@@ -1,0 +1,45 @@
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.out
+*.res
+*.stackdump
+
+# Database backup/temp files
+*.dat~
+*.idx~
+
+# IDE / Editor files
+nbproject/
+.dep.inc
+.vs/
+*.ncb
+*.suo
+*.user
+*.aps
+*.opt
+*.pdb
+*.ilk
+*.idb
+*.dsp
+*.dsw
+*.sln
+*.vcproj
+
+# Build output directories
+build/
+dist/
+Debug/
+Release/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary files
+nul
+tmpclaude-*
+*.tmp
+*~

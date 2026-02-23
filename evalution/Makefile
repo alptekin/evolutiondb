@@ -1,109 +1,69 @@
-#
-#  There exist several targets which are by default empty and which can be 
-#  used for execution of your targets. These targets are usually executed 
-#  before and after some main targets. They are: 
-#
-#     .build-pre:              called before 'build' target
-#     .build-post:             called after 'build' target
-#     .clean-pre:              called before 'clean' target
-#     .clean-post:             called after 'clean' target
-#     .clobber-pre:            called before 'clobber' target
-#     .clobber-post:           called after 'clobber' target
-#     .all-pre:                called before 'all' target
-#     .all-post:               called after 'all' target
-#     .help-pre:               called before 'help' target
-#     .help-post:              called after 'help' target
-#
-#  Targets beginning with '.' are not intended to be called on their own.
-#
-#  Main targets can be executed directly, and they are:
-#  
-#     build                    build a specific configuration
-#     clean                    remove built files from a configuration
-#     clobber                  remove all built files
-#     all                      build all configurations
-#     help                     print help mesage
-#  
-#  Targets .build-impl, .clean-impl, .clobber-impl, .all-impl, and
-#  .help-impl are implemented in nbproject/makefile-impl.mk.
-#
-#  Available make variables:
-#
-#     CND_BASEDIR                base directory for relative paths
-#     CND_DISTDIR                default top distribution directory (build artifacts)
-#     CND_BUILDDIR               default top build directory (object files, ...)
-#     CONF                       name of current configuration
-#     CND_PLATFORM_${CONF}       platform name (current configuration)
-#     CND_ARTIFACT_DIR_${CONF}   directory of build artifact (current configuration)
-#     CND_ARTIFACT_NAME_${CONF}  name of build artifact (current configuration)
-#     CND_ARTIFACT_PATH_${CONF}  path to build artifact (current configuration)
-#     CND_PACKAGE_DIR_${CONF}    directory of package (current configuration)
-#     CND_PACKAGE_NAME_${CONF}   name of package (current configuration)
-#     CND_PACKAGE_PATH_${CONF}   path to package (current configuration)
-#
-# NOCDDL
+# EvoSQL - SQL Parser & Database Engine
+# Standalone Makefile (cross-platform: Windows MinGW + Linux GCC)
 
+CC = gcc
+CFLAGS = -Wall -g
+LDFLAGS =
 
-# Environment 
-MKDIR=mkdir
-CP=cp
-CCADMIN=CCadmin
-RANLIB=ranlib
+# Windows-specific settings
+ifdef OS
+    # Windows detected
+    EXE = evosql.exe
+    CFLAGS += -D_CRT_SECURE_NO_WARNINGS
+    RM = del /Q
+else
+    EXE = evosql
+    RM = rm -f
+endif
 
+# Source files (with subdirectory paths)
+SRCS = main.c \
+       parser/evoparser.tab.c \
+       parser/lex.yy.c \
+       db/db.c \
+       db/error.c \
+       db/Create.c \
+       db/Select.c \
+       db/Insert.c \
+       db/Update.c \
+       db/Delete.c \
+       db/database_globals.c
 
-# build
-build: .build-post
+OBJS = $(SRCS:.c=.o)
 
-.build-pre:
-# Add your pre 'build' code here...
+# Default target
+all: $(EXE)
 
-.build-post: .build-impl
-# Add your post 'build' code here...
+$(EXE): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
+# Pattern rule for .c -> .o
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# clean
-clean: .clean-post
+# Suppress warnings for generated parser/lexer code
+parser/evoparser.tab.o: parser/evoparser.tab.c
+	$(CC) $(CFLAGS) -w -c $< -o $@
 
-.clean-pre:
-# Add your pre 'clean' code here...
+parser/lex.yy.o: parser/lex.yy.c
+	$(CC) $(CFLAGS) -w -c $< -o $@
 
-.clean-post: .clean-impl
-# Add your post 'clean' code here...
+# Generate parser from bison/yacc (only if bison is available)
+generate-parser: parser/evoparser.y
+	bison -d -o parser/evoparser.tab.c parser/evoparser.y
 
+# Generate lexer from flex (only if flex is available)
+generate-lexer: parser/evolexer.l parser/evoparser.tab.h
+	flex -o parser/lex.yy.c parser/evolexer.l
 
-# clobber
-clobber: .clobber-post
+# Regenerate both parser and lexer
+generate: generate-parser generate-lexer
 
-.clobber-pre:
-# Add your pre 'clobber' code here...
+clean:
+	$(RM) $(OBJS) $(EXE) 2>nul
 
-.clobber-post: .clobber-impl
-# Add your post 'clobber' code here...
+# Run the application
+run: $(EXE)
+	./$(EXE)
 
-
-# all
-all: .all-post
-
-.all-pre:
-# Add your pre 'all' code here...
-
-.all-post: .all-impl
-# Add your post 'all' code here...
-
-
-# help
-help: .help-post
-
-.help-pre:
-# Add your pre 'help' code here...
-
-.help-post: .help-impl
-# Add your post 'help' code here...
-
-
-
-# include project implementation makefile
-include nbproject/Makefile-impl.mk
-
-# include project make variables
-include nbproject/Makefile-variables.mk
+.PHONY: all clean run generate-parser generate-lexer generate

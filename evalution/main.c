@@ -1,8 +1,8 @@
 #define  _CRT_SECURE_NO_WARNINGS
 
 #include <stdio.h>
-#include "evoparser.tab.h"
-#include "database.h"
+#include "parser/evoparser.tab.h"
+#include "db/database.h"
 
 int yyparse(void);
 int main()
