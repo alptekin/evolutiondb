@@ -1,0 +1,230 @@
+/******************************************************************************/
+create table Stok(
+	StokID char(20) primary key, 
+	StokAd varchar(50), 
+	Miktar char(10)
+)
+;
+
+
+insert into Stok values('RAM256', '256 MB RAM', '10')
+;
+insert into Stok values('RAM128', '128 MB RAM', '12')
+;
+insert into Stok values('RAM248', '2048 MB RAM', '15')
+;
+insert into Stok values('RAM496', '4096 MB RAM', '18')
+;
+insert into Stok values('KLVY', 'KLAVYE', '50')
+;
+insert into Stok values('EKR21', '21 İNÇ EKRAN', '34')
+;
+insert into Stok values('ERK27', '27 İNÇ EKRAN', '44')
+;
+insert into Stok values('EKK512', '512 MB EKRAN KARTI', '18')
+;
+insert into Stok values('MUSE', 'FARE', '45')
+;
+insert into Stok values('CDRW', 'TEKRAR YAZILABİLİR CD', '500')
+;
+insert into Stok values('DVDRW', 'TEKRAR YAZILABİLİR DVD', '1000')
+;
+insert into Stok values('MAC', 'MAC MARKA BİLGİSAYAR', '2')
+;
+insert into Stok values('EXCDROM', 'HARİCİ CD ROM', '4')
+;
+insert into Stok values('BATTY', 'SONY BATARYA', '19')
+;
+insert into Stok values('MİCSD', 'MİCRO SD KARTI', '50')
+;
+insert into Stok values('FAX', 'FAX MAKİNESİ', '6')
+;
+insert into Stok values('PRN', 'HP MARKA YAZICI', '8')
+;
+
+
+SELECT STOKID, STOKAD from Stok WHERE STOKID = 'RAM256'
+;
+SELECT STOKID, STOKAD from Stok WHERE STOKID = 'PRN'
+;
+
+SELECT * FROM Stok
+;
+
+DELETE FROM Stok WHERE StokID = 'BATTY'
+;
+
+create table Musteri(
+	MusteriNo char(20) primary key, 
+	MusteriAd varchar(50), 
+	MusteriAdres char(100)
+)
+;
+
+
+insert into Musteri values('2', 'Cem Topal', 'İstanbul')
+;
+insert into Musteri values('3', 'Fevzi Topal', 'İstanbul')
+;
+insert into Musteri values('4', 'Sevgi Topal', 'İstanbul')
+;
+insert into Musteri values('5', 'Çisem Topal', 'İstanbul')
+;
+insert into Musteri values('6', 'Cihan İspiroğlu', 'İstanbul')
+;
+insert into Musteri values('7', 'Oğuz Karan', 'İstanbul')
+;
+insert into Musteri values('8', 'Haluk Gümüşkaya', 'İstanbul')
+;
+insert into Musteri values('9', 'Yüksel Bal', 'İstanbul')
+;
+
+select * from Musteri
+;
+select * from Stok
+;
+
+UPDATE Musteri 
+SET MusteriAd='Merve İskender', MusteriAdres='Trabzon'
+WHERE MusteriID='6'
+;
+
+select MusteriID, MusteriAd MusteriAdres from Musteri where MusteriId = '6'
+;
+
+insert into Musteri values('10', 'Selami Can', 'İspanya')
+;
+
+
+/******************************************************************************/
+#.			HASTA_KISISEL_BILGILER TABLOSU
+/******************************************************************************/
+CREATE TABLE HASTA_KISISEL_BILGILER(
+	HASTA_ID char(12) Primary key NOT NULL,
+	TCKIMLIK_NO char(11) NOT NULL,
+	HASTA_ADI varchar(50) NOT NULL,
+	HASTA_SOYADI varchar(50) NOT NULL,
+	ADRES varchar(750) NULL,
+	ANNE_ADI varchar(50) NOT NULL,
+	BABA_ADI varchar(50) NOT NULL,
+	TELEFON char(11) NOT NULL,
+	DOGUM_TARIHI char(10) NOT NULL,
+	DOGUM_YERI varchar(50) NOT NULL,
+	CINSIYET char(5) NOT NULL,
+	GONDEREN varchar(50) NULL,
+	KURUM_ADI varchar(60) NULL
+);
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('1', '10102648956', 'ALPTEKİN',
+                    'TOPAL', 'İSTANBUL', 'SEVGİ', 'FEVZİ', '05387339967',
+                    '29/09/1987', 'KIRKLARELİ', 'BAY', 'HASAN ADIGÜZEL', 'SGK')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('2', '33401189920', 'CİHAN',
+                     'İSPİROĞLU', 'İSTANBUL', 'SEVGİ', 'CEMİL', '05443722957',
+                     '25/08/1989', 'ANKARA', 'BAY', 'MEHMET SESİGÜZEL', 'EMEKLİ SANDIĞI')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('3', '25543674522', 'CEM', 'TOPAL',
+                    'ADANA', 'SEVGİ', 'FEVZİ', '05064162460', '13/11/1979',
+                    'KIRKLARELİ', 'BAY', 'HASAN ADIGÜZEL', 'SSK')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('4', '19174427230', 'MERVE', 'İSKENDER',
+                    'İSTANBUL', 'HÜLYA', 'HİKMET', '05362260000', '12/12/1987',
+                    'İSTANBUL', 'BAYAN', 'MEHMET SESİGÜZEL', 'ALLİANS SİGORTA')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('5', '34563452346', 'İSMET', 'KAYIK',
+                    'AMASYA', 'SEVİL', 'RAMAZAN', '05367367534', '23/12/1957',
+                    'SİVAS', 'BAY', 'SELMA BAHTIGÜZEL', 'SGK')
+;
+
+SELECT * FROM HASTA_KISISEL_BILGILER
+;
+
+SELECT HASTA_ID, TCKIMLIK_NO, HASTA_ADI, HASTA_SOYADI, ADRES, ANNE_ADI, BABA_ADI,
+TELEFON, DOGUM_TARIHI, DOGUM_YERI, CINSIYET, GONDEREN, KURUM_ADI FROM HASTA_KISISEL_BILGILER
+WHERE HASTA_ID = '1'
+;
+
+DELETE FROM HASTA_KISISEL_BILGILER WHERE HASTA_ID = '1'
+;
+
+UPDATE HASTA_KISISEL_BILGILER SET
+TCKIMLIK_NO = '34563452346',
+HASTA_ADI = 'İFFET',
+HASTA_SOYADI = 'KAYIK',
+ADRES = 'AMASYA',
+ANNE_ADI = 'SEVİL',
+BABA_ADI = 'RAMAZAN',
+TELEFON = '05367367534',
+DOGUM_TARIHI = '23/12/1957',
+DOGUM_YERI = 'SİVAS',
+CINSIYET = 'BAYAN',
+GONDEREN = 'SELMA BAHTIGÜZEL',
+KURUM_ADI = 'SGK'
+WHERE HASTA_ID = '5'
+;
+
+
+/******************************************************************************/
+-- 				DOKTOR TABLOSU
+/******************************************************************************/
+/*ALTER TABLE HASTA_KISISEL_BILGILER ADD CONSTRAINT(FOREIGN KEY(KURUM_ADI)
+REFERENCES KURUMLAR (KURUM_ADI));*/
+
+CREATE TABLE DOKTOR(
+	DOKTOR_NO char(8) PRIMARY KEY NOT NULL,
+	DOKTOR_ADI varchar(20) NOT NULL,
+	DOKTOR_SOYADI varchar(20) NOT NULL,
+	POLIKLINIK_ADI varchar(60) NOT NULL
+)
+;
+
+INSERT INTO DOKTOR VALUES('1', 'SELMA', 'BAHTIGÜZEL', 'GÖZ')
+;
+INSERT INTO DOKTOR VALUES('2', 'MEHMET', 'SESİGÜZEL', 'RADYOLOJİ')
+;
+INSERT INTO DOKTOR VALUES('3', 'HASAN', 'ADIGÜZEL', 'KULAK BURUN BOĞAZ')
+;
+INSERT INTO DOKTOR VALUES('4', 'RECEP', 'İÇİGÜZEL', 'DAHİLİYE')
+;
+INSERT INTO DOKTOR VALUES('5', 'İSMAİL', 'YÜZÜGÜZEL', 'DAHİLİYE')
+;
+
+SELECT * FROM DOKTOR
+;
+
+DELETE FROM DOKTOR WHERE DOKTOR_NO = '1'
+;
+
+SELECT * FROM DOKTOR
+;
+
+UPDATE DOKTOR SET
+DOKTOR_ADI = 'AHMET',
+DOKTOR_SOYADI = 'SESİGÜZEL',
+POLIKLINIK_ADI = 'RADYOLOJİ'
+WHERE DOKTOR_NO = '2'
+;
+
+SELECT DOKTOR_ID, DOKTOR_ADI, DOKTOR_SOYADI, POLIKLINIK_ADI FROM DOKTOR
+WHERE DOKTOR_NO = '5'
+;
+
+SELECT * FROM DOKTOR
+;
+
+/******************************************************************************/
+
+
+
+
+
+
+
+
+
+
+

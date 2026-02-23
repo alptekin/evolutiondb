@@ -1,0 +1,195 @@
+/******************************************************************************/
+create table Stok(
+		StokID char(20) primary key, 
+		StokAd varchar(50), 
+		Miktar char(10)
+)
+;
+
+insert into Stok values('RAM256', '256 MB RAM', '10')
+;
+
+insert into Stok values('RAM128', '128 MB RAM', '12')
+;
+
+insert into Stok values('RAM248', '2048 MB RAM', '15')
+;
+
+insert into Stok values('RAM496', '4096 MB RAM', '18')
+;
+
+insert into Stok values('KLVY', 'KLAVYE', '50')
+;
+
+insert into Stok values('EKR21', '21 INC EKRAN', '34')
+;
+
+insert into Stok values('ERK27', '27 INC EKRAN', '44')
+;
+
+insert into Stok values('EKK512', '512 MB EKRAN KARTI', '18')
+;
+
+insert into Stok values('MUSE', 'FARE', '45')
+;
+
+insert into Stok values('CDRW', 'TEKRAR YAZILABILIR CD', '500')
+;
+
+insert into Stok values('DVDRW', 'TEKRAR YAZILABILIR DVD', '1000')
+;
+
+insert into Stok values('MAC', 'MAC MARKA BILGISAYAR', '2')
+;
+
+insert into Stok values('EXCDROM', 'HARICI CD ROM', '4')
+;
+
+insert into Stok values('BATTY', 'SONY BATARYA', '19')
+;
+
+insert into Stok values('MICSD', 'MICRO SD KARTI', '50')
+;
+
+insert into Stok values('FAX', 'FAX MAKINESI', '6')
+;
+
+insert into Stok values('PRN', 'HP MARKA YAZICI', '8')
+;
+
+
+create table Musteri(
+		MusteriNo char(20) primary key, 
+		MusteriAd varchar(50), 
+		MusteriAdres char(100)
+)
+;
+
+insert into Musteri values('2', 'Cem Topal', 'Istanbul')
+;
+
+insert into Musteri values('3', 'Fevzi Topal', 'Istanbul')
+;
+
+insert into Musteri values('4', 'Sevgi Topal', 'Istanbul')
+;
+
+insert into Musteri values('5', 'Cisem Topal', 'Istanbul')
+;
+
+insert into Musteri values('6', 'Cihan Ispiroglu', 'Istanbul')
+;
+
+insert into Musteri values('7', 'Oguz Karan', 'Istanbul')
+;
+
+insert into Musteri values('8', 'Osman Aliefendioglu', 'Istanbul')
+;
+
+insert into Musteri values('9', 'Asli Kose', 'Istanbul')
+;
+
+select * from Musteri
+;
+
+select * from Stok
+;
+
+insert into Musteri values('10', 'Selami Can', 'Ispanya')
+;
+/******************************************************************************/
+#.			HASTA_KISISEL_BILGILER TABLOSU
+/******************************************************************************/
+
+CREATE TABLE HASTA_KISISEL_BILGILER(
+		HASTA_ID char(12) Primary key NOT NULL,
+		TCKIMLIK_NO char(11) NOT NULL,
+		HASTA_ADI varchar(50) NOT NULL,
+		HASTA_SOYADI varchar(50) NOT NULL,
+		ADRES varchar(750) NULL,
+		ANNE_ADI varchar(50) NOT NULL,
+		BABA_ADI varchar(50) NOT NULL,
+		TELEFON char(11) NOT NULL,
+		DOGUM_TARIHI char(10) NOT NULL,
+		DOGUM_YERI varchar(50) NOT NULL,
+		CINSIYET char(5) NOT NULL,
+		GONDEREN varchar(50) NULL,
+		KURUM_ADI varchar(60) NULL
+);
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('1', '10102648956', 'ALPTEKIN',
+'TOPAL', 'ISTANBUL', 'SEVGI', 'FEVZI', '05387339967',
+'29/09/1987', 'KIRKLARELI', 'BAY', 'HASAN ADIGUZEL', 'SGK')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('2', '33401189920', 'CIHAN','ISPIROGLU', 'ISTANBUL', 'SEVGI', 'CEMIL', '05443722957',
+ '25/08/1989', 'ANKARA', 'BAY', 'MEHMET SESIGUZEL', 'EMEKLI SANDIGI')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('3', '25543674522', 'CEM', 'TOPAL',
+                    'ADANA', 'SEVGI', 'FEVZI', '05064162460', '13/11/1979',
+                    'KIRKLARELI', 'BAY', 'HASAN ADIGUZEL', 'SSK')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('4', '19174427230', 'MERVE', 'ISKENDER',
+                    'ISTANBUL', 'HULYA', 'HIKMET', '05362260000', '12/12/1987',
+                    'ISTANBUL', 'BAYAN', 'MEHMET SESIGUZEL', 'ALLIANS SIGORTA')
+;
+
+INSERT INTO HASTA_KISISEL_BILGILER VALUES('5', '34563452346', 'ISMET', 'KAYIK',
+                    'AMASYA', 'SEVIL', 'RAMAZAN', '05367367534', '23/12/1957',
+                    'SIVAS', 'BAY', 'SELMA BAHTIGUZEL', 'SGK')
+;
+
+SELECT * FROM HASTA_KISISEL_BILGILER
+;
+
+/******************************************************************************/
+-- 				DOKTOR TABLOSU
+/******************************************************************************/
+/*ALTER TABLE HASTA_KISISEL_BILGILER ADD CONSTRAINT(FOREIGN KEY(KURUM_ADI)
+REFERENCES KURUMLAR (KURUM_ADI));*/
+
+CREATE TABLE DOKTOR(
+		DOKTOR_NO char(8) PRIMARY KEY NOT NULL,
+		DOKTOR_ADI varchar(20) NOT NULL,
+		DOKTOR_SOYADI varchar(20) NOT NULL,
+		POLIKLINIK_ADI varchar(60) NOT NULL
+)
+;
+
+INSERT INTO DOKTOR VALUES('1', 'SELMA', 'BAHTIGUZEL', 'GÖZ')
+;
+
+INSERT INTO DOKTOR VALUES('2', 'MEHMET', 'SESIGUZEL', 'RADYOLOJİ')
+;
+
+INSERT INTO DOKTOR VALUES('3', 'HASAN', 'ADIGUZEL', 'KULAK BURUN BOGAZ')
+;
+
+INSERT INTO DOKTOR VALUES('4', 'RECEP', 'ICIGUZEL', 'DAHILIYE')
+;
+
+INSERT INTO DOKTOR VALUES('5', 'ISMAIL', 'YUZUGUZEL', 'DAHILIYE')
+;
+
+SELECT * FROM DOKTOR
+;
+
+SELECT * FROM DOKTOR
+;
+
+SELECT * FROM DOKTOR
+;
+/******************************************************************************/
+
+
+
+
+
+
+
+
+
+
+
