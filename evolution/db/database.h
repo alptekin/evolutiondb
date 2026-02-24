@@ -27,6 +27,8 @@ int GetDropTableName(char *pname);
 int GetUpdateColumnName(char *pname);
 int GetColumnNames(char *name);
 int GetColumnSize(int typeVal);
+int GetOrderByColumn(char *name);
+void SetOrderByDirection(int desc);
 
 int UpdateProcess(void);
 int DeleteProcess(void);
@@ -61,5 +63,7 @@ extern int g_totalColumnSize;
 extern int g_gui_mode;
 extern jmp_buf g_gui_jmpbuf;
 extern int g_gui_error;
+extern char g_orderByColumn[256];
+extern int g_orderByDesc;
 
 #endif

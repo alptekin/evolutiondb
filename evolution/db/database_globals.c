@@ -17,3 +17,5 @@ int g_totalColumnSize = 0;
 int g_gui_mode = 0;
 jmp_buf g_gui_jmpbuf;
 int g_gui_error = 0;
+char g_orderByColumn[256];
+int g_orderByDesc = 0;

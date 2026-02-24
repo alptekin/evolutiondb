@@ -11,6 +11,7 @@
 #include <commctrl.h>
 #include "poppad.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <io.h>
 #include <fcntl.h>
@@ -266,6 +267,10 @@ void OnButtonExecClick(HWND hwndEdit, HWND hwndList)
         g_lastSelectTable[0] = '\0';
     }
 
+    /* Clear ORDER BY state after grid is populated */
+    g_orderByColumn[0] = '\0';
+    g_orderByDesc = 0;
+
     /* Cleanup */
     DeleteFileA(tmpFile);
     DeleteFileA(tmpErrFile);
@@ -275,6 +280,59 @@ void OnButtonExecClick(HWND hwndEdit, HWND hwndList)
 void OnButtonStopClick()
 {
 	MessageBox(NULL, TEXT("Execution stopped!"), TEXT("Info"), MB_OK);
+}
+
+/* Sorting helpers for PopulateGridView ORDER BY support */
+static int g_guiSortColIndex = -1;
+static int g_guiSortDesc = 0;
+
+typedef struct {
+    char data[1024];
+} GuiRecordEntry;
+
+static void GuiGetFieldValue(const char *data, int colIndex, char *buf, int bufSize)
+{
+    char tmp[1024];
+    char *val;
+    int i = 0;
+
+    strcpy(tmp, data);
+    val = strtok(tmp, ";");
+    while (val) {
+        if (i == colIndex) {
+            strncpy(buf, val, bufSize - 1);
+            buf[bufSize - 1] = '\0';
+            return;
+        }
+        i++;
+        val = strtok(NULL, ";");
+    }
+    buf[0] = '\0';
+}
+
+static int GuiCompareRecords(const void *a, const void *b)
+{
+    const GuiRecordEntry *ra = (const GuiRecordEntry *)a;
+    const GuiRecordEntry *rb = (const GuiRecordEntry *)b;
+    char valA[256], valB[256];
+    int result;
+    double numA, numB;
+    char *endA, *endB;
+
+    GuiGetFieldValue(ra->data, g_guiSortColIndex, valA, sizeof(valA));
+    GuiGetFieldValue(rb->data, g_guiSortColIndex, valB, sizeof(valB));
+
+    numA = strtod(valA, &endA);
+    numB = strtod(valB, &endB);
+    if (*endA == '\0' && *endB == '\0' && valA[0] != '\0' && valB[0] != '\0') {
+        if (numA < numB) result = -1;
+        else if (numA > numB) result = 1;
+        else result = 0;
+    } else {
+        result = strcmp(valA, valB);
+    }
+
+    return g_guiSortDesc ? -result : result;
 }
 
 void PopulateGridView(HWND hwndLV, const char *tableName)
@@ -323,7 +381,7 @@ void PopulateGridView(HWND hwndLV, const char *tableName)
         SendMessageA(hwndLV, LVM_INSERTCOLUMNA, col, (LPARAM)&lvc);
     }
 
-    /* Open database and iterate records */
+    /* Open database and read all records */
     if ((db = db_open(tableName, O_RDWR, FILE_MODE)) == NULL)
         return;
 
@@ -331,13 +389,40 @@ void PopulateGridView(HWND hwndLV, const char *tableName)
 
     char keyBuf[1024];
     char *data;
-    row = 0;
+    static GuiRecordEntry records[500];
+    int count = 0;
 
-    while ((data = db_nextrec(db, keyBuf)) != NULL) {
+    while ((data = db_nextrec(db, keyBuf)) != NULL && count < 500) {
+        strncpy(records[count].data, data, sizeof(records[count].data) - 1);
+        records[count].data[sizeof(records[count].data) - 1] = '\0';
+        count++;
+    }
+
+    db_close(db);
+
+    /* Sort if ORDER BY is requested */
+    if (g_orderByColumn[0] != '\0') {
+        int orderColIdx = -1;
+        int c;
+        for (c = 0; c < numCols; c++) {
+            if (strcmp(colNames[c], g_orderByColumn) == 0) {
+                orderColIdx = c;
+                break;
+            }
+        }
+        if (orderColIdx >= 0) {
+            g_guiSortColIndex = orderColIdx;
+            g_guiSortDesc = g_orderByDesc;
+            qsort(records, count, sizeof(GuiRecordEntry), GuiCompareRecords);
+        }
+    }
+
+    /* Insert sorted records into ListView */
+    for (row = 0; row < count; row++) {
         char fields[64][256];
         int numFields = 0;
 
-        strcpy(temp, data);
+        strcpy(temp, records[row].data);
         tok = strtok(temp, ";");
         while (tok && numFields < 64) {
             strcpy(fields[numFields], tok);
@@ -345,7 +430,6 @@ void PopulateGridView(HWND hwndLV, const char *tableName)
             tok = strtok(NULL, ";");
         }
 
-        /* Insert row (first column) */
         memset(&lvI, 0, sizeof(lvI));
         lvI.mask = LVIF_TEXT;
         lvI.iItem = row;
@@ -353,17 +437,12 @@ void PopulateGridView(HWND hwndLV, const char *tableName)
         lvI.pszText = numFields > 0 ? fields[0] : "";
         SendMessageA(hwndLV, LVM_INSERTITEMA, 0, (LPARAM)&lvI);
 
-        /* Set sub-items (remaining columns) */
         for (col = 1; col < numFields && col < numCols; col++) {
             lvI.iSubItem = col;
             lvI.pszText = fields[col];
             SendMessageA(hwndLV, LVM_SETITEMTEXTA, row, (LPARAM)&lvI);
         }
-
-        row++;
     }
-
-    db_close(db);
 }
 LRESULT CALLBACK WndProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {

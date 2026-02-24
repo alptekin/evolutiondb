@@ -1,6 +1,5 @@
-#line 1 "lex.yy.c"
 
-#line 3 "lex.yy.c"
+#line 2 "lex.yy.c"
 
 #define  YY_INT_ALIGNED short int
 
@@ -1276,9 +1275,9 @@ char *yytext;
 
 	void yyerror(char *s, ...);
 	int oldstate;
-#line 1279 "lex.yy.c"
+#line 1278 "lex.yy.c"
 
-#line 1281 "lex.yy.c"
+#line 1280 "lex.yy.c"
 
 #define INITIAL 0
 #define COMMENT 1
@@ -1507,7 +1506,7 @@ YY_DECL
 
 
 
-#line 1510 "lex.yy.c"
+#line 1509 "lex.yy.c"
 
 	while ( /*CONSTCOND*/1 )		/* loops until end-of-file is reached */
 		{
@@ -2489,7 +2488,7 @@ YY_RULE_SETUP
 #line 317 "evolexer.l"
 YY_FATAL_ERROR( "flex scanner jammed" );
 	YY_BREAK
-#line 2492 "lex.yy.c"
+#line 2491 "lex.yy.c"
 			case YY_STATE_EOF(INITIAL):
 			case YY_STATE_EOF(BTWMODE):
 				yyterminate();

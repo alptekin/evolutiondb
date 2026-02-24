@@ -442,7 +442,13 @@ opt_having: /* nil */
 ;
 
 opt_orderby: /* nil */
-| ORDER BY groupby_list								{ emit("ORDERBY %d", $3); }
+| ORDER BY NAME opt_asc_desc
+    {
+        emit("ORDERBY %s %d", $3, $4);
+        GetOrderByColumn($3);
+        SetOrderByDirection($4);
+        free($3);
+    }
 ;
 
 opt_limit: /* nil */ | LIMIT expr                                               { emit("LIMIT 1"); }
