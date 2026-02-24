@@ -3245,6 +3245,7 @@ yyreduce:
     {
         emit("COLUMNDEF %d %s", (yyvsp[-1].intval), (yyvsp[-2].strval));
         GetColumnNames((yyvsp[-2].strval));
+        GetColumnSize((yyvsp[-1].intval));
         free((yyvsp[-2].strval));
     }
 #line 3241 "evoparser.tab.c"

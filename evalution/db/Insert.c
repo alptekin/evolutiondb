@@ -49,6 +49,25 @@ int InsertProcess(void)
     if ((db = db_open(g_tblInsertionName, O_RDWR, FILE_MODE)) == NULL)
         err_sys("db_open error");
 
+    /* Read per-table pad size from .meta file */
+    {
+        char tblName[1024];
+        int padSize;
+        int curLen;
+
+        strcpy(tblName, g_tblInsertionName);
+        {
+            char *dot = strstr(tblName, ".dat");
+            if (dot) *dot = '\0';
+        }
+        padSize = ReadPadSize(tblName);
+
+        curLen = (int)strlen(g_insert);
+        if (curLen < padSize) {
+            memset(g_insert + curLen, ';', padSize - curLen);
+            g_insert[padSize] = '\0';
+        }
+    }
 
     if (db_store(db, str, g_insert, DB_INSERT) != 0)
         err_quit("\nerror:db_store error for %s\nDuplicate primary key field!..\n", str);

@@ -6,6 +6,47 @@
 #include "apue.h"
 #include "apue_db.h"
 
+static void ResizeAllRecords(const char *tblName, int newPadSize)
+{
+    DBHANDLE db;
+    char keyBuf[1024];
+    char *data;
+    int i, count = 0;
+
+    /* Phase 1: Read all records into memory */
+    static char keys[200][256];
+    static char records[200][1024];
+
+    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
+        return;
+
+    db_rewind(db);
+    while ((data = db_nextrec(db, keyBuf)) != NULL && count < 200) {
+        strcpy(keys[count], keyBuf);
+        strcpy(records[count], data);
+        count++;
+    }
+    db_close(db);
+
+    /* Phase 2: Re-store all records with new padding */
+    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
+        return;
+
+    for (i = 0; i < count; i++) {
+        int curLen = (int)strlen(records[i]);
+        if (curLen < newPadSize) {
+            memset(records[i] + curLen, ';', newPadSize - curLen);
+            records[i][newPadSize] = '\0';
+        }
+        db_store(db, keys[i], records[i], DB_REPLACE);
+    }
+
+    db_close(db);
+
+    /* Update .meta with new pad size */
+    WritePadSize(tblName, newPadSize);
+}
+
 int UpdateProcess(void)
 {
     DBHANDLE db;
@@ -79,6 +120,9 @@ int UpdateProcess(void)
         fclose(fp);
     }
 
+    /* Read per-table pad size */
+    int padSize = ReadPadSize(tblName);
+
     /* Open database */
     if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
         err_sys("db_open error");
@@ -122,19 +166,41 @@ int UpdateProcess(void)
     /* Build updated record string */
     {
         char newRecord[1024] = "";
+        int newLen, needResize = 0;
+
         for (i = 0; i < numFields; i++) {
             strcat(newRecord, fields[i]);
             strcat(newRecord, ";");
         }
 
+        newLen = (int)strlen(newRecord);
+
+        /* If new record exceeds current pad size, double padding */
+        if (newLen >= padSize) {
+            while (padSize <= newLen)
+                padSize *= 2;
+            needResize = 1;
+        }
+
+        /* Pad record to target pad size */
+        if (newLen < padSize) {
+            memset(newRecord + newLen, ';', padSize - newLen);
+            newRecord[padSize] = '\0';
+        }
+
         if (db_store(db, key, newRecord, DB_REPLACE) != 0)
             err_quit("\nerror: UPDATE failed for key %s\n", key);
+
+        db_close(db);
+
+        /* If padding was doubled, resize ALL records in the table */
+        if (needResize) {
+            ResizeAllRecords(tblName, padSize);
+        }
     }
 
     printf("command(s) completed successfully!..\n");
     TruncateUpdate();
-
-    db_close(db);
 
     return 0;
 }

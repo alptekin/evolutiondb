@@ -71,6 +71,13 @@ void SelectAll(void)
     if (dot)
         *dot = '\0';
 
+    /* In GUI mode, save table name for GridView and skip text output */
+    if (g_gui_mode) {
+        strcpy(g_lastSelectTable, tblName);
+        TruncateSelect();
+        return;
+    }
+
     if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
         err_sys("db_open error");
 
@@ -111,6 +118,13 @@ int SelectProcess(void)
     char *dot = strstr(tblName, ".dat");
     if (dot)
         *dot = '\0';
+
+    /* In GUI mode, save table name for GridView and skip text output */
+    if (g_gui_mode) {
+        strcpy(g_lastSelectTable, tblName);
+        TruncateSelect();
+        return 0;
+    }
 
     str2 = strtok(g_insert, ";");
 
