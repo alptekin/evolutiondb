@@ -14,9 +14,9 @@
 #include <string.h>
 #include <io.h>
 #include <fcntl.h>
-#include "../evalution/db/database.h"
-#include "../evalution/db/apue_db.h"
-#include "../evalution/db/apue.h"
+#include "../evolution/db/database.h"
+#include "../evolution/db/apue_db.h"
+#include "../evolution/db/apue.h"
 
 /* Flex/Bison externs */
 extern int yyparse(void);

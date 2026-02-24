@@ -5,7 +5,7 @@ A lightweight SQL parser and file-based database engine written in C, with an in
 ## Project Structure
 
 ```
-evalution/                      # SQL Engine (CLI)
+evolution/                      # SQL Engine (CLI)
 ├── main.c                      # CLI entry point (reads from test.txt)
 ├── build.bat                   # Windows build script
 ├── Makefile                    # Cross-platform build (MinGW / Linux GCC)
@@ -28,7 +28,8 @@ evalution/                      # SQL Engine (CLI)
     ├── Select.c                # SELECT (* and WHERE)
     ├── Insert.c                # INSERT INTO
     ├── Update.c                # UPDATE (column-level update via .meta)
-    └── Delete.c                # DELETE FROM
+    ├── Delete.c                # DELETE FROM
+    └── Drop.c                  # DROP TABLE
 
 PopPad/                         # Win32 GUI Frontend
 ├── PopPad.c                    # Main window, Execute button, SQL execution
@@ -76,12 +77,12 @@ DELETE FROM Ogrenci WHERE 1;
 ### EvoSQL CLI (evosql.exe)
 
 ```bat
-cd evalution
+cd evolution
 build.bat
 build.bat run
 ```
 
-SQL commands are read from `test.txt` in the `evalution/` directory.
+SQL commands are read from `test.txt` in the `evolution/` directory.
 
 ### PopPad GUI (PopPad.exe)
 
@@ -102,7 +103,7 @@ PopPad provides a text editor with an Execute button. Write SQL in the editor, c
 ### Regenerate Parser/Lexer
 
 ```bash
-cd evalution
+cd evolution
 make generate
 ```
 

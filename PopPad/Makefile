@@ -15,12 +15,12 @@ POPPAD_OBJS = $(POPPAD_SRCS:.c=.o)
 RES = poppad.res
 
 # EvoSQL DB sources
-DB_DIR = ../evalution/db
+DB_DIR = ../evolution/db
 DB_SRCS = db.c error.c Create.c Select.c Insert.c Update.c Delete.c Drop.c database_globals.c
 DB_OBJS = $(addprefix $(DB_DIR)/, $(DB_SRCS:.c=.o))
 
 # EvoSQL Parser sources
-PARSER_DIR = ../evalution/parser
+PARSER_DIR = ../evolution/parser
 PARSER_SRCS = evoparser.tab.c lex.yy.c
 PARSER_OBJS = $(addprefix $(PARSER_DIR)/, $(PARSER_SRCS:.c=.o))
 
