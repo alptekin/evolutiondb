@@ -166,6 +166,7 @@
 %token TABLE
 %token THEN 
 %token TRAILING
+%token TRUNCATE
 %token TINYBLOB
 %token TIME
 
@@ -613,6 +614,22 @@ stmt: drop_table_stmt
 drop_table_stmt: DROP TABLE NAME
     {
         emit("DROPTABLE %s", $3);
+        GetDropTableName($3);
+        free($3);
+    }
+;
+
+/** truncate table **/
+stmt: truncate_table_stmt
+    {
+        emit("STMT");
+        TruncateTableProcess();
+    }
+;
+
+truncate_table_stmt: TRUNCATE TABLE NAME
+    {
+        emit("TRUNCATETABLE %s", $3);
         GetDropTableName($3);
         free($3);
     }

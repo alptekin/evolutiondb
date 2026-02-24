@@ -212,6 +212,7 @@ INT1|TINYINT			{ return TINYINT; }
 TINYTEXT				{ return TINYTEXT; }
 
 TRAILING				{ return TRAILING; }
+TRUNCATE				{ return TRUNCATE; }
 
 
 

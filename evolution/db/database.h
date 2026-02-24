@@ -34,6 +34,7 @@ int SelectProcess(void);
 int CreateTableProcess(void);
 int InsertProcess(void);
 int DropTableProcess(void);
+int TruncateTableProcess(void);
 
 char *ParseUpdate(char *arr);
 char *ParseInsertion(char *arr);

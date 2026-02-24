@@ -177,28 +177,29 @@ extern int yydebug;
     TABLE = 378,                   /* TABLE  */
     THEN = 379,                    /* THEN  */
     TRAILING = 380,                /* TRAILING  */
-    TINYBLOB = 381,                /* TINYBLOB  */
-    TIME = 382,                    /* TIME  */
-    UPDATE = 383,                  /* UPDATE  */
-    UNSIGNED = 384,                /* UNSIGNED  */
-    UNIQUE = 385,                  /* UNIQUE  */
-    USING = 386,                   /* USING  */
-    USE = 387,                     /* USE  */
-    VARCHAR = 388,                 /* VARCHAR  */
-    VALUES = 389,                  /* VALUES  */
-    VARBINARY = 390,               /* VARBINARY  */
-    WHERE = 391,                   /* WHERE  */
-    WHEN = 392,                    /* WHEN  */
-    WITH = 393,                    /* WITH  */
-    YEAR = 394,                    /* YEAR  */
-    YEAR_MONTH = 395,              /* YEAR_MONTH  */
-    ZEROFILL = 396,                /* ZEROFILL  */
-    EXISTS = 397,                  /* EXISTS  */
-    FSUBSTRING = 398,              /* FSUBSTRING  */
-    FTRIM = 399,                   /* FTRIM  */
-    FDATE_ADD = 400,               /* FDATE_ADD  */
-    FDATE_SUB = 401,               /* FDATE_SUB  */
-    FCOUNT = 402                   /* FCOUNT  */
+    TRUNCATE = 381,                /* TRUNCATE  */
+    TINYBLOB = 382,                /* TINYBLOB  */
+    TIME = 383,                    /* TIME  */
+    UPDATE = 384,                  /* UPDATE  */
+    UNSIGNED = 385,                /* UNSIGNED  */
+    UNIQUE = 386,                  /* UNIQUE  */
+    USING = 387,                   /* USING  */
+    USE = 388,                     /* USE  */
+    VARCHAR = 389,                 /* VARCHAR  */
+    VALUES = 390,                  /* VALUES  */
+    VARBINARY = 391,               /* VARBINARY  */
+    WHERE = 392,                   /* WHERE  */
+    WHEN = 393,                    /* WHEN  */
+    WITH = 394,                    /* WITH  */
+    YEAR = 395,                    /* YEAR  */
+    YEAR_MONTH = 396,              /* YEAR_MONTH  */
+    ZEROFILL = 397,                /* ZEROFILL  */
+    EXISTS = 398,                  /* EXISTS  */
+    FSUBSTRING = 399,              /* FSUBSTRING  */
+    FTRIM = 400,                   /* FTRIM  */
+    FDATE_ADD = 401,               /* FDATE_ADD  */
+    FDATE_SUB = 402,               /* FDATE_SUB  */
+    FCOUNT = 403                   /* FCOUNT  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -214,7 +215,7 @@ union YYSTYPE
 	char *strval;
 	int subtok;
 
-#line 218 "evoparser.tab.h"
+#line 219 "evoparser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
