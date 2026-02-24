@@ -11,9 +11,12 @@
 #include <commctrl.h>
 #include "poppad.h"
 #include <stdio.h>
+#include <string.h>
 #include <io.h>
 #include <fcntl.h>
 #include "../evalution/db/database.h"
+#include "../evalution/db/apue_db.h"
+#include "../evalution/db/apue.h"
 
 /* Flex/Bison externs */
 extern int yyparse(void);
@@ -31,13 +34,14 @@ extern int yylineno;
 #define EDITERRID		4
 #define LISTID			5
 #define TABCTRLID		6
-#define MSG_SIZE		10000
+#define TREEID			7
 
 
 #define UNTITLED TEXT ("(untitled)")
 
 LRESULT CALLBACK WndProc      (HWND, UINT, WPARAM, LPARAM) ;
 INT_PTR CALLBACK AboutDlgProc (HWND, UINT, WPARAM, LPARAM) ;
+void PopulateGridView(HWND hwndLV, const char *tableName);
 
      // Functions in POPFILE.C
 
@@ -170,6 +174,17 @@ void OnButtonExecClick(HWND hwndEdit, HWND hwndList)
     if (!sql) return;
     GetWindowTextA(hwndEdit, sql, len + 1);
 
+    /* Strip \r characters (Windows \r\n -> \n) so the lexer doesn't choke */
+    {
+        int r = 0, w = 0;
+        while (sql[r]) {
+            if (sql[r] != '\r')
+                sql[w++] = sql[r];
+            r++;
+        }
+        sql[w] = '\0';
+    }
+
     /* Get the parent window's error output control */
     HWND hwndParent = GetParent(hwndEdit);
     HWND hwndEditErr = GetDlgItem(hwndParent, 4); /* EDITERRID = 4 */
@@ -245,6 +260,12 @@ void OnButtonExecClick(HWND hwndEdit, HWND hwndList)
     else
         SetWindowTextA(hwndEditErr, "OK");
 
+    /* If a SELECT was executed, populate the GridView */
+    if (g_lastSelectTable[0] != '\0') {
+        PopulateGridView(hwndList, g_lastSelectTable);
+        g_lastSelectTable[0] = '\0';
+    }
+
     /* Cleanup */
     DeleteFileA(tmpFile);
     DeleteFileA(tmpErrFile);
@@ -256,62 +277,93 @@ void OnButtonStopClick()
 	MessageBox(NULL, TEXT("Execution stopped!"), TEXT("Info"), MB_OK);
 }
 
-BOOL InitListViewColumns(HWND hwndList, WPARAM wParam, LPARAM lParam) 
-{ 
-    TCHAR szText[256] = TEXT("a");     // temporary buffer 
-    LVCOLUMN lvc; 
-    int iCol; 
-	HINSTANCE hInst ;
-	 hInst = ((LPCREATESTRUCT) lParam) -> hInstance ;
-    // Initialize the LVCOLUMN structure.
-    // The mask specifies that the format, width, text, and subitem members
-    // of the structure are valid. 
-    lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM; 
-	  
-    // Add the columns
-    for (iCol = 0; iCol < 5; iCol++) 
-    { 
-        lvc.iSubItem = iCol;
-        lvc.pszText = szText;	
-        lvc.cx = 100;     // width of column in pixels
-
-        if ( iCol < 2 )
-            lvc.fmt = LVCFMT_LEFT;  // left-aligned column
-        else
-            lvc.fmt = LVCFMT_RIGHT; // right-aligned column		                         
-
-        LoadString(hInst, 
-                   1 + iCol, 
-                   szText, 
-                   sizeof(szText)/sizeof(szText[0]));
-
-        if (ListView_InsertColumn(hwndList, iCol, &lvc) == -1) 
-            return FALSE; 
-    } 
-    return TRUE; 
-} 
-
-BOOL SetListViewItems(HWND hwndList)
+void PopulateGridView(HWND hwndLV, const char *tableName)
 {
-	LVITEM lvI;
-	int	index;
+    DBHANDLE db;
+    char metaFile[1024], metaLine[1024], temp[1024];
+    char *tok;
+    int col, row;
+    LVCOLUMNA lvc;
+    LVITEMA lvI;
 
-	lvI.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM | LVIF_STATE; 
-	lvI.state = 0; 
-	lvI.stateMask = 0; 
+    /* Clear existing items and columns */
+    SendMessage(hwndLV, LVM_DELETEALLITEMS, 0, 0);
+    while (SendMessageA(hwndLV, LVM_DELETECOLUMN, 0, 0))
+        ;
 
-	// Initialize LVITEM members that are different for each item. 
-	for (index = 0; index < 19; index++)
-	{
-		  lvI.iItem = index;
-	  lvI.iImage = index;
-	  lvI.iSubItem = 0;
-	  lvI.lParam = (LPARAM) &rgPetInfo[index];
-	  lvI.pszText = LPSTR_TEXTCALLBACK; // sends an LVN_GETDISP message.
-	  if (ListView_InsertItem(hwndList, &lvI) == -1)
-			break;
-	}
-	return TRUE;
+    /* Read column names from .meta file */
+    char colNames[64][256];
+    int numCols = 0;
+
+    sprintf(metaFile, "%s.meta", tableName);
+    FILE *fp = fopen(metaFile, "r");
+    if (!fp) return;
+
+    if (fgets(metaLine, sizeof(metaLine), fp)) {
+        metaLine[strcspn(metaLine, "\n")] = '\0';
+        strcpy(temp, metaLine);
+        tok = strtok(temp, ";");
+        while (tok && numCols < 64) {
+            strcpy(colNames[numCols], tok);
+            numCols++;
+            tok = strtok(NULL, ";");
+        }
+    }
+    fclose(fp);
+
+    /* Insert columns */
+    memset(&lvc, 0, sizeof(lvc));
+    lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+    lvc.fmt = LVCFMT_LEFT;
+    lvc.cx = 150;
+
+    for (col = 0; col < numCols; col++) {
+        lvc.iSubItem = col;
+        lvc.pszText = colNames[col];
+        SendMessageA(hwndLV, LVM_INSERTCOLUMNA, col, (LPARAM)&lvc);
+    }
+
+    /* Open database and iterate records */
+    if ((db = db_open(tableName, O_RDWR, FILE_MODE)) == NULL)
+        return;
+
+    db_rewind(db);
+
+    char keyBuf[1024];
+    char *data;
+    row = 0;
+
+    while ((data = db_nextrec(db, keyBuf)) != NULL) {
+        char fields[64][256];
+        int numFields = 0;
+
+        strcpy(temp, data);
+        tok = strtok(temp, ";");
+        while (tok && numFields < 64) {
+            strcpy(fields[numFields], tok);
+            numFields++;
+            tok = strtok(NULL, ";");
+        }
+
+        /* Insert row (first column) */
+        memset(&lvI, 0, sizeof(lvI));
+        lvI.mask = LVIF_TEXT;
+        lvI.iItem = row;
+        lvI.iSubItem = 0;
+        lvI.pszText = numFields > 0 ? fields[0] : "";
+        SendMessageA(hwndLV, LVM_INSERTITEMA, 0, (LPARAM)&lvI);
+
+        /* Set sub-items (remaining columns) */
+        for (col = 1; col < numFields && col < numCols; col++) {
+            lvI.iSubItem = col;
+            lvI.pszText = fields[col];
+            SendMessageA(hwndLV, LVM_SETITEMTEXTA, row, (LPARAM)&lvI);
+        }
+
+        row++;
+    }
+
+    db_close(db);
 }
 LRESULT CALLBACK WndProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -366,7 +418,7 @@ LRESULT CALLBACK WndProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 			hwndTree = CreateWindow (WC_TREEVIEW, NULL,
 								WS_CHILD |  WS_VISIBLE | WS_BORDER,
 								800, 80, 284, 582,
-								hwnd, (HMENU) LISTID, hInst, NULL) ;
+								hwnd, (HMENU) TREEID, hInst, NULL) ;
 
 			hwndEditErr = CreateWindow (TEXT ("edit"), NULL,
 								WS_CHILD | WS_VISIBLE | WS_HSCROLL | WS_VSCROLL |
@@ -386,39 +438,9 @@ LRESULT CALLBACK WndProc (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 	        
 			DoCaption (hwnd, szTitleName) ;
 
-			InitListViewColumns(hwndList, wParam, lParam);
-			SetListViewItems(hwndList);
-
 			return 0;
 			  
-		case WM_NOTIFY:
-			
-			switch (((LPNMHDR) lParam)->code)
-			{
-				NMLVDISPINFO *plvdi;
-				case LVN_GETDISPINFO:
-					plvdi = (NMLVDISPINFO*)lParam;    
-					switch (plvdi->item.iSubItem)
-					{
-						case 0:
-							plvdi->item.pszText = rgPetInfo[plvdi->item.iItem].szKind;
-							break;
-			            	  
-						case 1:
-							plvdi->item.pszText = rgPetInfo[plvdi->item.iItem].szBreed;
-							break;
-			            
-						case 2:
-							plvdi->item.pszText = rgPetInfo[plvdi->item.iItem].szPrice;
-							break;
-			            
-						default:
-							break;
-					}
-				return 0;
-			}
-	          
-		 case WM_SETFOCUS:
+		case WM_SETFOCUS:
 			  SetFocus (hwndEdit) ;
 			  return 0 ;
 	          
