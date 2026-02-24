@@ -76,6 +76,7 @@
 %token DAY_MICROSECOND
 %token DISTINCT
 %token DELETE
+%token DROP
 %token DAY_MINUTE
 %token DISTINCTROW
 %token DAY_SECOND
@@ -248,11 +249,21 @@ expr: NAME
     }
 | NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); free($1); free($3); }
 | USERVAR									{ emit("USERVAR %s", $1); free($1); }
-| STRING											
+| STRING
     {
-        emit("STRING %s", $1);
-        GetInsertions($1);
-        free($1);
+        char *sv = $1;
+        int slen = (int)strlen(sv);
+        emit("STRING %s", sv);
+        /* Strip surrounding quotes before insertion */
+        if (slen >= 2 && (sv[0] == '\'' || sv[0] == '"')) {
+            char stripped[1024];
+            strncpy(stripped, sv + 1, slen - 2);
+            stripped[slen - 2] = '\0';
+            GetInsertions(stripped);
+        } else {
+            GetInsertions(sv);
+        }
+        free(sv);
     }
 | INTNUM
     {
@@ -591,6 +602,22 @@ opt_dot_star: /* nil */ | '.' '*' ;
 delete_stmt: DELETE delete_opts FROM delete_list USING table_references opt_where	{ emit("DELETEMULTI %d %d %d", $2, $4, $6); }
 ;
 
+/** drop table **/
+stmt: drop_table_stmt
+    {
+        emit("STMT");
+        DropTableProcess();
+    }
+;
+
+drop_table_stmt: DROP TABLE NAME
+    {
+        emit("DROPTABLE %s", $3);
+        GetDropTableName($3);
+        free($3);
+    }
+;
+
 stmt: insert_stmt
     {
         emit("STMT");
@@ -799,11 +826,12 @@ create_definition: PRIMARY KEY '(' column_list ')'                              
 | FULLTEXT KEY '(' column_list ')'                                              { emit("TEXTINDEX %d", $4); }
 ;
 
-create_definition:								{ emit("STARTCOL"); } 
+create_definition:								{ emit("STARTCOL"); }
 NAME data_type column_atts
     {
         emit("COLUMNDEF %d %s", $3, $2);
         GetColumnNames($2);
+        GetColumnSize($3);
         free($2);
     }
 ;

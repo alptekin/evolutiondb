@@ -27,6 +27,7 @@ SRCS = main.c \
        db/Insert.c \
        db/Update.c \
        db/Delete.c \
+       db/Drop.c \
        db/database_globals.c
 
 OBJS = $(SRCS:.c=.o)

@@ -72,6 +72,7 @@ DEFAULT					{ return DEFAULT; }
 DELAYED					{ return DELAYED; }
 DELETE					{ return DELETE; }
 DESC					{ return DESC; }
+DROP					{ return DROP; }
 
 
 DISTINCT				{ return DISTINCT; }

@@ -16,7 +16,7 @@ RES = poppad.res
 
 # EvoSQL DB sources
 DB_DIR = ../evalution/db
-DB_SRCS = db.c error.c Create.c Select.c Insert.c Update.c Delete.c database_globals.c
+DB_SRCS = db.c error.c Create.c Select.c Insert.c Update.c Delete.c Drop.c database_globals.c
 DB_OBJS = $(addprefix $(DB_DIR)/, $(DB_SRCS:.c=.o))
 
 # EvoSQL Parser sources

@@ -15,12 +15,14 @@ void TruncateCreate(void);
 int TruncateUpdate(void);
 int TruncateDelete(void);
 int TruncateSelect(void);
+int TruncateDrop(void);
 
 int GetTableName(char *name);
 int GetUpdateTableName(char *pname);
 int GetDelTableName(char *pname);
 int GetSelTableName(char *pname);
 int GetInsertionTableName(char *name);
+int GetDropTableName(char *pname);
 
 int GetUpdateColumnName(char *pname);
 int GetColumnNames(char *name);
@@ -31,6 +33,7 @@ int DeleteProcess(void);
 int SelectProcess(void);
 int CreateTableProcess(void);
 int InsertProcess(void);
+int DropTableProcess(void);
 
 char *ParseUpdate(char *arr);
 char *ParseInsertion(char *arr);
@@ -50,6 +53,7 @@ extern char g_tblSelectionName[1024];
 extern char g_whereSel[1024];
 extern char g_tblDelName[1024];
 extern char g_tblUpdateTableName[1024];
+extern char g_tblDropName[1024];
 extern char g_columnDefs[1024];
 extern char g_lastSelectTable[1024];
 extern int g_totalColumnSize;

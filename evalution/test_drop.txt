@@ -1,0 +1,5 @@
+create table TestDrop(id char(10) primary key, ad varchar(50));
+insert into TestDrop values('1', 'Ali');
+insert into TestDrop values('2', 'Veli');
+select * from TestDrop;
+drop table TestDrop;

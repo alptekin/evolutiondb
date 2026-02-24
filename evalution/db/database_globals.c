@@ -10,6 +10,7 @@ char g_tblSelectionName[1024];
 char g_whereSel[1024];
 char g_tblDelName[1024];
 char g_tblUpdateTableName[1024];
+char g_tblDropName[1024];
 char g_columnDefs[1024];
 char g_lastSelectTable[1024];
 int g_totalColumnSize = 0;
