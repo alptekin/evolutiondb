@@ -36,6 +36,8 @@ INT8|BIGINT				{ return BIGINT; }
 BINARY					{ return BINARY; }
 BIT						{ return BIT; }
 BLOB					{ return BLOB; }
+BOOL					{ return BOOLEAN; }
+BOOLEAN					{ return BOOLEAN; }
 BOTH					{ return BOTH; }
 BY						{ return BY; }
 

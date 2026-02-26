@@ -2,7 +2,7 @@
 #include "database.h"
 
 char g_columnNames[1024];
-char g_insert[1024];
+char g_insert[RECORD_BUF_SIZE];
 char g_temp[1024];
 char g_tblName[1024];
 char g_tblInsertionName[1024];
@@ -17,5 +17,12 @@ int g_totalColumnSize = 0;
 int g_gui_mode = 0;
 jmp_buf g_gui_jmpbuf;
 int g_gui_error = 0;
+char g_gui_error_msg[512];
 char g_orderByColumn[256];
 int g_orderByDesc = 0;
+char g_columnTypeDefs[1024];
+int g_currentColNotNull = 0;
+int g_currentColPrimaryKey = 0;
+char g_columnNullFlags[1024];
+int g_primaryKeyIndex = -1;
+int g_columnCount = 0;

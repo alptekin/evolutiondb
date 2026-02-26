@@ -6,6 +6,9 @@
 /* Minimum padded record size - ensures UPDATE can overwrite in-place */
 #define RECORD_PAD_SIZE 256
 
+/* Maximum record buffer size (must accommodate any padded record) */
+#define RECORD_BUF_SIZE 8192
+
 /* Function Prototypes */
 int GetInsertions(char *name);
 int GetSelection(char *pname);
@@ -45,10 +48,16 @@ void SelectAll(void);
 
 int ReadPadSize(const char *tblName);
 void WritePadSize(const char *tblName, int padSize);
+int ReadColumnTypes(const char *tblName, int *types, int maxCols);
+int ValidateValue(const char *value, int typeEncoding);
+void SetColumnNotNull(void);
+void SetColumnPrimaryKey(void);
+int ReadPrimaryKey(const char *tblName);
+int ReadNullFlags(const char *tblName, int *flags, int maxCols);
 
 /* Global Variables (defined in database_globals.c) */
 extern char g_columnNames[1024];
-extern char g_insert[1024];
+extern char g_insert[RECORD_BUF_SIZE];
 extern char g_temp[1024];
 extern char g_tblName[1024];
 extern char g_tblInsertionName[1024];
@@ -63,7 +72,14 @@ extern int g_totalColumnSize;
 extern int g_gui_mode;
 extern jmp_buf g_gui_jmpbuf;
 extern int g_gui_error;
+extern char g_gui_error_msg[512];
 extern char g_orderByColumn[256];
 extern int g_orderByDesc;
+extern char g_columnTypeDefs[1024];
+extern int g_currentColNotNull;
+extern int g_currentColPrimaryKey;
+extern char g_columnNullFlags[1024];
+extern int g_primaryKeyIndex;
+extern int g_columnCount;
 
 #endif

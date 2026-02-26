@@ -1,20 +1,11 @@
 # EvoSQL - SQL Parser & Database Engine
-# Standalone Makefile (cross-platform: Windows MinGW + Linux GCC)
+# Standalone Makefile (MinGW/MSYS2)
 
 CC = gcc
-CFLAGS = -Wall -g
+CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS
 LDFLAGS =
 
-# Windows-specific settings
-ifdef OS
-    # Windows detected
-    EXE = evosql.exe
-    CFLAGS += -D_CRT_SECURE_NO_WARNINGS
-    RM = del /Q
-else
-    EXE = evosql
-    RM = rm -f
-endif
+EXE = evosql.exe
 
 # Source files (with subdirectory paths)
 SRCS = main.c \
@@ -61,7 +52,7 @@ generate-lexer: parser/evolexer.l parser/evoparser.tab.h
 generate: generate-parser generate-lexer
 
 clean:
-	$(RM) $(OBJS) $(EXE) 2>nul
+	rm -f $(OBJS) $(EXE) 2>/dev/null
 
 # Run the application
 run: $(EXE)

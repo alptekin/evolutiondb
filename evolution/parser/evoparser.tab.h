@@ -35,8 +35,8 @@
    especially those whose name start with YY_ or yy_.  They are
    private implementation details that can be changed or removed.  */
 
-#ifndef YY_YY_EVOPARSER_TAB_H_INCLUDED
-# define YY_YY_EVOPARSER_TAB_H_INCLUDED
+#ifndef YY_YY_PARSER_EVOPARSER_TAB_H_INCLUDED
+# define YY_YY_PARSER_EVOPARSER_TAB_H_INCLUDED
 /* Debug traces.  */
 #ifndef YYDEBUG
 # define YYDEBUG 0
@@ -83,123 +83,124 @@ extern int yydebug;
     AND = 284,                     /* AND  */
     AS = 285,                      /* AS  */
     BLOB = 286,                    /* BLOB  */
-    BY = 287,                      /* BY  */
-    BINARY = 288,                  /* BINARY  */
-    BOTH = 289,                    /* BOTH  */
-    BIGINT = 290,                  /* BIGINT  */
-    BIT = 291,                     /* BIT  */
-    CURRENT_TIMESTAMP = 292,       /* CURRENT_TIMESTAMP  */
-    CREATE = 293,                  /* CREATE  */
-    CROSS = 294,                   /* CROSS  */
-    CASE = 295,                    /* CASE  */
-    COMMENT = 296,                 /* COMMENT  */
-    CURRENT_DATE = 297,            /* CURRENT_DATE  */
-    CURRENT_TIME = 298,            /* CURRENT_TIME  */
-    CHAR = 299,                    /* CHAR  */
-    COLLATE = 300,                 /* COLLATE  */
-    DATABASE = 301,                /* DATABASE  */
-    DELAYED = 302,                 /* DELAYED  */
-    DAY_HOUR = 303,                /* DAY_HOUR  */
-    DAY_MICROSECOND = 304,         /* DAY_MICROSECOND  */
-    DISTINCT = 305,                /* DISTINCT  */
-    DELETE = 306,                  /* DELETE  */
-    DROP = 307,                    /* DROP  */
-    DAY_MINUTE = 308,              /* DAY_MINUTE  */
-    DISTINCTROW = 309,             /* DISTINCTROW  */
-    DAY_SECOND = 310,              /* DAY_SECOND  */
-    DESC = 311,                    /* DESC  */
-    DEFAULT = 312,                 /* DEFAULT  */
-    DOUBLE = 313,                  /* DOUBLE  */
-    DATETIME = 314,                /* DATETIME  */
-    DECIMAL = 315,                 /* DECIMAL  */
-    DATE = 316,                    /* DATE  */
-    ESCAPED = 317,                 /* ESCAPED  */
-    ENUM = 318,                    /* ENUM  */
-    END = 319,                     /* END  */
-    ELSE = 320,                    /* ELSE  */
-    FLOAT = 321,                   /* FLOAT  */
-    FORCE = 322,                   /* FORCE  */
-    FROM = 323,                    /* FROM  */
-    FULLTEXT = 324,                /* FULLTEXT  */
-    FOR = 325,                     /* FOR  */
-    GROUP = 326,                   /* GROUP  */
-    HOUR_MINUTE = 327,             /* HOUR_MINUTE  */
-    HOUR_MICROSECOND = 328,        /* HOUR_MICROSECOND  */
-    HIGH_PRIORITY = 329,           /* HIGH_PRIORITY  */
-    HOUR_SECOND = 330,             /* HOUR_SECOND  */
-    HAVING = 331,                  /* HAVING  */
-    INTEGER = 332,                 /* INTEGER  */
-    INNER = 333,                   /* INNER  */
-    IGNORE = 334,                  /* IGNORE  */
-    INDEX = 335,                   /* INDEX  */
-    IF = 336,                      /* IF  */
-    INSERT = 337,                  /* INSERT  */
-    INTO = 338,                    /* INTO  */
-    INT = 339,                     /* INT  */
-    INTERVAL = 340,                /* INTERVAL  */
-    JOIN = 341,                    /* JOIN  */
-    KEY = 342,                     /* KEY  */
-    LONGTEXT = 343,                /* LONGTEXT  */
-    LOW_PRIORITY = 344,            /* LOW_PRIORITY  */
-    LEFT = 345,                    /* LEFT  */
-    LEADING = 346,                 /* LEADING  */
-    LIMIT = 347,                   /* LIMIT  */
-    LONGBLOB = 348,                /* LONGBLOB  */
-    MEDIUMTEXT = 349,              /* MEDIUMTEXT  */
-    MEDIUMBLOB = 350,              /* MEDIUMBLOB  */
-    MEDIUMINT = 351,               /* MEDIUMINT  */
-    NATURAL = 352,                 /* NATURAL  */
-    NULLX = 353,                   /* NULLX  */
-    OUTER = 354,                   /* OUTER  */
-    ON = 355,                      /* ON  */
-    ORDER = 356,                   /* ORDER  */
-    ONDUPLICATE = 357,             /* ONDUPLICATE  */
-    PRIMARY = 358,                 /* PRIMARY  */
-    QUICK = 359,                   /* QUICK  */
-    REAL = 360,                    /* REAL  */
-    ROLLUP = 361,                  /* ROLLUP  */
-    RIGHT = 362,                   /* RIGHT  */
-    REPLACE = 363,                 /* REPLACE  */
-    SQL_SMALL_RESULT = 364,        /* SQL_SMALL_RESULT  */
-    SCHEMA = 365,                  /* SCHEMA  */
-    SOME = 366,                    /* SOME  */
-    SQL_CALC_FOUND_ROWS = 367,     /* SQL_CALC_FOUND_ROWS  */
-    SQL_BIG_RESULT = 368,          /* SQL_BIG_RESULT  */
-    STRAIGHT_JOIN = 369,           /* STRAIGHT_JOIN  */
-    SMALLINT = 370,                /* SMALLINT  */
-    SET = 371,                     /* SET  */
-    SELECT = 372,                  /* SELECT  */
-    TINYTEXT = 373,                /* TINYTEXT  */
-    TINYINT = 374,                 /* TINYINT  */
-    TEMPORARY = 375,               /* TEMPORARY  */
-    TEXT = 376,                    /* TEXT  */
-    TIMESTAMP = 377,               /* TIMESTAMP  */
-    TABLE = 378,                   /* TABLE  */
-    THEN = 379,                    /* THEN  */
-    TRAILING = 380,                /* TRAILING  */
-    TRUNCATE = 381,                /* TRUNCATE  */
-    TINYBLOB = 382,                /* TINYBLOB  */
-    TIME = 383,                    /* TIME  */
-    UPDATE = 384,                  /* UPDATE  */
-    UNSIGNED = 385,                /* UNSIGNED  */
-    UNIQUE = 386,                  /* UNIQUE  */
-    USING = 387,                   /* USING  */
-    USE = 388,                     /* USE  */
-    VARCHAR = 389,                 /* VARCHAR  */
-    VALUES = 390,                  /* VALUES  */
-    VARBINARY = 391,               /* VARBINARY  */
-    WHERE = 392,                   /* WHERE  */
-    WHEN = 393,                    /* WHEN  */
-    WITH = 394,                    /* WITH  */
-    YEAR = 395,                    /* YEAR  */
-    YEAR_MONTH = 396,              /* YEAR_MONTH  */
-    ZEROFILL = 397,                /* ZEROFILL  */
-    EXISTS = 398,                  /* EXISTS  */
-    FSUBSTRING = 399,              /* FSUBSTRING  */
-    FTRIM = 400,                   /* FTRIM  */
-    FDATE_ADD = 401,               /* FDATE_ADD  */
-    FDATE_SUB = 402,               /* FDATE_SUB  */
-    FCOUNT = 403                   /* FCOUNT  */
+    BOOLEAN = 287,                 /* BOOLEAN  */
+    BY = 288,                      /* BY  */
+    BINARY = 289,                  /* BINARY  */
+    BOTH = 290,                    /* BOTH  */
+    BIGINT = 291,                  /* BIGINT  */
+    BIT = 292,                     /* BIT  */
+    CURRENT_TIMESTAMP = 293,       /* CURRENT_TIMESTAMP  */
+    CREATE = 294,                  /* CREATE  */
+    CROSS = 295,                   /* CROSS  */
+    CASE = 296,                    /* CASE  */
+    COMMENT = 297,                 /* COMMENT  */
+    CURRENT_DATE = 298,            /* CURRENT_DATE  */
+    CURRENT_TIME = 299,            /* CURRENT_TIME  */
+    CHAR = 300,                    /* CHAR  */
+    COLLATE = 301,                 /* COLLATE  */
+    DATABASE = 302,                /* DATABASE  */
+    DELAYED = 303,                 /* DELAYED  */
+    DAY_HOUR = 304,                /* DAY_HOUR  */
+    DAY_MICROSECOND = 305,         /* DAY_MICROSECOND  */
+    DISTINCT = 306,                /* DISTINCT  */
+    DELETE = 307,                  /* DELETE  */
+    DROP = 308,                    /* DROP  */
+    DAY_MINUTE = 309,              /* DAY_MINUTE  */
+    DISTINCTROW = 310,             /* DISTINCTROW  */
+    DAY_SECOND = 311,              /* DAY_SECOND  */
+    DESC = 312,                    /* DESC  */
+    DEFAULT = 313,                 /* DEFAULT  */
+    DOUBLE = 314,                  /* DOUBLE  */
+    DATETIME = 315,                /* DATETIME  */
+    DECIMAL = 316,                 /* DECIMAL  */
+    DATE = 317,                    /* DATE  */
+    ESCAPED = 318,                 /* ESCAPED  */
+    ENUM = 319,                    /* ENUM  */
+    END = 320,                     /* END  */
+    ELSE = 321,                    /* ELSE  */
+    FLOAT = 322,                   /* FLOAT  */
+    FORCE = 323,                   /* FORCE  */
+    FROM = 324,                    /* FROM  */
+    FULLTEXT = 325,                /* FULLTEXT  */
+    FOR = 326,                     /* FOR  */
+    GROUP = 327,                   /* GROUP  */
+    HOUR_MINUTE = 328,             /* HOUR_MINUTE  */
+    HOUR_MICROSECOND = 329,        /* HOUR_MICROSECOND  */
+    HIGH_PRIORITY = 330,           /* HIGH_PRIORITY  */
+    HOUR_SECOND = 331,             /* HOUR_SECOND  */
+    HAVING = 332,                  /* HAVING  */
+    INTEGER = 333,                 /* INTEGER  */
+    INNER = 334,                   /* INNER  */
+    IGNORE = 335,                  /* IGNORE  */
+    INDEX = 336,                   /* INDEX  */
+    IF = 337,                      /* IF  */
+    INSERT = 338,                  /* INSERT  */
+    INTO = 339,                    /* INTO  */
+    INT = 340,                     /* INT  */
+    INTERVAL = 341,                /* INTERVAL  */
+    JOIN = 342,                    /* JOIN  */
+    KEY = 343,                     /* KEY  */
+    LONGTEXT = 344,                /* LONGTEXT  */
+    LOW_PRIORITY = 345,            /* LOW_PRIORITY  */
+    LEFT = 346,                    /* LEFT  */
+    LEADING = 347,                 /* LEADING  */
+    LIMIT = 348,                   /* LIMIT  */
+    LONGBLOB = 349,                /* LONGBLOB  */
+    MEDIUMTEXT = 350,              /* MEDIUMTEXT  */
+    MEDIUMBLOB = 351,              /* MEDIUMBLOB  */
+    MEDIUMINT = 352,               /* MEDIUMINT  */
+    NATURAL = 353,                 /* NATURAL  */
+    NULLX = 354,                   /* NULLX  */
+    OUTER = 355,                   /* OUTER  */
+    ON = 356,                      /* ON  */
+    ORDER = 357,                   /* ORDER  */
+    ONDUPLICATE = 358,             /* ONDUPLICATE  */
+    PRIMARY = 359,                 /* PRIMARY  */
+    QUICK = 360,                   /* QUICK  */
+    REAL = 361,                    /* REAL  */
+    ROLLUP = 362,                  /* ROLLUP  */
+    RIGHT = 363,                   /* RIGHT  */
+    REPLACE = 364,                 /* REPLACE  */
+    SQL_SMALL_RESULT = 365,        /* SQL_SMALL_RESULT  */
+    SCHEMA = 366,                  /* SCHEMA  */
+    SOME = 367,                    /* SOME  */
+    SQL_CALC_FOUND_ROWS = 368,     /* SQL_CALC_FOUND_ROWS  */
+    SQL_BIG_RESULT = 369,          /* SQL_BIG_RESULT  */
+    STRAIGHT_JOIN = 370,           /* STRAIGHT_JOIN  */
+    SMALLINT = 371,                /* SMALLINT  */
+    SET = 372,                     /* SET  */
+    SELECT = 373,                  /* SELECT  */
+    TINYTEXT = 374,                /* TINYTEXT  */
+    TINYINT = 375,                 /* TINYINT  */
+    TEMPORARY = 376,               /* TEMPORARY  */
+    TEXT = 377,                    /* TEXT  */
+    TIMESTAMP = 378,               /* TIMESTAMP  */
+    TABLE = 379,                   /* TABLE  */
+    THEN = 380,                    /* THEN  */
+    TRAILING = 381,                /* TRAILING  */
+    TRUNCATE = 382,                /* TRUNCATE  */
+    TINYBLOB = 383,                /* TINYBLOB  */
+    TIME = 384,                    /* TIME  */
+    UPDATE = 385,                  /* UPDATE  */
+    UNSIGNED = 386,                /* UNSIGNED  */
+    UNIQUE = 387,                  /* UNIQUE  */
+    USING = 388,                   /* USING  */
+    USE = 389,                     /* USE  */
+    VARCHAR = 390,                 /* VARCHAR  */
+    VALUES = 391,                  /* VALUES  */
+    VARBINARY = 392,               /* VARBINARY  */
+    WHERE = 393,                   /* WHERE  */
+    WHEN = 394,                    /* WHEN  */
+    WITH = 395,                    /* WITH  */
+    YEAR = 396,                    /* YEAR  */
+    YEAR_MONTH = 397,              /* YEAR_MONTH  */
+    ZEROFILL = 398,                /* ZEROFILL  */
+    EXISTS = 399,                  /* EXISTS  */
+    FSUBSTRING = 400,              /* FSUBSTRING  */
+    FTRIM = 401,                   /* FTRIM  */
+    FDATE_ADD = 402,               /* FDATE_ADD  */
+    FDATE_SUB = 403,               /* FDATE_SUB  */
+    FCOUNT = 404                   /* FCOUNT  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -208,14 +209,14 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 16 "evoparser.y"
+#line 16 "parser/evoparser.y"
 
 	int intval;
 	double floatval;
 	char *strval;
 	int subtok;
 
-#line 219 "evoparser.tab.h"
+#line 220 "parser/evoparser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
@@ -230,4 +231,4 @@ extern YYSTYPE yylval;
 int yyparse (void);
 
 
-#endif /* !YY_YY_EVOPARSER_TAB_H_INCLUDED  */
+#endif /* !YY_YY_PARSER_EVOPARSER_TAB_H_INCLUDED  */

@@ -54,6 +54,7 @@
 %token AS
 
 %token BLOB
+%token BOOLEAN
 %token BY
 %token BINARY
 %token BOTH
@@ -280,7 +281,11 @@ expr: NAME
         sprintf(buf, "%g", $1);
         GetInsertions(buf);
     }
-| BOOL										{ emit("BOOL %d", $1); }
+| BOOL
+    {
+        emit("BOOL %d", $1);
+        GetInsertions($1 ? "true" : "false");
+    }
 ;
 
 expr: expr '+' expr								{ emit("ADD"); }
@@ -860,7 +865,7 @@ NAME data_type column_atts
 ;
 
 column_atts: /* nil */								{ $$ = 0; }
-| column_atts NOT NULLX								{ emit("ATTR NOTNULL"); $$ = $1 + 1; }
+| column_atts NOT NULLX								{ emit("ATTR NOTNULL"); SetColumnNotNull(); $$ = $1 + 1; }
 | column_atts NULLX
 | column_atts DEFAULT STRING                                                    { emit("ATTR DEFAULT STRING %s", $3); free($3); $$ = $1 + 1; }
 | column_atts DEFAULT INTNUM                                                    { emit("ATTR DEFAULT NUMBER %d", $3); $$ = $1 + 1; }
@@ -869,8 +874,8 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts AUTO_INCREMENT                                                    { emit("ATTR AUTOINC"); $$ = $1 + 1; }
 | column_atts UNIQUE '(' column_list ')'                                        { emit("ATTR UNIQUEKEY %d", $4); $$ = $1 + 1; }
 | column_atts UNIQUE KEY							{ emit("ATTR UNIQUEKEY"); $$ = $1 + 1; }
-| column_atts PRIMARY KEY							{ emit("ATTR PRIKEY"); $$ = $1 + 1; }
-| column_atts KEY								{ emit("ATTR PRIKEY"); $$ = $1 + 1; }
+| column_atts PRIMARY KEY							{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
+| column_atts KEY								{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
 | column_atts COMMENT STRING                                                    { emit("ATTR COMMENT %s", $3); free($3); $$ = $1 + 1; }
 ;
 
@@ -924,6 +929,7 @@ BIT opt_length									{ $$ = 10000 + $2; }
 | LONGTEXT opt_binary opt_csc                                                   { $$ = 173000 + $2; }
 | ENUM '(' enum_list ')' opt_csc                                                { $$ = 200000 + $3; }
 | SET '(' enum_list ')' opt_csc                                                 { $$ = 210000 + $3; }
+| BOOLEAN                                                                        { $$ = 220001; }
 ;
 
 enum_list: STRING								{ emit("ENUMVAL %s", $1); free($1); $$ = 1; }

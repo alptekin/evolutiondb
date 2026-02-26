@@ -47,7 +47,7 @@ $(RES): poppad.rc resource.h
 	$(WINDRES) -i poppad.rc -o $(RES) -O coff --include-dir=.
 
 clean:
-	del /Q $(POPPAD_OBJS) $(RES) $(EXE) 2>nul
-	del /Q $(DB_DIR)\*.o $(PARSER_DIR)\*.o 2>nul
+	rm -f $(POPPAD_OBJS) $(RES) $(EXE) 2>/dev/null
+	rm -f $(DB_DIR)/*.o $(PARSER_DIR)/*.o 2>/dev/null
 
 .PHONY: all clean

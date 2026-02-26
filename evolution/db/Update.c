@@ -13,9 +13,13 @@ static void ResizeAllRecords(const char *tblName, int newPadSize)
     char *data;
     int i, count = 0;
 
+    /* Safety cap */
+    if (newPadSize >= RECORD_BUF_SIZE)
+        newPadSize = RECORD_BUF_SIZE - 1;
+
     /* Phase 1: Read all records into memory */
     static char keys[200][256];
-    static char records[200][1024];
+    static char records[200][RECORD_BUF_SIZE];
 
     if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
         return;
@@ -120,6 +124,51 @@ int UpdateProcess(void)
         fclose(fp);
     }
 
+    /* Validate SET values against column types */
+    {
+        int colTypes[64];
+        int numTypes = ReadColumnTypes(tblName, colTypes, 64);
+        if (numTypes > 0) {
+            int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+            for (s = 0; s < minSet; s++) {
+                /* Find column index for this SET column */
+                for (c = 0; c < numMetaCols; c++) {
+                    if (strcmp(metaCols[c], setCols[s]) == 0) {
+                        if (c < numTypes && ValidateValue(allTokens[s], colTypes[c]) != 0) {
+                            TruncateUpdate();
+                            return -1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Validate NOT NULL constraints for SET columns */
+    {
+        int nullFlags[64];
+        int numFlags = ReadNullFlags(tblName, nullFlags, 64);
+        if (numFlags > 0) {
+            int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+            for (s = 0; s < minSet; s++) {
+                for (c = 0; c < numMetaCols; c++) {
+                    if (strcmp(metaCols[c], setCols[s]) == 0) {
+                        if (c < numFlags && nullFlags[c] && allTokens[s][0] == '\0') {
+                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                     "null value in column \"%s\" violates not-null constraint",
+                                     setCols[s]);
+                            g_gui_error = 1;
+                            TruncateUpdate();
+                            return -1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     /* Read per-table pad size */
     int padSize = ReadPadSize(tblName);
 
@@ -165,7 +214,7 @@ int UpdateProcess(void)
 
     /* Build updated record string */
     {
-        char newRecord[1024] = "";
+        char newRecord[RECORD_BUF_SIZE] = "";
         int newLen, needResize = 0;
 
         for (i = 0; i < numFields; i++) {
@@ -179,6 +228,8 @@ int UpdateProcess(void)
         if (newLen >= padSize) {
             while (padSize <= newLen)
                 padSize *= 2;
+            if (padSize >= RECORD_BUF_SIZE)
+                padSize = RECORD_BUF_SIZE - 1;
             needResize = 1;
         }
 
@@ -220,13 +271,9 @@ int GetUpdateColumnName(char *pname)
 
 int TruncateUpdate(void)
 {
-    int i;
-
-    for (i = 0; i < 1024; ++i) {
-        g_columnNames[i] = '\0';
-        g_insert[i] = '\0';
-        g_tblSelectionName[i] = '\0';
-    }
+    memset(g_columnNames, '\0', 1024);
+    memset(g_insert, '\0', RECORD_BUF_SIZE);
+    memset(g_tblSelectionName, '\0', 1024);
 
     return 0;
 }
