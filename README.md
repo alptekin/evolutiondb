@@ -268,6 +268,40 @@ make
 
 Write SQL statements in the editor, click Execute. Results are displayed in the panel below.
 
+## Docker
+
+Run the EvoSQL server in a Docker container (Linux) without any build tools:
+
+### Quick Start
+
+```bash
+# Build and run with docker-compose
+docker compose up -d
+
+# Or build and run manually
+docker build -t evosql .
+docker run -d -p 5433:5433 --name evosql evosql
+```
+
+### Connect
+
+```bash
+# psql
+psql -h localhost -p 5433 -U evosql evosql
+
+# Or use DBeaver: PostgreSQL, localhost:5433, db=evosql
+```
+
+### Data Persistence
+
+Table files (`.idx`, `.dat`, `.meta`) are stored in `/data` inside the container. The docker-compose configuration mounts a named volume so data survives container restarts:
+
+```bash
+docker compose down       # stop (data preserved)
+docker compose up -d      # restart (data still there)
+docker compose down -v    # stop and delete data
+```
+
 ## How It Works
 
 1. **Lexer** (`evolexer.l`) - Tokenizes SQL input into keywords, identifiers, strings, and operators

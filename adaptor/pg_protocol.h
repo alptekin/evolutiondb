@@ -1,7 +1,7 @@
 #ifndef PG_PROTOCOL_H
 #define PG_PROTOCOL_H
 
-#include <winsock2.h>
+#include "platform.h"
 #include "result.h"
 
 /* Frontend message types (client → server) */
@@ -43,10 +43,10 @@ typedef struct {
 } PgBuf;
 
 /* Read exact number of bytes from socket */
-int pg_recv_exact(SOCKET sock, char *buf, int len);
+int pg_recv_exact(socket_t sock, char *buf, int len);
 
 /* Startup/handshake */
-int pg_handle_startup(SOCKET sock);
+int pg_handle_startup(socket_t sock);
 
 /* Send helpers */ 
 void pg_buf_init(PgBuf *b, char msg_type);
@@ -55,21 +55,21 @@ void pg_buf_add_int16(PgBuf *b, short val);
 void pg_buf_add_byte(PgBuf *b, char c);
 void pg_buf_add_string(PgBuf *b, const char *s);
 void pg_buf_add_bytes(PgBuf *b, const char *data, int len);
-int  pg_buf_send(PgBuf *b, SOCKET sock);
+int  pg_buf_send(PgBuf *b, socket_t sock);
 
 /* High-level send functions */
-void pg_send_auth_ok(SOCKET sock);
-void pg_send_parameter_status(SOCKET sock, const char *name, const char *value);
-void pg_send_ready_for_query(SOCKET sock, char status);
-void pg_send_error(SOCKET sock, const char *severity, const char *sqlstate,
+void pg_send_auth_ok(socket_t sock);
+void pg_send_parameter_status(socket_t sock, const char *name, const char *value);
+void pg_send_ready_for_query(socket_t sock, char status);
+void pg_send_error(socket_t sock, const char *severity, const char *sqlstate,
                    const char *message);
-void pg_send_command_complete(SOCKET sock, const char *tag);
-void pg_send_empty_query(SOCKET sock);
-void pg_send_backend_key_data(SOCKET sock, int pid, int secret);
-void pg_send_result_set(SOCKET sock, const ResultSet *rs);
+void pg_send_command_complete(socket_t sock, const char *tag);
+void pg_send_empty_query(socket_t sock);
+void pg_send_backend_key_data(socket_t sock, int pid, int secret);
+void pg_send_result_set(socket_t sock, const ResultSet *rs);
 
 /* Read a frontend message. Returns message type, fills buf and len.
    For startup messages, type is set to 0. */
-int pg_read_message(SOCKET sock, char *type, char *buf, int *len);
+int pg_read_message(socket_t sock, char *type, char *buf, int *len);
 
 #endif /* PG_PROTOCOL_H */

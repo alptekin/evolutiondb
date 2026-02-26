@@ -1,15 +1,22 @@
 # EvoSQL Adaptor — PostgreSQL Wire Protocol Server
-# Makefile for MinGW/MSYS2
+# Makefile for MinGW/MSYS2 and Linux
 
-# Fix linker temp-file permission issue on Windows
-export TEMP = /tmp
-export TMP  = /tmp
+# Platform detection
+UNAME := $(shell uname -s 2>/dev/null || echo Windows)
+
+ifeq ($(UNAME),Linux)
+    LDFLAGS = -lpthread
+    EXE = evosql-server
+else
+    # Fix linker temp-file permission issue on Windows
+    export TEMP = /tmp
+    export TMP  = /tmp
+    LDFLAGS = -lws2_32
+    EXE = evosql-server.exe
+endif
 
 CC = gcc
 CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS -pipe
-LDFLAGS = -lws2_32
-
-EXE = evosql-server.exe
 
 # Evolution engine paths
 EVO_DB     = ../evolution/db

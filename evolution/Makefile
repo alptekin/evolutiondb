@@ -1,11 +1,18 @@
 # EvoSQL - SQL Parser & Database Engine
-# Standalone Makefile (MinGW/MSYS2)
+# Standalone Makefile (MinGW/MSYS2 and Linux)
+
+# Platform detection
+UNAME := $(shell uname -s 2>/dev/null || echo Windows)
 
 CC = gcc
 CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS
 LDFLAGS =
 
-EXE = evosql.exe
+ifeq ($(UNAME),Linux)
+    EXE = evosql
+else
+    EXE = evosql.exe
+endif
 
 # Source files (with subdirectory paths)
 SRCS = main.c \

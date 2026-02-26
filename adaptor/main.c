@@ -5,22 +5,18 @@
  * DBeaver, pgAdmin, psql can connect using PostgreSQL JDBC/libpq driver.
  *
  * Multi-threaded: each connection handled in its own thread.
- * Query execution serialized via CRITICAL_SECTION (EvoSQL is not thread-safe).
+ * Query execution serialized via mutex (EvoSQL is not thread-safe).
  *
  * Usage:
- *   evosql-server.exe [port]
+ *   evosql-server[.exe] [port]
  *   Default port: 5433
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
 #include <ctype.h>
-
-#pragma comment(lib, "ws2_32.lib")
+#include "platform.h"
 
 #include "pg_protocol.h"
 #include "query_executor.h"
@@ -29,22 +25,22 @@
 #define DEFAULT_PORT 5433
 
 /* Mutex for serializing query execution (EvoSQL globals are not thread-safe) */
-static CRITICAL_SECTION g_query_lock;
+static mutex_t g_query_lock;
 
 /* ----------------------------------------------------------------
  *  Execute query under lock (thread-safe wrapper)
  * ---------------------------------------------------------------- */
 static void safe_query_execute(const char *sql, ResultSet *rs)
 {
-    EnterCriticalSection(&g_query_lock);
+    mutex_lock(&g_query_lock);
     query_execute(sql, rs);
-    LeaveCriticalSection(&g_query_lock);
+    mutex_unlock(&g_query_lock);
 }
 
 /* ----------------------------------------------------------------
  *  Handle a single client connection (runs in its own thread)
  * ---------------------------------------------------------------- */
-static void handle_client(SOCKET client_sock)
+static void handle_client(socket_t client_sock)
 {
     char *msg_buf;
     ResultSet *rs;
@@ -61,7 +57,7 @@ static void handle_client(SOCKET client_sock)
         fprintf(stderr, "[adaptor] Out of memory for client buffers\n");
         if (msg_buf) free(msg_buf);
         if (rs) free(rs);
-        closesocket(client_sock);
+        socket_close(client_sock);
         return;
     }
 
@@ -73,7 +69,7 @@ static void handle_client(SOCKET client_sock)
         fflush(stdout);
         free(msg_buf);
         free(rs);
-        closesocket(client_sock);
+        socket_close(client_sock);
         return;
     }
 
@@ -91,7 +87,7 @@ static void handle_client(SOCKET client_sock)
              * separated by semicolons. Per PG protocol, we must send
              * one response per statement, then a single ReadyForQuery. */
             char *sql_full = msg_buf;
-            char *sql_copy = _strdup(sql_full);
+            char *sql_copy = strdup(sql_full);
             char *remaining = sql_copy;
             int had_any = 0;
 
@@ -173,7 +169,7 @@ static void handle_client(SOCKET client_sock)
 
             /* Save query for Execute phase */
             if (pending_query) free(pending_query);
-            pending_query = _strdup(query);
+            pending_query = strdup(query);
             pending_described = 0;
 
             PgBuf b;
@@ -340,48 +336,49 @@ cleanup:
     if (pending_query) free(pending_query);
     free(msg_buf);
     free(rs);
-    closesocket(client_sock);
+    socket_close(client_sock);
 }
 
 /* ----------------------------------------------------------------
  *  Thread entry point for each client connection
  * ---------------------------------------------------------------- */
-static DWORD WINAPI client_thread(LPVOID param)
+static THREAD_RETURN client_thread(THREAD_PARAM param)
 {
-    SOCKET client_sock = (SOCKET)(UINT_PTR)param;
+    socket_t client_sock = (socket_t)(size_t)param;
     handle_client(client_sock);
     printf("[adaptor] Client disconnected\n"); fflush(stdout);
     return 0;
 }
 
 /* ----------------------------------------------------------------
- *  Main: Winsock TCP server
+ *  Main: TCP server
  * ---------------------------------------------------------------- */
 int main(int argc, char *argv[])
 {
-    WSADATA wsa;
-    SOCKET server_sock, client_sock;
+    socket_t server_sock, client_sock;
     struct sockaddr_in server_addr, client_addr;
-    int client_len;
+    socklen_t client_len;
     int port = DEFAULT_PORT;
 
     if (argc > 1)
         port = atoi(argv[1]);
 
-    /* Initialize Winsock */
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        fprintf(stderr, "WSAStartup failed: %d\n", WSAGetLastError());
-        return 1;
-    }
+#ifndef _WIN32
+    /* Ignore SIGPIPE so writing to a closed socket doesn't kill us */
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
+    /* Initialize socket subsystem */
+    socket_init();
 
     /* Initialize query execution lock */
-    InitializeCriticalSection(&g_query_lock);
+    mutex_init(&g_query_lock);
 
     /* Create socket */
     server_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (server_sock == INVALID_SOCKET) {
-        fprintf(stderr, "socket() failed: %d\n", WSAGetLastError());
-        WSACleanup();
+    if (server_sock == SOCKET_INVALID) {
+        fprintf(stderr, "socket() failed\n");
+        socket_cleanup();
         return 1;
     }
 
@@ -396,22 +393,21 @@ int main(int argc, char *argv[])
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons((u_short)port);
+    server_addr.sin_port = htons((unsigned short)port);
 
     if (bind(server_sock, (struct sockaddr *)&server_addr,
-             sizeof(server_addr)) == SOCKET_ERROR) {
-        fprintf(stderr, "bind() failed on port %d: %d\n",
-                port, WSAGetLastError());
-        closesocket(server_sock);
-        WSACleanup();
+             sizeof(server_addr)) == SOCKET_ERR) {
+        fprintf(stderr, "bind() failed on port %d\n", port);
+        socket_close(server_sock);
+        socket_cleanup();
         return 1;
     }
 
     /* Listen */
-    if (listen(server_sock, 5) == SOCKET_ERROR) {
-        fprintf(stderr, "listen() failed: %d\n", WSAGetLastError());
-        closesocket(server_sock);
-        WSACleanup();
+    if (listen(server_sock, 5) == SOCKET_ERR) {
+        fprintf(stderr, "listen() failed\n");
+        socket_close(server_sock);
+        socket_cleanup();
         return 1;
     }
 
@@ -439,8 +435,8 @@ int main(int argc, char *argv[])
         client_len = sizeof(client_addr);
         client_sock = accept(server_sock, (struct sockaddr *)&client_addr,
                              &client_len);
-        if (client_sock == INVALID_SOCKET) {
-            fprintf(stderr, "accept() failed: %d\n", WSAGetLastError());
+        if (client_sock == SOCKET_INVALID) {
+            fprintf(stderr, "accept() failed\n");
             continue;
         }
 
@@ -457,21 +453,11 @@ int main(int argc, char *argv[])
         fflush(stdout);
 
         /* Spawn a thread for this client */
-        {
-            HANDLE hThread = CreateThread(NULL, 0, client_thread,
-                                          (LPVOID)(UINT_PTR)client_sock,
-                                          0, NULL);
-            if (hThread) {
-                CloseHandle(hThread);  /* detach — thread cleans up itself */
-            } else {
-                fprintf(stderr, "CreateThread failed: %lu\n", GetLastError());
-                closesocket(client_sock);
-            }
-        }
+        thread_create(client_thread, (THREAD_PARAM)(size_t)client_sock);
     }
 
-    DeleteCriticalSection(&g_query_lock);
-    closesocket(server_sock);
-    WSACleanup();
+    mutex_destroy(&g_query_lock);
+    socket_close(server_sock);
+    socket_cleanup();
     return 0;
 }

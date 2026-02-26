@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
-#include <io.h>
 #include <ctype.h>
+#include "platform.h"
 #include "query_executor.h"
 #include "catalog.h"
 #include "../evolution/db/database.h"
@@ -42,43 +42,43 @@ static void strip_trailing(char *sql)
 static int is_select_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return (_strnicmp(sql, "SELECT", 6) == 0);
+    return (strncasecmp(sql, "SELECT", 6) == 0);
 }
 
 static int is_insert_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return (_strnicmp(sql, "INSERT", 6) == 0);
+    return (strncasecmp(sql, "INSERT", 6) == 0);
 }
 
 static int is_create_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return (_strnicmp(sql, "CREATE", 6) == 0);
+    return (strncasecmp(sql, "CREATE", 6) == 0);
 }
 
 static int is_update_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return (_strnicmp(sql, "UPDATE", 6) == 0);
+    return (strncasecmp(sql, "UPDATE", 6) == 0);
 }
 
 static int is_delete_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return (_strnicmp(sql, "DELETE", 6) == 0);
+    return (strncasecmp(sql, "DELETE", 6) == 0);
 }
 
 static int is_drop_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return (_strnicmp(sql, "DROP", 4) == 0);
+    return (strncasecmp(sql, "DROP", 4) == 0);
 }
 
 static int is_truncate_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return (_strnicmp(sql, "TRUNCATE", 8) == 0);
+    return (strncasecmp(sql, "TRUNCATE", 8) == 0);
 }
 
 /* Map EvoSQL type encoding to PostgreSQL type OID */
@@ -249,7 +249,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     volatile YY_BUFFER_STATE scan_buf = NULL;
 
     /* Make a mutable copy, strip \r */
-    sqlCopy = _strdup(sql);
+    sqlCopy = strdup(sql);
     if (!sqlCopy) {
         result_set_error(rs, "53000", "out of memory");
         return;
@@ -309,13 +309,13 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_columnCount = 0;
 
     /* Redirect stdout/stderr to NUL to suppress parser output */
-    saved_stdout = _dup(1);
-    saved_stderr = _dup(2);
+    saved_stdout = dup(1);
+    saved_stderr = dup(2);
     {
-        FILE *fnul = fopen("NUL", "w");
+        FILE *fnul = fopen(NULL_DEVICE, "w");
         if (fnul) {
-            _dup2(_fileno(fnul), 1);
-            _dup2(_fileno(fnul), 2);
+            dup2(fileno(fnul), 1);
+            dup2(fileno(fnul), 2);
             fclose(fnul);
         }
     }
@@ -352,8 +352,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
 
         /* Restore stdout/stderr BEFORE collect_select_results so that
          * any subsequent printf works, and mark fds as consumed. */
-        if (saved_stdout >= 0) { _dup2(saved_stdout, 1); _close(saved_stdout); saved_stdout = -1; }
-        if (saved_stderr >= 0) { _dup2(saved_stderr, 2); _close(saved_stderr); saved_stderr = -1; }
+        if (saved_stdout >= 0) { dup2(saved_stdout, 1); close(saved_stdout); saved_stdout = -1; }
+        if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); saved_stderr = -1; }
 
         /* Collect SELECT results (calls db_open/db_nextrec which may
          * longjmp on corrupted data — now safely inside setjmp scope) */
@@ -392,8 +392,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     }
 
     /* Restore stdout/stderr if not already done (longjmp path) */
-    if (saved_stdout >= 0) { _dup2(saved_stdout, 1); _close(saved_stdout); }
-    if (saved_stderr >= 0) { _dup2(saved_stderr, 2); _close(saved_stderr); }
+    if (saved_stdout >= 0) { dup2(saved_stdout, 1); close(saved_stdout); }
+    if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); }
 
     free(sqlCopy);
 }
@@ -437,7 +437,7 @@ static void normalize_sql(char *sql)
     src = sql;
     dst = buf;
     while (*src) {
-        if (_strnicmp(src, "public.", 7) == 0) {
+        if (strncasecmp(src, "public.", 7) == 0) {
             src += 7;  /* skip "public." */
         } else {
             *dst++ = *src++;
@@ -476,7 +476,7 @@ static void normalize_sql(char *sql)
     while (*src) {
         /* Look for " AS " (case-insensitive, surrounded by spaces) */
         if ((*src == ' ' || *src == '\t') &&
-            _strnicmp(src + 1, "AS ", 3) == 0 &&
+            strncasecmp(src + 1, "AS ", 3) == 0 &&
             (isalpha((unsigned char)src[4]) || src[4] == '_')) {
             /* Skip " AS alias" */
             char *p = src + 4;
@@ -495,12 +495,12 @@ static void normalize_sql(char *sql)
         char *p = sql;
         while (*p) {
             while (*p && isspace((unsigned char)*p)) p++;
-            if (_strnicmp(p, "LIMIT", 5) == 0 && (p[5] == ' ' || p[5] == '\t')) {
+            if (strncasecmp(p, "LIMIT", 5) == 0 && (p[5] == ' ' || p[5] == '\t')) {
                 /* Find end of LIMIT clause (LIMIT <number>) */
                 *p = '\0';
                 break;
             }
-            if (_strnicmp(p, "OFFSET", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
+            if (strncasecmp(p, "OFFSET", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
                 *p = '\0';
                 break;
             }

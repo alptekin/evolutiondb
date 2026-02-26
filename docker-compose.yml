@@ -1,0 +1,10 @@
+services:
+  evosql:
+    build: .
+    ports:
+      - "5433:5433"
+    volumes:
+      - evosql-data:/data
+
+volumes:
+  evosql-data:

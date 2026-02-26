@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <windows.h>
+#include "platform.h"
 #include "catalog.h"
 #include "../evolution/db/database.h"
 
@@ -87,7 +87,7 @@ static int stristr_found(const char *haystack, const char *needle)
     const char *h = haystack;
     int nlen = (int)strlen(needle);
     while (*h) {
-        if (_strnicmp(h, needle, nlen) == 0)
+        if (strncasecmp(h, needle, nlen) == 0)
             return 1;
         h++;
     }
@@ -98,7 +98,7 @@ static int stristr_found(const char *haystack, const char *needle)
 static int starts_with_i(const char *sql, const char *prefix)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
-    return _strnicmp(sql, prefix, strlen(prefix)) == 0;
+    return strncasecmp(sql, prefix, strlen(prefix)) == 0;
 }
 
 /* Deterministic OID from table name (djb2 hash) — ensures the same
@@ -374,7 +374,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
     {
         const char *p = sql;
         while (*p && isspace((unsigned char)*p)) p++;
-        if (_strnicmp(p, "SELECT", 6) == 0) {
+        if (strncasecmp(p, "SELECT", 6) == 0) {
             p += 6;
             while (*p && isspace((unsigned char)*p)) p++;
             if (*p == '1' && (p[1] == '\0' || isspace((unsigned char)p[1]) ||
@@ -396,9 +396,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
  * ---------------------------------------------------------------- */
 int catalog_list_tables(ResultSet *rs)
 {
-    WIN32_FIND_DATAA fd;
-    HANDLE hFind;
-    char pattern[] = "*.meta";
+    MetaIterator it;
 
     result_init(rs);
     rs->is_select = 1;
@@ -408,20 +406,12 @@ int catalog_list_tables(ResultSet *rs)
     result_add_column(rs, "table_name", PG_OID_TEXT);
     result_add_column(rs, "table_type", PG_OID_TEXT);
 
-    hFind = FindFirstFileA(pattern, &fd);
-    if (hFind == INVALID_HANDLE_VALUE) {
-        sprintf(rs->command_tag, "SELECT 0");
-        return 1;
-    }
-
+    meta_iter_open(&it);
     int count = 0;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
-
+    while (meta_iter_next(&it)) {
         /* Strip .meta extension to get table name */
         char tblName[256];
-        strncpy(tblName, fd.cFileName, sizeof(tblName) - 1);
+        strncpy(tblName, it.current_name, sizeof(tblName) - 1);
         tblName[sizeof(tblName) - 1] = '\0';
         char *dot = strstr(tblName, ".meta");
         if (dot) *dot = '\0';
@@ -433,9 +423,9 @@ int catalog_list_tables(ResultSet *rs)
         result_set_field(rs, row, 2, tblName);
         result_set_field(rs, row, 3, "BASE TABLE");
         count++;
-    } while (FindNextFileA(hFind, &fd));
+    }
+    meta_iter_close(&it);
 
-    FindClose(hFind);
     sprintf(rs->command_tag, "SELECT %d", count);
     return 1;
 }
@@ -512,8 +502,7 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
  * ---------------------------------------------------------------- */
 static int catalog_list_all_columns(ResultSet *rs)
 {
-    WIN32_FIND_DATAA fd;
-    HANDLE hFind;
+    MetaIterator it;
     int total = 0;
 
     result_init(rs);
@@ -527,18 +516,10 @@ static int catalog_list_all_columns(ResultSet *rs)
     result_add_column(rs, "data_type", PG_OID_TEXT);
     result_add_column(rs, "is_nullable", PG_OID_TEXT);
 
-    hFind = FindFirstFileA("*.meta", &fd);
-    if (hFind == INVALID_HANDLE_VALUE) {
-        sprintf(rs->command_tag, "SELECT 0");
-        return 1;
-    }
-
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
-
+    meta_iter_open(&it);
+    while (meta_iter_next(&it)) {
         char tblName[256], metaFile[1024], line[1024];
-        strncpy(tblName, fd.cFileName, sizeof(tblName) - 1);
+        strncpy(tblName, it.current_name, sizeof(tblName) - 1);
         tblName[sizeof(tblName) - 1] = '\0';
         char *dot = strstr(tblName, ".meta");
         if (dot) *dot = '\0';
@@ -586,9 +567,9 @@ static int catalog_list_all_columns(ResultSet *rs)
             }
         }
         fclose(fp);
-    } while (FindNextFileA(hFind, &fd));
+    }
+    meta_iter_close(&it);
 
-    FindClose(hFind);
     sprintf(rs->command_tag, "SELECT %d", total);
     return 1;
 }
@@ -784,14 +765,12 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "description", PG_OID_TEXT);    /* 23 */
 
         /* Scan .meta files — OID derived from table name for stability */
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA("*.meta", &fd);
+        MetaIterator mit;
+        meta_iter_open(&mit);
         int count = 0;
-        if (hFind != INVALID_HANDLE_VALUE) {
-            do {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        while (meta_iter_next(&mit)) {
                 char tblName[256];
-                strncpy(tblName, fd.cFileName, sizeof(tblName) - 1);
+                strncpy(tblName, mit.current_name, sizeof(tblName) - 1);
                 tblName[sizeof(tblName) - 1] = '\0';
                 char *dot = strstr(tblName, ".meta");
                 if (dot) *dot = '\0';
@@ -872,9 +851,8 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                     }
                 }
                 fclose(fp);
-            } while (FindNextFileA(hFind, &fd));
-            FindClose(hFind);
         }
+        meta_iter_close(&mit);
         sprintf(rs->command_tag, "SELECT %d", count);
         return 1;
     }
@@ -918,15 +896,12 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "partition_expr", PG_OID_TEXT);
 
         /* Scan .meta files to return actual tables */
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA("*.meta", &fd);
+        MetaIterator mit2;
+        meta_iter_open(&mit2);
         int count = 0;
-        if (hFind != INVALID_HANDLE_VALUE) {
-            do {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-                    continue;
+        while (meta_iter_next(&mit2)) {
                 char tblName[256];
-                strncpy(tblName, fd.cFileName, sizeof(tblName) - 1);
+                strncpy(tblName, mit2.current_name, sizeof(tblName) - 1);
                 tblName[sizeof(tblName) - 1] = '\0';
                 char *dot = strstr(tblName, ".meta");
                 if (dot) *dot = '\0';
@@ -990,9 +965,8 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 result_set_null(rs, row, 29);                 /* description */
                 result_set_null(rs, row, 30);                 /* partition_expr */
                 count++;
-            } while (FindNextFileA(hFind, &fd));
-            FindClose(hFind);
         }
+        meta_iter_close(&mit2);
         sprintf(rs->command_tag, "SELECT %d", count);
         return 1;
     }
@@ -1035,14 +1009,12 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "description", PG_OID_TEXT);
 
         /* Scan .meta files for tables with primary keys */
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA("*.meta", &fd);
+        MetaIterator mit3;
+        meta_iter_open(&mit3);
         int count = 0;
-        if (hFind != INVALID_HANDLE_VALUE) {
-            do {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        while (meta_iter_next(&mit3)) {
                 char tblName[256];
-                strncpy(tblName, fd.cFileName, sizeof(tblName) - 1);
+                strncpy(tblName, mit3.current_name, sizeof(tblName) - 1);
                 tblName[sizeof(tblName) - 1] = '\0';
                 char *dot = strstr(tblName, ".meta");
                 if (dot) *dot = '\0';
@@ -1079,9 +1051,8 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 result_set_null(rs, row, 16);                /* confkey */
                 result_set_null(rs, row, 17);                /* description */
                 count++;
-            } while (FindNextFileA(hFind, &fd));
-            FindClose(hFind);
         }
+        meta_iter_close(&mit3);
         sprintf(rs->command_tag, "SELECT %d", count);
         return 1;
     }

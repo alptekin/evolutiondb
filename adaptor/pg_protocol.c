@@ -1,13 +1,12 @@
 #include <stdio.h>
 #include <string.h>
-#include <winsock2.h>
-#include <windows.h>
+#include "platform.h"
 #include "pg_protocol.h"
 
 /* ----------------------------------------------------------------
  *  Low-level I/O
  * ---------------------------------------------------------------- */
-int pg_recv_exact(SOCKET sock, char *buf, int len)
+int pg_recv_exact(socket_t sock, char *buf, int len)
 {
     int total = 0, n;
     while (total < len) {
@@ -18,7 +17,7 @@ int pg_recv_exact(SOCKET sock, char *buf, int len)
     return total;
 }
 
-static int pg_send_all(SOCKET sock, const char *buf, int len)
+static int pg_send_all(socket_t sock, const char *buf, int len)
 {
     int total = 0, n;
     while (total < len) {
@@ -81,7 +80,7 @@ void pg_buf_add_bytes(PgBuf *b, const char *data, int len)
     b->len += len;
 }
 
-int pg_buf_send(PgBuf *b, SOCKET sock)
+int pg_buf_send(PgBuf *b, socket_t sock)
 {
     int has_type = (b->buf[0] != 0 && b->len >= 5) ? 1 : 0;
     int length_offset = has_type ? 1 : 0;
@@ -101,7 +100,7 @@ int pg_buf_send(PgBuf *b, SOCKET sock)
 /* ----------------------------------------------------------------
  *  High-level message senders
  * ---------------------------------------------------------------- */
-void pg_send_auth_ok(SOCKET sock)
+void pg_send_auth_ok(socket_t sock)
 {
     PgBuf b;
     pg_buf_init(&b, PG_RESP_AUTH);
@@ -109,7 +108,7 @@ void pg_send_auth_ok(SOCKET sock)
     pg_buf_send(&b, sock);
 }
 
-void pg_send_parameter_status(SOCKET sock, const char *name, const char *value)
+void pg_send_parameter_status(socket_t sock, const char *name, const char *value)
 {
     PgBuf b;
     pg_buf_init(&b, PG_RESP_PARAM_STATUS);
@@ -118,7 +117,7 @@ void pg_send_parameter_status(SOCKET sock, const char *name, const char *value)
     pg_buf_send(&b, sock);
 }
 
-void pg_send_ready_for_query(SOCKET sock, char status)
+void pg_send_ready_for_query(socket_t sock, char status)
 {
     PgBuf b;
     pg_buf_init(&b, PG_RESP_READY);
@@ -126,7 +125,7 @@ void pg_send_ready_for_query(SOCKET sock, char status)
     pg_buf_send(&b, sock);
 }
 
-void pg_send_error(SOCKET sock, const char *severity,
+void pg_send_error(socket_t sock, const char *severity,
                    const char *sqlstate, const char *message)
 {
     PgBuf b;
@@ -148,7 +147,7 @@ void pg_send_error(SOCKET sock, const char *severity,
     pg_buf_send(&b, sock);
 }
 
-void pg_send_command_complete(SOCKET sock, const char *tag)
+void pg_send_command_complete(socket_t sock, const char *tag)
 {
     PgBuf b;
     pg_buf_init(&b, PG_RESP_CMD_COMPLETE);
@@ -156,14 +155,14 @@ void pg_send_command_complete(SOCKET sock, const char *tag)
     pg_buf_send(&b, sock);
 }
 
-void pg_send_empty_query(SOCKET sock)
+void pg_send_empty_query(socket_t sock)
 {
     PgBuf b;
     pg_buf_init(&b, PG_RESP_EMPTY_QUERY);
     pg_buf_send(&b, sock);
 }
 
-void pg_send_backend_key_data(SOCKET sock, int pid, int secret)
+void pg_send_backend_key_data(socket_t sock, int pid, int secret)
 {
     PgBuf b;
     pg_buf_init(&b, 'K');
@@ -172,7 +171,7 @@ void pg_send_backend_key_data(SOCKET sock, int pid, int secret)
     pg_buf_send(&b, sock);
 }
 
-void pg_send_result_set(SOCKET sock, const ResultSet *rs)
+void pg_send_result_set(socket_t sock, const ResultSet *rs)
 {
     PgBuf b;
     int r, c;
@@ -214,7 +213,7 @@ void pg_send_result_set(SOCKET sock, const ResultSet *rs)
 /* ----------------------------------------------------------------
  *  Startup / handshake
  * ---------------------------------------------------------------- */
-int pg_handle_startup(SOCKET sock)
+int pg_handle_startup(socket_t sock)
 {
     char buf[8192];
     int msg_len;
@@ -298,7 +297,7 @@ int pg_handle_startup(SOCKET sock)
 
     /* BackendKeyData — required by JDBC/DBeaver */
     fprintf(stderr, "[debug] sending backend_key_data...\n"); fflush(stderr);
-    pg_send_backend_key_data(sock, (int)GetCurrentProcessId(), 12345);
+    pg_send_backend_key_data(sock, platform_getpid(), 12345);
 
     /* ReadyForQuery — idle */
     fprintf(stderr, "[debug] sending ready_for_query...\n"); fflush(stderr);
@@ -312,7 +311,7 @@ int pg_handle_startup(SOCKET sock)
 /* ----------------------------------------------------------------
  *  Read a frontend message
  * ---------------------------------------------------------------- */
-int pg_read_message(SOCKET sock, char *type, char *buf, int *len)
+int pg_read_message(socket_t sock, char *type, char *buf, int *len)
 {
     char header[5];
     int msg_len;
