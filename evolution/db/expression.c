@@ -223,6 +223,56 @@ ExprNode *expr_make_is_not_null(ExprNode *operand)
     return e;
 }
 
+ExprNode *expr_make_and(ExprNode *left, ExprNode *right)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_AND;
+    e->left = left;
+    e->right = right;
+    snprintf(e->display, sizeof(e->display), "%s AND %s",
+             left ? left->display : "?",
+             right ? right->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_or(ExprNode *left, ExprNode *right)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_OR;
+    e->left = left;
+    e->right = right;
+    snprintf(e->display, sizeof(e->display), "%s OR %s",
+             left ? left->display : "?",
+             right ? right->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_not(ExprNode *operand)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_NOT;
+    e->left = operand;
+    snprintf(e->display, sizeof(e->display), "NOT %s",
+             operand ? operand->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_xor(ExprNode *left, ExprNode *right)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_XOR;
+    e->left = left;
+    e->right = right;
+    snprintf(e->display, sizeof(e->display), "%s XOR %s",
+             left ? left->display : "?",
+             right ? right->display : "?");
+    return e;
+}
+
 /* ---- Store a select expression ---- */
 void expr_store_select(ExprNode *expr, const char *alias)
 {
@@ -250,7 +300,11 @@ int expr_is_boolean(const ExprNode *e)
             e->type == EXPR_CMP_LT ||
             e->type == EXPR_CMP_GT ||
             e->type == EXPR_CMP_LE ||
-            e->type == EXPR_CMP_GE);
+            e->type == EXPR_CMP_GE ||
+            e->type == EXPR_AND ||
+            e->type == EXPR_OR ||
+            e->type == EXPR_NOT ||
+            e->type == EXPR_XOR);
 }
 
 /* ---- Evaluate as double ---- */
@@ -437,6 +491,67 @@ int expr_evaluate(const ExprNode *e,
 
         int result = (e->type == EXPR_IS_NULL) ? is_null : !is_null;
         strncpy(out_buf, result ? "t" : "f", buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
+    /* AND / OR / NOT / XOR logical operators */
+    if (e->type == EXPR_AND || e->type == EXPR_OR || e->type == EXPR_XOR) {
+        char lbuf[512], rbuf[512];
+        int l_ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, lbuf, sizeof(lbuf)) : 0;
+        int r_ok = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, rbuf, sizeof(rbuf)) : 0;
+
+        /* Convert left/right to boolean: "t" or "true" or non-zero number → 1 */
+        int lval = 0, rval = 0;
+        if (l_ok) {
+            if (strcmp(lbuf, "t") == 0 || strcasecmp(lbuf, "true") == 0)
+                lval = 1;
+            else
+                lval = (strtod(lbuf, NULL) != 0.0) ? 1 : 0;
+        }
+        if (r_ok) {
+            if (strcmp(rbuf, "t") == 0 || strcasecmp(rbuf, "true") == 0)
+                rval = 1;
+            else
+                rval = (strtod(rbuf, NULL) != 0.0) ? 1 : 0;
+        }
+
+        /* SQL three-valued logic for NULL */
+        if (e->type == EXPR_AND) {
+            /* FALSE AND NULL → FALSE; TRUE AND NULL → NULL; NULL AND NULL → NULL */
+            if (!l_ok && !r_ok) { out_buf[0] = '\0'; return 0; }
+            if (!l_ok)  { strncpy(out_buf, rval ? "f" : "f", buf_size - 1); /* NULL AND x: if x false→false, else NULL */
+                          if (rval) { out_buf[0] = '\0'; return 0; } /* NULL AND TRUE → NULL */
+                          strncpy(out_buf, "f", buf_size - 1); out_buf[buf_size - 1] = '\0'; return 1; }
+            if (!r_ok)  { if (lval) { out_buf[0] = '\0'; return 0; } /* TRUE AND NULL → NULL */
+                          strncpy(out_buf, "f", buf_size - 1); out_buf[buf_size - 1] = '\0'; return 1; }
+            strncpy(out_buf, (lval && rval) ? "t" : "f", buf_size - 1);
+        } else if (e->type == EXPR_OR) {
+            /* TRUE OR NULL → TRUE; FALSE OR NULL → NULL; NULL OR NULL → NULL */
+            if (!l_ok && !r_ok) { out_buf[0] = '\0'; return 0; }
+            if (!l_ok)  { if (rval) { strncpy(out_buf, "t", buf_size - 1); out_buf[buf_size - 1] = '\0'; return 1; }
+                          out_buf[0] = '\0'; return 0; }
+            if (!r_ok)  { if (lval) { strncpy(out_buf, "t", buf_size - 1); out_buf[buf_size - 1] = '\0'; return 1; }
+                          out_buf[0] = '\0'; return 0; }
+            strncpy(out_buf, (lval || rval) ? "t" : "f", buf_size - 1);
+        } else { /* EXPR_XOR */
+            if (!l_ok || !r_ok) { out_buf[0] = '\0'; return 0; }
+            strncpy(out_buf, (lval != rval) ? "t" : "f", buf_size - 1);
+        }
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
+    if (e->type == EXPR_NOT) {
+        char lbuf[512];
+        int l_ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, lbuf, sizeof(lbuf)) : 0;
+        if (!l_ok) { out_buf[0] = '\0'; return 0; } /* NOT NULL → NULL */
+        int lval = 0;
+        if (strcmp(lbuf, "t") == 0 || strcasecmp(lbuf, "true") == 0)
+            lval = 1;
+        else
+            lval = (strtod(lbuf, NULL) != 0.0) ? 1 : 0;
+        strncpy(out_buf, lval ? "f" : "t", buf_size - 1);
         out_buf[buf_size - 1] = '\0';
         return 1;
     }

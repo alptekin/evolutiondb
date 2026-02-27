@@ -316,15 +316,15 @@ expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3)
 | expr MOD expr									{ emit("MOD"); $$ = expr_make_binop(EXPR_MOD, $1, $3); }
 | '-' expr %prec UMINUS								{ emit("NEG"); $$ = expr_make_neg($2); }
 | '(' expr ')'									{ $$ = $2; }
-| expr ANDOP expr								{ emit("AND"); $$ = $1; }
-| expr OR expr									{ emit("OR"); $$ = $1; }
-| expr XOR expr									{ emit("XOR"); $$ = $1; }
+| expr ANDOP expr								{ emit("AND"); $$ = expr_make_and($1, $3); }
+| expr OR expr									{ emit("OR"); $$ = expr_make_or($1, $3); }
+| expr XOR expr									{ emit("XOR"); $$ = expr_make_xor($1, $3); }
 | expr '|' expr									{ emit("BITOR"); $$ = expr_make_binop(EXPR_BITOR, $1, $3); }
 | expr '&' expr									{ emit("BITAND"); $$ = expr_make_binop(EXPR_BITAND, $1, $3); }
 | expr '^' expr									{ emit("BITXOR"); $$ = expr_make_binop(EXPR_BITXOR, $1, $3); }
 | expr SHIFT expr								{ emit("SHIFT %s", $2==1?"left":"right"); $$ = expr_make_binop($2==1 ? EXPR_SHIFT_LEFT : EXPR_SHIFT_RIGHT, $1, $3); }
-| NOT expr									{ emit("NOT"); $$ = $2; }
-| '!' expr									{ emit("NOT"); $$ = $2; }
+| NOT expr									{ emit("NOT"); $$ = expr_make_not($2); }
+| '!' expr									{ emit("NOT"); $$ = expr_make_not($2); }
 | expr COMPARISON expr
     {
         emit("CMP %d", $2);

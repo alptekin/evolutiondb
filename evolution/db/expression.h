@@ -36,6 +36,10 @@ typedef enum {
     EXPR_CMP_GT,          /* left > right */
     EXPR_CMP_LE,          /* left <= right */
     EXPR_CMP_GE,          /* left >= right */
+    EXPR_AND,             /* left AND right */
+    EXPR_OR,              /* left OR right */
+    EXPR_NOT,             /* NOT expr */
+    EXPR_XOR,             /* left XOR right */
     EXPR_IS_NULL,         /* expr IS NULL */
     EXPR_IS_NOT_NULL,     /* expr IS NOT NULL */
     EXPR_CURRENT_TIMESTAMP, /* CURRENT_TIMESTAMP */
@@ -85,6 +89,10 @@ ExprNode *expr_make_current_time(void);
 ExprNode *expr_make_cmp(int subtok, ExprNode *left, ExprNode *right);
 ExprNode *expr_make_is_null(ExprNode *operand);
 ExprNode *expr_make_is_not_null(ExprNode *operand);
+ExprNode *expr_make_and(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_or(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_not(ExprNode *operand);
+ExprNode *expr_make_xor(ExprNode *left, ExprNode *right);
 
 /* Reset expression pool (call before each query) */
 void expr_pool_reset(void);

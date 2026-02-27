@@ -644,6 +644,53 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         if (!rs->has_error && g_lastSelectTable[0] != '\0') {
             collect_select_results(g_lastSelectTable, rs);
             g_lastSelectTable[0] = '\0';
+        } else if (!rs->has_error && g_selectExprCount > 0 && is_select_query(sql)) {
+            /* Tableless SELECT: SELECT 1+2, SELECT 1=1 AND 2=2, etc.
+             * Evaluate expressions without any table context. */
+            int s;
+            rs->is_select = 1;
+            rs->num_cols = g_selectExprCount;
+            for (s = 0; s < g_selectExprCount; s++) {
+                if (g_selectExprs[s]) {
+                    strncpy(rs->columns[s].name, g_selectExprs[s]->display,
+                            sizeof(rs->columns[s].name) - 1);
+                } else {
+                    strcpy(rs->columns[s].name, "?column?");
+                }
+                rs->columns[s].attnum = s + 1;
+                rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
+                rs->columns[s].type_len = -1;
+                rs->columns[s].type_modifier = -1;
+            }
+            int row = result_add_row(rs);
+            if (row >= 0) {
+                char empty_names[1][128];
+                char empty_vals[1][256];
+                memset(empty_names, 0, sizeof(empty_names));
+                memset(empty_vals, 0, sizeof(empty_vals));
+                for (s = 0; s < g_selectExprCount; s++) {
+                    if (g_selectExprs[s]) {
+                        char result[512];
+                        int ok = expr_evaluate(g_selectExprs[s],
+                                               empty_names, empty_vals, 0,
+                                               result, sizeof(result));
+                        if (ok) {
+                            /* Boolean conversion */
+                            if (expr_is_boolean(g_selectExprs[s])) {
+                                if (strcmp(result, "t") == 0 || strcasecmp(result, "true") == 0 || strcmp(result, "1") == 0)
+                                    strcpy(rs->rows[row].fields[s], "true");
+                                else
+                                    strcpy(rs->rows[row].fields[s], "false");
+                            } else {
+                                strncpy(rs->rows[row].fields[s], result, MAX_FIELD_LEN - 1);
+                            }
+                        } else {
+                            rs->rows[row].is_null[s] = 1;
+                        }
+                    }
+                }
+            }
+            sprintf(rs->command_tag, "SELECT 1");
         } else if (!rs->has_error) {
             /* DDL/DML command — determine appropriate tag */
             if (is_create_query(sql))
