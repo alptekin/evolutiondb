@@ -422,7 +422,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
     sprintf(rs->command_tag, "SELECT %d", count);
 
-    /* --- Aggregate detection & evaluation --- */
+    /* --- GROUP BY / Aggregate detection & evaluation --- */
     {
         int has_aggregate = 0;
         int s;
@@ -432,8 +432,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 break;
             }
         }
-        if (has_aggregate && rs->num_cols > 0) {
-            /* Build column name/value arrays for per-row evaluation */
+        if ((has_aggregate || g_groupByCount > 0) && rs->num_cols > 0) {
+            /* Build column name arrays for evaluation */
             char colNames[MAX_COLUMNS][128];
             int origNumCols = rs->num_cols;
             int origNumRows = rs->num_rows;
@@ -443,6 +443,87 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     strncpy(colNames[c], rs->columns[c].name, 127);
                     colNames[c][127] = '\0';
                 }
+            }
+
+            /* --- Helper: build colValues for a given row index --- */
+            #define BUILD_COL_VALUES(rowIdx, colVals) do { \
+                int _c; \
+                for (_c = 0; _c < origNumCols && _c < MAX_COLUMNS; _c++) { \
+                    if (rs->rows[rowIdx].is_null[_c]) \
+                        strcpy((colVals)[_c], NULL_MARKER); \
+                    else { \
+                        strncpy((colVals)[_c], rs->rows[rowIdx].fields[_c], 255); \
+                        (colVals)[_c][255] = '\0'; \
+                    } \
+                } \
+            } while(0)
+
+            /* Determine group membership:
+             * groups[r] = group index for row r
+             * groupCount = total number of distinct groups
+             * groupFirstRow[g] = first row index of group g  */
+            int groups[MAX_ROWS];
+            int groupCount = 0;
+            int groupFirstRow[MAX_ROWS];
+            int groupSize[MAX_ROWS];
+            memset(groups, 0, sizeof(groups));
+            memset(groupSize, 0, sizeof(groupSize));
+
+            if (g_groupByCount > 0) {
+                /* Compute GROUP BY key for each row and assign group index */
+                /* groupKeys[g] is a concatenated string key for each group */
+                char groupKeys[MAX_ROWS][1024];
+                int r;
+                for (r = 0; r < origNumRows; r++) {
+                    char colValues[MAX_COLUMNS][256];
+                    BUILD_COL_VALUES(r, colValues);
+
+                    /* Build key from GROUP BY expressions */
+                    char key[1024];
+                    key[0] = '\0';
+                    int g;
+                    for (g = 0; g < g_groupByCount; g++) {
+                        char part[MAX_FIELD_LEN];
+                        if (expr_evaluate(g_groupByExprs[g],
+                                (const char (*)[128])colNames,
+                                (const char (*)[256])colValues,
+                                origNumCols, part, sizeof(part))) {
+                            if (g > 0) strcat(key, "\x01");
+                            strcat(key, part);
+                        } else {
+                            if (g > 0) strcat(key, "\x01");
+                            strcat(key, NULL_MARKER);
+                        }
+                    }
+
+                    /* Find or create group */
+                    int found = -1, gi;
+                    for (gi = 0; gi < groupCount; gi++) {
+                        if (strcmp(groupKeys[gi], key) == 0) {
+                            found = gi;
+                            break;
+                        }
+                    }
+                    if (found >= 0) {
+                        groups[r] = found;
+                        groupSize[found]++;
+                    } else {
+                        strncpy(groupKeys[groupCount], key, 1023);
+                        groupKeys[groupCount][1023] = '\0';
+                        groupFirstRow[groupCount] = r;
+                        groups[r] = groupCount;
+                        groupSize[groupCount] = 1;
+                        groupCount++;
+                    }
+                }
+            } else {
+                /* No GROUP BY — all rows form one group */
+                groupCount = 1;
+                groupFirstRow[0] = 0;
+                groupSize[0] = origNumRows;
+                int r;
+                for (r = 0; r < origNumRows; r++)
+                    groups[r] = 0;
             }
 
             /* Set up result columns */
@@ -461,79 +542,376 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 rs->columns[s].attnum = s + 1;
             }
 
-            /* Compute aggregate values */
-            Row aggRow;
-            memset(&aggRow, 0, sizeof(aggRow));
-            aggRow.num_fields = g_selectExprCount;
+            /* Compute aggregate/expression values for each group */
+            int outRows = 0;
+            Row groupRows[MAX_ROWS];
+            int gi;
+            for (gi = 0; gi < groupCount && outRows < MAX_ROWS; gi++) {
+                Row aggRow;
+                memset(&aggRow, 0, sizeof(aggRow));
+                aggRow.num_fields = g_selectExprCount;
 
-            for (s = 0; s < g_selectExprCount; s++) {
-                if (!g_selectExprs[s]) {
-                    aggRow.is_null[s] = 1;
-                    continue;
-                }
-                if (g_selectExprs[s]->type == EXPR_COUNT_STAR) {
-                    /* COUNT(*) — count all rows */
-                    snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", origNumRows);
-                } else if (g_selectExprs[s]->type == EXPR_COUNT) {
-                    /* COUNT(expr) — count rows where expr is not NULL */
-                    int cnt = 0, r;
-                    for (r = 0; r < origNumRows; r++) {
-                        char colValues[MAX_COLUMNS][256];
-                        int c;
-                        for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
-                            if (rs->rows[r].is_null[c])
-                                strcpy(colValues[c], NULL_MARKER);
-                            else {
-                                strncpy(colValues[c], rs->rows[r].fields[c], 255);
-                                colValues[c][255] = '\0';
-                            }
-                        }
-                        char result[MAX_FIELD_LEN];
-                        if (expr_evaluate(g_selectExprs[s]->left,
-                                (const char (*)[128])colNames,
-                                (const char (*)[256])colValues,
-                                origNumCols, result, sizeof(result))) {
-                            cnt++;  /* non-NULL result */
-                        }
+                for (s = 0; s < g_selectExprCount; s++) {
+                    if (!g_selectExprs[s]) {
+                        aggRow.is_null[s] = 1;
+                        continue;
                     }
-                    snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", cnt);
-                } else {
-                    /* Non-aggregate expression alongside aggregate — evaluate
-                     * against first row (undefined per SQL standard without GROUP BY,
-                     * but common in MySQL) */
-                    if (origNumRows > 0) {
-                        char colValues[MAX_COLUMNS][256];
-                        int c;
-                        for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
-                            if (rs->rows[0].is_null[c])
-                                strcpy(colValues[c], NULL_MARKER);
-                            else {
-                                strncpy(colValues[c], rs->rows[0].fields[c], 255);
-                                colValues[c][255] = '\0';
+                    if (g_selectExprs[s]->type == EXPR_COUNT_STAR) {
+                        int cnt = 0, r;
+                        for (r = 0; r < origNumRows; r++)
+                            if (groups[r] == gi) cnt++;
+                        snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", cnt);
+                    } else if (g_selectExprs[s]->type == EXPR_COUNT) {
+                        int cnt = 0, r;
+                        for (r = 0; r < origNumRows; r++) {
+                            if (groups[r] != gi) continue;
+                            char colValues[MAX_COLUMNS][256];
+                            BUILD_COL_VALUES(r, colValues);
+                            char result[MAX_FIELD_LEN];
+                            if (expr_evaluate(g_selectExprs[s]->left,
+                                    (const char (*)[128])colNames,
+                                    (const char (*)[256])colValues,
+                                    origNumCols, result, sizeof(result)))
+                                cnt++;
+                        }
+                        snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", cnt);
+                    } else if (g_selectExprs[s]->type == EXPR_SUM ||
+                               g_selectExprs[s]->type == EXPR_AVG) {
+                        double total = 0.0;
+                        int cnt = 0, r;
+                        for (r = 0; r < origNumRows; r++) {
+                            if (groups[r] != gi) continue;
+                            char colValues[MAX_COLUMNS][256];
+                            BUILD_COL_VALUES(r, colValues);
+                            char result[MAX_FIELD_LEN];
+                            if (expr_evaluate(g_selectExprs[s]->left,
+                                    (const char (*)[128])colNames,
+                                    (const char (*)[256])colValues,
+                                    origNumCols, result, sizeof(result))) {
+                                total += strtod(result, NULL);
+                                cnt++;
                             }
                         }
-                        char result[MAX_FIELD_LEN];
-                        if (expr_evaluate(g_selectExprs[s],
-                                (const char (*)[128])colNames,
-                                (const char (*)[256])colValues,
-                                origNumCols, result, sizeof(result))) {
-                            strncpy(aggRow.fields[s], result, MAX_FIELD_LEN - 1);
-                            /* Use VARCHAR for non-aggregate columns */
+                        if (cnt == 0) {
+                            aggRow.is_null[s] = 1;
+                        } else if (g_selectExprs[s]->type == EXPR_AVG) {
+                            double avg = total / cnt;
+                            if (avg == (double)(long long)avg && avg > -1e15 && avg < 1e15)
+                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%lld", (long long)avg);
+                            else
+                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%.4f", avg);
+                            rs->columns[s].pg_type_oid = PG_OID_FLOAT8;
+                        } else {
+                            if (total == (double)(long long)total && total > -1e15 && total < 1e15)
+                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%lld", (long long)total);
+                            else
+                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%g", total);
+                        }
+                    } else if (g_selectExprs[s]->type == EXPR_MIN ||
+                               g_selectExprs[s]->type == EXPR_MAX) {
+                        int found = 0, r;
+                        double best_num = 0.0;
+                        char best_str[MAX_FIELD_LEN];
+                        int is_numeric = 1;
+                        best_str[0] = '\0';
+                        for (r = 0; r < origNumRows; r++) {
+                            if (groups[r] != gi) continue;
+                            char colValues[MAX_COLUMNS][256];
+                            BUILD_COL_VALUES(r, colValues);
+                            char result[MAX_FIELD_LEN];
+                            if (expr_evaluate(g_selectExprs[s]->left,
+                                    (const char (*)[128])colNames,
+                                    (const char (*)[256])colValues,
+                                    origNumCols, result, sizeof(result))) {
+                                char *endp;
+                                double numval = strtod(result, &endp);
+                                if (*endp != '\0' || result[0] == '\0') is_numeric = 0;
+                                if (!found) {
+                                    strncpy(best_str, result, MAX_FIELD_LEN - 1);
+                                    best_num = numval;
+                                    found = 1;
+                                } else {
+                                    int take = 0;
+                                    if (is_numeric) {
+                                        if (g_selectExprs[s]->type == EXPR_MIN)
+                                            take = (numval < best_num);
+                                        else
+                                            take = (numval > best_num);
+                                    } else {
+                                        int cmp = strcmp(result, best_str);
+                                        if (g_selectExprs[s]->type == EXPR_MIN)
+                                            take = (cmp < 0);
+                                        else
+                                            take = (cmp > 0);
+                                    }
+                                    if (take) {
+                                        strncpy(best_str, result, MAX_FIELD_LEN - 1);
+                                        best_num = numval;
+                                    }
+                                }
+                            }
+                        }
+                        if (!found) {
+                            aggRow.is_null[s] = 1;
+                        } else {
+                            strncpy(aggRow.fields[s], best_str, MAX_FIELD_LEN - 1);
                             rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
                             rs->columns[s].type_len = -1;
+                        }
+                    } else {
+                        /* Non-aggregate expression — evaluate against first row of group */
+                        int firstRow = groupFirstRow[gi];
+                        if (origNumRows > 0) {
+                            char colValues[MAX_COLUMNS][256];
+                            BUILD_COL_VALUES(firstRow, colValues);
+                            char result[MAX_FIELD_LEN];
+                            if (expr_evaluate(g_selectExprs[s],
+                                    (const char (*)[128])colNames,
+                                    (const char (*)[256])colValues,
+                                    origNumCols, result, sizeof(result))) {
+                                strncpy(aggRow.fields[s], result, MAX_FIELD_LEN - 1);
+                                rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
+                                rs->columns[s].type_len = -1;
+                            } else {
+                                aggRow.is_null[s] = 1;
+                            }
                         } else {
                             aggRow.is_null[s] = 1;
                         }
-                    } else {
-                        aggRow.is_null[s] = 1;
                     }
                 }
+
+                /* HAVING filter: evaluate HAVING expression against this group.
+                 * Problem: HAVING may contain aggregates (COUNT(*), SUM(x), etc.)
+                 * that expr_evaluate can't directly compute. Solution: pre-compute
+                 * any aggregates in HAVING and expose them as named columns. We build
+                 * a column context with both the SELECT result columns AND the
+                 * original table columns, plus we handle the case where HAVING
+                 * directly references an aggregate by matching it to a SELECT column.
+                 *
+                 * Strategy: Build a combined column context:
+                 *   - SELECT expression display names → aggRow values
+                 *   - Original table columns → first row of group values
+                 * Then if HAVING references COUNT(*), it matches SELECT's COUNT(*) column.
+                 * For HAVING aggregates NOT in SELECT, we compute them on-the-fly. */
+                if (g_havingExpr) {
+                    /* Build combined context: select columns first, then original cols,
+                     * then any HAVING aggregates not already in SELECT */
+                    char havCols[MAX_COLUMNS][128];
+                    char havVals[MAX_COLUMNS][256];
+                    int havColCount = 0;
+                    int hc;
+
+                    /* First: add SELECT expression results (aggregates + group cols) */
+                    for (hc = 0; hc < g_selectExprCount && havColCount < MAX_COLUMNS; hc++) {
+                        strncpy(havCols[havColCount], rs->columns[hc].name, 127);
+                        havCols[havColCount][127] = '\0';
+                        if (aggRow.is_null[hc])
+                            strcpy(havVals[havColCount], NULL_MARKER);
+                        else {
+                            strncpy(havVals[havColCount], aggRow.fields[hc], 255);
+                            havVals[havColCount][255] = '\0';
+                        }
+                        havColCount++;
+                    }
+
+                    /* Second: collect aggregates from HAVING expression and compute
+                     * any that aren't already in the context */
+                    {
+                        const ExprNode *havAggs[16];
+                        int havAggCount = 0;
+                        expr_collect_aggregates(g_havingExpr, havAggs, &havAggCount, 16);
+                        int ha;
+                        for (ha = 0; ha < havAggCount; ha++) {
+                            /* Check if already in context by display name */
+                            int dup = 0, dc;
+                            for (dc = 0; dc < havColCount; dc++) {
+                                if (strcasecmp(havCols[dc], havAggs[ha]->display) == 0) {
+                                    dup = 1; break;
+                                }
+                            }
+                            if (dup || havColCount >= MAX_COLUMNS) continue;
+
+                            /* Compute this aggregate for the current group */
+                            strncpy(havCols[havColCount], havAggs[ha]->display, 127);
+                            havCols[havColCount][127] = '\0';
+
+                            if (havAggs[ha]->type == EXPR_COUNT_STAR) {
+                                int cnt = 0, r;
+                                for (r = 0; r < origNumRows; r++)
+                                    if (groups[r] == gi) cnt++;
+                                snprintf(havVals[havColCount], 256, "%d", cnt);
+                            } else if (havAggs[ha]->type == EXPR_COUNT) {
+                                int cnt = 0, r;
+                                for (r = 0; r < origNumRows; r++) {
+                                    if (groups[r] != gi) continue;
+                                    char cv[MAX_COLUMNS][256];
+                                    BUILD_COL_VALUES(r, cv);
+                                    char res[MAX_FIELD_LEN];
+                                    if (expr_evaluate(havAggs[ha]->left,
+                                            (const char (*)[128])colNames,
+                                            (const char (*)[256])cv,
+                                            origNumCols, res, sizeof(res)))
+                                        cnt++;
+                                }
+                                snprintf(havVals[havColCount], 256, "%d", cnt);
+                            } else if (havAggs[ha]->type == EXPR_SUM ||
+                                       havAggs[ha]->type == EXPR_AVG) {
+                                double total = 0.0;
+                                int cnt = 0, r;
+                                for (r = 0; r < origNumRows; r++) {
+                                    if (groups[r] != gi) continue;
+                                    char cv[MAX_COLUMNS][256];
+                                    BUILD_COL_VALUES(r, cv);
+                                    char res[MAX_FIELD_LEN];
+                                    if (expr_evaluate(havAggs[ha]->left,
+                                            (const char (*)[128])colNames,
+                                            (const char (*)[256])cv,
+                                            origNumCols, res, sizeof(res))) {
+                                        total += strtod(res, NULL);
+                                        cnt++;
+                                    }
+                                }
+                                if (cnt == 0) {
+                                    strcpy(havVals[havColCount], NULL_MARKER);
+                                } else if (havAggs[ha]->type == EXPR_AVG) {
+                                    double avg = total / cnt;
+                                    if (avg == (double)(long long)avg)
+                                        snprintf(havVals[havColCount], 256, "%lld", (long long)avg);
+                                    else
+                                        snprintf(havVals[havColCount], 256, "%.4f", avg);
+                                } else {
+                                    if (total == (double)(long long)total)
+                                        snprintf(havVals[havColCount], 256, "%lld", (long long)total);
+                                    else
+                                        snprintf(havVals[havColCount], 256, "%g", total);
+                                }
+                            } else if (havAggs[ha]->type == EXPR_MIN ||
+                                       havAggs[ha]->type == EXPR_MAX) {
+                                int found = 0, r, is_numeric = 1;
+                                double best_num = 0.0;
+                                char best_str[MAX_FIELD_LEN];
+                                best_str[0] = '\0';
+                                for (r = 0; r < origNumRows; r++) {
+                                    if (groups[r] != gi) continue;
+                                    char cv[MAX_COLUMNS][256];
+                                    BUILD_COL_VALUES(r, cv);
+                                    char res[MAX_FIELD_LEN];
+                                    if (expr_evaluate(havAggs[ha]->left,
+                                            (const char (*)[128])colNames,
+                                            (const char (*)[256])cv,
+                                            origNumCols, res, sizeof(res))) {
+                                        char *endp;
+                                        double nv = strtod(res, &endp);
+                                        if (*endp != '\0' || res[0] == '\0') is_numeric = 0;
+                                        if (!found) {
+                                            strncpy(best_str, res, MAX_FIELD_LEN - 1);
+                                            best_num = nv;
+                                            found = 1;
+                                        } else {
+                                            int take = 0;
+                                            if (is_numeric)
+                                                take = (havAggs[ha]->type == EXPR_MIN) ? (nv < best_num) : (nv > best_num);
+                                            else {
+                                                int cmp = strcmp(res, best_str);
+                                                take = (havAggs[ha]->type == EXPR_MIN) ? (cmp < 0) : (cmp > 0);
+                                            }
+                                            if (take) { strncpy(best_str, res, MAX_FIELD_LEN - 1); best_num = nv; }
+                                        }
+                                    }
+                                }
+                                if (!found)
+                                    strcpy(havVals[havColCount], NULL_MARKER);
+                                else
+                                    strncpy(havVals[havColCount], best_str, 255);
+                            }
+                            havColCount++;
+                        }
+                    }
+
+                    /* Third: add original table columns from first row of group */
+                    int firstRow = groupFirstRow[gi];
+                    for (hc = 0; hc < origNumCols && havColCount < MAX_COLUMNS; hc++) {
+                        /* Avoid duplicate column names */
+                        int dup = 0, dc;
+                        for (dc = 0; dc < havColCount; dc++) {
+                            if (strcasecmp(havCols[dc], colNames[hc]) == 0) {
+                                dup = 1; break;
+                            }
+                        }
+                        if (dup) continue;
+                        strncpy(havCols[havColCount], colNames[hc], 127);
+                        havCols[havColCount][127] = '\0';
+                        if (origNumRows > 0 && rs->rows[firstRow].is_null[hc])
+                            strcpy(havVals[havColCount], NULL_MARKER);
+                        else if (origNumRows > 0) {
+                            strncpy(havVals[havColCount], rs->rows[firstRow].fields[hc], 255);
+                            havVals[havColCount][255] = '\0';
+                        } else {
+                            strcpy(havVals[havColCount], NULL_MARKER);
+                        }
+                        havColCount++;
+                    }
+
+                    char hResult[MAX_FIELD_LEN];
+                    int hOk = expr_evaluate(g_havingExpr,
+                            (const char (*)[128])havCols,
+                            (const char (*)[256])havVals,
+                            havColCount,
+                            hResult, sizeof(hResult));
+                    int keep = 0;
+                    if (hOk) {
+                        if (strcmp(hResult, "t") == 0 || strcasecmp(hResult, "true") == 0 ||
+                            strcmp(hResult, "1") == 0)
+                            keep = 1;
+                        else {
+                            double v = strtod(hResult, NULL);
+                            if (v != 0.0) keep = 1;
+                        }
+                    }
+                    if (!keep) continue;  /* skip this group */
+                }
+
+                groupRows[outRows++] = aggRow;
             }
 
-            /* Replace all rows with single aggregate row */
-            rs->num_rows = 1;
-            rs->rows[0] = aggRow;
-            sprintf(rs->command_tag, "SELECT 1");
+            #undef BUILD_COL_VALUES
+
+            /* Replace rows with grouped/aggregated result rows */
+            int r;
+            for (r = 0; r < outRows; r++)
+                rs->rows[r] = groupRows[r];
+            rs->num_rows = outRows;
+            sprintf(rs->command_tag, "SELECT %d", outRows);
+
+            /* Apply LIMIT/OFFSET on grouped results (re-apply since
+             * we replaced rs->rows) */
+            if (g_limitExpr) {
+                char lbuf[64];
+                int limit_val = -1, offset_val = 0;
+                if (expr_evaluate(g_limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
+                    limit_val = atoi(lbuf);
+                if (g_offsetExpr) {
+                    char obuf[64];
+                    if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
+                        offset_val = atoi(obuf);
+                }
+                if (limit_val >= 0) {
+                    if (offset_val > 0) {
+                        if (offset_val >= rs->num_rows) {
+                            rs->num_rows = 0;
+                        } else {
+                            for (r = 0; r < rs->num_rows - offset_val; r++)
+                                rs->rows[r] = rs->rows[r + offset_val];
+                            rs->num_rows -= offset_val;
+                        }
+                    }
+                    if (limit_val < rs->num_rows)
+                        rs->num_rows = limit_val;
+                }
+                sprintf(rs->command_tag, "SELECT %d", rs->num_rows);
+            }
+
             return;  /* skip normal column filtering */
         }
     }
