@@ -203,6 +203,10 @@
 %token FTRIM
 %token FDATE_ADD FDATE_SUB
 %token FCOUNT
+%token FSUM
+%token FAVG
+%token FMIN
+%token FMAX
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -370,6 +374,10 @@ expr: NAME '(' opt_val_list ')'                                                 
 /* functions with special syntax */
 expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); $$ = expr_make_count_star(); }
 | FCOUNT '(' expr ')'								{ emit(" CALL 1 COUNT"); $$ = expr_make_count($3); }
+| FSUM '(' expr ')'									{ emit(" CALL 1 SUM"); $$ = expr_make_sum($3); }
+| FAVG '(' expr ')'									{ emit(" CALL 1 AVG"); $$ = expr_make_avg($3); }
+| FMIN '(' expr ')'									{ emit(" CALL 1 MIN"); $$ = expr_make_min($3); }
+| FMAX '(' expr ')'									{ emit(" CALL 1 MAX"); $$ = expr_make_max($3); }
 ;
 expr: FSUBSTRING '(' val_list ')'                                               { emit("CALL %d SUBSTR", $3); $$ = expr_make_column("SUBSTR"); }
 | FSUBSTRING '(' expr FROM expr ')'                                             { emit("CALL 2 SUBSTR"); $$ = expr_make_column("SUBSTR"); }
@@ -471,8 +479,19 @@ opt_groupby: /* nil */
 | GROUP BY groupby_list opt_with_rollup                                         { emit("GROUPBYLIST %d %d", $3, $4); }
 ;
 
-groupby_list: expr opt_asc_desc                                                 { emit("GROUPBY %d", $2); $$ = 1; }
-| groupby_list ',' expr opt_asc_desc                                            { emit("GROUPBY %d", $4); $$ = $1 + 1; }
+groupby_list: expr opt_asc_desc   {
+        emit("GROUPBY %d", $2);
+        g_groupByCount = 0;
+        if (g_groupByCount < MAX_GROUP_BY)
+            g_groupByExprs[g_groupByCount++] = $1;
+        $$ = 1;
+    }
+| groupby_list ',' expr opt_asc_desc  {
+        emit("GROUPBY %d", $4);
+        if (g_groupByCount < MAX_GROUP_BY)
+            g_groupByExprs[g_groupByCount++] = $3;
+        $$ = $1 + 1;
+    }
 ;
 
 opt_asc_desc: /* nil */								{ $$ = 0; }
@@ -485,7 +504,7 @@ opt_with_rollup: /* nil */							{ $$ = 0; }
 ;
 
 opt_having: /* nil */
-| HAVING expr									{ emit("HAVING"); }
+| HAVING expr									{ emit("HAVING"); g_havingExpr = $2; }
 ;
 
 opt_orderby: /* nil */

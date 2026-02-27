@@ -32,6 +32,13 @@ ExprNode *g_caseWhenExprs[MAX_CASE_WHENS];
 ExprNode *g_caseThenExprs[MAX_CASE_WHENS];
 int       g_caseWhenCount = 0;
 
+/* GROUP BY expressions */
+ExprNode *g_groupByExprs[MAX_GROUP_BY];
+int       g_groupByCount = 0;
+
+/* HAVING filter expression */
+ExprNode *g_havingExpr = NULL;
+
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)
 {
@@ -50,7 +57,10 @@ void expr_pool_reset(void)
     g_whereExpr = NULL;
     g_limitExpr = NULL;
     g_offsetExpr = NULL;
+    g_groupByCount = 0;
+    g_havingExpr = NULL;
     memset(g_selectExprs, 0, sizeof(g_selectExprs));
+    memset(g_groupByExprs, 0, sizeof(g_groupByExprs));
 }
 
 /* ---- Constructors ---- */
@@ -427,6 +437,51 @@ ExprNode *expr_make_count(ExprNode *arg)
     return e;
 }
 
+/* ---- SUM/AVG/MIN/MAX constructors ---- */
+ExprNode *expr_make_sum(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_SUM;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "SUM(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_avg(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_AVG;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "AVG(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_min(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_MIN;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "MIN(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_max(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_MAX;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "MAX(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
 /* ---- CASE WHEN constructors ---- */
 
 /* Searched CASE: CASE WHEN c1 THEN r1 WHEN c2 THEN r2 ... [ELSE e] END
@@ -473,7 +528,28 @@ ExprNode *expr_make_case_simple(ExprNode *operand, int count, ExprNode *else_exp
 int expr_is_aggregate(const ExprNode *e)
 {
     if (!e) return 0;
-    return (e->type == EXPR_COUNT_STAR || e->type == EXPR_COUNT);
+    return (e->type == EXPR_COUNT_STAR || e->type == EXPR_COUNT ||
+            e->type == EXPR_SUM || e->type == EXPR_AVG ||
+            e->type == EXPR_MIN || e->type == EXPR_MAX);
+}
+
+/* ---- Collect aggregate nodes from an expression tree ---- */
+void expr_collect_aggregates(const ExprNode *e, const ExprNode **out, int *count, int max)
+{
+    if (!e || *count >= max) return;
+    if (expr_is_aggregate(e)) {
+        /* Check for duplicate by display name */
+        int i;
+        for (i = 0; i < *count; i++) {
+            if (strcasecmp(out[i]->display, e->display) == 0)
+                return;  /* already collected */
+        }
+        out[(*count)++] = e;
+        return;  /* don't recurse into aggregate arguments */
+    }
+    expr_collect_aggregates(e->left, out, count, max);
+    expr_collect_aggregates(e->right, out, count, max);
+    expr_collect_aggregates(e->extra, out, count, max);
 }
 
 /* ---- Store a select expression ---- */
@@ -620,6 +696,26 @@ int expr_evaluate(const ExprNode *e,
         for (c = 0; c < num_cols; c++) {
             if (strcasecmp(col_names[c], e->val.col_name) == 0) {
                 /* If the column value is NULL_MARKER, signal NULL */
+                if (strcmp(col_values[c], NULL_MARKER) == 0) {
+                    out_buf[0] = '\0';
+                    return 0;
+                }
+                strncpy(out_buf, col_values[c], buf_size - 1);
+                out_buf[buf_size - 1] = '\0';
+                return 1;
+            }
+        }
+        out_buf[0] = '\0';
+        return 0;
+    }
+
+    /* Aggregate functions inside HAVING: look up the display name
+     * (e.g. "COUNT(*)", "SUM(score)") as a column in the provided context.
+     * The query executor pre-populates aggregate results as columns. */
+    if (expr_is_aggregate(e)) {
+        int c;
+        for (c = 0; c < num_cols; c++) {
+            if (strcasecmp(col_names[c], e->display) == 0) {
                 if (strcmp(col_values[c], NULL_MARKER) == 0) {
                     out_buf[0] = '\0';
                     return 0;

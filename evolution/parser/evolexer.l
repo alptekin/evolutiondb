@@ -290,6 +290,10 @@ DATE_ADD/"("			{ return FDATE_ADD; }
 DATE_SUB/"("			{ return FDATE_SUB; }
 
 COUNT					{ int c = input(); unput(c); if(c == '(') return FCOUNT; yylval.strval = strdup(yytext); return NAME; }  /* check trailing context manually */
+SUM						{ int c = input(); unput(c); if(c == '(') return FSUM; yylval.strval = strdup(yytext); return NAME; }
+AVG						{ int c = input(); unput(c); if(c == '(') return FAVG; yylval.strval = strdup(yytext); return NAME; }
+MIN						{ int c = input(); unput(c); if(c == '(') return FMIN; yylval.strval = strdup(yytext); return NAME; }
+MAX						{ int c = input(); unput(c); if(c == '(') return FMAX; yylval.strval = strdup(yytext); return NAME; }
 
 
 [A-Za-z][A-Za-z0-9_]*	{ yylval.strval = strdup(yytext); return NAME; }			/* names */

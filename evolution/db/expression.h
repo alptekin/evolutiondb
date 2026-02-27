@@ -49,6 +49,10 @@ typedef enum {
     EXPR_CURRENT_TIME,    /* CURRENT_TIME */
     EXPR_COUNT_STAR,       /* COUNT(*) — aggregate */
     EXPR_COUNT,            /* COUNT(expr) — aggregate */
+    EXPR_SUM,              /* SUM(expr) — aggregate */
+    EXPR_AVG,              /* AVG(expr) — aggregate */
+    EXPR_MIN,              /* MIN(expr) — aggregate */
+    EXPR_MAX,              /* MAX(expr) — aggregate */
     EXPR_CASE_WHEN,        /* CASE WHEN cond THEN result [ELSE ...] END */
     EXPR_FUNC_CALL,       /* function call (future) */
     EXPR_STAR             /* SELECT * (sentinel) */
@@ -114,6 +118,10 @@ ExprNode *expr_make_in(ExprNode *expr, ExprNode **list, int count);
 ExprNode *expr_make_not_in(ExprNode *expr, ExprNode **list, int count);
 ExprNode *expr_make_count_star(void);
 ExprNode *expr_make_count(ExprNode *arg);
+ExprNode *expr_make_sum(ExprNode *arg);
+ExprNode *expr_make_avg(ExprNode *arg);
+ExprNode *expr_make_min(ExprNode *arg);
+ExprNode *expr_make_max(ExprNode *arg);
 ExprNode *expr_make_case_searched(int count, ExprNode *else_expr);
 ExprNode *expr_make_case_simple(ExprNode *operand, int count, ExprNode *else_expr);
 
@@ -123,8 +131,19 @@ extern ExprNode *g_caseWhenExprs[MAX_CASE_WHENS];
 extern ExprNode *g_caseThenExprs[MAX_CASE_WHENS];
 extern int       g_caseWhenCount;
 
+/* GROUP BY expressions (set by parser) */
+#define MAX_GROUP_BY 16
+extern ExprNode *g_groupByExprs[MAX_GROUP_BY];
+extern int       g_groupByCount;
+
+/* HAVING filter expression (set by parser) */
+extern ExprNode *g_havingExpr;
+
 /* Check if any select expression is an aggregate function */
 int expr_is_aggregate(const ExprNode *e);
+
+/* Collect all aggregate nodes from an expression tree */
+void expr_collect_aggregates(const ExprNode *e, const ExprNode **out, int *count, int max);
 
 /* IN-list value collector (used during parsing) */
 #define MAX_IN_LIST 64
