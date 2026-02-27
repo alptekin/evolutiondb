@@ -16,6 +16,9 @@ int       g_exprNodePoolUsed = 0;
 ExprNode *g_selectExprs[MAX_SELECT_EXPRS];
 int       g_selectExprCount = 0;
 
+/* WHERE filter expression */
+ExprNode *g_whereExpr = NULL;
+
 /* IN list collector */
 ExprNode *g_inListExprs[MAX_IN_LIST];
 int       g_inListCount = 0;
@@ -34,6 +37,7 @@ void expr_pool_reset(void)
     g_exprNodePoolUsed = 0;
     g_selectExprCount = 0;
     g_inListCount = 0;
+    g_whereExpr = NULL;
     memset(g_selectExprs, 0, sizeof(g_selectExprs));
 }
 

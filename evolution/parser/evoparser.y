@@ -447,7 +447,7 @@ opt_into_list
 ;
 
 opt_where: /* nil */
-| WHERE expr									{ emit("WHERE"); };
+| WHERE expr									{ emit("WHERE"); g_whereExpr = $2; };
 opt_groupby: /* nil */
 | GROUP BY groupby_list opt_with_rollup                                         { emit("GROUPBYLIST %d %d", $3, $4); }
 ;

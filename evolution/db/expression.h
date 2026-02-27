@@ -72,6 +72,9 @@ extern int       g_exprNodePoolUsed;
 extern ExprNode *g_selectExprs[MAX_SELECT_EXPRS];
 extern int       g_selectExprCount;
 
+/* WHERE filter expression (set by parser, used by query executor) */
+extern ExprNode *g_whereExpr;
+
 /* Node allocation */
 ExprNode *expr_alloc(void);
 

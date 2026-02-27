@@ -100,7 +100,7 @@ static int type_encoding_to_pg_oid(int typeEncoding)
     case 11: return PG_OID_FLOAT8;  /* DECIMAL → float8 */
     case 12: return PG_OID_BPCHAR;  /* CHAR */
     case 13: return PG_OID_VARCHAR; /* VARCHAR */
-    case 22: return PG_OID_BOOL;    /* BOOLEAN */
+    case 22: return PG_OID_VARCHAR; /* BOOLEAN — send as VARCHAR to avoid DBeaver JDBC getByte() error */
     default: return PG_OID_TEXT;    /* BLOB, TEXT, ENUM, SET, etc. */
     }
 }
@@ -340,6 +340,55 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
     /* Clear ORDER BY state */
     g_orderByColumn[0] = '\0';
     g_orderByDesc = 0;
+
+    /* --- WHERE filtering using g_whereExpr --- */
+    if (g_whereExpr && rs->num_rows > 0) {
+        char colNames[MAX_COLUMNS][128];
+        int c;
+        for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+            strncpy(colNames[c], rs->columns[c].name, 127);
+            colNames[c][127] = '\0';
+        }
+
+        int dst = 0;
+        int r;
+        for (r = 0; r < rs->num_rows; r++) {
+            char colValues[MAX_COLUMNS][256];
+            for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+                if (rs->rows[r].is_null[c]) {
+                    strcpy(colValues[c], "\x01NULL\x01");
+                } else {
+                    strncpy(colValues[c], rs->rows[r].fields[c], 255);
+                    colValues[c][255] = '\0';
+                }
+            }
+
+            char result[512];
+            int ok = expr_evaluate(g_whereExpr,
+                                   (const char (*)[128])colNames,
+                                   (const char (*)[256])colValues,
+                                   rs->num_cols,
+                                   result, sizeof(result));
+            /* Keep row if WHERE evaluates to true (non-zero / "t" / "true") */
+            int keep = 0;
+            if (ok) {
+                if (strcmp(result, "t") == 0 || strcasecmp(result, "true") == 0 ||
+                    strcmp(result, "1") == 0)
+                    keep = 1;
+                else {
+                    double v = strtod(result, NULL);
+                    if (v != 0.0) keep = 1;
+                }
+            }
+            if (keep) {
+                if (dst != r)
+                    rs->rows[dst] = rs->rows[r];
+                dst++;
+            }
+        }
+        rs->num_rows = dst;
+        count = dst;
+    }
 
     sprintf(rs->command_tag, "SELECT %d", count);
 
