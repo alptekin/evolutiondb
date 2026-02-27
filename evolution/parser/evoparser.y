@@ -525,12 +525,18 @@ opt_having: /* nil */
 ;
 
 opt_orderby: /* nil */
-| ORDER BY NAME opt_asc_desc
+| ORDER BY orderby_list
+;
+
+orderby_list: orderby_item
+| orderby_list ',' orderby_item
+;
+
+orderby_item: NAME opt_asc_desc
     {
-        emit("ORDERBY %s %d", $3, $4);
-        GetOrderByColumn($3);
-        SetOrderByDirection($4);
-        free($3);
+        emit("ORDERBY %s %d", $1, $2);
+        AddOrderByColumn($1, $2);
+        free($1);
     }
 ;
 

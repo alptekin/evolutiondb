@@ -32,6 +32,7 @@ int GetColumnNames(char *name);
 int GetColumnSize(int typeVal);
 int GetOrderByColumn(char *name);
 void SetOrderByDirection(int desc);
+void AddOrderByColumn(const char *name, int desc);
 
 int UpdateProcess(void);
 int DeleteProcess(void);
@@ -75,6 +76,9 @@ extern int g_gui_error;
 extern char g_gui_error_msg[512];
 extern char g_orderByColumn[256];
 extern int g_orderByDesc;
+extern char g_orderByColumns[8][256];
+extern int  g_orderByDescs[8];
+extern int  g_orderByCount;
 extern int g_selectDistinct;
 extern char g_columnTypeDefs[1024];
 extern int g_currentColNotNull;

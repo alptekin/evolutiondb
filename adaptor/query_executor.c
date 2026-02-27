@@ -815,7 +815,63 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
     }
 
     /* --- ORDER BY (applied after WHERE and GROUP BY, before column filtering) --- */
-    if (g_orderByColumn[0] != '\0' && rs->num_rows > 1) {
+    if (g_orderByCount > 0 && rs->num_rows > 1) {
+        /* Resolve column indices for all ORDER BY columns */
+        int orderCols[8];
+        int orderDescs[8];
+        int numOrderKeys = 0;
+        int k;
+        for (k = 0; k < g_orderByCount && k < 8; k++) {
+            int c;
+            orderCols[k] = -1;
+            orderDescs[k] = g_orderByDescs[k];
+            for (c = 0; c < rs->num_cols; c++) {
+                if (strcasecmp(rs->columns[c].name, g_orderByColumns[k]) == 0) {
+                    orderCols[k] = c;
+                    break;
+                }
+            }
+            if (orderCols[k] >= 0)
+                numOrderKeys = k + 1;
+        }
+        if (numOrderKeys > 0) {
+            /* Bubble sort with multi-key comparison */
+            int i, j;
+            for (i = 0; i < rs->num_rows - 1; i++) {
+                for (j = 0; j < rs->num_rows - 1 - i; j++) {
+                    int cmp = 0;
+                    for (k = 0; k < numOrderKeys && cmp == 0; k++) {
+                        int col = orderCols[k];
+                        int null_a = rs->rows[j].is_null[col];
+                        int null_b = rs->rows[j+1].is_null[col];
+                        if (null_a && null_b) cmp = 0;
+                        else if (null_a) cmp = 1;
+                        else if (null_b) cmp = -1;
+                        else {
+                            char *a = rs->rows[j].fields[col];
+                            char *b = rs->rows[j+1].fields[col];
+                            char *endA, *endB;
+                            double numA = strtod(a, &endA);
+                            double numB = strtod(b, &endB);
+                            if (*endA == '\0' && *endB == '\0' &&
+                                a[0] != '\0' && b[0] != '\0') {
+                                cmp = (numA > numB) ? 1 : (numA < numB) ? -1 : 0;
+                            } else {
+                                cmp = strcmp(a, b);
+                            }
+                        }
+                        if (orderDescs[k]) cmp = -cmp;
+                    }
+                    if (cmp > 0) {
+                        Row tmp = rs->rows[j];
+                        rs->rows[j] = rs->rows[j+1];
+                        rs->rows[j+1] = tmp;
+                    }
+                }
+            }
+        }
+    } else if (g_orderByColumn[0] != '\0' && rs->num_rows > 1) {
+        /* Legacy single-column ORDER BY fallback */
         int orderCol = -1;
         int c;
         for (c = 0; c < rs->num_cols; c++) {
@@ -860,6 +916,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
     }
     g_orderByColumn[0] = '\0';
     g_orderByDesc = 0;
+    g_orderByCount = 0;
 
     /* --- Column filtering / expression evaluation (using parser AST) --- */
     if (!did_aggregate && g_selectExprCount > 0 && rs->num_cols > 0) {
@@ -1006,6 +1063,13 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     for (s = 0; s < mapCount; s++) {
                         newCols[s] = rs->columns[colMap[s]];
                         newCols[s].attnum = s + 1;
+                        /* Apply column alias if set */
+                        if (g_selectExprs[s] && g_selectExprs[s]->display[0] &&
+                            strcasecmp(g_selectExprs[s]->display,
+                                       g_selectExprs[s]->val.col_name) != 0) {
+                            strncpy(newCols[s].name, g_selectExprs[s]->display,
+                                    sizeof(newCols[s].name) - 1);
+                        }
                     }
                     memcpy(rs->columns, newCols, sizeof(ColumnInfo) * mapCount);
                     rs->num_cols = mapCount;
@@ -1020,6 +1084,17 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                             newRow.is_null[s] = rs->rows[r].is_null[colMap[s]];
                         }
                         rs->rows[r] = newRow;
+                    }
+                } else if (mapCount > 0) {
+                    /* All columns selected — still apply aliases */
+                    for (s = 0; s < mapCount; s++) {
+                        if (g_selectExprs[s] && g_selectExprs[s]->display[0] &&
+                            strcasecmp(g_selectExprs[s]->display,
+                                       g_selectExprs[s]->val.col_name) != 0) {
+                            strncpy(rs->columns[colMap[s]].name,
+                                    g_selectExprs[s]->display,
+                                    sizeof(rs->columns[colMap[s]].name) - 1);
+                        }
                     }
                 }
             }
@@ -1153,6 +1228,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_columnNames[0] = '\0';
     g_orderByColumn[0] = '\0';
     g_orderByDesc = 0;
+    g_orderByCount = 0;
     g_selectDistinct = 0;
     g_totalColumnSize = 0;
     g_currentColNotNull = 0;
@@ -1377,25 +1453,67 @@ static void normalize_sql(char *sql)
     *dst = '\0';
     strcpy(sql, buf);
 
-    /* Pass 4: Remove "AS <alias>" after table name in FROM clause */
-    src = sql;
-    dst = buf;
-    while (*src) {
-        /* Look for " AS " (case-insensitive, surrounded by spaces) */
-        if ((*src == ' ' || *src == '\t') &&
-            strncasecmp(src + 1, "AS ", 3) == 0 &&
-            (isalpha((unsigned char)src[4]) || src[4] == '_')) {
-            /* Skip " AS alias" */
-            char *p = src + 4;
-            while (*p && (isalnum((unsigned char)*p) || *p == '_'))
-                p++;
-            src = p;  /* skip past the alias */
-        } else {
-            *dst++ = *src++;
+    /* Pass 4: Remove "AS <alias>" after table name in FROM clause ONLY.
+     * We locate the FROM clause boundaries, then only strip aliases there.
+     * DBeaver sends e.g. FROM students AS s — we strip " AS s". */
+    {
+        /* Find FROM keyword (case-insensitive, word boundary) */
+        const char *from_start = NULL;
+        const char *from_end = NULL;
+        const char *scan = sql;
+        while (*scan) {
+            if (strncasecmp(scan, "FROM", 4) == 0 &&
+                (scan == sql || !isalnum((unsigned char)*(scan-1))) &&
+                (scan[4] == ' ' || scan[4] == '\t' || scan[4] == '\n')) {
+                from_start = scan + 4;
+                break;
+            }
+            scan++;
         }
+        if (from_start) {
+            /* FROM clause ends at WHERE/GROUP/HAVING/ORDER/LIMIT/UNION or end */
+            const char *kw;
+            from_end = from_start + strlen(from_start);
+            for (kw = from_start; *kw; kw++) {
+                if ((strncasecmp(kw, "WHERE", 5) == 0 ||
+                     strncasecmp(kw, "GROUP", 5) == 0 ||
+                     strncasecmp(kw, "ORDER", 5) == 0 ||
+                     strncasecmp(kw, "LIMIT", 5) == 0 ||
+                     strncasecmp(kw, "UNION", 5) == 0) &&
+                    (kw == from_start || !isalnum((unsigned char)*(kw-1))) &&
+                    !isalnum((unsigned char)kw[5])) {
+                    from_end = kw;
+                    break;
+                }
+                if (strncasecmp(kw, "HAVING", 6) == 0 &&
+                    (kw == from_start || !isalnum((unsigned char)*(kw-1))) &&
+                    !isalnum((unsigned char)kw[6])) {
+                    from_end = kw;
+                    break;
+                }
+            }
+        }
+
+        src = sql;
+        dst = buf;
+        while (*src) {
+            /* Only strip " AS alias" when src is within the FROM clause region */
+            if (from_start && src >= from_start && src < from_end &&
+                (*src == ' ' || *src == '\t') &&
+                strncasecmp(src + 1, "AS ", 3) == 0 &&
+                (isalpha((unsigned char)src[4]) || src[4] == '_')) {
+                /* Skip " AS alias" */
+                char *p = (char *)src + 4;
+                while (*p && (isalnum((unsigned char)*p) || *p == '_'))
+                    p++;
+                src = p;
+            } else {
+                *dst++ = *src++;
+            }
+        }
+        *dst = '\0';
+        strcpy(sql, buf);
     }
-    *dst = '\0';
-    strcpy(sql, buf);
 
     /* Clean up: strip trailing whitespace */
     len = (int)strlen(sql);

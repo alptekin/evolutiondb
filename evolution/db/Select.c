@@ -271,6 +271,20 @@ void SetOrderByDirection(int desc)
     g_orderByDesc = desc;
 }
 
+void AddOrderByColumn(const char *name, int desc)
+{
+    if (g_orderByCount >= 8) return;
+    strncpy(g_orderByColumns[g_orderByCount], name, 255);
+    g_orderByColumns[g_orderByCount][255] = '\0';
+    g_orderByDescs[g_orderByCount] = desc;
+    g_orderByCount++;
+    /* Also set legacy single-column globals for backward compat */
+    if (g_orderByCount == 1) {
+        strcpy(g_orderByColumn, name);
+        g_orderByDesc = desc;
+    }
+}
+
 int TruncateSelect(void)
 {
     int i;
