@@ -328,7 +328,7 @@ expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3)
 | expr COMPARISON expr
     {
         emit("CMP %d", $2);
-        $$ = $1;
+        $$ = expr_make_cmp($2, $1, $3);
     }
 /* recursive selects and comparisons thereto */
 | expr COMPARISON '(' select_stmt ')'                                           { emit("CMPSELECT %d", $2); $$ = $1; }

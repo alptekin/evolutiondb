@@ -170,6 +170,37 @@ ExprNode *expr_make_current_time(void)
     return e;
 }
 
+ExprNode *expr_make_cmp(int subtok, ExprNode *left, ExprNode *right)
+{
+    ExprNodeType type;
+    switch (subtok) {
+    case 4:  type = EXPR_CMP_EQ; break;
+    case 3:  type = EXPR_CMP_NE; break;
+    case 1:  type = EXPR_CMP_LT; break;
+    case 2:  type = EXPR_CMP_GT; break;
+    case 5:  type = EXPR_CMP_LE; break;
+    case 6:  type = EXPR_CMP_GE; break;
+    default: type = EXPR_CMP_EQ; break;
+    }
+    ExprNode *e = expr_make_binop(type, left, right);
+    if (e) {
+        const char *op_str;
+        switch (subtok) {
+        case 4:  op_str = "=";  break;
+        case 3:  op_str = "<>"; break;
+        case 1:  op_str = "<";  break;
+        case 2:  op_str = ">";  break;
+        case 5:  op_str = "<="; break;
+        case 6:  op_str = ">="; break;
+        default: op_str = "?";  break;
+        }
+        snprintf(e->display, sizeof(e->display), "%s %s %s",
+                 left ? left->display : "?", op_str,
+                 right ? right->display : "?");
+    }
+    return e;
+}
+
 ExprNode *expr_make_is_null(ExprNode *operand)
 {
     ExprNode *e = expr_alloc();
@@ -213,7 +244,13 @@ int expr_is_boolean(const ExprNode *e)
     if (!e) return 0;
     return (e->type == EXPR_IS_NULL ||
             e->type == EXPR_IS_NOT_NULL ||
-            e->type == EXPR_LITERAL_BOOL);
+            e->type == EXPR_LITERAL_BOOL ||
+            e->type == EXPR_CMP_EQ ||
+            e->type == EXPR_CMP_NE ||
+            e->type == EXPR_CMP_LT ||
+            e->type == EXPR_CMP_GT ||
+            e->type == EXPR_CMP_LE ||
+            e->type == EXPR_CMP_GE);
 }
 
 /* ---- Evaluate as double ---- */
@@ -335,6 +372,44 @@ int expr_evaluate(const ExprNode *e,
         }
         out_buf[0] = '\0';
         return 0;
+    }
+
+    /* Comparison operators */
+    if (e->type >= EXPR_CMP_EQ && e->type <= EXPR_CMP_GE) {
+        char lbuf[512], rbuf[512];
+        int l_ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, lbuf, sizeof(lbuf)) : 0;
+        int r_ok = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, rbuf, sizeof(rbuf)) : 0;
+
+        /* If either side is NULL, comparison result is NULL */
+        if (!l_ok || !r_ok) {
+            out_buf[0] = '\0';
+            return 0;
+        }
+
+        int cmp;
+        /* Try numeric comparison first */
+        char *endL, *endR;
+        double numL = strtod(lbuf, &endL);
+        double numR = strtod(rbuf, &endR);
+        if (*endL == '\0' && *endR == '\0' && lbuf[0] != '\0' && rbuf[0] != '\0') {
+            cmp = (numL > numR) ? 1 : (numL < numR) ? -1 : 0;
+        } else {
+            cmp = strcmp(lbuf, rbuf);
+        }
+
+        int result = 0;
+        switch (e->type) {
+        case EXPR_CMP_EQ: result = (cmp == 0); break;
+        case EXPR_CMP_NE: result = (cmp != 0); break;
+        case EXPR_CMP_LT: result = (cmp < 0);  break;
+        case EXPR_CMP_GT: result = (cmp > 0);  break;
+        case EXPR_CMP_LE: result = (cmp <= 0); break;
+        case EXPR_CMP_GE: result = (cmp >= 0); break;
+        default: break;
+        }
+        strncpy(out_buf, result ? "t" : "f", buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
     }
 
     /* IS NULL / IS NOT NULL */

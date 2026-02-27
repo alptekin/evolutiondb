@@ -278,9 +278,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 if (strncasecmp(val, "true", 4) == 0 ||
                     strcmp(val, "1") == 0 ||
                     strcmp(val, "t") == 0)
-                    result_set_field(rs, row, col, "t");
+                    result_set_field(rs, row, col, "true");
                 else
-                    result_set_field(rs, row, col, "f");
+                    result_set_field(rs, row, col, "false");
             } else {
                 result_set_field(rs, row, col, val);
             }
@@ -400,8 +400,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                 }
                             }
                         } else if (g_selectExprs[c] && expr_is_boolean(g_selectExprs[c])) {
-                            rs->columns[c].pg_type_oid = PG_OID_BOOL;
-                            rs->columns[c].type_len = 1;
+                            rs->columns[c].pg_type_oid = PG_OID_VARCHAR;
+                            rs->columns[c].type_len = -1;
                             rs->columns[c].type_modifier = -1;
                             rs->columns[c].table_oid = 0;
                             rs->columns[c].attnum = 0;
@@ -448,13 +448,14 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                     origNumCols,
                                     result, sizeof(result))) {
                                 /* Handle boolean conversion for wire protocol */
-                                if (rs->columns[c].pg_type_oid == PG_OID_BOOL) {
+                                if (rs->columns[c].pg_type_oid == PG_OID_BOOL ||
+                                    (g_selectExprs[c] && expr_is_boolean(g_selectExprs[c]))) {
                                     if (strncasecmp(result, "true", 4) == 0 ||
                                         strcmp(result, "1") == 0 ||
                                         strcmp(result, "t") == 0)
-                                        strcpy(rs->rows[r].fields[c], "t");
+                                        strcpy(rs->rows[r].fields[c], "true");
                                     else
-                                        strcpy(rs->rows[r].fields[c], "f");
+                                        strcpy(rs->rows[r].fields[c], "false");
                                 } else {
                                     strncpy(rs->rows[r].fields[c], result, MAX_FIELD_LEN - 1);
                                 }
