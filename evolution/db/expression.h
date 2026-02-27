@@ -47,6 +47,8 @@ typedef enum {
     EXPR_CURRENT_TIMESTAMP, /* CURRENT_TIMESTAMP */
     EXPR_CURRENT_DATE,    /* CURRENT_DATE */
     EXPR_CURRENT_TIME,    /* CURRENT_TIME */
+    EXPR_COUNT_STAR,       /* COUNT(*) — aggregate */
+    EXPR_COUNT,            /* COUNT(expr) — aggregate */
     EXPR_FUNC_CALL,       /* function call (future) */
     EXPR_STAR             /* SELECT * (sentinel) */
 } ExprNodeType;
@@ -108,6 +110,11 @@ ExprNode *expr_make_between(ExprNode *expr, ExprNode *low, ExprNode *high);
 ExprNode *expr_make_not_between(ExprNode *expr, ExprNode *low, ExprNode *high);
 ExprNode *expr_make_in(ExprNode *expr, ExprNode **list, int count);
 ExprNode *expr_make_not_in(ExprNode *expr, ExprNode **list, int count);
+ExprNode *expr_make_count_star(void);
+ExprNode *expr_make_count(ExprNode *arg);
+
+/* Check if any select expression is an aggregate function */
+int expr_is_aggregate(const ExprNode *e);
 
 /* IN-list value collector (used during parsing) */
 #define MAX_IN_LIST 64

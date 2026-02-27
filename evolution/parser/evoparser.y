@@ -368,8 +368,8 @@ expr: NAME '(' opt_val_list ')'                                                 
 ;
 
 /* functions with special syntax */
-expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); $$ = expr_make_column("COUNT"); }
-| FCOUNT '(' expr ')'								{ emit(" CALL 1 COUNT"); $$ = expr_make_column("COUNT"); }
+expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); $$ = expr_make_count_star(); }
+| FCOUNT '(' expr ')'								{ emit(" CALL 1 COUNT"); $$ = expr_make_count($3); }
 ;
 expr: FSUBSTRING '(' val_list ')'                                               { emit("CALL %d SUBSTR", $3); $$ = expr_make_column("SUBSTR"); }
 | FSUBSTRING '(' expr FROM expr ')'                                             { emit("CALL 2 SUBSTR"); $$ = expr_make_column("SUBSTR"); }

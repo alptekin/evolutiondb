@@ -400,6 +400,34 @@ ExprNode *expr_make_not_in(ExprNode *expr, ExprNode **list, int count)
     return result;
 }
 
+/* ---- COUNT constructors ---- */
+ExprNode *expr_make_count_star(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_COUNT_STAR;
+    strcpy(e->display, "COUNT(*)");
+    return e;
+}
+
+ExprNode *expr_make_count(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_COUNT;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "COUNT(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
+/* ---- Check if expression is an aggregate ---- */
+int expr_is_aggregate(const ExprNode *e)
+{
+    if (!e) return 0;
+    return (e->type == EXPR_COUNT_STAR || e->type == EXPR_COUNT);
+}
+
 /* ---- Store a select expression ---- */
 void expr_store_select(ExprNode *expr, const char *alias)
 {

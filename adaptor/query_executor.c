@@ -422,6 +422,122 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
     sprintf(rs->command_tag, "SELECT %d", count);
 
+    /* --- Aggregate detection & evaluation --- */
+    {
+        int has_aggregate = 0;
+        int s;
+        for (s = 0; s < g_selectExprCount; s++) {
+            if (expr_is_aggregate(g_selectExprs[s])) {
+                has_aggregate = 1;
+                break;
+            }
+        }
+        if (has_aggregate && rs->num_cols > 0) {
+            /* Build column name/value arrays for per-row evaluation */
+            char colNames[MAX_COLUMNS][128];
+            int origNumCols = rs->num_cols;
+            int origNumRows = rs->num_rows;
+            {
+                int c;
+                for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                    strncpy(colNames[c], rs->columns[c].name, 127);
+                    colNames[c][127] = '\0';
+                }
+            }
+
+            /* Set up result columns */
+            rs->num_cols = g_selectExprCount;
+            for (s = 0; s < g_selectExprCount; s++) {
+                memset(&rs->columns[s], 0, sizeof(ColumnInfo));
+                if (g_selectExprs[s]) {
+                    strncpy(rs->columns[s].name, g_selectExprs[s]->display,
+                            MAX_COL_NAME - 1);
+                } else {
+                    strcpy(rs->columns[s].name, "?column?");
+                }
+                rs->columns[s].pg_type_oid = PG_OID_INT8;
+                rs->columns[s].type_len = 8;
+                rs->columns[s].type_modifier = -1;
+                rs->columns[s].attnum = s + 1;
+            }
+
+            /* Compute aggregate values */
+            Row aggRow;
+            memset(&aggRow, 0, sizeof(aggRow));
+            aggRow.num_fields = g_selectExprCount;
+
+            for (s = 0; s < g_selectExprCount; s++) {
+                if (!g_selectExprs[s]) {
+                    aggRow.is_null[s] = 1;
+                    continue;
+                }
+                if (g_selectExprs[s]->type == EXPR_COUNT_STAR) {
+                    /* COUNT(*) — count all rows */
+                    snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", origNumRows);
+                } else if (g_selectExprs[s]->type == EXPR_COUNT) {
+                    /* COUNT(expr) — count rows where expr is not NULL */
+                    int cnt = 0, r;
+                    for (r = 0; r < origNumRows; r++) {
+                        char colValues[MAX_COLUMNS][256];
+                        int c;
+                        for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                            if (rs->rows[r].is_null[c])
+                                strcpy(colValues[c], NULL_MARKER);
+                            else {
+                                strncpy(colValues[c], rs->rows[r].fields[c], 255);
+                                colValues[c][255] = '\0';
+                            }
+                        }
+                        char result[MAX_FIELD_LEN];
+                        if (expr_evaluate(g_selectExprs[s]->left,
+                                (const char (*)[128])colNames,
+                                (const char (*)[256])colValues,
+                                origNumCols, result, sizeof(result))) {
+                            cnt++;  /* non-NULL result */
+                        }
+                    }
+                    snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", cnt);
+                } else {
+                    /* Non-aggregate expression alongside aggregate — evaluate
+                     * against first row (undefined per SQL standard without GROUP BY,
+                     * but common in MySQL) */
+                    if (origNumRows > 0) {
+                        char colValues[MAX_COLUMNS][256];
+                        int c;
+                        for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                            if (rs->rows[0].is_null[c])
+                                strcpy(colValues[c], NULL_MARKER);
+                            else {
+                                strncpy(colValues[c], rs->rows[0].fields[c], 255);
+                                colValues[c][255] = '\0';
+                            }
+                        }
+                        char result[MAX_FIELD_LEN];
+                        if (expr_evaluate(g_selectExprs[s],
+                                (const char (*)[128])colNames,
+                                (const char (*)[256])colValues,
+                                origNumCols, result, sizeof(result))) {
+                            strncpy(aggRow.fields[s], result, MAX_FIELD_LEN - 1);
+                            /* Use VARCHAR for non-aggregate columns */
+                            rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
+                            rs->columns[s].type_len = -1;
+                        } else {
+                            aggRow.is_null[s] = 1;
+                        }
+                    } else {
+                        aggRow.is_null[s] = 1;
+                    }
+                }
+            }
+
+            /* Replace all rows with single aggregate row */
+            rs->num_rows = 1;
+            rs->rows[0] = aggRow;
+            sprintf(rs->command_tag, "SELECT 1");
+            return;  /* skip normal column filtering */
+        }
+    }
+
     /* --- Column filtering / expression evaluation (using parser AST) --- */
     if (g_selectExprCount > 0 && rs->num_cols > 0) {
         /* Check if we have a single STAR expression (SELECT *) */
