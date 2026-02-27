@@ -409,9 +409,9 @@ expr: expr REGEXP expr								{ emit("REGEXP"); $$ = $1; }
 | expr NOT REGEXP expr								{ emit("REGEXP"); emit("NOT"); $$ = $1; }
 ;
 
-expr: CURRENT_TIMESTAMP								{ emit("NOW"); $$ = expr_make_column("CURRENT_TIMESTAMP"); }
-| CURRENT_DATE									{ emit("NOW"); $$ = expr_make_column("CURRENT_DATE"); }
-| CURRENT_TIME									{ emit("NOW"); $$ = expr_make_column("CURRENT_TIME"); }
+expr: CURRENT_TIMESTAMP								{ emit("NOW"); $$ = expr_make_current_timestamp(); }
+| CURRENT_DATE									{ emit("NOW"); $$ = expr_make_current_date(); }
+| CURRENT_TIME									{ emit("NOW"); $$ = expr_make_current_time(); }
 ;
 
 /* statements: select statement */

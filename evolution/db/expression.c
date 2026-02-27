@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 #include "expression.h"
 
 /* Pool storage */
@@ -133,6 +134,33 @@ ExprNode *expr_make_star(void)
     return e;
 }
 
+ExprNode *expr_make_current_timestamp(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_CURRENT_TIMESTAMP;
+    strcpy(e->display, "CURRENT_TIMESTAMP");
+    return e;
+}
+
+ExprNode *expr_make_current_date(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_CURRENT_DATE;
+    strcpy(e->display, "CURRENT_DATE");
+    return e;
+}
+
+ExprNode *expr_make_current_time(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_CURRENT_TIME;
+    strcpy(e->display, "CURRENT_TIME");
+    return e;
+}
+
 /* ---- Store a select expression ---- */
 void expr_store_select(ExprNode *expr, const char *alias)
 {
@@ -257,6 +285,20 @@ int expr_evaluate(const ExprNode *e,
         }
         out_buf[0] = '\0';
         return 0;
+    }
+
+    /* Date/time functions */
+    if (e->type == EXPR_CURRENT_TIMESTAMP || e->type == EXPR_CURRENT_DATE ||
+        e->type == EXPR_CURRENT_TIME) {
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        if (e->type == EXPR_CURRENT_TIMESTAMP)
+            strftime(out_buf, buf_size, "%Y-%m-%d %H:%M:%S", tm);
+        else if (e->type == EXPR_CURRENT_DATE)
+            strftime(out_buf, buf_size, "%Y-%m-%d", tm);
+        else
+            strftime(out_buf, buf_size, "%H:%M:%S", tm);
+        return 1;
     }
 
     /* For string literals, return the string directly */

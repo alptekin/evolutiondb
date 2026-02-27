@@ -28,6 +28,9 @@ typedef enum {
     EXPR_BITAND,          /* left & right */
     EXPR_BITOR,           /* left | right */
     EXPR_BITXOR,          /* left ^ right */
+    EXPR_CURRENT_TIMESTAMP, /* CURRENT_TIMESTAMP */
+    EXPR_CURRENT_DATE,    /* CURRENT_DATE */
+    EXPR_CURRENT_TIME,    /* CURRENT_TIME */
     EXPR_FUNC_CALL,       /* function call (future) */
     EXPR_STAR             /* SELECT * (sentinel) */
 } ExprNodeType;
@@ -65,6 +68,9 @@ ExprNode *expr_make_bool(int val);
 ExprNode *expr_make_binop(ExprNodeType op, ExprNode *left, ExprNode *right);
 ExprNode *expr_make_neg(ExprNode *operand);
 ExprNode *expr_make_star(void);
+ExprNode *expr_make_current_timestamp(void);
+ExprNode *expr_make_current_date(void);
+ExprNode *expr_make_current_time(void);
 
 /* Reset expression pool (call before each query) */
 void expr_pool_reset(void);
