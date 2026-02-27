@@ -344,7 +344,8 @@ expr: expr IS NULLX								{ emit("ISNULL"); $$ = expr_make_is_null($1); }
 | USERVAR ASSIGN expr								{ emit("ASSIGN @%s", $1); free($1); $$ = $3; }
 ;
 
-expr: expr BETWEEN expr AND expr %prec BETWEEN                                  { emit("BETWEEN"); $$ = $1; }
+expr: expr BETWEEN expr AND expr %prec BETWEEN                                  { emit("BETWEEN"); $$ = expr_make_between($1, $3, $5); }
+| expr NOT BETWEEN expr AND expr %prec BETWEEN                                  { emit("NOTBETWEEN"); $$ = expr_make_not_between($1, $4, $6); }
 ;
 
 val_list: expr									{ $$ = 1; }
@@ -407,8 +408,8 @@ case_list: WHEN expr THEN expr                                                  
 | case_list WHEN expr THEN expr                                                 { $$ = $1+1; }
 ;
 
-expr: expr LIKE expr								{ emit("LIKE"); $$ = $1; }
-| expr NOT LIKE expr								{ emit("LIKE"); emit("NOT"); $$ = $1; }
+expr: expr LIKE expr								{ emit("LIKE"); $$ = expr_make_like($1, $3); }
+| expr NOT LIKE expr								{ emit("NOTLIKE"); $$ = expr_make_not_like($1, $4); }
 ;
 
 expr: expr REGEXP expr								{ emit("REGEXP"); $$ = $1; }

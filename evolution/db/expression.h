@@ -40,6 +40,8 @@ typedef enum {
     EXPR_OR,              /* left OR right */
     EXPR_NOT,             /* NOT expr */
     EXPR_XOR,             /* left XOR right */
+    EXPR_LIKE,            /* left LIKE right */
+    EXPR_NOT_LIKE,        /* left NOT LIKE right */
     EXPR_IS_NULL,         /* expr IS NULL */
     EXPR_IS_NOT_NULL,     /* expr IS NOT NULL */
     EXPR_CURRENT_TIMESTAMP, /* CURRENT_TIMESTAMP */
@@ -93,6 +95,10 @@ ExprNode *expr_make_and(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_or(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_not(ExprNode *operand);
 ExprNode *expr_make_xor(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_like(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_not_like(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_between(ExprNode *expr, ExprNode *low, ExprNode *high);
+ExprNode *expr_make_not_between(ExprNode *expr, ExprNode *low, ExprNode *high);
 
 /* Reset expression pool (call before each query) */
 void expr_pool_reset(void);

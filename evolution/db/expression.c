@@ -273,6 +273,68 @@ ExprNode *expr_make_xor(ExprNode *left, ExprNode *right)
     return e;
 }
 
+ExprNode *expr_make_like(ExprNode *left, ExprNode *right)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_LIKE;
+    e->left = left;
+    e->right = right;
+    snprintf(e->display, sizeof(e->display), "%s LIKE %s",
+             left ? left->display : "?",
+             right ? right->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_not_like(ExprNode *left, ExprNode *right)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_NOT_LIKE;
+    e->left = left;
+    e->right = right;
+    snprintf(e->display, sizeof(e->display), "%s NOT LIKE %s",
+             left ? left->display : "?",
+             right ? right->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_between(ExprNode *expr, ExprNode *low, ExprNode *high)
+{
+    /* Desugar: expr BETWEEN low AND high  →  (expr >= low) AND (expr <= high) */
+    ExprNode *ge = expr_alloc();
+    ExprNode *le = expr_alloc();
+    if (!ge || !le) return NULL;
+    ge->type = EXPR_CMP_GE; ge->left = expr; ge->right = low;
+    le->type = EXPR_CMP_LE; le->left = expr; le->right = high;
+    ExprNode *result = expr_make_and(ge, le);
+    if (result) {
+        snprintf(result->display, sizeof(result->display), "%s BETWEEN %s AND %s",
+                 expr ? expr->display : "?",
+                 low ? low->display : "?",
+                 high ? high->display : "?");
+    }
+    return result;
+}
+
+ExprNode *expr_make_not_between(ExprNode *expr, ExprNode *low, ExprNode *high)
+{
+    /* Desugar: expr NOT BETWEEN low AND high  →  (expr < low) OR (expr > high) */
+    ExprNode *lt = expr_alloc();
+    ExprNode *gt = expr_alloc();
+    if (!lt || !gt) return NULL;
+    lt->type = EXPR_CMP_LT; lt->left = expr; lt->right = low;
+    gt->type = EXPR_CMP_GT; gt->left = expr; gt->right = high;
+    ExprNode *result = expr_make_or(lt, gt);
+    if (result) {
+        snprintf(result->display, sizeof(result->display), "%s NOT BETWEEN %s AND %s",
+                 expr ? expr->display : "?",
+                 low ? low->display : "?",
+                 high ? high->display : "?");
+    }
+    return result;
+}
+
 /* ---- Store a select expression ---- */
 void expr_store_select(ExprNode *expr, const char *alias)
 {
@@ -304,7 +366,9 @@ int expr_is_boolean(const ExprNode *e)
             e->type == EXPR_AND ||
             e->type == EXPR_OR ||
             e->type == EXPR_NOT ||
-            e->type == EXPR_XOR);
+            e->type == EXPR_XOR ||
+            e->type == EXPR_LIKE ||
+            e->type == EXPR_NOT_LIKE);
 }
 
 /* ---- Evaluate as double ---- */
@@ -554,6 +618,42 @@ int expr_evaluate(const ExprNode *e,
         strncpy(out_buf, lval ? "f" : "t", buf_size - 1);
         out_buf[buf_size - 1] = '\0';
         return 1;
+    }
+
+    /* LIKE / NOT LIKE — SQL pattern matching with % and _ */
+    if (e->type == EXPR_LIKE || e->type == EXPR_NOT_LIKE) {
+        char lbuf[512], rbuf[512];
+        int l_ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, lbuf, sizeof(lbuf)) : 0;
+        int r_ok = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, rbuf, sizeof(rbuf)) : 0;
+        if (!l_ok || !r_ok) { out_buf[0] = '\0'; return 0; }  /* NULL → NULL */
+
+        /* Simple LIKE pattern match: % = any sequence, _ = any single char */
+        const char *str = lbuf;
+        const char *pat = rbuf;
+        /* Recursive match helper via iterative approach */
+        {
+            const char *s = str, *p = pat;
+            const char *star_p = NULL, *star_s = NULL;
+            while (*s) {
+                if (*p == '%') {
+                    star_p = p++;
+                    star_s = s;
+                } else if (*p == '_' || *p == *s) {
+                    s++; p++;
+                } else if (star_p) {
+                    p = star_p + 1;
+                    s = ++star_s;
+                } else {
+                    break;
+                }
+            }
+            while (*p == '%') p++;
+            int matched = (*s == '\0' && *p == '\0');
+            if (e->type == EXPR_NOT_LIKE) matched = !matched;
+            strncpy(out_buf, matched ? "t" : "f", buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
     }
 
     /* Date/time functions */
