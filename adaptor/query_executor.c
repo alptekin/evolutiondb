@@ -668,7 +668,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                             if (expr_evaluate(g_selectExprs[s],
                                     (const char (*)[128])colNames,
                                     (const char (*)[256])colValues,
-                                    origNumCols, result, sizeof(result))) {
+                                    origNumCols, result, sizeof(result)) && strcmp(result, "\x01NULL\x01") != 0) {
                                 strncpy(aggRow.fields[s], result, MAX_FIELD_LEN - 1);
                                 rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
                                 rs->columns[s].type_len = -1;
@@ -1019,7 +1019,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                     (const char (*)[128])colNames,
                                     (const char (*)[256])colValues,
                                     origNumCols,
-                                    result, sizeof(result))) {
+                                    result, sizeof(result)) && strcmp(result, "\x01NULL\x01") != 0) {
                                 /* Handle boolean conversion for wire protocol */
                                 if (rs->columns[c].pg_type_oid == PG_OID_BOOL ||
                                     (g_selectExprs[c] && expr_is_boolean(g_selectExprs[c]))) {
@@ -1247,7 +1247,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                         int ok = expr_evaluate(g_selectExprs[s],
                                                empty_names, empty_vals, 0,
                                                result, sizeof(result));
-                        if (ok) {
+                        if (ok && strcmp(result, "\x01NULL\x01") != 0) {
                             /* Boolean conversion */
                             if (expr_is_boolean(g_selectExprs[s])) {
                                 if (strcmp(result, "t") == 0 || strcasecmp(result, "true") == 0 || strcmp(result, "1") == 0)

@@ -524,6 +524,110 @@ ExprNode *expr_make_case_simple(ExprNode *operand, int count, ExprNode *else_exp
     return expr_make_case_searched(count, else_expr);
 }
 
+/* ---- String function constructors ---- */
+
+ExprNode *expr_make_substring(ExprNode *str, ExprNode *pos, ExprNode *len)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_SUBSTRING;
+    e->left  = str;   /* string */
+    e->right = pos;   /* start position (1-based) */
+    e->extra = len;   /* length (may be NULL) */
+    snprintf(e->display, sizeof(e->display), "SUBSTRING(%s,%s,%s)",
+             str ? str->display : "?",
+             pos ? pos->display : "?",
+             len ? len->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_trim(int mode, ExprNode *chars, ExprNode *str)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_TRIM;
+    e->val.intval = mode;  /* 1=LEADING, 2=TRAILING, 3=BOTH */
+    e->left  = str;        /* string to trim */
+    e->right = chars;      /* characters to trim (NULL → space) */
+    snprintf(e->display, sizeof(e->display), "TRIM(%s)",
+             str ? str->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_upper(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_UPPER;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "UPPER(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_lower(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_LOWER;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "LOWER(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_length(ExprNode *arg)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_LENGTH;
+    e->left = arg;
+    snprintf(e->display, sizeof(e->display), "LENGTH(%s)",
+             arg ? arg->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_concat(ExprNode *a, ExprNode *b)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_CONCAT;
+    e->left  = a;
+    e->right = b;
+    snprintf(e->display, sizeof(e->display), "CONCAT(%s,%s)",
+             a ? a->display : "?",
+             b ? b->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_replace(ExprNode *str, ExprNode *from, ExprNode *to)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_REPLACE;
+    e->left  = str;   /* source string */
+    e->right = from;  /* search string */
+    e->extra = to;    /* replacement string */
+    snprintf(e->display, sizeof(e->display), "REPLACE(%s,%s,%s)",
+             str ? str->display : "?",
+             from ? from->display : "?",
+             to ? to->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_coalesce(ExprNode *a, ExprNode *b)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_COALESCE;
+    e->left  = a;
+    e->right = b;
+    snprintf(e->display, sizeof(e->display), "COALESCE(%s,%s)",
+             a ? a->display : "?",
+             b ? b->display : "?");
+    return e;
+}
+
 /* ---- Check if expression is an aggregate ---- */
 int expr_is_aggregate(const ExprNode *e)
 {
@@ -929,6 +1033,179 @@ int expr_evaluate(const ExprNode *e,
         /* No ELSE — result is NULL */
         out_buf[0] = '\0';
         return 0;
+    }
+
+    /* ---- String functions ---- */
+
+    if (e->type == EXPR_SUBSTRING) {
+        char str_buf[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, str_buf, sizeof(str_buf)) : 0;
+        if (!ok || strcmp(str_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+
+        char pos_buf[64];
+        ok = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, pos_buf, sizeof(pos_buf)) : 0;
+        int start = ok ? atoi(pos_buf) : 1;  /* 1-based */
+        if (start < 1) start = 1;
+
+        int slen = (int)strlen(str_buf);
+        int idx = start - 1;  /* 0-based */
+        if (idx >= slen) { out_buf[0] = '\0'; return 1; }
+
+        if (e->extra) {
+            char len_buf[64];
+            ok = expr_evaluate(e->extra, col_names, col_values, num_cols, len_buf, sizeof(len_buf));
+            int maxlen = ok ? atoi(len_buf) : slen;
+            if (maxlen < 0) maxlen = 0;
+            int avail = slen - idx;
+            if (maxlen > avail) maxlen = avail;
+            if (maxlen >= (int)buf_size) maxlen = (int)buf_size - 1;
+            memcpy(out_buf, str_buf + idx, maxlen);
+            out_buf[maxlen] = '\0';
+        } else {
+            strncpy(out_buf, str_buf + idx, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+        }
+        return 1;
+    }
+
+    if (e->type == EXPR_TRIM) {
+        char str_buf[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, str_buf, sizeof(str_buf)) : 0;
+        if (!ok || strcmp(str_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+
+        const char *trimchars = " ";  /* default: space */
+        char chars_buf[64];
+        if (e->right) {
+            ok = expr_evaluate(e->right, col_names, col_values, num_cols, chars_buf, sizeof(chars_buf));
+            if (ok && strcmp(chars_buf, NULL_MARKER) != 0) trimchars = chars_buf;
+        }
+
+        int mode = e->val.intval;  /* 1=LEADING, 2=TRAILING, 3=BOTH */
+        char *s = str_buf;
+        int len = (int)strlen(s);
+
+        /* Leading */
+        if (mode == 1 || mode == 3) {
+            while (*s && strchr(trimchars, *s)) s++;
+        }
+        len = (int)strlen(s);
+        /* Trailing */
+        if (mode == 2 || mode == 3) {
+            while (len > 0 && strchr(trimchars, s[len - 1])) len--;
+            s[len] = '\0';
+        }
+
+        strncpy(out_buf, s, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
+    if (e->type == EXPR_UPPER) {
+        char str_buf[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, str_buf, sizeof(str_buf)) : 0;
+        if (!ok || strcmp(str_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int i;
+        for (i = 0; str_buf[i] && i < (int)buf_size - 1; i++)
+            out_buf[i] = toupper((unsigned char)str_buf[i]);
+        out_buf[i] = '\0';
+        return 1;
+    }
+
+    if (e->type == EXPR_LOWER) {
+        char str_buf[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, str_buf, sizeof(str_buf)) : 0;
+        if (!ok || strcmp(str_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int i;
+        for (i = 0; str_buf[i] && i < (int)buf_size - 1; i++)
+            out_buf[i] = tolower((unsigned char)str_buf[i]);
+        out_buf[i] = '\0';
+        return 1;
+    }
+
+    if (e->type == EXPR_LENGTH) {
+        char str_buf[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, str_buf, sizeof(str_buf)) : 0;
+        if (!ok || strcmp(str_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%d", (int)strlen(str_buf));
+        return 1;
+    }
+
+    if (e->type == EXPR_CONCAT) {
+        char buf_a[512], buf_b[512];
+        int ok_a = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, buf_a, sizeof(buf_a)) : 0;
+        int ok_b = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, buf_b, sizeof(buf_b)) : 0;
+        /* NULL propagation: if either arg is NULL, result is NULL (MySQL-style) */
+        if ((!ok_a || strcmp(buf_a, NULL_MARKER) == 0) ||
+            (!ok_b || strcmp(buf_b, NULL_MARKER) == 0)) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        snprintf(out_buf, buf_size, "%s%s", buf_a, buf_b);
+        return 1;
+    }
+
+    if (e->type == EXPR_REPLACE) {
+        char str_buf[1024], from_buf[256], to_buf[256];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, str_buf, sizeof(str_buf)) : 0;
+        if (!ok || strcmp(str_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        ok = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, from_buf, sizeof(from_buf)) : 0;
+        if (!ok || strcmp(from_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        ok = e->extra ? expr_evaluate(e->extra, col_names, col_values, num_cols, to_buf, sizeof(to_buf)) : 0;
+        if (!ok || strcmp(to_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+
+        int from_len = (int)strlen(from_buf);
+        int to_len = (int)strlen(to_buf);
+        if (from_len == 0) {
+            strncpy(out_buf, str_buf, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+
+        char result[2048];
+        result[0] = '\0';
+        char *p = str_buf;
+        char *r = result;
+        int rlen = 0;
+        while (*p) {
+            if (strncmp(p, from_buf, from_len) == 0) {
+                if (rlen + to_len < (int)sizeof(result) - 1) {
+                    memcpy(r, to_buf, to_len);
+                    r += to_len;
+                    rlen += to_len;
+                }
+                p += from_len;
+            } else {
+                if (rlen < (int)sizeof(result) - 1) {
+                    *r++ = *p;
+                    rlen++;
+                }
+                p++;
+            }
+        }
+        *r = '\0';
+        strncpy(out_buf, result, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
+    if (e->type == EXPR_COALESCE) {
+        char buf_a[512];
+        int ok_a = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, buf_a, sizeof(buf_a)) : 0;
+        if (ok_a && strcmp(buf_a, NULL_MARKER) != 0) {
+            strncpy(out_buf, buf_a, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        /* First arg is NULL, try second */
+        char buf_b[512];
+        int ok_b = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, buf_b, sizeof(buf_b)) : 0;
+        if (ok_b && strcmp(buf_b, NULL_MARKER) != 0) {
+            strncpy(out_buf, buf_b, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
     }
 
     /* Date/time functions */

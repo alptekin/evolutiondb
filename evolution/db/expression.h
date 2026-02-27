@@ -54,6 +54,14 @@ typedef enum {
     EXPR_MIN,              /* MIN(expr) — aggregate */
     EXPR_MAX,              /* MAX(expr) — aggregate */
     EXPR_CASE_WHEN,        /* CASE WHEN cond THEN result [ELSE ...] END */
+    EXPR_SUBSTRING,       /* SUBSTRING(str, pos [, len]) */
+    EXPR_TRIM,            /* TRIM([LEADING|TRAILING|BOTH] [chars] FROM str) */
+    EXPR_UPPER,           /* UPPER(str) */
+    EXPR_LOWER,           /* LOWER(str) */
+    EXPR_LENGTH,          /* LENGTH(str) / CHAR_LENGTH(str) */
+    EXPR_CONCAT,          /* CONCAT(a, b) — left || right */
+    EXPR_REPLACE,         /* REPLACE(str, from, to) */
+    EXPR_COALESCE,        /* COALESCE(a, b) */
     EXPR_FUNC_CALL,       /* function call (future) */
     EXPR_STAR             /* SELECT * (sentinel) */
 } ExprNodeType;
@@ -124,6 +132,14 @@ ExprNode *expr_make_min(ExprNode *arg);
 ExprNode *expr_make_max(ExprNode *arg);
 ExprNode *expr_make_case_searched(int count, ExprNode *else_expr);
 ExprNode *expr_make_case_simple(ExprNode *operand, int count, ExprNode *else_expr);
+ExprNode *expr_make_substring(ExprNode *str, ExprNode *pos, ExprNode *len);
+ExprNode *expr_make_trim(int mode, ExprNode *chars, ExprNode *str);
+ExprNode *expr_make_upper(ExprNode *arg);
+ExprNode *expr_make_lower(ExprNode *arg);
+ExprNode *expr_make_length(ExprNode *arg);
+ExprNode *expr_make_concat(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_replace(ExprNode *str, ExprNode *from, ExprNode *to);
+ExprNode *expr_make_coalesce(ExprNode *left, ExprNode *right);
 
 /* CASE WHEN/THEN collector (used during parsing) */
 #define MAX_CASE_WHENS 32

@@ -207,6 +207,12 @@
 %token FAVG
 %token FMIN
 %token FMAX
+%token FUPPER
+%token FLOWER
+%token FLENGTH
+%token FCONCAT
+%token FREPLACE
+%token FCOALESCE
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -215,7 +221,8 @@
 %type <intval> opt_val_list
 %type <intval> case_list
 %type <intval> groupby_list
-%type <intval> opt_with_rollup 
+%type <intval> opt_with_rollup
+%type <intval> trim_ltb
 %type <intval> opt_asc_desc
 %type <intval> table_references
 %type <intval> opt_inner_cross 
@@ -379,16 +386,24 @@ expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); $$ = expr_make_count_star(); 
 | FMIN '(' expr ')'									{ emit(" CALL 1 MIN"); $$ = expr_make_min($3); }
 | FMAX '(' expr ')'									{ emit(" CALL 1 MAX"); $$ = expr_make_max($3); }
 ;
-expr: FSUBSTRING '(' val_list ')'                                               { emit("CALL %d SUBSTR", $3); $$ = expr_make_column("SUBSTR"); }
-| FSUBSTRING '(' expr FROM expr ')'                                             { emit("CALL 2 SUBSTR"); $$ = expr_make_column("SUBSTR"); }
-| FSUBSTRING '(' expr FROM expr FOR expr ')'                                    { emit("CALL 3 SUBSTR"); $$ = expr_make_column("SUBSTR"); }
-| FTRIM '(' val_list ')'							{ emit("CALL %d TRIM", $3); $$ = expr_make_column("TRIM"); }
-| FTRIM '(' trim_ltb expr FROM val_list ')'                                     { emit("CALL 3 TRIM"); $$ = expr_make_column("TRIM"); }
+expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = expr_make_substring($3, $5, $7); }
+| FSUBSTRING '(' expr ',' expr ')'                 { emit("CALL 2 SUBSTR"); $$ = expr_make_substring($3, $5, NULL); }
+| FSUBSTRING '(' expr FROM expr ')'                { emit("CALL 2 SUBSTR"); $$ = expr_make_substring($3, $5, NULL); }
+| FSUBSTRING '(' expr FROM expr FOR expr ')'       { emit("CALL 3 SUBSTR"); $$ = expr_make_substring($3, $5, $7); }
+| FTRIM '(' expr ')'                               { emit("CALL 1 TRIM"); $$ = expr_make_trim(3, NULL, $3); }
+| FTRIM '(' trim_ltb expr FROM expr ')'            { emit("CALL 3 TRIM"); $$ = expr_make_trim($3, $4, $6); }
+| FTRIM '(' trim_ltb FROM expr ')'                 { emit("CALL 2 TRIM"); $$ = expr_make_trim($3, NULL, $5); }
+| FUPPER '(' expr ')'                              { emit("CALL 1 UPPER"); $$ = expr_make_upper($3); }
+| FLOWER '(' expr ')'                              { emit("CALL 1 LOWER"); $$ = expr_make_lower($3); }
+| FLENGTH '(' expr ')'                             { emit("CALL 1 LENGTH"); $$ = expr_make_length($3); }
+| FCONCAT '(' expr ',' expr ')'                    { emit("CALL 2 CONCAT"); $$ = expr_make_concat($3, $5); }
+| FREPLACE '(' expr ',' expr ',' expr ')'          { emit("CALL 3 REPLACE"); $$ = expr_make_replace($3, $5, $7); }
+| FCOALESCE '(' expr ',' expr ')'                  { emit("CALL 2 COALESCE"); $$ = expr_make_coalesce($3, $5); }
 ;
 
-trim_ltb: LEADING								{ emit("NUMBER 1"); }
-| TRAILING									{ emit("NUMBER 2"); }
-| BOTH										{ emit("NUMBER 3"); }
+trim_ltb: LEADING								{ emit("NUMBER 1"); $$ = 1; }
+| TRAILING									{ emit("NUMBER 2"); $$ = 2; }
+| BOTH										{ emit("NUMBER 3"); $$ = 3; }
 ;
 
 expr: FDATE_ADD '(' expr ',' interval_exp ')'                                   { emit("CALL 3 DATE_ADD"); $$ = expr_make_column("DATE_ADD"); }

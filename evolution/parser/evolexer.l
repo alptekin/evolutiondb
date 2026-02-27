@@ -174,7 +174,7 @@ REGEXP|RLIKE			{ return REGEXP; }
 
 
 
-REPLACE					{ return REPLACE; }
+REPLACE					{ int c = input(); unput(c); if(c == '(') return FREPLACE; return REPLACE; }
 
 
 
@@ -286,6 +286,12 @@ B'[01]+'				{ yylval.strval = strdup(yytext); return STRING; }
 
 SUBSTR(ING)?/"("		{ return FSUBSTRING; }										/* functions */
 TRIM/"("				{ return FTRIM; }
+UPPER/"("				{ return FUPPER; }
+LOWER/"("				{ return FLOWER; }
+LENGTH/"("			{ return FLENGTH; }
+CHAR_LENGTH/"("		{ return FLENGTH; }
+CONCAT/"("			{ return FCONCAT; }
+COALESCE/"("			{ return FCOALESCE; }
 DATE_ADD/"("			{ return FDATE_ADD; }
 DATE_SUB/"("			{ return FDATE_SUB; }
 
