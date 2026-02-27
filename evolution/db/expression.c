@@ -27,6 +27,11 @@ ExprNode *g_offsetExpr = NULL;
 ExprNode *g_inListExprs[MAX_IN_LIST];
 int       g_inListCount = 0;
 
+/* CASE WHEN/THEN collector */
+ExprNode *g_caseWhenExprs[MAX_CASE_WHENS];
+ExprNode *g_caseThenExprs[MAX_CASE_WHENS];
+int       g_caseWhenCount = 0;
+
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)
 {
@@ -41,6 +46,7 @@ void expr_pool_reset(void)
     g_exprNodePoolUsed = 0;
     g_selectExprCount = 0;
     g_inListCount = 0;
+    g_caseWhenCount = 0;
     g_whereExpr = NULL;
     g_limitExpr = NULL;
     g_offsetExpr = NULL;
@@ -421,6 +427,48 @@ ExprNode *expr_make_count(ExprNode *arg)
     return e;
 }
 
+/* ---- CASE WHEN constructors ---- */
+
+/* Searched CASE: CASE WHEN c1 THEN r1 WHEN c2 THEN r2 ... [ELSE e] END
+ * Builds a right-nested chain: CASE_WHEN(c1, r1, CASE_WHEN(c2, r2, else_expr))
+ * Uses g_caseWhenExprs[] and g_caseThenExprs[] collected during parsing. */
+ExprNode *expr_make_case_searched(int count, ExprNode *else_expr)
+{
+    if (count <= 0) return else_expr;
+    /* Build from the last WHEN backwards so the chain is in order */
+    ExprNode *chain = else_expr;  /* may be NULL (no ELSE) */
+    int i;
+    for (i = count - 1; i >= 0; i--) {
+        ExprNode *node = expr_alloc();
+        if (!node) return NULL;
+        node->type = EXPR_CASE_WHEN;
+        node->left  = g_caseWhenExprs[i];   /* condition */
+        node->right = g_caseThenExprs[i];   /* result */
+        node->extra = chain;                /* else/next branch */
+        chain = node;
+    }
+    if (chain) strcpy(chain->display, "CASE");
+    return chain;
+}
+
+/* Simple CASE: CASE expr WHEN v1 THEN r1 WHEN v2 THEN r2 ... [ELSE e] END
+ * Desugars each WHEN into a comparison: (operand = vi)
+ * Then builds the same searched CASE chain. */
+ExprNode *expr_make_case_simple(ExprNode *operand, int count, ExprNode *else_expr)
+{
+    int i;
+    /* Convert each WHEN value into a comparison: operand = value */
+    for (i = 0; i < count && i < MAX_CASE_WHENS; i++) {
+        ExprNode *cmp = expr_alloc();
+        if (!cmp) return NULL;
+        cmp->type = EXPR_CMP_EQ;
+        cmp->left = operand;
+        cmp->right = g_caseWhenExprs[i];
+        g_caseWhenExprs[i] = cmp;
+    }
+    return expr_make_case_searched(count, else_expr);
+}
+
 /* ---- Check if expression is an aggregate ---- */
 int expr_is_aggregate(const ExprNode *e)
 {
@@ -747,6 +795,44 @@ int expr_evaluate(const ExprNode *e,
             out_buf[buf_size - 1] = '\0';
             return 1;
         }
+    }
+
+    /* CASE WHEN ... THEN ... [ELSE ...] END */
+    if (e->type == EXPR_CASE_WHEN) {
+        /* Walk the chain: left=condition, right=result, extra=next/else */
+        const ExprNode *cur = e;
+        while (cur && cur->type == EXPR_CASE_WHEN) {
+            char cond_buf[512];
+            int cond_ok = cur->left ?
+                expr_evaluate(cur->left, col_names, col_values, num_cols,
+                              cond_buf, sizeof(cond_buf)) : 0;
+            if (cond_ok) {
+                int is_true = 0;
+                if (strcmp(cond_buf, "t") == 0 || strcasecmp(cond_buf, "true") == 0 ||
+                    strcmp(cond_buf, "1") == 0)
+                    is_true = 1;
+                else {
+                    double v = strtod(cond_buf, NULL);
+                    if (v != 0.0) is_true = 1;
+                }
+                if (is_true) {
+                    /* Condition matched — evaluate THEN result */
+                    return cur->right ?
+                        expr_evaluate(cur->right, col_names, col_values, num_cols,
+                                      out_buf, buf_size) : 0;
+                }
+            }
+            /* Condition was false or NULL — try next WHEN */
+            cur = cur->extra;
+        }
+        /* No WHEN matched — evaluate ELSE (cur is now the else expr, or NULL) */
+        if (cur) {
+            return expr_evaluate(cur, col_names, col_values, num_cols,
+                                 out_buf, buf_size);
+        }
+        /* No ELSE — result is NULL */
+        out_buf[0] = '\0';
+        return 0;
     }
 
     /* Date/time functions */

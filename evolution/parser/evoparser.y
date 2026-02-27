@@ -398,14 +398,33 @@ interval_exp: INTERVAL expr DAY_HOUR                                            
 | INTERVAL expr HOUR_SECOND							{ emit("NUMBER 9"); }
 ;
 
-expr: CASE expr case_list END                                                   { emit("CASEVAL %d 0", $3); $$ = $2; }
-| CASE expr case_list ELSE expr END                                             { emit("CASEVAL %d 1", $3); $$ = $2; }
-| CASE case_list END								{ emit("CASE %d 0", $2); $$ = NULL; }
-| CASE case_list ELSE expr END                                                  { emit("CASE %d 1", $2); $$ = $4; }
+expr: CASE expr case_list END
+    { emit("CASEVAL %d 0", $3); $$ = expr_make_case_simple($2, g_caseWhenCount, NULL); }
+| CASE expr case_list ELSE expr END
+    { emit("CASEVAL %d 1", $3); $$ = expr_make_case_simple($2, g_caseWhenCount, $5); }
+| CASE case_list END
+    { emit("CASE %d 0", $2); $$ = expr_make_case_searched(g_caseWhenCount, NULL); }
+| CASE case_list ELSE expr END
+    { emit("CASE %d 1", $2); $$ = expr_make_case_searched(g_caseWhenCount, $4); }
 ;
 
-case_list: WHEN expr THEN expr                                                  { $$ = 1; }
-| case_list WHEN expr THEN expr                                                 { $$ = $1+1; }
+case_list: WHEN expr THEN expr
+    {
+        g_caseWhenCount = 0;
+        g_caseWhenExprs[0] = $2;
+        g_caseThenExprs[0] = $4;
+        g_caseWhenCount = 1;
+        $$ = 1;
+    }
+| case_list WHEN expr THEN expr
+    {
+        if (g_caseWhenCount < MAX_CASE_WHENS) {
+            g_caseWhenExprs[g_caseWhenCount] = $3;
+            g_caseThenExprs[g_caseWhenCount] = $5;
+            g_caseWhenCount++;
+        }
+        $$ = $1+1;
+    }
 ;
 
 expr: expr LIKE expr								{ emit("LIKE"); $$ = expr_make_like($1, $3); }

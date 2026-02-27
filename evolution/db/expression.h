@@ -49,6 +49,7 @@ typedef enum {
     EXPR_CURRENT_TIME,    /* CURRENT_TIME */
     EXPR_COUNT_STAR,       /* COUNT(*) — aggregate */
     EXPR_COUNT,            /* COUNT(expr) — aggregate */
+    EXPR_CASE_WHEN,        /* CASE WHEN cond THEN result [ELSE ...] END */
     EXPR_FUNC_CALL,       /* function call (future) */
     EXPR_STAR             /* SELECT * (sentinel) */
 } ExprNodeType;
@@ -63,6 +64,7 @@ typedef struct ExprNode {
     } val;
     struct ExprNode *left;      /* left operand (binary ops) or sole operand (NEG) */
     struct ExprNode *right;     /* right operand (binary ops) */
+    struct ExprNode *extra;     /* CASE_WHEN: else/next branch */
     char display[256];          /* display label / alias */
 } ExprNode;
 
@@ -112,6 +114,14 @@ ExprNode *expr_make_in(ExprNode *expr, ExprNode **list, int count);
 ExprNode *expr_make_not_in(ExprNode *expr, ExprNode **list, int count);
 ExprNode *expr_make_count_star(void);
 ExprNode *expr_make_count(ExprNode *arg);
+ExprNode *expr_make_case_searched(int count, ExprNode *else_expr);
+ExprNode *expr_make_case_simple(ExprNode *operand, int count, ExprNode *else_expr);
+
+/* CASE WHEN/THEN collector (used during parsing) */
+#define MAX_CASE_WHENS 32
+extern ExprNode *g_caseWhenExprs[MAX_CASE_WHENS];
+extern ExprNode *g_caseThenExprs[MAX_CASE_WHENS];
+extern int       g_caseWhenCount;
 
 /* Check if any select expression is an aggregate function */
 int expr_is_aggregate(const ExprNode *e);
