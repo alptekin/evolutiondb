@@ -1,6 +1,6 @@
-#line 1 "parser/lex.yy.c"
+#line 2 "parser/lex.yy.c"
 
-#line 3 "parser/lex.yy.c"
+#line 4 "parser/lex.yy.c"
 
 #define  YY_INT_ALIGNED short int
 
@@ -1281,9 +1281,9 @@ char *yytext;
 
 	void yyerror(char *s, ...);
 	int oldstate;
-#line 1284 "parser/lex.yy.c"
+#line 1285 "parser/lex.yy.c"
 
-#line 1286 "parser/lex.yy.c"
+#line 1287 "parser/lex.yy.c"
 
 #define INITIAL 0
 #define COMMENT 1
@@ -1512,7 +1512,7 @@ YY_DECL
 
 
 
-#line 1515 "parser/lex.yy.c"
+#line 1516 "parser/lex.yy.c"
 
 	while ( /*CONSTCOND*/1 )		/* loops until end-of-file is reached */
 		{
@@ -2504,7 +2504,7 @@ YY_RULE_SETUP
 #line 319 "parser/evolexer.l"
 YY_FATAL_ERROR( "flex scanner jammed" );
 	YY_BREAK
-#line 2507 "parser/lex.yy.c"
+#line 2508 "parser/lex.yy.c"
 			case YY_STATE_EOF(INITIAL):
 			case YY_STATE_EOF(BTWMODE):
 				yyterminate();

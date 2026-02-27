@@ -81,5 +81,7 @@ extern int g_currentColPrimaryKey;
 extern char g_columnNullFlags[1024];
 extern int g_primaryKeyIndex;
 extern int g_columnCount;
+extern char g_selectColumns[64][128];
+extern int g_selectColumnCount;
 
 #endif

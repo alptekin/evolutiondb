@@ -209,14 +209,15 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 16 "parser/evoparser.y"
+#line 20 "parser/evoparser.y"
 
 	int intval;
 	double floatval;
 	char *strval;
 	int subtok;
+	struct ExprNode *exprval;
 
-#line 220 "parser/evoparser.tab.h"
+#line 221 "parser/evoparser.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

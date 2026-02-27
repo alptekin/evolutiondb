@@ -10,7 +10,7 @@ COPY evolution/ evolution/
 COPY adaptor/ adaptor/
 COPY Makefile .
 
-RUN make adaptor
+RUN make generate && make adaptor
 
 # ---- Runtime stage ----
 FROM debian:bookworm-slim

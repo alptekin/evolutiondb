@@ -10,6 +10,7 @@
 #include "../evolution/db/database.h"
 #include "../evolution/db/apue.h"
 #include "../evolution/db/apue_db.h"
+#include "../evolution/db/expression.h"
 
 /* Flex/Bison externs */
 extern int yyparse(void);
@@ -105,6 +106,83 @@ static int type_encoding_to_pg_oid(int typeEncoding)
 }
 
 /* ----------------------------------------------------------------
+ *  Parse selected column names from a normalized SELECT.
+ *  Fills g_selectColumns[], g_selectColumnCount.
+ *  If SELECT *, counts remain 0 (= all columns).
+ *  NOTE: expression parsing is now handled by the Bison parser
+ *  which fills g_selectExprs[] / g_selectExprCount.
+ * ---------------------------------------------------------------- */
+static void parse_select_columns(const char *sql)
+{
+    const char *p = sql;
+    const char *from_pos;
+    char colbuf[4096];
+    char *tok;
+    int len;
+
+    g_selectColumnCount = 0;
+
+    /* Skip leading whitespace */
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Must start with SELECT */
+    if (strncasecmp(p, "SELECT", 6) != 0) return;
+    p += 6;
+
+    /* Skip select options (ALL, DISTINCT, etc.) */
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Find FROM keyword to know where column list ends */
+    {
+        const char *search = p;
+        from_pos = NULL;
+        while (*search) {
+            if (isspace((unsigned char)*(search > sql ? search - 1 : search)) &&
+                strncasecmp(search, "FROM", 4) == 0 &&
+                (search[4] == ' ' || search[4] == '\t' || search[4] == '\n' || search[4] == '\0')) {
+                from_pos = search;
+                break;
+            }
+            search++;
+        }
+    }
+    if (!from_pos) return;
+
+    /* Extract column list between SELECT and FROM */
+    len = (int)(from_pos - p);
+    if (len <= 0 || len >= (int)sizeof(colbuf)) return;
+    strncpy(colbuf, p, len);
+    colbuf[len] = '\0';
+
+    /* Trim whitespace */
+    {
+        int clen = (int)strlen(colbuf);
+        while (clen > 0 && isspace((unsigned char)colbuf[clen - 1]))
+            colbuf[--clen] = '\0';
+    }
+
+    /* If it's *, select all columns */
+    if (strcmp(colbuf, "*") == 0) return;
+
+    /* Split by comma */
+    tok = strtok(colbuf, ",");
+    while (tok && g_selectColumnCount < 64) {
+        while (*tok && isspace((unsigned char)*tok)) tok++;
+        {
+            int tlen = (int)strlen(tok);
+            while (tlen > 0 && isspace((unsigned char)tok[tlen - 1]))
+                tok[--tlen] = '\0';
+        }
+        if (*tok) {
+            strncpy(g_selectColumns[g_selectColumnCount], tok, 127);
+            g_selectColumns[g_selectColumnCount][127] = '\0';
+            g_selectColumnCount++;
+        }
+        tok = strtok(NULL, ",");
+    }
+}
+
+/* ----------------------------------------------------------------
  *  Collect SELECT results into ResultSet
  * ---------------------------------------------------------------- */
 static void collect_select_results(const char *tableName, ResultSet *rs)
@@ -132,18 +210,42 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         return;
     }
 
-    if (fgets(line, sizeof(line), fp)) {
-        char *col;
-        int colIdx = 0;
-        line[strcspn(line, "\n")] = '\0';
-        col = strtok(line, ";");
-        while (col) {
-            int oid = (colIdx < numTypes)
-                      ? type_encoding_to_pg_oid(colTypes[colIdx])
-                      : PG_OID_TEXT;
-            result_add_column(rs, col, oid);
-            colIdx++;
-            col = strtok(NULL, ";");
+    {
+        unsigned int tableOid = 0;
+        /* Compute stable table OID (djb2 hash) */
+        {
+            unsigned int h = 5381;
+            const char *p = tableName;
+            while (*p) {
+                h = ((h << 5) + h) + (unsigned char)*p;
+                p++;
+            }
+            tableOid = 16384 + (h % 100000);
+        }
+
+        if (fgets(line, sizeof(line), fp)) {
+            char *col;
+            int colIdx = 0;
+            line[strcspn(line, "\n")] = '\0';
+            col = strtok(line, ";");
+            while (col) {
+                int oid = (colIdx < numTypes)
+                          ? type_encoding_to_pg_oid(colTypes[colIdx])
+                          : PG_OID_TEXT;
+                result_add_column(rs, col, oid);
+                /* Set table OID and attnum so DBeaver can resolve columns */
+                rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
+                rs->columns[rs->num_cols - 1].attnum = colIdx + 1; /* 1-based */
+                /* Set type modifier for varchar/char */
+                if (colIdx < numTypes) {
+                    int family = colTypes[colIdx] / 10000;
+                    int size = colTypes[colIdx] % 10000;
+                    if ((family == 12 || family == 13) && size > 0)
+                        rs->columns[rs->num_cols - 1].type_modifier = size + 4;
+                }
+                colIdx++;
+                col = strtok(NULL, ";");
+            }
         }
     }
     fclose(fp);
@@ -169,7 +271,15 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
         char *val = strtok(temp, ";");
         while (val && col < rs->num_cols) {
-            result_set_field(rs, row, col, val);
+            /* Convert boolean values: PostgreSQL wire protocol expects t/f */
+            if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                if (strncasecmp(val, "true", 5) == 0 || strcmp(val, "1") == 0)
+                    result_set_field(rs, row, col, "t");
+                else
+                    result_set_field(rs, row, col, "f");
+            } else {
+                result_set_field(rs, row, col, val);
+            }
             col++;
             val = strtok(NULL, ";");
         }
@@ -228,6 +338,157 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
     g_orderByDesc = 0;
 
     sprintf(rs->command_tag, "SELECT %d", count);
+
+    /* --- Column filtering / expression evaluation (using parser AST) --- */
+    if (g_selectExprCount > 0 && rs->num_cols > 0) {
+        /* Check if we have a single STAR expression (SELECT *) */
+        if (g_selectExprCount == 1 && g_selectExprs[0] &&
+            g_selectExprs[0]->type == EXPR_STAR) {
+            /* SELECT * — no filtering needed */
+        } else {
+            /* Check if any expression is non-trivial (has arithmetic) */
+            int has_arithmetic = 0;
+            int s;
+            for (s = 0; s < g_selectExprCount; s++) {
+                if (g_selectExprs[s] && !expr_is_column(g_selectExprs[s])) {
+                    has_arithmetic = 1;
+                    break;
+                }
+            }
+
+            /* Build column name/value arrays for expr_evaluate */
+            char colNames[MAX_COLUMNS][128];
+            int origNumCols = rs->num_cols;
+            {
+                int c;
+                for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                    strncpy(colNames[c], rs->columns[c].name, 127);
+                    colNames[c][127] = '\0';
+                }
+            }
+
+            if (has_arithmetic) {
+                /* Build new column definitions for the result */
+                ColumnInfo origCols[MAX_COLUMNS];
+                memcpy(origCols, rs->columns, sizeof(ColumnInfo) * origNumCols);
+
+                /* Set up new columns */
+                rs->num_cols = g_selectExprCount;
+                {
+                    int c;
+                    for (c = 0; c < g_selectExprCount; c++) {
+                        memset(&rs->columns[c], 0, sizeof(ColumnInfo));
+                        if (g_selectExprs[c]) {
+                            strncpy(rs->columns[c].name, g_selectExprs[c]->display,
+                                    MAX_COL_NAME - 1);
+                        } else {
+                            snprintf(rs->columns[c].name, MAX_COL_NAME, "?column?");
+                        }
+                        /* Expression results are numeric unless plain column */
+                        if (g_selectExprs[c] && expr_is_column(g_selectExprs[c])) {
+                            int oc;
+                            for (oc = 0; oc < origNumCols; oc++) {
+                                if (strcasecmp(origCols[oc].name,
+                                               g_selectExprs[c]->val.col_name) == 0) {
+                                    rs->columns[c] = origCols[oc];
+                                    rs->columns[c].attnum = c + 1;
+                                    break;
+                                }
+                            }
+                        } else {
+                            rs->columns[c].pg_type_oid = PG_OID_FLOAT8;
+                            rs->columns[c].type_len = 8;
+                            rs->columns[c].type_modifier = -1;
+                            rs->columns[c].table_oid = 0;
+                            rs->columns[c].attnum = 0;
+                        }
+                    }
+                }
+
+                /* Evaluate expressions for each row */
+                {
+                    int r, c;
+                    for (r = 0; r < rs->num_rows; r++) {
+                        Row origRow = rs->rows[r];
+                        char colValues[MAX_COLUMNS][256];
+                        /* Copy field values for evaluation */
+                        for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                            strncpy(colValues[c], origRow.fields[c], 255);
+                            colValues[c][255] = '\0';
+                        }
+
+                        memset(&rs->rows[r], 0, sizeof(Row));
+                        rs->rows[r].num_fields = g_selectExprCount;
+
+                        for (c = 0; c < g_selectExprCount; c++) {
+                            if (!g_selectExprs[c]) {
+                                rs->rows[r].is_null[c] = 1;
+                                continue;
+                            }
+
+                            char result[MAX_FIELD_LEN];
+                            if (expr_evaluate(g_selectExprs[c],
+                                    (const char (*)[128])colNames,
+                                    (const char (*)[256])colValues,
+                                    origNumCols,
+                                    result, sizeof(result))) {
+                                /* Handle boolean conversion for wire protocol */
+                                if (rs->columns[c].pg_type_oid == PG_OID_BOOL) {
+                                    if (strncasecmp(result, "true", 5) == 0 || strcmp(result, "1") == 0)
+                                        strcpy(rs->rows[r].fields[c], "t");
+                                    else
+                                        strcpy(rs->rows[r].fields[c], "f");
+                                } else {
+                                    strncpy(rs->rows[r].fields[c], result, MAX_FIELD_LEN - 1);
+                                }
+                            } else {
+                                rs->rows[r].is_null[c] = 1;
+                            }
+                        }
+                    }
+                }
+            } else {
+                /* All expressions are plain columns — use simple column filtering */
+                int colMap[64];
+                int mapCount = 0;
+                int s, c, r;
+
+                for (s = 0; s < g_selectExprCount && mapCount < 64; s++) {
+                    if (!g_selectExprs[s] || !expr_is_column(g_selectExprs[s]))
+                        continue;
+                    for (c = 0; c < rs->num_cols; c++) {
+                        if (strcasecmp(rs->columns[c].name,
+                                       g_selectExprs[s]->val.col_name) == 0) {
+                            colMap[mapCount++] = c;
+                            break;
+                        }
+                    }
+                }
+
+                if (mapCount > 0 && mapCount < rs->num_cols) {
+                    ColumnInfo newCols[MAX_COLUMNS];
+                    for (s = 0; s < mapCount; s++) {
+                        newCols[s] = rs->columns[colMap[s]];
+                        newCols[s].attnum = s + 1;
+                    }
+                    memcpy(rs->columns, newCols, sizeof(ColumnInfo) * mapCount);
+                    rs->num_cols = mapCount;
+
+                    for (r = 0; r < rs->num_rows; r++) {
+                        Row newRow;
+                        memset(&newRow, 0, sizeof(Row));
+                        newRow.num_fields = mapCount;
+                        for (s = 0; s < mapCount; s++) {
+                            strcpy(newRow.fields[s],
+                                   rs->rows[r].fields[colMap[s]]);
+                            newRow.is_null[s] = rs->rows[r].is_null[colMap[s]];
+                        }
+                        rs->rows[r] = newRow;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /* ----------------------------------------------------------------
@@ -307,6 +568,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_columnNullFlags[0] = '\0';
     g_primaryKeyIndex = -1;
     g_columnCount = 0;
+    /* NOTE: g_selectColumnCount is NOT reset here — it was set by
+     * parse_select_columns() which runs before execute_via_parser() */
+
+    /* Reset expression pool for parser AST */
+    expr_pool_reset();
 
     /* Redirect stdout/stderr to NUL to suppress parser output */
     saved_stdout = dup(1);
@@ -433,12 +699,14 @@ static void normalize_sql(char *sql)
     *dst = '\0';
     strcpy(sql, buf);
 
-    /* Pass 2: Remove "public." prefix (case-insensitive) */
+    /* Pass 2: Remove "public." and "pg_catalog." prefixes (case-insensitive) */
     src = sql;
     dst = buf;
     while (*src) {
         if (strncasecmp(src, "public.", 7) == 0) {
             src += 7;  /* skip "public." */
+        } else if (strncasecmp(src, "pg_catalog.", 11) == 0) {
+            src += 11;  /* skip "pg_catalog." */
         } else {
             *dst++ = *src++;
         }
@@ -540,6 +808,9 @@ void query_execute(const char *sql, ResultSet *rs)
     printf("[adaptor] Normalized SQL: %.200s%s\n", normalized,
            strlen(normalized) > 200 ? "..." : "");
     fflush(stdout);
+
+    /* Parse selected columns from SQL for filtering */
+    parse_select_columns(normalized);
 
     /* Real EvoSQL query */
     execute_via_parser(normalized, rs);

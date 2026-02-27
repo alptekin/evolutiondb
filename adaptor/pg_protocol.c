@@ -181,11 +181,11 @@ void pg_send_result_set(socket_t sock, const ResultSet *rs)
     pg_buf_add_int16(&b, (short)rs->num_cols);
     for (c = 0; c < rs->num_cols; c++) {
         pg_buf_add_string(&b, rs->columns[c].name);  /* column name */
-        pg_buf_add_int32(&b, 0);                       /* table OID */
-        pg_buf_add_int16(&b, 0);                       /* column attr */
+        pg_buf_add_int32(&b, rs->columns[c].table_oid);  /* table OID */
+        pg_buf_add_int16(&b, (short)rs->columns[c].attnum); /* column attr number */
         pg_buf_add_int32(&b, rs->columns[c].pg_type_oid); /* type OID */
         pg_buf_add_int16(&b, (short)rs->columns[c].type_len); /* type size */
-        pg_buf_add_int32(&b, -1);                      /* type modifier */
+        pg_buf_add_int32(&b, rs->columns[c].type_modifier); /* type modifier */
         pg_buf_add_int16(&b, 0);                       /* format: text */
     }
     pg_buf_send(&b, sock);

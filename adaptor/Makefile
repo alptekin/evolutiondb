@@ -38,7 +38,8 @@ EVO_DB_SRCS = $(EVO_DB)/db.c \
               $(EVO_DB)/Update.c \
               $(EVO_DB)/Delete.c \
               $(EVO_DB)/Drop.c \
-              $(EVO_DB)/database_globals.c
+              $(EVO_DB)/database_globals.c \
+              $(EVO_DB)/expression.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

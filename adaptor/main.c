@@ -212,11 +212,11 @@ static void handle_client(socket_t client_sock)
                     pg_buf_add_int16(&b, (short)rs->num_cols);
                     for (c = 0; c < rs->num_cols; c++) {
                         pg_buf_add_string(&b, rs->columns[c].name);
-                        pg_buf_add_int32(&b, 0);  /* table OID */
-                        pg_buf_add_int16(&b, 0);  /* column attr */
+                        pg_buf_add_int32(&b, rs->columns[c].table_oid);
+                        pg_buf_add_int16(&b, (short)rs->columns[c].attnum);
                         pg_buf_add_int32(&b, rs->columns[c].pg_type_oid);
                         pg_buf_add_int16(&b, (short)rs->columns[c].type_len);
-                        pg_buf_add_int32(&b, -1); /* type modifier */
+                        pg_buf_add_int32(&b, rs->columns[c].type_modifier);
                         pg_buf_add_int16(&b, 0);  /* format: text */
                     }
                     pg_buf_send(&b, client_sock);
@@ -257,11 +257,11 @@ static void handle_client(socket_t client_sock)
                         pg_buf_add_int16(&rd, (short)rs->num_cols);
                         for (ci = 0; ci < rs->num_cols; ci++) {
                             pg_buf_add_string(&rd, rs->columns[ci].name);
-                            pg_buf_add_int32(&rd, 0);  /* table OID */
-                            pg_buf_add_int16(&rd, 0);  /* column attr */
+                            pg_buf_add_int32(&rd, rs->columns[ci].table_oid);
+                            pg_buf_add_int16(&rd, (short)rs->columns[ci].attnum);
                             pg_buf_add_int32(&rd, rs->columns[ci].pg_type_oid);
                             pg_buf_add_int16(&rd, (short)rs->columns[ci].type_len);
-                            pg_buf_add_int32(&rd, -1); /* type modifier */
+                            pg_buf_add_int32(&rd, rs->columns[ci].type_modifier);
                             pg_buf_add_int16(&rd, 0);  /* format: text */
                         }
                         pg_buf_send(&rd, client_sock);

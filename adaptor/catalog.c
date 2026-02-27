@@ -94,6 +94,18 @@ static int stristr_found(const char *haystack, const char *needle)
     return 0;
 }
 
+/* Case-insensitive substring search — returns pointer (like strstr) */
+static const char *strcasestr_local(const char *haystack, const char *needle)
+{
+    int nlen = (int)strlen(needle);
+    while (*haystack) {
+        if (strncasecmp(haystack, needle, nlen) == 0)
+            return haystack;
+        haystack++;
+    }
+    return NULL;
+}
+
 /* Case-insensitive prefix check (skips leading whitespace) */
 static int starts_with_i(const char *sql, const char *prefix)
 {
@@ -377,13 +389,19 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         if (strncasecmp(p, "SELECT", 6) == 0) {
             p += 6;
             while (*p && isspace((unsigned char)*p)) p++;
-            if (*p == '1' && (p[1] == '\0' || isspace((unsigned char)p[1]) ||
-                              p[1] == ';')) {
-                result_add_column(rs, "?column?", PG_OID_INT4);
-                int row = result_add_row(rs);
-                result_set_field(rs, row, 0, "1");
-                sprintf(rs->command_tag, "SELECT 1");
-                return 1;
+            if (*p == '1') {
+                /* Make sure there's nothing meaningful after the '1'
+                   (just optional whitespace / semicolon / end-of-string).
+                   Otherwise queries like "SELECT 1 << 4" would be caught. */
+                const char *q = p + 1;
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (*q == '\0' || *q == ';') {
+                    result_add_column(rs, "?column?", PG_OID_INT4);
+                    int row = result_add_row(rs);
+                    result_set_field(rs, row, 0, "1");
+                    sprintf(rs->command_tag, "SELECT 1");
+                    return 1;
+                }
             }
         }
     }
@@ -1106,6 +1124,36 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "oid", PG_OID_INT4);
         sprintf(rs->command_tag, "SELECT 0");
         return 1;
+    }
+
+    /* Before falling through to the catch-all, check if the SQL
+     * references a user table via pg_catalog.<tablename> syntax.
+     * If so, return 0 to let the query be handled by the EvoSQL parser. */
+    {
+        const char *pc = sql;
+        while ((pc = strcasestr_local(pc, "pg_catalog.")) != NULL) {
+            const char *tbl = pc + 11; /* skip "pg_catalog." */
+            /* Extract table name */
+            char candidate[256];
+            int ci = 0;
+            while (tbl[ci] && (isalnum((unsigned char)tbl[ci]) || tbl[ci] == '_') && ci < 255) {
+                candidate[ci] = tbl[ci];
+                ci++;
+            }
+            candidate[ci] = '\0';
+            if (ci > 0) {
+                /* Check if this is a user table (has .meta file) */
+                char metaPath[1024];
+                sprintf(metaPath, "%s.meta", candidate);
+                FILE *fp = fopen(metaPath, "r");
+                if (fp) {
+                    fclose(fp);
+                    /* This is a user table, not a system table */
+                    return 0;
+                }
+            }
+            pc = tbl; /* advance past this occurrence */
+        }
     }
 
     /* Generic catch-all: any other pg_ query returns empty SELECT */

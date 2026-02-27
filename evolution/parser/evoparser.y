@@ -8,16 +8,21 @@
 	#include <string.h>
 	#include <stdio.h>
 	#include "../db/database.h"
+	#include "../db/expression.h"
 
 	void yyerror(char *s, ...);
 	void emit(char *s, ...);
 	int yylex(void);
+
+	/* Track alias for current select_expr */
+	static char g_currentAlias[128];
 %}
 %union {
 	int intval;
 	double floatval;
 	char *strval;
 	int subtok;
+	struct ExprNode *exprval;
 }
 
 /* names and literal values */
@@ -234,6 +239,9 @@
 %type <intval> opt_ignore_replace
 %type <intval> create_col_list
 
+%type <exprval> expr
+%type <exprval> select_expr
+
 %start stmt_list
 %%
 
@@ -247,10 +255,11 @@ expr: NAME
     {
         emit("NAME %s", $1);
         GetSelection($1);
+        $$ = expr_make_column($1);
         free($1);
     }
-| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); free($1); free($3); }
-| USERVAR									{ emit("USERVAR %s", $1); free($1); }
+| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); $$ = expr_make_column($3); free($1); free($3); }
+| USERVAR									{ emit("USERVAR %s", $1); $$ = expr_make_string($1); free($1); }
 | STRING
     {
         char *sv = $1;
@@ -262,8 +271,10 @@ expr: NAME
             strncpy(stripped, sv + 1, slen - 2);
             stripped[slen - 2] = '\0';
             GetInsertions(stripped);
+            $$ = expr_make_string(stripped);
         } else {
             GetInsertions(sv);
+            $$ = expr_make_string(sv);
         }
         free(sv);
     }
@@ -273,6 +284,7 @@ expr: NAME
         char buf[32];
         sprintf(buf, "%d", $1);
         GetInsertions(buf);
+        $$ = expr_make_int($1);
     }
 | APPROXNUM
     {
@@ -280,49 +292,53 @@ expr: NAME
         char buf[64];
         sprintf(buf, "%g", $1);
         GetInsertions(buf);
+        $$ = expr_make_float($1);
     }
 | BOOL
     {
         emit("BOOL %d", $1);
         GetInsertions($1 ? "true" : "false");
+        $$ = expr_make_bool($1);
     }
 ;
 
-expr: expr '+' expr								{ emit("ADD"); }
-| expr '-' expr									{ emit("SUB"); }
-| expr '*' expr									{ emit("MUL"); }
-| expr '/' expr									{ emit("DIV"); }
-| expr '%' expr									{ emit("MOD"); }
-| expr MOD expr									{ emit("MOD"); }
-| '-' expr %prec UMINUS								{ emit("NEG"); }
-| expr ANDOP expr								{ emit("AND"); }
-| expr OR expr									{ emit("OR"); }
-| expr XOR expr									{ emit("XOR"); }
-| expr '|' expr									{ emit("BITOR"); }
-| expr '&' expr									{ emit("BITAND"); }
-| expr '^' expr									{ emit("BITXOR"); }
-| expr SHIFT expr								{ emit("SHIFT %s", $2==1?"left":"right"); }
-| NOT expr									{ emit("NOT"); }
-| '!' expr									{ emit("NOT"); }
+expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3); }
+| expr '-' expr									{ emit("SUB"); $$ = expr_make_binop(EXPR_SUB, $1, $3); }
+| expr '*' expr									{ emit("MUL"); $$ = expr_make_binop(EXPR_MUL, $1, $3); }
+| expr '/' expr									{ emit("DIV"); $$ = expr_make_binop(EXPR_DIV, $1, $3); }
+| expr '%' expr									{ emit("MOD"); $$ = expr_make_binop(EXPR_MOD, $1, $3); }
+| expr MOD expr									{ emit("MOD"); $$ = expr_make_binop(EXPR_MOD, $1, $3); }
+| '-' expr %prec UMINUS								{ emit("NEG"); $$ = expr_make_neg($2); }
+| '(' expr ')'									{ $$ = $2; }
+| expr ANDOP expr								{ emit("AND"); $$ = $1; }
+| expr OR expr									{ emit("OR"); $$ = $1; }
+| expr XOR expr									{ emit("XOR"); $$ = $1; }
+| expr '|' expr									{ emit("BITOR"); $$ = expr_make_binop(EXPR_BITOR, $1, $3); }
+| expr '&' expr									{ emit("BITAND"); $$ = expr_make_binop(EXPR_BITAND, $1, $3); }
+| expr '^' expr									{ emit("BITXOR"); $$ = expr_make_binop(EXPR_BITXOR, $1, $3); }
+| expr SHIFT expr								{ emit("SHIFT %s", $2==1?"left":"right"); $$ = expr_make_binop($2==1 ? EXPR_SHIFT_LEFT : EXPR_SHIFT_RIGHT, $1, $3); }
+| NOT expr									{ emit("NOT"); $$ = $2; }
+| '!' expr									{ emit("NOT"); $$ = $2; }
 | expr COMPARISON expr
     {
         emit("CMP %d", $2);
+        $$ = $1;
     }
 /* recursive selects and comparisons thereto */
-| expr COMPARISON '(' select_stmt ')'                                           { emit("CMPSELECT %d", $2); }
-| expr COMPARISON ANY '(' select_stmt ')'                                       { emit("CMPANYSELECT %d", $2); }
-| expr COMPARISON SOME '(' select_stmt ')'                                      { emit("CMPANYSELECT %d", $2); }
-| expr COMPARISON ALL '(' select_stmt ')'                                       { emit("CMPALLSELECT %d", $2); }
+| expr COMPARISON '(' select_stmt ')'                                           { emit("CMPSELECT %d", $2); $$ = $1; }
+| expr COMPARISON ANY '(' select_stmt ')'                                       { emit("CMPANYSELECT %d", $2); $$ = $1; }
+| expr COMPARISON SOME '(' select_stmt ')'                                      { emit("CMPANYSELECT %d", $2); $$ = $1; }
+| expr COMPARISON ALL '(' select_stmt ')'                                       { emit("CMPALLSELECT %d", $2); $$ = $1; }
 ;
 
-expr: expr IS NULLX								{ emit("ISNULL"); }
-| expr IS NOT NULLX								{ emit("ISNULL"); emit("NOT"); }
-| expr IS BOOL									{ emit("ISBOOL %d", $3); }
-| expr IS NOT BOOL								{ emit("ISBOOL %d", $4); emit("NOT"); }
-| USERVAR ASSIGN expr								{ emit("ASSIGN @%s", $1); free($1); }
+expr: expr IS NULLX								{ emit("ISNULL"); $$ = $1; }
+| expr IS NOT NULLX								{ emit("ISNULL"); emit("NOT"); $$ = $1; }
+| expr IS BOOL									{ emit("ISBOOL %d", $3); $$ = $1; }
+| expr IS NOT BOOL								{ emit("ISBOOL %d", $4); emit("NOT"); $$ = $1; }
+| USERVAR ASSIGN expr								{ emit("ASSIGN @%s", $1); free($1); $$ = $3; }
 ;
 
-expr: expr BETWEEN expr AND expr %prec BETWEEN                                  { emit("BETWEEN"); }
+expr: expr BETWEEN expr AND expr %prec BETWEEN                                  { emit("BETWEEN"); $$ = $1; }
 ;
 
 val_list: expr									{ $$ = 1; }
@@ -333,26 +349,26 @@ opt_val_list: /* nil */								{ $$ = 0; }
 | val_list
 ;
 
-expr: expr IN '(' val_list ')'                                                  { emit("ISIN %d", $4); }
-| expr NOT IN '(' val_list ')'                                                  { emit("ISIN %d", $5); emit("NOT"); }
-| expr IN '(' select_stmt ')'                                                   { emit("CMPANYSELECT 4"); }
-| expr NOT IN '(' select_stmt ')'                                               { emit("CMPALLSELECT 3"); }
-| EXISTS '(' select_stmt ')'                                                    { emit("EXISTSSELECT"); if($1)emit("NOT"); }
+expr: expr IN '(' val_list ')'                                                  { emit("ISIN %d", $4); $$ = $1; }
+| expr NOT IN '(' val_list ')'                                                  { emit("ISIN %d", $5); emit("NOT"); $$ = $1; }
+| expr IN '(' select_stmt ')'                                                   { emit("CMPANYSELECT 4"); $$ = $1; }
+| expr NOT IN '(' select_stmt ')'                                               { emit("CMPALLSELECT 3"); $$ = $1; }
+| EXISTS '(' select_stmt ')'                                                    { emit("EXISTSSELECT"); if($1)emit("NOT"); $$ = NULL; }
 ;
 
 /* regular functions */
-expr: NAME '(' opt_val_list ')'                                                 { emit("CALL %d %s", $3, $1); free($1); }
+expr: NAME '(' opt_val_list ')'                                                 { emit("CALL %d %s", $3, $1); $$ = expr_make_column($1); free($1); }
 ;
 
 /* functions with special syntax */
-expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); }
-| FCOUNT '(' expr ')'								{ emit(" CALL 1 COUNT"); }
+expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); $$ = expr_make_column("COUNT"); }
+| FCOUNT '(' expr ')'								{ emit(" CALL 1 COUNT"); $$ = expr_make_column("COUNT"); }
 ;
-expr: FSUBSTRING '(' val_list ')'                                               { emit("CALL %d SUBSTR", $3); }
-| FSUBSTRING '(' expr FROM expr ')'                                             { emit("CALL 2 SUBSTR"); }
-| FSUBSTRING '(' expr FROM expr FOR expr ')'                                    { emit("CALL 3 SUBSTR"); }
-| FTRIM '(' val_list ')'							{ emit("CALL %d TRIM", $3); }
-| FTRIM '(' trim_ltb expr FROM val_list ')'                                     { emit("CALL 3 TRIM"); }
+expr: FSUBSTRING '(' val_list ')'                                               { emit("CALL %d SUBSTR", $3); $$ = expr_make_column("SUBSTR"); }
+| FSUBSTRING '(' expr FROM expr ')'                                             { emit("CALL 2 SUBSTR"); $$ = expr_make_column("SUBSTR"); }
+| FSUBSTRING '(' expr FROM expr FOR expr ')'                                    { emit("CALL 3 SUBSTR"); $$ = expr_make_column("SUBSTR"); }
+| FTRIM '(' val_list ')'							{ emit("CALL %d TRIM", $3); $$ = expr_make_column("TRIM"); }
+| FTRIM '(' trim_ltb expr FROM val_list ')'                                     { emit("CALL 3 TRIM"); $$ = expr_make_column("TRIM"); }
 ;
 
 trim_ltb: LEADING								{ emit("NUMBER 1"); }
@@ -360,8 +376,8 @@ trim_ltb: LEADING								{ emit("NUMBER 1"); }
 | BOTH										{ emit("NUMBER 3"); }
 ;
 
-expr: FDATE_ADD '(' expr ',' interval_exp ')'                                   { emit("CALL 3 DATE_ADD"); }
-| FDATE_SUB '(' expr ',' interval_exp ')'                                       { emit("CALL 3 DATE_SUB"); }
+expr: FDATE_ADD '(' expr ',' interval_exp ')'                                   { emit("CALL 3 DATE_ADD"); $$ = expr_make_column("DATE_ADD"); }
+| FDATE_SUB '(' expr ',' interval_exp ')'                                       { emit("CALL 3 DATE_SUB"); $$ = expr_make_column("DATE_SUB"); }
 ;
 
 interval_exp: INTERVAL expr DAY_HOUR                                            { emit("NUMBER 1"); }
@@ -375,27 +391,27 @@ interval_exp: INTERVAL expr DAY_HOUR                                            
 | INTERVAL expr HOUR_SECOND							{ emit("NUMBER 9"); }
 ;
 
-expr: CASE expr case_list END                                                   { emit("CASEVAL %d 0", $3); }
-| CASE expr case_list ELSE expr END                                             { emit("CASEVAL %d 1", $3); }
-| CASE case_list END								{ emit("CASE %d 0", $2); }
-| CASE case_list ELSE expr END                                                  { emit("CASE %d 1", $2); }
+expr: CASE expr case_list END                                                   { emit("CASEVAL %d 0", $3); $$ = $2; }
+| CASE expr case_list ELSE expr END                                             { emit("CASEVAL %d 1", $3); $$ = $2; }
+| CASE case_list END								{ emit("CASE %d 0", $2); $$ = NULL; }
+| CASE case_list ELSE expr END                                                  { emit("CASE %d 1", $2); $$ = $4; }
 ;
 
 case_list: WHEN expr THEN expr                                                  { $$ = 1; }
 | case_list WHEN expr THEN expr                                                 { $$ = $1+1; }
 ;
 
-expr: expr LIKE expr								{ emit("LIKE"); }
-| expr NOT LIKE expr								{ emit("LIKE"); emit("NOT"); }
+expr: expr LIKE expr								{ emit("LIKE"); $$ = $1; }
+| expr NOT LIKE expr								{ emit("LIKE"); emit("NOT"); $$ = $1; }
 ;
 
-expr: expr REGEXP expr								{ emit("REGEXP"); }
-| expr NOT REGEXP expr								{ emit("REGEXP"); emit("NOT"); }
+expr: expr REGEXP expr								{ emit("REGEXP"); $$ = $1; }
+| expr NOT REGEXP expr								{ emit("REGEXP"); emit("NOT"); $$ = $1; }
 ;
 
-expr: CURRENT_TIMESTAMP								{ emit("NOW"); }
-| CURRENT_DATE									{ emit("NOW"); }
-| CURRENT_TIME									{ emit("NOW"); }
+expr: CURRENT_TIMESTAMP								{ emit("NOW"); $$ = expr_make_column("CURRENT_TIMESTAMP"); }
+| CURRENT_DATE									{ emit("NOW"); $$ = expr_make_column("CURRENT_DATE"); }
+| CURRENT_TIME									{ emit("NOW"); $$ = expr_make_column("CURRENT_TIME"); }
 ;
 
 /* statements: select statement */
@@ -484,14 +500,20 @@ select_expr_list: select_expr                                                   
 | '*'
     {
         emit("SELECTALL");
+        expr_store_select(expr_make_star(), NULL);
         $$ = 3;
     }
 ;
 
-select_expr: expr opt_as_alias ;
-opt_as_alias: AS NAME								{ emit ("ALIAS %s", $2); free($2); }
-| NAME										{ emit ("ALIAS %s", $1); free($1); }
-| /* nil */
+select_expr: expr opt_as_alias
+    {
+        expr_store_select($1, g_currentAlias[0] ? g_currentAlias : NULL);
+        g_currentAlias[0] = '\0';
+    }
+;
+opt_as_alias: AS NAME								{ emit ("ALIAS %s", $2); strncpy(g_currentAlias, $2, sizeof(g_currentAlias)-1); g_currentAlias[sizeof(g_currentAlias)-1] = '\0'; free($2); }
+| NAME										{ emit ("ALIAS %s", $1); strncpy(g_currentAlias, $1, sizeof(g_currentAlias)-1); g_currentAlias[sizeof(g_currentAlias)-1] = '\0'; free($1); }
+| /* nil */									{ g_currentAlias[0] = '\0'; }
 ;
 
 table_references: table_reference                                               { $$ = 1; }

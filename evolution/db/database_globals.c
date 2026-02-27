@@ -26,3 +26,5 @@ int g_currentColPrimaryKey = 0;
 char g_columnNullFlags[1024];
 int g_primaryKeyIndex = -1;
 int g_columnCount = 0;
+char g_selectColumns[64][128];
+int g_selectColumnCount = 0;

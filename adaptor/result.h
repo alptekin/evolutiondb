@@ -22,6 +22,9 @@ typedef struct {
     char   name[MAX_COL_NAME];
     int    pg_type_oid;
     int    type_len;       /* -1 for variable length */
+    int    table_oid;      /* OID of the source table (0 = computed) */
+    int    attnum;         /* column attribute number, 1-based (0 = computed) */
+    int    type_modifier;  /* type modifier, e.g. varchar(50) → 54 (-1 = none) */
 } ColumnInfo;
 
 typedef struct {

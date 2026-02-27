@@ -15,6 +15,7 @@ void result_add_column(ResultSet *rs, const char *name, int pg_oid)
     rs->columns[rs->num_cols].pg_type_oid = pg_oid;
 
     /* Set type length: fixed for ints, -1 for variable */
+    /* Set type length: fixed for ints, -1 for variable */
     switch (pg_oid) {
     case PG_OID_INT2:   rs->columns[rs->num_cols].type_len = 2; break;
     case PG_OID_INT4:   rs->columns[rs->num_cols].type_len = 4; break;
@@ -24,6 +25,10 @@ void result_add_column(ResultSet *rs, const char *name, int pg_oid)
     case PG_OID_BOOL:   rs->columns[rs->num_cols].type_len = 1; break;
     default:            rs->columns[rs->num_cols].type_len = -1; break;
     }
+
+    rs->columns[rs->num_cols].table_oid = 0;
+    rs->columns[rs->num_cols].attnum = 0;
+    rs->columns[rs->num_cols].type_modifier = -1;
 
     rs->num_cols++;
 }
