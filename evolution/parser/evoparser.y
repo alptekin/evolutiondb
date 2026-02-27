@@ -479,8 +479,9 @@ opt_orderby: /* nil */
     }
 ;
 
-opt_limit: /* nil */ | LIMIT expr                                               { emit("LIMIT 1"); }
-| LIMIT expr ',' expr								{ emit("LIMIT 2"); }
+opt_limit: /* nil */ { /* no limit */ }
+| LIMIT expr                                               { emit("LIMIT 1"); g_limitExpr = $2; }
+| LIMIT expr ',' expr								{ emit("LIMIT 2"); g_offsetExpr = $2; g_limitExpr = $4; }
 ;
 
 opt_into_list: /* nil */

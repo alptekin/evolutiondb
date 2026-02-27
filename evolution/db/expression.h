@@ -75,6 +75,10 @@ extern int       g_selectExprCount;
 /* WHERE filter expression (set by parser, used by query executor) */
 extern ExprNode *g_whereExpr;
 
+/* LIMIT / OFFSET (set by parser, used by query executor) */
+extern ExprNode *g_limitExpr;    /* LIMIT n */
+extern ExprNode *g_offsetExpr;   /* LIMIT offset, count  OR  LIMIT n OFFSET m */
+
 /* Node allocation */
 ExprNode *expr_alloc(void);
 

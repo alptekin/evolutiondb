@@ -390,6 +390,36 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         count = dst;
     }
 
+    /* --- LIMIT / OFFSET --- */
+    if (g_limitExpr) {
+        char lbuf[64];
+        int limit_val = -1, offset_val = 0;
+        if (expr_evaluate(g_limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
+            limit_val = atoi(lbuf);
+        if (g_offsetExpr) {
+            char obuf[64];
+            if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
+                offset_val = atoi(obuf);
+        }
+        if (limit_val >= 0) {
+            /* Apply offset: skip first offset_val rows */
+            if (offset_val > 0) {
+                if (offset_val >= rs->num_rows) {
+                    rs->num_rows = 0;
+                } else {
+                    int r;
+                    for (r = 0; r < rs->num_rows - offset_val; r++)
+                        rs->rows[r] = rs->rows[r + offset_val];
+                    rs->num_rows -= offset_val;
+                }
+            }
+            /* Apply limit */
+            if (limit_val < rs->num_rows)
+                rs->num_rows = limit_val;
+            count = rs->num_rows;
+        }
+    }
+
     sprintf(rs->command_tag, "SELECT %d", count);
 
     /* --- Column filtering / expression evaluation (using parser AST) --- */
@@ -871,25 +901,6 @@ static void normalize_sql(char *sql)
     }
     *dst = '\0';
     strcpy(sql, buf);
-
-    /* Pass 5: Remove LIMIT and OFFSET clauses */
-    {
-        char *p = sql;
-        while (*p) {
-            while (*p && isspace((unsigned char)*p)) p++;
-            if (strncasecmp(p, "LIMIT", 5) == 0 && (p[5] == ' ' || p[5] == '\t')) {
-                /* Find end of LIMIT clause (LIMIT <number>) */
-                *p = '\0';
-                break;
-            }
-            if (strncasecmp(p, "OFFSET", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
-                *p = '\0';
-                break;
-            }
-            /* Advance to next word */
-            while (*p && !isspace((unsigned char)*p)) p++;
-        }
-    }
 
     /* Clean up: strip trailing whitespace */
     len = (int)strlen(sql);
