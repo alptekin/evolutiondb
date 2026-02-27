@@ -300,6 +300,12 @@ expr: NAME
         GetInsertions($1 ? "true" : "false");
         $$ = expr_make_bool($1);
     }
+| NULLX
+    {
+        emit("NULL");
+        GetInsertions("\x01NULL\x01");
+        $$ = expr_make_null();
+    }
 ;
 
 expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3); }
@@ -331,8 +337,8 @@ expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3)
 | expr COMPARISON ALL '(' select_stmt ')'                                       { emit("CMPALLSELECT %d", $2); $$ = $1; }
 ;
 
-expr: expr IS NULLX								{ emit("ISNULL"); $$ = $1; }
-| expr IS NOT NULLX								{ emit("ISNULL"); emit("NOT"); $$ = $1; }
+expr: expr IS NULLX								{ emit("ISNULL"); $$ = expr_make_is_null($1); }
+| expr IS NOT NULLX								{ emit("ISNULL"); emit("NOT"); $$ = expr_make_is_not_null($1); }
 | expr IS BOOL									{ emit("ISBOOL %d", $3); $$ = $1; }
 | expr IS NOT BOOL								{ emit("ISBOOL %d", $4); emit("NOT"); $$ = $1; }
 | USERVAR ASSIGN expr								{ emit("ASSIGN @%s", $1); free($1); $$ = $3; }

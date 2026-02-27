@@ -10,6 +10,7 @@
 
 #define EXPR_POOL_SIZE 512
 #define MAX_SELECT_EXPRS 64
+#define NULL_MARKER "\x01NULL\x01"
 
 typedef enum {
     EXPR_COLUMN,          /* column reference: col_name */
@@ -17,6 +18,7 @@ typedef enum {
     EXPR_LITERAL_FLOAT,   /* floating-point literal: floatval */
     EXPR_LITERAL_STR,     /* string literal: strval */
     EXPR_LITERAL_BOOL,    /* boolean literal: intval (1/0/-1) */
+    EXPR_LITERAL_NULL,    /* NULL literal */
     EXPR_ADD,             /* left + right */
     EXPR_SUB,             /* left - right */
     EXPR_MUL,             /* left * right */
@@ -28,6 +30,8 @@ typedef enum {
     EXPR_BITAND,          /* left & right */
     EXPR_BITOR,           /* left | right */
     EXPR_BITXOR,          /* left ^ right */
+    EXPR_IS_NULL,         /* expr IS NULL */
+    EXPR_IS_NOT_NULL,     /* expr IS NOT NULL */
     EXPR_CURRENT_TIMESTAMP, /* CURRENT_TIMESTAMP */
     EXPR_CURRENT_DATE,    /* CURRENT_DATE */
     EXPR_CURRENT_TIME,    /* CURRENT_TIME */
@@ -65,12 +69,15 @@ ExprNode *expr_make_int(int val);
 ExprNode *expr_make_float(double val);
 ExprNode *expr_make_string(const char *val);
 ExprNode *expr_make_bool(int val);
+ExprNode *expr_make_null(void);
 ExprNode *expr_make_binop(ExprNodeType op, ExprNode *left, ExprNode *right);
 ExprNode *expr_make_neg(ExprNode *operand);
 ExprNode *expr_make_star(void);
 ExprNode *expr_make_current_timestamp(void);
 ExprNode *expr_make_current_date(void);
 ExprNode *expr_make_current_time(void);
+ExprNode *expr_make_is_null(ExprNode *operand);
+ExprNode *expr_make_is_not_null(ExprNode *operand);
 
 /* Reset expression pool (call before each query) */
 void expr_pool_reset(void);
@@ -80,6 +87,9 @@ void expr_store_select(ExprNode *expr, const char *alias);
 
 /* Check if an expression is a plain column reference */
 int expr_is_column(const ExprNode *e);
+
+/* Check if an expression returns a boolean result */
+int expr_is_boolean(const ExprNode *e);
 
 /* Evaluate an expression against a row.
  * col_names/col_values/num_cols describe the row's columns.

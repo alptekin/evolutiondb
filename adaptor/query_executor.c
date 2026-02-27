@@ -271,9 +271,13 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
         char *val = strtok(temp, ";");
         while (val && col < rs->num_cols) {
-            /* Convert boolean values: PostgreSQL wire protocol expects t/f */
-            if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                if (strncasecmp(val, "true", 5) == 0 || strcmp(val, "1") == 0)
+            /* Check for NULL marker */
+            if (strcmp(val, "\x01NULL\x01") == 0) {
+                result_set_null(rs, row, col);
+            } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                if (strncasecmp(val, "true", 4) == 0 ||
+                    strcmp(val, "1") == 0 ||
+                    strcmp(val, "t") == 0)
                     result_set_field(rs, row, col, "t");
                 else
                     result_set_field(rs, row, col, "f");
@@ -395,6 +399,12 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                     break;
                                 }
                             }
+                        } else if (g_selectExprs[c] && expr_is_boolean(g_selectExprs[c])) {
+                            rs->columns[c].pg_type_oid = PG_OID_BOOL;
+                            rs->columns[c].type_len = 1;
+                            rs->columns[c].type_modifier = -1;
+                            rs->columns[c].table_oid = 0;
+                            rs->columns[c].attnum = 0;
                         } else {
                             rs->columns[c].pg_type_oid = PG_OID_FLOAT8;
                             rs->columns[c].type_len = 8;
@@ -413,8 +423,13 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                         char colValues[MAX_COLUMNS][256];
                         /* Copy field values for evaluation */
                         for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
-                            strncpy(colValues[c], origRow.fields[c], 255);
-                            colValues[c][255] = '\0';
+                            if (origRow.is_null[c]) {
+                                /* Restore NULL_MARKER so expr_evaluate can detect it */
+                                strcpy(colValues[c], "\x01NULL\x01");
+                            } else {
+                                strncpy(colValues[c], origRow.fields[c], 255);
+                                colValues[c][255] = '\0';
+                            }
                         }
 
                         memset(&rs->rows[r], 0, sizeof(Row));
@@ -434,7 +449,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                     result, sizeof(result))) {
                                 /* Handle boolean conversion for wire protocol */
                                 if (rs->columns[c].pg_type_oid == PG_OID_BOOL) {
-                                    if (strncasecmp(result, "true", 5) == 0 || strcmp(result, "1") == 0)
+                                    if (strncasecmp(result, "true", 4) == 0 ||
+                                        strcmp(result, "1") == 0 ||
+                                        strcmp(result, "t") == 0)
                                         strcpy(rs->rows[r].fields[c], "t");
                                     else
                                         strcpy(rs->rows[r].fields[c], "f");

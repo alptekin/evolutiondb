@@ -116,7 +116,8 @@ int InsertProcess(void)
             }
 
             for (i = 0; i < numFlags && i < numVals2; i++) {
-                if (nullFlags[i] && (vals2[i][0] == '\0')) {
+                if (nullFlags[i] && (vals2[i][0] == '\0' ||
+                    strcmp(vals2[i], "\x01NULL\x01") == 0)) {
                     /* Read column name for error message */
                     char metaFile2[1024], metaLine2[1024];
                     char *colNames2[64];

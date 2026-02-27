@@ -234,6 +234,10 @@ int ValidateValue(const char *value, int typeEncoding)
     int size = typeEncoding % 10000;
     char *endptr;
 
+    /* NULL values bypass type validation */
+    if (strcmp(value, "\x01NULL\x01") == 0)
+        return 0;
+
     switch (typeFamily) {
     case 1: /* BIT, TINYINT */
     case 2: /* SMALLINT */

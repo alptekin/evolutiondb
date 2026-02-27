@@ -83,6 +83,15 @@ ExprNode *expr_make_bool(int val)
     return e;
 }
 
+ExprNode *expr_make_null(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_LITERAL_NULL;
+    strcpy(e->display, "NULL");
+    return e;
+}
+
 ExprNode *expr_make_binop(ExprNodeType op, ExprNode *left, ExprNode *right)
 {
     ExprNode *e = expr_alloc();
@@ -161,6 +170,28 @@ ExprNode *expr_make_current_time(void)
     return e;
 }
 
+ExprNode *expr_make_is_null(ExprNode *operand)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_IS_NULL;
+    e->left = operand;
+    snprintf(e->display, sizeof(e->display), "%s IS NULL",
+             operand ? operand->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_is_not_null(ExprNode *operand)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_IS_NOT_NULL;
+    e->left = operand;
+    snprintf(e->display, sizeof(e->display), "%s IS NOT NULL",
+             operand ? operand->display : "?");
+    return e;
+}
+
 /* ---- Store a select expression ---- */
 void expr_store_select(ExprNode *expr, const char *alias)
 {
@@ -175,6 +206,14 @@ void expr_store_select(ExprNode *expr, const char *alias)
 int expr_is_column(const ExprNode *e)
 {
     return (e && e->type == EXPR_COLUMN);
+}
+
+int expr_is_boolean(const ExprNode *e)
+{
+    if (!e) return 0;
+    return (e->type == EXPR_IS_NULL ||
+            e->type == EXPR_IS_NOT_NULL ||
+            e->type == EXPR_LITERAL_BOOL);
 }
 
 /* ---- Evaluate as double ---- */
@@ -272,12 +311,23 @@ int expr_evaluate(const ExprNode *e,
 {
     if (!e || !out_buf || buf_size <= 0) return 0;
 
+    /* NULL literal */
+    if (e->type == EXPR_LITERAL_NULL) {
+        out_buf[0] = '\0';
+        return 0;  /* returning 0 signals NULL */
+    }
+
     /* For a plain column reference, return the string value directly
      * (preserves formatting: dates, strings, booleans, etc.) */
     if (e->type == EXPR_COLUMN) {
         int c;
         for (c = 0; c < num_cols; c++) {
             if (strcasecmp(col_names[c], e->val.col_name) == 0) {
+                /* If the column value is NULL_MARKER, signal NULL */
+                if (strcmp(col_values[c], NULL_MARKER) == 0) {
+                    out_buf[0] = '\0';
+                    return 0;
+                }
                 strncpy(out_buf, col_values[c], buf_size - 1);
                 out_buf[buf_size - 1] = '\0';
                 return 1;
@@ -285,6 +335,35 @@ int expr_evaluate(const ExprNode *e,
         }
         out_buf[0] = '\0';
         return 0;
+    }
+
+    /* IS NULL / IS NOT NULL */
+    if (e->type == EXPR_IS_NULL || e->type == EXPR_IS_NOT_NULL) {
+        int is_null = 0;
+        if (!e->left) {
+            is_null = 1;
+        } else if (e->left->type == EXPR_LITERAL_NULL) {
+            is_null = 1;
+        } else if (e->left->type == EXPR_COLUMN) {
+            /* Check if column value is NULL (not found or NULL_MARKER) */
+            int found = 0;
+            int c;
+            for (c = 0; c < num_cols; c++) {
+                if (strcasecmp(col_names[c], e->left->val.col_name) == 0) {
+                    found = 1;
+                    if (strcmp(col_values[c], NULL_MARKER) == 0)
+                        is_null = 1;
+                    break;
+                }
+            }
+            if (!found) is_null = 1;
+        }
+        /* Literals (INT, FLOAT, STR, BOOL) are never null */
+
+        int result = (e->type == EXPR_IS_NULL) ? is_null : !is_null;
+        strncpy(out_buf, result ? "t" : "f", buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
     }
 
     /* Date/time functions */
