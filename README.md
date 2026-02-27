@@ -4,7 +4,7 @@ I started this project approximately 18 years ago, driven by a deep curiosity ab
 
 Soon after the initial development phase, the project was set aside. It did not remain active in a public repository; instead, it was archived and stayed on a DVD for many years — preserved, but untouched.
 
-About one month ago, I rediscovered the project and decided to revive it. This time, I resumed development as a solo engineer with the assistance of Claude OPS 4.6. In just a few days, I was able to implement and refine significantly more functionality than I had built over several years in the past. The combination of prior architectural vision and modern AI-assisted development dramatically accelerated progress.
+About one month ago, I rediscovered the project and decided to revive it. This time, I resumed development as a solo engineer with the assistance of Claude OPUS 4.6. In just a few days, I was able to implement and refine significantly more functionality than I had built over several years in the past. The combination of prior architectural vision and modern AI-assisted development dramatically accelerated progress.
 
 EvolutionDB was born as a relational database engine, but its next evolution is clear: it will incorporate AI capabilities to translate natural language directly into optimized SQL, enabling intuitive human interaction while preserving the performance characteristics of a high-speed relational core. The goal is a database that remains structurally rigorous and extremely fast, yet accessible through natural language — bridging classical relational systems with modern AI-driven interfaces.
 
