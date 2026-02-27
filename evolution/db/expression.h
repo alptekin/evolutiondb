@@ -99,6 +99,13 @@ ExprNode *expr_make_like(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_not_like(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_between(ExprNode *expr, ExprNode *low, ExprNode *high);
 ExprNode *expr_make_not_between(ExprNode *expr, ExprNode *low, ExprNode *high);
+ExprNode *expr_make_in(ExprNode *expr, ExprNode **list, int count);
+ExprNode *expr_make_not_in(ExprNode *expr, ExprNode **list, int count);
+
+/* IN-list value collector (used during parsing) */
+#define MAX_IN_LIST 64
+extern ExprNode *g_inListExprs[MAX_IN_LIST];
+extern int       g_inListCount;
 
 /* Reset expression pool (call before each query) */
 void expr_pool_reset(void);

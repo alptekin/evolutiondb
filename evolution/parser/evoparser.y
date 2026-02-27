@@ -348,16 +348,16 @@ expr: expr BETWEEN expr AND expr %prec BETWEEN                                  
 | expr NOT BETWEEN expr AND expr %prec BETWEEN                                  { emit("NOTBETWEEN"); $$ = expr_make_not_between($1, $4, $6); }
 ;
 
-val_list: expr									{ $$ = 1; }
-| expr ',' val_list								{ $$ = 1 + $3; }
+val_list: expr									{ $$ = 1; if (g_inListCount < MAX_IN_LIST) g_inListExprs[g_inListCount++] = $1; }
+| expr ',' val_list								{ $$ = 1 + $3; if (g_inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_inListCount; _i>0; _i--) g_inListExprs[_i]=g_inListExprs[_i-1]; g_inListExprs[0]=$1; g_inListCount++; } }
 ;
 
 opt_val_list: /* nil */								{ $$ = 0; }
 | val_list
 ;
 
-expr: expr IN '(' val_list ')'                                                  { emit("ISIN %d", $4); $$ = $1; }
-| expr NOT IN '(' val_list ')'                                                  { emit("ISIN %d", $5); emit("NOT"); $$ = $1; }
+expr: expr IN '(' { g_inListCount = 0; } val_list ')'                           { emit("ISIN %d", $5); $$ = expr_make_in($1, g_inListExprs, g_inListCount); }
+| expr NOT IN '(' { g_inListCount = 0; } val_list ')'                           { emit("ISIN %d", $6); emit("NOT"); $$ = expr_make_not_in($1, g_inListExprs, g_inListCount); }
 | expr IN '(' select_stmt ')'                                                   { emit("CMPANYSELECT 4"); $$ = $1; }
 | expr NOT IN '(' select_stmt ')'                                               { emit("CMPALLSELECT 3"); $$ = $1; }
 | EXISTS '(' select_stmt ')'                                                    { emit("EXISTSSELECT"); if($1)emit("NOT"); $$ = NULL; }

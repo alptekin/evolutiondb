@@ -16,6 +16,10 @@ int       g_exprNodePoolUsed = 0;
 ExprNode *g_selectExprs[MAX_SELECT_EXPRS];
 int       g_selectExprCount = 0;
 
+/* IN list collector */
+ExprNode *g_inListExprs[MAX_IN_LIST];
+int       g_inListCount = 0;
+
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)
 {
@@ -29,6 +33,7 @@ void expr_pool_reset(void)
 {
     g_exprNodePoolUsed = 0;
     g_selectExprCount = 0;
+    g_inListCount = 0;
     memset(g_selectExprs, 0, sizeof(g_selectExprs));
 }
 
@@ -331,6 +336,56 @@ ExprNode *expr_make_not_between(ExprNode *expr, ExprNode *low, ExprNode *high)
                  expr ? expr->display : "?",
                  low ? low->display : "?",
                  high ? high->display : "?");
+    }
+    return result;
+}
+
+ExprNode *expr_make_in(ExprNode *expr, ExprNode **list, int count)
+{
+    /* Desugar: expr IN (a, b, c) → (expr=a) OR (expr=b) OR (expr=c) */
+    if (count <= 0 || !list) return expr_make_bool(0);
+    ExprNode *result = NULL;
+    int i;
+    for (i = 0; i < count; i++) {
+        ExprNode *eq = expr_alloc();
+        if (!eq) return NULL;
+        eq->type = EXPR_CMP_EQ;
+        eq->left = expr;
+        eq->right = list[i];
+        if (!result) {
+            result = eq;
+        } else {
+            result = expr_make_or(result, eq);
+        }
+    }
+    if (result) {
+        snprintf(result->display, sizeof(result->display), "%s IN (...)",
+                 expr ? expr->display : "?");
+    }
+    return result;
+}
+
+ExprNode *expr_make_not_in(ExprNode *expr, ExprNode **list, int count)
+{
+    /* Desugar: expr NOT IN (a, b, c) → (expr<>a) AND (expr<>b) AND (expr<>c) */
+    if (count <= 0 || !list) return expr_make_bool(1);
+    ExprNode *result = NULL;
+    int i;
+    for (i = 0; i < count; i++) {
+        ExprNode *ne = expr_alloc();
+        if (!ne) return NULL;
+        ne->type = EXPR_CMP_NE;
+        ne->left = expr;
+        ne->right = list[i];
+        if (!result) {
+            result = ne;
+        } else {
+            result = expr_make_and(result, ne);
+        }
+    }
+    if (result) {
+        snprintf(result->display, sizeof(result->display), "%s NOT IN (...)",
+                 expr ? expr->display : "?");
     }
     return result;
 }
