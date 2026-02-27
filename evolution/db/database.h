@@ -75,6 +75,7 @@ extern int g_gui_error;
 extern char g_gui_error_msg[512];
 extern char g_orderByColumn[256];
 extern int g_orderByDesc;
+extern int g_selectDistinct;
 extern char g_columnTypeDefs[1024];
 extern int g_currentColNotNull;
 extern int g_currentColPrimaryKey;

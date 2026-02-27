@@ -129,6 +129,7 @@ LEADING					{ return LEADING; }
 LEFT					{ return LEFT; }
 LIKE					{ return LIKE; }
 LIMIT					{ return LIMIT; }
+OFFSET					{ return OFFSET; }
 
 
 

@@ -292,54 +292,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
     db_close(db);
 
-    /* Handle ORDER BY if set */
-    if (g_orderByColumn[0] != '\0' && count > 1) {
-        /* Find column index */
-        int orderCol = -1;
-        int c;
-        for (c = 0; c < rs->num_cols; c++) {
-            if (strcmp(rs->columns[c].name, g_orderByColumn) == 0) {
-                orderCol = c;
-                break;
-            }
-        }
-        if (orderCol >= 0) {
-            /* Simple bubble sort for MVP */
-            int i, j;
-            int desc = g_orderByDesc;
-            for (i = 0; i < rs->num_rows - 1; i++) {
-                for (j = 0; j < rs->num_rows - 1 - i; j++) {
-                    char *a = rs->rows[j].fields[orderCol];
-                    char *b = rs->rows[j+1].fields[orderCol];
-
-                    /* Try numeric comparison */
-                    char *endA, *endB;
-                    double numA = strtod(a, &endA);
-                    double numB = strtod(b, &endB);
-                    int cmp;
-
-                    if (*endA == '\0' && *endB == '\0' &&
-                        a[0] != '\0' && b[0] != '\0') {
-                        cmp = (numA > numB) ? 1 : (numA < numB) ? -1 : 0;
-                    } else {
-                        cmp = strcmp(a, b);
-                    }
-
-                    if (desc) cmp = -cmp;
-
-                    if (cmp > 0) {
-                        Row tmp = rs->rows[j];
-                        rs->rows[j] = rs->rows[j+1];
-                        rs->rows[j+1] = tmp;
-                    }
-                }
-            }
-        }
-    }
-
-    /* Clear ORDER BY state */
-    g_orderByColumn[0] = '\0';
-    g_orderByDesc = 0;
+    /* NOTE: ORDER BY sort is deferred to end of function, after all
+     * expression evaluation, GROUP BY, and DISTINCT processing. */
 
     /* --- WHERE filtering using g_whereExpr --- */
     if (g_whereExpr && rs->num_rows > 0) {
@@ -390,39 +344,11 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         count = dst;
     }
 
-    /* --- LIMIT / OFFSET --- */
-    if (g_limitExpr) {
-        char lbuf[64];
-        int limit_val = -1, offset_val = 0;
-        if (expr_evaluate(g_limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
-            limit_val = atoi(lbuf);
-        if (g_offsetExpr) {
-            char obuf[64];
-            if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
-                offset_val = atoi(obuf);
-        }
-        if (limit_val >= 0) {
-            /* Apply offset: skip first offset_val rows */
-            if (offset_val > 0) {
-                if (offset_val >= rs->num_rows) {
-                    rs->num_rows = 0;
-                } else {
-                    int r;
-                    for (r = 0; r < rs->num_rows - offset_val; r++)
-                        rs->rows[r] = rs->rows[r + offset_val];
-                    rs->num_rows -= offset_val;
-                }
-            }
-            /* Apply limit */
-            if (limit_val < rs->num_rows)
-                rs->num_rows = limit_val;
-            count = rs->num_rows;
-        }
-    }
-
-    sprintf(rs->command_tag, "SELECT %d", count);
+    /* NOTE: LIMIT/OFFSET is deferred to end of function, after
+     * ORDER BY, DISTINCT, GROUP BY, and expression evaluation. */
 
     /* --- GROUP BY / Aggregate detection & evaluation --- */
+    int did_aggregate = 0;
     {
         int has_aggregate = 0;
         int s;
@@ -882,42 +808,61 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
             for (r = 0; r < outRows; r++)
                 rs->rows[r] = groupRows[r];
             rs->num_rows = outRows;
-            sprintf(rs->command_tag, "SELECT %d", outRows);
 
-            /* Apply LIMIT/OFFSET on grouped results (re-apply since
-             * we replaced rs->rows) */
-            if (g_limitExpr) {
-                char lbuf[64];
-                int limit_val = -1, offset_val = 0;
-                if (expr_evaluate(g_limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
-                    limit_val = atoi(lbuf);
-                if (g_offsetExpr) {
-                    char obuf[64];
-                    if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
-                        offset_val = atoi(obuf);
-                }
-                if (limit_val >= 0) {
-                    if (offset_val > 0) {
-                        if (offset_val >= rs->num_rows) {
-                            rs->num_rows = 0;
-                        } else {
-                            for (r = 0; r < rs->num_rows - offset_val; r++)
-                                rs->rows[r] = rs->rows[r + offset_val];
-                            rs->num_rows -= offset_val;
-                        }
-                    }
-                    if (limit_val < rs->num_rows)
-                        rs->num_rows = limit_val;
-                }
-                sprintf(rs->command_tag, "SELECT %d", rs->num_rows);
-            }
-
-            return;  /* skip normal column filtering */
+            did_aggregate = 1;
+            /* DISTINCT, LIMIT/OFFSET will be applied at end of function */
         }
     }
 
+    /* --- ORDER BY (applied after WHERE and GROUP BY, before column filtering) --- */
+    if (g_orderByColumn[0] != '\0' && rs->num_rows > 1) {
+        int orderCol = -1;
+        int c;
+        for (c = 0; c < rs->num_cols; c++) {
+            if (strcasecmp(rs->columns[c].name, g_orderByColumn) == 0) {
+                orderCol = c;
+                break;
+            }
+        }
+        if (orderCol >= 0) {
+            int i, j;
+            int desc = g_orderByDesc;
+            for (i = 0; i < rs->num_rows - 1; i++) {
+                for (j = 0; j < rs->num_rows - 1 - i; j++) {
+                    int null_a = rs->rows[j].is_null[orderCol];
+                    int null_b = rs->rows[j+1].is_null[orderCol];
+                    int cmp;
+                    if (null_a && null_b) cmp = 0;
+                    else if (null_a) cmp = 1;
+                    else if (null_b) cmp = -1;
+                    else {
+                        char *a = rs->rows[j].fields[orderCol];
+                        char *b = rs->rows[j+1].fields[orderCol];
+                        char *endA, *endB;
+                        double numA = strtod(a, &endA);
+                        double numB = strtod(b, &endB);
+                        if (*endA == '\0' && *endB == '\0' &&
+                            a[0] != '\0' && b[0] != '\0') {
+                            cmp = (numA > numB) ? 1 : (numA < numB) ? -1 : 0;
+                        } else {
+                            cmp = strcmp(a, b);
+                        }
+                    }
+                    if (desc) cmp = -cmp;
+                    if (cmp > 0) {
+                        Row tmp = rs->rows[j];
+                        rs->rows[j] = rs->rows[j+1];
+                        rs->rows[j+1] = tmp;
+                    }
+                }
+            }
+        }
+    }
+    g_orderByColumn[0] = '\0';
+    g_orderByDesc = 0;
+
     /* --- Column filtering / expression evaluation (using parser AST) --- */
-    if (g_selectExprCount > 0 && rs->num_cols > 0) {
+    if (!did_aggregate && g_selectExprCount > 0 && rs->num_cols > 0) {
         /* Check if we have a single STAR expression (SELECT *) */
         if (g_selectExprCount == 1 && g_selectExprs[0] &&
             g_selectExprs[0]->type == EXPR_STAR) {
@@ -1080,6 +1025,61 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
             }
         }
     }
+
+    /* --- DISTINCT (remove duplicate rows) --- */
+    if (g_selectDistinct && rs->num_rows > 1) {
+        int dst = 1;
+        int r, c;
+        for (r = 1; r < rs->num_rows; r++) {
+            int duplicate = 0;
+            int d;
+            for (d = 0; d < dst; d++) {
+                int same = 1;
+                for (c = 0; c < rs->num_cols; c++) {
+                    if (rs->rows[r].is_null[c] != rs->rows[d].is_null[c]) { same = 0; break; }
+                    if (!rs->rows[r].is_null[c] &&
+                        strcmp(rs->rows[r].fields[c], rs->rows[d].fields[c]) != 0) { same = 0; break; }
+                }
+                if (same) { duplicate = 1; break; }
+            }
+            if (!duplicate) {
+                if (dst != r)
+                    rs->rows[dst] = rs->rows[r];
+                dst++;
+            }
+        }
+        rs->num_rows = dst;
+    }
+    g_selectDistinct = 0;
+
+    /* --- LIMIT / OFFSET (applied last) --- */
+    if (g_limitExpr) {
+        char lbuf[64];
+        int limit_val = -1, offset_val = 0;
+        if (expr_evaluate(g_limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
+            limit_val = atoi(lbuf);
+        if (g_offsetExpr) {
+            char obuf[64];
+            if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
+                offset_val = atoi(obuf);
+        }
+        if (limit_val >= 0) {
+            if (offset_val > 0) {
+                if (offset_val >= rs->num_rows) {
+                    rs->num_rows = 0;
+                } else {
+                    int r;
+                    for (r = 0; r < rs->num_rows - offset_val; r++)
+                        rs->rows[r] = rs->rows[r + offset_val];
+                    rs->num_rows -= offset_val;
+                }
+            }
+            if (limit_val < rs->num_rows)
+                rs->num_rows = limit_val;
+        }
+    }
+
+    sprintf(rs->command_tag, "SELECT %d", rs->num_rows);
 }
 
 /* ----------------------------------------------------------------
@@ -1153,6 +1153,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_columnNames[0] = '\0';
     g_orderByColumn[0] = '\0';
     g_orderByDesc = 0;
+    g_selectDistinct = 0;
     g_totalColumnSize = 0;
     g_currentColNotNull = 0;
     g_currentColPrimaryKey = 0;

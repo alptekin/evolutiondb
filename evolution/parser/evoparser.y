@@ -131,6 +131,7 @@
 %token LEFT
 %token LEADING
 %token LIMIT
+%token OFFSET
 %token LONGBLOB
 
 %token MEDIUMTEXT
@@ -474,13 +475,14 @@ stmt: select_stmt
     }
 ;
 
-select_stmt: SELECT select_opts select_expr_list                                { emit("SELECTNODATA %d %d", $2, $3); } ;
+select_stmt: SELECT select_opts select_expr_list                                { emit("SELECTNODATA %d %d", $2, $3); g_selectDistinct = ($2 & 02) ? 1 : 0; } ;
 | SELECT select_opts select_expr_list 
 FROM table_references
 opt_where opt_groupby opt_having opt_orderby opt_limit
 opt_into_list
     {
         emit("SELECT %d %d %d", $2, $3, $5);
+        g_selectDistinct = ($2 & 02) ? 1 : 0;
         if ($3 == 3)
             $$ = 1;
         else
@@ -535,6 +537,7 @@ opt_orderby: /* nil */
 opt_limit: /* nil */ { /* no limit */ }
 | LIMIT expr                                               { emit("LIMIT 1"); g_limitExpr = $2; }
 | LIMIT expr ',' expr								{ emit("LIMIT 2"); g_offsetExpr = $2; g_limitExpr = $4; }
+| LIMIT expr OFFSET expr							{ emit("LIMIT OFFSET"); g_limitExpr = $2; g_offsetExpr = $4; }
 ;
 
 opt_into_list: /* nil */

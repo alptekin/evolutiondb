@@ -20,6 +20,7 @@ int g_gui_error = 0;
 char g_gui_error_msg[512];
 char g_orderByColumn[256];
 int g_orderByDesc = 0;
+int g_selectDistinct = 0;
 char g_columnTypeDefs[1024];
 int g_currentColNotNull = 0;
 int g_currentColPrimaryKey = 0;
