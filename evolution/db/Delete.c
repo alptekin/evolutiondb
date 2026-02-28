@@ -42,7 +42,7 @@ int TruncateDelete(void)
 
 int GetDelTableName(char *pname)
 {
-    strcat(g_tblDelName, pname);
+    db_table_path(pname, g_tblDelName, sizeof(g_tblDelName));
 
     return 0;
 }

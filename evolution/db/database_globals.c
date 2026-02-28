@@ -32,3 +32,6 @@ int g_primaryKeyIndex = -1;
 int g_columnCount = 0;
 char g_selectColumns[64][128];
 int g_selectColumnCount = 0;
+char g_dbRoot[1024];
+char g_currentDatabase[256];
+char g_currentSchema[256];

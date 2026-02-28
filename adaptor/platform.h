@@ -86,8 +86,14 @@ typedef struct {
     int              valid;
 } MetaIterator;
 
-static inline void meta_iter_open(MetaIterator *it) {
-    it->hFind = FindFirstFileA("*.meta", &it->fd);
+static inline void meta_iter_open(MetaIterator *it, const char *dir) {
+    char pattern[1024];
+    if (dir && dir[0]) {
+        snprintf(pattern, sizeof(pattern), "%s\\*.meta", dir);
+    } else {
+        snprintf(pattern, sizeof(pattern), "*.meta");
+    }
+    it->hFind = FindFirstFileA(pattern, &it->fd);
     it->valid = (it->hFind != INVALID_HANDLE_VALUE);
     it->first = 1;
 }
@@ -184,8 +190,14 @@ typedef struct {
     int     valid;
 } MetaIterator;
 
-static inline void meta_iter_open(MetaIterator *it) {
-    int ret = glob("*.meta", 0, NULL, &it->globbuf);
+static inline void meta_iter_open(MetaIterator *it, const char *dir) {
+    char pattern[1024];
+    if (dir && dir[0]) {
+        snprintf(pattern, sizeof(pattern), "%s/*.meta", dir);
+    } else {
+        snprintf(pattern, sizeof(pattern), "*.meta");
+    }
+    int ret = glob(pattern, 0, NULL, &it->globbuf);
     it->valid = (ret == 0 && it->globbuf.gl_pathc > 0);
     it->idx = 0;
 }

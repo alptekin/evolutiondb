@@ -70,6 +70,7 @@ DAY_MINUTE				{ return DAY_MINUTE; }
 DAY_SECOND				{ return DAY_SECOND; }
 NUMERIC|DEC|DECIMAL		{ return DECIMAL; }
 
+DATABASE				{ return DATABASE; }
 DEFAULT					{ return DEFAULT; }
 DELAYED					{ return DELAYED; }
 DELETE					{ return DELETE; }

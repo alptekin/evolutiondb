@@ -133,6 +133,16 @@ static int handle_set(const char *sql, ResultSet *rs)
 {
     if (!starts_with_i(sql, "SET"))
         return 0;
+
+    /* SET SCHEMA <name> must go to the parser, not be stubbed */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "SCHEMA", 6) == 0 &&
+            (isspace((unsigned char)p[6]) || p[6] == '\0'))
+            return 0;  /* let parser handle it */
+    }
+
     result_init(rs);
     strcpy(rs->command_tag, "SET");
     return 1;
@@ -156,7 +166,7 @@ static int handle_show(const char *sql, ResultSet *rs)
     else if (stristr_found(sql, "standard_conforming_strings"))
         result_set_field(rs, row, 0, "on");
     else if (stristr_found(sql, "search_path"))
-        result_set_field(rs, row, 0, "\"$user\", public");
+        result_set_field(rs, row, 0, "\"$user\", default");
     else
         result_set_field(rs, row, 0, "");
 
@@ -242,7 +252,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
     if (stristr_found(sql, "current_database()")) {
         result_add_column(rs, "current_database", PG_OID_TEXT);
         int row = result_add_row(rs);
-        result_set_field(rs, row, 0, "evosql");
+        result_set_field(rs, row, 0, db_get_current_database());
         sprintf(rs->command_tag, "SELECT 1");
         return 1;
     }
@@ -253,7 +263,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "current_schema", PG_OID_TEXT);
         result_add_column(rs, "current_user", PG_OID_TEXT);
         int row = result_add_row(rs);
-        result_set_field(rs, row, 0, "public");
+        result_set_field(rs, row, 0, db_get_current_schema());
         result_set_field(rs, row, 1, "evosql");
         sprintf(rs->command_tag, "SELECT 1");
         return 1;
@@ -262,7 +272,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
     if (stristr_found(sql, "current_schema")) {
         result_add_column(rs, "current_schema", PG_OID_TEXT);
         int row = result_add_row(rs);
-        result_set_field(rs, row, 0, "public");
+        result_set_field(rs, row, 0, db_get_current_schema());
         sprintf(rs->command_tag, "SELECT 1");
         return 1;
     }
@@ -305,7 +315,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
     if (stristr_found(sql, "current_schemas")) {
         result_add_column(rs, "current_schemas", PG_OID_TEXT);
         int row = result_add_row(rs);
-        result_set_field(rs, row, 0, "{pg_catalog,public}");
+        result_set_field(rs, row, 0, "{pg_catalog,default}");
         sprintf(rs->command_tag, "SELECT 1");
         return 1;
     }
@@ -424,7 +434,9 @@ int catalog_list_tables(ResultSet *rs)
     result_add_column(rs, "table_name", PG_OID_TEXT);
     result_add_column(rs, "table_type", PG_OID_TEXT);
 
-    meta_iter_open(&it);
+    char _dbdir[1024];
+    snprintf(_dbdir, sizeof(_dbdir), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
+    meta_iter_open(&it, _dbdir);
     int count = 0;
     while (meta_iter_next(&it)) {
         /* Strip .meta extension to get table name */
@@ -437,7 +449,7 @@ int catalog_list_tables(ResultSet *rs)
         int row = result_add_row(rs);
         if (row < 0) break;
         result_set_field(rs, row, 0, "evosql");
-        result_set_field(rs, row, 1, "public");
+        result_set_field(rs, row, 1, "default");
         result_set_field(rs, row, 2, tblName);
         result_set_field(rs, row, 3, "BASE TABLE");
         count++;
@@ -470,12 +482,14 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
     result_add_column(rs, "data_type", PG_OID_TEXT);
     result_add_column(rs, "is_nullable", PG_OID_TEXT);
 
-    numTypes = ReadColumnTypes(table_name, colTypes, 64);
+    char _fullPath[1024];
+    db_table_path(table_name, _fullPath, sizeof(_fullPath));
+    numTypes = ReadColumnTypes(_fullPath, colTypes, 64);
 
     int nullFlags[64];
-    int numNullFlags = ReadNullFlags(table_name, nullFlags, 64);
+    int numNullFlags = ReadNullFlags(_fullPath, nullFlags, 64);
 
-    sprintf(metaFile, "%s.meta", table_name);
+    sprintf(metaFile, "%s.meta", _fullPath);
     fp = fopen(metaFile, "r");
     if (!fp) {
         sprintf(rs->command_tag, "SELECT 0");
@@ -499,7 +513,7 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
                 : "text";
 
             result_set_field(rs, row, 0, "evosql");
-            result_set_field(rs, row, 1, "public");
+            result_set_field(rs, row, 1, "default");
             result_set_field(rs, row, 2, table_name);
             result_set_field(rs, row, 3, col);
             result_set_field(rs, row, 4, ordStr);
@@ -534,7 +548,9 @@ static int catalog_list_all_columns(ResultSet *rs)
     result_add_column(rs, "data_type", PG_OID_TEXT);
     result_add_column(rs, "is_nullable", PG_OID_TEXT);
 
-    meta_iter_open(&it);
+    char _dbdir2[1024];
+    snprintf(_dbdir2, sizeof(_dbdir2), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
+    meta_iter_open(&it, _dbdir2);
     while (meta_iter_next(&it)) {
         char tblName[256], metaFile[1024], line[1024];
         strncpy(tblName, it.current_name, sizeof(tblName) - 1);
@@ -542,17 +558,19 @@ static int catalog_list_all_columns(ResultSet *rs)
         char *dot = strstr(tblName, ".meta");
         if (dot) *dot = '\0';
 
-        sprintf(metaFile, "%s.meta", tblName);
+        char _fp2[1024];
+        db_table_path(tblName, _fp2, sizeof(_fp2));
+        sprintf(metaFile, "%s.meta", _fp2);
         FILE *fp = fopen(metaFile, "r");
         if (!fp) continue;
 
         /* Read type encodings for this table */
         int colTypes[64];
-        int numColTypes = ReadColumnTypes(tblName, colTypes, 64);
+        int numColTypes = ReadColumnTypes(_fp2, colTypes, 64);
 
         /* Read NOT NULL flags for this table */
         int nullFlags[64];
-        int numNullFlags = ReadNullFlags(tblName, nullFlags, 64);
+        int numNullFlags = ReadNullFlags(_fp2, nullFlags, 64);
 
         if (fgets(line, sizeof(line), fp)) {
             char *col;
@@ -572,7 +590,7 @@ static int catalog_list_all_columns(ResultSet *rs)
                     : "text";
 
                 result_set_field(rs, row, 0, "evosql");
-                result_set_field(rs, row, 1, "public");
+                result_set_field(rs, row, 1, "default");
                 result_set_field(rs, row, 2, tblName);
                 result_set_field(rs, row, 3, col);
                 result_set_field(rs, row, 4, ordStr);
@@ -600,53 +618,171 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
     result_init(rs);
     rs->is_select = 1;
 
-    /* pg_database — DBeaver queries this for database list */
+    /* pg_database — DBeaver queries this for database list.
+     * Read dynamically from root/databases file.
+     * DBeaver issues:
+     *   SELECT db.oid,db.* FROM pg_catalog.pg_database db WHERE datname=$1
+     * The db.* expands to ALL pg_database columns, so we must provide them. */
     if (stristr_found(sql, "pg_database")) {
+        /* PostgreSQL pg_database columns */
         result_add_column(rs, "oid", PG_OID_INT4);
         result_add_column(rs, "datname", PG_OID_TEXT);
         result_add_column(rs, "datdba", PG_OID_INT4);
         result_add_column(rs, "encoding", PG_OID_INT4);
+        result_add_column(rs, "datlocprovider", PG_OID_BPCHAR);
+        result_add_column(rs, "datistemplate", PG_OID_BOOL);
+        result_add_column(rs, "datallowconn", PG_OID_BOOL);
+        result_add_column(rs, "datconnlimit", PG_OID_INT4);
+        result_add_column(rs, "datfrozenxid", PG_OID_INT4);
+        result_add_column(rs, "datminmxid", PG_OID_INT4);
+        result_add_column(rs, "dattablespace", PG_OID_INT4);
         result_add_column(rs, "datcollate", PG_OID_TEXT);
+        result_add_column(rs, "datctype", PG_OID_TEXT);
+        result_add_column(rs, "daticulocale", PG_OID_TEXT);
+        result_add_column(rs, "daticurules", PG_OID_TEXT);
+        result_add_column(rs, "datcollversion", PG_OID_TEXT);
+        result_add_column(rs, "datacl", PG_OID_TEXT);
 
-        int row = result_add_row(rs);
-        result_set_field(rs, row, 0, "16384");
-        result_set_field(rs, row, 1, "evosql");
-        result_set_field(rs, row, 2, "10");
-        result_set_field(rs, row, 3, "6");
-        result_set_field(rs, row, 4, "en_US.UTF-8");
-        sprintf(rs->command_tag, "SELECT 1");
+        /* Extract optional single-database filter.
+         * DBeaver uses two patterns:
+         *   1) WHERE datname=$1   (bind → WHERE datname='evosql')  — single db
+         *   2) WHERE 1=1 AND datallowconn AND NOT datistemplate
+         *      OR db.datname='evosql'                              — all dbs
+         * We only filter when pattern is "WHERE datname=" or "WHERE datname =" 
+         * i.e. datname is the primary WHERE condition. */
+        char datname_filter[256] = {0};
+        {
+            const char *wpos = strcasestr_local(sql, "WHERE");
+            if (wpos) {
+                const char *after = wpos + 5;
+                while (*after == ' ' || *after == '\t') after++;
+                if (strncasecmp(after, "datname", 7) == 0) {
+                    /* datname is right after WHERE — single-db filter */
+                    const char *q = strchr(after, '\'');
+                    if (q) {
+                        q++;
+                        int i = 0;
+                        while (*q && *q != '\'' && i < 255)
+                            datname_filter[i++] = *q++;
+                        datname_filter[i] = '\0';
+                    }
+                }
+                /* Otherwise (WHERE 1=1 AND datallowconn...) → no filter, show all */
+            }
+        }
+
+        char dbfile[1024];
+        snprintf(dbfile, sizeof(dbfile), "%s/databases", db_get_root());
+        FILE *fp = fopen(dbfile, "r");
+        int count = 0;
+        if (fp) {
+            char line[256];
+            int oid_counter = 16384;
+            while (fgets(line, sizeof(line), fp)) {
+                line[strcspn(line, "\n\r")] = '\0';
+                if (line[0] == '\0') continue;
+                if (datname_filter[0] && strcasecmp(line, datname_filter) != 0) {
+                    oid_counter++;
+                    continue;
+                }
+                char oid_str[32];
+                snprintf(oid_str, sizeof(oid_str), "%d", oid_counter++);
+                int r = result_add_row(rs);
+                result_set_field(rs, r, 0, oid_str);    /* oid */
+                result_set_field(rs, r, 1, line);         /* datname */
+                result_set_field(rs, r, 2, "10");         /* datdba */
+                result_set_field(rs, r, 3, "6");          /* encoding (UTF8) */
+                result_set_field(rs, r, 4, "c");          /* datlocprovider */
+                result_set_field(rs, r, 5, "f");          /* datistemplate */
+                result_set_field(rs, r, 6, "t");          /* datallowconn */
+                result_set_field(rs, r, 7, "-1");         /* datconnlimit */
+                result_set_field(rs, r, 8, "726");        /* datfrozenxid */
+                result_set_field(rs, r, 9, "1");          /* datminmxid */
+                result_set_field(rs, r, 10, "1663");      /* dattablespace */
+                result_set_field(rs, r, 11, "en_US.UTF-8"); /* datcollate */
+                result_set_field(rs, r, 12, "en_US.UTF-8"); /* datctype */
+                /* daticulocale, daticurules, datcollversion, datacl → NULL */
+                count++;
+            }
+            fclose(fp);
+        }
+        if (count == 0 && datname_filter[0] == '\0') {
+            int r = result_add_row(rs);
+            result_set_field(rs, r, 0, "16384");
+            result_set_field(rs, r, 1, "evosql");
+            result_set_field(rs, r, 2, "10");
+            result_set_field(rs, r, 3, "6");
+            result_set_field(rs, r, 4, "c");
+            result_set_field(rs, r, 5, "f");
+            result_set_field(rs, r, 6, "t");
+            result_set_field(rs, r, 7, "-1");
+            result_set_field(rs, r, 8, "726");
+            result_set_field(rs, r, 9, "1");
+            result_set_field(rs, r, 10, "1663");
+            result_set_field(rs, r, 11, "en_US.UTF-8");
+            result_set_field(rs, r, 12, "en_US.UTF-8");
+            count = 1;
+        }
+        sprintf(rs->command_tag, "SELECT %d", count);
         return 1;
     }
 
     /* pg_namespace — schema list
      * Guard: skip if query's main target is pg_type, pg_class, or pg_attribute
-     * (those queries reference pg_namespace in WHERE/subqueries) */
+     * (those queries reference pg_namespace in WHERE/subqueries)
+     * Read user schemas dynamically from root/schemas file.
+     * DBeaver issues:
+     *   SELECT n.oid,n.*,d.description FROM pg_catalog.pg_namespace n
+     *     LEFT OUTER JOIN pg_catalog.pg_description d ...
+     */
     if ((stristr_found(sql, "pg_namespace") || stristr_found(sql, "pg_catalog.pg_namespace")) &&
         !stristr_found(sql, "pg_type") && !stristr_found(sql, "pg_class") &&
         !stristr_found(sql, "pg_attribute")) {
-        result_add_column(rs, "oid", PG_OID_INT4);
+        /* n.oid (extra) + n.* columns + d.description from JOIN */
+        result_add_column(rs, "oid", PG_OID_INT4);       /* n.oid */
         result_add_column(rs, "nspname", PG_OID_TEXT);
         result_add_column(rs, "nspowner", PG_OID_INT4);
+        result_add_column(rs, "nspacl", PG_OID_TEXT);     /* n.* includes nspacl */
+        result_add_column(rs, "description", PG_OID_TEXT); /* d.description */
 
-        /* pg_catalog — required so DBeaver can resolve typnamespace=11 */
+        int count = 0;
+
+        /* pg_catalog — system schema (required for type resolution) */
         int row0 = result_add_row(rs);
         result_set_field(rs, row0, 0, "11");
         result_set_field(rs, row0, 1, "pg_catalog");
         result_set_field(rs, row0, 2, "10");
+        count++;
 
-        /* public schema */
+        /* information_schema — system schema */
         int row1 = result_add_row(rs);
-        result_set_field(rs, row1, 0, "2200");
-        result_set_field(rs, row1, 1, "public");
+        result_set_field(rs, row1, 0, "13060");
+        result_set_field(rs, row1, 1, "information_schema");
         result_set_field(rs, row1, 2, "10");
+        count++;
 
-        /* information_schema */
-        int row2 = result_add_row(rs);
-        result_set_field(rs, row2, 0, "13060");
-        result_set_field(rs, row2, 1, "information_schema");
-        result_set_field(rs, row2, 2, "10");
+        /* Database schemas from per-database schemas file */
+        char schfile[1024];
+        snprintf(schfile, sizeof(schfile), "%s/%s/schemas", db_get_root(), db_get_current_database());
+        FILE *fp = fopen(schfile, "r");
+        if (fp) {
+            char line[256];
+            int oid_counter = 2200;
+            while (fgets(line, sizeof(line), fp)) {
+                line[strcspn(line, "\n\r")] = '\0';
+                if (line[0] == '\0') continue;
+                char oid_str[32];
+                snprintf(oid_str, sizeof(oid_str), "%d", oid_counter++);
+                int r = result_add_row(rs);
+                result_set_field(rs, r, 0, oid_str);
+                result_set_field(rs, r, 1, line);
+                result_set_field(rs, r, 2, "10");
+                count++;
+            }
+            fclose(fp);
+        }
 
-        sprintf(rs->command_tag, "SELECT 3");
+        sprintf(rs->command_tag, "SELECT %d", count);
         return 1;
     }
 
@@ -784,7 +920,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
         /* Scan .meta files — OID derived from table name for stability */
         MetaIterator mit;
-        meta_iter_open(&mit);
+        char _dbdir3[1024];
+        snprintf(_dbdir3, sizeof(_dbdir3), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
+        meta_iter_open(&mit, _dbdir3);
         int count = 0;
         while (meta_iter_next(&mit)) {
                 char tblName[256];
@@ -794,16 +932,18 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 if (dot) *dot = '\0';
 
                 char metaPath[1024], line[2048], oidStr[16];
-                sprintf(metaPath, "%s.meta", tblName);
+                char _fp3[1024];
+                db_table_path(tblName, _fp3, sizeof(_fp3));
+                sprintf(metaPath, "%s.meta", _fp3);
                 sprintf(oidStr, "%u", stable_table_oid(tblName));
 
                 /* Read type encodings for this table */
                 int colTypes[64];
-                int numColTypes = ReadColumnTypes(tblName, colTypes, 64);
+                int numColTypes = ReadColumnTypes(_fp3, colTypes, 64);
 
                 /* Read NOT NULL flags for this table */
                 int nullFlags[64];
-                int numNullFlags = ReadNullFlags(tblName, nullFlags, 64);
+                int numNullFlags = ReadNullFlags(_fp3, nullFlags, 64);
 
                 FILE *fp = fopen(metaPath, "r");
                 if (!fp) continue;
@@ -915,7 +1055,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
         /* Scan .meta files to return actual tables */
         MetaIterator mit2;
-        meta_iter_open(&mit2);
+        char _dbdir4[1024];
+        snprintf(_dbdir4, sizeof(_dbdir4), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
+        meta_iter_open(&mit2, _dbdir4);
         int count = 0;
         while (meta_iter_next(&mit2)) {
                 char tblName[256];
@@ -927,7 +1069,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 /* Count columns from .meta file */
                 char metaPath[1024], line[2048];
                 int natts = 0;
-                sprintf(metaPath, "%s.meta", tblName);
+                char _fp4[1024];
+                db_table_path(tblName, _fp4, sizeof(_fp4));
+                sprintf(metaPath, "%s.meta", _fp4);
                 FILE *fp = fopen(metaPath, "r");
                 if (fp) {
                     if (fgets(line, sizeof(line), fp)) {
@@ -1028,7 +1172,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
         /* Scan .meta files for tables with primary keys */
         MetaIterator mit3;
-        meta_iter_open(&mit3);
+        char _dbdir5[1024];
+        snprintf(_dbdir5, sizeof(_dbdir5), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
+        meta_iter_open(&mit3, _dbdir5);
         int count = 0;
         while (meta_iter_next(&mit3)) {
                 char tblName[256];
@@ -1037,7 +1183,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 char *dot = strstr(tblName, ".meta");
                 if (dot) *dot = '\0';
 
-                int pkIndex = ReadPrimaryKey(tblName);
+                char _fp5[1024];
+                db_table_path(tblName, _fp5, sizeof(_fp5));
+                int pkIndex = ReadPrimaryKey(_fp5);
                 if (pkIndex < 0) continue; /* No primary key */
 
                 int row = result_add_row(rs);
@@ -1191,7 +1339,7 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
 
         int row1 = result_add_row(rs);
         result_set_field(rs, row1, 0, "evosql");
-        result_set_field(rs, row1, 1, "public");
+        result_set_field(rs, row1, 1, "default");
         result_set_field(rs, row1, 2, "evosql");
 
         int row2 = result_add_row(rs);

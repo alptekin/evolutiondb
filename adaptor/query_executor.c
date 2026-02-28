@@ -27,6 +27,7 @@ void query_engine_init(void)
 {
     g_gui_mode = 1;   /* Suppress printf output from EvoSQL */
     g_gui_error = 0;
+    db_ensure_root(); /* Create root/ directory structure and set default database */
 }
 
 /* ----------------------------------------------------------------
@@ -80,6 +81,18 @@ static int is_truncate_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
     return (strncasecmp(sql, "TRUNCATE", 8) == 0);
+}
+
+static int is_use_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "USE", 3) == 0 && isspace((unsigned char)sql[3]));
+}
+
+static int is_set_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "SET", 3) == 0 && isspace((unsigned char)sql[3]));
 }
 
 /* Map EvoSQL type encoding to PostgreSQL type OID */
@@ -1343,8 +1356,19 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
             sprintf(rs->command_tag, "SELECT 1");
         } else if (!rs->has_error) {
             /* DDL/DML command — determine appropriate tag */
-            if (is_create_query(sql))
-                strcpy(rs->command_tag, "CREATE TABLE");
+            if (is_create_query(sql)) {
+                /* Distinguish CREATE TABLE, CREATE DATABASE, CREATE SCHEMA */
+                const char *p = sql;
+                while (*p && isspace((unsigned char)*p)) p++;
+                p += 6; /* skip "CREATE" */
+                while (*p && isspace((unsigned char)*p)) p++;
+                if (strncasecmp(p, "DATABASE", 8) == 0)
+                    strcpy(rs->command_tag, "CREATE DATABASE");
+                else if (strncasecmp(p, "SCHEMA", 6) == 0)
+                    strcpy(rs->command_tag, "CREATE SCHEMA");
+                else
+                    strcpy(rs->command_tag, "CREATE TABLE");
+            }
             else if (is_insert_query(sql))
                 strcpy(rs->command_tag, "INSERT 0 1");
             else if (is_update_query(sql))
@@ -1355,6 +1379,10 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                 strcpy(rs->command_tag, "DROP TABLE");
             else if (is_truncate_query(sql))
                 strcpy(rs->command_tag, "TRUNCATE TABLE");
+            else if (is_use_query(sql))
+                strcpy(rs->command_tag, "USE");
+            else if (is_set_query(sql))
+                strcpy(rs->command_tag, "SET");
             else
                 strcpy(rs->command_tag, "OK");
         }
@@ -1522,11 +1550,152 @@ static void normalize_sql(char *sql)
 }
 
 /* ----------------------------------------------------------------
+ *  Resolve qualified table names: schema.table or db.schema.table
+ *
+ *  Scans the SQL for dotted identifiers (a.b or a.b.c) and:
+ *    - Temporarily switches the active db/schema context
+ *    - Strips the prefix from the SQL so the parser sees plain table
+ *    - Saves the original db/schema so the caller can restore later
+ *
+ *  Supports: FROM schema.tbl, INSERT INTO schema.tbl,
+ *            UPDATE schema.tbl, DELETE FROM schema.tbl,
+ *            CREATE TABLE schema.tbl, DROP TABLE schema.tbl
+ *
+ *  Returns 1 if a qualified name was resolved, 0 otherwise.
+ * ---------------------------------------------------------------- */
+static int resolve_qualified_table(char *sql,
+                                   char *saved_db, int saved_db_size,
+                                   char *saved_schema, int saved_schema_size)
+{
+    /* Save current context */
+    strncpy(saved_db, db_get_current_database(), saved_db_size - 1);
+    saved_db[saved_db_size - 1] = '\0';
+    strncpy(saved_schema, db_get_current_schema(), saved_schema_size - 1);
+    saved_schema[saved_schema_size - 1] = '\0';
+
+    /* Scan for patterns: identifier.identifier or identifier.identifier.identifier
+     * We look for NAME.NAME or NAME.NAME.NAME where NAME is [A-Za-z_][A-Za-z0-9_]*
+     * We skip known non-table prefixes and only match after table-context keywords. */
+    char *p = sql;
+    while (*p) {
+        /* Skip string literals */
+        if (*p == '\'') {
+            p++;
+            while (*p && *p != '\'') {
+                if (*p == '\\') p++;  /* skip escaped char */
+                if (*p) p++;
+            }
+            if (*p) p++;
+            continue;
+        }
+
+        /* Look for a.b.c or a.b pattern — an identifier followed by dot(s) */
+        if ((isalpha((unsigned char)*p) || *p == '_') && (p == sql || !isalnum((unsigned char)*(p-1)))) {
+            /* Capture first segment */
+            char *seg1_start = p;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+            int seg1_len = (int)(p - seg1_start);
+
+            if (*p == '.') {
+                char *dot1 = p;
+                p++;  /* skip dot */
+
+                /* Capture second segment */
+                if (isalpha((unsigned char)*p) || *p == '_') {
+                    char *seg2_start = p;
+                    while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                    int seg2_len = (int)(p - seg2_start);
+
+                    if (*p == '.') {
+                        char *dot2 = p;
+                        p++;  /* skip second dot */
+
+                        /* Capture third segment: db.schema.table */
+                        if (isalpha((unsigned char)*p) || *p == '_') {
+                            char *seg3_start = p;
+                            while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                            int seg3_len = (int)(p - seg3_start);
+
+                            char db_name[256], schema_name[256];
+                            snprintf(db_name, sizeof(db_name), "%.*s", seg1_len, seg1_start);
+                            snprintf(schema_name, sizeof(schema_name), "%.*s", seg2_len, seg2_start);
+
+                            /* Switch db + schema context */
+                            db_set_current_database(db_name);
+                            db_set_current_schema(schema_name);
+
+                            /* Remove "db.schema." prefix — shift SQL left */
+                            int prefix_len = (int)(seg3_start - seg1_start);
+                            memmove(seg1_start, seg3_start, strlen(seg3_start) + 1);
+                            /* Adjust p pointer */
+                            p = seg1_start + seg3_len;
+                            return 1;
+                        }
+                    } else {
+                        /* Two segments: could be schema.table or alias.column
+                         * We treat it as schema.table ONLY if seg1 is a known schema
+                         * in the current database */
+                        char maybe_schema[256];
+                        snprintf(maybe_schema, sizeof(maybe_schema), "%.*s", seg1_len, seg1_start);
+
+                        /* Skip common non-schema prefixes */
+                        if (strcasecmp(maybe_schema, "pg_catalog") == 0 ||
+                            strcasecmp(maybe_schema, "public") == 0) {
+                            continue;  /* already handled by normalize_sql */
+                        }
+
+                        /* Check if it's a registered schema */
+                        char regFile[1024];
+                        snprintf(regFile, sizeof(regFile), "%s/%s/schemas",
+                                 db_get_root(), db_get_current_database());
+                        FILE *fp = fopen(regFile, "r");
+                        int is_schema = 0;
+                        if (fp) {
+                            char line[256];
+                            while (fgets(line, sizeof(line), fp)) {
+                                /* Strip newline */
+                                int ll = (int)strlen(line);
+                                while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r'))
+                                    line[--ll] = '\0';
+                                if (strcasecmp(line, maybe_schema) == 0) {
+                                    is_schema = 1;
+                                    break;
+                                }
+                            }
+                            fclose(fp);
+                        }
+
+                        if (is_schema) {
+                            /* Switch schema context */
+                            db_set_current_schema(maybe_schema);
+
+                            /* Remove "schema." prefix */
+                            memmove(seg1_start, seg2_start, strlen(seg2_start) + 1);
+                            p = seg1_start + seg2_len;
+                            return 1;
+                        }
+                        /* else: not a schema, leave as-is (alias.column) */
+                    }
+                } else {
+                    /* dot followed by non-identifier — skip */
+                }
+            }
+            continue;
+        }
+        p++;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------
  *  Main entry point
  * ---------------------------------------------------------------- */
 void query_execute(const char *sql, ResultSet *rs)
 {
     char normalized[8192];
+    char saved_db[256] = "";
+    char saved_schema[256] = "";
+    int qualified = 0;
 
     result_init(rs);
 
@@ -1538,10 +1707,53 @@ void query_execute(const char *sql, ResultSet *rs)
     /* Reset rs — catalog sub-handlers may have modified it before returning 0 */
     result_init(rs);
 
-    /* Normalize SQL for DBeaver compatibility */
+    /* Normalize SQL for DBeaver compatibility (quote removal, pg_catalog removal) */
     strncpy(normalized, sql, sizeof(normalized) - 1);
     normalized[sizeof(normalized) - 1] = '\0';
     normalize_sql(normalized);
+
+    /* Resolve qualified table names AFTER normalization removes quotes
+     * but the schema prefix is still intact because normalize_sql
+     * only removes "public." and "pg_catalog.", not arbitrary schemas.
+     * However, Pass 3 (alias removal) can strip schema.table too,
+     * so we must resolve BEFORE alias removal.
+     * Solution: resolve on a pre-normalized copy, then re-normalize. */
+
+    /* Actually, let's resolve on the quote-stripped SQL before full normalize.
+     * We re-do normalize on the original to get just quote removal + known prefixes,
+     * then resolve, then do the alias/AS passes. */
+
+    /* Simpler approach: resolve on the raw (quote-stripped) SQL first */
+    {
+        char raw[8192];
+        strncpy(raw, sql, sizeof(raw) - 1);
+        raw[sizeof(raw) - 1] = '\0';
+        /* Strip quotes only (Pass 1 of normalize) */
+        {
+            char buf2[8192];
+            char *s2 = raw, *d2 = buf2;
+            while (*s2) {
+                if (*s2 == '"') {
+                    s2++;
+                    while (*s2 && *s2 != '"') *d2++ = *s2++;
+                    if (*s2 == '"') s2++;
+                } else {
+                    *d2++ = *s2++;
+                }
+            }
+            *d2 = '\0';
+            strcpy(raw, buf2);
+        }
+        qualified = resolve_qualified_table(raw,
+                                            saved_db, sizeof(saved_db),
+                                            saved_schema, sizeof(saved_schema));
+        if (qualified) {
+            /* Use the resolved (prefix-stripped) SQL and re-normalize */
+            strncpy(normalized, raw, sizeof(normalized) - 1);
+            normalized[sizeof(normalized) - 1] = '\0';
+            normalize_sql(normalized);
+        }
+    }
 
     printf("[adaptor] Normalized SQL: %.200s%s\n", normalized,
            strlen(normalized) > 200 ? "..." : "");
@@ -1552,4 +1764,10 @@ void query_execute(const char *sql, ResultSet *rs)
 
     /* Real EvoSQL query */
     execute_via_parser(normalized, rs);
+
+    /* Restore original db/schema context if we switched */
+    if (qualified) {
+        db_set_current_database(saved_db);
+        db_set_current_schema(saved_schema);
+    }
 }

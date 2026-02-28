@@ -189,7 +189,7 @@ int InsertProcess(void)
 }
 int GetInsertionTableName(char *name)
 {
-    strcat(g_tblInsertionName, name);
+    db_table_path(name, g_tblInsertionName, sizeof(g_tblInsertionName));
 
     return 0;
 }

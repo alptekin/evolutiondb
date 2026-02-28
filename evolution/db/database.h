@@ -41,6 +41,19 @@ int CreateTableProcess(void);
 int InsertProcess(void);
 int DropTableProcess(void);
 int TruncateTableProcess(void);
+int CreateDatabaseProcess(const char *name, int if_not_exists);
+int CreateSchemaProcess(const char *name, int if_not_exists);
+int UseDatabaseProcess(const char *name);
+int SetSchemaProcess(const char *name);
+
+/* Database root path management */
+void db_ensure_root(void);
+const char *db_get_root(void);
+void db_set_current_database(const char *name);
+const char *db_get_current_database(void);
+void db_set_current_schema(const char *name);
+const char *db_get_current_schema(void);
+void db_table_path(const char *tableName, char *out, int outSize);
 
 char *ParseUpdate(char *arr);
 char *ParseInsertion(char *arr);
@@ -88,5 +101,8 @@ extern int g_primaryKeyIndex;
 extern int g_columnCount;
 extern char g_selectColumns[64][128];
 extern int g_selectColumnCount;
+extern char g_dbRoot[1024];
+extern char g_currentDatabase[256];
+extern char g_currentSchema[256];
 
 #endif

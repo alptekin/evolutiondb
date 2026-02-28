@@ -73,7 +73,7 @@ int TruncateTableProcess(void)
 
 int GetDropTableName(char *pname)
 {
-    strcat(g_tblDropName, pname);
+    db_table_path(pname, g_tblDropName, sizeof(g_tblDropName));
     return 0;
 }
 

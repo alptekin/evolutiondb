@@ -210,7 +210,7 @@ void SelectAll(void)
 
 int GetSelTableName(char *pname)
 {
-    strcat(g_tblSelectionName, pname);
+    db_table_path(pname, g_tblSelectionName, sizeof(g_tblSelectionName));
     strcat(g_tblSelectionName, ".dat");
 
     return 0;

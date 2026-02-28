@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 #include "platform.h"
 
 #include "pg_protocol.h"
@@ -163,8 +164,7 @@ static void handle_client(socket_t client_sock)
             /* Parse message body: stmt_name\0 + query\0 + int16(nparams) + ... */
             char *stmt_name = msg_buf;
             char *query = stmt_name + strlen(stmt_name) + 1;
-            printf("[adaptor] Extended Parse: %.100s%s\n", query,
-                   strlen(query) > 100 ? "..." : "");
+            printf("[adaptor] Extended Parse: %s\n", query);
             fflush(stdout);
 
             /* Save query for Execute phase */
@@ -179,6 +179,98 @@ static void handle_client(socket_t client_sock)
         }
 
         case PG_MSG_BIND: {
+            /* Bind message body:
+             *   portal_name\0 + stmt_name\0
+             *   int16 num_format_codes + int16[] format_codes
+             *   int16 num_params + (int32 len + bytes)[] params
+             *   int16 num_result_format_codes + int16[] result_format_codes
+             *
+             * We parse parameter values and substitute $1, $2, ... in
+             * pending_query so catalog handlers see real values.
+             */
+            {
+                char *ptr = msg_buf;
+                /* Skip portal name */
+                ptr += strlen(ptr) + 1;
+                /* Skip statement name */
+                ptr += strlen(ptr) + 1;
+
+                /* Skip format codes */
+                int16_t num_fmt;
+                memcpy(&num_fmt, ptr, 2);
+                num_fmt = ntohs(num_fmt);
+                ptr += 2 + num_fmt * 2;
+
+                /* Read parameter values */
+                int16_t num_params;
+                memcpy(&num_params, ptr, 2);
+                num_params = ntohs(num_params);
+                ptr += 2;
+
+                if (num_params > 0 && pending_query) {
+                    /* Collect parameter values */
+                    char *param_vals[64];
+                    int pi;
+                    for (pi = 0; pi < num_params && pi < 64; pi++) {
+                        int32_t plen;
+                        memcpy(&plen, ptr, 4);
+                        plen = ntohl(plen);
+                        ptr += 4;
+                        if (plen == -1) {
+                            param_vals[pi] = strdup("NULL");
+                        } else {
+                            param_vals[pi] = (char *)malloc(plen + 1);
+                            memcpy(param_vals[pi], ptr, plen);
+                            param_vals[pi][plen] = '\0';
+                            ptr += plen;
+                        }
+                    }
+
+                    /* Substitute $1, $2, ... with quoted values in pending_query */
+                    char *new_query = (char *)malloc(65536);
+                    char *dst = new_query;
+                    char *src = pending_query;
+                    while (*src) {
+                        if (*src == '$' && src[1] >= '1' && src[1] <= '9') {
+                            int idx = 0;
+                            src++; /* skip '$' */
+                            while (*src >= '0' && *src <= '9') {
+                                idx = idx * 10 + (*src - '0');
+                                src++;
+                            }
+                            idx--; /* 0-based */
+                            if (idx >= 0 && idx < num_params) {
+                                if (strcmp(param_vals[idx], "NULL") == 0) {
+                                    memcpy(dst, "NULL", 4);
+                                    dst += 4;
+                                } else {
+                                    *dst++ = '\'';
+                                    /* Copy value, escaping single quotes */
+                                    char *v = param_vals[idx];
+                                    while (*v) {
+                                        if (*v == '\'') *dst++ = '\'';
+                                        *dst++ = *v++;
+                                    }
+                                    *dst++ = '\'';
+                                }
+                            }
+                        } else {
+                            *dst++ = *src++;
+                        }
+                    }
+                    *dst = '\0';
+
+                    printf("[adaptor] Bind: resolved query: %s\n", new_query);
+                    fflush(stdout);
+
+                    free(pending_query);
+                    pending_query = new_query;
+
+                    for (pi = 0; pi < num_params && pi < 64; pi++)
+                        free(param_vals[pi]);
+                }
+            }
+
             PgBuf b;
             pg_buf_init(&b, PG_RESP_BIND_COMPLETE);
             pg_buf_send(&b, client_sock);

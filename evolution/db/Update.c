@@ -258,7 +258,7 @@ int UpdateProcess(void)
 
 int GetUpdateTableName(char *pname)
 {
-    strcat(g_tblUpdateTableName, pname);
+    db_table_path(pname, g_tblUpdateTableName, sizeof(g_tblUpdateTableName));
     return 0;
 }
 

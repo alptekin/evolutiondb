@@ -884,12 +884,21 @@ stmt: create_database_stmt							{ emit("STMT"); }
 ;
 
 create_database_stmt:
-CREATE DATABASE opt_if_not_exists NAME                                          { emit("CREATEDATABASE %d %s", $3, $4); free($4); }
-| CREATE SCHEMA opt_if_not_exists NAME                                          { emit("CREATEDATABASE %d %s", $3, $4); free($4); }
+CREATE DATABASE opt_if_not_exists NAME                                          { emit("CREATEDATABASE %d %s", $3, $4); CreateDatabaseProcess($4, $3); free($4); }
+| CREATE SCHEMA opt_if_not_exists NAME                                          { emit("CREATESCHEMA %d %s", $3, $4); CreateSchemaProcess($4, $3); free($4); }
 ;
 
 opt_if_not_exists: /* nil */                                                    { $$ = 0; }
 | IF EXISTS									{ if(!$2) { yyerror("IF EXISTS doesn't exist"); YYERROR; } $$ = $2; /* NOT EXISTS hack */ }
+;
+
+/** use database **/
+stmt: use_database_stmt                                                         { emit("STMT"); }
+;
+
+use_database_stmt:
+USE NAME                                                                        { emit("USEDATABASE %s", $2); UseDatabaseProcess($2); free($2); }
+| USE DATABASE NAME                                                             { emit("USEDATABASE %s", $3); UseDatabaseProcess($3); free($3); }
 ;
 
 /** create table **/
@@ -1041,7 +1050,9 @@ opt_ignore_replace: /* nil */                                                   
 stmt: set_stmt									{ emit("STMT"); }
 ;
 
-set_stmt: SET set_list ;
+set_stmt: SET SCHEMA NAME                                                       { emit("SETSCHEMA %s", $3); SetSchemaProcess($3); free($3); }
+| SET SCHEMA DEFAULT                                                            { emit("SETSCHEMA default"); SetSchemaProcess("default"); }
+| SET set_list ;
 set_list: set_expr | set_list ',' set_expr ;
 set_expr:
 USERVAR COMPARISON expr								{ if ($2 != 4) { yyerror("bad set to @%s", $1); YYERROR; } emit("SET %s", $1); free($1); }

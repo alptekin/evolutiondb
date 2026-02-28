@@ -147,7 +147,7 @@ void TruncateCreate(void)
 
 int GetTableName(char *name)
 {
-    strcat(g_tblName, name);
+    db_table_path(name, g_tblName, sizeof(g_tblName));
 
     return 0;
 }
