@@ -1690,7 +1690,7 @@ static int resolve_qualified_table(char *sql,
 /* ----------------------------------------------------------------
  *  Main entry point
  * ---------------------------------------------------------------- */
-void query_execute(const char *sql, ResultSet *rs)
+void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
     char saved_db[256] = "";
@@ -1699,8 +1699,21 @@ void query_execute(const char *sql, ResultSet *rs)
 
     result_init(rs);
 
+    /* ── Load per-connection session state into engine globals ── */
+    if (ctx) {
+        db_set_current_database(ctx->database);
+        db_set_current_schema(ctx->schema);
+    }
+
     /* First, try catalog/internal queries (before normalization) */
     if (catalog_try_handle(sql, rs)) {
+        /* ── Write back session state (USE/SET SCHEMA may have run) ── */
+        if (ctx) {
+            strncpy(ctx->database, db_get_current_database(), sizeof(ctx->database) - 1);
+            ctx->database[sizeof(ctx->database) - 1] = '\0';
+            strncpy(ctx->schema, db_get_current_schema(), sizeof(ctx->schema) - 1);
+            ctx->schema[sizeof(ctx->schema) - 1] = '\0';
+        }
         return;
     }
 
@@ -1769,5 +1782,15 @@ void query_execute(const char *sql, ResultSet *rs)
     if (qualified) {
         db_set_current_database(saved_db);
         db_set_current_schema(saved_schema);
+    }
+
+    /* ── Write back session state to per-connection context ──
+     * USE <database> / SET SCHEMA <name> change the globals;
+     * capture those changes so they stick for this connection. */
+    if (ctx) {
+        strncpy(ctx->database, db_get_current_database(), sizeof(ctx->database) - 1);
+        ctx->database[sizeof(ctx->database) - 1] = '\0';
+        strncpy(ctx->schema, db_get_current_schema(), sizeof(ctx->schema) - 1);
+        ctx->schema[sizeof(ctx->schema) - 1] = '\0';
     }
 }

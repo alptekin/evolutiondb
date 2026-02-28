@@ -31,10 +31,10 @@ static mutex_t g_query_lock;
 /* ----------------------------------------------------------------
  *  Execute query under lock (thread-safe wrapper)
  * ---------------------------------------------------------------- */
-static void safe_query_execute(const char *sql, ResultSet *rs)
+static void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     mutex_lock(&g_query_lock);
-    query_execute(sql, rs);
+    query_execute(sql, rs, ctx);
     mutex_unlock(&g_query_lock);
 }
 
@@ -50,6 +50,9 @@ static void handle_client(socket_t client_sock)
     /* Pending query for Extended Query Protocol */
     char *pending_query = NULL;
     int pending_described = 0;
+
+    /* Per-connection session context — each client has its own db/schema */
+    SessionCtx session = { "evosql", "default" };
 
     /* Allocate per-thread buffers on heap */
     msg_buf = (char *)malloc(65536);
@@ -132,7 +135,7 @@ static void handle_client(socket_t client_sock)
                 if (!*stmt) continue;
 
                 had_any = 1;
-                safe_query_execute(stmt, rs);
+                safe_query_execute(stmt, rs, &session);
 
                 if (rs->has_error) {
                     pg_send_error(client_sock, "ERROR",
@@ -293,7 +296,7 @@ static void handle_client(socket_t client_sock)
 
             if (pending_query && pending_query[0] != '\0') {
                 /* Execute the query to get column info */
-                safe_query_execute(pending_query, rs);
+                safe_query_execute(pending_query, rs, &session);
                 pending_described = 1;
 
                 if (rs->is_select && !rs->has_error && rs->num_cols > 0) {
@@ -332,7 +335,7 @@ static void handle_client(socket_t client_sock)
             if (pending_query && pending_query[0] != '\0') {
                 /* Only execute if not already done in Describe */
                 if (!pending_described) {
-                    safe_query_execute(pending_query, rs);
+                    safe_query_execute(pending_query, rs, &session);
                 }
 
                 if (rs->has_error) {
