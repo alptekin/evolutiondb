@@ -9,17 +9,22 @@ def pg_connect():
     s = socket.socket()
     s.settimeout(5)
     s.connect(('localhost', 5433))
-    # Send minimal startup message (protocol v3)
-    s.send(b'\x00\x00\x00\x08\x00\x03\x00\x00')
-    # Read until ReadyForQuery ('Z')
-    data = b''
+    # Send startup message with user=admin
+    body = b'\x00\x03\x00\x00' + b'user\x00admin\x00database\x00testdb\x00\x00'
+    s.sendall(struct.pack('!I', len(body) + 4) + body)
+    # Read until ReadyForQuery ('Z'), handle auth
     while True:
-        chunk = s.recv(4096)
-        if not chunk:
+        tag = s.recv(1)
+        if not tag:
             raise ConnectionError("connection closed during startup")
-        data += chunk
-        # ReadyForQuery is 'Z' + 4-byte len + 1-byte status
-        if len(data) >= 6 and data[-6] == ord('Z'):
+        length = struct.unpack('!I', s.recv(4))[0]
+        body_data = s.recv(length - 4) if length > 4 else b''
+        if tag == b'R' and len(body_data) >= 4:
+            auth_type = struct.unpack('!I', body_data[:4])[0]
+            if auth_type == 3:
+                pw = b'admin\x00'
+                s.sendall(b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+        elif tag == b'Z':
             break
     return s
 

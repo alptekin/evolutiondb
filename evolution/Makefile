@@ -28,7 +28,9 @@ SRCS = main.c \
        db/Drop.c \
        db/database_globals.c \
        db/expression.c \
-       db/DatabaseMgmt.c
+       db/DatabaseMgmt.c \
+       db/crypto.c \
+       db/UserMgmt.c
 
 OBJS = $(SRCS:.c=.o)
 

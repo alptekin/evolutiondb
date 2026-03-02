@@ -8,7 +8,7 @@ HOST, PORT = "localhost", 5433
 def pg_connect():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((HOST, PORT))
-    body = struct.pack("!HH", 3, 0) + b"user\x00test\x00database\x00testdb\x00\x00"
+    body = struct.pack("!HH", 3, 0) + b"user\x00admin\x00database\x00testdb\x00\x00"
     s.sendall(struct.pack("!I", len(body) + 4) + body)
     _read_until_ready(s)
     return s
@@ -19,7 +19,12 @@ def _read_until_ready(s):
         tag = chr(hdr[0])
         length = struct.unpack("!I", hdr[1:5])[0]
         body = _recvall(s, length - 4) if length > 4 else b""
-        if tag == 'Z':
+        if tag == 'R' and len(body) >= 4:
+            auth_type = struct.unpack('!I', body[:4])[0]
+            if auth_type == 3:
+                pw = b'admin\x00'
+                s.sendall(b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+        elif tag == 'Z':
             return
 
 def _recvall(s, n):

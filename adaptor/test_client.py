@@ -18,7 +18,7 @@ def recv_exact(sock, n):
         buf += chunk
     return buf
 
-def send_startup(sock, user="evosql", database="evosql"):
+def send_startup(sock, user="admin", database="evosql"):
     """Send PostgreSQL v3 startup message."""
     params = f"user\x00{user}\x00database\x00{database}\x00\x00".encode()
     version = struct.pack("!I", 196608)  # v3.0
@@ -144,7 +144,14 @@ def main():
         msg_type, data = read_message(sock)
         if msg_type == 'R':
             auth_status = struct.unpack("!I", data[:4])[0]
-            print(f"Auth: {'OK' if auth_status == 0 else 'FAILED'}")
+            if auth_status == 3:
+                # CleartextPassword — send password
+                pw = b'admin\x00'
+                send_all(sock, b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+            elif auth_status == 0:
+                print("Auth: OK")
+            else:
+                print(f"Auth: FAILED ({auth_status})")
         elif msg_type == 'S':
             end1 = data.index(b'\x00')
             end2 = data.index(b'\x00', end1 + 1)

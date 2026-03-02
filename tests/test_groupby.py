@@ -10,7 +10,7 @@ PG_PORT = 5433
 
 # -- wire helpers --
 def pg_startup(sock):
-    user = b"test\x00"
+    user = b"admin\x00"
     db   = b"testdb\x00"
     payload = b"\x00\x03\x00\x00" + b"user\x00" + user + b"database\x00" + db + b"\x00"
     length  = 4 + len(payload)
@@ -21,7 +21,12 @@ def pg_startup(sock):
             raise ConnectionError("connection closed during startup")
         ln = struct.unpack("!I", sock.recv(4))[0] - 4
         body = sock.recv(ln) if ln > 0 else b""
-        if tag == b"Z":
+        if tag == b"R" and len(body) >= 4:
+            auth_type = struct.unpack('!I', body[:4])[0]
+            if auth_type == 3:
+                pw = b'admin\x00'
+                sock.sendall(b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+        elif tag == b"Z":
             break
 
 def pg_query(sock, sql):

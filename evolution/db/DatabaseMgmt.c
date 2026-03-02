@@ -83,6 +83,9 @@ void db_ensure_root(void)
     snprintf(g_dbRoot, sizeof(g_dbRoot), "%s", ROOT_DIR);
     strncpy(g_currentDatabase, DEFAULT_DB, sizeof(g_currentDatabase) - 1);
     strncpy(g_currentSchema, "default", sizeof(g_currentSchema) - 1);
+
+    /* Create initial admin user if users file is empty/missing */
+    db_ensure_users();
 }
 
 /* ----------------------------------------------------------------

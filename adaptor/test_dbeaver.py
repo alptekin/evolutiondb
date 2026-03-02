@@ -31,11 +31,17 @@ def read_message(sock):
     return chr(type_byte[0]), data
 
 def read_until_ready(sock, label=""):
-    """Read messages until ReadyForQuery ('Z')."""
+    """Read messages until ReadyForQuery ('Z'). Handles auth challenges."""
     messages = []
     while True:
         msg_type, data = read_message(sock)
         messages.append((msg_type, data))
+        if msg_type == 'R' and len(data) >= 4:
+            auth_type = struct.unpack("!I", data[:4])[0]
+            if auth_type == 3:
+                # CleartextPassword — send password
+                pw = b'admin\x00'
+                send_all(sock, b'p' + struct.pack('!I', 4 + len(pw)) + pw)
         if msg_type == 'Z':
             break
     return messages
@@ -200,7 +206,7 @@ def main():
     # ==========================================
     print("\n[3] Sending StartupMessage...")
     params = (
-        b"user\x00evosql\x00"
+        b"user\x00admin\x00"
         b"database\x00evosql\x00"
         b"application_name\x00DBeaver 23.3.0 - Main\x00"
         b"client_encoding\x00UTF8\x00"

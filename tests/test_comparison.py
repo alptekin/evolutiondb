@@ -3,10 +3,21 @@ import socket, struct, time
 def pg_connect():
     s = socket.socket()
     s.connect(('localhost', 5433))
-    s.send(b'\x00\x00\x00\x08\x00\x03\x00\x00')
-    s.recv(4096)
-    s.send(b'p\x00\x00\x00\x08\x00\x00\x00\x00')
-    s.recv(4096)
+    body = b'\x00\x03\x00\x00' + b'user\x00admin\x00database\x00testdb\x00\x00'
+    s.sendall(struct.pack('!I', len(body) + 4) + body)
+    while True:
+        tag = s.recv(1)
+        if not tag:
+            break
+        length = struct.unpack('!I', s.recv(4))[0]
+        body_data = s.recv(length - 4) if length > 4 else b''
+        if tag == b'R' and len(body_data) >= 4:
+            auth_type = struct.unpack('!I', body_data[:4])[0]
+            if auth_type == 3:
+                pw = b'admin\x00'
+                s.sendall(b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+        elif tag == b'Z':
+            break
     return s
 
 def pg_query(s, sql):

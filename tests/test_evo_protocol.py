@@ -41,11 +41,21 @@ class EvoConnection:
         self.buf = self.buf[idx+1:]
         return line
 
-    def handshake(self):
-        """Send EVO greeting, expect HELLO."""
+    def handshake(self, user="admin", password="admin"):
+        """Send EVO greeting, handle AUTH, expect HELLO."""
         self.sock.sendall(b"EVO\n")
         hello = self._recv_line()
         assert hello.startswith("HELLO"), f"Expected HELLO, got: {hello}"
+
+        # Handle auth flow
+        auth_line = self._recv_line()
+        if auth_line == "AUTH_REQUIRED":
+            self.sock.sendall(f"AUTH {user} {password}\n".encode("utf-8"))
+            auth_result = self._recv_line()
+            if auth_result != "AUTH_OK":
+                raise RuntimeError(f"Authentication failed: {auth_result}")
+        # If no AUTH_REQUIRED, push back (shouldn't happen with current server)
+
         return hello
 
     def execute(self, sql):

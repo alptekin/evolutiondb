@@ -22,7 +22,7 @@ def _recv(sock, n):
     return buf
 
 def pg_startup(sock):
-    user = b"test\x00"
+    user = b"admin\x00"
     db   = b"testdb\x00"
     payload = b"\x00\x03\x00\x00" + b"user\x00" + user + b"database\x00" + db + b"\x00"
     _send(sock, struct.pack("!I", 4 + len(payload)) + payload)
@@ -30,7 +30,12 @@ def pg_startup(sock):
         tag = _recv(sock, 1)
         length = struct.unpack("!I", _recv(sock, 4))[0]
         body = _recv(sock, length - 4)
-        if tag == b"Z":
+        if tag == b"R" and len(body) >= 4:
+            auth_type = struct.unpack('!I', body[:4])[0]
+            if auth_type == 3:
+                pw = b'admin\x00'
+                _send(sock, b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+        elif tag == b"Z":
             break
 
 def simple_query(sock, sql):

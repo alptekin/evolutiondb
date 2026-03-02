@@ -4,6 +4,9 @@
 # Platform detection
 UNAME := $(shell uname -s 2>/dev/null || echo Windows)
 
+# TLS support (set TLS=1 to enable, e.g. make TLS=1)
+TLS ?= 0
+
 ifeq ($(UNAME),Linux)
     LDFLAGS = -lpthread
     EXE = evosql-server
@@ -15,8 +18,15 @@ else
     EXE = evosql-server.exe
 endif
 
+ifeq ($(TLS),1)
+    CFLAGS_TLS = -DEVOSQL_TLS
+    LDFLAGS += -lssl -lcrypto
+else
+    CFLAGS_TLS =
+endif
+
 CC = gcc
-CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS -pipe
+CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS -pipe $(CFLAGS_TLS)
 
 # Evolution engine paths
 EVO_DB     = ../evolution/db
@@ -31,7 +41,8 @@ ADAPTOR_SRCS = main.c \
                evo_protocol.c \
                result.c \
                catalog.c \
-               query_executor.c
+               query_executor.c \
+               tls.c
 
 # Evolution DB engine source files (no main.c!)
 EVO_DB_SRCS = $(EVO_DB)/db.c \
@@ -44,7 +55,9 @@ EVO_DB_SRCS = $(EVO_DB)/db.c \
               $(EVO_DB)/Drop.c \
               $(EVO_DB)/database_globals.c \
               $(EVO_DB)/expression.c \
-              $(EVO_DB)/DatabaseMgmt.c
+              $(EVO_DB)/DatabaseMgmt.c \
+              $(EVO_DB)/crypto.c \
+              $(EVO_DB)/UserMgmt.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

@@ -16,6 +16,7 @@
 #include "query_executor.h"
 #include "result.h"
 #include "server.h"          /* safe_query_execute */
+#include "tls.h"
 
 /* ----------------------------------------------------------------
  *  pg_handle_client — full PG v3 session for one connection
@@ -36,7 +37,11 @@ void pg_handle_client(socket_t client_sock)
     int pending_described = 0;
 
     /* Per-connection session context */
-    SessionCtx session = { "evosql", "default" };
+    SessionCtx session = { "evosql", "default", "" };
+
+    /* Wrap socket in conn_t for TLS-transparent I/O */
+    conn_t conn;
+    conn_init(&conn, client_sock);
 
     /* Allocate per-thread buffers on heap */
     msg_buf = (char *)malloc(65536);
@@ -50,18 +55,23 @@ void pg_handle_client(socket_t client_sock)
 
     printf("[PG] Client connected\n"); fflush(stdout);
 
-    /* Step 1: Startup handshake */
-    if (pg_handle_startup(client_sock) < 0) {
+    /* Step 1: Startup handshake (includes TLS + auth) */
+    char auth_user[256] = "";
+    if (pg_handle_startup(&conn, auth_user, sizeof(auth_user)) < 0) {
         printf("[PG] Startup failed, closing connection\n");
         fflush(stdout);
+        conn_tls_shutdown(&conn);
         free(msg_buf);
         free(rs);
         return;
     }
 
+    /* Store authenticated username in session */
+    strncpy(session.username, auth_user, sizeof(session.username) - 1);
+
     /* Step 2: Query loop */
     while (1) {
-        if (pg_read_message(client_sock, &msg_type, msg_buf, &msg_len) < 0) {
+        if (pg_read_message(&conn, &msg_type, msg_buf, &msg_len) < 0) {
             printf("[PG] Connection closed by client\n");
             break;
         }
@@ -117,22 +127,22 @@ void pg_handle_client(socket_t client_sock)
                 safe_query_execute(stmt, rs, &session);
 
                 if (rs->has_error) {
-                    pg_send_error(client_sock, "ERROR",
+                    pg_send_error(&conn, "ERROR",
                                   rs->error_sqlstate, rs->error_message);
                 } else if (rs->command_tag[0] == '\0') {
-                    pg_send_empty_query(client_sock);
+                    pg_send_empty_query(&conn);
                 } else if (rs->is_select) {
-                    pg_send_result_set(client_sock, rs);
+                    pg_send_result_set(&conn, rs);
                 } else {
-                    pg_send_command_complete(client_sock, rs->command_tag);
+                    pg_send_command_complete(&conn, rs->command_tag);
                 }
             }
 
             if (!had_any) {
-                pg_send_empty_query(client_sock);
+                pg_send_empty_query(&conn);
             }
 
-            pg_send_ready_for_query(client_sock, 'I');
+            pg_send_ready_for_query(&conn, 'I');
             free(sql_copy);
             break;
         }
@@ -153,7 +163,7 @@ void pg_handle_client(socket_t client_sock)
 
             PgBuf b;
             pg_buf_init(&b, PG_RESP_PARSE_COMPLETE);
-            pg_buf_send(&b, client_sock);
+            pg_buf_send(&b, &conn);
             break;
         }
 
@@ -236,7 +246,7 @@ void pg_handle_client(socket_t client_sock)
 
             PgBuf b;
             pg_buf_init(&b, PG_RESP_BIND_COMPLETE);
-            pg_buf_send(&b, client_sock);
+            pg_buf_send(&b, &conn);
             break;
         }
 
@@ -248,7 +258,7 @@ void pg_handle_client(socket_t client_sock)
                 PgBuf pb;
                 pg_buf_init(&pb, PG_RESP_PARAM_DESC);
                 pg_buf_add_int16(&pb, 0);
-                pg_buf_send(&pb, client_sock);
+                pg_buf_send(&pb, &conn);
             }
 
             if (pending_query && pending_query[0] != '\0') {
@@ -269,16 +279,16 @@ void pg_handle_client(socket_t client_sock)
                         pg_buf_add_int32(&b, rs->columns[c].type_modifier);
                         pg_buf_add_int16(&b, 0);
                     }
-                    pg_buf_send(&b, client_sock);
+                    pg_buf_send(&b, &conn);
                 } else {
                     PgBuf b;
                     pg_buf_init(&b, PG_RESP_NO_DATA);
-                    pg_buf_send(&b, client_sock);
+                    pg_buf_send(&b, &conn);
                 }
             } else {
                 PgBuf b;
                 pg_buf_init(&b, PG_RESP_NO_DATA);
-                pg_buf_send(&b, client_sock);
+                pg_buf_send(&b, &conn);
             }
             break;
         }
@@ -292,7 +302,7 @@ void pg_handle_client(socket_t client_sock)
                 }
 
                 if (rs->has_error) {
-                    pg_send_error(client_sock, "ERROR",
+                    pg_send_error(&conn, "ERROR",
                                   rs->error_sqlstate, rs->error_message);
                 } else if (rs->is_select) {
                     if (!pending_described && rs->num_cols > 0) {
@@ -309,7 +319,7 @@ void pg_handle_client(socket_t client_sock)
                             pg_buf_add_int32(&rd, rs->columns[ci].type_modifier);
                             pg_buf_add_int16(&rd, 0);
                         }
-                        pg_buf_send(&rd, client_sock);
+                        pg_buf_send(&rd, &conn);
                     }
 
                     PgBuf b;
@@ -326,11 +336,11 @@ void pg_handle_client(socket_t client_sock)
                                 pg_buf_add_bytes(&b, rs->rows[r].fields[c], flen);
                             }
                         }
-                        pg_buf_send(&b, client_sock);
+                        pg_buf_send(&b, &conn);
                     }
-                    pg_send_command_complete(client_sock, rs->command_tag);
+                    pg_send_command_complete(&conn, rs->command_tag);
                 } else {
-                    pg_send_command_complete(client_sock,
+                    pg_send_command_complete(&conn,
                         rs->command_tag[0] ? rs->command_tag : "OK");
                 }
 
@@ -338,29 +348,25 @@ void pg_handle_client(socket_t client_sock)
                 free(pending_query);
                 pending_query = NULL;
             } else {
-                pg_send_command_complete(client_sock, "OK");
+                pg_send_command_complete(&conn, "OK");
             }
             break;
         }
 
         case PG_MSG_SYNC: {
             pending_described = 0;
-            pg_send_ready_for_query(client_sock, 'I');
+            pg_send_ready_for_query(&conn, 'I');
             break;
         }
 
         case PG_MSG_CLOSE: {
             PgBuf b;
             pg_buf_init(&b, PG_RESP_CLOSE_COMPLETE);
-            pg_buf_send(&b, client_sock);
+            pg_buf_send(&b, &conn);
             break;
         }
 
         case PG_MSG_FLUSH:
-            break;
-
-        case 'p':
-            printf("[PG] PasswordMessage (ignored)\n"); fflush(stdout);
             break;
 
         default:
@@ -372,6 +378,7 @@ void pg_handle_client(socket_t client_sock)
     }
 
 cleanup:
+    conn_tls_shutdown(&conn);
     if (pending_query) free(pending_query);
     free(msg_buf);
     free(rs);

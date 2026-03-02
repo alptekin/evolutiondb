@@ -10,7 +10,7 @@ NULL_MARKER = "\x01NULL\x01"
 
 # ── PostgreSQL v3 helpers ──────────────────────────────────────────
 def pg_startup(s):
-    user = b"testuser\x00"
+    user = b"admin\x00"
     db   = b"testdb\x00"
     payload = b"\x00\x03\x00\x00" + b"user\x00" + user + b"database\x00" + db + b"\x00"
     s.sendall(struct.pack("!I", 4 + len(payload)) + payload)
@@ -20,7 +20,12 @@ def pg_startup(s):
             raise ConnectionError("connection lost during startup")
         length = struct.unpack("!I", s.recv(4))[0]
         body = s.recv(length - 4) if length > 4 else b""
-        if tag == b"Z":
+        if tag == b"R" and len(body) >= 4:
+            auth_type = struct.unpack('!I', body[:4])[0]
+            if auth_type == 3:
+                pw = b'admin\x00'
+                s.sendall(b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+        elif tag == b"Z":
             break
 
 def pg_query(s, sql):

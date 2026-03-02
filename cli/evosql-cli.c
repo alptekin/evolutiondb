@@ -5,7 +5,7 @@
  * and provides an interactive SQL prompt with command history.
  *
  * Usage:
- *   evosql-cli [-h HOST] [-p PORT]
+ *   evosql-cli [-h HOST] [-p PORT] [-u USER]
  *
  * Features:
  *   • Persistent command history (saved to ~/.evosql_history)
@@ -45,6 +45,7 @@
   #include <arpa/inet.h>
   #include <netdb.h>
   #include <unistd.h>
+  #include <termios.h>
   typedef int socket_t;
   #define SOCKET_INVALID (-1)
   #define socket_close(s) close(s)
@@ -405,7 +406,52 @@ static void result_print(const EvoResult *r) {
 /* ================================================================
  *  Protocol communication
  * ================================================================ */
-static int evo_connect(const char *host, int port)
+
+/* Read password from terminal with echo disabled */
+static void read_password(const char *prompt, char *buf, int maxlen)
+{
+    printf("%s", prompt);
+    fflush(stdout);
+
+#ifdef _WIN32
+    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+    GetConsoleMode(hStdin, &mode);
+    SetConsoleMode(hStdin, mode & ~ENABLE_ECHO_INPUT);
+
+    int i = 0;
+    while (i < maxlen - 1) {
+        char c;
+        DWORD read;
+        ReadConsole(hStdin, &c, 1, &read, NULL);
+        if (c == '\r' || c == '\n') break;
+        buf[i++] = c;
+    }
+    buf[i] = '\0';
+
+    SetConsoleMode(hStdin, mode);
+    printf("\n");
+#else
+    /* Use termios to disable echo */
+    struct termios old, new_term;
+    tcgetattr(fileno(stdin), &old);
+    new_term = old;
+    new_term.c_lflag &= ~ECHO;
+    tcsetattr(fileno(stdin), TCSANOW, &new_term);
+
+    if (fgets(buf, maxlen, stdin)) {
+        buf[strcspn(buf, "\n\r")] = '\0';
+    } else {
+        buf[0] = '\0';
+    }
+
+    tcsetattr(fileno(stdin), TCSANOW, &old);
+    printf("\n");
+#endif
+}
+
+static int evo_connect(const char *host, int port, const char *username,
+                       const char *given_password)
 {
     socket_t s;
     struct sockaddr_in addr;
@@ -454,6 +500,43 @@ static int evo_connect(const char *host, int port)
         fprintf(stderr, "Error: unexpected greeting: %s\n", line);
         socket_close(s);
         return (int)SOCKET_INVALID;
+    }
+
+    /* Authentication flow */
+    if (net_recv_line(s, line, sizeof(line)) < 0) {
+        fprintf(stderr, "Error: no auth response\n");
+        socket_close(s);
+        return (int)SOCKET_INVALID;
+    }
+
+    if (strcmp(line, "AUTH_REQUIRED") == 0) {
+        char password[256];
+        if (given_password && given_password[0]) {
+            strncpy(password, given_password, sizeof(password) - 1);
+            password[sizeof(password) - 1] = '\0';
+        } else {
+            read_password("Password: ", password, sizeof(password));
+        }
+
+        /* Send AUTH <username> <password> */
+        char auth_msg[1024];
+        snprintf(auth_msg, sizeof(auth_msg), "AUTH %s %s", username, password);
+        memset(password, 0, sizeof(password));
+        send_line(s, auth_msg);
+        memset(auth_msg, 0, sizeof(auth_msg));
+
+        /* Read AUTH_OK or ERR */
+        if (net_recv_line(s, line, sizeof(line)) < 0) {
+            fprintf(stderr, "Error: connection closed during auth\n");
+            socket_close(s);
+            return (int)SOCKET_INVALID;
+        }
+
+        if (strcmp(line, "AUTH_OK") != 0) {
+            fprintf(stderr, "Authentication failed: %s\n", line);
+            socket_close(s);
+            return (int)SOCKET_INVALID;
+        }
     }
 
     return (int)s;
@@ -569,6 +652,8 @@ int main(int argc, char *argv[])
 {
     const char *host = "localhost";
     int port = 9967;
+    const char *username = "admin";
+    const char *password = NULL;
     int i;
 
     for (i = 1; i < argc; i++) {
@@ -576,16 +661,27 @@ int main(int argc, char *argv[])
             host = argv[++i];
         else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc)
             port = atoi(argv[++i]);
+        else if ((strcmp(argv[i], "-u") == 0 || strcmp(argv[i], "--user") == 0) && i + 1 < argc)
+            username = argv[++i];
+        else if ((strcmp(argv[i], "-W") == 0 || strcmp(argv[i], "--password") == 0) && i + 1 < argc)
+            password = argv[++i];
         else if (strcmp(argv[i], "--help") == 0) {
-            printf("Usage: evosql-cli [-h HOST] [-p PORT]\n");
-            printf("  -h, --host   Server hostname (default: localhost)\n");
-            printf("  -p, --port   Server port     (default: 9967)\n");
+            printf("Usage: evosql-cli [-h HOST] [-p PORT] [-u USER] [-W PASSWORD]\n");
+            printf("  -h, --host       Server hostname  (default: localhost)\n");
+            printf("  -p, --port       Server port      (default: 9967)\n");
+            printf("  -u, --user       Username         (default: admin)\n");
+            printf("  -W, --password   Password         (or set EVOSQL_PASSWORD)\n");
             return 0;
         }
     }
 
+    /* Password from env var if not given on command line */
+    if (!password) {
+        password = getenv("EVOSQL_PASSWORD");
+    }
+
     /* Connect */
-    int sock = evo_connect(host, port);
+    int sock = evo_connect(host, port, username, password);
     if (sock == (int)SOCKET_INVALID) return 1;
 
     printf("Connected to EvoSQL at %s:%d\n", host, port);

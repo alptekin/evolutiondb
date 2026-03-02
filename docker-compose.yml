@@ -6,6 +6,9 @@ services:
       - "9967:9967"
     volumes:
       - evosql-data:/data
+    environment:
+      EVOSQL_USER_NAME: admin
+      EVOSQL_PASSWORD: admin
 
   cli:
     build: ./cli

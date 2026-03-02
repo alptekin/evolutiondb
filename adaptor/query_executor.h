@@ -14,6 +14,7 @@
 typedef struct {
     char database[256];   /* active database  (default: "evosql")  */
     char schema[256];     /* active schema    (default: "default") */
+    char username[256];   /* authenticated user                    */
 } SessionCtx;
 
 /*

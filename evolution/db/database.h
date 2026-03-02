@@ -69,6 +69,14 @@ void SetColumnPrimaryKey(void);
 int ReadPrimaryKey(const char *tblName);
 int ReadNullFlags(const char *tblName, int *flags, int maxCols);
 
+/* User management (UserMgmt.c) */
+void db_ensure_users(void);
+int  AuthenticateUser(const char *username, const char *password);
+int  CreateUserProcess(const char *username, const char *password);
+int  DropUserProcess(const char *username);
+int  AlterUserPasswordProcess(const char *username, const char *new_password);
+int  ListUsers(char names[][256], int max_users);
+
 /* Global Variables (defined in database_globals.c) */
 extern char g_columnNames[1024];
 extern char g_insert[RECORD_BUF_SIZE];

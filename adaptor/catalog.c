@@ -6,6 +6,7 @@
 #include "platform.h"
 #include "catalog.h"
 #include "../evolution/db/database.h"
+#include "../evolution/db/crypto.h"
 
 /* From main.c — connection limit accessors */
 extern int  get_max_connections(void);
@@ -250,6 +251,22 @@ static int handle_show(const char *sql, ResultSet *rs)
             result_set_field(rs, row, 0, tname);
         }
         meta_iter_close(&mit);
+        sprintf(rs->command_tag, "SHOW");
+        return 1;
+    }
+
+    /* ── SHOW USERS ── */
+    if (stristr_found(sql, "users")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "username", PG_OID_TEXT);
+
+        char usernames[64][256];
+        int count = ListUsers(usernames, 64);
+        for (int i = 0; i < count; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, usernames[i]);
+        }
         sprintf(rs->command_tag, "SHOW");
         return 1;
     }
@@ -1475,6 +1492,127 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
 }
 
 /* ----------------------------------------------------------------
+ *  User management: CREATE/DROP/ALTER USER
+ * ---------------------------------------------------------------- */
+static int handle_user_mgmt(const char *sql, ResultSet *rs)
+{
+    const char *p = sql;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* CREATE USER <name> PASSWORD '<pass>' */
+    if (strncasecmp(p, "CREATE USER", 11) == 0 && isspace((unsigned char)p[11])) {
+        p += 11;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        /* Extract username */
+        char username[256];
+        int ui = 0;
+        while (*p && !isspace((unsigned char)*p) && ui < 255)
+            username[ui++] = *p++;
+        username[ui] = '\0';
+
+        /* Expect PASSWORD keyword */
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "PASSWORD", 8) != 0) {
+            result_init(rs);
+            result_set_error(rs, "42601", "Syntax: CREATE USER <name> PASSWORD '<pass>'");
+            return 1;
+        }
+        p += 8;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        /* Extract password (may be quoted) */
+        char password[256];
+        int pi = 0;
+        if (*p == '\'') {
+            p++;
+            while (*p && *p != '\'' && pi < 255)
+                password[pi++] = *p++;
+            if (*p == '\'') p++;
+        } else {
+            while (*p && !isspace((unsigned char)*p) && *p != ';' && pi < 255)
+                password[pi++] = *p++;
+        }
+        password[pi] = '\0';
+
+        result_init(rs);
+        if (CreateUserProcess(username, password) == 0) {
+            sprintf(rs->command_tag, "CREATE USER");
+        } else {
+            result_set_error(rs, "42710", g_gui_error_msg);
+            g_gui_error = 0;
+        }
+        return 1;
+    }
+
+    /* DROP USER <name> */
+    if (strncasecmp(p, "DROP USER", 9) == 0 && isspace((unsigned char)p[9])) {
+        p += 9;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        char username[256];
+        int ui = 0;
+        while (*p && !isspace((unsigned char)*p) && *p != ';' && ui < 255)
+            username[ui++] = *p++;
+        username[ui] = '\0';
+
+        result_init(rs);
+        if (DropUserProcess(username) == 0) {
+            sprintf(rs->command_tag, "DROP USER");
+        } else {
+            result_set_error(rs, "42704", g_gui_error_msg);
+            g_gui_error = 0;
+        }
+        return 1;
+    }
+
+    /* ALTER USER <name> PASSWORD '<newpass>' */
+    if (strncasecmp(p, "ALTER USER", 10) == 0 && isspace((unsigned char)p[10])) {
+        p += 10;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        char username[256];
+        int ui = 0;
+        while (*p && !isspace((unsigned char)*p) && ui < 255)
+            username[ui++] = *p++;
+        username[ui] = '\0';
+
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "PASSWORD", 8) != 0) {
+            result_init(rs);
+            result_set_error(rs, "42601", "Syntax: ALTER USER <name> PASSWORD '<newpass>'");
+            return 1;
+        }
+        p += 8;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        char password[256];
+        int pi = 0;
+        if (*p == '\'') {
+            p++;
+            while (*p && *p != '\'' && pi < 255)
+                password[pi++] = *p++;
+            if (*p == '\'') p++;
+        } else {
+            while (*p && !isspace((unsigned char)*p) && *p != ';' && pi < 255)
+                password[pi++] = *p++;
+        }
+        password[pi] = '\0';
+
+        result_init(rs);
+        if (AlterUserPasswordProcess(username, password) == 0) {
+            sprintf(rs->command_tag, "ALTER USER");
+        } else {
+            result_set_error(rs, "42704", g_gui_error_msg);
+            g_gui_error = 0;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+/* ----------------------------------------------------------------
  *  Main dispatch
  * ---------------------------------------------------------------- */
 int catalog_try_handle(const char *sql, ResultSet *rs)
@@ -1489,6 +1627,9 @@ int catalog_try_handle(const char *sql, ResultSet *rs)
             return 1;
         }
     }
+
+    /* User management: CREATE/DROP/ALTER USER */
+    if (handle_user_mgmt(sql, rs)) return 1;
 
     /* SET */
     if (handle_set(sql, rs)) return 1;

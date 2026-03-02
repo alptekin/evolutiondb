@@ -35,14 +35,43 @@ def recv_messages(s):
             break
     return data
 
-def send_startup(s, database="evosql", user="evo"):
+def send_startup(s, database="evosql", user="admin", password="admin"):
     body = b'\x00\x03\x00\x00'
     body += b'user\x00' + user.encode() + b'\x00'
     body += b'database\x00' + database.encode() + b'\x00'
     body += b'client_encoding\x00UTF8\x00'
     body += b'\x00'
     s.sendall(struct.pack('!I', len(body) + 4) + body)
-    return recv_messages(s)
+    # Read startup messages, handle auth
+    data = b''
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        i = 0
+        found_z = False
+        while i < len(data):
+            if i + 5 > len(data):
+                break
+            msg_type = data[i:i+1]
+            msg_len = struct.unpack('!I', data[i+1:i+5])[0]
+            total = 1 + msg_len
+            if i + total > len(data):
+                break
+            if msg_type == b'R':
+                msg_body = data[i+5:i+total]
+                if len(msg_body) >= 4:
+                    auth_type = struct.unpack('!I', msg_body[:4])[0]
+                    if auth_type == 3:
+                        pw = password.encode() + b'\x00'
+                        s.sendall(b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+            if msg_type == b'Z':
+                found_z = True
+            i += total
+        if found_z:
+            break
+    return data
 
 def send_query(s, sql):
     body = sql.encode('utf-8') + b'\x00'

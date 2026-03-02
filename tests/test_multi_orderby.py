@@ -10,14 +10,20 @@ PASS, FAIL = 0, 0
 def pg_connect():
     s = socket.socket()
     s.connect((HOST, PORT))
-    startup = b'\x00\x03\x00\x00user\x00postgres\x00database\x00evo\x00\x00'
+    startup = b'\x00\x03\x00\x00user\x00admin\x00database\x00evo\x00\x00'
     s.sendall(struct.pack('!I', len(startup)+4) + startup)
     while True:
         tag = s.recv(1)
         if not tag: break
         length = struct.unpack('!I', s.recv(4))[0]
-        s.recv(length - 4)
-        if tag == b'Z': break
+        body = s.recv(length - 4) if length > 4 else b''
+        if tag == b'R' and len(body) >= 4:
+            auth_type = struct.unpack('!I', body[:4])[0]
+            if auth_type == 3:
+                pw = b'admin\x00'
+                s.sendall(b'p' + struct.pack('!I', 4 + len(pw)) + pw)
+        elif tag == b'Z':
+            break
     return s
 
 def query(s, sql):
