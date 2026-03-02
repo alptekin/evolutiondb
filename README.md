@@ -253,7 +253,7 @@ Each index record has a 10-byte header + variable-length body:
 ```
 ┌──────────────────┬────────────────┬──────────────────────────┐
 │  Next Pointer    │  Body Length   │  Body                    │
-│  (6 bytes ASCII) │  (4 bytes ASCII)│ key:dat_off:dat_len\n  │
+│  (6 bytes ASCII) │ (4 bytes ASCII)│ key:dat_off:dat_len\n    │
 └──────────────────┴────────────────┴──────────────────────────┘
 ```
 
