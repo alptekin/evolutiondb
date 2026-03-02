@@ -10,52 +10,61 @@ EvolutionDB was born as a relational database engine, but its next evolution is 
 
 ---
 
-A file-based SQL database engine written in C. Features Flex/Bison SQL parsing, APUE hash-indexed file storage, a Win32 GUI, and a PostgreSQL wire protocol server that enables connectivity from DBeaver, pgAdmin, psql and other standard PostgreSQL clients.
+A file-based SQL database engine written in C. Features Flex/Bison SQL parsing, APUE hash-indexed file storage, a Win32 GUI, a dual-protocol server (PostgreSQL wire protocol + native EVO text protocol), and an interactive CLI client with readline/history support.
 
 ## Architecture
 
 ```
-                    +------------------+
-                    |     DBeaver      |
-                    |  pgAdmin / psql  |
-                    +--------+---------+
-                             |  PostgreSQL v3 Wire Protocol (TCP 5433)
-                    +--------+---------+
-                    |     Adaptor      |
-                    | evosql-server.exe|
-                    +--------+---------+
-                             |
-              +--------------+--------------+
-              |                             |
-     +--------+---------+         +---------+---------+
-     |   SQL Parser     |         |  Database Engine  |
-     |   Flex/Bison     |         |  APUE Hash Files  |
-     |  (evoparser.y)   |         | (.idx .dat .meta) |
-     +------------------+         +-------------------+
-              |
-     +--------+---------+
-     |     PopPad       |
-     |   PopPad.exe     |
-     |  (Win32 GUI)     |
-     +------------------+
+  +-----------------+    +------------------+    +------------------+
+  |  evosql-cli     |    |     DBeaver      |    |     PopPad       |
+  |  (CLI client)   |    |  pgAdmin / psql  |    |   (Win32 GUI)    |
+  +--------+--------+    +--------+---------+    +------------------+
+           |                       |
+   EVO Protocol (TCP 9967)   PG v3 Protocol (TCP 5433)
+           |                       |
+           +-----------+-----------+
+                       |
+              +--------+---------+
+              |     Adaptor      |
+              | evosql-server    |
+              |  (dual-protocol) |
+              +--------+---------+
+                       |
+        +--------------+--------------+
+        |              |              |
+  +-----+------+ +----+-----+ +------+------+
+  | net.c/h    | | server.c | | pg_handler  |
+  | networking | | TCP srv  | | evo_protocol|
+  +------------+ +----+-----+ +-------------+
+                       |
+        +--------------+--------------+
+        |                             |
+  +-----+----------+       +---------+---------+
+  |   SQL Parser   |       |  Database Engine  |
+  |   Flex/Bison   |       |  APUE Hash Files  |
+  |  (evoparser.y) |       | (.idx .dat .meta) |
+  +----------------+       +-------------------+
 ```
 
-The system consists of three main components:
+The system consists of four main components:
 
 | Component | Output | Description |
 |-----------|--------|-------------|
-| **Evolution** | `evosql.exe` | CLI SQL engine - parser + database operations |
-| **Adaptor** | `evosql-server.exe` | PostgreSQL wire protocol server (port 5433) |
-| **PopPad** | `PopPad.exe` | Win32 GUI - SQL editor and result viewer |
+| **Evolution** | `evosql` | Core SQL engine — parser + database operations |
+| **Adaptor** | `evosql-server` | Dual-protocol server (PG on 5433, EVO on 9967) |
+| **CLI** | `evosql-cli` | Interactive client with readline/history (connects via EVO protocol) |
+| **PopPad** | `PopPad.exe` | Win32 GUI — SQL editor and result viewer |
 
 ## Project Structure
 
 ```
 EvoSQL/
 ├── Makefile                        # Top-level build (all components)
+├── Dockerfile                      # Multi-stage Docker build (gcc:13 → debian slim)
+├── docker-compose.yml              # One-command deploy (PG:5433 + EVO:9967)
 ├── README.md
 │
-├── evolution/                      # SQL Engine (CLI)
+├── evolution/                      # SQL Engine (Core)
 │   ├── main.c                      # CLI entry point
 │   ├── Makefile
 │   ├── test.txt                    # Sample SQL queries
@@ -72,21 +81,42 @@ EvoSQL/
 │       ├── apue_db.h               # Database API (open/close/fetch/store/delete)
 │       ├── database.h              # Operation declarations and global variables
 │       ├── database_globals.c      # Global variable definitions
+│       ├── expression.c            # WHERE expression evaluation
+│       ├── DatabaseMgmt.c          # CREATE/USE DATABASE, CREATE SCHEMA
 │       ├── error.c                 # Error handling (setjmp/longjmp)
 │       ├── Create.c                # CREATE TABLE + .meta file generation
-│       ├── Select.c                # SELECT * and WHERE filtering
+│       ├── Select.c                # SELECT with WHERE, ORDER BY, GROUP BY, aggregates
 │       ├── Insert.c                # INSERT INTO
 │       ├── Update.c                # UPDATE (column-level updates)
 │       ├── Delete.c                # DELETE FROM
 │       └── Drop.c                  # DROP TABLE / TRUNCATE TABLE
 │
-├── adaptor/                        # PostgreSQL Wire Protocol Server
-│   ├── main.c                      # TCP server, multi-threaded client handling
-│   ├── pg_protocol.c/h             # PG v3 wire protocol (message read/write)
-│   ├── query_executor.c/h          # Query execution bridge (parser -> result)
+├── adaptor/                        # Dual-Protocol Server
+│   ├── main.c                      # Dual-port launcher (~90 lines)
+│   ├── platform.h                  # Cross-platform macros (Win32/POSIX)
+│   ├── net.c/h                     # Shared networking primitives
+│   ├── server.c/h                  # Generic multi-threaded TCP server
+│   ├── pg_handler.c/h              # PostgreSQL wire protocol handler
+│   ├── pg_protocol.c/h             # PG v3 message read/write
+│   ├── evo_protocol.c/h            # EVO native text protocol handler
+│   ├── query_executor.c/h          # Query execution bridge (parser → result)
 │   ├── result.c/h                  # ResultSet data structure
 │   ├── catalog.c/h                 # pg_catalog / information_schema emulation
 │   └── Makefile
+│
+├── cli/                            # Interactive CLI Client
+│   ├── evosql-cli.c                # Readline/history, tabular display
+│   └── Makefile
+│
+├── tests/                          # Test Suite (24 test files, 400+ tests)
+│   ├── test_evo_protocol.py        # EVO protocol tests (port 9967)
+│   ├── test_session_isolation.py   # Per-connection session isolation
+│   ├── test_max_connections.py     # Connection limit enforcement
+│   ├── test_aggregates.py          # SUM, AVG, MIN, MAX, COUNT
+│   ├── test_where.py               # WHERE clause operators
+│   ├── test_groupby.py             # GROUP BY + HAVING
+│   ├── test_database.py            # CREATE/USE DATABASE, CREATE SCHEMA
+│   └── ...                         # 16 more test suites
 │
 └── PopPad/                         # Win32 GUI
     ├── PopPad.c                    # Main window, Execute button, result grid
@@ -174,6 +204,69 @@ Each table creates three files:
 | `Table.dat` | Semicolon-separated data records |
 | `Table.meta` | Metadata (5 lines) |
 
+### .idx File Format (Hash Index)
+
+The `.idx` file is a **text-based hash-indexed** file. All values — including pointers and lengths — are stored as **fixed-width ASCII decimal strings**, making the file human-readable and platform-portable.
+
+#### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `NHASH_DEF` | 137 | Number of hash buckets (prime) |
+| `PTR_SZ` | 6 | Width of every pointer field (ASCII chars) |
+| `IDXLEN_SZ` | 4 | Width of index-record length field (ASCII chars) |
+| `SEP` | `:` | Field separator in index records |
+
+#### File Layout
+
+```
+.idx file:
+═══════════════════════════════════════════════════════════
+Offset 0:     [Free-list head ptr]     6 bytes ASCII
+Offset 6:     [Hash bucket 0 ptr]      6 bytes ASCII
+Offset 12:    [Hash bucket 1 ptr]      6 bytes ASCII
+  ...
+Offset 822:   [Hash bucket 136 ptr]    6 bytes ASCII
+Offset 828:   '\n'                     1 byte
+───────────────────────────────────────────────────────────
+Offset 829+:  Index Record 0:
+              [next_ptr]               6 bytes ASCII
+              [body_len]               4 bytes ASCII
+              [key:dat_offset:dat_len\n]  body_len bytes
+
+              Index Record 1:
+              [next_ptr]               6 bytes ASCII
+              [body_len]               4 bytes ASCII
+              [key:dat_offset:dat_len\n]  body_len bytes
+              ...
+═══════════════════════════════════════════════════════════
+```
+
+**Header**: $(137 + 1) \times 6 + 1 = 829$ bytes fixed. The first 6 bytes are the free-list head pointer, followed by 137 hash bucket pointers (6 bytes each), terminated by a newline.
+
+**Hash function**: Weighted character-sum modulo `nhash` — $h = \left(\sum_{i=1}^{n} c_i \times i\right) \bmod 137$
+
+#### Index Record Structure
+
+Each index record has a 10-byte header + variable-length body:
+
+```
+┌──────────────────┬────────────────┬──────────────────────────┐
+│  Next Pointer    │  Body Length   │  Body                    │
+│  (6 bytes ASCII) │  (4 bytes ASCII)│ key:dat_off:dat_len\n  │
+└──────────────────┴────────────────┴──────────────────────────┘
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Next Pointer | 6 bytes | Offset of next record in hash chain (0 = end) |
+| Body Length | 4 bytes | Length of body including `\n` |
+| Key | variable | Row lookup key |
+| `dat_offset` | ASCII decimal | Byte offset into `.dat` file |
+| `dat_len` | ASCII decimal | Length of data record in `.dat` |
+
+Records on the same hash chain are linked via the next-pointer field (singly-linked list). Deleted records are moved to a **free list** (head at offset 0) and reused when a new record of matching size is inserted; otherwise new records are appended to the end of the file.
+
 ### .meta File Format
 
 ```
@@ -188,15 +281,17 @@ Line 5: 1;1;0;0;1                         (NOT NULL flags; 1=NOT NULL, 0=nullabl
 
 **Pad size**: Records are stored at a fixed width so that UPDATE can overwrite in-place. If a record exceeds the current pad size, the entire table is resized (2x).
 
-## PostgreSQL Wire Protocol (Adaptor)
+## PostgreSQL Wire Protocol (Adaptor — Port 5433)
 
-The adaptor implements the PostgreSQL v3 wire protocol and listens on port 5433:
+The adaptor implements the PostgreSQL v3 wire protocol, enabling connectivity from DBeaver, pgAdmin, psql, JDBC and any standard PostgreSQL client:
 
 ### Supported Features
 
-- **Simple Query Protocol** (`Q` message) - Single or multiple SQL statements
-- **Extended Query Protocol** (`P`/`B`/`D`/`E`/`S` messages) - DBeaver / JDBC compatibility
-- **Multi-threaded**: Each client connection runs in its own thread (synchronized via `CRITICAL_SECTION`)
+- **Simple Query Protocol** (`Q` message) — Single or multiple SQL statements
+- **Extended Query Protocol** (`P`/`B`/`D`/`E`/`S` messages) — DBeaver / JDBC compatibility
+- **Multi-threaded**: Each client connection runs in its own thread
+- **Per-connection session state**: Each connection has its own database/schema context
+- **Connection limits**: Runtime-configurable `SET max_connections = N`
 - **SSL/GSS rejection**: Encryption requests are declined
 - **Catalog emulation**: All pg_catalog queries required by DBeaver are handled
 
@@ -231,6 +326,76 @@ Password: (any)
 
 Create a new PostgreSQL connection in DBeaver with the settings above. Table list, column information, types, NOT NULL and PRIMARY KEY constraints are displayed automatically.
 
+## EVO Protocol (Native Text Protocol — Port 9967)
+
+A simple, human-readable text-based wire protocol designed for the EvoSQL CLI client. All messages are line-oriented (`\n` terminated).
+
+### Protocol Flow
+
+```
+Client → Server:   EVO\n                    (greeting)
+Server → Client:   HELLO EvoSQL 1.0\n       (server hello)
+
+Client → Server:   SQL <length>\n           (query header)
+                   <sql text>\n             (query body)
+
+Server → Client:   RESULT\n                 (SELECT response)
+                   COLS <n>\n
+                   COL <name>\n             (× n)
+                   ROW\n                    (per row)
+                   FIELD <value>\n          (per field, or FIELD NULL\n)
+                   END\n
+                   TAG <command_tag>\n
+                   READY\n
+
+                   OK\n                     (DDL/DML response)
+                   TAG <command_tag>\n
+                   READY\n
+
+                   ERR <sqlstate> <msg>\n   (error response)
+                   READY\n
+
+Client → Server:   QUIT\n                  (disconnect)
+Server → Client:   BYE\n
+```
+
+## CLI Client (`evosql-cli`)
+
+Interactive command-line client that connects to the EVO protocol port (9967):
+
+```
+$ evosql-cli
+Connected to EvoSQL 1.0 at localhost:9967
+evosql> CREATE TABLE users (id INT, name VARCHAR(50));
+OK — CREATE TABLE
+
+evosql> INSERT INTO users VALUES (1, 'Alice');
+OK — INSERT 1
+
+evosql> SELECT * FROM users;
+ id | name
+----+-------
+  1 | Alice
+(1 row)
+```
+
+### Features
+
+- **Readline support**: Line editing, cursor movement, Ctrl+A/E (Linux: GNU readline, Windows: native console API)
+- **Command history**: Arrow keys navigate history, persisted to `~/.evosql_history`
+- **Tabular output**: Auto-aligned columns with header separator
+- **Multi-line SQL**: End a line with `\` to continue on the next line
+- **Meta-commands**: `\q` / `exit` / `quit` to disconnect
+
+### Usage
+
+```bash
+evosql-cli                        # Connect to localhost:9967
+evosql-cli -h 192.168.1.10        # Connect to remote host
+evosql-cli -p 9968                # Custom port
+evosql-cli -h myhost -p 9968      # Both
+```
+
 ## Build
 
 ### Requirements
@@ -242,10 +407,11 @@ Create a new PostgreSQL connection in DBeaver with the settings above. Table lis
 ### Build All Components
 
 ```bash
-make              # Build all three components
-make evolution    # Build only evosql.exe (CLI)
-make adaptor      # Build only evosql-server.exe
-make poppad       # Build only PopPad.exe
+make              # Build all components
+make evolution    # Build only evosql (core engine)
+make adaptor      # Build only evosql-server (dual-protocol)
+make cli          # Build only evosql-cli (interactive client)
+make poppad       # Build only PopPad.exe (Windows only)
 make clean        # Clean all build artifacts
 make release      # Stripped binaries to release/ directory
 make generate     # Regenerate parser/lexer from .y/.l files
@@ -256,7 +422,7 @@ make generate     # Regenerate parser/lexer from .y/.l files
 ```bash
 cd evolution
 make
-./evosql.exe      # Reads SQL commands from test.txt
+./evosql          # Reads SQL commands from test.txt
 ```
 
 ### Adaptor Server
@@ -264,8 +430,19 @@ make
 ```bash
 cd adaptor
 make
-./evosql-server.exe         # Listens on port 5433
-./evosql-server.exe 5434    # Custom port
+./evosql-server                     # PG on 5433, EVO on 9967
+./evosql-server --pg-port 5434      # Custom PG port
+./evosql-server --evo-port 9968     # Custom EVO port
+./evosql-server 5434                # Backward compat: bare number = PG port
+```
+
+### CLI Client
+
+```bash
+cd cli
+make
+./evosql-cli                        # Connect to localhost:9967
+./evosql-cli -h 10.0.0.1 -p 9968   # Remote host, custom port
 ```
 
 ### PopPad GUI
@@ -285,21 +462,22 @@ Run the EvoSQL server in a Docker container (Linux) without any build tools:
 ### Quick Start
 
 ```bash
-# Build and run with docker-compose
+# Build and run with docker-compose (PG:5433 + EVO:9967)
 docker compose up -d
 
 # Or build and run manually
 docker build -t evosql .
-docker run -d -p 5433:5433 --name evosql evosql
+docker run -d -p 5433:5433 -p 9967:9967 --name evosql evosql
 ```
 
 ### Connect
 
 ```bash
-# psql
+# PostgreSQL clients (psql, DBeaver, JDBC)
 psql -h localhost -p 5433 -U evosql evosql
 
-# Or use DBeaver: PostgreSQL, localhost:5433, db=evosql
+# EvoSQL CLI client
+evosql-cli -h localhost -p 9967
 ```
 
 ### Data Persistence
@@ -314,12 +492,58 @@ docker compose down -v    # stop and delete data
 
 ## How It Works
 
-1. **Lexer** (`evolexer.l`) - Tokenizes SQL input into keywords, identifiers, strings, and operators
-2. **Parser** (`evoparser.y`) - Processes tokens according to SQL grammar rules and emits RPN (Reverse Polish Notation)
-3. **Database engine** (`db.c`) - Manages hash-indexed flat files (`.idx` + `.dat`) for persistent storage
-4. **Operation modules** (`Create.c`, `Insert.c`, etc.) - Bridge parser actions to database calls
-5. **Meta files** (`.meta`) - Store per-table column definitions, types, and constraints
-6. **Type validation** - Validates values against column types during INSERT/UPDATE (integer, decimal, varchar length, boolean)
-7. **Constraint enforcement** - NOT NULL constraints are enforced on INSERT and UPDATE
-8. **GUI mode** (`g_gui_mode`) - Suppresses RPN debug output and uses `setjmp/longjmp` for safe error recovery
-9. **Adaptor layer** - Forwards SQL queries to the EvoSQL engine and returns structured results to PostgreSQL clients
+1. **Lexer** (`evolexer.l`) — Tokenizes SQL input into keywords, identifiers, strings, and operators
+2. **Parser** (`evoparser.y`) — Processes tokens according to SQL grammar rules and emits RPN (Reverse Polish Notation)
+3. **Database engine** (`db.c`) — Manages hash-indexed flat files (`.idx` + `.dat`) for persistent storage
+4. **Operation modules** (`Create.c`, `Insert.c`, etc.) — Bridge parser actions to database calls
+5. **Meta files** (`.meta`) — Store per-table column definitions, types, and constraints
+6. **Type validation** — Validates values against column types during INSERT/UPDATE (integer, decimal, varchar length, boolean)
+7. **Constraint enforcement** — NOT NULL constraints are enforced on INSERT and UPDATE
+8. **Networking layer** (`net.c`) — Shared socket operations (recv, send, accept, bind/listen)
+9. **TCP server** (`server.c`) — Generic multi-threaded accept loop with `protocol_handler_fn` callback, connection counting, mutex-protected query execution
+10. **PG handler** (`pg_handler.c`) — PostgreSQL wire protocol session (startup, Simple/Extended Query)
+11. **EVO handler** (`evo_protocol.c`) — Native text protocol session (greeting, SQL dispatch, result formatting)
+12. **CLI client** (`evosql-cli.c`) — Interactive readline-based client with tabular output and persistent history
+
+## Testing
+
+24 test suites with 400+ individual tests, all written in Python and targeting the running server:
+
+```bash
+# Start the server
+docker compose up -d
+
+# Run all tests (PG protocol on 5433)
+py tests/test_aggregates.py
+py tests/test_where.py
+py tests/test_session_isolation.py
+py tests/test_max_connections.py
+# ... (23 PG test files)
+
+# Run EVO protocol tests (port 9967)
+py tests/test_evo_protocol.py
+```
+
+### Test Coverage
+
+| Area | Test File | Tests |
+|------|-----------|-------|
+| Aggregates (SUM/AVG/MIN/MAX/COUNT) | `test_aggregates.py` | ✓ |
+| WHERE (=, <>, <, >, IN, LIKE, BETWEEN, IS NULL) | `test_where.py`, `test_comparison.py` | ✓ |
+| GROUP BY + HAVING | `test_groupby.py` | ✓ |
+| ORDER BY (multi-column, ASC/DESC) | `test_multi_orderby.py`, `test_distinct_orderby.py` | ✓ |
+| LIMIT / OFFSET | `test_limit.py` | ✓ |
+| CASE expressions | `test_case.py` | ✓ |
+| String functions (UPPER, LOWER, LENGTH, ...) | `test_string_functions.py` | ✓ |
+| Date/time functions | `test_datetime.py` | ✓ |
+| NULL handling | `test_null_insert.py`, `test_isnull.py` | ✓ |
+| Aliases | `test_alias.py` | ✓ |
+| Logical operators (AND, OR, NOT) | `test_logical.py` | ✓ |
+| DISTINCT | `test_distinct_orderby.py` | ✓ |
+| IN / BETWEEN / LIKE | `test_in.py`, `test_between_like.py` | ✓ |
+| Qualified names (schema.table.column) | `test_qualified_names.py` | ✓ |
+| CREATE/USE DATABASE, CREATE SCHEMA | `test_database.py`, `test_use_database.py` | ✓ |
+| SET/SHOW (schema, max_connections) | `test_set_schema.py`, `test_max_connections.py` | ✓ |
+| Per-connection session isolation | `test_session_isolation.py` | ✓ |
+| COUNT(*) / COUNT(col) | `test_count.py` | ✓ |
+| EVO protocol (handshake, CRUD, errors, multi-conn) | `test_evo_protocol.py` | ✓ |
