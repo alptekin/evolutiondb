@@ -89,7 +89,10 @@ EvoSQL/
 │       ├── Insert.c                # INSERT INTO
 │       ├── Update.c                # UPDATE (column-level updates)
 │       ├── Delete.c                # DELETE FROM
-│       └── Drop.c                  # DROP TABLE / TRUNCATE TABLE
+│       ├── Drop.c                  # DROP TABLE / TRUNCATE TABLE
+│       ├── crypto.c/h              # PBKDF2-SHA256 password hashing, random bytes
+│       ├── UserMgmt.c              # CREATE/DROP/ALTER USER, authentication
+│       └── GrantMgmt.c             # GRANT/REVOKE privileges, CheckPrivilege()
 │
 ├── adaptor/                        # Dual-Protocol Server
 │   ├── main.c                      # Dual-port launcher (~90 lines)
@@ -102,13 +105,14 @@ EvoSQL/
 │   ├── query_executor.c/h          # Query execution bridge (parser → result)
 │   ├── result.c/h                  # ResultSet data structure
 │   ├── catalog.c/h                 # pg_catalog / information_schema emulation
+│   ├── tls.c/h                     # OpenSSL TLS wrapper (self-signed certs)
 │   └── Makefile
 │
 ├── cli/                            # Interactive CLI Client
 │   ├── evosql-cli.c                # Readline/history, tabular display
 │   └── Makefile
 │
-├── tests/                          # Test Suite (24 test files, 400+ tests)
+├── tests/                          # Test Suite (27 test files, 450+ tests)
 │   ├── test_evo_protocol.py        # EVO protocol tests (port 9967)
 │   ├── test_session_isolation.py   # Per-connection session isolation
 │   ├── test_max_connections.py     # Connection limit enforcement
@@ -116,6 +120,9 @@ EvoSQL/
 │   ├── test_where.py               # WHERE clause operators
 │   ├── test_groupby.py             # GROUP BY + HAVING
 │   ├── test_database.py            # CREATE/USE DATABASE, CREATE SCHEMA
+│   ├── test_user_management.py     # CREATE/DROP/ALTER USER, SHOW USERS, auth
+│   ├── test_grant_revoke.py        # GRANT/REVOKE, PUBLIC, WITH GRANT OPTION
+│   ├── test_random_password.py     # Random admin password generation
 │   └── ...                         # 16 more test suites
 │
 └── PopPad/                         # Win32 GUI
@@ -193,6 +200,83 @@ DELETE FROM Students WHERE 1;
 - `NOT NULL` - Column cannot be empty (validated during INSERT and UPDATE)
 - `PRIMARY KEY` - Primary key (visible in DBeaver)
 - Constraint information is stored in the `.meta` file and reported to DBeaver via `pg_constraint`
+
+## User Management & Authentication
+
+EvoSQL includes a complete user management system with PBKDF2-SHA256 password hashing and a role-based privilege system.
+
+### Authentication
+
+- **PBKDF2-SHA256** password hashing with random salt (100,000 iterations)
+- **CleartextPassword** auth flow over PostgreSQL wire protocol (type 3 → PasswordMessage)
+- **TLS/SSL** support with auto-generated self-signed certificates
+
+### User Commands
+
+```sql
+CREATE USER alice PASSWORD 'secret123';
+ALTER USER alice PASSWORD 'newsecret';
+DROP USER alice;
+SHOW USERS;
+```
+
+### Initial Admin User
+
+The admin user is created on first startup:
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `EVOSQL_USER_NAME` | `admin` | Admin username |
+| `EVOSQL_PASSWORD` | *(random)* | Admin password — if not set, a random 16-char password is generated and printed to stdout **once** |
+
+```bash
+# Check the generated password
+docker logs evolutiondb-evosql-1
+# Output:
+#   ============================================================
+#     GENERATED PASSWORD for 'admin': xK7mP2qR9wL4nBvT
+#     Save this password! It will NOT be shown again.
+#     Change it with: ALTER USER admin PASSWORD '<newpass>'
+#   ============================================================
+
+# Or set an explicit password
+docker compose up -d -e EVOSQL_PASSWORD=mypassword
+```
+
+### GRANT / REVOKE Privileges
+
+```sql
+-- Grant specific privileges
+GRANT SELECT, INSERT ON DATABASE evosql TO alice;
+GRANT ALL ON SCHEMA evosql.default TO bob;
+GRANT SELECT ON TABLE evosql.default.users TO charlie;
+
+-- Grant with delegation rights
+GRANT SELECT ON DATABASE evosql TO alice WITH GRANT OPTION;
+
+-- Grant to all users (PostgreSQL PUBLIC model — additive)
+GRANT SELECT ON DATABASE evosql TO PUBLIC;
+
+-- Revoke privileges
+REVOKE INSERT ON DATABASE evosql FROM alice;
+REVOKE ALL ON DATABASE evosql FROM bob;
+
+-- View grants
+SHOW GRANTS;
+SHOW GRANTS FOR alice;
+```
+
+**Privilege types:** `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `DROP`, `ALL`
+
+**Scope levels (waterfall check):** `TABLE` → `SCHEMA` → `DATABASE`
+
+| Feature | Behavior |
+|---------|----------|
+| admin user | Superuser — bypasses all privilege checks |
+| PUBLIC grants | Additive (PostgreSQL model) — user-specific REVOKE does not override PUBLIC |
+| New databases | No default grants (MySQL model) — explicit GRANT required |
+| WITH GRANT OPTION | Non-admin users can delegate their privileges |
+| DROP USER | Automatically removes all grants for that user |
 
 ## Storage Format
 
@@ -291,8 +375,9 @@ The adaptor implements the PostgreSQL v3 wire protocol, enabling connectivity fr
 - **Extended Query Protocol** (`P`/`B`/`D`/`E`/`S` messages) — DBeaver / JDBC compatibility
 - **Multi-threaded**: Each client connection runs in its own thread
 - **Per-connection session state**: Each connection has its own database/schema context
+- **Authentication**: CleartextPassword (PG auth type 3) with PBKDF2-SHA256 verification
+- **TLS/SSL**: Auto-generated self-signed certificates (OpenSSL)
 - **Connection limits**: Runtime-configurable `SET max_connections = N`
-- **SSL/GSS rejection**: Encryption requests are declined
 - **Catalog emulation**: All pg_catalog queries required by DBeaver are handled
 
 ### Emulated System Tables
@@ -320,11 +405,11 @@ The adaptor implements the PostgreSQL v3 wire protocol, enabling connectivity fr
 Host:     localhost
 Port:     5433
 Database: evosql
-User:     (any)
-Password: (any)
+User:     admin
+Password: admin     (or the generated random password)
 ```
 
-Create a new PostgreSQL connection in DBeaver with the settings above. Table list, column information, types, NOT NULL and PRIMARY KEY constraints are displayed automatically.
+Create a new PostgreSQL connection in DBeaver with the settings above. Authentication is required — the server uses CleartextPassword (PG auth type 3). Table list, column information, types, NOT NULL and PRIMARY KEY constraints are displayed automatically.
 
 ## EVO Protocol (Native Text Protocol — Port 9967)
 
@@ -386,14 +471,17 @@ evosql> SELECT * FROM users;
 - **Tabular output**: Auto-aligned columns with header separator
 - **Multi-line SQL**: End a line with `\` to continue on the next line
 - **Meta-commands**: `\q` / `exit` / `quit` to disconnect
+- **Authentication**: `-W` / `--password` flag or `EVOSQL_PASSWORD` environment variable
 
 ### Usage
 
 ```bash
-evosql-cli                        # Connect to localhost:9967
-evosql-cli -h 192.168.1.10        # Connect to remote host
-evosql-cli -p 9968                # Custom port
-evosql-cli -h myhost -p 9968      # Both
+evosql-cli                               # Connect to localhost:9967
+evosql-cli -h 192.168.1.10               # Connect to remote host
+evosql-cli -p 9968                       # Custom port
+evosql-cli -h myhost -p 9968             # Both
+evosql-cli -W mypassword                 # Explicit password
+EVOSQL_PASSWORD=secret evosql-cli        # Password via env var
 ```
 
 ## Build
@@ -468,16 +556,22 @@ docker compose up -d
 # Or build and run manually
 docker build -t evosql .
 docker run -d -p 5433:5433 -p 9967:9967 --name evosql evosql
+
+# Set explicit admin password (otherwise random is generated)
+docker run -d -p 5433:5433 -p 9967:9967 -e EVOSQL_PASSWORD=mysecret evosql
+
+# Check generated random password
+docker logs evosql | grep "GENERATED PASSWORD"
 ```
 
 ### Connect
 
 ```bash
 # PostgreSQL clients (psql, DBeaver, JDBC)
-psql -h localhost -p 5433 -U evosql evosql
+psql -h localhost -p 5433 -U admin -W evosql
 
 # EvoSQL CLI client
-evosql-cli -h localhost -p 9967
+evosql-cli -W admin
 ```
 
 ### Data Persistence
@@ -501,13 +595,17 @@ docker compose down -v    # stop and delete data
 7. **Constraint enforcement** — NOT NULL constraints are enforced on INSERT and UPDATE
 8. **Networking layer** (`net.c`) — Shared socket operations (recv, send, accept, bind/listen)
 9. **TCP server** (`server.c`) — Generic multi-threaded accept loop with `protocol_handler_fn` callback, connection counting, mutex-protected query execution
-10. **PG handler** (`pg_handler.c`) — PostgreSQL wire protocol session (startup, Simple/Extended Query)
-11. **EVO handler** (`evo_protocol.c`) — Native text protocol session (greeting, SQL dispatch, result formatting)
-12. **CLI client** (`evosql-cli.c`) — Interactive readline-based client with tabular output and persistent history
+10. **PG handler** (`pg_handler.c`) — PostgreSQL wire protocol session (startup, Simple/Extended Query, CleartextPassword auth)
+11. **EVO handler** (`evo_protocol.c`) — Native text protocol session (greeting, auth, SQL dispatch, result formatting)
+12. **CLI client** (`evosql-cli.c`) — Interactive readline-based client with tabular output, auth support, and persistent history
+13. **TLS** (`tls.c`) — OpenSSL-based TLS wrapper with auto-generated self-signed certificates
+14. **Crypto** (`crypto.c`) — PBKDF2-SHA256 password hashing with random salt generation
+15. **User management** (`UserMgmt.c`) — CREATE/DROP/ALTER USER, authentication, random password generation
+16. **Privilege system** (`GrantMgmt.c`) — GRANT/REVOKE, CheckPrivilege() with waterfall scope, PUBLIC support
 
 ## Testing
 
-24 test suites with 400+ individual tests, all written in Python and targeting the running server:
+27 test suites with 450+ individual tests, all written in Python and targeting the running server:
 
 ```bash
 # Start the server
@@ -547,3 +645,6 @@ py tests/test_evo_protocol.py
 | Per-connection session isolation | `test_session_isolation.py` | ✓ |
 | COUNT(*) / COUNT(col) | `test_count.py` | ✓ |
 | EVO protocol (handshake, CRUD, errors, multi-conn) | `test_evo_protocol.py` | ✓ |
+| User management (CREATE/DROP/ALTER USER, auth) | `test_user_management.py` | ✓ |
+| GRANT/REVOKE (privileges, PUBLIC, GRANT OPTION) | `test_grant_revoke.py` | ✓ |
+| Random admin password generation | `test_random_password.py` | ✓ |
