@@ -9,10 +9,18 @@ def pg_connect():
     s = socket.socket()
     s.settimeout(5)
     s.connect(('localhost', 5433))
+    # Send minimal startup message (protocol v3)
     s.send(b'\x00\x00\x00\x08\x00\x03\x00\x00')
-    s.recv(4096)
-    s.send(b'p\x00\x00\x00\x08\x00\x00\x00\x00')
-    s.recv(4096)
+    # Read until ReadyForQuery ('Z')
+    data = b''
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            raise ConnectionError("connection closed during startup")
+        data += chunk
+        # ReadyForQuery is 'Z' + 4-byte len + 1-byte status
+        if len(data) >= 6 and data[-6] == ord('Z'):
+            break
     return s
 
 def pg_query(s, sql):
@@ -131,16 +139,21 @@ try:
     c.send(b'\x00\x00\x00\x08\x00\x03\x00\x00')
     data = c.recv(4096)
     # Server should send ErrorResponse or close immediately
-    if data and data[0:1] == b'E':
+    if not data:
+        # Empty recv = connection closed by server
+        print(f"  PASS: Connection closed by server (limit={limit})")
+        passed += 1
+    elif data[0:1] == b'E':
         print(f"  PASS: Connection rejected with ErrorResponse (limit={limit})")
         passed += 1
-    else:
-        # Still got auth request — try finishing handshake
-        c.send(b'p\x00\x00\x00\x08\x00\x00\x00\x00')
-        data2 = c.recv(4096)
+    elif data[0:1] == b'R':
+        # Got auth response — connection was accepted (unexpected)
         print(f"  FAIL: Connection accepted despite limit={limit}")
         failed += 1
         extra_conns.append(c)
+    else:
+        print(f"  FAIL: Unexpected response: {data[:20]}")
+        failed += 1
     c.close()
 except (ConnectionRefusedError, ConnectionResetError, OSError) as e:
     print(f"  PASS: Connection refused at limit (OS level): {e}")

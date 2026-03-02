@@ -19,10 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6 \
     && rm -rf /var/lib/apt/lists/*
 
+# Binary goes in /app, data lives in /data (volume mount)
+COPY --from=builder /build/adaptor/evosql-server /app/evosql-server
+
 WORKDIR /data
 
-COPY --from=builder /build/adaptor/evosql-server .
+EXPOSE 5433 9967
 
-EXPOSE 5433
-
-CMD ["./evosql-server"]
+CMD ["/app/evosql-server"]

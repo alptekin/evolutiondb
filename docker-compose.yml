@@ -3,6 +3,7 @@ services:
     build: .
     ports:
       - "5433:5433"
+      - "9967:9967"
     volumes:
       - evosql-data:/data
 

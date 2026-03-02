@@ -24,7 +24,11 @@ EVO_PARSER = ../evolution/parser
 
 # Adaptor source files
 ADAPTOR_SRCS = main.c \
+               net.c \
+               server.c \
                pg_protocol.c \
+               pg_handler.c \
+               evo_protocol.c \
                result.c \
                catalog.c \
                query_executor.c

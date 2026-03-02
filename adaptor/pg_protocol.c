@@ -2,30 +2,19 @@
 #include <string.h>
 #include "platform.h"
 #include "pg_protocol.h"
+#include "net.h"
 
 /* ----------------------------------------------------------------
- *  Low-level I/O
+ *  Low-level I/O — thin wrappers around net.c for compatibility
  * ---------------------------------------------------------------- */
 int pg_recv_exact(socket_t sock, char *buf, int len)
 {
-    int total = 0, n;
-    while (total < len) {
-        n = recv(sock, buf + total, len - total, 0);
-        if (n <= 0) return -1;
-        total += n;
-    }
-    return total;
+    return net_recv_exact(sock, buf, len);
 }
 
 static int pg_send_all(socket_t sock, const char *buf, int len)
 {
-    int total = 0, n;
-    while (total < len) {
-        n = send(sock, buf + total, len - total, 0);
-        if (n <= 0) return -1;
-        total += n;
-    }
-    return total;
+    return net_send_all(sock, buf, len);
 }
 
 /* ----------------------------------------------------------------
