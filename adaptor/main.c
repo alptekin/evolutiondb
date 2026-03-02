@@ -24,9 +24,20 @@
 #include "result.h"
 
 #define DEFAULT_PORT 5433
+#define DEFAULT_MAX_CONNECTIONS 100
 
 /* Mutex for serializing query execution (EvoSQL globals are not thread-safe) */
 static mutex_t g_query_lock;
+
+/* Connection limits */
+static int g_max_connections  = DEFAULT_MAX_CONNECTIONS;
+static int g_active_connections = 0;
+static mutex_t g_conn_lock;     /* protects the two counters above */
+
+/* ---- Public accessors (used by catalog.c) ---- */
+int  get_max_connections(void)  { return g_max_connections; }
+void set_max_connections(int n) { if (n > 0) g_max_connections = n; }
+int  get_active_connections(void) { return g_active_connections; }
 
 /* ----------------------------------------------------------------
  *  Execute query under lock (thread-safe wrapper)
@@ -441,7 +452,13 @@ static THREAD_RETURN client_thread(THREAD_PARAM param)
 {
     socket_t client_sock = (socket_t)(size_t)param;
     handle_client(client_sock);
-    printf("[adaptor] Client disconnected\n"); fflush(stdout);
+
+    mutex_lock(&g_conn_lock);
+    g_active_connections--;
+    printf("[adaptor] Client disconnected  (active: %d/%d)\n",
+           g_active_connections, g_max_connections);
+    mutex_unlock(&g_conn_lock);
+    fflush(stdout);
     return 0;
 }
 
@@ -466,8 +483,9 @@ int main(int argc, char *argv[])
     /* Initialize socket subsystem */
     socket_init();
 
-    /* Initialize query execution lock */
+    /* Initialize locks */
     mutex_init(&g_query_lock);
+    mutex_init(&g_conn_lock);
 
     /* Create socket */
     server_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -516,6 +534,7 @@ int main(int argc, char *argv[])
     printf("==============================================\n");
     printf("  EvoSQL Adaptor Server (multi-threaded)\n");
     printf("  PostgreSQL Wire Protocol on port %d\n", port);
+    printf("  Max connections: %d\n", g_max_connections);
     printf("  Connect with: psql -h localhost -p %d evosql\n", port);
     printf("  Or DBeaver: PostgreSQL, localhost:%d, db=evosql\n", port);
     printf("==============================================\n");
@@ -542,9 +561,46 @@ int main(int argc, char *argv[])
                        (const char *)&opt, sizeof(opt));
         }
 
-        printf("[adaptor] Connection from %s:%d\n",
+        /* Enforce connection limit */
+        mutex_lock(&g_conn_lock);
+        if (g_active_connections >= g_max_connections) {
+            mutex_unlock(&g_conn_lock);
+            fprintf(stderr, "[adaptor] Connection rejected: limit %d reached\n",
+                    g_max_connections);
+            fflush(stderr);
+            /* Send PG ErrorResponse before closing */
+            {
+                /* ErrorResponse: SFATAL + C53300 + Mtoo many connections */
+                unsigned char err[64];
+                int pos = 0;
+                err[pos++] = 'E';
+                /* placeholder for length (fill later) */
+                int len_off = pos; pos += 4;
+                /* Severity */
+                pos += sprintf((char*)err+pos, "SFATAL") + 1;
+                /* Code: 53300 = too_many_connections */
+                pos += sprintf((char*)err+pos, "C53300") + 1;
+                /* Message */
+                pos += sprintf((char*)err+pos, "Mtoo many connections") + 1;
+                err[pos++] = '\0'; /* terminator */
+                /* fill length (excludes msg-type byte) */
+                { int l = pos - 1;
+                  err[len_off]   = (l >> 24) & 0xff;
+                  err[len_off+1] = (l >> 16) & 0xff;
+                  err[len_off+2] = (l >>  8) & 0xff;
+                  err[len_off+3] = (l      ) & 0xff;
+                }
+                send(client_sock, (const char*)err, pos, 0);
+            }
+            socket_close(client_sock);
+            continue;
+        }
+        g_active_connections++;
+        printf("[adaptor] Connection from %s:%d  (active: %d/%d)\n",
                inet_ntoa(client_addr.sin_addr),
-               ntohs(client_addr.sin_port));
+               ntohs(client_addr.sin_port),
+               g_active_connections, g_max_connections);
+        mutex_unlock(&g_conn_lock);
         fflush(stdout);
 
         /* Spawn a thread for this client */
@@ -552,6 +608,7 @@ int main(int argc, char *argv[])
     }
 
     mutex_destroy(&g_query_lock);
+    mutex_destroy(&g_conn_lock);
     socket_close(server_sock);
     socket_cleanup();
     return 0;

@@ -7,6 +7,11 @@
 #include "catalog.h"
 #include "../evolution/db/database.h"
 
+/* From main.c — connection limit accessors */
+extern int  get_max_connections(void);
+extern void set_max_connections(int n);
+extern int  get_active_connections(void);
+
 /* ----------------------------------------------------------------
  *  Type encoding → PG metadata helpers
  * ---------------------------------------------------------------- */
@@ -143,6 +148,23 @@ static int handle_set(const char *sql, ResultSet *rs)
             return 0;  /* let parser handle it */
     }
 
+    /* SET max_connections = N */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "max_connections", 15) == 0) {
+            p += 15;
+            while (*p && (isspace((unsigned char)*p) || *p == '=' || *p == '\'')) p++;
+            int val = atoi(p);
+            if (val > 0) {
+                set_max_connections(val);
+                result_init(rs);
+                sprintf(rs->command_tag, "SET");
+                return 1;
+            }
+        }
+    }
+
     result_init(rs);
     strcpy(rs->command_tag, "SET");
     return 1;
@@ -157,7 +179,15 @@ static int handle_show(const char *sql, ResultSet *rs)
     result_add_column(rs, "setting", PG_OID_TEXT);
 
     int row = result_add_row(rs);
-    if (stristr_found(sql, "transaction_isolation") || stristr_found(sql, "transaction isolation"))
+    if (stristr_found(sql, "max_connections")) {
+        char buf[32];
+        sprintf(buf, "%d", get_max_connections());
+        result_set_field(rs, row, 0, buf);
+    } else if (stristr_found(sql, "active_connections")) {
+        char buf[32];
+        sprintf(buf, "%d", get_active_connections());
+        result_set_field(rs, row, 0, buf);
+    } else if (stristr_found(sql, "transaction_isolation") || stristr_found(sql, "transaction isolation"))
         result_set_field(rs, row, 0, "read committed");
     else if (stristr_found(sql, "server_version"))
         result_set_field(rs, row, 0, "15.0 (EvoSQL)");
