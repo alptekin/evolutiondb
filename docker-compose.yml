@@ -7,5 +7,13 @@ services:
     volumes:
       - evosql-data:/data
 
+  cli:
+    build: ./cli
+    depends_on:
+      - evosql
+    stdin_open: true
+    tty: true
+    entrypoint: ["sleep", "infinity"]
+
 volumes:
   evosql-data:

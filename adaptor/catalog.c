@@ -174,6 +174,87 @@ static int handle_show(const char *sql, ResultSet *rs)
 {
     if (!starts_with_i(sql, "SHOW"))
         return 0;
+
+    /* ── SHOW DATABASES ── */
+    if (stristr_found(sql, "databases")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "database", PG_OID_TEXT);
+
+        /* Read root/databases file — one name per line */
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/databases", db_get_root());
+        FILE *fp = fopen(path, "r");
+        if (fp) {
+            char line[256];
+            while (fgets(line, sizeof(line), fp)) {
+                /* Strip trailing whitespace/newline */
+                char *end = line + strlen(line) - 1;
+                while (end >= line && (*end == '\n' || *end == '\r' || *end == ' '))
+                    *end-- = '\0';
+                if (line[0] == '\0') continue;
+                int row = result_add_row(rs);
+                result_set_field(rs, row, 0, line);
+            }
+            fclose(fp);
+        }
+        sprintf(rs->command_tag, "SHOW");
+        return 1;
+    }
+
+    /* ── SHOW SCHEMAS ── */
+    if (stristr_found(sql, "schemas")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "schema", PG_OID_TEXT);
+
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s/schemas",
+                 db_get_root(), g_currentDatabase);
+        FILE *fp = fopen(path, "r");
+        if (fp) {
+            char line[256];
+            while (fgets(line, sizeof(line), fp)) {
+                char *end = line + strlen(line) - 1;
+                while (end >= line && (*end == '\n' || *end == '\r' || *end == ' '))
+                    *end-- = '\0';
+                if (line[0] == '\0') continue;
+                int row = result_add_row(rs);
+                result_set_field(rs, row, 0, line);
+            }
+            fclose(fp);
+        }
+        sprintf(rs->command_tag, "SHOW");
+        return 1;
+    }
+
+    /* ── SHOW TABLES ── */
+    if (stristr_found(sql, "tables")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "table", PG_OID_TEXT);
+
+        char dirpath[1024];
+        snprintf(dirpath, sizeof(dirpath), "%s/%s/%s",
+                 db_get_root(), g_currentDatabase, g_currentSchema);
+
+        MetaIterator mit;
+        meta_iter_open(&mit, dirpath);
+        while (meta_iter_next(&mit)) {
+            char tname[256];
+            strncpy(tname, mit.current_name, sizeof(tname) - 1);
+            tname[sizeof(tname) - 1] = '\0';
+            char *dot = strstr(tname, ".meta");
+            if (dot) *dot = '\0';
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, tname);
+        }
+        meta_iter_close(&mit);
+        sprintf(rs->command_tag, "SHOW");
+        return 1;
+    }
+
+    /* ── Other SHOW variables ── */
     result_init(rs);
     rs->is_select = 1;
     result_add_column(rs, "setting", PG_OID_TEXT);
