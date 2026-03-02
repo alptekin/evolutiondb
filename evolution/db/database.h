@@ -77,6 +77,27 @@ int  DropUserProcess(const char *username);
 int  AlterUserPasswordProcess(const char *username, const char *new_password);
 int  ListUsers(char names[][256], int max_users);
 
+/* Grant / Privilege management (GrantMgmt.c) */
+void db_ensure_grants(void);
+int  CheckPrivilege(const char *username, const char *database,
+                    const char *schema, const char *table,
+                    const char *privilege);
+int  HasGrantOption(const char *username, int scope_type,
+                    const char *scope_name, const char *privilege);
+int  GrantPrivilege(const char *username, int scope_type,
+                    const char *scope_name, const char *privileges,
+                    int with_grant_option);
+int  RevokePrivilege(const char *username, int scope_type,
+                     const char *scope_name, const char *privileges);
+int  ListGrantsForUser(const char *username,
+                       char out_users[][256],
+                       char out_scopes[][32],
+                       char out_names[][256],
+                       char out_privs[][128],
+                       int  out_grant_option[],
+                       int  max_entries);
+int  DropUserGrants(const char *username);
+
 /* Global Variables (defined in database_globals.c) */
 extern char g_columnNames[1024];
 extern char g_insert[RECORD_BUF_SIZE];

@@ -2,6 +2,7 @@
 #define CATALOG_H
 
 #include "result.h"
+#include "query_executor.h"   /* SessionCtx */
 
 /*
  * Try to handle a query as a system catalog / internal query.
@@ -17,8 +18,10 @@
  *  - information_schema.tables
  *  - information_schema.columns
  *  - pg_catalog.* system table queries
+ *  - CREATE/DROP/ALTER USER
+ *  - GRANT / REVOKE / SHOW GRANTS
  */
-int catalog_try_handle(const char *sql, ResultSet *rs);
+int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx);
 
 /* Scan current directory for .meta files and list tables */
 int catalog_list_tables(ResultSet *rs);

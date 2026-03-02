@@ -86,6 +86,9 @@ void db_ensure_root(void)
 
     /* Create initial admin user if users file is empty/missing */
     db_ensure_users();
+
+    /* Create initial grants file with admin superuser grant */
+    db_ensure_grants();
 }
 
 /* ----------------------------------------------------------------

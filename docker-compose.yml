@@ -9,6 +9,7 @@ services:
     environment:
       EVOSQL_USER_NAME: admin
       EVOSQL_PASSWORD: admin
+      # To generate a random password, remove or comment out EVOSQL_PASSWORD
 
   cli:
     build: ./cli

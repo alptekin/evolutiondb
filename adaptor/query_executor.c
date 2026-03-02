@@ -1706,7 +1706,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
 
     /* First, try catalog/internal queries (before normalization) */
-    if (catalog_try_handle(sql, rs)) {
+    if (catalog_try_handle(sql, rs, ctx)) {
         /* ── Write back session state (USE/SET SCHEMA may have run) ── */
         if (ctx) {
             strncpy(ctx->database, db_get_current_database(), sizeof(ctx->database) - 1);
@@ -1719,6 +1719,35 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* Reset rs — catalog sub-handlers may have modified it before returning 0 */
     result_init(rs);
+
+    /* ── Privilege enforcement ──
+     * Determine which privilege is needed for this query type and
+     * check it against the grant system.  admin always passes. */
+    if (ctx && ctx->username[0] && strcasecmp(ctx->username, "admin") != 0) {
+        const char *needed_priv = NULL;
+
+        if (is_select_query(sql))        needed_priv = "SELECT";
+        else if (is_insert_query(sql))   needed_priv = "INSERT";
+        else if (is_update_query(sql))   needed_priv = "UPDATE";
+        else if (is_delete_query(sql))   needed_priv = "DELETE";
+        else if (is_create_query(sql))   needed_priv = "CREATE";
+        else if (is_drop_query(sql))     needed_priv = "DROP";
+        else if (is_truncate_query(sql)) needed_priv = "DELETE";
+
+        if (needed_priv) {
+            /* Extract table name from query for TABLE-level check.
+             * For now, use the current database and schema context.
+             * Table-level checking happens at DATABASE/SCHEMA scope first. */
+            const char *db  = ctx->database;
+            const char *sch = ctx->schema;
+
+            if (!CheckPrivilege(ctx->username, db, sch, NULL, needed_priv)) {
+                result_set_error(rs, "42501",
+                    "Permission denied: insufficient privileges");
+                return;
+            }
+        }
+    }
 
     /* Normalize SQL for DBeaver compatibility (quote removal, pg_catalog removal) */
     strncpy(normalized, sql, sizeof(normalized) - 1);

@@ -24,9 +24,10 @@ COPY --from=builder /build/adaptor/evosql-server /app/evosql-server
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Default credentials (override in docker-compose or docker run)
+# Default admin username (override with environment variable).
+# If EVOSQL_PASSWORD is not set, a random password is generated
+# and printed to stdout once on first start (check docker logs).
 ENV EVOSQL_USER_NAME=admin
-ENV EVOSQL_PASSWORD=admin
 
 WORKDIR /data
 

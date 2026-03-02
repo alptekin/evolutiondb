@@ -271,6 +271,66 @@ static int handle_show(const char *sql, ResultSet *rs)
         return 1;
     }
 
+    /* ── SHOW GRANTS [FOR <user>] ── */
+    if (stristr_found(sql, "grants")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "user",         PG_OID_TEXT);
+        result_add_column(rs, "scope",        PG_OID_TEXT);
+        result_add_column(rs, "object",       PG_OID_TEXT);
+        result_add_column(rs, "privileges",   PG_OID_TEXT);
+        result_add_column(rs, "grant_option", PG_OID_TEXT);
+
+        /* Parse optional FOR <username> */
+        char filter_user[256] = "";
+        {
+            /* Find "FOR" keyword (case-insensitive) in the SQL */
+            const char *scan = sql;
+            const char *forpos = NULL;
+            while (*scan) {
+                if (strncasecmp(scan, "FOR", 3) == 0 &&
+                    (scan == sql || isspace((unsigned char)scan[-1])) &&
+                    isspace((unsigned char)scan[3])) {
+                    forpos = scan;
+                    break;
+                }
+                scan++;
+            }
+            if (forpos) {
+                const char *u = forpos + 3;
+                while (*u && isspace((unsigned char)*u)) u++;
+                int ui = 0;
+                /* Handle quoted or unquoted username */
+                if (*u == '\'') {
+                    u++;
+                    while (*u && *u != '\'' && ui < 255) filter_user[ui++] = *u++;
+                } else {
+                    while (*u && !isspace((unsigned char)*u) && *u != ';' && ui < 255)
+                        filter_user[ui++] = *u++;
+                }
+                filter_user[ui] = '\0';
+            }
+        }
+
+        char users[MAX_ROWS][256];
+        char scopes[MAX_ROWS][32];
+        char names[MAX_ROWS][256];
+        char privs[MAX_ROWS][128];
+        int  gopts[MAX_ROWS];
+        int cnt = ListGrantsForUser(filter_user, users, scopes, names, privs, gopts,
+                                    MAX_ROWS);
+        for (int i = 0; i < cnt; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, users[i]);
+            result_set_field(rs, row, 1, scopes[i]);
+            result_set_field(rs, row, 2, names[i]);
+            result_set_field(rs, row, 3, privs[i]);
+            result_set_field(rs, row, 4, gopts[i] ? "YES" : "NO");
+        }
+        sprintf(rs->command_tag, "SHOW");
+        return 1;
+    }
+
     /* ── Other SHOW variables ── */
     result_init(rs);
     rs->is_select = 1;
@@ -487,7 +547,10 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         return 1;
     }
 
-    /* has_table_privilege, has_schema_privilege, has_column_privileges, etc. */
+    /* has_table_privilege, has_schema_privilege, has_column_privileges, etc.
+     * These are PostgreSQL catalog functions used by tools like DBeaver/pgAdmin.
+     * Real privilege enforcement is done in query_executor.c via CheckPrivilege().
+     * TODO: Parse arguments and call CheckPrivilege() for accurate results. */
     if ((stristr_found(sql, "has_table_privilege") ||
          stristr_found(sql, "has_schema_privilege") ||
          stristr_found(sql, "has_database_privilege") ||
@@ -1492,6 +1555,176 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
 }
 
 /* ----------------------------------------------------------------
+ *  GRANT / REVOKE privilege management
+ *
+ *  GRANT priv[,priv] ON DATABASE|SCHEMA|TABLE name TO user [WITH GRANT OPTION]
+ *  REVOKE priv[,priv] ON DATABASE|SCHEMA|TABLE name FROM user
+ * ---------------------------------------------------------------- */
+static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
+{
+    const char *p = sql;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    int is_grant  = (strncasecmp(p, "GRANT",  5) == 0 && isspace((unsigned char)p[5]));
+    int is_revoke = (strncasecmp(p, "REVOKE", 6) == 0 && isspace((unsigned char)p[6]));
+    if (!is_grant && !is_revoke) return 0;
+
+    /* Only admin (or users with GRANT OPTION) can run GRANT/REVOKE.
+     * For simplicity, check admin first — GRANT OPTION checked later. */
+    const char *caller = ctx ? ctx->username : "admin";
+
+    p += is_grant ? 5 : 6;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Parse privilege list (everything before ON keyword) */
+    char priv_buf[512] = "";
+    {
+        /* Find the ON keyword (as a separate word) */
+        const char *on_pos = p;
+        while (*on_pos) {
+            if (strncasecmp(on_pos, "ON", 2) == 0 &&
+                (on_pos == p || isspace((unsigned char)on_pos[-1])) &&
+                isspace((unsigned char)on_pos[2]))
+                break;
+            on_pos++;
+        }
+        if (!*on_pos) {
+            result_init(rs);
+            result_set_error(rs, "42601",
+                is_grant ? "Syntax: GRANT priv[,priv] ON DATABASE|SCHEMA|TABLE name TO user [WITH GRANT OPTION]"
+                         : "Syntax: REVOKE priv[,priv] ON DATABASE|SCHEMA|TABLE name FROM user");
+            return 1;
+        }
+        int len = (int)(on_pos - p);
+        if (len >= (int)sizeof(priv_buf)) len = (int)sizeof(priv_buf) - 1;
+        memcpy(priv_buf, p, len);
+        priv_buf[len] = '\0';
+        /* Trim trailing whitespace */
+        while (len > 0 && isspace((unsigned char)priv_buf[len - 1]))
+            priv_buf[--len] = '\0';
+
+        p = on_pos + 2; /* skip "ON" */
+    }
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Parse scope type: DATABASE | SCHEMA | TABLE */
+    int scope_type = 0;
+    if (strncasecmp(p, "DATABASE", 8) == 0 && isspace((unsigned char)p[8])) {
+        scope_type = 1; p += 8;
+    } else if (strncasecmp(p, "SCHEMA", 6) == 0 && isspace((unsigned char)p[6])) {
+        scope_type = 2; p += 6;
+    } else if (strncasecmp(p, "TABLE", 5) == 0 && isspace((unsigned char)p[5])) {
+        scope_type = 3; p += 5;
+    } else {
+        result_init(rs);
+        result_set_error(rs, "42601", "Expected DATABASE, SCHEMA, or TABLE after ON");
+        return 1;
+    }
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Parse scope name (may be quoted or unquoted) */
+    char scope_name[256] = "";
+    {
+        int ni = 0;
+        if (*p == '\'') {
+            p++;
+            while (*p && *p != '\'' && ni < 255) scope_name[ni++] = *p++;
+            if (*p == '\'') p++;
+        } else if (*p == '"') {
+            p++;
+            while (*p && *p != '"' && ni < 255) scope_name[ni++] = *p++;
+            if (*p == '"') p++;
+        } else {
+            while (*p && !isspace((unsigned char)*p) && *p != ';' && ni < 255)
+                scope_name[ni++] = *p++;
+        }
+        scope_name[ni] = '\0';
+    }
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Parse TO/FROM keyword and target user */
+    char target_user[256] = "";
+    if (is_grant) {
+        if (strncasecmp(p, "TO", 2) != 0 || !isspace((unsigned char)p[2])) {
+            result_init(rs);
+            result_set_error(rs, "42601", "Expected TO after scope name");
+            return 1;
+        }
+        p += 2;
+    } else {
+        if (strncasecmp(p, "FROM", 4) != 0 || !isspace((unsigned char)p[4])) {
+            result_init(rs);
+            result_set_error(rs, "42601", "Expected FROM after scope name");
+            return 1;
+        }
+        p += 4;
+    }
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    {
+        int ui = 0;
+        if (*p == '\'') {
+            p++;
+            while (*p && *p != '\'' && ui < 255) target_user[ui++] = *p++;
+            if (*p == '\'') p++;
+        } else {
+            while (*p && !isspace((unsigned char)*p) && *p != ';' && ui < 255)
+                target_user[ui++] = *p++;
+        }
+        target_user[ui] = '\0';
+    }
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Check WITH GRANT OPTION (only for GRANT) */
+    int with_grant_option = 0;
+    if (is_grant && strncasecmp(p, "WITH", 4) == 0) {
+        const char *wp = p + 4;
+        while (*wp && isspace((unsigned char)*wp)) wp++;
+        if (strncasecmp(wp, "GRANT", 5) == 0) {
+            wp += 5;
+            while (*wp && isspace((unsigned char)*wp)) wp++;
+            if (strncasecmp(wp, "OPTION", 6) == 0) {
+                with_grant_option = 1;
+            }
+        }
+    }
+
+    /* Authorization check:
+     * - admin can always GRANT/REVOKE
+     * - non-admin needs GRANT OPTION on the same scope to delegate */
+    if (strcasecmp(caller, "admin") != 0) {
+        /* Check the caller has all privileges being granted with GRANT OPTION */
+        int has_option = HasGrantOption(caller, scope_type, scope_name, priv_buf);
+        if (!has_option) {
+            result_init(rs);
+            result_set_error(rs, "42501",
+                "Permission denied: you need WITH GRANT OPTION to delegate privileges");
+            return 1;
+        }
+    }
+
+    /* Execute */
+    result_init(rs);
+    if (is_grant) {
+        if (GrantPrivilege(target_user, scope_type, scope_name,
+                           priv_buf, with_grant_option) == 0) {
+            sprintf(rs->command_tag, "GRANT");
+        } else {
+            result_set_error(rs, "42501", g_gui_error_msg);
+            g_gui_error = 0;
+        }
+    } else {
+        if (RevokePrivilege(target_user, scope_type, scope_name, priv_buf) == 0) {
+            sprintf(rs->command_tag, "REVOKE");
+        } else {
+            result_set_error(rs, "42501", g_gui_error_msg);
+            g_gui_error = 0;
+        }
+    }
+    return 1;
+}
+
+/* ----------------------------------------------------------------
  *  User management: CREATE/DROP/ALTER USER
  * ---------------------------------------------------------------- */
 static int handle_user_mgmt(const char *sql, ResultSet *rs)
@@ -1558,6 +1791,7 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
 
         result_init(rs);
         if (DropUserProcess(username) == 0) {
+            DropUserGrants(username);   /* Also remove all grants for this user */
             sprintf(rs->command_tag, "DROP USER");
         } else {
             result_set_error(rs, "42704", g_gui_error_msg);
@@ -1615,7 +1849,7 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
 /* ----------------------------------------------------------------
  *  Main dispatch
  * ---------------------------------------------------------------- */
-int catalog_try_handle(const char *sql, ResultSet *rs)
+int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     /* Empty or whitespace-only query */
     {
@@ -1630,6 +1864,9 @@ int catalog_try_handle(const char *sql, ResultSet *rs)
 
     /* User management: CREATE/DROP/ALTER USER */
     if (handle_user_mgmt(sql, rs)) return 1;
+
+    /* GRANT / REVOKE */
+    if (handle_grant_revoke(sql, rs, ctx)) return 1;
 
     /* SET */
     if (handle_set(sql, rs)) return 1;

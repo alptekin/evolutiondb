@@ -57,7 +57,8 @@ EVO_DB_SRCS = $(EVO_DB)/db.c \
               $(EVO_DB)/expression.c \
               $(EVO_DB)/DatabaseMgmt.c \
               $(EVO_DB)/crypto.c \
-              $(EVO_DB)/UserMgmt.c
+              $(EVO_DB)/UserMgmt.c \
+              $(EVO_DB)/GrantMgmt.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

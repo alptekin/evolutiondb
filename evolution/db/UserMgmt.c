@@ -12,7 +12,8 @@
  *
  * Initial admin user is created from environment variables:
  *   EVOSQL_USER_NAME  (default: "admin")
- *   EVOSQL_PASSWORD   (default: "admin")
+ *   EVOSQL_PASSWORD   (if empty/unset, a random 16-char password is generated
+ *                      and printed to stdout ONCE — MySQL-style)
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
@@ -83,7 +84,28 @@ void db_ensure_users(void)
     const char *env_user = getenv("EVOSQL_USER_NAME");
     const char *env_pass = getenv("EVOSQL_PASSWORD");
     if (!env_user || env_user[0] == '\0') env_user = "admin";
-    if (!env_pass || env_pass[0] == '\0') env_pass = "admin";
+
+    /* If no password provided, generate a random 16-character password.
+     * This is printed to stdout ONCE (MySQL --initialize style).
+     * The user must then ALTER USER to change it. */
+    char generated_pass[32];
+    int  password_generated = 0;
+    if (!env_pass || env_pass[0] == '\0') {
+        static const char charset[] =
+            "abcdefghijklmnopqrstuvwxyz"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "0123456789!@#$%&*";
+        uint8_t rand_bytes[16];
+        if (crypto_random_bytes(rand_bytes, sizeof(rand_bytes)) < 0) {
+            fprintf(stderr, "[UserMgmt] ERROR: Cannot generate random password\n");
+            return;
+        }
+        for (int i = 0; i < 16; i++)
+            generated_pass[i] = charset[rand_bytes[i] % (sizeof(charset) - 1)];
+        generated_pass[16] = '\0';
+        env_pass = generated_pass;
+        password_generated = 1;
+    }
 
     /* Hash the password */
     char hash_str[HASH_STRING_MAX];
@@ -98,6 +120,16 @@ void db_ensure_users(void)
         fprintf(fp, "%s:%s\n", env_user, hash_str);
         fclose(fp);
         printf("[UserMgmt] Initial user '%s' created\n", env_user);
+        if (password_generated) {
+            printf("\n");
+            printf("============================================================\n");
+            printf("  GENERATED PASSWORD for '%s': %s\n", env_user, env_pass);
+            printf("  Save this password! It will NOT be shown again.\n");
+            printf("  Change it with: ALTER USER %s PASSWORD '<newpass>'\n", env_user);
+            printf("============================================================\n");
+            printf("\n");
+            fflush(stdout);
+        }
     } else {
         fprintf(stderr, "[UserMgmt] ERROR: Cannot create users file: %s\n", path);
     }
