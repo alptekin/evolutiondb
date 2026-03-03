@@ -37,7 +37,7 @@
 
 ---
 
-### Task 2: ⬜ Expression-Based WHERE for UPDATE (Feature #18)
+### Task 2: ✅ Expression-Based WHERE for UPDATE (Feature #18)
 
 **Goal:** UPDATE currently only works by primary key lookup. Enable expression-based WHERE for multi-row UPDATE.
 

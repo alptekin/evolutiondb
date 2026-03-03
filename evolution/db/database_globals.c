@@ -36,3 +36,4 @@ char g_dbRoot[1024];
 char g_currentDatabase[256];
 char g_currentSchema[256];
 int g_deleteCount = 0;
+int g_updateCount = 0;
