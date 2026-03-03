@@ -18,7 +18,7 @@
 
 ## Day 1 — Expression-Based WHERE for UPDATE & DELETE
 
-### Task 1: 🔄 Expression-Based WHERE for DELETE (Feature #17)
+### Task 1: ✅ Expression-Based WHERE for DELETE (Feature #17)
 
 **Goal:** DELETE currently only works by primary key (`db_delete(db, key)`). Enable expression-based WHERE filtering for DELETE, same as SELECT already supports.
 

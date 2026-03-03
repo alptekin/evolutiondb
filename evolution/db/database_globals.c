@@ -35,3 +35,4 @@ int g_selectColumnCount = 0;
 char g_dbRoot[1024];
 char g_currentDatabase[256];
 char g_currentSchema[256];
+int g_deleteCount = 0;

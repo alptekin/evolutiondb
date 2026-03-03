@@ -1236,6 +1236,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_tblDelName[0] = '\0';
     g_tblDropName[0] = '\0';
     g_insert[0] = '\0';
+    g_deleteCount = 0;
     g_whereSel[0] = '\0';
     g_columnDefs[0] = '\0';
     g_columnNames[0] = '\0';
@@ -1374,7 +1375,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
             else if (is_update_query(sql))
                 strcpy(rs->command_tag, "UPDATE 1");
             else if (is_delete_query(sql))
-                strcpy(rs->command_tag, "DELETE 1");
+                sprintf(rs->command_tag, "DELETE %d", g_deleteCount);
             else if (is_drop_query(sql))
                 strcpy(rs->command_tag, "DROP TABLE");
             else if (is_truncate_query(sql))

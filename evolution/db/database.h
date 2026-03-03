@@ -133,5 +133,6 @@ extern int g_selectColumnCount;
 extern char g_dbRoot[1024];
 extern char g_currentDatabase[256];
 extern char g_currentSchema[256];
+extern int g_deleteCount;
 
 #endif
