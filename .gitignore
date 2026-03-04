@@ -43,3 +43,5 @@ nul
 tmpclaude-*
 *.tmp
 *~
+*.pyc
+__pycache__/

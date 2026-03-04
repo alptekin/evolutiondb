@@ -1239,6 +1239,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_deleteCount = 0;
     g_updateCount = 0;
     g_insertCount = 0;
+    g_insertColumnCount = 0;
     g_whereSel[0] = '\0';
     g_columnDefs[0] = '\0';
     g_columnNames[0] = '\0';

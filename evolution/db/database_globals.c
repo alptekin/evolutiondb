@@ -38,3 +38,5 @@ char g_currentSchema[256];
 int g_deleteCount = 0;
 int g_updateCount = 0;
 int g_insertCount = 0;
+char g_insertColumns[64][128];
+int g_insertColumnCount = 0;

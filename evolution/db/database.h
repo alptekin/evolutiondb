@@ -137,5 +137,7 @@ extern char g_currentSchema[256];
 extern int g_deleteCount;
 extern int g_updateCount;
 extern int g_insertCount;
+extern char g_insertColumns[64][128];
+extern int g_insertColumnCount;
 
 #endif

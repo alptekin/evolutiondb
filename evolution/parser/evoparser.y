@@ -238,6 +238,7 @@
 %type <intval> insert_opts
 %type <intval> insert_vals
 %type <intval> insert_vals_list
+%type <intval> insert_col_list
 %type <intval> insert_asgn_list
 %type <intval> opt_if_not_exists
 %type <intval> update_opts
@@ -768,7 +769,30 @@ opt_into: INTO | /* nil */
 ;
 
 opt_col_names: /* nil */
-| '(' column_list ')'								{ emit("INSERTCOLS %d", $2); }
+| '(' insert_col_list ')'						{ emit("INSERTCOLS %d", $2); }
+;
+
+insert_col_list: NAME
+    {
+        g_insertColumnCount = 0;
+        strncpy(g_insertColumns[g_insertColumnCount], $1, 127);
+        g_insertColumns[g_insertColumnCount][127] = '\0';
+        g_insertColumnCount++;
+        emit("COLUMN %s", $1);
+        free($1);
+        $$ = 1;
+    }
+| insert_col_list ',' NAME
+    {
+        if (g_insertColumnCount < 64) {
+            strncpy(g_insertColumns[g_insertColumnCount], $3, 127);
+            g_insertColumns[g_insertColumnCount][127] = '\0';
+            g_insertColumnCount++;
+        }
+        emit("COLUMN %s", $3);
+        free($3);
+        $$ = $1 + 1;
+    }
 ;
 
 insert_vals_list: '(' insert_vals ')'                                           { emit("VALUES %d", $2); $$ = 1; }

@@ -56,6 +56,111 @@ static int split_row_values(char *row, char **vals, int maxVals)
     return n;
 }
 
+/* Read column names from table .meta file (line 1).
+ * Returns number of columns found. */
+static int InsertReadColumnNames(const char *tblName,
+                                 char colNames[][128], int maxCols)
+{
+    char metaFile[1024], line[2048];
+    int count = 0;
+    char *tok;
+
+    sprintf(metaFile, "%s.meta", tblName);
+    FILE *fp = fopen(metaFile, "r");
+    if (!fp) return 0;
+
+    if (fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n")] = '\0';
+        tok = strtok(line, ";");
+        while (tok && count < maxCols) {
+            strncpy(colNames[count], tok, 127);
+            colNames[count][127] = '\0';
+            count++;
+            tok = strtok(NULL, ";");
+        }
+    }
+    fclose(fp);
+    return count;
+}
+
+/* Reorder a single row's values from user-specified column order to
+ * table schema order.  When g_insertColumnCount > 0, the user wrote
+ *   INSERT INTO t (colB, colA) VALUES (valB, valA)
+ * and we need to produce the record in schema order (colA, colB).
+ * Missing columns are filled with the NULL marker.
+ *
+ * `rowData` is modified in-place (semicolon-delimited, up to RECORD_BUF_SIZE).
+ * Returns 0 on success, -1 on error. */
+static int reorder_row_for_column_map(const char *tblName, char *rowData)
+{
+    char tableColNames[64][128];
+    int numTableCols;
+    char *userVals[64];
+    int numUserVals, i, j;
+    char buf[RECORD_BUF_SIZE];
+    char valBuf[RECORD_BUF_SIZE];
+
+    if (g_insertColumnCount <= 0) return 0; /* no column list → no reorder */
+
+    numTableCols = InsertReadColumnNames(tblName, tableColNames, 64);
+    if (numTableCols <= 0) return 0;
+
+    /* Parse the user-supplied values */
+    strncpy(valBuf, rowData, sizeof(valBuf) - 1);
+    valBuf[sizeof(valBuf) - 1] = '\0';
+    numUserVals = split_row_values(valBuf, userVals, 64);
+
+    /* Validate: column count in INSERT list must match value count */
+    if (numUserVals != g_insertColumnCount) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "INSERT has %d value(s) but %d column(s) specified",
+                 numUserVals, g_insertColumnCount);
+        g_gui_error = 1;
+        return -1;
+    }
+
+    /* Validate: all column names in INSERT list must exist in table */
+    for (i = 0; i < g_insertColumnCount; i++) {
+        int found = 0;
+        for (j = 0; j < numTableCols; j++) {
+            if (strcasecmp(g_insertColumns[i], tableColNames[j]) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "column \"%s\" does not exist in table", g_insertColumns[i]);
+            g_gui_error = 1;
+            return -1;
+        }
+    }
+
+    /* Build reordered row: for each table column, find in user's list */
+    buf[0] = '\0';
+    for (i = 0; i < numTableCols; i++) {
+        int userIdx = -1;
+        for (j = 0; j < g_insertColumnCount; j++) {
+            if (strcasecmp(tableColNames[i], g_insertColumns[j]) == 0) {
+                userIdx = j;
+                break;
+            }
+        }
+        if (i > 0) strcat(buf, ";");
+        if (userIdx >= 0) {
+            strcat(buf, userVals[userIdx]);
+        } else {
+            /* Column not in INSERT list → NULL marker */
+            strcat(buf, "\x01NULL\x01");
+        }
+    }
+    strcat(buf, ";");
+
+    strncpy(rowData, buf, RECORD_BUF_SIZE - 1);
+    rowData[RECORD_BUF_SIZE - 1] = '\0';
+    return 0;
+}
+
 /* Validate column types for a single row.
  * Returns 0 on success, -1 on error (sets g_gui_error/g_gui_error_msg). */
 static int validate_types(const char *tblName, char **vals, int numValues)
@@ -193,13 +298,31 @@ int InsertProcess(void)
         }
     }
 
-    /* Validate all rows BEFORE inserting any (abort semantics) */
+    /* Apply column mapping (if INSERT has column list) and validate
+     * all rows BEFORE inserting any (abort semantics).
+     * We use reorderedRows[] to hold the mapped data because
+     * reorder_row_for_column_map() rewrites the row string. */
+    static char reorderedRows[256][RECORD_BUF_SIZE];
+
     for (i = 0; i < numRows; i++) {
         char valBuf[RECORD_BUF_SIZE];
         char *vals[64];
         int nv;
 
-        strncpy(valBuf, rowPtrs[i], sizeof(valBuf) - 1);
+        /* Copy row into reordered buffer */
+        strncpy(reorderedRows[i], rowPtrs[i], RECORD_BUF_SIZE - 1);
+        reorderedRows[i][RECORD_BUF_SIZE - 1] = '\0';
+
+        /* Apply column mapping if column list was specified */
+        if (g_insertColumnCount > 0) {
+            if (reorder_row_for_column_map(tblName, reorderedRows[i]) != 0) {
+                TruncateInsert();
+                return -1;
+            }
+        }
+
+        /* Validate types and NOT NULL on the (possibly reordered) row */
+        strncpy(valBuf, reorderedRows[i], sizeof(valBuf) - 1);
         valBuf[sizeof(valBuf) - 1] = '\0';
 
         nv = split_row_values(valBuf, vals, 64);
@@ -226,12 +349,12 @@ int InsertProcess(void)
     /* Insert each row */
     g_insertCount = 0;
     for (i = 0; i < numRows; i++) {
-        int rc = store_single_row(db, tblName, rowPtrs[i]);
+        int rc = store_single_row(db, tblName, reorderedRows[i]);
         if (rc != 0) {
             /* Duplicate PK or error — abort whole batch */
             char valBuf2[RECORD_BUF_SIZE];
             char *key;
-            strncpy(valBuf2, rowPtrs[i], sizeof(valBuf2) - 1);
+            strncpy(valBuf2, reorderedRows[i], sizeof(valBuf2) - 1);
             valBuf2[sizeof(valBuf2) - 1] = '\0';
             key = strtok(valBuf2, ";");
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),

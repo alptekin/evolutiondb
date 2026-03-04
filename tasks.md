@@ -77,7 +77,7 @@
 
 ---
 
-### Task 4: ⬜ INSERT with Column List Mapping (Feature #16)
+### Task 4: ✅ INSERT with Column List Mapping (Feature #16)
 
 **Goal:** `INSERT INTO t (col2, col1) VALUES ('b', 'a')` is parsed but column mapping is ignored. Implement it.
 
