@@ -18,6 +18,7 @@ int g_gui_mode = 0;
 jmp_buf g_gui_jmpbuf;
 int g_gui_error = 0;
 char g_gui_error_msg[512];
+char g_gui_error_sqlstate[6] = "";
 char g_orderByColumn[256];
 int g_orderByDesc = 0;
 char g_orderByColumns[8][256];

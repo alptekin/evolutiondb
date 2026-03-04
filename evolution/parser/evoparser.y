@@ -295,7 +295,7 @@ expr: NAME
     {
         emit("NUMBER %d", $1);
         char buf[32];
-        sprintf(buf, "%d", $1);
+        snprintf(buf, sizeof(buf), "%d", $1);
         GetInsertions(buf);
         $$ = expr_make_int($1);
     }
@@ -303,7 +303,7 @@ expr: NAME
     {
         emit("FLOAT %g", $1);
         char buf[64];
-        sprintf(buf, "%g", $1);
+        snprintf(buf, sizeof(buf), "%g", $1);
         GetInsertions(buf);
         $$ = expr_make_float($1);
     }

@@ -391,6 +391,7 @@ int GrantPrivilege(const char *username, int scope_type,
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Invalid privilege specification");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INSUFFICIENT_PRIVILEGE);
         return -1;
     }
 
@@ -404,6 +405,7 @@ int GrantPrivilege(const char *username, int scope_type,
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file for grants");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -487,6 +489,7 @@ int RevokePrivilege(const char *username, int scope_type,
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Invalid privilege specification");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INSUFFICIENT_PRIVILEGE);
         return -1;
     }
 
@@ -498,6 +501,7 @@ int RevokePrivilege(const char *username, int scope_type,
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot open grants file");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -507,6 +511,7 @@ int RevokePrivilege(const char *username, int scope_type,
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file for grants");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -566,6 +571,7 @@ int RevokePrivilege(const char *username, int scope_type,
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "No matching grant found for user '%s'", username);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         return -1;
     }
 

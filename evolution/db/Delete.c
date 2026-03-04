@@ -13,11 +13,11 @@
 static int ReadColumnNames(const char *tableName,
                            char colNames[][128], int maxCols)
 {
-    char metaFile[1024], line[2048];
+    char metaFile[SAFE_PATH_MAX], line[2048];
     int count = 0;
     char *tok;
 
-    sprintf(metaFile, "%s.meta", tableName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
     FILE *fp = fopen(metaFile, "r");
     if (!fp) return 0;
 

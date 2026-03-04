@@ -8,11 +8,11 @@
 
 int ReadPadSize(const char *tblName)
 {
-    char metaFile[1024], line[256];
+    char metaFile[SAFE_PATH_MAX], line[256];
     int padSize = RECORD_PAD_SIZE;
     FILE *fp;
 
-    sprintf(metaFile, "%s.meta", tblName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
     fp = fopen(metaFile, "r");
     if (fp) {
         /* Line 1: column names (skip) */
@@ -31,10 +31,10 @@ int ReadPadSize(const char *tblName)
 
 void WritePadSize(const char *tblName, int padSize)
 {
-    char metaFile[1024], colLine[1024], typeLine[1024], pkLine[256], nullLine[1024];
+    char metaFile[SAFE_PATH_MAX], colLine[1024], typeLine[1024], pkLine[256], nullLine[1024];
     FILE *fp;
 
-    sprintf(metaFile, "%s.meta", tblName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
 
     /* Read existing lines from .meta */
     colLine[0] = '\0';
@@ -112,7 +112,7 @@ int CreateTableProcess(void)
 
     /* Save column names and pad size to .meta file */
     if (g_columnDefs[0] != '\0') {
-        sprintf(metaFile, "%s.meta", g_tblName);
+        snprintf(metaFile, sizeof(metaFile), "%s.meta", g_tblName);
         FILE *fp = fopen(metaFile, "w");
         if (fp) {
             fprintf(fp, "%s\n%d\n%s\n%d\n%s\n", g_columnDefs, padSize, g_columnTypeDefs, g_primaryKeyIndex, g_columnNullFlags);
@@ -163,7 +163,7 @@ int GetColumnNames(char *name)
         char buf[4];
         if (g_columnNullFlags[0] != '\0')
             strcat(g_columnNullFlags, ";");
-        sprintf(buf, "%d", g_currentColNotNull ? 1 : 0);
+        snprintf(buf, sizeof(buf), "%d", g_currentColNotNull ? 1 : 0);
         strcat(g_columnNullFlags, buf);
     }
 
@@ -191,7 +191,7 @@ int GetColumnSize(int typeVal)
     /* Accumulate type encoding in g_columnTypeDefs (e.g. "40000;130050") */
     if (g_columnTypeDefs[0] != '\0')
         strcat(g_columnTypeDefs, ";");
-    sprintf(buf, "%d", typeVal);
+    snprintf(buf, sizeof(buf), "%d", typeVal);
     strcat(g_columnTypeDefs, buf);
 
     return size;
@@ -199,12 +199,12 @@ int GetColumnSize(int typeVal)
 
 int ReadColumnTypes(const char *tblName, int *types, int maxCols)
 {
-    char metaFile[1024], line[1024];
+    char metaFile[SAFE_PATH_MAX], line[1024];
     char *tok;
     int count = 0;
     FILE *fp;
 
-    sprintf(metaFile, "%s.meta", tblName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
     fp = fopen(metaFile, "r");
     if (!fp) return 0;
 
@@ -250,6 +250,7 @@ int ValidateValue(const char *value, int typeEncoding)
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "expected integer value, got '%s'", value);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
             return -1;
         }
         break;
@@ -263,6 +264,7 @@ int ValidateValue(const char *value, int typeEncoding)
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "expected numeric value, got '%s'", value);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
             return -1;
         }
         break;
@@ -274,6 +276,7 @@ int ValidateValue(const char *value, int typeEncoding)
                      "value '%.100s' exceeds %s(%d) length limit",
                      value, typeFamily == 12 ? "CHAR" : "VARCHAR", size);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_STRING_DATA_RIGHT_TRUNCATION);
             return -1;
         }
         break;
@@ -285,6 +288,7 @@ int ValidateValue(const char *value, int typeEncoding)
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "expected BOOLEAN (true/false/0/1), got '%s'", value);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
             return -1;
         }
         break;
@@ -308,10 +312,10 @@ void SetColumnPrimaryKey(void)
 
 int ReadPrimaryKey(const char *tblName)
 {
-    char metaFile[1024], line[256];
+    char metaFile[SAFE_PATH_MAX], line[256];
     FILE *fp;
 
-    sprintf(metaFile, "%s.meta", tblName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
     fp = fopen(metaFile, "r");
     if (!fp) return -1;
 
@@ -329,12 +333,12 @@ int ReadPrimaryKey(const char *tblName)
 
 int ReadNullFlags(const char *tblName, int *flags, int maxCols)
 {
-    char metaFile[1024], line[1024];
+    char metaFile[SAFE_PATH_MAX], line[1024];
     char *tok;
     int count = 0;
     FILE *fp;
 
-    sprintf(metaFile, "%s.meta", tblName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
     fp = fopen(metaFile, "r");
     if (!fp) return 0;
 

@@ -2,12 +2,16 @@
 #define DATABASE_H_
 
 #include <setjmp.h>
+#include "evosql_errcodes.h"
 
 /* Minimum padded record size - ensures UPDATE can overwrite in-place */
 #define RECORD_PAD_SIZE 256
 
 /* Maximum record buffer size (must accommodate any padded record) */
 #define RECORD_BUF_SIZE 8192
+
+/* Safe path buffer size — all file-path buffers should use this */
+#define SAFE_PATH_MAX 2048
 
 /* Function Prototypes */
 int GetInsertions(char *name);
@@ -55,6 +59,10 @@ const char *db_get_current_database(void);
 void db_set_current_schema(const char *name);
 const char *db_get_current_schema(void);
 void db_table_path(const char *tableName, char *out, int outSize);
+int  db_ext_path(const char *tableName, const char *ext, char *out, int outSize);
+int  db_meta_path(const char *tableName, char *out, int outSize);
+int  db_dat_path(const char *tableName, char *out, int outSize);
+int  db_idx_path(const char *tableName, char *out, int outSize);
 
 char *ParseUpdate(char *arr);
 char *ParseInsertion(char *arr);
@@ -117,6 +125,7 @@ extern int g_gui_mode;
 extern jmp_buf g_gui_jmpbuf;
 extern int g_gui_error;
 extern char g_gui_error_msg[512];
+extern char g_gui_error_sqlstate[6];
 extern char g_orderByColumn[256];
 extern int g_orderByDesc;
 extern char g_orderByColumns[8][256];

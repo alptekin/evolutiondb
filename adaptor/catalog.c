@@ -259,7 +259,7 @@ static int handle_set(const char *sql, ResultSet *rs)
             if (val > 0) {
                 set_max_connections(val);
                 result_init(rs);
-                sprintf(rs->command_tag, "SET");
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "SET");
                 return 1;
             }
         }
@@ -298,7 +298,7 @@ static int handle_show(const char *sql, ResultSet *rs)
             }
             fclose(fp);
         }
-        sprintf(rs->command_tag, "SHOW");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
 
@@ -324,7 +324,7 @@ static int handle_show(const char *sql, ResultSet *rs)
             }
             fclose(fp);
         }
-        sprintf(rs->command_tag, "SHOW");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
 
@@ -350,7 +350,7 @@ static int handle_show(const char *sql, ResultSet *rs)
             result_set_field(rs, row, 0, tname);
         }
         meta_iter_close(&mit);
-        sprintf(rs->command_tag, "SHOW");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
 
@@ -366,7 +366,7 @@ static int handle_show(const char *sql, ResultSet *rs)
             int row = result_add_row(rs);
             result_set_field(rs, row, 0, usernames[i]);
         }
-        sprintf(rs->command_tag, "SHOW");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
 
@@ -426,7 +426,7 @@ static int handle_show(const char *sql, ResultSet *rs)
             result_set_field(rs, row, 3, privs[i]);
             result_set_field(rs, row, 4, gopts[i] ? "YES" : "NO");
         }
-        sprintf(rs->command_tag, "SHOW");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
 
@@ -438,11 +438,11 @@ static int handle_show(const char *sql, ResultSet *rs)
     int row = result_add_row(rs);
     if (stristr_found(sql, "max_connections")) {
         char buf[32];
-        sprintf(buf, "%d", get_max_connections());
+        snprintf(buf, sizeof(buf), "%d", get_max_connections());
         result_set_field(rs, row, 0, buf);
     } else if (stristr_found(sql, "active_connections")) {
         char buf[32];
-        sprintf(buf, "%d", get_active_connections());
+        snprintf(buf, sizeof(buf), "%d", get_active_connections());
         result_set_field(rs, row, 0, buf);
     } else if (stristr_found(sql, "transaction_isolation") || stristr_found(sql, "transaction isolation"))
         result_set_field(rs, row, 0, "read committed");
@@ -457,7 +457,7 @@ static int handle_show(const char *sql, ResultSet *rs)
     else
         result_set_field(rs, row, 0, "");
 
-    sprintf(rs->command_tag, "SHOW");
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
     return 1;
 }
 
@@ -532,7 +532,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         int row = result_add_row(rs);
         result_set_field(rs, row, 0,
             "PostgreSQL 15.0 (EvoSQL 1.0 - Evolution Database Engine)");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -540,7 +540,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "current_database", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, db_get_current_database());
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -552,7 +552,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, db_get_current_schema());
         result_set_field(rs, row, 1, "evosql");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -560,7 +560,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "current_schema", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, db_get_current_schema());
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -568,7 +568,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "current_user", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "evosql");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -576,7 +576,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "inet_server_port", PG_OID_INT4);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "5433");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -594,7 +594,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
             result_set_field(rs, row, 0, "read committed");
         else
             result_set_field(rs, row, 0, "");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -603,7 +603,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "current_schemas", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "{pg_catalog,default}");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -615,7 +615,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "description", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_null(rs, row, 0);
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -624,7 +624,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "format_type", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "text");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -633,7 +633,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "pg_get_userbyid", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "evosql");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -642,7 +642,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "pg_encoding_to_char", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "UTF8");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -658,7 +658,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "privilege", PG_OID_BOOL);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "t");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -667,7 +667,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "pg_get_expr", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_null(rs, row, 0);
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -678,7 +678,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "result", PG_OID_TEXT);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "");
-        sprintf(rs->command_tag, "SELECT 1");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
 
@@ -699,7 +699,7 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
                     result_add_column(rs, "?column?", PG_OID_INT4);
                     int row = result_add_row(rs);
                     result_set_field(rs, row, 0, "1");
-                    sprintf(rs->command_tag, "SELECT 1");
+                    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
                     return 1;
                 }
             }
@@ -746,7 +746,7 @@ int catalog_list_tables(ResultSet *rs)
     }
     meta_iter_close(&it);
 
-    sprintf(rs->command_tag, "SELECT %d", count);
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
     return 1;
 }
 
@@ -755,7 +755,7 @@ int catalog_list_tables(ResultSet *rs)
  * ---------------------------------------------------------------- */
 int catalog_list_columns(const char *table_name, ResultSet *rs)
 {
-    char metaFile[1024], line[1024];
+    char metaFile[SAFE_PATH_MAX], line[1024];
     FILE *fp;
     int ordinal = 0;
     int colTypes[64];
@@ -779,10 +779,10 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
     int nullFlags[64];
     int numNullFlags = ReadNullFlags(_fullPath, nullFlags, 64);
 
-    sprintf(metaFile, "%s.meta", _fullPath);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", _fullPath);
     fp = fopen(metaFile, "r");
     if (!fp) {
-        sprintf(rs->command_tag, "SELECT 0");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         return 1;
     }
 
@@ -796,7 +796,7 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
             if (row < 0) break;
 
             char ordStr[16];
-            sprintf(ordStr, "%d", ordinal);
+            snprintf(ordStr, sizeof(ordStr), "%d", ordinal);
 
             const char *typeName = (ordinal - 1 < numTypes)
                 ? evo_type_to_name(colTypes[ordinal - 1])
@@ -815,7 +815,7 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
         }
     }
     fclose(fp);
-    sprintf(rs->command_tag, "SELECT %d", ordinal);
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", ordinal);
     return 1;
 }
 
@@ -842,7 +842,7 @@ static int catalog_list_all_columns(ResultSet *rs)
     snprintf(_dbdir2, sizeof(_dbdir2), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
     meta_iter_open(&it, _dbdir2);
     while (meta_iter_next(&it)) {
-        char tblName[256], metaFile[1024], line[1024];
+        char tblName[256], metaFile[SAFE_PATH_MAX], line[1024];
         strncpy(tblName, it.current_name, sizeof(tblName) - 1);
         tblName[sizeof(tblName) - 1] = '\0';
         char *dot = strstr(tblName, ".meta");
@@ -850,7 +850,7 @@ static int catalog_list_all_columns(ResultSet *rs)
 
         char _fp2[1024];
         db_table_path(tblName, _fp2, sizeof(_fp2));
-        sprintf(metaFile, "%s.meta", _fp2);
+        snprintf(metaFile, sizeof(metaFile), "%s.meta", _fp2);
         FILE *fp = fopen(metaFile, "r");
         if (!fp) continue;
 
@@ -873,7 +873,7 @@ static int catalog_list_all_columns(ResultSet *rs)
                 if (row < 0) break;
 
                 char ordStr[16];
-                sprintf(ordStr, "%d", ordinal);
+                snprintf(ordStr, sizeof(ordStr), "%d", ordinal);
 
                 const char *typeName = (ordinal - 1 < numColTypes)
                     ? evo_type_to_name(colTypes[ordinal - 1])
@@ -896,7 +896,7 @@ static int catalog_list_all_columns(ResultSet *rs)
     }
     meta_iter_close(&it);
 
-    sprintf(rs->command_tag, "SELECT %d", total);
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", total);
     return 1;
 }
 
@@ -1013,7 +1013,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             result_set_field(rs, r, 12, "en_US.UTF-8");
             count = 1;
         }
-        sprintf(rs->command_tag, "SELECT %d", count);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
 
@@ -1072,7 +1072,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             fclose(fp);
         }
 
-        sprintf(rs->command_tag, "SELECT %d", count);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
 
@@ -1172,7 +1172,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             count++;
         }
 
-        sprintf(rs->command_tag, "SELECT %d", count);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
 
@@ -1221,11 +1221,11 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 char *dot = strstr(tblName, ".meta");
                 if (dot) *dot = '\0';
 
-                char metaPath[1024], line[2048], oidStr[16];
+                char metaPath[SAFE_PATH_MAX], line[2048], oidStr[16];
                 char _fp3[1024];
                 db_table_path(tblName, _fp3, sizeof(_fp3));
-                sprintf(metaPath, "%s.meta", _fp3);
-                sprintf(oidStr, "%u", stable_table_oid(tblName));
+                snprintf(metaPath, sizeof(metaPath), "%s.meta", _fp3);
+                snprintf(oidStr, sizeof(oidStr), "%u", stable_table_oid(tblName));
 
                 /* Read type encodings for this table */
                 int colTypes[64];
@@ -1250,7 +1250,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                         int typoid, attlen, typmod;
                         const char *byval, *storage;
 
-                        sprintf(numStr, "%d", attnum);
+                        snprintf(numStr, sizeof(numStr), "%d", attnum);
 
                         if (attnum - 1 < numColTypes) {
                             typoid = evo_type_to_pg_oid(colTypes[attnum - 1]);
@@ -1265,9 +1265,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                             byval = "f";
                             storage = "x";
                         }
-                        sprintf(typoidStr, "%d", typoid);
-                        sprintf(attlenStr, "%d", attlen);
-                        sprintf(typmodStr, "%d", typmod);
+                        snprintf(typoidStr, sizeof(typoidStr), "%d", typoid);
+                        snprintf(attlenStr, sizeof(attlenStr), "%d", attlen);
+                        snprintf(typmodStr, sizeof(typmodStr), "%d", typmod);
 
                         result_set_field(rs, row, 0, oidStr);      /* attrelid */
                         result_set_field(rs, row, 1, col);          /* attname */
@@ -1301,7 +1301,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 fclose(fp);
         }
         meta_iter_close(&mit);
-        sprintf(rs->command_tag, "SELECT %d", count);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
 
@@ -1355,14 +1355,14 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             /* If it's a system schema (pg_catalog, information_schema), return empty */
             int oid_val = atoi(nsOid);
             if (oid_val == 11 || oid_val == 13060) {
-                sprintf(rs->command_tag, "SELECT 0");
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
                 return 1;
             }
             if (oid_to_schema_name(nsOid, schemaName, sizeof(schemaName))) {
                 strncpy(nsOidStr, nsOid, sizeof(nsOidStr) - 1);
             } else {
                 /* Unknown OID — return empty */
-                sprintf(rs->command_tag, "SELECT 0");
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
                 return 1;
             }
         } else {
@@ -1386,10 +1386,10 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 if (dot) *dot = '\0';
 
                 /* Count columns from .meta file */
-                char metaPath[1024], line[2048];
+                char metaPath[SAFE_PATH_MAX], line[2048];
                 int natts = 0;
                 /* Build meta path directly from resolved schema */
-                sprintf(metaPath, "%s/%s.meta", _dbdir4, tblName);
+                snprintf(metaPath, sizeof(metaPath), "%s/%s.meta", _dbdir4, tblName);
                 FILE *fp = fopen(metaPath, "r");
                 if (fp) {
                     if (fgets(line, sizeof(line), fp)) {
@@ -1405,13 +1405,13 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
                 char oidStr[16], nattsStr[16];
                 unsigned int tableOid = stable_table_oid(tblName);
-                sprintf(oidStr, "%u", tableOid);
-                sprintf(nattsStr, "%d", natts);
+                snprintf(oidStr, sizeof(oidStr), "%u", tableOid);
+                snprintf(nattsStr, sizeof(nattsStr), "%d", natts);
 
                 /* reltype: OID of the composite type for this table.
                  * Use table OID + 1 so DBeaver can resolve it. */
                 char reltypeStr[16];
-                sprintf(reltypeStr, "%u", tableOid + 1);
+                snprintf(reltypeStr, sizeof(reltypeStr), "%u", tableOid + 1);
 
                 result_set_field(rs, row, 0, oidStr);         /* oid */
                 result_set_field(rs, row, 1, tblName);        /* relname */
@@ -1447,7 +1447,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 count++;
         }
         meta_iter_close(&mit2);
-        sprintf(rs->command_tag, "SELECT %d", count);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
 
@@ -1455,7 +1455,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
     if (stristr_found(sql, "pg_proc")) {
         result_add_column(rs, "oid", PG_OID_INT4);
         result_add_column(rs, "proname", PG_OID_TEXT);
-        sprintf(rs->command_tag, "SELECT 0");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         return 1;
     }
 
@@ -1463,7 +1463,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
     if (stristr_found(sql, "pg_settings")) {
         result_add_column(rs, "name", PG_OID_TEXT);
         result_add_column(rs, "setting", PG_OID_TEXT);
-        sprintf(rs->command_tag, "SELECT 0");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         return 1;
     }
 
@@ -1516,10 +1516,10 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
                 unsigned int tableOid = stable_table_oid(tblName);
                 char oidStr[16], relidStr[16], conkeyStr[16], conname[256];
-                sprintf(oidStr, "%u", tableOid + 10000);
-                sprintf(relidStr, "%u", tableOid);
-                sprintf(conkeyStr, "{%d}", pkIndex + 1); /* PostgreSQL uses 1-based */
-                sprintf(conname, "%s_pkey", tblName);
+                snprintf(oidStr, sizeof(oidStr), "%u", tableOid + 10000);
+                snprintf(relidStr, sizeof(relidStr), "%u", tableOid);
+                snprintf(conkeyStr, sizeof(conkeyStr), "{%d}", pkIndex + 1); /* PostgreSQL uses 1-based */
+                snprintf(conname, sizeof(conname), "%s_pkey", tblName);
 
                 result_set_field(rs, row, 0, oidStr);       /* oid */
                 result_set_field(rs, row, 1, conname);       /* conname */
@@ -1542,7 +1542,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 count++;
         }
         meta_iter_close(&mit3);
-        sprintf(rs->command_tag, "SELECT %d", count);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
 
@@ -1555,7 +1555,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "refobjid", PG_OID_INT4);
         result_add_column(rs, "refobjsubid", PG_OID_INT4);
         result_add_column(rs, "deptype", PG_OID_BPCHAR);
-        sprintf(rs->command_tag, "SELECT 0");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         return 1;
     }
 
@@ -1565,12 +1565,12 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             result_add_column(rs, "string_agg", PG_OID_TEXT);
             int row = result_add_row(rs);
             result_set_field(rs, row, 0, "");
-            sprintf(rs->command_tag, "SELECT 1");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         } else {
             result_add_column(rs, "word", PG_OID_TEXT);
             result_add_column(rs, "catcode", PG_OID_TEXT);
             result_add_column(rs, "catdesc", PG_OID_TEXT);
-            sprintf(rs->command_tag, "SELECT 0");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         }
         return 1;
     }
@@ -1593,7 +1593,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         stristr_found(sql, "pg_operator") || stristr_found(sql, "pg_aggregate") ||
         stristr_found(sql, "pg_cast") || stristr_found(sql, "pg_auth")) {
         result_add_column(rs, "oid", PG_OID_INT4);
-        sprintf(rs->command_tag, "SELECT 0");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         return 1;
     }
 
@@ -1614,8 +1614,8 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             candidate[ci] = '\0';
             if (ci > 0) {
                 /* Check if this is a user table (has .meta file) */
-                char metaPath[1024];
-                sprintf(metaPath, "%s.meta", candidate);
+                char metaPath[SAFE_PATH_MAX];
+                snprintf(metaPath, sizeof(metaPath), "%s.meta", candidate);
                 FILE *fp = fopen(metaPath, "r");
                 if (fp) {
                     fclose(fp);
@@ -1629,7 +1629,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
     /* Generic catch-all: any other pg_ query returns empty SELECT */
     result_add_column(rs, "oid", PG_OID_INT4);
-    sprintf(rs->command_tag, "SELECT 0");
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
     return 1;
 }
 
@@ -1670,7 +1670,7 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
         result_set_field(rs, row2, 1, "information_schema");
         result_set_field(rs, row2, 2, "evosql");
 
-        sprintf(rs->command_tag, "SELECT 3");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 3");
         return 1;
     }
 
@@ -1679,7 +1679,7 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
         result_init(rs);
         rs->is_select = 1;
         result_add_column(rs, "result", PG_OID_TEXT);
-        sprintf(rs->command_tag, "SELECT 0");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         return 1;
     }
 
@@ -1840,14 +1840,14 @@ static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (is_grant) {
         if (GrantPrivilege(target_user, scope_type, scope_name,
                            priv_buf, with_grant_option) == 0) {
-            sprintf(rs->command_tag, "GRANT");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "GRANT");
         } else {
             result_set_error(rs, "42501", g_gui_error_msg);
             g_gui_error = 0;
         }
     } else {
         if (RevokePrivilege(target_user, scope_type, scope_name, priv_buf) == 0) {
-            sprintf(rs->command_tag, "REVOKE");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "REVOKE");
         } else {
             result_set_error(rs, "42501", g_gui_error_msg);
             g_gui_error = 0;
@@ -1902,7 +1902,7 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
 
         result_init(rs);
         if (CreateUserProcess(username, password) == 0) {
-            sprintf(rs->command_tag, "CREATE USER");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "CREATE USER");
         } else {
             result_set_error(rs, "42710", g_gui_error_msg);
             g_gui_error = 0;
@@ -1924,7 +1924,7 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
         result_init(rs);
         if (DropUserProcess(username) == 0) {
             DropUserGrants(username);   /* Also remove all grants for this user */
-            sprintf(rs->command_tag, "DROP USER");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "DROP USER");
         } else {
             result_set_error(rs, "42704", g_gui_error_msg);
             g_gui_error = 0;
@@ -1967,7 +1967,7 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
 
         result_init(rs);
         if (AlterUserPasswordProcess(username, password) == 0) {
-            sprintf(rs->command_tag, "ALTER USER");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "ALTER USER");
         } else {
             result_set_error(rs, "42704", g_gui_error_msg);
             g_gui_error = 0;

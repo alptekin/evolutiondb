@@ -201,7 +201,7 @@ static void parse_select_columns(const char *sql)
 static void collect_select_results(const char *tableName, ResultSet *rs)
 {
     DBHANDLE db;
-    char metaFile[1024], line[1024];
+    char metaFile[SAFE_PATH_MAX], line[1024];
     char keyBuf[1024];
     char *data;
     FILE *fp;
@@ -215,7 +215,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
     numTypes = ReadColumnTypes(tableName, colTypes, 64);
 
     /* Read column metadata from .meta file */
-    sprintf(metaFile, "%s.meta", tableName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
     fp = fopen(metaFile, "r");
     if (!fp) {
         result_set_error(rs, "42P01",
@@ -1167,7 +1167,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         }
     }
 
-    sprintf(rs->command_tag, "SELECT %d", rs->num_rows);
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
 }
 
 /* ----------------------------------------------------------------
@@ -1228,6 +1228,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_gui_mode = 1;
     g_gui_error = 0;
     g_gui_error_msg[0] = '\0';
+    g_gui_error_sqlstate[0] = '\0';
     g_lastSelectTable[0] = '\0';
     g_tblSelectionName[0] = '\0';
     g_tblName[0] = '\0';
@@ -1296,7 +1297,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         /* Check if engine set a validation/runtime error (e.g. type mismatch) */
         if (!rs->has_error && g_gui_error) {
             rs->has_error = 1;
-            strcpy(rs->error_sqlstate, "22000");
+            strcpy(rs->error_sqlstate,
+                   g_gui_error_sqlstate[0] ? g_gui_error_sqlstate : "22000");
             snprintf(rs->error_message, sizeof(rs->error_message),
                      "%.500s", g_gui_error_msg[0] ? g_gui_error_msg : "data validation error");
         }
@@ -1357,7 +1359,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                     }
                 }
             }
-            sprintf(rs->command_tag, "SELECT 1");
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         } else if (!rs->has_error) {
             /* DDL/DML command — determine appropriate tag */
             if (is_create_query(sql)) {
@@ -1374,11 +1376,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                     strcpy(rs->command_tag, "CREATE TABLE");
             }
             else if (is_insert_query(sql))
-                sprintf(rs->command_tag, "INSERT 0 %d", g_insertCount > 0 ? g_insertCount : 1);
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "INSERT 0 %d", g_insertCount > 0 ? g_insertCount : 1);
             else if (is_update_query(sql))
-                sprintf(rs->command_tag, "UPDATE %d", g_updateCount);
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "UPDATE %d", g_updateCount);
             else if (is_delete_query(sql))
-                sprintf(rs->command_tag, "DELETE %d", g_deleteCount);
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "DELETE %d", g_deleteCount);
             else if (is_drop_query(sql))
                 strcpy(rs->command_tag, "DROP TABLE");
             else if (is_truncate_query(sql))
@@ -1399,7 +1401,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
             scan_buf = NULL;
         }
         rs->has_error = 1;
-        strcpy(rs->error_sqlstate, "42000");
+        strcpy(rs->error_sqlstate,
+               g_gui_error_sqlstate[0] ? g_gui_error_sqlstate : "42000");
         snprintf(rs->error_message, sizeof(rs->error_message),
                  "SQL execution error: %.200s", sql);
     }

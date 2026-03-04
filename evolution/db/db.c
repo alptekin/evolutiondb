@@ -133,7 +133,7 @@ db_open(const char *pathname, int oflag, ...)
             err_sys("db_open: fstat error");
 
         if (statbuff.st_size == 0) {
-            sprintf(asciiptr, "%*d", PTR_SZ, 0);
+            snprintf(asciiptr, sizeof(asciiptr), "%*d", PTR_SZ, 0);
             hash[0] = 0;
             for (i = 0; i < NHASH_DEF + 1; i++)
                 strcat(hash, asciiptr);
@@ -451,12 +451,12 @@ _db_writeidx(DB *db, const char *key,
     if ((db->ptrval = ptrval) < 0 || ptrval > PTR_MAX)
         err_quit("_db_writeidx: invalid ptr: %ld", (long)ptrval);
 
-    sprintf(db->idxbuf, "%s%c%ld%c%d\n", key, SEP,
+    snprintf(db->idxbuf, IDXLEN_MAX + 2, "%s%c%ld%c%d\n", key, SEP,
             (long)db->datoff, SEP, (int)db->datlen);
 
     if ((len = (int)strlen(db->idxbuf)) < IDXLEN_MIN || len > IDXLEN_MAX)
         err_dump("_db_writeidx: invalid length");
-    sprintf(asciiptrlen, "%*ld%*d", PTR_SZ, (long)ptrval, IDXLEN_SZ, len);
+    snprintf(asciiptrlen, sizeof(asciiptrlen), "%*ld%*d", PTR_SZ, (long)ptrval, IDXLEN_SZ, len);
 
     if (whence == SEEK_END)
         if (writew_lock(db->idxfd, ((db->nhash+1)*PTR_SZ)+1,
@@ -487,7 +487,7 @@ _db_writeptr(DB *db, off_t offset, off_t ptrval)
 
     if (ptrval < 0 || ptrval > PTR_MAX)
         err_quit("_db_writeptr: invalid ptr: %ld", (long)ptrval);
-    sprintf(asciiptr, "%*ld", PTR_SZ, (long)ptrval);
+    snprintf(asciiptr, sizeof(asciiptr), "%*ld", PTR_SZ, (long)ptrval);
 
     if (lseek(db->idxfd, offset, SEEK_SET) == -1)
         err_dump("_db_writeptr: lseek error to ptr field");

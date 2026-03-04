@@ -8,14 +8,14 @@
 
 int DropTableProcess(void)
 {
-    char datFile[1024];
-    char idxFile[1024];
-    char metaFile[1024];
+    char datFile[SAFE_PATH_MAX];
+    char idxFile[SAFE_PATH_MAX];
+    char metaFile[SAFE_PATH_MAX];
     int ok = 0;
 
-    sprintf(datFile, "%s.dat", g_tblDropName);
-    sprintf(idxFile, "%s.idx", g_tblDropName);
-    sprintf(metaFile, "%s.meta", g_tblDropName);
+    snprintf(datFile, sizeof(datFile), "%s.dat", g_tblDropName);
+    snprintf(idxFile, sizeof(idxFile), "%s.idx", g_tblDropName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", g_tblDropName);
 
     if (remove(datFile) == 0)
         ok++;

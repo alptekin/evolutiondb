@@ -142,6 +142,41 @@ void db_table_path(const char *tableName, char *out, int outSize)
 }
 
 /* ----------------------------------------------------------------
+ *  Build extension path: root/<db>/<schema>/<table>.<ext>
+ *  Returns 0 on success, -1 on truncation (sets g_gui_error).
+ * ---------------------------------------------------------------- */
+int db_ext_path(const char *tableName, const char *ext, char *out, int outSize)
+{
+    int n = snprintf(out, outSize, "%s/%s/%s/%s.%s",
+                     g_dbRoot, g_currentDatabase, g_currentSchema, tableName, ext);
+    if (n < 0 || n >= outSize) {
+        g_gui_error = 1;
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "path too long for table \"%s\" (need %d, have %d)",
+                 tableName, n, outSize);
+        strncpy(g_gui_error_sqlstate, "E0001", sizeof(g_gui_error_sqlstate) - 1);
+        g_gui_error_sqlstate[sizeof(g_gui_error_sqlstate) - 1] = '\0';
+        return -1;
+    }
+    return 0;
+}
+
+int db_meta_path(const char *tableName, char *out, int outSize)
+{
+    return db_ext_path(tableName, "meta", out, outSize);
+}
+
+int db_dat_path(const char *tableName, char *out, int outSize)
+{
+    return db_ext_path(tableName, "dat", out, outSize);
+}
+
+int db_idx_path(const char *tableName, char *out, int outSize)
+{
+    return db_ext_path(tableName, "idx", out, outSize);
+}
+
+/* ----------------------------------------------------------------
  *  Helper: check if name already in a file (one name per line)
  * ---------------------------------------------------------------- */
 static int name_exists_in_file(const char *filepath, const char *name)
@@ -190,6 +225,7 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "database \"%s\" already exists", name);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_DATABASE);
         return -1;
     }
 
@@ -198,6 +234,7 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "could not create database directory \"%s\"", name);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -244,6 +281,7 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "schema \"%s\" already exists", name);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_SCHEMA);
         return -1;
     }
 
@@ -252,6 +290,7 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "could not create schema directory \"%s\"", name);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -276,6 +315,7 @@ int UseDatabaseProcess(const char *name)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "database \"%s\" does not exist", name);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_DATABASE);
         return -1;
     }
 
@@ -287,6 +327,7 @@ int UseDatabaseProcess(const char *name)
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "database directory \"%s\" not found", name);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
             return -1;
         }
     }
@@ -314,6 +355,7 @@ int SetSchemaProcess(const char *name)
                  "schema \"%s\" does not exist in database \"%s\"",
                  name, g_currentDatabase);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_SCHEMA);
         return -1;
     }
 
@@ -325,6 +367,7 @@ int SetSchemaProcess(const char *name)
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "schema directory \"%s\" not found", name);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
             return -1;
         }
     }

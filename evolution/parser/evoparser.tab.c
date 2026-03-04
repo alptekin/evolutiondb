@@ -1986,7 +1986,7 @@ yyreduce:
     {
         emit("NUMBER %d", (yyvsp[0].intval));
         char buf[32];
-        sprintf(buf, "%d", (yyvsp[0].intval));
+        snprintf(buf, sizeof(buf), "%d", (yyvsp[0].intval));
         GetInsertions(buf);
         (yyval.exprval) = expr_make_int((yyvsp[0].intval));
     }
@@ -1998,7 +1998,7 @@ yyreduce:
     {
         emit("FLOAT %g", (yyvsp[0].floatval));
         char buf[64];
-        sprintf(buf, "%g", (yyvsp[0].floatval));
+        snprintf(buf, sizeof(buf), "%g", (yyvsp[0].floatval));
         GetInsertions(buf);
         (yyval.exprval) = expr_make_float((yyvsp[0].floatval));
     }

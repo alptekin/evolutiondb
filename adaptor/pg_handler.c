@@ -220,14 +220,14 @@ void pg_handle_client(socket_t client_sock)
                                 memcpy(&ival, ptr, 4);
                                 ival = ntohl(ival);
                                 param_vals[pi] = (char *)malloc(16);
-                                sprintf(param_vals[pi], "%d", ival);
+                                snprintf(param_vals[pi], 16, "%d", ival);
                             } else if (is_binary && plen == 2) {
                                 /* 2-byte big-endian int16 → text */
                                 int16_t sval;
                                 memcpy(&sval, ptr, 2);
                                 sval = ntohs(sval);
                                 param_vals[pi] = (char *)malloc(16);
-                                sprintf(param_vals[pi], "%d", (int)sval);
+                                snprintf(param_vals[pi], 16, "%d", (int)sval);
                             } else if (is_binary && plen == 8) {
                                 /* 8-byte big-endian int64 → text */
                                 int64_t lval = 0;
@@ -235,7 +235,7 @@ void pg_handle_client(socket_t client_sock)
                                 for (bi = 0; bi < 8; bi++)
                                     lval = (lval << 8) | (unsigned char)ptr[bi];
                                 param_vals[pi] = (char *)malloc(24);
-                                sprintf(param_vals[pi], "%lld", (long long)lval);
+                                snprintf(param_vals[pi], 24, "%lld", (long long)lval);
                             } else if (is_binary && plen == 1) {
                                 /* 1-byte boolean → text */
                                 param_vals[pi] = strdup(ptr[0] ? "true" : "false");

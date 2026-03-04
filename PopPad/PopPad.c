@@ -338,7 +338,7 @@ static int GuiCompareRecords(const void *a, const void *b)
 void PopulateGridView(HWND hwndLV, const char *tableName)
 {
     DBHANDLE db;
-    char metaFile[1024], metaLine[1024], temp[1024];
+    char metaFile[SAFE_PATH_MAX], metaLine[1024], temp[1024];
     char *tok;
     int col, row;
     LVCOLUMNA lvc;
@@ -353,7 +353,7 @@ void PopulateGridView(HWND hwndLV, const char *tableName)
     char colNames[64][256];
     int numCols = 0;
 
-    sprintf(metaFile, "%s.meta", tableName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
     FILE *fp = fopen(metaFile, "r");
     if (!fp) return;
 

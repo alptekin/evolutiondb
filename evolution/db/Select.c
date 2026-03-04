@@ -9,11 +9,11 @@
 
 static void PrintColumnHeaders(const char *tableName)
 {
-    char metaFile[1024];
+    char metaFile[SAFE_PATH_MAX];
     char line[1024];
     char *col;
 
-    sprintf(metaFile, "%s.meta", tableName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
     FILE *fp = fopen(metaFile, "r");
     if (!fp)
         return;
@@ -62,11 +62,11 @@ static void PrintRecord(const char *data)
 /* Find column index by name from .meta file. Returns -1 if not found. */
 static int FindColumnIndex(const char *tableName, const char *colName)
 {
-    char metaFile[1024];
+    char metaFile[SAFE_PATH_MAX];
     char line[1024];
     int idx = 0;
 
-    sprintf(metaFile, "%s.meta", tableName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
     FILE *fp = fopen(metaFile, "r");
     if (!fp)
         return -1;

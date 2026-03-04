@@ -184,6 +184,7 @@ int CreateUserProcess(const char *username, const char *password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Username and password are required");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
         return -1;
     }
 
@@ -191,6 +192,7 @@ int CreateUserProcess(const char *username, const char *password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "User '%s' already exists", username);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_OBJECT);
         return -1;
     }
 
@@ -199,6 +201,7 @@ int CreateUserProcess(const char *username, const char *password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Failed to hash password");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
         return -1;
     }
 
@@ -209,6 +212,7 @@ int CreateUserProcess(const char *username, const char *password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot open users file");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -233,6 +237,7 @@ int DropUserProcess(const char *username)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Username is required");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
         return -1;
     }
 
@@ -245,6 +250,7 @@ int DropUserProcess(const char *username)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot open users file");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -254,6 +260,7 @@ int DropUserProcess(const char *username)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -277,6 +284,7 @@ int DropUserProcess(const char *username)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "User '%s' does not exist", username);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         return -1;
     }
 
@@ -304,6 +312,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Username and new password are required");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
         return -1;
     }
 
@@ -314,6 +323,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Failed to hash password");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
         return -1;
     }
 
@@ -325,6 +335,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot open users file");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -334,6 +345,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file");
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
@@ -358,6 +370,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "User '%s' does not exist", username);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         return -1;
     }
 

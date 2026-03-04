@@ -61,11 +61,11 @@ static int split_row_values(char *row, char **vals, int maxVals)
 static int InsertReadColumnNames(const char *tblName,
                                  char colNames[][128], int maxCols)
 {
-    char metaFile[1024], line[2048];
+    char metaFile[SAFE_PATH_MAX], line[2048];
     int count = 0;
     char *tok;
 
-    sprintf(metaFile, "%s.meta", tblName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
     FILE *fp = fopen(metaFile, "r");
     if (!fp) return 0;
 
@@ -116,6 +116,7 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
                  "INSERT has %d value(s) but %d column(s) specified",
                  numUserVals, g_insertColumnCount);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
         return -1;
     }
 
@@ -132,6 +133,7 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "column \"%s\" does not exist in table", g_insertColumns[i]);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_COLUMN);
             return -1;
         }
     }
@@ -176,6 +178,7 @@ static int validate_types(const char *tblName, char **vals, int numValues)
                  "INSERT has %d value(s) but table has %d column(s)",
                  numValues, numTypes);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
         return -1;
     }
     for (i = 0; i < numValues; i++) {
@@ -199,12 +202,12 @@ static int validate_not_null(const char *tblName, char **vals, int numValues)
         if (nullFlags[i] && (vals[i][0] == '\0' ||
             strcmp(vals[i], "\x01NULL\x01") == 0)) {
             /* Read column names for error message */
-            char metaFile[1024], metaLine[1024];
+            char metaFile[SAFE_PATH_MAX], metaLine[1024];
             char *colNames[64];
             int nc = 0;
             FILE *fp;
 
-            sprintf(metaFile, "%s.meta", tblName);
+            snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
             fp = fopen(metaFile, "r");
             if (fp) {
                 if (fgets(metaLine, sizeof(metaLine), fp)) {
@@ -223,6 +226,7 @@ static int validate_not_null(const char *tblName, char **vals, int numValues)
                      "null value in column \"%s\" violates not-null constraint",
                      (i < nc) ? colNames[i] : "unknown");
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
             return -1;
         }
     }
@@ -342,6 +346,7 @@ int InsertProcess(void)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "could not open table \"%s\"", tblName);
         g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
         TruncateInsert();
         return -1;
     }
@@ -361,6 +366,7 @@ int InsertProcess(void)
                      "duplicate key value violates unique constraint (key=%s, row %d)",
                      key ? key : "?", i + 1);
             g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
             db_close(db);
             TruncateInsert();
             return -1;

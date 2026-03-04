@@ -81,11 +81,11 @@ static void UpdateGetFieldValue(const char *data, int colIndex,
 static int UpdateReadColumnNames(const char *tableName,
                                  char colNames[][128], int maxCols)
 {
-    char mf[1024], ln[2048];
+    char mf[SAFE_PATH_MAX], ln[2048];
     int cnt = 0;
     char *t;
 
-    sprintf(mf, "%s.meta", tableName);
+    snprintf(mf, sizeof(mf), "%s.meta", tableName);
     FILE *f = fopen(mf, "r");
     if (!f) return 0;
 
@@ -190,7 +190,7 @@ int UpdateProcess(void)
     DBHANDLE db;
     char temp[RECORD_BUF_SIZE];
     char tblName[1024];
-    char metaFile[1024];
+    char metaFile[SAFE_PATH_MAX];
     char metaLine[1024];
     char *tok;
     int s, c;
@@ -247,7 +247,7 @@ int UpdateProcess(void)
     int numMetaCols = 0;
     FILE *fp;
 
-    sprintf(metaFile, "%s.meta", tblName);
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
     fp = fopen(metaFile, "r");
     if (fp) {
         if (fgets(metaLine, sizeof(metaLine), fp)) {
@@ -297,6 +297,7 @@ int UpdateProcess(void)
                                      "null value in column \"%s\" violates not-null constraint",
                                      setCols[s]);
                             g_gui_error = 1;
+                            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
                             g_updateCount = 0;
                             TruncateUpdate();
                             return -1;
