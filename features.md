@@ -104,6 +104,8 @@
 | 73 | Native UUID type & gen_random_uuid() | ❌ | ✅ | ❌ | UUID OID 2950 in catalog but no generation/validation |
 | 74 | Snowflake ID generation (SNOWFLAKE keyword) | ❌ | ❌ | ❌ | Twitter Snowflake: 41-bit timestamp + 10-bit machine + 12-bit sequence |
 | 75 | Query Timeout & Statement Cancellation | ✅ | ✅ | ❌ | No watchdog; runaway queries block connection forever |
+| 76 | `evo_sleep(ms)` — artificial delay function | ❌ | ✅ (`pg_sleep`) | ❌ | Block for N ms; interruptible by statement_timeout; chaos-engineering |
+| 77 | `evo_jitter(min_ms, max_ms)` — random delay function | ❌ (`pg_jitter` ext) | ❌ (`pg_jitter` ext) | ❌ | Random delay [min,max] ms; returns actual delay; pg_jitter-inspired |
 
 ## ⚙️ Storage Engine Limitations
 

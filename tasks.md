@@ -2,7 +2,7 @@
 
 > **Schedule:** 2 tasks per day, 10 steps each.  
 > **Testing rule:** Every task ends with unit tests, smoke tests, regression tests, and full system tests.  
-> **Ref:** [features.md](features.md) — 75 features → 75 tasks → 38 days.
+> **Ref:** [features.md](features.md) — 77 features → 75 tasks → 38 days.
 
 ---
 
@@ -357,22 +357,22 @@
 
 ---
 
-### Task 18: ⬜ Query Timeout & Statement Cancellation (Feature #75)
+### Task 18: ⬜ Query Timeout, Statement Cancellation & Delay Functions (Features #75, #76, #77)
 
-**Goal:** Implement `SET statement_timeout = <ms>` to prevent runaway queries (especially AI-generated ones). Uses a cross-platform watchdog thread approach — spawn a monitoring thread before query execution that sets a cancellation flag after timeout.
+**Goal:** Implement `SET statement_timeout = <ms>` to prevent runaway queries + `evo_sleep(ms)` and `evo_jitter(min_ms, max_ms)` SQL functions for artificial delay injection (pg_jitter-style). Uses a cross-platform watchdog thread approach — spawn a monitoring thread before query execution that sets a cancellation flag after timeout. The delay functions enable chaos-engineering style testing of timeout/retry behaviour.
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Add `statement_timeout` to `SessionCtx` — `int statement_timeout_ms` (0 = no timeout, default). Parse `SET statement_timeout = N` in catalog.c SET handler. | `adaptor/query_executor.h`, `adaptor/catalog.c` |
-| 2 | Add cancellation flag — `volatile int g_query_cancelled` (per-session or global behind `g_query_lock`). Watchdog thread sets this to 1 after timeout. | `evolution/db/database.h`, `evolution/db/database_globals.c` |
-| 3 | Implement watchdog thread — before `safe_query_execute()`, if `statement_timeout_ms > 0`, spawn a watchdog thread: `sleep(timeout_ms)` then set `g_query_cancelled = 1`. Cross-platform: uses `thread_create()` macro from `platform.h` (Linux: `pthread_create`, Windows: `CreateThread`). | `adaptor/server.c` |
-| 4 | Watchdog sleep — Linux: `usleep(timeout_ms * 1000)` or `nanosleep()`. Windows: `Sleep(timeout_ms)`. Wrap in `platform_sleep_ms(ms)` macro in `platform.h`. | `adaptor/platform.h` |
-| 5 | Check cancellation in scan loops — in `SelectAll()`, `DeleteProcess()`, `UpdateProcess()` inner loops, check `if (g_query_cancelled) { err_msg("canceling statement due to statement timeout"); return; }`. Early exit on cancel. | `evolution/db/Select.c`, `evolution/db/Delete.c`, `evolution/db/Update.c` |
-| 6 | Cancel watchdog on normal completion — after `safe_query_execute()` returns, set a `volatile int g_query_done = 1` flag that watchdog checks before setting cancel. Or use a cancellation event (Windows: `SetEvent`, Linux: `pthread_cancel`). | `adaptor/server.c` |
-| 7 | PG protocol cancel key — send `BackendKeyData` message with PID + secret during startup. Implement `CancelRequest` message handler: client sends cancel key → set `g_query_cancelled = 1` for matching session. | `adaptor/pg_handler.c` |
-| 8 | Reset state — after query completes (success or cancel), reset `g_query_cancelled = 0`. Return appropriate error code to client: `57014 query_canceled`. | `adaptor/server.c`, `adaptor/query_executor.c` |
-| 9 | Write unit tests — `tests/test_timeout.py`: SET statement_timeout = 100 (100ms), run a long query (scan 10000 rows with slow expression) → error "statement timeout", SET statement_timeout = 0 → no timeout, normal fast query with timeout set → succeeds. | `tests/test_timeout.py` |
-| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+| 1 | Add `platform_sleep_ms(ms)` — cross-platform millisecond sleep. Linux: `usleep(ms * 1000)` or `nanosleep()`. Windows: `Sleep(ms)`. Also add `platform_random_range(min, max)` helper using `rand()` seeded by `time(NULL)` once. | `adaptor/platform.h` |
+| 2 | Add `statement_timeout` to `SessionCtx` — `int statement_timeout_ms` (0 = no timeout, default). Parse `SET statement_timeout = N` in catalog.c SET handler. Add cancellation flag `volatile int g_query_cancelled` global. | `adaptor/query_executor.h`, `adaptor/catalog.c`, `evolution/db/database.h`, `evolution/db/database_globals.c` |
+| 3 | Implement watchdog thread — before `safe_query_execute()`, if `statement_timeout_ms > 0`, spawn a watchdog thread: `platform_sleep_ms(timeout_ms)` then set `g_query_cancelled = 1`. Cross-platform via `platform.h` macros (Linux: `pthread_create`, Windows: `CreateThread`). Add `volatile int g_query_done` to cancel watchdog on normal completion. | `adaptor/server.c`, `adaptor/platform.h` |
+| 4 | Check cancellation in scan loops — in `SelectAll()`, `DeleteProcess()`, `UpdateProcess()` inner loops, check `if (g_query_cancelled) { set SQLSTATE 57014; return; }`. Early exit on cancel. Reset `g_query_cancelled = 0` after query completes (success or cancel). | `evolution/db/Select.c`, `evolution/db/Delete.c`, `evolution/db/Update.c`, `adaptor/server.c`, `adaptor/query_executor.c` |
+| 5 | PG protocol cancel key — send `BackendKeyData` message with PID + secret during startup. Implement `CancelRequest` message handler: client sends cancel key → set `g_query_cancelled = 1` for matching session. | `adaptor/pg_handler.c` |
+| 6 | Implement `evo_sleep(ms)` — register as a SQL function in parser & catalog. Semantics: `SELECT evo_sleep(500)` → blocks for 500 ms using `platform_sleep_ms()`, returns integer 0 (success). Checks `g_query_cancelled` periodically (sleep in 50 ms chunks) so it can be interrupted by timeout. Grammar: `EVO_SLEEP '(' expr ')'` in evoparser.y. | `evolution/parser/evoparser.y`, `adaptor/catalog.c`, `adaptor/query_executor.c` |
+| 7 | Implement `evo_jitter(min_ms, max_ms)` — register as SQL function. Semantics: `SELECT evo_jitter(100, 500)` → sleeps for a random duration between min_ms and max_ms using `platform_random_range() + platform_sleep_ms()`, returns the actual delay in ms. Same interruptible chunked sleep as `evo_sleep`. Grammar: `EVO_JITTER '(' expr ',' expr ')'`. | `evolution/parser/evoparser.y`, `adaptor/catalog.c`, `adaptor/query_executor.c` |
+| 8 | Regenerate parser — run Bison/Flex to produce `evoparser.tab.c`, `lex.yy.c`. Wire delay functions through `query_executor.c` result pipeline (return single-row, single-column integer result). | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_timeout.py`: SET statement_timeout = 100 (100ms), run `SELECT evo_sleep(2000)` → error "statement timeout" (SQLSTATE 57014). SET statement_timeout = 0 → no timeout. `SELECT evo_sleep(50)` with timeout = 5000 → succeeds. `SELECT evo_jitter(10, 50)` → returns integer between 10-50. `SELECT evo_jitter(0, 0)` → returns 0 instantly. `evo_sleep` in WHERE: `SELECT * FROM t WHERE evo_sleep(1) = 0` → works. | `tests/test_timeout.py` |
+| 10 | Run regression + full system test — Docker rebuild, all test suites pass. Manual test: `SELECT evo_jitter(500, 2000)` from psql/DBeaver, observe delay. | `tests/`, `Dockerfile` |
 
 ---
 
@@ -1596,6 +1596,8 @@
 | 73 | Native UUID Type & gen_random_uuid() | 16 |
 | 74 | Snowflake ID Generation | 17 |
 | 75 | Query Timeout & Statement Cancellation | 18 |
+| 76 | `evo_sleep(ms)` — Artificial Delay | 18 |
+| 77 | `evo_jitter(min_ms, max_ms)` — Random Delay | 18 |
 | — | Dynamic allocation (storage fix) | 57 |
 | — | Semicolon-safe storage (storage fix) | 58 |
 
@@ -1613,7 +1615,7 @@
 | 6 | 11–12 | Transactions & Indexes (#12, #13) | 🔴 Critical |
 | 7 | 13–14 | Buffer Pool Manager & RECLAIM (#70, #71) | 🏗️ Architecture |
 | 8 | 15–16 | Temporary Tables & Native UUID (#72, #73) | 🏗️ Architecture |
-| 9 | 17–18 | Snowflake ID & Query Timeout (#74, #75) | 🏗️ Architecture |
+| 9 | 17–18 | Snowflake ID & Query Timeout + Sleep/Jitter (#74, #75, #76, #77) | 🏗️ Architecture |
 | 10 | 19–20 | INSERT...SELECT & Multi-table DELETE (#15, #19) | 🔴 Critical |
 | 11 | 21–22 | Multi-table UPDATE & ALTER TABLE ADD (#20, #5p1) | 🔴 Critical |
 | 12 | 23–24 | ALTER TABLE DROP & MODIFY/RENAME (#5p2, #5p3) | 🔴 Critical |
@@ -1644,7 +1646,7 @@
 | 37 | 73–74 | Connection pooling & Replication (#54, #68) | 🔵 Advanced |
 | 38 | 75 | Integration, hardening & release | 🏁 Final |
 
-**Total:** 75 tasks × 10 steps = **750 steps** over **38 working days**.
+**Total:** 75 tasks × 10 steps = **750 steps** over **38 working days** (77 features).
 
 ---
 
