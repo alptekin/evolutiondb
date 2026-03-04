@@ -106,6 +106,7 @@
 | 75 | Query Timeout & Statement Cancellation | ✅ | ✅ | ❌ | No watchdog; runaway queries block connection forever |
 | 76 | `evo_sleep(ms)` — artificial delay function | ❌ | ✅ (`pg_sleep`) | ❌ | Block for N ms; interruptible by statement_timeout; chaos-engineering |
 | 77 | `evo_jitter(min_ms, max_ms)` — random delay function | ❌ (`pg_jitter` ext) | ❌ (`pg_jitter` ext) | ❌ | Random delay [min,max] ms; returns actual delay; pg_jitter-inspired |
+| 78 | JIT Compilation Evaluation | ✅ (LLVM) | ✅ (LLVM / pg_jitter) | ❌ | Profile-driven decision at hardening phase; SLJIT/AsmJIT if expr eval >30% CPU on 100K+ rows |
 
 ## ⚙️ Storage Engine Limitations
 

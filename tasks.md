@@ -2,7 +2,7 @@
 
 > **Schedule:** 2 tasks per day, 10 steps each.  
 > **Testing rule:** Every task ends with unit tests, smoke tests, regression tests, and full system tests.  
-> **Ref:** [features.md](features.md) — 77 features → 75 tasks → 38 days.
+> **Ref:** [features.md](features.md) — 78 features → 75 tasks → 38 days.
 
 ---
 
@@ -1500,7 +1500,7 @@
 
 ### Task 75: ⬜ Comprehensive Integration & Hardening
 
-**Goal:** Final sweep: all 75 features integrated, edge cases handled, full test suite green.
+**Goal:** Final sweep: all features integrated, edge cases handled, full test suite green. Profile hot paths and evaluate JIT compilation need.
 
 | Step | Description | Files |
 |------|-------------|-------|
@@ -1509,11 +1509,12 @@
 | 3 | DBeaver full compatibility test — connect, browse tables, run queries, use prepared statements. | Manual |
 | 4 | psql full compatibility test — all SQL features via psql client. | Manual |
 | 5 | Performance benchmarks — 10K row table: SELECT, JOIN, GROUP BY, ORDER BY timing. | `tests/test_benchmark.py` (new) |
-| 6 | Memory leak audit — run Valgrind on full test suite, fix any leaks. | `Dockerfile` |
-| 7 | Error message audit — ensure all error messages follow PostgreSQL error code format (SQLSTATE). | All files |
-| 8 | Update `features.md` — mark all 75 features as ✅. | `features.md` |
-| 9 | Update `README.md` — final documentation with all features, benchmarks, known limitations. | `README.md` |
-| 10 | Tag release — `git tag v2.0.0`, update CHANGELOG. | Git |
+| 6 | **JIT evaluation (Feature #78)** — Profile expression evaluation & tuple deform hot paths with `perf`/`gprof`. If `evaluate_expr()` or scan loops consume >30% CPU on 100K+ row queries, evaluate lightweight JIT approach (SLJIT/AsmJIT-style native codegen for expressions). Document findings in `docs/jit_evaluation.md`. Decision: implement, defer, or skip. | `docs/jit_evaluation.md` (new) |
+| 7 | Memory leak audit — run Valgrind on full test suite, fix any leaks. | `Dockerfile` |
+| 8 | Error message audit — ensure all error messages follow PostgreSQL error code format (SQLSTATE). | All files |
+| 9 | Update `features.md` — mark all features as ✅. | `features.md` |
+| 10 | Update `README.md` — final documentation with all features, benchmarks, known limitations. | `README.md` |
+| 11 | Tag release — `git tag v2.0.0`, update CHANGELOG. | Git |
 
 ---
 
@@ -1598,6 +1599,7 @@
 | 75 | Query Timeout & Statement Cancellation | 18 |
 | 76 | `evo_sleep(ms)` — Artificial Delay | 18 |
 | 77 | `evo_jitter(min_ms, max_ms)` — Random Delay | 18 |
+| 78 | JIT Compilation Evaluation | 75 |
 | — | Dynamic allocation (storage fix) | 57 |
 | — | Semicolon-safe storage (storage fix) | 58 |
 
@@ -1646,7 +1648,7 @@
 | 37 | 73–74 | Connection pooling & Replication (#54, #68) | 🔵 Advanced |
 | 38 | 75 | Integration, hardening & release | 🏁 Final |
 
-**Total:** 75 tasks × 10 steps = **750 steps** over **38 working days** (77 features).
+**Total:** 75 tasks × 10 steps = **750 steps** over **38 working days** (78 features).
 
 ---
 
