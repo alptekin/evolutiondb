@@ -11,6 +11,7 @@
 
 /* Function Prototypes */
 int GetInsertions(char *name);
+int InsertRowSeparator(void);
 int GetSelection(char *pname);
 
 int TruncateInsert(void);
@@ -135,5 +136,6 @@ extern char g_currentDatabase[256];
 extern char g_currentSchema[256];
 extern int g_deleteCount;
 extern int g_updateCount;
+extern int g_insertCount;
 
 #endif

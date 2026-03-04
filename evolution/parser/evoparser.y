@@ -772,7 +772,7 @@ opt_col_names: /* nil */
 ;
 
 insert_vals_list: '(' insert_vals ')'                                           { emit("VALUES %d", $2); $$ = 1; }
-| insert_vals_list ',' '(' insert_vals ')'                                      { emit("VALUES %d", $4); $$ = $1 + 1; }
+| insert_vals_list ',' { InsertRowSeparator(); } '(' insert_vals ')'            { emit("VALUES %d", $5); $$ = $1 + 1; }
 ;
 insert_vals:
 expr										{ $$ = 1; }

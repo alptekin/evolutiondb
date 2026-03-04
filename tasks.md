@@ -58,7 +58,7 @@
 
 ## Day 2 — Multi-Row INSERT & Column Mapping
 
-### Task 3: ⬜ Multi-Row INSERT (Feature #14)
+### Task 3: ✅ Multi-Row INSERT (Feature #14)
 
 **Goal:** Parser already accepts `INSERT INTO t VALUES (1,'a'), (2,'b')` but only first row is inserted. Execute all rows.
 

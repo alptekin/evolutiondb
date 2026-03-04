@@ -1238,6 +1238,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_insert[0] = '\0';
     g_deleteCount = 0;
     g_updateCount = 0;
+    g_insertCount = 0;
     g_whereSel[0] = '\0';
     g_columnDefs[0] = '\0';
     g_columnNames[0] = '\0';
@@ -1372,7 +1373,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                     strcpy(rs->command_tag, "CREATE TABLE");
             }
             else if (is_insert_query(sql))
-                strcpy(rs->command_tag, "INSERT 0 1");
+                sprintf(rs->command_tag, "INSERT 0 %d", g_insertCount > 0 ? g_insertCount : 1);
             else if (is_update_query(sql))
                 sprintf(rs->command_tag, "UPDATE %d", g_updateCount);
             else if (is_delete_query(sql))
