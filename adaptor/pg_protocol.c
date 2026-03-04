@@ -6,6 +6,16 @@
 #include "../evolution/db/database.h"
 
 /* ----------------------------------------------------------------
+ *  evo_secure_wipe — local copy to avoid crypto.h / OpenSSL clash
+ *  (CWE-14: Compiler Removal of Code to Clear Buffers)
+ * ---------------------------------------------------------------- */
+static void *(*const volatile pg_memset_ptr)(void *, int, size_t) = memset;
+static void evo_secure_wipe(void *ptr, size_t len)
+{
+    pg_memset_ptr(ptr, 0, len);
+}
+
+/* ----------------------------------------------------------------
  *  Low-level I/O — use conn_t for TLS-transparent I/O
  * ---------------------------------------------------------------- */
 int pg_recv_exact(conn_t *conn, char *buf, int len)
@@ -332,7 +342,7 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
             return -1;
         }
 
-        memset(password, 0, sizeof(password)); /* wipe */
+        evo_secure_wipe(password, sizeof(password));
     }
 
     /* Authentication succeeded */
