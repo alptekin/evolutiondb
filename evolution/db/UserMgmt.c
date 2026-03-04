@@ -133,6 +133,10 @@ void db_ensure_users(void)
     } else {
         fprintf(stderr, "[UserMgmt] ERROR: Cannot create users file: %s\n", path);
     }
+
+    /* Wipe sensitive buffers regardless of outcome */
+    evo_secure_wipe(generated_pass, sizeof(generated_pass));
+    evo_secure_wipe(hash_str, sizeof(hash_str));
 }
 
 /* ----------------------------------------------------------------
@@ -218,6 +222,7 @@ int CreateUserProcess(const char *username, const char *password)
 
     fprintf(fp, "%s:%s\n", username, hash_str);
     fclose(fp);
+    evo_secure_wipe(hash_str, sizeof(hash_str));
     return 0;
 }
 
@@ -376,6 +381,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
 
     remove(path);
     rename(tmp_path, path);
+    evo_secure_wipe(hash_str, sizeof(hash_str));
     return 0;
 }
 
