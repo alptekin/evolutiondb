@@ -133,6 +133,105 @@ static unsigned int stable_table_oid(const char *name)
 }
 
 /* ----------------------------------------------------------------
+ *  Map a pg_namespace OID (string) to a schema name.
+ *  OID assignment mirrors pg_namespace handler:
+ *    11 = pg_catalog, 13060 = information_schema,
+ *    2200.. = user schemas (from per-database "schemas" file, in order)
+ *  Returns 1 if found and fills schema_out, 0 otherwise.
+ * ---------------------------------------------------------------- */
+static int schema_name_to_oid(const char *name, char *oid_out, int out_size)
+{
+    if (!name || !*name) return 0;
+    if (strcmp(name, "pg_catalog") == 0) { snprintf(oid_out, out_size, "11"); return 1; }
+    if (strcmp(name, "information_schema") == 0) { snprintf(oid_out, out_size, "13060"); return 1; }
+
+    char schfile[1024];
+    snprintf(schfile, sizeof(schfile), "%s/%s/schemas", db_get_root(), db_get_current_database());
+    FILE *fp = fopen(schfile, "r");
+    if (!fp) return 0;
+
+    char line[256];
+    int idx = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n\r")] = '\0';
+        if (line[0] == '\0') continue;
+        if (strcmp(line, name) == 0) {
+            snprintf(oid_out, out_size, "%d", 2200 + idx);
+            fclose(fp);
+            return 1;
+        }
+        idx++;
+    }
+    fclose(fp);
+    return 0;
+}
+
+static int oid_to_schema_name(const char *oid_str, char *schema_out, int out_size)
+{
+    int oid_val;
+    if (!oid_str || !*oid_str) return 0;
+    oid_val = atoi(oid_str);
+    if (oid_val == 11)    { strncpy(schema_out, "pg_catalog", out_size - 1); schema_out[out_size-1] = '\0'; return 1; }
+    if (oid_val == 13060) { strncpy(schema_out, "information_schema", out_size - 1); schema_out[out_size-1] = '\0'; return 1; }
+    if (oid_val < 2200)   return 0;
+
+    int idx = oid_val - 2200;  /* 0-based index into schemas file */
+    char schfile[1024];
+    snprintf(schfile, sizeof(schfile), "%s/%s/schemas", db_get_root(), db_get_current_database());
+    FILE *fp = fopen(schfile, "r");
+    if (!fp) return 0;
+
+    char line[256];
+    int cur = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        line[strcspn(line, "\n\r")] = '\0';
+        if (line[0] == '\0') continue;
+        if (cur == idx) {
+            strncpy(schema_out, line, out_size - 1);
+            schema_out[out_size - 1] = '\0';
+            fclose(fp);
+            return 1;
+        }
+        cur++;
+    }
+    fclose(fp);
+    return 0;
+}
+
+/* Extract the relnamespace OID from a WHERE clause like:
+ *   WHERE c.relnamespace='2200' ...   or
+ *   WHERE c.relnamespace = '2201' ...
+ * Searches from the WHERE keyword to avoid matching SELECT-list columns. */
+static int extract_relnamespace(const char *sql, char *oid_out, int out_size)
+{
+    /* Start searching from WHERE keyword */
+    const char *where_pos = strcasestr_local(sql, "WHERE");
+    if (!where_pos) return 0;
+
+    const char *p = strcasestr_local(where_pos, "relnamespace");
+    if (!p) return 0;
+    p += 12; /* skip "relnamespace" */
+    while (*p && (isspace((unsigned char)*p) || *p == '=')) p++;
+    if (*p == '\'') {
+        p++;
+        int i = 0;
+        while (*p && *p != '\'' && i < out_size - 1)
+            oid_out[i++] = *p++;
+        oid_out[i] = '\0';
+        return 1;
+    }
+    /* Could also be unquoted number */
+    if (isdigit((unsigned char)*p)) {
+        int i = 0;
+        while (*p && isdigit((unsigned char)*p) && i < out_size - 1)
+            oid_out[i++] = *p++;
+        oid_out[i] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------
  *  SET / SHOW / Transaction stubs
  * ---------------------------------------------------------------- */
 static int handle_set(const char *sql, ResultSet *rs)
@@ -1244,10 +1343,39 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "description", PG_OID_TEXT);
         result_add_column(rs, "partition_expr", PG_OID_TEXT);
 
-        /* Scan .meta files to return actual tables */
+        /* Determine which schema to scan from the WHERE clause.
+         * DBeaver sends: WHERE c.relnamespace='<oid>'
+         * We map the OID to a schema name and scan that directory. */
+        char nsOid[32] = "";
+        char schemaName[256] = "";
+        char nsOidStr[32] = "2200"; /* default fallback */
+
+        int has_ns_filter = extract_relnamespace(sql, nsOid, sizeof(nsOid));
+        if (has_ns_filter && nsOid[0]) {
+            /* If it's a system schema (pg_catalog, information_schema), return empty */
+            int oid_val = atoi(nsOid);
+            if (oid_val == 11 || oid_val == 13060) {
+                sprintf(rs->command_tag, "SELECT 0");
+                return 1;
+            }
+            if (oid_to_schema_name(nsOid, schemaName, sizeof(schemaName))) {
+                strncpy(nsOidStr, nsOid, sizeof(nsOidStr) - 1);
+            } else {
+                /* Unknown OID — return empty */
+                sprintf(rs->command_tag, "SELECT 0");
+                return 1;
+            }
+        } else {
+            /* No filter — use current schema */
+            strncpy(schemaName, db_get_current_schema(), sizeof(schemaName) - 1);
+            schemaName[sizeof(schemaName) - 1] = '\0';
+            schema_name_to_oid(schemaName, nsOidStr, sizeof(nsOidStr));
+        }
+
+        /* Scan .meta files from the resolved schema directory */
         MetaIterator mit2;
         char _dbdir4[1024];
-        snprintf(_dbdir4, sizeof(_dbdir4), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
+        snprintf(_dbdir4, sizeof(_dbdir4), "%s/%s/%s", db_get_root(), db_get_current_database(), schemaName);
         meta_iter_open(&mit2, _dbdir4);
         int count = 0;
         while (meta_iter_next(&mit2)) {
@@ -1260,9 +1388,8 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 /* Count columns from .meta file */
                 char metaPath[1024], line[2048];
                 int natts = 0;
-                char _fp4[1024];
-                db_table_path(tblName, _fp4, sizeof(_fp4));
-                sprintf(metaPath, "%s.meta", _fp4);
+                /* Build meta path directly from resolved schema */
+                sprintf(metaPath, "%s/%s.meta", _dbdir4, tblName);
                 FILE *fp = fopen(metaPath, "r");
                 if (fp) {
                     if (fgets(line, sizeof(line), fp)) {
@@ -1288,7 +1415,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
                 result_set_field(rs, row, 0, oidStr);         /* oid */
                 result_set_field(rs, row, 1, tblName);        /* relname */
-                result_set_field(rs, row, 2, "2200");         /* relnamespace (public) */
+                result_set_field(rs, row, 2, nsOidStr);       /* relnamespace */
                 result_set_field(rs, row, 3, reltypeStr);     /* reltype */
                 result_set_field(rs, row, 4, "0");            /* reloftype */
                 result_set_field(rs, row, 5, "10");           /* relowner */
@@ -1365,6 +1492,11 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         MetaIterator mit3;
         char _dbdir5[1024];
         snprintf(_dbdir5, sizeof(_dbdir5), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
+
+        /* Resolve the namespace OID for the current schema */
+        char conNsOid[32] = "2200";
+        schema_name_to_oid(db_get_current_schema(), conNsOid, sizeof(conNsOid));
+
         meta_iter_open(&mit3, _dbdir5);
         int count = 0;
         while (meta_iter_next(&mit3)) {
@@ -1391,7 +1523,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
 
                 result_set_field(rs, row, 0, oidStr);       /* oid */
                 result_set_field(rs, row, 1, conname);       /* conname */
-                result_set_field(rs, row, 2, "2200");        /* connamespace (public) */
+                result_set_field(rs, row, 2, conNsOid);      /* connamespace */
                 result_set_field(rs, row, 3, "p");           /* contype = primary key */
                 result_set_field(rs, row, 4, "f");           /* condeferrable */
                 result_set_field(rs, row, 5, "f");           /* condeferred */

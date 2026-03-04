@@ -173,10 +173,20 @@ void pg_handle_client(socket_t client_sock)
                 ptr += strlen(ptr) + 1;   /* skip portal name */
                 ptr += strlen(ptr) + 1;   /* skip statement name */
 
+                /* Read parameter format codes (0=text, 1=binary) */
                 int16_t num_fmt;
                 memcpy(&num_fmt, ptr, 2);
                 num_fmt = ntohs(num_fmt);
-                ptr += 2 + num_fmt * 2;
+                ptr += 2;
+                int16_t fmt_codes[64];
+                {
+                    int fi;
+                    for (fi = 0; fi < num_fmt && fi < 64; fi++) {
+                        memcpy(&fmt_codes[fi], ptr, 2);
+                        fmt_codes[fi] = ntohs(fmt_codes[fi]);
+                        ptr += 2;
+                    }
+                }
 
                 int16_t num_params;
                 memcpy(&num_params, ptr, 2);
@@ -194,9 +204,47 @@ void pg_handle_client(socket_t client_sock)
                         if (plen == -1) {
                             param_vals[pi] = strdup("NULL");
                         } else {
-                            param_vals[pi] = (char *)malloc(plen + 1);
-                            memcpy(param_vals[pi], ptr, plen);
-                            param_vals[pi][plen] = '\0';
+                            /* Determine format for this parameter:
+                             * - If num_fmt == 0: all text
+                             * - If num_fmt == 1: single format applies to all
+                             * - If num_fmt > 1: per-parameter format */
+                            int is_binary = 0;
+                            if (num_fmt == 1)
+                                is_binary = (fmt_codes[0] == 1);
+                            else if (pi < num_fmt)
+                                is_binary = (fmt_codes[pi] == 1);
+
+                            if (is_binary && plen == 4) {
+                                /* 4-byte big-endian int32 → text */
+                                int32_t ival;
+                                memcpy(&ival, ptr, 4);
+                                ival = ntohl(ival);
+                                param_vals[pi] = (char *)malloc(16);
+                                sprintf(param_vals[pi], "%d", ival);
+                            } else if (is_binary && plen == 2) {
+                                /* 2-byte big-endian int16 → text */
+                                int16_t sval;
+                                memcpy(&sval, ptr, 2);
+                                sval = ntohs(sval);
+                                param_vals[pi] = (char *)malloc(16);
+                                sprintf(param_vals[pi], "%d", (int)sval);
+                            } else if (is_binary && plen == 8) {
+                                /* 8-byte big-endian int64 → text */
+                                int64_t lval = 0;
+                                int bi;
+                                for (bi = 0; bi < 8; bi++)
+                                    lval = (lval << 8) | (unsigned char)ptr[bi];
+                                param_vals[pi] = (char *)malloc(24);
+                                sprintf(param_vals[pi], "%lld", (long long)lval);
+                            } else if (is_binary && plen == 1) {
+                                /* 1-byte boolean → text */
+                                param_vals[pi] = strdup(ptr[0] ? "true" : "false");
+                            } else {
+                                /* Text format or unknown binary size: copy as-is */
+                                param_vals[pi] = (char *)malloc(plen + 1);
+                                memcpy(param_vals[pi], ptr, plen);
+                                param_vals[pi][plen] = '\0';
+                            }
                             ptr += plen;
                         }
                     }
