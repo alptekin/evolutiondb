@@ -339,6 +339,7 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
             fprintf(stderr, "[PG] Authentication failed for user '%s'\n", startup_user);
             pg_send_error(conn, "FATAL", "28P01",
                           "password authentication failed");
+            evo_secure_wipe(password, sizeof(password));
             return -1;
         }
 
