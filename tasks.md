@@ -2,7 +2,7 @@
 
 > **Schedule:** 2 tasks per day, 10 steps each.  
 > **Testing rule:** Every task ends with unit tests, smoke tests, regression tests, and full system tests.  
-> **Ref:** [features.md](features.md) — 69 features → 69 tasks → 35 days.
+> **Ref:** [features.md](features.md) — 75 features → 75 tasks → 38 days.
 
 ---
 
@@ -256,9 +256,129 @@
 
 ---
 
-## Day 7 — INSERT...SELECT & Multi-Table DELETE
+## Day 7 — Buffer Pool Manager & RECLAIM
 
-### Task 13: ⬜ INSERT INTO ... SELECT (Feature #15)
+### Task 13: ⬜ Buffer Pool Manager (Feature #70)
+
+**Goal:** Implement a global in-memory page cache (LRU) to reduce disk I/O. All `db_fetch`/`db_store`/`db_delete` operations go through the buffer pool instead of hitting disk every time.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Design — define `BufferPage { off_t offset; char data[DATLEN_MAX]; int dirty; int pin_count; uint64_t access_ts; }`. Global pool array of N pages. Hash map `(fd, offset) → page_index` for O(1) lookup. | Design |
+| 2 | Create `buffer_pool.h` — public API: `bp_init(size)`, `bp_read_page(fd, offset, len) → data`, `bp_write_page(fd, offset, data, len)`, `bp_flush(fd)`, `bp_flush_all()`, `bp_invalidate(fd)`, `bp_destroy()`. | `evolution/db/buffer_pool.h` (new) |
+| 3 | Implement `buffer_pool.c` — LRU eviction: on cache miss, evict least-recently-used unpinned page. If evicted page is dirty, write to disk first. Use mutex for thread safety (global pool shared across connections). | `evolution/db/buffer_pool.c` (new) |
+| 4 | Wire into `db.c` — replace direct `read()`/`write()` calls in `_db_readdat()` and `_db_writedat()` with `bp_read_page()` / `bp_write_page()`. Keep index file I/O direct (small, random). | `evolution/db/db.c` |
+| 5 | Initialize buffer pool on server startup — call `bp_init()` from `server_init()` in `server.c`. Default pool size 256 pages. | `adaptor/server.c` |
+| 6 | Implement `bp_flush_all()` — called on graceful shutdown from `server_cleanup()`. Ensure all dirty pages written to disk. | `evolution/db/buffer_pool.c`, `adaptor/server.c` |
+| 7 | Implement `bp_invalidate(fd)` — invalidate all pages for a table's data file when table is dropped. Wire into `DropProcess()`. | `evolution/db/buffer_pool.c`, `evolution/db/Drop.c` |
+| 8 | Update Makefiles — add `buffer_pool.c` to evolution Makefile. | `evolution/Makefile` |
+| 9 | Write unit tests — `tests/test_buffer_pool.py`: INSERT+SELECT verifies data consistency through cache, large batch (500 rows) performance, DROP TABLE invalidates cache, multiple tables share pool. | `tests/test_buffer_pool.py` |
+| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+
+---
+
+### Task 14: ⬜ RECLAIM — Storage Garbage Collection (Feature #71)
+
+**Goal:** Deleted records leave blank space in `.dat`/`.idx` files (free list). `RECLAIM TABLE <name>` compacts storage by rewriting live records contiguously and rebuilding the hash index. EvoSQL-specific command (not PostgreSQL's VACUUM).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add grammar — `RECLAIM TABLE name` and `RECLAIM TABLE name ANALYZE` in `evoparser.y`. Add `RECLAIM` token to lexer. Set `g_commandType = CMD_RECLAIM`. | `evolution/parser/evoparser.y`, `evolution/parser/evolexer.l` |
+| 2 | Implement `ReclaimProcess(table_name)` — open `.idx` and `.dat` files. Scan all hash chains (not free list) to collect live records: `(key, data)` pairs. | `evolution/db/Reclaim.c` (new) |
+| 3 | Compact `.dat` file — create temp `.dat.new`, write live records contiguously with no gaps. Record new offsets for each key. | `evolution/db/Reclaim.c` |
+| 4 | Rebuild `.idx` file — create temp `.idx.new` with fresh hash table. Re-insert all live keys with their new `.dat` offsets. Empty free list. | `evolution/db/Reclaim.c` |
+| 5 | Atomic swap — rename `.dat.new` → `.dat`, `.idx.new` → `.idx`. On failure, keep originals. Invalidate buffer pool pages for this table via `bp_invalidate()`. | `evolution/db/Reclaim.c` |
+| 6 | Report statistics — return `"RECLAIM: removed N dead records, reclaimed M bytes"` as a notice/result message. | `evolution/db/Reclaim.c`, `adaptor/query_executor.c` |
+| 7 | Wire into `query_executor.c` — detect `RECLAIM` command, call `ReclaimProcess()`. Update Makefiles. | `adaptor/query_executor.c`, `evolution/Makefile` |
+| 8 | Regenerate parser. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_reclaim.py`: insert 100 rows → delete 80 → RECLAIM → verify 20 rows intact, file size shrunk, SELECT still works, RECLAIM on empty table, RECLAIM on table with no dead records. | `tests/test_reclaim.py` |
+| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+
+---
+
+## Day 8 — Temporary Tables & Native UUID
+
+### Task 15: ⬜ Temporary Tables (Feature #72)
+
+**Goal:** `CREATE TEMPORARY TABLE` is parsed (`opt_temporary`) but ignored. Implement session-scoped temporary tables that auto-drop on disconnect.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Design temp storage path — Linux: `/tmp/evosql_<pid>/<session_id>/`, Windows: `%TEMP%\evosql_<pid>\<session_id>\`. Tables stored as normal `.dat/.idx/.meta` files in this directory. | Design |
+| 2 | Extend `SessionCtx` — add `char temp_dir[512]`, `char temp_tables[64][128]`, `int temp_table_count`. Pass `SessionCtx*` into `CreateTableProcess()`. | `adaptor/query_executor.h`, `evolution/db/database.h` |
+| 3 | Modify `CreateTableProcess()` — when `opt_temporary == 1`, create files in session's temp directory instead of schema directory. Register table name in `SessionCtx.temp_tables[]`. | `evolution/db/Create.c` |
+| 4 | Modify table lookup — when resolving table name, check session temp directory first (temp tables shadow real tables). Fall back to schema directory. | `adaptor/query_executor.c` |
+| 5 | Auto-drop on disconnect — in `pg_handler()` cleanup (after client disconnects), iterate `temp_tables[]` and delete all temp files + temp directory. | `adaptor/pg_handler.c` |
+| 6 | Catalog isolation — temp tables not visible in `pg_class` to other sessions. Only the owning session sees them. | `adaptor/catalog.c` |
+| 7 | Regenerate parser (if any changes needed — `opt_temporary` already passes `$$ = 1`). | `evolution/parser/` |
+| 8 | Platform-specific temp dir — `#ifdef _WIN32` use `GetTempPathA()`, else use `/tmp/`. Create directory with `mkdir()` / `CreateDirectoryA()`. | `adaptor/query_executor.c` |
+| 9 | Write unit tests — `tests/test_temp_tables.py`: CREATE TEMPORARY TABLE, INSERT+SELECT, disconnect → table gone, temp shadows real table, two sessions have independent temp tables. | `tests/test_temp_tables.py` |
+| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+
+---
+
+### Task 16: ⬜ Native UUID Type & gen_random_uuid() (Feature #73)
+
+**Goal:** Implement UUID v4 data type with generation. Uses `/dev/urandom` (Linux) and `CryptGenRandom` (Windows) via existing `crypto_random_bytes()`. OID 2950 already registered in `pg_type` catalog.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Create `uuid.c` / `uuid.h` — `uuid_generate_v4(char *out)`: read 16 random bytes via `crypto_random_bytes()`, set version nibble (byte 6 → `0x4X`), set variant bits (byte 8 → `0x8X`/`0x9X`/`0xaX`/`0xbX`), format as `xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx`. | `evolution/db/uuid.c` (new), `evolution/db/uuid.h` (new) |
+| 2 | Add UUID type validation — `uuid_validate(const char *str)`: verify 36-char format `8-4-4-4-12` with valid hex digits. Wire into type checking in `validate_types()` (Insert.c). | `evolution/db/uuid.c`, `evolution/db/Insert.c` |
+| 3 | Add `gen_random_uuid()` SQL function — expression type `EXPR_GEN_RANDOM_UUID`. Add lexer token `FGEN_RANDOM_UUID`, parser rule `FGEN_RANDOM_UUID '(' ')'`. Evaluate by calling `uuid_generate_v4()`. | `evolution/db/expression.h`, `evolution/db/expression.c`, `evolution/parser/evolexer.l`, `evolution/parser/evoparser.y` |
+| 4 | Wire UUID as DEFAULT — `CREATE TABLE t (id UUID DEFAULT gen_random_uuid(), ...)`. When column is omitted in INSERT, generate UUID automatically. | `evolution/db/Insert.c` |
+| 5 | Add UUID comparison — UUIDs compared as case-insensitive strings. WHERE clause with UUID equality/inequality. | `evolution/db/expression.c` |
+| 6 | Regenerate parser. Update Makefiles. | `evolution/parser/`, `evolution/Makefile` |
+| 7 | Catalog — UUID type OID 2950 already in `pg_type`. Ensure DBeaver recognizes UUID columns. | `adaptor/catalog.c` |
+| 8 | Cross-platform test — verify `crypto_random_bytes()` works correctly on both Linux (Docker) and Windows (native build). UUID format and randomness. | Manual |
+| 9 | Write unit tests — `tests/test_uuid.py`: CREATE TABLE with UUID col, INSERT with gen_random_uuid(), INSERT with explicit UUID, invalid UUID → error, SELECT WHERE uuid_col = '...', UUID as DEFAULT, uniqueness over 100 generated UUIDs. | `tests/test_uuid.py` |
+| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+
+---
+
+## Day 9 — Snowflake ID & Query Timeout
+
+### Task 17: ⬜ Snowflake ID Generation (Feature #74)
+
+**Goal:** Implement Twitter Snowflake ID as a built-in function. 64-bit integer: 41-bit timestamp (ms since Unix epoch 1970-01-01) + 10-bit machine ID + 12-bit sequence counter. Exposed via `snowflake_id()` SQL function and `SNOWFLAKE` keyword.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Create snowflake module — extend `uuid.c` (or new `snowflake.c`): `snowflake_generate(int64_t *out)`. Use Unix epoch (1970-01-01 00:00:00 UTC). 41-bit ms timestamp gives range until ~2039. | `evolution/db/uuid.c` or `evolution/db/snowflake.c` (new) |
+| 2 | Monotonic clock — Linux: `clock_gettime(CLOCK_REALTIME)`, Windows: `GetSystemTimeAsFileTime()` converted to Unix ms. Helper: `snowflake_current_ms()`. | `evolution/db/snowflake.c` |
+| 3 | Machine ID — 10 bits (0–1023). Read from `EVOSQL_MACHINE_ID` env var, default to `hash(hostname) % 1024`. Linux: `gethostname()`, Windows: `GetComputerNameA()`. Stored as global `g_snowflake_machine_id`. | `evolution/db/snowflake.c` |
+| 4 | Sequence counter — 12-bit counter (0–4095) per millisecond. Thread-safe with mutex. If 4096 IDs exhausted in same ms, spin-wait until next ms. | `evolution/db/snowflake.c` |
+| 5 | Add `SNOWFLAKE` keyword to lexer and `snowflake_id()` SQL function — lexer token `SNOWFLAKE`, parser rule `SNOWFLAKE '(' ')'` → `EXPR_SNOWFLAKE_ID`. Return as BIGINT (int64). | `evolution/parser/evolexer.l`, `evolution/parser/evoparser.y`, `evolution/db/expression.h`, `evolution/db/expression.c` |
+| 6 | Wire as column DEFAULT — `CREATE TABLE t (id BIGINT DEFAULT snowflake_id(), ...)`. Auto-generate on INSERT when column omitted. | `evolution/db/Insert.c` |
+| 7 | Regenerate parser. Update Makefiles. | `evolution/parser/`, `evolution/Makefile` |
+| 8 | Initialize on server startup — call `snowflake_init()` from `server_init()`. Read machine ID, init mutex, init sequence. | `adaptor/server.c` |
+| 9 | Write unit tests — `tests/test_snowflake.py`: generate 100 IDs → all unique and monotonically increasing, extract timestamp component → within last second, extract machine ID → matches config, concurrent generation (multi-row INSERT) → no duplicates. | `tests/test_snowflake.py` |
+| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+
+---
+
+### Task 18: ⬜ Query Timeout & Statement Cancellation (Feature #75)
+
+**Goal:** Implement `SET statement_timeout = <ms>` to prevent runaway queries (especially AI-generated ones). Uses a cross-platform watchdog thread approach — spawn a monitoring thread before query execution that sets a cancellation flag after timeout.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `statement_timeout` to `SessionCtx` — `int statement_timeout_ms` (0 = no timeout, default). Parse `SET statement_timeout = N` in catalog.c SET handler. | `adaptor/query_executor.h`, `adaptor/catalog.c` |
+| 2 | Add cancellation flag — `volatile int g_query_cancelled` (per-session or global behind `g_query_lock`). Watchdog thread sets this to 1 after timeout. | `evolution/db/database.h`, `evolution/db/database_globals.c` |
+| 3 | Implement watchdog thread — before `safe_query_execute()`, if `statement_timeout_ms > 0`, spawn a watchdog thread: `sleep(timeout_ms)` then set `g_query_cancelled = 1`. Cross-platform: uses `thread_create()` macro from `platform.h` (Linux: `pthread_create`, Windows: `CreateThread`). | `adaptor/server.c` |
+| 4 | Watchdog sleep — Linux: `usleep(timeout_ms * 1000)` or `nanosleep()`. Windows: `Sleep(timeout_ms)`. Wrap in `platform_sleep_ms(ms)` macro in `platform.h`. | `adaptor/platform.h` |
+| 5 | Check cancellation in scan loops — in `SelectAll()`, `DeleteProcess()`, `UpdateProcess()` inner loops, check `if (g_query_cancelled) { err_msg("canceling statement due to statement timeout"); return; }`. Early exit on cancel. | `evolution/db/Select.c`, `evolution/db/Delete.c`, `evolution/db/Update.c` |
+| 6 | Cancel watchdog on normal completion — after `safe_query_execute()` returns, set a `volatile int g_query_done = 1` flag that watchdog checks before setting cancel. Or use a cancellation event (Windows: `SetEvent`, Linux: `pthread_cancel`). | `adaptor/server.c` |
+| 7 | PG protocol cancel key — send `BackendKeyData` message with PID + secret during startup. Implement `CancelRequest` message handler: client sends cancel key → set `g_query_cancelled = 1` for matching session. | `adaptor/pg_handler.c` |
+| 8 | Reset state — after query completes (success or cancel), reset `g_query_cancelled = 0`. Return appropriate error code to client: `57014 query_canceled`. | `adaptor/server.c`, `adaptor/query_executor.c` |
+| 9 | Write unit tests — `tests/test_timeout.py`: SET statement_timeout = 100 (100ms), run a long query (scan 10000 rows with slow expression) → error "statement timeout", SET statement_timeout = 0 → no timeout, normal fast query with timeout set → succeeds. | `tests/test_timeout.py` |
+| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+
+---
+
+## Day 10 — INSERT...SELECT & Multi-Table DELETE
+
+### Task 19: ⬜ INSERT INTO ... SELECT (Feature #15)
 
 **Goal:** Implement inserting rows from a SELECT query result.
 
@@ -277,7 +397,7 @@
 
 ---
 
-### Task 14: ⬜ Multi-Table DELETE (Feature #19)
+### Task 20: ⬜ Multi-Table DELETE (Feature #19)
 
 **Goal:** Grammar exists for multi-table DELETE but no execution. Implement `DELETE t1 FROM t1 JOIN t2 ON ... WHERE ...`.
 
@@ -285,7 +405,7 @@
 |------|-------------|-------|
 | 1 | Analyze parser `delete_list` / `table_references` rules — understand how multi-table DELETE is parsed. Identify globals set. | `evolution/parser/evoparser.y` |
 | 2 | Store target table list — `g_deleteTargets[]` (which tables to delete from) vs join tables. | `evolution/db/database.h`, `evolution/parser/evoparser.y` |
-| 3 | Implement — join tables (reuse JOIN engine from Task 23+), evaluate WHERE, collect keys for each target table. | `evolution/db/Delete.c` |
+| 3 | Implement — join tables (reuse JOIN engine from Task 29+), evaluate WHERE, collect keys for each target table. | `evolution/db/Delete.c` |
 | 4 | Execute deletions — for each target table, delete matching rows. | `evolution/db/Delete.c` |
 | 5 | Report combined affected_rows count. | `adaptor/query_executor.c` |
 | 6 | Regenerate parser. | `evolution/parser/` |
@@ -296,9 +416,9 @@
 
 ---
 
-## Day 8 — Multi-Table UPDATE & ALTER TABLE ADD COLUMN
+## Day 11 — Multi-Table UPDATE & ALTER TABLE ADD COLUMN
 
-### Task 15: ⬜ Multi-Table UPDATE (Feature #20)
+### Task 21: ⬜ Multi-Table UPDATE (Feature #20)
 
 **Goal:** Implement `UPDATE t1 JOIN t2 ON ... SET t1.col = t2.col WHERE ...`.
 
@@ -317,7 +437,7 @@
 
 ---
 
-### Task 16: ⬜ ALTER TABLE — ADD COLUMN (Feature #5, Part 1)
+### Task 22: ⬜ ALTER TABLE — ADD COLUMN (Feature #5, Part 1)
 
 **Goal:** No schema evolution exists. Implement `ALTER TABLE t ADD [COLUMN] col type [constraints]`.
 
@@ -336,9 +456,9 @@
 
 ---
 
-## Day 9 — ALTER TABLE DROP & MODIFY COLUMN
+## Day 12 — ALTER TABLE DROP & MODIFY COLUMN
 
-### Task 17: ⬜ ALTER TABLE — DROP COLUMN (Feature #5, Part 2)
+### Task 23: ⬜ ALTER TABLE — DROP COLUMN (Feature #5, Part 2)
 
 **Goal:** Implement `ALTER TABLE t DROP [COLUMN] col`.
 
@@ -357,7 +477,7 @@
 
 ---
 
-### Task 18: ⬜ ALTER TABLE — MODIFY & RENAME COLUMN (Feature #5, Part 3)
+### Task 24: ⬜ ALTER TABLE — MODIFY & RENAME COLUMN (Feature #5, Part 3)
 
 **Goal:** Implement `ALTER TABLE t MODIFY COLUMN col new_type` and `ALTER TABLE t RENAME COLUMN old TO new`.
 
@@ -376,9 +496,9 @@
 
 ---
 
-## Day 10 — RENAME TABLE & DROP DATABASE/SCHEMA
+## Day 13 — RENAME TABLE & DROP DATABASE/SCHEMA
 
-### Task 19: ⬜ RENAME TABLE (Feature #31)
+### Task 25: ⬜ RENAME TABLE (Feature #31)
 
 **Goal:** Implement `RENAME TABLE old TO new` / `ALTER TABLE old RENAME TO new`.
 
@@ -397,7 +517,7 @@
 
 ---
 
-### Task 20: ⬜ DROP DATABASE & DROP SCHEMA (Features #29, #30)
+### Task 26: ⬜ DROP DATABASE & DROP SCHEMA (Features #29, #30)
 
 **Goal:** CREATE DATABASE/SCHEMA exist but DROP is missing. Implement both.
 
@@ -416,9 +536,9 @@
 
 ---
 
-## Day 11 — UNION & ORDER BY Expressions
+## Day 14 — UNION & ORDER BY Expressions
 
-### Task 21: ⬜ UNION / UNION ALL / INTERSECT / EXCEPT (Feature #4)
+### Task 27: ⬜ UNION / UNION ALL / INTERSECT / EXCEPT (Feature #4)
 
 **Goal:** Implement set operations on query results.
 
@@ -437,7 +557,7 @@
 
 ---
 
-### Task 22: ⬜ ORDER BY Expression & Ordinal Position (Feature #35)
+### Task 28: ⬜ ORDER BY Expression & Ordinal Position (Feature #35)
 
 **Goal:** ORDER BY currently only accepts column names. Support expressions and ordinal positions (`ORDER BY 1`, `ORDER BY col+1`).
 
@@ -456,9 +576,9 @@
 
 ---
 
-## Day 12 — JOIN (Part 1)
+## Day 15 — JOIN (Part 1)
 
-### Task 23: ⬜ INNER JOIN Execution (Feature #1, Part 1)
+### Task 29: ⬜ INNER JOIN Execution (Feature #1, Part 1)
 
 **Goal:** Grammar for JOINs exists. Implement INNER JOIN execution.
 
@@ -477,7 +597,7 @@
 
 ---
 
-### Task 24: ⬜ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
+### Task 30: ⬜ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
 
 **Goal:** Extend join engine for LEFT, RIGHT, CROSS, and NATURAL joins.
 
@@ -496,9 +616,9 @@
 
 ---
 
-## Day 13 — Subqueries
+## Day 16 — Subqueries
 
-### Task 25: ⬜ Scalar & WHERE Subqueries (Feature #2)
+### Task 31: ⬜ Scalar & WHERE Subqueries (Feature #2)
 
 **Goal:** Implement subquery execution in WHERE and SELECT clauses.
 
@@ -517,7 +637,7 @@
 
 ---
 
-### Task 26: ⬜ EXISTS & ANY/SOME/ALL Subqueries (Feature #3)
+### Task 32: ⬜ EXISTS & ANY/SOME/ALL Subqueries (Feature #3)
 
 **Goal:** Implement EXISTS, NOT EXISTS, ANY/SOME/ALL subquery operators.
 
@@ -536,9 +656,9 @@
 
 ---
 
-## Day 14 — String Functions & Multi-arg CONCAT
+## Day 17 — String Functions & Multi-arg CONCAT
 
-### Task 27: ⬜ String Functions (Feature #48)
+### Task 33: ⬜ String Functions (Feature #48)
 
 **Goal:** Add LEFT, RIGHT, LPAD, RPAD, REVERSE, REPEAT, INSTR, LOCATE, POSITION to expression engine.
 
@@ -557,7 +677,7 @@
 
 ---
 
-### Task 28: ⬜ CONCAT 3+ args & || Operator (Features #45, #46)
+### Task 34: ⬜ CONCAT 3+ args & || Operator (Features #45, #46)
 
 **Goal:** Extend CONCAT to support 3+ arguments and add `||` string concatenation operator.
 
@@ -576,9 +696,9 @@
 
 ---
 
-## Day 15 — Math & Date Functions
+## Day 18 — Math & Date Functions
 
-### Task 29: ⬜ Math Functions (Feature #49)
+### Task 35: ⬜ Math Functions (Feature #49)
 
 **Goal:** Implement ABS, CEIL, FLOOR, ROUND, POWER, SQRT, LOG, RAND.
 
@@ -597,7 +717,7 @@
 
 ---
 
-### Task 30: ⬜ Date Functions & INTERVAL (Features #50, #43)
+### Task 36: ⬜ Date Functions & INTERVAL (Features #50, #43)
 
 **Goal:** Implement NOW, DATEDIFF, DATE_FORMAT, EXTRACT, YEAR, MONTH, DAY. Wire DATE_ADD/DATE_SUB and INTERVAL evaluation.
 
@@ -616,9 +736,9 @@
 
 ---
 
-## Day 16 — Utility Functions
+## Day 19 — Utility Functions
 
-### Task 31: ⬜ CAST / CONVERT (Feature #37)
+### Task 37: ⬜ CAST / CONVERT (Feature #37)
 
 **Goal:** Implement type casting: `CAST(expr AS type)`, `CONVERT(expr, type)`.
 
@@ -637,7 +757,7 @@
 
 ---
 
-### Task 32: ⬜ NULLIF, IF, IFNULL (Features #38, #39)
+### Task 38: ⬜ NULLIF, IF, IFNULL (Features #38, #39)
 
 **Goal:** Implement NULLIF(), IF(), IFNULL() functions.
 
@@ -656,9 +776,9 @@
 
 ---
 
-## Day 17 — Boolean Operators & REGEXP
+## Day 20 — Boolean Operators & REGEXP
 
-### Task 33: ⬜ IS TRUE / IS FALSE / IS UNKNOWN & NULL-safe <=> (Features #42, #47)
+### Task 39: ⬜ IS TRUE / IS FALSE / IS UNKNOWN & NULL-safe <=> (Features #42, #47)
 
 **Goal:** Implement boolean truth-value tests and NULL-safe comparison operator.
 
@@ -677,7 +797,7 @@
 
 ---
 
-### Task 34: ⬜ REGEXP / RLIKE Evaluation (Feature #40)
+### Task 40: ⬜ REGEXP / RLIKE Evaluation (Feature #40)
 
 **Goal:** REGEXP is parsed but not evaluated. Implement regex matching using POSIX regex.
 
@@ -696,9 +816,9 @@
 
 ---
 
-## Day 18 — GROUP_CONCAT & SET Variables
+## Day 21 — GROUP_CONCAT & SET Variables
 
-### Task 35: ⬜ GROUP_CONCAT / STRING_AGG (Feature #44)
+### Task 41: ⬜ GROUP_CONCAT / STRING_AGG (Feature #44)
 
 **Goal:** Implement GROUP_CONCAT aggregate function.
 
@@ -717,7 +837,7 @@
 
 ---
 
-### Task 36: ⬜ SET @var = ... User Variables (Feature #36)
+### Task 42: ⬜ SET @var = ... User Variables (Feature #36)
 
 **Goal:** Implement session-scoped user variables: `SET @name = expr`, `SELECT @name`.
 
@@ -736,9 +856,9 @@
 
 ---
 
-## Day 19 — ON DUPLICATE KEY UPDATE & REPLACE INTO
+## Day 22 — ON DUPLICATE KEY UPDATE & REPLACE INTO
 
-### Task 37: ⬜ ON DUPLICATE KEY UPDATE (Feature #32)
+### Task 43: ⬜ ON DUPLICATE KEY UPDATE (Feature #32)
 
 **Goal:** Parsed but not executed. Implement upsert semantics for MySQL-style ON DUPLICATE KEY UPDATE.
 
@@ -757,7 +877,7 @@
 
 ---
 
-### Task 38: ⬜ REPLACE INTO (Feature #33)
+### Task 44: ⬜ REPLACE INTO (Feature #33)
 
 **Goal:** Parsed but not executed. Implement `REPLACE INTO` — delete existing then insert, or just insert.
 
@@ -776,9 +896,9 @@
 
 ---
 
-## Day 20 — CREATE TABLE...SELECT & EXPLAIN
+## Day 23 — CREATE TABLE...SELECT & EXPLAIN
 
-### Task 39: ⬜ CREATE TABLE ... SELECT (Feature #34)
+### Task 45: ⬜ CREATE TABLE ... SELECT (Feature #34)
 
 **Goal:** Parsed but not executed. Implement creating a table from a SELECT query result.
 
@@ -797,7 +917,7 @@
 
 ---
 
-### Task 40: ⬜ EXPLAIN / EXPLAIN ANALYZE (Feature #28)
+### Task 46: ⬜ EXPLAIN / EXPLAIN ANALYZE (Feature #28)
 
 **Goal:** Show query execution plan.
 
@@ -816,9 +936,9 @@
 
 ---
 
-## Day 21 — Views & Prepared Statements
+## Day 24 — Views & Prepared Statements
 
-### Task 41: ⬜ Views — CREATE VIEW / DROP VIEW (Feature #21)
+### Task 47: ⬜ Views — CREATE VIEW / DROP VIEW (Feature #21)
 
 **Goal:** Implement basic views as stored SELECT queries.
 
@@ -837,7 +957,7 @@
 
 ---
 
-### Task 42: ⬜ Prepared Statements (Feature #25)
+### Task 48: ⬜ Prepared Statements (Feature #25)
 
 **Goal:** PG wire protocol extended query has stubs. Implement Parse/Bind/Describe/Execute.
 
@@ -856,9 +976,9 @@
 
 ---
 
-## Day 22 — Window Functions & CTEs
+## Day 25 — Window Functions & CTEs
 
-### Task 43: ⬜ Window Functions (Feature #26)
+### Task 49: ⬜ Window Functions (Feature #26)
 
 **Goal:** Implement ROW_NUMBER(), RANK(), DENSE_RANK() with OVER (PARTITION BY ... ORDER BY ...).
 
@@ -877,7 +997,7 @@
 
 ---
 
-### Task 44: ⬜ CTEs — WITH ... AS (Feature #27)
+### Task 50: ⬜ CTEs — WITH ... AS (Feature #27)
 
 **Goal:** Implement Common Table Expressions.
 
@@ -896,9 +1016,9 @@
 
 ---
 
-## Day 23 — Stored Procedures & Triggers
+## Day 26 — Stored Procedures & Triggers
 
-### Task 45: ⬜ Stored Procedures / Functions (Feature #22)
+### Task 51: ⬜ Stored Procedures / Functions (Feature #22)
 
 **Goal:** Implement basic stored procedure support: CREATE PROCEDURE, CALL, DROP PROCEDURE.
 
@@ -917,7 +1037,7 @@
 
 ---
 
-### Task 46: ⬜ Triggers (Feature #23)
+### Task 52: ⬜ Triggers (Feature #23)
 
 **Goal:** Implement basic triggers: BEFORE/AFTER INSERT/UPDATE/DELETE.
 
@@ -936,9 +1056,9 @@
 
 ---
 
-## Day 24 — Cursors & RETURNING
+## Day 27 — Cursors & RETURNING
 
-### Task 47: ⬜ Cursors (Feature #24)
+### Task 53: ⬜ Cursors (Feature #24)
 
 **Goal:** Implement server-side cursors: DECLARE, OPEN, FETCH, CLOSE.
 
@@ -957,7 +1077,7 @@
 
 ---
 
-### Task 48: ⬜ RETURNING Clause (Feature #56)
+### Task 54: ⬜ RETURNING Clause (Feature #56)
 
 **Goal:** Implement `INSERT/UPDATE/DELETE ... RETURNING *` / `RETURNING col1, col2`.
 
@@ -976,9 +1096,9 @@
 
 ---
 
-## Day 25 — SELECT INTO & Roles
+## Day 28 — SELECT INTO & Roles
 
-### Task 49: ⬜ SELECT INTO (Feature #69)
+### Task 55: ⬜ SELECT INTO (Feature #69)
 
 **Goal:** Implement `SELECT col1, col2 INTO new_table FROM old_table WHERE ...`.
 
@@ -997,7 +1117,7 @@
 
 ---
 
-### Task 50: ⬜ Roles (Feature #65)
+### Task 56: ⬜ Roles (Feature #65)
 
 **Goal:** Implement role-based access control. Users can be assigned to roles, roles can have privileges.
 
@@ -1016,9 +1136,9 @@
 
 ---
 
-## Day 26 — Dynamic Allocation & Semicolon Safety
+## Day 29 — Dynamic Allocation & Semicolon Safety
 
-### Task 51: ⬜ Dynamic Array Allocation (Storage Engine Fix)
+### Task 57: ⬜ Dynamic Array Allocation (Storage Engine Fix)
 
 **Goal:** Remove all static array caps. Use dynamic allocation throughout.
 
@@ -1037,7 +1157,7 @@
 
 ---
 
-### Task 52: ⬜ Semicolon-Safe Storage (Storage Engine Fix)
+### Task 58: ⬜ Semicolon-Safe Storage (Storage Engine Fix)
 
 **Goal:** Semicolons in data corrupt records. Fix with proper escaping.
 
@@ -1056,9 +1176,9 @@
 
 ---
 
-## Day 27 — JSON & Sequences
+## Day 30 — JSON & Sequences
 
-### Task 53: ⬜ JSON / JSONB Support (Feature #51)
+### Task 59: ⬜ JSON / JSONB Support (Feature #51)
 
 **Goal:** Basic JSON storage and query functions.
 
@@ -1077,7 +1197,7 @@
 
 ---
 
-### Task 54: ⬜ Sequences (Feature #55)
+### Task 60: ⬜ Sequences (Feature #55)
 
 **Goal:** Implement PostgreSQL-style CREATE SEQUENCE / NEXTVAL / CURRVAL.
 
@@ -1096,9 +1216,9 @@
 
 ---
 
-## Day 28 — UPSERT & COPY
+## Day 31 — UPSERT & COPY
 
-### Task 55: ⬜ UPSERT — INSERT ... ON CONFLICT (Feature #57)
+### Task 61: ⬜ UPSERT — INSERT ... ON CONFLICT (Feature #57)
 
 **Goal:** Implement PostgreSQL-style upsert: `INSERT ... ON CONFLICT (col) DO UPDATE SET ...` / `DO NOTHING`.
 
@@ -1117,7 +1237,7 @@
 
 ---
 
-### Task 56: ⬜ COPY Command (Feature #61)
+### Task 62: ⬜ COPY Command (Feature #61)
 
 **Goal:** Implement PostgreSQL-compatible COPY for bulk import/export.
 
@@ -1136,9 +1256,9 @@
 
 ---
 
-## Day 29 — Full-Text Search & Materialized Views
+## Day 32 — Full-Text Search & Materialized Views
 
-### Task 57: ⬜ Full-Text Search (Feature #52)
+### Task 63: ⬜ Full-Text Search (Feature #52)
 
 **Goal:** Basic full-text search: text indexing and MATCH AGAINST / @@ syntax.
 
@@ -1157,7 +1277,7 @@
 
 ---
 
-### Task 58: ⬜ Materialized Views (Feature #58)
+### Task 64: ⬜ Materialized Views (Feature #58)
 
 **Goal:** Implement materialized views: CREATE MATERIALIZED VIEW, REFRESH, DROP.
 
@@ -1176,9 +1296,9 @@
 
 ---
 
-## Day 30 — Table Partitioning & Lateral Joins
+## Day 33 — Table Partitioning & Lateral Joins
 
-### Task 59: ⬜ Table Partitioning (Feature #53)
+### Task 65: ⬜ Table Partitioning (Feature #53)
 
 **Goal:** Basic RANGE/LIST partitioning.
 
@@ -1197,7 +1317,7 @@
 
 ---
 
-### Task 60: ⬜ Lateral Joins (Feature #59)
+### Task 66: ⬜ Lateral Joins (Feature #59)
 
 **Goal:** Implement LATERAL subquery in FROM clause.
 
@@ -1216,9 +1336,9 @@
 
 ---
 
-## Day 31 — Array Type & LISTEN/NOTIFY
+## Day 34 — Array Type & LISTEN/NOTIFY
 
-### Task 61: ⬜ Array Data Type (Feature #60)
+### Task 67: ⬜ Array Data Type (Feature #60)
 
 **Goal:** Implement PostgreSQL-style array columns: `col INT[]`.
 
@@ -1237,7 +1357,7 @@
 
 ---
 
-### Task 62: ⬜ LISTEN / NOTIFY (Feature #62)
+### Task 68: ⬜ LISTEN / NOTIFY (Feature #62)
 
 **Goal:** Implement PostgreSQL-style asynchronous notifications.
 
@@ -1256,9 +1376,9 @@
 
 ---
 
-## Day 32 — Table Inheritance & Row-Level Security
+## Day 35 — Table Inheritance & Row-Level Security
 
-### Task 63: ⬜ Table Inheritance (Feature #63)
+### Task 69: ⬜ Table Inheritance (Feature #63)
 
 **Goal:** Implement PostgreSQL-style table inheritance.
 
@@ -1277,7 +1397,7 @@
 
 ---
 
-### Task 64: ⬜ Row-Level Security (Feature #64)
+### Task 70: ⬜ Row-Level Security (Feature #64)
 
 **Goal:** Implement RLS policies that filter rows based on current user.
 
@@ -1296,9 +1416,9 @@
 
 ---
 
-## Day 33 — WAL & File Locking
+## Day 36 — WAL & File Locking
 
-### Task 65: ⬜ WAL / Crash Recovery (Feature #66)
+### Task 71: ⬜ WAL / Crash Recovery (Feature #66)
 
 **Goal:** Implement basic Write-Ahead Log for crash recovery.
 
@@ -1317,7 +1437,7 @@
 
 ---
 
-### Task 66: ⬜ Concurrent Write Safety / File Locking (Feature #67)
+### Task 72: ⬜ Concurrent Write Safety / File Locking (Feature #67)
 
 **Goal:** Replace global mutex with per-table file-level locking.
 
@@ -1336,9 +1456,9 @@
 
 ---
 
-## Day 34 — Connection Pooling & Replication
+## Day 37 — Connection Pooling & Replication
 
-### Task 67: ⬜ Connection Pooling (Feature #68)
+### Task 73: ⬜ Connection Pooling (Feature #68)
 
 **Goal:** Implement server-side connection pooling to reuse threads/connections.
 
@@ -1357,7 +1477,7 @@
 
 ---
 
-### Task 68: ⬜ Replication (Feature #54)
+### Task 74: ⬜ Replication (Feature #54)
 
 **Goal:** Basic primary→replica streaming replication.
 
@@ -1376,22 +1496,22 @@
 
 ---
 
-## Day 35 — Final Task
+## Day 38 — Final Task
 
-### Task 69: ⬜ Comprehensive Integration & Hardening
+### Task 75: ⬜ Comprehensive Integration & Hardening
 
-**Goal:** Final sweep: all 69 features integrated, edge cases handled, full test suite green.
+**Goal:** Final sweep: all 75 features integrated, edge cases handled, full test suite green.
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Run ALL test suites — all 69+ test files must pass. Fix any failures. | `tests/` |
+| 1 | Run ALL test suites — all 75+ test files must pass. Fix any failures. | `tests/` |
 | 2 | Cross-feature integration tests — e.g. JOIN + subquery + UNION + ORDER BY + LIMIT in one query. | `tests/test_integration.py` (new) |
 | 3 | DBeaver full compatibility test — connect, browse tables, run queries, use prepared statements. | Manual |
 | 4 | psql full compatibility test — all SQL features via psql client. | Manual |
 | 5 | Performance benchmarks — 10K row table: SELECT, JOIN, GROUP BY, ORDER BY timing. | `tests/test_benchmark.py` (new) |
 | 6 | Memory leak audit — run Valgrind on full test suite, fix any leaks. | `Dockerfile` |
 | 7 | Error message audit — ensure all error messages follow PostgreSQL error code format (SQLSTATE). | All files |
-| 8 | Update `features.md` — mark all 69 features as ✅. | `features.md` |
+| 8 | Update `features.md` — mark all 75 features as ✅. | `features.md` |
 | 9 | Update `README.md` — final documentation with all features, benchmarks, known limitations. | `README.md` |
 | 10 | Tag release — `git tag v2.0.0`, update CHANGELOG. | Git |
 
@@ -1401,11 +1521,11 @@
 
 | Feature # | Feature Name | Task # |
 |-----------|-------------|--------|
-| 1 | JOIN (INNER, LEFT, RIGHT, CROSS, NATURAL) | 23, 24 |
-| 2 | Subqueries (scalar, WHERE) | 25 |
-| 3 | EXISTS / ANY / SOME / ALL | 26 |
-| 4 | UNION / UNION ALL / INTERSECT / EXCEPT | 21 |
-| 5 | ALTER TABLE (ADD / DROP / MODIFY / RENAME) | 16, 17, 18 |
+| 1 | JOIN (INNER, LEFT, RIGHT, CROSS, NATURAL) | 29, 30 |
+| 2 | Subqueries (scalar, WHERE) | 31 |
+| 3 | EXISTS / ANY / SOME / ALL | 32 |
+| 4 | UNION / UNION ALL / INTERSECT / EXCEPT | 27 |
+| 5 | ALTER TABLE (ADD / DROP / MODIFY / RENAME) | 22, 23, 24 |
 | 6 | FOREIGN KEY constraints | 10 |
 | 7 | CHECK constraint | 9 |
 | 8 | DEFAULT value enforcement | 6 |
@@ -1415,63 +1535,69 @@
 | 12 | Transactions (BEGIN / COMMIT / ROLLBACK) | 11 |
 | 13 | Indexes (B-tree) | 12 |
 | 14 | Multi-row INSERT | 3 |
-| 15 | INSERT INTO ... SELECT | 13 |
+| 15 | INSERT INTO ... SELECT | 19 |
 | 16 | INSERT column list mapping | 4 |
 | 17 | Expression-based WHERE for DELETE | 1 |
 | 18 | Expression-based WHERE for UPDATE | 2 |
-| 19 | Multi-table DELETE | 14 |
-| 20 | Multi-table UPDATE | 15 |
-| 21 | Views (CREATE VIEW / DROP VIEW) | 41 |
-| 22 | Stored Procedures / Functions | 45 |
-| 23 | Triggers | 46 |
-| 24 | Cursors | 47 |
-| 25 | Prepared Statements | 42 |
-| 26 | Window Functions | 43 |
-| 27 | CTEs (WITH ... AS) | 44 |
-| 28 | EXPLAIN / EXPLAIN ANALYZE | 40 |
-| 29 | DROP DATABASE | 20 |
-| 30 | DROP SCHEMA | 20 |
-| 31 | RENAME TABLE | 19 |
-| 32 | ON DUPLICATE KEY UPDATE | 37 |
-| 33 | REPLACE INTO | 38 |
-| 34 | CREATE TABLE ... SELECT | 39 |
-| 35 | ORDER BY expression & ordinal | 22 |
-| 36 | SET @var = ... user variables | 36 |
-| 37 | CAST / CONVERT | 31 |
-| 38 | NULLIF | 32 |
-| 39 | IF / IFNULL | 32 |
-| 40 | REGEXP / RLIKE | 34 |
-| 41 | EXISTS / ANY / ALL subquery execution | 26 |
-| 42 | IS TRUE / IS FALSE / IS UNKNOWN | 33 |
-| 43 | INTERVAL evaluation | 30 |
-| 44 | GROUP_CONCAT / STRING_AGG | 35 |
-| 45 | CONCAT 3+ args | 28 |
-| 46 | \|\| operator | 28 |
-| 47 | NULL-safe <=> comparison | 33 |
-| 48 | String functions (LEFT, RIGHT, etc.) | 27 |
-| 49 | Math functions (ABS, CEIL, etc.) | 29 |
-| 50 | Date functions (NOW, DATEDIFF, etc.) | 30 |
-| 51 | JSON / JSONB support | 53 |
-| 52 | Full-text search | 57 |
-| 53 | Table partitioning | 59 |
-| 54 | Replication | 68 |
-| 55 | Sequences (CREATE SEQUENCE, NEXTVAL) | 54 |
-| 56 | RETURNING clause | 48 |
-| 57 | UPSERT (ON CONFLICT) | 55 |
-| 58 | Materialized Views | 58 |
-| 59 | Lateral Joins | 60 |
-| 60 | Array data type | 61 |
-| 61 | COPY command | 56 |
-| 62 | LISTEN / NOTIFY | 62 |
-| 63 | Table inheritance | 63 |
-| 64 | Row-level security | 64 |
-| 65 | Roles | 50 |
-| 66 | WAL / Crash recovery | 65 |
-| 67 | File locking / concurrency | 66 |
-| 68 | Connection pooling | 67 |
-| 69 | SELECT INTO | 49 |
-| — | Dynamic allocation (storage fix) | 51 |
-| — | Semicolon-safe storage (storage fix) | 52 |
+| 19 | Multi-table DELETE | 20 |
+| 20 | Multi-table UPDATE | 21 |
+| 21 | Views (CREATE VIEW / DROP VIEW) | 47 |
+| 22 | Stored Procedures / Functions | 51 |
+| 23 | Triggers | 52 |
+| 24 | Cursors | 53 |
+| 25 | Prepared Statements | 48 |
+| 26 | Window Functions | 49 |
+| 27 | CTEs (WITH ... AS) | 50 |
+| 28 | EXPLAIN / EXPLAIN ANALYZE | 46 |
+| 29 | DROP DATABASE | 26 |
+| 30 | DROP SCHEMA | 26 |
+| 31 | RENAME TABLE | 25 |
+| 32 | ON DUPLICATE KEY UPDATE | 43 |
+| 33 | REPLACE INTO | 44 |
+| 34 | CREATE TABLE ... SELECT | 45 |
+| 35 | ORDER BY expression & ordinal | 28 |
+| 36 | SET @var = ... user variables | 42 |
+| 37 | CAST / CONVERT | 37 |
+| 38 | NULLIF | 38 |
+| 39 | IF / IFNULL | 38 |
+| 40 | REGEXP / RLIKE | 40 |
+| 41 | EXISTS / ANY / ALL subquery execution | 32 |
+| 42 | IS TRUE / IS FALSE / IS UNKNOWN | 39 |
+| 43 | INTERVAL evaluation | 36 |
+| 44 | GROUP_CONCAT / STRING_AGG | 41 |
+| 45 | CONCAT 3+ args | 34 |
+| 46 | \|\| operator | 34 |
+| 47 | NULL-safe <=> comparison | 39 |
+| 48 | String functions (LEFT, RIGHT, etc.) | 33 |
+| 49 | Math functions (ABS, CEIL, etc.) | 35 |
+| 50 | Date functions (NOW, DATEDIFF, etc.) | 36 |
+| 51 | JSON / JSONB support | 59 |
+| 52 | Full-text search | 63 |
+| 53 | Table partitioning | 65 |
+| 54 | Replication | 74 |
+| 55 | Sequences (CREATE SEQUENCE, NEXTVAL) | 60 |
+| 56 | RETURNING clause | 54 |
+| 57 | UPSERT (ON CONFLICT) | 61 |
+| 58 | Materialized Views | 64 |
+| 59 | Lateral Joins | 66 |
+| 60 | Array data type | 67 |
+| 61 | COPY command | 62 |
+| 62 | LISTEN / NOTIFY | 68 |
+| 63 | Table inheritance | 69 |
+| 64 | Row-level security | 70 |
+| 65 | Roles | 56 |
+| 66 | WAL / Crash recovery | 71 |
+| 67 | File locking / concurrency | 72 |
+| 68 | Connection pooling | 73 |
+| 69 | SELECT INTO | 55 |
+| 70 | Buffer Pool Manager | 13 |
+| 71 | RECLAIM (Storage Garbage Collection) | 14 |
+| 72 | Temporary Tables | 15 |
+| 73 | Native UUID Type & gen_random_uuid() | 16 |
+| 74 | Snowflake ID Generation | 17 |
+| 75 | Query Timeout & Statement Cancellation | 18 |
+| — | Dynamic allocation (storage fix) | 57 |
+| — | Semicolon-safe storage (storage fix) | 58 |
 
 ---
 
@@ -1485,37 +1611,40 @@
 | 4 | 7–8 | AUTO_INCREMENT & Composite PK (#9, #11) | 🔴 Critical |
 | 5 | 9–10 | CHECK & FOREIGN KEY constraints (#7, #6) | 🔴 Critical |
 | 6 | 11–12 | Transactions & Indexes (#12, #13) | 🔴 Critical |
-| 7 | 13–14 | INSERT...SELECT & Multi-table DELETE (#15, #19) | 🔴 Critical |
-| 8 | 15–16 | Multi-table UPDATE & ALTER TABLE ADD (#20, #5p1) | 🔴 Critical |
-| 9 | 17–18 | ALTER TABLE DROP & MODIFY/RENAME (#5p2, #5p3) | 🔴 Critical |
-| 10 | 19–20 | RENAME TABLE & DROP DB/SCHEMA (#31, #29, #30) | 🟠 Important |
-| 11 | 21–22 | UNION/INTERSECT/EXCEPT & ORDER BY expr (#4, #35) | 🔴 Critical |
-| 12 | 23–24 | JOIN INNER & LEFT/RIGHT/CROSS (#1p1, #1p2) | 🔴 Critical |
-| 13 | 25–26 | Subqueries & EXISTS/ANY/ALL (#2, #3, #41) | 🔴 Critical |
-| 14 | 27–28 | String functions & CONCAT/\|\| (#48, #45, #46) | 🟡 Moderate |
-| 15 | 29–30 | Math functions & Date functions (#49, #50, #43) | 🟡 Moderate |
-| 16 | 31–32 | CAST & NULLIF/IF/IFNULL (#37, #38, #39) | 🟡 Moderate |
-| 17 | 33–34 | IS TRUE/FALSE & REGEXP (#42, #47, #40) | 🟡 Moderate |
-| 18 | 35–36 | GROUP_CONCAT & SET @var (#44, #36) | 🟡 Moderate |
-| 19 | 37–38 | ON DUP KEY UPDATE & REPLACE INTO (#32, #33) | 🟠 Important |
-| 20 | 39–40 | CREATE TABLE...SELECT & EXPLAIN (#34, #28) | 🟠 Important |
-| 21 | 41–42 | Views & Prepared Statements (#21, #25) | 🟠 Important |
-| 22 | 43–44 | Window Functions & CTEs (#26, #27) | 🟠 Important |
-| 23 | 45–46 | Stored Procedures & Triggers (#22, #23) | 🟠 Important |
-| 24 | 47–48 | Cursors & RETURNING (#24, #56) | 🟠 Important |
-| 25 | 49–50 | SELECT INTO & Roles (#69, #65) | 🟠/🔵 |
-| 26 | 51–52 | Dynamic allocation & Semicolon safety (Storage) | ⚙️ Engine |
-| 27 | 53–54 | JSON & Sequences (#51, #55) | 🔵 Advanced |
-| 28 | 55–56 | UPSERT & COPY (#57, #61) | 🔵 Advanced |
-| 29 | 57–58 | Full-text search & Materialized views (#52, #58) | 🔵 Advanced |
-| 30 | 59–60 | Partitioning & Lateral Joins (#53, #59) | 🔵 Advanced |
-| 31 | 61–62 | Array type & LISTEN/NOTIFY (#60, #62) | 🔵 Advanced |
-| 32 | 63–64 | Table inheritance & Row-level security (#63, #64) | 🔵 Advanced |
-| 33 | 65–66 | WAL & File locking (#66, #67) | 🔵 Advanced |
-| 34 | 67–68 | Connection pooling & Replication (#54, #68) | 🔵 Advanced |
-| 35 | 69 | Integration, hardening & release | 🏁 Final |
+| 7 | 13–14 | Buffer Pool Manager & RECLAIM (#70, #71) | 🏗️ Architecture |
+| 8 | 15–16 | Temporary Tables & Native UUID (#72, #73) | 🏗️ Architecture |
+| 9 | 17–18 | Snowflake ID & Query Timeout (#74, #75) | 🏗️ Architecture |
+| 10 | 19–20 | INSERT...SELECT & Multi-table DELETE (#15, #19) | 🔴 Critical |
+| 11 | 21–22 | Multi-table UPDATE & ALTER TABLE ADD (#20, #5p1) | 🔴 Critical |
+| 12 | 23–24 | ALTER TABLE DROP & MODIFY/RENAME (#5p2, #5p3) | 🔴 Critical |
+| 13 | 25–26 | RENAME TABLE & DROP DB/SCHEMA (#31, #29, #30) | 🟠 Important |
+| 14 | 27–28 | UNION/INTERSECT/EXCEPT & ORDER BY expr (#4, #35) | 🔴 Critical |
+| 15 | 29–30 | JOIN INNER & LEFT/RIGHT/CROSS (#1p1, #1p2) | 🔴 Critical |
+| 16 | 31–32 | Subqueries & EXISTS/ANY/ALL (#2, #3, #41) | 🔴 Critical |
+| 17 | 33–34 | String functions & CONCAT/\|\| (#48, #45, #46) | 🟡 Moderate |
+| 18 | 35–36 | Math functions & Date functions (#49, #50, #43) | 🟡 Moderate |
+| 19 | 37–38 | CAST & NULLIF/IF/IFNULL (#37, #38, #39) | 🟡 Moderate |
+| 20 | 39–40 | IS TRUE/FALSE & REGEXP (#42, #47, #40) | 🟡 Moderate |
+| 21 | 41–42 | GROUP_CONCAT & SET @var (#44, #36) | 🟡 Moderate |
+| 22 | 43–44 | ON DUP KEY UPDATE & REPLACE INTO (#32, #33) | 🟠 Important |
+| 23 | 45–46 | CREATE TABLE...SELECT & EXPLAIN (#34, #28) | 🟠 Important |
+| 24 | 47–48 | Views & Prepared Statements (#21, #25) | 🟠 Important |
+| 25 | 49–50 | Window Functions & CTEs (#26, #27) | 🟠 Important |
+| 26 | 51–52 | Stored Procedures & Triggers (#22, #23) | 🟠 Important |
+| 27 | 53–54 | Cursors & RETURNING (#24, #56) | 🟠 Important |
+| 28 | 55–56 | SELECT INTO & Roles (#69, #65) | 🟠/🔵 |
+| 29 | 57–58 | Dynamic allocation & Semicolon safety (Storage) | ⚙️ Engine |
+| 30 | 59–60 | JSON & Sequences (#51, #55) | 🔵 Advanced |
+| 31 | 61–62 | UPSERT & COPY (#57, #61) | 🔵 Advanced |
+| 32 | 63–64 | Full-text search & Materialized views (#52, #58) | 🔵 Advanced |
+| 33 | 65–66 | Partitioning & Lateral Joins (#53, #59) | 🔵 Advanced |
+| 34 | 67–68 | Array type & LISTEN/NOTIFY (#60, #62) | 🔵 Advanced |
+| 35 | 69–70 | Table inheritance & Row-level security (#63, #64) | 🔵 Advanced |
+| 36 | 71–72 | WAL & File locking (#66, #67) | 🔵 Advanced |
+| 37 | 73–74 | Connection pooling & Replication (#54, #68) | 🔵 Advanced |
+| 38 | 75 | Integration, hardening & release | 🏁 Final |
 
-**Total:** 69 tasks × 10 steps = **690 steps** over **35 working days**.
+**Total:** 75 tasks × 10 steps = **750 steps** over **38 working days**.
 
 ---
 

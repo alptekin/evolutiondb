@@ -94,6 +94,17 @@
 | 68 | Connection pooling | ✅ | ✅ | ❌ | |
 | 69 | SELECT INTO | ✅ | ✅ | ❌ | |
 
+## 🏗️ Architecture & Operations
+
+| # | Feature | MySQL | PG | EvoSQL | Notes |
+|---|---------|:-----:|:--:|:------:|-------|
+| 70 | Buffer Pool Manager (LRU page cache) | ✅ | ✅ | ❌ | All I/O goes directly to disk; no caching layer |
+| 71 | RECLAIM (storage garbage collection) | ✅ (OPTIMIZE TABLE) | ✅ (VACUUM) | ❌ | Deleted records blanked but space never reclaimed |
+| 72 | Temporary Tables (session-scoped) | ✅ | ✅ | 🔧 | `opt_temporary` parsed but not executed |
+| 73 | Native UUID type & gen_random_uuid() | ❌ | ✅ | ❌ | UUID OID 2950 in catalog but no generation/validation |
+| 74 | Snowflake ID generation (SNOWFLAKE keyword) | ❌ | ❌ | ❌ | Twitter Snowflake: 41-bit timestamp + 10-bit machine + 12-bit sequence |
+| 75 | Query Timeout & Statement Cancellation | ✅ | ✅ | ❌ | No watchdog; runaway queries block connection forever |
+
 ## ⚙️ Storage Engine Limitations
 
 | Limitation | Current | Ideal |
