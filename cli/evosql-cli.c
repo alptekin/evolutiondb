@@ -749,8 +749,25 @@ int main(int argc, char *argv[])
             }
         }
 
-        /* Strip trailing semicolons for history neatness */
-        add_history_entry(sql);
+        /* Strip trailing semicolons for history neatness.
+         * Do NOT record SQL containing PASSWORD clauses to history
+         * file — prevents cleartext passwords leaking to disk. */
+        {
+            const char *s = sql;
+            int has_password = 0;
+            while (*s) {
+                if (strncasecmp(s, "PASSWORD", 8) == 0 &&
+                    (s == sql || isspace((unsigned char)s[-1])) &&
+                    (s[8] == '\0' || isspace((unsigned char)s[8]))) {
+                    has_password = 1;
+                    break;
+                }
+                s++;
+            }
+            if (!has_password) {
+                add_history_entry(sql);
+            }
+        }
 
         /* Execute */
         if (evo_execute((socket_t)sock, sql) < 0) {

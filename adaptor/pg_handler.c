@@ -19,6 +19,47 @@
 #include "tls.h"
 
 /* ----------------------------------------------------------------
+ *  sql_redact_password — Redact PASSWORD clauses for safe logging
+ *
+ *  Copies src into dst (up to dst_size), replacing any
+ *  PASSWORD '<secret>' or PASSWORD <secret> with PASSWORD '***'.
+ *  Case-insensitive matching.
+ * ---------------------------------------------------------------- */
+static void sql_redact_password(char *dst, size_t dst_size, const char *src)
+{
+    const char *p = src;
+    char *d = dst;
+    char *end = dst + dst_size - 1;
+
+    while (*p && d < end) {
+        /* Look for PASSWORD keyword (case-insensitive) */
+        if (strncasecmp(p, "PASSWORD", 8) == 0 &&
+            (p == src || isspace((unsigned char)p[-1])) &&
+            (p[8] == '\0' || isspace((unsigned char)p[8]))) {
+            /* Copy "PASSWORD " */
+            const char *kw = "PASSWORD ";
+            while (*kw && d < end) *d++ = *kw++;
+            p += 8;
+            while (*p && isspace((unsigned char)*p)) p++;
+            /* Skip the actual password value */
+            if (*p == '\'') {
+                p++; /* skip opening quote */
+                while (*p && *p != '\'') p++;
+                if (*p == '\'') p++; /* skip closing quote */
+            } else {
+                while (*p && !isspace((unsigned char)*p) && *p != ';') p++;
+            }
+            /* Write redacted placeholder */
+            const char *redacted = "'***'";
+            while (*redacted && d < end) *d++ = *redacted++;
+        } else {
+            *d++ = *p++;
+        }
+    }
+    *d = '\0';
+}
+
+/* ----------------------------------------------------------------
  *  pg_handle_client — full PG v3 session for one connection
  *
  *  The server infrastructure (server.c) calls this in a dedicated
@@ -87,9 +128,13 @@ void pg_handle_client(socket_t client_sock)
             char *remaining = sql_copy;
             int had_any = 0;
 
-            printf("[PG] Query: %.200s%s\n", sql_full,
-                   strlen(sql_full) > 200 ? "..." : "");
-            fflush(stdout);
+            {
+                char redacted[256];
+                sql_redact_password(redacted, sizeof(redacted), sql_full);
+                printf("[PG] Query: %.200s%s\n", redacted,
+                       strlen(redacted) > 200 ? "..." : "");
+                fflush(stdout);
+            }
 
             while (remaining && *remaining) {
                 while (*remaining && isspace((unsigned char)*remaining))
@@ -155,7 +200,11 @@ void pg_handle_client(socket_t client_sock)
         case PG_MSG_PARSE: {
             char *stmt_name = msg_buf;
             char *query = stmt_name + strlen(stmt_name) + 1;
-            printf("[PG] Extended Parse: %s\n", query); fflush(stdout);
+            {
+                char redacted[256];
+                sql_redact_password(redacted, sizeof(redacted), query);
+                printf("[PG] Extended Parse: %s\n", redacted); fflush(stdout);
+            }
 
             if (pending_query) free(pending_query);
             pending_query = strdup(query);
@@ -281,8 +330,12 @@ void pg_handle_client(socket_t client_sock)
                     }
                     *dst = '\0';
 
-                    printf("[PG] Bind: resolved query: %s\n", new_query);
-                    fflush(stdout);
+                    {
+                        char redacted[256];
+                        sql_redact_password(redacted, sizeof(redacted), new_query);
+                        printf("[PG] Bind: resolved query: %s\n", redacted);
+                        fflush(stdout);
+                    }
 
                     free(pending_query);
                     pending_query = new_query;

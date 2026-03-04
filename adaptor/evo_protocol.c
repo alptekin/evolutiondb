@@ -27,6 +27,39 @@ static void evo_secure_wipe(void *ptr, size_t len)
 }
 
 /* ----------------------------------------------------------------
+ *  sql_redact_password — Redact PASSWORD clauses for safe logging
+ * ---------------------------------------------------------------- */
+static void sql_redact_password(char *dst, size_t dst_size, const char *src)
+{
+    const char *p = src;
+    char *d = dst;
+    char *end = dst + dst_size - 1;
+
+    while (*p && d < end) {
+        if (strncasecmp(p, "PASSWORD", 8) == 0 &&
+            (p == src || isspace((unsigned char)p[-1])) &&
+            (p[8] == '\0' || isspace((unsigned char)p[8]))) {
+            const char *kw = "PASSWORD ";
+            while (*kw && d < end) *d++ = *kw++;
+            p += 8;
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (*p == '\'') {
+                p++;
+                while (*p && *p != '\'') p++;
+                if (*p == '\'') p++;
+            } else {
+                while (*p && !isspace((unsigned char)*p) && *p != ';') p++;
+            }
+            const char *redacted = "'***'";
+            while (*redacted && d < end) *d++ = *redacted++;
+        } else {
+            *d++ = *p++;
+        }
+    }
+    *d = '\0';
+}
+
+/* ----------------------------------------------------------------
  *  Send helpers (text-line based)
  * ---------------------------------------------------------------- */
 static int evo_sendf(conn_t *conn, const char *fmt, ...)
@@ -147,11 +180,13 @@ void evo_handle_client(socket_t sock)
             printf("[EVO] Auth failed for user '%s'\n", username);
             fflush(stdout);
             evo_secure_wipe(password, sizeof(password));
+            evo_secure_wipe(line, sizeof(line));
             free(rs);
             return;
         }
 
         evo_secure_wipe(password, sizeof(password));
+        evo_secure_wipe(line, sizeof(line));   /* wipe AUTH line that held cleartext password */
         strncpy(session.username, username, sizeof(session.username) - 1);
         printf("[EVO] Authenticated user '%s'\n", username); fflush(stdout);
     }
@@ -188,9 +223,13 @@ void evo_handle_client(socket_t sock)
                 break;
             }
 
-            printf("[EVO] Query: %.200s%s\n", sql,
-                   strlen(sql) > 200 ? "..." : "");
-            fflush(stdout);
+            {
+                char redacted[256];
+                sql_redact_password(redacted, sizeof(redacted), sql);
+                printf("[EVO] Query: %.200s%s\n", redacted,
+                       strlen(redacted) > 200 ? "..." : "");
+                fflush(stdout);
+            }
 
             /* Execute */
             safe_query_execute(sql, rs, &session);
