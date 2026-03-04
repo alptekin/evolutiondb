@@ -16,6 +16,7 @@
 #include "server.h"
 #include "pg_handler.h"
 #include "evo_protocol.h"
+#include "tls.h"
 
 #define DEFAULT_PG_PORT   5433
 #define DEFAULT_EVO_PORT  9967
@@ -57,6 +58,21 @@ int main(int argc, char *argv[])
     /* Initialise engine, locks, socket subsystem */
     server_init();
 
+    /* TLS initialisation — read cert/key paths from environment */
+    {
+        const char *cert = getenv("EVOSQL_TLS_CERT");
+        const char *key  = getenv("EVOSQL_TLS_KEY");
+        if (cert && key) {
+            if (tls_global_init(cert, key) == 0) {
+                printf("[TLS] Server TLS enabled\n");
+            } else {
+                fprintf(stderr, "[TLS] Failed to initialise — continuing without TLS\n");
+            }
+        } else {
+            printf("[TLS] No EVOSQL_TLS_CERT / EVOSQL_TLS_KEY set — TLS disabled\n");
+        }
+    }
+
     /* Banner */
     printf("==============================================\n");
     printf("                __                            \n");
@@ -69,6 +85,7 @@ int main(int argc, char *argv[])
     printf("  EvoSQL Adaptor Server (dual-protocol)\n");
     printf("  PG  protocol on port %d\n", pg_port);
     printf("  EVO protocol on port %d\n", evo_port);
+    printf("  TLS: %s\n", tls_is_available() ? "enabled" : "disabled");
     printf("  Max connections: %d\n", get_max_connections());
     printf("==============================================\n");
     fflush(stdout);
@@ -83,6 +100,7 @@ int main(int argc, char *argv[])
     /* Run PG listener on the main thread (blocks forever) */
     server_listen(pg_port, "PG", pg_handle_client);
 
+    tls_global_cleanup();
     server_cleanup();
     return 0;
 }
