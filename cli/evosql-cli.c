@@ -25,6 +25,14 @@
 #include <ctype.h>
 
 /* ----------------------------------------------------------------
+ *  Optional TLS support (compile with -DEVOSQL_CLI_TLS -lssl -lcrypto)
+ * ---------------------------------------------------------------- */
+#ifdef EVOSQL_CLI_TLS
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#endif
+
+/* ----------------------------------------------------------------
  *  evo_secure_wipe — local copy for standalone CLI binary
  *  (CWE-14: Compiler Removal of Code to Clear Buffers)
  * ---------------------------------------------------------------- */
@@ -296,8 +304,141 @@ static char *cli_readline(const char *prompt) {
 #endif
 
 /* ================================================================
- *  Networking helpers
+ *  CLI connection object — wraps socket + optional TLS
  * ================================================================ */
+typedef struct {
+    socket_t sock;
+#ifdef EVOSQL_CLI_TLS
+    SSL     *ssl;
+    SSL_CTX *ctx;
+#endif
+    int      is_tls;
+} cli_conn_t;
+
+static cli_conn_t g_conn;  /* global connection state */
+
+static void cli_conn_init(cli_conn_t *c, socket_t sock)
+{
+    c->sock   = sock;
+#ifdef EVOSQL_CLI_TLS
+    c->ssl    = NULL;
+    c->ctx    = NULL;
+#endif
+    c->is_tls = 0;
+}
+
+static int cli_conn_start_tls(cli_conn_t *c)
+{
+#ifdef EVOSQL_CLI_TLS
+    SSL_load_error_strings();
+    SSL_library_init();
+    OpenSSL_add_all_algorithms();
+
+    c->ctx = SSL_CTX_new(TLS_client_method());
+    if (!c->ctx) return -1;
+
+    c->ssl = SSL_new(c->ctx);
+    if (!c->ssl) {
+        SSL_CTX_free(c->ctx);
+        c->ctx = NULL;
+        return -1;
+    }
+
+    SSL_set_fd(c->ssl, (int)c->sock);
+
+    int ret = SSL_connect(c->ssl);
+    if (ret <= 0) {
+        fprintf(stderr, "TLS handshake failed: %d\n",
+                SSL_get_error(c->ssl, ret));
+        SSL_free(c->ssl);
+        SSL_CTX_free(c->ctx);
+        c->ssl = NULL;
+        c->ctx = NULL;
+        return -1;
+    }
+
+    c->is_tls = 1;
+    return 0;
+#else
+    (void)c;
+    return -1;  /* TLS not compiled in */
+#endif
+}
+
+static void cli_conn_shutdown(cli_conn_t *c)
+{
+#ifdef EVOSQL_CLI_TLS
+    if (c->ssl) {
+        SSL_shutdown(c->ssl);
+        SSL_free(c->ssl);
+        c->ssl = NULL;
+    }
+    if (c->ctx) {
+        SSL_CTX_free(c->ctx);
+        c->ctx = NULL;
+    }
+#endif
+    if (c->sock != SOCKET_INVALID) {
+        socket_close(c->sock);
+        c->sock = SOCKET_INVALID;
+    }
+    c->is_tls = 0;
+}
+
+/* ================================================================
+ *  Networking helpers — TLS-transparent
+ * ================================================================ */
+static int cli_send(cli_conn_t *c, const char *buf, int len)
+{
+    int total = 0, n;
+    while (total < len) {
+#ifdef EVOSQL_CLI_TLS
+        if (c->is_tls && c->ssl) {
+            n = SSL_write(c->ssl, buf + total, len - total);
+        } else
+#endif
+        {
+            n = send(c->sock, buf + total, len - total, 0);
+        }
+        if (n <= 0) return -1;
+        total += n;
+    }
+    return total;
+}
+
+static int cli_recv_line(cli_conn_t *c, char *buf, int maxlen)
+{
+    int pos = 0;
+    while (pos < maxlen - 1) {
+        char ch;
+        int n;
+#ifdef EVOSQL_CLI_TLS
+        if (c->is_tls && c->ssl) {
+            n = SSL_read(c->ssl, &ch, 1);
+        } else
+#endif
+        {
+            n = recv(c->sock, &ch, 1, 0);
+        }
+        if (n <= 0) return -1;
+        if (ch == '\n') break;
+        if (ch == '\r') continue;
+        buf[pos++] = ch;
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
+static int cli_send_line(cli_conn_t *c, const char *line)
+{
+    int len = (int)strlen(line);
+    if (cli_send(c, line, len) < 0) return -1;
+    if (cli_send(c, "\n", 1) < 0) return -1;
+    return 0;
+}
+
+/* Backward-compat wrappers — old socket_t signatures used during
+ * the initial plaintext greeting before TLS is established.       */
 static int net_send(socket_t s, const char *buf, int len)
 {
     int total = 0, n;
@@ -313,12 +454,12 @@ static int net_recv_line(socket_t s, char *buf, int maxlen)
 {
     int pos = 0;
     while (pos < maxlen - 1) {
-        char c;
-        int n = recv(s, &c, 1, 0);
+        char ch;
+        int n = recv(s, &ch, 1, 0);
         if (n <= 0) return -1;
-        if (c == '\n') break;
-        if (c == '\r') continue;
-        buf[pos++] = c;
+        if (ch == '\n') break;
+        if (ch == '\r') continue;
+        buf[pos++] = ch;
     }
     buf[pos] = '\0';
     return pos;
@@ -474,7 +615,7 @@ static int evo_connect(const char *host, int port, const char *username,
     s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == SOCKET_INVALID) {
         fprintf(stderr, "Error: cannot create socket\n");
-        return (int)SOCKET_INVALID;
+        return -1;
     }
 
     memset(&addr, 0, sizeof(addr));
@@ -492,10 +633,13 @@ static int evo_connect(const char *host, int port, const char *username,
     if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         fprintf(stderr, "Error: cannot connect to %s:%d\n", host, port);
         socket_close(s);
-        return (int)SOCKET_INVALID;
+        return -1;
     }
 
-    /* Send EVO greeting */
+    /* Initialize global connection object */
+    cli_conn_init(&g_conn, s);
+
+    /* Send EVO greeting (plaintext — just protocol identification) */
     send_line(s, "EVO");
 
     /* Read server greeting */
@@ -503,22 +647,58 @@ static int evo_connect(const char *host, int port, const char *username,
     if (net_recv_line(s, line, sizeof(line)) < 0) {
         fprintf(stderr, "Error: no server greeting\n");
         socket_close(s);
-        return (int)SOCKET_INVALID;
+        return -1;
     }
 
     if (strncmp(line, "HELLO", 5) != 0) {
         fprintf(stderr, "Error: unexpected greeting: %s\n", line);
         socket_close(s);
-        return (int)SOCKET_INVALID;
+        return -1;
     }
 
-    /* Authentication flow */
+    /* Read next server message — could be STARTTLS or AUTH_REQUIRED */
     if (net_recv_line(s, line, sizeof(line)) < 0) {
-        fprintf(stderr, "Error: no auth response\n");
+        fprintf(stderr, "Error: no server response after greeting\n");
         socket_close(s);
-        return (int)SOCKET_INVALID;
+        return -1;
     }
 
+    /* STARTTLS upgrade — encrypt the connection before sending credentials */
+    if (strcmp(line, "STARTTLS") == 0) {
+#ifdef EVOSQL_CLI_TLS
+        /* Acknowledge TLS upgrade */
+        send_line(s, "STARTTLS");
+
+        if (cli_conn_start_tls(&g_conn) < 0) {
+            fprintf(stderr, "Error: TLS handshake failed\n");
+            socket_close(s);
+            return -1;
+        }
+        fprintf(stderr, "[TLS] Encrypted connection established\n");
+
+        /* After TLS, read AUTH_REQUIRED over the encrypted channel */
+        if (cli_recv_line(&g_conn, line, sizeof(line)) < 0) {
+            fprintf(stderr, "Error: no auth response after TLS\n");
+            cli_conn_shutdown(&g_conn);
+            return -1;
+        }
+#else
+        /* TLS not compiled in — decline and continue plaintext */
+        send_line(s, "NOTLS");
+        fprintf(stderr, "Warning: server offered TLS but client was built without TLS support.\n");
+        fprintf(stderr, "         Credentials will be sent in cleartext!\n");
+        fprintf(stderr, "         Rebuild with: make TLS=1\n");
+
+        /* Read AUTH_REQUIRED over plaintext */
+        if (net_recv_line(s, line, sizeof(line)) < 0) {
+            fprintf(stderr, "Error: no auth response\n");
+            socket_close(s);
+            return -1;
+        }
+#endif
+    }
+
+    /* Authentication flow (encrypted if TLS succeeded) */
     if (strcmp(line, "AUTH_REQUIRED") == 0) {
         char password[256];
         if (given_password && given_password[0]) {
@@ -532,27 +712,27 @@ static int evo_connect(const char *host, int port, const char *username,
         char auth_msg[1024];
         snprintf(auth_msg, sizeof(auth_msg), "AUTH %s %s", username, password);
         evo_secure_wipe(password, sizeof(password));
-        send_line(s, auth_msg);
+        cli_send_line(&g_conn, auth_msg);
         evo_secure_wipe(auth_msg, sizeof(auth_msg));
 
         /* Read AUTH_OK or ERR */
-        if (net_recv_line(s, line, sizeof(line)) < 0) {
+        if (cli_recv_line(&g_conn, line, sizeof(line)) < 0) {
             fprintf(stderr, "Error: connection closed during auth\n");
-            socket_close(s);
-            return (int)SOCKET_INVALID;
+            cli_conn_shutdown(&g_conn);
+            return -1;
         }
 
         if (strcmp(line, "AUTH_OK") != 0) {
             fprintf(stderr, "Authentication failed: %s\n", line);
-            socket_close(s);
-            return (int)SOCKET_INVALID;
+            cli_conn_shutdown(&g_conn);
+            return -1;
         }
     }
 
-    return (int)s;
+    return 0;  /* success */
 }
 
-static int evo_execute(socket_t s, const char *sql)
+static int evo_execute(cli_conn_t *c, const char *sql)
 {
     char line[65536];
     int sql_len = (int)strlen(sql);
@@ -560,12 +740,12 @@ static int evo_execute(socket_t s, const char *sql)
     /* Send: SQL <len>\n<sql>\n */
     char header[64];
     snprintf(header, sizeof(header), "SQL %d", sql_len);
-    if (send_line(s, header) < 0) return -1;
-    if (send_line(s, sql)    < 0) return -1;
+    if (cli_send_line(c, header) < 0) return -1;
+    if (cli_send_line(c, sql)    < 0) return -1;
 
     /* Read response lines until READY */
     while (1) {
-        if (net_recv_line(s, line, sizeof(line)) < 0) return -1;
+        if (cli_recv_line(c, line, sizeof(line)) < 0) return -1;
 
         if (strcmp(line, "READY") == 0) {
             break;
@@ -593,18 +773,18 @@ static int evo_execute(socket_t s, const char *sql)
             result_init_evo(&res);
 
             /* COLS n */
-            if (net_recv_line(s, line, sizeof(line)) < 0) return -1;
+            if (cli_recv_line(c, line, sizeof(line)) < 0) return -1;
             if (strncmp(line, "COLS ", 5) == 0) {
                 res.num_cols = atoi(line + 5);
                 res.cols = (char **)calloc(res.num_cols, sizeof(char *));
 
                 /* Read column names */
-                for (int c = 0; c < res.num_cols; c++) {
-                    if (net_recv_line(s, line, sizeof(line)) < 0) { result_free(&res); return -1; }
+                for (int col = 0; col < res.num_cols; col++) {
+                    if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return -1; }
                     if (strncmp(line, "COL ", 4) == 0) {
-                        res.cols[c] = strdup(line + 4);
+                        res.cols[col] = strdup(line + 4);
                     } else {
-                        res.cols[c] = strdup("?");
+                        res.cols[col] = strdup("?");
                     }
                 }
             }
@@ -614,7 +794,7 @@ static int evo_execute(socket_t s, const char *sql)
             res.cells = (char **)calloc(cells_cap, sizeof(char *));
 
             while (1) {
-                if (net_recv_line(s, line, sizeof(line)) < 0) { result_free(&res); return -1; }
+                if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return -1; }
 
                 if (strcmp(line, "END") == 0) break;
 
@@ -625,9 +805,9 @@ static int evo_execute(socket_t s, const char *sql)
                         res.cells = (char **)realloc(res.cells, cells_cap * sizeof(char *));
                     }
 
-                    for (int c = 0; c < res.num_cols; c++) {
-                        if (net_recv_line(s, line, sizeof(line)) < 0) { result_free(&res); return -1; }
-                        int idx = res.num_rows * res.num_cols + c;
+                    for (int col = 0; col < res.num_cols; col++) {
+                        if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return -1; }
+                        int idx = res.num_rows * res.num_cols + col;
                         if (strncmp(line, "FIELD NULL", 10) == 0 && line[10] == '\0') {
                             res.cells[idx] = NULL;
                         } else if (strncmp(line, "FIELD ", 6) == 0) {
@@ -641,7 +821,7 @@ static int evo_execute(socket_t s, const char *sql)
             }
 
             /* Read TAG */
-            if (net_recv_line(s, line, sizeof(line)) >= 0 && strncmp(line, "TAG ", 4) == 0) {
+            if (cli_recv_line(c, line, sizeof(line)) >= 0 && strncmp(line, "TAG ", 4) == 0) {
                 strncpy(res.tag, line + 4, sizeof(res.tag) - 1);
             }
 
@@ -691,10 +871,10 @@ int main(int argc, char *argv[])
     }
 
     /* Connect */
-    int sock = evo_connect(host, port, username, password);
-    if (sock == (int)SOCKET_INVALID) return 1;
+    if (evo_connect(host, port, username, password) < 0) return 1;
 
-    printf("Connected to EvoSQL at %s:%d\n", host, port);
+    printf("Connected to EvoSQL at %s:%d%s\n", host, port,
+           g_conn.is_tls ? " (TLS)" : "");
     printf("Type SQL queries, or \\q to quit.\n\n");
 
     /* Load history */
@@ -722,7 +902,7 @@ int main(int argc, char *argv[])
         if (strcmp(trimmed, "\\q") == 0 ||
             strncasecmp(trimmed, "quit", 4) == 0 ||
             strncasecmp(trimmed, "exit", 4) == 0) {
-            send_line((socket_t)sock, "QUIT");
+            cli_send_line(&g_conn, "QUIT");
             free(line);
             break;
         }
@@ -770,7 +950,7 @@ int main(int argc, char *argv[])
         }
 
         /* Execute */
-        if (evo_execute((socket_t)sock, sql) < 0) {
+        if (evo_execute(&g_conn, sql) < 0) {
             fprintf(stderr, "Connection lost.\n");
             free(line);
             break;
@@ -781,7 +961,7 @@ int main(int argc, char *argv[])
     }
 
     save_history();
-    socket_close((socket_t)sock);
+    cli_conn_shutdown(&g_conn);
 
 #ifdef _WIN32
     WSACleanup();
