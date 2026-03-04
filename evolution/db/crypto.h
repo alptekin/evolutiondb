@@ -72,4 +72,19 @@ int crypto_hash_password(const char *password, char *out, size_t out_size);
  * Returns 1 if match, 0 if no match, -1 on error. */
 int crypto_verify_password(const char *password, const char *encoded);
 
+/* ----------------------------------------------------------------
+ *  Secure memory wipe
+ * ---------------------------------------------------------------- */
+
+/*
+ * evo_secure_wipe — Guaranteed-not-optimized-away memory clear.
+ *
+ * Uses a volatile function pointer to prevent the compiler from
+ * eliminating the memset call when the buffer is not subsequently used.
+ * Must be used for all sensitive data (passwords, keys, hashes, salts).
+ *
+ * Ref: CWE-14 — Compiler Removal of Code to Clear Buffers
+ */
+void evo_secure_wipe(void *ptr, size_t len);
+
 #endif /* CRYPTO_H */

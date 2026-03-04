@@ -140,7 +140,7 @@ void sha256_final(SHA256_CTX *ctx, uint8_t digest[SHA256_DIGEST_SIZE])
     }
 
     /* Wipe sensitive data */
-    memset(ctx, 0, sizeof(SHA256_CTX));
+    evo_secure_wipe(ctx, sizeof(SHA256_CTX));
 }
 
 void sha256(const uint8_t *data, size_t len, uint8_t digest[SHA256_DIGEST_SIZE])
@@ -192,8 +192,8 @@ void hmac_sha256(const uint8_t *key, size_t key_len,
     sha256_final(&ctx, out);
 
     /* Wipe sensitive data */
-    memset(k_ipad, 0, sizeof(k_ipad));
-    memset(k_opad, 0, sizeof(k_opad));
+    evo_secure_wipe(k_ipad, sizeof(k_ipad));
+    evo_secure_wipe(k_opad, sizeof(k_opad));
 }
 
 /* ================================================================
@@ -240,8 +240,8 @@ void pbkdf2_sha256(const uint8_t *password, size_t pass_len,
         block++;
     }
 
-    memset(U, 0, sizeof(U));
-    memset(T, 0, sizeof(T));
+    evo_secure_wipe(U, sizeof(U));
+    evo_secure_wipe(T, sizeof(T));
 }
 
 /* ================================================================
@@ -337,8 +337,8 @@ int crypto_hash_password(const char *password, char *out, size_t out_size)
              PBKDF2_ITERATIONS, salt_hex, hash_hex);
 
     /* Wipe sensitive buffers */
-    memset(salt, 0, sizeof(salt));
-    memset(hash, 0, sizeof(hash));
+    evo_secure_wipe(salt, sizeof(salt));
+    evo_secure_wipe(hash, sizeof(hash));
 
     return 0;
 }
@@ -377,9 +377,37 @@ int crypto_verify_password(const char *password, const char *encoded)
         diff |= computed_hash[i] ^ expected_hash[i];
 
     /* Wipe */
-    memset(salt, 0, sizeof(salt));
-    memset(expected_hash, 0, sizeof(expected_hash));
-    memset(computed_hash, 0, sizeof(computed_hash));
+    evo_secure_wipe(salt, sizeof(salt));
+    evo_secure_wipe(expected_hash, sizeof(expected_hash));
+    evo_secure_wipe(computed_hash, sizeof(computed_hash));
 
     return (diff == 0) ? 1 : 0;
 }
+
+/* ================================================================
+ *  Secure memory wipe (CWE-14 mitigation)
+ *
+ *  Uses a volatile function pointer so the compiler cannot
+ *  optimise the call away even when the buffer is dead afterwards.
+ *  Falls back to explicit_bzero() / SecureZeroMemory() when available.
+ * ================================================================ */
+#if defined(_WIN32)
+void evo_secure_wipe(void *ptr, size_t len)
+{
+    SecureZeroMemory(ptr, len);
+}
+#elif defined(__STDC_LIB_EXT1__)
+void evo_secure_wipe(void *ptr, size_t len)
+{
+    memset_s(ptr, len, 0, len);
+}
+#else
+/* Volatile function pointer trick — the indirection prevents
+ * the compiler from proving the call has no side effects. */
+static void *(*const volatile evo_memset_ptr)(void *, int, size_t) = memset;
+
+void evo_secure_wipe(void *ptr, size_t len)
+{
+    evo_memset_ptr(ptr, 0, len);
+}
+#endif
