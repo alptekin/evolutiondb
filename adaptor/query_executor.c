@@ -21,6 +21,39 @@ extern int yylex_destroy(void);
 extern int yylineno;
 
 /* ----------------------------------------------------------------
+ *  sql_redact_password — Redact PASSWORD clauses for safe logging
+ * ---------------------------------------------------------------- */
+static void sql_redact_password(char *dst, size_t dst_size, const char *src)
+{
+    const char *p = src;
+    char *d = dst;
+    char *end = dst + dst_size - 1;
+
+    while (*p && d < end) {
+        if (strncasecmp(p, "PASSWORD", 8) == 0 &&
+            (p == src || isspace((unsigned char)p[-1])) &&
+            (p[8] == '\0' || isspace((unsigned char)p[8]))) {
+            const char *kw = "PASSWORD ";
+            while (*kw && d < end) *d++ = *kw++;
+            p += 8;
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (*p == '\'') {
+                p++;
+                while (*p && *p != '\'') p++;
+                if (*p == '\'') p++;
+            } else {
+                while (*p && !isspace((unsigned char)*p) && *p != ';') p++;
+            }
+            const char *redacted = "'***'";
+            while (*redacted && d < end) *d++ = *redacted++;
+        } else {
+            *d++ = *p++;
+        }
+    }
+    *d = '\0';
+}
+
+/* ----------------------------------------------------------------
  *  Engine initialization
  * ---------------------------------------------------------------- */
 void query_engine_init(void)
@@ -1804,9 +1837,13 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
-    printf("[adaptor] Normalized SQL: %.200s%s\n", normalized,
-           strlen(normalized) > 200 ? "..." : "");
-    fflush(stdout);
+    {
+        char redacted[256];
+        sql_redact_password(redacted, sizeof(redacted), normalized);
+        printf("[adaptor] Normalized SQL: %.200s%s\n", redacted,
+               strlen(redacted) > 200 ? "..." : "");
+        fflush(stdout);
+    }
 
     /* Parse selected columns from SQL for filtering */
     parse_select_columns(normalized);

@@ -1907,6 +1907,7 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
             result_set_error(rs, "42710", g_gui_error_msg);
             g_gui_error = 0;
         }
+        evo_secure_wipe(password, sizeof(password));
         return 1;
     }
 
@@ -1972,6 +1973,7 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
             result_set_error(rs, "42704", g_gui_error_msg);
             g_gui_error = 0;
         }
+        evo_secure_wipe(password, sizeof(password));
         return 1;
     }
 
