@@ -140,7 +140,35 @@ void evo_handle_client(socket_t sock)
     /* Send server greeting */
     evo_sendf(&conn, "HELLO EvoSQL 1.0\n");
 
-    /* Step 1.5: Authentication */
+    /* Step 1.5: STARTTLS upgrade — offer TLS before auth so that
+     * credentials are never sent in cleartext over the wire. */
+    if (tls_is_available()) {
+        evo_sendf(&conn, "STARTTLS\n");
+
+        /* Wait for client acknowledgement */
+        if (conn_recv_line(&conn, line, sizeof(line)) < 0) {
+            printf("[EVO] Connection closed during TLS negotiation\n");
+            fflush(stdout);
+            free(rs);
+            return;
+        }
+
+        if (strcmp(line, "STARTTLS") == 0) {
+            /* Client accepted — perform TLS handshake */
+            if (conn_tls_accept(&conn) < 0) {
+                fprintf(stderr, "[EVO] TLS handshake failed\n");
+                free(rs);
+                return;
+            }
+            printf("[EVO] TLS connection established\n"); fflush(stdout);
+        } else {
+            /* Client declined — continue plaintext (backward compat) */
+            printf("[EVO] Client declined TLS, continuing plaintext\n");
+            fflush(stdout);
+        }
+    }
+
+    /* Step 2: Authentication (encrypted if TLS succeeded) */
     evo_sendf(&conn, "AUTH_REQUIRED\n");
 
     /* Expect: AUTH <username> <password> */

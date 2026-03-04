@@ -18,6 +18,16 @@ endif
 CC = gcc
 CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS -pipe
 
+# Optional TLS support: make TLS=1
+ifdef TLS
+    CFLAGS  += -DEVOSQL_CLI_TLS
+    ifeq ($(UNAME),Linux)
+        LDFLAGS += -lssl -lcrypto
+    else
+        LDFLAGS += -lssl -lcrypto
+    endif
+endif
+
 SRCS = evosql-cli.c
 OBJS = $(SRCS:.c=.o)
 
