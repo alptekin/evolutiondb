@@ -24,6 +24,16 @@
 #include <string.h>
 #include <ctype.h>
 
+/* ----------------------------------------------------------------
+ *  evo_secure_wipe — local copy for standalone CLI binary
+ *  (CWE-14: Compiler Removal of Code to Clear Buffers)
+ * ---------------------------------------------------------------- */
+static void *(*const volatile cli_memset_ptr)(void *, int, size_t) = memset;
+static void evo_secure_wipe(void *ptr, size_t len)
+{
+    cli_memset_ptr(ptr, 0, len);
+}
+
 /* ================================================================
  *  Platform detection
  * ================================================================ */
@@ -521,9 +531,9 @@ static int evo_connect(const char *host, int port, const char *username,
         /* Send AUTH <username> <password> */
         char auth_msg[1024];
         snprintf(auth_msg, sizeof(auth_msg), "AUTH %s %s", username, password);
-        memset(password, 0, sizeof(password));
+        evo_secure_wipe(password, sizeof(password));
         send_line(s, auth_msg);
-        memset(auth_msg, 0, sizeof(auth_msg));
+        evo_secure_wipe(auth_msg, sizeof(auth_msg));
 
         /* Read AUTH_OK or ERR */
         if (net_recv_line(s, line, sizeof(line)) < 0) {

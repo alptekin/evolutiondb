@@ -17,6 +17,16 @@
 #include "../evolution/db/database.h"
 
 /* ----------------------------------------------------------------
+ *  evo_secure_wipe — local copy to avoid crypto.h / OpenSSL clash
+ *  (CWE-14: Compiler Removal of Code to Clear Buffers)
+ * ---------------------------------------------------------------- */
+static void *(*const volatile evo_memset_ptr)(void *, int, size_t) = memset;
+static void evo_secure_wipe(void *ptr, size_t len)
+{
+    evo_memset_ptr(ptr, 0, len);
+}
+
+/* ----------------------------------------------------------------
  *  Send helpers (text-line based)
  * ---------------------------------------------------------------- */
 static int evo_sendf(conn_t *conn, const char *fmt, ...)
@@ -136,12 +146,12 @@ void evo_handle_client(socket_t sock)
             evo_sendf(&conn, "ERR 28P01 Authentication failed\n");
             printf("[EVO] Auth failed for user '%s'\n", username);
             fflush(stdout);
-            memset(password, 0, sizeof(password));
+            evo_secure_wipe(password, sizeof(password));
             free(rs);
             return;
         }
 
-        memset(password, 0, sizeof(password));
+        evo_secure_wipe(password, sizeof(password));
         strncpy(session.username, username, sizeof(session.username) - 1);
         printf("[EVO] Authenticated user '%s'\n", username); fflush(stdout);
     }
