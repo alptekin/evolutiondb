@@ -141,7 +141,7 @@
 ### Task 7: ✅ AUTO_INCREMENT / SERIAL (Feature #9)
 
 **Goal:** AUTO_INCREMENT is parsed but no counter exists. Implement auto-increment for a single column per table.
-
+ 
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Design counter storage — `.meta` line 8: auto-increment column index and current counter (e.g. `2:47` = column 2, next value 47). `-1:0` = no auto-inc. | Design |

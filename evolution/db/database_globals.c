@@ -35,6 +35,8 @@ char g_currentColDefault[256];
 char g_columnDefaults[4096];
 int g_currentColAutoIncrement = 0;
 int g_autoIncColIndex = -1;
+int g_autoIncStart = 1;
+int g_autoIncStep = 1;
 char g_primaryKeyIndices[256] = "";
 int g_pkColumnCount = 0;
 char g_pkColumnNames[16][128];

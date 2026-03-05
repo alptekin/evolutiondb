@@ -172,10 +172,10 @@ int CreateTableProcess(void)
         FILE *fp = fopen(metaFile, "w");
         if (fp) {
             /* Line 4 is now comma-separated PK indices (e.g. "0" or "0,2") */
-            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n%d:%d\n",
+            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n%d:%d:%d\n",
                     g_columnDefs, padSize, g_columnTypeDefs, pkIndicesStr,
                     g_columnNullFlags, g_columnUniqueFlags, g_columnDefaults,
-                    g_autoIncColIndex, 0);
+                    g_autoIncColIndex, g_autoIncStart - g_autoIncStep, g_autoIncStep);
             fclose(fp);
         }
     }
@@ -209,6 +209,8 @@ void TruncateCreate(void)
     g_currentColUnique = 0;
     g_currentColAutoIncrement = 0;
     g_autoIncColIndex = -1;
+    g_autoIncStart = 1;
+    g_autoIncStep = 1;
     g_pkColumnCount = 0;
     memset(g_pkColumnNames, 0, sizeof(g_pkColumnNames));
 }
@@ -499,18 +501,21 @@ int ReadDefaults(const char *tblName, char defaults[][256], int maxCols)
     return count;
 }
 
-void SetColumnAutoIncrement(void)
+void SetColumnAutoIncrement(int start, int step)
 {
     g_currentColAutoIncrement = 1;
+    g_autoIncStart = (start > 0) ? start : 1;
+    g_autoIncStep  = (step  > 0) ? step  : 1;
 }
 
-int ReadAutoIncrement(const char *tblName, int *colIndex, int *counter)
+int ReadAutoIncrement(const char *tblName, int *colIndex, int *counter, int *step)
 {
     char metaFile[SAFE_PATH_MAX], line[256];
     FILE *fp;
 
     *colIndex = -1;
     *counter = 0;
+    *step = 1;
 
     snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
     fp = fopen(metaFile, "r");
@@ -524,19 +529,29 @@ int ReadAutoIncrement(const char *tblName, int *colIndex, int *counter)
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
-    /* Line 8: auto-increment (col_index:counter) */
+    /* Line 8: auto-increment (col_index:counter[:step]) */
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
 
     fclose(fp);
     line[strcspn(line, "\n")] = '\0';
 
-    /* Parse "col_index:counter" */
+    /* Parse "col_index:counter" or "col_index:counter:step" */
     {
-        char *colon = strchr(line, ':');
-        if (colon) {
-            *colon = '\0';
+        char *c1 = strchr(line, ':');
+        if (c1) {
+            *c1 = '\0';
             *colIndex = atoi(line);
-            *counter = atoi(colon + 1);
+            char *c2 = strchr(c1 + 1, ':');
+            if (c2) {
+                *c2 = '\0';
+                *counter = atoi(c1 + 1);
+                int s = atoi(c2 + 1);
+                *step = (s > 0) ? s : 1;
+            } else {
+                *counter = atoi(c1 + 1);
+                /* Old format without step — default to 1 */
+                *step = 1;
+            }
         } else {
             *colIndex = atoi(line);
         }
@@ -545,7 +560,7 @@ int ReadAutoIncrement(const char *tblName, int *colIndex, int *counter)
     return 0;
 }
 
-int WriteAutoIncrement(const char *tblName, int colIndex, int counter)
+int WriteAutoIncrement(const char *tblName, int colIndex, int counter, int step)
 {
     char metaFile[SAFE_PATH_MAX];
     char lines[8][4096];
@@ -564,12 +579,12 @@ int WriteAutoIncrement(const char *tblName, int colIndex, int counter)
     }
     fclose(fp);
 
-    /* Rewrite with updated line 8 */
+    /* Rewrite with updated line 8, preserving step */
     fp = fopen(metaFile, "w");
     if (!fp) return -1;
     for (i = 0; i < 7; i++)
         fprintf(fp, "%s\n", lines[i]);
-    fprintf(fp, "%d:%d\n", colIndex, counter);
+    fprintf(fp, "%d:%d:%d\n", colIndex, counter, step);
     fclose(fp);
 
     return 0;
