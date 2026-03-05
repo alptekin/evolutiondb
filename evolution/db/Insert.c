@@ -1,6 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include "database.h"
 #include "apue.h"
@@ -138,6 +139,10 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         }
     }
 
+    /* Read DEFAULT values for the table */
+    char defaultVals[64][256];
+    int numDefaults = ReadDefaults(tblName, defaultVals, 64);
+
     /* Build reordered row: for each table column, find in user's list */
     buf[0] = '\0';
     for (i = 0; i < numTableCols; i++) {
@@ -151,8 +156,11 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         if (i > 0) strcat(buf, ";");
         if (userIdx >= 0) {
             strcat(buf, userVals[userIdx]);
+        } else if (i < numDefaults && strcmp(defaultVals[i], "\x01NONE\x01") != 0) {
+            /* Column not in INSERT list but has a DEFAULT value → use it */
+            strcat(buf, defaultVals[i]);
         } else {
-            /* Column not in INSERT list → NULL marker */
+            /* Column not in INSERT list, no DEFAULT → NULL marker */
             strcat(buf, "\x01NULL\x01");
         }
     }
@@ -233,6 +241,113 @@ static int validate_not_null(const char *tblName, char **vals, int numValues)
     return 0;
 }
 
+/* Validate UNIQUE constraints for a single row against existing data.
+ * Opens the table, iterates all records, checks UNIQUE columns.
+ * Returns 0 on success, -1 on violation (sets g_gui_error/g_gui_error_msg). */
+static int validate_unique(const char *tblName, const char *datName,
+                           char **vals, int numValues)
+{
+    int uniqueFlags[64];
+    int numFlags = ReadUniqueFlags(tblName, uniqueFlags, 64);
+    int i;
+    DBHANDLE db;
+    char keyBuf[1024];
+    char *data;
+
+    if (numFlags <= 0) return 0; /* no UNIQUE info or old table → skip */
+
+    /* Check if any column is marked UNIQUE */
+    {
+        int hasUnique = 0;
+        for (i = 0; i < numFlags && i < numValues; i++) {
+            if (uniqueFlags[i]) { hasUnique = 1; break; }
+        }
+        if (!hasUnique) return 0;
+    }
+
+    /* Read column names for error messages */
+    char colNames[64][128];
+    int numColNames = InsertReadColumnNames(tblName, colNames, 64);
+
+    /* Open table and scan all existing records */
+    db = db_open(datName, O_RDONLY, FILE_MODE);
+    if (!db) return 0; /* table doesn't exist yet → no duplicates */
+
+    db_rewind(db);
+    while ((data = db_nextrec(db, keyBuf)) != NULL) {
+        for (i = 0; i < numFlags && i < numValues; i++) {
+            if (!uniqueFlags[i]) continue;
+            /* Skip NULL values — NULLs are allowed to be duplicate in UNIQUE columns */
+            if (strcmp(vals[i], "\x01NULL\x01") == 0) continue;
+
+            /* Extract field i from existing record */
+            char existingVal[256];
+            char tmp[RECORD_BUF_SIZE];
+            char *tok;
+            int idx = 0;
+
+            strncpy(tmp, data, sizeof(tmp) - 1);
+            tmp[sizeof(tmp) - 1] = '\0';
+            tok = strtok(tmp, ";");
+            existingVal[0] = '\0';
+            while (tok) {
+                if (idx == i) {
+                    strncpy(existingVal, tok, sizeof(existingVal) - 1);
+                    existingVal[sizeof(existingVal) - 1] = '\0';
+                    break;
+                }
+                idx++;
+                tok = strtok(NULL, ";");
+            }
+
+            if (strcmp(vals[i], existingVal) == 0) {
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
+                         (i < numColNames) ? colNames[i] : "unknown", vals[i]);
+                g_gui_error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                db_close(db);
+                return -1;
+            }
+        }
+    }
+
+    db_close(db);
+    return 0;
+}
+
+/* Apply AUTO_INCREMENT to a single row's values.
+ * If the auto-inc column value is NULL marker, "0", or empty, replace it with
+ * the next counter value. If user provides an explicit non-zero value, track
+ * the maximum for counter advancement.
+ * `vals` array is modified in-place (pointers into valBuf remain valid).
+ * `generatedVal` receives the generated string value (static buffer).
+ * Returns: 1 if a value was generated, 0 if user provided explicit value,
+ *         -1 if no auto-inc column. */
+static int apply_auto_increment(const char *tblName, char **vals, int numValues,
+                                int autoIncCol, int *counterInOut,
+                                char *generatedVal, int genBufSize)
+{
+    if (autoIncCol < 0 || autoIncCol >= numValues) return -1;
+
+    /* Check if value needs auto-generation */
+    if (strcmp(vals[autoIncCol], "\x01NULL\x01") == 0 ||
+        strcmp(vals[autoIncCol], "0") == 0 ||
+        vals[autoIncCol][0] == '\0') {
+        /* Generate next value */
+        (*counterInOut)++;
+        snprintf(generatedVal, genBufSize, "%d", *counterInOut);
+        vals[autoIncCol] = generatedVal;
+        return 1;
+    } else {
+        /* User provided explicit value — track for counter advancement */
+        long explicitVal = strtol(vals[autoIncCol], NULL, 10);
+        if (explicitVal > *counterInOut)
+            *counterInOut = (int)explicitVal;
+        return 0;
+    }
+}
+
 /* Pad a single row to the table's pad size and store it via db_store.
  * Returns 0 on success, 1 on duplicate key, -1 on error. */
 static int store_single_row(DBHANDLE db, const char *tblName, char *rowData)
@@ -240,13 +355,43 @@ static int store_single_row(DBHANDLE db, const char *tblName, char *rowData)
     int padSize, curLen;
     char padded[RECORD_BUF_SIZE];
     char keyBuf[RECORD_BUF_SIZE];
-    char *key;
+    char compositeKey[1024];
+    int pkIndices[16];
+    int numPKs;
 
-    /* Extract key (first semicolon-delimited value) */
-    strncpy(keyBuf, rowData, sizeof(keyBuf) - 1);
-    keyBuf[sizeof(keyBuf) - 1] = '\0';
-    key = strtok(keyBuf, ";");
-    if (!key) return -1;
+    /* Read primary key column indices */
+    numPKs = ReadPrimaryKeys(tblName, pkIndices, 16);
+    if (numPKs <= 0) {
+        /* Fallback: use first column */
+        pkIndices[0] = 0;
+        numPKs = 1;
+    }
+
+    /* Parse row values to extract PK column(s) */
+    {
+        char tmpRow[RECORD_BUF_SIZE];
+        char *vals[64];
+        int nv = 0, p;
+        char *t;
+
+        strncpy(tmpRow, rowData, sizeof(tmpRow) - 1);
+        tmpRow[sizeof(tmpRow) - 1] = '\0';
+        t = strtok(tmpRow, ";");
+        while (t && nv < 64) {
+            vals[nv++] = t;
+            t = strtok(NULL, ";");
+        }
+
+        /* Build composite key: val1|val2|... for multi-column PK, or just val for single */
+        compositeKey[0] = '\0';
+        for (p = 0; p < numPKs; p++) {
+            if (p > 0) strcat(compositeKey, "|");
+            if (pkIndices[p] < nv)
+                strcat(compositeKey, vals[pkIndices[p]]);
+        }
+    }
+
+    if (compositeKey[0] == '\0') return -1;
 
     /* Prepare padded row data */
     strncpy(padded, rowData, sizeof(padded) - 1);
@@ -262,7 +407,7 @@ static int store_single_row(DBHANDLE db, const char *tblName, char *rowData)
         padded[padSize] = '\0';
     }
 
-    return db_store(db, key, padded, DB_INSERT);
+    return db_store(db, compositeKey, padded, DB_INSERT);
 }
 
 /* -------------------------------------------------------------------- */
@@ -308,6 +453,10 @@ int InsertProcess(void)
      * reorder_row_for_column_map() rewrites the row string. */
     static char reorderedRows[256][RECORD_BUF_SIZE];
 
+    /* Read AUTO_INCREMENT info once for the table */
+    int autoIncCol = -1, autoIncCounter = 0;
+    ReadAutoIncrement(tblName, &autoIncCol, &autoIncCounter);
+
     for (i = 0; i < numRows; i++) {
         char valBuf[RECORD_BUF_SIZE];
         char *vals[64];
@@ -325,6 +474,25 @@ int InsertProcess(void)
             }
         }
 
+        /* Apply AUTO_INCREMENT before validation */
+        if (autoIncCol >= 0) {
+            char genBuf[32];
+            strncpy(valBuf, reorderedRows[i], sizeof(valBuf) - 1);
+            valBuf[sizeof(valBuf) - 1] = '\0';
+            nv = split_row_values(valBuf, vals, 64);
+            if (apply_auto_increment(tblName, vals, nv, autoIncCol,
+                                     &autoIncCounter, genBuf, sizeof(genBuf)) >= 0) {
+                /* Reconstruct reorderedRows[i] from vals[] */
+                int k;
+                reorderedRows[i][0] = '\0';
+                for (k = 0; k < nv; k++) {
+                    if (k > 0) strcat(reorderedRows[i], ";");
+                    strcat(reorderedRows[i], vals[k]);
+                }
+                strcat(reorderedRows[i], ";");
+            }
+        }
+
         /* Validate types and NOT NULL on the (possibly reordered) row */
         strncpy(valBuf, reorderedRows[i], sizeof(valBuf) - 1);
         valBuf[sizeof(valBuf) - 1] = '\0';
@@ -336,6 +504,10 @@ int InsertProcess(void)
             return -1;
         }
         if (validate_not_null(tblName, vals, nv) != 0) {
+            TruncateInsert();
+            return -1;
+        }
+        if (validate_unique(tblName, g_tblInsertionName, vals, nv) != 0) {
             TruncateInsert();
             return -1;
         }
@@ -376,6 +548,12 @@ int InsertProcess(void)
 
     printf("command(s) completed successfully!..\n");
     db_close(db);
+
+    /* Persist AUTO_INCREMENT counter if it was used */
+    if (autoIncCol >= 0) {
+        WriteAutoIncrement(tblName, autoIncCol, autoIncCounter);
+    }
+
     TruncateInsert();
 
     return 0;
