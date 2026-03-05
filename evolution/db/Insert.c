@@ -325,7 +325,7 @@ static int validate_unique(const char *tblName, const char *datName,
  * Returns: 1 if a value was generated, 0 if user provided explicit value,
  *         -1 if no auto-inc column. */
 static int apply_auto_increment(const char *tblName, char **vals, int numValues,
-                                int autoIncCol, int *counterInOut,
+                                int autoIncCol, int *counterInOut, int step,
                                 char *generatedVal, int genBufSize)
 {
     if (autoIncCol < 0 || autoIncCol >= numValues) return -1;
@@ -334,8 +334,8 @@ static int apply_auto_increment(const char *tblName, char **vals, int numValues,
     if (strcmp(vals[autoIncCol], "\x01NULL\x01") == 0 ||
         strcmp(vals[autoIncCol], "0") == 0 ||
         vals[autoIncCol][0] == '\0') {
-        /* Generate next value */
-        (*counterInOut)++;
+        /* Generate next value: counter += step */
+        *counterInOut += step;
         snprintf(generatedVal, genBufSize, "%d", *counterInOut);
         vals[autoIncCol] = generatedVal;
         return 1;
@@ -454,8 +454,8 @@ int InsertProcess(void)
     static char reorderedRows[256][RECORD_BUF_SIZE];
 
     /* Read AUTO_INCREMENT info once for the table */
-    int autoIncCol = -1, autoIncCounter = 0;
-    ReadAutoIncrement(tblName, &autoIncCol, &autoIncCounter);
+    int autoIncCol = -1, autoIncCounter = 0, autoIncStep = 1;
+    ReadAutoIncrement(tblName, &autoIncCol, &autoIncCounter, &autoIncStep);
 
     for (i = 0; i < numRows; i++) {
         char valBuf[RECORD_BUF_SIZE];
@@ -481,7 +481,8 @@ int InsertProcess(void)
             valBuf[sizeof(valBuf) - 1] = '\0';
             nv = split_row_values(valBuf, vals, 64);
             if (apply_auto_increment(tblName, vals, nv, autoIncCol,
-                                     &autoIncCounter, genBuf, sizeof(genBuf)) >= 0) {
+                                     &autoIncCounter, autoIncStep,
+                                     genBuf, sizeof(genBuf)) >= 0) {
                 /* Reconstruct reorderedRows[i] from vals[] */
                 int k;
                 reorderedRows[i][0] = '\0';
@@ -551,7 +552,7 @@ int InsertProcess(void)
 
     /* Persist AUTO_INCREMENT counter if it was used */
     if (autoIncCol >= 0) {
-        WriteAutoIncrement(tblName, autoIncCol, autoIncCounter);
+        WriteAutoIncrement(tblName, autoIncCol, autoIncCounter, autoIncStep);
     }
 
     TruncateInsert();
