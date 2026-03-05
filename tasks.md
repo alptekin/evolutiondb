@@ -98,7 +98,7 @@
 
 ## Day 3 — Constraint Enforcement
 
-### Task 5: ⬜ UNIQUE Constraint Enforcement (Feature #10)
+### Task 5: ✅ UNIQUE Constraint Enforcement (Feature #10)
 
 **Goal:** UNIQUE is parsed but duplicates are allowed. Enforce uniqueness on INSERT and UPDATE.
 
@@ -117,7 +117,7 @@
 
 ---
 
-### Task 6: ⬜ DEFAULT Value Enforcement (Feature #8)
+### Task 6: ✅ DEFAULT Value Enforcement (Feature #8)
 
 **Goal:** DEFAULT is parsed but not stored or applied. Store DEFAULT values and apply them on INSERT when column is omitted.
 
@@ -138,7 +138,7 @@
 
 ## Day 4 — AUTO_INCREMENT & Composite PK
 
-### Task 7: ⬜ AUTO_INCREMENT / SERIAL (Feature #9)
+### Task 7: ✅ AUTO_INCREMENT / SERIAL (Feature #9)
 
 **Goal:** AUTO_INCREMENT is parsed but no counter exists. Implement auto-increment for a single column per table.
 

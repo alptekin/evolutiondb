@@ -230,7 +230,7 @@
 %type <intval> opt_outer
 %type <intval> left_or_right 
 %type <intval> opt_left_or_right_outer
-%type <intval> column_list
+%type <intval> column_list pk_column_list
 %type <intval> index_list
 %type <intval> opt_for_join
 %type <intval> delete_opts
@@ -972,11 +972,15 @@ create_col_list: create_definition                                              
 | create_col_list ',' create_definition                                         { $$ = $1 + 1; }
 ;
 
-create_definition: PRIMARY KEY '(' column_list ')'                              { emit("PRIKEY %d", $4); }
+create_definition: PRIMARY KEY '(' pk_column_list ')'                            { emit("PRIKEY %d", $4); }
 | KEY '(' column_list ')'							{ emit("KEY %d", $3); }
 | INDEX '(' column_list ')'							{ emit("KEY %d", $3); }
 | FULLTEXT INDEX '(' column_list ')'                                            { emit("TEXTINDEX %d", $4); }
 | FULLTEXT KEY '(' column_list ')'                                              { emit("TEXTINDEX %d", $4); }
+;
+
+pk_column_list: NAME                                                            { emit("PRIKEY_COL %s", $1); AddPrimaryKeyColumn($1); free($1); $$ = 1; }
+| pk_column_list ',' NAME                                                       { emit("PRIKEY_COL %s", $3); AddPrimaryKeyColumn($3); free($3); $$ = $1 + 1; }
 ;
 
 create_definition:								{ emit("STARTCOL"); }
@@ -992,13 +996,14 @@ NAME data_type column_atts
 column_atts: /* nil */								{ $$ = 0; }
 | column_atts NOT NULLX								{ emit("ATTR NOTNULL"); SetColumnNotNull(); $$ = $1 + 1; }
 | column_atts NULLX
-| column_atts DEFAULT STRING                                                    { emit("ATTR DEFAULT STRING %s", $3); free($3); $$ = $1 + 1; }
-| column_atts DEFAULT INTNUM                                                    { emit("ATTR DEFAULT NUMBER %d", $3); $$ = $1 + 1; }
-| column_atts DEFAULT APPROXNUM                                                 { emit("ATTR DEFAULT FLOAT %g", $3); $$ = $1 + 1; }
-| column_atts DEFAULT BOOL							{ emit("ATTR DEFAULT BOOL %d", $3); $$ = $1 + 1; }
-| column_atts AUTO_INCREMENT                                                    { emit("ATTR AUTOINC"); $$ = $1 + 1; }
+| column_atts DEFAULT STRING                                                    { emit("ATTR DEFAULT STRING %s", $3); SetColumnDefault($3); free($3); $$ = $1 + 1; }
+| column_atts DEFAULT INTNUM                                                    { char _buf[32]; snprintf(_buf, sizeof(_buf), "%d", $3); emit("ATTR DEFAULT NUMBER %d", $3); SetColumnDefault(_buf); $$ = $1 + 1; }
+| column_atts DEFAULT APPROXNUM                                                 { char _buf[64]; snprintf(_buf, sizeof(_buf), "%g", $3); emit("ATTR DEFAULT FLOAT %g", $3); SetColumnDefault(_buf); $$ = $1 + 1; }
+| column_atts DEFAULT BOOL							{ char _buf[8]; snprintf(_buf, sizeof(_buf), "%s", $3 ? "true" : "false"); emit("ATTR DEFAULT BOOL %d", $3); SetColumnDefault(_buf); $$ = $1 + 1; }
+| column_atts AUTO_INCREMENT                                                    { emit("ATTR AUTOINC"); SetColumnAutoIncrement(); $$ = $1 + 1; }
 | column_atts UNIQUE '(' column_list ')'                                        { emit("ATTR UNIQUEKEY %d", $4); $$ = $1 + 1; }
-| column_atts UNIQUE KEY							{ emit("ATTR UNIQUEKEY"); $$ = $1 + 1; }
+| column_atts UNIQUE KEY							{ emit("ATTR UNIQUEKEY"); SetColumnUnique(); $$ = $1 + 1; }
+| column_atts UNIQUE								{ emit("ATTR UNIQUE"); SetColumnUnique(); $$ = $1 + 1; }
 | column_atts PRIMARY KEY							{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
 | column_atts KEY								{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
 | column_atts COMMENT STRING                                                    { emit("ATTR COMMENT %s", $3); free($3); $$ = $1 + 1; }

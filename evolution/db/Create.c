@@ -31,7 +31,7 @@ int ReadPadSize(const char *tblName)
 
 void WritePadSize(const char *tblName, int padSize)
 {
-    char metaFile[SAFE_PATH_MAX], colLine[1024], typeLine[1024], pkLine[256], nullLine[1024];
+    char metaFile[SAFE_PATH_MAX], colLine[1024], typeLine[1024], pkLine[256], nullLine[1024], uniqueLine[1024], defaultLine[4096], autoIncLine[64];
     FILE *fp;
 
     snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
@@ -41,6 +41,9 @@ void WritePadSize(const char *tblName, int padSize)
     typeLine[0] = '\0';
     pkLine[0] = '\0';
     nullLine[0] = '\0';
+    uniqueLine[0] = '\0';
+    defaultLine[0] = '\0';
+    autoIncLine[0] = '\0';
     fp = fopen(metaFile, "r");
     if (fp) {
         if (fgets(colLine, sizeof(colLine), fp)) {
@@ -55,8 +58,20 @@ void WritePadSize(const char *tblName, int padSize)
                     if (fgets(pkLine, sizeof(pkLine), fp)) {
                         pkLine[strcspn(pkLine, "\n")] = '\0';
                         /* Line 5: NOT NULL flags */
-                        if (fgets(nullLine, sizeof(nullLine), fp))
+                        if (fgets(nullLine, sizeof(nullLine), fp)) {
                             nullLine[strcspn(nullLine, "\n")] = '\0';
+                            /* Line 6: UNIQUE flags */
+                            if (fgets(uniqueLine, sizeof(uniqueLine), fp)) {
+                                uniqueLine[strcspn(uniqueLine, "\n")] = '\0';
+                                /* Line 7: DEFAULT values */
+                                if (fgets(defaultLine, sizeof(defaultLine), fp)) {
+                                    defaultLine[strcspn(defaultLine, "\n")] = '\0';
+                                    /* Line 8: AUTO_INCREMENT */
+                                    if (fgets(autoIncLine, sizeof(autoIncLine), fp))
+                                        autoIncLine[strcspn(autoIncLine, "\n")] = '\0';
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -67,7 +82,13 @@ void WritePadSize(const char *tblName, int padSize)
     /* Rewrite .meta preserving all lines */
     fp = fopen(metaFile, "w");
     if (fp) {
-        if (nullLine[0] != '\0')
+        if (autoIncLine[0] != '\0')
+            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine, uniqueLine, defaultLine, autoIncLine);
+        else if (defaultLine[0] != '\0')
+            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine, uniqueLine, defaultLine);
+        else if (uniqueLine[0] != '\0')
+            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine, uniqueLine);
+        else if (nullLine[0] != '\0')
             fprintf(fp, "%s\n%d\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine);
         else if (pkLine[0] != '\0')
             fprintf(fp, "%s\n%d\n%s\n%s\n", colLine, padSize, typeLine, pkLine);
@@ -112,10 +133,49 @@ int CreateTableProcess(void)
 
     /* Save column names and pad size to .meta file */
     if (g_columnDefs[0] != '\0') {
+        /* Resolve composite PK — table-level PRIMARY KEY (col1, col2, ...) */
+        char pkIndicesStr[256];
+        if (g_pkColumnCount > 0) {
+            /* Resolve column names to indices */
+            char tmpDefs[1024];
+            char *colArr[64];
+            int numCols = 0, p;
+            strncpy(tmpDefs, g_columnDefs, sizeof(tmpDefs) - 1);
+            tmpDefs[sizeof(tmpDefs) - 1] = '\0';
+            char *t = strtok(tmpDefs, ";");
+            while (t && numCols < 64) {
+                colArr[numCols++] = t;
+                t = strtok(NULL, ";");
+            }
+            pkIndicesStr[0] = '\0';
+            for (p = 0; p < g_pkColumnCount; p++) {
+                int j, found = -1;
+                for (j = 0; j < numCols; j++) {
+                    if (strcasecmp(g_pkColumnNames[p], colArr[j]) == 0) {
+                        found = j;
+                        break;
+                    }
+                }
+                if (found >= 0) {
+                    char idxBuf[16];
+                    if (pkIndicesStr[0] != '\0') strcat(pkIndicesStr, ",");
+                    snprintf(idxBuf, sizeof(idxBuf), "%d", found);
+                    strcat(pkIndicesStr, idxBuf);
+                }
+            }
+        } else {
+            /* Single-column PK from column_atts rule */
+            snprintf(pkIndicesStr, sizeof(pkIndicesStr), "%d", g_primaryKeyIndex);
+        }
+
         snprintf(metaFile, sizeof(metaFile), "%s.meta", g_tblName);
         FILE *fp = fopen(metaFile, "w");
         if (fp) {
-            fprintf(fp, "%s\n%d\n%s\n%d\n%s\n", g_columnDefs, padSize, g_columnTypeDefs, g_primaryKeyIndex, g_columnNullFlags);
+            /* Line 4 is now comma-separated PK indices (e.g. "0" or "0,2") */
+            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n%d:%d\n",
+                    g_columnDefs, padSize, g_columnTypeDefs, pkIndicesStr,
+                    g_columnNullFlags, g_columnUniqueFlags, g_columnDefaults,
+                    g_autoIncColIndex, 0);
             fclose(fp);
         }
     }
@@ -137,12 +197,20 @@ void TruncateCreate(void)
         g_columnDefs[i] = '\0';
         g_columnTypeDefs[i] = '\0';
         g_columnNullFlags[i] = '\0';
+        g_columnUniqueFlags[i] = '\0';
     }
+    memset(g_columnDefaults, 0, sizeof(g_columnDefaults));
+    g_currentColDefault[0] = '\0';
     g_totalColumnSize = 0;
     g_primaryKeyIndex = -1;
     g_columnCount = 0;
     g_currentColNotNull = 0;
     g_currentColPrimaryKey = 0;
+    g_currentColUnique = 0;
+    g_currentColAutoIncrement = 0;
+    g_autoIncColIndex = -1;
+    g_pkColumnCount = 0;
+    memset(g_pkColumnNames, 0, sizeof(g_pkColumnNames));
 }
 
 int GetTableName(char *name)
@@ -167,15 +235,41 @@ int GetColumnNames(char *name)
         strcat(g_columnNullFlags, buf);
     }
 
+    /* Accumulate UNIQUE flags (e.g. "0;1;0") */
+    {
+        char buf[4];
+        if (g_columnUniqueFlags[0] != '\0')
+            strcat(g_columnUniqueFlags, ";");
+        snprintf(buf, sizeof(buf), "%d", g_currentColUnique ? 1 : 0);
+        strcat(g_columnUniqueFlags, buf);
+    }
+
+    /* Accumulate DEFAULT values (e.g. "\x01NONE\x01;42;\x01NONE\x01;hello") */
+    {
+        if (g_columnDefaults[0] != '\0')
+            strcat(g_columnDefaults, ";");
+        if (g_currentColDefault[0] != '\0')
+            strcat(g_columnDefaults, g_currentColDefault);
+        else
+            strcat(g_columnDefaults, "\x01NONE\x01");
+    }
+
     /* Record PRIMARY KEY column index */
     if (g_currentColPrimaryKey)
         g_primaryKeyIndex = g_columnCount;
+
+    /* Record AUTO_INCREMENT column index */
+    if (g_currentColAutoIncrement)
+        g_autoIncColIndex = g_columnCount;
 
     g_columnCount++;
 
     /* Reset per-column flags for next column */
     g_currentColNotNull = 0;
     g_currentColPrimaryKey = 0;
+    g_currentColUnique = 0;
+    g_currentColDefault[0] = '\0';
+    g_currentColAutoIncrement = 0;
 
     return 0;
 }
@@ -310,6 +404,177 @@ void SetColumnPrimaryKey(void)
     g_currentColPrimaryKey = 1;
 }
 
+void SetColumnUnique(void)
+{
+    g_currentColUnique = 1;
+}
+
+int ReadUniqueFlags(const char *tblName, int *flags, int maxCols)
+{
+    char metaFile[SAFE_PATH_MAX], line[1024];
+    char *tok;
+    int count = 0;
+    FILE *fp;
+
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
+    fp = fopen(metaFile, "r");
+    if (!fp) return 0;
+
+    /* Skip lines 1-5 */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    /* Line 6: UNIQUE flags */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+
+    fclose(fp);
+    line[strcspn(line, "\n")] = '\0';
+    if (line[0] == '\0') return 0;
+
+    tok = strtok(line, ";");
+    while (tok && count < maxCols) {
+        flags[count++] = atoi(tok);
+        tok = strtok(NULL, ";");
+    }
+
+    return count;
+}
+
+void SetColumnDefault(const char *value)
+{
+    size_t len;
+    if (!value) { g_currentColDefault[0] = '\0'; return; }
+    len = strlen(value);
+    /* Strip surrounding quotes if present (e.g. 'active' → active) */
+    if (len >= 2 && ((value[0] == '\'' && value[len-1] == '\'') ||
+                     (value[0] == '"'  && value[len-1] == '"'))) {
+        len -= 2;
+        if (len >= sizeof(g_currentColDefault))
+            len = sizeof(g_currentColDefault) - 1;
+        memcpy(g_currentColDefault, value + 1, len);
+        g_currentColDefault[len] = '\0';
+    } else {
+        strncpy(g_currentColDefault, value, sizeof(g_currentColDefault) - 1);
+        g_currentColDefault[sizeof(g_currentColDefault) - 1] = '\0';
+    }
+}
+
+int ReadDefaults(const char *tblName, char defaults[][256], int maxCols)
+{
+    char metaFile[SAFE_PATH_MAX], line[4096];
+    int count = 0;
+    FILE *fp;
+
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
+    fp = fopen(metaFile, "r");
+    if (!fp) return 0;
+
+    /* Skip lines 1-6 */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    /* Line 7: DEFAULT values */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+
+    fclose(fp);
+    line[strcspn(line, "\n")] = '\0';
+    if (line[0] == '\0') return 0;
+
+    /* Parse semicolon-separated defaults */
+    {
+        char *tok = strtok(line, ";");
+        while (tok && count < maxCols) {
+            strncpy(defaults[count], tok, 255);
+            defaults[count][255] = '\0';
+            count++;
+            tok = strtok(NULL, ";");
+        }
+    }
+
+    return count;
+}
+
+void SetColumnAutoIncrement(void)
+{
+    g_currentColAutoIncrement = 1;
+}
+
+int ReadAutoIncrement(const char *tblName, int *colIndex, int *counter)
+{
+    char metaFile[SAFE_PATH_MAX], line[256];
+    FILE *fp;
+
+    *colIndex = -1;
+    *counter = 0;
+
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
+    fp = fopen(metaFile, "r");
+    if (!fp) return -1;
+
+    /* Skip lines 1-7 */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+    /* Line 8: auto-increment (col_index:counter) */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
+
+    fclose(fp);
+    line[strcspn(line, "\n")] = '\0';
+
+    /* Parse "col_index:counter" */
+    {
+        char *colon = strchr(line, ':');
+        if (colon) {
+            *colon = '\0';
+            *colIndex = atoi(line);
+            *counter = atoi(colon + 1);
+        } else {
+            *colIndex = atoi(line);
+        }
+    }
+
+    return 0;
+}
+
+int WriteAutoIncrement(const char *tblName, int colIndex, int counter)
+{
+    char metaFile[SAFE_PATH_MAX];
+    char lines[8][4096];
+    FILE *fp;
+    int i;
+
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
+
+    /* Read all 8 lines */
+    for (i = 0; i < 8; i++) lines[i][0] = '\0';
+    fp = fopen(metaFile, "r");
+    if (!fp) return -1;
+    for (i = 0; i < 8; i++) {
+        if (!fgets(lines[i], sizeof(lines[i]), fp)) break;
+        lines[i][strcspn(lines[i], "\n")] = '\0';
+    }
+    fclose(fp);
+
+    /* Rewrite with updated line 8 */
+    fp = fopen(metaFile, "w");
+    if (!fp) return -1;
+    for (i = 0; i < 7; i++)
+        fprintf(fp, "%s\n", lines[i]);
+    fprintf(fp, "%d:%d\n", colIndex, counter);
+    fclose(fp);
+
+    return 0;
+}
+
 int ReadPrimaryKey(const char *tblName)
 {
     char metaFile[SAFE_PATH_MAX], line[256];
@@ -323,12 +588,52 @@ int ReadPrimaryKey(const char *tblName)
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
-    /* Line 4: primary key index */
+    /* Line 4: primary key indices (comma-separated or single int) */
     if (!fgets(line, sizeof(line), fp)) { fclose(fp); return -1; }
 
     fclose(fp);
     line[strcspn(line, "\n")] = '\0';
+    /* For backward compat, return first PK index */
     return atoi(line);
+}
+
+void AddPrimaryKeyColumn(const char *colName)
+{
+    if (g_pkColumnCount < 16) {
+        strncpy(g_pkColumnNames[g_pkColumnCount], colName, 127);
+        g_pkColumnNames[g_pkColumnCount][127] = '\0';
+        g_pkColumnCount++;
+    }
+}
+
+int ReadPrimaryKeys(const char *tblName, int *indices, int maxCols)
+{
+    char metaFile[SAFE_PATH_MAX], line[256];
+    char *tok;
+    int count = 0;
+    FILE *fp;
+
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
+    fp = fopen(metaFile, "r");
+    if (!fp) return 0;
+
+    /* Skip lines 1-3 */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    /* Line 4: primary key indices (comma-separated) */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+
+    fclose(fp);
+    line[strcspn(line, "\n")] = '\0';
+    if (line[0] == '\0') return 0;
+
+    tok = strtok(line, ",");
+    while (tok && count < maxCols) {
+        indices[count++] = atoi(tok);
+        tok = strtok(NULL, ",");
+    }
+    return count;
 }
 
 int ReadNullFlags(const char *tblName, int *flags, int maxCols)

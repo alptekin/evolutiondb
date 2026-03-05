@@ -309,6 +309,52 @@ int UpdateProcess(void)
         }
     }
 
+    /* Validate UNIQUE constraints for SET columns */
+    {
+        int uniqueFlags[64];
+        int numUFlags = ReadUniqueFlags(tblName, uniqueFlags, 64);
+        if (numUFlags > 0) {
+            int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+            for (s = 0; s < minSet; s++) {
+                for (c = 0; c < numMetaCols; c++) {
+                    if (strcmp(metaCols[c], setCols[s]) == 0) {
+                        if (c < numUFlags && uniqueFlags[c]) {
+                            /* Skip NULL values — NULLs don't violate UNIQUE */
+                            if (allTokens[s][0] == '\0' ||
+                                strcmp(allTokens[s], "\x01NULL\x01") == 0)
+                                break;
+
+                            /* Scan all existing records for duplicate */
+                            DBHANDLE udb = db_open(tblName, O_RDONLY, FILE_MODE);
+                            if (udb) {
+                                char uKeyBuf[1024];
+                                char *uData;
+                                db_rewind(udb);
+                                while ((uData = db_nextrec(udb, uKeyBuf)) != NULL) {
+                                    char existVal[256];
+                                    UpdateGetFieldValue(uData, c, existVal, sizeof(existVal));
+                                    if (strcmp(allTokens[s], existVal) == 0) {
+                                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                                 "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
+                                                 setCols[s], allTokens[s]);
+                                        g_gui_error = 1;
+                                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                                        db_close(udb);
+                                        g_updateCount = 0;
+                                        TruncateUpdate();
+                                        return -1;
+                                    }
+                                }
+                                db_close(udb);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     /* Read per-table pad size */
     int padSize = ReadPadSize(tblName);
 
