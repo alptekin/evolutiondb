@@ -249,20 +249,20 @@ def run_tests():
         CREATE TABLE chk_string (
             id INT PRIMARY KEY,
             status VARCHAR(20),
-            value INT,
-            CHECK (value >= 0 AND value <= 100)
+            score INT,
+            CHECK (score >= 0 AND score <= 100)
         )
     """)
     check("CREATE TABLE with range CHECK", r["error"] is None, r.get("error", ""))
 
     r = simple_query(s, "INSERT INTO chk_string VALUES (1, 'active', 50)")
-    check("INSERT valid (value=50 in 0..100)", r["error"] is None, r.get("error", ""))
+    check("INSERT valid (score=50 in 0..100)", r["error"] is None, r.get("error", ""))
 
     r = simple_query(s, "INSERT INTO chk_string VALUES (2, 'over', 101)")
-    check("INSERT violating (value=101 > 100)", r["error"] is not None, "expected error")
+    check("INSERT violating (score=101 > 100)", r["error"] is not None, "expected error")
 
     r = simple_query(s, "INSERT INTO chk_string VALUES (3, 'negative', -1)")
-    check("INSERT violating (value=-1 < 0)", r["error"] is not None, "expected error")
+    check("INSERT violating (score=-1 < 0)", r["error"] is not None, "expected error")
 
     # ---- Cleanup ----
     simple_query(s, "DROP TABLE IF EXISTS chk_age")
