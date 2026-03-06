@@ -178,7 +178,7 @@
 
 ## Day 5 — CHECK Constraints & FOREIGN KEY
 
-### Task 9: 🔄 CHECK Constraint (Feature #7)
+### Task 9: ✅ CHECK Constraint (Feature #7)
 
 **Goal:** Implement CHECK constraints that are validated on INSERT and UPDATE.
 
