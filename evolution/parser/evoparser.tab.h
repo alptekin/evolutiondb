@@ -1,14 +1,14 @@
-/* A Bison parser, made by GNU Bison 3.8.2.  */
+/* A Bison parser, made by GNU Bison 2.3.  */
 
-/* Bison interface for Yacc-like parsers in C
+/* Skeleton interface for Bison's Yacc-like parsers in C
 
-   Copyright (C) 1984, 1989-1990, 2000-2015, 2018-2021 Free Software Foundation,
-   Inc.
+   Copyright (C) 1984, 1989, 1990, 2000, 2001, 2002, 2003, 2004, 2005, 2006
+   Free Software Foundation, Inc.
 
-   This program is free software: you can redistribute it and/or modify
+   This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
-   the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
+   the Free Software Foundation; either version 2, or (at your option)
+   any later version.
 
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,7 +16,9 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program.  If not, see <https://www.gnu.org/licenses/>.  */
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin Street, Fifth Floor,
+   Boston, MA 02110-1301, USA.  */
 
 /* As a special exception, you may create a larger work that contains
    part or all of the Bison parser skeleton and distribute that work
@@ -31,205 +33,354 @@
    This special exception was added by the Free Software Foundation in
    version 2.2 of Bison.  */
 
-/* DO NOT RELY ON FEATURES THAT ARE NOT DOCUMENTED in the manual,
-   especially those whose name start with YY_ or yy_.  They are
-   private implementation details that can be changed or removed.  */
-
-#ifndef YY_YY_PARSER_EVOPARSER_TAB_H_INCLUDED
-# define YY_YY_PARSER_EVOPARSER_TAB_H_INCLUDED
-/* Debug traces.  */
-#ifndef YYDEBUG
-# define YYDEBUG 0
-#endif
-#if YYDEBUG
-extern int yydebug;
-#endif
-
-/* Token kinds.  */
+/* Tokens.  */
 #ifndef YYTOKENTYPE
 # define YYTOKENTYPE
-  enum yytokentype
-  {
-    YYEMPTY = -2,
-    YYEOF = 0,                     /* "end of file"  */
-    YYerror = 256,                 /* error  */
-    YYUNDEF = 257,                 /* "invalid token"  */
-    NAME = 258,                    /* NAME  */
-    STRING = 259,                  /* STRING  */
-    INTNUM = 260,                  /* INTNUM  */
-    BOOL = 261,                    /* BOOL  */
-    APPROXNUM = 262,               /* APPROXNUM  */
-    USERVAR = 263,                 /* USERVAR  */
-    ASSIGN = 264,                  /* ASSIGN  */
-    OR = 265,                      /* OR  */
-    XOR = 266,                     /* XOR  */
-    ANDOP = 267,                   /* ANDOP  */
-    IN = 268,                      /* IN  */
-    IS = 269,                      /* IS  */
-    LIKE = 270,                    /* LIKE  */
-    REGEXP = 271,                  /* REGEXP  */
-    NOT = 272,                     /* NOT  */
-    BETWEEN = 273,                 /* BETWEEN  */
-    COMPARISON = 274,              /* COMPARISON  */
-    SHIFT = 275,                   /* SHIFT  */
-    MOD = 276,                     /* MOD  */
-    UMINUS = 277,                  /* UMINUS  */
-    ALTER = 278,                   /* ALTER  */
-    ADD = 279,                     /* ADD  */
-    ALL = 280,                     /* ALL  */
-    ANY = 281,                     /* ANY  */
-    AUTO_INCREMENT = 282,          /* AUTO_INCREMENT  */
-    ASC = 283,                     /* ASC  */
-    AND = 284,                     /* AND  */
-    AS = 285,                      /* AS  */
-    BLOB = 286,                    /* BLOB  */
-    BOOLEAN = 287,                 /* BOOLEAN  */
-    BY = 288,                      /* BY  */
-    BINARY = 289,                  /* BINARY  */
-    BOTH = 290,                    /* BOTH  */
-    BIGINT = 291,                  /* BIGINT  */
-    BIT = 292,                     /* BIT  */
-    CURRENT_TIMESTAMP = 293,       /* CURRENT_TIMESTAMP  */
-    CREATE = 294,                  /* CREATE  */
-    CROSS = 295,                   /* CROSS  */
-    CASE = 296,                    /* CASE  */
-    COMMENT = 297,                 /* COMMENT  */
-    CURRENT_DATE = 298,            /* CURRENT_DATE  */
-    CURRENT_TIME = 299,            /* CURRENT_TIME  */
-    CHAR = 300,                    /* CHAR  */
-    COLLATE = 301,                 /* COLLATE  */
-    DATABASE = 302,                /* DATABASE  */
-    DELAYED = 303,                 /* DELAYED  */
-    DAY_HOUR = 304,                /* DAY_HOUR  */
-    DAY_MICROSECOND = 305,         /* DAY_MICROSECOND  */
-    DISTINCT = 306,                /* DISTINCT  */
-    DELETE = 307,                  /* DELETE  */
-    DROP = 308,                    /* DROP  */
-    DAY_MINUTE = 309,              /* DAY_MINUTE  */
-    DISTINCTROW = 310,             /* DISTINCTROW  */
-    DAY_SECOND = 311,              /* DAY_SECOND  */
-    DESC = 312,                    /* DESC  */
-    DEFAULT = 313,                 /* DEFAULT  */
-    DOUBLE = 314,                  /* DOUBLE  */
-    DATETIME = 315,                /* DATETIME  */
-    DECIMAL = 316,                 /* DECIMAL  */
-    DATE = 317,                    /* DATE  */
-    ESCAPED = 318,                 /* ESCAPED  */
-    ENUM = 319,                    /* ENUM  */
-    END = 320,                     /* END  */
-    ELSE = 321,                    /* ELSE  */
-    FLOAT = 322,                   /* FLOAT  */
-    FORCE = 323,                   /* FORCE  */
-    FROM = 324,                    /* FROM  */
-    FULLTEXT = 325,                /* FULLTEXT  */
-    FOR = 326,                     /* FOR  */
-    GROUP = 327,                   /* GROUP  */
-    HOUR_MINUTE = 328,             /* HOUR_MINUTE  */
-    HOUR_MICROSECOND = 329,        /* HOUR_MICROSECOND  */
-    HIGH_PRIORITY = 330,           /* HIGH_PRIORITY  */
-    HOUR_SECOND = 331,             /* HOUR_SECOND  */
-    HAVING = 332,                  /* HAVING  */
-    INTEGER = 333,                 /* INTEGER  */
-    INNER = 334,                   /* INNER  */
-    IGNORE = 335,                  /* IGNORE  */
-    INDEX = 336,                   /* INDEX  */
-    IF = 337,                      /* IF  */
-    INSERT = 338,                  /* INSERT  */
-    INTO = 339,                    /* INTO  */
-    INT = 340,                     /* INT  */
-    INTERVAL = 341,                /* INTERVAL  */
-    JOIN = 342,                    /* JOIN  */
-    KEY = 343,                     /* KEY  */
-    LONGTEXT = 344,                /* LONGTEXT  */
-    LOW_PRIORITY = 345,            /* LOW_PRIORITY  */
-    LEFT = 346,                    /* LEFT  */
-    LEADING = 347,                 /* LEADING  */
-    LIMIT = 348,                   /* LIMIT  */
-    LONGBLOB = 349,                /* LONGBLOB  */
-    MEDIUMTEXT = 350,              /* MEDIUMTEXT  */
-    MEDIUMBLOB = 351,              /* MEDIUMBLOB  */
-    MEDIUMINT = 352,               /* MEDIUMINT  */
-    NATURAL = 353,                 /* NATURAL  */
-    NULLX = 354,                   /* NULLX  */
-    OUTER = 355,                   /* OUTER  */
-    ON = 356,                      /* ON  */
-    ORDER = 357,                   /* ORDER  */
-    ONDUPLICATE = 358,             /* ONDUPLICATE  */
-    PRIMARY = 359,                 /* PRIMARY  */
-    QUICK = 360,                   /* QUICK  */
-    REAL = 361,                    /* REAL  */
-    ROLLUP = 362,                  /* ROLLUP  */
-    RIGHT = 363,                   /* RIGHT  */
-    REPLACE = 364,                 /* REPLACE  */
-    SQL_SMALL_RESULT = 365,        /* SQL_SMALL_RESULT  */
-    SCHEMA = 366,                  /* SCHEMA  */
-    SOME = 367,                    /* SOME  */
-    SQL_CALC_FOUND_ROWS = 368,     /* SQL_CALC_FOUND_ROWS  */
-    SQL_BIG_RESULT = 369,          /* SQL_BIG_RESULT  */
-    STRAIGHT_JOIN = 370,           /* STRAIGHT_JOIN  */
-    SMALLINT = 371,                /* SMALLINT  */
-    SET = 372,                     /* SET  */
-    SELECT = 373,                  /* SELECT  */
-    TINYTEXT = 374,                /* TINYTEXT  */
-    TINYINT = 375,                 /* TINYINT  */
-    TEMPORARY = 376,               /* TEMPORARY  */
-    TEXT = 377,                    /* TEXT  */
-    TIMESTAMP = 378,               /* TIMESTAMP  */
-    TABLE = 379,                   /* TABLE  */
-    THEN = 380,                    /* THEN  */
-    TRAILING = 381,                /* TRAILING  */
-    TRUNCATE = 382,                /* TRUNCATE  */
-    TINYBLOB = 383,                /* TINYBLOB  */
-    TIME = 384,                    /* TIME  */
-    UPDATE = 385,                  /* UPDATE  */
-    UNSIGNED = 386,                /* UNSIGNED  */
-    UNIQUE = 387,                  /* UNIQUE  */
-    USING = 388,                   /* USING  */
-    USE = 389,                     /* USE  */
-    VARCHAR = 390,                 /* VARCHAR  */
-    VALUES = 391,                  /* VALUES  */
-    VARBINARY = 392,               /* VARBINARY  */
-    WHERE = 393,                   /* WHERE  */
-    WHEN = 394,                    /* WHEN  */
-    WITH = 395,                    /* WITH  */
-    YEAR = 396,                    /* YEAR  */
-    YEAR_MONTH = 397,              /* YEAR_MONTH  */
-    ZEROFILL = 398,                /* ZEROFILL  */
-    EXISTS = 399,                  /* EXISTS  */
-    FSUBSTRING = 400,              /* FSUBSTRING  */
-    FTRIM = 401,                   /* FTRIM  */
-    FDATE_ADD = 402,               /* FDATE_ADD  */
-    FDATE_SUB = 403,               /* FDATE_SUB  */
-    FCOUNT = 404                   /* FCOUNT  */
-  };
-  typedef enum yytokentype yytoken_kind_t;
+   /* Put the tokens into the symbol table, so that GDB and other debuggers
+      know about them.  */
+   enum yytokentype {
+     NAME = 258,
+     STRING = 259,
+     INTNUM = 260,
+     BOOL = 261,
+     APPROXNUM = 262,
+     USERVAR = 263,
+     ASSIGN = 264,
+     OR = 265,
+     XOR = 266,
+     ANDOP = 267,
+     REGEXP = 268,
+     LIKE = 269,
+     IS = 270,
+     IN = 271,
+     NOT = 272,
+     BETWEEN = 273,
+     COMPARISON = 274,
+     SHIFT = 275,
+     MOD = 276,
+     UMINUS = 277,
+     ALTER = 278,
+     ADD = 279,
+     ALL = 280,
+     ANY = 281,
+     AUTO_INCREMENT = 282,
+     ASC = 283,
+     AND = 284,
+     AS = 285,
+     BLOB = 286,
+     BOOLEAN = 287,
+     BY = 288,
+     BINARY = 289,
+     BOTH = 290,
+     BIGINT = 291,
+     BIT = 292,
+     CURRENT_TIMESTAMP = 293,
+     CREATE = 294,
+     CROSS = 295,
+     CASE = 296,
+     CHECK = 297,
+     COMMENT = 298,
+     CURRENT_DATE = 299,
+     CURRENT_TIME = 300,
+     CHAR = 301,
+     COLLATE = 302,
+     DATABASE = 303,
+     DELAYED = 304,
+     DAY_HOUR = 305,
+     DAY_MICROSECOND = 306,
+     DISTINCT = 307,
+     DELETE = 308,
+     DROP = 309,
+     DAY_MINUTE = 310,
+     DISTINCTROW = 311,
+     DAY_SECOND = 312,
+     DESC = 313,
+     DEFAULT = 314,
+     DOUBLE = 315,
+     DATETIME = 316,
+     DECIMAL = 317,
+     DATE = 318,
+     ESCAPED = 319,
+     ENUM = 320,
+     END = 321,
+     ELSE = 322,
+     FLOAT = 323,
+     FORCE = 324,
+     FROM = 325,
+     FULLTEXT = 326,
+     FOR = 327,
+     GROUP = 328,
+     HOUR_MINUTE = 329,
+     HOUR_MICROSECOND = 330,
+     HIGH_PRIORITY = 331,
+     HOUR_SECOND = 332,
+     HAVING = 333,
+     INTEGER = 334,
+     INNER = 335,
+     IGNORE = 336,
+     INDEX = 337,
+     IF = 338,
+     INSERT = 339,
+     INTO = 340,
+     INT = 341,
+     INTERVAL = 342,
+     JOIN = 343,
+     KEY = 344,
+     LONGTEXT = 345,
+     LOW_PRIORITY = 346,
+     LEFT = 347,
+     LEADING = 348,
+     LIMIT = 349,
+     OFFSET = 350,
+     LONGBLOB = 351,
+     MEDIUMTEXT = 352,
+     MEDIUMBLOB = 353,
+     MEDIUMINT = 354,
+     NATURAL = 355,
+     NULLX = 356,
+     OUTER = 357,
+     ON = 358,
+     ORDER = 359,
+     ONDUPLICATE = 360,
+     PRIMARY = 361,
+     QUICK = 362,
+     REAL = 363,
+     ROLLUP = 364,
+     RIGHT = 365,
+     REPLACE = 366,
+     SQL_SMALL_RESULT = 367,
+     SCHEMA = 368,
+     SOME = 369,
+     SQL_CALC_FOUND_ROWS = 370,
+     SQL_BIG_RESULT = 371,
+     STRAIGHT_JOIN = 372,
+     SMALLINT = 373,
+     SET = 374,
+     SELECT = 375,
+     TINYTEXT = 376,
+     TINYINT = 377,
+     TEMPORARY = 378,
+     TEXT = 379,
+     TIMESTAMP = 380,
+     TABLE = 381,
+     THEN = 382,
+     TRAILING = 383,
+     TRUNCATE = 384,
+     TINYBLOB = 385,
+     TIME = 386,
+     UPDATE = 387,
+     UNSIGNED = 388,
+     UNIQUE = 389,
+     USING = 390,
+     USE = 391,
+     VARCHAR = 392,
+     VALUES = 393,
+     VARBINARY = 394,
+     WHERE = 395,
+     WHEN = 396,
+     WITH = 397,
+     YEAR = 398,
+     YEAR_MONTH = 399,
+     ZEROFILL = 400,
+     EXISTS = 401,
+     FSUBSTRING = 402,
+     FTRIM = 403,
+     FDATE_ADD = 404,
+     FDATE_SUB = 405,
+     FCOUNT = 406,
+     FSUM = 407,
+     FAVG = 408,
+     FMIN = 409,
+     FMAX = 410,
+     FUPPER = 411,
+     FLOWER = 412,
+     FLENGTH = 413,
+     FCONCAT = 414,
+     FREPLACE = 415,
+     FCOALESCE = 416
+   };
 #endif
+/* Tokens.  */
+#define NAME 258
+#define STRING 259
+#define INTNUM 260
+#define BOOL 261
+#define APPROXNUM 262
+#define USERVAR 263
+#define ASSIGN 264
+#define OR 265
+#define XOR 266
+#define ANDOP 267
+#define REGEXP 268
+#define LIKE 269
+#define IS 270
+#define IN 271
+#define NOT 272
+#define BETWEEN 273
+#define COMPARISON 274
+#define SHIFT 275
+#define MOD 276
+#define UMINUS 277
+#define ALTER 278
+#define ADD 279
+#define ALL 280
+#define ANY 281
+#define AUTO_INCREMENT 282
+#define ASC 283
+#define AND 284
+#define AS 285
+#define BLOB 286
+#define BOOLEAN 287
+#define BY 288
+#define BINARY 289
+#define BOTH 290
+#define BIGINT 291
+#define BIT 292
+#define CURRENT_TIMESTAMP 293
+#define CREATE 294
+#define CROSS 295
+#define CASE 296
+#define CHECK 297
+#define COMMENT 298
+#define CURRENT_DATE 299
+#define CURRENT_TIME 300
+#define CHAR 301
+#define COLLATE 302
+#define DATABASE 303
+#define DELAYED 304
+#define DAY_HOUR 305
+#define DAY_MICROSECOND 306
+#define DISTINCT 307
+#define DELETE 308
+#define DROP 309
+#define DAY_MINUTE 310
+#define DISTINCTROW 311
+#define DAY_SECOND 312
+#define DESC 313
+#define DEFAULT 314
+#define DOUBLE 315
+#define DATETIME 316
+#define DECIMAL 317
+#define DATE 318
+#define ESCAPED 319
+#define ENUM 320
+#define END 321
+#define ELSE 322
+#define FLOAT 323
+#define FORCE 324
+#define FROM 325
+#define FULLTEXT 326
+#define FOR 327
+#define GROUP 328
+#define HOUR_MINUTE 329
+#define HOUR_MICROSECOND 330
+#define HIGH_PRIORITY 331
+#define HOUR_SECOND 332
+#define HAVING 333
+#define INTEGER 334
+#define INNER 335
+#define IGNORE 336
+#define INDEX 337
+#define IF 338
+#define INSERT 339
+#define INTO 340
+#define INT 341
+#define INTERVAL 342
+#define JOIN 343
+#define KEY 344
+#define LONGTEXT 345
+#define LOW_PRIORITY 346
+#define LEFT 347
+#define LEADING 348
+#define LIMIT 349
+#define OFFSET 350
+#define LONGBLOB 351
+#define MEDIUMTEXT 352
+#define MEDIUMBLOB 353
+#define MEDIUMINT 354
+#define NATURAL 355
+#define NULLX 356
+#define OUTER 357
+#define ON 358
+#define ORDER 359
+#define ONDUPLICATE 360
+#define PRIMARY 361
+#define QUICK 362
+#define REAL 363
+#define ROLLUP 364
+#define RIGHT 365
+#define REPLACE 366
+#define SQL_SMALL_RESULT 367
+#define SCHEMA 368
+#define SOME 369
+#define SQL_CALC_FOUND_ROWS 370
+#define SQL_BIG_RESULT 371
+#define STRAIGHT_JOIN 372
+#define SMALLINT 373
+#define SET 374
+#define SELECT 375
+#define TINYTEXT 376
+#define TINYINT 377
+#define TEMPORARY 378
+#define TEXT 379
+#define TIMESTAMP 380
+#define TABLE 381
+#define THEN 382
+#define TRAILING 383
+#define TRUNCATE 384
+#define TINYBLOB 385
+#define TIME 386
+#define UPDATE 387
+#define UNSIGNED 388
+#define UNIQUE 389
+#define USING 390
+#define USE 391
+#define VARCHAR 392
+#define VALUES 393
+#define VARBINARY 394
+#define WHERE 395
+#define WHEN 396
+#define WITH 397
+#define YEAR 398
+#define YEAR_MONTH 399
+#define ZEROFILL 400
+#define EXISTS 401
+#define FSUBSTRING 402
+#define FTRIM 403
+#define FDATE_ADD 404
+#define FDATE_SUB 405
+#define FCOUNT 406
+#define FSUM 407
+#define FAVG 408
+#define FMIN 409
+#define FMAX 410
+#define FUPPER 411
+#define FLOWER 412
+#define FLENGTH 413
+#define FCONCAT 414
+#define FREPLACE 415
+#define FCOALESCE 416
 
-/* Value type.  */
+
+
+
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
-union YYSTYPE
-{
+typedef union YYSTYPE
 #line 20 "parser/evoparser.y"
-
+{
 	int intval;
 	double floatval;
 	char *strval;
 	int subtok;
 	struct ExprNode *exprval;
-
-#line 221 "parser/evoparser.tab.h"
-
-};
-typedef union YYSTYPE YYSTYPE;
-# define YYSTYPE_IS_TRIVIAL 1
+}
+/* Line 1529 of yacc.c.  */
+#line 379 "parser/evoparser.tab.h"
+	YYSTYPE;
+# define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
+# define YYSTYPE_IS_TRIVIAL 1
 #endif
-
 
 extern YYSTYPE yylval;
 
-
-int yyparse (void);
-
-
-#endif /* !YY_YY_PARSER_EVOPARSER_TAB_H_INCLUDED  */

@@ -1,0 +1,14 @@
+*.o
+*.exe
+*.out
+*.res
+*.dat
+*.idx
+*.meta
+release/
+build/
+.git
+tests/
+PopPad/
+cli/
+__pycache__/
