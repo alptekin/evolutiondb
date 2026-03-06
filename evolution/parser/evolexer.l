@@ -46,6 +46,8 @@ CASE					{ return CASE; }
 
 CHAR(ACTER)?			{ return CHAR; }
 
+CHECK					{ return CHECK; }
+
 COLLATE					{ return COLLATE; }
 
 COMMENT					{ return COMMENT; }

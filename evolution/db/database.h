@@ -86,6 +86,7 @@ int ReadPrimaryKey(const char *tblName);
 int ReadNullFlags(const char *tblName, int *flags, int maxCols);
 int ReadUniqueFlags(const char *tblName, int *flags, int maxCols);
 int ReadDefaults(const char *tblName, char defaults[][256], int maxCols);
+int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxConstraints);
 
 /* User management (UserMgmt.c) */
 void db_ensure_users(void);

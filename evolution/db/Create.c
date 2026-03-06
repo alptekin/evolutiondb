@@ -5,6 +5,7 @@
 #include "apue.h"
 #include "apue_db.h"
 #include "database.h"
+#include "expression.h"
 
 int ReadPadSize(const char *tblName)
 {
@@ -31,71 +32,31 @@ int ReadPadSize(const char *tblName)
 
 void WritePadSize(const char *tblName, int padSize)
 {
-    char metaFile[SAFE_PATH_MAX], colLine[1024], typeLine[1024], pkLine[256], nullLine[1024], uniqueLine[1024], defaultLine[4096], autoIncLine[64];
+    char metaFile[SAFE_PATH_MAX];
+    char lines[9][4096];
     FILE *fp;
+    int i, numLines = 0;
 
     snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
 
-    /* Read existing lines from .meta */
-    colLine[0] = '\0';
-    typeLine[0] = '\0';
-    pkLine[0] = '\0';
-    nullLine[0] = '\0';
-    uniqueLine[0] = '\0';
-    defaultLine[0] = '\0';
-    autoIncLine[0] = '\0';
+    /* Read all lines from .meta */
+    for (i = 0; i < 9; i++) lines[i][0] = '\0';
     fp = fopen(metaFile, "r");
     if (fp) {
-        if (fgets(colLine, sizeof(colLine), fp)) {
-            colLine[strcspn(colLine, "\n")] = '\0';
-            /* Skip line 2 (old pad size) */
-            char skipBuf[256];
-            if (fgets(skipBuf, sizeof(skipBuf), fp)) {
-                /* Line 3: type encodings */
-                if (fgets(typeLine, sizeof(typeLine), fp)) {
-                    typeLine[strcspn(typeLine, "\n")] = '\0';
-                    /* Line 4: primary key index */
-                    if (fgets(pkLine, sizeof(pkLine), fp)) {
-                        pkLine[strcspn(pkLine, "\n")] = '\0';
-                        /* Line 5: NOT NULL flags */
-                        if (fgets(nullLine, sizeof(nullLine), fp)) {
-                            nullLine[strcspn(nullLine, "\n")] = '\0';
-                            /* Line 6: UNIQUE flags */
-                            if (fgets(uniqueLine, sizeof(uniqueLine), fp)) {
-                                uniqueLine[strcspn(uniqueLine, "\n")] = '\0';
-                                /* Line 7: DEFAULT values */
-                                if (fgets(defaultLine, sizeof(defaultLine), fp)) {
-                                    defaultLine[strcspn(defaultLine, "\n")] = '\0';
-                                    /* Line 8: AUTO_INCREMENT */
-                                    if (fgets(autoIncLine, sizeof(autoIncLine), fp))
-                                        autoIncLine[strcspn(autoIncLine, "\n")] = '\0';
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        for (i = 0; i < 9; i++) {
+            if (!fgets(lines[i], sizeof(lines[i]), fp)) break;
+            lines[i][strcspn(lines[i], "\n")] = '\0';
+            numLines = i + 1;
         }
         fclose(fp);
     }
 
-    /* Rewrite .meta preserving all lines */
+    /* Rewrite .meta with updated pad size (line 2) */
     fp = fopen(metaFile, "w");
     if (fp) {
-        if (autoIncLine[0] != '\0')
-            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine, uniqueLine, defaultLine, autoIncLine);
-        else if (defaultLine[0] != '\0')
-            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine, uniqueLine, defaultLine);
-        else if (uniqueLine[0] != '\0')
-            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine, uniqueLine);
-        else if (nullLine[0] != '\0')
-            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n", colLine, padSize, typeLine, pkLine, nullLine);
-        else if (pkLine[0] != '\0')
-            fprintf(fp, "%s\n%d\n%s\n%s\n", colLine, padSize, typeLine, pkLine);
-        else if (typeLine[0] != '\0')
-            fprintf(fp, "%s\n%d\n%s\n", colLine, padSize, typeLine);
-        else
-            fprintf(fp, "%s\n%d\n", colLine, padSize);
+        fprintf(fp, "%s\n%d\n", lines[0], padSize);
+        for (i = 2; i < numLines; i++)
+            fprintf(fp, "%s\n", lines[i]);
         fclose(fp);
     }
 }
@@ -168,14 +129,26 @@ int CreateTableProcess(void)
             snprintf(pkIndicesStr, sizeof(pkIndicesStr), "%d", g_primaryKeyIndex);
         }
 
+        /* Build CHECK constraints line (line 9): serialized exprs separated by \x04 */
+        char checkLine[4096];
+        checkLine[0] = '\0';
+        if (g_checkCount > 0) {
+            int ci;
+            for (ci = 0; ci < g_checkCount; ci++) {
+                if (ci > 0) strcat(checkLine, "\x04");
+                strcat(checkLine, g_checkSerialized[ci]);
+            }
+        }
+
         snprintf(metaFile, sizeof(metaFile), "%s.meta", g_tblName);
         FILE *fp = fopen(metaFile, "w");
         if (fp) {
-            /* Line 4 is now comma-separated PK indices (e.g. "0" or "0,2") */
-            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n%d:%d:%d\n",
+            /* Lines 1-8 as before, plus line 9: CHECK constraints */
+            fprintf(fp, "%s\n%d\n%s\n%s\n%s\n%s\n%s\n%d:%d:%d\n%s\n",
                     g_columnDefs, padSize, g_columnTypeDefs, pkIndicesStr,
                     g_columnNullFlags, g_columnUniqueFlags, g_columnDefaults,
-                    g_autoIncColIndex, g_autoIncStart - g_autoIncStep, g_autoIncStep);
+                    g_autoIncColIndex, g_autoIncStart - g_autoIncStep, g_autoIncStep,
+                    checkLine);
             fclose(fp);
         }
     }
@@ -563,28 +536,32 @@ int ReadAutoIncrement(const char *tblName, int *colIndex, int *counter, int *ste
 int WriteAutoIncrement(const char *tblName, int colIndex, int counter, int step)
 {
     char metaFile[SAFE_PATH_MAX];
-    char lines[8][4096];
+    char lines[9][4096];
     FILE *fp;
-    int i;
+    int i, numLines = 0;
 
     snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
 
-    /* Read all 8 lines */
-    for (i = 0; i < 8; i++) lines[i][0] = '\0';
+    /* Read all lines (up to 9) */
+    for (i = 0; i < 9; i++) lines[i][0] = '\0';
     fp = fopen(metaFile, "r");
     if (!fp) return -1;
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < 9; i++) {
         if (!fgets(lines[i], sizeof(lines[i]), fp)) break;
         lines[i][strcspn(lines[i], "\n")] = '\0';
+        numLines = i + 1;
     }
     fclose(fp);
 
-    /* Rewrite with updated line 8, preserving step */
+    /* Rewrite with updated line 8, preserving line 9 (CHECK) */
     fp = fopen(metaFile, "w");
     if (!fp) return -1;
     for (i = 0; i < 7; i++)
         fprintf(fp, "%s\n", lines[i]);
     fprintf(fp, "%d:%d:%d\n", colIndex, counter, step);
+    /* Preserve line 9 (CHECK constraints) if present */
+    if (numLines >= 9)
+        fprintf(fp, "%s\n", lines[8]);
     fclose(fp);
 
     return 0;
@@ -648,6 +625,51 @@ int ReadPrimaryKeys(const char *tblName, int *indices, int maxCols)
         indices[count++] = atoi(tok);
         tok = strtok(NULL, ",");
     }
+    return count;
+}
+
+int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxConstraints)
+{
+    char metaFile[SAFE_PATH_MAX], line[4096];
+    int count = 0;
+    FILE *fp;
+
+    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
+    fp = fopen(metaFile, "r");
+    if (!fp) return 0;
+
+    /* Skip lines 1-8 */
+    int i;
+    for (i = 0; i < 8; i++) {
+        if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+    }
+    /* Line 9: CHECK constraints (separated by \x04) */
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+
+    fclose(fp);
+    line[strcspn(line, "\n")] = '\0';
+    if (line[0] == '\0') return 0;
+
+    /* Split by \x04 */
+    {
+        char *start = line;
+        char *sep;
+        while ((sep = strchr(start, '\x04')) != NULL && count < maxConstraints) {
+            *sep = '\0';
+            if (start[0] != '\0') {
+                strncpy(constraints[count], start, 1023);
+                constraints[count][1023] = '\0';
+                count++;
+            }
+            start = sep + 1;
+        }
+        if (start[0] != '\0' && count < maxConstraints) {
+            strncpy(constraints[count], start, 1023);
+            constraints[count][1023] = '\0';
+            count++;
+        }
+    }
+
     return count;
 }
 

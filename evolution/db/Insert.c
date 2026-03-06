@@ -6,6 +6,7 @@
 #include "database.h"
 #include "apue.h"
 #include "apue_db.h"
+#include "expression.h"
 
 /* Row separator used between multiple value groups in g_insert.
  * E.g. INSERT INTO t VALUES (1,'a'), (2,'b') produces:
@@ -316,6 +317,70 @@ static int validate_unique(const char *tblName, const char *datName,
     return 0;
 }
 
+/* Validate CHECK constraints for a single row.
+ * Deserializes stored CHECK expressions, evaluates them against row values.
+ * Returns 0 on success, -1 on violation (sets g_gui_error/g_gui_error_msg). */
+static int validate_check(const char *tblName, char **vals, int numValues)
+{
+    char constraints[MAX_CHECK_CONSTRAINTS][1024];
+    int numChecks = ReadCheckConstraints(tblName, constraints, MAX_CHECK_CONSTRAINTS);
+    int i;
+
+    if (numChecks <= 0) return 0;
+
+    /* Read column names for evaluation */
+    char colNames[64][128];
+    int numCols = InsertReadColumnNames(tblName, colNames, 64);
+    if (numCols <= 0) return 0;
+
+    /* Build column values in the format expr_evaluate expects */
+    char colValues[64][256];
+    int c;
+    for (c = 0; c < numCols && c < numValues && c < 64; c++) {
+        /* Convert NULL marker to empty for evaluation */
+        if (strcmp(vals[c], "\x01NULL\x01") == 0)
+            colValues[c][0] = '\0';
+        else {
+            strncpy(colValues[c], vals[c], 255);
+            colValues[c][255] = '\0';
+        }
+    }
+
+    for (i = 0; i < numChecks; i++) {
+        ExprNode *checkExpr = expr_deserialize(constraints[i]);
+        if (!checkExpr) continue;
+
+        char result[512];
+        int ok = expr_evaluate(checkExpr,
+                               (const char (*)[128])colNames,
+                               (const char (*)[256])colValues,
+                               numCols,
+                               result, sizeof(result));
+
+        int pass = 0;
+        if (ok) {
+            if (strcmp(result, "t") == 0 ||
+                strcasecmp(result, "true") == 0 ||
+                strcmp(result, "1") == 0)
+                pass = 1;
+            else {
+                double v = strtod(result, NULL);
+                if (v != 0.0) pass = 1;
+            }
+        }
+
+        if (!pass) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "new row violates check constraint");
+            g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 /* Apply AUTO_INCREMENT to a single row's values.
  * If the auto-inc column value is NULL marker, "0", or empty, replace it with
  * the next counter value. If user provides an explicit non-zero value, track
@@ -509,6 +574,10 @@ int InsertProcess(void)
             return -1;
         }
         if (validate_unique(tblName, g_tblInsertionName, vals, nv) != 0) {
+            TruncateInsert();
+            return -1;
+        }
+        if (validate_check(tblName, vals, nv) != 0) {
             TruncateInsert();
             return -1;
         }

@@ -109,7 +109,8 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
                             const char setCols[][256], const char setVals[][256],
                             int numSetCols, int numSetVals,
                             const char metaCols[][256], int numMetaCols,
-                            int padSize, int *needResize, int *newPadSize)
+                            int padSize, int *needResize, int *newPadSize,
+                            const char *tblName)
 {
     char *existingData;
     char temp[RECORD_BUF_SIZE];
@@ -143,6 +144,53 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
                         strcpy(fields[c], setVals[s]);
                     }
                     break;
+                }
+            }
+        }
+    }
+
+    /* Validate CHECK constraints against updated row */
+    if (tblName && tblName[0]) {
+        char checkConstraints[MAX_CHECK_CONSTRAINTS][1024];
+        int numChecks = ReadCheckConstraints(tblName, checkConstraints, MAX_CHECK_CONSTRAINTS);
+        if (numChecks > 0) {
+            /* Read column names in [128] format for expr_evaluate */
+            char chkColNames[64][128];
+            int numChkCols = UpdateReadColumnNames(tblName, chkColNames, 64);
+            char colValues[64][256];
+            int cv;
+            for (cv = 0; cv < numFields && cv < 64; cv++) {
+                strncpy(colValues[cv], fields[cv], 255);
+                colValues[cv][255] = '\0';
+            }
+            int evalCols = numChkCols < numFields ? numChkCols : numFields;
+            int ci;
+            for (ci = 0; ci < numChecks; ci++) {
+                ExprNode *checkExpr = expr_deserialize(checkConstraints[ci]);
+                if (!checkExpr) continue;
+                char result[512];
+                int ok = expr_evaluate(checkExpr,
+                                       (const char (*)[128])chkColNames,
+                                       (const char (*)[256])colValues,
+                                       evalCols,
+                                       result, sizeof(result));
+                int pass = 0;
+                if (ok) {
+                    if (strcmp(result, "t") == 0 ||
+                        strcasecmp(result, "true") == 0 ||
+                        strcmp(result, "1") == 0)
+                        pass = 1;
+                    else {
+                        double v = strtod(result, NULL);
+                        if (v != 0.0) pass = 1;
+                    }
+                }
+                if (!pass) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "new row violates check constraint");
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
+                    return -1;
                 }
             }
         }
@@ -435,7 +483,8 @@ int UpdateProcess(void)
                                      (const char (*)[256])allTokens,
                                      numSetCols, numSetVals,
                                      (const char (*)[256])metaCols, numMetaCols,
-                                     padSize, &needResize, &newPadSize) == 0)
+                                     padSize, &needResize, &newPadSize,
+                                     tblName) == 0)
                     updated++;
                 free(matchKeys[i]);
             }
@@ -464,7 +513,8 @@ int UpdateProcess(void)
                              (const char (*)[256])allTokens,
                              numSetCols, numSetVals,
                              (const char (*)[256])metaCols, numMetaCols,
-                             padSize, &needResize, &newPadSize) == 0) {
+                             padSize, &needResize, &newPadSize,
+                             tblName) == 0) {
             g_updateCount = 1;
         } else {
             printf("Record not found for key: %s\n", key);

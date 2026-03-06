@@ -39,6 +39,10 @@ int       g_groupByCount = 0;
 /* HAVING filter expression */
 ExprNode *g_havingExpr = NULL;
 
+/* CHECK constraints (serialized RPN) */
+char g_checkSerialized[MAX_CHECK_CONSTRAINTS][1024];
+int  g_checkCount = 0;
+
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)
 {
@@ -61,6 +65,8 @@ void expr_pool_reset(void)
     g_havingExpr = NULL;
     memset(g_selectExprs, 0, sizeof(g_selectExprs));
     memset(g_groupByExprs, 0, sizeof(g_groupByExprs));
+    g_checkCount = 0;
+    memset(g_checkSerialized, 0, sizeof(g_checkSerialized));
 }
 
 /* ---- Constructors ---- */
@@ -1240,4 +1246,213 @@ int expr_evaluate(const ExprNode *e,
         }
         return 1;
     }
+}
+
+/* ----------------------------------------------------------------
+ *  CHECK constraint support — serialize / deserialize ExprNode
+ *
+ *  Serialization uses RPN (postfix) with \x03 as token separator.
+ *  Token formats:
+ *    C:name      column reference
+ *    I:42        integer literal
+ *    F:3.14      float literal
+ *    S:hello     string literal
+ *    B:1         boolean literal (1=true, 0=false)
+ *    N           NULL literal
+ *    EQ NE LT GT LE GE   comparison operators
+ *    AND OR NOT XOR       logical operators
+ *    ISNULL ISNN          IS NULL / IS NOT NULL
+ *    LIKE NLIKE           LIKE / NOT LIKE
+ *    ADD SUB MUL DIV MOD  arithmetic
+ *    NEG                  unary minus
+ * ---------------------------------------------------------------- */
+
+#define SER_SEP '\x03'
+
+static int ser_append(char *buf, int pos, int bufSize, const char *tok)
+{
+    int len = (int)strlen(tok);
+    if (pos > 0 && pos < bufSize) buf[pos++] = SER_SEP;
+    if (pos + len < bufSize) {
+        memcpy(buf + pos, tok, len);
+        pos += len;
+    }
+    if (pos < bufSize) buf[pos] = '\0';
+    return pos;
+}
+
+static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
+{
+    char tok[512];
+
+    if (!e) return pos;
+
+    switch (e->type) {
+    case EXPR_COLUMN:
+        snprintf(tok, sizeof(tok), "C:%s", e->val.col_name);
+        return ser_append(buf, pos, bufSize, tok);
+    case EXPR_LITERAL_INT:
+        snprintf(tok, sizeof(tok), "I:%d", e->val.intval);
+        return ser_append(buf, pos, bufSize, tok);
+    case EXPR_LITERAL_FLOAT:
+        snprintf(tok, sizeof(tok), "F:%g", e->val.floatval);
+        return ser_append(buf, pos, bufSize, tok);
+    case EXPR_LITERAL_STR:
+        snprintf(tok, sizeof(tok), "S:%s", e->val.strval);
+        return ser_append(buf, pos, bufSize, tok);
+    case EXPR_LITERAL_BOOL:
+        snprintf(tok, sizeof(tok), "B:%d", e->val.intval);
+        return ser_append(buf, pos, bufSize, tok);
+    case EXPR_LITERAL_NULL:
+        return ser_append(buf, pos, bufSize, "N");
+    /* Binary operators */
+    case EXPR_CMP_EQ: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "EQ");
+    case EXPR_CMP_NE: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "NE");
+    case EXPR_CMP_LT: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "LT");
+    case EXPR_CMP_GT: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "GT");
+    case EXPR_CMP_LE: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "LE");
+    case EXPR_CMP_GE: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "GE");
+    case EXPR_AND:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "AND");
+    case EXPR_OR:     pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "OR");
+    case EXPR_XOR:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "XOR");
+    case EXPR_ADD:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "ADD");
+    case EXPR_SUB:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "SUB");
+    case EXPR_MUL:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "MUL");
+    case EXPR_DIV:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "DIV");
+    case EXPR_MOD:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "MOD");
+    case EXPR_LIKE:   pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                      pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                      return ser_append(buf, pos, bufSize, "LIKE");
+    case EXPR_NOT_LIKE: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                        pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                        return ser_append(buf, pos, bufSize, "NLIKE");
+    /* Unary operators */
+    case EXPR_NOT:        pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "NOT");
+    case EXPR_NEG:        pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "NEG");
+    case EXPR_IS_NULL:    pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "ISNULL");
+    case EXPR_IS_NOT_NULL: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                           return ser_append(buf, pos, bufSize, "ISNN");
+    default:
+        return pos; /* unsupported node type — skip */
+    }
+}
+
+int expr_serialize(const ExprNode *e, char *buf, int bufSize)
+{
+    buf[0] = '\0';
+    return expr_serialize_r(e, buf, 0, bufSize);
+}
+
+ExprNode *expr_deserialize(const char *buf)
+{
+    ExprNode *stack[64];
+    int sp = 0;
+    char copy[1024];
+    char *tok, *saveptr;
+
+    if (!buf || !buf[0]) return NULL;
+
+    strncpy(copy, buf, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+
+    tok = strtok_r(copy, "\x03", &saveptr);
+    while (tok) {
+        if (tok[0] == 'C' && tok[1] == ':') {
+            if (sp < 64) stack[sp++] = expr_make_column(tok + 2);
+        } else if (tok[0] == 'I' && tok[1] == ':') {
+            if (sp < 64) stack[sp++] = expr_make_int(atoi(tok + 2));
+        } else if (tok[0] == 'F' && tok[1] == ':') {
+            if (sp < 64) stack[sp++] = expr_make_float(atof(tok + 2));
+        } else if (tok[0] == 'S' && tok[1] == ':') {
+            if (sp < 64) stack[sp++] = expr_make_string(tok + 2);
+        } else if (tok[0] == 'B' && tok[1] == ':') {
+            if (sp < 64) stack[sp++] = expr_make_bool(atoi(tok + 2));
+        } else if (tok[0] == 'N' && tok[1] == '\0') {
+            if (sp < 64) stack[sp++] = expr_make_null();
+        }
+        /* Unary operators (check first — before binary) */
+        else if ((strcmp(tok, "NOT") == 0 || strcmp(tok, "NEG") == 0 ||
+                  strcmp(tok, "ISNULL") == 0 || strcmp(tok, "ISNN") == 0) && sp >= 1) {
+            ExprNode *operand = stack[--sp];
+            ExprNode *node = NULL;
+            if      (strcmp(tok, "NOT") == 0)    node = expr_make_not(operand);
+            else if (strcmp(tok, "NEG") == 0)    node = expr_make_neg(operand);
+            else if (strcmp(tok, "ISNULL") == 0) node = expr_make_is_null(operand);
+            else if (strcmp(tok, "ISNN") == 0)   node = expr_make_is_not_null(operand);
+            if (node && sp < 64) stack[sp++] = node;
+        }
+        /* Binary operators — pop two operands */
+        else if (sp >= 2) {
+            ExprNode *right = stack[--sp];
+            ExprNode *left  = stack[--sp];
+            ExprNode *node = NULL;
+
+            if      (strcmp(tok, "EQ") == 0)    node = expr_make_binop(EXPR_CMP_EQ, left, right);
+            else if (strcmp(tok, "NE") == 0)    node = expr_make_binop(EXPR_CMP_NE, left, right);
+            else if (strcmp(tok, "LT") == 0)    node = expr_make_binop(EXPR_CMP_LT, left, right);
+            else if (strcmp(tok, "GT") == 0)    node = expr_make_binop(EXPR_CMP_GT, left, right);
+            else if (strcmp(tok, "LE") == 0)    node = expr_make_binop(EXPR_CMP_LE, left, right);
+            else if (strcmp(tok, "GE") == 0)    node = expr_make_binop(EXPR_CMP_GE, left, right);
+            else if (strcmp(tok, "AND") == 0)   node = expr_make_and(left, right);
+            else if (strcmp(tok, "OR") == 0)    node = expr_make_or(left, right);
+            else if (strcmp(tok, "XOR") == 0)   node = expr_make_xor(left, right);
+            else if (strcmp(tok, "ADD") == 0)   node = expr_make_binop(EXPR_ADD, left, right);
+            else if (strcmp(tok, "SUB") == 0)   node = expr_make_binop(EXPR_SUB, left, right);
+            else if (strcmp(tok, "MUL") == 0)   node = expr_make_binop(EXPR_MUL, left, right);
+            else if (strcmp(tok, "DIV") == 0)   node = expr_make_binop(EXPR_DIV, left, right);
+            else if (strcmp(tok, "MOD") == 0)   node = expr_make_binop(EXPR_MOD, left, right);
+            else if (strcmp(tok, "LIKE") == 0)  node = expr_make_like(left, right);
+            else if (strcmp(tok, "NLIKE") == 0) node = expr_make_not_like(left, right);
+            else {
+                /* Unknown op — push operands back and skip */
+                stack[sp++] = left;
+                stack[sp++] = right;
+                tok = strtok_r(NULL, "\x03", &saveptr);
+                continue;
+            }
+            if (node && sp < 64) stack[sp++] = node;
+        }
+
+        tok = strtok_r(NULL, "\x03", &saveptr);
+    }
+
+    return (sp > 0) ? stack[0] : NULL;
+}
+
+void AddCheckConstraint(ExprNode *expr)
+{
+    if (!expr || g_checkCount >= MAX_CHECK_CONSTRAINTS) return;
+    expr_serialize(expr, g_checkSerialized[g_checkCount], 1024);
+    g_checkCount++;
 }

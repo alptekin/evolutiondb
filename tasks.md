@@ -157,7 +157,7 @@
 
 ---
 
-### Task 8: ⬜ Composite PRIMARY KEY (Feature #11)
+### Task 8: ✅ Composite PRIMARY KEY (Feature #11)
 
 **Goal:** Parser accepts composite PK but only single column is stored. Implement multi-column primary keys.
 
@@ -178,7 +178,7 @@
 
 ## Day 5 — CHECK Constraints & FOREIGN KEY
 
-### Task 9: ⬜ CHECK Constraint (Feature #7)
+### Task 9: 🔄 CHECK Constraint (Feature #7)
 
 **Goal:** Implement CHECK constraints that are validated on INSERT and UPDATE.
 

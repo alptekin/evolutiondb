@@ -166,6 +166,22 @@ void expr_collect_aggregates(const ExprNode *e, const ExprNode **out, int *count
 extern ExprNode *g_inListExprs[MAX_IN_LIST];
 extern int       g_inListCount;
 
+/* CHECK constraints (set by parser during CREATE TABLE) */
+#define MAX_CHECK_CONSTRAINTS 16
+extern char g_checkSerialized[MAX_CHECK_CONSTRAINTS][1024];
+extern int  g_checkCount;
+
+/* Add a CHECK constraint expression during parsing */
+void AddCheckConstraint(ExprNode *expr);
+
+/* Serialize an ExprNode tree to RPN text format.
+ * Returns number of chars written. */
+int expr_serialize(const ExprNode *e, char *buf, int bufSize);
+
+/* Deserialize RPN text back into an ExprNode tree.
+ * Returns NULL on failure. */
+ExprNode *expr_deserialize(const char *buf);
+
 /* Reset expression pool (call before each query) */
 void expr_pool_reset(void);
 

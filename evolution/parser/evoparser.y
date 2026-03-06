@@ -70,6 +70,7 @@
 %token CREATE
 %token CROSS
 %token CASE
+%token CHECK
 %token COMMENT
 %token CURRENT_DATE
 %token CURRENT_TIME
@@ -977,6 +978,7 @@ create_definition: PRIMARY KEY '(' pk_column_list ')'                           
 | INDEX '(' column_list ')'							{ emit("KEY %d", $3); }
 | FULLTEXT INDEX '(' column_list ')'                                            { emit("TEXTINDEX %d", $4); }
 | FULLTEXT KEY '(' column_list ')'                                              { emit("TEXTINDEX %d", $4); }
+| CHECK '(' expr ')'                                                            { emit("CHECK"); AddCheckConstraint($3); }
 ;
 
 pk_column_list: NAME                                                            { emit("PRIKEY_COL %s", $1); AddPrimaryKeyColumn($1); free($1); $$ = 1; }
@@ -1009,6 +1011,7 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts PRIMARY KEY							{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
 | column_atts KEY								{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
 | column_atts COMMENT STRING                                                    { emit("ATTR COMMENT %s", $3); free($3); $$ = $1 + 1; }
+| column_atts CHECK '(' expr ')'                                                { emit("ATTR CHECK"); AddCheckConstraint($4); $$ = $1 + 1; }
 ;
 
 opt_length: /* nil */								{ $$ = 0; }
