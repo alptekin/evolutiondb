@@ -339,14 +339,78 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         return;
     }
 
-    /* --- Try index-accelerated lookup for simple WHERE col = value --- */
+    /* --- Try PK direct lookup or index-accelerated lookup --- */
     int used_index = 0;
     if (g_whereExpr) {
         char eq_col[128], eq_val[256];
         if (extract_eq_condition(g_whereExpr, eq_col, sizeof(eq_col),
                                  eq_val, sizeof(eq_val))) {
+            /* Check if eq_col is the primary key — use hash O(1) lookup */
+            int is_pk = 0;
+            {
+                char pkColNames[64][128];
+                int pkIndices[16], nPK, nc, p;
+                /* Read column names */
+                char metaTmp[SAFE_PATH_MAX], metaLine[2048];
+                snprintf(metaTmp, sizeof(metaTmp), "%s.meta", tableName);
+                FILE *mfp = fopen(metaTmp, "r");
+                if (mfp) {
+                    nc = 0;
+                    if (fgets(metaLine, sizeof(metaLine), mfp)) {
+                        metaLine[strcspn(metaLine, "\n")] = '\0';
+                        char *mt = strtok(metaLine, ";");
+                        while (mt && nc < 64) {
+                            strncpy(pkColNames[nc], mt, 127);
+                            pkColNames[nc][127] = '\0';
+                            nc++;
+                            mt = strtok(NULL, ";");
+                        }
+                    }
+                    fclose(mfp);
+                    nPK = ReadPrimaryKeys(tableName, pkIndices, 16);
+                    if (nPK == 1 && pkIndices[0] < nc) {
+                        if (strcasecmp(pkColNames[pkIndices[0]], eq_col) == 0)
+                            is_pk = 1;
+                    }
+                }
+            }
+
+            if (is_pk) {
+                /* PK hash lookup — O(1) via db_fetch */
+                data = db_fetch(db, eq_val);
+                if (data) {
+                    int row = result_add_row(rs);
+                    if (row >= 0) {
+                        char temp[1024];
+                        int col = 0;
+                        strncpy(temp, data, sizeof(temp) - 1);
+                        temp[sizeof(temp) - 1] = '\0';
+                        char *val = strtok(temp, ";");
+                        while (val && col < rs->num_cols) {
+                            if (strcmp(val, "\x01NULL\x01") == 0) {
+                                result_set_null(rs, row, col);
+                            } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                                if (strncasecmp(val, "true", 4) == 0 ||
+                                    strcmp(val, "1") == 0 ||
+                                    strcmp(val, "t") == 0)
+                                    result_set_field(rs, row, col, "true");
+                                else
+                                    result_set_field(rs, row, col, "false");
+                            } else {
+                                result_set_field(rs, row, col, val);
+                            }
+                            col++;
+                            val = strtok(NULL, ";");
+                        }
+                        count++;
+                    }
+                }
+                used_index = 1;
+            }
+
+            /* If not PK, try B-tree nonclustered index */
             char idxPath[1024];
-            if (index_exists(tableName, eq_col, idxPath, sizeof(idxPath))) {
+            if (!used_index && index_exists(tableName, eq_col, idxPath, sizeof(idxPath))) {
                 /* Use B-tree index: search for matching PKs */
                 char matchPKs[256][256];
                 int nMatch = btree_search(idxPath, eq_val, matchPKs, 256);

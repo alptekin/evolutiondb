@@ -153,6 +153,33 @@ int CreateTableProcess(void)
         }
     }
 
+    /* Auto-create clustered index on PRIMARY KEY column */
+    if (g_primaryKeyIndex >= 0 || g_pkColumnCount > 0) {
+        /* Get PK column name */
+        char pkColName[128] = "";
+        if (g_pkColumnCount > 0) {
+            /* Composite PK — index on first PK column */
+            strncpy(pkColName, g_pkColumnNames[0], sizeof(pkColName) - 1);
+        } else {
+            /* Single PK — extract column name from g_columnDefs */
+            char tmpDefs[1024];
+            strncpy(tmpDefs, g_columnDefs, sizeof(tmpDefs) - 1);
+            tmpDefs[sizeof(tmpDefs) - 1] = '\0';
+            char *t = strtok(tmpDefs, ";");
+            int ci = 0;
+            while (t) {
+                if (ci == g_primaryKeyIndex) {
+                    strncpy(pkColName, t, sizeof(pkColName) - 1);
+                    break;
+                }
+                ci++;
+                t = strtok(NULL, ";");
+            }
+        }
+        if (pkColName[0])
+            CreateClusteredIndex(g_tblName, pkColName);
+    }
+
     printf("command(s) completed successfully!..\n");
     TruncateCreate();
 

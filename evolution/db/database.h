@@ -62,6 +62,9 @@ extern char g_indexName[256];
 extern char g_indexTableName[256];
 extern char g_indexColumnName[256];
 
+/* Clustered index (auto-created on PK) */
+int  CreateClusteredIndex(const char *tblPath, const char *pkColName);
+
 /* B-tree index API */
 int  btree_create(const char *path);
 int  btree_insert(const char *path, const char *key, const char *pk);

@@ -489,7 +489,8 @@ int btree_drop(const char *path)
 }
 
 /* ── Index metadata (.indexes file) ── */
-/* Format: one line per index: "index_name:column_name:btree_path" */
+/* Format: one line per index: "index_name:column_name:btree_path:type"
+ * type: C = clustered (auto PK), N = nonclustered (user-created) */
 
 static void get_indexes_path(const char *tblBasePath, char *out, int outSize)
 {
@@ -512,7 +513,7 @@ int index_exists(const char *tblPath, const char *colName,
         while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
             line[--len] = '\0';
 
-        /* Parse "name:column:path" */
+        /* Parse "name:column:path[:type]" */
         char *col = strchr(line, ':');
         if (!col) continue;
         col++;
@@ -520,6 +521,9 @@ int index_exists(const char *tblPath, const char *colName,
         if (!path) continue;
         *path = '\0';
         path++;
+        /* Strip optional :type suffix from path */
+        char *typeF = strchr(path, ':');
+        if (typeF) *typeF = '\0';
 
         if (strcasecmp(col, colName) == 0) {
             if (idxPath)
@@ -556,6 +560,9 @@ int index_list_for_table(const char *tblPath, char names[][256],
         if (!path) continue;
         *path = '\0';
         path++;
+        /* Strip optional :type suffix from path */
+        char *typeF = strchr(path, ':');
+        if (typeF) *typeF = '\0';
 
         strncpy(names[count], line, 255);
         strncpy(cols[count], col, 255);
@@ -701,7 +708,7 @@ int CreateIndexProcess(void)
     {
         FILE *f = fopen(indexesFile, "a");
         if (f) {
-            fprintf(f, "%s:%s:%s\n", g_indexName, g_indexColumnName, btreePath);
+            fprintf(f, "%s:%s:%s:N\n", g_indexName, g_indexColumnName, btreePath);
             fclose(f);
         }
     }
@@ -770,11 +777,25 @@ int DropIndexProcess(void)
                 *col = '\0';
 
                 if (strcasecmp(lineCopy, g_indexName) == 0) {
-                    /* Found it — extract btree path */
+                    /* Found it — extract btree path and type */
                     col++;
                     char *path = strchr(col, ':');
                     if (path) {
                         path++;
+                        /* Strip :type suffix */
+                        char *typeF = strchr(path, ':');
+                        char idxType = 'N';
+                        if (typeF) { idxType = typeF[1]; *typeF = '\0'; }
+                        /* Prevent dropping clustered index */
+                        if (idxType == 'C') {
+                            fclose(f);
+                            closedir(d);
+                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                     "cannot drop clustered index '%s' (auto-created for PRIMARY KEY)",
+                                     g_indexName);
+                            g_gui_error = 1;
+                            return -1;
+                        }
                         strncpy(found_btree_path, path, sizeof(found_btree_path) - 1);
                     }
                     strncpy(found_indexes_file, idxFile, sizeof(found_indexes_file) - 1);
@@ -813,4 +834,48 @@ int DropIndexProcess(void)
              "index '%s' does not exist", g_indexName);
     g_gui_error = 1;
     return -1;
+}
+
+/* ── Auto-create clustered index on PRIMARY KEY ── */
+
+int CreateClusteredIndex(const char *tblPath, const char *pkColName)
+{
+    char btreePath[1024];
+    char indexesFile[1024];
+
+    /* Build btree path: same directory as table */
+    {
+        char dir[1024];
+        strncpy(dir, tblPath, sizeof(dir) - 1);
+        dir[sizeof(dir) - 1] = '\0';
+        char *slash = strrchr(dir, '/');
+        if (slash) *(slash + 1) = '\0';
+        else strcpy(dir, "./");
+
+        /* Extract table base name for index name */
+        const char *baseName = strrchr(tblPath, '/');
+        baseName = baseName ? baseName + 1 : tblPath;
+        snprintf(btreePath, sizeof(btreePath), "%s_pk_%s.evo", dir, baseName);
+    }
+
+    /* Create empty B-tree */
+    if (btree_create(btreePath) < 0)
+        return -1;
+
+    /* Register as clustered index in .indexes file */
+    get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
+    {
+        char idxName[256];
+        const char *baseName = strrchr(tblPath, '/');
+        baseName = baseName ? baseName + 1 : tblPath;
+        snprintf(idxName, sizeof(idxName), "_pk_%s", baseName);
+
+        FILE *f = fopen(indexesFile, "a");
+        if (f) {
+            fprintf(f, "%s:%s:%s:C\n", idxName, pkColName, btreePath);
+            fclose(f);
+        }
+    }
+
+    return 0;
 }
