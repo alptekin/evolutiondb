@@ -144,7 +144,7 @@ else:
 
 # Test 14: DROP TABLE removes indexes
 simple_query(s, "DROP TABLE idx_test")
-# The .indexes and .btree files should be gone — verify by creating a
+# The .indexes and .evo files should be gone — verify by creating a
 # new table with same name and creating an index (no conflict)
 simple_query(s, "CREATE TABLE idx_test (id INT PRIMARY KEY, name VARCHAR(50))")
 cols, rows, err, tag = simple_query(s, "CREATE INDEX idx_name ON idx_test(name)")
