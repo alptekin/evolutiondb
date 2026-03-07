@@ -31,7 +31,8 @@ SRCS = main.c \
        db/DatabaseMgmt.c \
        db/crypto.c \
        db/UserMgmt.c \
-       db/GrantMgmt.c
+       db/GrantMgmt.c \
+       db/Index.c
 
 OBJS = $(SRCS:.c=.o)
 

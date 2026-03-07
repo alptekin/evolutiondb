@@ -218,7 +218,7 @@
 
 ## Day 6 — Transactions & Indexes
 
-### Task 11: ⬜ Real Transactions / ACID (Feature #12)
+### Task 11: ✅ Real Transactions / ACID (Feature #12)
 
 **Goal:** BEGIN/COMMIT/ROLLBACK currently no-op. Implement basic single-connection transaction with undo log.
 
@@ -237,7 +237,7 @@
 
 ---
 
-### Task 12: ⬜ Indexes — B-tree (Feature #13)
+### Task 12: ✅ Indexes — B-tree (Feature #13)
 
 **Goal:** All queries currently do full table scan. Implement basic B-tree index for faster lookups.
 

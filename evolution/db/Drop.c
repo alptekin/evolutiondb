@@ -24,6 +24,34 @@ int DropTableProcess(void)
     if (remove(metaFile) == 0)
         ok++;
 
+    /* Remove associated indexes */
+    {
+        char indexesFile[SAFE_PATH_MAX];
+        snprintf(indexesFile, sizeof(indexesFile), "%s.indexes", g_tblDropName);
+        FILE *fi = fopen(indexesFile, "r");
+        if (fi) {
+            char line[2048];
+            while (fgets(line, sizeof(line), fi)) {
+                /* Parse "name:col:btree_path" and remove btree file */
+                char *col = strchr(line, ':');
+                if (!col) continue;
+                col++;
+                char *path = strchr(col, ':');
+                if (!path) continue;
+                path++;
+                /* Strip newline */
+                int len = (int)strlen(path);
+                while (len > 0 && (path[len-1] == '\n' || path[len-1] == '\r'))
+                    path[--len] = '\0';
+                if (path[0])
+                    remove(path);
+            }
+            fclose(fi);
+            remove(indexesFile);
+            ok++;
+        }
+    }
+
     if (ok > 0)
         printf("command(s) completed successfully!..\n");
     else

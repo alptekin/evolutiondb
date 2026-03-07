@@ -142,6 +142,29 @@ int DeleteProcess(void)
                         g_tx_undo_callback(3 /*TX_OP_DELETE*/,
                                            g_tblDelName, matchKeys[i], old);
                 }
+                /* Remove from B-tree indexes before deleting record */
+                {
+                    char idxN[16][256], idxC[16][256], idxP[16][1024];
+                    int nIdx = index_list_for_table(g_tblDelName, idxN, idxC, idxP, 16);
+                    if (nIdx > 0) {
+                        char *rec = db_fetch(db, matchKeys[i]);
+                        if (rec) {
+                            int ix;
+                            for (ix = 0; ix < nIdx; ix++) {
+                                char cv[256] = "";
+                                int ci;
+                                for (ci = 0; ci < numCols; ci++) {
+                                    if (strcasecmp(colNames[ci], idxC[ix]) == 0) {
+                                        GetFieldValue(rec, ci, cv, sizeof(cv));
+                                        break;
+                                    }
+                                }
+                                if (cv[0])
+                                    btree_delete(idxP[ix], cv, matchKeys[i]);
+                            }
+                        }
+                    }
+                }
                 if (db_delete(db, matchKeys[i]) == 0)
                     deleted++;
                 free(matchKeys[i]);
@@ -161,6 +184,32 @@ int DeleteProcess(void)
             if (old)
                 g_tx_undo_callback(3 /*TX_OP_DELETE*/,
                                    g_tblDelName, str, old);
+        }
+
+        /* Remove from B-tree indexes before deleting record (legacy path) */
+        {
+            char idxN[16][256], idxC[16][256], idxP[16][1024];
+            int nIdx = index_list_for_table(g_tblDelName, idxN, idxC, idxP, 16);
+            if (nIdx > 0) {
+                char *rec = db_fetch(db, str);
+                if (rec) {
+                    char legacyCols[64][128];
+                    int legacyNumCols = ReadColumnNames(g_tblDelName, legacyCols, 64);
+                    int ix;
+                    for (ix = 0; ix < nIdx; ix++) {
+                        char cv[256] = "";
+                        int ci;
+                        for (ci = 0; ci < legacyNumCols; ci++) {
+                            if (strcasecmp(legacyCols[ci], idxC[ix]) == 0) {
+                                GetFieldValue(rec, ci, cv, sizeof(cv));
+                                break;
+                            }
+                        }
+                        if (cv[0])
+                            btree_delete(idxP[ix], cv, str);
+                    }
+                }
+            }
         }
 
         if (db_delete(db, str) != 0) {

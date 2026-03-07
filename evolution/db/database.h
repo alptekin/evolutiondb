@@ -51,6 +51,33 @@ int CreateSchemaProcess(const char *name, int if_not_exists);
 int UseDatabaseProcess(const char *name);
 int SetSchemaProcess(const char *name);
 
+/* B-tree index operations */
+int  CreateIndexProcess(void);
+int  DropIndexProcess(void);
+void SetIndexInfo(const char *idxName, const char *tblName, const char *colName);
+void SetDropIndexName(const char *idxName);
+
+/* Index globals */
+extern char g_indexName[256];
+extern char g_indexTableName[256];
+extern char g_indexColumnName[256];
+
+/* B-tree index API */
+int  btree_create(const char *path);
+int  btree_insert(const char *path, const char *key, const char *pk);
+int  btree_search(const char *path, const char *key, char results[][256], int max_results);
+int  btree_delete(const char *path, const char *key, const char *pk);
+int  btree_range(const char *path, const char *lo, const char *hi,
+                 int lo_inclusive, int hi_inclusive,
+                 char results[][256], int max_results);
+int  btree_drop(const char *path);
+
+/* Index metadata helpers */
+int  index_exists(const char *tblPath, const char *colName,
+                  char *idxPath, int idxPathSize);
+int  index_list_for_table(const char *tblPath, char names[][256],
+                          char cols[][256], char paths[][1024], int max);
+
 /* Database root path management */
 void db_ensure_root(void);
 const char *db_get_root(void);
