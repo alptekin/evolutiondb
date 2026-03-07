@@ -387,13 +387,22 @@ _db_dodelete(DB *db)
     int     i;
     char   *ptr;
     off_t   freeptr, saveptr;
+    char    delkey[IDXLEN_MAX + 1];   /* separate buffer for deleted key */
 
     for (ptr = db->datbuf, i = 0; i < (int)db->datlen - 1; i++)
         *ptr++ = SPACE;
     *ptr = 0;
+
+    /* Build space-filled key in a SEPARATE buffer to avoid
+     * undefined behavior from snprintf(buf, ..., "%s", buf)
+     * in _db_writeidx when key == db->idxbuf. */
     ptr = db->idxbuf;
-    while (*ptr)
-        *ptr++ = SPACE;
+    i = 0;
+    while (*ptr) {
+        delkey[i++] = SPACE;
+        ptr++;
+    }
+    delkey[i] = 0;
 
     if (writew_lock(db->idxfd, FREE_OFF, SEEK_SET, 1) < 0)
         err_dump("_db_dodelete: writew_lock error");
@@ -402,7 +411,7 @@ _db_dodelete(DB *db)
     freeptr = _db_readptr(db, FREE_OFF);
     saveptr = db->ptrval;
 
-    _db_writeidx(db, db->idxbuf, db->idxoff, SEEK_SET, freeptr);
+    _db_writeidx(db, delkey, db->idxoff, SEEK_SET, freeptr);
     _db_writeptr(db, FREE_OFF, db->idxoff);
     _db_writeptr(db, db->ptroff, saveptr);
 

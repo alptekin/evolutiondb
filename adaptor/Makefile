@@ -42,6 +42,7 @@ ADAPTOR_SRCS = main.c \
                result.c \
                catalog.c \
                query_executor.c \
+               transaction.c \
                tls.c
 
 # Evolution DB engine source files (no main.c!)

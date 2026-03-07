@@ -121,6 +121,12 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
     if (existingData == NULL)
         return -1;
 
+    /* Log undo entry before modifying data (for transaction rollback).
+     * Use tblName (without .dat) — db_open appends .idx/.dat itself. */
+    if (g_tx_undo_callback)
+        g_tx_undo_callback(2 /*TX_OP_UPDATE*/, tblName,
+                           key, existingData);
+
     /* Parse existing record into fields */
     char fields[64][256];
     int numFields = 0;

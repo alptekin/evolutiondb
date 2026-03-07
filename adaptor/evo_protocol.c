@@ -281,6 +281,15 @@ void evo_handle_client(socket_t sock)
         evo_sendf(&conn, "READY\n");
     }
 
+    /* Auto-rollback if client disconnects with an open transaction */
+    if (session.in_transaction && session.undo_log) {
+        fprintf(stderr, "[TX] EVO client disconnected with open transaction — rolling back\n");
+        undo_log_rollback(session.undo_log);
+        undo_log_free(session.undo_log);
+        session.undo_log = NULL;
+        session.in_transaction = 0;
+    }
+
     conn_tls_shutdown(&conn);
     free(rs);
     /* NOTE: do NOT close socket — server.c does it */
