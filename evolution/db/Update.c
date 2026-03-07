@@ -232,8 +232,62 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
             newRecord[curPad] = '\0';
         }
 
+        /* Save old field values for index update before db_store overwrites */
+        char oldFields[64][256];
+        {
+            int fi;
+            char oldTemp[RECORD_BUF_SIZE];
+            char *otok;
+            int oCount = 0;
+            strncpy(oldTemp, existingData, sizeof(oldTemp) - 1);
+            oldTemp[sizeof(oldTemp) - 1] = '\0';
+            otok = strtok(oldTemp, ";");
+            while (otok && oCount < 64) {
+                strncpy(oldFields[oCount], otok, 255);
+                oldFields[oCount][255] = '\0';
+                oCount++;
+                otok = strtok(NULL, ";");
+            }
+        }
+
         if (db_store(db, key, newRecord, DB_REPLACE) != 0)
             return -1;
+
+        /* Update B-tree indexes for changed columns */
+        if (tblName && tblName[0]) {
+            char idxN[16][256], idxC[16][256], idxP[16][1024];
+            int nIdx = index_list_for_table(tblName, idxN, idxC, idxP, 16);
+            if (nIdx > 0) {
+                int ix;
+                for (ix = 0; ix < nIdx; ix++) {
+                    int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+                    int si, colIdx = -1;
+                    for (si = 0; si < numMetaCols; si++) {
+                        if (strcasecmp(metaCols[si], idxC[ix]) == 0) {
+                            colIdx = si;
+                            break;
+                        }
+                    }
+                    if (colIdx < 0 || colIdx >= numFields) continue;
+
+                    /* Was this column in the SET clause? */
+                    int wasSet = 0;
+                    for (si = 0; si < minSet; si++) {
+                        if (strcasecmp(setCols[si], idxC[ix]) == 0) {
+                            wasSet = 1;
+                            break;
+                        }
+                    }
+                    if (!wasSet) continue;
+
+                    /* Remove old, insert new */
+                    if (oldFields[colIdx][0])
+                        btree_delete(idxP[ix], oldFields[colIdx], key);
+                    if (fields[colIdx][0])
+                        btree_insert(idxP[ix], fields[colIdx], key);
+                }
+            }
+        }
     }
 
     return 0;

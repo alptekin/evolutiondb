@@ -620,6 +620,45 @@ int InsertProcess(void)
             return -1;
         }
         g_insertCount++;
+
+        /* Update B-tree indexes for the inserted row */
+        {
+            char idxNames[16][256], idxCols[16][256], idxPaths[16][1024];
+            int nIdx = index_list_for_table(tblName, idxNames, idxCols, idxPaths, 16);
+            if (nIdx > 0) {
+                char colNames2[64][128];
+                int numCols2 = InsertReadColumnNames(tblName, colNames2, 64);
+                /* Parse the row to get values */
+                char tmpRow2[RECORD_BUF_SIZE];
+                strncpy(tmpRow2, reorderedRows[i], sizeof(tmpRow2) - 1);
+                tmpRow2[sizeof(tmpRow2) - 1] = '\0';
+                char *vals2[64];
+                int nv2 = 0;
+                char *t2 = strtok(tmpRow2, ";");
+                while (t2 && nv2 < 64) { vals2[nv2++] = t2; t2 = strtok(NULL, ";"); }
+                /* Extract PK from row */
+                char pkBuf[256] = "";
+                {
+                    int pkIdx[16], nPKs, p;
+                    nPKs = ReadPrimaryKeys(tblName, pkIdx, 16);
+                    if (nPKs <= 0) { nPKs = 1; pkIdx[0] = 0; }
+                    for (p = 0; p < nPKs; p++) {
+                        if (p > 0) strcat(pkBuf, "|");
+                        if (pkIdx[p] < nv2) strcat(pkBuf, vals2[pkIdx[p]]);
+                    }
+                }
+                int ix;
+                for (ix = 0; ix < nIdx; ix++) {
+                    int ci;
+                    for (ci = 0; ci < numCols2; ci++) {
+                        if (strcasecmp(colNames2[ci], idxCols[ix]) == 0 && ci < nv2) {
+                            btree_insert(idxPaths[ix], vals2[ci], pkBuf);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     printf("command(s) completed successfully!..\n");

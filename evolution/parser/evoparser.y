@@ -724,6 +724,40 @@ drop_table_stmt: DROP TABLE NAME
     }
 ;
 
+/** create index **/
+stmt: create_index_stmt
+    {
+        emit("STMT");
+        CreateIndexProcess();
+    }
+;
+
+create_index_stmt: CREATE INDEX NAME ON NAME '(' NAME ')'
+    {
+        emit("CREATEINDEX %s ON %s (%s)", $3, $5, $7);
+        SetIndexInfo($3, $5, $7);
+        free($3);
+        free($5);
+        free($7);
+    }
+;
+
+/** drop index **/
+stmt: drop_index_stmt
+    {
+        emit("STMT");
+        DropIndexProcess();
+    }
+;
+
+drop_index_stmt: DROP INDEX NAME
+    {
+        emit("DROPINDEX %s", $3);
+        SetDropIndexName($3);
+        free($3);
+    }
+;
+
 /** truncate table **/
 stmt: truncate_table_stmt
     {

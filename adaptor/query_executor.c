@@ -1396,7 +1396,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         } else if (!rs->has_error) {
             /* DDL/DML command — determine appropriate tag */
             if (is_create_query(sql)) {
-                /* Distinguish CREATE TABLE, CREATE DATABASE, CREATE SCHEMA */
+                /* Distinguish CREATE TABLE, CREATE DATABASE, CREATE SCHEMA, CREATE INDEX */
                 const char *p = sql;
                 while (*p && isspace((unsigned char)*p)) p++;
                 p += 6; /* skip "CREATE" */
@@ -1405,6 +1405,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                     strcpy(rs->command_tag, "CREATE DATABASE");
                 else if (strncasecmp(p, "SCHEMA", 6) == 0)
                     strcpy(rs->command_tag, "CREATE SCHEMA");
+                else if (strncasecmp(p, "INDEX", 5) == 0)
+                    strcpy(rs->command_tag, "CREATE INDEX");
                 else
                     strcpy(rs->command_tag, "CREATE TABLE");
             }
@@ -1414,8 +1416,16 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                 snprintf(rs->command_tag, sizeof(rs->command_tag), "UPDATE %d", g_updateCount);
             else if (is_delete_query(sql))
                 snprintf(rs->command_tag, sizeof(rs->command_tag), "DELETE %d", g_deleteCount);
-            else if (is_drop_query(sql))
-                strcpy(rs->command_tag, "DROP TABLE");
+            else if (is_drop_query(sql)) {
+                const char *p = sql;
+                while (*p && isspace((unsigned char)*p)) p++;
+                p += 4; /* skip "DROP" */
+                while (*p && isspace((unsigned char)*p)) p++;
+                if (strncasecmp(p, "INDEX", 5) == 0)
+                    strcpy(rs->command_tag, "DROP INDEX");
+                else
+                    strcpy(rs->command_tag, "DROP TABLE");
+            }
             else if (is_truncate_query(sql))
                 strcpy(rs->command_tag, "TRUNCATE TABLE");
             else if (is_use_query(sql))

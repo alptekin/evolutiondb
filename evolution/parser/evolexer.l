@@ -124,7 +124,8 @@ INTO					{ return INTO; }
 IS						{ return IS; }
 
 JOIN					{ return JOIN; }
-INDEX|KEY				{ return KEY; }
+INDEX					{ return INDEX; }
+KEY					{ return KEY; }
 
 
 LEADING					{ return LEADING; }

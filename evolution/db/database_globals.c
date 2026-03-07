@@ -54,3 +54,6 @@ int g_insertCount = 0;
 char g_insertColumns[64][128];
 int g_insertColumnCount = 0;
 tx_undo_fn g_tx_undo_callback = NULL;
+char g_indexName[256] = "";
+char g_indexTableName[256] = "";
+char g_indexColumnName[256] = "";
