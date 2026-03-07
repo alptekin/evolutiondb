@@ -135,6 +135,13 @@ int DeleteProcess(void)
         int i;
         for (i = 0; i < matchCount; i++) {
             if (matchKeys[i]) {
+                /* Log undo entry before delete (for transaction rollback) */
+                if (g_tx_undo_callback) {
+                    char *old = db_fetch(db, matchKeys[i]);
+                    if (old)
+                        g_tx_undo_callback(3 /*TX_OP_DELETE*/,
+                                           g_tblDelName, matchKeys[i], old);
+                }
                 if (db_delete(db, matchKeys[i]) == 0)
                     deleted++;
                 free(matchKeys[i]);
@@ -147,6 +154,14 @@ int DeleteProcess(void)
     } else {
         /* ---------- Legacy PK-based delete ---------- */
         str = strtok(g_insert, ";");
+
+        /* Log undo entry before delete (for transaction rollback) */
+        if (g_tx_undo_callback) {
+            char *old = db_fetch(db, str);
+            if (old)
+                g_tx_undo_callback(3 /*TX_OP_DELETE*/,
+                                   g_tblDelName, str, old);
+        }
 
         if (db_delete(db, str) != 0) {
             printf("Record not found: %s\n", str);

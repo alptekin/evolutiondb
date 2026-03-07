@@ -9,6 +9,7 @@
 #include "net.h"
 #include "server.h"
 #include "query_executor.h"
+#include "../evolution/db/database.h"  /* g_tx_undo_callback */
 
 /* ================================================================
  *  Shared state — used by all protocol servers
@@ -27,11 +28,33 @@ int  get_max_connections(void)      { return g_max_connections; }
 void set_max_connections(int n)     { if (n > 0) g_max_connections = n; }
 int  get_active_connections(void)   { return g_active_connections; }
 
+/* From transaction.c */
+extern UndoLog *g_current_undo_log;
+
 /* ---- Thread-safe query execution ---- */
 void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     mutex_lock(&g_query_lock);
+
+    /* Install undo-log callback while in a transaction */
+    if (ctx && ctx->in_transaction && ctx->undo_log) {
+        g_current_undo_log = ctx->undo_log;
+        g_tx_undo_callback = tx_undo_callback;
+    } else {
+        g_current_undo_log = NULL;
+        g_tx_undo_callback = NULL;
+    }
+
     query_execute(sql, rs, ctx);
+
+    /* If error occurred within a transaction, mark it as aborted */
+    if (ctx && ctx->in_transaction && rs->has_error)
+        ctx->tx_aborted = 1;
+
+    /* Clear callback after query (next query will re-set if needed) */
+    g_tx_undo_callback = NULL;
+    g_current_undo_log = NULL;
+
     mutex_unlock(&g_query_lock);
 }
 

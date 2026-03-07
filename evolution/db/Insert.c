@@ -472,6 +472,12 @@ static int store_single_row(DBHANDLE db, const char *tblName, char *rowData)
         padded[padSize] = '\0';
     }
 
+    /* Log undo entry before modifying data (for transaction rollback).
+     * Use tblName (without .dat) — db_open appends .idx/.dat itself. */
+    if (g_tx_undo_callback)
+        g_tx_undo_callback(1 /*TX_OP_INSERT*/, tblName,
+                           compositeKey, NULL);
+
     return db_store(db, compositeKey, padded, DB_INSERT);
 }
 

@@ -170,4 +170,11 @@ extern int g_insertCount;
 extern char g_insertColumns[64][128];
 extern int g_insertColumnCount;
 
+/* Transaction undo-log callback (set by adaptor when transaction is active).
+ * op_type: 1=INSERT, 2=UPDATE, 3=DELETE
+ * Engine DML code calls this before modifying data, if non-NULL. */
+typedef void (*tx_undo_fn)(int op_type, const char *table,
+                           const char *key, const char *data);
+extern tx_undo_fn g_tx_undo_callback;
+
 #endif

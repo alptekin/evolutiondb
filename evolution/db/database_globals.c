@@ -1,4 +1,5 @@
 /* Global variable definitions for the EvoSQL database project */
+#include <stddef.h>
 #include "database.h"
 
 char g_columnNames[1024];
@@ -52,3 +53,4 @@ int g_updateCount = 0;
 int g_insertCount = 0;
 char g_insertColumns[64][128];
 int g_insertColumnCount = 0;
+tx_undo_fn g_tx_undo_callback = NULL;

@@ -1739,6 +1739,16 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     result_init(rs);
 
+    /* If transaction is aborted, only allow ROLLBACK */
+    if (ctx && ctx->tx_aborted) {
+        if (strncasecmp(sql, "ROLLBACK", 8) != 0) {
+            result_set_error(rs, "25P02",
+                "current transaction is aborted, "
+                "commands ignored until end of transaction block");
+            return;
+        }
+    }
+
     /* ── Load per-connection session state into engine globals ── */
     if (ctx) {
         db_set_current_database(ctx->database);

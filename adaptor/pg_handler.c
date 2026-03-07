@@ -479,6 +479,15 @@ void pg_handle_client(socket_t client_sock)
     }
 
 cleanup:
+    /* Auto-rollback if client disconnects with an open transaction */
+    if (session.in_transaction && session.undo_log) {
+        fprintf(stderr, "[TX] Client disconnected with open transaction — rolling back\n");
+        undo_log_rollback(session.undo_log);
+        undo_log_free(session.undo_log);
+        session.undo_log = NULL;
+        session.in_transaction = 0;
+    }
+
     conn_tls_shutdown(&conn);
     if (pending_query) free(pending_query);
     free(msg_buf);

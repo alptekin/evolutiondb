@@ -461,19 +461,52 @@ static int handle_show(const char *sql, ResultSet *rs)
     return 1;
 }
 
-static int handle_transaction(const char *sql, ResultSet *rs)
+static int handle_transaction(const char *sql, ResultSet *rs,
+                              SessionCtx *ctx)
 {
     result_init(rs);
 
-    if (starts_with_i(sql, "BEGIN")) {
+    if (starts_with_i(sql, "BEGIN") ||
+        starts_with_i(sql, "START TRANSACTION")) {
+        if (ctx) {
+            if (ctx->in_transaction) {
+                /* Nested BEGIN — PostgreSQL issues a WARNING but continues */
+                fprintf(stderr, "[TX] WARNING: already in transaction\n");
+            } else {
+                ctx->in_transaction = 1;
+                if (ctx->undo_log) {
+                    undo_log_free(ctx->undo_log);
+                    ctx->undo_log = NULL;
+                }
+                ctx->undo_log = undo_log_create();
+            }
+        }
         strcpy(rs->command_tag, "BEGIN");
         return 1;
     }
-    if (starts_with_i(sql, "COMMIT")) {
+    if (starts_with_i(sql, "COMMIT") || starts_with_i(sql, "END")) {
+        if (ctx && ctx->in_transaction) {
+            /* COMMIT — discard undo log, changes are permanent */
+            ctx->in_transaction = 0;
+            if (ctx->undo_log) {
+                undo_log_free(ctx->undo_log);
+                ctx->undo_log = NULL;
+            }
+        }
         strcpy(rs->command_tag, "COMMIT");
         return 1;
     }
     if (starts_with_i(sql, "ROLLBACK")) {
+        if (ctx && (ctx->in_transaction || ctx->tx_aborted)) {
+            /* ROLLBACK — replay undo log in reverse */
+            if (ctx->undo_log) {
+                undo_log_rollback(ctx->undo_log);
+                undo_log_free(ctx->undo_log);
+                ctx->undo_log = NULL;
+            }
+            ctx->in_transaction = 0;
+            ctx->tx_aborted = 0;
+        }
         strcpy(rs->command_tag, "ROLLBACK");
         return 1;
     }
@@ -2009,7 +2042,7 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (handle_show(sql, rs)) return 1;
 
     /* Transaction commands */
-    if (handle_transaction(sql, rs)) return 1;
+    if (handle_transaction(sql, rs, ctx)) return 1;
 
     /* Built-in functions: version(), current_database(), etc. */
     if (starts_with_i(sql, "SELECT") || starts_with_i(sql, "select")) {

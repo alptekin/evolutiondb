@@ -2,6 +2,7 @@
 #define QUERY_EXECUTOR_H
 
 #include "result.h"
+#include "transaction.h"
 
 /* ----------------------------------------------------------------
  *  Per-connection session context
@@ -15,6 +16,9 @@ typedef struct {
     char database[256];   /* active database  (default: "evosql")  */
     char schema[256];     /* active schema    (default: "default") */
     char username[256];   /* authenticated user                    */
+    int       in_transaction;  /* 1 if BEGIN was issued */
+    int       tx_aborted;     /* 1 if error occurred in transaction */
+    UndoLog  *undo_log;       /* undo entries for rollback */
 } SessionCtx;
 
 /*
