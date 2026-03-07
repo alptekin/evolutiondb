@@ -1,7 +1,7 @@
 /*
  * Index.c — B-tree index for EvoSQL
  *
- * On-disk format (.btree file):
+ * On-disk format (.evo file):
  *   Header (16 bytes): [root_offset:8][node_count:4][order:2][padding:2]
  *   Nodes (fixed-size): [is_leaf:1][key_count:2][padding:1]
  *                       [keys: ORDER-1 * KEY_SIZE]
@@ -627,7 +627,7 @@ int CreateIndexProcess(void)
         }
     }
 
-    /* Build btree file path: same directory as table, named <index>.btree */
+    /* Build btree file path: same directory as table, named <index>.evo */
     {
         /* Get directory of table */
         char dir[1024];
@@ -635,7 +635,7 @@ int CreateIndexProcess(void)
         char *slash = strrchr(dir, '/');
         if (slash) *(slash + 1) = '\0';
         else strcpy(dir, "./");
-        snprintf(btreePath, sizeof(btreePath), "%s%s.btree", dir, g_indexName);
+        snprintf(btreePath, sizeof(btreePath), "%s%s.evo", dir, g_indexName);
     }
 
     /* Check if index already exists */
@@ -646,7 +646,7 @@ int CreateIndexProcess(void)
         return -1;
     }
 
-    /* Create .btree file */
+    /* Create .evo file */
     if (btree_create(btreePath) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "failed to create index file");
@@ -797,7 +797,7 @@ int DropIndexProcess(void)
                     fclose(f);
                 }
 
-                /* Delete .btree file */
+                /* Delete .evo file */
                 if (found_btree_path[0])
                     btree_drop(found_btree_path);
 
