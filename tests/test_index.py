@@ -158,6 +158,79 @@ simple_query(s, "DROP TABLE idx_test")
 s.close()
 
 # ------------------------------------------------------------------
+print("\n=== Clustered Index (Auto PK) Tests ===")
+
+s = conn()
+
+# Test 15: PK direct lookup via hash
+simple_query(s, "DROP TABLE cl_test")
+simple_query(s, "CREATE TABLE cl_test (id INT PRIMARY KEY, name VARCHAR(50), score INT)")
+simple_query(s, "INSERT INTO cl_test VALUES (1, 'Alice', 90)")
+simple_query(s, "INSERT INTO cl_test VALUES (2, 'Bob', 85)")
+simple_query(s, "INSERT INTO cl_test VALUES (3, 'Charlie', 70)")
+
+cols, rows, err, tag = simple_query(s, "SELECT * FROM cl_test WHERE id = 2")
+if not err and len(rows) == 1 and rows[0][1] == 'Bob':
+    ok("PK direct lookup (WHERE id = 2)")
+else:
+    fail("PK direct lookup", f"err={err}, rows={rows}")
+
+# Test 16: PK lookup returns empty for non-existent key
+cols, rows, err, tag = simple_query(s, "SELECT * FROM cl_test WHERE id = 99")
+if not err and len(rows) == 0:
+    ok("PK lookup non-existent key returns empty")
+else:
+    fail("PK lookup non-existent", f"err={err}, rows={rows}")
+
+# Test 17: Clustered index auto-created (score column should have auto PK btree)
+# Verify by creating a nonclustered index on score, then querying
+cols, rows, err, tag = simple_query(s, "CREATE INDEX idx_cl_score ON cl_test(score)")
+if not err:
+    ok("Nonclustered index alongside clustered")
+else:
+    fail("Nonclustered index alongside clustered", err)
+
+cols, rows, err, tag = simple_query(s, "SELECT * FROM cl_test WHERE score = 85")
+if not err and len(rows) == 1 and rows[0][1] == 'Bob':
+    ok("Nonclustered index lookup works with clustered present")
+else:
+    fail("Nonclustered index lookup", f"err={err}, rows={rows}")
+
+# Test 18: Cannot drop clustered index
+cols, rows, err, tag = simple_query(s, "DROP INDEX _pk_cl_test")
+if err:
+    ok("Cannot DROP clustered index (protected)")
+else:
+    fail("Cannot DROP clustered index")
+
+# Test 19: INSERT updates clustered index, PK lookup finds new row
+simple_query(s, "INSERT INTO cl_test VALUES (4, 'Diana', 60)")
+cols, rows, err, tag = simple_query(s, "SELECT * FROM cl_test WHERE id = 4")
+if not err and len(rows) == 1 and rows[0][1] == 'Diana':
+    ok("INSERT updates clustered index (PK lookup)")
+else:
+    fail("INSERT updates clustered index", f"err={err}, rows={rows}")
+
+# Test 20: DELETE + PK lookup
+simple_query(s, "DELETE FROM cl_test WHERE id = 2")
+cols, rows, err, tag = simple_query(s, "SELECT * FROM cl_test WHERE id = 2")
+if not err and len(rows) == 0:
+    ok("DELETE removes from clustered index (PK lookup)")
+else:
+    fail("DELETE removes from clustered index", f"err={err}, rows={rows}")
+
+# Test 21: Full scan still works
+cols, rows, err, tag = simple_query(s, "SELECT * FROM cl_test")
+if not err and len(rows) == 3:
+    ok("Full scan works with clustered index present")
+else:
+    fail("Full scan with clustered index", f"err={err}, rows={len(rows) if rows else 0}")
+
+# Cleanup
+simple_query(s, "DROP TABLE cl_test")
+s.close()
+
+# ------------------------------------------------------------------
 print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
 if failed:
     sys.exit(1)
