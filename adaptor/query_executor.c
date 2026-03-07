@@ -229,6 +229,41 @@ static void parse_select_columns(const char *sql)
 }
 
 /* ----------------------------------------------------------------
+ *  Try to extract a simple "column = literal" from WHERE expression.
+ *  Returns 1 if found, fills col_name and literal_val.
+ * ---------------------------------------------------------------- */
+static int extract_eq_condition(const ExprNode *expr,
+                                char *col_name, int col_size,
+                                char *literal_val, int val_size)
+{
+    if (!expr || expr->type != EXPR_CMP_EQ)
+        return 0;
+    const ExprNode *left = expr->left;
+    const ExprNode *right = expr->right;
+    if (!left || !right) return 0;
+
+    const ExprNode *col = NULL, *lit = NULL;
+    if (left->type == EXPR_COLUMN) { col = left; lit = right; }
+    else if (right->type == EXPR_COLUMN) { col = right; lit = left; }
+    else return 0;
+
+    if (lit->type == EXPR_LITERAL_INT) {
+        snprintf(literal_val, val_size, "%d", lit->val.intval);
+    } else if (lit->type == EXPR_LITERAL_FLOAT) {
+        snprintf(literal_val, val_size, "%g", lit->val.floatval);
+    } else if (lit->type == EXPR_LITERAL_STR) {
+        strncpy(literal_val, lit->val.strval, val_size - 1);
+        literal_val[val_size - 1] = '\0';
+    } else {
+        return 0;
+    }
+
+    strncpy(col_name, col->val.col_name, col_size - 1);
+    col_name[col_size - 1] = '\0';
+    return 1;
+}
+
+/* ----------------------------------------------------------------
  *  Collect SELECT results into ResultSet
  * ---------------------------------------------------------------- */
 static void collect_select_results(const char *tableName, ResultSet *rs)
@@ -304,36 +339,87 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         return;
     }
 
-    db_rewind(db);
-    while ((data = db_nextrec(db, keyBuf)) != NULL && count < MAX_ROWS) {
-        int row = result_add_row(rs);
-        if (row < 0) break;
+    /* --- Try index-accelerated lookup for simple WHERE col = value --- */
+    int used_index = 0;
+    if (g_whereExpr) {
+        char eq_col[128], eq_val[256];
+        if (extract_eq_condition(g_whereExpr, eq_col, sizeof(eq_col),
+                                 eq_val, sizeof(eq_val))) {
+            char idxPath[1024];
+            if (index_exists(tableName, eq_col, idxPath, sizeof(idxPath))) {
+                /* Use B-tree index: search for matching PKs */
+                char matchPKs[256][256];
+                int nMatch = btree_search(idxPath, eq_val, matchPKs, 256);
+                int m;
+                for (m = 0; m < nMatch && count < MAX_ROWS; m++) {
+                    data = db_fetch(db, matchPKs[m]);
+                    if (!data) continue;
 
-        /* Parse semicolon-separated fields */
-        char temp[1024];
-        int col = 0;
-        strncpy(temp, data, sizeof(temp) - 1);
-        temp[sizeof(temp) - 1] = '\0';
+                    int row = result_add_row(rs);
+                    if (row < 0) break;
 
-        char *val = strtok(temp, ";");
-        while (val && col < rs->num_cols) {
-            /* Check for NULL marker */
-            if (strcmp(val, "\x01NULL\x01") == 0) {
-                result_set_null(rs, row, col);
-            } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                if (strncasecmp(val, "true", 4) == 0 ||
-                    strcmp(val, "1") == 0 ||
-                    strcmp(val, "t") == 0)
-                    result_set_field(rs, row, col, "true");
-                else
-                    result_set_field(rs, row, col, "false");
-            } else {
-                result_set_field(rs, row, col, val);
+                    char temp[1024];
+                    int col = 0;
+                    strncpy(temp, data, sizeof(temp) - 1);
+                    temp[sizeof(temp) - 1] = '\0';
+
+                    char *val = strtok(temp, ";");
+                    while (val && col < rs->num_cols) {
+                        if (strcmp(val, "\x01NULL\x01") == 0) {
+                            result_set_null(rs, row, col);
+                        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                            if (strncasecmp(val, "true", 4) == 0 ||
+                                strcmp(val, "1") == 0 ||
+                                strcmp(val, "t") == 0)
+                                result_set_field(rs, row, col, "true");
+                            else
+                                result_set_field(rs, row, col, "false");
+                        } else {
+                            result_set_field(rs, row, col, val);
+                        }
+                        col++;
+                        val = strtok(NULL, ";");
+                    }
+                    count++;
+                }
+                used_index = 1;
             }
-            col++;
-            val = strtok(NULL, ";");
         }
-        count++;
+    }
+
+    /* --- Full table scan fallback --- */
+    if (!used_index) {
+        db_rewind(db);
+        while ((data = db_nextrec(db, keyBuf)) != NULL && count < MAX_ROWS) {
+            int row = result_add_row(rs);
+            if (row < 0) break;
+
+            /* Parse semicolon-separated fields */
+            char temp[1024];
+            int col = 0;
+            strncpy(temp, data, sizeof(temp) - 1);
+            temp[sizeof(temp) - 1] = '\0';
+
+            char *val = strtok(temp, ";");
+            while (val && col < rs->num_cols) {
+                /* Check for NULL marker */
+                if (strcmp(val, "\x01NULL\x01") == 0) {
+                    result_set_null(rs, row, col);
+                } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                    if (strncasecmp(val, "true", 4) == 0 ||
+                        strcmp(val, "1") == 0 ||
+                        strcmp(val, "t") == 0)
+                        result_set_field(rs, row, col, "true");
+                    else
+                        result_set_field(rs, row, col, "false");
+                } else {
+                    result_set_field(rs, row, col, val);
+                }
+                col++;
+                val = strtok(NULL, ";");
+            }
+            count++;
+        }
     }
 
     db_close(db);
@@ -342,7 +428,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
      * expression evaluation, GROUP BY, and DISTINCT processing. */
 
     /* --- WHERE filtering using g_whereExpr --- */
-    if (g_whereExpr && rs->num_rows > 0) {
+    if (g_whereExpr && rs->num_rows > 0 && !used_index) {
         char colNames[MAX_COLUMNS][128];
         int c;
         for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
