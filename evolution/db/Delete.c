@@ -151,16 +151,42 @@ int DeleteProcess(void)
                         if (rec) {
                             int ix;
                             for (ix = 0; ix < nIdx; ix++) {
-                                char cv[256] = "";
-                                int ci;
-                                for (ci = 0; ci < numCols; ci++) {
-                                    if (strcasecmp(colNames[ci], idxC[ix]) == 0) {
-                                        GetFieldValue(rec, ci, cv, sizeof(cv));
-                                        break;
+                                int isComposite = (strchr(idxC[ix], ',') != NULL);
+                                if (isComposite) {
+                                    char compKey[512] = "";
+                                    char colSpec[256];
+                                    strncpy(colSpec, idxC[ix], sizeof(colSpec) - 1);
+                                    colSpec[sizeof(colSpec) - 1] = '\0';
+                                    char *ct = strtok(colSpec, ",");
+                                    int first = 1;
+                                    while (ct) {
+                                        int ci;
+                                        for (ci = 0; ci < numCols; ci++) {
+                                            if (strcasecmp(colNames[ci], ct) == 0) {
+                                                char fv[256];
+                                                GetFieldValue(rec, ci, fv, sizeof(fv));
+                                                if (!first) strcat(compKey, "|");
+                                                strcat(compKey, fv);
+                                                first = 0;
+                                                break;
+                                            }
+                                        }
+                                        ct = strtok(NULL, ",");
                                     }
+                                    if (compKey[0])
+                                        btree_delete(idxP[ix], compKey, matchKeys[i]);
+                                } else {
+                                    char cv[256] = "";
+                                    int ci;
+                                    for (ci = 0; ci < numCols; ci++) {
+                                        if (strcasecmp(colNames[ci], idxC[ix]) == 0) {
+                                            GetFieldValue(rec, ci, cv, sizeof(cv));
+                                            break;
+                                        }
+                                    }
+                                    if (cv[0])
+                                        btree_delete(idxP[ix], cv, matchKeys[i]);
                                 }
-                                if (cv[0])
-                                    btree_delete(idxP[ix], cv, matchKeys[i]);
                             }
                         }
                     }
@@ -197,16 +223,42 @@ int DeleteProcess(void)
                     int legacyNumCols = ReadColumnNames(g_tblDelName, legacyCols, 64);
                     int ix;
                     for (ix = 0; ix < nIdx; ix++) {
-                        char cv[256] = "";
-                        int ci;
-                        for (ci = 0; ci < legacyNumCols; ci++) {
-                            if (strcasecmp(legacyCols[ci], idxC[ix]) == 0) {
-                                GetFieldValue(rec, ci, cv, sizeof(cv));
-                                break;
+                        int isComposite = (strchr(idxC[ix], ',') != NULL);
+                        if (isComposite) {
+                            char compKey[512] = "";
+                            char colSpec[256];
+                            strncpy(colSpec, idxC[ix], sizeof(colSpec) - 1);
+                            colSpec[sizeof(colSpec) - 1] = '\0';
+                            char *ct = strtok(colSpec, ",");
+                            int first = 1;
+                            while (ct) {
+                                int ci;
+                                for (ci = 0; ci < legacyNumCols; ci++) {
+                                    if (strcasecmp(legacyCols[ci], ct) == 0) {
+                                        char fv[256];
+                                        GetFieldValue(rec, ci, fv, sizeof(fv));
+                                        if (!first) strcat(compKey, "|");
+                                        strcat(compKey, fv);
+                                        first = 0;
+                                        break;
+                                    }
+                                }
+                                ct = strtok(NULL, ",");
                             }
+                            if (compKey[0])
+                                btree_delete(idxP[ix], compKey, str);
+                        } else {
+                            char cv[256] = "";
+                            int ci;
+                            for (ci = 0; ci < legacyNumCols; ci++) {
+                                if (strcasecmp(legacyCols[ci], idxC[ix]) == 0) {
+                                    GetFieldValue(rec, ci, cv, sizeof(cv));
+                                    break;
+                                }
+                            }
+                            if (cv[0])
+                                btree_delete(idxP[ix], cv, str);
                         }
-                        if (cv[0])
-                            btree_delete(idxP[ix], cv, str);
                     }
                 }
             }

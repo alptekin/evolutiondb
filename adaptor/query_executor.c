@@ -128,6 +128,12 @@ static int is_set_query(const char *sql)
     return (strncasecmp(sql, "SET", 3) == 0 && isspace((unsigned char)sql[3]));
 }
 
+static int is_explain_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "EXPLAIN", 7) == 0 && isspace((unsigned char)sql[7]));
+}
+
 /* Map EvoSQL type encoding to PostgreSQL type OID */
 static int type_encoding_to_pg_oid(int typeEncoding)
 {
@@ -1419,6 +1425,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_tblUpdateTableName[0] = '\0';
     g_tblDelName[0] = '\0';
     g_tblDropName[0] = '\0';
+    g_indexName[0] = '\0';
+    g_indexTableName[0] = '\0';
+    g_indexColumnName[0] = '\0';
+    g_indexUnique = 0;
+    g_indexIfNotExists = 0;
     g_insert[0] = '\0';
     g_deleteCount = 0;
     g_updateCount = 0;
@@ -1556,6 +1567,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                 else if (strncasecmp(p, "SCHEMA", 6) == 0)
                     strcpy(rs->command_tag, "CREATE SCHEMA");
                 else if (strncasecmp(p, "INDEX", 5) == 0)
+                    strcpy(rs->command_tag, "CREATE INDEX");
+                else if (strncasecmp(p, "UNIQUE", 6) == 0)
                     strcpy(rs->command_tag, "CREATE INDEX");
                 else
                     strcpy(rs->command_tag, "CREATE TABLE");
@@ -1957,6 +1970,163 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 return;
             }
         }
+    }
+
+    /* ── EXPLAIN prefix detection ── */
+    if (is_explain_query(sql)) {
+        const char *inner = sql;
+        while (*inner && isspace((unsigned char)*inner)) inner++;
+        inner += 7; /* skip "EXPLAIN" */
+        while (*inner && isspace((unsigned char)*inner)) inner++;
+
+        /* Build a query plan ResultSet */
+        rs->is_select = 1;
+        result_add_column(rs, "QUERY PLAN", PG_OID_TEXT);
+
+        /* Determine scan type */
+        char planLine[512];
+        if (is_select_query(inner)) {
+            /* Normalize inner query to extract table and WHERE info */
+            char innerNorm[8192];
+            strncpy(innerNorm, inner, sizeof(innerNorm) - 1);
+            innerNorm[sizeof(innerNorm) - 1] = '\0';
+            normalize_sql(innerNorm);
+
+            /* Extract table name from FROM clause */
+            char tblName[256] = "";
+            {
+                const char *f = innerNorm;
+                while (*f) {
+                    if (strncasecmp(f, "FROM", 4) == 0 &&
+                        (f == innerNorm || !isalnum((unsigned char)*(f-1))) &&
+                        (f[4] == ' ' || f[4] == '\t')) {
+                        f += 4;
+                        while (*f && isspace((unsigned char)*f)) f++;
+                        int ti = 0;
+                        while (*f && (isalnum((unsigned char)*f) || *f == '_') && ti < 255)
+                            tblName[ti++] = *f++;
+                        tblName[ti] = '\0';
+                        break;
+                    }
+                    f++;
+                }
+            }
+
+            /* Check if WHERE has a simple col = value */
+            char whereCol[128] = "", whereVal[256] = "";
+            int hasWhere = 0;
+            {
+                const char *w = innerNorm;
+                while (*w) {
+                    if (strncasecmp(w, "WHERE", 5) == 0 &&
+                        (w == innerNorm || !isalnum((unsigned char)*(w-1))) &&
+                        (w[5] == ' ' || w[5] == '\t')) {
+                        w += 5;
+                        while (*w && isspace((unsigned char)*w)) w++;
+                        /* Simple parse: NAME = VALUE */
+                        int ci = 0;
+                        while (*w && (isalnum((unsigned char)*w) || *w == '_') && ci < 127)
+                            whereCol[ci++] = *w++;
+                        whereCol[ci] = '\0';
+                        while (*w && isspace((unsigned char)*w)) w++;
+                        if (*w == '=') {
+                            w++;
+                            while (*w && isspace((unsigned char)*w)) w++;
+                            int vi = 0;
+                            if (*w == '\'') {
+                                w++;
+                                while (*w && *w != '\'' && vi < 255)
+                                    whereVal[vi++] = *w++;
+                            } else {
+                                while (*w && !isspace((unsigned char)*w) && *w != ';' && vi < 255)
+                                    whereVal[vi++] = *w++;
+                            }
+                            whereVal[vi] = '\0';
+                            hasWhere = (whereCol[0] && whereVal[0]);
+                        }
+                        break;
+                    }
+                    w++;
+                }
+            }
+
+            /* Determine access method */
+            const char *scanType = "Seq Scan";
+            char indexName[256] = "";
+            if (hasWhere && tblName[0]) {
+                char tblPath[1024];
+                db_table_path(tblName, tblPath, sizeof(tblPath));
+
+                /* Check PK */
+                int is_pk = 0;
+                {
+                    char colNames2[64][128];
+                    char metaTmp[SAFE_PATH_MAX], metaLine[2048];
+                    int nc = 0;
+                    snprintf(metaTmp, sizeof(metaTmp), "%s.meta", tblPath);
+                    FILE *mfp = fopen(metaTmp, "r");
+                    if (mfp) {
+                        if (fgets(metaLine, sizeof(metaLine), mfp)) {
+                            metaLine[strcspn(metaLine, "\n")] = '\0';
+                            char *mt = strtok(metaLine, ";");
+                            while (mt && nc < 64) {
+                                strncpy(colNames2[nc], mt, 127);
+                                colNames2[nc][127] = '\0';
+                                nc++;
+                                mt = strtok(NULL, ";");
+                            }
+                        }
+                        fclose(mfp);
+                        int pkIndices[16];
+                        int nPK = ReadPrimaryKeys(tblPath, pkIndices, 16);
+                        if (nPK == 1 && pkIndices[0] < nc) {
+                            if (strcasecmp(colNames2[pkIndices[0]], whereCol) == 0)
+                                is_pk = 1;
+                        }
+                    }
+                }
+
+                if (is_pk) {
+                    scanType = "PK Lookup (Hash)";
+                    snprintf(indexName, sizeof(indexName), " using PRIMARY KEY");
+                } else {
+                    /* Check B-tree index */
+                    char idxNames[16][256], idxCols[16][256], idxPaths[16][1024];
+                    char idxTypes[16];
+                    int nIdx = index_list_with_types(tblPath, idxNames, idxCols,
+                                                     idxPaths, idxTypes, 16);
+                    int ix;
+                    for (ix = 0; ix < nIdx; ix++) {
+                        if (strcasecmp(idxCols[ix], whereCol) == 0) {
+                            scanType = (idxTypes[ix] == 'U') ?
+                                "Index Scan (Unique B-tree)" :
+                                "Index Scan (B-tree)";
+                            snprintf(indexName, sizeof(indexName),
+                                     " using %s", idxNames[ix]);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            snprintf(planLine, sizeof(planLine), "%s on %s%s",
+                     scanType, tblName[0] ? tblName : "(unknown)", indexName);
+        } else {
+            snprintf(planLine, sizeof(planLine), "Utility Statement");
+        }
+
+        int row = result_add_row(rs);
+        if (row >= 0)
+            result_set_field(rs, row, 0, planLine);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "EXPLAIN");
+
+        if (ctx) {
+            strncpy(ctx->database, db_get_current_database(), sizeof(ctx->database) - 1);
+            ctx->database[sizeof(ctx->database) - 1] = '\0';
+            strncpy(ctx->schema, db_get_current_schema(), sizeof(ctx->schema) - 1);
+            ctx->schema[sizeof(ctx->schema) - 1] = '\0';
+        }
+        return;
     }
 
     /* Normalize SQL for DBeaver compatibility (quote removal, pg_catalog removal) */
