@@ -10,6 +10,7 @@
 #include "server.h"
 #include "query_executor.h"
 #include "../evolution/db/database.h"  /* g_tx_undo_callback */
+#include "../evolution/db/buffer_pool.h"
 
 /* ================================================================
  *  Shared state — used by all protocol servers
@@ -98,11 +99,14 @@ void server_init(void)
     socket_init();
     mutex_init(&g_query_lock);
     mutex_init(&g_conn_lock);
+    bp_init(BP_DEFAULT_PAGES);   /* 256 pages = 1 MB buffer pool */
     query_engine_init();
 }
 
 void server_cleanup(void)
 {
+    bp_flush_all();
+    bp_destroy();
     mutex_destroy(&g_query_lock);
     mutex_destroy(&g_conn_lock);
     socket_cleanup();
