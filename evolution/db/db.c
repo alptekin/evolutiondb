@@ -1,5 +1,6 @@
 #include "apue.h"
 #include "apue_db.h"
+#include "buffer_pool.h"
 #include <fcntl.h>
 #include <stdarg.h>
 #include <errno.h>
@@ -53,6 +54,8 @@ typedef struct {
     COUNT  cnt_stor3;
     COUNT  cnt_stor4;
     COUNT  cnt_storerr;
+    off_t  seq_pos;      /* sequential scan position (replaces SEEK_CUR) */
+    BPRing *scan_ring;   /* ring buffer for sequential scans */
 } DB;
 
 /*
@@ -168,6 +171,8 @@ _db_alloc(int namelen)
         err_dump("_db_alloc: malloc error for index buffer");
     if ((db->datbuf = (char *)malloc(DATLEN_MAX + 2)) == NULL)
         err_dump("_db_alloc: malloc error for data buffer");
+    db->seq_pos   = 0;
+    db->scan_ring = bp_ring_alloc();
     return(db);
 }
 
@@ -186,10 +191,17 @@ db_close(DBHANDLE h)
 static void
 _db_free(DB *db)
 {
+    /* Flush & invalidate cached pages before closing fds */
+    if (db->idxfd >= 0)
+        bp_invalidate_fd(db->idxfd);
+    if (db->datfd >= 0)
+        bp_invalidate_fd(db->datfd);
     if (db->idxfd >= 0)
         close(db->idxfd);
     if (db->datfd >= 0)
         close(db->datfd);
+    if (db->scan_ring != NULL)
+        bp_ring_free(db->scan_ring);
     if (db->idxbuf != NULL)
         free(db->idxbuf);
     if (db->datbuf != NULL)
@@ -275,9 +287,7 @@ _db_readptr(DB *db, off_t offset)
 {
     char asciiptr[PTR_SZ + 1];
 
-    if (lseek(db->idxfd, offset, SEEK_SET) == -1)
-        err_dump("_db_readptr: lseek error to ptr field");
-    if (read(db->idxfd, asciiptr, PTR_SZ) != PTR_SZ)
+    if (bp_read(db->idxfd, asciiptr, PTR_SZ, offset) != PTR_SZ)
         err_dump("_db_readptr: read error of ptr field");
     asciiptr[PTR_SZ] = 0;
     return(atol(asciiptr));
@@ -291,16 +301,23 @@ static off_t
 _db_readidx(DB *db, off_t offset)
 {
     int      n1, n2;
-    ssize_t  total;
+    int      total;
     char    *ptr1, *ptr2;
     char     asciiptr[PTR_SZ + 1], asciilen[IDXLEN_SZ + 1];
+    off_t    read_off;
 
-    if ((db->idxoff = lseek(db->idxfd, offset,
-      offset == 0 ? SEEK_CUR : SEEK_SET)) == -1)
-        err_dump("_db_readidx: lseek error");
+    /*
+     * When offset==0 the old code used SEEK_CUR for sequential scan.
+     * Now we use db->seq_pos instead.
+     */
+    if (offset == 0)
+        read_off = db->seq_pos;
+    else
+        read_off = offset;
+    db->idxoff = read_off;
 
-    n1 = read(db->idxfd, asciiptr, PTR_SZ);
-    n2 = read(db->idxfd, asciilen, IDXLEN_SZ);
+    n1 = bp_read(db->idxfd, asciiptr, PTR_SZ, read_off);
+    n2 = bp_read(db->idxfd, asciilen, IDXLEN_SZ, read_off + PTR_SZ);
     total = n1 + n2;
 
     if (total != PTR_SZ + IDXLEN_SZ) {
@@ -317,11 +334,15 @@ _db_readidx(DB *db, off_t offset)
       db->idxlen > IDXLEN_MAX)
         err_dump("_db_readidx: invalid length");
 
-    if (read(db->idxfd, db->idxbuf, (unsigned int)db->idxlen) != (int)db->idxlen)
+    if (bp_read(db->idxfd, db->idxbuf, (unsigned int)db->idxlen,
+                read_off + PTR_SZ + IDXLEN_SZ) != (int)db->idxlen)
         err_dump("_db_readidx: read error of index record");
     if (db->idxbuf[db->idxlen-1] != NEWLINE)
         err_dump("_db_readidx: missing newline");
     db->idxbuf[db->idxlen-1] = 0;
+
+    /* Advance sequential scan position past this record */
+    db->seq_pos = read_off + PTR_SZ + IDXLEN_SZ + db->idxlen;
 
     if ((ptr1 = strchr(db->idxbuf, SEP)) == NULL)
         err_dump("_db_readidx: missing first separator");
@@ -347,12 +368,24 @@ _db_readidx(DB *db, off_t offset)
 static char *
 _db_readdat(DB *db)
 {
-    if (lseek(db->datfd, db->datoff, SEEK_SET) == -1)
-        err_dump("_db_readdat: lseek error");
-    if (read(db->datfd, db->datbuf, (unsigned int)db->datlen) != (int)db->datlen)
+    if (bp_read(db->datfd, db->datbuf, (unsigned int)db->datlen, db->datoff)
+        != (int)db->datlen)
         err_dump("_db_readdat: read error");
     if (db->datbuf[db->datlen-1] != NEWLINE)
         err_dump("_db_readdat: missing newline");
+    db->datbuf[db->datlen-1] = 0;
+    return(db->datbuf);
+}
+
+/* Read data using ring buffer (for sequential scans — anti-pollution) */
+static char *
+_db_readdat_seq(DB *db)
+{
+    if (bp_read_seq(db->datfd, db->datbuf, (unsigned int)db->datlen,
+                    db->datoff, db->scan_ring) != (int)db->datlen)
+        err_dump("_db_readdat_seq: read error");
+    if (db->datbuf[db->datlen-1] != NEWLINE)
+        err_dump("_db_readdat_seq: missing newline");
     db->datbuf[db->datlen-1] = 0;
     return(db->datbuf);
 }
@@ -426,20 +459,32 @@ _db_dodelete(DB *db)
 static void
 _db_writedat(DB *db, const char *data, off_t offset, int whence)
 {
-    static char newline = NEWLINE;
+    char    writebuf[DATLEN_MAX + 2];
+    size_t  datalen;
 
     if (whence == SEEK_END)
         if (writew_lock(db->datfd, 0, SEEK_SET, 0) < 0)
             err_dump("_db_writedat: writew_lock error");
 
-    if ((db->datoff = lseek(db->datfd, offset, whence)) == -1)
-        err_dump("_db_writedat: lseek error");
     db->datlen = strlen(data) + 1;
+    datalen = db->datlen;
 
-    if (write(db->datfd, data, (unsigned int)(db->datlen - 1)) != (int)(db->datlen - 1))
-        err_dump("_db_writedat: write error of data record");
-    if (write(db->datfd, &newline, 1) != 1)
-        err_dump("_db_writedat: write error of newline");
+    /* Coalesce data + newline into a single write */
+    memcpy(writebuf, data, datalen - 1);
+    writebuf[datalen - 1] = NEWLINE;
+
+    if (whence == SEEK_END) {
+        off_t new_off;
+        if (bp_write_append(db->datfd, writebuf, (unsigned int)datalen,
+                            &new_off) != (int)datalen)
+            err_dump("_db_writedat: write error of data record");
+        db->datoff = new_off;
+    } else {
+        db->datoff = offset;
+        if (bp_write(db->datfd, writebuf, (unsigned int)datalen,
+                     offset) != (int)datalen)
+            err_dump("_db_writedat: write error of data record");
+    }
 
     if (whence == SEEK_END)
         if (un_lock(db->datfd, 0, SEEK_SET, 0) < 0)
@@ -455,7 +500,8 @@ _db_writeidx(DB *db, const char *key,
              off_t offset, int whence, off_t ptrval)
 {
     char asciiptrlen[PTR_SZ + IDXLEN_SZ + 1];
-    int  len;
+    char writebuf[PTR_SZ + IDXLEN_SZ + IDXLEN_MAX + 2];
+    int  len, total;
 
     if ((db->ptrval = ptrval) < 0 || ptrval > PTR_MAX)
         err_quit("_db_writeidx: invalid ptr: %ld", (long)ptrval);
@@ -472,13 +518,21 @@ _db_writeidx(DB *db, const char *key,
           SEEK_SET, 0) < 0)
             err_dump("_db_writeidx: writew_lock error");
 
-    if ((db->idxoff = lseek(db->idxfd, offset, whence)) == -1)
-        err_dump("_db_writeidx: lseek error");
+    /* Coalesce header + record into a single write */
+    memcpy(writebuf, asciiptrlen, PTR_SZ + IDXLEN_SZ);
+    memcpy(writebuf + PTR_SZ + IDXLEN_SZ, db->idxbuf, len);
+    total = PTR_SZ + IDXLEN_SZ + len;
 
-    if (write(db->idxfd, asciiptrlen, PTR_SZ + IDXLEN_SZ) != PTR_SZ + IDXLEN_SZ)
-        err_dump("_db_writeidx: write error of header");
-    if (write(db->idxfd, db->idxbuf, len) != len)
-        err_dump("_db_writeidx: write error of index record");
+    if (whence == SEEK_END) {
+        off_t new_off;
+        if (bp_write_append(db->idxfd, writebuf, total, &new_off) != total)
+            err_dump("_db_writeidx: write error of index record");
+        db->idxoff = new_off;
+    } else {
+        db->idxoff = offset;
+        if (bp_write(db->idxfd, writebuf, total, offset) != total)
+            err_dump("_db_writeidx: write error of index record");
+    }
 
     if (whence == SEEK_END)
         if (un_lock(db->idxfd, ((db->nhash+1)*PTR_SZ)+1,
@@ -498,9 +552,7 @@ _db_writeptr(DB *db, off_t offset, off_t ptrval)
         err_quit("_db_writeptr: invalid ptr: %ld", (long)ptrval);
     snprintf(asciiptr, sizeof(asciiptr), "%*ld", PTR_SZ, (long)ptrval);
 
-    if (lseek(db->idxfd, offset, SEEK_SET) == -1)
-        err_dump("_db_writeptr: lseek error to ptr field");
-    if (write(db->idxfd, asciiptr, PTR_SZ) != PTR_SZ)
+    if (bp_write(db->idxfd, asciiptr, PTR_SZ, offset) != PTR_SZ)
         err_dump("_db_writeptr: write error of ptr field");
 }
 
@@ -614,12 +666,10 @@ void
 db_rewind(DBHANDLE h)
 {
     DB     *db = (DB *)h;
-    off_t   offset;
 
-    offset = (db->nhash + 1) * PTR_SZ;
-
-    if ((db->idxoff = lseek(db->idxfd, offset+1, SEEK_SET)) == -1)
-        err_dump("db_rewind: lseek error");
+    /* Position sequential scan at first index record (after hash table + newline) */
+    db->seq_pos = (db->nhash + 1) * PTR_SZ + 1;
+    db->idxoff  = db->seq_pos;
 }
 
 /*
@@ -647,7 +697,7 @@ db_nextrec(DBHANDLE h, char *key)
 
     if (key != NULL)
         strcpy(key, db->idxbuf);
-    ptr = _db_readdat(db);
+    ptr = _db_readdat_seq(db);  /* use ring buffer to prevent scan pollution */
     db->cnt_nextrec++;
 
 doreturn:
