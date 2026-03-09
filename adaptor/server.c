@@ -9,15 +9,19 @@
 #include "net.h"
 #include "server.h"
 #include "query_executor.h"
-#include "../evolution/db/database.h"  /* g_tx_undo_callback */
+#include "../evolution/db/database.h"
 #include "../evolution/db/buffer_pool.h"
+#include "../evolution/db/query_context.h"
 
 /* ================================================================
  *  Shared state — used by all protocol servers
  * ================================================================ */
 
-/* Mutex for serializing query execution (EvoSQL globals not thread-safe) */
-static mutex_t g_query_lock;
+/* Parser mutex — serializes yyparse() (Flex/Bison not reentrant).
+ * SELECT execution (collect_select_results) runs WITHOUT this mutex,
+ * enabling concurrent SELECT queries.  DML runs inside yyparse()
+ * so it is still serialized. */
+mutex_t g_parse_lock;
 
 /* Connection limits */
 static int     g_max_connections    = 100;
@@ -29,13 +33,24 @@ int  get_max_connections(void)      { return g_max_connections; }
 void set_max_connections(int n)     { if (n > 0) g_max_connections = n; }
 int  get_active_connections(void)   { return g_active_connections; }
 
-/* From transaction.c */
-extern UndoLog *g_current_undo_log;
+/* From transaction.c — thread-local per-connection undo log */
+#if defined(_WIN32)
+extern __declspec(thread) UndoLog *g_current_undo_log;
+#else
+extern __thread UndoLog *g_current_undo_log;
+#endif
 
 /* ---- Thread-safe query execution ---- */
 void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
-    mutex_lock(&g_query_lock);
+    /* Allocate per-query context (thread-local) */
+    QueryContext *qctx = qctx_alloc();
+    if (!qctx) {
+        result_init(rs);
+        result_set_error(rs, "53000", "out of memory for query context");
+        return;
+    }
+    g_qctx = qctx;
 
     /* Install undo-log callback while in a transaction */
     if (ctx && ctx->in_transaction && ctx->undo_log) {
@@ -56,7 +71,9 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_tx_undo_callback = NULL;
     g_current_undo_log = NULL;
 
-    mutex_unlock(&g_query_lock);
+    /* Free per-query context */
+    qctx_free(qctx);
+    g_qctx = NULL;
 }
 
 /* ================================================================
@@ -97,7 +114,7 @@ static THREAD_RETURN client_thread(THREAD_PARAM param)
 void server_init(void)
 {
     socket_init();
-    mutex_init(&g_query_lock);
+    mutex_init(&g_parse_lock);
     mutex_init(&g_conn_lock);
     bp_init(BP_DEFAULT_PAGES);   /* 256 pages = 1 MB buffer pool */
     query_engine_init();
@@ -107,7 +124,7 @@ void server_cleanup(void)
 {
     bp_flush_all();
     bp_destroy();
-    mutex_destroy(&g_query_lock);
+    mutex_destroy(&g_parse_lock);
     mutex_destroy(&g_conn_lock);
     socket_cleanup();
 }

@@ -1,61 +1,17 @@
-/* Global variable definitions for the EvoSQL database project */
+/*
+ * database_globals.c — Server-wide global variable definitions
+ *
+ * Query-scoped globals have moved to QueryContext (query_context.h/c).
+ * Only truly server-wide globals remain here.
+ */
 #include <stddef.h>
 #include "database.h"
 
-char g_columnNames[1024];
-char g_insert[RECORD_BUF_SIZE];
-char g_temp[1024];
-char g_tblName[1024];
-char g_tblInsertionName[1024];
-char g_tblSelectionName[1024];
-char g_whereSel[1024];
-char g_tblDelName[1024];
-char g_tblUpdateTableName[1024];
-char g_tblDropName[1024];
-char g_columnDefs[1024];
-char g_lastSelectTable[1024];
-int g_totalColumnSize = 0;
-int g_gui_mode = 0;
-jmp_buf g_gui_jmpbuf;
-int g_gui_error = 0;
-char g_gui_error_msg[512];
-char g_gui_error_sqlstate[6] = "";
-char g_orderByColumn[256];
-int g_orderByDesc = 0;
-char g_orderByColumns[8][256];
-int  g_orderByDescs[8];
-int  g_orderByCount = 0;
-int g_selectDistinct = 0;
-char g_columnTypeDefs[1024];
-int g_currentColNotNull = 0;
-int g_currentColPrimaryKey = 0;
-int g_currentColUnique = 0;
-char g_columnNullFlags[1024];
-char g_columnUniqueFlags[1024];
-char g_currentColDefault[256];
-char g_columnDefaults[4096];
-int g_currentColAutoIncrement = 0;
-int g_autoIncColIndex = -1;
-int g_autoIncStart = 1;
-int g_autoIncStep = 1;
-char g_primaryKeyIndices[256] = "";
-int g_pkColumnCount = 0;
-char g_pkColumnNames[16][128];
-int g_primaryKeyIndex = -1;
-int g_columnCount = 0;
-char g_selectColumns[64][128];
-int g_selectColumnCount = 0;
+/* Server-wide globals — set once at startup, read-only during queries */
+int  g_gui_mode = 0;
 char g_dbRoot[1024];
+
+/* Database/Schema context — per-session in the future, global for now.
+ * These persist across queries within a connection. */
 char g_currentDatabase[256];
 char g_currentSchema[256];
-int g_deleteCount = 0;
-int g_updateCount = 0;
-int g_insertCount = 0;
-char g_insertColumns[64][128];
-int g_insertColumnCount = 0;
-tx_undo_fn g_tx_undo_callback = NULL;
-char g_indexName[256] = "";
-char g_indexTableName[256] = "";
-char g_indexColumnName[256] = "";
-int  g_indexUnique = 0;
-int  g_indexIfNotExists = 0;

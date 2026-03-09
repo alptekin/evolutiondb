@@ -60,13 +60,6 @@ void SetDropIndexName(const char *idxName);
 void SetIndexUnique(void);
 void SetIndexIfNotExists(void);
 
-/* Index globals */
-extern char g_indexName[256];
-extern char g_indexTableName[256];
-extern char g_indexColumnName[256];  /* comma-separated for composite */
-extern int  g_indexUnique;
-extern int  g_indexIfNotExists;
-
 /* Clustered index (auto-created on PK) */
 int  CreateClusteredIndex(const char *tblPath, const char *pkColName);
 
@@ -155,64 +148,18 @@ int  ListGrantsForUser(const char *username,
                        int  max_entries);
 int  DropUserGrants(const char *username);
 
-/* Global Variables (defined in database_globals.c) */
-extern char g_columnNames[1024];
-extern char g_insert[RECORD_BUF_SIZE];
-extern char g_temp[1024];
-extern char g_tblName[1024];
-extern char g_tblInsertionName[1024];
-extern char g_tblSelectionName[1024];
-extern char g_whereSel[1024];
-extern char g_tblDelName[1024];
-extern char g_tblUpdateTableName[1024];
-extern char g_tblDropName[1024];
-extern char g_columnDefs[1024];
-extern char g_lastSelectTable[1024];
-extern int g_totalColumnSize;
-extern int g_gui_mode;
-extern jmp_buf g_gui_jmpbuf;
-extern int g_gui_error;
-extern char g_gui_error_msg[512];
-extern char g_gui_error_sqlstate[6];
-extern char g_orderByColumn[256];
-extern int g_orderByDesc;
-extern char g_orderByColumns[8][256];
-extern int  g_orderByDescs[8];
-extern int  g_orderByCount;
-extern int g_selectDistinct;
-extern char g_columnTypeDefs[1024];
-extern int g_currentColNotNull;
-extern int g_currentColPrimaryKey;
-extern int g_currentColUnique;
-extern char g_columnNullFlags[1024];
-extern char g_columnUniqueFlags[1024];
-extern char g_currentColDefault[256];
-extern char g_columnDefaults[4096];
-extern int g_currentColAutoIncrement;
-extern int g_autoIncColIndex;
-extern int g_autoIncStart;
-extern int g_autoIncStep;
-extern char g_primaryKeyIndices[256];
-extern int g_pkColumnCount;
-extern char g_pkColumnNames[16][128];
-extern int g_primaryKeyIndex;
-extern int g_columnCount;
-extern char g_selectColumns[64][128];
-extern int g_selectColumnCount;
+/* Server-wide globals (NOT per-query, remain as true globals) */
+extern int  g_gui_mode;
 extern char g_dbRoot[1024];
 extern char g_currentDatabase[256];
 extern char g_currentSchema[256];
-extern int g_deleteCount;
-extern int g_updateCount;
-extern int g_insertCount;
-extern char g_insertColumns[64][128];
-extern int g_insertColumnCount;
 
-/* Transaction undo-log callback (set by adaptor when transaction is active).
- * op_type: 1=INSERT, 2=UPDATE, 3=DELETE
- * Engine DML code calls this before modifying data, if non-NULL. */
+/* tx_undo_fn typedef — used by QueryContext, must be before its include */
 typedef void (*tx_undo_fn)(int op_type, const char *table,
                            const char *key, const char *data);
-extern tx_undo_fn g_tx_undo_callback;
+
+/* Per-query thread-local context — provides all query-scoped globals
+ * via compatibility macros (g_insert, g_tblName, g_whereExpr, etc.) */
+#include "query_context.h"
 
 #endif

@@ -33,7 +33,8 @@ SRCS = main.c \
        db/UserMgmt.c \
        db/GrantMgmt.c \
        db/Index.c \
-       db/buffer_pool.c
+       db/buffer_pool.c \
+       db/query_context.c
 
 OBJS = $(SRCS:.c=.o)
 
