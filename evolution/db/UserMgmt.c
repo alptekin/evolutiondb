@@ -183,6 +183,7 @@ int CreateUserProcess(const char *username, const char *password)
 {
     char path[1024], hash_str[HASH_STRING_MAX];
     FILE *fp;
+    int result = 0;
 
     if (!username || !password || username[0] == '\0' || password[0] == '\0') {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -192,15 +193,7 @@ int CreateUserProcess(const char *username, const char *password)
         return -1;
     }
 
-    if (user_exists(username)) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "User '%s' already exists", username);
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_OBJECT);
-        return -1;
-    }
-
-    /* Hash password */
+    /* Hash password before taking lock (expensive operation) */
     if (crypto_hash_password(password, hash_str, sizeof(hash_str)) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Failed to hash password");
@@ -209,21 +202,33 @@ int CreateUserProcess(const char *username, const char *password)
         return -1;
     }
 
-    /* Append to users file */
-    users_path(path, sizeof(path));
-    fp = fopen(path, "a");
-    if (!fp) {
+    pthread_mutex_lock(&g_metadata_lock);
+
+    if (user_exists(username)) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot open users file");
+                 "User '%s' already exists", username);
         g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        return -1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_OBJECT);
+        result = -1;
+    } else {
+        /* Append to users file */
+        users_path(path, sizeof(path));
+        fp = fopen(path, "a");
+        if (!fp) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "Cannot open users file");
+            g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
+            result = -1;
+        } else {
+            fprintf(fp, "%s:%s\n", username, hash_str);
+            fclose(fp);
+        }
     }
 
-    fprintf(fp, "%s:%s\n", username, hash_str);
-    fclose(fp);
+    pthread_mutex_unlock(&g_metadata_lock);
     evo_secure_wipe(hash_str, sizeof(hash_str));
-    return 0;
+    return result;
 }
 
 /* ----------------------------------------------------------------
@@ -237,6 +242,7 @@ int DropUserProcess(const char *username)
     FILE *fp, *tmp;
     int found = 0;
     size_t ulen;
+    int result = 0;
 
     if (!username || username[0] == '\0') {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -250,8 +256,11 @@ int DropUserProcess(const char *username)
     users_path(path, sizeof(path));
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 
+    pthread_mutex_lock(&g_metadata_lock);
+
     fp = fopen(path, "r");
     if (!fp) {
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot open users file");
         g_gui_error = 1;
@@ -262,6 +271,7 @@ int DropUserProcess(const char *username)
     tmp = fopen(tmp_path, "w");
     if (!tmp) {
         fclose(fp);
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file");
         g_gui_error = 1;
@@ -290,13 +300,15 @@ int DropUserProcess(const char *username)
                  "User '%s' does not exist", username);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
-        return -1;
+        result = -1;
+    } else {
+        /* Replace original with temp */
+        remove(path);
+        rename(tmp_path, path);
     }
 
-    /* Replace original with temp */
-    remove(path);
-    rename(tmp_path, path);
-    return 0;
+    pthread_mutex_unlock(&g_metadata_lock);
+    return result;
 }
 
 /* ----------------------------------------------------------------
@@ -311,6 +323,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
     FILE *fp, *tmp;
     int found = 0;
     size_t ulen;
+    int result = 0;
 
     if (!username || !new_password ||
         username[0] == '\0' || new_password[0] == '\0') {
@@ -323,7 +336,7 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
 
     ulen = strlen(username);
 
-    /* Hash new password first */
+    /* Hash new password before taking lock (expensive operation) */
     if (crypto_hash_password(new_password, hash_str, sizeof(hash_str)) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Failed to hash password");
@@ -335,22 +348,28 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
     users_path(path, sizeof(path));
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 
+    pthread_mutex_lock(&g_metadata_lock);
+
     fp = fopen(path, "r");
     if (!fp) {
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot open users file");
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
+        evo_secure_wipe(hash_str, sizeof(hash_str));
         return -1;
     }
 
     tmp = fopen(tmp_path, "w");
     if (!tmp) {
         fclose(fp);
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file");
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
+        evo_secure_wipe(hash_str, sizeof(hash_str));
         return -1;
     }
 
@@ -376,13 +395,15 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
                  "User '%s' does not exist", username);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
-        return -1;
+        result = -1;
+    } else {
+        remove(path);
+        rename(tmp_path, path);
     }
 
-    remove(path);
-    rename(tmp_path, path);
+    pthread_mutex_unlock(&g_metadata_lock);
     evo_secure_wipe(hash_str, sizeof(hash_str));
-    return 0;
+    return result;
 }
 
 /* ----------------------------------------------------------------

@@ -110,9 +110,8 @@ static void GetFieldValue(const char *data, int colIndex, char *buf, int bufSize
     buf[0] = '\0';
 }
 
-/* Sorting context for qsort */
-static int g_sortColIndex = -1;
-static int g_sortDesc = 0;
+/* Sorting context: g_sortColIndex / g_sortDesc are now in QueryContext
+ * (thread-local) via compatibility macros in query_context.h */
 
 typedef struct {
     char data[1024];
