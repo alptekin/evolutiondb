@@ -32,7 +32,8 @@ SRCS = main.c \
        db/crypto.c \
        db/UserMgmt.c \
        db/GrantMgmt.c \
-       db/Index.c
+       db/Index.c \
+       db/buffer_pool.c
 
 OBJS = $(SRCS:.c=.o)
 
