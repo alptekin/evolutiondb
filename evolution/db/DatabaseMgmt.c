@@ -79,10 +79,8 @@ void db_ensure_root(void)
     snprintf(path, sizeof(path), "%s/%s/default", ROOT_DIR, DEFAULT_DB);
     MKDIR(path);
 
-    /* Set root path, default database and default schema */
+    /* Set root path (database/schema defaults are in QueryContext) */
     snprintf(g_dbRoot, sizeof(g_dbRoot), "%s", ROOT_DIR);
-    strncpy(g_currentDatabase, DEFAULT_DB, sizeof(g_currentDatabase) - 1);
-    strncpy(g_currentSchema, "default", sizeof(g_currentSchema) - 1);
 
     /* Create initial admin user if users file is empty/missing */
     db_ensure_users();
@@ -214,13 +212,17 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
 {
     char path[1024];
     char regFile[1024];
+    int result = 0;
 
     /* Build directory path */
     snprintf(path, sizeof(path), "%s/%s", g_dbRoot, name);
+    snprintf(regFile, sizeof(regFile), "%s/databases", g_dbRoot);
+
+    pthread_mutex_lock(&g_metadata_lock);
 
     /* Check if already registered */
-    snprintf(regFile, sizeof(regFile), "%s/databases", g_dbRoot);
     if (name_exists_in_file(regFile, name)) {
+        pthread_mutex_unlock(&g_metadata_lock);
         if (if_not_exists) return 0;  /* silently succeed */
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "database \"%s\" already exists", name);
@@ -231,6 +233,7 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
 
     /* Create directory */
     if (MKDIR(path) != 0 && errno != EEXIST) {
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "could not create database directory \"%s\"", name);
         g_gui_error = 1;
@@ -240,6 +243,8 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
 
     /* Register in databases file */
     append_name_to_file(regFile, name);
+
+    pthread_mutex_unlock(&g_metadata_lock);
 
     /* Create per-database schemas file with 'default' schema */
     {
@@ -260,7 +265,7 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
     }
 
     printf("CREATE DATABASE %s\n", name);
-    return 0;
+    return result;
 }
 
 /* ----------------------------------------------------------------
@@ -273,10 +278,13 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
 
     /* Build directory path under current database: root/<currentdb>/<schema> */
     snprintf(path, sizeof(path), "%s/%s/%s", g_dbRoot, g_currentDatabase, name);
+    snprintf(regFile, sizeof(regFile), "%s/%s/schemas", g_dbRoot, g_currentDatabase);
+
+    pthread_mutex_lock(&g_metadata_lock);
 
     /* Check if already registered in per-database schemas file */
-    snprintf(regFile, sizeof(regFile), "%s/%s/schemas", g_dbRoot, g_currentDatabase);
     if (name_exists_in_file(regFile, name)) {
+        pthread_mutex_unlock(&g_metadata_lock);
         if (if_not_exists) return 0;  /* silently succeed */
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "schema \"%s\" already exists", name);
@@ -287,6 +295,7 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
 
     /* Create schema directory under current database */
     if (MKDIR(path) != 0 && errno != EEXIST) {
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "could not create schema directory \"%s\"", name);
         g_gui_error = 1;
@@ -296,6 +305,8 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
 
     /* Register in per-database schemas file */
     append_name_to_file(regFile, name);
+
+    pthread_mutex_unlock(&g_metadata_lock);
 
     printf("CREATE SCHEMA %s (in database %s)\n", name, g_currentDatabase);
     return 0;

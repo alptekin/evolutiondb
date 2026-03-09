@@ -19,12 +19,19 @@ static void ResizeAllRecords(const char *tblName, int newPadSize)
     if (newPadSize >= RECORD_BUF_SIZE)
         newPadSize = RECORD_BUF_SIZE - 1;
 
-    /* Phase 1: Read all records into memory */
-    static char keys[200][256];
-    static char records[200][RECORD_BUF_SIZE];
-
-    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
+    /* Phase 1: Read all records into memory (heap-allocated for thread safety) */
+    char (*keys)[256] = (char (*)[256])malloc(200 * 256);
+    char (*records)[RECORD_BUF_SIZE] =
+        (char (*)[RECORD_BUF_SIZE])malloc(200 * RECORD_BUF_SIZE);
+    if (!keys || !records) {
+        free(keys); free(records);
         return;
+    }
+
+    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL) {
+        free(keys); free(records);
+        return;
+    }
 
     db_rewind(db);
     while ((data = db_nextrec(db, keyBuf)) != NULL && count < 200) {
@@ -35,8 +42,10 @@ static void ResizeAllRecords(const char *tblName, int newPadSize)
     db_close(db);
 
     /* Phase 2: Re-store all records with new padding */
-    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
+    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL) {
+        free(keys); free(records);
         return;
+    }
 
     for (i = 0; i < count; i++) {
         int curLen = (int)strlen(records[i]);
@@ -48,6 +57,8 @@ static void ResizeAllRecords(const char *tblName, int newPadSize)
     }
 
     db_close(db);
+    free(keys);
+    free(records);
 
     /* Update .meta with new pad size */
     WritePadSize(tblName, newPadSize);
@@ -741,10 +752,11 @@ int TruncateUpdate(void)
 char *ParseUpdate(char *arr)
 {
     char *str = NULL;
-    static char res[1024];
 
+    /* Use thread-local g_temp (via QueryContext) instead of static buffer */
+    g_temp[0] = '\0';
     for (str = strtok(arr, ";"); str != NULL; str = strtok(NULL, ";"))
-        strcpy(res, str);
+        strncpy(g_temp, str, sizeof(g_temp) - 1);
 
-    return res;
+    return g_temp;
 }

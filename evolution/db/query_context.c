@@ -35,6 +35,13 @@ QueryContext *qctx_alloc(void)
     ctx->autoIncStart    = 1;
     ctx->autoIncStep     = 1;
 
+    /* Sort context default */
+    ctx->sortColIndex = -1;
+
+    /* Database/Schema defaults (sane fallback before SessionCtx loads) */
+    strncpy(ctx->currentDatabase, "evosql", sizeof(ctx->currentDatabase) - 1);
+    strncpy(ctx->currentSchema, "default", sizeof(ctx->currentSchema) - 1);
+
     return ctx;
 }
 

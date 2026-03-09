@@ -151,8 +151,10 @@ int  DropUserGrants(const char *username);
 /* Server-wide globals (NOT per-query, remain as true globals) */
 extern int  g_gui_mode;
 extern char g_dbRoot[1024];
-extern char g_currentDatabase[256];
-extern char g_currentSchema[256];
+
+/* Metadata file mutex — protects users/grants/databases registry files */
+#include <pthread.h>
+extern pthread_mutex_t g_metadata_lock;
 
 /* tx_undo_fn typedef — used by QueryContext, must be before its include */
 typedef void (*tx_undo_fn)(int op_type, const char *table,

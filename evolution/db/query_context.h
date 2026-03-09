@@ -28,6 +28,10 @@
  *  QueryContext — all per-query mutable state
  * ================================================================ */
 typedef struct QueryContext {
+    /* ---- Database/Schema context (per-session, was global) ---- */
+    char currentDatabase[256];
+    char currentSchema[256];
+
     /* ---- Table name paths ---- */
     char tblName[1024];
     char tblInsertionName[1024];
@@ -127,6 +131,10 @@ typedef struct QueryContext {
     /* ---- CHECK constraints ---- */
     char checkSerialized[MAX_CHECK_CONSTRAINTS][1024];
     int  checkCount;
+
+    /* ---- Sort context (for qsort callback) ---- */
+    int sortColIndex;
+    int sortDesc;
 } QueryContext;
 
 /* ================================================================
@@ -246,5 +254,13 @@ void          qctx_free(QueryContext *ctx);
 /* CHECK constraints */
 #define g_checkSerialized       (g_qctx->checkSerialized)
 #define g_checkCount            (g_qctx->checkCount)
+
+/* Database/Schema context (moved from true globals for thread safety) */
+#define g_currentDatabase       (g_qctx->currentDatabase)
+#define g_currentSchema         (g_qctx->currentSchema)
+
+/* Sort context (for qsort callback in Select.c) */
+#define g_sortColIndex          (g_qctx->sortColIndex)
+#define g_sortDesc              (g_qctx->sortDesc)
 
 #endif /* QUERY_CONTEXT_H */

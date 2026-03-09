@@ -398,10 +398,13 @@ int GrantPrivilege(const char *username, int scope_type,
     grants_path(path, sizeof(path));
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 
+    pthread_mutex_lock(&g_metadata_lock);
+
     fp = fopen(path, "r");
     tmp = fopen(tmp_path, "w");
     if (!tmp) {
         if (fp) fclose(fp);
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file for grants");
         g_gui_error = 1;
@@ -468,6 +471,8 @@ int GrantPrivilege(const char *username, int scope_type,
     fclose(tmp);
     remove(path);
     rename(tmp_path, path);
+
+    pthread_mutex_unlock(&g_metadata_lock);
     return 0;
 }
 
@@ -483,6 +488,7 @@ int RevokePrivilege(const char *username, int scope_type,
     char path[1024], tmp_path[1024], line[MAX_LINE];
     FILE *fp, *tmp;
     int found = 0;
+    int result = 0;
     unsigned revoke_mask = parse_privs(privileges);
 
     if (revoke_mask == 0) {
@@ -496,8 +502,11 @@ int RevokePrivilege(const char *username, int scope_type,
     grants_path(path, sizeof(path));
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 
+    pthread_mutex_lock(&g_metadata_lock);
+
     fp = fopen(path, "r");
     if (!fp) {
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot open grants file");
         g_gui_error = 1;
@@ -508,6 +517,7 @@ int RevokePrivilege(const char *username, int scope_type,
     tmp = fopen(tmp_path, "w");
     if (!tmp) {
         fclose(fp);
+        pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "Cannot create temp file for grants");
         g_gui_error = 1;
@@ -572,12 +582,14 @@ int RevokePrivilege(const char *username, int scope_type,
                  "No matching grant found for user '%s'", username);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
-        return -1;
+        result = -1;
+    } else {
+        remove(path);
+        rename(tmp_path, path);
     }
 
-    remove(path);
-    rename(tmp_path, path);
-    return 0;
+    pthread_mutex_unlock(&g_metadata_lock);
+    return result;
 }
 
 /* ----------------------------------------------------------------
@@ -658,11 +670,13 @@ int DropUserGrants(const char *username)
     grants_path(path, sizeof(path));
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
 
+    pthread_mutex_lock(&g_metadata_lock);
+
     fp = fopen(path, "r");
-    if (!fp) return 0;
+    if (!fp) { pthread_mutex_unlock(&g_metadata_lock); return 0; }
 
     tmp = fopen(tmp_path, "w");
-    if (!tmp) { fclose(fp); return 0; }
+    if (!tmp) { fclose(fp); pthread_mutex_unlock(&g_metadata_lock); return 0; }
 
     while (fgets(line, sizeof(line), fp)) {
         char buf[MAX_LINE];
@@ -687,5 +701,7 @@ int DropUserGrants(const char *username)
     fclose(tmp);
     remove(path);
     rename(tmp_path, path);
+
+    pthread_mutex_unlock(&g_metadata_lock);
     return removed;
 }

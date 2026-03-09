@@ -86,8 +86,14 @@ int TruncateTableProcess(void)
 
     /* Collect all keys first, then delete them */
     {
-        static char keys[200][256];
+        char (*keys)[256] = (char (*)[256])malloc(200 * 256);
         int count = 0, i;
+
+        if (!keys) {
+            db_close(db);
+            TruncateDrop();
+            return -1;
+        }
 
         db_rewind(db);
         while ((data = db_nextrec(db, keyBuf)) != NULL && count < 200) {
@@ -98,6 +104,7 @@ int TruncateTableProcess(void)
         for (i = 0; i < count; i++) {
             db_delete(db, keys[i]);
         }
+        free(keys);
     }
 
     db_close(db);

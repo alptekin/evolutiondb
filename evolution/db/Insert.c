@@ -490,6 +490,8 @@ int InsertProcess(void)
     char allRows[RECORD_BUF_SIZE];
     char *rowPtrs[256];  /* max 256 rows in one batch */
     int numRows, i;
+    int retval = 0;
+    char (*reorderedRows)[RECORD_BUF_SIZE] = NULL;
 
     /* Extract base table name (without .dat) */
     strcpy(tblName, g_tblInsertionName);
@@ -521,8 +523,18 @@ int InsertProcess(void)
     /* Apply column mapping (if INSERT has column list) and validate
      * all rows BEFORE inserting any (abort semantics).
      * We use reorderedRows[] to hold the mapped data because
-     * reorder_row_for_column_map() rewrites the row string. */
-    static char reorderedRows[256][RECORD_BUF_SIZE];
+     * reorder_row_for_column_map() rewrites the row string.
+     * Heap-allocated to avoid static buffer thread-safety issues. */
+    reorderedRows =
+        (char (*)[RECORD_BUF_SIZE])malloc(256 * RECORD_BUF_SIZE);
+    if (!reorderedRows) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "out of memory for INSERT batch");
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
+        TruncateInsert();
+        return -1;
+    }
 
     /* Read AUTO_INCREMENT info once for the table */
     int autoIncCol = -1, autoIncCounter = 0, autoIncStep = 1;
@@ -541,7 +553,7 @@ int InsertProcess(void)
         if (g_insertColumnCount > 0) {
             if (reorder_row_for_column_map(tblName, reorderedRows[i]) != 0) {
                 TruncateInsert();
-                return -1;
+                retval = -1; goto cleanup;
             }
         }
 
@@ -573,19 +585,19 @@ int InsertProcess(void)
 
         if (validate_types(tblName, vals, nv) != 0) {
             TruncateInsert();
-            return -1;
+            retval = -1; goto cleanup;
         }
         if (validate_not_null(tblName, vals, nv) != 0) {
             TruncateInsert();
-            return -1;
+            retval = -1; goto cleanup;
         }
         if (validate_unique(tblName, g_tblInsertionName, vals, nv) != 0) {
             TruncateInsert();
-            return -1;
+            retval = -1; goto cleanup;
         }
         if (validate_check(tblName, vals, nv) != 0) {
             TruncateInsert();
-            return -1;
+            retval = -1; goto cleanup;
         }
     }
 
@@ -596,7 +608,7 @@ int InsertProcess(void)
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
         TruncateInsert();
-        return -1;
+        retval = -1; goto cleanup;
     }
 
     /* Read index metadata once (used for pre-insert unique check and post-insert B-tree update) */
@@ -678,7 +690,7 @@ int InsertProcess(void)
                         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                         db_close(db);
                         TruncateInsert();
-                        return -1;
+                        retval = -1; goto cleanup;
                     }
                 }
             }
@@ -699,7 +711,7 @@ int InsertProcess(void)
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
             db_close(db);
             TruncateInsert();
-            return -1;
+            retval = -1; goto cleanup;
         }
         g_insertCount++;
 
@@ -723,7 +735,9 @@ int InsertProcess(void)
 
     TruncateInsert();
 
-    return 0;
+cleanup:
+    free(reorderedRows);
+    return retval;
 }
 
 char *ParseInsertion(char *arr)
