@@ -7,41 +7,7 @@
 #include <ctype.h>
 #include <time.h>
 #include "expression.h"
-
-/* Pool storage */
-ExprNode  g_exprNodePool[EXPR_POOL_SIZE];
-int       g_exprNodePoolUsed = 0;
-
-/* Parsed SELECT expressions */
-ExprNode *g_selectExprs[MAX_SELECT_EXPRS];
-int       g_selectExprCount = 0;
-
-/* WHERE filter expression */
-ExprNode *g_whereExpr = NULL;
-
-/* LIMIT / OFFSET */
-ExprNode *g_limitExpr  = NULL;
-ExprNode *g_offsetExpr = NULL;
-
-/* IN list collector */
-ExprNode *g_inListExprs[MAX_IN_LIST];
-int       g_inListCount = 0;
-
-/* CASE WHEN/THEN collector */
-ExprNode *g_caseWhenExprs[MAX_CASE_WHENS];
-ExprNode *g_caseThenExprs[MAX_CASE_WHENS];
-int       g_caseWhenCount = 0;
-
-/* GROUP BY expressions */
-ExprNode *g_groupByExprs[MAX_GROUP_BY];
-int       g_groupByCount = 0;
-
-/* HAVING filter expression */
-ExprNode *g_havingExpr = NULL;
-
-/* CHECK constraints (serialized RPN) */
-char g_checkSerialized[MAX_CHECK_CONSTRAINTS][1024];
-int  g_checkCount = 0;
+#include "database.h"   /* query_context.h macros for g_exprNodePool etc. */
 
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)

@@ -9,8 +9,13 @@
 #include "../evolution/db/apue.h"
 #include "../evolution/db/apue_db.h"
 
-/* Current undo log pointer — set by safe_query_execute when in transaction */
-UndoLog *g_current_undo_log = NULL;
+/* Current undo log pointer — set by safe_query_execute when in transaction.
+ * Thread-local: each connection has its own transaction context. */
+#if defined(_WIN32)
+__declspec(thread) UndoLog *g_current_undo_log = NULL;
+#else
+__thread UndoLog *g_current_undo_log = NULL;
+#endif
 
 UndoLog *undo_log_create(void)
 {

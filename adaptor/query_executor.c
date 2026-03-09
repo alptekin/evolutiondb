@@ -20,6 +20,10 @@ extern void yy_delete_buffer(YY_BUFFER_STATE buf);
 extern int yylex_destroy(void);
 extern int yylineno;
 
+/* Parser mutex from server.c (serializes yyparse, not reentrant) */
+#include "platform.h"
+extern mutex_t g_parse_lock;
+
 /* ----------------------------------------------------------------
  *  sql_redact_password — Redact PASSWORD clauses for safe logging
  * ---------------------------------------------------------------- */
@@ -59,7 +63,9 @@ static void sql_redact_password(char *dst, size_t dst_size, const char *src)
 void query_engine_init(void)
 {
     g_gui_mode = 1;   /* Suppress printf output from EvoSQL */
-    g_gui_error = 0;
+    /* NOTE: g_gui_error is now per-query (in QueryContext).
+     * At startup g_qctx is NULL, so we skip it here.
+     * Each query's qctx_alloc() calloc-zeros gui_error. */
     db_ensure_root(); /* Create root/ directory structure and set default database */
 }
 
@@ -1376,6 +1382,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     volatile int saved_stdout = -1;
     volatile int saved_stderr = -1;
     volatile YY_BUFFER_STATE scan_buf = NULL;
+    volatile int parse_mutex_held = 0;
 
     /* Make a mutable copy, strip \r */
     sqlCopy = strdup(sql);
@@ -1473,12 +1480,23 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
      * calls db_open / db_nextrec that use err_dump internally). */
     if (setjmp(g_gui_jmpbuf) == 0) {
         int parse_result;
+
+        /* Lock parser mutex — Flex/Bison are not reentrant.
+         * DML (INSERT/UPDATE/DELETE) executes inside yyparse() actions,
+         * so it is serialized.  SELECT only sets g_lastSelectTable
+         * inside yyparse; actual data collection runs AFTER unlock. */
+        mutex_lock(&g_parse_lock);
+        parse_mutex_held = 1;
+
         yylineno = 1;
         scan_buf = yy_scan_string(sqlCopy);
         parse_result = yyparse();
         yy_delete_buffer((YY_BUFFER_STATE)scan_buf);
         yylex_destroy();
         scan_buf = NULL;
+
+        mutex_unlock(&g_parse_lock);
+        parse_mutex_held = 0;
 
         /* yyparse returns 0 on success, 1 on syntax error, 2 on OOM */
         if (parse_result != 0) {
@@ -1502,8 +1520,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         if (saved_stdout >= 0) { dup2(saved_stdout, 1); close(saved_stdout); saved_stdout = -1; }
         if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); saved_stderr = -1; }
 
-        /* Collect SELECT results (calls db_open/db_nextrec which may
-         * longjmp on corrupted data — now safely inside setjmp scope) */
+        /* Collect SELECT results — runs WITHOUT parser mutex, enabling
+         * concurrent SELECT queries across different connections. */
         if (!rs->has_error && g_lastSelectTable[0] != '\0') {
             collect_select_results(g_lastSelectTable, rs);
             g_lastSelectTable[0] = '\0';
@@ -1600,11 +1618,15 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         }
     } else {
         /* Error occurred via longjmp (err_sys/err_quit/err_dump).
-         * Clean up Flex scanner if it was still active. */
-        if (scan_buf) {
-            yy_delete_buffer((YY_BUFFER_STATE)scan_buf);
-            yylex_destroy();
-            scan_buf = NULL;
+         * Clean up Flex scanner and release parser mutex if held. */
+        if (parse_mutex_held) {
+            if (scan_buf) {
+                yy_delete_buffer((YY_BUFFER_STATE)scan_buf);
+                yylex_destroy();
+                scan_buf = NULL;
+            }
+            mutex_unlock(&g_parse_lock);
+            parse_mutex_held = 0;
         }
         rs->has_error = 1;
         strcpy(rs->error_sqlstate,

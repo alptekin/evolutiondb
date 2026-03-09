@@ -80,21 +80,6 @@ typedef struct ExprNode {
     char display[256];          /* display label / alias */
 } ExprNode;
 
-/* Pool allocator — avoids per-node malloc/free */
-extern ExprNode  g_exprNodePool[EXPR_POOL_SIZE];
-extern int       g_exprNodePoolUsed;
-
-/* Parsed SELECT expressions from parser */
-extern ExprNode *g_selectExprs[MAX_SELECT_EXPRS];
-extern int       g_selectExprCount;
-
-/* WHERE filter expression (set by parser, used by query executor) */
-extern ExprNode *g_whereExpr;
-
-/* LIMIT / OFFSET (set by parser, used by query executor) */
-extern ExprNode *g_limitExpr;    /* LIMIT n */
-extern ExprNode *g_offsetExpr;   /* LIMIT offset, count  OR  LIMIT n OFFSET m */
-
 /* Node allocation */
 ExprNode *expr_alloc(void);
 
@@ -141,19 +126,9 @@ ExprNode *expr_make_concat(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_replace(ExprNode *str, ExprNode *from, ExprNode *to);
 ExprNode *expr_make_coalesce(ExprNode *left, ExprNode *right);
 
-/* CASE WHEN/THEN collector (used during parsing) */
+/* Constants for expression array sizes */
 #define MAX_CASE_WHENS 32
-extern ExprNode *g_caseWhenExprs[MAX_CASE_WHENS];
-extern ExprNode *g_caseThenExprs[MAX_CASE_WHENS];
-extern int       g_caseWhenCount;
-
-/* GROUP BY expressions (set by parser) */
 #define MAX_GROUP_BY 16
-extern ExprNode *g_groupByExprs[MAX_GROUP_BY];
-extern int       g_groupByCount;
-
-/* HAVING filter expression (set by parser) */
-extern ExprNode *g_havingExpr;
 
 /* Check if any select expression is an aggregate function */
 int expr_is_aggregate(const ExprNode *e);
@@ -161,15 +136,9 @@ int expr_is_aggregate(const ExprNode *e);
 /* Collect all aggregate nodes from an expression tree */
 void expr_collect_aggregates(const ExprNode *e, const ExprNode **out, int *count, int max);
 
-/* IN-list value collector (used during parsing) */
+/* Constants for collector array sizes */
 #define MAX_IN_LIST 64
-extern ExprNode *g_inListExprs[MAX_IN_LIST];
-extern int       g_inListCount;
-
-/* CHECK constraints (set by parser during CREATE TABLE) */
 #define MAX_CHECK_CONSTRAINTS 16
-extern char g_checkSerialized[MAX_CHECK_CONSTRAINTS][1024];
-extern int  g_checkCount;
 
 /* Add a CHECK constraint expression during parsing */
 void AddCheckConstraint(ExprNode *expr);
