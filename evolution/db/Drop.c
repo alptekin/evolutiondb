@@ -3,6 +3,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include "database.h"
+#include "buffer_pool.h"
 #include "apue.h"
 #include "apue_db.h"
 
@@ -12,10 +13,18 @@ int DropTableProcess(void)
     char idxFile[SAFE_PATH_MAX];
     char metaFile[SAFE_PATH_MAX];
     int ok = 0;
+    int fd;
 
     snprintf(datFile, sizeof(datFile), "%s.dat", g_tblDropName);
     snprintf(idxFile, sizeof(idxFile), "%s.idx", g_tblDropName);
     snprintf(metaFile, sizeof(metaFile), "%s.meta", g_tblDropName);
+
+    /* Invalidate buffer pool pages before removing files.
+     * Open briefly to get fd for invalidation, then close. */
+    fd = open(idxFile, O_RDONLY);
+    if (fd >= 0) { bp_invalidate_fd(fd); close(fd); }
+    fd = open(datFile, O_RDONLY);
+    if (fd >= 0) { bp_invalidate_fd(fd); close(fd); }
 
     if (remove(datFile) == 0)
         ok++;
