@@ -98,6 +98,7 @@
 %token ENUM
 %token END
 %token ELSE
+%token EXPLAIN
 
 %token FLOAT
 %token FORCE
@@ -732,13 +733,52 @@ stmt: create_index_stmt
     }
 ;
 
-create_index_stmt: CREATE INDEX NAME ON NAME '(' NAME ')'
+create_index_stmt: CREATE INDEX NAME ON NAME '(' index_col_list ')'
     {
-        emit("CREATEINDEX %s ON %s (%s)", $3, $5, $7);
-        SetIndexInfo($3, $5, $7);
+        emit("CREATEINDEX %s ON %s", $3, $5);
+        SetIndexInfo($3, $5, "");
         free($3);
         free($5);
+    }
+| CREATE INDEX IF EXISTS NAME ON NAME '(' index_col_list ')'
+    {
+        /* NOTE: lexer matches "NOT EXISTS" as single EXISTS token (subtok=1),
+         * so "IF NOT EXISTS" appears as "IF EXISTS" in grammar */
+        emit("CREATEINDEX IF NOT EXISTS %s ON %s", $5, $7);
+        SetIndexIfNotExists();
+        SetIndexInfo($5, $7, "");
+        free($5);
         free($7);
+    }
+| CREATE UNIQUE INDEX NAME ON NAME '(' index_col_list ')'
+    {
+        emit("CREATEUNIQUEINDEX %s ON %s", $4, $6);
+        SetIndexUnique();
+        SetIndexInfo($4, $6, "");
+        free($4);
+        free($6);
+    }
+| CREATE UNIQUE INDEX IF EXISTS NAME ON NAME '(' index_col_list ')'
+    {
+        /* NOTE: lexer matches "NOT EXISTS" as single EXISTS token (subtok=1) */
+        emit("CREATEUNIQUEINDEX IF NOT EXISTS %s ON %s", $6, $8);
+        SetIndexUnique();
+        SetIndexIfNotExists();
+        SetIndexInfo($6, $8, "");
+        free($6);
+        free($8);
+    }
+;
+
+index_col_list: NAME
+    {
+        SetIndexAddColumn($1);
+        free($1);
+    }
+| index_col_list ',' NAME
+    {
+        SetIndexAddColumn($3);
+        free($3);
     }
 ;
 

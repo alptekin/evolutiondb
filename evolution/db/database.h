@@ -55,12 +55,17 @@ int SetSchemaProcess(const char *name);
 int  CreateIndexProcess(void);
 int  DropIndexProcess(void);
 void SetIndexInfo(const char *idxName, const char *tblName, const char *colName);
+void SetIndexAddColumn(const char *colName);
 void SetDropIndexName(const char *idxName);
+void SetIndexUnique(void);
+void SetIndexIfNotExists(void);
 
 /* Index globals */
 extern char g_indexName[256];
 extern char g_indexTableName[256];
-extern char g_indexColumnName[256];
+extern char g_indexColumnName[256];  /* comma-separated for composite */
+extern int  g_indexUnique;
+extern int  g_indexIfNotExists;
 
 /* Clustered index (auto-created on PK) */
 int  CreateClusteredIndex(const char *tblPath, const char *pkColName);
@@ -80,6 +85,9 @@ int  index_exists(const char *tblPath, const char *colName,
                   char *idxPath, int idxPathSize);
 int  index_list_for_table(const char *tblPath, char names[][256],
                           char cols[][256], char paths[][1024], int max);
+int  index_list_with_types(const char *tblPath, char names[][256],
+                           char cols[][256], char paths[][1024],
+                           char types[], int max);
 
 /* Database root path management */
 void db_ensure_root(void);

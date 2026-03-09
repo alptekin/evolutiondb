@@ -57,3 +57,5 @@ tx_undo_fn g_tx_undo_callback = NULL;
 char g_indexName[256] = "";
 char g_indexTableName[256] = "";
 char g_indexColumnName[256] = "";
+int  g_indexUnique = 0;
+int  g_indexIfNotExists = 0;

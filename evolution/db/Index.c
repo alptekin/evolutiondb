@@ -573,6 +573,45 @@ int index_list_for_table(const char *tblPath, char names[][256],
     return count;
 }
 
+int index_list_with_types(const char *tblPath, char names[][256],
+                          char cols[][256], char paths[][1024],
+                          char types[], int max)
+{
+    char indexesFile[1024];
+    get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
+
+    FILE *f = fopen(indexesFile, "r");
+    if (!f) return 0;
+
+    int count = 0;
+    char line[2048];
+    while (fgets(line, sizeof(line), f) && count < max) {
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+            line[--len] = '\0';
+
+        char *col = strchr(line, ':');
+        if (!col) continue;
+        *col = '\0';
+        col++;
+        char *path = strchr(col, ':');
+        if (!path) continue;
+        *path = '\0';
+        path++;
+        char *typeF = strchr(path, ':');
+        char idxType = 'N';
+        if (typeF) { idxType = typeF[1]; *typeF = '\0'; }
+
+        strncpy(names[count], line, 255);
+        strncpy(cols[count], col, 255);
+        strncpy(paths[count], path, 1023);
+        types[count] = idxType;
+        count++;
+    }
+    fclose(f);
+    return count;
+}
+
 /* ── CREATE INDEX / DROP INDEX process functions ── */
 
 void SetIndexInfo(const char *idxName, const char *tblName, const char *colName)
@@ -581,14 +620,86 @@ void SetIndexInfo(const char *idxName, const char *tblName, const char *colName)
     g_indexName[sizeof(g_indexName) - 1] = '\0';
     strncpy(g_indexTableName, tblName, sizeof(g_indexTableName) - 1);
     g_indexTableName[sizeof(g_indexTableName) - 1] = '\0';
-    strncpy(g_indexColumnName, colName, sizeof(g_indexColumnName) - 1);
-    g_indexColumnName[sizeof(g_indexColumnName) - 1] = '\0';
+    /* colName is empty when using index_col_list (columns set via SetIndexAddColumn) */
+    if (colName[0] != '\0') {
+        strncpy(g_indexColumnName, colName, sizeof(g_indexColumnName) - 1);
+        g_indexColumnName[sizeof(g_indexColumnName) - 1] = '\0';
+    }
+}
+
+void SetIndexAddColumn(const char *colName)
+{
+    /* Append column to comma-separated list */
+    if (g_indexColumnName[0] != '\0')
+        strcat(g_indexColumnName, ",");
+    strncat(g_indexColumnName, colName, sizeof(g_indexColumnName) - strlen(g_indexColumnName) - 1);
+}
+
+void SetIndexUnique(void)
+{
+    g_indexUnique = 1;
+}
+
+void SetIndexIfNotExists(void)
+{
+    g_indexIfNotExists = 1;
 }
 
 void SetDropIndexName(const char *idxName)
 {
     strncpy(g_indexName, idxName, sizeof(g_indexName) - 1);
     g_indexName[sizeof(g_indexName) - 1] = '\0';
+}
+
+/* Build composite B-tree key from multiple column values.
+ * cols = "col1,col2", vals[i] = field values, colNames[i] = column names.
+ * Output: "val1|val2" in keyBuf. Returns 1 if all columns found. */
+static int build_composite_key(const char *colSpec,
+                                const char colNames[][128], int numCols,
+                                const char **vals, int numVals,
+                                char *keyBuf, int keyBufSize)
+{
+    char tmp[256];
+    strncpy(tmp, colSpec, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    keyBuf[0] = '\0';
+    char *tok = strtok(tmp, ",");
+    int first = 1;
+    while (tok) {
+        /* Find column index */
+        int ci, found = 0;
+        for (ci = 0; ci < numCols; ci++) {
+            if (strcasecmp(colNames[ci], tok) == 0 && ci < numVals) {
+                if (!first) strncat(keyBuf, "|", keyBufSize - strlen(keyBuf) - 1);
+                strncat(keyBuf, vals[ci], keyBufSize - strlen(keyBuf) - 1);
+                found = 1;
+                first = 0;
+                break;
+            }
+        }
+        if (!found) return 0;
+        tok = strtok(NULL, ",");
+    }
+    return keyBuf[0] != '\0';
+}
+
+/* Same as above but reads values from semicolon-separated record string */
+static int build_composite_key_from_record(const char *colSpec,
+                                            const char colNames[][128], int numCols,
+                                            const char *record,
+                                            char *keyBuf, int keyBufSize)
+{
+    char recTmp[RECORD_BUF_SIZE];
+    strncpy(recTmp, record, sizeof(recTmp) - 1);
+    recTmp[sizeof(recTmp) - 1] = '\0';
+
+    const char *vals[64];
+    int nv = 0;
+    char *t = strtok(recTmp, ";");
+    while (t && nv < 64) { vals[nv++] = t; t = strtok(NULL, ";"); }
+
+    return build_composite_key(colSpec, colNames, numCols, vals, nv, keyBuf, keyBufSize);
 }
 
 int CreateIndexProcess(void)
@@ -609,34 +720,39 @@ int CreateIndexProcess(void)
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "table '%s' does not exist", g_indexTableName);
             g_gui_error = 1;
+            g_indexUnique = 0; g_indexIfNotExists = 0;
             return -1;
         }
         fclose(f);
     }
 
-    /* Verify column exists */
+    /* Verify all columns exist (supports composite: "col1,col2") */
     {
         char colNames[64][128];
         int numCols = IndexReadColumnNames(tblPath, colNames, 64);
-        int found = 0, i;
-        for (i = 0; i < numCols; i++) {
-            if (strcasecmp(colNames[i], g_indexColumnName) == 0) {
-                found = 1;
-                break;
+        char colCheck[256];
+        strncpy(colCheck, g_indexColumnName, sizeof(colCheck) - 1);
+        colCheck[sizeof(colCheck) - 1] = '\0';
+        char *ct = strtok(colCheck, ",");
+        while (ct) {
+            int found = 0, i;
+            for (i = 0; i < numCols; i++) {
+                if (strcasecmp(colNames[i], ct) == 0) { found = 1; break; }
             }
-        }
-        if (!found) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "column '%s' does not exist in table '%s'",
-                     g_indexColumnName, g_indexTableName);
-            g_gui_error = 1;
-            return -1;
+            if (!found) {
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "column '%s' does not exist in table '%s'",
+                         ct, g_indexTableName);
+                g_gui_error = 1;
+                g_indexUnique = 0; g_indexIfNotExists = 0;
+                return -1;
+            }
+            ct = strtok(NULL, ",");
         }
     }
 
     /* Build btree file path: same directory as table, named <index>.evo */
     {
-        /* Get directory of table */
         char dir[1024];
         strncpy(dir, tblPath, sizeof(dir) - 1);
         char *slash = strrchr(dir, '/');
@@ -645,11 +761,17 @@ int CreateIndexProcess(void)
         snprintf(btreePath, sizeof(btreePath), "%s%s.evo", dir, g_indexName);
     }
 
-    /* Check if index already exists */
+    /* Check if index already exists on these columns */
     if (index_exists(tblPath, g_indexColumnName, NULL, 0)) {
+        if (g_indexIfNotExists) {
+            /* Silently succeed */
+            g_indexUnique = 0; g_indexIfNotExists = 0;
+            return 0;
+        }
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "index already exists on column '%s'", g_indexColumnName);
         g_gui_error = 1;
+        g_indexUnique = 0; g_indexIfNotExists = 0;
         return -1;
     }
 
@@ -658,6 +780,7 @@ int CreateIndexProcess(void)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "failed to create index file");
         g_gui_error = 1;
+        g_indexUnique = 0; g_indexIfNotExists = 0;
         return -1;
     }
 
@@ -667,54 +790,81 @@ int CreateIndexProcess(void)
         if (db) {
             char colNames[64][128];
             int numCols = IndexReadColumnNames(tblPath, colNames, 64);
-            int colIdx = -1, i;
-            for (i = 0; i < numCols; i++) {
-                if (strcasecmp(colNames[i], g_indexColumnName) == 0) {
-                    colIdx = i;
-                    break;
-                }
-            }
+            int isComposite = (strchr(g_indexColumnName, ',') != NULL);
 
-            if (colIdx >= 0) {
-                char keyBuf[1024];
-                char *rec;
-                db_rewind(db);
-                while ((rec = db_nextrec(db, keyBuf)) != NULL) {
-                    /* Extract column value from record */
-                    char colVal[256] = "";
-                    char tmp[RECORD_BUF_SIZE];
-                    strncpy(tmp, rec, sizeof(tmp) - 1);
-                    tmp[sizeof(tmp) - 1] = '\0';
-                    char *tok = strtok(tmp, ";");
-                    int ci = 0;
-                    while (tok && ci <= colIdx) {
-                        if (ci == colIdx) {
-                            strncpy(colVal, tok, sizeof(colVal) - 1);
-                            break;
-                        }
-                        ci++;
-                        tok = strtok(NULL, ";");
+            char keyBuf[1024];
+            char *rec;
+            db_rewind(db);
+            while ((rec = db_nextrec(db, keyBuf)) != NULL) {
+                char idxKey[512] = "";
+
+                if (isComposite) {
+                    build_composite_key_from_record(g_indexColumnName,
+                        (const char (*)[128])colNames, numCols, rec,
+                        idxKey, sizeof(idxKey));
+                } else {
+                    /* Single column */
+                    int colIdx = -1, i;
+                    for (i = 0; i < numCols; i++) {
+                        if (strcasecmp(colNames[i], g_indexColumnName) == 0)
+                            { colIdx = i; break; }
                     }
-                    if (colVal[0])
-                        btree_insert(btreePath, colVal, keyBuf);
+                    if (colIdx >= 0) {
+                        char tmp[RECORD_BUF_SIZE];
+                        strncpy(tmp, rec, sizeof(tmp) - 1);
+                        tmp[sizeof(tmp) - 1] = '\0';
+                        char *tok = strtok(tmp, ";");
+                        int ci = 0;
+                        while (tok && ci <= colIdx) {
+                            if (ci == colIdx) {
+                                strncpy(idxKey, tok, sizeof(idxKey) - 1);
+                                break;
+                            }
+                            ci++;
+                            tok = strtok(NULL, ";");
+                        }
+                    }
+                }
+
+                if (idxKey[0]) {
+                    /* Unique check on existing data */
+                    if (g_indexUnique) {
+                        char dup[1][256];
+                        if (btree_search(btreePath, idxKey, dup, 1) > 0) {
+                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                     "could not create unique index: duplicate key '%s'",
+                                     idxKey);
+                            g_gui_error = 1;
+                            db_close(db);
+                            btree_drop(btreePath);
+                            g_indexUnique = 0; g_indexIfNotExists = 0;
+                            return -1;
+                        }
+                    }
+                    btree_insert(btreePath, idxKey, keyBuf);
                 }
             }
             db_close(db);
         }
     }
 
-    /* Register index in .indexes file */
+    /* Register index in .indexes file.
+     * Type flag: C=clustered, N=nonclustered, U=unique nonclustered */
     get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
     {
         FILE *f = fopen(indexesFile, "a");
         if (f) {
-            fprintf(f, "%s:%s:%s:N\n", g_indexName, g_indexColumnName, btreePath);
+            fprintf(f, "%s:%s:%s:%s\n", g_indexName, g_indexColumnName, btreePath,
+                    g_indexUnique ? "U" : "N");
             fclose(f);
         }
     }
 
-    printf("Index '%s' created on %s(%s).\n",
-           g_indexName, g_indexTableName, g_indexColumnName);
+    printf("Index '%s' created on %s(%s)%s.\n",
+           g_indexName, g_indexTableName, g_indexColumnName,
+           g_indexUnique ? " [UNIQUE]" : "");
+    g_indexUnique = 0;
+    g_indexIfNotExists = 0;
     return 0;
 }
 

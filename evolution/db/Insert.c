@@ -599,9 +599,91 @@ int InsertProcess(void)
         return -1;
     }
 
+    /* Read index metadata once (used for pre-insert unique check and post-insert B-tree update) */
+    char idxNames[16][256], idxCols[16][256], idxPaths[16][1024];
+    char idxTypes[16];
+    int nIdx = index_list_with_types(tblName, idxNames, idxCols, idxPaths, idxTypes, 16);
+    char colNames2[64][128];
+    int numCols2 = 0;
+    if (nIdx > 0)
+        numCols2 = InsertReadColumnNames(tblName, colNames2, 64);
+
     /* Insert each row */
     g_insertCount = 0;
     for (i = 0; i < numRows; i++) {
+        /* Pre-insert: check unique index constraints BEFORE storing */
+        char preIdxKeys[16][512];
+        char prePkBuf[256] = "";
+        if (nIdx > 0) {
+            char tmpPre[RECORD_BUF_SIZE];
+            char *valsPre[64];
+            int nvPre = 0;
+            strncpy(tmpPre, reorderedRows[i], sizeof(tmpPre) - 1);
+            tmpPre[sizeof(tmpPre) - 1] = '\0';
+            char *tp = strtok(tmpPre, ";");
+            while (tp && nvPre < 64) { valsPre[nvPre++] = tp; tp = strtok(NULL, ";"); }
+
+            /* Extract PK */
+            {
+                int pkIdx2[16], nPKs2, p2;
+                nPKs2 = ReadPrimaryKeys(tblName, pkIdx2, 16);
+                if (nPKs2 <= 0) { nPKs2 = 1; pkIdx2[0] = 0; }
+                for (p2 = 0; p2 < nPKs2; p2++) {
+                    if (p2 > 0) strcat(prePkBuf, "|");
+                    if (pkIdx2[p2] < nvPre) strcat(prePkBuf, valsPre[pkIdx2[p2]]);
+                }
+            }
+
+            int ix;
+            for (ix = 0; ix < nIdx; ix++) {
+                int isComposite = (strchr(idxCols[ix], ',') != NULL);
+                preIdxKeys[ix][0] = '\0';
+
+                if (isComposite) {
+                    char colSpec[256];
+                    strncpy(colSpec, idxCols[ix], sizeof(colSpec) - 1);
+                    colSpec[sizeof(colSpec) - 1] = '\0';
+                    char *ctok = strtok(colSpec, ",");
+                    int first = 1;
+                    while (ctok) {
+                        int ci;
+                        for (ci = 0; ci < numCols2; ci++) {
+                            if (strcasecmp(colNames2[ci], ctok) == 0 && ci < nvPre) {
+                                if (!first) strcat(preIdxKeys[ix], "|");
+                                strcat(preIdxKeys[ix], valsPre[ci]);
+                                first = 0;
+                                break;
+                            }
+                        }
+                        ctok = strtok(NULL, ",");
+                    }
+                } else {
+                    int ci;
+                    for (ci = 0; ci < numCols2; ci++) {
+                        if (strcasecmp(colNames2[ci], idxCols[ix]) == 0 && ci < nvPre) {
+                            strncpy(preIdxKeys[ix], valsPre[ci], sizeof(preIdxKeys[ix]) - 1);
+                            break;
+                        }
+                    }
+                }
+
+                /* Unique enforcement BEFORE store */
+                if (preIdxKeys[ix][0] && idxTypes[ix] == 'U') {
+                    char dupCheck[1][256];
+                    if (btree_search(idxPaths[ix], preIdxKeys[ix], dupCheck, 1) > 0) {
+                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                 "duplicate key value violates unique index \"%s\" (key=%s)",
+                                 idxNames[ix], preIdxKeys[ix]);
+                        g_gui_error = 1;
+                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                        db_close(db);
+                        TruncateInsert();
+                        return -1;
+                    }
+                }
+            }
+        }
+
         int rc = store_single_row(db, tblName, reorderedRows[i]);
         if (rc != 0) {
             /* Duplicate PK or error — abort whole batch */
@@ -621,42 +703,12 @@ int InsertProcess(void)
         }
         g_insertCount++;
 
-        /* Update B-tree indexes for the inserted row */
-        {
-            char idxNames[16][256], idxCols[16][256], idxPaths[16][1024];
-            int nIdx = index_list_for_table(tblName, idxNames, idxCols, idxPaths, 16);
-            if (nIdx > 0) {
-                char colNames2[64][128];
-                int numCols2 = InsertReadColumnNames(tblName, colNames2, 64);
-                /* Parse the row to get values */
-                char tmpRow2[RECORD_BUF_SIZE];
-                strncpy(tmpRow2, reorderedRows[i], sizeof(tmpRow2) - 1);
-                tmpRow2[sizeof(tmpRow2) - 1] = '\0';
-                char *vals2[64];
-                int nv2 = 0;
-                char *t2 = strtok(tmpRow2, ";");
-                while (t2 && nv2 < 64) { vals2[nv2++] = t2; t2 = strtok(NULL, ";"); }
-                /* Extract PK from row */
-                char pkBuf[256] = "";
-                {
-                    int pkIdx[16], nPKs, p;
-                    nPKs = ReadPrimaryKeys(tblName, pkIdx, 16);
-                    if (nPKs <= 0) { nPKs = 1; pkIdx[0] = 0; }
-                    for (p = 0; p < nPKs; p++) {
-                        if (p > 0) strcat(pkBuf, "|");
-                        if (pkIdx[p] < nv2) strcat(pkBuf, vals2[pkIdx[p]]);
-                    }
-                }
-                int ix;
-                for (ix = 0; ix < nIdx; ix++) {
-                    int ci;
-                    for (ci = 0; ci < numCols2; ci++) {
-                        if (strcasecmp(colNames2[ci], idxCols[ix]) == 0 && ci < nv2) {
-                            btree_insert(idxPaths[ix], vals2[ci], pkBuf);
-                            break;
-                        }
-                    }
-                }
+        /* Post-insert: update B-tree indexes */
+        if (nIdx > 0) {
+            int ix;
+            for (ix = 0; ix < nIdx; ix++) {
+                if (preIdxKeys[ix][0])
+                    btree_insert(idxPaths[ix], preIdxKeys[ix], prePkBuf);
             }
         }
     }

@@ -88,6 +88,7 @@ FLOAT8|DOUBLE			{ return DOUBLE; }
 
 
 ELSE					{ return ELSE; }
+EXPLAIN					{ return EXPLAIN; }
 
 END						{ return END; }
 ENUM					{ return ENUM; }
