@@ -4,45 +4,27 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include "database.h"
-#include "apue.h"
-#include "apue_db.h"
+#include "catalog_internal.h"
+#include "table_api.h"
 
 static void PrintColumnHeaders(const char *tableName)
 {
-    char metaFile[SAFE_PATH_MAX];
-    char line[1024];
-    char *col;
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
 
-    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
-    FILE *fp = fopen(metaFile, "r");
-    if (!fp)
+    if (tapi_resolve(tableName, &td, cols, &ncols) < 0)
         return;
 
-    if (fgets(line, sizeof(line), fp)) {
-        char temp[1024];
+    /* Print column names */
+    for (int i = 0; i < ncols; i++)
+        printf("%-20s", cols[i].col_name);
+    printf("\n");
 
-        line[strcspn(line, "\n")] = '\0';
-
-        /* Print column names */
-        strcpy(temp, line);
-        col = strtok(temp, ";");
-        while (col) {
-            printf("%-20s", col);
-            col = strtok(NULL, ";");
-        }
-        printf("\n");
-
-        /* Print separator line */
-        strcpy(temp, line);
-        col = strtok(temp, ";");
-        while (col) {
-            printf("--------------------");
-            col = strtok(NULL, ";");
-        }
-        printf("\n");
-    }
-
-    fclose(fp);
+    /* Print separator line */
+    for (int i = 0; i < ncols; i++)
+        printf("--------------------");
+    printf("\n");
 }
 
 static void PrintRecord(const char *data)
@@ -59,33 +41,20 @@ static void PrintRecord(const char *data)
     printf("\n");
 }
 
-/* Find column index by name from .meta file. Returns -1 if not found. */
+/* Find column index by name from catalog. Returns -1 if not found. */
 static int FindColumnIndex(const char *tableName, const char *colName)
 {
-    char metaFile[SAFE_PATH_MAX];
-    char line[1024];
-    int idx = 0;
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
 
-    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
-    FILE *fp = fopen(metaFile, "r");
-    if (!fp)
+    if (tapi_resolve(tableName, &td, cols, &ncols) < 0)
         return -1;
 
-    if (fgets(line, sizeof(line), fp)) {
-        char *col;
-        line[strcspn(line, "\n")] = '\0';
-        col = strtok(line, ";");
-        while (col) {
-            if (strcmp(col, colName) == 0) {
-                fclose(fp);
-                return idx;
-            }
-            idx++;
-            col = strtok(NULL, ";");
-        }
+    for (int i = 0; i < ncols; i++) {
+        if (strcmp(cols[i].col_name, colName) == 0)
+            return i;
     }
-
-    fclose(fp);
     return -1;
 }
 
@@ -110,9 +79,6 @@ static void GetFieldValue(const char *data, int colIndex, char *buf, int bufSize
     buf[0] = '\0';
 }
 
-/* Sorting context: g_sortColIndex / g_sortDesc are now in QueryContext
- * (thread-local) via compatibility macros in query_context.h */
-
 typedef struct {
     char data[1024];
 } RecordEntry;
@@ -129,7 +95,6 @@ static int CompareRecords(const void *a, const void *b)
     GetFieldValue(ra->data, g_sortColIndex, valA, sizeof(valA));
     GetFieldValue(rb->data, g_sortColIndex, valB, sizeof(valB));
 
-    /* Try numeric comparison first */
     numA = strtod(valA, &endA);
     numB = strtod(valB, &endB);
     if (*endA == '\0' && *endB == '\0' && valA[0] != '\0' && valB[0] != '\0') {
@@ -145,10 +110,9 @@ static int CompareRecords(const void *a, const void *b)
 
 void SelectAll(void)
 {
-    DBHANDLE db;
-    char *str = NULL;
     char tblName[1024];
-    char keyBuf[1024];
+    char pkBuf[256];
+    char recBuf[RECORD_BUF_SIZE];
 
     /* Extract table name without .dat extension */
     strcpy(tblName, g_tblSelectionName);
@@ -158,13 +122,20 @@ void SelectAll(void)
 
     /* In GUI mode, save table name for GridView and skip text output */
     if (g_gui_mode) {
-        strcpy(g_lastSelectTable, tblName);
+        char baseName[128];
+        tapi_basename(tblName, baseName, sizeof(baseName));
+        strcpy(g_lastSelectTable, baseName);
         TruncateSelect();
         return;
     }
 
-    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
-        err_sys("db_open error");
+    /* Resolve table */
+    TableDesc td;
+    if (tapi_resolve(tblName, &td, NULL, NULL) < 0) {
+        printf("Error: table not found\n");
+        TruncateSelect();
+        return;
+    }
 
     PrintColumnHeaders(tblName);
 
@@ -173,19 +144,26 @@ void SelectAll(void)
         int colIdx = FindColumnIndex(tblName, g_orderByColumn);
         if (colIdx < 0) {
             printf("Error: column '%s' not found\n", g_orderByColumn);
-            db_rewind(db);
-            while ((str = db_nextrec(db, keyBuf)) != NULL)
-                PrintRecord(str);
+            /* Fall through to unordered scan */
+            TableScanCursor cursor;
+            if (tapi_scan_begin(&td, &cursor) == 0) {
+                while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0)
+                    PrintRecord(recBuf);
+            }
         } else {
             RecordEntry records[500];
             int count = 0;
             int i;
 
-            db_rewind(db);
-            while ((str = db_nextrec(db, keyBuf)) != NULL && count < 500) {
-                strncpy(records[count].data, str, sizeof(records[count].data) - 1);
-                records[count].data[sizeof(records[count].data) - 1] = '\0';
-                count++;
+            TableScanCursor cursor;
+            if (tapi_scan_begin(&td, &cursor) == 0) {
+                while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0
+                       && count < 500) {
+                    strncpy(records[count].data, recBuf,
+                            sizeof(records[count].data) - 1);
+                    records[count].data[sizeof(records[count].data) - 1] = '\0';
+                    count++;
+                }
             }
 
             g_sortColIndex = colIdx;
@@ -196,15 +174,16 @@ void SelectAll(void)
                 PrintRecord(records[i].data);
         }
     } else {
-        db_rewind(db);
-        while ((str = db_nextrec(db, keyBuf)) != NULL)
-            PrintRecord(str);
+        TableScanCursor cursor;
+        if (tapi_scan_begin(&td, &cursor) == 0) {
+            while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0)
+                PrintRecord(recBuf);
+        }
     }
 
     TruncateSelect();
     g_orderByColumn[0] = '\0';
     g_orderByDesc = 0;
-    db_close(db);
 }
 
 int GetSelTableName(char *pname)
@@ -223,8 +202,6 @@ int GetSelection(char *pname)
 
 int SelectProcess(void)
 {
-    DBHANDLE db;
-    char *str = NULL;
     char *str2 = NULL;
     char tblName[1024];
 
@@ -234,28 +211,41 @@ int SelectProcess(void)
     if (dot)
         *dot = '\0';
 
-    /* In GUI mode, save table name for GridView and skip text output */
+    /* In GUI mode, save table name for GridView */
     if (g_gui_mode) {
-        strcpy(g_lastSelectTable, tblName);
+        char baseName[128];
+        tapi_basename(tblName, baseName, sizeof(baseName));
+        strcpy(g_lastSelectTable, baseName);
         TruncateSelect();
         return 0;
     }
 
     str2 = strtok(g_insert, ";");
 
-    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
-        err_sys("db_open error");
+    /* Resolve table */
+    TableDesc td;
+    if (tapi_resolve(tblName, &td, NULL, NULL) < 0) {
+        printf("Error: table not found\n");
+        TruncateSelect();
+        return -1;
+    }
 
-    if ((str = db_fetch(db, str2)) == NULL) {
-        printf("Record not found: %s\n", str2 ? str2 : "(null)");
+    /* Fetch record by PK */
+    BTree2 pk_tree = tapi_pk_tree(&td);
+    RowID rid;
+    if (str2 && bt2_search(&pk_tree, str2, &rid) == 0) {
+        char recBuf[RECORD_BUF_SIZE];
+        if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) > 0) {
+            PrintColumnHeaders(tblName);
+            PrintRecord(recBuf);
+        } else {
+            printf("Record not found: %s\n", str2);
+        }
     } else {
-        PrintColumnHeaders(tblName);
-        PrintRecord(str);
+        printf("Record not found: %s\n", str2 ? str2 : "(null)");
     }
 
     TruncateSelect();
-    db_close(db);
-
     return 0;
 }
 
@@ -277,7 +267,6 @@ void AddOrderByColumn(const char *name, int desc)
     g_orderByColumns[g_orderByCount][255] = '\0';
     g_orderByDescs[g_orderByCount] = desc;
     g_orderByCount++;
-    /* Also set legacy single-column globals for backward compat */
     if (g_orderByCount == 1) {
         strcpy(g_orderByColumn, name);
         g_orderByDesc = desc;

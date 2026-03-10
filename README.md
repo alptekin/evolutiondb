@@ -43,7 +43,18 @@ A file-based SQL database engine written in C. Features Flex/Bison SQL parsing, 
   |   SQL Parser   |       |  Database Engine  |
   |   Flex/Bison   |       |  APUE Hash Files  |
   |  (evoparser.y) |       | (.idx .dat .meta) |
-  +----------------+       +-------------------+
+  +----------------+       +---+---------------+
+                                |
+                    +-----------+-----------+
+                    | Unified Page Storage  |
+                    | (evosql.db — single   |
+                    |  global binary file)  |
+                    +-----------+-----------+
+                                |
+                    +-----------+-----------+
+                    |  Buffer Pool (4KB     |
+                    |  Clock Sweep cache)   |
+                    +-----------------------+
 ```
 
 The system consists of four main components:
@@ -92,7 +103,12 @@ EvoSQL/
 │       ├── Drop.c                  # DROP TABLE / TRUNCATE TABLE
 │       ├── crypto.c/h              # PBKDF2-SHA256 password hashing, random bytes
 │       ├── UserMgmt.c              # CREATE/DROP/ALTER USER, authentication
-│       └── GrantMgmt.c             # GRANT/REVOKE privileges, CheckPrivilege()
+│       ├── GrantMgmt.c             # GRANT/REVOKE privileges, CheckPrivilege()
+│       ├── buffer_pool.c/h         # Clock Sweep buffer pool (4KB page cache)
+│       ├── page_mgr.c/h            # Unified page-based storage manager
+│       ├── slotted.c/h             # Slotted page record manager
+│       ├── btree2.c/h              # Page-based B+ tree (replaces APUE hash index)
+│       └── catalog_internal.c/h    # System catalog (metadata in B+ trees)
 │
 ├── adaptor/                        # Dual-Protocol Server
 │   ├── main.c                      # Dual-port launcher (~90 lines)
@@ -123,6 +139,9 @@ EvoSQL/
 │   ├── test_user_management.py     # CREATE/DROP/ALTER USER, SHOW USERS, auth
 │   ├── test_grant_revoke.py        # GRANT/REVOKE, PUBLIC, WITH GRANT OPTION
 │   ├── test_random_password.py     # Random admin password generation
+│   ├── test_page_mgr.c             # Page Manager + Slotted Pages (C, 18 tests)
+│   ├── test_btree2.c               # B+ Tree (C, 13 tests)
+│   ├── test_catalog.c              # System Catalog (C, 30 tests)
 │   └── ...                         # 16 more test suites
 │
 └── PopPad/                         # Win32 GUI
@@ -279,6 +298,22 @@ SHOW GRANTS FOR alice;
 | DROP USER | Automatically removes all grants for that user |
 
 ## Storage Format
+
+### Unified Page-Based Storage (New)
+
+EvoSQL is transitioning to a single global binary file (`evosql.db`) with page-based storage, similar to Oracle/PostgreSQL/SQLite. The new storage stack:
+
+| Layer | Component | Description |
+|-------|-----------|-------------|
+| **Buffer Pool** | `buffer_pool.c/h` | Clock Sweep 4KB page cache (like PostgreSQL) |
+| **Page Manager** | `page_mgr.c/h` | Single-file management: alloc/free pages, free list, file header |
+| **Slotted Pages** | `slotted.c/h` | Variable-length record storage within pages |
+| **B+ Tree** | `btree2.c/h` | Page-based B+ tree index (~170 fan-out, 1M rows in 3 levels) |
+| **System Catalog** | `catalog_internal.c/h` | Metadata in B+ trees: databases, schemas, tables, columns, indexes, constraints, users, grants |
+
+All I/O goes through the buffer pool. Records are identified by RowID `{page_no, slot_idx}`. The B+ tree supports numeric-aware key comparison and doubly-linked leaf chains for range scans.
+
+### Legacy Storage (Current)
 
 Each table creates three files:
 
@@ -602,6 +637,9 @@ docker compose down -v    # stop and delete data
 14. **Crypto** (`crypto.c`) — PBKDF2-SHA256 password hashing with random salt generation
 15. **User management** (`UserMgmt.c`) — CREATE/DROP/ALTER USER, authentication, random password generation
 16. **Privilege system** (`GrantMgmt.c`) — GRANT/REVOKE, CheckPrivilege() with waterfall scope, PUBLIC support
+17. **Buffer pool** (`buffer_pool.c`) — Clock Sweep page cache (PostgreSQL algorithm), anti-pollution ring buffer for sequential scans
+18. **Unified storage** (`page_mgr.c`, `slotted.c`, `btree2.c`) — Single global binary file with 4KB pages, slotted pages for variable-length records, B+ tree for O(log n) key lookups
+19. **System catalog** (`catalog_internal.c`) — All metadata (databases, schemas, tables, columns, indexes, users, grants) stored in B+ trees within the unified file
 
 ## Testing
 

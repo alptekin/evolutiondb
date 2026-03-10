@@ -1,0 +1,243 @@
+/*
+ * table_api.c — Table Data Operations for EvoSQL Unified Storage
+ *
+ * Implements heap page management and PK B+ tree helpers
+ * that replace APUE db_open/db_store/db_fetch/db_close.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "table_api.h"
+#include "database.h"
+
+/* ----------------------------------------------------------------
+ *  Table resolution
+ * ---------------------------------------------------------------- */
+
+void tapi_basename(const char *path, char *out, int out_size)
+{
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    strncpy(out, base, out_size - 1);
+    out[out_size - 1] = '\0';
+    /* Strip .dat extension if present */
+    char *dot = strstr(out, ".dat");
+    if (dot) *dot = '\0';
+}
+
+int tapi_resolve(const char *name_or_path, TableDesc *td,
+                 ColumnDesc *cols, int *ncols)
+{
+    char name[CAT_MAX_NAME_LEN];
+    tapi_basename(name_or_path, name, sizeof(name));
+
+    if (cat_resolve_table(g_currentDatabase, g_currentSchema,
+                          name, td) < 0)
+        return -1;
+
+    if (cols && ncols) {
+        *ncols = cat_find_columns(td->table_id, cols, CAT_MAX_COLUMNS);
+        if (*ncols < 0) return -1;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ *  Heap page operations
+ * ---------------------------------------------------------------- */
+
+RowID tapi_heap_insert(TableDesc *td, const char *record, uint16_t rec_len)
+{
+    RowID bad = {0, 0};
+    char page_buf[EVO_PAGE_SIZE];
+
+    /* Try current heap page */
+    if (td->heap_page != 0) {
+        pgm_read_page(td->heap_page, page_buf);
+        int slot = slot_insert(page_buf, record, rec_len);
+        if (slot >= 0) {
+            pgm_write_page(td->heap_page, page_buf);
+            RowID rid = {td->heap_page, (uint16_t)slot};
+            return rid;
+        }
+    }
+
+    /* Current page full or no heap page yet — allocate new page */
+    uint32_t new_page = pgm_alloc_page(PAGE_DATA);
+    if (new_page == 0) return bad;
+
+    slot_page_init(page_buf, new_page);
+    int slot = slot_insert(page_buf, record, rec_len);
+    if (slot < 0) {
+        pgm_free_page(new_page);
+        return bad;
+    }
+
+    /* Chain: new page's next_page points to old heap_page */
+    PageHeader *hdr = (PageHeader *)page_buf;
+    hdr->next_page = td->heap_page;
+
+    pgm_write_page(new_page, page_buf);
+
+    /* Update table's heap_page to point to the new page */
+    td->heap_page = new_page;
+    cat_update_heap_page(td->table_id, td->table_name,
+                         td->schema_id, new_page);
+
+    RowID rid = {new_page, (uint16_t)slot};
+    return rid;
+}
+
+int tapi_heap_read(RowID rid, char *buf, int bufsize)
+{
+    if (rid.page_no == 0) return -1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    int len = slot_read(page_buf, rid.slot_idx, buf, (uint16_t)bufsize);
+    if (len > 0 && len < bufsize)
+        buf[len] = '\0';
+    return len;
+}
+
+int tapi_heap_delete(RowID rid)
+{
+    if (rid.page_no == 0) return -1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    int ret = slot_delete(page_buf, rid.slot_idx);
+    if (ret == 0)
+        pgm_write_page(rid.page_no, page_buf);
+    return ret;
+}
+
+RowID tapi_heap_update(TableDesc *td, RowID old_rid,
+                       const char *new_record, uint16_t rec_len)
+{
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(old_rid.page_no, page_buf);
+
+    /* Try in-place update */
+    if (slot_update(page_buf, old_rid.slot_idx, new_record, rec_len) == 0) {
+        pgm_write_page(old_rid.page_no, page_buf);
+        return old_rid;
+    }
+
+    /* Doesn't fit: delete old, insert new */
+    slot_delete(page_buf, old_rid.slot_idx);
+    pgm_write_page(old_rid.page_no, page_buf);
+
+    return tapi_heap_insert(td, new_record, rec_len);
+}
+
+/* ----------------------------------------------------------------
+ *  PK key building
+ * ---------------------------------------------------------------- */
+
+int tapi_build_pk_key_from_vals(const ColumnDesc *cols, int ncols,
+                                char **vals, int nvals,
+                                char *key_out, int key_size)
+{
+    key_out[0] = '\0';
+    int first = 1;
+
+    for (int i = 0; i < ncols && i < nvals; i++) {
+        if (cols[i].is_pk) {
+            if (!first) {
+                int len = (int)strlen(key_out);
+                if (len < key_size - 1) {
+                    key_out[len] = '|';
+                    key_out[len + 1] = '\0';
+                }
+            }
+            strncat(key_out, vals[i], key_size - (int)strlen(key_out) - 1);
+            first = 0;
+        }
+    }
+
+    /* If no PK column marked, use first column */
+    if (first && nvals > 0) {
+        strncpy(key_out, vals[0], key_size - 1);
+        key_out[key_size - 1] = '\0';
+    }
+
+    return key_out[0] != '\0' ? 0 : -1;
+}
+
+int tapi_build_pk_key(const ColumnDesc *cols, int ncols,
+                      const char *record,
+                      char *key_out, int key_size)
+{
+    char tmp[RECORD_BUF_SIZE];
+    strncpy(tmp, record, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    char *vals[64];
+    int nv = 0;
+    char *t = strtok(tmp, ";");
+    while (t && nv < 64) {
+        vals[nv++] = t;
+        t = strtok(NULL, ";");
+    }
+
+    return tapi_build_pk_key_from_vals(cols, ncols, vals, nv,
+                                       key_out, key_size);
+}
+
+int tapi_get_pk_indices(const ColumnDesc *cols, int ncols,
+                        int *indices, int max)
+{
+    int count = 0;
+    for (int i = 0; i < ncols && count < max; i++) {
+        if (cols[i].is_pk)
+            indices[count++] = i;
+    }
+    /* If no PK marked, default to column 0 */
+    if (count == 0 && ncols > 0 && max > 0) {
+        indices[0] = 0;
+        count = 1;
+    }
+    return count;
+}
+
+/* ----------------------------------------------------------------
+ *  Full table scan
+ * ---------------------------------------------------------------- */
+
+int tapi_scan_begin(const TableDesc *td, TableScanCursor *cursor)
+{
+    cursor->tree = tapi_pk_tree(td);
+    return bt2_cursor_first(&cursor->tree, &cursor->bt_cursor);
+}
+
+int tapi_scan_next(TableScanCursor *cursor,
+                   char *pk_key_out, char *record_out, int rec_out_size)
+{
+    RowID rid;
+    if (bt2_cursor_next(&cursor->bt_cursor, pk_key_out, &rid) < 0)
+        return -1;
+
+    if (tapi_heap_read(rid, record_out, rec_out_size) < 0)
+        return -1;
+
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ *  Free heap pages
+ * ---------------------------------------------------------------- */
+
+void tapi_free_heap_pages(const TableDesc *td)
+{
+    uint32_t page = td->heap_page;
+    char page_buf[EVO_PAGE_SIZE];
+
+    while (page != 0) {
+        pgm_read_page(page, page_buf);
+        PageHeader *hdr = (PageHeader *)page_buf;
+        uint32_t next = hdr->next_page;
+        pgm_free_page(page);
+        page = next;
+    }
+}

@@ -2,7 +2,14 @@
 #define DATABASE_H_
 
 #include <setjmp.h>
+#include <stdint.h>
 #include "evosql_errcodes.h"
+
+/* Forward declaration — full definition in slotted.h */
+#ifndef ROWID_DEFINED
+#define ROWID_DEFINED
+typedef struct { uint32_t page_no; uint16_t slot_idx; } RowID;
+#endif
 
 /* Minimum padded record size - ensures UPDATE can overwrite in-place */
 #define RECORD_PAD_SIZE 256
@@ -60,9 +67,6 @@ void SetDropIndexName(const char *idxName);
 void SetIndexUnique(void);
 void SetIndexIfNotExists(void);
 
-/* Clustered index (auto-created on PK) */
-int  CreateClusteredIndex(const char *tblPath, const char *pkColName);
-
 /* B-tree index API */
 int  btree_create(const char *path);
 int  btree_insert(const char *path, const char *key, const char *pk);
@@ -73,7 +77,7 @@ int  btree_range(const char *path, const char *lo, const char *hi,
                  char results[][256], int max_results);
 int  btree_drop(const char *path);
 
-/* Index metadata helpers */
+/* Index metadata helpers (catalog-backed) */
 int  index_exists(const char *tblPath, const char *colName,
                   char *idxPath, int idxPathSize);
 int  index_list_for_table(const char *tblPath, char names[][256],
@@ -81,6 +85,14 @@ int  index_list_for_table(const char *tblPath, char names[][256],
 int  index_list_with_types(const char *tblPath, char names[][256],
                            char cols[][256], char paths[][1024],
                            char types[], int max);
+
+/* Secondary index operations (page-based bt2) */
+int  sec_idx_search(uint32_t root_page, const char *indexed_val,
+                    char results[][256], int max_results);
+int  sec_idx_insert(uint32_t *root_page, const char *indexed_val,
+                    const char *pk, RowID heap_rid);
+int  sec_idx_delete(uint32_t *root_page, const char *indexed_val,
+                    const char *pk);
 
 /* Database root path management */
 void db_ensure_root(void);
@@ -100,8 +112,6 @@ char *ParseInsertion(char *arr);
 
 void SelectAll(void);
 
-int ReadPadSize(const char *tblName);
-void WritePadSize(const char *tblName, int padSize);
 int ReadColumnTypes(const char *tblName, int *types, int maxCols);
 int ValidateValue(const char *value, int typeEncoding);
 void SetColumnNotNull(void);
@@ -109,8 +119,6 @@ void SetColumnPrimaryKey(void);
 void SetColumnUnique(void);
 void SetColumnDefault(const char *value);
 void SetColumnAutoIncrement(int start, int step);
-int ReadAutoIncrement(const char *tblName, int *colIndex, int *counter, int *step);
-int WriteAutoIncrement(const char *tblName, int colIndex, int counter, int step);
 void AddPrimaryKeyColumn(const char *colName);
 int ReadPrimaryKeys(const char *tblName, int *indices, int maxCols);
 int ReadPrimaryKey(const char *tblName);

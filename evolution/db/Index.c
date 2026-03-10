@@ -1,618 +1,316 @@
 /*
- * Index.c — B-tree index for EvoSQL
+ * Index.c — Secondary index management for EvoSQL
  *
- * On-disk format (.evo file):
- *   Header (16 bytes): [root_offset:8][node_count:4][order:2][padding:2]
- *   Nodes (fixed-size): [is_leaf:1][key_count:2][padding:1]
- *                       [keys: ORDER-1 * KEY_SIZE]
- *                       [values: ORDER-1 * VAL_SIZE]   (leaf: PK values)
- *                       [children: ORDER * 8]           (internal: child offsets)
+ * Secondary indexes are stored as B+ trees in the unified storage file.
+ * Each secondary index is a bt2 tree where:
+ *   Key = "indexed_value\x1fPK_value" (composite for uniqueness)
+ *   RowID = heap row location (direct access, no PK lookup needed)
  *
- * Each key is a string (indexed column value).
- * Each value is a string (primary key of the row).
- * For simplicity, duplicate index keys are supported (multiple rows with same value).
+ * Index metadata is stored in the system catalog (CAT_SYS_INDEXES).
+ *
+ * The \x1F separator between indexed value and PK ensures:
+ *   - Unique keys (each row has unique PK)
+ *   - Prefix scan on "indexed_value\x1F" finds all matching rows
+ *   - Correct sort order (\x1F < any printable character)
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <dirent.h>
-#include "apue.h"
+#include <ctype.h>
 #include "database.h"
-#include "apue_db.h"
+#include "catalog_internal.h"
+#include "table_api.h"
 
-/* Read column names from .meta file (first line, semicolon-separated) */
-static int IndexReadColumnNames(const char *tableName,
-                                char colNames[][128], int maxCols)
+/* Separator between indexed value and PK in secondary index keys.
+ * Using \x1F (Unit Separator) — sorts before printable chars, won't appear in data */
+#define SEC_IDX_SEP '\x1f'
+
+/* ── Secondary index helper: build composite key ── */
+static void sec_idx_make_key(const char *indexed_val, const char *pk,
+                              char *out, int outSize)
 {
-    char metaFile[SAFE_PATH_MAX], line[2048];
+    snprintf(out, outSize, "%s%c%s", indexed_val, SEC_IDX_SEP, pk);
+}
+
+/* ── Secondary index search: prefix scan returning PK strings ── */
+int sec_idx_search(uint32_t root_page, const char *indexed_val,
+                   char results[][256], int max_results)
+{
+    BTree2 tree = { .root_page = root_page };
+    char prefix[BT2_MAX_KEY_LEN + 1];
+    snprintf(prefix, sizeof(prefix), "%s%c", indexed_val, SEC_IDX_SEP);
+    int prefix_len = (int)strlen(prefix);
+
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&tree, prefix, &cur) < 0)
+        return 0;
+
     int count = 0;
-    char *tok;
-
-    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
-    FILE *fp = fopen(metaFile, "r");
-    if (!fp) return 0;
-
-    if (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\n")] = '\0';
-        tok = strtok(line, ";");
-        while (tok && count < maxCols) {
-            strncpy(colNames[count], tok, 127);
-            colNames[count][127] = '\0';
-            count++;
-            tok = strtok(NULL, ";");
-        }
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max_results && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, prefix_len) != 0)
+            break;
+        /* Extract PK from key (after separator) */
+        const char *pk = key + prefix_len;
+        strncpy(results[count], pk, 255);
+        results[count][255] = '\0';
+        count++;
     }
-    fclose(fp);
     return count;
 }
 
-/* B-tree parameters */
-#define BTREE_ORDER    64
-#define KEY_SIZE       128
-#define VAL_SIZE       128
-#define MAX_KEYS       (BTREE_ORDER - 1)  /* 63 */
-
-/* Header: 16 bytes */
-typedef struct {
-    long   root_offset;    /* offset of root node (0 = empty tree) */
-    int    node_count;     /* total nodes allocated */
-    short  order;          /* tree order (BTREE_ORDER) */
-    short  padding;
-} BTreeHeader;
-
-/* Node: fixed size */
-typedef struct {
-    unsigned char is_leaf;
-    unsigned short key_count;
-    unsigned char  padding;
-    char  keys[MAX_KEYS][KEY_SIZE];
-    char  vals[MAX_KEYS][VAL_SIZE];    /* PK values (leaf only) */
-    long  children[BTREE_ORDER];       /* child offsets (internal only) */
-} BTreeNode;
-
-#define HEADER_SIZE  sizeof(BTreeHeader)
-#define NODE_SIZE    sizeof(BTreeNode)
-
-/* ── File I/O helpers ── */
-
-static int read_header(FILE *f, BTreeHeader *h)
+/* ── Secondary index search returning RowIDs directly ── */
+int sec_idx_search_rids(uint32_t root_page, const char *indexed_val,
+                        RowID *rids, int max_results)
 {
-    fseek(f, 0, SEEK_SET);
-    return fread(h, HEADER_SIZE, 1, f) == 1 ? 0 : -1;
-}
+    BTree2 tree = { .root_page = root_page };
+    char prefix[BT2_MAX_KEY_LEN + 1];
+    snprintf(prefix, sizeof(prefix), "%s%c", indexed_val, SEC_IDX_SEP);
+    int prefix_len = (int)strlen(prefix);
 
-static int write_header(FILE *f, const BTreeHeader *h)
-{
-    fseek(f, 0, SEEK_SET);
-    return fwrite(h, HEADER_SIZE, 1, f) == 1 ? 0 : -1;
-}
-
-static int read_node(FILE *f, long offset, BTreeNode *n)
-{
-    fseek(f, offset, SEEK_SET);
-    return fread(n, NODE_SIZE, 1, f) == 1 ? 0 : -1;
-}
-
-static int write_node(FILE *f, long offset, const BTreeNode *n)
-{
-    fseek(f, offset, SEEK_SET);
-    return fwrite(n, NODE_SIZE, 1, f) == 1 ? 0 : -1;
-}
-
-static long alloc_node(FILE *f, BTreeHeader *h)
-{
-    long offset = HEADER_SIZE + (long)h->node_count * NODE_SIZE;
-    h->node_count++;
-    write_header(f, h);
-    return offset;
-}
-
-/* String comparison for keys (numeric-aware) */
-static int key_cmp(const char *a, const char *b)
-{
-    /* Try numeric comparison first */
-    char *ea, *eb;
-    double da = strtod(a, &ea);
-    double db = strtod(b, &eb);
-    if (*ea == '\0' && *eb == '\0' && ea != a && eb != b) {
-        if (da < db) return -1;
-        if (da > db) return 1;
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&tree, prefix, &cur) < 0)
         return 0;
+
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max_results && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, prefix_len) != 0)
+            break;
+        rids[count] = rid;
+        count++;
     }
-    return strcmp(a, b);
+    return count;
 }
 
-/* ── B-tree create ── */
-
-int btree_create(const char *path)
+/* ── Secondary index insert ── */
+int sec_idx_insert(uint32_t *root_page, const char *indexed_val,
+                   const char *pk, RowID heap_rid)
 {
-    FILE *f = fopen(path, "wb");
-    if (!f) return -1;
+    BTree2 tree = { .root_page = *root_page };
+    char key[BT2_MAX_KEY_LEN + 1];
+    sec_idx_make_key(indexed_val, pk, key, sizeof(key));
+    int rc = bt2_insert(&tree, key, heap_rid);
+    *root_page = tree.root_page;
+    return rc;
+}
 
-    BTreeHeader h = {0};
-    h.order = BTREE_ORDER;
-    write_header(f, &h);
-    fclose(f);
+/* ── Secondary index delete ── */
+int sec_idx_delete(uint32_t *root_page, const char *indexed_val,
+                   const char *pk)
+{
+    BTree2 tree = { .root_page = *root_page };
+    char key[BT2_MAX_KEY_LEN + 1];
+    sec_idx_make_key(indexed_val, pk, key, sizeof(key));
+    int rc = bt2_delete(&tree, key);
+    *root_page = tree.root_page;
+    return rc;
+}
+
+/* ── Load indexes for a table from catalog ──
+ * Returns count of secondary indexes found.
+ * Fills IndexDesc array for the caller. */
+int idx_load_for_table(const char *tableName, IndexDesc *out, int max)
+{
+    TableDesc td;
+    if (tapi_resolve(tableName, &td, NULL, NULL) < 0)
+        return 0;
+    return cat_list_indexes(td.table_id, out, max);
+}
+
+/* ── Check if an index exists on a given column ──
+ * Returns 1 if found (fills root_page_out), 0 otherwise. */
+int idx_exists_on_col(const char *tableName, const char *colName,
+                      uint32_t *root_page_out)
+{
+    IndexDesc indexes[16];
+    int n = idx_load_for_table(tableName, indexes, 16);
+    for (int i = 0; i < n; i++) {
+        if (indexes[i].index_type == 'P') continue; /* skip PK */
+        if (strcasecmp(indexes[i].col_list, colName) == 0) {
+            if (root_page_out)
+                *root_page_out = indexes[i].root_page;
+            return 1;
+        }
+    }
     return 0;
 }
 
-/* ── B-tree insert ── */
-
-/* Split child node at index `idx` of parent */
-static void split_child(FILE *f, BTreeHeader *h,
-                         BTreeNode *parent, int idx,
-                         BTreeNode *child, long child_off)
+/* ── Legacy wrapper: index_exists ──
+ * idxPath format: "table_id:index_name:root_page" */
+int index_exists(const char *tblPath, const char *colName,
+                 char *idxPath, int idxPathSize)
 {
-    int mid = MAX_KEYS / 2;  /* 31 */
-    BTreeNode new_node;
-    memset(&new_node, 0, sizeof(new_node));
-    new_node.is_leaf = child->is_leaf;
-    new_node.key_count = child->key_count - mid - 1;
-
-    /* Copy upper half of keys/vals to new node */
-    int j;
-    for (j = 0; j < new_node.key_count; j++) {
-        strncpy(new_node.keys[j], child->keys[mid + 1 + j], KEY_SIZE - 1);
-        strncpy(new_node.vals[j], child->vals[mid + 1 + j], VAL_SIZE - 1);
-    }
-    if (!child->is_leaf) {
-        for (j = 0; j <= new_node.key_count; j++)
-            new_node.children[j] = child->children[mid + 1 + j];
-    }
-
-    child->key_count = mid;
-
-    long new_off = alloc_node(f, h);
-
-    /* Shift parent's children and keys to make room */
-    for (j = parent->key_count; j > idx; j--) {
-        strncpy(parent->keys[j], parent->keys[j - 1], KEY_SIZE);
-        strncpy(parent->vals[j], parent->vals[j - 1], VAL_SIZE);
-        parent->children[j + 1] = parent->children[j];
-    }
-
-    /* Promote middle key to parent */
-    strncpy(parent->keys[idx], child->keys[mid], KEY_SIZE);
-    strncpy(parent->vals[idx], child->vals[mid], VAL_SIZE);
-    parent->children[idx + 1] = new_off;
-    parent->key_count++;
-
-    write_node(f, child_off, child);
-    write_node(f, new_off, &new_node);
-}
-
-/* Insert into a non-full node */
-static void insert_nonfull(FILE *f, BTreeHeader *h,
-                            BTreeNode *node, long node_off,
-                            const char *key, const char *pk)
-{
-    int i = node->key_count - 1;
-
-    if (node->is_leaf) {
-        /* Shift keys right to make room */
-        while (i >= 0 && key_cmp(key, node->keys[i]) < 0) {
-            strncpy(node->keys[i + 1], node->keys[i], KEY_SIZE);
-            strncpy(node->vals[i + 1], node->vals[i], VAL_SIZE);
-            i--;
+    IndexDesc indexes[16];
+    int n = idx_load_for_table(tblPath, indexes, 16);
+    for (int i = 0; i < n; i++) {
+        if (indexes[i].index_type == 'P') continue;
+        if (strcasecmp(indexes[i].col_list, colName) == 0) {
+            if (idxPath)
+                snprintf(idxPath, idxPathSize, "%u:%s:%u",
+                         indexes[i].table_id, indexes[i].index_name,
+                         indexes[i].root_page);
+            return 1;
         }
-        strncpy(node->keys[i + 1], key, KEY_SIZE - 1);
-        node->keys[i + 1][KEY_SIZE - 1] = '\0';
-        strncpy(node->vals[i + 1], pk, VAL_SIZE - 1);
-        node->vals[i + 1][VAL_SIZE - 1] = '\0';
-        node->key_count++;
-        write_node(f, node_off, node);
-    } else {
-        /* Find child to descend into */
-        while (i >= 0 && key_cmp(key, node->keys[i]) < 0)
-            i--;
-        i++;
-
-        BTreeNode child;
-        long child_off = node->children[i];
-        read_node(f, child_off, &child);
-
-        if (child.key_count == MAX_KEYS) {
-            split_child(f, h, node, i, &child, child_off);
-            write_node(f, node_off, node);
-            if (key_cmp(key, node->keys[i]) > 0) {
-                i++;
-                child_off = node->children[i];
-                read_node(f, child_off, &child);
-            }
-        }
-        insert_nonfull(f, h, &child, child_off, key, pk);
     }
-}
-
-int btree_insert(const char *path, const char *key, const char *pk)
-{
-    FILE *f = fopen(path, "r+b");
-    if (!f) return -1;
-
-    BTreeHeader h;
-    if (read_header(f, &h) < 0) { fclose(f); return -1; }
-
-    if (h.root_offset == 0) {
-        /* Empty tree — create root leaf */
-        BTreeNode root;
-        memset(&root, 0, sizeof(root));
-        root.is_leaf = 1;
-        root.key_count = 1;
-        strncpy(root.keys[0], key, KEY_SIZE - 1);
-        strncpy(root.vals[0], pk, VAL_SIZE - 1);
-
-        long root_off = alloc_node(f, &h);
-        h.root_offset = root_off;
-        write_header(f, &h);
-        write_node(f, root_off, &root);
-        fclose(f);
-        return 0;
-    }
-
-    BTreeNode root;
-    read_node(f, h.root_offset, &root);
-
-    if (root.key_count == MAX_KEYS) {
-        /* Root is full — split it */
-        BTreeNode new_root;
-        memset(&new_root, 0, sizeof(new_root));
-        new_root.is_leaf = 0;
-        new_root.key_count = 0;
-        new_root.children[0] = h.root_offset;
-
-        long new_root_off = alloc_node(f, &h);
-        split_child(f, &h, &new_root, 0, &root, h.root_offset);
-        h.root_offset = new_root_off;
-        write_header(f, &h);
-        write_node(f, new_root_off, &new_root);
-
-        insert_nonfull(f, &h, &new_root, new_root_off, key, pk);
-    } else {
-        insert_nonfull(f, &h, &root, h.root_offset, key, pk);
-    }
-
-    fclose(f);
     return 0;
 }
 
-/* ── B-tree search (exact match) ── */
+/* ── Legacy wrapper: index_list_for_table ── */
+/* paths[] format: "table_id:index_name:root_page" — parsed by btree_* wrappers */
+int index_list_for_table(const char *tblPath, char names[][256],
+                         char cols[][256], char paths[][1024], int max)
+{
+    IndexDesc indexes[16];
+    int n = idx_load_for_table(tblPath, indexes, max < 16 ? max : 16);
+    int count = 0;
+    for (int i = 0; i < n; i++) {
+        if (indexes[i].index_type == 'P') continue; /* skip PK index */
+        strncpy(names[count], indexes[i].index_name, 255);
+        names[count][255] = '\0';
+        strncpy(cols[count], indexes[i].col_list, 255);
+        cols[count][255] = '\0';
+        snprintf(paths[count], 1023, "%u:%s:%u",
+                 indexes[i].table_id, indexes[i].index_name,
+                 indexes[i].root_page);
+        count++;
+    }
+    return count;
+}
+
+/* ── Legacy wrapper: index_list_with_types ── */
+/* paths[] format: "table_id:index_name:root_page" — parsed by btree_* wrappers */
+int index_list_with_types(const char *tblPath, char names[][256],
+                          char cols[][256], char paths[][1024],
+                          char types[], int max)
+{
+    IndexDesc indexes[16];
+    int n = idx_load_for_table(tblPath, indexes, max < 16 ? max : 16);
+    int count = 0;
+    for (int i = 0; i < n; i++) {
+        if (indexes[i].index_type == 'P') continue; /* skip PK index */
+        strncpy(names[count], indexes[i].index_name, 255);
+        names[count][255] = '\0';
+        strncpy(cols[count], indexes[i].col_list, 255);
+        cols[count][255] = '\0';
+        snprintf(paths[count], 1023, "%u:%s:%u",
+                 indexes[i].table_id, indexes[i].index_name,
+                 indexes[i].root_page);
+        types[count] = indexes[i].index_type;
+        count++;
+    }
+    return count;
+}
+
+/* ── Parse "table_id:index_name:root_page" from legacy path string ── */
+static void parse_idx_path(const char *path,
+                           uint32_t *table_id, char *idx_name, int name_size,
+                           uint32_t *root_page)
+{
+    /* Format: "table_id:index_name:root_page" */
+    char buf[1024];
+    strncpy(buf, path, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char *p1 = strchr(buf, ':');
+    if (!p1) {
+        /* Fallback: just a root_page number */
+        *table_id = 0;
+        idx_name[0] = '\0';
+        *root_page = (uint32_t)strtoul(path, NULL, 10);
+        return;
+    }
+    *p1 = '\0';
+    *table_id = (uint32_t)strtoul(buf, NULL, 10);
+
+    char *p2 = strchr(p1 + 1, ':');
+    if (!p2) {
+        idx_name[0] = '\0';
+        *root_page = (uint32_t)strtoul(p1 + 1, NULL, 10);
+        return;
+    }
+    *p2 = '\0';
+    strncpy(idx_name, p1 + 1, name_size - 1);
+    idx_name[name_size - 1] = '\0';
+    *root_page = (uint32_t)strtoul(p2 + 1, NULL, 10);
+}
+
+/* ── Legacy wrappers for old btree_* functions ──
+ * The "path" argument is "table_id:index_name:root_page". */
 
 int btree_search(const char *path, const char *key,
                  char results[][256], int max_results)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-
-    BTreeHeader h;
-    if (read_header(f, &h) < 0 || h.root_offset == 0) {
-        fclose(f);
-        return 0;
-    }
-
-    int count = 0;
-    BTreeNode node;
-    long offset = h.root_offset;
-
-    while (offset != 0) {
-        if (read_node(f, offset, &node) < 0) break;
-
-        int i;
-        for (i = 0; i < node.key_count; i++) {
-            int c = key_cmp(key, node.keys[i]);
-            if (c == 0) {
-                /* Found a match — collect the PK */
-                if (count < max_results) {
-                    strncpy(results[count], node.vals[i], 255);
-                    results[count][255] = '\0';
-                    count++;
-                }
-                /* Continue scanning for duplicates in leaf */
-                if (node.is_leaf) {
-                    /* Check remaining keys in this leaf */
-                    int j;
-                    for (j = i + 1; j < node.key_count && count < max_results; j++) {
-                        if (key_cmp(key, node.keys[j]) == 0) {
-                            strncpy(results[count], node.vals[j], 255);
-                            results[count][255] = '\0';
-                            count++;
-                        } else break;
-                    }
-                }
-                fclose(f);
-                return count;
-            } else if (c < 0) {
-                break;
-            }
-        }
-
-        if (node.is_leaf) break;
-        offset = node.children[i];
-    }
-
-    fclose(f);
-    return count;
+    uint32_t table_id, root_page;
+    char idx_name[256];
+    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page);
+    return sec_idx_search(root_page, key, results, max_results);
 }
 
-/* ── B-tree range scan ── */
-
-static void range_scan_node(FILE *f, long offset,
-                            const char *lo, const char *hi,
-                            int lo_inc, int hi_inc,
-                            char results[][256], int max, int *count)
+int btree_insert(const char *path, const char *key, const char *pk)
 {
-    if (offset == 0 || *count >= max) return;
+    uint32_t table_id, root_page;
+    char idx_name[256];
+    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page);
 
-    BTreeNode node;
-    if (read_node(f, offset, &node) < 0) return;
+    /* Use non-zero sentinel — {0,0} is the "deleted" marker in bt2 */
+    RowID marker = { .page_no = 1, .slot_idx = 0 };
+    BTree2 tree = { .root_page = root_page };
+    char composite_key[BT2_MAX_KEY_LEN + 1];
+    sec_idx_make_key(key, pk, composite_key, sizeof(composite_key));
+    int rc = bt2_insert(&tree, composite_key, marker);
 
-    int i;
-    for (i = 0; i < node.key_count && *count < max; i++) {
-        if (!node.is_leaf)
-            range_scan_node(f, node.children[i], lo, hi, lo_inc, hi_inc,
-                            results, max, count);
-
-        int clo = lo ? key_cmp(node.keys[i], lo) : 1;
-        int chi = hi ? key_cmp(node.keys[i], hi) : -1;
-
-        int in_lo = lo ? (lo_inc ? clo >= 0 : clo > 0) : 1;
-        int in_hi = hi ? (hi_inc ? chi <= 0 : chi < 0) : 1;
-
-        if (in_lo && in_hi && *count < max) {
-            strncpy(results[*count], node.vals[i], 255);
-            results[*count][255] = '\0';
-            (*count)++;
-        }
-
-        /* If past upper bound, stop */
-        if (hi && (hi_inc ? chi > 0 : chi >= 0))
-            return;
+    /* Update catalog if root_page changed (due to B+ tree split) */
+    if (tree.root_page != root_page && table_id != 0 && idx_name[0]) {
+        cat_update_index_root(table_id, idx_name, tree.root_page);
     }
+    return rc;
+}
 
-    /* Visit last child */
-    if (!node.is_leaf && *count < max)
-        range_scan_node(f, node.children[i], lo, hi, lo_inc, hi_inc,
-                        results, max, count);
+int btree_delete(const char *path, const char *key, const char *pk)
+{
+    uint32_t table_id, root_page;
+    char idx_name[256];
+    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page);
+
+    BTree2 tree = { .root_page = root_page };
+    char composite_key[BT2_MAX_KEY_LEN + 1];
+    sec_idx_make_key(key, pk, composite_key, sizeof(composite_key));
+    int rc = bt2_delete(&tree, composite_key);
+
+    /* Update catalog if root_page changed */
+    if (tree.root_page != root_page && table_id != 0 && idx_name[0]) {
+        cat_update_index_root(table_id, idx_name, tree.root_page);
+    }
+    return rc == 0 ? 1 : 0;
+}
+
+int btree_create(const char *path)
+{
+    (void)path;
+    return 0;
+}
+
+int btree_drop(const char *path)
+{
+    (void)path;
+    return 0;
 }
 
 int btree_range(const char *path, const char *lo, const char *hi,
                 int lo_inclusive, int hi_inclusive,
                 char results[][256], int max_results)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-
-    BTreeHeader h;
-    if (read_header(f, &h) < 0 || h.root_offset == 0) {
-        fclose(f);
-        return 0;
-    }
-
-    int count = 0;
-    range_scan_node(f, h.root_offset, lo, hi, lo_inclusive, hi_inclusive,
-                    results, max_results, &count);
-    fclose(f);
-    return count;
-}
-
-/* ── B-tree delete ── */
-
-/* Simple lazy delete: find and remove the key+pk pair from the leaf.
- * For a production DB we'd do proper B-tree deletion with rebalancing,
- * but lazy delete (mark & skip) suffices for correctness. */
-static int delete_from_node(FILE *f, long offset,
-                            const char *key, const char *pk)
-{
-    if (offset == 0) return 0;
-
-    BTreeNode node;
-    if (read_node(f, offset, &node) < 0) return 0;
-
-    int i;
-    for (i = 0; i < node.key_count; i++) {
-        int c = key_cmp(key, node.keys[i]);
-        if (c == 0) {
-            if (node.is_leaf) {
-                /* Check if pk matches (for duplicate keys) */
-                if (pk == NULL || strcmp(node.vals[i], pk) == 0) {
-                    /* Remove by shifting left */
-                    int j;
-                    for (j = i; j < node.key_count - 1; j++) {
-                        strncpy(node.keys[j], node.keys[j + 1], KEY_SIZE);
-                        strncpy(node.vals[j], node.vals[j + 1], VAL_SIZE);
-                    }
-                    node.key_count--;
-                    memset(node.keys[node.key_count], 0, KEY_SIZE);
-                    memset(node.vals[node.key_count], 0, VAL_SIZE);
-                    write_node(f, offset, &node);
-                    return 1;
-                }
-                /* Check next entries with same key */
-                int j;
-                for (j = i + 1; j < node.key_count; j++) {
-                    if (key_cmp(key, node.keys[j]) != 0) break;
-                    if (pk == NULL || strcmp(node.vals[j], pk) == 0) {
-                        /* Remove this one */
-                        int k;
-                        for (k = j; k < node.key_count - 1; k++) {
-                            strncpy(node.keys[k], node.keys[k + 1], KEY_SIZE);
-                            strncpy(node.vals[k], node.vals[k + 1], VAL_SIZE);
-                        }
-                        node.key_count--;
-                        memset(node.keys[node.key_count], 0, KEY_SIZE);
-                        memset(node.vals[node.key_count], 0, VAL_SIZE);
-                        write_node(f, offset, &node);
-                        return 1;
-                    }
-                }
-                return 0;
-            }
-            /* Internal node: descend into right child */
-            if (delete_from_node(f, node.children[i + 1], key, pk))
-                return 1;
-            /* Also try left child */
-            return delete_from_node(f, node.children[i], key, pk);
-        } else if (c < 0) {
-            if (node.is_leaf) return 0;
-            return delete_from_node(f, node.children[i], key, pk);
-        }
-    }
-
-    if (node.is_leaf) return 0;
-    return delete_from_node(f, node.children[i], key, pk);
-}
-
-int btree_delete(const char *path, const char *key, const char *pk)
-{
-    FILE *f = fopen(path, "r+b");
-    if (!f) return 0;
-
-    BTreeHeader h;
-    if (read_header(f, &h) < 0 || h.root_offset == 0) {
-        fclose(f);
-        return 0;
-    }
-
-    int result = delete_from_node(f, h.root_offset, key, pk);
-    fclose(f);
-    return result;
-}
-
-/* ── B-tree drop (delete file) ── */
-
-int btree_drop(const char *path)
-{
-    return remove(path);
-}
-
-/* ── Index metadata (.indexes file) ── */
-/* Format: one line per index: "index_name:column_name:btree_path:type"
- * type: C = clustered (auto PK), N = nonclustered (user-created) */
-
-static void get_indexes_path(const char *tblBasePath, char *out, int outSize)
-{
-    snprintf(out, outSize, "%s.indexes", tblBasePath);
-}
-
-int index_exists(const char *tblPath, const char *colName,
-                 char *idxPath, int idxPathSize)
-{
-    char indexesFile[1024];
-    get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
-
-    FILE *f = fopen(indexesFile, "r");
-    if (!f) return 0;
-
-    char line[2048];
-    while (fgets(line, sizeof(line), f)) {
-        /* Strip newline */
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
-            line[--len] = '\0';
-
-        /* Parse "name:column:path[:type]" */
-        char *col = strchr(line, ':');
-        if (!col) continue;
-        col++;
-        char *path = strchr(col, ':');
-        if (!path) continue;
-        *path = '\0';
-        path++;
-        /* Strip optional :type suffix from path */
-        char *typeF = strchr(path, ':');
-        if (typeF) *typeF = '\0';
-
-        if (strcasecmp(col, colName) == 0) {
-            if (idxPath)
-                strncpy(idxPath, path, idxPathSize - 1);
-            fclose(f);
-            return 1;
-        }
-    }
-    fclose(f);
+    (void)path; (void)lo; (void)hi;
+    (void)lo_inclusive; (void)hi_inclusive;
+    (void)results; (void)max_results;
     return 0;
 }
 
-int index_list_for_table(const char *tblPath, char names[][256],
-                         char cols[][256], char paths[][1024], int max)
-{
-    char indexesFile[1024];
-    get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
-
-    FILE *f = fopen(indexesFile, "r");
-    if (!f) return 0;
-
-    int count = 0;
-    char line[2048];
-    while (fgets(line, sizeof(line), f) && count < max) {
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
-            line[--len] = '\0';
-
-        char *col = strchr(line, ':');
-        if (!col) continue;
-        *col = '\0';
-        col++;
-        char *path = strchr(col, ':');
-        if (!path) continue;
-        *path = '\0';
-        path++;
-        /* Strip optional :type suffix from path */
-        char *typeF = strchr(path, ':');
-        if (typeF) *typeF = '\0';
-
-        strncpy(names[count], line, 255);
-        strncpy(cols[count], col, 255);
-        strncpy(paths[count], path, 1023);
-        count++;
-    }
-    fclose(f);
-    return count;
-}
-
-int index_list_with_types(const char *tblPath, char names[][256],
-                          char cols[][256], char paths[][1024],
-                          char types[], int max)
-{
-    char indexesFile[1024];
-    get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
-
-    FILE *f = fopen(indexesFile, "r");
-    if (!f) return 0;
-
-    int count = 0;
-    char line[2048];
-    while (fgets(line, sizeof(line), f) && count < max) {
-        int len = (int)strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
-            line[--len] = '\0';
-
-        char *col = strchr(line, ':');
-        if (!col) continue;
-        *col = '\0';
-        col++;
-        char *path = strchr(col, ':');
-        if (!path) continue;
-        *path = '\0';
-        path++;
-        char *typeF = strchr(path, ':');
-        char idxType = 'N';
-        if (typeF) { idxType = typeF[1]; *typeF = '\0'; }
-
-        strncpy(names[count], line, 255);
-        strncpy(cols[count], col, 255);
-        strncpy(paths[count], path, 1023);
-        types[count] = idxType;
-        count++;
-    }
-    fclose(f);
-    return count;
-}
-
-/* ── CREATE INDEX / DROP INDEX process functions ── */
+/* ── Setter functions (parser interface — unchanged) ── */
 
 void SetIndexInfo(const char *idxName, const char *tblName, const char *colName)
 {
@@ -620,7 +318,6 @@ void SetIndexInfo(const char *idxName, const char *tblName, const char *colName)
     g_indexName[sizeof(g_indexName) - 1] = '\0';
     strncpy(g_indexTableName, tblName, sizeof(g_indexTableName) - 1);
     g_indexTableName[sizeof(g_indexTableName) - 1] = '\0';
-    /* colName is empty when using index_col_list (columns set via SetIndexAddColumn) */
     if (colName[0] != '\0') {
         strncpy(g_indexColumnName, colName, sizeof(g_indexColumnName) - 1);
         g_indexColumnName[sizeof(g_indexColumnName) - 1] = '\0';
@@ -629,7 +326,6 @@ void SetIndexInfo(const char *idxName, const char *tblName, const char *colName)
 
 void SetIndexAddColumn(const char *colName)
 {
-    /* Append column to comma-separated list */
     if (g_indexColumnName[0] != '\0')
         strcat(g_indexColumnName, ",");
     strncat(g_indexColumnName, colName, sizeof(g_indexColumnName) - strlen(g_indexColumnName) - 1);
@@ -651,40 +347,7 @@ void SetDropIndexName(const char *idxName)
     g_indexName[sizeof(g_indexName) - 1] = '\0';
 }
 
-/* Build composite B-tree key from multiple column values.
- * cols = "col1,col2", vals[i] = field values, colNames[i] = column names.
- * Output: "val1|val2" in keyBuf. Returns 1 if all columns found. */
-static int build_composite_key(const char *colSpec,
-                                const char colNames[][128], int numCols,
-                                const char **vals, int numVals,
-                                char *keyBuf, int keyBufSize)
-{
-    char tmp[256];
-    strncpy(tmp, colSpec, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
-
-    keyBuf[0] = '\0';
-    char *tok = strtok(tmp, ",");
-    int first = 1;
-    while (tok) {
-        /* Find column index */
-        int ci, found = 0;
-        for (ci = 0; ci < numCols; ci++) {
-            if (strcasecmp(colNames[ci], tok) == 0 && ci < numVals) {
-                if (!first) strncat(keyBuf, "|", keyBufSize - strlen(keyBuf) - 1);
-                strncat(keyBuf, vals[ci], keyBufSize - strlen(keyBuf) - 1);
-                found = 1;
-                first = 0;
-                break;
-            }
-        }
-        if (!found) return 0;
-        tok = strtok(NULL, ",");
-    }
-    return keyBuf[0] != '\0';
-}
-
-/* Same as above but reads values from semicolon-separated record string */
+/* ── Build composite index key from multiple column values ── */
 static int build_composite_key_from_record(const char *colSpec,
                                             const char colNames[][128], int numCols,
                                             const char *record,
@@ -699,45 +362,58 @@ static int build_composite_key_from_record(const char *colSpec,
     char *t = strtok(recTmp, ";");
     while (t && nv < 64) { vals[nv++] = t; t = strtok(NULL, ";"); }
 
-    return build_composite_key(colSpec, colNames, numCols, vals, nv, keyBuf, keyBufSize);
+    char tmp[256];
+    strncpy(tmp, colSpec, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    keyBuf[0] = '\0';
+    char *tok = strtok(tmp, ",");
+    int first = 1;
+    while (tok) {
+        int ci, found = 0;
+        for (ci = 0; ci < numCols; ci++) {
+            if (strcasecmp(colNames[ci], tok) == 0 && ci < nv) {
+                if (!first) strncat(keyBuf, "|", keyBufSize - strlen(keyBuf) - 1);
+                strncat(keyBuf, vals[ci], keyBufSize - strlen(keyBuf) - 1);
+                found = 1;
+                first = 0;
+                break;
+            }
+        }
+        if (!found) return 0;
+        tok = strtok(NULL, ",");
+    }
+    return keyBuf[0] != '\0';
 }
 
+/* ── CREATE INDEX ── */
 int CreateIndexProcess(void)
 {
     char tblPath[1024];
-    char btreePath[1024];
-    char indexesFile[1024];
-    char metaPath[1024];
-
-    /* Resolve table path */
     db_table_path(g_indexTableName, tblPath, sizeof(tblPath));
 
-    /* Verify table exists by checking .meta */
-    db_meta_path(g_indexTableName, metaPath, sizeof(metaPath));
-    {
-        FILE *f = fopen(metaPath, "r");
-        if (!f) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "table '%s' does not exist", g_indexTableName);
-            g_gui_error = 1;
-            g_indexUnique = 0; g_indexIfNotExists = 0;
-            return -1;
-        }
-        fclose(f);
+    /* Resolve table via catalog */
+    TableDesc td;
+    ColumnDesc indexCols[CAT_MAX_COLUMNS];
+    int indexNCols;
+    if (tapi_resolve(tblPath, &td, indexCols, &indexNCols) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "table '%s' does not exist", g_indexTableName);
+        g_gui_error = 1;
+        g_indexUnique = 0; g_indexIfNotExists = 0;
+        return -1;
     }
 
-    /* Verify all columns exist (supports composite: "col1,col2") */
+    /* Verify all columns exist */
     {
-        char colNames[64][128];
-        int numCols = IndexReadColumnNames(tblPath, colNames, 64);
         char colCheck[256];
         strncpy(colCheck, g_indexColumnName, sizeof(colCheck) - 1);
         colCheck[sizeof(colCheck) - 1] = '\0';
         char *ct = strtok(colCheck, ",");
         while (ct) {
             int found = 0, i;
-            for (i = 0; i < numCols; i++) {
-                if (strcasecmp(colNames[i], ct) == 0) { found = 1; break; }
+            for (i = 0; i < indexNCols; i++) {
+                if (strcasecmp(indexCols[i].col_name, ct) == 0) { found = 1; break; }
             }
             if (!found) {
                 snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -751,70 +427,71 @@ int CreateIndexProcess(void)
         }
     }
 
-    /* Build btree file path: same directory as table, named <index>.evo */
-    {
-        char dir[1024];
-        strncpy(dir, tblPath, sizeof(dir) - 1);
-        char *slash = strrchr(dir, '/');
-        if (slash) *(slash + 1) = '\0';
-        else strcpy(dir, "./");
-        snprintf(btreePath, sizeof(btreePath), "%s%s.evo", dir, g_indexName);
-    }
-
     /* Check if index already exists on these columns */
-    if (index_exists(tblPath, g_indexColumnName, NULL, 0)) {
-        if (g_indexIfNotExists) {
-            /* Silently succeed */
-            g_indexUnique = 0; g_indexIfNotExists = 0;
-            return 0;
-        }
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "index already exists on column '%s'", g_indexColumnName);
-        g_gui_error = 1;
-        g_indexUnique = 0; g_indexIfNotExists = 0;
-        return -1;
-    }
-
-    /* Create .evo file */
-    if (btree_create(btreePath) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "failed to create index file");
-        g_gui_error = 1;
-        g_indexUnique = 0; g_indexIfNotExists = 0;
-        return -1;
-    }
-
-    /* Populate index from existing data */
     {
-        DBHANDLE db = db_open(tblPath, O_RDONLY, FILE_MODE);
-        if (db) {
-            char colNames[64][128];
-            int numCols = IndexReadColumnNames(tblPath, colNames, 64);
-            int isComposite = (strchr(g_indexColumnName, ',') != NULL);
+        IndexDesc existing[16];
+        int n = cat_list_indexes(td.table_id, existing, 16);
+        for (int i = 0; i < n; i++) {
+            if (strcasecmp(existing[i].col_list, g_indexColumnName) == 0 &&
+                existing[i].index_type != 'P') {
+                if (g_indexIfNotExists) {
+                    g_indexUnique = 0; g_indexIfNotExists = 0;
+                    return 0;
+                }
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "index already exists on column '%s'", g_indexColumnName);
+                g_gui_error = 1;
+                g_indexUnique = 0; g_indexIfNotExists = 0;
+                return -1;
+            }
+        }
+    }
 
-            char keyBuf[1024];
-            char *rec;
-            db_rewind(db);
-            while ((rec = db_nextrec(db, keyBuf)) != NULL) {
+    /* Create B+ tree for secondary index */
+    BTree2 idx_tree;
+    if (bt2_create(&idx_tree) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "failed to create index B+ tree");
+        g_gui_error = 1;
+        g_indexUnique = 0; g_indexIfNotExists = 0;
+        return -1;
+    }
+
+    /* Populate index from existing rows */
+    {
+        char colNames[64][128];
+        int numCols = 0;
+        for (int ci = 0; ci < indexNCols && ci < 64; ci++) {
+            strncpy(colNames[ci], indexCols[ci].col_name, 127);
+            colNames[ci][127] = '\0';
+            numCols++;
+        }
+        int isComposite = (strchr(g_indexColumnName, ',') != NULL);
+
+        TableScanCursor scanCur;
+        char pkBuf[256];
+        char recBuf[RECORD_BUF_SIZE];
+
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            while (tapi_scan_next(&scanCur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
                 char idxKey[512] = "";
 
                 if (isComposite) {
                     build_composite_key_from_record(g_indexColumnName,
-                        (const char (*)[128])colNames, numCols, rec,
+                        (const char (*)[128])colNames, numCols, recBuf,
                         idxKey, sizeof(idxKey));
                 } else {
-                    /* Single column */
-                    int colIdx = -1, i;
-                    for (i = 0; i < numCols; i++) {
-                        if (strcasecmp(colNames[i], g_indexColumnName) == 0)
-                            { colIdx = i; break; }
+                    int colIdx = -1, ci;
+                    for (ci = 0; ci < numCols; ci++) {
+                        if (strcasecmp(colNames[ci], g_indexColumnName) == 0)
+                            { colIdx = ci; break; }
                     }
                     if (colIdx >= 0) {
                         char tmp[RECORD_BUF_SIZE];
-                        strncpy(tmp, rec, sizeof(tmp) - 1);
+                        strncpy(tmp, recBuf, sizeof(tmp) - 1);
                         tmp[sizeof(tmp) - 1] = '\0';
                         char *tok = strtok(tmp, ";");
-                        int ci = 0;
+                        ci = 0;
                         while (tok && ci <= colIdx) {
                             if (ci == colIdx) {
                                 strncpy(idxKey, tok, sizeof(idxKey) - 1);
@@ -827,38 +504,39 @@ int CreateIndexProcess(void)
                 }
 
                 if (idxKey[0]) {
-                    /* Unique check on existing data */
                     if (g_indexUnique) {
-                        char dup[1][256];
-                        if (btree_search(btreePath, idxKey, dup, 1) > 0) {
+                        /* Check for duplicate */
+                        char dupCheck[1][256];
+                        if (sec_idx_search(idx_tree.root_page, idxKey, dupCheck, 1) > 0) {
                             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                                      "could not create unique index: duplicate key '%s'",
                                      idxKey);
                             g_gui_error = 1;
-                            db_close(db);
-                            btree_drop(btreePath);
+                            bt2_destroy(&idx_tree);
                             g_indexUnique = 0; g_indexIfNotExists = 0;
                             return -1;
                         }
                     }
-                    btree_insert(btreePath, idxKey, keyBuf);
+
+                    /* Build composite key: indexed_value + SEP + PK */
+                    char compositeKey[BT2_MAX_KEY_LEN + 1];
+                    sec_idx_make_key(idxKey, pkBuf, compositeKey, sizeof(compositeKey));
+
+                    /* Get the RowID from PK tree for direct heap access */
+                    BTree2 pk_tree = tapi_pk_tree(&td);
+                    RowID heap_rid;
+                    if (bt2_search(&pk_tree, pkBuf, &heap_rid) == 0) {
+                        bt2_insert(&idx_tree, compositeKey, heap_rid);
+                    }
                 }
             }
-            db_close(db);
         }
     }
 
-    /* Register index in .indexes file.
-     * Type flag: C=clustered, N=nonclustered, U=unique nonclustered */
-    get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
-    {
-        FILE *f = fopen(indexesFile, "a");
-        if (f) {
-            fprintf(f, "%s:%s:%s:%s\n", g_indexName, g_indexColumnName, btreePath,
-                    g_indexUnique ? "U" : "N");
-            fclose(f);
-        }
-    }
+    /* Register index in catalog */
+    char idx_type = g_indexUnique ? 'U' : 'N';
+    cat_create_index(td.table_id, g_indexName, idx_tree.root_page,
+                     g_indexColumnName, idx_type);
 
     printf("Index '%s' created on %s(%s)%s.\n",
            g_indexName, g_indexTableName, g_indexColumnName,
@@ -868,164 +546,33 @@ int CreateIndexProcess(void)
     return 0;
 }
 
+/* ── DROP INDEX ── */
 int DropIndexProcess(void)
 {
-    /* Search all tables in current schema for the index name */
-    char schemaDir[1024];
-    snprintf(schemaDir, sizeof(schemaDir), "%s/%s/%s",
-             db_get_root(), db_get_current_database(), db_get_current_schema());
-
-    /* Find the index in .indexes files */
-    char cmd[2048];
-    char found_indexes_file[1024] = "";
-    char found_btree_path[1024] = "";
-
-    /* Scan directory for .indexes files */
-    {
-        char dirPath[1024];
-        strncpy(dirPath, schemaDir, sizeof(dirPath) - 1);
-
-        /* Use platform-independent approach: try known table names */
-        /* Actually, iterate .indexes files by scanning .meta files */
-        DIR *d = opendir(dirPath);
-        if (!d) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "cannot open schema directory");
-            g_gui_error = 1;
-            return -1;
-        }
-
-        struct dirent *ent;
-        while ((ent = readdir(d)) != NULL) {
-            /* Look for .indexes files */
-            char *ext = strstr(ent->d_name, ".indexes");
-            if (!ext || ext[8] != '\0') continue;
-
-            char idxFile[1024];
-            snprintf(idxFile, sizeof(idxFile), "%s/%s", dirPath, ent->d_name);
-
-            FILE *f = fopen(idxFile, "r");
-            if (!f) continue;
-
-            char line[2048];
-            char remaining[4096] = "";
-            int found = 0;
-
-            while (fgets(line, sizeof(line), f)) {
-                /* Parse "name:col:path" */
-                char lineCopy[2048];
-                strncpy(lineCopy, line, sizeof(lineCopy) - 1);
-                lineCopy[sizeof(lineCopy) - 1] = '\0';
-
-                /* Strip newline */
-                int len = (int)strlen(lineCopy);
-                while (len > 0 && (lineCopy[len-1] == '\n' || lineCopy[len-1] == '\r'))
-                    lineCopy[--len] = '\0';
-
-                char *col = strchr(lineCopy, ':');
-                if (!col) { strcat(remaining, line); continue; }
-                *col = '\0';
-
-                if (strcasecmp(lineCopy, g_indexName) == 0) {
-                    /* Found it — extract btree path and type */
-                    col++;
-                    char *path = strchr(col, ':');
-                    if (path) {
-                        path++;
-                        /* Strip :type suffix */
-                        char *typeF = strchr(path, ':');
-                        char idxType = 'N';
-                        if (typeF) { idxType = typeF[1]; *typeF = '\0'; }
-                        /* Prevent dropping clustered index */
-                        if (idxType == 'C') {
-                            fclose(f);
-                            closedir(d);
-                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                                     "cannot drop clustered index '%s' (auto-created for PRIMARY KEY)",
-                                     g_indexName);
-                            g_gui_error = 1;
-                            return -1;
-                        }
-                        strncpy(found_btree_path, path, sizeof(found_btree_path) - 1);
-                    }
-                    strncpy(found_indexes_file, idxFile, sizeof(found_indexes_file) - 1);
-                    found = 1;
-                } else {
-                    /* Restore colon and keep this line */
-                    *col = ':'; /* undo the split above */
-                    /* Actually, just append the original line */
-                    strcat(remaining, line);
-                }
-            }
-            fclose(f);
-
-            if (found) {
-                /* Rewrite .indexes file without the dropped index */
-                f = fopen(idxFile, "w");
-                if (f) {
-                    if (remaining[0])
-                        fputs(remaining, f);
-                    fclose(f);
-                }
-
-                /* Delete .evo file */
-                if (found_btree_path[0])
-                    btree_drop(found_btree_path);
-
-                closedir(d);
-                printf("Index '%s' dropped.\n", g_indexName);
-                return 0;
-            }
-        }
-        closedir(d);
-    }
-
-    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-             "index '%s' does not exist", g_indexName);
-    g_gui_error = 1;
-    return -1;
-}
-
-/* ── Auto-create clustered index on PRIMARY KEY ── */
-
-int CreateClusteredIndex(const char *tblPath, const char *pkColName)
-{
-    char btreePath[1024];
-    char indexesFile[1024];
-
-    /* Build btree path: same directory as table */
-    {
-        char dir[1024];
-        strncpy(dir, tblPath, sizeof(dir) - 1);
-        dir[sizeof(dir) - 1] = '\0';
-        char *slash = strrchr(dir, '/');
-        if (slash) *(slash + 1) = '\0';
-        else strcpy(dir, "./");
-
-        /* Extract table base name for index name */
-        const char *baseName = strrchr(tblPath, '/');
-        baseName = baseName ? baseName + 1 : tblPath;
-        snprintf(btreePath, sizeof(btreePath), "%s_pk_%s.evo", dir, baseName);
-    }
-
-    /* Create empty B-tree */
-    if (btree_create(btreePath) < 0)
+    /* Find the index by name across all tables */
+    IndexDesc idx;
+    if (cat_find_index_by_name(g_indexName, &idx) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "index '%s' does not exist", g_indexName);
+        g_gui_error = 1;
         return -1;
-
-    /* Register as clustered index in .indexes file */
-    get_indexes_path(tblPath, indexesFile, sizeof(indexesFile));
-    {
-        char idxName[256];
-        const char *baseName = strrchr(tblPath, '/');
-        baseName = baseName ? baseName + 1 : tblPath;
-        snprintf(idxName, sizeof(idxName), "_pk_%s", baseName);
-
-        FILE *f = fopen(indexesFile, "a");
-        if (f) {
-            fprintf(f, "%s:%s:%s:C\n", idxName, pkColName, btreePath);
-            fclose(f);
-        }
     }
 
+    /* Prevent dropping PK index */
+    if (idx.index_type == 'P') {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "cannot drop primary key index '%s'", g_indexName);
+        g_gui_error = 1;
+        return -1;
+    }
+
+    /* Destroy B+ tree pages */
+    BTree2 idx_tree = { .root_page = idx.root_page };
+    bt2_destroy(&idx_tree);
+
+    /* Remove from catalog */
+    cat_drop_index(idx.table_id, g_indexName);
+
+    printf("Index '%s' dropped.\n", g_indexName);
     return 0;
 }

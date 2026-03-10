@@ -21,7 +21,7 @@
 | 10 | UNIQUE constraint enforcement | ✅ | ✅ | 🔧 | Parsed but duplicates allowed |
 | 11 | Composite PRIMARY KEY | ✅ | ✅ | 🔧 | Parser accepts but only single-column PK stored |
 | 12 | Real transactions (ACID) | ✅ | ✅ | 🔧 | BEGIN/COMMIT/ROLLBACK accepted but no-op |
-| 13 | Indexes (B-tree, Hash, GiST, GIN) | ✅ | ✅ | ❌ | Full table scan only |
+| 13 | Indexes (B-tree, Hash, GiST, GIN) | ✅ | ✅ | 🔧 | Page-based B+ tree implemented (btree2.c), not yet wired into DML modules |
 | 14 | Multi-row INSERT | ✅ | ✅ | 🔧 | Parser accepts but only first row inserted |
 | 15 | INSERT INTO ... SELECT | ✅ | ✅ | ❌ | |
 | 16 | INSERT with column list mapping | ✅ | ✅ | 🔧 | Parser accepts but column mapping not used |
@@ -98,7 +98,7 @@
 
 | # | Feature | MySQL | PG | EvoSQL | Notes |
 |---|---------|:-----:|:--:|:------:|-------|
-| 70 | Buffer Pool Manager (LRU page cache) | ✅ | ✅ | ❌ | All I/O goes directly to disk; no caching layer |
+| 70 | Buffer Pool Manager (LRU page cache) | ✅ | ✅ | ✅ | Clock Sweep buffer pool (4KB pages, like PostgreSQL) with anti-pollution ring buffer |
 | 71 | RECLAIM (storage garbage collection) | ✅ (OPTIMIZE TABLE) | ✅ (VACUUM) | ❌ | Deleted records blanked but space never reclaimed |
 | 72 | Temporary Tables (session-scoped) | ✅ | ✅ | 🔧 | `opt_temporary` parsed but not executed |
 | 73 | Native UUID type & gen_random_uuid() | ❌ | ✅ | ❌ | UUID OID 2950 in catalog but no generation/validation |
@@ -112,10 +112,24 @@
 
 | Limitation | Current | Ideal |
 |-----------|---------|-------|
-| All queries full table scan | O(n) | B-tree index O(log n) |
+| All queries full table scan | O(n) | B-tree index O(log n) — **B+ tree ready (btree2.c), pending DML integration** |
 | Record size cap | ~8 KB | Configurable / TOAST |
 | Max ORDER BY rows | 500 (static array) | Dynamic allocation |
 | Max UPDATE/DROP rows | 200 (static array) | Dynamic allocation |
 | Semicolon in data | Corrupts records | Escaped/binary storage |
 | Concurrent writes | Global mutex | Row-level locking / MVCC |
 | Crash recovery | None | WAL + checkpoints |
+
+## 🏗️ Unified Storage Migration (In Progress)
+
+Migrating from 9+ separate file types to a single global binary file with page-based storage. Current status:
+
+| Phase | Component | Status |
+|-------|-----------|--------|
+| 1 | Page Manager + Slotted Pages | ✅ Done (18/18 tests) |
+| 2 | B+ Tree | ✅ Done (13/13 tests) |
+| 3 | System Catalog | ✅ Done (30/30 tests) |
+| 4 | Table API (drop-in replacement for APUE) | TODO |
+| 5 | Metadata Migration (Create.c, DatabaseMgmt.c, etc.) | TODO |
+| 6 | Index Integration (Index.c -> btree2) | TODO |
+| 7 | FOREIGN KEY (trivial with catalog) | TODO |

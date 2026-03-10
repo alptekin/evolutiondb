@@ -258,7 +258,7 @@
 
 ## Day 7 — Buffer Pool Manager & RECLAIM
 
-### Task 13: ⬜ Buffer Pool Manager (Feature #70)
+### Task 13: ✅ Buffer Pool Manager (Feature #70)
 
 **Goal:** Implement a global in-memory page cache (LRU) to reduce disk I/O. All `db_fetch`/`db_store`/`db_delete` operations go through the buffer pool instead of hitting disk every time.
 

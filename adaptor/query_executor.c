@@ -8,8 +8,8 @@
 #include "query_executor.h"
 #include "catalog.h"
 #include "../evolution/db/database.h"
-#include "../evolution/db/apue.h"
-#include "../evolution/db/apue_db.h"
+#include "../evolution/db/catalog_internal.h"
+#include "../evolution/db/table_api.h"
 #include "../evolution/db/expression.h"
 
 /* Flex/Bison externs */
@@ -280,29 +280,20 @@ static int extract_eq_condition(const ExprNode *expr,
  * ---------------------------------------------------------------- */
 static void collect_select_results(const char *tableName, ResultSet *rs)
 {
-    DBHANDLE db;
-    char metaFile[SAFE_PATH_MAX], line[1024];
-    char keyBuf[1024];
-    char *data;
-    FILE *fp;
     int count = 0;
-    int colTypes[64];
-    int numTypes = 0;
 
     rs->is_select = 1;
 
-    /* Read type encodings from .meta line 3 */
-    numTypes = ReadColumnTypes(tableName, colTypes, 64);
-
-    /* Read column metadata from .meta file */
-    snprintf(metaFile, sizeof(metaFile), "%s.meta", tableName);
-    fp = fopen(metaFile, "r");
-    if (!fp) {
-        result_set_error(rs, "42P01",
-            "relation does not exist");
+    /* Resolve table via catalog */
+    TableDesc td;
+    ColumnDesc allCols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(tableName, &td, allCols, &ncols) < 0) {
+        result_set_error(rs, "42P01", "relation does not exist");
         return;
     }
 
+    /* Set up column metadata from catalog */
     {
         unsigned int tableOid = 0;
         /* Compute stable table OID (djb2 hash) */
@@ -316,40 +307,21 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
             tableOid = 16384 + (h % 100000);
         }
 
-        if (fgets(line, sizeof(line), fp)) {
-            char *col;
-            int colIdx = 0;
-            line[strcspn(line, "\n")] = '\0';
-            col = strtok(line, ";");
-            while (col) {
-                int oid = (colIdx < numTypes)
-                          ? type_encoding_to_pg_oid(colTypes[colIdx])
-                          : PG_OID_TEXT;
-                result_add_column(rs, col, oid);
-                /* Set table OID and attnum so DBeaver can resolve columns */
-                rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
-                rs->columns[rs->num_cols - 1].attnum = colIdx + 1; /* 1-based */
-                /* Set type modifier for varchar/char */
-                if (colIdx < numTypes) {
-                    int family = colTypes[colIdx] / 10000;
-                    int size = colTypes[colIdx] % 10000;
-                    if ((family == 12 || family == 13) && size > 0)
-                        rs->columns[rs->num_cols - 1].type_modifier = size + 4;
-                }
-                colIdx++;
-                col = strtok(NULL, ";");
-            }
+        int colIdx;
+        for (colIdx = 0; colIdx < ncols; colIdx++) {
+            int oid = type_encoding_to_pg_oid(allCols[colIdx].type_code);
+            result_add_column(rs, allCols[colIdx].col_name, oid);
+            rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
+            rs->columns[rs->num_cols - 1].attnum = colIdx + 1;
+            /* Set type modifier for varchar/char */
+            int family = allCols[colIdx].type_code / 10000;
+            int size = allCols[colIdx].type_code % 10000;
+            if ((family == 12 || family == 13) && size > 0)
+                rs->columns[rs->num_cols - 1].type_modifier = size + 4;
         }
     }
-    fclose(fp);
 
-    /* Open database and read records */
-    db = db_open(tableName, O_RDWR, FILE_MODE);
-    if (!db) {
-        result_set_error(rs, "42P01",
-            "could not open table");
-        return;
-    }
+    BTree2 pk_tree = tapi_pk_tree(&td);
 
     /* --- Try PK direct lookup or index-accelerated lookup --- */
     int used_index = 0;
@@ -357,86 +329,73 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         char eq_col[128], eq_val[256];
         if (extract_eq_condition(g_whereExpr, eq_col, sizeof(eq_col),
                                  eq_val, sizeof(eq_val))) {
-            /* Check if eq_col is the primary key — use hash O(1) lookup */
+            /* Check if eq_col is the primary key */
             int is_pk = 0;
             {
-                char pkColNames[64][128];
-                int pkIndices[16], nPK, nc, p;
-                /* Read column names */
-                char metaTmp[SAFE_PATH_MAX], metaLine[2048];
-                snprintf(metaTmp, sizeof(metaTmp), "%s.meta", tableName);
-                FILE *mfp = fopen(metaTmp, "r");
-                if (mfp) {
-                    nc = 0;
-                    if (fgets(metaLine, sizeof(metaLine), mfp)) {
-                        metaLine[strcspn(metaLine, "\n")] = '\0';
-                        char *mt = strtok(metaLine, ";");
-                        while (mt && nc < 64) {
-                            strncpy(pkColNames[nc], mt, 127);
-                            pkColNames[nc][127] = '\0';
-                            nc++;
-                            mt = strtok(NULL, ";");
-                        }
-                    }
-                    fclose(mfp);
-                    nPK = ReadPrimaryKeys(tableName, pkIndices, 16);
-                    if (nPK == 1 && pkIndices[0] < nc) {
-                        if (strcasecmp(pkColNames[pkIndices[0]], eq_col) == 0)
-                            is_pk = 1;
-                    }
+                int pkIndices[16];
+                int nPK = tapi_get_pk_indices(allCols, ncols, pkIndices, 16);
+                if (nPK == 1 && pkIndices[0] < ncols) {
+                    if (strcasecmp(allCols[pkIndices[0]].col_name, eq_col) == 0)
+                        is_pk = 1;
                 }
             }
 
             if (is_pk) {
-                /* PK hash lookup — O(1) via db_fetch */
-                data = db_fetch(db, eq_val);
-                if (data) {
-                    int row = result_add_row(rs);
-                    if (row >= 0) {
-                        char temp[1024];
-                        int col = 0;
-                        strncpy(temp, data, sizeof(temp) - 1);
-                        temp[sizeof(temp) - 1] = '\0';
-                        char *val = strtok(temp, ";");
-                        while (val && col < rs->num_cols) {
-                            if (strcmp(val, "\x01NULL\x01") == 0) {
-                                result_set_null(rs, row, col);
-                            } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                                if (strncasecmp(val, "true", 4) == 0 ||
-                                    strcmp(val, "1") == 0 ||
-                                    strcmp(val, "t") == 0)
-                                    result_set_field(rs, row, col, "true");
-                                else
-                                    result_set_field(rs, row, col, "false");
-                            } else {
-                                result_set_field(rs, row, col, val);
+                /* PK B+ tree lookup — O(log n) */
+                RowID rid;
+                if (bt2_search(&pk_tree, eq_val, &rid) == 0) {
+                    char recBuf[RECORD_BUF_SIZE];
+                    if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) > 0) {
+                        int row = result_add_row(rs);
+                        if (row >= 0) {
+                            char temp[RECORD_BUF_SIZE];
+                            int col = 0;
+                            strncpy(temp, recBuf, sizeof(temp) - 1);
+                            temp[sizeof(temp) - 1] = '\0';
+                            char *val = strtok(temp, ";");
+                            while (val && col < rs->num_cols) {
+                                if (strcmp(val, "\x01NULL\x01") == 0) {
+                                    result_set_null(rs, row, col);
+                                } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                                    if (strncasecmp(val, "true", 4) == 0 ||
+                                        strcmp(val, "1") == 0 ||
+                                        strcmp(val, "t") == 0)
+                                        result_set_field(rs, row, col, "true");
+                                    else
+                                        result_set_field(rs, row, col, "false");
+                                } else {
+                                    result_set_field(rs, row, col, val);
+                                }
+                                col++;
+                                val = strtok(NULL, ";");
                             }
-                            col++;
-                            val = strtok(NULL, ";");
+                            count++;
                         }
-                        count++;
                     }
                 }
                 used_index = 1;
             }
 
-            /* If not PK, try B-tree nonclustered index */
+            /* If not PK, try B-tree nonclustered index (catalog-based) */
             char idxPath[1024];
             if (!used_index && index_exists(tableName, eq_col, idxPath, sizeof(idxPath))) {
-                /* Use B-tree index: search for matching PKs */
                 char matchPKs[256][256];
                 int nMatch = btree_search(idxPath, eq_val, matchPKs, 256);
                 int m;
                 for (m = 0; m < nMatch && count < MAX_ROWS; m++) {
-                    data = db_fetch(db, matchPKs[m]);
-                    if (!data) continue;
+                    RowID rid;
+                    if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0)
+                        continue;
+                    char recBuf[RECORD_BUF_SIZE];
+                    if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
+                        continue;
 
                     int row = result_add_row(rs);
                     if (row < 0) break;
 
-                    char temp[1024];
+                    char temp[RECORD_BUF_SIZE];
                     int col = 0;
-                    strncpy(temp, data, sizeof(temp) - 1);
+                    strncpy(temp, recBuf, sizeof(temp) - 1);
                     temp[sizeof(temp) - 1] = '\0';
 
                     char *val = strtok(temp, ";");
@@ -463,42 +422,44 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         }
     }
 
-    /* --- Full table scan fallback --- */
+    /* --- Full table scan via PK B+ tree cursor --- */
     if (!used_index) {
-        db_rewind(db);
-        while ((data = db_nextrec(db, keyBuf)) != NULL && count < MAX_ROWS) {
-            int row = result_add_row(rs);
-            if (row < 0) break;
+        TableScanCursor cursor;
+        char keyBuf[256];
+        char recBuf[RECORD_BUF_SIZE];
 
-            /* Parse semicolon-separated fields */
-            char temp[1024];
-            int col = 0;
-            strncpy(temp, data, sizeof(temp) - 1);
-            temp[sizeof(temp) - 1] = '\0';
+        if (tapi_scan_begin(&td, &cursor) == 0) {
+            while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0
+                   && count < MAX_ROWS) {
+                int row = result_add_row(rs);
+                if (row < 0) break;
 
-            char *val = strtok(temp, ";");
-            while (val && col < rs->num_cols) {
-                /* Check for NULL marker */
-                if (strcmp(val, "\x01NULL\x01") == 0) {
-                    result_set_null(rs, row, col);
-                } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                    if (strncasecmp(val, "true", 4) == 0 ||
-                        strcmp(val, "1") == 0 ||
-                        strcmp(val, "t") == 0)
-                        result_set_field(rs, row, col, "true");
-                    else
-                        result_set_field(rs, row, col, "false");
-                } else {
-                    result_set_field(rs, row, col, val);
+                char temp[RECORD_BUF_SIZE];
+                int col = 0;
+                strncpy(temp, recBuf, sizeof(temp) - 1);
+                temp[sizeof(temp) - 1] = '\0';
+
+                char *val = strtok(temp, ";");
+                while (val && col < rs->num_cols) {
+                    if (strcmp(val, "\x01NULL\x01") == 0) {
+                        result_set_null(rs, row, col);
+                    } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                        if (strncasecmp(val, "true", 4) == 0 ||
+                            strcmp(val, "1") == 0 ||
+                            strcmp(val, "t") == 0)
+                            result_set_field(rs, row, col, "true");
+                        else
+                            result_set_field(rs, row, col, "false");
+                    } else {
+                        result_set_field(rs, row, col, val);
+                    }
+                    col++;
+                    val = strtok(NULL, ";");
                 }
-                col++;
-                val = strtok(NULL, ";");
+                count++;
             }
-            count++;
         }
     }
-
-    db_close(db);
 
     /* NOTE: ORDER BY sort is deferred to end of function, after all
      * expression evaluation, GROUP BY, and DISTINCT processing. */
@@ -1879,25 +1840,15 @@ static int resolve_qualified_table(char *sql,
                             continue;  /* already handled by normalize_sql */
                         }
 
-                        /* Check if it's a registered schema */
-                        char regFile[1024];
-                        snprintf(regFile, sizeof(regFile), "%s/%s/schemas",
-                                 db_get_root(), db_get_current_database());
-                        FILE *fp = fopen(regFile, "r");
+                        /* Check if it's a registered schema via catalog */
                         int is_schema = 0;
-                        if (fp) {
-                            char line[256];
-                            while (fgets(line, sizeof(line), fp)) {
-                                /* Strip newline */
-                                int ll = (int)strlen(line);
-                                while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r'))
-                                    line[--ll] = '\0';
-                                if (strcasecmp(line, maybe_schema) == 0) {
-                                    is_schema = 1;
-                                    break;
-                                }
+                        {
+                            DatabaseDesc _dbDesc;
+                            SchemaDesc _schDesc;
+                            if (cat_find_database(db_get_current_database(), &_dbDesc) == 0 &&
+                                cat_find_schema(_dbDesc.db_id, maybe_schema, &_schDesc) == 0) {
+                                is_schema = 1;
                             }
-                            fclose(fp);
                         }
 
                         if (is_schema) {
@@ -2082,28 +2033,16 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 /* Check PK */
                 int is_pk = 0;
                 {
-                    char colNames2[64][128];
-                    char metaTmp[SAFE_PATH_MAX], metaLine[2048];
-                    int nc = 0;
-                    snprintf(metaTmp, sizeof(metaTmp), "%s.meta", tblPath);
-                    FILE *mfp = fopen(metaTmp, "r");
-                    if (mfp) {
-                        if (fgets(metaLine, sizeof(metaLine), mfp)) {
-                            metaLine[strcspn(metaLine, "\n")] = '\0';
-                            char *mt = strtok(metaLine, ";");
-                            while (mt && nc < 64) {
-                                strncpy(colNames2[nc], mt, 127);
-                                colNames2[nc][127] = '\0';
-                                nc++;
-                                mt = strtok(NULL, ";");
-                            }
-                        }
-                        fclose(mfp);
-                        int pkIndices[16];
-                        int nPK = ReadPrimaryKeys(tblPath, pkIndices, 16);
-                        if (nPK == 1 && pkIndices[0] < nc) {
-                            if (strcasecmp(colNames2[pkIndices[0]], whereCol) == 0)
+                    TableDesc _td;
+                    ColumnDesc _cols[CAT_MAX_COLUMNS];
+                    int _ncols = 0;
+                    if (tapi_resolve(tblName, &_td, _cols, &_ncols) == 0) {
+                        for (int ci = 0; ci < _ncols; ci++) {
+                            if (_cols[ci].is_pk &&
+                                strcasecmp(_cols[ci].col_name, whereCol) == 0) {
                                 is_pk = 1;
+                                break;
+                            }
                         }
                     }
                 }

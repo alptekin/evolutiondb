@@ -1,8 +1,8 @@
 /*
  * UserMgmt.c — User management for EvoSQL
  *
- * Storage layout:
- *   root/users          (text file: "username:pbkdf2-hash" per line)
+ * Storage: System catalog B+ tree (CAT_SYS_USERS) in unified storage file.
+ * Key = username, Record = password_hash (PBKDF2-SHA256).
  *
  * SQL commands handled via catalog.c interception:
  *   CREATE USER <name> PASSWORD '<pass>'
@@ -22,62 +22,21 @@
 #include <ctype.h>
 #include "database.h"
 #include "crypto.h"
-
-#define USERS_FILE  "users"
-#define MAX_LINE    1024
+#include "catalog_internal.h"
 
 /* ----------------------------------------------------------------
- *  Helpers
- * ---------------------------------------------------------------- */
-static void users_path(char *out, size_t size)
-{
-    snprintf(out, size, "%s/%s", db_get_root(), USERS_FILE);
-}
-
-/* Check if a user exists.  Returns 1 if found, 0 otherwise. */
-static int user_exists(const char *username)
-{
-    char path[1024], line[MAX_LINE];
-    FILE *fp;
-    size_t ulen = strlen(username);
-
-    users_path(path, sizeof(path));
-    fp = fopen(path, "r");
-    if (!fp) return 0;
-
-    while (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\n\r")] = '\0';
-        /* Format: username:hash */
-        if (strncasecmp(line, username, ulen) == 0 && line[ulen] == ':') {
-            fclose(fp);
-            return 1;
-        }
-    }
-    fclose(fp);
-    return 0;
-}
-
-/* ----------------------------------------------------------------
- *  db_ensure_users — Create initial admin user if users file empty
+ *  db_ensure_users — Create initial admin user if not in catalog
  *
- *  Called from db_ensure_root().
+ *  Called from db_ensure_root() after cat_init().
+ *  cat_init() already creates an "admin" entry with empty hash.
+ *  This function sets the real password hash.
  * ---------------------------------------------------------------- */
 void db_ensure_users(void)
 {
-    char path[1024];
-    FILE *fp;
-
-    users_path(path, sizeof(path));
-
-    /* If file already exists and has content, skip */
-    fp = fopen(path, "r");
-    if (fp) {
-        char line[MAX_LINE];
-        if (fgets(line, sizeof(line), fp) && line[0] != '\0' && line[0] != '\n') {
-            fclose(fp);
-            return; /* Users file already populated */
-        }
-        fclose(fp);
+    /* Check if admin already has a real password hash */
+    UserDesc ud;
+    if (cat_find_user("admin", &ud) == 0 && ud.password_hash[0] != '\0') {
+        return; /* Already initialized */
     }
 
     /* Read initial credentials from environment */
@@ -86,8 +45,7 @@ void db_ensure_users(void)
     if (!env_user || env_user[0] == '\0') env_user = "admin";
 
     /* If no password provided, generate a random 16-character password.
-     * This is printed to stdout ONCE (MySQL --initialize style).
-     * The user must then ALTER USER to change it. */
+     * This is printed to stdout ONCE (MySQL --initialize style). */
     char generated_pass[32];
     int  password_generated = 0;
     if (!env_pass || env_pass[0] == '\0') {
@@ -111,30 +69,32 @@ void db_ensure_users(void)
     char hash_str[HASH_STRING_MAX];
     if (crypto_hash_password(env_pass, hash_str, sizeof(hash_str)) < 0) {
         fprintf(stderr, "[UserMgmt] ERROR: Failed to hash initial password\n");
+        evo_secure_wipe(generated_pass, sizeof(generated_pass));
         return;
     }
 
-    /* Write initial user */
-    fp = fopen(path, "w");
-    if (fp) {
-        fprintf(fp, "%s:%s\n", env_user, hash_str);
-        fclose(fp);
-        printf("[UserMgmt] Initial user '%s' created\n", env_user);
-        if (password_generated) {
-            printf("\n");
-            printf("============================================================\n");
-            printf("  GENERATED PASSWORD for '%s': %s\n", env_user, env_pass);
-            printf("  Save this password! It will NOT be shown again.\n");
-            printf("  Change it with: ALTER USER %s PASSWORD '<newpass>'\n", env_user);
-            printf("============================================================\n");
-            printf("\n");
-            fflush(stdout);
-        }
+    /* Update or create admin user in catalog */
+    if (cat_find_user(env_user, NULL) == 0) {
+        /* Admin entry exists (created by cat_init with empty hash) — update */
+        cat_update_user(env_user, hash_str);
     } else {
-        fprintf(stderr, "[UserMgmt] ERROR: Cannot create users file: %s\n", path);
+        /* Custom username from EVOSQL_USER_NAME — create */
+        cat_create_user(env_user, hash_str);
     }
 
-    /* Wipe sensitive buffers regardless of outcome */
+    printf("[UserMgmt] Initial user '%s' created\n", env_user);
+    if (password_generated) {
+        printf("\n");
+        printf("============================================================\n");
+        printf("  GENERATED PASSWORD for '%s': %s\n", env_user, env_pass);
+        printf("  Save this password! It will NOT be shown again.\n");
+        printf("  Change it with: ALTER USER %s PASSWORD '<newpass>'\n", env_user);
+        printf("============================================================\n");
+        printf("\n");
+        fflush(stdout);
+    }
+
+    /* Wipe sensitive buffers */
     evo_secure_wipe(generated_pass, sizeof(generated_pass));
     evo_secure_wipe(hash_str, sizeof(hash_str));
 }
@@ -146,32 +106,23 @@ void db_ensure_users(void)
  * ---------------------------------------------------------------- */
 int AuthenticateUser(const char *username, const char *password)
 {
-    char path[1024], line[MAX_LINE];
-    FILE *fp;
-    size_t ulen;
-
     if (!username || !password) return 0;
 
-    ulen = strlen(username);
-    users_path(path, sizeof(path));
+    /* Case-insensitive lookup: lowercase the username for catalog search */
+    char lower[CAT_MAX_NAME_LEN];
+    size_t i;
+    for (i = 0; username[i] && i < CAT_MAX_NAME_LEN - 1; i++)
+        lower[i] = (char)tolower((unsigned char)username[i]);
+    lower[i] = '\0';
 
-    fp = fopen(path, "r");
-    if (!fp) return 0;
-
-    while (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\n\r")] = '\0';
-        if (line[0] == '\0') continue;
-
-        /* Match username (case-insensitive) */
-        if (strncasecmp(line, username, ulen) == 0 && line[ulen] == ':') {
-            const char *stored_hash = line + ulen + 1;
-            fclose(fp);
-            return crypto_verify_password(password, stored_hash) == 1 ? 1 : 0;
-        }
+    UserDesc ud;
+    if (cat_find_user(lower, &ud) < 0) {
+        /* Try original case */
+        if (cat_find_user(username, &ud) < 0)
+            return 0;
     }
 
-    fclose(fp);
-    return 0; /* User not found */
+    return crypto_verify_password(password, ud.password_hash) == 1 ? 1 : 0;
 }
 
 /* ----------------------------------------------------------------
@@ -181,8 +132,7 @@ int AuthenticateUser(const char *username, const char *password)
  * ---------------------------------------------------------------- */
 int CreateUserProcess(const char *username, const char *password)
 {
-    char path[1024], hash_str[HASH_STRING_MAX];
-    FILE *fp;
+    char hash_str[HASH_STRING_MAX];
     int result = 0;
 
     if (!username || !password || username[0] == '\0' || password[0] == '\0') {
@@ -204,25 +154,19 @@ int CreateUserProcess(const char *username, const char *password)
 
     pthread_mutex_lock(&g_metadata_lock);
 
-    if (user_exists(username)) {
+    if (cat_find_user(username, NULL) == 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "User '%s' already exists", username);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_OBJECT);
         result = -1;
     } else {
-        /* Append to users file */
-        users_path(path, sizeof(path));
-        fp = fopen(path, "a");
-        if (!fp) {
+        if (cat_create_user(username, hash_str) < 0) {
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "Cannot open users file");
+                     "Failed to create user '%s'", username);
             g_gui_error = 1;
-            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
             result = -1;
-        } else {
-            fprintf(fp, "%s:%s\n", username, hash_str);
-            fclose(fp);
         }
     }
 
@@ -238,10 +182,6 @@ int CreateUserProcess(const char *username, const char *password)
  * ---------------------------------------------------------------- */
 int DropUserProcess(const char *username)
 {
-    char path[1024], tmp_path[1024], line[MAX_LINE];
-    FILE *fp, *tmp;
-    int found = 0;
-    size_t ulen;
     int result = 0;
 
     if (!username || username[0] == '\0') {
@@ -252,59 +192,14 @@ int DropUserProcess(const char *username)
         return -1;
     }
 
-    ulen = strlen(username);
-    users_path(path, sizeof(path));
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
     pthread_mutex_lock(&g_metadata_lock);
 
-    fp = fopen(path, "r");
-    if (!fp) {
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot open users file");
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        return -1;
-    }
-
-    tmp = fopen(tmp_path, "w");
-    if (!tmp) {
-        fclose(fp);
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot create temp file");
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        return -1;
-    }
-
-    while (fgets(line, sizeof(line), fp)) {
-        char clean[MAX_LINE];
-        strncpy(clean, line, sizeof(clean));
-        clean[strcspn(clean, "\n\r")] = '\0';
-
-        if (strncasecmp(clean, username, ulen) == 0 && clean[ulen] == ':') {
-            found = 1;
-            continue; /* Skip this line (drop user) */
-        }
-        fputs(line, tmp);
-    }
-
-    fclose(fp);
-    fclose(tmp);
-
-    if (!found) {
-        remove(tmp_path);
+    if (cat_drop_user(username) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "User '%s' does not exist", username);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         result = -1;
-    } else {
-        /* Replace original with temp */
-        remove(path);
-        rename(tmp_path, path);
     }
 
     pthread_mutex_unlock(&g_metadata_lock);
@@ -318,11 +213,7 @@ int DropUserProcess(const char *username)
  * ---------------------------------------------------------------- */
 int AlterUserPasswordProcess(const char *username, const char *new_password)
 {
-    char path[1024], tmp_path[1024], line[MAX_LINE];
     char hash_str[HASH_STRING_MAX];
-    FILE *fp, *tmp;
-    int found = 0;
-    size_t ulen;
     int result = 0;
 
     if (!username || !new_password ||
@@ -334,8 +225,6 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
         return -1;
     }
 
-    ulen = strlen(username);
-
     /* Hash new password before taking lock (expensive operation) */
     if (crypto_hash_password(new_password, hash_str, sizeof(hash_str)) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -345,60 +234,14 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
         return -1;
     }
 
-    users_path(path, sizeof(path));
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
     pthread_mutex_lock(&g_metadata_lock);
 
-    fp = fopen(path, "r");
-    if (!fp) {
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot open users file");
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        evo_secure_wipe(hash_str, sizeof(hash_str));
-        return -1;
-    }
-
-    tmp = fopen(tmp_path, "w");
-    if (!tmp) {
-        fclose(fp);
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot create temp file");
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        evo_secure_wipe(hash_str, sizeof(hash_str));
-        return -1;
-    }
-
-    while (fgets(line, sizeof(line), fp)) {
-        char clean[MAX_LINE];
-        strncpy(clean, line, sizeof(clean));
-        clean[strcspn(clean, "\n\r")] = '\0';
-
-        if (strncasecmp(clean, username, ulen) == 0 && clean[ulen] == ':') {
-            fprintf(tmp, "%s:%s\n", username, hash_str);
-            found = 1;
-        } else {
-            fputs(line, tmp);
-        }
-    }
-
-    fclose(fp);
-    fclose(tmp);
-
-    if (!found) {
-        remove(tmp_path);
+    if (cat_update_user(username, hash_str) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "User '%s' does not exist", username);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         result = -1;
-    } else {
-        remove(path);
-        rename(tmp_path, path);
     }
 
     pthread_mutex_unlock(&g_metadata_lock);
@@ -414,29 +257,13 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
  * ---------------------------------------------------------------- */
 int ListUsers(char names[][256], int max_users)
 {
-    char path[1024], line[MAX_LINE];
-    FILE *fp;
-    int count = 0;
+    UserDesc users[64];
+    int limit = max_users < 64 ? max_users : 64;
+    int count = cat_list_users(users, limit);
 
-    users_path(path, sizeof(path));
-    fp = fopen(path, "r");
-    if (!fp) return 0;
-
-    while (fgets(line, sizeof(line), fp) && count < max_users) {
-        line[strcspn(line, "\n\r")] = '\0';
-        if (line[0] == '\0') continue;
-
-        /* Extract username (before ':') */
-        char *colon = strchr(line, ':');
-        if (colon) {
-            size_t ulen = (size_t)(colon - line);
-            if (ulen >= 256) ulen = 255;
-            strncpy(names[count], line, ulen);
-            names[count][ulen] = '\0';
-            count++;
-        }
+    for (int i = 0; i < count; i++) {
+        strncpy(names[i], users[i].username, 255);
+        names[i][255] = '\0';
     }
-
-    fclose(fp);
     return count;
 }
