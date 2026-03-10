@@ -53,6 +53,7 @@ int CreateTableProcess(void);
 int InsertProcess(void);
 int DropTableProcess(void);
 int TruncateTableProcess(void);
+int ReclaimTableProcess(void);
 int CreateDatabaseProcess(const char *name, int if_not_exists);
 int CreateSchemaProcess(const char *name, int if_not_exists);
 int UseDatabaseProcess(const char *name);
@@ -126,6 +127,13 @@ int ReadNullFlags(const char *tblName, int *flags, int maxCols);
 int ReadUniqueFlags(const char *tblName, int *flags, int maxCols);
 int ReadDefaults(const char *tblName, char defaults[][256], int maxCols);
 int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxConstraints);
+
+/* FOREIGN KEY parser helpers */
+void AddForeignKeyColumn(const char *colName);
+void AddForeignKeyRefColumn(const char *colName);
+void AddForeignKeyRefTable(const char *tableName);
+void SetForeignKeyOnDelete(int action);
+void SetForeignKeyOnUpdate(int action);
 
 /* User management (UserMgmt.c) */
 void db_ensure_users(void);

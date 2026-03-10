@@ -265,6 +265,56 @@ void AddPrimaryKeyColumn(const char *colName)
 }
 
 /* ----------------------------------------------------------------
+ *  FOREIGN KEY parser helpers
+ * ---------------------------------------------------------------- */
+
+void AddForeignKeyColumn(const char *colName)
+{
+    if (!colName) return;
+    if (g_fkCurLocalCols[0] != '\0')
+        strcat(g_fkCurLocalCols, ",");
+    strcat(g_fkCurLocalCols, colName);
+}
+
+void AddForeignKeyRefColumn(const char *colName)
+{
+    if (!colName) return;
+    if (g_fkCurRefCols[0] != '\0')
+        strcat(g_fkCurRefCols, ",");
+    strcat(g_fkCurRefCols, colName);
+}
+
+void AddForeignKeyRefTable(const char *tableName)
+{
+    if (!tableName || g_fkCount >= 8) return;
+
+    strncpy(g_fkLocalCols[g_fkCount], g_fkCurLocalCols, 255);
+    g_fkLocalCols[g_fkCount][255] = '\0';
+    strncpy(g_fkRefTable[g_fkCount], tableName, 127);
+    g_fkRefTable[g_fkCount][127] = '\0';
+    strncpy(g_fkRefCols[g_fkCount], g_fkCurRefCols, 255);
+    g_fkRefCols[g_fkCount][255] = '\0';
+    /* on_delete/on_update already set by SetForeignKey* or default 0 */
+
+    g_fkCount++;
+
+    /* Reset current accumulators for next FK */
+    g_fkCurLocalCols[0] = '\0';
+    g_fkCurRefCols[0] = '\0';
+}
+
+void SetForeignKeyOnDelete(int action)
+{
+    /* Set on the current FK being built (g_fkCount is the index) */
+    g_fkOnDelete[g_fkCount] = action;
+}
+
+void SetForeignKeyOnUpdate(int action)
+{
+    g_fkOnUpdate[g_fkCount] = action;
+}
+
+/* ----------------------------------------------------------------
  *  CREATE TABLE — now uses system catalog + unified storage
  * ---------------------------------------------------------------- */
 
@@ -448,6 +498,38 @@ int CreateTableProcess(void)
         }
     }
 
+    /* Store FOREIGN KEY constraints in catalog */
+    if (g_fkCount > 0) {
+        TableDesc td;
+        if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
+            for (int fi = 0; fi < g_fkCount; fi++) {
+                /* Resolve referenced table */
+                TableDesc refTd;
+                char refPath[1024];
+                db_table_path(g_fkRefTable[fi], refPath, sizeof(refPath));
+                if (tapi_resolve(refPath, &refTd, NULL, NULL) < 0) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "referenced table \"%s\" does not exist",
+                             g_fkRefTable[fi]);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE("42P01");
+                    TruncateCreate();
+                    return -1;
+                }
+
+                /* Build definition: "local_cols|on_delete|on_update" */
+                char definition[1024];
+                snprintf(definition, sizeof(definition), "%s|%d|%d",
+                         g_fkLocalCols[fi],
+                         g_fkOnDelete[fi],
+                         g_fkOnUpdate[fi]);
+
+                cat_add_constraint(td.table_id, 'F', definition,
+                                   refTd.table_id, g_fkRefCols[fi]);
+            }
+        }
+    }
+
     printf("command(s) completed successfully!..\n");
     TruncateCreate();
 
@@ -483,6 +565,16 @@ void TruncateCreate(void)
     g_autoIncStep = 1;
     g_pkColumnCount = 0;
     memset(g_pkColumnNames, 0, sizeof(g_pkColumnNames));
+
+    /* Reset FK state */
+    g_fkCount = 0;
+    memset(g_fkLocalCols, 0, sizeof(g_fkLocalCols));
+    memset(g_fkRefTable, 0, sizeof(g_fkRefTable));
+    memset(g_fkRefCols, 0, sizeof(g_fkRefCols));
+    memset(g_fkOnDelete, 0, sizeof(g_fkOnDelete));
+    memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
+    g_fkCurLocalCols[0] = '\0';
+    g_fkCurRefCols[0] = '\0';
 }
 
 int GetTableName(char *name)

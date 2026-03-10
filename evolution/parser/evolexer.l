@@ -42,6 +42,7 @@ BOTH					{ return BOTH; }
 BY						{ return BY; }
 
 
+CASCADE					{ return CASCADE; }
 CASE					{ return CASE; }
 
 CHAR(ACTER)?			{ return CHAR; }
@@ -101,6 +102,7 @@ NOT[ \t\n]+EXISTS		{ yylval.subtok = 1; return EXISTS; }
 FLOAT4?					{ return FLOAT; }
 FOR						{ return FOR; }
 FORCE					{ return FORCE; }
+FOREIGN					{ return FOREIGN; }
 
 FROM					{ return FROM; }
 FULLTEXT				{ return FULLTEXT; }
@@ -180,9 +182,10 @@ REGEXP|RLIKE			{ return REGEXP; }
 
 
 
+RECLAIM					{ return RECLAIM; }
+REFERENCES				{ return REFERENCES; }
 REPLACE					{ int c = input(); unput(c); if(c == '(') return FREPLACE; return REPLACE; }
-
-
+RESTRICT				{ return RESTRICT; }
 
 
 RIGHT					{ return RIGHT; }

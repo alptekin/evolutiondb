@@ -132,6 +132,17 @@ typedef struct QueryContext {
     char checkSerialized[MAX_CHECK_CONSTRAINTS][1024];
     int  checkCount;
 
+    /* ---- FOREIGN KEY constraints (accumulated during CREATE TABLE) ---- */
+    char fkLocalCols[8][256];      /* local column list CSV per FK */
+    char fkRefTable[8][128];       /* referenced table name */
+    char fkRefCols[8][256];        /* referenced column list CSV */
+    int  fkOnDelete[8];            /* 0=RESTRICT(default), 1=CASCADE, 2=SET NULL, 3=RESTRICT */
+    int  fkOnUpdate[8];            /* 0=RESTRICT(default), 1=CASCADE, 2=SET NULL, 3=RESTRICT */
+    int  fkCount;
+    /* Temp accumulators for current FK being parsed */
+    char fkCurLocalCols[256];
+    char fkCurRefCols[256];
+
     /* ---- Sort context (for qsort callback) ---- */
     int sortColIndex;
     int sortDesc;
@@ -254,6 +265,16 @@ void          qctx_free(QueryContext *ctx);
 /* CHECK constraints */
 #define g_checkSerialized       (g_qctx->checkSerialized)
 #define g_checkCount            (g_qctx->checkCount)
+
+/* FOREIGN KEY constraints */
+#define g_fkLocalCols           (g_qctx->fkLocalCols)
+#define g_fkRefTable            (g_qctx->fkRefTable)
+#define g_fkRefCols             (g_qctx->fkRefCols)
+#define g_fkOnDelete            (g_qctx->fkOnDelete)
+#define g_fkOnUpdate            (g_qctx->fkOnUpdate)
+#define g_fkCount               (g_qctx->fkCount)
+#define g_fkCurLocalCols        (g_qctx->fkCurLocalCols)
+#define g_fkCurRefCols          (g_qctx->fkCurRefCols)
 
 /* Database/Schema context (moved from true globals for thread safety) */
 #define g_currentDatabase       (g_qctx->currentDatabase)

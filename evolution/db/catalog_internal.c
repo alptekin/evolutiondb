@@ -1049,6 +1049,30 @@ int cat_list_constraints(uint32_t table_id, ConstraintDesc *out, int max)
     return count;
 }
 
+int cat_list_referencing_fks(uint32_t ref_table_id, ConstraintDesc *out, int max)
+{
+    /* Full scan of constraint B+ tree to find FKs referencing this table */
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_CONSTRAINTS], &cur) < 0)
+        return 0;
+
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            ConstraintDesc desc;
+            deserialize_constraint(record, &desc);
+            if (desc.constraint_type == 'F' &&
+                desc.ref_table_id == ref_table_id) {
+                out[count++] = desc;
+            }
+        }
+    }
+    return count;
+}
+
 /* ----------------------------------------------------------------
  *  User operations
  * ---------------------------------------------------------------- */

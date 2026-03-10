@@ -197,7 +197,7 @@
 
 ---
 
-### Task 10: ⬜ FOREIGN KEY Constraints (Feature #6)
+### Task 10: ✅ FOREIGN KEY Constraints (Feature #6)
 
 **Goal:** Implement basic referential integrity: FOREIGN KEY enforcement on INSERT, UPDATE, DELETE.
 
@@ -277,7 +277,7 @@
 
 ---
 
-### Task 14: ⬜ RECLAIM — Storage Garbage Collection (Feature #71)
+### Task 14: ✅ RECLAIM — Storage Garbage Collection (Feature #71)
 
 **Goal:** Deleted records leave blank space in `.dat`/`.idx` files (free list). `RECLAIM TABLE <name>` compacts storage by rewriting live records contiguously and rebuilding the hash index. EvoSQL-specific command (not PostgreSQL's VACUUM).
 
