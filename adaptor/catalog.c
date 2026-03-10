@@ -7,6 +7,8 @@
 #include "catalog.h"
 #include "../evolution/db/database.h"
 #include "../evolution/db/crypto.h"
+#include "../evolution/db/catalog_internal.h"
+#include "../evolution/db/table_api.h"
 
 /* From main.c — connection limit accessors */
 extern int  get_max_connections(void);
@@ -145,24 +147,16 @@ static int schema_name_to_oid(const char *name, char *oid_out, int out_size)
     if (strcmp(name, "pg_catalog") == 0) { snprintf(oid_out, out_size, "11"); return 1; }
     if (strcmp(name, "information_schema") == 0) { snprintf(oid_out, out_size, "13060"); return 1; }
 
-    char schfile[1024];
-    snprintf(schfile, sizeof(schfile), "%s/%s/schemas", db_get_root(), db_get_current_database());
-    FILE *fp = fopen(schfile, "r");
-    if (!fp) return 0;
-
-    char line[256];
-    int idx = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\n\r")] = '\0';
-        if (line[0] == '\0') continue;
-        if (strcmp(line, name) == 0) {
-            snprintf(oid_out, out_size, "%d", 2200 + idx);
-            fclose(fp);
+    DatabaseDesc dbDesc;
+    if (cat_find_database(db_get_current_database(), &dbDesc) != 0) return 0;
+    SchemaDesc schemas[32];
+    int n = cat_list_schemas(dbDesc.db_id, schemas, 32);
+    for (int i = 0; i < n; i++) {
+        if (strcasecmp(schemas[i].schema_name, name) == 0) {
+            snprintf(oid_out, out_size, "%d", 2200 + i);
             return 1;
         }
-        idx++;
     }
-    fclose(fp);
     return 0;
 }
 
@@ -175,26 +169,16 @@ static int oid_to_schema_name(const char *oid_str, char *schema_out, int out_siz
     if (oid_val == 13060) { strncpy(schema_out, "information_schema", out_size - 1); schema_out[out_size-1] = '\0'; return 1; }
     if (oid_val < 2200)   return 0;
 
-    int idx = oid_val - 2200;  /* 0-based index into schemas file */
-    char schfile[1024];
-    snprintf(schfile, sizeof(schfile), "%s/%s/schemas", db_get_root(), db_get_current_database());
-    FILE *fp = fopen(schfile, "r");
-    if (!fp) return 0;
-
-    char line[256];
-    int cur = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\n\r")] = '\0';
-        if (line[0] == '\0') continue;
-        if (cur == idx) {
-            strncpy(schema_out, line, out_size - 1);
-            schema_out[out_size - 1] = '\0';
-            fclose(fp);
-            return 1;
-        }
-        cur++;
+    int idx = oid_val - 2200;  /* 0-based index into schema list */
+    DatabaseDesc dbDesc;
+    if (cat_find_database(db_get_current_database(), &dbDesc) != 0) return 0;
+    SchemaDesc schemas[32];
+    int n = cat_list_schemas(dbDesc.db_id, schemas, 32);
+    if (idx >= 0 && idx < n) {
+        strncpy(schema_out, schemas[idx].schema_name, out_size - 1);
+        schema_out[out_size - 1] = '\0';
+        return 1;
     }
-    fclose(fp);
     return 0;
 }
 
@@ -281,22 +265,11 @@ static int handle_show(const char *sql, ResultSet *rs)
         rs->is_select = 1;
         result_add_column(rs, "database", PG_OID_TEXT);
 
-        /* Read root/databases file — one name per line */
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/databases", db_get_root());
-        FILE *fp = fopen(path, "r");
-        if (fp) {
-            char line[256];
-            while (fgets(line, sizeof(line), fp)) {
-                /* Strip trailing whitespace/newline */
-                char *end = line + strlen(line) - 1;
-                while (end >= line && (*end == '\n' || *end == '\r' || *end == ' '))
-                    *end-- = '\0';
-                if (line[0] == '\0') continue;
-                int row = result_add_row(rs);
-                result_set_field(rs, row, 0, line);
-            }
-            fclose(fp);
+        DatabaseDesc dbs[64];
+        int ndb = cat_list_databases(dbs, 64);
+        for (int i = 0; i < ndb; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, dbs[i].db_name);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
@@ -308,21 +281,14 @@ static int handle_show(const char *sql, ResultSet *rs)
         rs->is_select = 1;
         result_add_column(rs, "schema", PG_OID_TEXT);
 
-        char path[1024];
-        snprintf(path, sizeof(path), "%s/%s/schemas",
-                 db_get_root(), g_currentDatabase);
-        FILE *fp = fopen(path, "r");
-        if (fp) {
-            char line[256];
-            while (fgets(line, sizeof(line), fp)) {
-                char *end = line + strlen(line) - 1;
-                while (end >= line && (*end == '\n' || *end == '\r' || *end == ' '))
-                    *end-- = '\0';
-                if (line[0] == '\0') continue;
+        DatabaseDesc dbDesc;
+        if (cat_find_database(db_get_current_database(), &dbDesc) == 0) {
+            SchemaDesc schemas[32];
+            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            for (int i = 0; i < ns; i++) {
                 int row = result_add_row(rs);
-                result_set_field(rs, row, 0, line);
+                result_set_field(rs, row, 0, schemas[i].schema_name);
             }
-            fclose(fp);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
@@ -334,22 +300,17 @@ static int handle_show(const char *sql, ResultSet *rs)
         rs->is_select = 1;
         result_add_column(rs, "table", PG_OID_TEXT);
 
-        char dirpath[1024];
-        snprintf(dirpath, sizeof(dirpath), "%s/%s/%s",
-                 db_get_root(), g_currentDatabase, g_currentSchema);
-
-        MetaIterator mit;
-        meta_iter_open(&mit, dirpath);
-        while (meta_iter_next(&mit)) {
-            char tname[256];
-            strncpy(tname, mit.current_name, sizeof(tname) - 1);
-            tname[sizeof(tname) - 1] = '\0';
-            char *dot = strstr(tname, ".meta");
-            if (dot) *dot = '\0';
-            int row = result_add_row(rs);
-            result_set_field(rs, row, 0, tname);
+        DatabaseDesc dbDesc;
+        SchemaDesc schDesc;
+        if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
+            cat_find_schema(dbDesc.db_id, g_currentSchema, &schDesc) == 0) {
+            TableDesc tables[256];
+            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            for (int i = 0; i < nt; i++) {
+                int row = result_add_row(rs);
+                result_set_field(rs, row, 0, tables[i].table_name);
+            }
         }
-        meta_iter_close(&mit);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
@@ -747,8 +708,6 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
  * ---------------------------------------------------------------- */
 int catalog_list_tables(ResultSet *rs)
 {
-    MetaIterator it;
-
     result_init(rs);
     rs->is_select = 1;
 
@@ -757,27 +716,23 @@ int catalog_list_tables(ResultSet *rs)
     result_add_column(rs, "table_name", PG_OID_TEXT);
     result_add_column(rs, "table_type", PG_OID_TEXT);
 
-    char _dbdir[1024];
-    snprintf(_dbdir, sizeof(_dbdir), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
-    meta_iter_open(&it, _dbdir);
     int count = 0;
-    while (meta_iter_next(&it)) {
-        /* Strip .meta extension to get table name */
-        char tblName[256];
-        strncpy(tblName, it.current_name, sizeof(tblName) - 1);
-        tblName[sizeof(tblName) - 1] = '\0';
-        char *dot = strstr(tblName, ".meta");
-        if (dot) *dot = '\0';
-
-        int row = result_add_row(rs);
-        if (row < 0) break;
-        result_set_field(rs, row, 0, "evosql");
-        result_set_field(rs, row, 1, "default");
-        result_set_field(rs, row, 2, tblName);
-        result_set_field(rs, row, 3, "BASE TABLE");
-        count++;
+    DatabaseDesc dbDesc;
+    SchemaDesc schDesc;
+    if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
+        cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
+        TableDesc tables[256];
+        int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+        for (int i = 0; i < nt; i++) {
+            int row = result_add_row(rs);
+            if (row < 0) break;
+            result_set_field(rs, row, 0, "evosql");
+            result_set_field(rs, row, 1, db_get_current_schema());
+            result_set_field(rs, row, 2, tables[i].table_name);
+            result_set_field(rs, row, 3, "BASE TABLE");
+            count++;
+        }
     }
-    meta_iter_close(&it);
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
     return 1;
@@ -788,11 +743,7 @@ int catalog_list_tables(ResultSet *rs)
  * ---------------------------------------------------------------- */
 int catalog_list_columns(const char *table_name, ResultSet *rs)
 {
-    char metaFile[SAFE_PATH_MAX], line[1024];
-    FILE *fp;
     int ordinal = 0;
-    int colTypes[64];
-    int numTypes;
 
     result_init(rs);
     rs->is_select = 1;
@@ -805,49 +756,37 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
     result_add_column(rs, "data_type", PG_OID_TEXT);
     result_add_column(rs, "is_nullable", PG_OID_TEXT);
 
-    char _fullPath[1024];
-    db_table_path(table_name, _fullPath, sizeof(_fullPath));
-    numTypes = ReadColumnTypes(_fullPath, colTypes, 64);
-
-    int nullFlags[64];
-    int numNullFlags = ReadNullFlags(_fullPath, nullFlags, 64);
-
-    snprintf(metaFile, sizeof(metaFile), "%s.meta", _fullPath);
-    fp = fopen(metaFile, "r");
-    if (!fp) {
+    DatabaseDesc dbDesc;
+    SchemaDesc schDesc;
+    TableDesc tblDesc;
+    if (cat_find_database(db_get_current_database(), &dbDesc) != 0 ||
+        cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) != 0 ||
+        cat_find_table(schDesc.schema_id, table_name, &tblDesc) != 0) {
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
         return 1;
     }
 
-    if (fgets(line, sizeof(line), fp)) {
-        char *col;
-        line[strcspn(line, "\n")] = '\0';
-        col = strtok(line, ";");
-        while (col) {
-            ordinal++;
-            int row = result_add_row(rs);
-            if (row < 0) break;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = cat_find_columns(tblDesc.table_id, cols, CAT_MAX_COLUMNS);
+    for (int i = 0; i < ncols; i++) {
+        ordinal++;
+        int row = result_add_row(rs);
+        if (row < 0) break;
 
-            char ordStr[16];
-            snprintf(ordStr, sizeof(ordStr), "%d", ordinal);
+        char ordStr[16];
+        snprintf(ordStr, sizeof(ordStr), "%d", ordinal);
 
-            const char *typeName = (ordinal - 1 < numTypes)
-                ? evo_type_to_name(colTypes[ordinal - 1])
-                : "text";
+        const char *typeName = evo_type_to_name(cols[i].type_code);
 
-            result_set_field(rs, row, 0, "evosql");
-            result_set_field(rs, row, 1, "default");
-            result_set_field(rs, row, 2, table_name);
-            result_set_field(rs, row, 3, col);
-            result_set_field(rs, row, 4, ordStr);
-            result_set_field(rs, row, 5, typeName);
-            result_set_field(rs, row, 6,
-                (ordinal - 1 < numNullFlags && nullFlags[ordinal - 1]) ? "NO" : "YES");
-
-            col = strtok(NULL, ";");
-        }
+        result_set_field(rs, row, 0, "evosql");
+        result_set_field(rs, row, 1, db_get_current_schema());
+        result_set_field(rs, row, 2, table_name);
+        result_set_field(rs, row, 3, cols[i].col_name);
+        result_set_field(rs, row, 4, ordStr);
+        result_set_field(rs, row, 5, typeName);
+        result_set_field(rs, row, 6, cols[i].is_not_null ? "NO" : "YES");
     }
-    fclose(fp);
+
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", ordinal);
     return 1;
 }
@@ -857,7 +796,6 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
  * ---------------------------------------------------------------- */
 static int catalog_list_all_columns(ResultSet *rs)
 {
-    MetaIterator it;
     int total = 0;
 
     result_init(rs);
@@ -871,63 +809,38 @@ static int catalog_list_all_columns(ResultSet *rs)
     result_add_column(rs, "data_type", PG_OID_TEXT);
     result_add_column(rs, "is_nullable", PG_OID_TEXT);
 
-    char _dbdir2[1024];
-    snprintf(_dbdir2, sizeof(_dbdir2), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
-    meta_iter_open(&it, _dbdir2);
-    while (meta_iter_next(&it)) {
-        char tblName[256], metaFile[SAFE_PATH_MAX], line[1024];
-        strncpy(tblName, it.current_name, sizeof(tblName) - 1);
-        tblName[sizeof(tblName) - 1] = '\0';
-        char *dot = strstr(tblName, ".meta");
-        if (dot) *dot = '\0';
-
-        char _fp2[1024];
-        db_table_path(tblName, _fp2, sizeof(_fp2));
-        snprintf(metaFile, sizeof(metaFile), "%s.meta", _fp2);
-        FILE *fp = fopen(metaFile, "r");
-        if (!fp) continue;
-
-        /* Read type encodings for this table */
-        int colTypes[64];
-        int numColTypes = ReadColumnTypes(_fp2, colTypes, 64);
-
-        /* Read NOT NULL flags for this table */
-        int nullFlags[64];
-        int numNullFlags = ReadNullFlags(_fp2, nullFlags, 64);
-
-        if (fgets(line, sizeof(line), fp)) {
-            char *col;
-            int ordinal = 0;
-            line[strcspn(line, "\n")] = '\0';
-            col = strtok(line, ";");
-            while (col) {
-                ordinal++;
-                int row = result_add_row(rs);
-                if (row < 0) break;
-
-                char ordStr[16];
-                snprintf(ordStr, sizeof(ordStr), "%d", ordinal);
-
-                const char *typeName = (ordinal - 1 < numColTypes)
-                    ? evo_type_to_name(colTypes[ordinal - 1])
-                    : "text";
-
-                result_set_field(rs, row, 0, "evosql");
-                result_set_field(rs, row, 1, "default");
-                result_set_field(rs, row, 2, tblName);
-                result_set_field(rs, row, 3, col);
-                result_set_field(rs, row, 4, ordStr);
-                result_set_field(rs, row, 5, typeName);
-                result_set_field(rs, row, 6,
-                    (ordinal - 1 < numNullFlags && nullFlags[ordinal - 1]) ? "NO" : "YES");
-                total++;
-
-                col = strtok(NULL, ";");
-            }
-        }
-        fclose(fp);
+    DatabaseDesc dbDesc;
+    SchemaDesc schDesc;
+    if (cat_find_database(db_get_current_database(), &dbDesc) != 0 ||
+        cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) != 0) {
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
+        return 1;
     }
-    meta_iter_close(&it);
+
+    TableDesc tables[256];
+    int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+    for (int t = 0; t < nt; t++) {
+        ColumnDesc cols[CAT_MAX_COLUMNS];
+        int ncols = cat_find_columns(tables[t].table_id, cols, CAT_MAX_COLUMNS);
+        for (int c = 0; c < ncols; c++) {
+            int row = result_add_row(rs);
+            if (row < 0) break;
+
+            char ordStr[16];
+            snprintf(ordStr, sizeof(ordStr), "%d", c + 1);
+
+            const char *typeName = evo_type_to_name(cols[c].type_code);
+
+            result_set_field(rs, row, 0, "evosql");
+            result_set_field(rs, row, 1, db_get_current_schema());
+            result_set_field(rs, row, 2, tables[t].table_name);
+            result_set_field(rs, row, 3, cols[c].col_name);
+            result_set_field(rs, row, 4, ordStr);
+            result_set_field(rs, row, 5, typeName);
+            result_set_field(rs, row, 6, cols[c].is_not_null ? "NO" : "YES");
+            total++;
+        }
+    }
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", total);
     return 1;
@@ -994,40 +907,33 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             }
         }
 
-        char dbfile[1024];
-        snprintf(dbfile, sizeof(dbfile), "%s/databases", db_get_root());
-        FILE *fp = fopen(dbfile, "r");
+        DatabaseDesc dbs[64];
+        int ndb = cat_list_databases(dbs, 64);
         int count = 0;
-        if (fp) {
-            char line[256];
-            int oid_counter = 16384;
-            while (fgets(line, sizeof(line), fp)) {
-                line[strcspn(line, "\n\r")] = '\0';
-                if (line[0] == '\0') continue;
-                if (datname_filter[0] && strcasecmp(line, datname_filter) != 0) {
-                    oid_counter++;
-                    continue;
-                }
-                char oid_str[32];
-                snprintf(oid_str, sizeof(oid_str), "%d", oid_counter++);
-                int r = result_add_row(rs);
-                result_set_field(rs, r, 0, oid_str);    /* oid */
-                result_set_field(rs, r, 1, line);         /* datname */
-                result_set_field(rs, r, 2, "10");         /* datdba */
-                result_set_field(rs, r, 3, "6");          /* encoding (UTF8) */
-                result_set_field(rs, r, 4, "c");          /* datlocprovider */
-                result_set_field(rs, r, 5, "f");          /* datistemplate */
-                result_set_field(rs, r, 6, "t");          /* datallowconn */
-                result_set_field(rs, r, 7, "-1");         /* datconnlimit */
-                result_set_field(rs, r, 8, "726");        /* datfrozenxid */
-                result_set_field(rs, r, 9, "1");          /* datminmxid */
-                result_set_field(rs, r, 10, "1663");      /* dattablespace */
-                result_set_field(rs, r, 11, "en_US.UTF-8"); /* datcollate */
-                result_set_field(rs, r, 12, "en_US.UTF-8"); /* datctype */
-                /* daticulocale, daticurules, datcollversion, datacl → NULL */
-                count++;
+        int oid_counter = 16384;
+        for (int i = 0; i < ndb; i++) {
+            if (datname_filter[0] && strcasecmp(dbs[i].db_name, datname_filter) != 0) {
+                oid_counter++;
+                continue;
             }
-            fclose(fp);
+            char oid_str[32];
+            snprintf(oid_str, sizeof(oid_str), "%d", oid_counter++);
+            int r = result_add_row(rs);
+            result_set_field(rs, r, 0, oid_str);    /* oid */
+            result_set_field(rs, r, 1, dbs[i].db_name); /* datname */
+            result_set_field(rs, r, 2, "10");         /* datdba */
+            result_set_field(rs, r, 3, "6");          /* encoding (UTF8) */
+            result_set_field(rs, r, 4, "c");          /* datlocprovider */
+            result_set_field(rs, r, 5, "f");          /* datistemplate */
+            result_set_field(rs, r, 6, "t");          /* datallowconn */
+            result_set_field(rs, r, 7, "-1");         /* datconnlimit */
+            result_set_field(rs, r, 8, "726");        /* datfrozenxid */
+            result_set_field(rs, r, 9, "1");          /* datminmxid */
+            result_set_field(rs, r, 10, "1663");      /* dattablespace */
+            result_set_field(rs, r, 11, "en_US.UTF-8"); /* datcollate */
+            result_set_field(rs, r, 12, "en_US.UTF-8"); /* datctype */
+            /* daticulocale, daticurules, datcollversion, datacl → NULL */
+            count++;
         }
         if (count == 0 && datname_filter[0] == '\0') {
             int r = result_add_row(rs);
@@ -1084,25 +990,21 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_set_field(rs, row1, 2, "10");
         count++;
 
-        /* Database schemas from per-database schemas file */
-        char schfile[1024];
-        snprintf(schfile, sizeof(schfile), "%s/%s/schemas", db_get_root(), db_get_current_database());
-        FILE *fp = fopen(schfile, "r");
-        if (fp) {
-            char line[256];
+        /* Database schemas from catalog */
+        DatabaseDesc dbDescNs;
+        if (cat_find_database(db_get_current_database(), &dbDescNs) == 0) {
+            SchemaDesc schemas[32];
+            int ns = cat_list_schemas(dbDescNs.db_id, schemas, 32);
             int oid_counter = 2200;
-            while (fgets(line, sizeof(line), fp)) {
-                line[strcspn(line, "\n\r")] = '\0';
-                if (line[0] == '\0') continue;
+            for (int i = 0; i < ns; i++) {
                 char oid_str[32];
                 snprintf(oid_str, sizeof(oid_str), "%d", oid_counter++);
                 int r = result_add_row(rs);
                 result_set_field(rs, r, 0, oid_str);
-                result_set_field(rs, r, 1, line);
+                result_set_field(rs, r, 1, schemas[i].schema_name);
                 result_set_field(rs, r, 2, "10");
                 count++;
             }
-            fclose(fp);
         }
 
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
@@ -1241,99 +1143,72 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "def_value", PG_OID_TEXT);      /* 22 */
         result_add_column(rs, "description", PG_OID_TEXT);    /* 23 */
 
-        /* Scan .meta files — OID derived from table name for stability */
-        MetaIterator mit;
-        char _dbdir3[1024];
-        snprintf(_dbdir3, sizeof(_dbdir3), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
-        meta_iter_open(&mit, _dbdir3);
+        /* Scan tables via catalog — OID derived from table name for stability */
         int count = 0;
-        while (meta_iter_next(&mit)) {
-                char tblName[256];
-                strncpy(tblName, mit.current_name, sizeof(tblName) - 1);
-                tblName[sizeof(tblName) - 1] = '\0';
-                char *dot = strstr(tblName, ".meta");
-                if (dot) *dot = '\0';
+        DatabaseDesc dbDescAttr;
+        SchemaDesc schDescAttr;
+        if (cat_find_database(db_get_current_database(), &dbDescAttr) == 0 &&
+            cat_find_schema(dbDescAttr.db_id, db_get_current_schema(), &schDescAttr) == 0) {
+            TableDesc tables[256];
+            int nt = cat_list_tables(schDescAttr.schema_id, tables, 256);
+            for (int t = 0; t < nt; t++) {
+                char oidStr[16];
+                snprintf(oidStr, sizeof(oidStr), "%u", stable_table_oid(tables[t].table_name));
 
-                char metaPath[SAFE_PATH_MAX], line[2048], oidStr[16];
-                char _fp3[1024];
-                db_table_path(tblName, _fp3, sizeof(_fp3));
-                snprintf(metaPath, sizeof(metaPath), "%s.meta", _fp3);
-                snprintf(oidStr, sizeof(oidStr), "%u", stable_table_oid(tblName));
+                ColumnDesc cols[CAT_MAX_COLUMNS];
+                int ncols = cat_find_columns(tables[t].table_id, cols, CAT_MAX_COLUMNS);
+                for (int c = 0; c < ncols; c++) {
+                    int attnum = c + 1;
+                    int row = result_add_row(rs);
+                    if (row < 0) break;
+                    char numStr[16], typoidStr[16], attlenStr[16], typmodStr[16];
+                    int typoid, attlen, typmod;
+                    const char *byval, *storage;
 
-                /* Read type encodings for this table */
-                int colTypes[64];
-                int numColTypes = ReadColumnTypes(_fp3, colTypes, 64);
+                    snprintf(numStr, sizeof(numStr), "%d", attnum);
 
-                /* Read NOT NULL flags for this table */
-                int nullFlags[64];
-                int numNullFlags = ReadNullFlags(_fp3, nullFlags, 64);
+                    typoid = evo_type_to_pg_oid(cols[c].type_code);
+                    attlen = evo_type_to_attlen(cols[c].type_code);
+                    typmod = evo_type_to_atttypmod(cols[c].type_code);
+                    byval = (attlen > 0 && attlen <= 8) ? "t" : "f";
+                    storage = (attlen < 0) ? "x" : "p";
 
-                FILE *fp = fopen(metaPath, "r");
-                if (!fp) continue;
+                    snprintf(typoidStr, sizeof(typoidStr), "%d", typoid);
+                    snprintf(attlenStr, sizeof(attlenStr), "%d", attlen);
+                    snprintf(typmodStr, sizeof(typmodStr), "%d", typmod);
 
-                if (fgets(line, sizeof(line), fp)) {
-                    int attnum = 0;
-                    line[strcspn(line, "\n")] = '\0';
-                    char *col = strtok(line, ";");
-                    while (col) {
-                        attnum++;
-                        int row = result_add_row(rs);
-                        if (row < 0) break;
-                        char numStr[16], typoidStr[16], attlenStr[16], typmodStr[16];
-                        int typoid, attlen, typmod;
-                        const char *byval, *storage;
-
-                        snprintf(numStr, sizeof(numStr), "%d", attnum);
-
-                        if (attnum - 1 < numColTypes) {
-                            typoid = evo_type_to_pg_oid(colTypes[attnum - 1]);
-                            attlen = evo_type_to_attlen(colTypes[attnum - 1]);
-                            typmod = evo_type_to_atttypmod(colTypes[attnum - 1]);
-                            byval = (attlen > 0 && attlen <= 8) ? "t" : "f";
-                            storage = (attlen < 0) ? "x" : "p";
-                        } else {
-                            typoid = 25;  /* text */
-                            attlen = -1;
-                            typmod = -1;
-                            byval = "f";
-                            storage = "x";
-                        }
-                        snprintf(typoidStr, sizeof(typoidStr), "%d", typoid);
-                        snprintf(attlenStr, sizeof(attlenStr), "%d", attlen);
-                        snprintf(typmodStr, sizeof(typmodStr), "%d", typmod);
-
-                        result_set_field(rs, row, 0, oidStr);      /* attrelid */
-                        result_set_field(rs, row, 1, col);          /* attname */
-                        result_set_field(rs, row, 2, typoidStr);    /* atttypid */
-                        result_set_field(rs, row, 3, "-1");         /* attstattarget */
-                        result_set_field(rs, row, 4, attlenStr);    /* attlen */
-                        result_set_field(rs, row, 5, numStr);       /* attnum */
-                        result_set_field(rs, row, 6, "0");          /* attndims */
-                        result_set_field(rs, row, 7, "-1");         /* attcacheoff */
-                        result_set_field(rs, row, 8, typmodStr);    /* atttypmod */
-                        result_set_field(rs, row, 9, byval);        /* attbyval */
-                        result_set_field(rs, row, 10, storage);     /* attstorage */
-                        result_set_field(rs, row, 11, "i");         /* attalign */
-                        result_set_field(rs, row, 12,
-                            (attnum - 1 < numNullFlags && nullFlags[attnum - 1]) ? "t" : "f");     /* attnotnull */
-                        result_set_field(rs, row, 13, "f");     /* atthasdef */
-                        result_set_field(rs, row, 14, "f");     /* atthasmissing */
-                        result_set_field(rs, row, 15, "");      /* attidentity (none) */
-                        result_set_field(rs, row, 16, "");      /* attgenerated (none) */
-                        result_set_field(rs, row, 17, "f");     /* attisdropped */
-                        result_set_field(rs, row, 18, "t");     /* attislocal */
-                        result_set_field(rs, row, 19, "0");     /* attinhcount */
-                        result_set_field(rs, row, 20, "0");     /* attcollation */
-                        result_set_field(rs, row, 21, tblName); /* relname */
+                    result_set_field(rs, row, 0, oidStr);      /* attrelid */
+                    result_set_field(rs, row, 1, cols[c].col_name); /* attname */
+                    result_set_field(rs, row, 2, typoidStr);    /* atttypid */
+                    result_set_field(rs, row, 3, "-1");         /* attstattarget */
+                    result_set_field(rs, row, 4, attlenStr);    /* attlen */
+                    result_set_field(rs, row, 5, numStr);       /* attnum */
+                    result_set_field(rs, row, 6, "0");          /* attndims */
+                    result_set_field(rs, row, 7, "-1");         /* attcacheoff */
+                    result_set_field(rs, row, 8, typmodStr);    /* atttypmod */
+                    result_set_field(rs, row, 9, byval);        /* attbyval */
+                    result_set_field(rs, row, 10, storage);     /* attstorage */
+                    result_set_field(rs, row, 11, "i");         /* attalign */
+                    result_set_field(rs, row, 12, cols[c].is_not_null ? "t" : "f"); /* attnotnull */
+                    result_set_field(rs, row, 13,
+                        (cols[c].default_val[0] != '\0') ? "t" : "f"); /* atthasdef */
+                    result_set_field(rs, row, 14, "f");     /* atthasmissing */
+                    result_set_field(rs, row, 15, "");      /* attidentity (none) */
+                    result_set_field(rs, row, 16, "");      /* attgenerated (none) */
+                    result_set_field(rs, row, 17, "f");     /* attisdropped */
+                    result_set_field(rs, row, 18, "t");     /* attislocal */
+                    result_set_field(rs, row, 19, "0");     /* attinhcount */
+                    result_set_field(rs, row, 20, "0");     /* attcollation */
+                    result_set_field(rs, row, 21, tables[t].table_name); /* relname */
+                    if (cols[c].default_val[0] != '\0')
+                        result_set_field(rs, row, 22, cols[c].default_val); /* def_value */
+                    else
                         result_set_null(rs, row, 22);           /* def_value */
-                        result_set_null(rs, row, 23);           /* description */
-                        count++;
-                        col = strtok(NULL, ";");
-                    }
+                    result_set_null(rs, row, 23);           /* description */
+                    count++;
                 }
-                fclose(fp);
+            }
         }
-        meta_iter_close(&mit);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
@@ -1405,41 +1280,22 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             schema_name_to_oid(schemaName, nsOidStr, sizeof(nsOidStr));
         }
 
-        /* Scan .meta files from the resolved schema directory */
-        MetaIterator mit2;
-        char _dbdir4[1024];
-        snprintf(_dbdir4, sizeof(_dbdir4), "%s/%s/%s", db_get_root(), db_get_current_database(), schemaName);
-        meta_iter_open(&mit2, _dbdir4);
+        /* Scan tables from catalog for the resolved schema */
         int count = 0;
-        while (meta_iter_next(&mit2)) {
-                char tblName[256];
-                strncpy(tblName, mit2.current_name, sizeof(tblName) - 1);
-                tblName[sizeof(tblName) - 1] = '\0';
-                char *dot = strstr(tblName, ".meta");
-                if (dot) *dot = '\0';
-
-                /* Count columns from .meta file */
-                char metaPath[SAFE_PATH_MAX], line[2048];
-                int natts = 0;
-                /* Build meta path directly from resolved schema */
-                snprintf(metaPath, sizeof(metaPath), "%s/%s.meta", _dbdir4, tblName);
-                FILE *fp = fopen(metaPath, "r");
-                if (fp) {
-                    if (fgets(line, sizeof(line), fp)) {
-                        char *p = line;
-                        natts = 1;
-                        while (*p) { if (*p == ';') natts++; p++; }
-                    }
-                    fclose(fp);
-                }
-
+        DatabaseDesc dbDescCls;
+        SchemaDesc schDescCls;
+        if (cat_find_database(db_get_current_database(), &dbDescCls) == 0 &&
+            cat_find_schema(dbDescCls.db_id, schemaName, &schDescCls) == 0) {
+            TableDesc tables[256];
+            int nt = cat_list_tables(schDescCls.schema_id, tables, 256);
+            for (int i = 0; i < nt; i++) {
                 int row = result_add_row(rs);
                 if (row < 0) break;
 
                 char oidStr[16], nattsStr[16];
-                unsigned int tableOid = stable_table_oid(tblName);
+                unsigned int tableOid = stable_table_oid(tables[i].table_name);
                 snprintf(oidStr, sizeof(oidStr), "%u", tableOid);
-                snprintf(nattsStr, sizeof(nattsStr), "%d", natts);
+                snprintf(nattsStr, sizeof(nattsStr), "%d", tables[i].num_columns);
 
                 /* reltype: OID of the composite type for this table.
                  * Use table OID + 1 so DBeaver can resolve it. */
@@ -1447,7 +1303,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 snprintf(reltypeStr, sizeof(reltypeStr), "%u", tableOid + 1);
 
                 result_set_field(rs, row, 0, oidStr);         /* oid */
-                result_set_field(rs, row, 1, tblName);        /* relname */
+                result_set_field(rs, row, 1, tables[i].table_name); /* relname */
                 result_set_field(rs, row, 2, nsOidStr);       /* relnamespace */
                 result_set_field(rs, row, 3, reltypeStr);     /* reltype */
                 result_set_field(rs, row, 4, "0");            /* reloftype */
@@ -1478,8 +1334,8 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 result_set_null(rs, row, 29);                 /* description */
                 result_set_null(rs, row, 30);                 /* partition_expr */
                 count++;
+            }
         }
-        meta_iter_close(&mit2);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
@@ -1521,60 +1377,104 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
         result_add_column(rs, "confkey", PG_OID_TEXT);
         result_add_column(rs, "description", PG_OID_TEXT);
 
-        /* Scan .meta files for tables with primary keys */
-        MetaIterator mit3;
-        char _dbdir5[1024];
-        snprintf(_dbdir5, sizeof(_dbdir5), "%s/%s/%s", db_get_root(), db_get_current_database(), db_get_current_schema());
-
         /* Resolve the namespace OID for the current schema */
         char conNsOid[32] = "2200";
         schema_name_to_oid(db_get_current_schema(), conNsOid, sizeof(conNsOid));
 
-        meta_iter_open(&mit3, _dbdir5);
+        /* Scan tables via catalog for constraints */
         int count = 0;
-        while (meta_iter_next(&mit3)) {
-                char tblName[256];
-                strncpy(tblName, mit3.current_name, sizeof(tblName) - 1);
-                tblName[sizeof(tblName) - 1] = '\0';
-                char *dot = strstr(tblName, ".meta");
-                if (dot) *dot = '\0';
+        DatabaseDesc dbDescCon;
+        SchemaDesc schDescCon;
+        if (cat_find_database(db_get_current_database(), &dbDescCon) == 0 &&
+            cat_find_schema(dbDescCon.db_id, db_get_current_schema(), &schDescCon) == 0) {
+            TableDesc tables[256];
+            int nt = cat_list_tables(schDescCon.schema_id, tables, 256);
+            for (int t = 0; t < nt; t++) {
+                ConstraintDesc cons[64];
+                int ncons = cat_list_constraints(tables[t].table_id, cons, 64);
+                for (int ci = 0; ci < ncons; ci++) {
+                    /* Map constraint type: catalog uses 'P','U','C','F' */
+                    char contype[2] = {0};
+                    contype[0] = cons[ci].constraint_type;
+                    /* lowercase for PG compatibility */
+                    if (contype[0] >= 'A' && contype[0] <= 'Z')
+                        contype[0] = contype[0] + ('a' - 'A');
 
-                char _fp5[1024];
-                db_table_path(tblName, _fp5, sizeof(_fp5));
-                int pkIndex = ReadPrimaryKey(_fp5);
-                if (pkIndex < 0) continue; /* No primary key */
+                    int row = result_add_row(rs);
+                    if (row < 0) break;
 
-                int row = result_add_row(rs);
-                if (row < 0) break;
+                    unsigned int tableOid = stable_table_oid(tables[t].table_name);
+                    char oidStr[16], relidStr[16], conkeyStr[64], conname[256];
+                    snprintf(oidStr, sizeof(oidStr), "%u", tableOid + 10000 + ci);
+                    snprintf(relidStr, sizeof(relidStr), "%u", tableOid);
 
-                unsigned int tableOid = stable_table_oid(tblName);
-                char oidStr[16], relidStr[16], conkeyStr[16], conname[256];
-                snprintf(oidStr, sizeof(oidStr), "%u", tableOid + 10000);
-                snprintf(relidStr, sizeof(relidStr), "%u", tableOid);
-                snprintf(conkeyStr, sizeof(conkeyStr), "{%d}", pkIndex + 1); /* PostgreSQL uses 1-based */
-                snprintf(conname, sizeof(conname), "%s_pkey", tblName);
+                    /* Build conkey from constraint definition for PK/UK,
+                     * or from column info for PK */
+                    if (contype[0] == 'p') {
+                        /* Find PK column ordinal */
+                        ColumnDesc cols[CAT_MAX_COLUMNS];
+                        int ncols = cat_find_columns(tables[t].table_id, cols, CAT_MAX_COLUMNS);
+                        int pk_positions_len = 0;
+                        char pk_positions[256] = "{";
+                        for (int k = 0; k < ncols; k++) {
+                            if (cols[k].is_pk) {
+                                if (pk_positions_len > 0) strcat(pk_positions, ",");
+                                char tmp[16];
+                                snprintf(tmp, sizeof(tmp), "%d", k + 1);
+                                strcat(pk_positions, tmp);
+                                pk_positions_len++;
+                            }
+                        }
+                        strcat(pk_positions, "}");
+                        strncpy(conkeyStr, pk_positions, sizeof(conkeyStr) - 1);
+                        conkeyStr[sizeof(conkeyStr) - 1] = '\0';
+                        snprintf(conname, sizeof(conname), "%s_pkey", tables[t].table_name);
+                    } else if (contype[0] == 'u') {
+                        /* For unique constraints, try to find the column */
+                        snprintf(conkeyStr, sizeof(conkeyStr), "{1}");
+                        snprintf(conname, sizeof(conname), "%s_uq_%d", tables[t].table_name, ci);
+                    } else if (contype[0] == 'c') {
+                        snprintf(conkeyStr, sizeof(conkeyStr), "{}");
+                        snprintf(conname, sizeof(conname), "%s_check_%d", tables[t].table_name, ci);
+                    } else if (contype[0] == 'f') {
+                        snprintf(conkeyStr, sizeof(conkeyStr), "{1}");
+                        snprintf(conname, sizeof(conname), "%s_fkey_%d", tables[t].table_name, ci);
+                    } else {
+                        snprintf(conkeyStr, sizeof(conkeyStr), "{}");
+                        snprintf(conname, sizeof(conname), "%s_con_%d", tables[t].table_name, ci);
+                    }
 
-                result_set_field(rs, row, 0, oidStr);       /* oid */
-                result_set_field(rs, row, 1, conname);       /* conname */
-                result_set_field(rs, row, 2, conNsOid);      /* connamespace */
-                result_set_field(rs, row, 3, "p");           /* contype = primary key */
-                result_set_field(rs, row, 4, "f");           /* condeferrable */
-                result_set_field(rs, row, 5, "f");           /* condeferred */
-                result_set_field(rs, row, 6, "t");           /* convalidated */
-                result_set_field(rs, row, 7, relidStr);      /* conrelid */
-                result_set_field(rs, row, 8, "0");           /* contypid */
-                result_set_field(rs, row, 9, "0");           /* conindid */
-                result_set_field(rs, row, 10, "0");          /* conparentid */
-                result_set_field(rs, row, 11, "0");          /* confrelid */
-                result_set_field(rs, row, 12, " ");          /* confupdtype */
-                result_set_field(rs, row, 13, " ");          /* confdeltype */
-                result_set_field(rs, row, 14, " ");          /* confmatchtype */
-                result_set_field(rs, row, 15, conkeyStr);    /* conkey */
-                result_set_null(rs, row, 16);                /* confkey */
-                result_set_null(rs, row, 17);                /* description */
-                count++;
+                    char confrelStr[16] = "0";
+                    if (contype[0] == 'f' && cons[ci].ref_table_id != 0) {
+                        /* Try to find ref table name for OID */
+                        snprintf(confrelStr, sizeof(confrelStr), "%u", cons[ci].ref_table_id);
+                    }
+
+                    result_set_field(rs, row, 0, oidStr);       /* oid */
+                    result_set_field(rs, row, 1, conname);       /* conname */
+                    result_set_field(rs, row, 2, conNsOid);      /* connamespace */
+                    result_set_field(rs, row, 3, contype);        /* contype */
+                    result_set_field(rs, row, 4, "f");           /* condeferrable */
+                    result_set_field(rs, row, 5, "f");           /* condeferred */
+                    result_set_field(rs, row, 6, "t");           /* convalidated */
+                    result_set_field(rs, row, 7, relidStr);      /* conrelid */
+                    result_set_field(rs, row, 8, "0");           /* contypid */
+                    result_set_field(rs, row, 9, "0");           /* conindid */
+                    result_set_field(rs, row, 10, "0");          /* conparentid */
+                    result_set_field(rs, row, 11, confrelStr);   /* confrelid */
+                    result_set_field(rs, row, 12, " ");          /* confupdtype */
+                    result_set_field(rs, row, 13, " ");          /* confdeltype */
+                    result_set_field(rs, row, 14, " ");          /* confmatchtype */
+                    result_set_field(rs, row, 15, conkeyStr);    /* conkey */
+                    if (contype[0] == 'f' && cons[ci].ref_columns[0])
+                        result_set_field(rs, row, 16, cons[ci].ref_columns); /* confkey */
+                    else
+                        result_set_null(rs, row, 16);            /* confkey */
+                    result_set_null(rs, row, 17);                /* description */
+                    count++;
+                }
+            }
         }
-        meta_iter_close(&mit3);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
     }
@@ -1634,6 +1534,10 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
      * references a user table via pg_catalog.<tablename> syntax.
      * If so, return 0 to let the query be handled by the EvoSQL parser. */
     {
+        DatabaseDesc dbDescChk;
+        SchemaDesc schDescChk;
+        int have_schema = (cat_find_database(db_get_current_database(), &dbDescChk) == 0 &&
+                           cat_find_schema(dbDescChk.db_id, db_get_current_schema(), &schDescChk) == 0);
         const char *pc = sql;
         while ((pc = strcasestr_local(pc, "pg_catalog.")) != NULL) {
             const char *tbl = pc + 11; /* skip "pg_catalog." */
@@ -1645,13 +1549,10 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
                 ci++;
             }
             candidate[ci] = '\0';
-            if (ci > 0) {
-                /* Check if this is a user table (has .meta file) */
-                char metaPath[SAFE_PATH_MAX];
-                snprintf(metaPath, sizeof(metaPath), "%s.meta", candidate);
-                FILE *fp = fopen(metaPath, "r");
-                if (fp) {
-                    fclose(fp);
+            if (ci > 0 && have_schema) {
+                /* Check if this is a user table via catalog */
+                TableDesc tDesc;
+                if (cat_find_table(schDescChk.schema_id, candidate, &tDesc) == 0) {
                     /* This is a user table, not a system table */
                     return 0;
                 }
@@ -1688,22 +1589,36 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
         result_add_column(rs, "schema_name", PG_OID_TEXT);
         result_add_column(rs, "schema_owner", PG_OID_TEXT);
 
+        int schcount = 0;
+
+        /* System schemas */
         int row0 = result_add_row(rs);
         result_set_field(rs, row0, 0, "evosql");
         result_set_field(rs, row0, 1, "pg_catalog");
         result_set_field(rs, row0, 2, "evosql");
+        schcount++;
 
         int row1 = result_add_row(rs);
         result_set_field(rs, row1, 0, "evosql");
-        result_set_field(rs, row1, 1, "default");
+        result_set_field(rs, row1, 1, "information_schema");
         result_set_field(rs, row1, 2, "evosql");
+        schcount++;
 
-        int row2 = result_add_row(rs);
-        result_set_field(rs, row2, 0, "evosql");
-        result_set_field(rs, row2, 1, "information_schema");
-        result_set_field(rs, row2, 2, "evosql");
+        /* User schemas from catalog */
+        DatabaseDesc dbDescSch;
+        if (cat_find_database(db_get_current_database(), &dbDescSch) == 0) {
+            SchemaDesc schemas[32];
+            int ns = cat_list_schemas(dbDescSch.db_id, schemas, 32);
+            for (int i = 0; i < ns; i++) {
+                int r = result_add_row(rs);
+                result_set_field(rs, r, 0, "evosql");
+                result_set_field(rs, r, 1, schemas[i].schema_name);
+                result_set_field(rs, r, 2, "evosql");
+                schcount++;
+            }
+        }
 
-        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 3");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", schcount);
         return 1;
     }
 

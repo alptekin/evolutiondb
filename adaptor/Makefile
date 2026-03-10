@@ -62,7 +62,12 @@ EVO_DB_SRCS = $(EVO_DB)/db.c \
               $(EVO_DB)/GrantMgmt.c \
               $(EVO_DB)/Index.c \
               $(EVO_DB)/buffer_pool.c \
-              $(EVO_DB)/query_context.c
+              $(EVO_DB)/query_context.c \
+              $(EVO_DB)/page_mgr.c \
+              $(EVO_DB)/slotted.c \
+              $(EVO_DB)/btree2.c \
+              $(EVO_DB)/catalog_internal.c \
+              $(EVO_DB)/table_api.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

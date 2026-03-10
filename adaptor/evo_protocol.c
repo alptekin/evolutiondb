@@ -15,6 +15,7 @@
 #include "result.h"
 #include "server.h"          /* safe_query_execute */
 #include "../evolution/db/database.h"
+#include "../evolution/db/query_context.h"
 
 /* ----------------------------------------------------------------
  *  evo_secure_wipe — local copy to avoid crypto.h / OpenSSL clash
@@ -284,7 +285,15 @@ void evo_handle_client(socket_t sock)
     /* Auto-rollback if client disconnects with an open transaction */
     if (session.in_transaction && session.undo_log) {
         fprintf(stderr, "[TX] EVO client disconnected with open transaction — rolling back\n");
-        undo_log_rollback(session.undo_log);
+        QueryContext *qctx = qctx_alloc();
+        if (qctx) {
+            g_qctx = qctx;
+            db_set_current_database(session.database);
+            db_set_current_schema(session.schema);
+            undo_log_rollback(session.undo_log);
+            qctx_free(qctx);
+            g_qctx = NULL;
+        }
         undo_log_free(session.undo_log);
         session.undo_log = NULL;
         session.in_transaction = 0;

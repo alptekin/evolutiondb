@@ -17,6 +17,8 @@
 #include "result.h"
 #include "server.h"          /* safe_query_execute */
 #include "tls.h"
+#include "../evolution/db/database.h"
+#include "../evolution/db/query_context.h"
 
 /* ----------------------------------------------------------------
  *  sql_redact_password — Redact PASSWORD clauses for safe logging
@@ -482,7 +484,16 @@ cleanup:
     /* Auto-rollback if client disconnects with an open transaction */
     if (session.in_transaction && session.undo_log) {
         fprintf(stderr, "[TX] Client disconnected with open transaction — rolling back\n");
-        undo_log_rollback(session.undo_log);
+        /* Allocate temporary query context so g_currentDatabase etc. work */
+        QueryContext *qctx = qctx_alloc();
+        if (qctx) {
+            g_qctx = qctx;
+            db_set_current_database(session.database);
+            db_set_current_schema(session.schema);
+            undo_log_rollback(session.undo_log);
+            qctx_free(qctx);
+            g_qctx = NULL;
+        }
         undo_log_free(session.undo_log);
         session.undo_log = NULL;
         session.in_transaction = 0;

@@ -1,20 +1,11 @@
 /*
  * GrantMgmt.c — Privilege / GRANT management for EvoSQL
  *
- * Storage layout:
- *   root/grants    (text file, one grant per line)
- *   Format: username:scope_type:scope_name:privileges:grant_option
- *
- *   username     = user name or "PUBLIC" (pseudo-user, affects everyone)
- *   scope_type   = DATABASE | SCHEMA | TABLE
- *   scope_name   = fully-qualified name (e.g. "mydb", "mydb.myschema",
- *                  "mydb.myschema.mytable") or "*" for all
- *   privileges   = comma-separated: SELECT,INSERT,UPDATE,DELETE,CREATE,DROP
- *                  or "ALL"
- *   grant_option = 1 (WITH GRANT OPTION) or 0
+ * Storage: System catalog B+ tree (CAT_SYS_GRANTS) in unified storage file.
+ * Key = "username:scope_type:scope_name", Record = grant details.
  *
  * Design decisions:
- *   - admin is superuser: CheckPrivilege() returns 1 without file I/O
+ *   - admin is superuser: CheckPrivilege() returns 1 without catalog I/O
  *   - PUBLIC grants are additive (PostgreSQL model):
  *       user-specific REVOKE does NOT override PUBLIC grants
  *   - Waterfall: TABLE → SCHEMA → DATABASE (most-specific wins first)
@@ -31,10 +22,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include "database.h"
-
-#define GRANTS_FILE "grants"
-#define MAX_LINE    1024
-#define MAX_GRANTS  512
+#include "catalog_internal.h"
 
 /* ----------------------------------------------------------------
  *  Privilege bit flags
@@ -48,7 +36,7 @@
 #define PRIV_ALL     0x3F   /* SELECT|INSERT|UPDATE|DELETE|CREATE|DROP */
 
 /* ----------------------------------------------------------------
- *  Scope type constants
+ *  Scope type constants (must match adaptor/catalog.c parser)
  * ---------------------------------------------------------------- */
 #define SCOPE_DATABASE 1
 #define SCOPE_SCHEMA   2
@@ -57,10 +45,6 @@
 /* ----------------------------------------------------------------
  *  Helpers
  * ---------------------------------------------------------------- */
-static void grants_path(char *out, size_t size)
-{
-    snprintf(out, size, "%s/%s", db_get_root(), GRANTS_FILE);
-}
 
 /* Parse a comma-separated privilege string into bitmask.
  * Accepts: SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALL
@@ -113,15 +97,6 @@ static void privs_to_string(unsigned mask, char *buf, size_t size)
     if (mask & PRIV_DROP)   { if (buf[0]) strncat(buf, ",", size - strlen(buf) - 1); strncat(buf, "DROP",   size - strlen(buf) - 1); }
 }
 
-/* Parse scope type string to constant. Returns 0 on invalid. */
-static int parse_scope_type(const char *str)
-{
-    if (strcasecmp(str, "DATABASE") == 0) return SCOPE_DATABASE;
-    if (strcasecmp(str, "SCHEMA")   == 0) return SCOPE_SCHEMA;
-    if (strcasecmp(str, "TABLE")    == 0) return SCOPE_TABLE;
-    return 0;
-}
-
 static const char *scope_type_str(int scope)
 {
     switch (scope) {
@@ -132,113 +107,35 @@ static const char *scope_type_str(int scope)
     }
 }
 
-/* Match a grant line against user+scope_type+scope_name.
- * Returns the privilege bitmask if matched, 0 otherwise.
- * If grant_option_out is not NULL, sets it to the grant_option value. */
-static unsigned match_grant_line(const char *line,
-                                 const char *username,
-                                 int scope_type,
-                                 const char *scope_name,
-                                 int *grant_option_out)
-{
-    /* Format: username:scope_type:scope_name:privileges:grant_option */
-    char buf[MAX_LINE];
-    char *parts[5];
-    int i = 0;
-
-    strncpy(buf, line, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-    buf[strcspn(buf, "\n\r")] = '\0';
-    if (buf[0] == '\0') return 0;
-
-    /* Split into parts */
-    parts[0] = buf;
-    for (i = 0; i < 4; i++) {
-        char *colon = strchr(parts[i], ':');
-        if (!colon) return 0; /* malformed line */
-        *colon = '\0';
-        parts[i + 1] = colon + 1;
-    }
-
-    /* parts[0]=username, parts[1]=scope_type, parts[2]=scope_name,
-     * parts[3]=privileges, parts[4]=grant_option */
-
-    /* Match username (case-insensitive) */
-    if (strcasecmp(parts[0], username) != 0) return 0;
-
-    /* Match scope type */
-    int line_scope = parse_scope_type(parts[1]);
-    if (line_scope != scope_type) return 0;
-
-    /* Match scope name: either exact match or wildcard '*' */
-    if (strcmp(parts[2], "*") != 0 &&
-        strcasecmp(parts[2], scope_name) != 0) return 0;
-
-    /* Parse privileges */
-    unsigned mask = parse_privs(parts[3]);
-
-    if (grant_option_out) {
-        *grant_option_out = atoi(parts[4]);
-    }
-
-    return mask;
-}
-
-/* ----------------------------------------------------------------
- *  Check privileges for a specific user (not PUBLIC) at a specific
- *  scope level. Returns the privilege bitmask found.
- * ---------------------------------------------------------------- */
+/* Check privileges for a specific user at a specific scope level.
+ * Returns the privilege bitmask found. */
 static unsigned check_user_scope(const char *username,
                                  int scope_type,
                                  const char *scope_name)
 {
-    char path[1024], line[MAX_LINE];
-    FILE *fp;
-    unsigned result = 0;
-
-    grants_path(path, sizeof(path));
-    fp = fopen(path, "r");
-    if (!fp) return 0;
-
-    while (fgets(line, sizeof(line), fp)) {
-        result |= match_grant_line(line, username, scope_type, scope_name, NULL);
+    GrantDesc gd;
+    if (cat_find_grant(username, scope_type, scope_name, &gd) == 0) {
+        return parse_privs(gd.privileges);
     }
-    fclose(fp);
-    return result;
+    return 0;
 }
 
 /* ----------------------------------------------------------------
- *  db_ensure_grants — Create initial grants file if missing
+ *  db_ensure_grants — Create initial grants if catalog empty
  *
  *  Called from db_ensure_root() after db_ensure_users().
- *  Creates root/grants with admin:DATABASE:*:ALL:1
+ *  Creates admin:DATABASE:*:ALL:1
  * ---------------------------------------------------------------- */
 void db_ensure_grants(void)
 {
-    char path[1024];
-    FILE *fp;
-
-    grants_path(path, sizeof(path));
-
-    /* If file already exists and has content, skip */
-    fp = fopen(path, "r");
-    if (fp) {
-        char line[MAX_LINE];
-        if (fgets(line, sizeof(line), fp) && line[0] != '\0' && line[0] != '\n') {
-            fclose(fp);
-            return; /* Grants file already populated */
-        }
-        fclose(fp);
+    /* Check if admin already has a wildcard DATABASE grant */
+    GrantDesc gd;
+    if (cat_find_grant("admin", SCOPE_DATABASE, "*", &gd) == 0) {
+        return; /* Already initialized */
     }
 
-    /* Write initial admin grant */
-    fp = fopen(path, "w");
-    if (fp) {
-        fprintf(fp, "admin:DATABASE:*:ALL:1\n");
-        fclose(fp);
-    } else {
-        fprintf(stderr, "[GrantMgmt] ERROR: Cannot create grants file: %s\n", path);
-    }
+    /* Create initial admin superuser grant */
+    cat_create_grant("admin", SCOPE_DATABASE, "*", "ALL", 1);
 }
 
 /* ----------------------------------------------------------------
@@ -247,13 +144,6 @@ void db_ensure_grants(void)
  *  Waterfall: TABLE → SCHEMA → DATABASE
  *  Additive: user-specific grants + PUBLIC grants (PG model)
  *  admin is always superuser (returns 1 immediately).
- *
- *  Parameters:
- *    username  - the authenticated user
- *    database  - current database name
- *    schema    - current schema name (can be NULL for DB-level ops)
- *    table     - table name (can be NULL for schema/DB-level ops)
- *    privilege - single privilege string: "SELECT", "INSERT", etc.
  *
  *  Returns 1 if allowed, 0 if denied.
  * ---------------------------------------------------------------- */
@@ -325,9 +215,6 @@ int CheckPrivilege(const char *username,
 /* ----------------------------------------------------------------
  *  HasGrantOption — Check if user has WITH GRANT OPTION
  *
- *  Checks if the user holds the privilege with grant_option=1
- *  at the given scope level.  admin always returns 1.
- *
  *  Returns 1 if yes, 0 if no.
  * ---------------------------------------------------------------- */
 int HasGrantOption(const char *username,
@@ -335,46 +222,36 @@ int HasGrantOption(const char *username,
                    const char *scope_name,
                    const char *privilege)
 {
-    char path[1024], line[MAX_LINE];
-    FILE *fp;
     unsigned priv_bit;
-    int grant_opt = 0;
+    GrantDesc gd;
 
     if (strcasecmp(username, "admin") == 0) return 1;
 
     priv_bit = parse_privs(privilege);
     if (priv_bit == 0) return 0;
 
-    grants_path(path, sizeof(path));
-    fp = fopen(path, "r");
-    if (!fp) return 0;
+    /* Check exact scope */
+    if (cat_find_grant(username, scope_type, scope_name, &gd) == 0) {
+        unsigned m = parse_privs(gd.privileges);
+        if ((m & priv_bit) && gd.grant_option) return 1;
+    }
 
-    while (fgets(line, sizeof(line), fp)) {
-        int go = 0;
-        unsigned m = match_grant_line(line, username, scope_type, scope_name, &go);
-        if ((m & priv_bit) && go) {
-            grant_opt = 1;
-            break;
-        }
-        /* Also check wildcard scope */
-        if (scope_type == SCOPE_DATABASE) {
-            m = match_grant_line(line, username, scope_type, "*", &go);
-            if ((m & priv_bit) && go) {
-                grant_opt = 1;
-                break;
-            }
+    /* Also check wildcard '*' for DATABASE scope */
+    if (scope_type == SCOPE_DATABASE) {
+        if (cat_find_grant(username, scope_type, "*", &gd) == 0) {
+            unsigned m = parse_privs(gd.privileges);
+            if ((m & priv_bit) && gd.grant_option) return 1;
         }
     }
-    fclose(fp);
-    return grant_opt;
+
+    return 0;
 }
 
 /* ----------------------------------------------------------------
  *  GrantPrivilege — Add a grant entry
  *
- *  If a matching line exists (same user + scope_type + scope_name),
- *  merge the new privileges with existing ones.
- *  Otherwise, append a new line.
+ *  If a matching grant exists, merge the new privileges.
+ *  Otherwise, create a new grant.
  *
  *  Returns 0 on success, -1 on error (sets g_gui_error_msg).
  * ---------------------------------------------------------------- */
@@ -382,9 +259,6 @@ int GrantPrivilege(const char *username, int scope_type,
                    const char *scope_name, const char *privileges,
                    int with_grant_option)
 {
-    char path[1024], tmp_path[1024], line[MAX_LINE];
-    FILE *fp, *tmp;
-    int found = 0;
     unsigned new_mask = parse_privs(privileges);
 
     if (new_mask == 0) {
@@ -395,82 +269,29 @@ int GrantPrivilege(const char *username, int scope_type,
         return -1;
     }
 
-    grants_path(path, sizeof(path));
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
     pthread_mutex_lock(&g_metadata_lock);
 
-    fp = fopen(path, "r");
-    tmp = fopen(tmp_path, "w");
-    if (!tmp) {
-        if (fp) fclose(fp);
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot create temp file for grants");
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        return -1;
-    }
+    GrantDesc existing;
+    if (cat_find_grant(username, scope_type, scope_name, &existing) == 0) {
+        /* Merge: combine existing + new privileges */
+        unsigned existing_mask = parse_privs(existing.privileges);
+        unsigned merged = existing_mask | new_mask;
+        int go = existing.grant_option;
+        if (with_grant_option) go = 1;
 
-    if (fp) {
-        while (fgets(line, sizeof(line), fp)) {
-            char buf[MAX_LINE];
-            char *parts[5];
-            int i;
+        char priv_str[128];
+        privs_to_string(merged, priv_str, sizeof(priv_str));
 
-            strncpy(buf, line, sizeof(buf) - 1);
-            buf[sizeof(buf) - 1] = '\0';
-            buf[strcspn(buf, "\n\r")] = '\0';
-            if (buf[0] == '\0') { fputs(line, tmp); continue; }
-
-            /* Parse parts */
-            parts[0] = buf;
-            int valid = 1;
-            for (i = 0; i < 4; i++) {
-                char *colon = strchr(parts[i], ':');
-                if (!colon) { valid = 0; break; }
-                *colon = '\0';
-                parts[i + 1] = colon + 1;
-            }
-
-            if (!valid) { fputs(line, tmp); continue; }
-
-            /* Check if same user + scope_type + scope_name */
-            int line_scope = parse_scope_type(parts[1]);
-            if (strcasecmp(parts[0], username) == 0 &&
-                line_scope == scope_type &&
-                strcasecmp(parts[2], scope_name) == 0) {
-                /* Merge privileges */
-                unsigned existing = parse_privs(parts[3]);
-                unsigned merged = existing | new_mask;
-                int go = atoi(parts[4]);
-                if (with_grant_option) go = 1;
-
-                char priv_str[128];
-                privs_to_string(merged, priv_str, sizeof(priv_str));
-                fprintf(tmp, "%s:%s:%s:%s:%d\n",
-                        username, scope_type_str(scope_type),
-                        scope_name, priv_str, go);
-                found = 1;
-            } else {
-                fputs(line, tmp);
-            }
-        }
-        fclose(fp);
-    }
-
-    if (!found) {
-        /* Append new grant */
+        /* Delete old, insert new with merged privileges */
+        cat_drop_grant(username, scope_type, scope_name);
+        cat_create_grant(username, scope_type, scope_name, priv_str, go);
+    } else {
+        /* New grant */
         char priv_str[128];
         privs_to_string(new_mask, priv_str, sizeof(priv_str));
-        fprintf(tmp, "%s:%s:%s:%s:%d\n",
-                username, scope_type_str(scope_type),
-                scope_name, priv_str, with_grant_option ? 1 : 0);
+        cat_create_grant(username, scope_type, scope_name, priv_str,
+                         with_grant_option ? 1 : 0);
     }
-
-    fclose(tmp);
-    remove(path);
-    rename(tmp_path, path);
 
     pthread_mutex_unlock(&g_metadata_lock);
     return 0;
@@ -479,17 +300,14 @@ int GrantPrivilege(const char *username, int scope_type,
 /* ----------------------------------------------------------------
  *  RevokePrivilege — Remove specific privileges from a grant
  *
- *  If all privileges are removed, the line is deleted.
+ *  If all privileges are removed, the grant entry is deleted.
  *  Returns 0 on success, -1 on error.
  * ---------------------------------------------------------------- */
 int RevokePrivilege(const char *username, int scope_type,
                     const char *scope_name, const char *privileges)
 {
-    char path[1024], tmp_path[1024], line[MAX_LINE];
-    FILE *fp, *tmp;
-    int found = 0;
-    int result = 0;
     unsigned revoke_mask = parse_privs(privileges);
+    int result = 0;
 
     if (revoke_mask == 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -499,93 +317,31 @@ int RevokePrivilege(const char *username, int scope_type,
         return -1;
     }
 
-    grants_path(path, sizeof(path));
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
     pthread_mutex_lock(&g_metadata_lock);
 
-    fp = fopen(path, "r");
-    if (!fp) {
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot open grants file");
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        return -1;
-    }
-
-    tmp = fopen(tmp_path, "w");
-    if (!tmp) {
-        fclose(fp);
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "Cannot create temp file for grants");
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        return -1;
-    }
-
-    while (fgets(line, sizeof(line), fp)) {
-        char buf[MAX_LINE];
-        char *parts[5];
-        int i;
-
-        strncpy(buf, line, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-        buf[strcspn(buf, "\n\r")] = '\0';
-        if (buf[0] == '\0') { fputs(line, tmp); continue; }
-
-        /* Parse parts */
-        parts[0] = buf;
-        int valid = 1;
-        for (i = 0; i < 4; i++) {
-            char *colon = strchr(parts[i], ':');
-            if (!colon) { valid = 0; break; }
-            *colon = '\0';
-            parts[i + 1] = colon + 1;
-        }
-
-        if (!valid) { fputs(line, tmp); continue; }
-
-        int line_scope = parse_scope_type(parts[1]);
-        if (strcasecmp(parts[0], username) == 0 &&
-            line_scope == scope_type &&
-            strcasecmp(parts[2], scope_name) == 0) {
-            /* Remove revoked privileges */
-            unsigned existing = parse_privs(parts[3]);
-            unsigned remaining = existing & ~revoke_mask;
-            found = 1;
-
-            if (remaining != 0) {
-                /* Still has some privileges — write back */
-                int go = atoi(parts[4]);
-                /* If revoking ALL, also revoke grant option */
-                if (revoke_mask == PRIV_ALL) go = 0;
-                char priv_str[128];
-                privs_to_string(remaining, priv_str, sizeof(priv_str));
-                fprintf(tmp, "%s:%s:%s:%s:%d\n",
-                        username, scope_type_str(scope_type),
-                        scope_name, priv_str, go);
-            }
-            /* else: all privileges revoked — line is deleted */
-        } else {
-            fputs(line, tmp);
-        }
-    }
-
-    fclose(fp);
-    fclose(tmp);
-
-    if (!found) {
-        remove(tmp_path);
+    GrantDesc existing;
+    if (cat_find_grant(username, scope_type, scope_name, &existing) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "No matching grant found for user '%s'", username);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         result = -1;
     } else {
-        remove(path);
-        rename(tmp_path, path);
+        unsigned existing_mask = parse_privs(existing.privileges);
+        unsigned remaining = existing_mask & ~revoke_mask;
+
+        /* Always delete old grant */
+        cat_drop_grant(username, scope_type, scope_name);
+
+        if (remaining != 0) {
+            /* Still has some privileges — re-create with remaining */
+            int go = existing.grant_option;
+            if (revoke_mask == PRIV_ALL) go = 0;
+            char priv_str[128];
+            privs_to_string(remaining, priv_str, sizeof(priv_str));
+            cat_create_grant(username, scope_type, scope_name, priv_str, go);
+        }
+        /* else: all privileges revoked — entry deleted */
     }
 
     pthread_mutex_unlock(&g_metadata_lock);
@@ -596,7 +352,7 @@ int RevokePrivilege(const char *username, int scope_type,
  *  ListGrantsForUser — List all grants for a user
  *
  *  Fills the output arrays.  Returns count of grants found.
- *  If username is NULL or empty, lists ALL grants.
+ *  If username is NULL or empty, lists ALL grants (via cursor scan).
  * ---------------------------------------------------------------- */
 int ListGrantsForUser(const char *username,
                       char out_users[][256],
@@ -606,52 +362,66 @@ int ListGrantsForUser(const char *username,
                       int  out_grant_option[],
                       int  max_entries)
 {
-    char path[1024], line[MAX_LINE];
-    FILE *fp;
     int count = 0;
 
-    grants_path(path, sizeof(path));
-    fp = fopen(path, "r");
-    if (!fp) return 0;
+    if (username && username[0] != '\0') {
+        /* List grants for specific user */
+        GrantDesc grants[64];
+        int limit = max_entries < 64 ? max_entries : 64;
+        int n = cat_list_grants_for_user(username, grants, limit);
 
-    while (fgets(line, sizeof(line), fp) && count < max_entries) {
-        char buf[MAX_LINE];
-        char *parts[5];
-        int i;
-
-        strncpy(buf, line, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-        buf[strcspn(buf, "\n\r")] = '\0';
-        if (buf[0] == '\0') continue;
-
-        parts[0] = buf;
-        int valid = 1;
-        for (i = 0; i < 4; i++) {
-            char *colon = strchr(parts[i], ':');
-            if (!colon) { valid = 0; break; }
-            *colon = '\0';
-            parts[i + 1] = colon + 1;
+        for (int i = 0; i < n && count < max_entries; i++) {
+            strncpy(out_users[count], grants[i].username, 255);
+            out_users[count][255] = '\0';
+            strncpy(out_scopes[count], scope_type_str(grants[i].scope_type), 31);
+            out_scopes[count][31] = '\0';
+            strncpy(out_names[count], grants[i].scope_name, 255);
+            out_names[count][255] = '\0';
+            strncpy(out_privs[count], grants[i].privileges, 127);
+            out_privs[count][127] = '\0';
+            out_grant_option[count] = grants[i].grant_option;
+            count++;
         }
-        if (!valid) continue;
+    } else {
+        /* List ALL grants — scan entire B+ tree */
+        /* Use cursor scan from the beginning of the grants tree */
+        UserDesc users[64];
+        int nusers = cat_list_users(users, 64);
 
-        /* Filter by username if provided */
-        if (username && username[0] != '\0' &&
-            strcasecmp(parts[0], username) != 0)
-            continue;
+        for (int u = 0; u < nusers && count < max_entries; u++) {
+            GrantDesc grants[64];
+            int n = cat_list_grants_for_user(users[u].username, grants, 64);
+            for (int i = 0; i < n && count < max_entries; i++) {
+                strncpy(out_users[count], grants[i].username, 255);
+                out_users[count][255] = '\0';
+                strncpy(out_scopes[count], scope_type_str(grants[i].scope_type), 31);
+                out_scopes[count][31] = '\0';
+                strncpy(out_names[count], grants[i].scope_name, 255);
+                out_names[count][255] = '\0';
+                strncpy(out_privs[count], grants[i].privileges, 127);
+                out_privs[count][127] = '\0';
+                out_grant_option[count] = grants[i].grant_option;
+                count++;
+            }
+        }
 
-        strncpy(out_users[count], parts[0], 255);
-        out_users[count][255] = '\0';
-        strncpy(out_scopes[count], parts[1], 31);
-        out_scopes[count][31] = '\0';
-        strncpy(out_names[count], parts[2], 255);
-        out_names[count][255] = '\0';
-        strncpy(out_privs[count], parts[3], 127);
-        out_privs[count][127] = '\0';
-        out_grant_option[count] = atoi(parts[4]);
-        count++;
+        /* Also list PUBLIC grants */
+        GrantDesc pub_grants[64];
+        int npub = cat_list_grants_for_user("PUBLIC", pub_grants, 64);
+        for (int i = 0; i < npub && count < max_entries; i++) {
+            strncpy(out_users[count], pub_grants[i].username, 255);
+            out_users[count][255] = '\0';
+            strncpy(out_scopes[count], scope_type_str(pub_grants[i].scope_type), 31);
+            out_scopes[count][31] = '\0';
+            strncpy(out_names[count], pub_grants[i].scope_name, 255);
+            out_names[count][255] = '\0';
+            strncpy(out_privs[count], pub_grants[i].privileges, 127);
+            out_privs[count][127] = '\0';
+            out_grant_option[count] = pub_grants[i].grant_option;
+            count++;
+        }
     }
 
-    fclose(fp);
     return count;
 }
 
@@ -659,49 +429,12 @@ int ListGrantsForUser(const char *username,
  *  DropUserGrants — Remove ALL grants for a user
  *
  *  Called when DROP USER is executed.
- *  Returns number of grants removed.
+ *  Returns number of grants removed (always 0 on success for catalog).
  * ---------------------------------------------------------------- */
 int DropUserGrants(const char *username)
 {
-    char path[1024], tmp_path[1024], line[MAX_LINE];
-    FILE *fp, *tmp;
-    int removed = 0;
-
-    grants_path(path, sizeof(path));
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
     pthread_mutex_lock(&g_metadata_lock);
-
-    fp = fopen(path, "r");
-    if (!fp) { pthread_mutex_unlock(&g_metadata_lock); return 0; }
-
-    tmp = fopen(tmp_path, "w");
-    if (!tmp) { fclose(fp); pthread_mutex_unlock(&g_metadata_lock); return 0; }
-
-    while (fgets(line, sizeof(line), fp)) {
-        char buf[MAX_LINE];
-        strncpy(buf, line, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
-        buf[strcspn(buf, "\n\r")] = '\0';
-
-        /* Extract username from line (before first ':') */
-        char *colon = strchr(buf, ':');
-        if (colon) {
-            *colon = '\0';
-            if (strcasecmp(buf, username) == 0) {
-                removed++;
-                continue; /* Skip — drop this grant */
-            }
-            *colon = ':';
-        }
-        fputs(line, tmp);
-    }
-
-    fclose(fp);
-    fclose(tmp);
-    remove(path);
-    rename(tmp_path, path);
-
+    cat_drop_all_grants_for_user(username);
     pthread_mutex_unlock(&g_metadata_lock);
-    return removed;
+    return 0;
 }

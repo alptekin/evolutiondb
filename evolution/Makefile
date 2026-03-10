@@ -34,7 +34,12 @@ SRCS = main.c \
        db/GrantMgmt.c \
        db/Index.c \
        db/buffer_pool.c \
-       db/query_context.c
+       db/query_context.c \
+       db/page_mgr.c \
+       db/slotted.c \
+       db/btree2.c \
+       db/catalog_internal.c \
+       db/table_api.c
 
 OBJS = $(SRCS:.c=.o)
 

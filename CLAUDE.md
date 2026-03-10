@@ -76,7 +76,8 @@ Clients (evosql-cli, DBeaver, psql)
 - **Parser output is RPN**: The Bison parser (`evoparser.y`) emits Reverse Polish Notation which the operation modules consume. Understanding the RPN stack is essential for adding new SQL features.
 - **Adaptor links evolution's object files directly** (no library): The adaptor Makefile compiles `evolution/db/*.c` and `evolution/parser/*.c` directly, excluding `evolution/main.c`.
 - **Global state with mutex**: The database engine uses global variables (`evolution/db/database_globals.c`, `evolution/db/database.h`). The adaptor's `query_executor.c` wraps all query execution in a mutex lock for thread safety.
-- **Storage**: Each table = 3 files (`.idx` hash index, `.dat` semicolon-separated records, `.meta` metadata). Type encoding: `typeVal / 10000` = type family, `typeVal % 10000` = size (e.g., `130050` = VARCHAR(50)).
+- **Storage (legacy)**: Each table = 3 files (`.idx` hash index, `.dat` semicolon-separated records, `.meta` metadata). Type encoding: `typeVal / 10000` = type family, `typeVal % 10000` = size (e.g., `130050` = VARCHAR(50)).
+- **Storage (new — unified)**: Single global binary file with 4KB pages. Page Manager (`page_mgr.c`) handles allocation/free list, Slotted Pages (`slotted.c`) store variable-length records, B+ Tree (`btree2.c`) provides O(log n) indexing, System Catalog (`catalog_internal.c`) stores all metadata in B+ trees. All I/O through Clock Sweep buffer pool (`buffer_pool.c`). Migration in progress — legacy and new coexist.
 - **Error handling**: Uses `setjmp`/`longjmp` (not exceptions). See `evolution/db/error.c`.
 - **Catalog emulation**: `adaptor/catalog.c` fakes `pg_catalog` and `information_schema` tables so DBeaver/pgAdmin work.
 
@@ -91,6 +92,8 @@ Clients (evosql-cli, DBeaver, psql)
 - **EVO text protocol**: `adaptor/evo_protocol.c`
 - **Network/server**: `adaptor/net.c`, `adaptor/server.c` (multi-threaded TCP accept loop)
 - **TLS**: `adaptor/tls.c` (OpenSSL, auto-generated self-signed certs)
+- **Buffer pool**: `evolution/db/buffer_pool.c` — Clock Sweep 4KB page cache (PostgreSQL algorithm)
+- **Unified page storage**: `evolution/db/page_mgr.c` (page alloc/free), `slotted.c` (record storage), `btree2.c` (B+ tree index), `catalog_internal.c` (system catalog in B+ trees)
 
 ## Parser Modification Workflow
 

@@ -4,65 +4,9 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include "database.h"
-#include "apue.h"
-#include "apue_db.h"
 #include "expression.h"
-
-static void ResizeAllRecords(const char *tblName, int newPadSize)
-{
-    DBHANDLE db;
-    char keyBuf[1024];
-    char *data;
-    int i, count = 0;
-
-    /* Safety cap */
-    if (newPadSize >= RECORD_BUF_SIZE)
-        newPadSize = RECORD_BUF_SIZE - 1;
-
-    /* Phase 1: Read all records into memory (heap-allocated for thread safety) */
-    char (*keys)[256] = (char (*)[256])malloc(200 * 256);
-    char (*records)[RECORD_BUF_SIZE] =
-        (char (*)[RECORD_BUF_SIZE])malloc(200 * RECORD_BUF_SIZE);
-    if (!keys || !records) {
-        free(keys); free(records);
-        return;
-    }
-
-    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL) {
-        free(keys); free(records);
-        return;
-    }
-
-    db_rewind(db);
-    while ((data = db_nextrec(db, keyBuf)) != NULL && count < 200) {
-        strcpy(keys[count], keyBuf);
-        strcpy(records[count], data);
-        count++;
-    }
-    db_close(db);
-
-    /* Phase 2: Re-store all records with new padding */
-    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL) {
-        free(keys); free(records);
-        return;
-    }
-
-    for (i = 0; i < count; i++) {
-        int curLen = (int)strlen(records[i]);
-        if (curLen < newPadSize) {
-            memset(records[i] + curLen, ';', newPadSize - curLen);
-            records[i][newPadSize] = '\0';
-        }
-        db_store(db, keys[i], records[i], DB_REPLACE);
-    }
-
-    db_close(db);
-    free(keys);
-    free(records);
-
-    /* Update .meta with new pad size */
-    WritePadSize(tblName, newPadSize);
-}
+#include "catalog_internal.h"
+#include "table_api.h"
 
 /* Extract field at colIndex from semicolon-separated record */
 static void UpdateGetFieldValue(const char *data, int colIndex,
@@ -87,56 +31,52 @@ static void UpdateGetFieldValue(const char *data, int colIndex,
     buf[0] = '\0';
 }
 
-/* Read column names from .meta file line 1 into arrays.
- * Returns the number of columns. */
+/* Read column names from catalog */
 static int UpdateReadColumnNames(const char *tableName,
                                  char colNames[][128], int maxCols)
 {
-    char mf[SAFE_PATH_MAX], ln[2048];
-    int cnt = 0;
-    char *t;
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
 
-    snprintf(mf, sizeof(mf), "%s.meta", tableName);
-    FILE *f = fopen(mf, "r");
-    if (!f) return 0;
+    if (tapi_resolve(tableName, &td, cols, &ncols) < 0)
+        return 0;
 
-    if (fgets(ln, sizeof(ln), f)) {
-        ln[strcspn(ln, "\n")] = '\0';
-        t = strtok(ln, ";");
-        while (t && cnt < maxCols) {
-            strncpy(colNames[cnt], t, 127);
-            colNames[cnt][127] = '\0';
-            cnt++;
-            t = strtok(NULL, ";");
-        }
+    int count = ncols < maxCols ? ncols : maxCols;
+    for (int i = 0; i < count; i++) {
+        strncpy(colNames[i], cols[i].col_name, 127);
+        colNames[i][127] = '\0';
     }
-    fclose(f);
-    return cnt;
+    return count;
 }
 
-/* Apply a single-row update: fetch record by key, apply SET columns, store back.
- * Returns 0 on success, -1 on failure. Sets *needResize and *newPadSize if resize needed. */
-static int ApplyUpdateToRow(DBHANDLE db, const char *key,
+/* Apply a single-row update: fetch record by PK, apply SET columns,
+ * store back into heap.
+ * Returns 0 on success, -1 on failure. */
+static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCols,
+                            const char *pkKey,
                             const char setCols[][256], const char setVals[][256],
                             int numSetCols, int numSetVals,
                             const char metaCols[][256], int numMetaCols,
-                            int padSize, int *needResize, int *newPadSize,
                             const char *tblName)
 {
-    char *existingData;
+    char existingData[RECORD_BUF_SIZE];
     char temp[RECORD_BUF_SIZE];
     char *tok;
     int s, c, i;
 
-    existingData = (char *)db_fetch(db, key);
-    if (existingData == NULL)
+    /* Fetch record by PK from B+ tree + heap */
+    BTree2 pk_tree = tapi_pk_tree(td);
+    RowID rid;
+    if (bt2_search(&pk_tree, pkKey, &rid) < 0)
+        return -1;
+    if (tapi_heap_read(rid, existingData, sizeof(existingData)) < 0)
         return -1;
 
-    /* Log undo entry before modifying data (for transaction rollback).
-     * Use tblName (without .dat) — db_open appends .idx/.dat itself. */
+    /* Log undo entry before modifying data */
     if (g_tx_undo_callback)
         g_tx_undo_callback(2 /*TX_OP_UPDATE*/, tblName,
-                           key, existingData);
+                           pkKey, existingData);
 
     /* Parse existing record into fields */
     char fields[64][256];
@@ -171,7 +111,6 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
         char checkConstraints[MAX_CHECK_CONSTRAINTS][1024];
         int numChecks = ReadCheckConstraints(tblName, checkConstraints, MAX_CHECK_CONSTRAINTS);
         if (numChecks > 0) {
-            /* Read column names in [128] format for expr_evaluate */
             char chkColNames[64][128];
             int numChkCols = UpdateReadColumnNames(tblName, chkColNames, 64);
             char colValues[64][256];
@@ -216,37 +155,15 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
     /* Build updated record string */
     {
         char newRecord[RECORD_BUF_SIZE] = "";
-        int newLen;
-        int curPad = padSize;
 
         for (i = 0; i < numFields; i++) {
             strcat(newRecord, fields[i]);
             strcat(newRecord, ";");
         }
 
-        newLen = (int)strlen(newRecord);
-
-        /* If new record exceeds current pad size, need resize */
-        if (newLen >= curPad) {
-            while (curPad <= newLen)
-                curPad *= 2;
-            if (curPad >= RECORD_BUF_SIZE)
-                curPad = RECORD_BUF_SIZE - 1;
-            *needResize = 1;
-            if (curPad > *newPadSize)
-                *newPadSize = curPad;
-        }
-
-        /* Pad record to target pad size */
-        if (newLen < curPad) {
-            memset(newRecord + newLen, ';', curPad - newLen);
-            newRecord[curPad] = '\0';
-        }
-
-        /* Save old field values for index update before db_store overwrites */
+        /* Save old field values for index update */
         char oldFields[64][256];
         {
-            int fi;
             char oldTemp[RECORD_BUF_SIZE];
             char *otok;
             int oCount = 0;
@@ -261,7 +178,7 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
             }
         }
 
-        /* Pre-store: check unique index constraints BEFORE db_store */
+        /* Pre-store: check unique index constraints */
         if (tblName && tblName[0]) {
             char idxN[16][256], idxC[16][256], idxP[16][1024];
             char idxT[16];
@@ -348,10 +265,19 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
             }
         }
 
-        if (db_store(db, key, newRecord, DB_REPLACE) != 0)
+        /* Update record in heap (may move to new page) */
+        uint16_t newLen = (uint16_t)(strlen(newRecord) + 1);
+        RowID newRid = tapi_heap_update(td, rid, newRecord, newLen);
+        if (newRid.page_no == 0)
             return -1;
 
-        /* Post-store: update B-tree indexes for changed columns */
+        /* If record moved, update PK B+ tree */
+        if (newRid.page_no != rid.page_no || newRid.slot_idx != rid.slot_idx) {
+            bt2_update(&pk_tree, pkKey, newRid);
+            td->pk_root_page = pk_tree.root_page;
+        }
+
+        /* Post-store: update secondary B-tree indexes for changed columns */
         if (tblName && tblName[0]) {
             char idxN[16][256], idxC[16][256], idxP[16][1024];
             char idxT[16];
@@ -405,8 +331,8 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
                             }
                             ct = strtok(NULL, ",");
                         }
-                        if (oldKey[0]) btree_delete(idxP[ix], oldKey, key);
-                        if (newKey[0]) btree_insert(idxP[ix], newKey, key);
+                        if (oldKey[0]) btree_delete(idxP[ix], oldKey, pkKey);
+                        if (newKey[0]) btree_insert(idxP[ix], newKey, pkKey);
                     } else {
                         int colIdx = -1, si;
                         for (si = 0; si < numMetaCols; si++) {
@@ -414,9 +340,9 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
                         }
                         if (colIdx < 0 || colIdx >= numFields) continue;
                         if (oldFields[colIdx][0])
-                            btree_delete(idxP[ix], oldFields[colIdx], key);
+                            btree_delete(idxP[ix], oldFields[colIdx], pkKey);
                         if (fields[colIdx][0])
-                            btree_insert(idxP[ix], fields[colIdx], key);
+                            btree_insert(idxP[ix], fields[colIdx], pkKey);
                     }
                 }
             }
@@ -428,11 +354,8 @@ static int ApplyUpdateToRow(DBHANDLE db, const char *key,
 
 int UpdateProcess(void)
 {
-    DBHANDLE db;
     char temp[RECORD_BUF_SIZE];
     char tblName[1024];
-    char metaFile[SAFE_PATH_MAX];
-    char metaLine[1024];
     char *tok;
     int s, c;
 
@@ -460,12 +383,9 @@ int UpdateProcess(void)
         tok = strtok(NULL, ";");
     }
 
-    /* Determine how many tokens are SET values:
-     * When g_whereExpr is set, we know exactly numSetCols SET values.
-     * When no expression, last token is the legacy WHERE key. */
     int numSetVals;
     if (g_whereExpr != NULL) {
-        numSetVals = numSetCols; /* first numSetCols tokens are SET values */
+        numSetVals = numSetCols;
     } else {
         if (numTokens < 2) {
             printf("Error: UPDATE requires at least a SET value and a WHERE key\n");
@@ -473,7 +393,7 @@ int UpdateProcess(void)
             TruncateUpdate();
             return -1;
         }
-        numSetVals = numTokens - 1; /* last token is the WHERE key */
+        numSetVals = numTokens - 1;
     }
 
     /* Get table name (remove .dat extension) */
@@ -483,30 +403,33 @@ int UpdateProcess(void)
         if (dot) *dot = '\0';
     }
 
-    /* Read column definitions from .meta file */
+    /* Resolve table via catalog */
+    TableDesc td;
+    ColumnDesc allCols[CAT_MAX_COLUMNS];
+    int allNCols;
+    if (tapi_resolve(tblName, &td, allCols, &allNCols) < 0) {
+        printf("Error: table not found\n");
+        g_updateCount = 0;
+        TruncateUpdate();
+        return -1;
+    }
+
+    /* Read column names from catalog */
     char metaCols[64][256];
     int numMetaCols = 0;
-    FILE *fp;
-
-    snprintf(metaFile, sizeof(metaFile), "%s.meta", tblName);
-    fp = fopen(metaFile, "r");
-    if (fp) {
-        if (fgets(metaLine, sizeof(metaLine), fp)) {
-            metaLine[strcspn(metaLine, "\n")] = '\0';
-            tok = strtok(metaLine, ";");
-            while (tok && numMetaCols < 64) {
-                strcpy(metaCols[numMetaCols], tok);
-                numMetaCols++;
-                tok = strtok(NULL, ";");
-            }
-        }
-        fclose(fp);
+    for (int i = 0; i < allNCols && i < 64; i++) {
+        strncpy(metaCols[i], allCols[i].col_name, 255);
+        metaCols[i][255] = '\0';
+        numMetaCols++;
     }
 
     /* Validate SET values against column types */
     {
         int colTypes[64];
-        int numTypes = ReadColumnTypes(tblName, colTypes, 64);
+        int numTypes = 0;
+        for (int i = 0; i < allNCols && i < 64; i++)
+            colTypes[numTypes++] = allCols[i].type_code;
+
         if (numTypes > 0) {
             int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
             for (s = 0; s < minSet; s++) {
@@ -526,25 +449,22 @@ int UpdateProcess(void)
 
     /* Validate NOT NULL constraints for SET columns */
     {
-        int nullFlags[64];
-        int numFlags = ReadNullFlags(tblName, nullFlags, 64);
-        if (numFlags > 0) {
-            int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
-            for (s = 0; s < minSet; s++) {
-                for (c = 0; c < numMetaCols; c++) {
-                    if (strcmp(metaCols[c], setCols[s]) == 0) {
-                        if (c < numFlags && nullFlags[c] && allTokens[s][0] == '\0') {
-                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                                     "null value in column \"%s\" violates not-null constraint",
-                                     setCols[s]);
-                            g_gui_error = 1;
-                            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
-                            g_updateCount = 0;
-                            TruncateUpdate();
-                            return -1;
-                        }
-                        break;
+        int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+        for (s = 0; s < minSet; s++) {
+            for (c = 0; c < numMetaCols; c++) {
+                if (strcmp(metaCols[c], setCols[s]) == 0) {
+                    if (c < allNCols && allCols[c].is_not_null &&
+                        allTokens[s][0] == '\0') {
+                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                 "null value in column \"%s\" violates not-null constraint",
+                                 setCols[s]);
+                        g_gui_error = 1;
+                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
+                        g_updateCount = 0;
+                        TruncateUpdate();
+                        return -1;
                     }
+                    break;
                 }
             }
         }
@@ -552,144 +472,120 @@ int UpdateProcess(void)
 
     /* Validate UNIQUE constraints for SET columns */
     {
-        int uniqueFlags[64];
-        int numUFlags = ReadUniqueFlags(tblName, uniqueFlags, 64);
-        if (numUFlags > 0) {
-            int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
-            for (s = 0; s < minSet; s++) {
-                for (c = 0; c < numMetaCols; c++) {
-                    if (strcmp(metaCols[c], setCols[s]) == 0) {
-                        if (c < numUFlags && uniqueFlags[c]) {
-                            /* Skip NULL values — NULLs don't violate UNIQUE */
-                            if (allTokens[s][0] == '\0' ||
-                                strcmp(allTokens[s], "\x01NULL\x01") == 0)
-                                break;
+        int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+        for (s = 0; s < minSet; s++) {
+            for (c = 0; c < numMetaCols; c++) {
+                if (strcmp(metaCols[c], setCols[s]) == 0) {
+                    if (c < allNCols && allCols[c].is_unique) {
+                        if (allTokens[s][0] == '\0' ||
+                            strcmp(allTokens[s], "\x01NULL\x01") == 0)
+                            break;
 
-                            /* Scan all existing records for duplicate */
-                            DBHANDLE udb = db_open(tblName, O_RDONLY, FILE_MODE);
-                            if (udb) {
-                                char uKeyBuf[1024];
-                                char *uData;
-                                db_rewind(udb);
-                                while ((uData = db_nextrec(udb, uKeyBuf)) != NULL) {
-                                    char existVal[256];
-                                    UpdateGetFieldValue(uData, c, existVal, sizeof(existVal));
-                                    if (strcmp(allTokens[s], existVal) == 0) {
-                                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                                                 "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
-                                                 setCols[s], allTokens[s]);
-                                        g_gui_error = 1;
-                                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
-                                        db_close(udb);
-                                        g_updateCount = 0;
-                                        TruncateUpdate();
-                                        return -1;
-                                    }
+                        /* Scan existing records for duplicate */
+                        TableScanCursor scanCur;
+                        if (tapi_scan_begin(&td, &scanCur) == 0) {
+                            char uPk[256], uRec[RECORD_BUF_SIZE];
+                            while (tapi_scan_next(&scanCur, uPk, uRec, sizeof(uRec)) == 0) {
+                                char existVal[256];
+                                UpdateGetFieldValue(uRec, c, existVal, sizeof(existVal));
+                                if (strcmp(allTokens[s], existVal) == 0) {
+                                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                             "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
+                                             setCols[s], allTokens[s]);
+                                    g_gui_error = 1;
+                                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                                    g_updateCount = 0;
+                                    TruncateUpdate();
+                                    return -1;
                                 }
-                                db_close(udb);
                             }
                         }
-                        break;
                     }
+                    break;
                 }
             }
         }
     }
 
-    /* Read per-table pad size */
-    int padSize = ReadPadSize(tblName);
-
-    /* Open database */
-    if ((db = db_open(tblName, O_RDWR, FILE_MODE)) == NULL)
-        err_sys("db_open error");
-
     if (g_whereExpr != NULL) {
         /* ---------- Expression-based WHERE update ---------- */
         char colNames[64][128];
-        int numCols;
-
-        numCols = UpdateReadColumnNames(tblName, colNames, 64);
+        int numCols = numMetaCols;
+        for (int i = 0; i < numMetaCols; i++) {
+            strncpy(colNames[i], metaCols[i], 127);
+            colNames[i][127] = '\0';
+        }
 
         /* Phase 1: iterate all records, evaluate WHERE, collect matching keys */
         int capacity = 64;
         int matchCount = 0;
         char **matchKeys = (char **)malloc(capacity * sizeof(char *));
         if (!matchKeys) {
-            db_close(db);
             g_updateCount = 0;
             TruncateUpdate();
             return -1;
         }
 
-        char keyBuf[1024];
-        char *str;
-        db_rewind(db);
-        while ((str = db_nextrec(db, keyBuf)) != NULL) {
-            /* Build column values array from record */
-            char colValues[64][256];
-            int cv;
-            for (cv = 0; cv < numCols && cv < 64; cv++) {
-                UpdateGetFieldValue(str, cv, colValues[cv], 256);
-            }
+        TableScanCursor cursor;
+        char keyBuf[256];
+        char recBuf[RECORD_BUF_SIZE];
 
-            /* Evaluate WHERE expression */
-            char result[512];
-            int ok = expr_evaluate(g_whereExpr,
-                                   (const char (*)[128])colNames,
-                                   (const char (*)[256])colValues,
-                                   numCols,
-                                   result, sizeof(result));
-            int match = 0;
-            if (ok) {
-                if (strcmp(result, "t") == 0 ||
-                    strcasecmp(result, "true") == 0 ||
-                    strcmp(result, "1") == 0)
-                    match = 1;
-                else {
-                    double v = strtod(result, NULL);
-                    if (v != 0.0) match = 1;
+        if (tapi_scan_begin(&td, &cursor) == 0) {
+            while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
+                char colValues[64][256];
+                int cv;
+                for (cv = 0; cv < numCols && cv < 64; cv++) {
+                    UpdateGetFieldValue(recBuf, cv, colValues[cv], 256);
                 }
-            }
 
-            if (match) {
-                if (matchCount >= capacity) {
-                    capacity *= 2;
-                    char **tmp = (char **)realloc(matchKeys,
-                                                  capacity * sizeof(char *));
-                    if (!tmp) break;
-                    matchKeys = tmp;
+                char result[512];
+                int ok = expr_evaluate(g_whereExpr,
+                                       (const char (*)[128])colNames,
+                                       (const char (*)[256])colValues,
+                                       numCols,
+                                       result, sizeof(result));
+                int match = 0;
+                if (ok) {
+                    if (strcmp(result, "t") == 0 ||
+                        strcasecmp(result, "true") == 0 ||
+                        strcmp(result, "1") == 0)
+                        match = 1;
+                    else {
+                        double v = strtod(result, NULL);
+                        if (v != 0.0) match = 1;
+                    }
                 }
-                matchKeys[matchCount] = strdup(keyBuf);
-                matchCount++;
+
+                if (match) {
+                    if (matchCount >= capacity) {
+                        capacity *= 2;
+                        char **tmp2 = (char **)realloc(matchKeys,
+                                                       capacity * sizeof(char *));
+                        if (!tmp2) break;
+                        matchKeys = tmp2;
+                    }
+                    matchKeys[matchCount] = strdup(keyBuf);
+                    matchCount++;
+                }
             }
         }
 
         /* Phase 2: apply update to all matched records */
         int updated = 0;
-        int needResize = 0;
-        int newPadSize = padSize;
         int i;
         for (i = 0; i < matchCount; i++) {
             if (matchKeys[i]) {
-                if (ApplyUpdateToRow(db, matchKeys[i],
+                if (ApplyUpdateToRow(&td, allCols, allNCols, matchKeys[i],
                                      (const char (*)[256])setCols,
                                      (const char (*)[256])allTokens,
                                      numSetCols, numSetVals,
                                      (const char (*)[256])metaCols, numMetaCols,
-                                     padSize, &needResize, &newPadSize,
                                      tblName) == 0)
                     updated++;
                 free(matchKeys[i]);
             }
         }
         free(matchKeys);
-
-        db_close(db);
-
-        /* If padding was expanded, resize ALL records in the table */
-        if (needResize) {
-            ResizeAllRecords(tblName, newPadSize);
-        }
 
         g_updateCount = updated;
         printf("%d record(s) updated.\n", updated);
@@ -698,26 +594,16 @@ int UpdateProcess(void)
         char key[256];
         strcpy(key, allTokens[numTokens - 1]);
 
-        int needResize = 0;
-        int newPadSize = padSize;
-
-        if (ApplyUpdateToRow(db, key,
+        if (ApplyUpdateToRow(&td, allCols, allNCols, key,
                              (const char (*)[256])setCols,
                              (const char (*)[256])allTokens,
                              numSetCols, numSetVals,
                              (const char (*)[256])metaCols, numMetaCols,
-                             padSize, &needResize, &newPadSize,
                              tblName) == 0) {
             g_updateCount = 1;
         } else {
             printf("Record not found for key: %s\n", key);
             g_updateCount = 0;
-        }
-
-        db_close(db);
-
-        if (needResize) {
-            ResizeAllRecords(tblName, newPadSize);
         }
     }
 
@@ -753,7 +639,6 @@ char *ParseUpdate(char *arr)
 {
     char *str = NULL;
 
-    /* Use thread-local g_temp (via QueryContext) instead of static buffer */
     g_temp[0] = '\0';
     for (str = strtok(arr, ";"); str != NULL; str = strtok(NULL, ";"))
         strncpy(g_temp, str, sizeof(g_temp) - 1);

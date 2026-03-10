@@ -1,91 +1,53 @@
 /*
  * DatabaseMgmt.c — Database / Schema management for EvolutionDB
  *
- * Root directory layout:
- *   root/
- *     databases          (text file listing database names, one per line)
- *     evosql/            (default database)
- *       schemas           (per-database schema registry, one per line)
- *       table.dat
- *       table.idx
- *       table.meta
- *       myschema/         (user-created schema directory)
- *     mydb/              (user-created database)
- *       schemas
- *       ...
+ * All metadata is stored in the unified page-based storage (evosql.db).
+ * The root/ directory only contains the evosql.db binary file.
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <sys/stat.h>
-#include <errno.h>
 
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(path) _mkdir(path)
 #else
 #include <sys/types.h>
+#include <sys/stat.h>
 #define MKDIR(path) mkdir(path, 0755)
 #endif
 
 #include "database.h"
+#include "page_mgr.h"
+#include "catalog_internal.h"
 
 #define ROOT_DIR "root"
 #define DEFAULT_DB "evosql"
 
 /* ----------------------------------------------------------------
- *  Ensure the root directory structure exists
+ *  Ensure the root directory and unified storage exist
  * ---------------------------------------------------------------- */
 void db_ensure_root(void)
 {
-    char path[1024];
-    FILE *fp;
-
-    /* Create root/ */
+    /* Create root/ directory for evosql.db */
     MKDIR(ROOT_DIR);
 
-    /* Create root/databases file if not exists */
-    snprintf(path, sizeof(path), "%s/databases", ROOT_DIR);
-    fp = fopen(path, "r");
-    if (!fp) {
-        fp = fopen(path, "w");
-        if (fp) {
-            fprintf(fp, "%s\n", DEFAULT_DB);
-            fclose(fp);
-        }
-    } else {
-        fclose(fp);
-    }
-
-    /* Create default database directory root/evosql/ */
-    snprintf(path, sizeof(path), "%s/%s", ROOT_DIR, DEFAULT_DB);
-    MKDIR(path);
-
-    /* Create per-database schemas file root/evosql/schemas if not exists */
-    snprintf(path, sizeof(path), "%s/%s/schemas", ROOT_DIR, DEFAULT_DB);
-    fp = fopen(path, "r");
-    if (!fp) {
-        fp = fopen(path, "w");
-        if (fp) {
-            fprintf(fp, "default\n");
-            fclose(fp);
-        }
-    } else {
-        fclose(fp);
-    }
-
-    /* Create default schema directory root/evosql/default/ */
-    snprintf(path, sizeof(path), "%s/%s/default", ROOT_DIR, DEFAULT_DB);
-    MKDIR(path);
-
-    /* Set root path (database/schema defaults are in QueryContext) */
+    /* Set root path */
     snprintf(g_dbRoot, sizeof(g_dbRoot), "%s", ROOT_DIR);
 
-    /* Create initial admin user if users file is empty/missing */
+    /* Initialize unified page-based storage */
+    {
+        char dbFile[1024];
+        snprintf(dbFile, sizeof(dbFile), "%s/evosql.db", ROOT_DIR);
+        pgm_init(dbFile);
+        cat_init();  /* Creates default db/schema/admin on first run */
+    }
+
+    /* Create initial admin user if not present */
     db_ensure_users();
 
-    /* Create initial grants file with admin superuser grant */
+    /* Create initial grants with admin superuser grant */
     db_ensure_grants();
 }
 
@@ -133,6 +95,8 @@ const char *db_get_current_schema(void)
 
 /* ----------------------------------------------------------------
  *  Build full path: root/<currentdb>/<currentschema>/<tableName>
+ *  NOTE: Legacy path format kept for backward compatibility with
+ *  tapi_basename() which strips the path to extract the table name.
  * ---------------------------------------------------------------- */
 void db_table_path(const char *tableName, char *out, int outSize)
 {
@@ -141,7 +105,7 @@ void db_table_path(const char *tableName, char *out, int outSize)
 
 /* ----------------------------------------------------------------
  *  Build extension path: root/<db>/<schema>/<table>.<ext>
- *  Returns 0 on success, -1 on truncation (sets g_gui_error).
+ *  NOTE: Legacy format — only used for backward compatibility.
  * ---------------------------------------------------------------- */
 int db_ext_path(const char *tableName, const char *ext, char *out, int outSize)
 {
@@ -175,55 +139,17 @@ int db_idx_path(const char *tableName, char *out, int outSize)
 }
 
 /* ----------------------------------------------------------------
- *  Helper: check if name already in a file (one name per line)
- * ---------------------------------------------------------------- */
-static int name_exists_in_file(const char *filepath, const char *name)
-{
-    FILE *fp = fopen(filepath, "r");
-    char line[256];
-    if (!fp) return 0;
-    while (fgets(line, sizeof(line), fp)) {
-        line[strcspn(line, "\n\r")] = '\0';
-        if (strcasecmp(line, name) == 0) {
-            fclose(fp);
-            return 1;
-        }
-    }
-    fclose(fp);
-    return 0;
-}
-
-/* ----------------------------------------------------------------
- *  Helper: append name to a file
- * ---------------------------------------------------------------- */
-static void append_name_to_file(const char *filepath, const char *name)
-{
-    FILE *fp = fopen(filepath, "a");
-    if (fp) {
-        fprintf(fp, "%s\n", name);
-        fclose(fp);
-    }
-}
-
-/* ----------------------------------------------------------------
  *  CREATE DATABASE <name>
  * ---------------------------------------------------------------- */
 int CreateDatabaseProcess(const char *name, int if_not_exists)
 {
-    char path[1024];
-    char regFile[1024];
-    int result = 0;
-
-    /* Build directory path */
-    snprintf(path, sizeof(path), "%s/%s", g_dbRoot, name);
-    snprintf(regFile, sizeof(regFile), "%s/databases", g_dbRoot);
-
     pthread_mutex_lock(&g_metadata_lock);
 
-    /* Check if already registered */
-    if (name_exists_in_file(regFile, name)) {
+    /* Check if already exists in catalog */
+    DatabaseDesc existing;
+    if (cat_find_database(name, &existing) == 0) {
         pthread_mutex_unlock(&g_metadata_lock);
-        if (if_not_exists) return 0;  /* silently succeed */
+        if (if_not_exists) return 0;
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "database \"%s\" already exists", name);
         g_gui_error = 1;
@@ -231,41 +157,24 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
         return -1;
     }
 
-    /* Create directory */
-    if (MKDIR(path) != 0 && errno != EEXIST) {
+    /* Register in catalog */
+    int db_id = cat_create_database(name);
+    if (db_id <= 0) {
         pthread_mutex_unlock(&g_metadata_lock);
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "could not create database directory \"%s\"", name);
+                 "could not create database \"%s\"", name);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
 
-    /* Register in databases file */
-    append_name_to_file(regFile, name);
+    /* Create default schema in new database */
+    cat_create_schema(db_id, "default");
 
     pthread_mutex_unlock(&g_metadata_lock);
 
-    /* Create per-database schemas file with 'default' schema */
-    {
-        char schPath[1024];
-        snprintf(schPath, sizeof(schPath), "%s/schemas", path);
-        FILE *sfp = fopen(schPath, "w");
-        if (sfp) {
-            fprintf(sfp, "default\n");
-            fclose(sfp);
-        }
-    }
-
-    /* Create default schema directory under new database */
-    {
-        char defSchDir[1024];
-        snprintf(defSchDir, sizeof(defSchDir), "%s/default", path);
-        MKDIR(defSchDir);
-    }
-
     printf("CREATE DATABASE %s\n", name);
-    return result;
+    return 0;
 }
 
 /* ----------------------------------------------------------------
@@ -273,19 +182,23 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
  * ---------------------------------------------------------------- */
 int CreateSchemaProcess(const char *name, int if_not_exists)
 {
-    char path[1024];
-    char regFile[1024];
-
-    /* Build directory path under current database: root/<currentdb>/<schema> */
-    snprintf(path, sizeof(path), "%s/%s/%s", g_dbRoot, g_currentDatabase, name);
-    snprintf(regFile, sizeof(regFile), "%s/%s/schemas", g_dbRoot, g_currentDatabase);
-
     pthread_mutex_lock(&g_metadata_lock);
 
-    /* Check if already registered in per-database schemas file */
-    if (name_exists_in_file(regFile, name)) {
+    /* Look up current database */
+    DatabaseDesc dbDesc;
+    if (cat_find_database(g_currentDatabase, &dbDesc) != 0) {
         pthread_mutex_unlock(&g_metadata_lock);
-        if (if_not_exists) return 0;  /* silently succeed */
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "current database \"%s\" not found", g_currentDatabase);
+        g_gui_error = 1;
+        return -1;
+    }
+
+    /* Check if schema already exists */
+    SchemaDesc existing;
+    if (cat_find_schema(dbDesc.db_id, name, &existing) == 0) {
+        pthread_mutex_unlock(&g_metadata_lock);
+        if (if_not_exists) return 0;
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "schema \"%s\" already exists", name);
         g_gui_error = 1;
@@ -293,18 +206,8 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
         return -1;
     }
 
-    /* Create schema directory under current database */
-    if (MKDIR(path) != 0 && errno != EEXIST) {
-        pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "could not create schema directory \"%s\"", name);
-        g_gui_error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-        return -1;
-    }
-
-    /* Register in per-database schemas file */
-    append_name_to_file(regFile, name);
+    /* Register in catalog */
+    cat_create_schema(dbDesc.db_id, name);
 
     pthread_mutex_unlock(&g_metadata_lock);
 
@@ -317,30 +220,14 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
  * ---------------------------------------------------------------- */
 int UseDatabaseProcess(const char *name)
 {
-    char regFile[1024];
-    char dbDir[1024];
-
-    /* Check if database is registered */
-    snprintf(regFile, sizeof(regFile), "%s/databases", g_dbRoot);
-    if (!name_exists_in_file(regFile, name)) {
+    /* Check if database exists in catalog */
+    DatabaseDesc dbDesc;
+    if (cat_find_database(name, &dbDesc) != 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "database \"%s\" does not exist", name);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_DATABASE);
         return -1;
-    }
-
-    /* Verify database directory exists */
-    snprintf(dbDir, sizeof(dbDir), "%s/%s", g_dbRoot, name);
-    {
-        struct stat st;
-        if (stat(dbDir, &st) != 0 || !(st.st_mode & S_IFDIR)) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "database directory \"%s\" not found", name);
-            g_gui_error = 1;
-            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-            return -1;
-        }
     }
 
     /* Switch active database and reset schema to default */
@@ -356,31 +243,25 @@ int UseDatabaseProcess(const char *name)
  * ---------------------------------------------------------------- */
 int SetSchemaProcess(const char *name)
 {
-    char regFile[1024];
-    char schDir[1024];
+    /* Look up current database */
+    DatabaseDesc dbDesc;
+    if (cat_find_database(g_currentDatabase, &dbDesc) != 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "database \"%s\" not found", g_currentDatabase);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_SCHEMA);
+        return -1;
+    }
 
-    /* Check if schema is registered in current database */
-    snprintf(regFile, sizeof(regFile), "%s/%s/schemas", g_dbRoot, g_currentDatabase);
-    if (!name_exists_in_file(regFile, name)) {
+    /* Check if schema exists in catalog */
+    SchemaDesc schDesc;
+    if (cat_find_schema(dbDesc.db_id, name, &schDesc) != 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "schema \"%s\" does not exist in database \"%s\"",
                  name, g_currentDatabase);
         g_gui_error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_SCHEMA);
         return -1;
-    }
-
-    /* Verify schema directory exists */
-    snprintf(schDir, sizeof(schDir), "%s/%s/%s", g_dbRoot, g_currentDatabase, name);
-    {
-        struct stat st;
-        if (stat(schDir, &st) != 0 || !(st.st_mode & S_IFDIR)) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "schema directory \"%s\" not found", name);
-            g_gui_error = 1;
-            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
-            return -1;
-        }
     }
 
     /* Switch active schema */

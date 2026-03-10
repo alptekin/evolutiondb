@@ -1,71 +1,44 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
 #include "database.h"
-#include "buffer_pool.h"
-#include "apue.h"
-#include "apue_db.h"
+#include "catalog_internal.h"
+#include "table_api.h"
 
 int DropTableProcess(void)
 {
-    char datFile[SAFE_PATH_MAX];
-    char idxFile[SAFE_PATH_MAX];
-    char metaFile[SAFE_PATH_MAX];
-    int ok = 0;
-    int fd;
+    /* Resolve table via catalog */
+    TableDesc td;
+    if (tapi_resolve(g_tblDropName, &td, NULL, NULL) < 0) {
+        printf("Error: table '%s' not found\n", g_tblDropName);
+        TruncateDrop();
+        return -1;
+    }
 
-    snprintf(datFile, sizeof(datFile), "%s.dat", g_tblDropName);
-    snprintf(idxFile, sizeof(idxFile), "%s.idx", g_tblDropName);
-    snprintf(metaFile, sizeof(metaFile), "%s.meta", g_tblDropName);
+    /* Destroy PK B+ tree */
+    BTree2 pk_tree = tapi_pk_tree(&td);
+    bt2_destroy(&pk_tree);
 
-    /* Invalidate buffer pool pages before removing files.
-     * Open briefly to get fd for invalidation, then close. */
-    fd = open(idxFile, O_RDONLY);
-    if (fd >= 0) { bp_invalidate_fd(fd); close(fd); }
-    fd = open(datFile, O_RDONLY);
-    if (fd >= 0) { bp_invalidate_fd(fd); close(fd); }
+    /* Free all heap pages */
+    tapi_free_heap_pages(&td);
 
-    if (remove(datFile) == 0)
-        ok++;
-    if (remove(idxFile) == 0)
-        ok++;
-    if (remove(metaFile) == 0)
-        ok++;
-
-    /* Remove associated indexes */
+    /* Destroy secondary index B+ trees */
     {
-        char indexesFile[SAFE_PATH_MAX];
-        snprintf(indexesFile, sizeof(indexesFile), "%s.indexes", g_tblDropName);
-        FILE *fi = fopen(indexesFile, "r");
-        if (fi) {
-            char line[2048];
-            while (fgets(line, sizeof(line), fi)) {
-                /* Parse "name:col:btree_path" and remove btree file */
-                char *col = strchr(line, ':');
-                if (!col) continue;
-                col++;
-                char *path = strchr(col, ':');
-                if (!path) continue;
-                path++;
-                /* Strip newline */
-                int len = (int)strlen(path);
-                while (len > 0 && (path[len-1] == '\n' || path[len-1] == '\r'))
-                    path[--len] = '\0';
-                if (path[0])
-                    remove(path);
-            }
-            fclose(fi);
-            remove(indexesFile);
-            ok++;
+        IndexDesc indexes[16];
+        int nIdx = cat_list_indexes(td.table_id, indexes, 16);
+        for (int ix = 0; ix < nIdx; ix++) {
+            if (indexes[ix].index_type == 'P') continue; /* PK handled above */
+            BTree2 idx_tree = { .root_page = indexes[ix].root_page };
+            bt2_destroy(&idx_tree);
         }
     }
 
-    if (ok > 0)
-        printf("command(s) completed successfully!..\n");
-    else
-        printf("Error: table '%s' not found\n", g_tblDropName);
+    /* Drop table from catalog (removes table, columns, indexes, constraints) */
+    cat_drop_table(td.table_id);
 
+    printf("command(s) completed successfully!..\n");
     TruncateDrop();
 
     return 0;
@@ -73,41 +46,48 @@ int DropTableProcess(void)
 
 int TruncateTableProcess(void)
 {
-    DBHANDLE db;
-    char keyBuf[1024];
-    char *data;
-
-    /* Check table exists */
-    if ((db = db_open(g_tblDropName, O_RDWR, FILE_MODE)) == NULL) {
+    /* Resolve table via catalog */
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(g_tblDropName, &td, cols, &ncols) < 0) {
         printf("Error: table '%s' not found\n", g_tblDropName);
         TruncateDrop();
         return -1;
     }
 
-    /* Collect all keys first, then delete them */
-    {
-        char (*keys)[256] = (char (*)[256])malloc(200 * 256);
-        int count = 0, i;
+    /* Delete all records: iterate PK B+ tree, delete each from heap */
+    BTree2 pk_tree = tapi_pk_tree(&td);
+    BTree2Cursor cursor;
+    char keyBuf[256];
+    RowID rid;
 
-        if (!keys) {
-            db_close(db);
-            TruncateDrop();
-            return -1;
-        }
+    /* Collect all keys first */
+    char (*keys)[256] = (char (*)[256])malloc(200 * 256);
+    int count = 0;
 
-        db_rewind(db);
-        while ((data = db_nextrec(db, keyBuf)) != NULL && count < 200) {
+    if (!keys) {
+        TruncateDrop();
+        return -1;
+    }
+
+    if (bt2_cursor_first(&pk_tree, &cursor) == 0) {
+        while (bt2_cursor_next(&cursor, keyBuf, &rid) == 0 && count < 200) {
             strcpy(keys[count], keyBuf);
             count++;
         }
-
-        for (i = 0; i < count; i++) {
-            db_delete(db, keys[i]);
-        }
-        free(keys);
     }
 
-    db_close(db);
+    /* Delete each record */
+    for (int i = 0; i < count; i++) {
+        RowID delRid;
+        if (bt2_search(&pk_tree, keys[i], &delRid) == 0) {
+            tapi_heap_delete(delRid);
+            bt2_delete(&pk_tree, keys[i]);
+        }
+    }
+
+    free(keys);
 
     printf("command(s) completed successfully!..\n");
     TruncateDrop();
