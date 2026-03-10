@@ -10,7 +10,7 @@ EvolutionDB was born as a relational database engine, but its next evolution is 
 
 ---
 
-A file-based SQL database engine written in C. Features Flex/Bison SQL parsing, APUE hash-indexed file storage, a Win32 GUI, a dual-protocol server (PostgreSQL wire protocol + native EVO text protocol), and an interactive CLI client with readline/history support.
+EvoSQL is a SQL database engine written in C featuring unified page-based storage, a Flex/Bison SQL parser, B+ tree indexing, a Clock Sweep buffer pool, undo-log transactions, and a dual-protocol server that speaks both PostgreSQL wire protocol and a native text protocol.
 
 ## Architecture
 
