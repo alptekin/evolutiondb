@@ -322,6 +322,195 @@ static int validate_check(const char *tblName, char **vals, int numValues)
     return 0;
 }
 
+/* Validate FOREIGN KEY constraints: each FK column value must exist
+ * in the referenced table's referenced column(s). */
+static int validate_foreign_keys(const char *tblName, char **vals, int numValues)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+
+    if (tapi_resolve(tblName, &td, cols, &ncols) < 0)
+        return 0;
+
+    ConstraintDesc constraints[32];
+    int numCon = cat_list_constraints(td.table_id, constraints, 32);
+    if (numCon <= 0) return 0;
+
+    char colNames[64][128];
+    int numColNames = InsertReadColumnNames(tblName, colNames, 64);
+
+    for (int ci = 0; ci < numCon; ci++) {
+        if (constraints[ci].constraint_type != 'F') continue;
+
+        /* Parse definition: "local_col1,col2|on_delete|on_update" */
+        char localColsCsv[1024];
+        strncpy(localColsCsv, constraints[ci].definition, sizeof(localColsCsv) - 1);
+        localColsCsv[sizeof(localColsCsv) - 1] = '\0';
+        char *pipe = strchr(localColsCsv, '|');
+        if (pipe) *pipe = '\0';
+
+        /* Parse referenced columns */
+        char refColsCsv[256];
+        strncpy(refColsCsv, constraints[ci].ref_columns, sizeof(refColsCsv) - 1);
+        refColsCsv[sizeof(refColsCsv) - 1] = '\0';
+
+        /* Build FK value from local columns */
+        char fkValue[1024] = "";
+        int allNull = 1;
+        {
+            char colListBuf[256];
+            strncpy(colListBuf, localColsCsv, sizeof(colListBuf) - 1);
+            colListBuf[sizeof(colListBuf) - 1] = '\0';
+            char *saveptr = NULL;
+            char *colName = strtok_r(colListBuf, ",", &saveptr);
+            int first = 1;
+            while (colName) {
+                int found = 0;
+                for (int j = 0; j < numColNames && j < numValues; j++) {
+                    if (strcasecmp(colNames[j], colName) == 0) {
+                        if (strcmp(vals[j], "\x01NULL\x01") != 0)
+                            allNull = 0;
+                        if (!first) strcat(fkValue, "|");
+                        strcat(fkValue, vals[j]);
+                        first = 0;
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (!first) strcat(fkValue, "|");
+                    strcat(fkValue, "\x01NULL\x01");
+                    first = 0;
+                }
+                colName = strtok_r(NULL, ",", &saveptr);
+            }
+        }
+
+        /* NULL FK values are allowed (no referential check) */
+        if (allNull) continue;
+
+        /* Resolve referenced table by ID */
+        TableDesc refTd;
+        ColumnDesc refCols[CAT_MAX_COLUMNS];
+        int refColCount;
+        {
+            DatabaseDesc dbDesc;
+            if (cat_find_database(g_currentDatabase, &dbDesc) < 0) continue;
+            SchemaDesc schemas[16];
+            int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
+            int foundRef = 0;
+            for (int si = 0; si < numSchemas; si++) {
+                TableDesc tables[64];
+                int numTables = cat_list_tables(schemas[si].schema_id, tables, 64);
+                for (int ti = 0; ti < numTables; ti++) {
+                    if (tables[ti].table_id == constraints[ci].ref_table_id) {
+                        refTd = tables[ti];
+                        refColCount = cat_find_columns(refTd.table_id, refCols, CAT_MAX_COLUMNS);
+                        foundRef = 1;
+                        break;
+                    }
+                }
+                if (foundRef) break;
+            }
+            if (!foundRef) continue;
+        }
+
+        /* Check if referenced columns form the PK — enables direct B+ tree lookup */
+        int refIsPK = 1;
+        {
+            char refColListBuf[256];
+            strncpy(refColListBuf, refColsCsv, sizeof(refColListBuf) - 1);
+            refColListBuf[sizeof(refColListBuf) - 1] = '\0';
+            char *saveptr = NULL;
+            char *refColName = strtok_r(refColListBuf, ",", &saveptr);
+            while (refColName) {
+                int isPk = 0;
+                for (int k = 0; k < refColCount; k++) {
+                    if (strcasecmp(refCols[k].col_name, refColName) == 0) {
+                        if (refCols[k].is_pk) isPk = 1;
+                        break;
+                    }
+                }
+                if (!isPk) { refIsPK = 0; break; }
+                refColName = strtok_r(NULL, ",", &saveptr);
+            }
+        }
+
+        if (refIsPK) {
+            /* Direct PK lookup in referenced table */
+            BTree2 refPkTree = tapi_pk_tree(&refTd);
+            RowID rid;
+            if (bt2_search(&refPkTree, fkValue, &rid) < 0) {
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "insert or update on table violates foreign key constraint "
+                         "(value \"%s\" not found in referenced table \"%s\")",
+                         fkValue, refTd.table_name);
+                g_gui_error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                return -1;
+            }
+        } else {
+            /* Table scan for non-PK referenced columns */
+            int found = 0;
+            TableScanCursor scanCur;
+            if (tapi_scan_begin(&refTd, &scanCur) == 0) {
+                char scanKey[256], scanRec[RECORD_BUF_SIZE];
+                while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
+                    /* Extract referenced column values and build composite value */
+                    char refRecValue[1024] = "";
+                    char refColListBuf[256];
+                    strncpy(refColListBuf, refColsCsv, sizeof(refColListBuf) - 1);
+                    refColListBuf[sizeof(refColListBuf) - 1] = '\0';
+                    char *saveptr = NULL;
+                    char *refColName = strtok_r(refColListBuf, ",", &saveptr);
+                    int first = 1;
+                    while (refColName) {
+                        for (int k = 0; k < refColCount; k++) {
+                            if (strcasecmp(refCols[k].col_name, refColName) == 0) {
+                                char fieldVal[256] = "";
+                                char recCopy[RECORD_BUF_SIZE];
+                                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
+                                recCopy[sizeof(recCopy) - 1] = '\0';
+                                char *field = strtok(recCopy, ";");
+                                int idx = 0;
+                                while (field) {
+                                    if (idx == k) {
+                                        strncpy(fieldVal, field, sizeof(fieldVal) - 1);
+                                        fieldVal[sizeof(fieldVal) - 1] = '\0';
+                                        break;
+                                    }
+                                    idx++;
+                                    field = strtok(NULL, ";");
+                                }
+                                if (!first) strcat(refRecValue, "|");
+                                strcat(refRecValue, fieldVal);
+                                first = 0;
+                                break;
+                            }
+                        }
+                        refColName = strtok_r(NULL, ",", &saveptr);
+                    }
+                    if (strcmp(fkValue, refRecValue) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "insert or update on table violates foreign key constraint "
+                         "(value \"%s\" not found in referenced table \"%s\")",
+                         fkValue, refTd.table_name);
+                g_gui_error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int apply_auto_increment(const char *tblName, char **vals, int numValues,
                                 int autoIncCol, int *counterInOut, int step,
                                 char *generatedVal, int genBufSize)
@@ -503,6 +692,10 @@ int InsertProcess(void)
             retval = -1; goto cleanup;
         }
         if (validate_check(tblName, vals, nv) != 0) {
+            TruncateInsert();
+            retval = -1; goto cleanup;
+        }
+        if (validate_foreign_keys(tblName, vals, nv) != 0) {
             TruncateInsert();
             retval = -1; goto cleanup;
         }

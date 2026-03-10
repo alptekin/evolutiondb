@@ -165,6 +165,10 @@ int cat_add_constraint(uint32_t table_id, char type,
                        uint32_t ref_table_id, const char *ref_columns);
 int cat_list_constraints(uint32_t table_id, ConstraintDesc *out, int max);
 
+/* Find all FK constraints that reference a given table (by ref_table_id).
+ * Scans all constraints in the catalog. Returns count found. */
+int cat_list_referencing_fks(uint32_t ref_table_id, ConstraintDesc *out, int max);
+
 /* ----------------------------------------------------------------
  *  User operations
  * ---------------------------------------------------------------- */

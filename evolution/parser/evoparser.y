@@ -68,6 +68,7 @@
 
 %token CURRENT_TIMESTAMP
 %token CREATE
+%token CASCADE
 %token CROSS
 %token CASE
 %token CHECK
@@ -102,6 +103,7 @@
 
 %token FLOAT
 %token FORCE
+%token FOREIGN
 %token FROM
 %token FULLTEXT
 %token FOR
@@ -153,6 +155,9 @@
 %token QUICK
 
 %token REAL
+%token RECLAIM
+%token REFERENCES
+%token RESTRICT
 %token ROLLUP
 %token RIGHT
 %token REPLACE
@@ -814,6 +819,22 @@ truncate_table_stmt: TRUNCATE TABLE NAME
     }
 ;
 
+/** reclaim table — defragmentation **/
+stmt: reclaim_table_stmt
+    {
+        emit("STMT");
+        ReclaimTableProcess();
+    }
+;
+
+reclaim_table_stmt: RECLAIM TABLE NAME
+    {
+        emit("RECLAIMTABLE %s", $3);
+        GetDropTableName($3);
+        free($3);
+    }
+;
+
 stmt: insert_stmt
     {
         emit("STMT");
@@ -1053,10 +1074,29 @@ create_definition: PRIMARY KEY '(' pk_column_list ')'                           
 | FULLTEXT INDEX '(' column_list ')'                                            { emit("TEXTINDEX %d", $4); }
 | FULLTEXT KEY '(' column_list ')'                                              { emit("TEXTINDEX %d", $4); }
 | CHECK '(' expr ')'                                                            { emit("CHECK"); AddCheckConstraint($3); }
+| FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
+    { emit("FOREIGNKEY"); AddForeignKeyRefTable($7); free($7); }
 ;
 
 pk_column_list: NAME                                                            { emit("PRIKEY_COL %s", $1); AddPrimaryKeyColumn($1); free($1); $$ = 1; }
 | pk_column_list ',' NAME                                                       { emit("PRIKEY_COL %s", $3); AddPrimaryKeyColumn($3); free($3); $$ = $1 + 1; }
+;
+
+fk_column_list: NAME                                                            { AddForeignKeyColumn($1); free($1); }
+| fk_column_list ',' NAME                                                       { AddForeignKeyColumn($3); free($3); }
+;
+
+fk_ref_column_list: NAME                                                        { AddForeignKeyRefColumn($1); free($1); }
+| fk_ref_column_list ',' NAME                                                   { AddForeignKeyRefColumn($3); free($3); }
+;
+
+fk_actions: /* nil */
+| fk_actions ON DELETE CASCADE                                                  { SetForeignKeyOnDelete(1); }
+| fk_actions ON DELETE SET NULLX                                                { SetForeignKeyOnDelete(2); }
+| fk_actions ON DELETE RESTRICT                                                 { SetForeignKeyOnDelete(3); }
+| fk_actions ON UPDATE CASCADE                                                  { SetForeignKeyOnUpdate(1); }
+| fk_actions ON UPDATE SET NULLX                                                { SetForeignKeyOnUpdate(2); }
+| fk_actions ON UPDATE RESTRICT                                                 { SetForeignKeyOnUpdate(3); }
 ;
 
 create_definition:								{ emit("STARTCOL"); }
