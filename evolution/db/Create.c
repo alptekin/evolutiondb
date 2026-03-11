@@ -115,6 +115,12 @@ int ReadPrimaryKeys(const char *tblName, int *indices, int maxCols)
 
 int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxConstraints)
 {
+    return ReadCheckConstraintsWithNames(tblName, constraints, NULL, maxConstraints);
+}
+
+int ReadCheckConstraintsWithNames(const char *tblName, char constraints[][1024],
+                                   char names[][128], int maxConstraints)
+{
     TableDesc td;
     if (tapi_resolve(tblName, &td, NULL, NULL) < 0)
         return 0;
@@ -125,9 +131,13 @@ int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxC
 
     int count = 0;
     for (int i = 0; i < total && count < maxConstraints; i++) {
-        if (descs[i].constraint_type == 'C') {
+        if (descs[i].constraint_type == 'C' && descs[i].is_enabled) {
             strncpy(constraints[count], descs[i].definition, 1023);
             constraints[count][1023] = '\0';
+            if (names) {
+                strncpy(names[count], descs[i].constraint_name, 127);
+                names[count][127] = '\0';
+            }
             count++;
         }
     }
@@ -315,6 +325,10 @@ void AddForeignKeyRefTable(const char *tableName)
     g_fkRefTable[g_fkCount][127] = '\0';
     strncpy(g_fkRefCols[g_fkCount], g_fkCurRefCols, 255);
     g_fkRefCols[g_fkCount][255] = '\0';
+    /* Copy pending constraint name if set */
+    strncpy(g_fkNames[g_fkCount], g_pendingConstraintName, 127);
+    g_fkNames[g_fkCount][127] = '\0';
+    g_pendingConstraintName[0] = '\0';
     /* on_delete/on_update already set by SetForeignKey* or default 0 */
 
     g_fkCount++;
@@ -517,7 +531,14 @@ int CreateTableProcess(void)
         TableDesc td;
         if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
             for (int ci = 0; ci < g_checkCount; ci++) {
-                cat_add_constraint(td.table_id, 'C',
+                /* Auto-generate name if not specified */
+                char cname[128];
+                if (g_checkNames[ci][0] != '\0') {
+                    strncpy(cname, g_checkNames[ci], sizeof(cname) - 1);
+                } else {
+                    snprintf(cname, sizeof(cname), "%s_check_%d", tableName, ci + 1);
+                }
+                cat_add_constraint(td.table_id, 'C', cname,
                                    g_checkSerialized[ci], 0, "");
             }
         }
@@ -549,7 +570,15 @@ int CreateTableProcess(void)
                          g_fkOnDelete[fi],
                          g_fkOnUpdate[fi]);
 
-                cat_add_constraint(td.table_id, 'F', definition,
+                /* Auto-generate name if not specified */
+                char cname[128];
+                if (g_fkNames[fi][0] != '\0') {
+                    strncpy(cname, g_fkNames[fi], sizeof(cname) - 1);
+                } else {
+                    snprintf(cname, sizeof(cname), "%s_%s_fkey",
+                             tableName, g_fkLocalCols[fi]);
+                }
+                cat_add_constraint(td.table_id, 'F', cname, definition,
                                    refTd.table_id, g_fkRefCols[fi]);
             }
         }
@@ -678,4 +707,842 @@ int GetColumnSize(int typeVal)
     strcat(g_columnTypeDefs, buf);
 
     return size;
+}
+
+/* ----------------------------------------------------------------
+ *  ALTER TABLE — ADD / DROP CONSTRAINT
+ * ---------------------------------------------------------------- */
+
+static int resolve_table_for_alter(const char *tableName, TableDesc *td)
+{
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+    if (tapi_resolve(tblPath, td, NULL, NULL) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "table \"%s\" does not exist", tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+    return 0;
+}
+
+int AlterTableAddCheckConstraint(const char *tableName, const char *constraintName,
+                                  ExprNode *expr)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "table \"%s\" does not exist", tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Check for duplicate constraint name */
+    ConstraintDesc existing;
+    if (cat_find_constraint_by_name(td.table_id, constraintName, &existing) == 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" already exists", constraintName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42710");
+        return -1;
+    }
+
+    /* Validate existing rows against the new CHECK constraint */
+    {
+        char colNames[64][128];
+        for (int c = 0; c < ncols && c < 64; c++)
+            strncpy(colNames[c], cols[c].col_name, 127);
+
+        TableScanCursor scanCur;
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            char scanKey[256], scanRec[RECORD_BUF_SIZE];
+            int rowNum = 0;
+            while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
+                rowNum++;
+                /* Parse record into column values */
+                char colValues[64][256];
+                memset(colValues, 0, sizeof(colValues));
+                char recCopy[RECORD_BUF_SIZE];
+                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
+                char *field = strtok(recCopy, ";");
+                int idx = 0;
+                while (field && idx < 64) {
+                    strncpy(colValues[idx], field, 255);
+                    idx++;
+                    field = strtok(NULL, ";");
+                }
+
+                char result[512];
+                int ok = expr_evaluate(expr,
+                                       (const char (*)[128])colNames,
+                                       (const char (*)[256])colValues,
+                                       ncols, result, sizeof(result));
+                int pass = 0;
+                if (ok) {
+                    if (strcmp(result, "t") == 0 || strcasecmp(result, "true") == 0 ||
+                        strcmp(result, "1") == 0)
+                        pass = 1;
+                    else {
+                        double v = strtod(result, NULL);
+                        if (v != 0.0) pass = 1;
+                    }
+                }
+                if (!pass) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "check constraint \"%s\" is violated by existing row %d",
+                             constraintName, rowNum);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
+                    return -1;
+                }
+            }
+        }
+    }
+
+    /* Serialize the CHECK expression */
+    char serialized[1024];
+    expr_serialize(expr, serialized, sizeof(serialized));
+
+    cat_add_constraint(td.table_id, 'C', constraintName, serialized, 0, "");
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintName)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "table \"%s\" does not exist", tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Check for duplicate constraint name */
+    ConstraintDesc existing;
+    if (cat_find_constraint_by_name(td.table_id, constraintName, &existing) == 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" already exists", constraintName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42710");
+        return -1;
+    }
+
+    /* Resolve column indices for the UNIQUE columns */
+    char colListBuf[256];
+    strncpy(colListBuf, g_fkCurLocalCols, sizeof(colListBuf) - 1);
+    colListBuf[sizeof(colListBuf) - 1] = '\0';
+    int uqColIndices[16];
+    int numUqCols = 0;
+    {
+        char *saveptr = NULL;
+        char *colName = strtok_r(colListBuf, ",", &saveptr);
+        while (colName && numUqCols < 16) {
+            for (int c = 0; c < ncols; c++) {
+                if (strcasecmp(cols[c].col_name, colName) == 0) {
+                    uqColIndices[numUqCols++] = c;
+                    break;
+                }
+            }
+            colName = strtok_r(NULL, ",", &saveptr);
+        }
+    }
+
+    /* Validate existing rows for uniqueness using simple O(n^2) scan */
+    {
+        /* Collect all values */
+        char (*allValues)[1024] = NULL;
+        int rowCount = 0, rowCap = 64;
+        allValues = malloc(rowCap * sizeof(*allValues));
+        if (!allValues) { g_fkCurLocalCols[0] = '\0'; return -1; }
+
+        TableScanCursor scanCur;
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            char scanKey[256], scanRec[RECORD_BUF_SIZE];
+            while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
+                if (rowCount >= rowCap) {
+                    rowCap *= 2;
+                    allValues = realloc(allValues, rowCap * sizeof(*allValues));
+                    if (!allValues) { g_fkCurLocalCols[0] = '\0'; return -1; }
+                }
+                /* Build composite unique value */
+                char composite[1024] = "";
+                char recCopy[RECORD_BUF_SIZE];
+                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
+                char *fields[64];
+                int nf = 0;
+                char *f = strtok(recCopy, ";");
+                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+
+                for (int u = 0; u < numUqCols; u++) {
+                    if (u > 0) strcat(composite, "|");
+                    if (uqColIndices[u] < nf)
+                        strcat(composite, fields[uqColIndices[u]]);
+                }
+                strncpy(allValues[rowCount], composite, 1023);
+                allValues[rowCount][1023] = '\0';
+                rowCount++;
+            }
+        }
+
+        /* Check for duplicates */
+        for (int i = 0; i < rowCount; i++) {
+            for (int j = i + 1; j < rowCount; j++) {
+                if (strcmp(allValues[i], allValues[j]) == 0) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "could not create unique constraint \"%s\": "
+                             "duplicate key value \"%s\"",
+                             constraintName, allValues[i]);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                    free(allValues);
+                    g_fkCurLocalCols[0] = '\0';
+                    return -1;
+                }
+            }
+        }
+        free(allValues);
+    }
+
+    cat_add_constraint(td.table_id, 'U', constraintName, g_fkCurLocalCols, 0, "");
+    g_fkCurLocalCols[0] = '\0';
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTableName)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "table \"%s\" does not exist", tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Use constraint name from g_pendingConstraintName */
+    const char *cname = g_pendingConstraintName;
+
+    /* Check for duplicate constraint name */
+    ConstraintDesc existing;
+    if (cat_find_constraint_by_name(td.table_id, cname, &existing) == 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" already exists", cname);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42710");
+        return -1;
+    }
+
+    /* Resolve referenced table */
+    TableDesc refTd;
+    char refPath[1024];
+    db_table_path(refTableName, refPath, sizeof(refPath));
+    if (tapi_resolve(refPath, &refTd, NULL, NULL) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "referenced table \"%s\" does not exist", refTableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Validate existing rows: each FK column value must exist in referenced table */
+    {
+        /* Resolve FK column indices */
+        int fkColIndices[16];
+        int numFkCols = 0;
+        char colListBuf[256];
+        strncpy(colListBuf, g_fkCurLocalCols, sizeof(colListBuf) - 1);
+        colListBuf[sizeof(colListBuf) - 1] = '\0';
+        char *saveptr = NULL;
+        char *colName = strtok_r(colListBuf, ",", &saveptr);
+        while (colName && numFkCols < 16) {
+            for (int c = 0; c < ncols; c++) {
+                if (strcasecmp(cols[c].col_name, colName) == 0) {
+                    fkColIndices[numFkCols++] = c;
+                    break;
+                }
+            }
+            colName = strtok_r(NULL, ",", &saveptr);
+        }
+
+        BTree2 refPkTree = tapi_pk_tree(&refTd);
+        TableScanCursor scanCur;
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            char scanKey[256], scanRec[RECORD_BUF_SIZE];
+            int rowNum = 0;
+            while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
+                rowNum++;
+                char recCopy[RECORD_BUF_SIZE];
+                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
+                char *fields[64];
+                int nf = 0;
+                char *f = strtok(recCopy, ";");
+                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+
+                /* Build composite FK value */
+                char fkValue[1024] = "";
+                int allNull = 1;
+                for (int u = 0; u < numFkCols; u++) {
+                    if (u > 0) strcat(fkValue, "|");
+                    if (fkColIndices[u] < nf) {
+                        strcat(fkValue, fields[fkColIndices[u]]);
+                        if (strcmp(fields[fkColIndices[u]], "\x01NULL\x01") != 0)
+                            allNull = 0;
+                    }
+                }
+                if (allNull) continue; /* NULL FK values are allowed */
+
+                RowID rid;
+                if (bt2_search(&refPkTree, fkValue, &rid) < 0) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "insert or update on table \"%s\" violates foreign key constraint \"%s\" "
+                             "(value \"%s\" not found in referenced table \"%s\")",
+                             tableName, cname, fkValue, refTd.table_name);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                    /* Reset FK state */
+                    g_fkCount = 0;
+                    g_fkCurLocalCols[0] = '\0';
+                    g_fkCurRefCols[0] = '\0';
+                    g_pendingConstraintName[0] = '\0';
+                    return -1;
+                }
+            }
+        }
+    }
+
+    /* Build definition from accumulated FK state */
+    char definition[1024];
+    snprintf(definition, sizeof(definition), "%s|%d|%d",
+             g_fkCurLocalCols, g_fkOnDelete[0], g_fkOnUpdate[0]);
+
+    cat_add_constraint(td.table_id, 'F', cname, definition,
+                       refTd.table_id, g_fkCurRefCols);
+
+    /* Reset FK state */
+    g_fkCount = 0;
+    g_fkCurLocalCols[0] = '\0';
+    g_fkCurRefCols[0] = '\0';
+    memset(g_fkOnDelete, 0, sizeof(g_fkOnDelete));
+    memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
+    g_pendingConstraintName[0] = '\0';
+
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+int AlterTableDropConstraint(const char *tableName, const char *constraintName)
+{
+    TableDesc td;
+    if (resolve_table_for_alter(tableName, &td) < 0) return -1;
+
+    ConstraintDesc cd;
+    if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" does not exist on table \"%s\"",
+                 constraintName, tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+
+    cat_drop_constraint(td.table_id, cd.ordinal);
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+/* ---- Feature 1: RENAME CONSTRAINT ---- */
+
+int AlterTableRenameConstraint(const char *tableName, const char *oldName, const char *newName)
+{
+    TableDesc td;
+    if (resolve_table_for_alter(tableName, &td) < 0) return -1;
+
+    ConstraintDesc cd;
+    if (cat_find_constraint_by_name(td.table_id, oldName, &cd) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" does not exist on table \"%s\"",
+                 oldName, tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+
+    /* Check new name not already in use */
+    ConstraintDesc dup;
+    if (cat_find_constraint_by_name(td.table_id, newName, &dup) == 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" already exists", newName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42710");
+        return -1;
+    }
+
+    strncpy(cd.constraint_name, newName, CAT_MAX_NAME_LEN - 1);
+    cd.constraint_name[CAT_MAX_NAME_LEN - 1] = '\0';
+    cat_update_constraint(td.table_id, cd.ordinal, &cd);
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+/* ---- Feature 2: ON DELETE/UPDATE SET DEFAULT (action=4) ----
+ * Implementation is in Delete.c — see enforce_fk_on_delete */
+
+/* ---- Feature 3: ENABLE / DISABLE CONSTRAINT ---- */
+
+int AlterTableEnableConstraint(const char *tableName, const char *constraintName)
+{
+    TableDesc td;
+    if (resolve_table_for_alter(tableName, &td) < 0) return -1;
+
+    ConstraintDesc cd;
+    if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" does not exist on table \"%s\"",
+                 constraintName, tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+
+    cd.is_enabled = 1;
+    cat_update_constraint(td.table_id, cd.ordinal, &cd);
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+int AlterTableDisableConstraint(const char *tableName, const char *constraintName)
+{
+    TableDesc td;
+    if (resolve_table_for_alter(tableName, &td) < 0) return -1;
+
+    ConstraintDesc cd;
+    if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" does not exist on table \"%s\"",
+                 constraintName, tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+
+    cd.is_enabled = 0;
+    cat_update_constraint(td.table_id, cd.ordinal, &cd);
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+/* ---- Feature 4: NOT VALID + VALIDATE CONSTRAINT ---- */
+
+int AlterTableAddCheckConstraintNotValid(const char *tableName, const char *constraintName,
+                                          ExprNode *expr)
+{
+    TableDesc td;
+    if (resolve_table_for_alter(tableName, &td) < 0) return -1;
+
+    ConstraintDesc existing;
+    if (cat_find_constraint_by_name(td.table_id, constraintName, &existing) == 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" already exists", constraintName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42710");
+        return -1;
+    }
+
+    char serialized[1024];
+    expr_serialize(expr, serialized, sizeof(serialized));
+
+    /* NOT VALID: skip existing data validation, mark as not validated */
+    cat_add_constraint_ex(td.table_id, 'C', constraintName, serialized,
+                          0, "", 1, 0);
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+int AlterTableAddForeignKeyConstraintNotValid(const char *tableName, const char *refTableName)
+{
+    TableDesc td;
+    if (resolve_table_for_alter(tableName, &td) < 0) return -1;
+
+    const char *cname = g_pendingConstraintName;
+
+    ConstraintDesc existing;
+    if (cat_find_constraint_by_name(td.table_id, cname, &existing) == 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" already exists", cname);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42710");
+        return -1;
+    }
+
+    TableDesc refTd;
+    char refPath[1024];
+    db_table_path(refTableName, refPath, sizeof(refPath));
+    if (tapi_resolve(refPath, &refTd, NULL, NULL) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "referenced table \"%s\" does not exist", refTableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    char definition[1024];
+    snprintf(definition, sizeof(definition), "%s|%d|%d",
+             g_fkCurLocalCols, g_fkOnDelete[0], g_fkOnUpdate[0]);
+
+    /* NOT VALID: skip existing data validation */
+    cat_add_constraint_ex(td.table_id, 'F', cname, definition,
+                          refTd.table_id, g_fkCurRefCols, 1, 0);
+
+    g_fkCount = 0;
+    g_fkCurLocalCols[0] = '\0';
+    g_fkCurRefCols[0] = '\0';
+    memset(g_fkOnDelete, 0, sizeof(g_fkOnDelete));
+    memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
+    g_pendingConstraintName[0] = '\0';
+
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+int AlterTableValidateConstraint(const char *tableName, const char *constraintName)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "table \"%s\" does not exist", tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    ConstraintDesc cd;
+    if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "constraint \"%s\" does not exist on table \"%s\"",
+                 constraintName, tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+
+    if (cd.is_validated) {
+        /* Already validated, nothing to do */
+        printf("command(s) completed successfully!..\n");
+        return 0;
+    }
+
+    if (cd.constraint_type == 'C') {
+        /* Validate CHECK against all existing rows */
+        ExprNode *expr = expr_deserialize(cd.definition);
+        if (!expr) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "cannot deserialize check constraint \"%s\"", constraintName);
+            g_gui_error = 1;
+            return -1;
+        }
+
+        char colNames[64][128];
+        for (int c = 0; c < ncols && c < 64; c++)
+            strncpy(colNames[c], cols[c].col_name, 127);
+
+        TableScanCursor scanCur;
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            char scanKey[256], scanRec[RECORD_BUF_SIZE];
+            int rowNum = 0;
+            while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
+                rowNum++;
+                char colValues[64][256];
+                memset(colValues, 0, sizeof(colValues));
+                char recCopy[RECORD_BUF_SIZE];
+                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
+                char *field = strtok(recCopy, ";");
+                int idx = 0;
+                while (field && idx < 64) {
+                    strncpy(colValues[idx], field, 255);
+                    idx++;
+                    field = strtok(NULL, ";");
+                }
+                char result[512];
+                int ok = expr_evaluate(expr, (const char (*)[128])colNames,
+                                       (const char (*)[256])colValues,
+                                       ncols, result, sizeof(result));
+                int pass = 0;
+                if (ok) {
+                    if (strcmp(result, "t") == 0 || strcasecmp(result, "true") == 0 ||
+                        strcmp(result, "1") == 0)
+                        pass = 1;
+                    else {
+                        double v = strtod(result, NULL);
+                        if (v != 0.0) pass = 1;
+                    }
+                }
+                if (!pass) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "check constraint \"%s\" is violated by existing row %d",
+                             constraintName, rowNum);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
+                    return -1;
+                }
+            }
+        }
+    } else if (cd.constraint_type == 'F') {
+        /* Validate FK against all existing rows */
+        TableDesc refTd;
+        if (cat_find_table_by_id(cd.ref_table_id, &refTd) < 0) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "referenced table not found for constraint \"%s\"", constraintName);
+            g_gui_error = 1;
+            return -1;
+        }
+
+        /* Parse local columns from definition */
+        char localColsCsv[1024];
+        strncpy(localColsCsv, cd.definition, sizeof(localColsCsv) - 1);
+        char *pipe = strchr(localColsCsv, '|');
+        if (pipe) *pipe = '\0';
+
+        int fkColIndices[16];
+        int numFkCols = 0;
+        {
+            char buf[256];
+            strncpy(buf, localColsCsv, sizeof(buf) - 1);
+            char *saveptr = NULL;
+            char *colName = strtok_r(buf, ",", &saveptr);
+            while (colName && numFkCols < 16) {
+                for (int c = 0; c < ncols; c++) {
+                    if (strcasecmp(cols[c].col_name, colName) == 0) {
+                        fkColIndices[numFkCols++] = c;
+                        break;
+                    }
+                }
+                colName = strtok_r(NULL, ",", &saveptr);
+            }
+        }
+
+        BTree2 refPkTree = tapi_pk_tree(&refTd);
+        TableScanCursor scanCur;
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            char scanKey[256], scanRec[RECORD_BUF_SIZE];
+            while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
+                char recCopy[RECORD_BUF_SIZE];
+                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
+                char *fields[64];
+                int nf = 0;
+                char *f = strtok(recCopy, ";");
+                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+
+                char fkValue[1024] = "";
+                int allNull = 1;
+                for (int u = 0; u < numFkCols; u++) {
+                    if (u > 0) strcat(fkValue, "|");
+                    if (fkColIndices[u] < nf) {
+                        strcat(fkValue, fields[fkColIndices[u]]);
+                        if (strcmp(fields[fkColIndices[u]], "\x01NULL\x01") != 0)
+                            allNull = 0;
+                    }
+                }
+                if (allNull) continue;
+
+                RowID rid;
+                if (bt2_search(&refPkTree, fkValue, &rid) < 0) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "constraint \"%s\" is violated by existing data "
+                             "(value \"%s\" not found in referenced table \"%s\")",
+                             constraintName, fkValue, refTd.table_name);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                    return -1;
+                }
+            }
+        }
+    }
+
+    /* Mark as validated */
+    cd.is_validated = 1;
+    cat_update_constraint(td.table_id, cd.ordinal, &cd);
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+/* ---- Feature 5: ALTER TABLE ADD PRIMARY KEY ---- */
+
+int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "table \"%s\" does not exist", tableName);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Check table doesn't already have a PK */
+    for (int c = 0; c < ncols; c++) {
+        if (cols[c].is_pk) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "table \"%s\" already has a primary key", tableName);
+            g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE("42710");
+            return -1;
+        }
+    }
+
+    /* Resolve PK column indices from pkColumnNames accumulated by parser */
+    int pkColIndices[16];
+    int numPkCols = g_pkColumnCount;
+    for (int p = 0; p < numPkCols; p++) {
+        pkColIndices[p] = -1;
+        for (int c = 0; c < ncols; c++) {
+            if (strcasecmp(cols[c].col_name, g_pkColumnNames[p]) == 0) {
+                pkColIndices[p] = c;
+                break;
+            }
+        }
+        if (pkColIndices[p] < 0) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "column \"%s\" does not exist", g_pkColumnNames[p]);
+            g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE("42703");
+            g_pkColumnCount = 0;
+            return -1;
+        }
+    }
+
+    /* Validate: PK columns must be NOT NULL and unique across all rows */
+    {
+        char (*allKeys)[1024] = NULL;
+        int rowCount = 0, rowCap = 64;
+        allKeys = malloc(rowCap * sizeof(*allKeys));
+        if (!allKeys) { g_pkColumnCount = 0; return -1; }
+
+        TableScanCursor scanCur;
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            char scanKey[256], scanRec[RECORD_BUF_SIZE];
+            int rowNum = 0;
+            while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
+                rowNum++;
+                if (rowCount >= rowCap) {
+                    rowCap *= 2;
+                    allKeys = realloc(allKeys, rowCap * sizeof(*allKeys));
+                }
+                char recCopy[RECORD_BUF_SIZE];
+                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
+                char *fields[64];
+                int nf = 0;
+                char *f = strtok(recCopy, ";");
+                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+
+                char composite[1024] = "";
+                for (int p = 0; p < numPkCols; p++) {
+                    if (p > 0) strcat(composite, "|");
+                    if (pkColIndices[p] < nf) {
+                        if (strcmp(fields[pkColIndices[p]], "\x01NULL\x01") == 0) {
+                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                     "column \"%s\" contains null values (row %d)",
+                                     g_pkColumnNames[p], rowNum);
+                            g_gui_error = 1;
+                            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
+                            free(allKeys);
+                            g_pkColumnCount = 0;
+                            return -1;
+                        }
+                        strcat(composite, fields[pkColIndices[p]]);
+                    }
+                }
+                strncpy(allKeys[rowCount], composite, 1023);
+                allKeys[rowCount][1023] = '\0';
+                rowCount++;
+            }
+        }
+
+        /* Check uniqueness */
+        for (int i = 0; i < rowCount; i++) {
+            for (int j = i + 1; j < rowCount; j++) {
+                if (strcmp(allKeys[i], allKeys[j]) == 0) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "could not create primary key constraint: "
+                             "duplicate key value \"%s\"", allKeys[i]);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                    free(allKeys);
+                    g_pkColumnCount = 0;
+                    return -1;
+                }
+            }
+        }
+        free(allKeys);
+    }
+
+    /* Build PK indices definition string */
+    char pkDef[256] = "";
+    for (int p = 0; p < numPkCols; p++) {
+        if (p > 0) strcat(pkDef, ",");
+        strcat(pkDef, g_pkColumnNames[p]);
+    }
+
+    cat_add_constraint(td.table_id, 'P', constraintName, pkDef, 0, "");
+    g_pkColumnCount = 0;
+    printf("command(s) completed successfully!..\n");
+    return 0;
+}
+
+/* ---- Feature 6: CREATE DOMAIN ---- */
+
+int CreateDomainProcess(const char *name, int typeVal, ExprNode *checkExpr,
+                        int notNull, int hasCheck)
+{
+    /* Store domain in catalog as a special constraint-like entry.
+     * We use the constraints B+ tree with table_id=0 (system namespace)
+     * and constraint_type='D' for domain. */
+    char definition[1024];
+    char checkSerialized[1024] = "";
+
+    if (hasCheck && checkExpr) {
+        expr_serialize(checkExpr, checkSerialized, sizeof(checkSerialized));
+    }
+
+    /* Pack: "type_val|not_null|check_serialized" */
+    snprintf(definition, sizeof(definition), "%d|%d|%s",
+             typeVal, notNull, checkSerialized);
+
+    /* Check if domain already exists — search with table_id=0 */
+    ConstraintDesc existing;
+    if (cat_find_constraint_by_name(0, name, &existing) == 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "domain \"%s\" already exists", name);
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE("42710");
+        return -1;
+    }
+
+    cat_add_constraint(0, 'D', name, definition, 0, "");
+    printf("command(s) completed successfully!..\n");
+    return 0;
 }

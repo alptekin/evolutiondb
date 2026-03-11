@@ -20,6 +20,9 @@
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
 
+/* From server.c — parser mutex for SERIALIZABLE cleanup */
+extern mutex_t g_parse_lock;
+
 /* ----------------------------------------------------------------
  *  sql_redact_password — Redact PASSWORD clauses for safe logging
  *
@@ -81,6 +84,7 @@ void pg_handle_client(socket_t client_sock)
 
     /* Per-connection session context */
     SessionCtx session = { "evosql", "default", "" };
+    session.isolation_level = 1;  /* default: READ COMMITTED */
 
     /* Wrap socket in conn_t for TLS-transparent I/O */
     conn_t conn;
@@ -511,6 +515,10 @@ cleanup:
         undo_log_free(session.undo_log);
         session.undo_log = NULL;
         session.in_transaction = 0;
+        if (session.serializable_locked) {
+            session.serializable_locked = 0;
+            mutex_unlock(&g_parse_lock);
+        }
     }
 
     /* Auto-drop temporary tables for this session */

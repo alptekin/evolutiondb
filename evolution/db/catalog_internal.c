@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "catalog_internal.h"
+#include "table_api.h"
 
 /* ----------------------------------------------------------------
  *  Internal state
@@ -202,9 +203,10 @@ static void deserialize_index(const char *buf, IndexDesc *idx)
 /* --- Constraint --- */
 static void serialize_constraint(const ConstraintDesc *c, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%d;%c;%s;%u;%s",
+    snprintf(buf, size, "%u;%d;%c;%s;%u;%s;%s;%d;%d",
              c->table_id, c->ordinal, c->constraint_type,
-             c->definition, c->ref_table_id, c->ref_columns);
+             c->definition, c->ref_table_id, c->ref_columns,
+             c->constraint_name, c->is_enabled, c->is_validated);
 }
 
 static void deserialize_constraint(const char *buf, ConstraintDesc *c)
@@ -217,6 +219,18 @@ static void deserialize_constraint(const char *buf, ConstraintDesc *c)
     p = next_field(p, c->definition, sizeof(c->definition));
     p = next_field(p, field, sizeof(field)); c->ref_table_id = (uint32_t)atoi(field);
     p = next_field(p, c->ref_columns, CAT_MAX_NAME_LEN);
+    p = next_field(p, c->constraint_name, CAT_MAX_NAME_LEN);
+    /* is_enabled, is_validated (default to 1 for backward compat) */
+    c->is_enabled = 1;
+    c->is_validated = 1;
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field));
+        c->is_enabled = atoi(field);
+    }
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field));
+        c->is_validated = atoi(field);
+    }
     (void)p;
 }
 
@@ -1026,9 +1040,18 @@ int cat_update_index_root(uint32_t table_id, const char *name,
  *  Constraint operations
  * ---------------------------------------------------------------- */
 
-int cat_add_constraint(uint32_t table_id, char type,
+int cat_add_constraint(uint32_t table_id, char type, const char *name,
                        const char *definition,
                        uint32_t ref_table_id, const char *ref_columns)
+{
+    return cat_add_constraint_ex(table_id, type, name, definition,
+                                 ref_table_id, ref_columns, 1, 1);
+}
+
+int cat_add_constraint_ex(uint32_t table_id, char type, const char *name,
+                          const char *definition,
+                          uint32_t ref_table_id, const char *ref_columns,
+                          int is_enabled, int is_validated)
 {
     int ordinal = g_constraint_ordinal++;
 
@@ -1040,11 +1063,14 @@ int cat_add_constraint(uint32_t table_id, char type,
     c.table_id = table_id;
     c.ordinal = ordinal;
     c.constraint_type = type;
+    strncpy(c.constraint_name, name ? name : "", CAT_MAX_NAME_LEN - 1);
     strncpy(c.definition, definition ? definition : "",
             sizeof(c.definition) - 1);
     c.ref_table_id = ref_table_id;
     strncpy(c.ref_columns, ref_columns ? ref_columns : "",
             CAT_MAX_NAME_LEN - 1);
+    c.is_enabled = is_enabled;
+    c.is_validated = is_validated;
 
     char record[CAT_MAX_RECORD_LEN];
     serialize_constraint(&c, record, sizeof(record));
@@ -1102,6 +1128,70 @@ int cat_list_referencing_fks(uint32_t ref_table_id, ConstraintDesc *out, int max
         }
     }
     return count;
+}
+
+int cat_find_constraint_by_name(uint32_t table_id, const char *name,
+                                ConstraintDesc *out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_CONSTRAINTS], prefix, &cur) < 0)
+        return -1;
+
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, strlen(prefix)) != 0)
+            break;
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            ConstraintDesc desc;
+            deserialize_constraint(record, &desc);
+            if (strcasecmp(desc.constraint_name, name) == 0) {
+                if (out) *out = desc;
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
+int cat_drop_constraint(uint32_t table_id, int ordinal)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_constraint_key(table_id, ordinal, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_CONSTRAINTS], key, &rid) < 0)
+        return -1;
+
+    tapi_heap_delete(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_CONSTRAINTS], key);
+    return 0;
+}
+
+int cat_update_constraint(uint32_t table_id, int ordinal, const ConstraintDesc *updated)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_constraint_key(table_id, ordinal, key, sizeof(key));
+
+    RowID old_rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_CONSTRAINTS], key, &old_rid) < 0)
+        return -1;
+
+    tapi_heap_delete(old_rid);
+
+    char record[CAT_MAX_RECORD_LEN];
+    serialize_constraint(updated, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+
+    RowID new_rid = cat_store_record(CAT_SYS_CONSTRAINTS, record, rec_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_CONSTRAINTS], key, new_rid);
+    return 0;
 }
 
 /* ----------------------------------------------------------------

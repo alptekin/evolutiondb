@@ -66,6 +66,7 @@
 %token BIGINT
 %token BIT
 
+%token CONSTRAINT
 %token CURRENT_TIMESTAMP
 %token CREATE
 %token CASCADE
@@ -79,6 +80,8 @@
 %token COLLATE
 
 %token DATABASE
+%token DISABLE
+%token DOMAIN
 %token DELAYED
 %token DAY_HOUR
 %token DAY_MICROSECOND
@@ -95,6 +98,7 @@
 %token DECIMAL
 %token DATE
 
+%token ENABLE
 %token ESCAPED
 %token ENUM
 %token END
@@ -157,6 +161,7 @@
 %token REAL
 %token RECLAIM
 %token REFERENCES
+%token RENAME
 %token RESTRICT
 %token ROLLUP
 %token RIGHT
@@ -174,11 +179,12 @@
 
 %token TINYTEXT
 %token <intval> TINYINT
+%token TO
 %token TEMPORARY
 %token TEXT
 %token TIMESTAMP
 %token TABLE
-%token THEN 
+%token THEN
 %token TRAILING
 %token TRUNCATE
 %token TINYBLOB
@@ -191,6 +197,7 @@
 %token USING
 %token USE
 
+%token VALIDATE
 %token VARCHAR
 %token VALUES
 %token VARBINARY
@@ -771,8 +778,16 @@ stmt: drop_table_stmt
 drop_table_stmt: DROP TABLE NAME
     {
         emit("DROPTABLE %s", $3);
+        g_dropIfExists = 0;
         GetDropTableName($3);
         free($3);
+    }
+| DROP TABLE IF EXISTS NAME
+    {
+        emit("DROPTABLE IF EXISTS %s", $5);
+        g_dropIfExists = 1;
+        GetDropTableName($5);
+        free($5);
     }
 ;
 
@@ -878,6 +893,80 @@ reclaim_table_stmt: RECLAIM TABLE NAME
         emit("RECLAIMTABLE %s", $3);
         GetDropTableName($3);
         free($3);
+    }
+;
+
+/** alter table **/
+stmt: alter_table_stmt                                                          { emit("STMT"); }
+;
+
+alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
+    {
+        emit("ALTER TABLE ADD CHECK %s %s", $3, $6);
+        AlterTableAddCheckConstraint($3, $6, $9);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME ADD CONSTRAINT NAME UNIQUE '(' fk_column_list ')'
+    {
+        emit("ALTER TABLE ADD UNIQUE %s %s", $3, $6);
+        AlterTableAddUniqueConstraint($3, $6);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME ADD CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
+    {
+        emit("ALTER TABLE ADD FK %s %s", $3, $6);
+        strncpy(g_pendingConstraintName, $6, 127);
+        AlterTableAddForeignKeyConstraint($3, $13);
+        free($3); free($6); free($13);
+    }
+| ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')' NOT VALIDATE
+    {
+        emit("ALTER TABLE ADD CHECK NOT VALID %s %s", $3, $6);
+        AlterTableAddCheckConstraintNotValid($3, $6, $9);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME ADD CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions NOT VALIDATE
+    {
+        emit("ALTER TABLE ADD FK NOT VALID %s %s", $3, $6);
+        strncpy(g_pendingConstraintName, $6, 127);
+        AlterTableAddForeignKeyConstraintNotValid($3, $13);
+        free($3); free($6); free($13);
+    }
+| ALTER TABLE NAME ADD CONSTRAINT NAME PRIMARY KEY '(' pk_column_list ')'
+    {
+        emit("ALTER TABLE ADD PK %s %s", $3, $6);
+        AlterTableAddPrimaryKey($3, $6);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME DROP CONSTRAINT NAME
+    {
+        emit("ALTER TABLE DROP CONSTRAINT %s %s", $3, $6);
+        AlterTableDropConstraint($3, $6);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME RENAME CONSTRAINT NAME TO NAME
+    {
+        emit("ALTER TABLE RENAME CONSTRAINT %s %s %s", $3, $6, $8);
+        AlterTableRenameConstraint($3, $6, $8);
+        free($3); free($6); free($8);
+    }
+| ALTER TABLE NAME ENABLE CONSTRAINT NAME
+    {
+        emit("ALTER TABLE ENABLE CONSTRAINT %s %s", $3, $6);
+        AlterTableEnableConstraint($3, $6);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME DISABLE CONSTRAINT NAME
+    {
+        emit("ALTER TABLE DISABLE CONSTRAINT %s %s", $3, $6);
+        AlterTableDisableConstraint($3, $6);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME VALIDATE CONSTRAINT NAME
+    {
+        emit("ALTER TABLE VALIDATE CONSTRAINT %s %s", $3, $6);
+        AlterTableValidateConstraint($3, $6);
+        free($3); free($6);
     }
 ;
 
@@ -1058,6 +1147,23 @@ opt_if_not_exists: /* nil */                                                    
 | IF EXISTS									{ if(!$2) { yyerror("IF EXISTS doesn't exist"); YYERROR; } $$ = $2; /* NOT EXISTS hack */ }
 ;
 
+/** create domain **/
+stmt: create_domain_stmt                                                        { emit("STMT"); }
+;
+
+create_domain_stmt:
+  CREATE DOMAIN NAME AS data_type
+    { emit("CREATEDOMAIN %s %d", $3); CreateDomainProcess($3, $5, NULL, 0, 0); free($3); }
+| CREATE DOMAIN NAME AS data_type DEFAULT expr
+    { emit("CREATEDOMAIN %s %d DEFAULT", $3); CreateDomainProcess($3, $5, NULL, 0, 0); free($3); }
+| CREATE DOMAIN NAME AS data_type NOT NULLX
+    { emit("CREATEDOMAIN %s %d NOTNULL", $3); CreateDomainProcess($3, $5, NULL, 1, 0); free($3); }
+| CREATE DOMAIN NAME AS data_type CHECK '(' expr ')'
+    { emit("CREATEDOMAIN %s %d CHECK", $3); CreateDomainProcess($3, $5, $8, 0, 1); free($3); }
+| CREATE DOMAIN NAME AS data_type NOT NULLX CHECK '(' expr ')'
+    { emit("CREATEDOMAIN %s %d NOTNULL CHECK", $3); CreateDomainProcess($3, $5, $10, 1, 1); free($3); }
+;
+
 /** use database **/
 stmt: use_database_stmt                                                         { emit("STMT"); }
 ;
@@ -1116,13 +1222,17 @@ create_col_list: create_definition                                              
 ;
 
 create_definition: PRIMARY KEY '(' pk_column_list ')'                            { emit("PRIKEY %d", $4); }
+| CONSTRAINT NAME PRIMARY KEY '(' pk_column_list ')'                            { emit("PRIKEY %d", $6); g_pendingConstraintName[0] = '\0'; free($2); }
 | KEY '(' column_list ')'							{ emit("KEY %d", $3); }
 | INDEX '(' column_list ')'							{ emit("KEY %d", $3); }
 | FULLTEXT INDEX '(' column_list ')'                                            { emit("TEXTINDEX %d", $4); }
 | FULLTEXT KEY '(' column_list ')'                                              { emit("TEXTINDEX %d", $4); }
 | CHECK '(' expr ')'                                                            { emit("CHECK"); AddCheckConstraint($3); }
+| CONSTRAINT NAME CHECK '(' expr ')'                                            { emit("CHECK"); strncpy(g_checkNames[g_checkCount], $2, 127); AddCheckConstraint($5); free($2); }
 | FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
     { emit("FOREIGNKEY"); AddForeignKeyRefTable($7); free($7); }
+| CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
+    { emit("FOREIGNKEY"); strncpy(g_pendingConstraintName, $2, 127); AddForeignKeyRefTable($9); free($2); free($9); }
 ;
 
 pk_column_list: NAME                                                            { emit("PRIKEY_COL %s", $1); AddPrimaryKeyColumn($1); free($1); $$ = 1; }
@@ -1141,9 +1251,11 @@ fk_actions: /* nil */
 | fk_actions ON DELETE CASCADE                                                  { SetForeignKeyOnDelete(1); }
 | fk_actions ON DELETE SET NULLX                                                { SetForeignKeyOnDelete(2); }
 | fk_actions ON DELETE RESTRICT                                                 { SetForeignKeyOnDelete(3); }
+| fk_actions ON DELETE SET DEFAULT                                              { SetForeignKeyOnDelete(4); }
 | fk_actions ON UPDATE CASCADE                                                  { SetForeignKeyOnUpdate(1); }
 | fk_actions ON UPDATE SET NULLX                                                { SetForeignKeyOnUpdate(2); }
 | fk_actions ON UPDATE RESTRICT                                                 { SetForeignKeyOnUpdate(3); }
+| fk_actions ON UPDATE SET DEFAULT                                              { SetForeignKeyOnUpdate(4); }
 ;
 
 create_definition:								{ emit("STARTCOL"); }
@@ -1177,6 +1289,9 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts KEY								{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
 | column_atts COMMENT STRING                                                    { emit("ATTR COMMENT %s", $3); free($3); $$ = $1 + 1; }
 | column_atts CHECK '(' expr ')'                                                { emit("ATTR CHECK"); AddCheckConstraint($4); $$ = $1 + 1; }
+| column_atts CONSTRAINT NAME UNIQUE                                            { emit("ATTR UNIQUE"); SetColumnUnique(); free($3); $$ = $1 + 1; }
+| column_atts CONSTRAINT NAME PRIMARY KEY                                       { emit("ATTR PRIKEY"); SetColumnPrimaryKey(); free($3); $$ = $1 + 1; }
+| column_atts CONSTRAINT NAME CHECK '(' expr ')'                               { emit("ATTR CHECK"); strncpy(g_checkNames[g_checkCount], $3, 127); AddCheckConstraint($6); free($3); $$ = $1 + 1; }
 ;
 
 opt_length: /* nil */								{ $$ = 0; }

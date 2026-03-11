@@ -1529,7 +1529,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
  *  the setjmp scope, and the stdout/stderr restore MUST be guarded
  *  against double-close in case longjmp fires after the first restore.
  * ---------------------------------------------------------------- */
-static void execute_via_parser(const char *sql, ResultSet *rs)
+static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char *sqlCopy;
     /* volatile: values survive longjmp per C standard */
@@ -1640,9 +1640,13 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         /* Lock parser mutex — Flex/Bison are not reentrant.
          * DML (INSERT/UPDATE/DELETE) executes inside yyparse() actions,
          * so it is serialized.  SELECT only sets g_lastSelectTable
-         * inside yyparse; actual data collection runs AFTER unlock. */
-        mutex_lock(&g_parse_lock);
-        parse_mutex_held = 1;
+         * inside yyparse; actual data collection runs AFTER unlock.
+         * Skip lock/unlock if SERIALIZABLE transaction already holds it. */
+        int already_locked = (ctx && ctx->serializable_locked);
+        if (!already_locked) {
+            mutex_lock(&g_parse_lock);
+            parse_mutex_held = 1;
+        }
 
         yylineno = 1;
         scan_buf = yy_scan_string(sqlCopy);
@@ -1651,8 +1655,10 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         yylex_destroy();
         scan_buf = NULL;
 
-        mutex_unlock(&g_parse_lock);
-        parse_mutex_held = 0;
+        if (!already_locked) {
+            mutex_unlock(&g_parse_lock);
+            parse_mutex_held = 0;
+        }
 
         /* yyparse returns 0 on success, 1 on syntax error, 2 on OOM */
         if (parse_result != 0) {
@@ -1773,14 +1779,17 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
         }
     } else {
         /* Error occurred via longjmp (err_sys/err_quit/err_dump).
-         * Clean up Flex scanner and release parser mutex if held. */
+         * Clean up Flex scanner and release parser mutex if held.
+         * Don't release if SERIALIZABLE transaction owns the lock. */
         if (parse_mutex_held) {
             if (scan_buf) {
                 yy_delete_buffer((YY_BUFFER_STATE)scan_buf);
                 yylex_destroy();
                 scan_buf = NULL;
             }
-            mutex_unlock(&g_parse_lock);
+            if (!(ctx && ctx->serializable_locked)) {
+                mutex_unlock(&g_parse_lock);
+            }
             parse_mutex_held = 0;
         }
         rs->has_error = 1;
@@ -2132,9 +2141,13 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     result_init(rs);
 
-    /* If transaction is aborted, only allow ROLLBACK */
+    /* If transaction is aborted, only allow ROLLBACK/COMMIT/SAVEPOINT/RELEASE */
     if (ctx && ctx->tx_aborted) {
-        if (strncasecmp(sql, "ROLLBACK", 8) != 0) {
+        if (strncasecmp(sql, "ROLLBACK", 8) != 0 &&
+            strncasecmp(sql, "COMMIT", 6) != 0 &&
+            strncasecmp(sql, "END", 3) != 0 &&
+            strncasecmp(sql, "SAVEPOINT", 9) != 0 &&
+            strncasecmp(sql, "RELEASE", 7) != 0) {
             result_set_error(rs, "25P02",
                 "current transaction is aborted, "
                 "commands ignored until end of transaction block");
@@ -2397,7 +2410,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     parse_select_columns(normalized);
 
     /* Real EvoSQL query */
-    execute_via_parser(normalized, rs);
+    execute_via_parser(normalized, rs, ctx);
 
     /* Register temporary table in session context */
     if (ctx && !rs->has_error && g_isTemporary && g_lastCreatedTableId > 0) {

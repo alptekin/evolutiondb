@@ -127,6 +127,8 @@ int ReadNullFlags(const char *tblName, int *flags, int maxCols);
 int ReadUniqueFlags(const char *tblName, int *flags, int maxCols);
 int ReadDefaults(const char *tblName, char defaults[][256], int maxCols);
 int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxConstraints);
+int ReadCheckConstraintsWithNames(const char *tblName, char constraints[][1024],
+                                   char names[][128], int maxConstraints);
 
 /* FOREIGN KEY parser helpers */
 void AddForeignKeyColumn(const char *colName);
@@ -134,6 +136,24 @@ void AddForeignKeyRefColumn(const char *colName);
 void AddForeignKeyRefTable(const char *tableName);
 void SetForeignKeyOnDelete(int action);
 void SetForeignKeyOnUpdate(int action);
+
+/* ALTER TABLE constraint operations */
+struct ExprNode;  /* forward declaration */
+int AlterTableAddCheckConstraint(const char *tableName, const char *constraintName, struct ExprNode *expr);
+int AlterTableAddCheckConstraintNotValid(const char *tableName, const char *constraintName, struct ExprNode *expr);
+int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintName);
+int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTableName);
+int AlterTableAddForeignKeyConstraintNotValid(const char *tableName, const char *refTableName);
+int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName);
+int AlterTableDropConstraint(const char *tableName, const char *constraintName);
+int AlterTableRenameConstraint(const char *tableName, const char *oldName, const char *newName);
+int AlterTableEnableConstraint(const char *tableName, const char *constraintName);
+int AlterTableDisableConstraint(const char *tableName, const char *constraintName);
+int AlterTableValidateConstraint(const char *tableName, const char *constraintName);
+
+/* CREATE DOMAIN */
+int CreateDomainProcess(const char *name, int typeVal, struct ExprNode *checkExpr,
+                        int notNull, int hasCheck);
 
 /* User management (UserMgmt.c) */
 void db_ensure_users(void);

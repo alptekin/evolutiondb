@@ -357,7 +357,7 @@
 
 ## Day 10 — Transaction Enhancements
 
-### Task 18: ⬜ SAVEPOINT & ROLLBACK TO SAVEPOINT
+### Task 18: ✅ SAVEPOINT & ROLLBACK TO SAVEPOINT
 
 **Goal:** Support named savepoints within a transaction. `SAVEPOINT sp1` marks a restore point, `ROLLBACK TO sp1` undoes only changes after that savepoint. Requires extending UndoLog with position markers. In MySQL, MSSQL (SAVE TRANSACTION), and Oracle.
 
@@ -376,7 +376,7 @@
 
 ---
 
-### Task 19: ⬜ Transaction Isolation Levels (Feature #79)
+### Task 19: ✅ Transaction Isolation Levels (Feature #79)
 
 **Goal:** Implement `SET TRANSACTION ISOLATION LEVEL` with at least READ COMMITTED and SERIALIZABLE. In MySQL (4 levels), MSSQL (5 levels), and Oracle (3 levels).
 

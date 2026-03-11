@@ -27,6 +27,7 @@ ALL						{ return ALL; }
 <BTWMODE>AND			{ BEGIN INITIAL; return AND; }	/* Hack for BETWEEN ... AND ... return special AND token if BETWEEN seen */
 AND						{ return ANDOP; }
 ANY						{ return ANY; }
+ALTER					{ return ALTER; }
 AS						{ return AS; }
 ASC						{ return ASC; }
 AUTO_INCREMENT			{ return AUTO_INCREMENT; }
@@ -50,6 +51,8 @@ CHAR(ACTER)?			{ return CHAR; }
 CHECK					{ return CHECK; }
 
 COLLATE					{ return COLLATE; }
+
+CONSTRAINT				{ return CONSTRAINT; }
 
 COMMENT					{ return COMMENT; }
 
@@ -81,7 +84,9 @@ DESC					{ return DESC; }
 DROP					{ return DROP; }
 
 
+DISABLE					{ return DISABLE; }
 DISTINCT				{ return DISTINCT; }
+DOMAIN					{ return DOMAIN; }
 DISTINCTROW				{ return DISTINCTROW; }
 
 FLOAT8|DOUBLE			{ return DOUBLE; }
@@ -89,6 +94,7 @@ FLOAT8|DOUBLE			{ return DOUBLE; }
 
 
 ELSE					{ return ELSE; }
+ENABLE					{ return ENABLE; }
 EXPLAIN					{ return EXPLAIN; }
 
 END						{ return END; }
@@ -184,6 +190,7 @@ REGEXP|RLIKE			{ return REGEXP; }
 
 RECLAIM					{ return RECLAIM; }
 REFERENCES				{ return REFERENCES; }
+RENAME					{ return RENAME; }
 REPLACE					{ int c = input(); unput(c); if(c == '(') return FREPLACE; return REPLACE; }
 RESTRICT				{ return RESTRICT; }
 
@@ -222,6 +229,7 @@ TIMESTAMP				{ return TIMESTAMP; }
 INT1|TINYINT			{ return TINYINT; }
 TINYTEXT				{ return TINYTEXT; }
 
+TO						{ return TO; }
 TRAILING				{ return TRAILING; }
 TRUNCATE				{ return TRUNCATE; }
 
@@ -236,7 +244,9 @@ UUID					{ return UUID; }
 USE						{ return USE; }
 USING					{ return USING; }
 
-VALUES?					{ return VALUES; }
+VALIDATE				{ return VALIDATE; }
+VALUES					{ return VALUES; }
+VALUE					{ yylval.strval = strdup("VALUE"); return NAME; }
 VARBINARY				{ return VARBINARY; }
 VARCHAR(ACTER)?			{ return VARCHAR; }
 

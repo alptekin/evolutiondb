@@ -290,7 +290,9 @@ static int validate_unique(const char *tblName,
 static int validate_check(const char *tblName, char **vals, int numValues)
 {
     char constraints[MAX_CHECK_CONSTRAINTS][1024];
-    int numChecks = ReadCheckConstraints(tblName, constraints, MAX_CHECK_CONSTRAINTS);
+    char constraintNames[MAX_CHECK_CONSTRAINTS][128];
+    int numChecks = ReadCheckConstraintsWithNames(tblName, constraints,
+                                                   constraintNames, MAX_CHECK_CONSTRAINTS);
     int i;
 
     if (numChecks <= 0) return 0;
@@ -335,7 +337,8 @@ static int validate_check(const char *tblName, char **vals, int numValues)
 
         if (!pass) {
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "new row violates check constraint");
+                     "new row violates check constraint \"%s\"",
+                     constraintNames[i]);
             g_gui_error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
             return -1;
@@ -365,6 +368,7 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
 
     for (int ci = 0; ci < numCon; ci++) {
         if (constraints[ci].constraint_type != 'F') continue;
+        if (!constraints[ci].is_enabled) continue;
 
         /* Parse definition: "local_col1,col2|on_delete|on_update" */
         char localColsCsv[1024];
@@ -466,9 +470,9 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
             RowID rid;
             if (bt2_search(&refPkTree, fkValue, &rid) < 0) {
                 snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                         "insert or update on table violates foreign key constraint "
+                         "insert or update on table violates foreign key constraint \"%s\" "
                          "(value \"%s\" not found in referenced table \"%s\")",
-                         fkValue, refTd.table_name);
+                         constraints[ci].constraint_name, fkValue, refTd.table_name);
                 g_gui_error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                 return -1;
@@ -522,9 +526,9 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
             }
             if (!found) {
                 snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                         "insert or update on table violates foreign key constraint "
+                         "insert or update on table violates foreign key constraint \"%s\" "
                          "(value \"%s\" not found in referenced table \"%s\")",
-                         fkValue, refTd.table_name);
+                         constraints[ci].constraint_name, fkValue, refTd.table_name);
                 g_gui_error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                 return -1;

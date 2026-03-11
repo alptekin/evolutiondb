@@ -90,6 +90,7 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
     if (numRefs <= 0) return 0;
 
     for (int ri = 0; ri < numRefs; ri++) {
+        if (!refConstraints[ri].is_enabled) continue;
         /* Parse on_delete action from definition: "local_cols|on_delete|on_update" */
         char localColsCsv[1024];
         strncpy(localColsCsv, refConstraints[ri].definition, sizeof(localColsCsv) - 1);
@@ -211,9 +212,10 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
         if (onDeleteAction == 0 || onDeleteAction == 3) {
             /* RESTRICT — reject delete */
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "update or delete on table \"%s\" violates foreign key constraint "
+                     "update or delete on table \"%s\" violates foreign key constraint \"%s\" "
                      "on table \"%s\"",
-                     parentTd->table_name, childTd.table_name);
+                     parentTd->table_name, refConstraints[ri].constraint_name,
+                     childTd.table_name);
             g_gui_error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
             for (int m = 0; m < matchCount; m++) free(matchingChildKeys[m]);
@@ -234,14 +236,23 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
                 }
                 free(matchingChildKeys[m]);
             }
-        } else if (onDeleteAction == 2) {
-            /* SET NULL — set FK columns to NULL in matching child rows */
+        } else if (onDeleteAction == 2 || onDeleteAction == 4) {
+            /* SET NULL (2) or SET DEFAULT (4) — update FK columns in matching child rows */
+            /* Read defaults for SET DEFAULT */
+            char childDefaults[64][256];
+            int numDefaults = 0;
+            if (onDeleteAction == 4) {
+                char childPath[1024];
+                snprintf(childPath, sizeof(childPath), "root/%s/%s/%s",
+                         g_currentDatabase, g_currentSchema, childTd.table_name);
+                numDefaults = ReadDefaults(childPath, childDefaults, 64);
+            }
+
             for (int m = 0; m < matchCount; m++) {
                 RowID childRid;
                 if (bt2_search(&childPkTree, matchingChildKeys[m], &childRid) == 0) {
                     char childRec[RECORD_BUF_SIZE];
                     if (tapi_heap_read(childRid, childRec, sizeof(childRec)) > 0) {
-                        /* Parse fields, set FK columns to NULL, rebuild record */
                         char fields[64][256];
                         int numFields = 0;
                         char tmpRec[RECORD_BUF_SIZE];
@@ -256,8 +267,14 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
                         }
 
                         for (int fc = 0; fc < fkColCount; fc++) {
-                            if (fkColIndices[fc] >= 0 && fkColIndices[fc] < numFields)
-                                strcpy(fields[fkColIndices[fc]], "\x01NULL\x01");
+                            if (fkColIndices[fc] >= 0 && fkColIndices[fc] < numFields) {
+                                if (onDeleteAction == 4 && fkColIndices[fc] < numDefaults &&
+                                    strcmp(childDefaults[fkColIndices[fc]], "\x01NONE\x01") != 0) {
+                                    strcpy(fields[fkColIndices[fc]], childDefaults[fkColIndices[fc]]);
+                                } else {
+                                    strcpy(fields[fkColIndices[fc]], "\x01NULL\x01");
+                                }
+                            }
                         }
 
                         char newRec[RECORD_BUF_SIZE] = "";
