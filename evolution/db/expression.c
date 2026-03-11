@@ -6,8 +6,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <sys/time.h>
+#include <unistd.h>
 #include "expression.h"
 #include "database.h"   /* query_context.h macros for g_exprNodePool etc. */
+#include "crypto.h"
 
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)
@@ -171,6 +174,49 @@ ExprNode *expr_make_current_time(void)
     e->type = EXPR_CURRENT_TIME;
     strcpy(e->display, "CURRENT_TIME");
     return e;
+}
+
+ExprNode *expr_make_gen_random_uuid(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_GEN_RANDOM_UUID;
+    strcpy(e->display, "gen_random_uuid");
+    return e;
+}
+
+ExprNode *expr_make_gen_random_uuid_v7(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_GEN_RANDOM_UUID_V7;
+    strcpy(e->display, "gen_random_uuid_v7");
+    return e;
+}
+
+ExprNode *expr_make_snowflake_id(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_SNOWFLAKE_ID;
+    strcpy(e->display, "snowflake_id");
+    return e;
+}
+
+void snowflake_init(void)
+{
+    char *env = getenv("EVOSQL_MACHINE_ID");
+    if (env) {
+        g_snowflake_machine_id = (uint16_t)(atoi(env) & 0x3FF);
+    } else {
+        char hostname[256];
+        if (gethostname(hostname, sizeof(hostname)) == 0) {
+            unsigned int h = 0;
+            for (int i = 0; hostname[i]; i++)
+                h = h * 31 + (unsigned char)hostname[i];
+            g_snowflake_machine_id = (uint16_t)(h % 1024);
+        }
+    }
 }
 
 ExprNode *expr_make_cmp(int subtok, ExprNode *left, ExprNode *right)
@@ -1191,6 +1237,86 @@ int expr_evaluate(const ExprNode *e,
             strftime(out_buf, buf_size, "%Y-%m-%d", tm);
         else
             strftime(out_buf, buf_size, "%H:%M:%S", tm);
+        return 1;
+    }
+
+    /* gen_random_uuid() */
+    if (e->type == EXPR_GEN_RANDOM_UUID) {
+        uint8_t bytes[16];
+        if (crypto_random_bytes(bytes, 16) < 0) return 0;
+        bytes[6] = (bytes[6] & 0x0F) | 0x40;  /* version 4 */
+        bytes[8] = (bytes[8] & 0x3F) | 0x80;  /* variant RFC 4122 */
+        snprintf(out_buf, buf_size,
+            "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]);
+        return 1;
+    }
+
+    /* gen_random_uuid_v7() — RFC 9562 UUID v7 (time-ordered) */
+    if (e->type == EXPR_GEN_RANDOM_UUID_V7) {
+        uint8_t bytes[16];
+        if (crypto_random_bytes(bytes, 16) < 0) return 0;
+
+        /* Get Unix timestamp in milliseconds */
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        uint64_t ms = (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
+
+        /* Bits 0-47: timestamp (big-endian) */
+        bytes[0] = (uint8_t)(ms >> 40);
+        bytes[1] = (uint8_t)(ms >> 32);
+        bytes[2] = (uint8_t)(ms >> 24);
+        bytes[3] = (uint8_t)(ms >> 16);
+        bytes[4] = (uint8_t)(ms >> 8);
+        bytes[5] = (uint8_t)(ms);
+        /* Bits 48-51: version = 0111 (7) */
+        bytes[6] = (bytes[6] & 0x0F) | 0x70;
+        /* Bits 64-65: variant = 10 */
+        bytes[8] = (bytes[8] & 0x3F) | 0x80;
+
+        snprintf(out_buf, buf_size,
+            "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]);
+        return 1;
+    }
+
+    /* snowflake_id() — 41-bit ms timestamp + 10-bit machine ID + 12-bit sequence
+     * Custom epoch: 2024-01-01 00:00:00 UTC (extends range to ~2093) */
+    if (e->type == EXPR_SNOWFLAKE_ID) {
+        /* 2026-01-01T00:00:00Z in milliseconds since Unix epoch */
+        static const uint64_t SNOWFLAKE_EPOCH_MS = 1735689600000ULL;
+
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        uint64_t now_ms = (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
+        uint64_t ms = now_ms - SNOWFLAKE_EPOCH_MS;
+
+        if (ms > g_snowflake_last_ms) {
+            g_snowflake_last_ms = ms;
+            g_snowflake_sequence = 0;
+        } else if (g_snowflake_sequence >= 4095) {
+            /* Exhausted 12-bit counter in this ms — spin to next ms */
+            while (ms <= g_snowflake_last_ms) {
+                gettimeofday(&tv, NULL);
+                now_ms = (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
+                ms = now_ms - SNOWFLAKE_EPOCH_MS;
+            }
+            g_snowflake_last_ms = ms;
+            g_snowflake_sequence = 0;
+        }
+
+        uint64_t id = (ms << 22)
+                     | ((uint64_t)(g_snowflake_machine_id & 0x3FF) << 12)
+                     | (g_snowflake_sequence & 0xFFF);
+        g_snowflake_sequence++;
+
+        snprintf(out_buf, buf_size, "%llu", (unsigned long long)id);
         return 1;
     }
 

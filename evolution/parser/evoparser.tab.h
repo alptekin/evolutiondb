@@ -177,33 +177,37 @@
      UPDATE = 393,
      UNSIGNED = 394,
      UNIQUE = 395,
-     USING = 396,
-     USE = 397,
-     VARCHAR = 398,
-     VALUES = 399,
-     VARBINARY = 400,
-     WHERE = 401,
-     WHEN = 402,
-     WITH = 403,
-     YEAR = 404,
-     YEAR_MONTH = 405,
-     ZEROFILL = 406,
-     EXISTS = 407,
-     FSUBSTRING = 408,
-     FTRIM = 409,
-     FDATE_ADD = 410,
-     FDATE_SUB = 411,
-     FCOUNT = 412,
-     FSUM = 413,
-     FAVG = 414,
-     FMIN = 415,
-     FMAX = 416,
-     FUPPER = 417,
-     FLOWER = 418,
-     FLENGTH = 419,
-     FCONCAT = 420,
-     FREPLACE = 421,
-     FCOALESCE = 422
+     UUID = 396,
+     USING = 397,
+     USE = 398,
+     VARCHAR = 399,
+     VALUES = 400,
+     VARBINARY = 401,
+     WHERE = 402,
+     WHEN = 403,
+     WITH = 404,
+     YEAR = 405,
+     YEAR_MONTH = 406,
+     ZEROFILL = 407,
+     EXISTS = 408,
+     FSUBSTRING = 409,
+     FTRIM = 410,
+     FDATE_ADD = 411,
+     FDATE_SUB = 412,
+     FCOUNT = 413,
+     FSUM = 414,
+     FAVG = 415,
+     FMIN = 416,
+     FMAX = 417,
+     FUPPER = 418,
+     FLOWER = 419,
+     FLENGTH = 420,
+     FCONCAT = 421,
+     FREPLACE = 422,
+     FCOALESCE = 423,
+     FGEN_RANDOM_UUID = 424,
+     FGEN_RANDOM_UUID_V7 = 425,
+     FSNOWFLAKE_ID = 426
    };
 #endif
 /* Tokens.  */
@@ -345,33 +349,37 @@
 #define UPDATE 393
 #define UNSIGNED 394
 #define UNIQUE 395
-#define USING 396
-#define USE 397
-#define VARCHAR 398
-#define VALUES 399
-#define VARBINARY 400
-#define WHERE 401
-#define WHEN 402
-#define WITH 403
-#define YEAR 404
-#define YEAR_MONTH 405
-#define ZEROFILL 406
-#define EXISTS 407
-#define FSUBSTRING 408
-#define FTRIM 409
-#define FDATE_ADD 410
-#define FDATE_SUB 411
-#define FCOUNT 412
-#define FSUM 413
-#define FAVG 414
-#define FMIN 415
-#define FMAX 416
-#define FUPPER 417
-#define FLOWER 418
-#define FLENGTH 419
-#define FCONCAT 420
-#define FREPLACE 421
-#define FCOALESCE 422
+#define UUID 396
+#define USING 397
+#define USE 398
+#define VARCHAR 399
+#define VALUES 400
+#define VARBINARY 401
+#define WHERE 402
+#define WHEN 403
+#define WITH 404
+#define YEAR 405
+#define YEAR_MONTH 406
+#define ZEROFILL 407
+#define EXISTS 408
+#define FSUBSTRING 409
+#define FTRIM 410
+#define FDATE_ADD 411
+#define FDATE_SUB 412
+#define FCOUNT 413
+#define FSUM 414
+#define FAVG 415
+#define FMIN 416
+#define FMAX 417
+#define FUPPER 418
+#define FLOWER 419
+#define FLENGTH 420
+#define FCONCAT 421
+#define FREPLACE 422
+#define FCOALESCE 423
+#define FGEN_RANDOM_UUID 424
+#define FGEN_RANDOM_UUID_V7 425
+#define FSNOWFLAKE_ID 426
 
 
 
@@ -387,7 +395,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 391 "parser/evoparser.tab.h"
+#line 399 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

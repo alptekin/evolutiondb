@@ -191,6 +191,27 @@ int ValidateValue(const char *value, int typeEncoding)
         }
         break;
 
+    case 18: /* UUID */
+        if (strlen(value) != 36 ||
+            value[8] != '-' || value[13] != '-' ||
+            value[18] != '-' || value[23] != '-') {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "invalid UUID format: '%s'", value);
+            g_gui_error = 1;
+            return -1;
+        }
+        for (int k = 0; k < 36; k++) {
+            if (k == 8 || k == 13 || k == 18 || k == 23) continue;
+            char ch = value[k];
+            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))) {
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "invalid UUID: non-hex character at position %d", k);
+                g_gui_error = 1;
+                return -1;
+            }
+        }
+        break;
+
     case 22: /* BOOLEAN */
         if (strcmp(value, "true") != 0 && strcmp(value, "false") != 0 &&
             strcmp(value, "TRUE") != 0 && strcmp(value, "FALSE") != 0 &&

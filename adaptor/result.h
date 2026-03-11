@@ -20,6 +20,7 @@
 #define PG_OID_TEXT    25
 #define PG_OID_DATE    1082
 #define PG_OID_BOOL    16
+#define PG_OID_UUID    2950
 
 typedef struct {
     char   name[MAX_COL_NAME];

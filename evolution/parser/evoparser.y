@@ -187,6 +187,7 @@
 %token UPDATE
 %token UNSIGNED
 %token UNIQUE
+%token UUID
 %token USING
 %token USE
 
@@ -221,6 +222,9 @@
 %token FCONCAT
 %token FREPLACE
 %token FCOALESCE
+%token FGEN_RANDOM_UUID
+%token FGEN_RANDOM_UUID_V7
+%token FSNOWFLAKE_ID
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -408,6 +412,27 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FCONCAT '(' expr ',' expr ')'                    { emit("CALL 2 CONCAT"); $$ = expr_make_concat($3, $5); }
 | FREPLACE '(' expr ',' expr ',' expr ')'          { emit("CALL 3 REPLACE"); $$ = expr_make_replace($3, $5, $7); }
 | FCOALESCE '(' expr ',' expr ')'                  { emit("CALL 2 COALESCE"); $$ = expr_make_coalesce($3, $5); }
+| FGEN_RANDOM_UUID '(' ')'                         {
+                                                        emit("CALL 0 GEN_RANDOM_UUID");
+                                                        $$ = expr_make_gen_random_uuid();
+                                                        char _uuid[64];
+                                                        expr_evaluate($$, NULL, NULL, 0, _uuid, sizeof(_uuid));
+                                                        GetInsertions(_uuid);
+                                                    }
+| FGEN_RANDOM_UUID_V7 '(' ')'                      {
+                                                        emit("CALL 0 GEN_RANDOM_UUID_V7");
+                                                        $$ = expr_make_gen_random_uuid_v7();
+                                                        char _uuid[64];
+                                                        expr_evaluate($$, NULL, NULL, 0, _uuid, sizeof(_uuid));
+                                                        GetInsertions(_uuid);
+                                                    }
+| FSNOWFLAKE_ID '(' ')'                            {
+                                                        emit("CALL 0 SNOWFLAKE_ID");
+                                                        $$ = expr_make_snowflake_id();
+                                                        char _sf[64];
+                                                        expr_evaluate($$, NULL, NULL, 0, _sf, sizeof(_sf));
+                                                        GetInsertions(_sf);
+                                                    }
 ;
 
 trim_ltb: LEADING								{ emit("NUMBER 1"); $$ = 1; }
@@ -467,9 +492,30 @@ expr: expr REGEXP expr								{ emit("REGEXP"); $$ = $1; }
 | expr NOT REGEXP expr								{ emit("REGEXP"); emit("NOT"); $$ = $1; }
 ;
 
-expr: CURRENT_TIMESTAMP								{ emit("NOW"); $$ = expr_make_current_timestamp(); }
-| CURRENT_DATE									{ emit("NOW"); $$ = expr_make_current_date(); }
-| CURRENT_TIME									{ emit("NOW"); $$ = expr_make_current_time(); }
+expr: CURRENT_TIMESTAMP
+    {
+        emit("NOW");
+        $$ = expr_make_current_timestamp();
+        char _ts[64];
+        expr_evaluate($$, NULL, NULL, 0, _ts, sizeof(_ts));
+        GetInsertions(_ts);
+    }
+| CURRENT_DATE
+    {
+        emit("NOW");
+        $$ = expr_make_current_date();
+        char _ts[64];
+        expr_evaluate($$, NULL, NULL, 0, _ts, sizeof(_ts));
+        GetInsertions(_ts);
+    }
+| CURRENT_TIME
+    {
+        emit("NOW");
+        $$ = expr_make_current_time();
+        char _ts[64];
+        expr_evaluate($$, NULL, NULL, 0, _ts, sizeof(_ts));
+        GetInsertions(_ts);
+    }
 ;
 
 /* statements: select statement */
@@ -1117,6 +1163,10 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts DEFAULT INTNUM                                                    { char _buf[32]; snprintf(_buf, sizeof(_buf), "%d", $3); emit("ATTR DEFAULT NUMBER %d", $3); SetColumnDefault(_buf); $$ = $1 + 1; }
 | column_atts DEFAULT APPROXNUM                                                 { char _buf[64]; snprintf(_buf, sizeof(_buf), "%g", $3); emit("ATTR DEFAULT FLOAT %g", $3); SetColumnDefault(_buf); $$ = $1 + 1; }
 | column_atts DEFAULT BOOL							{ char _buf[8]; snprintf(_buf, sizeof(_buf), "%s", $3 ? "true" : "false"); emit("ATTR DEFAULT BOOL %d", $3); SetColumnDefault(_buf); $$ = $1 + 1; }
+| column_atts DEFAULT FGEN_RANDOM_UUID '(' ')'                                   { emit("ATTR DEFAULT GEN_RANDOM_UUID"); SetColumnDefault("gen_random_uuid()"); $$ = $1 + 1; }
+| column_atts DEFAULT FGEN_RANDOM_UUID_V7 '(' ')'                               { emit("ATTR DEFAULT GEN_RANDOM_UUID_V7"); SetColumnDefault("gen_random_uuid_v7()"); $$ = $1 + 1; }
+| column_atts DEFAULT FSNOWFLAKE_ID '(' ')'                                     { emit("ATTR DEFAULT SNOWFLAKE_ID"); SetColumnDefault("snowflake_id()"); $$ = $1 + 1; }
+| column_atts DEFAULT CURRENT_TIMESTAMP                                          { emit("ATTR DEFAULT CURRENT_TIMESTAMP"); SetColumnDefault("CURRENT_TIMESTAMP"); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT                                                    { emit("ATTR AUTOINC"); SetColumnAutoIncrement(1, 1); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ',' INTNUM ')'                          { emit("ATTR AUTOINC %d %d", $4, $6); SetColumnAutoIncrement($4, $6); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ')'                                     { emit("ATTR AUTOINC %d 1", $4); SetColumnAutoIncrement($4, 1); $$ = $1 + 1; }
@@ -1180,6 +1230,7 @@ BIT opt_length									{ $$ = 10000 + $2; }
 | ENUM '(' enum_list ')' opt_csc                                                { $$ = 200000 + $3; }
 | SET '(' enum_list ')' opt_csc                                                 { $$ = 210000 + $3; }
 | BOOLEAN                                                                        { $$ = 220001; }
+| UUID                                                                           { $$ = 180036; }
 ;
 
 enum_list: STRING								{ emit("ENUMVAL %s", $1); free($1); $$ = 1; }

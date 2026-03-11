@@ -58,6 +58,17 @@ static int key_cmp(const char *a, int alen, const char *b, int blen)
         memcpy(abuf, a, alen); abuf[alen] = '\0';
         memcpy(bbuf, b, blen); bbuf[blen] = '\0';
         char *ea, *eb;
+
+        /* Try integer comparison first (int64 — full precision for large IDs) */
+        long long la = strtoll(abuf, &ea, 10);
+        long long lb = strtoll(bbuf, &eb, 10);
+        if (*ea == '\0' && *eb == '\0' && ea != abuf && eb != bbuf) {
+            if (la < lb) return -1;
+            if (la > lb) return 1;
+            return 0;
+        }
+
+        /* Try floating-point comparison for decimals */
         double da = strtod(abuf, &ea);
         double db = strtod(bbuf, &eb);
         if (*ea == '\0' && *eb == '\0') {
