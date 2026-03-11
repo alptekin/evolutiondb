@@ -316,7 +316,7 @@
 
 ---
 
-### Task 16: ⬜ Native UUID Type & gen_random_uuid() (Feature #73)
+### Task 16: ✅ Native UUID Type & gen_random_uuid() (Feature #73)
 
 **Goal:** Implement UUID v4 data type with generation. Uses `/dev/urandom` (Linux) and `CryptGenRandom` (Windows) via existing `crypto_random_bytes()`. OID 2950 already registered in `pg_type` catalog.
 
@@ -335,9 +335,8 @@
 
 ---
 
-## Day 9 — Snowflake ID & Query Timeout
 
-### Task 17: ⬜ Snowflake ID Generation (Feature #74)
+### Task 17: ✅ Snowflake ID Generation (Feature #74)
 
 **Goal:** Implement Twitter Snowflake ID as a built-in function. 64-bit integer: 41-bit timestamp (ms since Unix epoch 1970-01-01) + 10-bit machine ID + 12-bit sequence counter. Exposed via `snowflake_id()` SQL function and `SNOWFLAKE` keyword.
 
@@ -356,7 +355,460 @@
 
 ---
 
-### Task 18: ⬜ Query Timeout, Statement Cancellation & Delay Functions (Features #75, #76, #77)
+## Day 10 — Transaction Enhancements
+
+### Task 18: ⬜ SAVEPOINT & ROLLBACK TO SAVEPOINT
+
+**Goal:** Support named savepoints within a transaction. `SAVEPOINT sp1` marks a restore point, `ROLLBACK TO sp1` undoes only changes after that savepoint. Requires extending UndoLog with position markers. In MySQL, MSSQL (SAVE TRANSACTION), and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add SAVEPOINT token to lexer and parser rule: `SAVEPOINT NAME`. | `evolexer.l`, `evoparser.y` |
+| 2 | Extend UndoLog with savepoint stack — store name + undo position index. | `adaptor/transaction.h`, `adaptor/transaction.c` |
+| 3 | Implement `ROLLBACK TO NAME` — undo entries back to savepoint position, keep savepoint alive. | `adaptor/transaction.c` |
+| 4 | Implement `RELEASE SAVEPOINT NAME` — discard the savepoint marker (keep changes). | `adaptor/transaction.c` |
+| 5 | Wire into SessionCtx — savepoint commands during active transaction only, error outside. | `adaptor/pg_handler.c`, `adaptor/evo_protocol.c` |
+| 6 | Nested savepoints — multiple SAVEPOINTs stack, ROLLBACK TO pops to named point. | `adaptor/transaction.c` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_savepoint.py`: create/rollback/release savepoint, nested savepoints, rollback to middle savepoint. | `tests/test_savepoint.py` |
+| 9 | Run regression — all existing test suites pass. | `tests/` |
+| 10 | Full system test — Docker rebuild, verify via psql/DBeaver. | `Dockerfile` |
+
+---
+
+### Task 19: ⬜ Transaction Isolation Levels (Feature #79)
+
+**Goal:** Implement `SET TRANSACTION ISOLATION LEVEL` with at least READ COMMITTED and SERIALIZABLE. In MySQL (4 levels), MSSQL (5 levels), and Oracle (3 levels).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add isolation level tokens to lexer: ISOLATION, LEVEL, READ, COMMITTED, UNCOMMITTED, REPEATABLE, SERIALIZABLE. | `evolexer.l` |
+| 2 | Parser rule: `SET TRANSACTION ISOLATION LEVEL <level>`. Store level in SessionCtx. | `evoparser.y`, `adaptor/pg_handler.c` |
+| 3 | Implement READ COMMITTED — default level, current behavior (see latest committed data). | `adaptor/transaction.c` |
+| 4 | Implement SERIALIZABLE — acquire exclusive lock for entire transaction duration. | `adaptor/transaction.c`, `evolution/db/server.c` |
+| 5 | Report current isolation level — `SHOW transaction_isolation` or pg_catalog query. | `adaptor/catalog.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_isolation.py`: default level, set level, dirty read prevention, serializable conflicts. | `tests/test_isolation.py` |
+| 8 | Run regression — all test suites pass. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Document isolation level behavior differences from PostgreSQL/MySQL. | `README.md` |
+
+---
+
+## Day 11 — Constraint Enhancements
+
+### Task 20: ⬜ Named Constraints & ALTER TABLE ADD/DROP CONSTRAINT (Feature #80)
+
+**Goal:** Support `CONSTRAINT name` syntax for PK, FK, UNIQUE, CHECK. Enable `ALTER TABLE DROP CONSTRAINT name`. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add CONSTRAINT token to lexer. Parser rule: `CONSTRAINT NAME` prefix for PK, FK, UNIQUE, CHECK. | `evolexer.l`, `evoparser.y` |
+| 2 | Store constraint name in ConstraintDesc (catalog_internal). | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 3 | Parser rule: `ALTER TABLE name DROP CONSTRAINT name`. | `evoparser.y` |
+| 4 | Implement DropConstraintProcess — find constraint by name, remove from catalog, drop backing index if UNIQUE/PK. | `evolution/db/Create.c` or new `Alter.c` |
+| 5 | Parser rule: `ALTER TABLE name ADD CONSTRAINT name ...` for PK, FK, UNIQUE, CHECK on existing table. | `evoparser.y` |
+| 6 | Implement AddConstraintProcess — validate existing data against new constraint, add to catalog. | `evolution/db/Create.c` or `Alter.c` |
+| 7 | Auto-generate constraint names when not specified (e.g., `tablename_colname_pkey`). | `evolution/db/Create.c` |
+| 8 | Regenerate parser. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_named_constraints.py`: named PK/FK/UNIQUE/CHECK, DROP CONSTRAINT, ADD CONSTRAINT, auto-naming. | `tests/test_named_constraints.py` |
+| 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
+
+---
+
+### Task 21: ⬜ Composite UNIQUE & Composite FOREIGN KEY (Feature #81)
+
+**Goal:** Support multi-column UNIQUE constraints and multi-column FOREIGN KEYs. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `UNIQUE (col1, col2, ...)` table-level constraint. Store multiple column names. | `evoparser.y`, `evolution/db/Create.c` |
+| 2 | Create composite B+ tree index for UNIQUE — key = "val1\|val2". | `evolution/db/Create.c`, `evolution/db/Index.c` |
+| 3 | Validate composite UNIQUE on INSERT — build composite key, check for duplicates. | `evolution/db/Insert.c` |
+| 4 | Validate composite UNIQUE on UPDATE — re-check when any of the unique columns change. | `evolution/db/Update.c` |
+| 5 | Parser: `FOREIGN KEY (col1, col2) REFERENCES table(col1, col2)` with composite columns. | `evoparser.y` |
+| 6 | Validate composite FK on INSERT — build composite value, look up in referenced table. | `evolution/db/Insert.c` |
+| 7 | Enforce composite FK on DELETE (CASCADE/RESTRICT/SET NULL for composite). | `evolution/db/Delete.c` |
+| 8 | Regenerate parser. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_composite_constraints.py`: composite UNIQUE, composite FK, cascade delete with composite FK. | `tests/test_composite_constraints.py` |
+| 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
+
+---
+
+## Day 12 — Constraint Enhancements (Part 2)
+
+### Task 22: ⬜ Self-Referencing FOREIGN KEY (Feature #82)
+
+**Goal:** Allow a table to reference itself (e.g., employee → manager). In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Modify FK validation in Create.c — allow ref_table == current table (defer validation to after table creation). | `evolution/db/Create.c` |
+| 2 | Handle INSERT order — self-referencing FK allows NULL parent or existing parent in same table. | `evolution/db/Insert.c` |
+| 3 | Handle DELETE CASCADE on self-referencing FK — recursive cascading deletion. | `evolution/db/Delete.c` |
+| 4 | Handle UPDATE CASCADE on self-referencing FK. | `evolution/db/Update.c` |
+| 5 | Prevent circular cascade infinite loops — track visited PKs during cascade. | `evolution/db/Delete.c`, `evolution/db/Update.c` |
+| 6 | Write unit tests — `tests/test_self_ref_fk.py`: employee/manager hierarchy, cascade delete tree, update parent, NULL parent. | `tests/test_self_ref_fk.py` |
+| 7 | Run regression + full system test. | `tests/`, `Dockerfile` |
+| 8-10 | Edge cases: insert root node, delete leaf vs. root, orphan prevention. | `tests/test_self_ref_fk.py` |
+
+---
+
+### Task 23: ⬜ Composite Index — Multi-Column B-tree (Feature #83)
+
+**Goal:** `CREATE INDEX idx ON table (col1, col2, ...)` with multi-column key. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: index column list `(col1, col2, ...)` already parsed. Extend CreateIndexProcess to store multiple columns. | `evoparser.y`, `evolution/db/Index.c` |
+| 2 | Build composite B+ tree key — concatenate column values with separator `\|`. | `evolution/db/Index.c` |
+| 3 | Populate composite index via table scan — extract all index columns per record. | `evolution/db/Index.c` |
+| 4 | Maintain composite index on INSERT — build composite key from inserted values. | `evolution/db/Insert.c` |
+| 5 | Maintain composite index on DELETE — remove composite key. | `evolution/db/Delete.c` |
+| 6 | Maintain composite index on UPDATE — if any indexed column changes, delete old key + insert new. | `evolution/db/Update.c` |
+| 7 | Query optimizer — use composite index for WHERE clauses matching leftmost prefix of index columns. | `adaptor/query_executor.c` |
+| 8 | Regenerate parser if needed. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_composite_index.py`: create composite index, WHERE on prefix, WHERE on all columns, INSERT/UPDATE/DELETE maintenance. | `tests/test_composite_index.py` |
+| 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
+
+---
+
+## Day 13 — Index Enhancements
+
+### Task 24: ⬜ Expression / Functional Index (Feature #84)
+
+**Goal:** `CREATE INDEX idx ON table (LOWER(col))` or `CREATE INDEX idx ON table (col1 + col2)`. In MySQL 8.0, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: allow expression in index column list, not just column names. | `evoparser.y` |
+| 2 | Store index expression definition in catalog (serialized ExprNode or expression string). | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 3 | Build index — evaluate expression for each row during CREATE INDEX, insert result as key. | `evolution/db/Index.c` |
+| 4 | Maintain on INSERT — evaluate expression on new row, insert into index. | `evolution/db/Insert.c` |
+| 5 | Maintain on UPDATE — if any column in expression changes, re-evaluate and update index. | `evolution/db/Update.c` |
+| 6 | Maintain on DELETE — evaluate expression on deleted row, remove from index. | `evolution/db/Delete.c` |
+| 7 | Query optimizer — detect matching expressions in WHERE clause. | `adaptor/query_executor.c` |
+| 8 | Regenerate parser. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_expr_index.py`: LOWER() index, arithmetic expression index, WHERE using expression. | `tests/test_expr_index.py` |
+| 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
+
+---
+
+### Task 25: ⬜ Hash Index (Feature #85)
+
+**Goal:** `CREATE INDEX idx ON table USING HASH (col)` for O(1) equality lookups. In MySQL (MEMORY/NDB) and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add HASH and USING tokens to lexer. Parser rule: `CREATE INDEX ... USING HASH (col)`. | `evolexer.l`, `evoparser.y` |
+| 2 | Implement hash index structure — fixed-size hash table with chaining in pages. | `evolution/db/hash_index.c` (new), `evolution/db/hash_index.h` (new) |
+| 3 | Hash function — use FNV-1a or similar for string keys, modulo bucket count. | `evolution/db/hash_index.c` |
+| 4 | Store hash index metadata in catalog (type='H' vs 'B' for B-tree). | `evolution/db/catalog_internal.c` |
+| 5 | Populate hash index via table scan on CREATE INDEX. | `evolution/db/Index.c` |
+| 6 | Maintain on INSERT/DELETE/UPDATE. | `evolution/db/Insert.c`, `evolution/db/Delete.c`, `evolution/db/Update.c` |
+| 7 | Query optimizer — use hash index for `WHERE col = value` (equality only, not range). | `adaptor/query_executor.c` |
+| 8 | Regenerate parser. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_hash_index.py`: create, equality lookup, insert/delete/update maintenance, performance vs B-tree on equality. | `tests/test_hash_index.py` |
+| 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
+
+---
+
+## Day 14 — Index & Query Planner
+
+### Task 26: ⬜ Index Statistics & ANALYZE TABLE (Feature #86)
+
+**Goal:** Collect table/index statistics (row count, distinct values, index depth) to enable future query optimization. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add ANALYZE token to lexer. Parser rule: `ANALYZE TABLE name`. | `evolexer.l`, `evoparser.y` |
+| 2 | Implement AnalyzeProcess — scan table, count rows, compute per-column distinct value count. | `evolution/db/Analyze.c` (new) |
+| 3 | Store statistics in catalog — new stats entry: table_id, row_count, col_distinct_counts[], last_analyzed timestamp. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 4 | Compute index statistics — B-tree depth, leaf page count, entries per leaf (avg). | `evolution/db/btree2.c` |
+| 5 | Auto-analyze — optionally update stats after large INSERT/DELETE batches. | `evolution/db/Insert.c`, `evolution/db/Delete.c` |
+| 6 | Expose via `EXPLAIN` — show estimated row counts based on statistics. | `adaptor/query_executor.c` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_analyze.py`: ANALYZE TABLE, verify stats, EXPLAIN shows estimates. | `tests/test_analyze.py` |
+| 9 | Run regression — all test suites pass. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 27: ⬜ LIMIT / TOP for UPDATE & DELETE (Feature #87)
+
+**Goal:** `DELETE FROM t WHERE ... LIMIT 10` and `UPDATE t SET ... WHERE ... LIMIT 5`. In MySQL (LIMIT), MSSQL (TOP), and Oracle (ROWNUM/FETCH FIRST).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: add optional LIMIT clause to DELETE and UPDATE grammar rules. | `evoparser.y` |
+| 2 | Store limit value in QueryContext (g_deleteLimit, g_updateLimit). | `evolution/db/query_context.h` |
+| 3 | Modify DeleteProcess — stop collecting matching rows after limit reached. | `evolution/db/Delete.c` |
+| 4 | Modify UpdateProcess — stop updating rows after limit reached. | `evolution/db/Update.c` |
+| 5 | Report correct affected_rows count (may be less than total matches). | `adaptor/query_executor.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_limit_dml.py`: DELETE LIMIT, UPDATE LIMIT, LIMIT 0, LIMIT > total rows. | `tests/test_limit_dml.py` |
+| 8 | Run regression — all test suites pass. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+## Day 15 — AUTO_INCREMENT & Identity Enhancements
+
+### Task 28: ⬜ LAST_INSERT_ID() / @@IDENTITY (Feature #88)
+
+**Goal:** Return the last auto-generated ID (AUTO_INCREMENT or snowflake_id DEFAULT) via `SELECT LAST_INSERT_ID()`. In MySQL and MSSQL (SCOPE_IDENTITY).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add thread-local `g_last_insert_id` to SessionCtx. | `adaptor/pg_handler.c`, `evolution/db/database.h` |
+| 2 | Set `g_last_insert_id` after successful INSERT with AUTO_INCREMENT or snowflake_id DEFAULT. | `evolution/db/Insert.c` |
+| 3 | Add LAST_INSERT_ID function token to lexer. Parser rule: `LAST_INSERT_ID()`. | `evolexer.l`, `evoparser.y` |
+| 4 | Expression evaluation — return session's `g_last_insert_id`. | `evolution/db/expression.h`, `evolution/db/expression.c` |
+| 5 | Multi-row INSERT — set to the FIRST auto-generated ID in the batch (MySQL behavior). | `evolution/db/Insert.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_last_insert_id.py`: single insert, multi-row insert, explicit ID (no change), different sessions. | `tests/test_last_insert_id.py` |
+| 8 | Run regression — all test suites pass. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify session isolation — two connections get independent LAST_INSERT_ID values. | `tests/test_last_insert_id.py` |
+
+---
+
+### Task 29: ⬜ AUTO_INCREMENT Custom Start Value & Step (Feature #89)
+
+**Goal:** `AUTO_INCREMENT = 1000` at table level and `SET @@auto_increment_increment = 2`. In MySQL, MSSQL (IDENTITY(start, step)), and Oracle (GENERATED AS IDENTITY(START WITH n INCREMENT BY n)).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `AUTO_INCREMENT = N` after CREATE TABLE closing paren (table option). | `evoparser.y` |
+| 2 | Store start value in catalog (auto_inc_counter initial value). | `evolution/db/Create.c`, `evolution/db/catalog_internal.c` |
+| 3 | Parser: `IDENTITY(start, step)` as MSSQL-compatible alias for column-level. | `evoparser.y`, `evolexer.l` |
+| 4 | Store step in catalog (auto_inc_step). | `evolution/db/catalog_internal.c` |
+| 5 | Modify apply_auto_increment — use stored start and step values. | `evolution/db/Insert.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_auto_inc_options.py`: custom start, custom step, IDENTITY syntax, verify sequence. | `tests/test_auto_inc_options.py` |
+| 8 | Run regression — all test suites pass. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify counter persists across server restarts. | `tests/test_auto_inc_options.py` |
+
+---
+
+## Day 16 — DEFAULT & Computed Columns
+
+### Task 30: ⬜ Expression-Based DEFAULT Values (Feature #90)
+
+**Goal:** `DEFAULT (col1 + col2)` or `DEFAULT (UPPER(name))` — defaults that reference other columns or expressions. In MySQL 8.0, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `DEFAULT '(' expr ')'` — store serialized expression as default value. | `evoparser.y` |
+| 2 | Store expression default as serialized ExprNode string in catalog. | `evolution/db/Create.c` |
+| 3 | Evaluate expression default at INSERT time — pass current row values as context. | `evolution/db/Insert.c` |
+| 4 | Handle column ordering — expression may reference columns that appear earlier in the row. | `evolution/db/Insert.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_expr_default.py`: arithmetic default, function default, cross-column default. | `tests/test_expr_default.py` |
+| 7 | Run regression — all test suites pass. | `tests/` |
+| 8-10 | Edge cases: NULL input columns, circular references (error), UPDATE triggers re-evaluation. | `tests/test_expr_default.py` |
+
+---
+
+### Task 31: ⬜ Generated / Computed Columns (Feature #91)
+
+**Goal:** `col AS (expr) STORED` or `col AS (expr) VIRTUAL`. STORED = physically stored, VIRTUAL = computed on read. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add GENERATED, ALWAYS, STORED, VIRTUAL tokens to lexer. | `evolexer.l` |
+| 2 | Parser: `col_name type GENERATED ALWAYS AS (expr) [STORED|VIRTUAL]`. | `evoparser.y` |
+| 3 | Store generated column expression in catalog (column attribute: gen_expr, gen_type). | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 4 | STORED columns — evaluate expression on INSERT/UPDATE, persist computed value. | `evolution/db/Insert.c`, `evolution/db/Update.c` |
+| 5 | VIRTUAL columns — evaluate expression on SELECT (read-time computation). | `evolution/db/Select.c`, `adaptor/query_executor.c` |
+| 6 | Prevent direct INSERT/UPDATE of generated columns — error if user tries to set value. | `evolution/db/Insert.c`, `evolution/db/Update.c` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_generated_cols.py`: stored computed, virtual computed, prevent direct write, index on generated column. | `tests/test_generated_cols.py` |
+| 9 | Run regression — all test suites pass. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+## Day 17 — Type System & Temp Table Enhancements
+
+### Task 32: ⬜ UUID Binary Storage — 16-byte Native Type (Feature #92)
+
+**Goal:** Store UUID internally as 16 bytes instead of 36-char string. Accept/output canonical string format, store as binary for 2.25x space savings and faster comparison. In MySQL (BINARY(16)), MSSQL (uniqueidentifier), and Oracle (RAW(16)).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Define UUID internal format — 16-byte big-endian binary. New type family or sub-type of family 18. | `evolution/db/database.h` |
+| 2 | Modify uuid_generate_v4/v7 — return 16-byte binary array alongside string. | `evolution/db/expression.c` |
+| 3 | Storage: convert string UUID → 16-byte on INSERT, 16-byte → string on SELECT. | `evolution/db/Insert.c`, `adaptor/query_executor.c` |
+| 4 | B+ tree key comparison — binary memcmp (16 bytes) instead of string compare (36 chars). | `evolution/db/btree2.c` |
+| 5 | PG wire protocol — send as PG_OID_UUID with binary format. | `adaptor/pg_protocol.c` |
+| 6 | Write unit tests — `tests/test_uuid_binary.py`: insert/select round-trip, binary comparison, index performance. | `tests/test_uuid_binary.py` |
+| 7 | Benchmark — compare 100K row INSERT/SELECT performance before and after optimization. | `tests/test_benchmark.py` |
+| 8 | Run regression — all test suites pass (including existing UUID tests). | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify DBeaver/psql display UUID correctly. | Manual |
+
+---
+
+### Task 33: ⬜ Global Temporary Tables (Feature #93)
+
+**Goal:** Tables visible to all sessions but data is session-private. `CREATE GLOBAL TEMPORARY TABLE`. In MSSQL (##table) and Oracle (GLOBAL TEMPORARY).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add GLOBAL token to lexer. Parser: `CREATE GLOBAL TEMPORARY TABLE`. | `evolexer.l`, `evoparser.y` |
+| 2 | Store global temp table definition in catalog (shared metadata, per-session data). | `evolution/db/catalog_internal.c` |
+| 3 | Per-session data isolation — each session gets its own heap pages for the global temp table. | `evolution/db/table_api.c` |
+| 4 | ON COMMIT DELETE ROWS — clear session data on COMMIT (Oracle default). | `adaptor/transaction.c` |
+| 5 | ON COMMIT PRESERVE ROWS — keep data until session disconnect (MSSQL default). | `adaptor/pg_handler.c` |
+| 6 | Cleanup on session disconnect — free session-specific pages. | `adaptor/pg_handler.c`, `adaptor/evo_protocol.c` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_global_temp.py`: create global temp, insert from two sessions, verify isolation, ON COMMIT behavior. | `tests/test_global_temp.py` |
+| 9 | Run regression — all test suites pass. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 34: ⬜ CREATE TEMPORARY TABLE AS SELECT (Feature #94)
+
+**Goal:** `CREATE TEMPORARY TABLE tmp AS SELECT ...` — create and populate a temp table from a query result. In MySQL, MSSQL (SELECT INTO #tmp), and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `CREATE TEMPORARY TABLE name AS select_stmt`. | `evoparser.y` |
+| 2 | Execute SELECT, capture result columns and rows. | `evolution/db/Select.c` |
+| 3 | Auto-create temp table with matching column names and types from SELECT result. | `evolution/db/Create.c` |
+| 4 | Bulk insert SELECT results into temp table. | `evolution/db/Insert.c` |
+| 5 | Handle column aliases — `AS SELECT col1 AS alias1` uses alias as column name. | `evolution/db/Create.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_create_temp_as.py`: basic CTAS, with WHERE, with aliases, with expressions. | `tests/test_create_temp_as.py` |
+| 8 | Run regression — all test suites pass. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Combine with Task 45 (CREATE TABLE AS SELECT) — reuse logic for permanent tables too. | `evolution/db/Create.c` |
+
+---
+
+## Day 18 — Infrastructure & Concurrency
+
+### Task 35: ⬜ Online DDL — Non-Blocking Schema Changes (Feature #95)
+
+**Goal:** ALTER TABLE operations (ADD/DROP COLUMN, ADD INDEX) without locking the table for reads. In MySQL (ALGORITHM=INPLACE), MSSQL (ONLINE=ON), and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Implement reader-writer lock for table-level access. | `evolution/db/table_api.h`, `evolution/db/table_api.c` |
+| 2 | DDL acquires write lock, DML/SELECT acquires read lock — multiple readers, single writer. | `evolution/db/table_api.c` |
+| 3 | ADD COLUMN online — add column metadata first, then backfill DEFAULT values in background. | `evolution/db/Create.c` |
+| 4 | CREATE INDEX online — build index while allowing concurrent reads. | `evolution/db/Index.c` |
+| 5 | DROP INDEX online — mark index as "dropping", stop using in queries, then destroy. | `evolution/db/Index.c` |
+| 6 | Progress tracking — report DDL progress (rows processed / total). | `adaptor/query_executor.c` |
+| 7 | Write unit tests — `tests/test_online_ddl.py`: concurrent SELECT during ADD COLUMN, concurrent INSERT during CREATE INDEX. | `tests/test_online_ddl.py` |
+| 8 | Run regression — all test suites pass. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Benchmark — measure DDL blocking time before vs. after. | `tests/test_benchmark.py` |
+
+---
+
+### Task 36: ⬜ Configurable Buffer Pool Size (Feature #96)
+
+**Goal:** `SET buffer_pool_size = <pages>` or command-line `--buffer-pool-size`. In MySQL (innodb_buffer_pool_size), MSSQL (max server memory), and Oracle (SGA).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `--buffer-pool-size` CLI argument to evosql-server. | `adaptor/main.c` |
+| 2 | Environment variable `EVOSQL_BUFFER_POOL_SIZE` (number of 4KB pages). | `adaptor/main.c` |
+| 3 | Pass configured size to `bp_init()` instead of hardcoded `BP_DEFAULT_PAGES`. | `adaptor/server.c`, `evolution/db/buffer_pool.c` |
+| 4 | Runtime resize — `SET buffer_pool_size = N` flushes dirty pages and reallocates. | `evolution/db/buffer_pool.c` |
+| 5 | Show current size — `SHOW buffer_pool_size`. | `adaptor/catalog.c` |
+| 6 | Sensible defaults — auto-detect available memory, use 25% as default. | `adaptor/main.c` |
+| 7 | Buffer pool hit rate monitoring — track hits/misses, expose via `SHOW buffer_pool_stats`. | `evolution/db/buffer_pool.c` |
+| 8 | Write unit tests — `tests/test_buffer_pool_config.py`: set size, show size, performance with different sizes. | `tests/test_buffer_pool_config.py` |
+| 9 | Run regression — all test suites pass. | `tests/` |
+| 10 | Full system test — test with small (64 pages) and large (4096 pages) pool. | `Dockerfile` |
+
+---
+
+## Day 19 — MVCC & Deadlock
+
+### Task 37: ⬜ MVCC — Multi-Version Concurrency Control (Feature #97)
+
+**Goal:** Readers never block writers, writers never block readers. Each transaction sees a consistent snapshot. In MySQL (InnoDB), MSSQL (snapshot isolation), and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add transaction ID (txid) — global monotonically increasing counter, assigned at BEGIN. | `adaptor/transaction.h`, `adaptor/transaction.c` |
+| 2 | Row versioning — each record stores (xmin, xmax) — created-by and deleted-by txid. | `evolution/db/table_api.h`, `evolution/db/slotted.c` |
+| 3 | Visibility check — a row is visible to txid T if: xmin < T AND (xmax == 0 OR xmax > T). | `evolution/db/table_api.c` |
+| 4 | UPDATE creates new version — mark old row's xmax, insert new row with new xmin. | `evolution/db/Update.c` |
+| 5 | DELETE sets xmax — don't physically remove, just mark as deleted for this txid. | `evolution/db/Delete.c` |
+| 6 | Snapshot isolation — at BEGIN, record current txid as snapshot. All reads use this snapshot for visibility. | `adaptor/transaction.c` |
+| 7 | Vacuum/cleanup — background process to physically remove rows invisible to all active transactions. | `evolution/db/Reclaim.c` |
+| 8 | Integrate with buffer pool — versioned pages in cache. | `evolution/db/buffer_pool.c` |
+| 9 | Write unit tests — `tests/test_mvcc.py`: concurrent read+write, snapshot isolation, dirty read prevention, phantom read prevention. | `tests/test_mvcc.py` |
+| 10 | Run regression + full system test — verify no regressions, benchmark concurrent workload. | `tests/`, `Dockerfile` |
+
+---
+
+### Task 38: ⬜ Deadlock Detection & Resolution (Feature #98)
+
+**Goal:** Detect deadlocks between concurrent transactions and abort one to resolve. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Implement row-level locking — lock manager tracks (table, key, txid, lock_type). | `evolution/db/lock_mgr.c` (new), `evolution/db/lock_mgr.h` (new) |
+| 2 | Lock types — SHARED (for SELECT FOR UPDATE) and EXCLUSIVE (for UPDATE/DELETE). | `evolution/db/lock_mgr.c` |
+| 3 | Wait-for graph — when a transaction waits for a lock, add edge to dependency graph. | `evolution/db/lock_mgr.c` |
+| 4 | Cycle detection — periodically (or on wait) check for cycles in wait-for graph using DFS. | `evolution/db/lock_mgr.c` |
+| 5 | Victim selection — abort the transaction with least work done (fewest undo log entries). | `evolution/db/lock_mgr.c`, `adaptor/transaction.c` |
+| 6 | Return deadlock error to client — SQLSTATE 40P01 (deadlock_detected). | `adaptor/query_executor.c` |
+| 7 | Lock timeout — `SET lock_timeout = <ms>` as alternative to deadlock detection. | `evolution/db/lock_mgr.c` |
+| 8 | Write unit tests — `tests/test_deadlock.py`: two transactions deadlocking, victim gets error, other completes. | `tests/test_deadlock.py` |
+| 9 | Run regression — all test suites pass. | `tests/` |
+| 10 | Full system test — concurrent DBeaver sessions causing deadlock. | `Dockerfile` |
+
+---
+
+## Day 20 — Distributed & Reliability
+
+### Task 39: ⬜ XA Transactions — 2-Phase Commit (Feature #99)
+
+**Goal:** Distributed transaction support via XA protocol. `XA START`, `XA END`, `XA PREPARE`, `XA COMMIT`. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add XA, START, END, PREPARE tokens to lexer. | `evolexer.l` |
+| 2 | Parser: `XA START 'xid'`, `XA END 'xid'`, `XA PREPARE 'xid'`, `XA COMMIT 'xid'`, `XA ROLLBACK 'xid'`. | `evoparser.y` |
+| 3 | XA transaction state machine — IDLE → ACTIVE → ENDED → PREPARED → COMMITTED/ROLLED_BACK. | `adaptor/transaction.c` |
+| 4 | PREPARE phase — flush undo log to disk, write prepare record. Survives crash. | `adaptor/transaction.c` |
+| 5 | COMMIT phase — finalize transaction, remove prepare record. | `adaptor/transaction.c` |
+| 6 | XA RECOVER — list all prepared (in-doubt) transactions. | `adaptor/transaction.c` |
+| 7 | Crash recovery — on startup, detect prepared transactions and keep them until explicit COMMIT/ROLLBACK. | `adaptor/server.c` |
+| 8 | Regenerate parser. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_xa.py`: full XA cycle, prepare+crash+recover, XA ROLLBACK. | `tests/test_xa.py` |
+| 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
+
+---
+
+### Task 40: ⬜ TRUNCATE TABLE — Fast DDL Delete (Feature #100)
+
+**Goal:** `TRUNCATE TABLE name` — remove all rows without scanning (reset heap + index). Much faster than `DELETE FROM table`. In MySQL, MSSQL, and Oracle.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | TRUNCATE token already in lexer. Add parser rule: `TRUNCATE TABLE name`. | `evoparser.y` |
+| 2 | Implement TruncateProcess — destroy and recreate PK B+ tree (empty). | `evolution/db/Drop.c` or new `Truncate.c` |
+| 3 | Free all heap pages — return to page manager free list. | `evolution/db/table_api.c` |
+| 4 | Reset AUTO_INCREMENT counter to initial value. | `evolution/db/catalog_internal.c` |
+| 5 | Destroy and recreate all secondary indexes (empty). | `evolution/db/Index.c` |
+| 6 | Reset table statistics. | `evolution/db/catalog_internal.c` |
+| 7 | FK constraint check — error if other tables reference this table with existing rows. | `evolution/db/Delete.c` |
+| 8 | Regenerate parser. | `evolution/parser/` |
+| 9 | Write unit tests — `tests/test_truncate.py`: truncate empty table, truncate with data, verify auto_inc reset, FK check. | `tests/test_truncate.py` |
+| 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
+
+### Task 41: ⬜ Query Timeout, Statement Cancellation & Delay Functions (Features #75, #76, #77)
 
 **Goal:** Implement `SET statement_timeout = <ms>` to prevent runaway queries + `evo_sleep(ms)` and `evo_jitter(min_ms, max_ms)` SQL functions for artificial delay injection (pg_jitter-style). Uses a cross-platform watchdog thread approach — spawn a monitoring thread before query execution that sets a cancellation flag after timeout. The delay functions enable chaos-engineering style testing of timeout/retry behaviour.
 
@@ -375,9 +827,9 @@
 
 ---
 
-## Day 10 — INSERT...SELECT & Multi-Table DELETE
+## Day 22 — INSERT...SELECT & Multi-Table DELETE
 
-### Task 19: ⬜ INSERT INTO ... SELECT (Feature #15)
+### Task 42: ⬜ INSERT INTO ... SELECT (Feature #15)
 
 **Goal:** Implement inserting rows from a SELECT query result.
 
@@ -396,7 +848,7 @@
 
 ---
 
-### Task 20: ⬜ Multi-Table DELETE (Feature #19)
+### Task 43: ⬜ Multi-Table DELETE (Feature #19)
 
 **Goal:** Grammar exists for multi-table DELETE but no execution. Implement `DELETE t1 FROM t1 JOIN t2 ON ... WHERE ...`.
 
@@ -415,9 +867,9 @@
 
 ---
 
-## Day 11 — Multi-Table UPDATE & ALTER TABLE ADD COLUMN
+## Day 23 — Multi-Table UPDATE & ALTER TABLE ADD COLUMN
 
-### Task 21: ⬜ Multi-Table UPDATE (Feature #20)
+### Task 44: ⬜ Multi-Table UPDATE (Feature #20)
 
 **Goal:** Implement `UPDATE t1 JOIN t2 ON ... SET t1.col = t2.col WHERE ...`.
 
@@ -436,7 +888,7 @@
 
 ---
 
-### Task 22: ⬜ ALTER TABLE — ADD COLUMN (Feature #5, Part 1)
+### Task 45: ⬜ ALTER TABLE — ADD COLUMN (Feature #5, Part 1)
 
 **Goal:** No schema evolution exists. Implement `ALTER TABLE t ADD [COLUMN] col type [constraints]`.
 
@@ -455,9 +907,9 @@
 
 ---
 
-## Day 12 — ALTER TABLE DROP & MODIFY COLUMN
+## Day 24 — ALTER TABLE DROP & MODIFY COLUMN
 
-### Task 23: ⬜ ALTER TABLE — DROP COLUMN (Feature #5, Part 2)
+### Task 46: ⬜ ALTER TABLE — DROP COLUMN (Feature #5, Part 2)
 
 **Goal:** Implement `ALTER TABLE t DROP [COLUMN] col`.
 
@@ -476,7 +928,7 @@
 
 ---
 
-### Task 24: ⬜ ALTER TABLE — MODIFY & RENAME COLUMN (Feature #5, Part 3)
+### Task 47: ⬜ ALTER TABLE — MODIFY & RENAME COLUMN (Feature #5, Part 3)
 
 **Goal:** Implement `ALTER TABLE t MODIFY COLUMN col new_type` and `ALTER TABLE t RENAME COLUMN old TO new`.
 
@@ -495,9 +947,9 @@
 
 ---
 
-## Day 13 — RENAME TABLE & DROP DATABASE/SCHEMA
+## Day 25 — RENAME TABLE & DROP DATABASE/SCHEMA
 
-### Task 25: ⬜ RENAME TABLE (Feature #31)
+### Task 48: ⬜ RENAME TABLE (Feature #31)
 
 **Goal:** Implement `RENAME TABLE old TO new` / `ALTER TABLE old RENAME TO new`.
 
@@ -516,7 +968,7 @@
 
 ---
 
-### Task 26: ⬜ DROP DATABASE & DROP SCHEMA (Features #29, #30)
+### Task 49: ⬜ DROP DATABASE & DROP SCHEMA (Features #29, #30)
 
 **Goal:** CREATE DATABASE/SCHEMA exist but DROP is missing. Implement both.
 
@@ -535,9 +987,9 @@
 
 ---
 
-## Day 14 — UNION & ORDER BY Expressions
+## Day 26 — UNION & ORDER BY Expressions
 
-### Task 27: ⬜ UNION / UNION ALL / INTERSECT / EXCEPT (Feature #4)
+### Task 50: ⬜ UNION / UNION ALL / INTERSECT / EXCEPT (Feature #4)
 
 **Goal:** Implement set operations on query results.
 
@@ -556,7 +1008,7 @@
 
 ---
 
-### Task 28: ⬜ ORDER BY Expression & Ordinal Position (Feature #35)
+### Task 51: ⬜ ORDER BY Expression & Ordinal Position (Feature #35)
 
 **Goal:** ORDER BY currently only accepts column names. Support expressions and ordinal positions (`ORDER BY 1`, `ORDER BY col+1`).
 
@@ -575,9 +1027,9 @@
 
 ---
 
-## Day 15 — JOIN (Part 1)
+## Day 27 — JOIN (Part 1)
 
-### Task 29: ⬜ INNER JOIN Execution (Feature #1, Part 1)
+### Task 52: ⬜ INNER JOIN Execution (Feature #1, Part 1)
 
 **Goal:** Grammar for JOINs exists. Implement INNER JOIN execution.
 
@@ -596,7 +1048,7 @@
 
 ---
 
-### Task 30: ⬜ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
+### Task 53: ⬜ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
 
 **Goal:** Extend join engine for LEFT, RIGHT, CROSS, and NATURAL joins.
 
@@ -615,9 +1067,9 @@
 
 ---
 
-## Day 16 — Subqueries
+## Day 28 — Subqueries
 
-### Task 31: ⬜ Scalar & WHERE Subqueries (Feature #2)
+### Task 54: ⬜ Scalar & WHERE Subqueries (Feature #2)
 
 **Goal:** Implement subquery execution in WHERE and SELECT clauses.
 
@@ -636,7 +1088,7 @@
 
 ---
 
-### Task 32: ⬜ EXISTS & ANY/SOME/ALL Subqueries (Feature #3)
+### Task 55: ⬜ EXISTS & ANY/SOME/ALL Subqueries (Feature #3)
 
 **Goal:** Implement EXISTS, NOT EXISTS, ANY/SOME/ALL subquery operators.
 
@@ -655,9 +1107,9 @@
 
 ---
 
-## Day 17 — String Functions & Multi-arg CONCAT
+## Day 29 — String Functions & Multi-arg CONCAT
 
-### Task 33: ⬜ String Functions (Feature #48)
+### Task 56: ⬜ String Functions (Feature #48)
 
 **Goal:** Add LEFT, RIGHT, LPAD, RPAD, REVERSE, REPEAT, INSTR, LOCATE, POSITION to expression engine.
 
@@ -676,7 +1128,7 @@
 
 ---
 
-### Task 34: ⬜ CONCAT 3+ args & || Operator (Features #45, #46)
+### Task 57: ⬜ CONCAT 3+ args & || Operator (Features #45, #46)
 
 **Goal:** Extend CONCAT to support 3+ arguments and add `||` string concatenation operator.
 
@@ -695,9 +1147,9 @@
 
 ---
 
-## Day 18 — Math & Date Functions
+## Day 30 — Math & Date Functions
 
-### Task 35: ⬜ Math Functions (Feature #49)
+### Task 58: ⬜ Math Functions (Feature #49)
 
 **Goal:** Implement ABS, CEIL, FLOOR, ROUND, POWER, SQRT, LOG, RAND.
 
@@ -716,7 +1168,7 @@
 
 ---
 
-### Task 36: ⬜ Date Functions & INTERVAL (Features #50, #43)
+### Task 59: ⬜ Date Functions & INTERVAL (Features #50, #43)
 
 **Goal:** Implement NOW, DATEDIFF, DATE_FORMAT, EXTRACT, YEAR, MONTH, DAY. Wire DATE_ADD/DATE_SUB and INTERVAL evaluation.
 
@@ -735,9 +1187,9 @@
 
 ---
 
-## Day 19 — Utility Functions
+## Day 31 — Utility Functions
 
-### Task 37: ⬜ CAST / CONVERT (Feature #37)
+### Task 60: ⬜ CAST / CONVERT (Feature #37)
 
 **Goal:** Implement type casting: `CAST(expr AS type)`, `CONVERT(expr, type)`.
 
@@ -756,7 +1208,7 @@
 
 ---
 
-### Task 38: ⬜ NULLIF, IF, IFNULL (Features #38, #39)
+### Task 61: ⬜ NULLIF, IF, IFNULL (Features #38, #39)
 
 **Goal:** Implement NULLIF(), IF(), IFNULL() functions.
 
@@ -775,9 +1227,9 @@
 
 ---
 
-## Day 20 — Boolean Operators & REGEXP
+## Day 32 — Boolean Operators & REGEXP
 
-### Task 39: ⬜ IS TRUE / IS FALSE / IS UNKNOWN & NULL-safe <=> (Features #42, #47)
+### Task 62: ⬜ IS TRUE / IS FALSE / IS UNKNOWN & NULL-safe <=> (Features #42, #47)
 
 **Goal:** Implement boolean truth-value tests and NULL-safe comparison operator.
 
@@ -796,7 +1248,7 @@
 
 ---
 
-### Task 40: ⬜ REGEXP / RLIKE Evaluation (Feature #40)
+### Task 63: ⬜ REGEXP / RLIKE Evaluation (Feature #40)
 
 **Goal:** REGEXP is parsed but not evaluated. Implement regex matching using POSIX regex.
 
@@ -815,9 +1267,9 @@
 
 ---
 
-## Day 21 — GROUP_CONCAT & SET Variables
+## Day 33 — GROUP_CONCAT & SET Variables
 
-### Task 41: ⬜ GROUP_CONCAT / STRING_AGG (Feature #44)
+### Task 64: ⬜ GROUP_CONCAT / STRING_AGG (Feature #44)
 
 **Goal:** Implement GROUP_CONCAT aggregate function.
 
@@ -836,7 +1288,7 @@
 
 ---
 
-### Task 42: ⬜ SET @var = ... User Variables (Feature #36)
+### Task 65: ⬜ SET @var = ... User Variables (Feature #36)
 
 **Goal:** Implement session-scoped user variables: `SET @name = expr`, `SELECT @name`.
 
@@ -855,9 +1307,9 @@
 
 ---
 
-## Day 22 — ON DUPLICATE KEY UPDATE & REPLACE INTO
+## Day 34 — ON DUPLICATE KEY UPDATE & REPLACE INTO
 
-### Task 43: ⬜ ON DUPLICATE KEY UPDATE (Feature #32)
+### Task 66: ⬜ ON DUPLICATE KEY UPDATE (Feature #32)
 
 **Goal:** Parsed but not executed. Implement upsert semantics for MySQL-style ON DUPLICATE KEY UPDATE.
 
@@ -876,7 +1328,7 @@
 
 ---
 
-### Task 44: ⬜ REPLACE INTO (Feature #33)
+### Task 67: ⬜ REPLACE INTO (Feature #33)
 
 **Goal:** Parsed but not executed. Implement `REPLACE INTO` — delete existing then insert, or just insert.
 
@@ -895,9 +1347,9 @@
 
 ---
 
-## Day 23 — CREATE TABLE...SELECT & EXPLAIN
+## Day 35 — CREATE TABLE...SELECT & EXPLAIN
 
-### Task 45: ⬜ CREATE TABLE ... SELECT (Feature #34)
+### Task 68: ⬜ CREATE TABLE ... SELECT (Feature #34)
 
 **Goal:** Parsed but not executed. Implement creating a table from a SELECT query result.
 
@@ -916,7 +1368,7 @@
 
 ---
 
-### Task 46: ⬜ EXPLAIN / EXPLAIN ANALYZE (Feature #28)
+### Task 69: ⬜ EXPLAIN / EXPLAIN ANALYZE (Feature #28)
 
 **Goal:** Show query execution plan.
 
@@ -935,9 +1387,9 @@
 
 ---
 
-## Day 24 — Views & Prepared Statements
+## Day 36 — Views & Prepared Statements
 
-### Task 47: ⬜ Views — CREATE VIEW / DROP VIEW (Feature #21)
+### Task 70: ⬜ Views — CREATE VIEW / DROP VIEW (Feature #21)
 
 **Goal:** Implement basic views as stored SELECT queries.
 
@@ -956,7 +1408,7 @@
 
 ---
 
-### Task 48: ⬜ Prepared Statements (Feature #25)
+### Task 71: ⬜ Prepared Statements (Feature #25)
 
 **Goal:** PG wire protocol extended query has stubs. Implement Parse/Bind/Describe/Execute.
 
@@ -975,9 +1427,9 @@
 
 ---
 
-## Day 25 — Window Functions & CTEs
+## Day 37 — Window Functions & CTEs
 
-### Task 49: ⬜ Window Functions (Feature #26)
+### Task 72: ⬜ Window Functions (Feature #26)
 
 **Goal:** Implement ROW_NUMBER(), RANK(), DENSE_RANK() with OVER (PARTITION BY ... ORDER BY ...).
 
@@ -996,7 +1448,7 @@
 
 ---
 
-### Task 50: ⬜ CTEs — WITH ... AS (Feature #27)
+### Task 73: ⬜ CTEs — WITH ... AS (Feature #27)
 
 **Goal:** Implement Common Table Expressions.
 
@@ -1015,9 +1467,9 @@
 
 ---
 
-## Day 26 — Stored Procedures & Triggers
+## Day 38 — Stored Procedures & Triggers
 
-### Task 51: ⬜ Stored Procedures / Functions (Feature #22)
+### Task 74: ⬜ Stored Procedures / Functions (Feature #22)
 
 **Goal:** Implement basic stored procedure support: CREATE PROCEDURE, CALL, DROP PROCEDURE.
 
@@ -1036,7 +1488,7 @@
 
 ---
 
-### Task 52: ⬜ Triggers (Feature #23)
+### Task 75: ⬜ Triggers (Feature #23)
 
 **Goal:** Implement basic triggers: BEFORE/AFTER INSERT/UPDATE/DELETE.
 
@@ -1055,9 +1507,9 @@
 
 ---
 
-## Day 27 — Cursors & RETURNING
+## Day 39 — Cursors & RETURNING
 
-### Task 53: ⬜ Cursors (Feature #24)
+### Task 76: ⬜ Cursors (Feature #24)
 
 **Goal:** Implement server-side cursors: DECLARE, OPEN, FETCH, CLOSE.
 
@@ -1076,7 +1528,7 @@
 
 ---
 
-### Task 54: ⬜ RETURNING Clause (Feature #56)
+### Task 77: ⬜ RETURNING Clause (Feature #56)
 
 **Goal:** Implement `INSERT/UPDATE/DELETE ... RETURNING *` / `RETURNING col1, col2`.
 
@@ -1095,9 +1547,9 @@
 
 ---
 
-## Day 28 — SELECT INTO & Roles
+## Day 40 — SELECT INTO & Roles
 
-### Task 55: ⬜ SELECT INTO (Feature #69)
+### Task 78: ⬜ SELECT INTO (Feature #69)
 
 **Goal:** Implement `SELECT col1, col2 INTO new_table FROM old_table WHERE ...`.
 
@@ -1116,7 +1568,7 @@
 
 ---
 
-### Task 56: ⬜ Roles (Feature #65)
+### Task 79: ⬜ Roles (Feature #65)
 
 **Goal:** Implement role-based access control. Users can be assigned to roles, roles can have privileges.
 
@@ -1135,9 +1587,9 @@
 
 ---
 
-## Day 29 — Dynamic Allocation & Semicolon Safety
+## Day 41 — Dynamic Allocation & Semicolon Safety
 
-### Task 57: ⬜ Dynamic Array Allocation (Storage Engine Fix)
+### Task 80: ⬜ Dynamic Array Allocation (Storage Engine Fix)
 
 **Goal:** Remove all static array caps. Use dynamic allocation throughout.
 
@@ -1156,7 +1608,7 @@
 
 ---
 
-### Task 58: ⬜ Semicolon-Safe Storage (Storage Engine Fix)
+### Task 81: ⬜ Semicolon-Safe Storage (Storage Engine Fix)
 
 **Goal:** Semicolons in data corrupt records. Fix with proper escaping.
 
@@ -1175,9 +1627,9 @@
 
 ---
 
-## Day 30 — JSON & Sequences
+## Day 42 — JSON & Sequences
 
-### Task 59: ⬜ JSON / JSONB Support (Feature #51)
+### Task 82: ⬜ JSON / JSONB Support (Feature #51)
 
 **Goal:** Basic JSON storage and query functions.
 
@@ -1196,7 +1648,7 @@
 
 ---
 
-### Task 60: ⬜ Sequences (Feature #55)
+### Task 83: ⬜ Sequences (Feature #55)
 
 **Goal:** Implement PostgreSQL-style CREATE SEQUENCE / NEXTVAL / CURRVAL.
 
@@ -1215,9 +1667,9 @@
 
 ---
 
-## Day 31 — UPSERT & COPY
+## Day 43 — UPSERT & COPY
 
-### Task 61: ⬜ UPSERT — INSERT ... ON CONFLICT (Feature #57)
+### Task 84: ⬜ UPSERT — INSERT ... ON CONFLICT (Feature #57)
 
 **Goal:** Implement PostgreSQL-style upsert: `INSERT ... ON CONFLICT (col) DO UPDATE SET ...` / `DO NOTHING`.
 
@@ -1236,7 +1688,7 @@
 
 ---
 
-### Task 62: ⬜ COPY Command (Feature #61)
+### Task 85: ⬜ COPY Command (Feature #61)
 
 **Goal:** Implement PostgreSQL-compatible COPY for bulk import/export.
 
@@ -1255,9 +1707,9 @@
 
 ---
 
-## Day 32 — Full-Text Search & Materialized Views
+## Day 44 — Full-Text Search & Materialized Views
 
-### Task 63: ⬜ Full-Text Search (Feature #52)
+### Task 86: ⬜ Full-Text Search (Feature #52)
 
 **Goal:** Basic full-text search: text indexing and MATCH AGAINST / @@ syntax.
 
@@ -1276,7 +1728,7 @@
 
 ---
 
-### Task 64: ⬜ Materialized Views (Feature #58)
+### Task 87: ⬜ Materialized Views (Feature #58)
 
 **Goal:** Implement materialized views: CREATE MATERIALIZED VIEW, REFRESH, DROP.
 
@@ -1295,9 +1747,9 @@
 
 ---
 
-## Day 33 — Table Partitioning & Lateral Joins
+## Day 45 — Table Partitioning & Lateral Joins
 
-### Task 65: ⬜ Table Partitioning (Feature #53)
+### Task 88: ⬜ Table Partitioning (Feature #53)
 
 **Goal:** Basic RANGE/LIST partitioning.
 
@@ -1316,7 +1768,7 @@
 
 ---
 
-### Task 66: ⬜ Lateral Joins (Feature #59)
+### Task 89: ⬜ Lateral Joins (Feature #59)
 
 **Goal:** Implement LATERAL subquery in FROM clause.
 
@@ -1335,9 +1787,9 @@
 
 ---
 
-## Day 34 — Array Type & LISTEN/NOTIFY
+## Day 46 — Array Type & LISTEN/NOTIFY
 
-### Task 67: ⬜ Array Data Type (Feature #60)
+### Task 90: ⬜ Array Data Type (Feature #60)
 
 **Goal:** Implement PostgreSQL-style array columns: `col INT[]`.
 
@@ -1356,7 +1808,7 @@
 
 ---
 
-### Task 68: ⬜ LISTEN / NOTIFY (Feature #62)
+### Task 91: ⬜ LISTEN / NOTIFY (Feature #62)
 
 **Goal:** Implement PostgreSQL-style asynchronous notifications.
 
@@ -1375,9 +1827,9 @@
 
 ---
 
-## Day 35 — Table Inheritance & Row-Level Security
+## Day 47 — Table Inheritance & Row-Level Security
 
-### Task 69: ⬜ Table Inheritance (Feature #63)
+### Task 92: ⬜ Table Inheritance (Feature #63)
 
 **Goal:** Implement PostgreSQL-style table inheritance.
 
@@ -1396,7 +1848,7 @@
 
 ---
 
-### Task 70: ⬜ Row-Level Security (Feature #64)
+### Task 93: ⬜ Row-Level Security (Feature #64)
 
 **Goal:** Implement RLS policies that filter rows based on current user.
 
@@ -1415,9 +1867,9 @@
 
 ---
 
-## Day 36 — WAL & File Locking
+## Day 48 — WAL & File Locking
 
-### Task 71: ⬜ WAL / Crash Recovery (Feature #66)
+### Task 94: ⬜ WAL / Crash Recovery (Feature #66)
 
 **Goal:** Implement basic Write-Ahead Log for crash recovery.
 
@@ -1436,7 +1888,7 @@
 
 ---
 
-### Task 72: ⬜ Concurrent Write Safety / Lock Manager (Feature #67)
+### Task 95: ⬜ Concurrent Write Safety / Lock Manager (Feature #67)
 
 **Goal:** Replace global mutex with finer-grained concurrency control. Single `evosql.db` file means `flock()` is not suitable — use in-memory lock manager instead.
 
@@ -1455,9 +1907,9 @@
 
 ---
 
-## Day 37 — Connection Pooling & Replication
+## Day 49 — Connection Pooling & Replication
 
-### Task 73: ⬜ Connection Pooling (Feature #68)
+### Task 96: ⬜ Connection Pooling (Feature #68)
 
 **Goal:** Implement server-side connection pooling to reuse threads/connections.
 
@@ -1476,7 +1928,7 @@
 
 ---
 
-### Task 74: ⬜ Replication (Feature #54)
+### Task 97: ⬜ Replication (Feature #54)
 
 **Goal:** Basic primary→replica streaming replication.
 
@@ -1495,9 +1947,9 @@
 
 ---
 
-## Day 38 — Final Task
+## Day 50 — Final Task
 
-### Task 75: ⬜ Comprehensive Integration & Hardening
+### Task 98: ⬜ Comprehensive Integration & Hardening
 
 **Goal:** Final sweep: all features integrated, edge cases handled, full test suite green. Profile hot paths and evaluate JIT compilation need.
 
@@ -1516,16 +1968,17 @@
 | 11 | Tag release — `git tag v2.0.0`, update CHANGELOG. | Git |
 
 ---
+---
 
 ## Feature → Task Cross-Reference
 
 | Feature # | Feature Name | Task # |
 |-----------|-------------|--------|
-| 1 | JOIN (INNER, LEFT, RIGHT, CROSS, NATURAL) | 29, 30 |
-| 2 | Subqueries (scalar, WHERE) | 31 |
-| 3 | EXISTS / ANY / SOME / ALL | 32 |
-| 4 | UNION / UNION ALL / INTERSECT / EXCEPT | 27 |
-| 5 | ALTER TABLE (ADD / DROP / MODIFY / RENAME) | 22, 23, 24 |
+| 1 | JOIN (INNER, LEFT, RIGHT, CROSS, NATURAL) | 52, 53 |
+| 2 | Subqueries (scalar, WHERE) | 54 |
+| 3 | EXISTS / ANY / SOME / ALL | 55 |
+| 4 | UNION / UNION ALL / INTERSECT / EXCEPT | 50 |
+| 5 | ALTER TABLE (ADD / DROP / MODIFY / RENAME) | 45, 46, 47 |
 | 6 | FOREIGN KEY constraints | 10 |
 | 7 | CHECK constraint | 9 |
 | 8 | DEFAULT value enforcement | 6 |
@@ -1535,70 +1988,70 @@
 | 12 | Transactions (BEGIN / COMMIT / ROLLBACK) | 11 |
 | 13 | Indexes (B-tree) | 12 |
 | 14 | Multi-row INSERT | 3 |
-| 15 | INSERT INTO ... SELECT | 19 |
+| 15 | INSERT INTO ... SELECT | 42 |
 | 16 | INSERT column list mapping | 4 |
 | 17 | Expression-based WHERE for DELETE | 1 |
 | 18 | Expression-based WHERE for UPDATE | 2 |
-| 19 | Multi-table DELETE | 20 |
-| 20 | Multi-table UPDATE | 21 |
-| 21 | Views (CREATE VIEW / DROP VIEW) | 47 |
-| 22 | Stored Procedures / Functions | 51 |
-| 23 | Triggers | 52 |
-| 24 | Cursors | 53 |
-| 25 | Prepared Statements | 48 |
-| 26 | Window Functions | 49 |
-| 27 | CTEs (WITH ... AS) | 50 |
-| 28 | EXPLAIN / EXPLAIN ANALYZE | 46 |
-| 29 | DROP DATABASE | 26 |
-| 30 | DROP SCHEMA | 26 |
-| 31 | RENAME TABLE | 25 |
-| 32 | ON DUPLICATE KEY UPDATE | 43 |
-| 33 | REPLACE INTO | 44 |
-| 34 | CREATE TABLE ... SELECT | 45 |
-| 35 | ORDER BY expression & ordinal | 28 |
-| 36 | SET @var = ... user variables | 42 |
-| 37 | CAST / CONVERT | 37 |
-| 38 | NULLIF | 38 |
-| 39 | IF / IFNULL | 38 |
-| 40 | REGEXP / RLIKE | 40 |
-| 41 | EXISTS / ANY / ALL subquery execution | 32 |
-| 42 | IS TRUE / IS FALSE / IS UNKNOWN | 39 |
-| 43 | INTERVAL evaluation | 36 |
-| 44 | GROUP_CONCAT / STRING_AGG | 41 |
-| 45 | CONCAT 3+ args | 34 |
-| 46 | \|\| operator | 34 |
-| 47 | NULL-safe <=> comparison | 39 |
-| 48 | String functions (LEFT, RIGHT, etc.) | 33 |
-| 49 | Math functions (ABS, CEIL, etc.) | 35 |
-| 50 | Date functions (NOW, DATEDIFF, etc.) | 36 |
-| 51 | JSON / JSONB support | 59 |
-| 52 | Full-text search | 63 |
-| 53 | Table partitioning | 65 |
-| 54 | Replication | 74 |
-| 55 | Sequences (CREATE SEQUENCE, NEXTVAL) | 60 |
-| 56 | RETURNING clause | 54 |
-| 57 | UPSERT (ON CONFLICT) | 61 |
-| 58 | Materialized Views | 64 |
-| 59 | Lateral Joins | 66 |
-| 60 | Array data type | 67 |
-| 61 | COPY command | 62 |
-| 62 | LISTEN / NOTIFY | 68 |
-| 63 | Table inheritance | 69 |
-| 64 | Row-level security | 70 |
-| 65 | Roles | 56 |
-| 66 | WAL / Crash recovery | 71 |
-| 67 | File locking / concurrency | 72 |
-| 68 | Connection pooling | 73 |
-| 69 | SELECT INTO | 55 |
+| 19 | Multi-table DELETE | 43 |
+| 20 | Multi-table UPDATE | 44 |
+| 21 | Views (CREATE VIEW / DROP VIEW) | 70 |
+| 22 | Stored Procedures / Functions | 74 |
+| 23 | Triggers | 75 |
+| 24 | Cursors | 76 |
+| 25 | Prepared Statements | 71 |
+| 26 | Window Functions | 72 |
+| 27 | CTEs (WITH ... AS) | 73 |
+| 28 | EXPLAIN / EXPLAIN ANALYZE | 69 |
+| 29 | DROP DATABASE | 49 |
+| 30 | DROP SCHEMA | 49 |
+| 31 | RENAME TABLE | 48 |
+| 32 | ON DUPLICATE KEY UPDATE | 66 |
+| 33 | REPLACE INTO | 67 |
+| 34 | CREATE TABLE ... SELECT | 68 |
+| 35 | ORDER BY expression & ordinal | 51 |
+| 36 | SET @var = ... user variables | 65 |
+| 37 | CAST / CONVERT | 60 |
+| 38 | NULLIF | 61 |
+| 39 | IF / IFNULL | 61 |
+| 40 | REGEXP / RLIKE | 63 |
+| 41 | EXISTS / ANY / ALL subquery execution | 55 |
+| 42 | IS TRUE / IS FALSE / IS UNKNOWN | 62 |
+| 43 | INTERVAL evaluation | 59 |
+| 44 | GROUP_CONCAT / STRING_AGG | 64 |
+| 45 | CONCAT 3+ args | 57 |
+| 46 | \|\| operator | 57 |
+| 47 | NULL-safe <=> comparison | 62 |
+| 48 | String functions (LEFT, RIGHT, etc.) | 56 |
+| 49 | Math functions (ABS, CEIL, etc.) | 58 |
+| 50 | Date functions (NOW, DATEDIFF, etc.) | 59 |
+| 51 | JSON / JSONB support | 82 |
+| 52 | Full-text search | 86 |
+| 53 | Table partitioning | 88 |
+| 54 | Replication | 97 |
+| 55 | Sequences (CREATE SEQUENCE, NEXTVAL) | 83 |
+| 56 | RETURNING clause | 77 |
+| 57 | UPSERT (ON CONFLICT) | 84 |
+| 58 | Materialized Views | 87 |
+| 59 | Lateral Joins | 89 |
+| 60 | Array data type | 90 |
+| 61 | COPY command | 85 |
+| 62 | LISTEN / NOTIFY | 91 |
+| 63 | Table inheritance | 92 |
+| 64 | Row-level security | 93 |
+| 65 | Roles | 79 |
+| 66 | WAL / Crash recovery | 94 |
+| 67 | File locking / concurrency | 95 |
+| 68 | Connection pooling | 96 |
+| 69 | SELECT INTO | 78 |
 | 70 | Buffer Pool Manager | 13 |
 | 71 | RECLAIM (Storage Garbage Collection) | 14 |
 | 72 | Temporary Tables | 15 |
 | 73 | Native UUID Type & gen_random_uuid() | 16 |
 | 74 | Snowflake ID Generation | 17 |
-| 75 | Query Timeout & Statement Cancellation | 18 |
-| 76 | `evo_sleep(ms)` — Artificial Delay | 18 |
-| 77 | `evo_jitter(min_ms, max_ms)` — Random Delay | 18 |
-| 78 | JIT Compilation Evaluation | 75 |
+| 75 | Query Timeout & Statement Cancellation | 41 |
+| 76 | `evo_sleep(ms)` — Artificial Delay | 41 |
+| 77 | `evo_jitter(min_ms, max_ms)` — Random Delay | 41 |
+| 78 | JIT Compilation Evaluation | 98 |
 | — | Dynamic allocation (storage fix) | 57 |
 | — | Semicolon-safe storage (storage fix) | 58 |
 
@@ -1616,38 +2069,38 @@
 | 6 | 11–12 | Transactions & Indexes (#12, #13) | 🔴 Critical |
 | 7 | 13–14 | Buffer Pool Manager & RECLAIM (#70, #71) | 🏗️ Architecture |
 | 8 | 15–16 | Temporary Tables & Native UUID (#72, #73) | 🏗️ Architecture |
-| 9 | 17–18 | Snowflake ID & Query Timeout + Sleep/Jitter (#74, #75, #76, #77) | 🏗️ Architecture |
-| 10 | 19–20 | INSERT...SELECT & Multi-table DELETE (#15, #19) | 🔴 Critical |
-| 11 | 21–22 | Multi-table UPDATE & ALTER TABLE ADD (#20, #5p1) | 🔴 Critical |
-| 12 | 23–24 | ALTER TABLE DROP & MODIFY/RENAME (#5p2, #5p3) | 🔴 Critical |
-| 13 | 25–26 | RENAME TABLE & DROP DB/SCHEMA (#31, #29, #30) | 🟠 Important |
-| 14 | 27–28 | UNION/INTERSECT/EXCEPT & ORDER BY expr (#4, #35) | 🔴 Critical |
-| 15 | 29–30 | JOIN INNER & LEFT/RIGHT/CROSS (#1p1, #1p2) | 🔴 Critical |
-| 16 | 31–32 | Subqueries & EXISTS/ANY/ALL (#2, #3, #41) | 🔴 Critical |
-| 17 | 33–34 | String functions & CONCAT/\|\| (#48, #45, #46) | 🟡 Moderate |
-| 18 | 35–36 | Math functions & Date functions (#49, #50, #43) | 🟡 Moderate |
-| 19 | 37–38 | CAST & NULLIF/IF/IFNULL (#37, #38, #39) | 🟡 Moderate |
-| 20 | 39–40 | IS TRUE/FALSE & REGEXP (#42, #47, #40) | 🟡 Moderate |
-| 21 | 41–42 | GROUP_CONCAT & SET @var (#44, #36) | 🟡 Moderate |
-| 22 | 43–44 | ON DUP KEY UPDATE & REPLACE INTO (#32, #33) | 🟠 Important |
-| 23 | 45–46 | CREATE TABLE...SELECT & EXPLAIN (#34, #28) | 🟠 Important |
-| 24 | 47–48 | Views & Prepared Statements (#21, #25) | 🟠 Important |
-| 25 | 49–50 | Window Functions & CTEs (#26, #27) | 🟠 Important |
-| 26 | 51–52 | Stored Procedures & Triggers (#22, #23) | 🟠 Important |
-| 27 | 53–54 | Cursors & RETURNING (#24, #56) | 🟠 Important |
-| 28 | 55–56 | SELECT INTO & Roles (#69, #65) | 🟠/🔵 |
-| 29 | 57–58 | Dynamic allocation & Semicolon safety (Storage) | ⚙️ Engine |
-| 30 | 59–60 | JSON & Sequences (#51, #55) | 🔵 Advanced |
-| 31 | 61–62 | UPSERT & COPY (#57, #61) | 🔵 Advanced |
-| 32 | 63–64 | Full-text search & Materialized views (#52, #58) | 🔵 Advanced |
-| 33 | 65–66 | Partitioning & Lateral Joins (#53, #59) | 🔵 Advanced |
-| 34 | 67–68 | Array type & LISTEN/NOTIFY (#60, #62) | 🔵 Advanced |
-| 35 | 69–70 | Table inheritance & Row-level security (#63, #64) | 🔵 Advanced |
-| 36 | 71–72 | WAL & File locking (#66, #67) | 🔵 Advanced |
-| 37 | 73–74 | Connection pooling & Replication (#54, #68) | 🔵 Advanced |
-| 38 | 75 | Integration, hardening & release | 🏁 Final |
+| 9 | 17–41 | Snowflake ID & Query Timeout + Sleep/Jitter (#74, #75, #76, #77) | 🏗️ Architecture |
+| 10 | 42–43 | INSERT...SELECT & Multi-table DELETE (#15, #19) | 🔴 Critical |
+| 11 | 44–45 | Multi-table UPDATE & ALTER TABLE ADD (#20, #5p1) | 🔴 Critical |
+| 12 | 46–47 | ALTER TABLE DROP & MODIFY/RENAME (#5p2, #5p3) | 🔴 Critical |
+| 13 | 48–49 | RENAME TABLE & DROP DB/SCHEMA (#31, #29, #30) | 🟠 Important |
+| 14 | 50–51 | UNION/INTERSECT/EXCEPT & ORDER BY expr (#4, #35) | 🔴 Critical |
+| 15 | 52–53 | JOIN INNER & LEFT/RIGHT/CROSS (#1p1, #1p2) | 🔴 Critical |
+| 16 | 54–55 | Subqueries & EXISTS/ANY/ALL (#2, #3, #41) | 🔴 Critical |
+| 17 | 56–57 | String functions & CONCAT/\|\| (#48, #45, #46) | 🟡 Moderate |
+| 18 | 58–59 | Math functions & Date functions (#49, #50, #43) | 🟡 Moderate |
+| 19 | 60–61 | CAST & NULLIF/IF/IFNULL (#37, #38, #39) | 🟡 Moderate |
+| 20 | 62–63 | IS TRUE/FALSE & REGEXP (#42, #47, #40) | 🟡 Moderate |
+| 21 | 64–65 | GROUP_CONCAT & SET @var (#44, #36) | 🟡 Moderate |
+| 22 | 66–67 | ON DUP KEY UPDATE & REPLACE INTO (#32, #33) | 🟠 Important |
+| 23 | 68–69 | CREATE TABLE...SELECT & EXPLAIN (#34, #28) | 🟠 Important |
+| 24 | 70–71 | Views & Prepared Statements (#21, #25) | 🟠 Important |
+| 25 | 72–73 | Window Functions & CTEs (#26, #27) | 🟠 Important |
+| 26 | 74–75 | Stored Procedures & Triggers (#22, #23) | 🟠 Important |
+| 27 | 76–77 | Cursors & RETURNING (#24, #56) | 🟠 Important |
+| 28 | 78–79 | SELECT INTO & Roles (#69, #65) | 🟠/🔵 |
+| 29 | 80–81 | Dynamic allocation & Semicolon safety (Storage) | ⚙️ Engine |
+| 30 | 82–83 | JSON & Sequences (#51, #55) | 🔵 Advanced |
+| 31 | 84–85 | UPSERT & COPY (#57, #61) | 🔵 Advanced |
+| 32 | 86–87 | Full-text search & Materialized views (#52, #58) | 🔵 Advanced |
+| 33 | 88–89 | Partitioning & Lateral Joins (#53, #59) | 🔵 Advanced |
+| 34 | 90–91 | Array type & LISTEN/NOTIFY (#60, #62) | 🔵 Advanced |
+| 35 | 92–93 | Table inheritance & Row-level security (#63, #64) | 🔵 Advanced |
+| 36 | 94–95 | WAL & File locking (#66, #67) | 🔵 Advanced |
+| 37 | 96–97 | Connection pooling & Replication (#54, #68) | 🔵 Advanced |
+| 38 | 98 | Integration, hardening & release | 🏁 Final |
 
-**Total:** 75 tasks × 10 steps = **750 steps** over **38 working days** (78 features).
+**Total:** 98 tasks × 10 steps = **980 steps** over **49 working days** (100 features).
 
 ---
 
