@@ -12,6 +12,12 @@ int DropTableProcess(void)
     /* Resolve table via catalog */
     TableDesc td;
     if (tapi_resolve(g_tblDropName, &td, NULL, NULL) < 0) {
+        if (g_dropIfExists) {
+            /* IF EXISTS — silently succeed when table doesn't exist */
+            printf("command(s) completed successfully!..\n");
+            TruncateDrop();
+            return 0;
+        }
         printf("Error: table '%s' not found\n", g_tblDropName);
         TruncateDrop();
         return -1;

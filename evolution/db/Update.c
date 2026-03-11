@@ -109,7 +109,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     /* Validate CHECK constraints against updated row */
     if (tblName && tblName[0]) {
         char checkConstraints[MAX_CHECK_CONSTRAINTS][1024];
-        int numChecks = ReadCheckConstraints(tblName, checkConstraints, MAX_CHECK_CONSTRAINTS);
+        char checkNames[MAX_CHECK_CONSTRAINTS][128];
+        int numChecks = ReadCheckConstraintsWithNames(tblName, checkConstraints,
+                                                       checkNames, MAX_CHECK_CONSTRAINTS);
         if (numChecks > 0) {
             char chkColNames[64][128];
             int numChkCols = UpdateReadColumnNames(tblName, chkColNames, 64);
@@ -143,7 +145,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                 }
                 if (!pass) {
                     snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                             "new row violates check constraint");
+                             "new row violates check constraint \"%s\"",
+                             checkNames[ci]);
                     g_gui_error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
                     return -1;
@@ -158,6 +161,7 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         int numFkCon = cat_list_constraints(td->table_id, fkConstraints, 32);
         for (int fi = 0; fi < numFkCon; fi++) {
             if (fkConstraints[fi].constraint_type != 'F') continue;
+            if (!fkConstraints[fi].is_enabled) continue;
 
             /* Parse local columns from definition */
             char localColsCsv[1024];
@@ -242,9 +246,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             RowID refRid;
             if (bt2_search(&refPkTree, fkValue, &refRid) < 0) {
                 snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                         "insert or update on table violates foreign key constraint "
+                         "insert or update on table violates foreign key constraint \"%s\" "
                          "(value \"%s\" not found in referenced table \"%s\")",
-                         fkValue, refTd.table_name);
+                         fkConstraints[fi].constraint_name, fkValue, refTd.table_name);
                 g_gui_error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                 return -1;

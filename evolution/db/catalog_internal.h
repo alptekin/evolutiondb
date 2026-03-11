@@ -77,10 +77,13 @@ typedef struct {
 typedef struct {
     uint32_t table_id;
     int      ordinal;
+    char     constraint_name[CAT_MAX_NAME_LEN]; /* user-defined or auto-generated name */
     char     constraint_type;  /* 'C' check, 'F' foreign key, 'P' primary, 'U' unique */
     char     definition[1024];
     uint32_t ref_table_id;     /* for FK, 0 otherwise */
     char     ref_columns[CAT_MAX_NAME_LEN];
+    int      is_enabled;       /* 1=enabled (default), 0=disabled */
+    int      is_validated;     /* 1=validated (default), 0=not validated */
 } ConstraintDesc;
 
 typedef struct {
@@ -163,10 +166,17 @@ int cat_update_index_root(uint32_t table_id, const char *name,
 /* ----------------------------------------------------------------
  *  Constraint operations
  * ---------------------------------------------------------------- */
-int cat_add_constraint(uint32_t table_id, char type,
+int cat_add_constraint(uint32_t table_id, char type, const char *name,
                        const char *definition,
                        uint32_t ref_table_id, const char *ref_columns);
+int cat_add_constraint_ex(uint32_t table_id, char type, const char *name,
+                          const char *definition,
+                          uint32_t ref_table_id, const char *ref_columns,
+                          int is_enabled, int is_validated);
 int cat_list_constraints(uint32_t table_id, ConstraintDesc *out, int max);
+int cat_find_constraint_by_name(uint32_t table_id, const char *name, ConstraintDesc *out);
+int cat_drop_constraint(uint32_t table_id, int ordinal);
+int cat_update_constraint(uint32_t table_id, int ordinal, const ConstraintDesc *updated);
 
 /* Find all FK constraints that reference a given table (by ref_table_id).
  * Scans all constraints in the catalog. Returns count found. */

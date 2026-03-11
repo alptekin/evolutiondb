@@ -15,6 +15,9 @@ extern int  get_max_connections(void);
 extern void set_max_connections(int n);
 extern int  get_active_connections(void);
 
+/* From server.c — parser mutex for SERIALIZABLE isolation */
+extern mutex_t g_parse_lock;
+
 /* ----------------------------------------------------------------
  *  Type encoding → PG metadata helpers
  * ---------------------------------------------------------------- */
@@ -218,7 +221,36 @@ static int extract_relnamespace(const char *sql, char *oid_out, int out_size)
 /* ----------------------------------------------------------------
  *  SET / SHOW / Transaction stubs
  * ---------------------------------------------------------------- */
-static int handle_set(const char *sql, ResultSet *rs)
+static const char *isolation_level_name(int level)
+{
+    switch (level) {
+    case 0:  return "read uncommitted";
+    case 1:  return "read committed";
+    case 2:  return "repeatable read";
+    case 3:  return "serializable";
+    default: return "read committed";
+    }
+}
+
+static int parse_isolation_level(const char *p)
+{
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (strncasecmp(p, "READ", 4) == 0) {
+        p += 4;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "UNCOMMITTED", 11) == 0) return 0;
+        if (strncasecmp(p, "COMMITTED", 9) == 0)   return 1;
+    }
+    if (strncasecmp(p, "REPEATABLE", 10) == 0) {
+        p += 10;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "READ", 4) == 0) return 2;
+    }
+    if (strncasecmp(p, "SERIALIZABLE", 12) == 0) return 3;
+    return -1;
+}
+
+static int handle_set(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     if (!starts_with_i(sql, "SET"))
         return 0;
@@ -230,6 +262,46 @@ static int handle_set(const char *sql, ResultSet *rs)
         if (strncasecmp(p, "SCHEMA", 6) == 0 &&
             (isspace((unsigned char)p[6]) || p[6] == '\0'))
             return 0;  /* let parser handle it */
+    }
+
+    /* SET [SESSION] TRANSACTION ISOLATION LEVEL <level> */
+    if (stristr_found(sql, "TRANSACTION") && stristr_found(sql, "ISOLATION")) {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        /* Skip optional SESSION keyword */
+        if (strncasecmp(p, "SESSION", 7) == 0) {
+            p += 7;
+            while (*p && isspace((unsigned char)*p)) p++;
+        }
+        if (strncasecmp(p, "TRANSACTION", 11) == 0) {
+            p += 11;
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (strncasecmp(p, "ISOLATION", 9) == 0) {
+                p += 9;
+                while (*p && isspace((unsigned char)*p)) p++;
+                if (strncasecmp(p, "LEVEL", 5) == 0) {
+                    p += 5;
+                    int level = parse_isolation_level(p);
+                    if (level < 0) {
+                        result_init(rs);
+                        result_set_error(rs, "22023", "invalid isolation level");
+                        return 1;
+                    }
+                    if (ctx) {
+                        if (ctx->in_transaction) {
+                            result_init(rs);
+                            result_set_error(rs, "25001",
+                                "SET TRANSACTION ISOLATION LEVEL must be called before any query in transaction");
+                            return 1;
+                        }
+                        ctx->isolation_level = level;
+                    }
+                    result_init(rs);
+                    strcpy(rs->command_tag, "SET");
+                    return 1;
+                }
+            }
+        }
     }
 
     /* SET max_connections = N */
@@ -420,7 +492,7 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         snprintf(buf, sizeof(buf), "%d", get_active_connections());
         result_set_field(rs, row, 0, buf);
     } else if (stristr_found(sql, "transaction_isolation") || stristr_found(sql, "transaction isolation"))
-        result_set_field(rs, row, 0, "read committed");
+        result_set_field(rs, row, 0, isolation_level_name(ctx ? ctx->isolation_level : 1));
     else if (stristr_found(sql, "server_version"))
         result_set_field(rs, row, 0, "15.0 (EvoSQL)");
     else if (stristr_found(sql, "max_identifier_length"))
@@ -454,21 +526,81 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                     ctx->undo_log = NULL;
                 }
                 ctx->undo_log = undo_log_create();
+                savepoint_stack_init(&ctx->savepoints);
+                /* SERIALIZABLE: hold parse lock for entire transaction */
+                if (ctx->isolation_level == 3) {
+                    mutex_lock(&g_parse_lock);
+                    ctx->serializable_locked = 1;
+                }
             }
         }
         strcpy(rs->command_tag, "BEGIN");
         return 1;
     }
     if (starts_with_i(sql, "COMMIT") || starts_with_i(sql, "END")) {
-        if (ctx && ctx->in_transaction) {
-            /* COMMIT — discard undo log, changes are permanent */
+        if (ctx && (ctx->in_transaction || ctx->tx_aborted)) {
+            if (ctx->tx_aborted && ctx->undo_log) {
+                /* COMMIT in aborted TX = implicit ROLLBACK (PostgreSQL behavior) */
+                undo_log_rollback(ctx->undo_log);
+            }
             ctx->in_transaction = 0;
+            ctx->tx_aborted = 0;
             if (ctx->undo_log) {
                 undo_log_free(ctx->undo_log);
                 ctx->undo_log = NULL;
             }
+            savepoint_stack_init(&ctx->savepoints);
+            /* Release SERIALIZABLE lock */
+            if (ctx->serializable_locked) {
+                ctx->serializable_locked = 0;
+                mutex_unlock(&g_parse_lock);
+            }
         }
         strcpy(rs->command_tag, "COMMIT");
+        return 1;
+    }
+    /* ROLLBACK TO [SAVEPOINT] <name> — must check before plain ROLLBACK */
+    if (starts_with_i(sql, "ROLLBACK TO")) {
+        if (ctx && ctx->in_transaction) {
+            /* Parse savepoint name: "ROLLBACK TO [SAVEPOINT] name" */
+            const char *p = sql + 11; /* skip "ROLLBACK TO" */
+            while (*p == ' ') p++;
+            if (starts_with_i(p, "SAVEPOINT"))
+                p += 9;
+            while (*p == ' ') p++;
+            char sp_name[128];
+            int i = 0;
+            while (*p && *p != ' ' && *p != ';' && i < 127)
+                sp_name[i++] = *p++;
+            sp_name[i] = '\0';
+
+            if (sp_name[0] == '\0') {
+                result_set_error(rs, "42601", "ROLLBACK TO requires a savepoint name");
+                return 1;
+            }
+
+            int idx = savepoint_find(&ctx->savepoints, sp_name);
+            if (idx < 0) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "savepoint \"%s\" does not exist", sp_name);
+                result_set_error(rs, "3B001", msg);
+                return 1;
+            }
+
+            /* Undo entries back to savepoint position */
+            int target = ctx->savepoints.entries[idx].undo_count;
+            undo_log_rollback_to(ctx->undo_log, target);
+
+            /* Destroy savepoints created after this one */
+            savepoint_release_after(&ctx->savepoints, idx);
+
+            /* Clear aborted state — PG allows continuing after ROLLBACK TO */
+            ctx->tx_aborted = 0;
+        } else {
+            result_set_error(rs, "25P01", "ROLLBACK TO can only be used in a transaction");
+            return 1;
+        }
+        strcpy(rs->command_tag, "ROLLBACK");
         return 1;
     }
     if (starts_with_i(sql, "ROLLBACK")) {
@@ -481,8 +613,78 @@ static int handle_transaction(const char *sql, ResultSet *rs,
             }
             ctx->in_transaction = 0;
             ctx->tx_aborted = 0;
+            savepoint_stack_init(&ctx->savepoints);
+            /* Release SERIALIZABLE lock */
+            if (ctx->serializable_locked) {
+                ctx->serializable_locked = 0;
+                mutex_unlock(&g_parse_lock);
+            }
         }
         strcpy(rs->command_tag, "ROLLBACK");
+        return 1;
+    }
+    /* RELEASE SAVEPOINT <name> */
+    if (starts_with_i(sql, "RELEASE")) {
+        if (ctx && ctx->in_transaction) {
+            const char *p = sql + 7; /* skip "RELEASE" */
+            while (*p == ' ') p++;
+            if (starts_with_i(p, "SAVEPOINT"))
+                p += 9;
+            while (*p == ' ') p++;
+            char sp_name[128];
+            int i = 0;
+            while (*p && *p != ' ' && *p != ';' && i < 127)
+                sp_name[i++] = *p++;
+            sp_name[i] = '\0';
+
+            if (sp_name[0] == '\0') {
+                result_set_error(rs, "42601", "RELEASE requires a savepoint name");
+                return 1;
+            }
+
+            int idx = savepoint_find(&ctx->savepoints, sp_name);
+            if (idx < 0) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "savepoint \"%s\" does not exist", sp_name);
+                result_set_error(rs, "3B001", msg);
+                return 1;
+            }
+
+            /* Release this savepoint and all newer ones */
+            savepoint_release_after(&ctx->savepoints, idx - 1);
+        } else {
+            result_set_error(rs, "25P01", "RELEASE SAVEPOINT can only be used in a transaction");
+            return 1;
+        }
+        strcpy(rs->command_tag, "RELEASE");
+        return 1;
+    }
+    /* SAVEPOINT <name> */
+    if (starts_with_i(sql, "SAVEPOINT")) {
+        if (ctx && ctx->in_transaction) {
+            const char *p = sql + 9; /* skip "SAVEPOINT" */
+            while (*p == ' ') p++;
+            char sp_name[128];
+            int i = 0;
+            while (*p && *p != ' ' && *p != ';' && i < 127)
+                sp_name[i++] = *p++;
+            sp_name[i] = '\0';
+
+            if (sp_name[0] == '\0') {
+                result_set_error(rs, "42601", "SAVEPOINT requires a name");
+                return 1;
+            }
+
+            int undo_count = ctx->undo_log ? ctx->undo_log->count : 0;
+            if (savepoint_create(&ctx->savepoints, sp_name, undo_count) < 0) {
+                result_set_error(rs, "53000", "too many savepoints");
+                return 1;
+            }
+        } else {
+            result_set_error(rs, "25P01", "SAVEPOINT can only be used in a transaction");
+            return 1;
+        }
+        strcpy(rs->command_tag, "SAVEPOINT");
         return 1;
     }
     if (starts_with_i(sql, "DISCARD")) {
@@ -1438,6 +1640,22 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
                     /* Build conkey from constraint definition for PK/UK,
                      * or from column info for PK */
+                    /* Use actual constraint name if available, else auto-generate */
+                    if (cons[ci].constraint_name[0] != '\0') {
+                        strncpy(conname, cons[ci].constraint_name, sizeof(conname) - 1);
+                        conname[sizeof(conname) - 1] = '\0';
+                    } else if (contype[0] == 'p') {
+                        snprintf(conname, sizeof(conname), "%s_pkey", tables[t].table_name);
+                    } else if (contype[0] == 'u') {
+                        snprintf(conname, sizeof(conname), "%s_uq_%d", tables[t].table_name, ci);
+                    } else if (contype[0] == 'c') {
+                        snprintf(conname, sizeof(conname), "%s_check_%d", tables[t].table_name, ci);
+                    } else if (contype[0] == 'f') {
+                        snprintf(conname, sizeof(conname), "%s_fkey_%d", tables[t].table_name, ci);
+                    } else {
+                        snprintf(conname, sizeof(conname), "%s_con_%d", tables[t].table_name, ci);
+                    }
+
                     if (contype[0] == 'p') {
                         /* Find PK column ordinal */
                         ColumnDesc cols[CAT_MAX_COLUMNS];
@@ -1456,20 +1674,14 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         strcat(pk_positions, "}");
                         strncpy(conkeyStr, pk_positions, sizeof(conkeyStr) - 1);
                         conkeyStr[sizeof(conkeyStr) - 1] = '\0';
-                        snprintf(conname, sizeof(conname), "%s_pkey", tables[t].table_name);
                     } else if (contype[0] == 'u') {
-                        /* For unique constraints, try to find the column */
                         snprintf(conkeyStr, sizeof(conkeyStr), "{1}");
-                        snprintf(conname, sizeof(conname), "%s_uq_%d", tables[t].table_name, ci);
                     } else if (contype[0] == 'c') {
                         snprintf(conkeyStr, sizeof(conkeyStr), "{}");
-                        snprintf(conname, sizeof(conname), "%s_check_%d", tables[t].table_name, ci);
                     } else if (contype[0] == 'f') {
                         snprintf(conkeyStr, sizeof(conkeyStr), "{1}");
-                        snprintf(conname, sizeof(conname), "%s_fkey_%d", tables[t].table_name, ci);
                     } else {
                         snprintf(conkeyStr, sizeof(conkeyStr), "{}");
-                        snprintf(conname, sizeof(conname), "%s_con_%d", tables[t].table_name, ci);
                     }
 
                     char confrelStr[16] = "0";
@@ -1647,6 +1859,75 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
         }
 
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", schcount);
+        return 1;
+    }
+
+    /* information_schema.table_constraints */
+    if (stristr_found(sql, "table_constraints")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "constraint_catalog", PG_OID_TEXT);
+        result_add_column(rs, "constraint_schema", PG_OID_TEXT);
+        result_add_column(rs, "constraint_name", PG_OID_TEXT);
+        result_add_column(rs, "table_catalog", PG_OID_TEXT);
+        result_add_column(rs, "table_schema", PG_OID_TEXT);
+        result_add_column(rs, "table_name", PG_OID_TEXT);
+        result_add_column(rs, "constraint_type", PG_OID_TEXT);
+        result_add_column(rs, "is_deferrable", PG_OID_TEXT);
+        result_add_column(rs, "initially_deferred", PG_OID_TEXT);
+
+        int tccount = 0;
+        DatabaseDesc dbDescTC;
+        if (cat_find_database(db_get_current_database(), &dbDescTC) == 0) {
+            SchemaDesc schemas[32];
+            int ns = cat_list_schemas(dbDescTC.db_id, schemas, 32);
+            for (int si = 0; si < ns; si++) {
+                TableDesc tables[256];
+                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                for (int ti = 0; ti < nt; ti++) {
+                    ConstraintDesc cons[64];
+                    int ncons = cat_list_constraints(tables[ti].table_id, cons, 64);
+                    for (int ci = 0; ci < ncons; ci++) {
+                        char conname[256];
+                        const char *contype_str = "CHECK";
+
+                        if (cons[ci].constraint_name[0] != '\0') {
+                            strncpy(conname, cons[ci].constraint_name, sizeof(conname) - 1);
+                            conname[sizeof(conname) - 1] = '\0';
+                        } else {
+                            switch (cons[ci].constraint_type) {
+                                case 'P': snprintf(conname, sizeof(conname), "%s_pkey", tables[ti].table_name); break;
+                                case 'U': snprintf(conname, sizeof(conname), "%s_uq_%d", tables[ti].table_name, ci); break;
+                                case 'C': snprintf(conname, sizeof(conname), "%s_check_%d", tables[ti].table_name, ci); break;
+                                case 'F': snprintf(conname, sizeof(conname), "%s_fkey_%d", tables[ti].table_name, ci); break;
+                                default:  snprintf(conname, sizeof(conname), "%s_con_%d", tables[ti].table_name, ci); break;
+                            }
+                        }
+
+                        switch (cons[ci].constraint_type) {
+                            case 'P': contype_str = "PRIMARY KEY"; break;
+                            case 'U': contype_str = "UNIQUE"; break;
+                            case 'C': contype_str = "CHECK"; break;
+                            case 'F': contype_str = "FOREIGN KEY"; break;
+                        }
+
+                        int r = result_add_row(rs);
+                        if (r < 0) break;
+                        result_set_field(rs, r, 0, "evosql");
+                        result_set_field(rs, r, 1, schemas[si].schema_name);
+                        result_set_field(rs, r, 2, conname);
+                        result_set_field(rs, r, 3, "evosql");
+                        result_set_field(rs, r, 4, schemas[si].schema_name);
+                        result_set_field(rs, r, 5, tables[ti].table_name);
+                        result_set_field(rs, r, 6, contype_str);
+                        result_set_field(rs, r, 7, "NO");
+                        result_set_field(rs, r, 8, "NO");
+                        tccount++;
+                    }
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", tccount);
         return 1;
     }
 
@@ -1979,7 +2260,7 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (handle_grant_revoke(sql, rs, ctx)) return 1;
 
     /* SET */
-    if (handle_set(sql, rs)) return 1;
+    if (handle_set(sql, rs, ctx)) return 1;
 
     /* SHOW */
     if (handle_show(sql, rs, ctx)) return 1;

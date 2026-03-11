@@ -26,6 +26,18 @@ typedef struct {
     int        count;       /* number of entries */
 } UndoLog;
 
+/* Savepoint — marks a position in the undo log stack */
+#define MAX_SAVEPOINTS 64
+typedef struct {
+    char name[128];         /* savepoint name */
+    int  undo_count;        /* undo log count at savepoint creation */
+} SavePoint;
+
+typedef struct {
+    SavePoint entries[MAX_SAVEPOINTS];
+    int       count;        /* number of active savepoints */
+} SavePointStack;
+
 /* Allocate / free an undo log */
 UndoLog *undo_log_create(void);
 void     undo_log_free(UndoLog *log);
@@ -38,6 +50,17 @@ void undo_log_record(UndoLog *log, int op_type,
 /* Replay the undo log in reverse (ROLLBACK) — undoes all changes.
  * Returns 0 on success, -1 on error. */
 int undo_log_rollback(UndoLog *log);
+
+/* Rollback to a savepoint — undoes entries until count == target_count.
+ * Returns 0 on success, -1 on error. */
+int undo_log_rollback_to(UndoLog *log, int target_count);
+
+/* Savepoint stack operations */
+void savepoint_stack_init(SavePointStack *sp);
+int  savepoint_create(SavePointStack *sp, const char *name, int undo_count);
+int  savepoint_find(SavePointStack *sp, const char *name);
+void savepoint_release(SavePointStack *sp, int idx);
+void savepoint_release_after(SavePointStack *sp, int idx);
 
 /* The global callback installed while a transaction query runs.
  * Engine DML code calls this (if non-NULL) before modifying data. */

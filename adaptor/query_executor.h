@@ -19,7 +19,11 @@ typedef struct {
     char username[256];   /* authenticated user                    */
     int       in_transaction;  /* 1 if BEGIN was issued */
     int       tx_aborted;     /* 1 if error occurred in transaction */
+    int       isolation_level; /* 0=READ UNCOMMITTED, 1=READ COMMITTED (default),
+                                  2=REPEATABLE READ, 3=SERIALIZABLE */
+    int       serializable_locked; /* 1 if holding parse lock for SERIALIZABLE */
     UndoLog  *undo_log;       /* undo entries for rollback */
+    SavePointStack savepoints; /* savepoint stack for SAVEPOINT/ROLLBACK TO */
 
     /* Temporary table tracking — auto-dropped on disconnect */
     uint32_t  temp_table_ids[64];

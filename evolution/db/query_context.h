@@ -40,6 +40,7 @@ typedef struct QueryContext {
     char tblDelName[1024];
     char tblUpdateTableName[1024];
     char tblDropName[1024];
+    int  dropIfExists;          /* 1 if DROP TABLE IF EXISTS */
     char lastSelectTable[1024];
 
     /* ---- INSERT/UPDATE data ---- */
@@ -133,18 +134,23 @@ typedef struct QueryContext {
 
     /* ---- CHECK constraints ---- */
     char checkSerialized[MAX_CHECK_CONSTRAINTS][1024];
+    char checkNames[MAX_CHECK_CONSTRAINTS][128]; /* constraint names */
     int  checkCount;
 
     /* ---- FOREIGN KEY constraints (accumulated during CREATE TABLE) ---- */
     char fkLocalCols[8][256];      /* local column list CSV per FK */
     char fkRefTable[8][128];       /* referenced table name */
     char fkRefCols[8][256];        /* referenced column list CSV */
+    char fkNames[8][128];          /* constraint names */
     int  fkOnDelete[8];            /* 0=RESTRICT(default), 1=CASCADE, 2=SET NULL, 3=RESTRICT */
     int  fkOnUpdate[8];            /* 0=RESTRICT(default), 1=CASCADE, 2=SET NULL, 3=RESTRICT */
     int  fkCount;
     /* Temp accumulators for current FK being parsed */
     char fkCurLocalCols[256];
     char fkCurRefCols[256];
+
+    /* ---- Pending constraint name (for CONSTRAINT name ... syntax) ---- */
+    char pendingConstraintName[128];
 
     /* ---- Sort context (for qsort callback) ---- */
     int sortColIndex;
@@ -178,6 +184,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_tblDelName            (g_qctx->tblDelName)
 #define g_tblUpdateTableName    (g_qctx->tblUpdateTableName)
 #define g_tblDropName           (g_qctx->tblDropName)
+#define g_dropIfExists          (g_qctx->dropIfExists)
 #define g_lastSelectTable       (g_qctx->lastSelectTable)
 
 /* INSERT/UPDATE data */
@@ -269,17 +276,22 @@ void          qctx_free(QueryContext *ctx);
 
 /* CHECK constraints */
 #define g_checkSerialized       (g_qctx->checkSerialized)
+#define g_checkNames            (g_qctx->checkNames)
 #define g_checkCount            (g_qctx->checkCount)
 
 /* FOREIGN KEY constraints */
 #define g_fkLocalCols           (g_qctx->fkLocalCols)
 #define g_fkRefTable            (g_qctx->fkRefTable)
 #define g_fkRefCols             (g_qctx->fkRefCols)
+#define g_fkNames               (g_qctx->fkNames)
 #define g_fkOnDelete            (g_qctx->fkOnDelete)
 #define g_fkOnUpdate            (g_qctx->fkOnUpdate)
 #define g_fkCount               (g_qctx->fkCount)
 #define g_fkCurLocalCols        (g_qctx->fkCurLocalCols)
 #define g_fkCurRefCols          (g_qctx->fkCurRefCols)
+
+/* Constraint naming */
+#define g_pendingConstraintName (g_qctx->pendingConstraintName)
 
 /* Database/Schema context (moved from true globals for thread safety) */
 #define g_currentDatabase       (g_qctx->currentDatabase)

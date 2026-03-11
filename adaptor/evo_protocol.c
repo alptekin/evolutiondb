@@ -17,6 +17,9 @@
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
 
+/* From server.c — parser mutex for SERIALIZABLE cleanup */
+extern mutex_t g_parse_lock;
+
 /* ----------------------------------------------------------------
  *  evo_secure_wipe — local copy to avoid crypto.h / OpenSSL clash
  *  (CWE-14: Compiler Removal of Code to Clear Buffers)
@@ -112,6 +115,7 @@ void evo_handle_client(socket_t sock)
 
     /* Per-connection session context */
     SessionCtx session = { "evosql", "default", "" };
+    session.isolation_level = 1;  /* default: READ COMMITTED */
 
     /* Wrap socket in conn_t for TLS-transparent I/O */
     conn_t conn;
@@ -297,6 +301,10 @@ void evo_handle_client(socket_t sock)
         undo_log_free(session.undo_log);
         session.undo_log = NULL;
         session.in_transaction = 0;
+        if (session.serializable_locked) {
+            session.serializable_locked = 0;
+            mutex_unlock(&g_parse_lock);
+        }
     }
 
     /* Auto-drop temporary tables for this session */
