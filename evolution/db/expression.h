@@ -62,6 +62,9 @@ typedef enum {
     EXPR_CONCAT,          /* CONCAT(a, b) — left || right */
     EXPR_REPLACE,         /* REPLACE(str, from, to) */
     EXPR_COALESCE,        /* COALESCE(a, b) */
+    EXPR_GEN_RANDOM_UUID,    /* gen_random_uuid() — v4 */
+    EXPR_GEN_RANDOM_UUID_V7, /* gen_random_uuid_v7() — v7 time-ordered */
+    EXPR_SNOWFLAKE_ID,       /* snowflake_id() — 64-bit time-ordered ID */
     EXPR_FUNC_CALL,       /* function call (future) */
     EXPR_STAR             /* SELECT * (sentinel) */
 } ExprNodeType;
@@ -125,6 +128,9 @@ ExprNode *expr_make_length(ExprNode *arg);
 ExprNode *expr_make_concat(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_replace(ExprNode *str, ExprNode *from, ExprNode *to);
 ExprNode *expr_make_coalesce(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_gen_random_uuid(void);
+ExprNode *expr_make_gen_random_uuid_v7(void);
+ExprNode *expr_make_snowflake_id(void);
 
 /* Constants for expression array sizes */
 #define MAX_CASE_WHENS 32

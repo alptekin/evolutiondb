@@ -159,6 +159,7 @@ static int type_encoding_to_pg_oid(int typeEncoding)
     case 11: return PG_OID_FLOAT8;  /* DECIMAL → float8 */
     case 12: return PG_OID_BPCHAR;  /* CHAR */
     case 13: return PG_OID_VARCHAR; /* VARCHAR */
+    case 18: return PG_OID_UUID;    /* UUID */
     case 22: return PG_OID_VARCHAR; /* BOOLEAN — send as VARCHAR to avoid DBeaver JDBC getByte() error */
     default: return PG_OID_TEXT;    /* BLOB, TEXT, ENUM, SET, etc. */
     }

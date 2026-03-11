@@ -134,7 +134,30 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         if (userIdx >= 0) {
             strcat(buf, userVals[userIdx]);
         } else if (i < numDefaults && strcmp(defaultVals[i], "\x01NONE\x01") != 0) {
-            strcat(buf, defaultVals[i]);
+            /* Evaluate function-based defaults */
+            if (strcasecmp(defaultVals[i], "gen_random_uuid()") == 0) {
+                char uuid[64];
+                ExprNode *e = expr_make_gen_random_uuid();
+                expr_evaluate(e, NULL, NULL, 0, uuid, sizeof(uuid));
+                strcat(buf, uuid);
+            } else if (strcasecmp(defaultVals[i], "gen_random_uuid_v7()") == 0) {
+                char uuid[64];
+                ExprNode *e = expr_make_gen_random_uuid_v7();
+                expr_evaluate(e, NULL, NULL, 0, uuid, sizeof(uuid));
+                strcat(buf, uuid);
+            } else if (strcasecmp(defaultVals[i], "snowflake_id()") == 0) {
+                char sfid[64];
+                ExprNode *e = expr_make_snowflake_id();
+                expr_evaluate(e, NULL, NULL, 0, sfid, sizeof(sfid));
+                strcat(buf, sfid);
+            } else if (strcasecmp(defaultVals[i], "CURRENT_TIMESTAMP") == 0) {
+                char ts[64];
+                ExprNode *e = expr_make_current_timestamp();
+                expr_evaluate(e, NULL, NULL, 0, ts, sizeof(ts));
+                strcat(buf, ts);
+            } else {
+                strcat(buf, defaultVals[i]);
+            }
         } else {
             strcat(buf, "\x01NULL\x01");
         }

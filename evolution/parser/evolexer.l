@@ -231,6 +231,7 @@ UNIQUE					{ return UNIQUE; }
 
 UNSIGNED				{ return UNSIGNED; }
 UPDATE					{ return UPDATE; }
+UUID					{ return UUID; }
 
 USE						{ return USE; }
 USING					{ return USING; }
@@ -301,6 +302,9 @@ LENGTH/"("			{ return FLENGTH; }
 CHAR_LENGTH/"("		{ return FLENGTH; }
 CONCAT/"("			{ return FCONCAT; }
 COALESCE/"("			{ return FCOALESCE; }
+GEN_RANDOM_UUID_V7/"("	{ return FGEN_RANDOM_UUID_V7; }
+GEN_RANDOM_UUID/"("		{ return FGEN_RANDOM_UUID; }
+SNOWFLAKE_ID/"("		{ return FSNOWFLAKE_ID; }
 DATE_ADD/"("			{ return FDATE_ADD; }
 DATE_SUB/"("			{ return FDATE_SUB; }
 

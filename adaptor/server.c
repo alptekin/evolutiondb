@@ -118,6 +118,7 @@ void server_init(void)
     mutex_init(&g_conn_lock);
     bp_init(BP_DEFAULT_PAGES);   /* 256 pages = 1 MB buffer pool */
     query_engine_init();
+    snowflake_init();
 }
 
 void server_cleanup(void)
