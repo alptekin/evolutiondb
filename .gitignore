@@ -46,3 +46,5 @@ tmpclaude-*
 *~
 *.pyc
 __pycache__/
+*.tests
+*.wiki
