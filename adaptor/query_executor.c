@@ -11,6 +11,7 @@
 #include "../evolution/db/catalog_internal.h"
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/expression.h"
+#include "pg_protocol.h"
 
 /* Flex/Bison externs */
 extern int yyparse(void);
@@ -275,6 +276,62 @@ static int extract_eq_condition(const ExprNode *expr,
     return 1;
 }
 
+/* Check if query can use streaming (no post-processing needed) */
+static int can_stream_results(void)
+{
+    /* Aggregates in SELECT prevent streaming */
+    int i;
+    for (i = 0; i < g_selectExprCount; i++) {
+        if (!g_selectExprs[i]) continue;
+        int t = g_selectExprs[i]->type;
+        if (t == EXPR_COUNT_STAR || t == EXPR_COUNT ||
+            t == EXPR_SUM || t == EXPR_AVG ||
+            t == EXPR_MIN || t == EXPR_MAX)
+            return 0;
+    }
+    if (g_orderByCount > 0 || g_orderByColumn[0] != '\0') return 0;
+    if (g_groupByCount > 0) return 0;
+    if (g_selectDistinct) return 0;
+    if (g_havingExpr) return 0;
+    /* Only stream SELECT * — column filtering needs post-processing */
+    if (!(g_selectExprCount == 1 && g_selectExprs[0] &&
+          g_selectExprs[0]->type == EXPR_STAR))
+        return 0;
+    return 1;
+}
+
+/* Parse a record buffer into per-column string values.
+ * Returns number of columns parsed. field_ptrs[] will point into parseBuf. */
+static int parse_record_fields(const char *recBuf, char *parseBuf, int parseBufSize,
+                               const char *field_ptrs[], int is_null[], int maxCols,
+                               const ColumnInfo columns[])
+{
+    strncpy(parseBuf, recBuf, parseBufSize - 1);
+    parseBuf[parseBufSize - 1] = '\0';
+    int col = 0;
+    char *val = strtok(parseBuf, ";");
+    while (val && col < maxCols) {
+        if (strcmp(val, "\x01NULL\x01") == 0) {
+            field_ptrs[col] = NULL;
+            is_null[col] = 1;
+        } else if (columns[col].pg_type_oid == PG_OID_BOOL) {
+            if (strncasecmp(val, "true", 4) == 0 ||
+                strcmp(val, "1") == 0 || strcmp(val, "t") == 0) {
+                field_ptrs[col] = "true";
+            } else {
+                field_ptrs[col] = "false";
+            }
+            is_null[col] = 0;
+        } else {
+            field_ptrs[col] = val;
+            is_null[col] = 0;
+        }
+        col++;
+        val = strtok(NULL, ";");
+    }
+    return col;
+}
+
 /* ----------------------------------------------------------------
  *  Collect SELECT results into ResultSet
  * ---------------------------------------------------------------- */
@@ -382,7 +439,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 char matchPKs[256][256];
                 int nMatch = btree_search(idxPath, eq_val, matchPKs, 256);
                 int m;
-                for (m = 0; m < nMatch && count < MAX_ROWS; m++) {
+                for (m = 0; m < nMatch; m++) {
                     RowID rid;
                     if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0)
                         continue;
@@ -424,40 +481,132 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
     /* --- Full table scan via PK B+ tree cursor --- */
     if (!used_index) {
+        int streaming = (rs->stream_conn != NULL && can_stream_results());
+
+        /* Precompute WHERE / LIMIT / OFFSET for inline evaluation during streaming */
+        char streamColNames[MAX_COLUMNS][128];
+        int limitVal = -1, offsetVal = 0, skipped = 0;
+        if (streaming) {
+            int c;
+            for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+                strncpy(streamColNames[c], rs->columns[c].name, 127);
+                streamColNames[c][127] = '\0';
+            }
+            if (g_limitExpr) {
+                char buf[64];
+                if (expr_evaluate(g_limitExpr, NULL, NULL, 0, buf, sizeof(buf)))
+                    limitVal = atoi(buf);
+            }
+            if (g_offsetExpr) {
+                char buf[64];
+                if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, buf, sizeof(buf)))
+                    offsetVal = atoi(buf);
+            }
+            /* Send RowDescription header before first row */
+            pg_send_row_description((conn_t *)rs->stream_conn, rs);
+        }
+
         TableScanCursor cursor;
         char keyBuf[256];
         char recBuf[RECORD_BUF_SIZE];
 
         if (tapi_scan_begin(&td, &cursor) == 0) {
-            while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0
-                   && count < MAX_ROWS) {
-                int row = result_add_row(rs);
-                if (row < 0) break;
+            while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
+                if (streaming) {
+                    /* --- Streaming path: parse, filter, send directly --- */
+                    char parseBuf[RECORD_BUF_SIZE];
+                    const char *fieldPtrs[MAX_COLUMNS];
+                    int  fieldNulls[MAX_COLUMNS];
+                    memset(fieldPtrs, 0, sizeof(fieldPtrs));
+                    memset(fieldNulls, 0, sizeof(fieldNulls));
+                    parse_record_fields(recBuf, parseBuf, sizeof(parseBuf),
+                                        fieldPtrs, fieldNulls, rs->num_cols,
+                                        rs->columns);
 
-                char temp[RECORD_BUF_SIZE];
-                int col = 0;
-                strncpy(temp, recBuf, sizeof(temp) - 1);
-                temp[sizeof(temp) - 1] = '\0';
-
-                char *val = strtok(temp, ";");
-                while (val && col < rs->num_cols) {
-                    if (strcmp(val, "\x01NULL\x01") == 0) {
-                        result_set_null(rs, row, col);
-                    } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                        if (strncasecmp(val, "true", 4) == 0 ||
-                            strcmp(val, "1") == 0 ||
-                            strcmp(val, "t") == 0)
-                            result_set_field(rs, row, col, "true");
-                        else
-                            result_set_field(rs, row, col, "false");
-                    } else {
-                        result_set_field(rs, row, col, val);
+                    /* Apply WHERE inline */
+                    if (g_whereExpr) {
+                        char colValues[MAX_COLUMNS][256];
+                        int c;
+                        for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+                            if (fieldNulls[c])
+                                strcpy(colValues[c], "\x01NULL\x01");
+                            else {
+                                strncpy(colValues[c], fieldPtrs[c] ? fieldPtrs[c] : "", 255);
+                                colValues[c][255] = '\0';
+                            }
+                        }
+                        char whereResult[512];
+                        int ok = expr_evaluate(g_whereExpr,
+                                               (const char (*)[128])streamColNames,
+                                               (const char (*)[256])colValues,
+                                               rs->num_cols,
+                                               whereResult, sizeof(whereResult));
+                        int keep = 0;
+                        if (ok) {
+                            if (strcmp(whereResult, "t") == 0 ||
+                                strcasecmp(whereResult, "true") == 0 ||
+                                strcmp(whereResult, "1") == 0)
+                                keep = 1;
+                            else {
+                                double v = strtod(whereResult, NULL);
+                                if (v != 0.0) keep = 1;
+                            }
+                        }
+                        if (!keep) continue;
                     }
-                    col++;
-                    val = strtok(NULL, ";");
+
+                    /* Apply OFFSET: skip first N matching rows */
+                    if (offsetVal > 0 && skipped < offsetVal) {
+                        skipped++;
+                        continue;
+                    }
+
+                    /* Apply LIMIT: stop after N rows sent */
+                    if (limitVal >= 0 && count >= limitVal)
+                        break;
+
+                    /* Send DataRow directly to client */
+                    pg_send_data_row((conn_t *)rs->stream_conn,
+                                    fieldPtrs, fieldNulls, rs->num_cols);
+                    count++;
+                } else {
+                    /* --- Buffered path: store in ResultSet --- */
+                    int row = result_add_row(rs);
+                    if (row < 0) break;
+
+                    char parseBuf[RECORD_BUF_SIZE];
+                    int col = 0;
+                    strncpy(parseBuf, recBuf, sizeof(parseBuf) - 1);
+                    parseBuf[sizeof(parseBuf) - 1] = '\0';
+
+                    char *val = strtok(parseBuf, ";");
+                    while (val && col < rs->num_cols) {
+                        if (strcmp(val, "\x01NULL\x01") == 0) {
+                            result_set_null(rs, row, col);
+                        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                            if (strncasecmp(val, "true", 4) == 0 ||
+                                strcmp(val, "1") == 0 ||
+                                strcmp(val, "t") == 0)
+                                result_set_field(rs, row, col, "true");
+                            else
+                                result_set_field(rs, row, col, "false");
+                        } else {
+                            result_set_field(rs, row, col, val);
+                        }
+                        col++;
+                        val = strtok(NULL, ";");
+                    }
+                    count++;
                 }
-                count++;
             }
+        }
+
+        if (streaming) {
+            /* Mark as streamed — caller must not send result set again */
+            rs->streamed_rows = count;
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
+            pg_send_command_complete((conn_t *)rs->stream_conn, rs->command_tag);
+            return;  /* skip all post-processing */
         }
     }
 
@@ -481,7 +630,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 if (rs->rows[r].is_null[c]) {
                     strcpy(colValues[c], "\x01NULL\x01");
                 } else {
-                    strncpy(colValues[c], rs->rows[r].fields[c], 255);
+                    strncpy(colValues[c], rs->rows[r].fields[c] ? rs->rows[r].fields[c] : "", 255);
                     colValues[c][255] = '\0';
                 }
             }
@@ -505,8 +654,10 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
             }
             if (keep) {
                 if (dst != r)
-                    rs->rows[dst] = rs->rows[r];
+                    row_move(&rs->rows[dst], &rs->rows[r]);
                 dst++;
+            } else {
+                row_clear(&rs->rows[r]);
             }
         }
         rs->num_rows = dst;
@@ -547,7 +698,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     if (rs->rows[rowIdx].is_null[_c]) \
                         strcpy((colVals)[_c], NULL_MARKER); \
                     else { \
-                        strncpy((colVals)[_c], rs->rows[rowIdx].fields[_c], 255); \
+                        const char *_f = rs->rows[rowIdx].fields[_c]; \
+                        strncpy((colVals)[_c], _f ? _f : "", 255); \
                         (colVals)[_c][255] = '\0'; \
                     } \
                 } \
@@ -557,17 +709,17 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
              * groups[r] = group index for row r
              * groupCount = total number of distinct groups
              * groupFirstRow[g] = first row index of group g  */
-            int groups[MAX_ROWS];
+            int *groups = (int *)calloc(origNumRows > 0 ? origNumRows : 1, sizeof(int));
             int groupCount = 0;
-            int groupFirstRow[MAX_ROWS];
-            int groupSize[MAX_ROWS];
-            memset(groups, 0, sizeof(groups));
-            memset(groupSize, 0, sizeof(groupSize));
+            int *groupFirstRow = (int *)calloc(origNumRows > 0 ? origNumRows : 1, sizeof(int));
+            int *groupSize = (int *)calloc(origNumRows > 0 ? origNumRows : 1, sizeof(int));
 
             if (g_groupByCount > 0) {
                 /* Compute GROUP BY key for each row and assign group index */
                 /* groupKeys[g] is a concatenated string key for each group */
-                char groupKeys[MAX_ROWS][1024];
+                /* Dynamically allocate group keys — one per potential group (worst case = origNumRows) */
+                int gkCap = origNumRows > 0 ? origNumRows : 1;
+                char (*groupKeys)[1024] = (char (*)[1024])calloc(gkCap, 1024);
                 int r;
                 for (r = 0; r < origNumRows; r++) {
                     char colValues[MAX_COLUMNS][256];
@@ -611,6 +763,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                         groupCount++;
                     }
                 }
+                free(groupKeys);
             } else {
                 /* No GROUP BY — all rows form one group */
                 groupCount = 1;
@@ -639,23 +792,25 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
             /* Compute aggregate/expression values for each group */
             int outRows = 0;
-            Row groupRows[MAX_ROWS];
+            Row *groupRows = (Row *)calloc(groupCount > 0 ? groupCount : 1, sizeof(Row));
             int gi;
-            for (gi = 0; gi < groupCount && outRows < MAX_ROWS; gi++) {
+            for (gi = 0; gi < groupCount; gi++) {
                 Row aggRow;
                 memset(&aggRow, 0, sizeof(aggRow));
                 aggRow.num_fields = g_selectExprCount;
 
                 for (s = 0; s < g_selectExprCount; s++) {
                     if (!g_selectExprs[s]) {
-                        aggRow.is_null[s] = 1;
+                        row_set_null(&aggRow, s);
                         continue;
                     }
                     if (g_selectExprs[s]->type == EXPR_COUNT_STAR) {
                         int cnt = 0, r;
                         for (r = 0; r < origNumRows; r++)
                             if (groups[r] == gi) cnt++;
-                        snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", cnt);
+                        char countStr[64];
+                        snprintf(countStr, sizeof(countStr), "%d", cnt);
+                        row_set(&aggRow, s, countStr);
                     } else if (g_selectExprs[s]->type == EXPR_COUNT) {
                         int cnt = 0, r;
                         for (r = 0; r < origNumRows; r++) {
@@ -669,7 +824,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                     origNumCols, result, sizeof(result)))
                                 cnt++;
                         }
-                        snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%d", cnt);
+                        char countStr[64];
+                        snprintf(countStr, sizeof(countStr), "%d", cnt);
+                        row_set(&aggRow, s, countStr);
                     } else if (g_selectExprs[s]->type == EXPR_SUM ||
                                g_selectExprs[s]->type == EXPR_AVG) {
                         double total = 0.0;
@@ -688,19 +845,23 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                             }
                         }
                         if (cnt == 0) {
-                            aggRow.is_null[s] = 1;
+                            row_set_null(&aggRow, s);
                         } else if (g_selectExprs[s]->type == EXPR_AVG) {
                             double avg = total / cnt;
+                            char avgStr[64];
                             if (avg == (double)(long long)avg && avg > -1e15 && avg < 1e15)
-                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%lld", (long long)avg);
+                                snprintf(avgStr, sizeof(avgStr), "%lld", (long long)avg);
                             else
-                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%.4f", avg);
+                                snprintf(avgStr, sizeof(avgStr), "%.4f", avg);
+                            row_set(&aggRow, s, avgStr);
                             rs->columns[s].pg_type_oid = PG_OID_FLOAT8;
                         } else {
+                            char sumStr[64];
                             if (total == (double)(long long)total && total > -1e15 && total < 1e15)
-                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%lld", (long long)total);
+                                snprintf(sumStr, sizeof(sumStr), "%lld", (long long)total);
                             else
-                                snprintf(aggRow.fields[s], MAX_FIELD_LEN, "%g", total);
+                                snprintf(sumStr, sizeof(sumStr), "%g", total);
+                            row_set(&aggRow, s, sumStr);
                         }
                     } else if (g_selectExprs[s]->type == EXPR_MIN ||
                                g_selectExprs[s]->type == EXPR_MAX) {
@@ -747,9 +908,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                             }
                         }
                         if (!found) {
-                            aggRow.is_null[s] = 1;
+                            row_set_null(&aggRow, s);
                         } else {
-                            strncpy(aggRow.fields[s], best_str, MAX_FIELD_LEN - 1);
+                            row_set(&aggRow, s, best_str);
                             rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
                             rs->columns[s].type_len = -1;
                         }
@@ -764,14 +925,14 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                     (const char (*)[128])colNames,
                                     (const char (*)[256])colValues,
                                     origNumCols, result, sizeof(result)) && strcmp(result, "\x01NULL\x01") != 0) {
-                                strncpy(aggRow.fields[s], result, MAX_FIELD_LEN - 1);
+                                row_set(&aggRow, s, result);
                                 rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
                                 rs->columns[s].type_len = -1;
                             } else {
-                                aggRow.is_null[s] = 1;
+                                row_set_null(&aggRow, s);
                             }
                         } else {
-                            aggRow.is_null[s] = 1;
+                            row_set_null(&aggRow, s);
                         }
                     }
                 }
@@ -801,7 +962,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     for (hc = 0; hc < g_selectExprCount && havColCount < MAX_COLUMNS; hc++) {
                         strncpy(havCols[havColCount], rs->columns[hc].name, 127);
                         havCols[havColCount][127] = '\0';
-                        if (aggRow.is_null[hc])
+                        if (aggRow.is_null[hc] || !aggRow.fields[hc])
                             strcpy(havVals[havColCount], NULL_MARKER);
                         else {
                             strncpy(havVals[havColCount], aggRow.fields[hc], 255);
@@ -939,7 +1100,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                         havCols[havColCount][127] = '\0';
                         if (origNumRows > 0 && rs->rows[firstRow].is_null[hc])
                             strcpy(havVals[havColCount], NULL_MARKER);
-                        else if (origNumRows > 0) {
+                        else if (origNumRows > 0 && rs->rows[firstRow].fields[hc]) {
                             strncpy(havVals[havColCount], rs->rows[firstRow].fields[hc], 255);
                             havVals[havColCount][255] = '\0';
                         } else {
@@ -964,19 +1125,30 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                             if (v != 0.0) keep = 1;
                         }
                     }
-                    if (!keep) continue;  /* skip this group */
+                    if (!keep) {
+                        row_clear(&aggRow);
+                        continue;  /* skip this group */
+                    }
                 }
 
                 groupRows[outRows++] = aggRow;
+                /* aggRow pointers transferred to groupRows — don't free aggRow */
             }
 
             #undef BUILD_COL_VALUES
 
-            /* Replace rows with grouped/aggregated result rows */
+            /* Free old scan rows, then replace with grouped/aggregated results */
             int r;
+            for (r = 0; r < rs->num_rows; r++)
+                row_clear(&rs->rows[r]);
             for (r = 0; r < outRows; r++)
                 rs->rows[r] = groupRows[r];
             rs->num_rows = outRows;
+
+            free(groupRows);
+            free(groups);
+            free(groupFirstRow);
+            free(groupSize);
 
             did_aggregate = 1;
             /* DISTINCT, LIMIT/OFFSET will be applied at end of function */
@@ -1163,19 +1335,20 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 {
                     int r, c;
                     for (r = 0; r < rs->num_rows; r++) {
-                        Row origRow = rs->rows[r];
+                        /* Save field values before clearing the row */
                         char colValues[MAX_COLUMNS][256];
-                        /* Copy field values for evaluation */
                         for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
-                            if (origRow.is_null[c]) {
-                                /* Restore NULL_MARKER so expr_evaluate can detect it */
+                            if (rs->rows[r].is_null[c]) {
                                 strcpy(colValues[c], "\x01NULL\x01");
                             } else {
-                                strncpy(colValues[c], origRow.fields[c], 255);
+                                const char *fieldVal = rs->rows[r].fields[c];
+                                strncpy(colValues[c], fieldVal ? fieldVal : "", 255);
                                 colValues[c][255] = '\0';
                             }
                         }
 
+                        /* Clear old row (frees heap strings) and prepare for new values */
+                        row_clear(&rs->rows[r]);
                         memset(&rs->rows[r], 0, sizeof(Row));
                         rs->rows[r].num_fields = g_selectExprCount;
 
@@ -1191,20 +1364,19 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                                     (const char (*)[256])colValues,
                                     origNumCols,
                                     result, sizeof(result)) && strcmp(result, "\x01NULL\x01") != 0) {
-                                /* Handle boolean conversion for wire protocol */
                                 if (rs->columns[c].pg_type_oid == PG_OID_BOOL ||
                                     (g_selectExprs[c] && expr_is_boolean(g_selectExprs[c]))) {
                                     if (strncasecmp(result, "true", 4) == 0 ||
                                         strcmp(result, "1") == 0 ||
                                         strcmp(result, "t") == 0)
-                                        strcpy(rs->rows[r].fields[c], "true");
+                                        row_set(&rs->rows[r], c, "true");
                                     else
-                                        strcpy(rs->rows[r].fields[c], "false");
+                                        row_set(&rs->rows[r], c, "false");
                                 } else {
-                                    strncpy(rs->rows[r].fields[c], result, MAX_FIELD_LEN - 1);
+                                    row_set(&rs->rows[r], c, result);
                                 }
                             } else {
-                                rs->rows[r].is_null[c] = 1;
+                                row_set_null(&rs->rows[r], c);
                             }
                         }
                     }
@@ -1248,10 +1420,13 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                         memset(&newRow, 0, sizeof(Row));
                         newRow.num_fields = mapCount;
                         for (s = 0; s < mapCount; s++) {
-                            strcpy(newRow.fields[s],
-                                   rs->rows[r].fields[colMap[s]]);
-                            newRow.is_null[s] = rs->rows[r].is_null[colMap[s]];
+                            if (rs->rows[r].is_null[colMap[s]]) {
+                                row_set_null(&newRow, s);
+                            } else {
+                                row_set(&newRow, s, rs->rows[r].fields[colMap[s]]);
+                            }
                         }
+                        row_clear(&rs->rows[r]);
                         rs->rows[r] = newRow;
                     }
                 } else if (mapCount > 0) {
@@ -1281,15 +1456,17 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 int same = 1;
                 for (c = 0; c < rs->num_cols; c++) {
                     if (rs->rows[r].is_null[c] != rs->rows[d].is_null[c]) { same = 0; break; }
-                    if (!rs->rows[r].is_null[c] &&
+                    if (!rs->rows[r].is_null[c] && rs->rows[r].fields[c] && rs->rows[d].fields[c] &&
                         strcmp(rs->rows[r].fields[c], rs->rows[d].fields[c]) != 0) { same = 0; break; }
                 }
                 if (same) { duplicate = 1; break; }
             }
             if (!duplicate) {
                 if (dst != r)
-                    rs->rows[dst] = rs->rows[r];
+                    row_move(&rs->rows[dst], &rs->rows[r]);
                 dst++;
+            } else {
+                row_clear(&rs->rows[r]);
             }
         }
         rs->num_rows = dst;
@@ -1310,16 +1487,31 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         if (limit_val >= 0) {
             if (offset_val > 0) {
                 if (offset_val >= rs->num_rows) {
+                    /* Free all rows — everything is offset past the end */
+                    int r;
+                    for (r = 0; r < rs->num_rows; r++)
+                        row_clear(&rs->rows[r]);
                     rs->num_rows = 0;
                 } else {
+                    /* Free skipped rows, then shift remaining forward */
                     int r;
+                    for (r = 0; r < offset_val; r++)
+                        row_clear(&rs->rows[r]);
                     for (r = 0; r < rs->num_rows - offset_val; r++)
                         rs->rows[r] = rs->rows[r + offset_val];
+                    /* Zero the vacated tail slots to avoid dangling pointers */
+                    for (r = rs->num_rows - offset_val; r < rs->num_rows; r++)
+                        memset(&rs->rows[r], 0, sizeof(Row));
                     rs->num_rows -= offset_val;
                 }
             }
-            if (limit_val < rs->num_rows)
+            if (limit_val < rs->num_rows) {
+                /* Free rows beyond limit */
+                int r;
+                for (r = limit_val; r < rs->num_rows; r++)
+                    row_clear(&rs->rows[r]);
                 rs->num_rows = limit_val;
+            }
         }
     }
 
@@ -1398,6 +1590,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
     g_indexColumnName[0] = '\0';
     g_indexUnique = 0;
     g_indexIfNotExists = 0;
+    g_isTemporary = 0;
+    g_lastCreatedTableId = 0;
     g_insert[0] = '\0';
     g_deleteCount = 0;
     g_updateCount = 0;
@@ -1517,17 +1711,16 @@ static void execute_via_parser(const char *sql, ResultSet *rs)
                                                empty_names, empty_vals, 0,
                                                result, sizeof(result));
                         if (ok && strcmp(result, "\x01NULL\x01") != 0) {
-                            /* Boolean conversion */
                             if (expr_is_boolean(g_selectExprs[s])) {
                                 if (strcmp(result, "t") == 0 || strcasecmp(result, "true") == 0 || strcmp(result, "1") == 0)
-                                    strcpy(rs->rows[row].fields[s], "true");
+                                    row_set(&rs->rows[row], s, "true");
                                 else
-                                    strcpy(rs->rows[row].fields[s], "false");
+                                    row_set(&rs->rows[row], s, "false");
                             } else {
-                                strncpy(rs->rows[row].fields[s], result, MAX_FIELD_LEN - 1);
+                                row_set(&rs->rows[row], s, result);
                             }
                         } else {
-                            rs->rows[row].is_null[s] = 1;
+                            row_set_null(&rs->rows[row], s);
                         }
                     }
                 }
@@ -1876,6 +2069,59 @@ static int resolve_qualified_table(char *sql,
 /* ----------------------------------------------------------------
  *  Main entry point
  * ---------------------------------------------------------------- */
+/* ----------------------------------------------------------------
+ *  Drop all temporary tables tracked in a session.
+ *  Called on disconnect (pg_handler / evo_protocol cleanup).
+ * ---------------------------------------------------------------- */
+void session_drop_temp_tables(SessionCtx *ctx)
+{
+    if (!ctx || ctx->temp_table_count <= 0) return;
+
+    /* Need a QueryContext for catalog/tapi operations */
+    QueryContext *qctx = qctx_alloc();
+    if (!qctx) return;
+
+    g_qctx = qctx;
+    db_set_current_database(ctx->database);
+    db_set_current_schema(ctx->schema);
+
+    for (int i = 0; i < ctx->temp_table_count; i++) {
+        uint32_t tid = ctx->temp_table_ids[i];
+
+        /* Find table descriptor by ID */
+        TableDesc td;
+        if (cat_find_table_by_id(tid, &td) < 0)
+            continue;
+
+        fprintf(stderr, "[TEMP] Auto-dropping temporary table '%s' (id=%u)\n",
+                td.table_name, tid);
+
+        /* Destroy PK B+ tree */
+        BTree2 pk_tree = tapi_pk_tree(&td);
+        bt2_destroy(&pk_tree);
+
+        /* Free all heap pages */
+        tapi_free_heap_pages(&td);
+
+        /* Destroy secondary index B+ trees */
+        IndexDesc indexes[16];
+        int nIdx = cat_list_indexes(td.table_id, indexes, 16);
+        for (int ix = 0; ix < nIdx; ix++) {
+            if (indexes[ix].index_type == 'P') continue;
+            BTree2 idx_tree = { .root_page = indexes[ix].root_page };
+            bt2_destroy(&idx_tree);
+        }
+
+        /* Drop from catalog */
+        cat_drop_table(tid);
+    }
+
+    ctx->temp_table_count = 0;
+
+    qctx_free(qctx);
+    g_qctx = NULL;
+}
+
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
@@ -2151,6 +2397,15 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* Real EvoSQL query */
     execute_via_parser(normalized, rs);
+
+    /* Register temporary table in session context */
+    if (ctx && !rs->has_error && g_isTemporary && g_lastCreatedTableId > 0) {
+        if (ctx->temp_table_count < 64) {
+            ctx->temp_table_ids[ctx->temp_table_count++] = g_lastCreatedTableId;
+            fprintf(stderr, "[TEMP] Registered temporary table (id=%u) for session\n",
+                    g_lastCreatedTableId);
+        }
+    }
 
     /* Restore original db/schema context if we switched */
     if (qualified) {

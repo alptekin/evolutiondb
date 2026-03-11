@@ -88,7 +88,7 @@ static int evo_send_result(conn_t *conn, const ResultSet *rs)
     for (r = 0; r < rs->num_rows; r++) {
         if (evo_sendf(conn, "ROW\n") < 0) return -1;
         for (c = 0; c < rs->num_cols; c++) {
-            if (rs->rows[r].is_null[c]) {
+            if (rs->rows[r].is_null[c] || !rs->rows[r].fields[c]) {
                 if (evo_sendf(conn, "FIELD NULL\n") < 0) return -1;
             } else {
                 if (evo_sendf(conn, "FIELD %s\n", rs->rows[r].fields[c]) < 0)
@@ -128,13 +128,13 @@ void evo_handle_client(socket_t sock)
     /* Step 1: Read greeting line — must be "EVO" */
     if (conn_recv_line(&conn, line, sizeof(line)) < 0) {
         printf("[EVO] No greeting, closing\n"); fflush(stdout);
-        free(rs);
+        result_free(rs); free(rs);
         return;
     }
 
     if (strcmp(line, "EVO") != 0) {
         evo_sendf(&conn, "ERR 08000 Expected EVO greeting\n");
-        free(rs);
+        result_free(rs); free(rs);
         return;
     }
 
@@ -175,13 +175,13 @@ void evo_handle_client(socket_t sock)
     /* Expect: AUTH <username> <password> */
     if (conn_recv_line(&conn, line, sizeof(line)) < 0) {
         printf("[EVO] Connection closed during auth\n"); fflush(stdout);
-        free(rs);
+        result_free(rs); free(rs);
         return;
     }
 
     if (strncasecmp(line, "AUTH ", 5) != 0) {
         evo_sendf(&conn, "ERR 28000 Expected AUTH <user> <password>\n");
-        free(rs);
+        result_free(rs); free(rs);
         return;
     }
 
@@ -299,7 +299,10 @@ void evo_handle_client(socket_t sock)
         session.in_transaction = 0;
     }
 
+    /* Auto-drop temporary tables for this session */
+    session_drop_temp_tables(&session);
+
     conn_tls_shutdown(&conn);
-    free(rs);
+    result_free(rs); free(rs);
     /* NOTE: do NOT close socket — server.c does it */
 }

@@ -1,11 +1,43 @@
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "result.h"
 
 void result_init(ResultSet *rs)
 {
+    /* Free existing row strings if re-initializing */
+    if (rs->rows && rs->num_rows > 0) {
+        int i;
+        for (i = 0; i < rs->num_rows; i++)
+            row_clear(&rs->rows[i]);
+    }
+    Row *saved_rows = rs->rows;
+    int  saved_cap  = rs->row_capacity;
+    void *saved_stream_conn = rs->stream_conn;
     memset(rs, 0, sizeof(ResultSet));
+    rs->stream_conn = saved_stream_conn;
     strcpy(rs->error_sqlstate, "00000");
+    if (saved_rows && saved_cap > 0) {
+        rs->rows = saved_rows;
+        rs->row_capacity = saved_cap;
+        memset(rs->rows, 0, (size_t)saved_cap * sizeof(Row));
+    } else {
+        rs->rows = (Row *)calloc(MAX_ROWS_INIT, sizeof(Row));
+        rs->row_capacity = rs->rows ? MAX_ROWS_INIT : 0;
+    }
+}
+
+void result_free(ResultSet *rs)
+{
+    if (rs->rows) {
+        int i;
+        for (i = 0; i < rs->num_rows; i++)
+            row_clear(&rs->rows[i]);
+        free(rs->rows);
+        rs->rows = NULL;
+    }
+    rs->num_rows = 0;
+    rs->row_capacity = 0;
 }
 
 void result_add_column(ResultSet *rs, const char *name, int pg_oid)
@@ -14,8 +46,6 @@ void result_add_column(ResultSet *rs, const char *name, int pg_oid)
     strncpy(rs->columns[rs->num_cols].name, name, MAX_COL_NAME - 1);
     rs->columns[rs->num_cols].pg_type_oid = pg_oid;
 
-    /* Set type length: fixed for ints, -1 for variable */
-    /* Set type length: fixed for ints, -1 for variable */
     switch (pg_oid) {
     case PG_OID_INT2:   rs->columns[rs->num_cols].type_len = 2; break;
     case PG_OID_INT4:   rs->columns[rs->num_cols].type_len = 4; break;
@@ -35,7 +65,15 @@ void result_add_column(ResultSet *rs, const char *name, int pg_oid)
 
 int result_add_row(ResultSet *rs)
 {
-    if (rs->num_rows >= MAX_ROWS) return -1;
+    if (rs->num_rows >= rs->row_capacity) {
+        int new_cap = rs->row_capacity ? rs->row_capacity * 2 : MAX_ROWS_INIT;
+        Row *new_rows = (Row *)realloc(rs->rows, (size_t)new_cap * sizeof(Row));
+        if (!new_rows) return -1;
+        memset(new_rows + rs->row_capacity, 0,
+               (size_t)(new_cap - rs->row_capacity) * sizeof(Row));
+        rs->rows = new_rows;
+        rs->row_capacity = new_cap;
+    }
     memset(&rs->rows[rs->num_rows], 0, sizeof(Row));
     rs->rows[rs->num_rows].num_fields = rs->num_cols;
     return rs->num_rows++;
@@ -45,16 +83,14 @@ void result_set_field(ResultSet *rs, int row, int col, const char *value)
 {
     if (row < 0 || row >= rs->num_rows) return;
     if (col < 0 || col >= MAX_COLUMNS) return;
-    strncpy(rs->rows[row].fields[col], value, MAX_FIELD_LEN - 1);
-    rs->rows[row].is_null[col] = 0;
+    row_set(&rs->rows[row], col, value);
 }
 
 void result_set_null(ResultSet *rs, int row, int col)
 {
     if (row < 0 || row >= rs->num_rows) return;
     if (col < 0 || col >= MAX_COLUMNS) return;
-    rs->rows[row].fields[col][0] = '\0';
-    rs->rows[row].is_null[col] = 1;
+    row_set_null(&rs->rows[row], col);
 }
 
 void result_set_error(ResultSet *rs, const char *sqlstate, const char *msg)

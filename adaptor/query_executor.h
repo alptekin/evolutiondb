@@ -1,6 +1,7 @@
 #ifndef QUERY_EXECUTOR_H
 #define QUERY_EXECUTOR_H
 
+#include <stdint.h>
 #include "result.h"
 #include "transaction.h"
 
@@ -19,6 +20,10 @@ typedef struct {
     int       in_transaction;  /* 1 if BEGIN was issued */
     int       tx_aborted;     /* 1 if error occurred in transaction */
     UndoLog  *undo_log;       /* undo entries for rollback */
+
+    /* Temporary table tracking — auto-dropped on disconnect */
+    uint32_t  temp_table_ids[64];
+    int       temp_table_count;
 } SessionCtx;
 
 /*
@@ -35,5 +40,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx);
 
 /* Initialize the EvoSQL engine for adaptor use */
 void query_engine_init(void);
+
+/* Drop all temporary tables tracked in session context */
+void session_drop_temp_tables(SessionCtx *ctx);
 
 #endif /* QUERY_EXECUTOR_H */

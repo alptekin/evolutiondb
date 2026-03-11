@@ -92,7 +92,7 @@ void pg_handle_client(socket_t client_sock)
     if (!msg_buf || !rs) {
         fprintf(stderr, "[PG] Out of memory for client buffers\n");
         if (msg_buf) free(msg_buf);
-        if (rs) free(rs);
+        if (rs) { result_free(rs); free(rs); }
         return;
     }
 
@@ -105,7 +105,7 @@ void pg_handle_client(socket_t client_sock)
         fflush(stdout);
         conn_tls_shutdown(&conn);
         free(msg_buf);
-        free(rs);
+        result_free(rs); free(rs);
         return;
     }
 
@@ -171,9 +171,23 @@ void pg_handle_client(socket_t client_sock)
                 if (!*stmt) continue;
 
                 had_any = 1;
+
+                /* Enable streaming for SELECT queries */
+                {
+                    const char *sp = stmt;
+                    while (*sp && isspace((unsigned char)*sp)) sp++;
+                    if (strncasecmp(sp, "SELECT", 6) == 0 &&
+                        (sp[6] == ' ' || sp[6] == '\t' || sp[6] == '\n'))
+                        rs->stream_conn = &conn;
+                    else
+                        rs->stream_conn = NULL;
+                }
+
                 safe_query_execute(stmt, rs, &session);
 
-                if (rs->has_error) {
+                if (rs->streamed_rows > 0) {
+                    /* Already sent to client during scan — nothing to do */
+                } else if (rs->has_error) {
                     pg_send_error(&conn, "ERROR",
                                   rs->error_sqlstate, rs->error_message);
                 } else if (rs->command_tag[0] == '\0') {
@@ -431,7 +445,7 @@ void pg_handle_client(socket_t client_sock)
                         pg_buf_init(&b, PG_RESP_DATA_ROW);
                         pg_buf_add_int16(&b, (short)rs->num_cols);
                         for (c = 0; c < rs->num_cols; c++) {
-                            if (rs->rows[r].is_null[c]) {
+                            if (rs->rows[r].is_null[c] || !rs->rows[r].fields[c]) {
                                 pg_buf_add_int32(&b, -1);
                             } else {
                                 int flen = (int)strlen(rs->rows[r].fields[c]);
@@ -499,9 +513,12 @@ cleanup:
         session.in_transaction = 0;
     }
 
+    /* Auto-drop temporary tables for this session */
+    session_drop_temp_tables(&session);
+
     conn_tls_shutdown(&conn);
     if (pending_query) free(pending_query);
     free(msg_buf);
-    free(rs);
+    result_free(rs); free(rs);
     /* NOTE: do NOT close socket — server.c does it */
 }

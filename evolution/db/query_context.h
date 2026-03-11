@@ -15,6 +15,7 @@
 #define QUERY_CONTEXT_H
 
 #include <setjmp.h>
+#include <stdint.h>
 #include "expression.h"   /* ExprNode, constants */
 
 /* Forward: tx_undo_fn typedef must exist before this header.
@@ -70,6 +71,8 @@ typedef struct QueryContext {
     int  primaryKeyIndex;
     int  columnCount;
     int  totalColumnSize;
+    int  isTemporary;          /* 1 if CREATE TEMPORARY TABLE */
+    uint32_t lastCreatedTableId; /* table_id of last created table (0 = none) */
 
     /* ---- SELECT ---- */
     char selectColumns[64][128];
@@ -206,6 +209,8 @@ void          qctx_free(QueryContext *ctx);
 #define g_primaryKeyIndex       (g_qctx->primaryKeyIndex)
 #define g_columnCount           (g_qctx->columnCount)
 #define g_totalColumnSize       (g_qctx->totalColumnSize)
+#define g_isTemporary           (g_qctx->isTemporary)
+#define g_lastCreatedTableId    (g_qctx->lastCreatedTableId)
 
 /* SELECT */
 #define g_selectColumns         (g_qctx->selectColumns)
