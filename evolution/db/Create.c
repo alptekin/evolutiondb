@@ -477,7 +477,11 @@ int CreateTableProcess(void)
                               cols, numCols, padSize,
                               g_autoIncColIndex,
                               g_autoIncStart - g_autoIncStep,
-                              g_autoIncStep);
+                              g_autoIncStep,
+                              g_isTemporary);
+    if (rc >= 0) {
+        g_lastCreatedTableId = (uint32_t)rc;  /* save for temp table tracking */
+    }
     if (rc < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "table \"%s\" already exists", tableName);

@@ -298,22 +298,21 @@
 
 ## Day 8 — Temporary Tables & Native UUID
 
-### Task 15: ⬜ Temporary Tables (Feature #72)
+### Task 15: ✅ Temporary Tables (Feature #72)
 
 **Goal:** `CREATE TEMPORARY TABLE` is parsed (`opt_temporary`) but ignored. Implement session-scoped temporary tables that auto-drop on disconnect.
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design temp storage path — Linux: `/tmp/evosql_<pid>/<session_id>/`, Windows: `%TEMP%\evosql_<pid>\<session_id>\`. Tables stored as normal `.dat/.idx/.meta` files in this directory. | Design |
-| 2 | Extend `SessionCtx` — add `char temp_dir[512]`, `char temp_tables[64][128]`, `int temp_table_count`. Pass `SessionCtx*` into `CreateTableProcess()`. | `adaptor/query_executor.h`, `evolution/db/database.h` |
-| 3 | Modify `CreateTableProcess()` — when `opt_temporary == 1`, create files in session's temp directory instead of schema directory. Register table name in `SessionCtx.temp_tables[]`. | `evolution/db/Create.c` |
-| 4 | Modify table lookup — when resolving table name, check session temp directory first (temp tables shadow real tables). Fall back to schema directory. | `adaptor/query_executor.c` |
-| 5 | Auto-drop on disconnect — in `pg_handler()` cleanup (after client disconnects), iterate `temp_tables[]` and delete all temp files + temp directory. | `adaptor/pg_handler.c` |
-| 6 | Catalog isolation — temp tables not visible in `pg_class` to other sessions. Only the owning session sees them. | `adaptor/catalog.c` |
+| 1 | Design catalog-based session isolation — temp tables stored in the same `evosql.db` file via `cat_create_table()` with an `is_temporary` flag. Each session tracks its temp table IDs in `SessionCtx`. No separate files or directories needed. | Design |
+| 2 | Extend `SessionCtx` — add `uint32_t temp_table_ids[64]`, `int temp_table_count`. Pass `SessionCtx*` into `CreateTableProcess()`. | `adaptor/query_executor.h`, `evolution/db/database.h` |
+| 3 | Modify `CreateTableProcess()` — when `g_qctx->isTemporary == 1`, call `cat_create_table()` to register in catalog, then store table ID in `SessionCtx.temp_table_ids[]`. | `evolution/db/Create.c` |
+| 4 | Modify table lookup — in `tapi_resolve()`, check session's temp table IDs first (temp tables shadow real tables with the same name). Fall back to normal catalog lookup. | `evolution/db/table_api.c`, `adaptor/query_executor.c` |
+| 5 | Auto-drop on disconnect — in `pg_handler()` cleanup (after client disconnects), iterate `temp_table_ids[]` and for each: `bt2_destroy()` + `tapi_free_heap_pages()` + `cat_drop_table()`. | `adaptor/pg_handler.c` |
+| 6 | Catalog isolation — temp tables not visible in `pg_class` to other sessions. Only the owning session sees them. Filter by session's `temp_table_ids[]`. | `adaptor/catalog.c` |
 | 7 | Regenerate parser (if any changes needed — `opt_temporary` already passes `$$ = 1`). | `evolution/parser/` |
-| 8 | Platform-specific temp dir — `#ifdef _WIN32` use `GetTempPathA()`, else use `/tmp/`. Create directory with `mkdir()` / `CreateDirectoryA()`. | `adaptor/query_executor.c` |
-| 9 | Write unit tests — `tests/test_temp_tables.py`: CREATE TEMPORARY TABLE, INSERT+SELECT, disconnect → table gone, temp shadows real table, two sessions have independent temp tables. | `tests/test_temp_tables.py` |
-| 10 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
+| 8 | Write unit tests — `tests/test_temp_tables.py`: CREATE TEMPORARY TABLE, INSERT+SELECT, disconnect → table gone, temp shadows real table, two sessions have independent temp tables. | `tests/test_temp_tables.py` |
+| 9 | Run regression + full system test — Docker rebuild, all test suites pass. | `tests/`, `Dockerfile` |
 
 ---
 
@@ -385,7 +384,7 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar — `INSERT INTO table [columns] SELECT ...` in `evoparser.y`. Set a flag `g_insertFromSelect = 1`. | `evolution/parser/evoparser.y` |
-| 2 | Implement — first execute the SELECT query into a temporary ResultSet. Then loop over rows and insert each into target table. | `evolution/db/Insert.c`, `adaptor/query_executor.c` |
+| 2 | Implement — first execute the SELECT query into a temporary ResultSet. Then loop over rows and insert each into target table via `tapi_heap_insert()` + `bt2_insert()`. | `evolution/db/Insert.c`, `adaptor/query_executor.c` |
 | 3 | Column mapping — if column list specified, map SELECT result columns to target columns. | `evolution/db/Insert.c` |
 | 4 | Validate column count matches. Validate types per column. | `evolution/db/Insert.c` |
 | 5 | Regenerate parser. | `evolution/parser/` |
@@ -405,8 +404,8 @@
 |------|-------------|-------|
 | 1 | Analyze parser `delete_list` / `table_references` rules — understand how multi-table DELETE is parsed. Identify globals set. | `evolution/parser/evoparser.y` |
 | 2 | Store target table list — `g_deleteTargets[]` (which tables to delete from) vs join tables. | `evolution/db/database.h`, `evolution/parser/evoparser.y` |
-| 3 | Implement — join tables (reuse JOIN engine from Task 29+), evaluate WHERE, collect keys for each target table. | `evolution/db/Delete.c` |
-| 4 | Execute deletions — for each target table, delete matching rows. | `evolution/db/Delete.c` |
+| 3 | Implement — join tables via `tapi_scan` + `bt2_search` for PK lookup (reuse JOIN engine from Task 29+), evaluate WHERE, collect matching rows for each target table. | `evolution/db/Delete.c` |
+| 4 | Execute deletions — for each target table, delete matching rows via `tapi_heap_delete()` + `bt2_delete()` per row. | `evolution/db/Delete.c` |
 | 5 | Report combined affected_rows count. | `adaptor/query_executor.c` |
 | 6 | Regenerate parser. | `evolution/parser/` |
 | 7 | Handle edge cases — delete from both sides of a JOIN, self-referencing delete. | `evolution/db/Delete.c` |
@@ -426,11 +425,11 @@
 |------|-------------|-------|
 | 1 | Add grammar — multi-table UPDATE with JOIN in `evoparser.y`. | `evolution/parser/evoparser.y` |
 | 2 | Store target tables and SET assignments per table. | `evolution/db/database.h`, `evolution/parser/evoparser.y` |
-| 3 | Implement — join tables, evaluate WHERE, collect matching rows from target table(s). | `evolution/db/Update.c` |
-| 4 | Apply SET assignments per target table row. Handle cross-table references in SET (`SET t1.col = t2.col`). | `evolution/db/Update.c` |
+| 3 | Implement — join tables via `tapi_scan`, evaluate WHERE, collect matching rows from target table(s). | `evolution/db/Update.c` |
+| 4 | Apply SET assignments per target table row via `tapi_heap_update()`. Handle cross-table references in SET (`SET t1.col = t2.col`). | `evolution/db/Update.c` |
 | 5 | Report combined affected_rows. | `adaptor/query_executor.c` |
 | 6 | Regenerate parser. | `evolution/parser/` |
-| 7 | Handle pad-size resize for updated tables. | `evolution/db/Update.c` |
+| 7 | Handle pad-size resize — update table descriptor in catalog if needed. | `evolution/db/Update.c`, `evolution/db/catalog_internal.c` |
 | 8 | Write unit tests — `tests/test_multi_table_update.py`: UPDATE with JOIN, cross-table SET, verify both tables. | `tests/test_multi_table_update.py` |
 | 9 | Run regression — all test suites pass. | `tests/` |
 | 10 | Full system test — Docker rebuild + manual. | `Dockerfile` |
@@ -444,8 +443,8 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar rule — `ALTER TABLE name ADD [COLUMN] column_def` in `evoparser.y`. Define `AlterTableAddColumnProcess()`. | `evolution/parser/evoparser.y` |
-| 2 | Implement `AlterTableAddColumnProcess()` — update `.meta` file: append column to line 1 (names), line 3 (types), line 5 (null flags), recalculate pad size (line 2). | `evolution/db/Alter.c` (new file) |
-| 3 | Migrate existing data — scan all records, append a DEFAULT value (or NULL marker) for the new column to each record. Respect new pad size. | `evolution/db/Alter.c` |
+| 2 | Implement `AlterTableAddColumnProcess()` — use `cat_find_columns()` to get existing columns. Create new `ColumnDesc` for the added column and write to catalog (via `cat_add_column()` or drop+recreate column entries). | `evolution/db/Alter.c` (new file), `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 3 | Migrate existing data — `tapi_scan_begin/next` to read all records, append DEFAULT value (or NULL marker) for the new column to each record, `tapi_heap_update()` to write back. If record moves, `bt2_update()` for PK tree. | `evolution/db/Alter.c`, `evolution/db/table_api.h` |
 | 4 | Handle constraints — the new column can have NOT NULL (requires a DEFAULT), UNIQUE, DEFAULT, etc. | `evolution/db/Alter.c` |
 | 5 | Wire into `query_executor.c` — detect `ALTER TABLE` via `is_alter_query()`, call process function. | `adaptor/query_executor.c` |
 | 6 | Also handle in catalog.c if needed for intercepted queries. | `adaptor/catalog.c` |
@@ -465,11 +464,11 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar rule — `ALTER TABLE name DROP [COLUMN] name` in `evoparser.y`. | `evolution/parser/evoparser.y` |
-| 2 | Implement `AlterTableDropColumnProcess()` — find column index in `.meta` line 1. | `evolution/db/Alter.c` |
-| 3 | Update `.meta` — remove column from lines 1, 3, 5, 6 (unique), 7 (default), 8 (auto-inc). Adjust PK index if needed. | `evolution/db/Alter.c` |
-| 4 | Migrate data — scan all records, remove the field at dropped column index, rebuild each record. | `evolution/db/Alter.c` |
+| 2 | Implement `AlterTableDropColumnProcess()` — use `cat_find_columns()` to locate the column in catalog. | `evolution/db/Alter.c`, `evolution/db/catalog_internal.h` |
+| 3 | Update catalog — remove column entry from catalog. Adjust remaining column ordinals. If column has secondary indexes, drop them via `cat_list_indexes()` + `bt2_destroy()` + `cat_drop_index()`. | `evolution/db/Alter.c`, `evolution/db/catalog_internal.c` |
+| 4 | Migrate data — `tapi_scan_begin/next` to read all records, remove the field at dropped column index, rebuild each record via `tapi_heap_update()`. Update PK B+ tree RowIDs if records move via `bt2_update()`. | `evolution/db/Alter.c`, `evolution/db/table_api.h` |
 | 5 | Safety — cannot drop the last column. Cannot drop PK column (or warn). | `evolution/db/Alter.c` |
-| 6 | Recalculate pad size — may shrink. Re-pad all records. | `evolution/db/Alter.c` |
+| 6 | Recalculate pad size — update table descriptor in catalog. | `evolution/db/Alter.c` |
 | 7 | Regenerate parser. | `evolution/parser/` |
 | 8 | Write unit tests — `tests/test_alter_table.py` (extend): drop column, verify data intact, drop last col → error, drop PK → error. | `tests/test_alter_table.py` |
 | 9 | Run regression — all test suites pass. | `tests/` |
@@ -484,9 +483,9 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar rules — MODIFY COLUMN and RENAME COLUMN in `evoparser.y`. | `evolution/parser/evoparser.y` |
-| 2 | Implement `AlterTableModifyColumnProcess()` — change type encoding in `.meta` line 3. Validate existing data is compatible. | `evolution/db/Alter.c` |
-| 3 | Implement `AlterTableRenameColumnProcess()` — rename column in `.meta` line 1. | `evolution/db/Alter.c` |
-| 4 | MODIFY with size change — if VARCHAR(50) → VARCHAR(100), update pad size. If shrinking, validate no data exceeds new limit. | `evolution/db/Alter.c` |
+| 2 | Implement `AlterTableModifyColumnProcess()` — update column type in catalog via column descriptor update. Validate existing data is compatible. MODIFY: `tapi_scan_begin/next` to read all records, apply type conversion, `tapi_heap_update()`. | `evolution/db/Alter.c`, `evolution/db/catalog_internal.h` |
+| 3 | Implement `AlterTableRenameColumnProcess()` — update column name in catalog descriptor. No data migration needed, metadata-only change. | `evolution/db/Alter.c`, `evolution/db/catalog_internal.c` |
+| 4 | MODIFY with size change — if VARCHAR(50) → VARCHAR(100), update table descriptor pad_size in catalog. If shrinking, validate no data exceeds new limit via `tapi_scan`. | `evolution/db/Alter.c` |
 | 5 | Regenerate parser. | `evolution/parser/` |
 | 6 | Wire into query_executor.c. | `adaptor/query_executor.c` |
 | 7 | Handle edge cases — modify PK column type, rename column referenced by constraints. | `evolution/db/Alter.c` |
@@ -505,12 +504,12 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar — `RENAME TABLE old_name TO new_name` and `ALTER TABLE old_name RENAME TO new_name`. | `evolution/parser/evoparser.y` |
-| 2 | Implement `RenameTableProcess()` — rename `.dat`, `.idx`, `.meta` files on disk. | `evolution/db/Alter.c` |
-| 3 | Update any indexes referencing old table name. | `evolution/db/Alter.c` |
+| 2 | Implement `RenameTableProcess()` — update table name in catalog via `cat_update_table_name()` (new catalog function). No physical file rename needed — all data in single `evosql.db`. | `evolution/db/Alter.c`, `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 3 | Index references — catalog indexes are linked by `table_id`, not table name. No index updates needed. | `evolution/db/Alter.c` |
 | 4 | Wire into catalog.c / query_executor.c. | `adaptor/catalog.c`, `adaptor/query_executor.c` |
 | 5 | Regenerate parser. | `evolution/parser/` |
 | 6 | Handle non-existent table → error, target name already exists → error. | `evolution/db/Alter.c` |
-| 7 | Update grants — rename scoped grants from old name to new name. | `evolution/db/GrantMgmt.c` |
+| 7 | Update grants — rename scoped grants from old name to new name via `cat_update_grant()` or drop+recreate grant entries. | `evolution/db/GrantMgmt.c`, `evolution/db/catalog_internal.c` |
 | 8 | Write unit tests — `tests/test_rename_table.py`: rename, verify data, rename non-existent → error, rename to existing → error. | `tests/test_rename_table.py` |
 | 9 | Run regression — all test suites pass. | `tests/` |
 | 10 | Full system test — Docker rebuild + manual. | `Dockerfile` |
@@ -524,15 +523,15 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar rules — `DROP DATABASE [IF EXISTS] name`, `DROP SCHEMA [IF EXISTS] name`. | `evolution/parser/evoparser.y` |
-| 2 | Implement `DropDatabaseProcess(name, if_exists)` — delete the database directory and all its contents. Refuse to drop active database. | `evolution/db/DatabaseMgmt.c`, `evolution/db/database.h` |
-| 3 | Implement `DropSchemaProcess(name, if_exists)` — delete schema directory within current database. Refuse to drop active schema. | `evolution/db/DatabaseMgmt.c` |
-| 4 | Safety checks — cannot drop `evosql` system database. Cannot drop schema `public`. | `evolution/db/DatabaseMgmt.c` |
+| 2 | Implement `DropDatabaseProcess(name, if_exists)` — call `cat_drop_database(name)`. Cascade: `cat_list_schemas()` → for each schema, drop all tables via `cat_list_tables()` → `bt2_destroy()` + `tapi_free_heap_pages()` + `cat_drop_table()` per table, then `cat_drop_schema()`. Refuse to drop active database. | `evolution/db/DatabaseMgmt.c`, `evolution/db/database.h`, `evolution/db/catalog_internal.h` |
+| 3 | Implement `DropSchemaProcess(name, if_exists)` — cascade: `cat_list_tables()` for schema → `bt2_destroy()` + `tapi_free_heap_pages()` + `cat_drop_table()` per table, then `cat_drop_schema()`. Refuse to drop active schema. | `evolution/db/DatabaseMgmt.c` |
+| 4 | Safety checks — cannot drop `evosql` system database. Cannot drop `default` schema. | `evolution/db/DatabaseMgmt.c` |
 | 5 | Wire into catalog handler — `catalog.c` intercepts `DROP DATABASE` / `DROP SCHEMA`. | `adaptor/catalog.c` |
 | 6 | Regenerate parser. | `evolution/parser/` |
-| 7 | Clean up grants — when database dropped, remove all grants scoped to it. | `evolution/db/GrantMgmt.c` |
+| 7 | Clean up grants — when database/schema dropped, remove all grants scoped to it via `cat_list_grants_for_user()` + `cat_drop_grant()`. | `evolution/db/GrantMgmt.c`, `evolution/db/catalog_internal.c` |
 | 8 | Write unit tests — `tests/test_drop_database.py`: create then drop, drop if exists, drop non-existent → error, drop active → error, drop evosql → error. | `tests/test_drop_database.py` |
 | 9 | Run regression — all test suites pass. | `tests/` |
-| 10 | Full system test — Docker rebuild, verify directories removed. | `Dockerfile` |
+| 10 | Full system test — Docker rebuild, verify catalog entries removed. | `Dockerfile` |
 
 ---
 
@@ -586,7 +585,7 @@
 |------|-------------|-------|
 | 1 | Design multi-table execution — define structures: `JoinPlan { table_name, alias, join_type, on_condition }[]`. | `evolution/db/database.h`, `evolution/db/Join.c` (new) |
 | 2 | Update parser — in `table_references` / `join` rules, populate `JoinPlan` instead of just `emit()`. | `evolution/parser/evoparser.y` |
-| 3 | Implement `load_table_data()` — generic function to load all rows from a table into memory as arrays. | `evolution/db/Join.c` |
+| 3 | Implement `load_table_data()` — generic function using `tapi_scan_begin/next` to load all rows from a table into memory as arrays. | `evolution/db/Join.c`, `evolution/db/table_api.h` |
 | 4 | Implement nested-loop INNER JOIN — for each row in left table, scan right table, evaluate ON condition using `expr_evaluate()`. | `evolution/db/Join.c` |
 | 5 | Column name resolution — handle `t1.col` and `t2.col` qualified names in expressions. | `evolution/db/Join.c` |
 | 6 | Wire into `query_executor.c` — detect multi-table SELECT, use join path instead of single-table `collect_select_results`. | `adaptor/query_executor.c` |
@@ -865,9 +864,9 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Wire parser — ON DUPLICATE KEY UPDATE assignment list is already parsed. Store columns/values in `g_onDupCols[]`, `g_onDupVals[]`, `g_onDupCount`. | `evolution/parser/evoparser.y`, `evolution/db/database.h` |
-| 2 | In `InsertProcess()` — if `db_store()` returns duplicate error and `g_onDupCount > 0`, fetch existing record. | `evolution/db/Insert.c` |
+| 2 | In `InsertProcess()` — if `bt2_search()` finds PK collision and `g_onDupCount > 0`, read existing record via `tapi_heap_read()`. | `evolution/db/Insert.c` |
 | 3 | Apply ON DUPLICATE KEY UPDATE assignments to existing record (like UPDATE SET). | `evolution/db/Insert.c` |
-| 4 | Store updated record with `db_store(DB_REPLACE)`. | `evolution/db/Insert.c` |
+| 4 | Store updated record with `tapi_heap_update()` + `bt2_update()` if record moves. | `evolution/db/Insert.c` |
 | 5 | Report affected_rows: INSERT=1, ON DUP UPDATE=2 (MySQL convention). | `adaptor/query_executor.c` |
 | 6 | Handle `VALUES(col)` function — reference the would-be-inserted value in UPDATE clause. | `evolution/db/Insert.c` |
 | 7 | Regenerate parser. | `evolution/parser/` |
@@ -884,8 +883,8 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Wire parser — REPLACE already has a token. Set `g_isReplace = 1` flag during parsing. | `evolution/parser/evoparser.y`, `evolution/db/database.h` |
-| 2 | In `InsertProcess()` — if `g_isReplace` and PK exists, delete old record first. | `evolution/db/Insert.c` |
-| 3 | Insert new record. | `evolution/db/Insert.c` |
+| 2 | In `InsertProcess()` — if `g_isReplace` and `bt2_search()` finds existing PK, delete old record: `tapi_heap_delete()` + `bt2_delete()` + secondary index cleanup via `cat_list_indexes()`. | `evolution/db/Insert.c`, `evolution/db/catalog_internal.h` |
+| 3 | Insert new record via `tapi_heap_insert()` + `bt2_insert()` + secondary index inserts. | `evolution/db/Insert.c` |
 | 4 | Report affected_rows: new=1, replaced=2. | `adaptor/query_executor.c` |
 | 5 | Handle all constraints on the new record (NOT NULL, UNIQUE, FK, CHECK). | `evolution/db/Insert.c` |
 | 6 | Handle REPLACE with column list mapping. | `evolution/db/Insert.c` |
@@ -907,7 +906,7 @@
 | 1 | Wire parser — detect `CREATE TABLE name AS SELECT ...` or `CREATE TABLE name SELECT ...`. Set `g_createTableFromSelect = 1`. | `evolution/parser/evoparser.y` |
 | 2 | Execute the SELECT query into a temporary ResultSet. | `adaptor/query_executor.c` |
 | 3 | Infer column definitions from ResultSet — column names, types, sizes. | `adaptor/query_executor.c` |
-| 4 | Create the table with inferred schema (call `CreateTableProcess()` logic). | `evolution/db/Create.c` |
+| 4 | Create the table with inferred schema via `cat_create_table()` + heap page init. | `evolution/db/Create.c`, `evolution/db/catalog_internal.h` |
 | 5 | Insert all result rows into the new table. | `evolution/db/Insert.c` |
 | 6 | Regenerate parser. | `evolution/parser/` |
 | 7 | Handle IF NOT EXISTS, TEMPORARY table variants. | `evolution/db/Create.c` |
@@ -944,10 +943,10 @@
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design storage — `root/evosql/public/evo_views` file with format `viewname:SELECT query`. | Design |
+| 1 | Design storage — add `CAT_SYS_VIEWS` B+ tree to catalog (extend `CatalogID` enum in `page_mgr.h`). Key: `schema_id:view_name`, value: SQL text + column info. Implement `cat_create_view()`, `cat_find_view()`, `cat_drop_view()`, `cat_list_views()`. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c`, `evolution/db/page_mgr.h` |
 | 2 | Add grammar — `CREATE [OR REPLACE] VIEW name AS select_stmt`, `DROP VIEW [IF EXISTS] name`. | `evolution/parser/evoparser.y` |
-| 3 | Implement `CreateViewProcess()` — store view name + SQL text. Validate inner query. | `evolution/db/View.c` (new) |
-| 4 | Implement `DropViewProcess()` — remove from storage. | `evolution/db/View.c` |
+| 3 | Implement `CreateViewProcess()` — call `cat_create_view()` with view name + SQL text. Validate inner query. | `evolution/db/View.c` (new) |
+| 4 | Implement `DropViewProcess()` — call `cat_drop_view()`. | `evolution/db/View.c` |
 | 5 | Implement view expansion — when SELECT references a view name, replace with stored subquery. | `adaptor/query_executor.c` |
 | 6 | Wire into catalog.c. Add to `SHOW TABLES` / information_schema output. | `adaptor/catalog.c` |
 | 7 | Update Makefile — add `View.c`. | `evolution/Makefile` |
@@ -1024,7 +1023,7 @@
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design storage — `evo_procedures` system file with `name:param_list:body_sql`. | Design |
+| 1 | Design storage — add `CAT_SYS_PROCEDURES` B+ tree to catalog (extend `CatalogID` enum in `page_mgr.h`). Key: `schema_id:proc_name`, value: param list + body SQL. Implement `cat_create_procedure()`, `cat_find_procedure()`, `cat_drop_procedure()`. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c`, `evolution/db/page_mgr.h` |
 | 2 | Add grammar — `CREATE PROCEDURE name (params) BEGIN ... END`, `CALL name(args)`, `DROP PROCEDURE name`. | `evolution/parser/evoparser.y` |
 | 3 | Implement `CreateProcedureProcess()` — validate and store procedure definition. | `evolution/db/Procedure.c` (new) |
 | 4 | Implement `CallProcedureProcess()` — look up stored SQL, bind parameters, execute sequentially. | `evolution/db/Procedure.c` |
@@ -1043,7 +1042,7 @@
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design storage — `evo_triggers` file: `name:table:timing:event:body_sql`. | Design |
+| 1 | Design storage — add `CAT_SYS_TRIGGERS` B+ tree to catalog (extend `CatalogID` enum in `page_mgr.h`). Key: `table_id:trigger_name`, value: timing + event + body SQL. Implement `cat_create_trigger()`, `cat_find_trigger()`, `cat_drop_trigger()`, `cat_list_triggers_for_table()`. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c`, `evolution/db/page_mgr.h` |
 | 2 | Add grammar — `CREATE TRIGGER name BEFORE|AFTER INSERT|UPDATE|DELETE ON table FOR EACH ROW body`. | `evolution/parser/evoparser.y` |
 | 3 | Implement `CreateTriggerProcess()` — store trigger definition. | `evolution/db/Trigger.c` (new) |
 | 4 | Implement trigger firing — in `InsertProcess()`, before/after insert, look up triggers for table and execute. | `evolution/db/Insert.c`, `evolution/db/Trigger.c` |
@@ -1107,7 +1106,7 @@
 | 1 | Add grammar — `SELECT ... INTO table_name FROM ...` in `evoparser.y`. | `evolution/parser/evoparser.y` |
 | 2 | Detect SELECT INTO — set flag `g_selectIntoTable`. | `evolution/parser/evoparser.y`, `evolution/db/database.h` |
 | 3 | Execute SELECT query normally into ResultSet. | `adaptor/query_executor.c` |
-| 4 | Infer table schema from ResultSet columns. Create new table. | `adaptor/query_executor.c`, `evolution/db/Create.c` |
+| 4 | Infer table schema from ResultSet columns. Create new table via `cat_create_table()`. | `adaptor/query_executor.c`, `evolution/db/Create.c`, `evolution/db/catalog_internal.h` |
 | 5 | Insert all result rows into new table. | `adaptor/query_executor.c` |
 | 6 | Handle IF table already exists → error. | `adaptor/query_executor.c` |
 | 7 | Regenerate parser. | `evolution/parser/` |
@@ -1124,8 +1123,8 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar — `CREATE ROLE name`, `DROP ROLE name`, `GRANT role TO user`, `REVOKE role FROM user`. | `evolution/parser/evoparser.y` |
-| 2 | Extend user storage — role membership in `evo_users` or separate `evo_roles` file. | `evolution/db/UserMgmt.c` |
-| 3 | Implement `CreateRoleProcess()`, `DropRoleProcess()` — roles are like users without login. | `evolution/db/UserMgmt.c` |
+| 2 | Extend catalog — add role flag to `CAT_SYS_USERS` tree entries, or create `CAT_SYS_ROLES` + `CAT_SYS_ROLE_MEMBERS` B+ trees (extend `CatalogID` enum in `page_mgr.h`). Implement `cat_create_role()`, `cat_grant_role()`, `cat_revoke_role()`. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c`, `evolution/db/page_mgr.h` |
+| 3 | Implement `CreateRoleProcess()`, `DropRoleProcess()` — roles are like users without login. Use `cat_create_role()` / `cat_drop_role()`. | `evolution/db/UserMgmt.c` |
 | 4 | Implement `GrantRoleToUser()`, `RevokeRoleFromUser()`. | `evolution/db/GrantMgmt.c` |
 | 5 | Modify `CheckPrivilege()` — also check all roles the user belongs to. Inherit privileges. | `evolution/db/GrantMgmt.c` |
 | 6 | Wire into catalog.c — handle CREATE/DROP ROLE, GRANT/REVOKE role. | `adaptor/catalog.c` |
@@ -1164,11 +1163,11 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Choose encoding — escape `;` as `\;` and `\` as `\\`. Or switch delimiter to `\x1F`. | Design |
-| 2 | Implement `encode_field()` — escape before writing. | `evolution/db/Insert.c`, `evolution/db/Update.c` |
-| 3 | Implement `decode_field()` — unescape when reading. | `evolution/db/Select.c`, `adaptor/query_executor.c` |
-| 4 | Apply encoding in `InsertProcess()`. | `evolution/db/Insert.c` |
-| 5 | Apply decoding in `collect_select_results()`. | `adaptor/query_executor.c` |
-| 6 | Apply in `UpdateProcess()`. | `evolution/db/Update.c` |
+| 2 | Implement `encode_field()` — escape before writing. Apply in `InsertProcess()` before `tapi_heap_insert()`. | `evolution/db/Insert.c`, `evolution/db/Update.c` |
+| 3 | Implement `decode_field()` — unescape when reading. Apply in `collect_select_results()` (already catalog-based). | `evolution/db/Select.c`, `adaptor/query_executor.c` |
+| 4 | Apply encoding in `InsertProcess()` — encode fields before building the semicolon-delimited record string for `tapi_heap_insert()`. | `evolution/db/Insert.c` |
+| 5 | Apply decoding in `collect_select_results()` — decode fields after reading via `tapi_scan_begin/next`. | `adaptor/query_executor.c` |
+| 6 | Apply encoding in `UpdateProcess()` — encode before `tapi_heap_update()`. | `evolution/db/Update.c` |
 | 7 | Migration — handle old data format gracefully. | `evolution/db/Select.c` |
 | 8 | Write unit tests — `tests/test_semicolon.py`: insert data with `;`, `\`, special chars, verify retrieval, WHERE filtering. | `tests/test_semicolon.py` |
 | 9 | Run regression — all test suites pass. | `tests/` |
@@ -1204,7 +1203,7 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar — `CREATE SEQUENCE name [START n] [INCREMENT n]`, `DROP SEQUENCE`, `NEXTVAL('name')`, `CURRVAL('name')`. | `evolution/parser/evoparser.y` |
-| 2 | Implement storage — system file `evo_sequences` with `name:current:increment:min:max`. | `evolution/db/Sequence.c` (new) |
+| 2 | Implement storage — add `CAT_SYS_SEQUENCES` B+ tree to catalog (extend `CatalogID` enum in `page_mgr.h`). Key: `schema_id:seq_name`, value: current + increment + min + max. Implement `cat_create_sequence()`, `cat_find_sequence()`, `cat_update_sequence()`, `cat_drop_sequence()`. | `evolution/db/Sequence.c` (new), `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c`, `evolution/db/page_mgr.h` |
 | 3 | Implement `NEXTVAL()` — atomic increment and return. | `evolution/db/Sequence.c` |
 | 4 | Implement `CURRVAL()` — return last value for this session. | `evolution/db/Sequence.c` |
 | 5 | Wire as expression — `EXPR_NEXTVAL`, `EXPR_CURRVAL` types. | `evolution/db/expression.h`, `evolution/db/expression.c` |
@@ -1226,7 +1225,7 @@
 |------|-------------|-------|
 | 1 | Add grammar — `ON CONFLICT (column) DO UPDATE SET ...` / `DO NOTHING`. | `evolution/parser/evoparser.y` |
 | 2 | Store conflict target and action — `g_onConflictCol`, `g_onConflictAction`, SET assignments. | `evolution/db/database.h`, `evolution/parser/evoparser.y` |
-| 3 | In `InsertProcess()` — on PK conflict, if `DO NOTHING`, silently skip. If `DO UPDATE`, apply SET. | `evolution/db/Insert.c` |
+| 3 | In `InsertProcess()` — on PK conflict (detected via `bt2_search()`), if `DO NOTHING`, silently skip. If `DO UPDATE`, apply SET via `tapi_heap_update()` + `bt2_update()`. | `evolution/db/Insert.c` |
 | 4 | Handle `EXCLUDED` pseudo-table — reference would-be-inserted values in SET clause. | `evolution/db/Insert.c` |
 | 5 | Report correct affected_rows. | `adaptor/query_executor.c` |
 | 6 | Regenerate parser. | `evolution/parser/` |
@@ -1264,7 +1263,7 @@
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design — inverted index: `word → [(table, key, col, position), ...]` stored in `.ftindex` files. | Design |
+| 1 | Design — inverted index as B+ tree: key = `word:table_id:PK_value`, RowID = heap location. Create FT index via `bt2_create()`. No separate `.ftindex` files — all in `evosql.db`. | Design, `evolution/db/btree2.h` |
 | 2 | Add grammar — `FULLTEXT INDEX`, `MATCH (col) AGAINST ('text')` / PG-style `col @@ 'query'`. | `evolution/parser/evoparser.y` |
 | 3 | Implement tokenizer — split text into lowercase words, remove stop words. | `evolution/db/FullText.c` (new) |
 | 4 | Build inverted index on INSERT — tokenize text columns, store word→record mappings. | `evolution/db/FullText.c` |
@@ -1283,7 +1282,7 @@
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design — materialized view = real table + stored query. Stored in `evo_matviews` with `name:query`. | Design |
+| 1 | Design — materialized view = real catalog table + stored query. Extend `CAT_SYS_VIEWS` B+ tree with `is_materialized` flag, or add `CAT_SYS_MATVIEWS` tree (extend `CatalogID` enum in `page_mgr.h`). Underlying data stored as normal table in catalog via `cat_create_table()`. | Design, `evolution/db/catalog_internal.h`, `evolution/db/page_mgr.h` |
 | 2 | Add grammar — `CREATE MATERIALIZED VIEW name AS select_stmt`, `REFRESH MATERIALIZED VIEW name`, `DROP MATERIALIZED VIEW name`. | `evolution/parser/evoparser.y` |
 | 3 | Implement CREATE — execute query, store results as a real table. Also store query definition. | `evolution/db/View.c` |
 | 4 | Implement REFRESH — drop and recreate table data from stored query. | `evolution/db/View.c` |
@@ -1304,9 +1303,9 @@
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design — partition = separate physical table per range/list. Master table routes to partitions. | Design |
+| 1 | Design — partition = separate catalog table per range/list. Master table routes to partitions. All in single `evosql.db` file. | Design |
 | 2 | Add grammar — `CREATE TABLE t (...) PARTITION BY RANGE (col)`, `CREATE TABLE t_p1 PARTITION OF t FOR VALUES FROM (1) TO (100)`. | `evolution/parser/evoparser.y` |
-| 3 | Store partition metadata — in master `.meta`: partition column, type (RANGE/LIST), child table names and ranges. | `evolution/db/Create.c` |
+| 3 | Store partition metadata — in catalog: `cat_create_partition()`, add `partition_column`, `partition_type` fields to `TableDesc`, or create separate partition metadata entries. Child tables are normal catalog tables + partition range metadata. | `evolution/db/Create.c`, `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
 | 4 | Route INSERT — based on partition column value, insert into correct child table. | `evolution/db/Insert.c` |
 | 5 | Route SELECT — scan relevant partitions based on WHERE clause (partition pruning). | `adaptor/query_executor.c` |
 | 6 | Route UPDATE/DELETE — find correct partition. | `evolution/db/Update.c`, `evolution/db/Delete.c` |
@@ -1385,7 +1384,7 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar — `CREATE TABLE child (...) INHERITS (parent)`. | `evolution/parser/evoparser.y` |
-| 2 | Store inheritance metadata — in child `.meta`: parent table name. | `evolution/db/Create.c` |
+| 2 | Store inheritance metadata — add `parent_table_id` field to `TableDesc` in catalog, or create a separate inheritance metadata B+ tree. | `evolution/db/Create.c`, `evolution/db/catalog_internal.h` |
 | 3 | Implement inheritance — child table has all parent columns plus its own. | `evolution/db/Create.c` |
 | 4 | SELECT on parent — also return rows from child tables. | `adaptor/query_executor.c` |
 | 5 | INSERT on child — validate parent + child constraints. | `evolution/db/Insert.c` |
@@ -1404,7 +1403,7 @@
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | Add grammar — `ALTER TABLE t ENABLE ROW LEVEL SECURITY`, `CREATE POLICY name ON table USING (expr)`. | `evolution/parser/evoparser.y` |
-| 2 | Store RLS policies — in `.meta` or separate file: `policy_name:table:command:using_expr:check_expr`. | `evolution/db/Create.c` |
+| 2 | Store RLS policies — add `CAT_SYS_POLICIES` B+ tree to catalog (extend `CatalogID` enum in `page_mgr.h`). Key: `table_id:policy_name`, value: command + using_expr + check_expr. Implement `cat_create_policy()`, `cat_list_policies_for_table()`, `cat_drop_policy()`. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c`, `evolution/db/page_mgr.h` |
 | 3 | Implement policy enforcement — on SELECT, append policy USING expression to WHERE clause. | `adaptor/query_executor.c` |
 | 4 | Implement for INSERT — evaluate policy CHECK expression against new row. | `adaptor/query_executor.c` |
 | 5 | Implement for UPDATE/DELETE — evaluate USING for existing rows, CHECK for new rows. | `adaptor/query_executor.c` |
@@ -1424,12 +1423,12 @@
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design WAL format — append-only log: `[LSN][type][table][key][data_len][data]`. Types: INSERT, UPDATE, DELETE, COMMIT, CHECKPOINT. | Design |
-| 2 | Implement WAL writer — `wal_append()`. Append to `root/wal/wal.log`. Use `fsync()`. | `evolution/db/Wal.c` (new) |
-| 3 | Wire INSERT — before `db_store()`, write WAL record. | `evolution/db/Insert.c` |
-| 4 | Wire UPDATE — before `db_store(DB_REPLACE)`, write WAL record. | `evolution/db/Update.c` |
-| 5 | Wire DELETE — before `db_delete()`, write WAL record. | `evolution/db/Delete.c` |
-| 6 | Implement recovery — on startup, read WAL from last checkpoint, replay. | `evolution/db/Wal.c` |
+| 1 | Design WAL format — append-only log: `[LSN][type][page_no][slot_no][data_len][data]`. Types: INSERT, UPDATE, DELETE, COMMIT, CHECKPOINT. WAL at page manager level. | Design |
+| 2 | Implement WAL writer — `wal_append()`. Append to `evosql.wal` (separate file from `evosql.db`). Use `fsync()`. | `evolution/db/Wal.c` (new) |
+| 3 | Wire INSERT — before `tapi_heap_insert()` + `bt2_insert()`, write WAL record. | `evolution/db/Insert.c` |
+| 4 | Wire UPDATE — before `tapi_heap_update()` + `bt2_update()`, write WAL record. | `evolution/db/Update.c` |
+| 5 | Wire DELETE — before `tapi_heap_delete()` + `bt2_delete()`, write WAL record. | `evolution/db/Delete.c` |
+| 6 | Implement recovery — on startup, read WAL from last checkpoint, replay page writes via `pgm_write_page()`. | `evolution/db/Wal.c`, `evolution/db/page_mgr.h` |
 | 7 | Implement checkpoint — flush data files, truncate WAL. | `evolution/db/Wal.c` |
 | 8 | Update Makefile. | `evolution/Makefile` |
 | 9 | Write unit tests — `tests/test_wal.py`: insert + simulate crash + recovery, checkpoint + recovery. | `tests/test_wal.py` |
@@ -1437,17 +1436,17 @@
 
 ---
 
-### Task 72: ⬜ Concurrent Write Safety / File Locking (Feature #67)
+### Task 72: ⬜ Concurrent Write Safety / Lock Manager (Feature #67)
 
-**Goal:** Replace global mutex with per-table file-level locking.
+**Goal:** Replace global mutex with finer-grained concurrency control. Single `evosql.db` file means `flock()` is not suitable — use in-memory lock manager instead.
 
 | Step | Description | Files |
 |------|-------------|-------|
-| 1 | Design — `flock()` on `.dat` files. Reads → shared lock. Writes → exclusive lock. | Design |
-| 2 | Implement `table_lock_shared()` / `table_lock_exclusive()` / `table_unlock()`. | `evolution/db/Lock.c` (new) |
-| 3 | Wire into SELECT — shared lock during read. | `evolution/db/Select.c`, `adaptor/query_executor.c` |
-| 4 | Wire into INSERT — exclusive lock during write. | `evolution/db/Insert.c` |
-| 5 | Wire into UPDATE/DELETE — exclusive lock. | `evolution/db/Update.c`, `evolution/db/Delete.c` |
+| 1 | Design — in-memory lock manager with table-level read/write locks (hash map: `table_id → lock_state`). Buffer pool already provides page-level pinning via `bp_pin_page()` / `bp_unpin_page()`. | Design |
+| 2 | Implement `table_lock_shared()` / `table_lock_exclusive()` / `table_unlock()` — lightweight in-memory lock manager using pthread rwlocks per table. | `evolution/db/Lock.c` (new), `evolution/db/Lock.h` (new) |
+| 3 | Wire into SELECT — shared lock during `tapi_scan`. | `evolution/db/Select.c`, `adaptor/query_executor.c` |
+| 4 | Wire into INSERT — exclusive lock during `tapi_heap_insert()` + `bt2_insert()`. | `evolution/db/Insert.c` |
+| 5 | Wire into UPDATE/DELETE — exclusive lock during `tapi_heap_update/delete()` + `bt2_update/delete()`. | `evolution/db/Update.c`, `evolution/db/Delete.c` |
 | 6 | Deadlock prevention — lock tables in alphabetical order for multi-table ops. | `evolution/db/Lock.c` |
 | 7 | Timeout — lock not acquired within 5s → error. | `evolution/db/Lock.c` |
 | 8 | Update Makefile. Concurrent stress test. | `evolution/Makefile`, `tests/test_concurrent.py` |

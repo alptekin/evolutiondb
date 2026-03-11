@@ -254,7 +254,7 @@ static int handle_set(const char *sql, ResultSet *rs)
     return 1;
 }
 
-static int handle_show(const char *sql, ResultSet *rs)
+static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     if (!starts_with_i(sql, "SHOW"))
         return 0;
@@ -307,6 +307,19 @@ static int handle_show(const char *sql, ResultSet *rs)
             TableDesc tables[256];
             int nt = cat_list_tables(schDesc.schema_id, tables, 256);
             for (int i = 0; i < nt; i++) {
+                /* Skip temp tables not owned by this session */
+                if (tables[i].is_temporary) {
+                    int owned = 0;
+                    if (ctx) {
+                        for (int ti = 0; ti < ctx->temp_table_count; ti++) {
+                            if (ctx->temp_table_ids[ti] == tables[i].table_id) {
+                                owned = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (!owned) continue;
+                }
                 int row = result_add_row(rs);
                 result_set_field(rs, row, 0, tables[i].table_name);
             }
@@ -372,13 +385,14 @@ static int handle_show(const char *sql, ResultSet *rs)
             }
         }
 
-        char users[MAX_ROWS][256];
-        char scopes[MAX_ROWS][32];
-        char names[MAX_ROWS][256];
-        char privs[MAX_ROWS][128];
-        int  gopts[MAX_ROWS];
+        #define GRANT_LIST_MAX 512
+        char users[GRANT_LIST_MAX][256];
+        char scopes[GRANT_LIST_MAX][32];
+        char names[GRANT_LIST_MAX][256];
+        char privs[GRANT_LIST_MAX][128];
+        int  gopts[GRANT_LIST_MAX];
         int cnt = ListGrantsForUser(filter_user, users, scopes, names, privs, gopts,
-                                    MAX_ROWS);
+                                    GRANT_LIST_MAX);
         for (int i = 0; i < cnt; i++) {
             int row = result_add_row(rs);
             result_set_field(rs, row, 0, users[i]);
@@ -849,7 +863,7 @@ static int catalog_list_all_columns(ResultSet *rs)
 /* ----------------------------------------------------------------
  *  pg_catalog mock queries
  * ---------------------------------------------------------------- */
-static int handle_pg_catalog(const char *sql, ResultSet *rs)
+static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     result_init(rs);
     rs->is_select = 1;
@@ -1289,6 +1303,20 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs)
             TableDesc tables[256];
             int nt = cat_list_tables(schDescCls.schema_id, tables, 256);
             for (int i = 0; i < nt; i++) {
+                /* Skip temporary tables not owned by this session */
+                if (tables[i].is_temporary) {
+                    int owned = 0;
+                    if (ctx) {
+                        for (int ti = 0; ti < ctx->temp_table_count; ti++) {
+                            if (ctx->temp_table_ids[ti] == tables[i].table_id) {
+                                owned = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (!owned) continue;
+                }
+
                 int row = result_add_row(rs);
                 if (row < 0) break;
 
@@ -1954,7 +1982,7 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (handle_set(sql, rs)) return 1;
 
     /* SHOW */
-    if (handle_show(sql, rs)) return 1;
+    if (handle_show(sql, rs, ctx)) return 1;
 
     /* Transaction commands */
     if (handle_transaction(sql, rs, ctx)) return 1;
@@ -1966,7 +1994,7 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* pg_catalog queries */
     if (stristr_found(sql, "pg_catalog") || stristr_found(sql, "pg_")) {
-        if (handle_pg_catalog(sql, rs)) return 1;
+        if (handle_pg_catalog(sql, rs, ctx)) return 1;
     }
 
     /* information_schema queries */

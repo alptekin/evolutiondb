@@ -76,6 +76,13 @@ void pg_send_empty_query(conn_t *conn);
 void pg_send_backend_key_data(conn_t *conn, int pid, int secret);
 void pg_send_result_set(conn_t *conn, const ResultSet *rs);
 
+/* Streaming: send RowDescription header (column metadata) */
+void pg_send_row_description(conn_t *conn, const ResultSet *rs);
+
+/* Streaming: send a single DataRow from raw field values */
+void pg_send_data_row(conn_t *conn, const char *fields[], const int is_null[],
+                      int num_cols);
+
 /* Read a frontend message. Returns message type, fills buf and len.
    For startup messages, type is set to 0. */
 int pg_read_message(conn_t *conn, char *type, char *buf, int *len);

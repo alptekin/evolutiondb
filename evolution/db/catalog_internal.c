@@ -123,11 +123,12 @@ static void deserialize_schema(const char *buf, SchemaDesc *s)
 /* --- Table --- */
 static void serialize_table(const TableDesc *t, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d",
+    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d",
              t->table_id, t->schema_id, t->table_name,
              t->pk_root_page, t->heap_page,
              t->num_columns, t->pad_size,
-             t->auto_inc_col, t->auto_inc_counter, t->auto_inc_step);
+             t->auto_inc_col, t->auto_inc_counter, t->auto_inc_step,
+             t->is_temporary);
 }
 
 static void deserialize_table(const char *buf, TableDesc *t)
@@ -144,6 +145,12 @@ static void deserialize_table(const char *buf, TableDesc *t)
     p = next_field(p, field, sizeof(field)); t->auto_inc_col = atoi(field);
     p = next_field(p, field, sizeof(field)); t->auto_inc_counter = atoi(field);
     p = next_field(p, field, sizeof(field)); t->auto_inc_step = atoi(field);
+    /* is_temporary — optional field for backward compatibility */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->is_temporary = atoi(field);
+    } else {
+        t->is_temporary = 0;
+    }
     (void)p;
 }
 
@@ -533,7 +540,8 @@ int cat_list_schemas(uint32_t db_id, SchemaDesc *out, int max)
 int cat_create_table(uint32_t schema_id, const char *name,
                      const ColumnDesc *cols, int ncols,
                      int pad_size, int auto_inc_col,
-                     int auto_inc_start, int auto_inc_step)
+                     int auto_inc_start, int auto_inc_step,
+                     int is_temporary)
 {
     char key[CAT_MAX_KEY_LEN];
     make_table_key(schema_id, name, key, sizeof(key));
@@ -560,6 +568,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
     t.auto_inc_col = auto_inc_col;
     t.auto_inc_counter = auto_inc_start;
     t.auto_inc_step = auto_inc_step;
+    t.is_temporary = is_temporary;
 
     /* Store table descriptor */
     char record[CAT_MAX_RECORD_LEN];
@@ -610,6 +619,28 @@ int cat_find_table(uint32_t schema_id, const char *name, TableDesc *out)
 
     if (out) deserialize_table(record, out);
     return 0;
+}
+
+int cat_find_table_by_id(uint32_t table_id, TableDesc *out)
+{
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_TABLES], &cur) < 0)
+        return -1;
+
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            TableDesc t;
+            deserialize_table(record, &t);
+            if (t.table_id == table_id) {
+                if (out) *out = t;
+                return 0;
+            }
+        }
+    }
+    return -1;
 }
 
 int cat_drop_table(uint32_t table_id)

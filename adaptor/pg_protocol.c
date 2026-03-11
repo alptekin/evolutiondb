@@ -179,39 +179,54 @@ void pg_send_backend_key_data(conn_t *conn, int pid, int secret)
     pg_buf_send(&b, conn);
 }
 
-void pg_send_result_set(conn_t *conn, const ResultSet *rs)
+void pg_send_row_description(conn_t *conn, const ResultSet *rs)
 {
     PgBuf b;
-    int r, c;
-
-    /* RowDescription */
+    int c;
     pg_buf_init(&b, PG_RESP_ROW_DESC);
     pg_buf_add_int16(&b, (short)rs->num_cols);
     for (c = 0; c < rs->num_cols; c++) {
-        pg_buf_add_string(&b, rs->columns[c].name);  /* column name */
-        pg_buf_add_int32(&b, rs->columns[c].table_oid);  /* table OID */
-        pg_buf_add_int16(&b, (short)rs->columns[c].attnum); /* column attr number */
-        pg_buf_add_int32(&b, rs->columns[c].pg_type_oid); /* type OID */
-        pg_buf_add_int16(&b, (short)rs->columns[c].type_len); /* type size */
-        pg_buf_add_int32(&b, rs->columns[c].type_modifier); /* type modifier */
-        pg_buf_add_int16(&b, 0);                       /* format: text */
+        pg_buf_add_string(&b, rs->columns[c].name);
+        pg_buf_add_int32(&b, rs->columns[c].table_oid);
+        pg_buf_add_int16(&b, (short)rs->columns[c].attnum);
+        pg_buf_add_int32(&b, rs->columns[c].pg_type_oid);
+        pg_buf_add_int16(&b, (short)rs->columns[c].type_len);
+        pg_buf_add_int32(&b, rs->columns[c].type_modifier);
+        pg_buf_add_int16(&b, 0);  /* format: text */
     }
     pg_buf_send(&b, conn);
+}
 
-    /* DataRow for each row */
-    for (r = 0; r < rs->num_rows; r++) {
-        pg_buf_init(&b, PG_RESP_DATA_ROW);
-        pg_buf_add_int16(&b, (short)rs->num_cols);
-        for (c = 0; c < rs->num_cols; c++) {
-            if (rs->rows[r].is_null[c]) {
-                pg_buf_add_int32(&b, -1); /* NULL */
-            } else {
-                int flen = (int)strlen(rs->rows[r].fields[c]);
-                pg_buf_add_int32(&b, flen);
-                pg_buf_add_bytes(&b, rs->rows[r].fields[c], flen);
-            }
+void pg_send_data_row(conn_t *conn, const char *fields[], const int is_null[],
+                      int num_cols)
+{
+    PgBuf b;
+    int c;
+    pg_buf_init(&b, PG_RESP_DATA_ROW);
+    pg_buf_add_int16(&b, (short)num_cols);
+    for (c = 0; c < num_cols; c++) {
+        if (is_null[c] || !fields[c]) {
+            pg_buf_add_int32(&b, -1);
+        } else {
+            int flen = (int)strlen(fields[c]);
+            pg_buf_add_int32(&b, flen);
+            pg_buf_add_bytes(&b, fields[c], flen);
         }
-        pg_buf_send(&b, conn);
+    }
+    pg_buf_send(&b, conn);
+}
+
+void pg_send_result_set(conn_t *conn, const ResultSet *rs)
+{
+    int r;
+
+    pg_send_row_description(conn, rs);
+
+    for (r = 0; r < rs->num_rows; r++) {
+        pg_send_data_row(conn,
+                         (const char **)rs->rows[r].fields,
+                         rs->rows[r].is_null,
+                         rs->num_cols);
     }
 
     /* CommandComplete */

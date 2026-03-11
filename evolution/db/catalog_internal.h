@@ -52,6 +52,7 @@ typedef struct {
     int      auto_inc_col;     /* -1 if none */
     int      auto_inc_counter;
     int      auto_inc_step;
+    int      is_temporary;     /* 1 if CREATE TEMPORARY TABLE */
 } TableDesc;
 
 typedef struct {
@@ -130,8 +131,10 @@ int cat_list_schemas(uint32_t db_id, SchemaDesc *out, int max);
 int cat_create_table(uint32_t schema_id, const char *name,
                      const ColumnDesc *cols, int ncols,
                      int pad_size, int auto_inc_col,
-                     int auto_inc_start, int auto_inc_step);
+                     int auto_inc_start, int auto_inc_step,
+                     int is_temporary);
 int cat_find_table(uint32_t schema_id, const char *name, TableDesc *out);
+int cat_find_table_by_id(uint32_t table_id, TableDesc *out);
 int cat_drop_table(uint32_t table_id);
 int cat_update_auto_inc(uint32_t table_id, const char *table_name,
                         uint32_t schema_id, int new_counter);
