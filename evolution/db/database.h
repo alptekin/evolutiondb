@@ -130,6 +130,10 @@ int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxC
 int ReadCheckConstraintsWithNames(const char *tblName, char constraints[][1024],
                                    char names[][128], int maxConstraints);
 
+/* Table-level UNIQUE parser helpers */
+void AddUniqueColumn(const char *colName);
+void AddUniqueComplete(void);
+
 /* FOREIGN KEY parser helpers */
 void AddForeignKeyColumn(const char *colName);
 void AddForeignKeyRefColumn(const char *colName);

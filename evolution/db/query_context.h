@@ -149,6 +149,13 @@ typedef struct QueryContext {
     char fkCurLocalCols[256];
     char fkCurRefCols[256];
 
+    /* ---- Table-level UNIQUE constraints (accumulated during CREATE TABLE) ---- */
+    char uniqueLocalCols[8][256];   /* column list CSV per UNIQUE constraint */
+    char uniqueNames[8][128];       /* constraint names */
+    int  uniqueCount;
+    /* Temp accumulator for current UNIQUE being parsed */
+    char uniqueCurCols[256];
+
     /* ---- Pending constraint name (for CONSTRAINT name ... syntax) ---- */
     char pendingConstraintName[128];
 
@@ -289,6 +296,12 @@ void          qctx_free(QueryContext *ctx);
 #define g_fkCount               (g_qctx->fkCount)
 #define g_fkCurLocalCols        (g_qctx->fkCurLocalCols)
 #define g_fkCurRefCols          (g_qctx->fkCurRefCols)
+
+/* Table-level UNIQUE constraints */
+#define g_uniqueLocalCols       (g_qctx->uniqueLocalCols)
+#define g_uniqueNames           (g_qctx->uniqueNames)
+#define g_uniqueCount           (g_qctx->uniqueCount)
+#define g_uniqueCurCols         (g_qctx->uniqueCurCols)
 
 /* Constraint naming */
 #define g_pendingConstraintName (g_qctx->pendingConstraintName)

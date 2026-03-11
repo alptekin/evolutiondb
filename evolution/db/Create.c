@@ -296,6 +296,33 @@ void AddPrimaryKeyColumn(const char *colName)
 }
 
 /* ----------------------------------------------------------------
+ *  Table-level UNIQUE parser helpers
+ * ---------------------------------------------------------------- */
+
+void AddUniqueColumn(const char *colName)
+{
+    if (!colName) return;
+    if (g_uniqueCurCols[0] != '\0')
+        strcat(g_uniqueCurCols, ",");
+    strcat(g_uniqueCurCols, colName);
+}
+
+void AddUniqueComplete(void)
+{
+    if (g_uniqueCount >= 8) return;
+
+    strncpy(g_uniqueLocalCols[g_uniqueCount], g_uniqueCurCols, 255);
+    g_uniqueLocalCols[g_uniqueCount][255] = '\0';
+    /* Copy pending constraint name if set */
+    strncpy(g_uniqueNames[g_uniqueCount], g_pendingConstraintName, 127);
+    g_uniqueNames[g_uniqueCount][127] = '\0';
+    g_pendingConstraintName[0] = '\0';
+
+    g_uniqueCount++;
+    g_uniqueCurCols[0] = '\0';
+}
+
+/* ----------------------------------------------------------------
  *  FOREIGN KEY parser helpers
  * ---------------------------------------------------------------- */
 
@@ -584,6 +611,25 @@ int CreateTableProcess(void)
         }
     }
 
+    /* Store table-level UNIQUE constraints in catalog */
+    if (g_uniqueCount > 0) {
+        TableDesc td;
+        if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
+            for (int ui = 0; ui < g_uniqueCount; ui++) {
+                /* Auto-generate name if not specified */
+                char cname[128];
+                if (g_uniqueNames[ui][0] != '\0') {
+                    strncpy(cname, g_uniqueNames[ui], sizeof(cname) - 1);
+                } else {
+                    snprintf(cname, sizeof(cname), "%s_%s_key",
+                             tableName, g_uniqueLocalCols[ui]);
+                }
+                cat_add_constraint(td.table_id, 'U', cname,
+                                   g_uniqueLocalCols[ui], 0, "");
+            }
+        }
+    }
+
     printf("command(s) completed successfully!..\n");
     TruncateCreate();
 
@@ -629,6 +675,12 @@ void TruncateCreate(void)
     memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
     g_fkCurLocalCols[0] = '\0';
     g_fkCurRefCols[0] = '\0';
+
+    /* Reset UNIQUE state */
+    g_uniqueCount = 0;
+    memset(g_uniqueLocalCols, 0, sizeof(g_uniqueLocalCols));
+    memset(g_uniqueNames, 0, sizeof(g_uniqueNames));
+    g_uniqueCurCols[0] = '\0';
 }
 
 int GetTableName(char *name)
@@ -841,7 +893,7 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
 
     /* Resolve column indices for the UNIQUE columns */
     char colListBuf[256];
-    strncpy(colListBuf, g_fkCurLocalCols, sizeof(colListBuf) - 1);
+    strncpy(colListBuf, g_uniqueCurCols, sizeof(colListBuf) - 1);
     colListBuf[sizeof(colListBuf) - 1] = '\0';
     int uqColIndices[16];
     int numUqCols = 0;
@@ -865,7 +917,7 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
         char (*allValues)[1024] = NULL;
         int rowCount = 0, rowCap = 64;
         allValues = malloc(rowCap * sizeof(*allValues));
-        if (!allValues) { g_fkCurLocalCols[0] = '\0'; return -1; }
+        if (!allValues) { g_uniqueCurCols[0] = '\0'; return -1; }
 
         TableScanCursor scanCur;
         if (tapi_scan_begin(&td, &scanCur) == 0) {
@@ -874,7 +926,7 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
                 if (rowCount >= rowCap) {
                     rowCap *= 2;
                     allValues = realloc(allValues, rowCap * sizeof(*allValues));
-                    if (!allValues) { g_fkCurLocalCols[0] = '\0'; return -1; }
+                    if (!allValues) { g_uniqueCurCols[0] = '\0'; return -1; }
                 }
                 /* Build composite unique value */
                 char composite[1024] = "";
@@ -907,7 +959,7 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
                     g_gui_error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                     free(allValues);
-                    g_fkCurLocalCols[0] = '\0';
+                    g_uniqueCurCols[0] = '\0';
                     return -1;
                 }
             }
@@ -915,8 +967,8 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
         free(allValues);
     }
 
-    cat_add_constraint(td.table_id, 'U', constraintName, g_fkCurLocalCols, 0, "");
-    g_fkCurLocalCols[0] = '\0';
+    cat_add_constraint(td.table_id, 'U', constraintName, g_uniqueCurCols, 0, "");
+    g_uniqueCurCols[0] = '\0';
     printf("command(s) completed successfully!..\n");
     return 0;
 }

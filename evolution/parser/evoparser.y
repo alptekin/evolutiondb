@@ -248,7 +248,7 @@
 %type <intval> opt_outer
 %type <intval> left_or_right 
 %type <intval> opt_left_or_right_outer
-%type <intval> column_list pk_column_list
+%type <intval> column_list pk_column_list unique_column_list
 %type <intval> index_list
 %type <intval> opt_for_join
 %type <intval> delete_opts
@@ -906,7 +906,7 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         AlterTableAddCheckConstraint($3, $6, $9);
         free($3); free($6);
     }
-| ALTER TABLE NAME ADD CONSTRAINT NAME UNIQUE '(' fk_column_list ')'
+| ALTER TABLE NAME ADD CONSTRAINT NAME UNIQUE '(' unique_column_list ')'
     {
         emit("ALTER TABLE ADD UNIQUE %s %s", $3, $6);
         AlterTableAddUniqueConstraint($3, $6);
@@ -1233,6 +1233,10 @@ create_definition: PRIMARY KEY '(' pk_column_list ')'                           
     { emit("FOREIGNKEY"); AddForeignKeyRefTable($7); free($7); }
 | CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
     { emit("FOREIGNKEY"); strncpy(g_pendingConstraintName, $2, 127); AddForeignKeyRefTable($9); free($2); free($9); }
+| UNIQUE '(' unique_column_list ')'
+    { emit("UNIQUE %d", $3); AddUniqueComplete(); }
+| CONSTRAINT NAME UNIQUE '(' unique_column_list ')'
+    { emit("UNIQUE %d", $5); strncpy(g_pendingConstraintName, $2, 127); AddUniqueComplete(); free($2); }
 ;
 
 pk_column_list: NAME                                                            { emit("PRIKEY_COL %s", $1); AddPrimaryKeyColumn($1); free($1); $$ = 1; }
@@ -1256,6 +1260,10 @@ fk_actions: /* nil */
 | fk_actions ON UPDATE SET NULLX                                                { SetForeignKeyOnUpdate(2); }
 | fk_actions ON UPDATE RESTRICT                                                 { SetForeignKeyOnUpdate(3); }
 | fk_actions ON UPDATE SET DEFAULT                                              { SetForeignKeyOnUpdate(4); }
+;
+
+unique_column_list: NAME                                                        { AddUniqueColumn($1); free($1); $$ = 1; }
+| unique_column_list ',' NAME                                                   { AddUniqueColumn($3); free($3); $$ = $1 + 1; }
 ;
 
 create_definition:								{ emit("STARTCOL"); }
@@ -1282,7 +1290,6 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts AUTO_INCREMENT                                                    { emit("ATTR AUTOINC"); SetColumnAutoIncrement(1, 1); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ',' INTNUM ')'                          { emit("ATTR AUTOINC %d %d", $4, $6); SetColumnAutoIncrement($4, $6); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ')'                                     { emit("ATTR AUTOINC %d 1", $4); SetColumnAutoIncrement($4, 1); $$ = $1 + 1; }
-| column_atts UNIQUE '(' column_list ')'                                        { emit("ATTR UNIQUEKEY %d", $4); $$ = $1 + 1; }
 | column_atts UNIQUE KEY							{ emit("ATTR UNIQUEKEY"); SetColumnUnique(); $$ = $1 + 1; }
 | column_atts UNIQUE								{ emit("ATTR UNIQUE"); SetColumnUnique(); $$ = $1 + 1; }
 | column_atts PRIMARY KEY							{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
