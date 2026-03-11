@@ -224,24 +224,68 @@ static int validate_unique(const char *tblName,
 {
     int uniqueFlags[64];
     int numFlags = ReadUniqueFlags(tblName, uniqueFlags, 64);
-    int i;
-
-    if (numFlags <= 0) return 0;
-
-    int hasUnique = 0;
-    for (i = 0; i < numFlags && i < numValues; i++) {
-        if (uniqueFlags[i]) { hasUnique = 1; break; }
-    }
-    if (!hasUnique) return 0;
 
     char colNames[64][128];
     int numColNames = InsertReadColumnNames(tblName, colNames, 64);
 
-    /* Scan all existing records via B+ tree cursor */
+    /* Resolve table for scan */
     TableDesc td;
-    if (tapi_resolve(tblName, &td, NULL, NULL) < 0)
+    ColumnDesc colDescs[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(tblName, &td, colDescs, &ncols) < 0)
         return 0;
 
+    /* Check single-column UNIQUE flags */
+    int hasColumnUnique = 0;
+    for (int i = 0; i < numFlags && i < numValues; i++) {
+        if (uniqueFlags[i]) { hasColumnUnique = 1; break; }
+    }
+
+    /* Load catalog 'U' constraints */
+    ConstraintDesc uqDescs[32];
+    int numUq = cat_list_constraints(td.table_id, uqDescs, 32);
+    int hasCompositeUnique = 0;
+
+    /* Filter to only 'U' type enabled constraints, resolve column indices */
+    typedef struct {
+        int colIndices[16];
+        int numCols;
+        char name[128];
+    } UqInfo;
+    UqInfo uqInfos[16];
+    int uqInfoCount = 0;
+
+    for (int ci = 0; ci < numUq; ci++) {
+        if (uqDescs[ci].constraint_type != 'U') continue;
+        if (!uqDescs[ci].is_enabled) continue;
+
+        UqInfo *info = &uqInfos[uqInfoCount];
+        strncpy(info->name, uqDescs[ci].constraint_name, 127);
+        info->numCols = 0;
+
+        /* Parse column list from definition */
+        char defBuf[1024];
+        strncpy(defBuf, uqDescs[ci].definition, sizeof(defBuf) - 1);
+        char *saveptr = NULL;
+        char *col = strtok_r(defBuf, ",", &saveptr);
+        while (col && info->numCols < 16) {
+            for (int c = 0; c < ncols; c++) {
+                if (strcasecmp(colDescs[c].col_name, col) == 0) {
+                    info->colIndices[info->numCols++] = c;
+                    break;
+                }
+            }
+            col = strtok_r(NULL, ",", &saveptr);
+        }
+        if (info->numCols > 0) {
+            uqInfoCount++;
+            hasCompositeUnique = 1;
+        }
+    }
+
+    if (!hasColumnUnique && !hasCompositeUnique) return 0;
+
+    /* Scan all existing records */
     TableScanCursor cursor;
     if (tapi_scan_begin(&td, &cursor) < 0)
         return 0; /* empty table */
@@ -249,34 +293,49 @@ static int validate_unique(const char *tblName,
     char pkBuf[256];
     char recBuf[RECORD_BUF_SIZE];
     while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0) {
-        for (i = 0; i < numFlags && i < numValues; i++) {
+        char tmp[RECORD_BUF_SIZE];
+        strncpy(tmp, recBuf, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+        char *fields[64];
+        int nf = 0;
+        char *f = strtok(tmp, ";");
+        while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+
+        /* Check single-column UNIQUE flags */
+        for (int i = 0; i < numFlags && i < numValues; i++) {
             if (!uniqueFlags[i]) continue;
             if (strcmp(vals[i], "\x01NULL\x01") == 0) continue;
-
-            /* Extract field i from existing record */
-            char existingVal[256];
-            char tmp[RECORD_BUF_SIZE];
-            char *tok;
-            int idx = 0;
-
-            strncpy(tmp, recBuf, sizeof(tmp) - 1);
-            tmp[sizeof(tmp) - 1] = '\0';
-            tok = strtok(tmp, ";");
-            existingVal[0] = '\0';
-            while (tok) {
-                if (idx == i) {
-                    strncpy(existingVal, tok, sizeof(existingVal) - 1);
-                    existingVal[sizeof(existingVal) - 1] = '\0';
-                    break;
-                }
-                idx++;
-                tok = strtok(NULL, ";");
-            }
-
-            if (strcmp(vals[i], existingVal) == 0) {
+            if (i < nf && strcmp(vals[i], fields[i]) == 0) {
                 snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                          "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
                          (i < numColNames) ? colNames[i] : "unknown", vals[i]);
+                g_gui_error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                return -1;
+            }
+        }
+
+        /* Check composite UNIQUE constraints from catalog */
+        for (int u = 0; u < uqInfoCount; u++) {
+            UqInfo *info = &uqInfos[u];
+            /* Build composite value from new row */
+            char newComposite[1024] = "";
+            char existComposite[1024] = "";
+            int allNull = 1;
+            for (int c = 0; c < info->numCols; c++) {
+                if (c > 0) { strcat(newComposite, "|"); strcat(existComposite, "|"); }
+                int ci = info->colIndices[c];
+                if (ci < numValues) {
+                    strcat(newComposite, vals[ci]);
+                    if (strcmp(vals[ci], "\x01NULL\x01") != 0) allNull = 0;
+                }
+                if (ci < nf) strcat(existComposite, fields[ci]);
+            }
+            if (allNull) continue; /* NULL composites don't violate UNIQUE */
+            if (strcmp(newComposite, existComposite) == 0) {
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "duplicate key value violates unique constraint \"%s\"",
+                         info->name);
                 g_gui_error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                 return -1;

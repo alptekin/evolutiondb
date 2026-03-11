@@ -256,6 +256,97 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
+    /* Validate UNIQUE constraints (catalog 'U' type) against updated row */
+    if (tblName && tblName[0]) {
+        ConstraintDesc uqCons[32];
+        int numUqCon = cat_list_constraints(td->table_id, uqCons, 32);
+        for (int ui = 0; ui < numUqCon; ui++) {
+            if (uqCons[ui].constraint_type != 'U') continue;
+            if (!uqCons[ui].is_enabled) continue;
+
+            /* Parse UNIQUE column list from definition */
+            char uqColsBuf[1024];
+            strncpy(uqColsBuf, uqCons[ui].definition, sizeof(uqColsBuf) - 1);
+            uqColsBuf[sizeof(uqColsBuf) - 1] = '\0';
+            int uqColIndices[16];
+            int numUqCols = 0;
+            {
+                char *saveptr = NULL;
+                char *col = strtok_r(uqColsBuf, ",", &saveptr);
+                while (col && numUqCols < 16) {
+                    for (int mc = 0; mc < numMetaCols; mc++) {
+                        if (strcasecmp(metaCols[mc], col) == 0) {
+                            uqColIndices[numUqCols++] = mc;
+                            break;
+                        }
+                    }
+                    col = strtok_r(NULL, ",", &saveptr);
+                }
+            }
+            if (numUqCols == 0) continue;
+
+            /* Check if any SET column overlaps with UNIQUE columns */
+            int uqAffected = 0;
+            {
+                int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+                for (int si = 0; si < minSet; si++) {
+                    for (int uc = 0; uc < numUqCols; uc++) {
+                        if (uqColIndices[uc] < numMetaCols &&
+                            strcasecmp(setCols[si], metaCols[uqColIndices[uc]]) == 0) {
+                            uqAffected = 1;
+                            break;
+                        }
+                    }
+                    if (uqAffected) break;
+                }
+            }
+            if (!uqAffected) continue;
+
+            /* Build composite value from updated fields */
+            char newComposite[1024] = "";
+            int allNull = 1;
+            for (int uc = 0; uc < numUqCols; uc++) {
+                if (uc > 0) strcat(newComposite, "|");
+                if (uqColIndices[uc] < numFields) {
+                    strcat(newComposite, fields[uqColIndices[uc]]);
+                    if (strcmp(fields[uqColIndices[uc]], "\x01NULL\x01") != 0)
+                        allNull = 0;
+                }
+            }
+            if (allNull) continue;
+
+            /* Scan all rows to check for duplicate */
+            TableScanCursor uqCursor;
+            if (tapi_scan_begin(td, &uqCursor) == 0) {
+                char uqPkBuf[256], uqRecBuf[RECORD_BUF_SIZE];
+                while (tapi_scan_next(&uqCursor, uqPkBuf, uqRecBuf, sizeof(uqRecBuf)) == 0) {
+                    if (strcmp(uqPkBuf, pkKey) == 0) continue; /* skip self */
+                    char uqTmp[RECORD_BUF_SIZE];
+                    strncpy(uqTmp, uqRecBuf, sizeof(uqTmp) - 1);
+                    char *uqFields[64];
+                    int uqNf = 0;
+                    char *uf = strtok(uqTmp, ";");
+                    while (uf && uqNf < 64) { uqFields[uqNf++] = uf; uf = strtok(NULL, ";"); }
+
+                    char existComposite[1024] = "";
+                    for (int uc = 0; uc < numUqCols; uc++) {
+                        if (uc > 0) strcat(existComposite, "|");
+                        if (uqColIndices[uc] < uqNf)
+                            strcat(existComposite, uqFields[uqColIndices[uc]]);
+                    }
+                    if (strcmp(newComposite, existComposite) == 0) {
+                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                 "duplicate key value violates unique constraint \"%s\"",
+                                 uqCons[ui].constraint_name);
+                        g_gui_error = 1;
+                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+
     /* Build updated record string */
     {
         char newRecord[RECORD_BUF_SIZE] = "";
