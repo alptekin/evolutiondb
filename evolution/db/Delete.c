@@ -81,10 +81,19 @@ static int resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
  * - CASCADE (1): delete child rows
  * - SET NULL (2): set FK columns to NULL in child rows
  * Returns 0 on success, -1 on violation. */
-static int enforce_fk_on_delete(const TableDesc *parentTd,
+static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                                 const ColumnDesc *parentCols, int parentNCols,
-                                const char *deletedRecord, const char *deletedKey)
+                                const char *deletedRecord, const char *deletedKey,
+                                int depth)
 {
+    if (depth > 32) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "foreign key cascade depth exceeded (possible circular reference)");
+        g_gui_error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+        return -1;
+    }
+
     ConstraintDesc refConstraints[32];
     int numRefs = cat_list_referencing_fks(parentTd->table_id, refConstraints, 32);
     if (numRefs <= 0) return 0;
@@ -209,8 +218,8 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
             continue;
         }
 
-        if (onDeleteAction == 0 || onDeleteAction == 3) {
-            /* RESTRICT — reject delete */
+        if (onDeleteAction == 0 || onDeleteAction == 3 || onDeleteAction == 5) {
+            /* RESTRICT / NO ACTION — reject delete */
             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                      "update or delete on table \"%s\" violates foreign key constraint \"%s\" "
                      "on table \"%s\"",
@@ -226,13 +235,28 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
         BTree2 childPkTree = tapi_pk_tree(&childTd);
 
         if (onDeleteAction == 1) {
-            /* CASCADE — delete matching child rows */
+            /* CASCADE — delete matching child rows (recurse first) */
             for (int m = 0; m < matchCount; m++) {
                 RowID childRid;
                 if (bt2_search(&childPkTree, matchingChildKeys[m], &childRid) == 0) {
-                    tapi_heap_delete(childRid);
-                    bt2_delete(&childPkTree, matchingChildKeys[m]);
-                    childTd.pk_root_page = childPkTree.root_page;
+                    /* Read child record for recursive cascade */
+                    char childRecBuf[RECORD_BUF_SIZE];
+                    if (tapi_heap_read(childRid, childRecBuf, sizeof(childRecBuf)) > 0) {
+                        /* Recurse: cascade delete grandchildren before deleting child */
+                        if (enforce_fk_on_delete_depth(&childTd, childCols, childNCols,
+                                                       childRecBuf, matchingChildKeys[m],
+                                                       depth + 1) < 0) {
+                            for (int mm = m; mm < matchCount; mm++) free(matchingChildKeys[mm]);
+                            free(matchingChildKeys);
+                            return -1;
+                        }
+                    }
+                    /* Re-search in case tree changed during recursion */
+                    if (bt2_search(&childPkTree, matchingChildKeys[m], &childRid) == 0) {
+                        tapi_heap_delete(childRid);
+                        bt2_delete(&childPkTree, matchingChildKeys[m]);
+                        childTd.pk_root_page = childPkTree.root_page;
+                    }
                 }
                 free(matchingChildKeys[m]);
             }
@@ -300,6 +324,14 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
     }
 
     return 0;
+}
+
+static int enforce_fk_on_delete(const TableDesc *parentTd,
+                                const ColumnDesc *parentCols, int parentNCols,
+                                const char *deletedRecord, const char *deletedKey)
+{
+    return enforce_fk_on_delete_depth(parentTd, parentCols, parentNCols,
+                                      deletedRecord, deletedKey, 0);
 }
 
 int DeleteProcess(void)

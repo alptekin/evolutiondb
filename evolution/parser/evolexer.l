@@ -84,6 +84,8 @@ DESC					{ return DESC; }
 DROP					{ return DROP; }
 
 
+DEFERRABLE				{ return DEFERRABLE; }
+DEFERRED				{ return DEFERRED; }
 DISABLE					{ return DISABLE; }
 DISTINCT				{ return DISTINCT; }
 DOMAIN					{ return DOMAIN; }
@@ -111,6 +113,7 @@ FORCE					{ return FORCE; }
 FOREIGN					{ return FOREIGN; }
 
 FROM					{ return FROM; }
+FULL					{ return FULL; }
 FULLTEXT				{ return FULLTEXT; }
 
 GROUP					{ return GROUP; }
@@ -121,6 +124,8 @@ HOUR_MINUTE				{ return HOUR_MINUTE; }
 HOUR_SECOND				{ return HOUR_SECOND; }
 IF						{ return IF; }
 IGNORE					{ return IGNORE; }
+IMMEDIATE				{ return IMMEDIATE; }
+INITIALLY				{ return INITIALLY; }
 IN						{ return IN; }
 
 INNER					{ return INNER; }
@@ -154,6 +159,7 @@ LONGTEXT				{ return LONGTEXT; }
 
 LOW_PRIORITY			{ return LOW_PRIORITY; }
 
+MATCH					{ return MATCH; }
 MEDIUMBLOB				{ return MEDIUMBLOB; }
 MIDDLEINT|MEDIUMINT		{ return MEDIUMINT; }
 MEDIUMTEXT				{ return MEDIUMTEXT; }
@@ -162,11 +168,13 @@ MEDIUMTEXT				{ return MEDIUMTEXT; }
 MOD						{ return MOD; }
 
 NATURAL					{ return NATURAL; }
+NO[ \t]+ACTION				{ return NO_ACTION; }
 NOT						{ return NOT; }
 
 NULL					{ return NULLX; }
 
 ON						{ return ON; }
+PARTIAL					{ return PARTIAL; }
 
 
 
@@ -205,6 +213,7 @@ SELECT					{ return SELECT; }
 
 SET						{ return SET; }
 
+SIMPLE					{ return SIMPLE; }
 INT2|SMALLINT			{ return SMALLINT; }
 SOME					{ return SOME; }
 

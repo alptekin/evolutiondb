@@ -429,12 +429,26 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
         if (constraints[ci].constraint_type != 'F') continue;
         if (!constraints[ci].is_enabled) continue;
 
-        /* Parse definition: "local_col1,col2|on_delete|on_update" */
+        /* Parse definition: "local_cols|on_delete|on_update|match_type|deferrable" */
         char localColsCsv[1024];
         strncpy(localColsCsv, constraints[ci].definition, sizeof(localColsCsv) - 1);
         localColsCsv[sizeof(localColsCsv) - 1] = '\0';
-        char *pipe = strchr(localColsCsv, '|');
-        if (pipe) *pipe = '\0';
+        int matchType = 0; /* 0=SIMPLE, 1=FULL, 2=PARTIAL */
+        {
+            char *pipe1 = strchr(localColsCsv, '|');
+            if (pipe1) {
+                *pipe1 = '\0';
+                /* Skip on_delete */
+                char *pipe2 = strchr(pipe1 + 1, '|');
+                if (pipe2) {
+                    /* Skip on_update */
+                    char *pipe3 = strchr(pipe2 + 1, '|');
+                    if (pipe3) {
+                        matchType = atoi(pipe3 + 1);
+                    }
+                }
+            }
+        }
 
         /* Parse referenced columns */
         char refColsCsv[256];
@@ -444,6 +458,7 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
         /* Build FK value from local columns */
         char fkValue[1024] = "";
         int allNull = 1;
+        int anyNull = 0;
         {
             char colListBuf[256];
             strncpy(colListBuf, localColsCsv, sizeof(colListBuf) - 1);
@@ -457,6 +472,8 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                     if (strcasecmp(colNames[j], colName) == 0) {
                         if (strcmp(vals[j], "\x01NULL\x01") != 0)
                             allNull = 0;
+                        else
+                            anyNull = 1;
                         if (!first) strcat(fkValue, "|");
                         strcat(fkValue, vals[j]);
                         first = 0;
@@ -467,14 +484,27 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                 if (!found) {
                     if (!first) strcat(fkValue, "|");
                     strcat(fkValue, "\x01NULL\x01");
+                    anyNull = 1;
                     first = 0;
                 }
                 colName = strtok_r(NULL, ",", &saveptr);
             }
         }
 
-        /* NULL FK values are allowed (no referential check) */
+        /* MATCH FULL: all columns must be NULL or all must be non-NULL */
+        if (matchType == 1 && anyNull && !allNull) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "insert or update on table violates foreign key constraint \"%s\" "
+                     "(MATCH FULL does not allow mixing of null and nonnull values)",
+                     constraints[ci].constraint_name);
+            g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+            return -1;
+        }
+
+        /* MATCH SIMPLE: any NULL skips the check. MATCH FULL: only all-NULL skips. */
         if (allNull) continue;
+        if (matchType == 0 && anyNull) continue;  /* SIMPLE: any NULL → skip */
 
         /* Resolve referenced table by ID */
         TableDesc refTd;

@@ -80,6 +80,8 @@
 %token COLLATE
 
 %token DATABASE
+%token DEFERRABLE
+%token DEFERRED
 %token DISABLE
 %token DOMAIN
 %token DELAYED
@@ -109,6 +111,7 @@
 %token FORCE
 %token FOREIGN
 %token FROM
+%token FULL
 %token FULLTEXT
 %token FOR
 
@@ -120,6 +123,8 @@
 %token HOUR_SECOND
 %token HAVING
 
+%token IMMEDIATE
+%token INITIALLY
 %token INTEGER
 %token INNER
 %token IGNORE
@@ -142,11 +147,13 @@
 %token OFFSET
 %token LONGBLOB
 
+%token MATCH
 %token MEDIUMTEXT
 %token MEDIUMBLOB
 %token MEDIUMINT
 
 %token NATURAL
+%token NO_ACTION
 %token NULLX
 
 %token OUTER
@@ -154,6 +161,7 @@
 %token ORDER
 %token ONDUPLICATE
 
+%token PARTIAL
 %token PRIMARY
 
 %token QUICK
@@ -172,6 +180,7 @@
 %token SOME
 %token SQL_CALC_FOUND_ROWS
 %token SQL_BIG_RESULT
+%token SIMPLE
 %token STRAIGHT_JOIN
 %token SMALLINT
 %token SET
@@ -1231,8 +1240,12 @@ create_definition: PRIMARY KEY '(' pk_column_list ')'                           
 | CONSTRAINT NAME CHECK '(' expr ')'                                            { emit("CHECK"); strncpy(g_checkNames[g_checkCount], $2, 127); AddCheckConstraint($5); free($2); }
 | FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
     { emit("FOREIGNKEY"); AddForeignKeyRefTable($7); free($7); }
+| FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '.' NAME '(' fk_ref_column_list ')' fk_actions
+    { emit("FOREIGNKEY CROSSSCHEMA"); AddForeignKeyRefTableSchema($7, $9); free($7); free($9); }
 | CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
     { emit("FOREIGNKEY"); strncpy(g_pendingConstraintName, $2, 127); AddForeignKeyRefTable($9); free($2); free($9); }
+| CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '.' NAME '(' fk_ref_column_list ')' fk_actions
+    { emit("FOREIGNKEY CROSSSCHEMA"); strncpy(g_pendingConstraintName, $2, 127); AddForeignKeyRefTableSchema($9, $11); free($2); free($9); free($11); }
 | UNIQUE '(' unique_column_list ')'
     { emit("UNIQUE %d", $3); AddUniqueComplete(); }
 | CONSTRAINT NAME UNIQUE '(' unique_column_list ')'
@@ -1260,6 +1273,15 @@ fk_actions: /* nil */
 | fk_actions ON UPDATE SET NULLX                                                { SetForeignKeyOnUpdate(2); }
 | fk_actions ON UPDATE RESTRICT                                                 { SetForeignKeyOnUpdate(3); }
 | fk_actions ON UPDATE SET DEFAULT                                              { SetForeignKeyOnUpdate(4); }
+| fk_actions ON DELETE NO_ACTION                                                { SetForeignKeyOnDelete(5); }
+| fk_actions ON UPDATE NO_ACTION                                                { SetForeignKeyOnUpdate(5); }
+| fk_actions MATCH FULL                                                         { SetForeignKeyMatchType(1); }
+| fk_actions MATCH SIMPLE                                                       { SetForeignKeyMatchType(0); }
+| fk_actions MATCH PARTIAL                                                      { SetForeignKeyMatchType(2); }
+| fk_actions DEFERRABLE                                                         { SetForeignKeyDeferrable(1); }
+| fk_actions NOT DEFERRABLE                                                     { SetForeignKeyDeferrable(0); }
+| fk_actions DEFERRABLE INITIALLY DEFERRED                                      { SetForeignKeyDeferrable(2); }
+| fk_actions DEFERRABLE INITIALLY IMMEDIATE                                     { SetForeignKeyDeferrable(1); }
 ;
 
 unique_column_list: NAME                                                        { AddUniqueColumn($1); free($1); $$ = 1; }
