@@ -397,7 +397,7 @@
 
 ## Day 11 — Constraint Enhancements
 
-### Task 20: ⬜ Named Constraints & ALTER TABLE ADD/DROP CONSTRAINT (Feature #80)
+### Task 20: ✅ Named Constraints & ALTER TABLE ADD/DROP CONSTRAINT (Feature #80)
 
 **Goal:** Support `CONSTRAINT name` syntax for PK, FK, UNIQUE, CHECK. Enable `ALTER TABLE DROP CONSTRAINT name`. In MySQL, MSSQL, and Oracle.
 
@@ -416,7 +416,7 @@
 
 ---
 
-### Task 21: ⬜ Composite UNIQUE & Composite FOREIGN KEY (Feature #81)
+### Task 21: ✅ Composite UNIQUE & Composite FOREIGN KEY (Feature #81)
 
 **Goal:** Support multi-column UNIQUE constraints and multi-column FOREIGN KEYs. In MySQL, MSSQL, and Oracle.
 
@@ -437,7 +437,7 @@
 
 ## Day 12 — Constraint Enhancements (Part 2)
 
-### Task 22: ⬜ Self-Referencing FOREIGN KEY (Feature #82)
+### Task 22: ✅ Self-Referencing FOREIGN KEY + Advanced FK Features (Feature #82)
 
 **Goal:** Allow a table to reference itself (e.g., employee → manager). In MySQL, MSSQL, and Oracle.
 

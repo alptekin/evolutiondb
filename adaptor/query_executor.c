@@ -277,6 +277,135 @@ static int extract_eq_condition(const ExprNode *expr,
     return 1;
 }
 
+/* ----------------------------------------------------------------
+ *  Extract multiple "column = literal" conditions from AND chains.
+ *  Walks the WHERE expression tree and collects all col=val pairs
+ *  joined by AND. Returns count of extracted conditions.
+ * ---------------------------------------------------------------- */
+typedef struct {
+    char col_name[128];
+    char literal_val[256];
+} EqCondition;
+
+static int extract_and_eq_conditions(const ExprNode *expr,
+                                     EqCondition *out, int maxOut)
+{
+    if (!expr) return 0;
+
+    /* Single equality */
+    if (expr->type == EXPR_CMP_EQ) {
+        char col[128], val[256];
+        if (extract_eq_condition(expr, col, sizeof(col), val, sizeof(val))) {
+            if (maxOut > 0) {
+                strncpy(out[0].col_name, col, 127);
+                out[0].col_name[127] = '\0';
+                strncpy(out[0].literal_val, val, 255);
+                out[0].literal_val[255] = '\0';
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    /* AND node — recurse left and right */
+    if (expr->type == EXPR_AND) {
+        int n = 0;
+        n += extract_and_eq_conditions(expr->left, out + n, maxOut - n);
+        n += extract_and_eq_conditions(expr->right, out + n, maxOut - n);
+        return n;
+    }
+
+    return 0;
+}
+
+/* Try to find a composite index matching a set of eq conditions.
+ * Returns 1 if found, fills idxPath and compositeKey (values joined by |).
+ * The index must have its leading columns match the given conditions. */
+static int find_composite_index_match(const char *tableName,
+                                      const EqCondition *conds, int numConds,
+                                      char *idxPath, int idxPathSize,
+                                      char *compositeKey, int keySize,
+                                      char *matchedIdxName, int nameSize)
+{
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+
+    char idxNames[16][256], idxCols[16][256], idxPaths[16][1024];
+    char idxTypes[16];
+    int nIdx = index_list_with_types(tblPath, idxNames, idxCols, idxPaths, idxTypes, 16);
+
+    for (int ix = 0; ix < nIdx; ix++) {
+        /* Only consider composite indexes */
+        if (!strchr(idxCols[ix], ',')) continue;
+
+        /* Parse index column list */
+        char colsBuf[256];
+        strncpy(colsBuf, idxCols[ix], sizeof(colsBuf) - 1);
+        colsBuf[sizeof(colsBuf) - 1] = '\0';
+        char *idxColArr[16];
+        int numIdxCols = 0;
+        char *savep = NULL;
+        char *c = strtok_r(colsBuf, ",", &savep);
+        while (c && numIdxCols < 16) {
+            idxColArr[numIdxCols++] = c;
+            c = strtok_r(NULL, ",", &savep);
+        }
+
+        /* Check if ALL index columns have a matching eq condition */
+        int allMatch = 1;
+        char keyBuf[1024] = "";
+        for (int ci = 0; ci < numIdxCols; ci++) {
+            int found = 0;
+            for (int ei = 0; ei < numConds; ei++) {
+                if (strcasecmp(idxColArr[ci], conds[ei].col_name) == 0) {
+                    if (ci > 0) strcat(keyBuf, "|");
+                    strcat(keyBuf, conds[ei].literal_val);
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) { allMatch = 0; break; }
+        }
+
+        if (allMatch) {
+            strncpy(idxPath, idxPaths[ix], idxPathSize - 1);
+            idxPath[idxPathSize - 1] = '\0';
+            strncpy(compositeKey, keyBuf, keySize - 1);
+            compositeKey[keySize - 1] = '\0';
+            if (matchedIdxName) {
+                strncpy(matchedIdxName, idxNames[ix], nameSize - 1);
+                matchedIdxName[nameSize - 1] = '\0';
+            }
+            return 1;
+        }
+
+        /* Also check leftmost prefix match (all given conds match leading index cols) */
+        if (numConds < numIdxCols) {
+            int prefixMatch = 1;
+            char prefixKey[1024] = "";
+            for (int ci = 0; ci < numIdxCols && ci < numConds; ci++) {
+                int found = 0;
+                for (int ei = 0; ei < numConds; ei++) {
+                    if (strcasecmp(idxColArr[ci], conds[ei].col_name) == 0) {
+                        if (ci > 0) strcat(prefixKey, "|");
+                        strcat(prefixKey, conds[ei].literal_val);
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) { prefixMatch = 0; break; }
+            }
+
+            /* For prefix match, we'd need range scan — skip for now,
+             * only exact full match uses the index */
+            (void)prefixMatch;
+            (void)prefixKey;
+        }
+    }
+
+    return 0;
+}
+
 /* Check if query can use streaming (no post-processing needed) */
 static int can_stream_results(void)
 {
@@ -476,6 +605,59 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     count++;
                 }
                 used_index = 1;
+            }
+        }
+
+        /* Try composite index: extract multiple col=val from AND chain */
+        if (!used_index && g_whereExpr && g_whereExpr->type == EXPR_AND) {
+            EqCondition conds[16];
+            int numConds = extract_and_eq_conditions(g_whereExpr, conds, 16);
+            if (numConds >= 2) {
+                char compIdxPath[1024], compKey[1024], compIdxName[256];
+                if (find_composite_index_match(tableName, conds, numConds,
+                        compIdxPath, sizeof(compIdxPath),
+                        compKey, sizeof(compKey),
+                        compIdxName, sizeof(compIdxName))) {
+                    char matchPKs[256][256];
+                    int nMatch = btree_search(compIdxPath, compKey, matchPKs, 256);
+                    int m;
+                    for (m = 0; m < nMatch; m++) {
+                        RowID rid;
+                        if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0)
+                            continue;
+                        char recBuf[RECORD_BUF_SIZE];
+                        if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
+                            continue;
+
+                        int row = result_add_row(rs);
+                        if (row < 0) break;
+
+                        char temp[RECORD_BUF_SIZE];
+                        int col = 0;
+                        strncpy(temp, recBuf, sizeof(temp) - 1);
+                        temp[sizeof(temp) - 1] = '\0';
+
+                        char *val = strtok(temp, ";");
+                        while (val && col < rs->num_cols) {
+                            if (strcmp(val, "\x01NULL\x01") == 0) {
+                                result_set_null(rs, row, col);
+                            } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                                if (strncasecmp(val, "true", 4) == 0 ||
+                                    strcmp(val, "1") == 0 ||
+                                    strcmp(val, "t") == 0)
+                                    result_set_field(rs, row, col, "true");
+                                else
+                                    result_set_field(rs, row, col, "false");
+                            } else {
+                                result_set_field(rs, row, col, val);
+                            }
+                            col++;
+                            val = strtok(NULL, ";");
+                        }
+                        count++;
+                    }
+                    used_index = 1;
+                }
             }
         }
     }
@@ -2311,13 +2493,14 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     scanType = "PK Lookup (Hash)";
                     snprintf(indexName, sizeof(indexName), " using PRIMARY KEY");
                 } else {
-                    /* Check B-tree index */
+                    /* Check B-tree index (single or composite) */
                     char idxNames[16][256], idxCols[16][256], idxPaths[16][1024];
                     char idxTypes[16];
                     int nIdx = index_list_with_types(tblPath, idxNames, idxCols,
                                                      idxPaths, idxTypes, 16);
                     int ix;
                     for (ix = 0; ix < nIdx; ix++) {
+                        /* Exact single-column match */
                         if (strcasecmp(idxCols[ix], whereCol) == 0) {
                             scanType = (idxTypes[ix] == 'U') ?
                                 "Index Scan (Unique B-tree)" :
@@ -2325,6 +2508,22 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                             snprintf(indexName, sizeof(indexName),
                                      " using %s", idxNames[ix]);
                             break;
+                        }
+                        /* Composite index: check if whereCol is the leading column */
+                        if (strchr(idxCols[ix], ',')) {
+                            char firstCol[128];
+                            strncpy(firstCol, idxCols[ix], sizeof(firstCol) - 1);
+                            firstCol[sizeof(firstCol) - 1] = '\0';
+                            char *comma = strchr(firstCol, ',');
+                            if (comma) *comma = '\0';
+                            if (strcasecmp(firstCol, whereCol) == 0) {
+                                scanType = (idxTypes[ix] == 'U') ?
+                                    "Index Scan (Unique Composite B-tree)" :
+                                    "Index Scan (Composite B-tree)";
+                                snprintf(indexName, sizeof(indexName),
+                                         " using %s", idxNames[ix]);
+                                break;
+                            }
                         }
                     }
                 }
