@@ -140,6 +140,9 @@ void AddForeignKeyRefColumn(const char *colName);
 void AddForeignKeyRefTable(const char *tableName);
 void SetForeignKeyOnDelete(int action);
 void SetForeignKeyOnUpdate(int action);
+void SetForeignKeyMatchType(int matchType);
+void SetForeignKeyDeferrable(int mode);
+void AddForeignKeyRefTableSchema(const char *schemaName, const char *tableName);
 
 /* ALTER TABLE constraint operations */
 struct ExprNode;  /* forward declaration */

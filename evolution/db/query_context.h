@@ -142,8 +142,11 @@ typedef struct QueryContext {
     char fkRefTable[8][128];       /* referenced table name */
     char fkRefCols[8][256];        /* referenced column list CSV */
     char fkNames[8][128];          /* constraint names */
-    int  fkOnDelete[8];            /* 0=RESTRICT(default), 1=CASCADE, 2=SET NULL, 3=RESTRICT */
-    int  fkOnUpdate[8];            /* 0=RESTRICT(default), 1=CASCADE, 2=SET NULL, 3=RESTRICT */
+    int  fkOnDelete[8];            /* 0=RESTRICT, 1=CASCADE, 2=SET NULL, 3=RESTRICT, 4=SET DEFAULT, 5=NO ACTION */
+    int  fkOnUpdate[8];            /* same as on_delete */
+    int  fkMatchType[8];           /* 0=SIMPLE (default), 1=FULL, 2=PARTIAL */
+    int  fkDeferrable[8];          /* 0=NOT DEFERRABLE, 1=DEFERRABLE INITIALLY IMMEDIATE, 2=DEFERRABLE INITIALLY DEFERRED */
+    char fkRefSchema[8][128];      /* referenced schema (empty = current schema) */
     int  fkCount;
     /* Temp accumulators for current FK being parsed */
     char fkCurLocalCols[256];
@@ -293,6 +296,9 @@ void          qctx_free(QueryContext *ctx);
 #define g_fkNames               (g_qctx->fkNames)
 #define g_fkOnDelete            (g_qctx->fkOnDelete)
 #define g_fkOnUpdate            (g_qctx->fkOnUpdate)
+#define g_fkMatchType           (g_qctx->fkMatchType)
+#define g_fkDeferrable          (g_qctx->fkDeferrable)
+#define g_fkRefSchema           (g_qctx->fkRefSchema)
 #define g_fkCount               (g_qctx->fkCount)
 #define g_fkCurLocalCols        (g_qctx->fkCurLocalCols)
 #define g_fkCurRefCols          (g_qctx->fkCurRefCols)

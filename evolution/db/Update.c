@@ -50,6 +50,243 @@ static int UpdateReadColumnNames(const char *tableName,
     return count;
 }
 
+/* Helper: resolve table by ID across schemas in current database */
+static int update_resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
+                                      ColumnDesc *outCols, int *outNCols)
+{
+    DatabaseDesc dbDesc;
+    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) return -1;
+    SchemaDesc schemas[16];
+    int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
+    for (int si = 0; si < numSchemas; si++) {
+        TableDesc tables[64];
+        int numTables = cat_list_tables(schemas[si].schema_id, tables, 64);
+        for (int ti = 0; ti < numTables; ti++) {
+            if (tables[ti].table_id == table_id) {
+                *outTd = tables[ti];
+                if (outCols && outNCols)
+                    *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
+/* Enforce referential integrity when a parent row's PK is updated.
+ * For each FK that references this table:
+ * - RESTRICT/NO ACTION (0,3,5): reject if child rows reference old PK
+ * - CASCADE (1): update child FK columns from old PK to new PK
+ * - SET NULL (2): set child FK columns to NULL
+ * - SET DEFAULT (4): set child FK columns to their defaults */
+static int enforce_fk_on_update(const TableDesc *parentTd,
+                                const ColumnDesc *parentCols, int parentNCols,
+                                const char *oldPkValue, const char *newPkValue)
+{
+    ConstraintDesc refConstraints[32];
+    int numRefs = cat_list_referencing_fks(parentTd->table_id, refConstraints, 32);
+    if (numRefs <= 0) return 0;
+
+    for (int ri = 0; ri < numRefs; ri++) {
+        if (!refConstraints[ri].is_enabled) continue;
+
+        /* Parse on_update action from definition: "local_cols|on_delete|on_update[|match|defer]" */
+        char localColsCsv[1024];
+        strncpy(localColsCsv, refConstraints[ri].definition, sizeof(localColsCsv) - 1);
+        localColsCsv[sizeof(localColsCsv) - 1] = '\0';
+        int onUpdateAction = 0; /* default RESTRICT */
+        {
+            char *pipe1 = strchr(localColsCsv, '|');
+            if (pipe1) {
+                *pipe1 = '\0';
+                /* pipe1+1 = on_delete */
+                char *pipe2 = strchr(pipe1 + 1, '|');
+                if (pipe2) {
+                    onUpdateAction = atoi(pipe2 + 1);
+                }
+            }
+        }
+
+        /* Get referenced (parent PK) column values from old record */
+        char refColsCsv[256];
+        strncpy(refColsCsv, refConstraints[ri].ref_columns, sizeof(refColsCsv) - 1);
+        refColsCsv[sizeof(refColsCsv) - 1] = '\0';
+
+        /* Resolve child table */
+        TableDesc childTd;
+        ColumnDesc childCols[CAT_MAX_COLUMNS];
+        int childNCols;
+        if (update_resolve_table_by_id(refConstraints[ri].table_id,
+                                       &childTd, childCols, &childNCols) < 0)
+            continue;
+
+        /* Find child column indices for FK local columns */
+        int fkColIndices[16];
+        int fkColCount = 0;
+        {
+            char colBuf[256];
+            strncpy(colBuf, localColsCsv, sizeof(colBuf) - 1);
+            colBuf[sizeof(colBuf) - 1] = '\0';
+            char *saveptr = NULL;
+            char *colName = strtok_r(colBuf, ",", &saveptr);
+            while (colName && fkColCount < 16) {
+                fkColIndices[fkColCount] = -1;
+                for (int k = 0; k < childNCols; k++) {
+                    if (strcasecmp(childCols[k].col_name, colName) == 0) {
+                        fkColIndices[fkColCount] = k;
+                        break;
+                    }
+                }
+                fkColCount++;
+                colName = strtok_r(NULL, ",", &saveptr);
+            }
+        }
+
+        /* Scan child table for rows referencing oldPkValue */
+        TableScanCursor childCursor;
+        if (tapi_scan_begin(&childTd, &childCursor) < 0)
+            continue;
+
+        char **matchingChildKeys = NULL;
+        int matchCount = 0, matchCapacity = 0;
+        {
+            char childPk[256], childRec[RECORD_BUF_SIZE];
+            while (tapi_scan_next(&childCursor, childPk, childRec, sizeof(childRec)) == 0) {
+                char childFkValue[1024] = "";
+                int first = 1;
+                for (int fc = 0; fc < fkColCount; fc++) {
+                    if (fkColIndices[fc] >= 0) {
+                        char fieldVal[256];
+                        UpdateGetFieldValue(childRec, fkColIndices[fc], fieldVal, sizeof(fieldVal));
+                        if (!first) strcat(childFkValue, "|");
+                        strcat(childFkValue, fieldVal);
+                        first = 0;
+                    }
+                }
+                if (strcmp(childFkValue, oldPkValue) == 0) {
+                    if (matchCount >= matchCapacity) {
+                        matchCapacity = matchCapacity == 0 ? 16 : matchCapacity * 2;
+                        char **newBuf = (char **)realloc(matchingChildKeys,
+                                                          matchCapacity * sizeof(char *));
+                        if (!newBuf) break;
+                        matchingChildKeys = newBuf;
+                    }
+                    matchingChildKeys[matchCount++] = strdup(childPk);
+                }
+            }
+        }
+
+        if (matchCount == 0) {
+            free(matchingChildKeys);
+            continue;
+        }
+
+        if (onUpdateAction == 0 || onUpdateAction == 3 || onUpdateAction == 5) {
+            /* RESTRICT / NO ACTION — reject update */
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "update or delete on table \"%s\" violates foreign key constraint \"%s\" "
+                     "on table \"%s\"",
+                     parentTd->table_name, refConstraints[ri].constraint_name,
+                     childTd.table_name);
+            g_gui_error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+            for (int m = 0; m < matchCount; m++) free(matchingChildKeys[m]);
+            free(matchingChildKeys);
+            return -1;
+        }
+
+        BTree2 childPkTree = tapi_pk_tree(&childTd);
+
+        /* Read defaults for SET DEFAULT */
+        char childDefaults[64][256];
+        int numDefaults = 0;
+        if (onUpdateAction == 4) {
+            char childPath[1024];
+            snprintf(childPath, sizeof(childPath), "root/%s/%s/%s",
+                     g_currentDatabase, g_currentSchema, childTd.table_name);
+            numDefaults = ReadDefaults(childPath, childDefaults, 64);
+        }
+
+        /* Parse new PK value components for CASCADE */
+        char newPkParts[16][256];
+        int numNewPkParts = 0;
+        if (onUpdateAction == 1) {
+            char tmpPk[1024];
+            strncpy(tmpPk, newPkValue, sizeof(tmpPk) - 1);
+            tmpPk[sizeof(tmpPk) - 1] = '\0';
+            char *saveptr = NULL;
+            char *part = strtok_r(tmpPk, "|", &saveptr);
+            while (part && numNewPkParts < 16) {
+                strncpy(newPkParts[numNewPkParts], part, 255);
+                newPkParts[numNewPkParts][255] = '\0';
+                numNewPkParts++;
+                part = strtok_r(NULL, "|", &saveptr);
+            }
+        }
+
+        for (int m = 0; m < matchCount; m++) {
+            RowID childRid;
+            if (bt2_search(&childPkTree, matchingChildKeys[m], &childRid) == 0) {
+                char childRec[RECORD_BUF_SIZE];
+                if (tapi_heap_read(childRid, childRec, sizeof(childRec)) > 0) {
+                    char fields[64][256];
+                    int numFields = 0;
+                    char tmpRec[RECORD_BUF_SIZE];
+                    strncpy(tmpRec, childRec, sizeof(tmpRec) - 1);
+                    tmpRec[sizeof(tmpRec) - 1] = '\0';
+                    char *tok = strtok(tmpRec, ";");
+                    while (tok && numFields < 64) {
+                        strncpy(fields[numFields], tok, 255);
+                        fields[numFields][255] = '\0';
+                        numFields++;
+                        tok = strtok(NULL, ";");
+                    }
+
+                    for (int fc = 0; fc < fkColCount; fc++) {
+                        if (fkColIndices[fc] >= 0 && fkColIndices[fc] < numFields) {
+                            if (onUpdateAction == 1) {
+                                /* CASCADE — copy new PK value */
+                                if (fc < numNewPkParts)
+                                    strcpy(fields[fkColIndices[fc]], newPkParts[fc]);
+                            } else if (onUpdateAction == 2) {
+                                /* SET NULL */
+                                strcpy(fields[fkColIndices[fc]], "\x01NULL\x01");
+                            } else if (onUpdateAction == 4) {
+                                /* SET DEFAULT */
+                                if (fkColIndices[fc] < numDefaults &&
+                                    strcmp(childDefaults[fkColIndices[fc]], "\x01NONE\x01") != 0) {
+                                    strcpy(fields[fkColIndices[fc]],
+                                           childDefaults[fkColIndices[fc]]);
+                                } else {
+                                    strcpy(fields[fkColIndices[fc]], "\x01NULL\x01");
+                                }
+                            }
+                        }
+                    }
+
+                    char newRec[RECORD_BUF_SIZE] = "";
+                    for (int f = 0; f < numFields; f++) {
+                        strcat(newRec, fields[f]);
+                        strcat(newRec, ";");
+                    }
+
+                    uint16_t newLen = (uint16_t)(strlen(newRec) + 1);
+                    RowID newRid = tapi_heap_update(&childTd, childRid, newRec, newLen);
+                    if (newRid.page_no != childRid.page_no ||
+                        newRid.slot_idx != childRid.slot_idx) {
+                        bt2_update(&childPkTree, matchingChildKeys[m], newRid);
+                        childTd.pk_root_page = childPkTree.root_page;
+                    }
+                }
+            }
+            free(matchingChildKeys[m]);
+        }
+        free(matchingChildKeys);
+    }
+
+    return 0;
+}
+
 /* Apply a single-row update: fetch record by PK, apply SET columns,
  * store back into heap.
  * Returns 0 on success, -1 on failure. */
@@ -163,12 +400,23 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             if (fkConstraints[fi].constraint_type != 'F') continue;
             if (!fkConstraints[fi].is_enabled) continue;
 
-            /* Parse local columns from definition */
+            /* Parse local columns and match_type from definition:
+             * "local_cols|on_delete|on_update|match_type|deferrable" */
             char localColsCsv[1024];
             strncpy(localColsCsv, fkConstraints[fi].definition, sizeof(localColsCsv) - 1);
             localColsCsv[sizeof(localColsCsv) - 1] = '\0';
-            char *pipe = strchr(localColsCsv, '|');
-            if (pipe) *pipe = '\0';
+            int fkMatchType = 0;
+            {
+                char *pipe1 = strchr(localColsCsv, '|');
+                if (pipe1) {
+                    *pipe1 = '\0';
+                    char *pipe2 = strchr(pipe1 + 1, '|');
+                    if (pipe2) {
+                        char *pipe3 = strchr(pipe2 + 1, '|');
+                        if (pipe3) fkMatchType = atoi(pipe3 + 1);
+                    }
+                }
+            }
 
             /* Check if any SET column overlaps with FK local columns */
             int fkAffected = 0;
@@ -195,6 +443,7 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             /* Build FK value from updated fields */
             char fkValue[1024] = "";
             int allNull = 1;
+            int anyNull = 0;
             {
                 char colListBuf[256];
                 strncpy(colListBuf, localColsCsv, sizeof(colListBuf) - 1);
@@ -207,6 +456,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                         if (strcasecmp(metaCols[mc], colName) == 0 && mc < numFields) {
                             if (strcmp(fields[mc], "\x01NULL\x01") != 0)
                                 allNull = 0;
+                            else
+                                anyNull = 1;
                             if (!first) strcat(fkValue, "|");
                             strcat(fkValue, fields[mc]);
                             first = 0;
@@ -216,7 +467,19 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                     colName = strtok_r(NULL, ",", &saveptr);
                 }
             }
+
+            /* MATCH FULL: reject mixed NULL/non-NULL */
+            if (fkMatchType == 1 && anyNull && !allNull) {
+                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                         "insert or update on table violates foreign key constraint \"%s\" "
+                         "(MATCH FULL does not allow mixing of null and nonnull values)",
+                         fkConstraints[fi].constraint_name);
+                g_gui_error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                return -1;
+            }
             if (allNull) continue;
+            if (fkMatchType == 0 && anyNull) continue;  /* SIMPLE: any NULL → skip */
 
             /* Resolve referenced table by ID */
             TableDesc refTd;
@@ -343,6 +606,39 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                         return -1;
                     }
                 }
+            }
+        }
+    }
+
+    /* Enforce ON UPDATE referential actions when PK columns are modified */
+    if (tblName && tblName[0]) {
+        /* Check if any PK column is being SET */
+        int pkModified = 0;
+        int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
+        for (int si = 0; si < minSet; si++) {
+            for (int ci = 0; ci < allNCols; ci++) {
+                if (allCols[ci].is_pk && strcasecmp(setCols[si], allCols[ci].col_name) == 0) {
+                    pkModified = 1;
+                    break;
+                }
+            }
+            if (pkModified) break;
+        }
+        if (pkModified) {
+            /* Build new PK value from updated fields */
+            char newPkValue[1024] = "";
+            int first = 1;
+            for (int ci = 0; ci < allNCols; ci++) {
+                if (allCols[ci].is_pk) {
+                    if (!first) strcat(newPkValue, "|");
+                    strcat(newPkValue, fields[ci]);
+                    first = 0;
+                }
+            }
+            /* Only enforce if PK actually changed */
+            if (strcmp(pkKey, newPkValue) != 0) {
+                if (enforce_fk_on_update(td, allCols, allNCols, pkKey, newPkValue) < 0)
+                    return -1;
             }
         }
     }

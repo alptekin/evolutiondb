@@ -376,6 +376,39 @@ void SetForeignKeyOnUpdate(int action)
     g_fkOnUpdate[g_fkCount] = action;
 }
 
+void SetForeignKeyMatchType(int matchType)
+{
+    g_fkMatchType[g_fkCount] = matchType;
+}
+
+void SetForeignKeyDeferrable(int mode)
+{
+    g_fkDeferrable[g_fkCount] = mode;
+}
+
+void AddForeignKeyRefTableSchema(const char *schemaName, const char *tableName)
+{
+    if (!tableName || !schemaName || g_fkCount >= 8) return;
+
+    strncpy(g_fkLocalCols[g_fkCount], g_fkCurLocalCols, 255);
+    g_fkLocalCols[g_fkCount][255] = '\0';
+    strncpy(g_fkRefTable[g_fkCount], tableName, 127);
+    g_fkRefTable[g_fkCount][127] = '\0';
+    strncpy(g_fkRefCols[g_fkCount], g_fkCurRefCols, 255);
+    g_fkRefCols[g_fkCount][255] = '\0';
+    strncpy(g_fkRefSchema[g_fkCount], schemaName, 127);
+    g_fkRefSchema[g_fkCount][127] = '\0';
+    /* Copy pending constraint name if set */
+    strncpy(g_fkNames[g_fkCount], g_pendingConstraintName, 127);
+    g_fkNames[g_fkCount][127] = '\0';
+    g_pendingConstraintName[0] = '\0';
+
+    g_fkCount++;
+
+    g_fkCurLocalCols[0] = '\0';
+    g_fkCurRefCols[0] = '\0';
+}
+
 /* ----------------------------------------------------------------
  *  CREATE TABLE — now uses system catalog + unified storage
  * ---------------------------------------------------------------- */
@@ -576,10 +609,15 @@ int CreateTableProcess(void)
         TableDesc td;
         if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
             for (int fi = 0; fi < g_fkCount; fi++) {
-                /* Resolve referenced table */
+                /* Resolve referenced table (cross-schema if specified) */
                 TableDesc refTd;
                 char refPath[1024];
-                db_table_path(g_fkRefTable[fi], refPath, sizeof(refPath));
+                if (g_fkRefSchema[fi][0] != '\0') {
+                    snprintf(refPath, sizeof(refPath), "root/%s/%s/%s",
+                             g_currentDatabase, g_fkRefSchema[fi], g_fkRefTable[fi]);
+                } else {
+                    db_table_path(g_fkRefTable[fi], refPath, sizeof(refPath));
+                }
                 if (tapi_resolve(refPath, &refTd, NULL, NULL) < 0) {
                     snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                              "referenced table \"%s\" does not exist",
@@ -590,12 +628,14 @@ int CreateTableProcess(void)
                     return -1;
                 }
 
-                /* Build definition: "local_cols|on_delete|on_update" */
+                /* Build definition: "local_cols|on_delete|on_update|match_type|deferrable" */
                 char definition[1024];
-                snprintf(definition, sizeof(definition), "%s|%d|%d",
+                snprintf(definition, sizeof(definition), "%s|%d|%d|%d|%d",
                          g_fkLocalCols[fi],
                          g_fkOnDelete[fi],
-                         g_fkOnUpdate[fi]);
+                         g_fkOnUpdate[fi],
+                         g_fkMatchType[fi],
+                         g_fkDeferrable[fi]);
 
                 /* Auto-generate name if not specified */
                 char cname[128];
@@ -673,6 +713,10 @@ void TruncateCreate(void)
     memset(g_fkRefCols, 0, sizeof(g_fkRefCols));
     memset(g_fkOnDelete, 0, sizeof(g_fkOnDelete));
     memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
+    memset(g_fkMatchType, 0, sizeof(g_fkMatchType));
+    memset(g_fkDeferrable, 0, sizeof(g_fkDeferrable));
+    memset(g_fkRefSchema, 0, sizeof(g_fkRefSchema));
+    memset(g_fkNames, 0, sizeof(g_fkNames));
     g_fkCurLocalCols[0] = '\0';
     g_fkCurRefCols[0] = '\0';
 
