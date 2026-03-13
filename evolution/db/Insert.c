@@ -818,9 +818,8 @@ int InsertProcess(void)
     }
 
     /* Read index metadata for secondary indexes */
-    char idxNames[16][256], idxCols[16][256], idxPaths[16][1024];
-    char idxTypes[16];
-    int nIdx = index_list_with_types(tblName, idxNames, idxCols, idxPaths, idxTypes, 16);
+    IndexDesc secIdx[16];
+    int nIdx = idx_load_secondary(tblName, secIdx, 16);
     char colNames2[64][128];
     int numCols2 = 0;
     if (nIdx > 0)
@@ -832,6 +831,7 @@ int InsertProcess(void)
         /* Pre-insert: check unique index constraints BEFORE storing */
         char preIdxKeys[16][512];
         char prePkBuf[256] = "";
+        char preIdxPaths[16][1024];
         if (nIdx > 0) {
             char tmpPre[RECORD_BUF_SIZE];
             char *valsPre[64];
@@ -847,43 +847,30 @@ int InsertProcess(void)
 
             int ix;
             for (ix = 0; ix < nIdx; ix++) {
-                int isComposite = (strchr(idxCols[ix], ',') != NULL);
                 preIdxKeys[ix][0] = '\0';
+                snprintf(preIdxPaths[ix], sizeof(preIdxPaths[ix]), "%u:%s:%u",
+                         secIdx[ix].table_id, secIdx[ix].index_name,
+                         secIdx[ix].root_page);
 
-                if (isComposite) {
-                    char colSpec[256];
-                    strncpy(colSpec, idxCols[ix], sizeof(colSpec) - 1);
-                    colSpec[sizeof(colSpec) - 1] = '\0';
-                    char *ctok = strtok(colSpec, ",");
-                    int first = 1;
-                    while (ctok) {
-                        int ci;
-                        for (ci = 0; ci < numCols2; ci++) {
-                            if (strcasecmp(colNames2[ci], ctok) == 0 && ci < nvPre) {
-                                if (!first) strcat(preIdxKeys[ix], "|");
-                                strcat(preIdxKeys[ix], valsPre[ci]);
-                                first = 0;
-                                break;
-                            }
-                        }
-                        ctok = strtok(NULL, ",");
+                /* Build index key using common helper */
+                {
+                    char colVals[64][256];
+                    for (int ci = 0; ci < numCols2 && ci < nvPre; ci++) {
+                        strncpy(colVals[ci], valsPre[ci], 255);
+                        colVals[ci][255] = '\0';
                     }
-                } else {
-                    int ci;
-                    for (ci = 0; ci < numCols2; ci++) {
-                        if (strcasecmp(colNames2[ci], idxCols[ix]) == 0 && ci < nvPre) {
-                            strncpy(preIdxKeys[ix], valsPre[ci], sizeof(preIdxKeys[ix]) - 1);
-                            break;
-                        }
-                    }
+                    idx_build_key(&secIdx[ix],
+                                  (const char (*)[128])colNames2, numCols2,
+                                  (const char (*)[256])colVals,
+                                  preIdxKeys[ix], sizeof(preIdxKeys[ix]));
                 }
 
-                if (preIdxKeys[ix][0] && idxTypes[ix] == 'U') {
+                if (preIdxKeys[ix][0] && secIdx[ix].index_type == 'U') {
                     char dupCheck[1][256];
-                    if (btree_search(idxPaths[ix], preIdxKeys[ix], dupCheck, 1) > 0) {
+                    if (btree_search(preIdxPaths[ix], preIdxKeys[ix], dupCheck, 1) > 0) {
                         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                                  "duplicate key value violates unique index \"%s\" (key=%s)",
-                                 idxNames[ix], preIdxKeys[ix]);
+                                 secIdx[ix].index_name, preIdxKeys[ix]);
                         g_gui_error = 1;
                         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                         TruncateInsert();
@@ -915,7 +902,7 @@ int InsertProcess(void)
             int ix;
             for (ix = 0; ix < nIdx; ix++) {
                 if (preIdxKeys[ix][0])
-                    btree_insert(idxPaths[ix], preIdxKeys[ix], prePkBuf);
+                    btree_insert(preIdxPaths[ix], preIdxKeys[ix], prePkBuf);
             }
         }
     }

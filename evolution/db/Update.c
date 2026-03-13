@@ -669,91 +669,63 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             }
         }
 
+        /* Load secondary indexes once for both pre-store and post-store */
+        IndexDesc updIdx[16];
+        int nIdx = (tblName && tblName[0]) ? idx_load_secondary(tblName, updIdx, 16) : 0;
+
         /* Pre-store: check unique index constraints */
-        if (tblName && tblName[0]) {
-            char idxN[16][256], idxC[16][256], idxP[16][1024];
-            char idxT[16];
-            int nIdx = index_list_with_types(tblName, idxN, idxC, idxP, idxT, 16);
-            if (nIdx > 0) {
+        if (nIdx > 0) {
                 int ix;
                 for (ix = 0; ix < nIdx; ix++) {
-                    if (idxT[ix] != 'U') continue;
-                    int minSet2 = numSetVals < numSetCols ? numSetVals : numSetCols;
-                    int isComposite = (strchr(idxC[ix], ',') != NULL);
+                    if (updIdx[ix].index_type != 'U') continue;
 
+                    /* Check if any SET column touches this index */
+                    int minSet2 = numSetVals < numSetCols ? numSetVals : numSetCols;
                     int wasSet = 0;
-                    if (isComposite) {
+                    if (updIdx[ix].expr_def[0]) {
+                        /* Expression index: always check if any referenced column was SET */
+                        wasSet = 1; /* conservative: always recheck */
+                    } else {
                         char colSpec[256];
-                        strncpy(colSpec, idxC[ix], sizeof(colSpec) - 1);
+                        strncpy(colSpec, updIdx[ix].col_list, sizeof(colSpec) - 1);
                         colSpec[sizeof(colSpec) - 1] = '\0';
                         char *ct = strtok(colSpec, ",");
                         while (ct) {
-                            int si;
-                            for (si = 0; si < minSet2; si++) {
+                            for (int si = 0; si < minSet2; si++) {
                                 if (strcasecmp(setCols[si], ct) == 0) { wasSet = 1; break; }
                             }
                             if (wasSet) break;
                             ct = strtok(NULL, ",");
                         }
-                    } else {
-                        int si;
-                        for (si = 0; si < minSet2; si++) {
-                            if (strcasecmp(setCols[si], idxC[ix]) == 0) { wasSet = 1; break; }
-                        }
                     }
                     if (!wasSet) continue;
 
-                    if (isComposite) {
-                        char oldKey[512] = "", newKey[512] = "";
-                        char colSpec2[256];
-                        int si, first;
-                        strncpy(colSpec2, idxC[ix], sizeof(colSpec2) - 1);
-                        colSpec2[sizeof(colSpec2) - 1] = '\0';
-                        char *ct = strtok(colSpec2, ",");
-                        first = 1;
-                        while (ct) {
-                            for (si = 0; si < numMetaCols; si++) {
-                                if (strcasecmp(metaCols[si], ct) == 0 && si < numFields) {
-                                    if (!first) { strcat(oldKey, "|"); strcat(newKey, "|"); }
-                                    strcat(oldKey, oldFields[si]);
-                                    strcat(newKey, fields[si]);
-                                    first = 0;
-                                    break;
-                                }
-                            }
-                            ct = strtok(NULL, ",");
-                        }
-                        if (newKey[0] && strcmp(oldKey, newKey) != 0) {
-                            char dupCheck[1][256];
-                            if (btree_search(idxP[ix], newKey, dupCheck, 1) > 0) {
-                                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                                         "duplicate key value violates unique index \"%s\"",
-                                         idxN[ix]);
-                                g_gui_error = 1;
-                                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
-                                return -1;
-                            }
-                        }
-                    } else {
-                        int colIdx = -1, si;
-                        for (si = 0; si < numMetaCols; si++) {
-                            if (strcasecmp(metaCols[si], idxC[ix]) == 0) { colIdx = si; break; }
-                        }
-                        if (colIdx >= 0 && colIdx < numFields &&
-                            fields[colIdx][0] && strcmp(oldFields[colIdx], fields[colIdx]) != 0) {
-                            char dupCheck[1][256];
-                            if (btree_search(idxP[ix], fields[colIdx], dupCheck, 1) > 0) {
-                                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                                         "duplicate key value violates unique index \"%s\" (key=%s)",
-                                         idxN[ix], fields[colIdx]);
-                                g_gui_error = 1;
-                                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
-                                return -1;
-                            }
+                    char oldKey[512], newKey[512];
+                    idx_build_key_ex(&updIdx[ix],
+                                     (const char *)metaCols, 256,
+                                     (const char *)oldFields, 256,
+                                     numMetaCols, oldKey, sizeof(oldKey));
+                    idx_build_key_ex(&updIdx[ix],
+                                     (const char *)metaCols, 256,
+                                     (const char *)fields, 256,
+                                     numMetaCols, newKey, sizeof(newKey));
+
+                    if (newKey[0] && strcmp(oldKey, newKey) != 0) {
+                        char idxPath[1024];
+                        snprintf(idxPath, sizeof(idxPath), "%u:%s:%u",
+                                 updIdx[ix].table_id, updIdx[ix].index_name,
+                                 updIdx[ix].root_page);
+                        char dupCheck[1][256];
+                        if (btree_search(idxPath, newKey, dupCheck, 1) > 0) {
+                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                     "duplicate key value violates unique index \"%s\" (key=%s)",
+                                     updIdx[ix].index_name, newKey);
+                            g_gui_error = 1;
+                            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                            return -1;
                         }
                     }
                 }
-            }
         }
 
         /* Update record in heap (may move to new page) */
@@ -769,74 +741,47 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
 
         /* Post-store: update secondary B-tree indexes for changed columns */
-        if (tblName && tblName[0]) {
-            char idxN[16][256], idxC[16][256], idxP[16][1024];
-            char idxT[16];
-            int nIdx = index_list_with_types(tblName, idxN, idxC, idxP, idxT, 16);
-            if (nIdx > 0) {
+        if (nIdx > 0) {
                 int ix;
                 for (ix = 0; ix < nIdx; ix++) {
                     int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
-                    int isComposite = (strchr(idxC[ix], ',') != NULL);
 
+                    /* Check if any SET column touches this index */
                     int wasSet = 0;
-                    if (isComposite) {
+                    if (updIdx[ix].expr_def[0]) {
+                        wasSet = 1; /* expression index: conservative check */
+                    } else {
                         char colSpec[256];
-                        strncpy(colSpec, idxC[ix], sizeof(colSpec) - 1);
+                        strncpy(colSpec, updIdx[ix].col_list, sizeof(colSpec) - 1);
                         colSpec[sizeof(colSpec) - 1] = '\0';
                         char *ct = strtok(colSpec, ",");
                         while (ct) {
-                            int si;
-                            for (si = 0; si < minSet; si++) {
+                            for (int si = 0; si < minSet; si++) {
                                 if (strcasecmp(setCols[si], ct) == 0) { wasSet = 1; break; }
                             }
                             if (wasSet) break;
                             ct = strtok(NULL, ",");
                         }
-                    } else {
-                        int si;
-                        for (si = 0; si < minSet; si++) {
-                            if (strcasecmp(setCols[si], idxC[ix]) == 0) { wasSet = 1; break; }
-                        }
                     }
                     if (!wasSet) continue;
 
-                    if (isComposite) {
-                        char oldKey[512] = "", newKey[512] = "";
-                        char colSpec2[256];
-                        int si, first;
+                    char oldKey[512], newKey[512];
+                    idx_build_key_ex(&updIdx[ix],
+                                     (const char *)metaCols, 256,
+                                     (const char *)oldFields, 256,
+                                     numMetaCols, oldKey, sizeof(oldKey));
+                    idx_build_key_ex(&updIdx[ix],
+                                     (const char *)metaCols, 256,
+                                     (const char *)fields, 256,
+                                     numMetaCols, newKey, sizeof(newKey));
 
-                        strncpy(colSpec2, idxC[ix], sizeof(colSpec2) - 1);
-                        colSpec2[sizeof(colSpec2) - 1] = '\0';
-                        char *ct = strtok(colSpec2, ",");
-                        first = 1;
-                        while (ct) {
-                            for (si = 0; si < numMetaCols; si++) {
-                                if (strcasecmp(metaCols[si], ct) == 0 && si < numFields) {
-                                    if (!first) { strcat(oldKey, "|"); strcat(newKey, "|"); }
-                                    strcat(oldKey, oldFields[si]);
-                                    strcat(newKey, fields[si]);
-                                    first = 0;
-                                    break;
-                                }
-                            }
-                            ct = strtok(NULL, ",");
-                        }
-                        if (oldKey[0]) btree_delete(idxP[ix], oldKey, pkKey);
-                        if (newKey[0]) btree_insert(idxP[ix], newKey, pkKey);
-                    } else {
-                        int colIdx = -1, si;
-                        for (si = 0; si < numMetaCols; si++) {
-                            if (strcasecmp(metaCols[si], idxC[ix]) == 0) { colIdx = si; break; }
-                        }
-                        if (colIdx < 0 || colIdx >= numFields) continue;
-                        if (oldFields[colIdx][0])
-                            btree_delete(idxP[ix], oldFields[colIdx], pkKey);
-                        if (fields[colIdx][0])
-                            btree_insert(idxP[ix], fields[colIdx], pkKey);
-                    }
+                    char idxPath[1024];
+                    snprintf(idxPath, sizeof(idxPath), "%u:%s:%u",
+                             updIdx[ix].table_id, updIdx[ix].index_name,
+                             updIdx[ix].root_page);
+                    if (oldKey[0]) btree_delete(idxPath, oldKey, pkKey);
+                    if (newKey[0]) btree_insert(idxPath, newKey, pkKey);
                 }
-            }
         }
     }
 

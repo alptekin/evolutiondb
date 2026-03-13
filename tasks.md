@@ -454,7 +454,7 @@
 
 ---
 
-### Task 23: ⬜ Composite Index — Multi-Column B-tree (Feature #83)
+### Task 23: ✅ Composite Index — Multi-Column B-tree (Feature #83)
 
 **Goal:** `CREATE INDEX idx ON table (col1, col2, ...)` with multi-column key. In MySQL, MSSQL, and Oracle.
 
@@ -475,7 +475,7 @@
 
 ## Day 13 — Index Enhancements
 
-### Task 24: ⬜ Expression / Functional Index (Feature #84)
+### Task 24: ✅ Expression / Functional Index (Feature #84)
 
 **Goal:** `CREATE INDEX idx ON table (LOWER(col))` or `CREATE INDEX idx ON table (col1 + col2)`. In MySQL 8.0, MSSQL, and Oracle.
 

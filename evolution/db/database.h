@@ -11,6 +11,10 @@
 typedef struct { uint32_t page_no; uint16_t slot_idx; } RowID;
 #endif
 
+/* Forward declaration — full definition in expression.h */
+struct ExprNode;
+
+
 /* Minimum padded record size - ensures UPDATE can overwrite in-place */
 #define RECORD_PAD_SIZE 256
 
@@ -67,6 +71,7 @@ void SetIndexAddColumn(const char *colName);
 void SetDropIndexName(const char *idxName);
 void SetIndexUnique(void);
 void SetIndexIfNotExists(void);
+void SetIndexExpression(struct ExprNode *expr);
 
 /* B-tree index API */
 int  btree_create(const char *path);
@@ -86,6 +91,21 @@ int  index_list_for_table(const char *tblPath, char names[][256],
 int  index_list_with_types(const char *tblPath, char names[][256],
                            char cols[][256], char paths[][1024],
                            char types[], int max);
+
+/* Load secondary indexes as IndexDesc array (excludes PK) */
+struct IndexDesc;
+int  idx_load_secondary(const char *tblName, struct IndexDesc *out, int max);
+
+/* Build index key from row data (handles expression, composite, single column) */
+int  idx_build_key(const struct IndexDesc *idx,
+                   const char colNames[][128], int numCols,
+                   const char colValues[][256],
+                   char *keyBuf, int keyBufSize);
+int  idx_build_key_ex(const struct IndexDesc *idx,
+                      const char *colNamesBuf, int nameStride,
+                      const char *colValuesBuf, int valueStride,
+                      int numCols,
+                      char *keyBuf, int keyBufSize);
 
 /* Secondary index operations (page-based bt2) */
 int  sec_idx_search(uint32_t root_page, const char *indexed_val,

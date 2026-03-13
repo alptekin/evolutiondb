@@ -101,6 +101,7 @@ typedef struct QueryContext {
     char indexColumnName[256];
     int  indexUnique;
     int  indexIfNotExists;
+    char indexExprDef[1024];        /* expression index: serialized RPN */
 
     /* ---- Error handling ---- */
     jmp_buf gui_jmpbuf;
@@ -255,6 +256,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_indexColumnName       (g_qctx->indexColumnName)
 #define g_indexUnique           (g_qctx->indexUnique)
 #define g_indexIfNotExists      (g_qctx->indexIfNotExists)
+#define g_indexExprDef          (g_qctx->indexExprDef)
 
 /* Error handling */
 #define g_gui_jmpbuf            (g_qctx->gui_jmpbuf)

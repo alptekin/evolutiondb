@@ -8,6 +8,35 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 
+static void GetFieldValue(const char *data, int colIndex,
+                          char *buf, int bufSize);
+
+/* Remove secondary index entries for a deleted record */
+static void delete_secondary_indexes(const char *tblName,
+                                     const char colNames[][128], int numCols,
+                                     const char *rec, const char *pkKey)
+{
+    IndexDesc delIdx[16];
+    int nIdx = idx_load_secondary(tblName, delIdx, 16);
+    if (nIdx <= 0) return;
+    char colVals[64][256];
+    for (int ci = 0; ci < numCols && ci < 64; ci++)
+        GetFieldValue(rec, ci, colVals[ci], sizeof(colVals[ci]));
+    for (int ix = 0; ix < nIdx; ix++) {
+        char idxKey[512];
+        if (idx_build_key(&delIdx[ix],
+                (const char (*)[128])colNames, numCols,
+                (const char (*)[256])colVals,
+                idxKey, sizeof(idxKey)) && idxKey[0]) {
+            char idxPath[1024];
+            snprintf(idxPath, sizeof(idxPath), "%u:%s:%u",
+                     delIdx[ix].table_id, delIdx[ix].index_name,
+                     delIdx[ix].root_page);
+            btree_delete(idxPath, idxKey, pkKey);
+        }
+    }
+}
+
 /* Extract field at colIndex from semicolon-separated record */
 static void GetFieldValue(const char *data, int colIndex,
                           char *buf, int bufSize)
@@ -442,51 +471,7 @@ int DeleteProcess(void)
                                                g_tblDelName, matchKeys[i], rec);
 
                         /* Remove from secondary B-tree indexes */
-                        {
-                            char idxN[16][256], idxC[16][256], idxP[16][1024];
-                            int nIdx = index_list_for_table(g_tblDelName, idxN, idxC, idxP, 16);
-                            if (nIdx > 0) {
-                                int ix;
-                                for (ix = 0; ix < nIdx; ix++) {
-                                    int isComposite = (strchr(idxC[ix], ',') != NULL);
-                                    if (isComposite) {
-                                        char compKey[512] = "";
-                                        char colSpec[256];
-                                        strncpy(colSpec, idxC[ix], sizeof(colSpec) - 1);
-                                        colSpec[sizeof(colSpec) - 1] = '\0';
-                                        char *ct = strtok(colSpec, ",");
-                                        int first = 1;
-                                        while (ct) {
-                                            int ci;
-                                            for (ci = 0; ci < numCols; ci++) {
-                                                if (strcasecmp(colNames[ci], ct) == 0) {
-                                                    char fv[256];
-                                                    GetFieldValue(rec, ci, fv, sizeof(fv));
-                                                    if (!first) strcat(compKey, "|");
-                                                    strcat(compKey, fv);
-                                                    first = 0;
-                                                    break;
-                                                }
-                                            }
-                                            ct = strtok(NULL, ",");
-                                        }
-                                        if (compKey[0])
-                                            btree_delete(idxP[ix], compKey, matchKeys[i]);
-                                    } else {
-                                        char cv[256] = "";
-                                        int ci;
-                                        for (ci = 0; ci < numCols; ci++) {
-                                            if (strcasecmp(colNames[ci], idxC[ix]) == 0) {
-                                                GetFieldValue(rec, ci, cv, sizeof(cv));
-                                                break;
-                                            }
-                                        }
-                                        if (cv[0])
-                                            btree_delete(idxP[ix], cv, matchKeys[i]);
-                                    }
-                                }
-                            }
-                        }
+                        delete_secondary_indexes(g_tblDelName, colNames, numCols, rec, matchKeys[i]);
                     }
 
                     /* Delete from heap and PK B+ tree */
@@ -528,51 +513,7 @@ int DeleteProcess(void)
                                        g_tblDelName, str, rec);
 
                 /* Remove from secondary B-tree indexes */
-                {
-                    char idxN[16][256], idxC[16][256], idxP[16][1024];
-                    int nIdx = index_list_for_table(g_tblDelName, idxN, idxC, idxP, 16);
-                    if (nIdx > 0) {
-                        int ix;
-                        for (ix = 0; ix < nIdx; ix++) {
-                            int isComposite = (strchr(idxC[ix], ',') != NULL);
-                            if (isComposite) {
-                                char compKey[512] = "";
-                                char colSpec[256];
-                                strncpy(colSpec, idxC[ix], sizeof(colSpec) - 1);
-                                colSpec[sizeof(colSpec) - 1] = '\0';
-                                char *ct = strtok(colSpec, ",");
-                                int first = 1;
-                                while (ct) {
-                                    int ci;
-                                    for (ci = 0; ci < numCols; ci++) {
-                                        if (strcasecmp(colNames[ci], ct) == 0) {
-                                            char fv[256];
-                                            GetFieldValue(rec, ci, fv, sizeof(fv));
-                                            if (!first) strcat(compKey, "|");
-                                            strcat(compKey, fv);
-                                            first = 0;
-                                            break;
-                                        }
-                                    }
-                                    ct = strtok(NULL, ",");
-                                }
-                                if (compKey[0])
-                                    btree_delete(idxP[ix], compKey, str);
-                            } else {
-                                char cv[256] = "";
-                                int ci;
-                                for (ci = 0; ci < numCols; ci++) {
-                                    if (strcasecmp(colNames[ci], idxC[ix]) == 0) {
-                                        GetFieldValue(rec, ci, cv, sizeof(cv));
-                                        break;
-                                    }
-                                }
-                                if (cv[0])
-                                    btree_delete(idxP[ix], cv, str);
-                            }
-                        }
-                    }
-                }
+                delete_secondary_indexes(g_tblDelName, colNames, numCols, rec, str);
             }
 
             tapi_heap_delete(rid);

@@ -406,6 +406,68 @@ static int find_composite_index_match(const char *tableName,
     return 0;
 }
 
+/* Try to match a WHERE expression against expression indexes.
+ * Detects patterns like: UPPER(col) = 'val', LOWER(col) = 'val', etc.
+ * Returns 1 if matched, fills idxPath and lookupVal. */
+static int find_expr_index_match(const char *tableName, const ExprNode *whereExpr,
+                                 char *idxPath, int idxPathSize,
+                                 char *lookupVal, int valSize,
+                                 char *matchedIdxName, int nameSize)
+{
+    if (!whereExpr || whereExpr->type != EXPR_CMP_EQ) return 0;
+
+    /* One side must be a literal, the other a function expression */
+    const ExprNode *exprSide = NULL;
+    const ExprNode *valSide = NULL;
+
+    if (whereExpr->left && (whereExpr->left->type == EXPR_UPPER ||
+        whereExpr->left->type == EXPR_LOWER || whereExpr->left->type == EXPR_LENGTH ||
+        whereExpr->left->type == EXPR_CONCAT)) {
+        exprSide = whereExpr->left;
+        valSide = whereExpr->right;
+    } else if (whereExpr->right && (whereExpr->right->type == EXPR_UPPER ||
+               whereExpr->right->type == EXPR_LOWER || whereExpr->right->type == EXPR_LENGTH ||
+               whereExpr->right->type == EXPR_CONCAT)) {
+        exprSide = whereExpr->right;
+        valSide = whereExpr->left;
+    }
+    if (!exprSide || !valSide) return 0;
+
+    /* valSide must be a literal */
+    if (valSide->type != EXPR_LITERAL_STR && valSide->type != EXPR_LITERAL_INT &&
+        valSide->type != EXPR_LITERAL_FLOAT) return 0;
+
+    /* Serialize the expression side */
+    char exprBuf[1024];
+    expr_serialize(exprSide, exprBuf, sizeof(exprBuf));
+
+    /* Load secondary indexes and check for matching expr_def */
+    IndexDesc indexes[16];
+    int nIdx = idx_load_secondary(tableName, indexes, 16);
+    for (int i = 0; i < nIdx; i++) {
+        if (indexes[i].expr_def[0] && strcmp(indexes[i].expr_def, exprBuf) == 0) {
+            /* Match found — build index lookup path and value */
+            snprintf(idxPath, idxPathSize, "%u:%s:%u",
+                     indexes[i].table_id, indexes[i].index_name,
+                     indexes[i].root_page);
+            /* Extract literal value */
+            if (valSide->type == EXPR_LITERAL_STR)
+                strncpy(lookupVal, valSide->val.strval, valSize - 1);
+            else if (valSide->type == EXPR_LITERAL_INT)
+                snprintf(lookupVal, valSize, "%d", valSide->val.intval);
+            else
+                snprintf(lookupVal, valSize, "%g", valSide->val.floatval);
+            lookupVal[valSize - 1] = '\0';
+            if (matchedIdxName) {
+                strncpy(matchedIdxName, indexes[i].index_name, nameSize - 1);
+                matchedIdxName[nameSize - 1] = '\0';
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Check if query can use streaming (no post-processing needed) */
 static int can_stream_results(void)
 {
@@ -568,6 +630,55 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
             if (!used_index && index_exists(tableName, eq_col, idxPath, sizeof(idxPath))) {
                 char matchPKs[256][256];
                 int nMatch = btree_search(idxPath, eq_val, matchPKs, 256);
+                int m;
+                for (m = 0; m < nMatch; m++) {
+                    RowID rid;
+                    if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0)
+                        continue;
+                    char recBuf[RECORD_BUF_SIZE];
+                    if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
+                        continue;
+
+                    int row = result_add_row(rs);
+                    if (row < 0) break;
+
+                    char temp[RECORD_BUF_SIZE];
+                    int col = 0;
+                    strncpy(temp, recBuf, sizeof(temp) - 1);
+                    temp[sizeof(temp) - 1] = '\0';
+
+                    char *val = strtok(temp, ";");
+                    while (val && col < rs->num_cols) {
+                        if (strcmp(val, "\x01NULL\x01") == 0) {
+                            result_set_null(rs, row, col);
+                        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+                            if (strncasecmp(val, "true", 4) == 0 ||
+                                strcmp(val, "1") == 0 ||
+                                strcmp(val, "t") == 0)
+                                result_set_field(rs, row, col, "true");
+                            else
+                                result_set_field(rs, row, col, "false");
+                        } else {
+                            result_set_field(rs, row, col, val);
+                        }
+                        col++;
+                        val = strtok(NULL, ";");
+                    }
+                    count++;
+                }
+                used_index = 1;
+            }
+        }
+
+        /* Try expression index: UPPER(col) = 'val', LOWER(col) = 'val', etc. */
+        if (!used_index) {
+            char exprIdxPath[1024], exprLookupVal[256], exprIdxName[256];
+            if (find_expr_index_match(tableName, g_whereExpr,
+                    exprIdxPath, sizeof(exprIdxPath),
+                    exprLookupVal, sizeof(exprLookupVal),
+                    exprIdxName, sizeof(exprIdxName))) {
+                char matchPKs[256][256];
+                int nMatch = btree_search(exprIdxPath, exprLookupVal, matchPKs, 256);
                 int m;
                 for (m = 0; m < nMatch; m++) {
                     RowID rid;
@@ -2427,9 +2538,10 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 }
             }
 
-            /* Check if WHERE has a simple col = value */
+            /* Check if WHERE has a simple col = value or FUNC(col) = value */
             char whereCol[128] = "", whereVal[256] = "";
             int hasWhere = 0;
+            int hasExprWhere = 0;
             {
                 const char *w = innerNorm;
                 while (*w) {
@@ -2438,12 +2550,25 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         (w[5] == ' ' || w[5] == '\t')) {
                         w += 5;
                         while (*w && isspace((unsigned char)*w)) w++;
-                        /* Simple parse: NAME = VALUE */
+                        /* Simple parse: NAME = VALUE or FUNC(NAME) = VALUE */
                         int ci = 0;
                         while (*w && (isalnum((unsigned char)*w) || *w == '_') && ci < 127)
                             whereCol[ci++] = *w++;
                         whereCol[ci] = '\0';
                         while (*w && isspace((unsigned char)*w)) w++;
+                        /* Check if it's a function call: FUNC(col) */
+                        if (*w == '(') {
+                            hasExprWhere = 1;
+                            w++; /* skip ( */
+                            /* Skip everything until matching ) */
+                            int depth = 1;
+                            while (*w && depth > 0) {
+                                if (*w == '(') depth++;
+                                else if (*w == ')') depth--;
+                                w++;
+                            }
+                            while (*w && isspace((unsigned char)*w)) w++;
+                        }
                         if (*w == '=') {
                             w++;
                             while (*w && isspace((unsigned char)*w)) w++;
@@ -2464,6 +2589,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     w++;
                 }
             }
+
+            (void)hasExprWhere; /* used only for EXPLAIN context */
 
             /* Determine access method */
             const char *scanType = "Seq Scan";
@@ -2522,6 +2649,22 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                                     "Index Scan (Composite B-tree)";
                                 snprintf(indexName, sizeof(indexName),
                                          " using %s", idxNames[ix]);
+                                break;
+                            }
+                        }
+                    }
+
+                    /* Check expression indexes if still Seq Scan */
+                    if (strcmp(scanType, "Seq Scan") == 0) {
+                        IndexDesc exIdxes[16];
+                        int nExIdx = idx_load_secondary(tblName, exIdxes, 16);
+                        for (int ei = 0; ei < nExIdx; ei++) {
+                            if (exIdxes[ei].expr_def[0]) {
+                                scanType = (exIdxes[ei].index_type == 'U') ?
+                                    "Index Scan (Unique Expression B-tree)" :
+                                    "Index Scan (Expression B-tree)";
+                                snprintf(indexName, sizeof(indexName),
+                                         " using %s", exIdxes[ei].index_name);
                                 break;
                             }
                         }

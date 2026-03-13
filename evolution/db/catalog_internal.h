@@ -66,12 +66,13 @@ typedef struct {
     char     default_val[CAT_MAX_DEFAULT_LEN];
 } ColumnDesc;
 
-typedef struct {
+typedef struct IndexDesc {
     uint32_t table_id;
     char     index_name[CAT_MAX_NAME_LEN];
     uint32_t root_page;
     char     col_list[CAT_MAX_NAME_LEN];   /* comma-separated column names */
     char     index_type;                    /* 'P' primary, 'U' unique, 'N' normal */
+    char     expr_def[1024];               /* expression index: serialized RPN, empty if plain column */
 } IndexDesc;
 
 typedef struct {
@@ -156,6 +157,9 @@ int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max);
 int cat_create_index(uint32_t table_id, const char *name,
                      uint32_t root_page, const char *col_list,
                      char index_type);
+int cat_create_index_ex(uint32_t table_id, const char *name,
+                        uint32_t root_page, const char *col_list,
+                        char index_type, const char *expr_def);
 int cat_find_index(uint32_t table_id, const char *name, IndexDesc *out);
 int cat_find_index_by_name(const char *name, IndexDesc *out);
 int cat_list_indexes(uint32_t table_id, IndexDesc *out, int max);

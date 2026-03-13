@@ -1455,6 +1455,17 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
                           return ser_append(buf, pos, bufSize, "ISNULL");
     case EXPR_IS_NOT_NULL: pos = expr_serialize_r(e->left, buf, pos, bufSize);
                            return ser_append(buf, pos, bufSize, "ISNN");
+    /* Unary functions */
+    case EXPR_UPPER:      pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "UPR");
+    case EXPR_LOWER:      pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "LWR");
+    case EXPR_LENGTH:     pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "LEN");
+    /* Binary functions */
+    case EXPR_CONCAT:     pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "CAT");
     default:
         return pos; /* unsupported node type — skip */
     }
@@ -1495,13 +1506,18 @@ ExprNode *expr_deserialize(const char *buf)
         }
         /* Unary operators (check first — before binary) */
         else if ((strcmp(tok, "NOT") == 0 || strcmp(tok, "NEG") == 0 ||
-                  strcmp(tok, "ISNULL") == 0 || strcmp(tok, "ISNN") == 0) && sp >= 1) {
+                  strcmp(tok, "ISNULL") == 0 || strcmp(tok, "ISNN") == 0 ||
+                  strcmp(tok, "UPR") == 0 || strcmp(tok, "LWR") == 0 ||
+                  strcmp(tok, "LEN") == 0) && sp >= 1) {
             ExprNode *operand = stack[--sp];
             ExprNode *node = NULL;
             if      (strcmp(tok, "NOT") == 0)    node = expr_make_not(operand);
             else if (strcmp(tok, "NEG") == 0)    node = expr_make_neg(operand);
             else if (strcmp(tok, "ISNULL") == 0) node = expr_make_is_null(operand);
             else if (strcmp(tok, "ISNN") == 0)   node = expr_make_is_not_null(operand);
+            else if (strcmp(tok, "UPR") == 0)    node = expr_make_upper(operand);
+            else if (strcmp(tok, "LWR") == 0)    node = expr_make_lower(operand);
+            else if (strcmp(tok, "LEN") == 0)    node = expr_make_length(operand);
             if (node && sp < 64) stack[sp++] = node;
         }
         /* Binary operators — pop two operands */
@@ -1526,6 +1542,7 @@ ExprNode *expr_deserialize(const char *buf)
             else if (strcmp(tok, "MOD") == 0)   node = expr_make_binop(EXPR_MOD, left, right);
             else if (strcmp(tok, "LIKE") == 0)  node = expr_make_like(left, right);
             else if (strcmp(tok, "NLIKE") == 0) node = expr_make_not_like(left, right);
+            else if (strcmp(tok, "CAT") == 0)   node = expr_make_concat(left, right);
             else {
                 /* Unknown op — push operands back and skip */
                 stack[sp++] = left;

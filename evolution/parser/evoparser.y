@@ -855,6 +855,40 @@ index_col_list: NAME
         SetIndexAddColumn($3);
         free($3);
     }
+| index_expr
+    {
+        /* Expression index — single expression, already set via SetIndexExpression */
+    }
+;
+
+index_expr: FUPPER '(' NAME ')'
+    {
+        emit("IDX_EXPR UPPER(%s)", $3);
+        SetIndexAddColumn($3);
+        SetIndexExpression(expr_make_upper(expr_make_column($3)));
+        free($3);
+    }
+| FLOWER '(' NAME ')'
+    {
+        emit("IDX_EXPR LOWER(%s)", $3);
+        SetIndexAddColumn($3);
+        SetIndexExpression(expr_make_lower(expr_make_column($3)));
+        free($3);
+    }
+| FLENGTH '(' NAME ')'
+    {
+        emit("IDX_EXPR LENGTH(%s)", $3);
+        SetIndexAddColumn($3);
+        SetIndexExpression(expr_make_length(expr_make_column($3)));
+        free($3);
+    }
+| FCONCAT '(' NAME ',' NAME ')'
+    {
+        emit("IDX_EXPR CONCAT(%s,%s)", $3, $5);
+        SetIndexAddColumn($3);
+        SetIndexExpression(expr_make_concat(expr_make_column($3), expr_make_column($5)));
+        free($3); free($5);
+    }
 ;
 
 /** drop index **/

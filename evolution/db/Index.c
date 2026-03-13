@@ -19,6 +19,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "database.h"
+#include "expression.h"
 #include "catalog_internal.h"
 #include "table_api.h"
 
@@ -205,6 +206,19 @@ int index_list_with_types(const char *tblPath, char names[][256],
     return count;
 }
 
+/* ── Load secondary indexes as IndexDesc array ── */
+int idx_load_secondary(const char *tblName, IndexDesc *out, int max)
+{
+    IndexDesc all[16];
+    int n = idx_load_for_table(tblName, all, 16);
+    int count = 0;
+    for (int i = 0; i < n && count < max; i++) {
+        if (all[i].index_type == 'P') continue;
+        out[count++] = all[i];
+    }
+    return count;
+}
+
 /* ── Parse "table_id:index_name:root_page" from legacy path string ── */
 static void parse_idx_path(const char *path,
                            uint32_t *table_id, char *idx_name, int name_size,
@@ -341,6 +355,12 @@ void SetIndexIfNotExists(void)
     g_indexIfNotExists = 1;
 }
 
+void SetIndexExpression(ExprNode *expr)
+{
+    if (!expr) return;
+    expr_serialize(expr, g_indexExprDef, sizeof(g_indexExprDef));
+}
+
 void SetDropIndexName(const char *idxName)
 {
     strncpy(g_indexName, idxName, sizeof(g_indexName) - 1);
@@ -386,6 +406,85 @@ static int build_composite_key_from_record(const char *colSpec,
     return keyBuf[0] != '\0';
 }
 
+/* ── Build index key for a given IndexDesc from row data ──
+ * Returns 1 if key was built, 0 if failed.
+ * For expression indexes: evaluates the stored RPN expression.
+ * For composite indexes: joins column values with '|'.
+ * For single-column indexes: copies the column value. */
+int idx_build_key_ex(const IndexDesc *idx,
+                     const char *colNamesBuf, int nameStride,
+                     const char *colValuesBuf, int valueStride,
+                     int numCols,
+                     char *keyBuf, int keyBufSize)
+{
+    keyBuf[0] = '\0';
+
+    /* Helper macros for accessing strided arrays */
+    #define COLNAME(i)  (colNamesBuf  + (i) * nameStride)
+    #define COLVALUE(i) (colValuesBuf + (i) * valueStride)
+
+    if (idx->expr_def[0]) {
+        /* Expression index: need 128/256 arrays for expr_evaluate */
+        char cn[64][128], cv[64][256];
+        int n = numCols < 64 ? numCols : 64;
+        for (int i = 0; i < n; i++) {
+            strncpy(cn[i], COLNAME(i), 127); cn[i][127] = '\0';
+            strncpy(cv[i], COLVALUE(i), 255); cv[i][255] = '\0';
+        }
+        ExprNode *idxExpr = expr_deserialize(idx->expr_def);
+        if (!idxExpr) { return 0; }
+        int rc = expr_evaluate(idxExpr, (const char (*)[128])cn,
+                               (const char (*)[256])cv, n,
+                               keyBuf, keyBufSize);
+        return rc;
+    }
+
+    if (strchr(idx->col_list, ',')) {
+        /* Composite index */
+        char colSpec[256];
+        strncpy(colSpec, idx->col_list, sizeof(colSpec) - 1);
+        colSpec[sizeof(colSpec) - 1] = '\0';
+        char *tok = strtok(colSpec, ",");
+        int first = 1;
+        while (tok) {
+            for (int ci = 0; ci < numCols; ci++) {
+                if (strcasecmp(COLNAME(ci), tok) == 0) {
+                    if (!first) strncat(keyBuf, "|", keyBufSize - strlen(keyBuf) - 1);
+                    strncat(keyBuf, COLVALUE(ci), keyBufSize - strlen(keyBuf) - 1);
+                    first = 0;
+                    break;
+                }
+            }
+            tok = strtok(NULL, ",");
+        }
+        return keyBuf[0] != '\0';
+    }
+
+    /* Single column */
+    for (int ci = 0; ci < numCols; ci++) {
+        if (strcasecmp(COLNAME(ci), idx->col_list) == 0) {
+            strncpy(keyBuf, COLVALUE(ci), keyBufSize - 1);
+            keyBuf[keyBufSize - 1] = '\0';
+            return 1;
+        }
+    }
+
+    #undef COLNAME
+    #undef COLVALUE
+    return 0;
+}
+
+/* Convenience wrapper for [128]/[256] arrays */
+int idx_build_key(const IndexDesc *idx,
+                  const char colNames[][128], int numCols,
+                  const char colValues[][256],
+                  char *keyBuf, int keyBufSize)
+{
+    return idx_build_key_ex(idx, (const char *)colNames, 128,
+                            (const char *)colValues, 256,
+                            numCols, keyBuf, keyBufSize);
+}
+
 /* ── CREATE INDEX ── */
 int CreateIndexProcess(void)
 {
@@ -400,7 +499,7 @@ int CreateIndexProcess(void)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "table '%s' does not exist", g_indexTableName);
         g_gui_error = 1;
-        g_indexUnique = 0; g_indexIfNotExists = 0;
+        g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
         return -1;
     }
 
@@ -420,7 +519,7 @@ int CreateIndexProcess(void)
                          "column '%s' does not exist in table '%s'",
                          ct, g_indexTableName);
                 g_gui_error = 1;
-                g_indexUnique = 0; g_indexIfNotExists = 0;
+                g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
                 return -1;
             }
             ct = strtok(NULL, ",");
@@ -435,13 +534,13 @@ int CreateIndexProcess(void)
             if (strcasecmp(existing[i].col_list, g_indexColumnName) == 0 &&
                 existing[i].index_type != 'P') {
                 if (g_indexIfNotExists) {
-                    g_indexUnique = 0; g_indexIfNotExists = 0;
+                    g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
                     return 0;
                 }
                 snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                          "index already exists on column '%s'", g_indexColumnName);
                 g_gui_error = 1;
-                g_indexUnique = 0; g_indexIfNotExists = 0;
+                g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
                 return -1;
             }
         }
@@ -453,7 +552,7 @@ int CreateIndexProcess(void)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "failed to create index B+ tree");
         g_gui_error = 1;
-        g_indexUnique = 0; g_indexIfNotExists = 0;
+        g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
         return -1;
     }
 
@@ -467,6 +566,12 @@ int CreateIndexProcess(void)
             numCols++;
         }
         int isComposite = (strchr(g_indexColumnName, ',') != NULL);
+        int isExprIndex = (g_indexExprDef[0] != '\0');
+
+        /* Deserialize expression for expression indexes */
+        ExprNode *idxExpr = NULL;
+        if (isExprIndex)
+            idxExpr = expr_deserialize(g_indexExprDef);
 
         TableScanCursor scanCur;
         char pkBuf[256];
@@ -476,7 +581,25 @@ int CreateIndexProcess(void)
             while (tapi_scan_next(&scanCur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
                 char idxKey[512] = "";
 
-                if (isComposite) {
+                if (isExprIndex && idxExpr) {
+                    /* Evaluate expression against row to get index key */
+                    char colValues[64][256];
+                    int nv = 0;
+                    char recTmp[RECORD_BUF_SIZE];
+                    strncpy(recTmp, recBuf, sizeof(recTmp) - 1);
+                    recTmp[sizeof(recTmp) - 1] = '\0';
+                    char *t = strtok(recTmp, ";");
+                    while (t && nv < 64) {
+                        strncpy(colValues[nv], t, 255);
+                        colValues[nv][255] = '\0';
+                        nv++;
+                        t = strtok(NULL, ";");
+                    }
+                    expr_evaluate(idxExpr,
+                                  (const char (*)[128])colNames,
+                                  (const char (*)[256])colValues,
+                                  numCols, idxKey, sizeof(idxKey));
+                } else if (isComposite) {
                     build_composite_key_from_record(g_indexColumnName,
                         (const char (*)[128])colNames, numCols, recBuf,
                         idxKey, sizeof(idxKey));
@@ -513,7 +636,7 @@ int CreateIndexProcess(void)
                                      idxKey);
                             g_gui_error = 1;
                             bt2_destroy(&idx_tree);
-                            g_indexUnique = 0; g_indexIfNotExists = 0;
+                            g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
                             return -1;
                         }
                     }
@@ -535,14 +658,17 @@ int CreateIndexProcess(void)
 
     /* Register index in catalog */
     char idx_type = g_indexUnique ? 'U' : 'N';
-    cat_create_index(td.table_id, g_indexName, idx_tree.root_page,
-                     g_indexColumnName, idx_type);
+    cat_create_index_ex(td.table_id, g_indexName, idx_tree.root_page,
+                        g_indexColumnName, idx_type,
+                        g_indexExprDef[0] ? g_indexExprDef : NULL);
 
-    printf("Index '%s' created on %s(%s)%s.\n",
+    printf("Index '%s' created on %s(%s)%s%s.\n",
            g_indexName, g_indexTableName, g_indexColumnName,
-           g_indexUnique ? " [UNIQUE]" : "");
+           g_indexUnique ? " [UNIQUE]" : "",
+           g_indexExprDef[0] ? " [EXPRESSION]" : "");
     g_indexUnique = 0;
     g_indexIfNotExists = 0;
+    g_indexExprDef[0] = '\0';
     return 0;
 }
 
