@@ -10,7 +10,7 @@ COPY evolution/ evolution/
 COPY adaptor/ adaptor/
 COPY Makefile .
 
-RUN make clean; make generate && make adaptor TLS=1
+RUN make -C evolution clean; make -C adaptor clean; make generate && make adaptor TLS=1
 
 # ---- Runtime stage ----
 FROM debian:bookworm-slim

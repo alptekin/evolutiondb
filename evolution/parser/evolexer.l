@@ -117,6 +117,7 @@ FULL					{ return FULL; }
 FULLTEXT				{ return FULLTEXT; }
 
 GROUP					{ return GROUP; }
+HASH					{ return HASH; }
 HAVING					{ return HAVING; }
 HIGH_PRIORITY			{ return HIGH_PRIORITY; }
 HOUR_MICROSECOND		{ return HOUR_MICROSECOND; }

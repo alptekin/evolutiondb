@@ -15,6 +15,7 @@
 
 #include "page_mgr.h"
 #include "buffer_pool.h"
+#include "page_crypt.h"
 
 /* ----------------------------------------------------------------
  *  Global state (singleton — one global file per server)
@@ -138,6 +139,23 @@ static int create_new_file(const char *filepath)
         return -1;
     }
 
+    /* Try to initialize encryption for new database */
+    {
+        const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
+        if (enc_key && enc_key[0]) {
+            if (pcrypt_init_new(g_header.encryption_salt,
+                                g_header.wrapped_dek,
+                                g_header.page_iv_prefix) == 0) {
+                g_header.encryption_enabled = 1;
+            } else {
+                fprintf(stderr, "page_mgr: failed to initialize encryption\n");
+                close(g_global_fd);
+                g_global_fd = -1;
+                return -1;
+            }
+        }
+    }
+
     /* Write header to page 0 */
     if (bp_write(g_global_fd, &g_header, sizeof(FileHeader), 0) < 0) {
         close(g_global_fd);
@@ -202,6 +220,44 @@ int pgm_init(const char *filepath)
             pthread_mutex_unlock(&g_pgm_lock);
             return -1;
         }
+
+        /* --- Encryption state machine --- */
+        {
+            const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
+            int has_key = (enc_key && enc_key[0]);
+
+            if (g_header.encryption_enabled && has_key) {
+                /* Encrypted DB + key provided → unlock */
+                if (pcrypt_init_existing(g_header.encryption_salt,
+                                         g_header.wrapped_dek,
+                                         g_header.page_iv_prefix) < 0) {
+                    fprintf(stderr,
+                        "FATAL: Wrong encryption key for this database.\n"
+                        "The EVOSQL_ENCRYPTION_KEY does not match.\n");
+                    close(g_global_fd);
+                    g_global_fd = -1;
+                    pthread_mutex_unlock(&g_pgm_lock);
+                    return -1;
+                }
+            } else if (g_header.encryption_enabled && !has_key) {
+                /* Encrypted DB + no key → cannot open */
+                fprintf(stderr,
+                    "FATAL: Database is encrypted but EVOSQL_ENCRYPTION_KEY "
+                    "is not set.\nSet the environment variable to unlock.\n");
+                close(g_global_fd);
+                g_global_fd = -1;
+                pthread_mutex_unlock(&g_pgm_lock);
+                return -1;
+            } else if (!g_header.encryption_enabled && has_key) {
+                /* Unencrypted DB + key provided → warn and continue */
+                fprintf(stderr,
+                    "WARNING: EVOSQL_ENCRYPTION_KEY is set but database "
+                    "is not encrypted.\nEncryption is only applied to new "
+                    "databases. Continuing without encryption.\n");
+            }
+            /* else: no encryption, no key → normal operation */
+        }
+
         g_header_dirty = 0;
         pthread_mutex_unlock(&g_pgm_lock);
         return 0;
@@ -230,6 +286,7 @@ void pgm_shutdown(void)
 
     flush_header_if_dirty();
     bp_flush_all();
+    pcrypt_shutdown();
 
     close(g_global_fd);
     g_global_fd = -1;

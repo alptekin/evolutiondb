@@ -205,6 +205,7 @@
 %token UUID
 %token USING
 %token USE
+%token HASH
 
 %token VALIDATE
 %token VARCHAR
@@ -838,6 +839,42 @@ create_index_stmt: CREATE INDEX NAME ON NAME '(' index_col_list ')'
         /* NOTE: lexer matches "NOT EXISTS" as single EXISTS token (subtok=1) */
         emit("CREATEUNIQUEINDEX IF NOT EXISTS %s ON %s", $6, $8);
         SetIndexUnique();
+        SetIndexIfNotExists();
+        SetIndexInfo($6, $8, "");
+        free($6);
+        free($8);
+    }
+| CREATE INDEX NAME ON NAME USING HASH '(' index_col_list ')'
+    {
+        emit("CREATEHASHINDEX %s ON %s", $3, $5);
+        SetIndexUsingHash();
+        SetIndexInfo($3, $5, "");
+        free($3);
+        free($5);
+    }
+| CREATE INDEX IF EXISTS NAME ON NAME USING HASH '(' index_col_list ')'
+    {
+        emit("CREATEHASHINDEX IF NOT EXISTS %s ON %s", $5, $7);
+        SetIndexUsingHash();
+        SetIndexIfNotExists();
+        SetIndexInfo($5, $7, "");
+        free($5);
+        free($7);
+    }
+| CREATE UNIQUE INDEX NAME ON NAME USING HASH '(' index_col_list ')'
+    {
+        emit("CREATEUNIQUEHASHINDEX %s ON %s", $4, $6);
+        SetIndexUnique();
+        SetIndexUsingHash();
+        SetIndexInfo($4, $6, "");
+        free($4);
+        free($6);
+    }
+| CREATE UNIQUE INDEX IF EXISTS NAME ON NAME USING HASH '(' index_col_list ')'
+    {
+        emit("CREATEUNIQUEHASHINDEX IF NOT EXISTS %s ON %s", $6, $8);
+        SetIndexUnique();
+        SetIndexUsingHash();
         SetIndexIfNotExists();
         SetIndexInfo($6, $8, "");
         free($6);

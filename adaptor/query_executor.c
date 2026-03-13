@@ -447,9 +447,9 @@ static int find_expr_index_match(const char *tableName, const ExprNode *whereExp
     for (int i = 0; i < nIdx; i++) {
         if (indexes[i].expr_def[0] && strcmp(indexes[i].expr_def, exprBuf) == 0) {
             /* Match found — build index lookup path and value */
-            snprintf(idxPath, idxPathSize, "%u:%s:%u",
+            snprintf(idxPath, idxPathSize, "%u:%s:%u:%c",
                      indexes[i].table_id, indexes[i].index_name,
-                     indexes[i].root_page);
+                     indexes[i].root_page, indexes[i].index_type);
             /* Extract literal value */
             if (valSide->type == EXPR_LITERAL_STR)
                 strncpy(lookupVal, valSide->val.strval, valSize - 1);
@@ -2629,9 +2629,14 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     for (ix = 0; ix < nIdx; ix++) {
                         /* Exact single-column match */
                         if (strcasecmp(idxCols[ix], whereCol) == 0) {
-                            scanType = (idxTypes[ix] == 'U') ?
-                                "Index Scan (Unique B-tree)" :
-                                "Index Scan (B-tree)";
+                            if (idxTypes[ix] == 'H')
+                                scanType = "Index Scan (Hash)";
+                            else if (idxTypes[ix] == 'V')
+                                scanType = "Index Scan (Unique Hash)";
+                            else if (idxTypes[ix] == 'U')
+                                scanType = "Index Scan (Unique B-tree)";
+                            else
+                                scanType = "Index Scan (B-tree)";
                             snprintf(indexName, sizeof(indexName),
                                      " using %s", idxNames[ix]);
                             break;

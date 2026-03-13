@@ -848,9 +848,9 @@ int InsertProcess(void)
             int ix;
             for (ix = 0; ix < nIdx; ix++) {
                 preIdxKeys[ix][0] = '\0';
-                snprintf(preIdxPaths[ix], sizeof(preIdxPaths[ix]), "%u:%s:%u",
+                snprintf(preIdxPaths[ix], sizeof(preIdxPaths[ix]), "%u:%s:%u:%c",
                          secIdx[ix].table_id, secIdx[ix].index_name,
-                         secIdx[ix].root_page);
+                         secIdx[ix].root_page, secIdx[ix].index_type);
 
                 /* Build index key using common helper */
                 {
@@ -865,7 +865,7 @@ int InsertProcess(void)
                                   preIdxKeys[ix], sizeof(preIdxKeys[ix]));
                 }
 
-                if (preIdxKeys[ix][0] && secIdx[ix].index_type == 'U') {
+                if (preIdxKeys[ix][0] && (secIdx[ix].index_type == 'U' || secIdx[ix].index_type == 'V')) {
                     char dupCheck[1][256];
                     if (btree_search(preIdxPaths[ix], preIdxKeys[ix], dupCheck, 1) > 0) {
                         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),

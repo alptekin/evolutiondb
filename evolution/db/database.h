@@ -72,6 +72,7 @@ void SetDropIndexName(const char *idxName);
 void SetIndexUnique(void);
 void SetIndexIfNotExists(void);
 void SetIndexExpression(struct ExprNode *expr);
+void SetIndexUsingHash(void);
 
 /* B-tree index API */
 int  btree_create(const char *path);

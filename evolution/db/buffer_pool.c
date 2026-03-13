@@ -5,6 +5,7 @@
  * Internal mutex for concurrency-readiness.
  */
 #include "buffer_pool.h"
+#include "page_crypt.h"
 #include "apue.h"
 
 #include <string.h>
@@ -57,6 +58,37 @@ static ssize_t bp_pwrite(int fd, const void *buf, size_t count, off_t offset)
     if (lseek(fd, offset, SEEK_SET) == (off_t)-1)
         return -1;
     return write(fd, buf, (unsigned int)count);
+}
+
+/* ================================================================
+ *  TDE helpers — encrypt before disk write, decrypt after disk read.
+ *  Operates on full-page buffers only.  Page 0 is always plaintext.
+ * ================================================================ */
+static void bp_encrypt_and_write(int fd, const void *data, size_t len,
+                                 off_t page_no)
+{
+    if (pcrypt_is_enabled() && page_no > 0) {
+        uint8_t enc[BP_PAGE_SIZE];
+        memcpy(enc, data, len);
+        pcrypt_encrypt_page(enc, (uint32_t)page_no);
+        bp_pwrite(fd, enc, len, page_no * BP_PAGE_SIZE);
+    } else {
+        bp_pwrite(fd, data, len, page_no * BP_PAGE_SIZE);
+    }
+}
+
+static void bp_write_page_to_disk(BPPage *p)
+{
+    bp_encrypt_and_write(p->fd, p->data, (size_t)p->valid_len, p->page_no);
+}
+
+static ssize_t bp_read_page_from_disk(int fd, char *data, off_t page_no)
+{
+    ssize_t n = bp_pread(fd, data, BP_PAGE_SIZE, page_no * BP_PAGE_SIZE);
+    if (n > 0 && pcrypt_is_enabled() && page_no > 0) {
+        pcrypt_decrypt_page((uint8_t *)data, (uint32_t)page_no);
+    }
+    return n;
 }
 
 /* ================================================================
@@ -157,8 +189,7 @@ static void bp_evict(int idx)
     BPPage *p = &g_pool->pages[idx];
     if (p->fd >= 0) {
         if (p->dirty) {
-            bp_pwrite(p->fd, p->data, p->valid_len,
-                      p->page_no * BP_PAGE_SIZE);
+            bp_write_page_to_disk(p);
             g_pool->flushes++;
             p->dirty = 0;
         }
@@ -180,7 +211,7 @@ static int bp_load_page(int fd, off_t page_no)
     bp_evict(idx);
 
     p = &g_pool->pages[idx];
-    n = bp_pread(fd, p->data, BP_PAGE_SIZE, page_no * BP_PAGE_SIZE);
+    n = bp_read_page_from_disk(fd, p->data, page_no);
     if (n < 0) n = 0;
 
     p->fd          = fd;
@@ -379,8 +410,7 @@ int bp_write_append(int fd, const void *buf, size_t count, off_t *out_offset)
         for (i = 0; i < g_pool->num_pages; i++) {
             BPPage *p = &g_pool->pages[i];
             if (p->fd == fd && p->dirty) {
-                bp_pwrite(p->fd, p->data, p->valid_len,
-                          p->page_no * BP_PAGE_SIZE);
+                bp_write_page_to_disk(p);
                 g_pool->flushes++;
                 p->dirty = 0;
             }
@@ -395,8 +425,15 @@ int bp_write_append(int fd, const void *buf, size_t count, off_t *out_offset)
     if (out_offset)
         *out_offset = end_off;
 
-    /* Write through to disk */
-    bp_pwrite(fd, buf, count, end_off);
+    /* Write through to disk (encrypt if page-aligned append) */
+    {
+        off_t page_no = end_off / BP_PAGE_SIZE;
+        if (pcrypt_is_enabled() && count == BP_PAGE_SIZE && page_no > 0) {
+            bp_encrypt_and_write(fd, buf, count, page_no);
+        } else {
+            bp_pwrite(fd, buf, count, end_off);
+        }
+    }
 
     /* Cache the written data */
     {
@@ -465,7 +502,7 @@ int bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring)
             p = &ring->pages[ring->next_slot];
             ring->next_slot = (ring->next_slot + 1) % BP_RING_SIZE;
 
-            n = bp_pread(fd, p->data, BP_PAGE_SIZE, page_no * BP_PAGE_SIZE);
+            n = bp_read_page_from_disk(fd, p->data, page_no);
             if (n < 0) n = 0;
             p->fd        = fd;
             p->page_no   = page_no;
@@ -500,8 +537,7 @@ void bp_flush_fd(int fd)
     for (i = 0; i < g_pool->num_pages; i++) {
         BPPage *p = &g_pool->pages[i];
         if (p->fd == fd && p->dirty) {
-            bp_pwrite(p->fd, p->data, p->valid_len,
-                      p->page_no * BP_PAGE_SIZE);
+            bp_write_page_to_disk(p);
             g_pool->flushes++;
             p->dirty = 0;
         }
@@ -519,8 +555,7 @@ void bp_invalidate_fd(int fd)
         BPPage *p = &g_pool->pages[i];
         if (p->fd == fd) {
             if (p->dirty) {
-                bp_pwrite(p->fd, p->data, p->valid_len,
-                          p->page_no * BP_PAGE_SIZE);
+                bp_write_page_to_disk(p);
                 g_pool->flushes++;
             }
             bp_hash_remove(p->fd, p->page_no);
@@ -542,8 +577,7 @@ void bp_flush_all(void)
     for (i = 0; i < g_pool->num_pages; i++) {
         BPPage *p = &g_pool->pages[i];
         if (p->fd >= 0 && p->dirty) {
-            bp_pwrite(p->fd, p->data, p->valid_len,
-                      p->page_no * BP_PAGE_SIZE);
+            bp_write_page_to_disk(p);
             g_pool->flushes++;
             p->dirty = 0;
         }
