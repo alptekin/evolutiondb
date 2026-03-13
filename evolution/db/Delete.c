@@ -29,9 +29,9 @@ static void delete_secondary_indexes(const char *tblName,
                 (const char (*)[256])colVals,
                 idxKey, sizeof(idxKey)) && idxKey[0]) {
             char idxPath[1024];
-            snprintf(idxPath, sizeof(idxPath), "%u:%s:%u",
+            snprintf(idxPath, sizeof(idxPath), "%u:%s:%u:%c",
                      delIdx[ix].table_id, delIdx[ix].index_name,
-                     delIdx[ix].root_page);
+                     delIdx[ix].root_page, delIdx[ix].index_type);
             btree_delete(idxPath, idxKey, pkKey);
         }
     }

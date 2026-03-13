@@ -9,7 +9,9 @@ services:
     environment:
       EVOSQL_USER_NAME: admin
       EVOSQL_PASSWORD: admin
+      EVOSQL_ENCRYPTION_KEY: ${EVOSQL_ENCRYPTION_KEY:-MuhtacOldugunKudret!DamarlarindakiAsilKandaMevcuttur}
       # To generate a random password, remove or comment out EVOSQL_PASSWORD
+      # To disable encryption, set EVOSQL_ENCRYPTION_KEY to empty string
 
   cli:
     build: ./cli

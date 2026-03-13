@@ -102,6 +102,7 @@ typedef struct QueryContext {
     int  indexUnique;
     int  indexIfNotExists;
     char indexExprDef[1024];        /* expression index: serialized RPN */
+    int  indexUsingHash;            /* CREATE INDEX ... USING HASH */
 
     /* ---- Error handling ---- */
     jmp_buf gui_jmpbuf;
@@ -257,6 +258,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_indexUnique           (g_qctx->indexUnique)
 #define g_indexIfNotExists      (g_qctx->indexIfNotExists)
 #define g_indexExprDef          (g_qctx->indexExprDef)
+#define g_indexUsingHash        (g_qctx->indexUsingHash)
 
 /* Error handling */
 #define g_gui_jmpbuf            (g_qctx->gui_jmpbuf)

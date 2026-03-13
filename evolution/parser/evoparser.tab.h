@@ -195,35 +195,36 @@
      UUID = 411,
      USING = 412,
      USE = 413,
-     VALIDATE = 414,
-     VARCHAR = 415,
-     VALUES = 416,
-     VARBINARY = 417,
-     WHERE = 418,
-     WHEN = 419,
-     WITH = 420,
-     YEAR = 421,
-     YEAR_MONTH = 422,
-     ZEROFILL = 423,
-     EXISTS = 424,
-     FSUBSTRING = 425,
-     FTRIM = 426,
-     FDATE_ADD = 427,
-     FDATE_SUB = 428,
-     FCOUNT = 429,
-     FSUM = 430,
-     FAVG = 431,
-     FMIN = 432,
-     FMAX = 433,
-     FUPPER = 434,
-     FLOWER = 435,
-     FLENGTH = 436,
-     FCONCAT = 437,
-     FREPLACE = 438,
-     FCOALESCE = 439,
-     FGEN_RANDOM_UUID = 440,
-     FGEN_RANDOM_UUID_V7 = 441,
-     FSNOWFLAKE_ID = 442
+     HASH = 414,
+     VALIDATE = 415,
+     VARCHAR = 416,
+     VALUES = 417,
+     VARBINARY = 418,
+     WHERE = 419,
+     WHEN = 420,
+     WITH = 421,
+     YEAR = 422,
+     YEAR_MONTH = 423,
+     ZEROFILL = 424,
+     EXISTS = 425,
+     FSUBSTRING = 426,
+     FTRIM = 427,
+     FDATE_ADD = 428,
+     FDATE_SUB = 429,
+     FCOUNT = 430,
+     FSUM = 431,
+     FAVG = 432,
+     FMIN = 433,
+     FMAX = 434,
+     FUPPER = 435,
+     FLOWER = 436,
+     FLENGTH = 437,
+     FCONCAT = 438,
+     FREPLACE = 439,
+     FCOALESCE = 440,
+     FGEN_RANDOM_UUID = 441,
+     FGEN_RANDOM_UUID_V7 = 442,
+     FSNOWFLAKE_ID = 443
    };
 #endif
 /* Tokens.  */
@@ -383,35 +384,36 @@
 #define UUID 411
 #define USING 412
 #define USE 413
-#define VALIDATE 414
-#define VARCHAR 415
-#define VALUES 416
-#define VARBINARY 417
-#define WHERE 418
-#define WHEN 419
-#define WITH 420
-#define YEAR 421
-#define YEAR_MONTH 422
-#define ZEROFILL 423
-#define EXISTS 424
-#define FSUBSTRING 425
-#define FTRIM 426
-#define FDATE_ADD 427
-#define FDATE_SUB 428
-#define FCOUNT 429
-#define FSUM 430
-#define FAVG 431
-#define FMIN 432
-#define FMAX 433
-#define FUPPER 434
-#define FLOWER 435
-#define FLENGTH 436
-#define FCONCAT 437
-#define FREPLACE 438
-#define FCOALESCE 439
-#define FGEN_RANDOM_UUID 440
-#define FGEN_RANDOM_UUID_V7 441
-#define FSNOWFLAKE_ID 442
+#define HASH 414
+#define VALIDATE 415
+#define VARCHAR 416
+#define VALUES 417
+#define VARBINARY 418
+#define WHERE 419
+#define WHEN 420
+#define WITH 421
+#define YEAR 422
+#define YEAR_MONTH 423
+#define ZEROFILL 424
+#define EXISTS 425
+#define FSUBSTRING 426
+#define FTRIM 427
+#define FDATE_ADD 428
+#define FDATE_SUB 429
+#define FCOUNT 430
+#define FSUM 431
+#define FAVG 432
+#define FMIN 433
+#define FMAX 434
+#define FUPPER 435
+#define FLOWER 436
+#define FLENGTH 437
+#define FCONCAT 438
+#define FREPLACE 439
+#define FCOALESCE 440
+#define FGEN_RANDOM_UUID 441
+#define FGEN_RANDOM_UUID_V7 442
+#define FSNOWFLAKE_ID 443
 
 
 
@@ -427,7 +429,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 431 "parser/evoparser.tab.h"
+#line 433 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

@@ -677,7 +677,7 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         if (nIdx > 0) {
                 int ix;
                 for (ix = 0; ix < nIdx; ix++) {
-                    if (updIdx[ix].index_type != 'U') continue;
+                    if (updIdx[ix].index_type != 'U' && updIdx[ix].index_type != 'V') continue;
 
                     /* Check if any SET column touches this index */
                     int minSet2 = numSetVals < numSetCols ? numSetVals : numSetCols;
@@ -712,9 +712,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
                     if (newKey[0] && strcmp(oldKey, newKey) != 0) {
                         char idxPath[1024];
-                        snprintf(idxPath, sizeof(idxPath), "%u:%s:%u",
+                        snprintf(idxPath, sizeof(idxPath), "%u:%s:%u:%c",
                                  updIdx[ix].table_id, updIdx[ix].index_name,
-                                 updIdx[ix].root_page);
+                                 updIdx[ix].root_page, updIdx[ix].index_type);
                         char dupCheck[1][256];
                         if (btree_search(idxPath, newKey, dupCheck, 1) > 0) {
                             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -776,9 +776,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                                      numMetaCols, newKey, sizeof(newKey));
 
                     char idxPath[1024];
-                    snprintf(idxPath, sizeof(idxPath), "%u:%s:%u",
+                    snprintf(idxPath, sizeof(idxPath), "%u:%s:%u:%c",
                              updIdx[ix].table_id, updIdx[ix].index_name,
-                             updIdx[ix].root_page);
+                             updIdx[ix].root_page, updIdx[ix].index_type);
                     if (oldKey[0]) btree_delete(idxPath, oldKey, pkKey);
                     if (newKey[0]) btree_insert(idxPath, newKey, pkKey);
                 }

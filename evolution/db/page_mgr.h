@@ -29,7 +29,9 @@ typedef enum {
     PAGE_DATA       = 1,   /* slotted page for row storage */
     PAGE_BTREE_INT  = 2,   /* B+ tree internal node */
     PAGE_BTREE_LEAF = 3,   /* B+ tree leaf node */
-    PAGE_OVERFLOW   = 4    /* overflow for large records */
+    PAGE_OVERFLOW   = 4,   /* overflow for large records */
+    PAGE_HASH_DIR   = 5,   /* hash index directory page */
+    PAGE_HASH_BKT   = 6    /* hash index bucket page */
 } PageType;
 
 /* ----------------------------------------------------------------
@@ -74,7 +76,12 @@ typedef struct {
     uint32_t next_table_id;                    /* auto-increment for table IDs */
     uint32_t next_schema_id;                   /* auto-increment for schema IDs */
     uint32_t next_db_id;                       /* auto-increment for database IDs */
-    uint8_t  reserved[EVO_PAGE_SIZE - 92];     /* pad to full page */
+    /* --- Transparent Data Encryption (TDE) fields --- */
+    uint8_t  encryption_enabled;               /* 0=off, 1=AES-256 TDE active */
+    uint8_t  encryption_salt[16];              /* PBKDF2 salt for MEK derivation */
+    uint8_t  wrapped_dek[48];                  /* DEK encrypted with MEK (32 ct + 16 GCM tag) */
+    uint8_t  page_iv_prefix[8];               /* fixed CTR IV prefix (never changes on rekey) */
+    uint8_t  reserved[EVO_PAGE_SIZE - 165];    /* pad to full page (92 + 73 = 165) */
 } FileHeader;
 
 /* ----------------------------------------------------------------

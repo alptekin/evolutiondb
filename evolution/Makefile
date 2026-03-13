@@ -40,7 +40,9 @@ SRCS = main.c \
        db/slotted.c \
        db/btree2.c \
        db/catalog_internal.c \
-       db/table_api.c
+       db/table_api.c \
+       db/hash_idx.c \
+       db/page_crypt.c
 
 OBJS = $(SRCS:.c=.o)
 

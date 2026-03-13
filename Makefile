@@ -65,8 +65,8 @@ endif
 evolution:
 	$(MAKE) -C $(EVO_DIR)
 
-adaptor: evolution
-	$(MAKE) -C $(ADAPTOR_DIR)
+adaptor:
+	$(MAKE) -C $(ADAPTOR_DIR) TLS=$(TLS)
 
 cli:
 	$(MAKE) -C $(CLI_DIR)

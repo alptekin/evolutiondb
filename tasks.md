@@ -494,7 +494,7 @@
 
 ---
 
-### Task 25: ⬜ Hash Index (Feature #85)
+### Task 25: ✅ Hash Index (Feature #85)
 
 **Goal:** `CREATE INDEX idx ON table USING HASH (col)` for O(1) equality lookups. In MySQL (MEMORY/NDB) and Oracle.
 

@@ -6,6 +6,7 @@
 #include "database.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "hash_idx.h"
 
 int DropTableProcess(void)
 {
@@ -36,8 +37,13 @@ int DropTableProcess(void)
         int nIdx = cat_list_indexes(td.table_id, indexes, 16);
         for (int ix = 0; ix < nIdx; ix++) {
             if (indexes[ix].index_type == 'P') continue; /* PK handled above */
-            BTree2 idx_tree = { .root_page = indexes[ix].root_page };
-            bt2_destroy(&idx_tree);
+            if (indexes[ix].index_type == 'H' || indexes[ix].index_type == 'V') {
+                HashIndex hi = { .dir_page = indexes[ix].root_page };
+                hash_idx_destroy(&hi);
+            } else {
+                BTree2 idx_tree = { .root_page = indexes[ix].root_page };
+                bt2_destroy(&idx_tree);
+            }
         }
     }
 

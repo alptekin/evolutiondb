@@ -21,6 +21,21 @@
 #define DEFAULT_PG_PORT   5433
 #define DEFAULT_EVO_PORT  9967
 
+/* ---- Graceful shutdown on SIGTERM/SIGINT ---- */
+#ifndef _WIN32
+#include <signal.h>
+#include <unistd.h>
+
+static void shutdown_handler(int sig)
+{
+    (void)sig;
+    const char msg[] = "\n[server] Signal received — shutting down...\n";
+    (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    server_cleanup();
+    _exit(0);
+}
+#endif
+
 /* ---- Thread param for listener ---- */
 typedef struct {
     int                  port;
@@ -53,6 +68,8 @@ int main(int argc, char *argv[])
 
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGTERM, shutdown_handler);
+    signal(SIGINT,  shutdown_handler);
 #endif
 
     /* Initialise engine, locks, socket subsystem */

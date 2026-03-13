@@ -19,7 +19,7 @@ else
 endif
 
 ifeq ($(TLS),1)
-    CFLAGS_TLS = -DEVOSQL_TLS
+    CFLAGS_TLS = -DEVOSQL_TLS -DEVO_ENCRYPTION
     LDFLAGS += -lssl -lcrypto
 else
     CFLAGS_TLS =
@@ -68,7 +68,9 @@ EVO_DB_SRCS = $(EVO_DB)/db.c \
               $(EVO_DB)/slotted.c \
               $(EVO_DB)/btree2.c \
               $(EVO_DB)/catalog_internal.c \
-              $(EVO_DB)/table_api.c
+              $(EVO_DB)/table_api.c \
+              $(EVO_DB)/hash_idx.c \
+              $(EVO_DB)/page_crypt.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

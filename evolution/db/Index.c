@@ -22,6 +22,7 @@
 #include "expression.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "hash_idx.h"
 
 /* Separator between indexed value and PK in secondary index keys.
  * Using \x1F (Unit Separator) — sorts before printable chars, won't appear in data */
@@ -151,9 +152,9 @@ int index_exists(const char *tblPath, const char *colName,
         if (indexes[i].index_type == 'P') continue;
         if (strcasecmp(indexes[i].col_list, colName) == 0) {
             if (idxPath)
-                snprintf(idxPath, idxPathSize, "%u:%s:%u",
+                snprintf(idxPath, idxPathSize, "%u:%s:%u:%c",
                          indexes[i].table_id, indexes[i].index_name,
-                         indexes[i].root_page);
+                         indexes[i].root_page, indexes[i].index_type);
             return 1;
         }
     }
@@ -174,9 +175,9 @@ int index_list_for_table(const char *tblPath, char names[][256],
         names[count][255] = '\0';
         strncpy(cols[count], indexes[i].col_list, 255);
         cols[count][255] = '\0';
-        snprintf(paths[count], 1023, "%u:%s:%u",
+        snprintf(paths[count], 1023, "%u:%s:%u:%c",
                  indexes[i].table_id, indexes[i].index_name,
-                 indexes[i].root_page);
+                 indexes[i].root_page, indexes[i].index_type);
         count++;
     }
     return count;
@@ -197,9 +198,9 @@ int index_list_with_types(const char *tblPath, char names[][256],
         names[count][255] = '\0';
         strncpy(cols[count], indexes[i].col_list, 255);
         cols[count][255] = '\0';
-        snprintf(paths[count], 1023, "%u:%s:%u",
+        snprintf(paths[count], 1023, "%u:%s:%u:%c",
                  indexes[i].table_id, indexes[i].index_name,
-                 indexes[i].root_page);
+                 indexes[i].root_page, indexes[i].index_type);
         types[count] = indexes[i].index_type;
         count++;
     }
@@ -219,19 +220,19 @@ int idx_load_secondary(const char *tblName, IndexDesc *out, int max)
     return count;
 }
 
-/* ── Parse "table_id:index_name:root_page" from legacy path string ── */
+/* ── Parse "table_id:index_name:root_page[:type]" from legacy path string ── */
 static void parse_idx_path(const char *path,
                            uint32_t *table_id, char *idx_name, int name_size,
-                           uint32_t *root_page)
+                           uint32_t *root_page, char *idx_type)
 {
-    /* Format: "table_id:index_name:root_page" */
+    /* Format: "table_id:index_name:root_page[:type]" */
+    *idx_type = 'N';  /* default: B+ tree */
     char buf[1024];
     strncpy(buf, path, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
     char *p1 = strchr(buf, ':');
     if (!p1) {
-        /* Fallback: just a root_page number */
         *table_id = 0;
         idx_name[0] = '\0';
         *root_page = (uint32_t)strtoul(path, NULL, 10);
@@ -249,35 +250,57 @@ static void parse_idx_path(const char *path,
     *p2 = '\0';
     strncpy(idx_name, p1 + 1, name_size - 1);
     idx_name[name_size - 1] = '\0';
-    *root_page = (uint32_t)strtoul(p2 + 1, NULL, 10);
+
+    /* Check for optional 4th field: type char */
+    char *p3 = strchr(p2 + 1, ':');
+    if (p3) {
+        *p3 = '\0';
+        *root_page = (uint32_t)strtoul(p2 + 1, NULL, 10);
+        *idx_type = *(p3 + 1);
+    } else {
+        *root_page = (uint32_t)strtoul(p2 + 1, NULL, 10);
+    }
 }
 
-/* ── Legacy wrappers for old btree_* functions ──
- * The "path" argument is "table_id:index_name:root_page". */
+/* ── Helper: is this a hash index type? ── */
+static int is_hash_type(char t) { return t == 'H' || t == 'V'; }
+
+/* ── Legacy wrappers for btree_* functions ──
+ * The "path" argument is "table_id:index_name:root_page[:type]". */
 
 int btree_search(const char *path, const char *key,
                  char results[][256], int max_results)
 {
     uint32_t table_id, root_page;
-    char idx_name[256];
-    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page);
+    char idx_name[256], idx_type;
+    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page, &idx_type);
+
+    if (is_hash_type(idx_type)) {
+        HashIndex hi = { .dir_page = root_page };
+        return hash_idx_search(&hi, key, results, max_results);
+    }
     return sec_idx_search(root_page, key, results, max_results);
 }
 
 int btree_insert(const char *path, const char *key, const char *pk)
 {
     uint32_t table_id, root_page;
-    char idx_name[256];
-    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page);
+    char idx_name[256], idx_type;
+    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page, &idx_type);
 
-    /* Use non-zero sentinel — {0,0} is the "deleted" marker in bt2 */
-    RowID marker = { .page_no = 1, .slot_idx = 0 };
-    BTree2 tree = { .root_page = root_page };
     char composite_key[BT2_MAX_KEY_LEN + 1];
     sec_idx_make_key(key, pk, composite_key, sizeof(composite_key));
+
+    if (is_hash_type(idx_type)) {
+        HashIndex hi = { .dir_page = root_page };
+        RowID marker = { .page_no = 1, .slot_idx = 0 };
+        return hash_idx_insert(&hi, composite_key, marker);
+    }
+
+    RowID marker = { .page_no = 1, .slot_idx = 0 };
+    BTree2 tree = { .root_page = root_page };
     int rc = bt2_insert(&tree, composite_key, marker);
 
-    /* Update catalog if root_page changed (due to B+ tree split) */
     if (tree.root_page != root_page && table_id != 0 && idx_name[0]) {
         cat_update_index_root(table_id, idx_name, tree.root_page);
     }
@@ -287,15 +310,20 @@ int btree_insert(const char *path, const char *key, const char *pk)
 int btree_delete(const char *path, const char *key, const char *pk)
 {
     uint32_t table_id, root_page;
-    char idx_name[256];
-    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page);
+    char idx_name[256], idx_type;
+    parse_idx_path(path, &table_id, idx_name, sizeof(idx_name), &root_page, &idx_type);
 
-    BTree2 tree = { .root_page = root_page };
     char composite_key[BT2_MAX_KEY_LEN + 1];
     sec_idx_make_key(key, pk, composite_key, sizeof(composite_key));
+
+    if (is_hash_type(idx_type)) {
+        HashIndex hi = { .dir_page = root_page };
+        return hash_idx_delete(&hi, composite_key) == 0 ? 1 : 0;
+    }
+
+    BTree2 tree = { .root_page = root_page };
     int rc = bt2_delete(&tree, composite_key);
 
-    /* Update catalog if root_page changed */
     if (tree.root_page != root_page && table_id != 0 && idx_name[0]) {
         cat_update_index_root(table_id, idx_name, tree.root_page);
     }
@@ -359,6 +387,11 @@ void SetIndexExpression(ExprNode *expr)
 {
     if (!expr) return;
     expr_serialize(expr, g_indexExprDef, sizeof(g_indexExprDef));
+}
+
+void SetIndexUsingHash(void)
+{
+    g_indexUsingHash = 1;
 }
 
 void SetDropIndexName(const char *idxName)
@@ -499,7 +532,7 @@ int CreateIndexProcess(void)
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "table '%s' does not exist", g_indexTableName);
         g_gui_error = 1;
-        g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
+        g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
         return -1;
     }
 
@@ -534,7 +567,7 @@ int CreateIndexProcess(void)
             if (strcasecmp(existing[i].col_list, g_indexColumnName) == 0 &&
                 existing[i].index_type != 'P') {
                 if (g_indexIfNotExists) {
-                    g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
+                    g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
                     return 0;
                 }
                 snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -546,14 +579,32 @@ int CreateIndexProcess(void)
         }
     }
 
-    /* Create B+ tree for secondary index */
-    BTree2 idx_tree;
-    if (bt2_create(&idx_tree) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "failed to create index B+ tree");
-        g_gui_error = 1;
-        g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
-        return -1;
+    /* Create index structure (B+ tree or hash) */
+    int useHash = g_indexUsingHash;
+    BTree2 idx_tree = { .root_page = 0 };
+    HashIndex hash_idx = { .dir_page = 0 };
+    uint32_t idx_root = 0;
+
+    if (useHash) {
+        if (hash_idx_create(&hash_idx, HASH_DEFAULT_BUCKETS) < 0) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "failed to create hash index");
+            g_gui_error = 1;
+            g_indexUnique = 0; g_indexIfNotExists = 0;
+            g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
+            return -1;
+        }
+        idx_root = hash_idx.dir_page;
+    } else {
+        if (bt2_create(&idx_tree) < 0) {
+            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                     "failed to create index B+ tree");
+            g_gui_error = 1;
+            g_indexUnique = 0; g_indexIfNotExists = 0;
+            g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
+            return -1;
+        }
+        idx_root = idx_tree.root_page;
     }
 
     /* Populate index from existing rows */
@@ -582,7 +633,6 @@ int CreateIndexProcess(void)
                 char idxKey[512] = "";
 
                 if (isExprIndex && idxExpr) {
-                    /* Evaluate expression against row to get index key */
                     char colValues[64][256];
                     int nv = 0;
                     char recTmp[RECORD_BUF_SIZE];
@@ -630,13 +680,18 @@ int CreateIndexProcess(void)
                     if (g_indexUnique) {
                         /* Check for duplicate */
                         char dupCheck[1][256];
-                        if (sec_idx_search(idx_tree.root_page, idxKey, dupCheck, 1) > 0) {
+                        int dupCount = useHash
+                            ? hash_idx_search(&hash_idx, idxKey, dupCheck, 1)
+                            : sec_idx_search(idx_tree.root_page, idxKey, dupCheck, 1);
+                        if (dupCount > 0) {
                             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                                      "could not create unique index: duplicate key '%s'",
                                      idxKey);
                             g_gui_error = 1;
-                            bt2_destroy(&idx_tree);
-                            g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
+                            if (useHash) hash_idx_destroy(&hash_idx);
+                            else bt2_destroy(&idx_tree);
+                            g_indexUnique = 0; g_indexIfNotExists = 0;
+                            g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
                             return -1;
                         }
                     }
@@ -645,30 +700,41 @@ int CreateIndexProcess(void)
                     char compositeKey[BT2_MAX_KEY_LEN + 1];
                     sec_idx_make_key(idxKey, pkBuf, compositeKey, sizeof(compositeKey));
 
-                    /* Get the RowID from PK tree for direct heap access */
                     BTree2 pk_tree = tapi_pk_tree(&td);
                     RowID heap_rid;
                     if (bt2_search(&pk_tree, pkBuf, &heap_rid) == 0) {
-                        bt2_insert(&idx_tree, compositeKey, heap_rid);
+                        if (useHash)
+                            hash_idx_insert(&hash_idx, compositeKey, heap_rid);
+                        else
+                            bt2_insert(&idx_tree, compositeKey, heap_rid);
                     }
                 }
             }
         }
     }
 
+    /* Get final root page (may have changed due to splits) */
+    idx_root = useHash ? hash_idx.dir_page : idx_tree.root_page;
+
     /* Register index in catalog */
-    char idx_type = g_indexUnique ? 'U' : 'N';
-    cat_create_index_ex(td.table_id, g_indexName, idx_tree.root_page,
+    char idx_type;
+    if (useHash)
+        idx_type = g_indexUnique ? 'V' : 'H';
+    else
+        idx_type = g_indexUnique ? 'U' : 'N';
+    cat_create_index_ex(td.table_id, g_indexName, idx_root,
                         g_indexColumnName, idx_type,
                         g_indexExprDef[0] ? g_indexExprDef : NULL);
 
-    printf("Index '%s' created on %s(%s)%s%s.\n",
+    printf("Index '%s' created on %s(%s)%s%s%s.\n",
            g_indexName, g_indexTableName, g_indexColumnName,
            g_indexUnique ? " [UNIQUE]" : "",
+           useHash ? " [HASH]" : "",
            g_indexExprDef[0] ? " [EXPRESSION]" : "");
     g_indexUnique = 0;
     g_indexIfNotExists = 0;
     g_indexExprDef[0] = '\0';
+    g_indexUsingHash = 0;
     return 0;
 }
 
@@ -692,9 +758,14 @@ int DropIndexProcess(void)
         return -1;
     }
 
-    /* Destroy B+ tree pages */
-    BTree2 idx_tree = { .root_page = idx.root_page };
-    bt2_destroy(&idx_tree);
+    /* Destroy index pages (hash or B+ tree) */
+    if (idx.index_type == 'H' || idx.index_type == 'V') {
+        HashIndex hi = { .dir_page = idx.root_page };
+        hash_idx_destroy(&hi);
+    } else {
+        BTree2 idx_tree = { .root_page = idx.root_page };
+        bt2_destroy(&idx_tree);
+    }
 
     /* Remove from catalog */
     cat_drop_index(idx.table_id, g_indexName);
