@@ -182,9 +182,10 @@ static void deserialize_column(const char *buf, ColumnDesc *c)
 /* --- Index --- */
 static void serialize_index(const IndexDesc *idx, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%s;%u;%s;%c",
+    snprintf(buf, size, "%u;%s;%u;%s;%c;%s",
              idx->table_id, idx->index_name,
-             idx->root_page, idx->col_list, idx->index_type);
+             idx->root_page, idx->col_list, idx->index_type,
+             idx->expr_def[0] ? idx->expr_def : "");
 }
 
 static void deserialize_index(const char *buf, IndexDesc *idx)
@@ -197,7 +198,11 @@ static void deserialize_index(const char *buf, IndexDesc *idx)
     p = next_field(p, idx->col_list, CAT_MAX_NAME_LEN);
     p = next_field(p, field, sizeof(field));
     idx->index_type = field[0] ? field[0] : 'N';
-    (void)p;
+    /* expr_def — 6th field, may be absent in old records */
+    idx->expr_def[0] = '\0';
+    if (p && *p) {
+        next_field(p, idx->expr_def, sizeof(idx->expr_def));
+    }
 }
 
 /* --- Constraint --- */
@@ -889,9 +894,9 @@ int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max)
  *  Index operations
  * ---------------------------------------------------------------- */
 
-int cat_create_index(uint32_t table_id, const char *name,
-                     uint32_t root_page, const char *col_list,
-                     char index_type)
+int cat_create_index_ex(uint32_t table_id, const char *name,
+                        uint32_t root_page, const char *col_list,
+                        char index_type, const char *expr_def)
 {
     char key[CAT_MAX_KEY_LEN];
     make_index_key(table_id, name, key, sizeof(key));
@@ -907,6 +912,8 @@ int cat_create_index(uint32_t table_id, const char *name,
     idx.root_page = root_page;
     strncpy(idx.col_list, col_list, CAT_MAX_NAME_LEN - 1);
     idx.index_type = index_type;
+    if (expr_def && expr_def[0])
+        strncpy(idx.expr_def, expr_def, sizeof(idx.expr_def) - 1);
 
     char record[CAT_MAX_RECORD_LEN];
     serialize_index(&idx, record, sizeof(record));
@@ -916,6 +923,13 @@ int cat_create_index(uint32_t table_id, const char *name,
     if (rid.page_no == 0) return -1;
 
     return bt2_insert(&g_cat_trees[CAT_SYS_INDEXES], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_create_index(uint32_t table_id, const char *name,
+                     uint32_t root_page, const char *col_list,
+                     char index_type)
+{
+    return cat_create_index_ex(table_id, name, root_page, col_list, index_type, NULL);
 }
 
 int cat_find_index(uint32_t table_id, const char *name, IndexDesc *out)
