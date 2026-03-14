@@ -1484,6 +1484,9 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
     case EXPR_CONCAT:     pos = expr_serialize_r(e->left, buf, pos, bufSize);
                           pos = expr_serialize_r(e->right, buf, pos, bufSize);
                           return ser_append(buf, pos, bufSize, "CAT");
+    case EXPR_COALESCE:   pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "COA");
     default:
         return pos; /* unsupported node type — skip */
     }
@@ -1561,6 +1564,7 @@ ExprNode *expr_deserialize(const char *buf)
             else if (strcmp(tok, "LIKE") == 0)  node = expr_make_like(left, right);
             else if (strcmp(tok, "NLIKE") == 0) node = expr_make_not_like(left, right);
             else if (strcmp(tok, "CAT") == 0)   node = expr_make_concat(left, right);
+            else if (strcmp(tok, "COA") == 0)   node = expr_make_coalesce(left, right);
             else {
                 /* Unknown op — push operands back and skip */
                 stack[sp++] = left;
