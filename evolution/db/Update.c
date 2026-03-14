@@ -1006,10 +1006,20 @@ int UpdateProcess(void)
             }
         }
 
-        /* Phase 2: apply update to all matched records */
+        /* Apply LIMIT/OFFSET if specified */
+        int effectiveStart = 0;
+        int effectiveEnd = matchCount;
+        if (expr_eval_limit_range(matchCount, &effectiveStart, &effectiveEnd)) {
+            for (int si = 0; si < effectiveStart; si++)
+                free(matchKeys[si]);
+            for (int si = effectiveEnd; si < matchCount; si++)
+                free(matchKeys[si]);
+        }
+
+        /* Phase 2: apply update to matched records (within limit) */
         int updated = 0;
         int i;
-        for (i = 0; i < matchCount; i++) {
+        for (i = effectiveStart; i < effectiveEnd; i++) {
             if (matchKeys[i]) {
                 if (ApplyUpdateToRow(&td, allCols, allNCols, matchKeys[i],
                                      (const char (*)[256])setCols,

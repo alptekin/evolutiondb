@@ -1565,3 +1565,30 @@ void AddCheckConstraint(ExprNode *expr)
     expr_serialize(expr, g_checkSerialized[g_checkCount], 1024);
     g_checkCount++;
 }
+
+/* ---- LIMIT/OFFSET range helper ---- */
+
+int expr_eval_limit_range(int match_count, int *start, int *end)
+{
+    *start = 0;
+    *end = match_count;
+    if (!g_limitExpr) return 0;
+
+    char lbuf[64];
+    if (!expr_evaluate(g_limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
+        return 0;
+
+    int lim = atoi(lbuf);
+    if (lim < 0) lim = 0;
+    int off = 0;
+    if (g_offsetExpr) {
+        char obuf[64];
+        if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
+            off = atoi(obuf);
+        if (off < 0) off = 0;
+    }
+
+    *start = off < match_count ? off : match_count;
+    *end = (*start + lim) < match_count ? (*start + lim) : match_count;
+    return 1;
+}
