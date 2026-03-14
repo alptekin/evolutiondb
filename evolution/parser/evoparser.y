@@ -243,6 +243,7 @@
 %token FGEN_RANDOM_UUID
 %token FGEN_RANDOM_UUID_V7
 %token FSNOWFLAKE_ID
+%token FLAST_INSERT_ID
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -450,6 +451,10 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
                                                         char _sf[64];
                                                         expr_evaluate($$, NULL, NULL, 0, _sf, sizeof(_sf));
                                                         GetInsertions(_sf);
+                                                    }
+| FLAST_INSERT_ID '(' ')'                          {
+                                                        emit("CALL 0 LAST_INSERT_ID");
+                                                        $$ = expr_make_last_insert_id();
                                                     }
 ;
 

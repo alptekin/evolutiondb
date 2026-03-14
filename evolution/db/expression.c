@@ -203,6 +203,15 @@ ExprNode *expr_make_snowflake_id(void)
     return e;
 }
 
+ExprNode *expr_make_last_insert_id(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_LAST_INSERT_ID;
+    strcpy(e->display, "last_insert_id");
+    return e;
+}
+
 void snowflake_init(void)
 {
     char *env = getenv("EVOSQL_MACHINE_ID");
@@ -1317,6 +1326,15 @@ int expr_evaluate(const ExprNode *e,
         g_snowflake_sequence++;
 
         snprintf(out_buf, buf_size, "%llu", (unsigned long long)id);
+        return 1;
+    }
+
+    if (e->type == EXPR_LAST_INSERT_ID) {
+        if (g_last_insert_id[0] == '\0') {
+            snprintf(out_buf, buf_size, "0");
+        } else {
+            snprintf(out_buf, buf_size, "%s", g_last_insert_id);
+        }
         return 1;
     }
 

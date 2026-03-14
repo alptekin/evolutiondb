@@ -28,6 +28,9 @@ typedef struct {
     /* Temporary table tracking — auto-dropped on disconnect */
     uint32_t  temp_table_ids[64];
     int       temp_table_count;
+
+    /* LAST_INSERT_ID — last auto-generated value (per-session) */
+    char      last_insert_id[64];
 } SessionCtx;
 
 /*

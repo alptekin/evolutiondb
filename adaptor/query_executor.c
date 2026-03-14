@@ -2460,6 +2460,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (ctx) {
         db_set_current_database(ctx->database);
         db_set_current_schema(ctx->schema);
+        strncpy(g_last_insert_id, ctx->last_insert_id, sizeof(g_last_insert_id) - 1);
+        g_last_insert_id[sizeof(g_last_insert_id) - 1] = '\0';
     }
 
     /* First, try catalog/internal queries (before normalization) */
@@ -2818,5 +2820,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         ctx->database[sizeof(ctx->database) - 1] = '\0';
         strncpy(ctx->schema, db_get_current_schema(), sizeof(ctx->schema) - 1);
         ctx->schema[sizeof(ctx->schema) - 1] = '\0';
+        strncpy(ctx->last_insert_id, g_last_insert_id, sizeof(ctx->last_insert_id) - 1);
+        ctx->last_insert_id[sizeof(ctx->last_insert_id) - 1] = '\0';
     }
 }

@@ -225,7 +225,8 @@
      FCOALESCE = 441,
      FGEN_RANDOM_UUID = 442,
      FGEN_RANDOM_UUID_V7 = 443,
-     FSNOWFLAKE_ID = 444
+     FSNOWFLAKE_ID = 444,
+     FLAST_INSERT_ID = 445
    };
 #endif
 /* Tokens.  */
@@ -416,6 +417,7 @@
 #define FGEN_RANDOM_UUID 442
 #define FGEN_RANDOM_UUID_V7 443
 #define FSNOWFLAKE_ID 444
+#define FLAST_INSERT_ID 445
 
 
 
@@ -431,7 +433,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 435 "parser/evoparser.tab.h"
+#line 437 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

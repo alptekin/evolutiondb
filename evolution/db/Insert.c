@@ -11,6 +11,15 @@
 /* Row separator used between multiple value groups in g_insert. */
 #define ROW_SEP '\x02'
 
+/* Capture first auto-generated value for LAST_INSERT_ID() */
+static void capture_generated_id(const char *val)
+{
+    if (g_last_insert_id[0] == '\0') {
+        strncpy(g_last_insert_id, val, sizeof(g_last_insert_id) - 1);
+        g_last_insert_id[sizeof(g_last_insert_id) - 1] = '\0';
+    }
+}
+
 int GetInsertions(char *name)
 {
     strcat(g_insert, name);
@@ -140,16 +149,19 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
                 ExprNode *e = expr_make_gen_random_uuid();
                 expr_evaluate(e, NULL, NULL, 0, uuid, sizeof(uuid));
                 strcat(buf, uuid);
+                capture_generated_id(uuid);
             } else if (strcasecmp(defaultVals[i], "gen_random_uuid_v7()") == 0) {
                 char uuid[64];
                 ExprNode *e = expr_make_gen_random_uuid_v7();
                 expr_evaluate(e, NULL, NULL, 0, uuid, sizeof(uuid));
                 strcat(buf, uuid);
+                capture_generated_id(uuid);
             } else if (strcasecmp(defaultVals[i], "snowflake_id()") == 0) {
                 char sfid[64];
                 ExprNode *e = expr_make_snowflake_id();
                 expr_evaluate(e, NULL, NULL, 0, sfid, sizeof(sfid));
                 strcat(buf, sfid);
+                capture_generated_id(sfid);
             } else if (strcasecmp(defaultVals[i], "CURRENT_TIMESTAMP") == 0) {
                 char ts[64];
                 ExprNode *e = expr_make_current_timestamp();
@@ -756,6 +768,12 @@ int InsertProcess(void)
     int autoIncCounter = td.auto_inc_counter;
     int autoIncStep = td.auto_inc_step;
 
+    /* Reset capture flag — first generated value in this INSERT will be captured */
+    char saved_last_id[64];
+    strncpy(saved_last_id, g_last_insert_id, sizeof(saved_last_id) - 1);
+    saved_last_id[sizeof(saved_last_id) - 1] = '\0';
+    g_last_insert_id[0] = '\0';
+
     for (i = 0; i < numRows; i++) {
         char valBuf[RECORD_BUF_SIZE];
         char *vals[64];
@@ -777,9 +795,10 @@ int InsertProcess(void)
             strncpy(valBuf, reorderedRows[i], sizeof(valBuf) - 1);
             valBuf[sizeof(valBuf) - 1] = '\0';
             nv = split_row_values(valBuf, vals, 64);
-            if (apply_auto_increment(tblName, vals, nv, autoIncCol,
+            int generated = apply_auto_increment(tblName, vals, nv, autoIncCol,
                                      &autoIncCounter, autoIncStep,
-                                     genBuf, sizeof(genBuf)) >= 0) {
+                                     genBuf, sizeof(genBuf));
+            if (generated >= 0) {
                 int k;
                 reorderedRows[i][0] = '\0';
                 for (k = 0; k < nv; k++) {
@@ -787,6 +806,9 @@ int InsertProcess(void)
                     strcat(reorderedRows[i], vals[k]);
                 }
                 strcat(reorderedRows[i], ";");
+                /* Capture first auto-generated value for LAST_INSERT_ID() */
+                if (generated == 1)
+                    capture_generated_id(genBuf);
             }
         }
 
@@ -918,6 +940,9 @@ int InsertProcess(void)
     TruncateInsert();
 
 cleanup:
+    /* If no value was captured in this INSERT, restore previous session value */
+    if (g_last_insert_id[0] == '\0')
+        strncpy(g_last_insert_id, saved_last_id, sizeof(g_last_insert_id) - 1);
     free(reorderedRows);
     return retval;
 }

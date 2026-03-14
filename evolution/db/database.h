@@ -227,6 +227,9 @@ extern uint16_t g_snowflake_sequence;
 extern uint16_t g_snowflake_machine_id;
 void snowflake_init(void);
 
+/* LAST_INSERT_ID — per-session, synced via SessionCtx in query_executor */
+extern char g_last_insert_id[64];
+
 /* tx_undo_fn typedef — used by QueryContext, must be before its include */
 typedef void (*tx_undo_fn)(int op_type, const char *table,
                            const char *key, const char *data);

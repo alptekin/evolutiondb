@@ -21,3 +21,6 @@ pthread_mutex_t g_metadata_lock = PTHREAD_MUTEX_INITIALIZER;
 uint64_t g_snowflake_last_ms  = 0;
 uint16_t g_snowflake_sequence = 0;
 uint16_t g_snowflake_machine_id = 0;
+
+/* LAST_INSERT_ID — per-session, synced via SessionCtx in query_executor */
+char g_last_insert_id[64] = "";
