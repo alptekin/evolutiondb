@@ -444,10 +444,20 @@ int DeleteProcess(void)
             }
         }
 
-        /* Phase 2: delete all matched records */
+        /* Apply LIMIT/OFFSET if specified */
+        int effectiveStart = 0;
+        int effectiveEnd = matchCount;
+        if (expr_eval_limit_range(matchCount, &effectiveStart, &effectiveEnd)) {
+            for (int si = 0; si < effectiveStart; si++)
+                free(matchKeys[si]);
+            for (int si = effectiveEnd; si < matchCount; si++)
+                free(matchKeys[si]);
+        }
+
+        /* Phase 2: delete matched records (within limit) */
         int deleted = 0;
         int i;
-        for (i = 0; i < matchCount; i++) {
+        for (i = effectiveStart; i < effectiveEnd; i++) {
             if (matchKeys[i]) {
                 RowID rid;
                 if (bt2_search(&pk_tree, matchKeys[i], &rid) == 0) {
