@@ -142,6 +142,7 @@ void SetColumnPrimaryKey(void);
 void SetColumnUnique(void);
 void SetColumnDefault(const char *value);
 void SetColumnAutoIncrement(int start, int step);
+void SetTableAutoIncrement(int startVal);
 void AddPrimaryKeyColumn(const char *colName);
 int ReadPrimaryKeys(const char *tblName, int *indices, int maxCols);
 int ReadPrimaryKey(const char *tblName);
