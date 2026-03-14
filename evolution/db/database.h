@@ -58,6 +58,7 @@ int InsertProcess(void);
 int DropTableProcess(void);
 int TruncateTableProcess(void);
 int ReclaimTableProcess(void);
+int AnalyzeTableProcess(void);
 int CreateDatabaseProcess(const char *name, int if_not_exists);
 int CreateSchemaProcess(const char *name, int if_not_exists);
 int UseDatabaseProcess(const char *name);

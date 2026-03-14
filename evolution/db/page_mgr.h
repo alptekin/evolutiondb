@@ -63,7 +63,8 @@ typedef enum {
     CAT_SYS_CONSTRAINTS = 5,
     CAT_SYS_USERS      = 6,
     CAT_SYS_GRANTS     = 7,
-    CAT_MAX             = 8
+    CAT_SYS_TABLE_STATS = 8,
+    CAT_MAX             = 9
 } CatalogID;
 
 typedef struct {

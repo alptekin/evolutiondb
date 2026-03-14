@@ -12,6 +12,7 @@
 #define CATALOG_INTERNAL_H
 
 #include <stdint.h>
+#include <time.h>
 #include "page_mgr.h"
 #include "slotted.h"
 #include "btree2.h"
@@ -207,6 +208,43 @@ int cat_drop_grant(const char *username, int scope_type,
                    const char *scope_name);
 int cat_list_grants_for_user(const char *username, GrantDesc *out, int max);
 int cat_drop_all_grants_for_user(const char *username);
+
+/* ----------------------------------------------------------------
+ *  Table statistics (ANALYZE TABLE)
+ * ---------------------------------------------------------------- */
+
+typedef struct {
+    uint32_t table_id;
+    uint64_t row_count;
+    uint32_t page_count;
+    time_t   last_analyzed;
+} TableStatsDesc;
+
+typedef struct {
+    uint32_t table_id;
+    char     col_name[CAT_MAX_NAME_LEN];
+    uint64_t null_count;
+    uint64_t distinct_count;
+    char     min_value[256];
+    char     max_value[256];
+    int      avg_width;
+} ColumnStatsDesc;
+
+/* Store or update table-level statistics. */
+int cat_store_table_stats(const TableStatsDesc *ts);
+
+/* Retrieve table-level statistics. Returns 0 on success, -1 if not found. */
+int cat_get_table_stats(uint32_t table_id, TableStatsDesc *out);
+
+/* Store or update per-column statistics. */
+int cat_store_column_stats(const ColumnStatsDesc *cs);
+
+/* Retrieve per-column statistics. Returns 0 on success, -1 if not found. */
+int cat_get_column_stats(uint32_t table_id, const char *col_name,
+                         ColumnStatsDesc *out);
+
+/* List all column stats for a table. Returns count found. */
+int cat_list_column_stats(uint32_t table_id, ColumnStatsDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Convenience

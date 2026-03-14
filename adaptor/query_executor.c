@@ -123,6 +123,12 @@ static int is_truncate_query(const char *sql)
     return (strncasecmp(sql, "TRUNCATE", 8) == 0);
 }
 
+static int is_analyze_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "ANALYZE", 7) == 0);
+}
+
 static int is_use_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
@@ -2063,6 +2069,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
             }
             else if (is_truncate_query(sql))
                 strcpy(rs->command_tag, "TRUNCATE TABLE");
+            else if (is_analyze_query(sql))
+                strcpy(rs->command_tag, "ANALYZE");
             else if (is_use_query(sql))
                 strcpy(rs->command_tag, "USE");
             else if (is_set_query(sql))
@@ -2677,8 +2685,36 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 }
             }
 
-            snprintf(planLine, sizeof(planLine), "%s on %s%s",
-                     scanType, tblName[0] ? tblName : "(unknown)", indexName);
+            /* Add row estimate from ANALYZE stats if available */
+            {
+                char rowEstimate[64] = "";
+                if (tblName[0]) {
+                    TableDesc _etd;
+                    ColumnDesc _ecols[CAT_MAX_COLUMNS];
+                    int _encols = 0;
+                    if (tapi_resolve(tblName, &_etd, _ecols, &_encols) == 0) {
+                        TableStatsDesc _ets;
+                        if (cat_get_table_stats(_etd.table_id, &_ets) == 0) {
+                            uint64_t est = _ets.row_count;
+                            if (hasWhere && est > 0) {
+                                /* For equality on indexed column, estimate selectivity */
+                                ColumnStatsDesc _ecs;
+                                if (whereCol[0] &&
+                                    cat_get_column_stats(_etd.table_id, whereCol, &_ecs) == 0 &&
+                                    _ecs.distinct_count > 0) {
+                                    est = _ets.row_count / _ecs.distinct_count;
+                                    if (est == 0) est = 1;
+                                }
+                            }
+                            snprintf(rowEstimate, sizeof(rowEstimate),
+                                     "  (rows=%lu)", (unsigned long)est);
+                        }
+                    }
+                }
+                snprintf(planLine, sizeof(planLine), "%s on %s%s%s",
+                         scanType, tblName[0] ? tblName : "(unknown)",
+                         indexName, rowEstimate);
+            }
         } else {
             snprintf(planLine, sizeof(planLine), "Utility Statement");
         }
