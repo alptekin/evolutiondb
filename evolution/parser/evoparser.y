@@ -52,6 +52,7 @@
 %token ALTER
 %token ADD
 %token ALL
+%token ANALYZE
 %token ANY
 %token AUTO_INCREMENT
 %token ASC
@@ -973,6 +974,30 @@ reclaim_table_stmt: RECLAIM TABLE NAME
         emit("RECLAIMTABLE %s", $3);
         GetDropTableName($3);
         free($3);
+    }
+;
+
+/** analyze table — collect statistics **/
+stmt: analyze_table_stmt
+    {
+        emit("STMT");
+        AnalyzeTableProcess();
+    }
+;
+
+analyze_table_stmt: ANALYZE TABLE NAME
+    {
+        emit("ANALYZETABLE %s", $3);
+        GetDropTableName($3);
+        free($3);
+    }
+  | ANALYZE TABLE NAME '.' NAME
+    {
+        emit("ANALYZETABLE %s.%s", $3, $5);
+        char full[512];
+        snprintf(full, sizeof(full), "%s.%s", $3, $5);
+        GetDropTableName(full);
+        free($3); free($5);
     }
 ;
 

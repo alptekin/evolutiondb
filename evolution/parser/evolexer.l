@@ -19,8 +19,9 @@
 %%
 
 
-ADD						{ return ADD; }					/* keywords */			
+ADD						{ return ADD; }					/* keywords */
 ALL						{ return ALL; }
+ANALYZE					{ return ANALYZE; }
 
 
 

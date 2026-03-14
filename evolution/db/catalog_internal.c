@@ -1434,6 +1434,161 @@ int cat_drop_all_grants_for_user(const char *username)
 }
 
 /* ----------------------------------------------------------------
+ *  Table statistics (ANALYZE TABLE)
+ * ---------------------------------------------------------------- */
+
+static void make_table_stats_key(uint32_t table_id, char *out, int size)
+{
+    snprintf(out, size, "%010u:_", table_id);
+}
+
+static void make_col_stats_key(uint32_t table_id, const char *col_name,
+                               char *out, int size)
+{
+    snprintf(out, size, "%010u:%s", table_id, col_name);
+}
+
+static void serialize_table_stats(const TableStatsDesc *ts, char *buf, int size)
+{
+    snprintf(buf, size, "%u;%lu;%u;%ld",
+             ts->table_id, (unsigned long)ts->row_count,
+             ts->page_count, (long)ts->last_analyzed);
+}
+
+static void deserialize_table_stats(const char *buf, TableStatsDesc *ts)
+{
+    char field[64];
+    const char *p = buf;
+    p = next_field(p, field, sizeof(field)); ts->table_id = (uint32_t)atoi(field);
+    p = next_field(p, field, sizeof(field)); ts->row_count = (uint64_t)strtoul(field, NULL, 10);
+    p = next_field(p, field, sizeof(field)); ts->page_count = (uint32_t)atoi(field);
+    p = next_field(p, field, sizeof(field)); ts->last_analyzed = (time_t)strtol(field, NULL, 10);
+    (void)p;
+}
+
+static void serialize_column_stats(const ColumnStatsDesc *cs, char *buf, int size)
+{
+    snprintf(buf, size, "%u;%s;%lu;%lu;%s;%s;%d",
+             cs->table_id, cs->col_name,
+             (unsigned long)cs->null_count, (unsigned long)cs->distinct_count,
+             cs->min_value, cs->max_value, cs->avg_width);
+}
+
+static void deserialize_column_stats(const char *buf, ColumnStatsDesc *cs)
+{
+    char field[256];
+    const char *p = buf;
+    p = next_field(p, field, sizeof(field)); cs->table_id = (uint32_t)atoi(field);
+    p = next_field(p, cs->col_name, CAT_MAX_NAME_LEN);
+    p = next_field(p, field, sizeof(field)); cs->null_count = (uint64_t)strtoul(field, NULL, 10);
+    p = next_field(p, field, sizeof(field)); cs->distinct_count = (uint64_t)strtoul(field, NULL, 10);
+    p = next_field(p, cs->min_value, sizeof(cs->min_value));
+    p = next_field(p, cs->max_value, sizeof(cs->max_value));
+    p = next_field(p, field, sizeof(field)); cs->avg_width = atoi(field);
+    (void)p;
+}
+
+/* Upsert helper: delete old entry if exists, then insert new. */
+static int cat_upsert_stats(const char *key, const char *record, int rec_len)
+{
+    RowID old_rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLE_STATS], key, &old_rid) == 0) {
+        cat_delete_record(old_rid);
+        bt2_delete(&g_cat_trees[CAT_SYS_TABLE_STATS], key);
+    }
+
+    RowID rid = cat_store_record(CAT_SYS_TABLE_STATS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+
+    return bt2_insert(&g_cat_trees[CAT_SYS_TABLE_STATS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_store_table_stats(const TableStatsDesc *ts)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_table_stats_key(ts->table_id, key, sizeof(key));
+
+    char record[CAT_MAX_RECORD_LEN];
+    serialize_table_stats(ts, record, sizeof(record));
+
+    return cat_upsert_stats(key, record, (int)strlen(record) + 1);
+}
+
+int cat_get_table_stats(uint32_t table_id, TableStatsDesc *out)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_table_stats_key(table_id, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLE_STATS], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    if (out) deserialize_table_stats(record, out);
+    return 0;
+}
+
+int cat_store_column_stats(const ColumnStatsDesc *cs)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_col_stats_key(cs->table_id, cs->col_name, key, sizeof(key));
+
+    char record[CAT_MAX_RECORD_LEN];
+    serialize_column_stats(cs, record, sizeof(record));
+
+    return cat_upsert_stats(key, record, (int)strlen(record) + 1);
+}
+
+int cat_get_column_stats(uint32_t table_id, const char *col_name,
+                         ColumnStatsDesc *out)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_col_stats_key(table_id, col_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLE_STATS], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    if (out) deserialize_column_stats(record, out);
+    return 0;
+}
+
+int cat_list_column_stats(uint32_t table_id, ColumnStatsDesc *out, int max)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_TABLE_STATS], prefix, &cur) < 0)
+        return 0;
+
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, strlen(prefix)) != 0)
+            break;
+        /* Skip the table-level stats entry (key ends with ":_") */
+        int klen = (int)strlen(key);
+        if (klen >= 2 && key[klen - 1] == '_' && key[klen - 2] == ':')
+            continue;
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_column_stats(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}
+
+/* ----------------------------------------------------------------
  *  Convenience
  * ---------------------------------------------------------------- */
 

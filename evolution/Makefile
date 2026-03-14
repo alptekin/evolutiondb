@@ -34,6 +34,7 @@ SRCS = main.c \
        db/GrantMgmt.c \
        db/Index.c \
        db/Reclaim.c \
+       db/Analyze.c \
        db/buffer_pool.c \
        db/query_context.c \
        db/page_mgr.c \
