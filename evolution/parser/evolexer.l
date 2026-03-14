@@ -140,6 +140,7 @@ INTO					{ return INTO; }
 IS						{ return IS; }
 
 JOIN					{ return JOIN; }
+IDENTITY				{ return IDENTITY; }
 INDEX					{ return INDEX; }
 KEY					{ return KEY; }
 

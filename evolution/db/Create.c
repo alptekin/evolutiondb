@@ -286,6 +286,12 @@ void SetColumnAutoIncrement(int start, int step)
     g_autoIncStep  = (step  > 0) ? step  : 1;
 }
 
+void SetTableAutoIncrement(int startVal)
+{
+    if (startVal > 0)
+        g_autoIncStart = startVal;
+}
+
 void AddPrimaryKeyColumn(const char *colName)
 {
     if (g_pkColumnCount < 16) {

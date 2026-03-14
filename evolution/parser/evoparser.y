@@ -59,6 +59,8 @@
 %token AND
 %token AS
 
+%token IDENTITY
+
 %token BLOB
 %token BOOLEAN
 %token BY
@@ -1292,7 +1294,7 @@ stmt: create_table_stmt
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
-'(' create_col_list ')'
+'(' create_col_list ')' opt_table_options
     {
         emit("CREATE %d %d %d %s", $2, $4, $7, $5);
         g_isTemporary = $2;
@@ -1302,7 +1304,12 @@ create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME '.' NAME
-'(' create_col_list ')'								{ emit("CREATE %d %d %d %s.%s", $2, $4, $9, $5, $7); g_isTemporary = $2; free($5); free($7); }
+'(' create_col_list ')' opt_table_options               { emit("CREATE %d %d %d %s.%s", $2, $4, $9, $5, $7); g_isTemporary = $2; free($5); free($7); }
+;
+
+opt_table_options: /* empty */
+    | opt_table_options AUTO_INCREMENT COMPARISON INTNUM { emit("TABLE OPT AUTOINC %d", $4); SetTableAutoIncrement($4); }
+    | opt_table_options AUTO_INCREMENT INTNUM            { emit("TABLE OPT AUTOINC %d", $3); SetTableAutoIncrement($3); }
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
@@ -1413,6 +1420,9 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts AUTO_INCREMENT                                                    { emit("ATTR AUTOINC"); SetColumnAutoIncrement(1, 1); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ',' INTNUM ')'                          { emit("ATTR AUTOINC %d %d", $4, $6); SetColumnAutoIncrement($4, $6); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ')'                                     { emit("ATTR AUTOINC %d 1", $4); SetColumnAutoIncrement($4, 1); $$ = $1 + 1; }
+| column_atts IDENTITY '(' INTNUM ',' INTNUM ')'                               { emit("ATTR IDENTITY %d %d", $4, $6); SetColumnAutoIncrement($4, $6); $$ = $1 + 1; }
+| column_atts IDENTITY '(' INTNUM ')'                                           { emit("ATTR IDENTITY %d 1", $4); SetColumnAutoIncrement($4, 1); $$ = $1 + 1; }
+| column_atts IDENTITY                                                          { emit("ATTR IDENTITY"); SetColumnAutoIncrement(1, 1); $$ = $1 + 1; }
 | column_atts UNIQUE KEY							{ emit("ATTR UNIQUEKEY"); SetColumnUnique(); $$ = $1 + 1; }
 | column_atts UNIQUE								{ emit("ATTR UNIQUE"); SetColumnUnique(); $$ = $1 + 1; }
 | column_atts PRIMARY KEY							{ emit("ATTR PRIKEY"); SetColumnPrimaryKey(); $$ = $1 + 1; }
