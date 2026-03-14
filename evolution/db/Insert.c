@@ -130,6 +130,13 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
     char defaultVals[64][256];
     int numDefaults = ReadDefaults(tblName, defaultVals, 64);
 
+    /* Expression default tracking for pass 2 */
+    int exprDefCols[64];
+    char exprDefStrs[64][512];
+    int numExprDefs = 0;
+
+    /* Pass 1: fill user values, literal defaults, function defaults.
+     * Expression defaults get a NULL placeholder — resolved in pass 2. */
     buf[0] = '\0';
     for (i = 0; i < numTableCols; i++) {
         int userIdx = -1;
@@ -143,8 +150,16 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         if (userIdx >= 0) {
             strcat(buf, userVals[userIdx]);
         } else if (i < numDefaults && strcmp(defaultVals[i], "\x01NONE\x01") != 0) {
+            /* Expression-based default — defer to pass 2 */
+            if (strncmp(defaultVals[i], "EXPR:", 5) == 0 && numExprDefs < 64) {
+                strcat(buf, "\x01NULL\x01");
+                exprDefCols[numExprDefs] = i;
+                strncpy(exprDefStrs[numExprDefs], defaultVals[i] + 5, 511);
+                exprDefStrs[numExprDefs][511] = '\0';
+                numExprDefs++;
+            }
             /* Evaluate function-based defaults */
-            if (strcasecmp(defaultVals[i], "gen_random_uuid()") == 0) {
+            else if (strcasecmp(defaultVals[i], "gen_random_uuid()") == 0) {
                 char uuid[64];
                 ExprNode *e = expr_make_gen_random_uuid();
                 expr_evaluate(e, NULL, NULL, 0, uuid, sizeof(uuid));
@@ -175,6 +190,46 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         }
     }
     strcat(buf, ";");
+
+    /* Pass 2: evaluate expression defaults with row context */
+    if (numExprDefs > 0) {
+        /* Parse buf into column values */
+        char colValues[64][256];
+        char tmpBuf[RECORD_BUF_SIZE];
+        strncpy(tmpBuf, buf, sizeof(tmpBuf) - 1);
+        tmpBuf[sizeof(tmpBuf) - 1] = '\0';
+        int ci = 0;
+        char *tok = strtok(tmpBuf, ";");
+        while (tok && ci < 64) {
+            strncpy(colValues[ci], tok, 255);
+            colValues[ci][255] = '\0';
+            ci++;
+            tok = strtok(NULL, ";");
+        }
+
+        /* Evaluate each expression default */
+        for (int ed = 0; ed < numExprDefs; ed++) {
+            ExprNode *defExpr = expr_deserialize(exprDefStrs[ed]);
+            if (!defExpr) continue;
+            char result[256];
+            if (expr_evaluate(defExpr,
+                              (const char (*)[128])tableColNames,
+                              (const char (*)[256])colValues,
+                              numTableCols,
+                              result, sizeof(result))) {
+                strncpy(colValues[exprDefCols[ed]], result, 255);
+                colValues[exprDefCols[ed]][255] = '\0';
+            }
+        }
+
+        /* Rebuild buf from colValues */
+        buf[0] = '\0';
+        for (i = 0; i < numTableCols; i++) {
+            if (i > 0) strcat(buf, ";");
+            strcat(buf, colValues[i]);
+        }
+        strcat(buf, ";");
+    }
 
     strncpy(rowData, buf, RECORD_BUF_SIZE - 1);
     rowData[RECORD_BUF_SIZE - 1] = '\0';

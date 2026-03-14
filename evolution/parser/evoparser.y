@@ -1417,6 +1417,13 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts DEFAULT FGEN_RANDOM_UUID_V7 '(' ')'                               { emit("ATTR DEFAULT GEN_RANDOM_UUID_V7"); SetColumnDefault("gen_random_uuid_v7()"); $$ = $1 + 1; }
 | column_atts DEFAULT FSNOWFLAKE_ID '(' ')'                                     { emit("ATTR DEFAULT SNOWFLAKE_ID"); SetColumnDefault("snowflake_id()"); $$ = $1 + 1; }
 | column_atts DEFAULT CURRENT_TIMESTAMP                                          { emit("ATTR DEFAULT CURRENT_TIMESTAMP"); SetColumnDefault("CURRENT_TIMESTAMP"); $$ = $1 + 1; }
+| column_atts DEFAULT '(' expr ')'  {
+    char _ser[512]; expr_serialize($4, _ser, sizeof(_ser));
+    char _prefixed[520]; snprintf(_prefixed, sizeof(_prefixed), "EXPR:%s", _ser);
+    emit("ATTR DEFAULT EXPR");
+    SetColumnDefault(_prefixed);
+    $$ = $1 + 1;
+  }
 | column_atts AUTO_INCREMENT                                                    { emit("ATTR AUTOINC"); SetColumnAutoIncrement(1, 1); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ',' INTNUM ')'                          { emit("ATTR AUTOINC %d %d", $4, $6); SetColumnAutoIncrement($4, $6); $$ = $1 + 1; }
 | column_atts AUTO_INCREMENT '(' INTNUM ')'                                     { emit("ATTR AUTOINC %d 1", $4); SetColumnAutoIncrement($4, 1); $$ = $1 + 1; }
