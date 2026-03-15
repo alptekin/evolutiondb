@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "table_api.h"
+#include "tuple_format.h"
 #include "database.h"
 
 /* ----------------------------------------------------------------
@@ -166,22 +167,30 @@ int tapi_build_pk_key_from_vals(const ColumnDesc *cols, int ncols,
 }
 
 int tapi_build_pk_key(const ColumnDesc *cols, int ncols,
-                      const char *record,
+                      const char *record, int record_len,
                       char *key_out, int key_size)
 {
-    char tmp[RECORD_BUF_SIZE];
-    strncpy(tmp, record, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
+    char fields[64][256];
+    int is_null[64];
+    int nf = tup_extract_fields(record, record_len, cols, ncols,
+                                fields, is_null, 64);
+    if (nf <= 0) return -1;
 
-    char *vals[64];
-    int nv = 0;
-    char *t = strtok(tmp, ";");
-    while (t && nv < 64) {
-        vals[nv++] = t;
-        t = strtok(NULL, ";");
-    }
+    return tapi_build_pk_key_from_fields(cols, ncols,
+                                          (const char (*)[256])fields, nf,
+                                          key_out, key_size);
+}
 
-    return tapi_build_pk_key_from_vals(cols, ncols, vals, nv,
+int tapi_build_pk_key_from_fields(const ColumnDesc *cols, int ncols,
+                                  const char fields[][256], int nfields,
+                                  char *key_out, int key_size)
+{
+    /* Delegate to _from_vals with pointer adapter array */
+    char *ptrs[64];
+    int n = nfields < 64 ? nfields : 64;
+    for (int i = 0; i < n; i++)
+        ptrs[i] = (char *)fields[i];
+    return tapi_build_pk_key_from_vals(cols, ncols, ptrs, n,
                                        key_out, key_size);
 }
 

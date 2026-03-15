@@ -2,6 +2,7 @@
  * transaction.c — Undo-log based transaction support for EvoSQL
  *
  * Rollback uses the unified page-based storage (catalog + table_api + bt2).
+ * old_data is stored as binary tuples with explicit length (may contain NUL bytes).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,18 +44,76 @@ void undo_log_free(UndoLog *log)
 
 void undo_log_record(UndoLog *log, int op_type,
                      const char *table, const char *key,
-                     const char *old_data)
+                     const char *old_data, int old_data_len)
 {
     if (!log) return;
     UndoEntry *e = (UndoEntry *)calloc(1, sizeof(UndoEntry));
     if (!e) return;
-    e->op_type  = op_type;
-    e->table    = table    ? strdup(table)    : NULL;
-    e->key      = key      ? strdup(key)      : NULL;
-    e->old_data = old_data ? strdup(old_data) : NULL;
+    e->op_type      = op_type;
+    e->table        = table ? strdup(table) : NULL;
+    e->key          = key   ? strdup(key)   : NULL;
+    e->old_data_len = 0;
+    e->old_data     = NULL;
+    if (old_data && old_data_len > 0) {
+        e->old_data = (char *)malloc(old_data_len);
+        if (e->old_data) {
+            memcpy(e->old_data, old_data, old_data_len);
+            e->old_data_len = old_data_len;
+        }
+    }
     e->next     = log->head;
     log->head   = e;
     log->count++;
+}
+
+/* Helper: undo a single entry */
+static void undo_single_entry(UndoEntry *e)
+{
+    if (!e->table || !e->key) return;
+
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(e->table, &td, cols, &ncols) < 0) {
+        fprintf(stderr, "[TX] rollback: cannot resolve table %s\n", e->table);
+        return;
+    }
+
+    BTree2 pk_tree = tapi_pk_tree(&td);
+
+    switch (e->op_type) {
+    case TX_OP_INSERT: {
+        RowID rid;
+        if (bt2_search(&pk_tree, e->key, &rid) == 0) {
+            tapi_heap_delete(rid);
+            bt2_delete(&pk_tree, e->key);
+        }
+        break;
+    }
+    case TX_OP_UPDATE: {
+        if (e->old_data && e->old_data_len > 0) {
+            RowID rid;
+            if (bt2_search(&pk_tree, e->key, &rid) == 0) {
+                uint16_t rec_len = (uint16_t)e->old_data_len;
+                RowID new_rid = tapi_heap_update(&td, rid, e->old_data, rec_len);
+                if (new_rid.page_no != rid.page_no || new_rid.slot_idx != rid.slot_idx)
+                    bt2_update(&pk_tree, e->key, new_rid);
+            }
+        }
+        break;
+    }
+    case TX_OP_DELETE: {
+        if (e->old_data && e->old_data_len > 0) {
+            uint16_t rec_len = (uint16_t)e->old_data_len;
+            RowID rid = tapi_heap_insert(&td, e->old_data, rec_len);
+            if (rid.page_no != 0) {
+                bt2_insert(&pk_tree, e->key, rid);
+                td.pk_root_page = pk_tree.root_page;
+            }
+        }
+        break;
+    }
+    }
 }
 
 int undo_log_rollback(UndoLog *log)
@@ -63,62 +122,7 @@ int undo_log_rollback(UndoLog *log)
 
     UndoEntry *e = log->head;
     while (e) {
-        if (!e->table || !e->key) {
-            e = e->next;
-            continue;
-        }
-
-        /* Resolve table via catalog (tapi_resolve handles path stripping) */
-        TableDesc td;
-        ColumnDesc cols[CAT_MAX_COLUMNS];
-        int ncols;
-        if (tapi_resolve(e->table, &td, cols, &ncols) < 0) {
-            fprintf(stderr, "[TX] rollback: cannot resolve table %s\n", e->table);
-            e = e->next;
-            continue;
-        }
-
-        BTree2 pk_tree = tapi_pk_tree(&td);
-
-        switch (e->op_type) {
-        case TX_OP_INSERT: {
-            /* Undo INSERT = delete the inserted row */
-            RowID rid;
-            if (bt2_search(&pk_tree, e->key, &rid) == 0) {
-                tapi_heap_delete(rid);
-                bt2_delete(&pk_tree, e->key);
-            }
-            break;
-        }
-        case TX_OP_UPDATE: {
-            /* Undo UPDATE = restore old data */
-            if (e->old_data) {
-                RowID rid;
-                if (bt2_search(&pk_tree, e->key, &rid) == 0) {
-                    uint16_t rec_len = (uint16_t)(strlen(e->old_data) + 1);
-                    RowID new_rid = tapi_heap_update(&td, rid, e->old_data, rec_len);
-                    /* If record moved to a different page, update PK B+ tree */
-                    if (new_rid.page_no != rid.page_no || new_rid.slot_idx != rid.slot_idx) {
-                        bt2_update(&pk_tree, e->key, new_rid);
-                    }
-                }
-            }
-            break;
-        }
-        case TX_OP_DELETE: {
-            /* Undo DELETE = re-insert old data */
-            if (e->old_data) {
-                uint16_t rec_len = (uint16_t)(strlen(e->old_data) + 1);
-                RowID rid = tapi_heap_insert(&td, e->old_data, rec_len);
-                if (rid.page_no != 0) {
-                    bt2_insert(&pk_tree, e->key, rid);
-                    td.pk_root_page = pk_tree.root_page;
-                }
-            }
-            break;
-        }
-        }
-
+        undo_single_entry(e);
         e = e->next;
     }
 
@@ -131,49 +135,7 @@ int undo_log_rollback_to(UndoLog *log, int target_count)
 
     while (log->count > target_count && log->head) {
         UndoEntry *e = log->head;
-
-        if (e->table && e->key) {
-            TableDesc td;
-            ColumnDesc cols[CAT_MAX_COLUMNS];
-            int ncols;
-            if (tapi_resolve(e->table, &td, cols, &ncols) == 0) {
-                BTree2 pk_tree = tapi_pk_tree(&td);
-
-                switch (e->op_type) {
-                case TX_OP_INSERT: {
-                    RowID rid;
-                    if (bt2_search(&pk_tree, e->key, &rid) == 0) {
-                        tapi_heap_delete(rid);
-                        bt2_delete(&pk_tree, e->key);
-                    }
-                    break;
-                }
-                case TX_OP_UPDATE: {
-                    if (e->old_data) {
-                        RowID rid;
-                        if (bt2_search(&pk_tree, e->key, &rid) == 0) {
-                            uint16_t rec_len = (uint16_t)(strlen(e->old_data) + 1);
-                            RowID new_rid = tapi_heap_update(&td, rid, e->old_data, rec_len);
-                            if (new_rid.page_no != rid.page_no || new_rid.slot_idx != rid.slot_idx)
-                                bt2_update(&pk_tree, e->key, new_rid);
-                        }
-                    }
-                    break;
-                }
-                case TX_OP_DELETE: {
-                    if (e->old_data) {
-                        uint16_t rec_len = (uint16_t)(strlen(e->old_data) + 1);
-                        RowID rid = tapi_heap_insert(&td, e->old_data, rec_len);
-                        if (rid.page_no != 0) {
-                            bt2_insert(&pk_tree, e->key, rid);
-                            td.pk_root_page = pk_tree.root_page;
-                        }
-                    }
-                    break;
-                }
-                }
-            }
-        }
+        undo_single_entry(e);
 
         /* Pop entry from stack */
         log->head = e->next;
@@ -225,7 +187,6 @@ int savepoint_find(SavePointStack *sp, const char *name)
 void savepoint_release(SavePointStack *sp, int idx)
 {
     if (idx < 0 || idx >= sp->count) return;
-    /* Remove this savepoint, shift remaining down */
     for (int i = idx; i < sp->count - 1; i++)
         sp->entries[i] = sp->entries[i + 1];
     sp->count--;
@@ -233,16 +194,14 @@ void savepoint_release(SavePointStack *sp, int idx)
 
 void savepoint_release_after(SavePointStack *sp, int idx)
 {
-    /* Keep savepoints [0..idx], remove everything after.
-     * idx=-1 means remove ALL savepoints. */
     if (idx < -1 || idx >= sp->count) return;
-    sp->count = idx + 1;  /* idx=-1 → count=0 */
+    sp->count = idx + 1;
 }
 
 /* Callback invoked by engine DML code */
 void tx_undo_callback(int op_type, const char *table,
-                      const char *key, const char *data)
+                      const char *key, const char *data, int data_len)
 {
     if (g_current_undo_log)
-        undo_log_record(g_current_undo_log, op_type, table, key, data);
+        undo_log_record(g_current_undo_log, op_type, table, key, data, data_len);
 }

@@ -70,6 +70,7 @@ EVO_DB_SRCS = $(EVO_DB)/db.c \
               $(EVO_DB)/btree2.c \
               $(EVO_DB)/catalog_internal.c \
               $(EVO_DB)/table_api.c \
+              $(EVO_DB)/tuple_format.c \
               $(EVO_DB)/hash_idx.c \
               $(EVO_DB)/page_crypt.c
 

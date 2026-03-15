@@ -23,6 +23,7 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "hash_idx.h"
+#include "tuple_format.h"
 
 /* Separator between indexed value and PK in secondary index keys.
  * Using \x1F (Unit Separator) — sorts before printable chars, won't appear in data */
@@ -403,18 +404,16 @@ void SetDropIndexName(const char *idxName)
 /* ── Build composite index key from multiple column values ── */
 static int build_composite_key_from_record(const char *colSpec,
                                             const char colNames[][128], int numCols,
-                                            const char *record,
+                                            const ColumnDesc *cols, int ncols,
+                                            const char *record, int recLen,
                                             char *keyBuf, int keyBufSize)
 {
-    char recTmp[RECORD_BUF_SIZE];
-    strncpy(recTmp, record, sizeof(recTmp) - 1);
-    recTmp[sizeof(recTmp) - 1] = '\0';
+    char fields[64][256];
+    int is_null[64];
+    int nf = tup_extract_fields(record, recLen, cols, ncols, fields, is_null, 64);
+    if (nf <= 0) return 0;
 
-    const char *vals[64];
-    int nv = 0;
-    char *t = strtok(recTmp, ";");
-    while (t && nv < 64) { vals[nv++] = t; t = strtok(NULL, ";"); }
-
+    /* Parse colSpec with strtok(",") — column name list, not record data */
     char tmp[256];
     strncpy(tmp, colSpec, sizeof(tmp) - 1);
     tmp[sizeof(tmp) - 1] = '\0';
@@ -425,9 +424,9 @@ static int build_composite_key_from_record(const char *colSpec,
     while (tok) {
         int ci, found = 0;
         for (ci = 0; ci < numCols; ci++) {
-            if (strcasecmp(colNames[ci], tok) == 0 && ci < nv) {
+            if (strcasecmp(colNames[ci], tok) == 0 && ci < nf) {
                 if (!first) strncat(keyBuf, "|", keyBufSize - strlen(keyBuf) - 1);
-                strncat(keyBuf, vals[ci], keyBufSize - strlen(keyBuf) - 1);
+                strncat(keyBuf, fields[ci], keyBufSize - strlen(keyBuf) - 1);
                 found = 1;
                 first = 0;
                 break;
@@ -632,48 +631,30 @@ int CreateIndexProcess(void)
             while (tapi_scan_next(&scanCur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
                 char idxKey[512] = "";
 
+                int recLen = tup_record_len(recBuf, sizeof(recBuf));
+                char colValues[64][256];
+                int nullArr[64];
+                int nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
+                                             colValues, nullArr, 64);
+
                 if (isExprIndex && idxExpr) {
-                    char colValues[64][256];
-                    int nv = 0;
-                    char recTmp[RECORD_BUF_SIZE];
-                    strncpy(recTmp, recBuf, sizeof(recTmp) - 1);
-                    recTmp[sizeof(recTmp) - 1] = '\0';
-                    char *t = strtok(recTmp, ";");
-                    while (t && nv < 64) {
-                        strncpy(colValues[nv], t, 255);
-                        colValues[nv][255] = '\0';
-                        nv++;
-                        t = strtok(NULL, ";");
-                    }
                     expr_evaluate(idxExpr,
                                   (const char (*)[128])colNames,
                                   (const char (*)[256])colValues,
                                   numCols, idxKey, sizeof(idxKey));
                 } else if (isComposite) {
                     build_composite_key_from_record(g_indexColumnName,
-                        (const char (*)[128])colNames, numCols, recBuf,
+                        (const char (*)[128])colNames, numCols,
+                        indexCols, indexNCols, recBuf, recLen,
                         idxKey, sizeof(idxKey));
                 } else {
-                    int colIdx = -1, ci;
-                    for (ci = 0; ci < numCols; ci++) {
+                    int colIdx = -1;
+                    for (int ci = 0; ci < numCols; ci++) {
                         if (strcasecmp(colNames[ci], g_indexColumnName) == 0)
                             { colIdx = ci; break; }
                     }
-                    if (colIdx >= 0) {
-                        char tmp[RECORD_BUF_SIZE];
-                        strncpy(tmp, recBuf, sizeof(tmp) - 1);
-                        tmp[sizeof(tmp) - 1] = '\0';
-                        char *tok = strtok(tmp, ";");
-                        ci = 0;
-                        while (tok && ci <= colIdx) {
-                            if (ci == colIdx) {
-                                strncpy(idxKey, tok, sizeof(idxKey) - 1);
-                                break;
-                            }
-                            ci++;
-                            tok = strtok(NULL, ";");
-                        }
-                    }
+                    if (colIdx >= 0 && colIdx < nv && !nullArr[colIdx])
+                        strncpy(idxKey, colValues[colIdx], sizeof(idxKey) - 1);
                 }
 
                 if (idxKey[0]) {

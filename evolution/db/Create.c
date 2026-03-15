@@ -4,9 +4,10 @@
 #include <string.h>
 #include <fcntl.h>
 #include "database.h"
-#include "expression.h"
+#include "expression.h"   /* NULL_MARKER */
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "tuple_format.h"
 
 /* ----------------------------------------------------------------
  *  Metadata readers — now backed by system catalog
@@ -896,16 +897,9 @@ int AlterTableAddCheckConstraint(const char *tableName, const char *constraintNa
                 rowNum++;
                 /* Parse record into column values */
                 char colValues[64][256];
-                memset(colValues, 0, sizeof(colValues));
-                char recCopy[RECORD_BUF_SIZE];
-                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
-                char *field = strtok(recCopy, ";");
-                int idx = 0;
-                while (field && idx < 64) {
-                    strncpy(colValues[idx], field, 255);
-                    idx++;
-                    field = strtok(NULL, ";");
-                }
+                int recLen = tup_record_len(scanRec, sizeof(scanRec));
+                tup_extract_fields_nm(scanRec, recLen, cols, ncols,
+                                      colValues, NULL, 64);
 
                 char result[512];
                 int ok = expr_evaluate(expr,
@@ -1007,17 +1001,16 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
                 }
                 /* Build composite unique value */
                 char composite[1024] = "";
-                char recCopy[RECORD_BUF_SIZE];
-                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
-                char *fields[64];
-                int nf = 0;
-                char *f = strtok(recCopy, ";");
-                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+                char fieldArr[64][256];
+                int nullArr[64];
+                int recLen = tup_record_len(scanRec, sizeof(scanRec));
+                int nf = tup_extract_fields(scanRec, recLen, cols, ncols,
+                                            fieldArr, nullArr, 64);
 
                 for (int u = 0; u < numUqCols; u++) {
                     if (u > 0) strcat(composite, "|");
                     if (uqColIndices[u] < nf)
-                        strcat(composite, fields[uqColIndices[u]]);
+                        strcat(composite, fieldArr[uqColIndices[u]]);
                 }
                 strncpy(allValues[rowCount], composite, 1023);
                 allValues[rowCount][1023] = '\0';
@@ -1117,12 +1110,10 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
             int rowNum = 0;
             while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
                 rowNum++;
-                char recCopy[RECORD_BUF_SIZE];
-                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
-                char *fields[64];
-                int nf = 0;
-                char *f = strtok(recCopy, ";");
-                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+                char fieldArr[64][256];
+                int recLen = tup_record_len(scanRec, sizeof(scanRec));
+                int nf = tup_extract_fields_nm(scanRec, recLen, cols, ncols,
+                                               fieldArr, NULL, 64);
 
                 /* Build composite FK value */
                 char fkValue[1024] = "";
@@ -1130,8 +1121,8 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
                 for (int u = 0; u < numFkCols; u++) {
                     if (u > 0) strcat(fkValue, "|");
                     if (fkColIndices[u] < nf) {
-                        strcat(fkValue, fields[fkColIndices[u]]);
-                        if (strcmp(fields[fkColIndices[u]], "\x01NULL\x01") != 0)
+                        strcat(fkValue, fieldArr[fkColIndices[u]]);
+                        if (strcmp(fieldArr[fkColIndices[u]], NULL_MARKER) != 0)
                             allNull = 0;
                     }
                 }
@@ -1402,16 +1393,9 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
             while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
                 rowNum++;
                 char colValues[64][256];
-                memset(colValues, 0, sizeof(colValues));
-                char recCopy[RECORD_BUF_SIZE];
-                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
-                char *field = strtok(recCopy, ";");
-                int idx = 0;
-                while (field && idx < 64) {
-                    strncpy(colValues[idx], field, 255);
-                    idx++;
-                    field = strtok(NULL, ";");
-                }
+                int recLen = tup_record_len(scanRec, sizeof(scanRec));
+                tup_extract_fields_nm(scanRec, recLen, cols, ncols,
+                                      colValues, NULL, 64);
                 char result[512];
                 int ok = expr_evaluate(expr, (const char (*)[128])colNames,
                                        (const char (*)[256])colValues,
@@ -1475,20 +1459,18 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
         if (tapi_scan_begin(&td, &scanCur) == 0) {
             char scanKey[256], scanRec[RECORD_BUF_SIZE];
             while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
-                char recCopy[RECORD_BUF_SIZE];
-                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
-                char *fields[64];
-                int nf = 0;
-                char *f = strtok(recCopy, ";");
-                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+                char fieldArr[64][256];
+                int recLen = tup_record_len(scanRec, sizeof(scanRec));
+                int nf = tup_extract_fields_nm(scanRec, recLen, cols, ncols,
+                                               fieldArr, NULL, 64);
 
                 char fkValue[1024] = "";
                 int allNull = 1;
                 for (int u = 0; u < numFkCols; u++) {
                     if (u > 0) strcat(fkValue, "|");
                     if (fkColIndices[u] < nf) {
-                        strcat(fkValue, fields[fkColIndices[u]]);
-                        if (strcmp(fields[fkColIndices[u]], "\x01NULL\x01") != 0)
+                        strcat(fkValue, fieldArr[fkColIndices[u]]);
+                        if (strcmp(fieldArr[fkColIndices[u]], NULL_MARKER) != 0)
                             allNull = 0;
                     }
                 }
@@ -1581,18 +1563,16 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
                     rowCap *= 2;
                     allKeys = realloc(allKeys, rowCap * sizeof(*allKeys));
                 }
-                char recCopy[RECORD_BUF_SIZE];
-                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
-                char *fields[64];
-                int nf = 0;
-                char *f = strtok(recCopy, ";");
-                while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+                char fieldArr[64][256];
+                int recLen = tup_record_len(scanRec, sizeof(scanRec));
+                int nf = tup_extract_fields_nm(scanRec, recLen, cols, ncols,
+                                               fieldArr, NULL, 64);
 
                 char composite[1024] = "";
                 for (int p = 0; p < numPkCols; p++) {
                     if (p > 0) strcat(composite, "|");
                     if (pkColIndices[p] < nf) {
-                        if (strcmp(fields[pkColIndices[p]], "\x01NULL\x01") == 0) {
+                        if (strcmp(fieldArr[pkColIndices[p]], NULL_MARKER) == 0) {
                             snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                                      "column \"%s\" contains null values (row %d)",
                                      g_pkColumnNames[p], rowNum);
@@ -1602,7 +1582,7 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
                             g_pkColumnCount = 0;
                             return -1;
                         }
-                        strcat(composite, fields[pkColIndices[p]]);
+                        strcat(composite, fieldArr[pkColIndices[p]]);
                     }
                 }
                 strncpy(allKeys[rowCount], composite, 1023);
