@@ -1,8 +1,8 @@
 /*
  * table_api.c — Table Data Operations for EvoSQL Unified Storage
  *
- * Implements heap page management and PK B+ tree helpers
- * that replace APUE db_open/db_store/db_fetch/db_close.
+ * Implements heap page management and PK B+ tree helpers.
+ * Records stored as binary tuples in slotted pages.
  */
 #include <stdio.h>
 #include <stdlib.h>

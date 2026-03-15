@@ -1818,10 +1818,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 /* ----------------------------------------------------------------
  *  Execute SQL through EvoSQL parser
  *
- *  IMPORTANT: The APUE db library (db.c) calls err_dump/err_sys on
- *  many internal errors (lseek, read, invalid index, etc.).  In GUI
- *  mode these do longjmp(g_gui_jmpbuf, 1).  Therefore ANY code that
- *  touches the db library (db_open, db_nextrec, …) MUST run inside
+ *  IMPORTANT: Error functions (err_dump/err_sys) do longjmp(g_gui_jmpbuf, 1)
+ *  in GUI mode.  Therefore ANY code that can trigger errors MUST run inside
  *  the setjmp scope, and the stdout/stderr restore MUST be guarded
  *  against double-close in case longjmp fires after the first restore.
  * ---------------------------------------------------------------- */
@@ -1928,8 +1926,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* ----- setjmp scope -----
      * Everything that can call err_sys / err_dump / err_quit (which
      * longjmp back here in GUI mode) MUST be inside this block.
-     * This includes the parser AND collect_select_results (which
-     * calls db_open / db_nextrec that use err_dump internally). */
+     * This includes the parser AND collect_select_results. */
     if (setjmp(g_gui_jmpbuf) == 0) {
         int parse_result;
 

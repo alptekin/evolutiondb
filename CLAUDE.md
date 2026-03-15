@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EvoSQL (EvolutionDB) is a file-based SQL database engine written in C. It features Flex/Bison SQL parsing, APUE hash-indexed file storage, a dual-protocol server (PostgreSQL wire protocol on port 5433 + native EVO text protocol on port 9967), a CLI client, and a Win32 GUI (PopPad).
+EvoSQL (EvolutionDB) is a SQL database engine written in C. It features Flex/Bison SQL parsing, unified page-based storage with binary tuple format, a dual-protocol server (PostgreSQL wire protocol on port 5433 + native EVO text protocol on port 9967), and a CLI client.
 
 ## Build Commands
 
 ```bash
-make                  # Build all components (Linux skips PopPad)
+make                  # Build all components
 make evolution        # Build core SQL engine (evolution/evosql)
 make adaptor          # Build dual-protocol server (adaptor/evosql-server)
 make cli              # Build CLI client (cli/evosql-cli)
@@ -67,7 +67,7 @@ Clients (evosql-cli, DBeaver, psql)
   │  Evolution  │  evolution/ — core SQL engine
   ├─────────────┤
   │   Parser    │  evolution/parser/ — Flex/Bison (evoparser.y, evolexer.l)
-  │   DB Engine │  evolution/db/ — APUE hash-file storage, SQL operations
+  │   DB Engine │  evolution/db/ — unified page storage, SQL operations
   └─────────────┘
 ```
 
@@ -76,8 +76,7 @@ Clients (evosql-cli, DBeaver, psql)
 - **Parser output is RPN**: The Bison parser (`evoparser.y`) emits Reverse Polish Notation which the operation modules consume. Understanding the RPN stack is essential for adding new SQL features.
 - **Adaptor links evolution's object files directly** (no library): The adaptor Makefile compiles `evolution/db/*.c` and `evolution/parser/*.c` directly, excluding `evolution/main.c`.
 - **Global state with mutex**: The database engine uses global variables (`evolution/db/database_globals.c`, `evolution/db/database.h`). The adaptor's `query_executor.c` wraps all query execution in a mutex lock for thread safety.
-- **Storage (legacy)**: Each table = 3 files (`.idx` hash index, `.dat` semicolon-separated records, `.meta` metadata). Type encoding: `typeVal / 10000` = type family, `typeVal % 10000` = size (e.g., `130050` = VARCHAR(50)).
-- **Storage (new — unified)**: Single global binary file with 4KB pages. Page Manager (`page_mgr.c`) handles allocation/free list, Slotted Pages (`slotted.c`) store variable-length records, B+ Tree (`btree2.c`) provides O(log n) indexing, System Catalog (`catalog_internal.c`) stores all metadata in B+ trees. All I/O through Clock Sweep buffer pool (`buffer_pool.c`). Migration in progress — legacy and new coexist.
+- **Storage**: Single global binary file (`evosql.db`) with 4KB pages. Page Manager (`page_mgr.c`) handles allocation/free list, Slotted Pages (`slotted.c`) store variable-length records, B+ Tree (`btree2.c`) provides O(log n) indexing, System Catalog (`catalog_internal.c`) stores all metadata in B+ trees. All I/O through Clock Sweep buffer pool (`buffer_pool.c`). User table records use binary tuple format (`tuple_format.c`): `[0xE7][table_id:4B][Header:4B][NullBitmap][ColData...]`. Type encoding: `typeVal / 10000` = type family, `typeVal % 10000` = size (e.g., `130050` = VARCHAR(50)).
 - **Error handling**: Uses `setjmp`/`longjmp` (not exceptions). See `evolution/db/error.c`.
 - **Catalog emulation**: `adaptor/catalog.c` fakes `pg_catalog` and `information_schema` tables so DBeaver/pgAdmin work.
 
@@ -85,6 +84,8 @@ Clients (evosql-cli, DBeaver, psql)
 
 - **SQL operations**: `evolution/db/Create.c`, `Select.c`, `Insert.c`, `Update.c`, `Delete.c`, `Drop.c`
 - **WHERE evaluation**: `evolution/db/expression.c`
+- **Binary tuple format**: `evolution/db/tuple_format.c` — encode/decode, column cache
+- **Table API**: `evolution/db/table_api.c` — heap CRUD, PK key building, table scan
 - **Database/schema management**: `evolution/db/DatabaseMgmt.c`
 - **User auth & crypto**: `evolution/db/UserMgmt.c`, `evolution/db/crypto.c` (PBKDF2-SHA256)
 - **Privileges**: `evolution/db/GrantMgmt.c` — waterfall check: TABLE → SCHEMA → DATABASE
@@ -104,6 +105,6 @@ When modifying the SQL grammar:
 
 ## Platform Notes
 
-- Linux/macOS: Builds produce executables without `.exe` suffix; PopPad is skipped (Win32 GUI)
-- Windows (MinGW/MSYS2): Produces `.exe` files; PopPad is included
+- Linux/macOS: Builds produce executables without `.exe` suffix
+- Windows (MinGW/MSYS2): Produces `.exe` files
 - Docker build uses `gcc:13` → `debian:bookworm-slim` multi-stage with `TLS=1`

@@ -18,7 +18,6 @@ endif
 SRCS = main.c \
        parser/evoparser.tab.c \
        parser/lex.yy.c \
-       db/db.c \
        db/error.c \
        db/Create.c \
        db/Select.c \

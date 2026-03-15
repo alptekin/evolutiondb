@@ -1,9 +1,8 @@
 /*
  * table_api.h — Table Data Operations for EvoSQL Unified Storage
  *
- * Provides heap page management and PK B+ tree operations
- * that replace the old APUE db_open/db_store/db_fetch/db_close API.
- * All data stored in slotted pages, indexed by bt2 B+ trees.
+ * Provides heap page management and PK B+ tree operations.
+ * All data stored as binary tuples in slotted pages, indexed by bt2 B+ trees.
  */
 #ifndef TABLE_API_H
 #define TABLE_API_H

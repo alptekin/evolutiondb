@@ -39,7 +39,7 @@ typedef struct {
  * ctx is the per-connection session context; it is read before
  * execution and written back after (to capture USE / SET SCHEMA).
  *
- * For SELECT: reads .meta for columns, db_nextrec for rows
+ * For SELECT: reads columns from catalog, scans rows via table API
  * For DDL/DML: captures stdout message
  * For catalog queries: delegates to catalog.c
  */
