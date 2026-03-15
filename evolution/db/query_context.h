@@ -75,6 +75,12 @@ typedef struct QueryContext {
     int  isTemporary;          /* 1 if CREATE TEMPORARY TABLE */
     uint32_t lastCreatedTableId; /* table_id of last created table (0 = none) */
 
+    /* ---- Generated columns (accumulated during CREATE TABLE) ---- */
+    int  currentColGeneratedMode;       /* GENMODE_NONE / STORED / VIRTUAL */
+    char currentColGeneratedExpr[512];  /* serialized RPN */
+    int  columnGeneratedModes[64];      /* per-column: GENMODE_* */
+    char columnGeneratedExprs[64][512]; /* per-column: serialized RPN */
+
     /* ---- SELECT ---- */
     char selectColumns[64][128];
     int  selectColumnCount;
@@ -230,6 +236,12 @@ void          qctx_free(QueryContext *ctx);
 #define g_totalColumnSize       (g_qctx->totalColumnSize)
 #define g_isTemporary           (g_qctx->isTemporary)
 #define g_lastCreatedTableId    (g_qctx->lastCreatedTableId)
+
+/* Generated columns */
+#define g_currentColGeneratedMode  (g_qctx->currentColGeneratedMode)
+#define g_currentColGeneratedExpr  (g_qctx->currentColGeneratedExpr)
+#define g_columnGeneratedModes     (g_qctx->columnGeneratedModes)
+#define g_columnGeneratedExprs     (g_qctx->columnGeneratedExprs)
 
 /* SELECT */
 #define g_selectColumns         (g_qctx->selectColumns)

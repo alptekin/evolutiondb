@@ -286,6 +286,15 @@ void SetColumnAutoIncrement(int start, int step)
     g_autoIncStep  = (step  > 0) ? step  : 1;
 }
 
+void SetColumnGenerated(int mode, ExprNode *expr)
+{
+    g_currentColGeneratedMode = mode;
+    if (expr)
+        expr_serialize(expr, g_currentColGeneratedExpr, sizeof(g_currentColGeneratedExpr));
+    else
+        g_currentColGeneratedExpr[0] = '\0';
+}
+
 void SetTableAutoIncrement(int startVal)
 {
     if (startVal > 0)
@@ -543,6 +552,13 @@ int CreateTableProcess(void)
         } else {
             strcpy(cols[i].default_val, "\x01NONE\x01");
         }
+        cols[i].generated_mode = (i < 64) ? g_columnGeneratedModes[i] : 0;
+        if (i < 64 && g_columnGeneratedExprs[i][0]) {
+            strncpy(cols[i].generated_expr, g_columnGeneratedExprs[i], 511);
+            cols[i].generated_expr[511] = '\0';
+        } else {
+            cols[i].generated_expr[0] = '\0';
+        }
     }
 
     /* Mark PK columns */
@@ -782,6 +798,15 @@ int GetColumnNames(char *name)
     if (g_currentColAutoIncrement)
         g_autoIncColIndex = g_columnCount;
 
+    /* Accumulate generated column info */
+    if (g_columnCount < 64) {
+        g_columnGeneratedModes[g_columnCount] = g_currentColGeneratedMode;
+        if (g_currentColGeneratedExpr[0])
+            strncpy(g_columnGeneratedExprs[g_columnCount], g_currentColGeneratedExpr, 511);
+        else
+            g_columnGeneratedExprs[g_columnCount][0] = '\0';
+    }
+
     g_columnCount++;
 
     /* Reset per-column flags for next column */
@@ -790,6 +815,8 @@ int GetColumnNames(char *name)
     g_currentColUnique = 0;
     g_currentColDefault[0] = '\0';
     g_currentColAutoIncrement = 0;
+    g_currentColGeneratedMode = 0;
+    g_currentColGeneratedExpr[0] = '\0';
 
     return 0;
 }

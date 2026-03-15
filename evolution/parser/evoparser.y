@@ -58,8 +58,12 @@
 %token ASC
 %token AND
 %token AS
+%token ALWAYS
 
 %token IDENTITY
+%token GENERATED
+%token STORED
+%token VIRTUAL
 
 %token BLOB
 %token BOOLEAN
@@ -1439,6 +1443,12 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts CONSTRAINT NAME UNIQUE                                            { emit("ATTR UNIQUE"); SetColumnUnique(); free($3); $$ = $1 + 1; }
 | column_atts CONSTRAINT NAME PRIMARY KEY                                       { emit("ATTR PRIKEY"); SetColumnPrimaryKey(); free($3); $$ = $1 + 1; }
 | column_atts CONSTRAINT NAME CHECK '(' expr ')'                               { emit("ATTR CHECK"); strncpy(g_checkNames[g_checkCount], $3, 127); AddCheckConstraint($6); free($3); $$ = $1 + 1; }
+| column_atts GENERATED ALWAYS AS '(' expr ')' STORED                          { emit("ATTR GENERATED STORED"); SetColumnGenerated(1, $6); $$ = $1 + 1; }
+| column_atts GENERATED ALWAYS AS '(' expr ')' VIRTUAL                         { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, $6); $$ = $1 + 1; }
+| column_atts GENERATED ALWAYS AS '(' expr ')'                                 { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, $6); $$ = $1 + 1; }
+| column_atts AS '(' expr ')' STORED                                           { emit("ATTR GENERATED STORED"); SetColumnGenerated(1, $4); $$ = $1 + 1; }
+| column_atts AS '(' expr ')' VIRTUAL                                          { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, $4); $$ = $1 + 1; }
+| column_atts AS '(' expr ')'                                                  { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, $4); $$ = $1 + 1; }
 ;
 
 opt_length: /* nil */								{ $$ = 0; }
