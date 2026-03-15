@@ -110,11 +110,26 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         return -1;
     }
 
+    /* Load column metadata for generated column checks */
+    TableDesc reorderTd;
+    ColumnDesc reorderCols[CAT_MAX_COLUMNS];
+    int reorderNcols;
+    tapi_resolve(tblName, &reorderTd, reorderCols, &reorderNcols);
+
     for (i = 0; i < g_insertColumnCount; i++) {
         int found = 0;
         for (j = 0; j < numTableCols; j++) {
             if (strcasecmp(g_insertColumns[i], tableColNames[j]) == 0) {
                 found = 1;
+                /* Block writes to generated columns */
+                if (j < reorderNcols && reorderCols[j].generated_mode != GENMODE_NONE) {
+                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                             "cannot insert a non-DEFAULT value into column \"%s\" "
+                             "because it is a generated column", g_insertColumns[i]);
+                    g_gui_error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
+                    return -1;
+                }
                 break;
             }
         }
@@ -229,6 +244,55 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
             strcat(buf, colValues[i]);
         }
         strcat(buf, ";");
+    }
+
+    /* Pass 3: evaluate STORED generated columns, set VIRTUAL to NULL */
+    {
+        int hasGenerated = 0;
+        for (i = 0; i < reorderNcols && i < numTableCols; i++) {
+            if (reorderCols[i].generated_mode != GENMODE_NONE) { hasGenerated = 1; break; }
+        }
+        if (hasGenerated) {
+            char colValues[64][256];
+            char tmpBuf[RECORD_BUF_SIZE];
+            strncpy(tmpBuf, buf, sizeof(tmpBuf) - 1);
+            tmpBuf[sizeof(tmpBuf) - 1] = '\0';
+            int ci = 0;
+            char *tok = strtok(tmpBuf, ";");
+            while (tok && ci < 64) {
+                strncpy(colValues[ci], tok, 255);
+                colValues[ci][255] = '\0';
+                ci++;
+                tok = strtok(NULL, ";");
+            }
+
+            for (i = 0; i < reorderNcols && i < numTableCols; i++) {
+                if (reorderCols[i].generated_mode == GENMODE_STORED && reorderCols[i].generated_expr[0]) {
+                    /* STORED — evaluate and store */
+                    ExprNode *genExpr = expr_deserialize(reorderCols[i].generated_expr);
+                    if (genExpr) {
+                        char result[256];
+                        if (expr_evaluate(genExpr,
+                                          (const char (*)[128])tableColNames,
+                                          (const char (*)[256])colValues,
+                                          numTableCols, result, sizeof(result))) {
+                            strncpy(colValues[i], result, 255);
+                            colValues[i][255] = '\0';
+                        }
+                    }
+                } else if (reorderCols[i].generated_mode == GENMODE_VIRTUAL) {
+                    /* VIRTUAL — store NULL placeholder on disk */
+                    strcpy(colValues[i], "\x01NULL\x01");
+                }
+            }
+
+            buf[0] = '\0';
+            for (i = 0; i < numTableCols; i++) {
+                if (i > 0) strcat(buf, ";");
+                strcat(buf, colValues[i]);
+            }
+            strcat(buf, ";");
+        }
     }
 
     strncpy(rowData, buf, RECORD_BUF_SIZE - 1);
@@ -864,6 +928,53 @@ int InsertProcess(void)
                 /* Capture first auto-generated value for LAST_INSERT_ID() */
                 if (generated == 1)
                     capture_generated_id(genBuf);
+            }
+        }
+
+        /* Evaluate generated columns (for full INSERT without column list) */
+        {
+            int hasGen = 0;
+            for (int gc = 0; gc < ncols; gc++) {
+                if (cols[gc].generated_mode != GENMODE_NONE) { hasGen = 1; break; }
+            }
+            if (hasGen) {
+                char colNames[64][128];
+                int numCN = InsertReadColumnNames(tblName, colNames, 64);
+                char colVals[64][256];
+                char tmpRow[RECORD_BUF_SIZE];
+                strncpy(tmpRow, reorderedRows[i], sizeof(tmpRow) - 1);
+                tmpRow[sizeof(tmpRow) - 1] = '\0';
+                int ci = 0;
+                char *tp = strtok(tmpRow, ";");
+                while (tp && ci < 64) {
+                    strncpy(colVals[ci], tp, 255);
+                    colVals[ci][255] = '\0';
+                    ci++;
+                    tp = strtok(NULL, ";");
+                }
+                for (int gc = 0; gc < ncols && gc < ci; gc++) {
+                    if (cols[gc].generated_mode == GENMODE_STORED && cols[gc].generated_expr[0]) {
+                        ExprNode *genExpr = expr_deserialize(cols[gc].generated_expr);
+                        if (genExpr) {
+                            char result[256];
+                            if (expr_evaluate(genExpr,
+                                              (const char (*)[128])colNames,
+                                              (const char (*)[256])colVals,
+                                              numCN, result, sizeof(result))) {
+                                strncpy(colVals[gc], result, 255);
+                                colVals[gc][255] = '\0';
+                            }
+                        }
+                    } else if (cols[gc].generated_mode == GENMODE_VIRTUAL) {
+                        strcpy(colVals[gc], "\x01NULL\x01");
+                    }
+                }
+                reorderedRows[i][0] = '\0';
+                for (int gc = 0; gc < ci; gc++) {
+                    if (gc > 0) strcat(reorderedRows[i], ";");
+                    strcat(reorderedRows[i], colVals[gc]);
+                }
+                strcat(reorderedRows[i], ";");
             }
         }
 

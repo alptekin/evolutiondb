@@ -29,6 +29,7 @@ ANALYZE					{ return ANALYZE; }
 AND						{ return ANDOP; }
 ANY						{ return ANY; }
 ALTER					{ return ALTER; }
+ALWAYS					{ return ALWAYS; }
 AS						{ return AS; }
 ASC						{ return ASC; }
 AUTO_INCREMENT			{ return AUTO_INCREMENT; }
@@ -117,6 +118,7 @@ FROM					{ return FROM; }
 FULL					{ return FULL; }
 FULLTEXT				{ return FULLTEXT; }
 
+GENERATED				{ return GENERATED; }
 GROUP					{ return GROUP; }
 HASH					{ return HASH; }
 HAVING					{ return HAVING; }
@@ -218,6 +220,7 @@ SET						{ return SET; }
 
 SIMPLE					{ return SIMPLE; }
 INT2|SMALLINT			{ return SMALLINT; }
+STORED					{ return STORED; }
 SOME					{ return SOME; }
 
 
@@ -258,6 +261,7 @@ USING					{ return USING; }
 
 VALIDATE				{ return VALIDATE; }
 VALUES					{ return VALUES; }
+VIRTUAL					{ return VIRTUAL; }
 VALUE					{ yylval.strval = strdup("VALUE"); return NAME; }
 VARBINARY				{ return VARBINARY; }
 VARCHAR(ACTER)?			{ return VARCHAR; }

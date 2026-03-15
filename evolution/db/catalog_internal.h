@@ -65,7 +65,13 @@ typedef struct {
     int      is_unique;
     int      is_pk;
     char     default_val[CAT_MAX_DEFAULT_LEN];
+    int      generated_mode;   /* GENMODE_NONE / GENMODE_STORED / GENMODE_VIRTUAL */
+    char     generated_expr[512]; /* serialized RPN expression */
 } ColumnDesc;
+
+#define GENMODE_NONE    0
+#define GENMODE_STORED  1
+#define GENMODE_VIRTUAL 2
 
 typedef struct IndexDesc {
     uint32_t table_id;

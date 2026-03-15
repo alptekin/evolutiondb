@@ -158,10 +158,12 @@ static void deserialize_table(const char *buf, TableDesc *t)
 /* --- Column --- */
 static void serialize_column(const ColumnDesc *c, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%d;%s;%d;%d;%d;%d;%s",
+    snprintf(buf, size, "%u;%d;%s;%d;%d;%d;%d;%s;%d;%s",
              c->table_id, c->col_ordinal, c->col_name,
              c->type_code, c->is_not_null, c->is_unique, c->is_pk,
-             c->default_val);
+             c->default_val,
+             c->generated_mode,
+             c->generated_expr[0] ? c->generated_expr : "");
 }
 
 static void deserialize_column(const char *buf, ColumnDesc *c)
@@ -176,7 +178,15 @@ static void deserialize_column(const char *buf, ColumnDesc *c)
     p = next_field(p, field, sizeof(field)); c->is_unique = atoi(field);
     p = next_field(p, field, sizeof(field)); c->is_pk = atoi(field);
     p = next_field(p, c->default_val, CAT_MAX_DEFAULT_LEN);
-    (void)p;
+    /* generated_mode — 9th field, may be absent in old records */
+    c->generated_mode = 0;
+    c->generated_expr[0] = '\0';
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field));
+        c->generated_mode = atoi(field);
+        if (p && *p)
+            next_field(p, c->generated_expr, sizeof(c->generated_expr));
+    }
 }
 
 /* --- Index --- */

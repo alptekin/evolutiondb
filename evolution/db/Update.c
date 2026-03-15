@@ -334,10 +334,49 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         for (s = 0; s < minSet; s++) {
             for (c = 0; c < numMetaCols; c++) {
                 if (strcmp(metaCols[c], setCols[s]) == 0) {
+                    /* Block SET on generated columns */
+                    if (c < allNCols && allCols[c].generated_mode != GENMODE_NONE) {
+                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                 "column \"%s\" can only be updated to DEFAULT "
+                                 "because it is a generated column", setCols[s]);
+                        g_gui_error = 1;
+                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
+                        return -1;
+                    }
                     if (c < numFields) {
                         strcpy(fields[c], setVals[s]);
                     }
                     break;
+                }
+            }
+        }
+    }
+
+    /* Re-evaluate STORED generated columns after SET */
+    {
+        int hasGen = 0;
+        for (i = 0; i < allNCols; i++) {
+            if (allCols[i].generated_mode == GENMODE_STORED && allCols[i].generated_expr[0]) {
+                hasGen = 1; break;
+            }
+        }
+        if (hasGen) {
+            char genColNames[64][128];
+            int numGCN = UpdateReadColumnNames(tblName, genColNames, 64);
+            for (i = 0; i < allNCols && i < numFields; i++) {
+                if (allCols[i].generated_mode == GENMODE_STORED && allCols[i].generated_expr[0]) {
+                    ExprNode *genExpr = expr_deserialize(allCols[i].generated_expr);
+                    if (genExpr) {
+                        char result[256];
+                        if (expr_evaluate(genExpr,
+                                          (const char (*)[128])genColNames,
+                                          (const char (*)[256])fields,
+                                          numGCN < numFields ? numGCN : numFields,
+                                          result, sizeof(result))) {
+                            strncpy(fields[i], result, 255);
+                            fields[i][255] = '\0';
+                        }
+                    }
                 }
             }
         }

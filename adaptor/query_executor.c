@@ -530,6 +530,78 @@ static int parse_record_fields(const char *recBuf, char *parseBuf, int parseBufS
     return col;
 }
 
+/* Pre-deserialized virtual column expressions (cached once per SELECT). */
+typedef struct {
+    ExprNode *exprs[64];   /* NULL for non-virtual columns */
+    int       ncols;
+    int       has_virtual;
+} VirtualColCache;
+
+static void vcc_init(VirtualColCache *vc, const ColumnDesc *cols, int ncols)
+{
+    memset(vc, 0, sizeof(*vc));
+    vc->ncols = ncols < 64 ? ncols : 64;
+    for (int i = 0; i < vc->ncols; i++) {
+        if (cols[i].generated_mode == GENMODE_VIRTUAL && cols[i].generated_expr[0]) {
+            vc->exprs[i] = expr_deserialize(cols[i].generated_expr);
+            if (vc->exprs[i]) vc->has_virtual = 1;
+        }
+    }
+}
+
+/* Evaluate VIRTUAL generated columns in a record buffer (in-place).
+ * Replaces \x01NULL\x01 placeholders with computed values.
+ * Caller must check vc->has_virtual before calling in hot loops. */
+static void eval_virtual_columns(char *recBuf, int recBufSize,
+                                 const ColumnDesc *cols, int ncols,
+                                 const VirtualColCache *vc)
+{
+    /* Parse record into fields */
+    char colNames[64][128];
+    char colVals[64][256];
+    char tmp[RECORD_BUF_SIZE];
+    strncpy(tmp, recBuf, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    int nf = 0;
+    char *t = strtok(tmp, ";");
+    while (t && nf < 64 && nf < ncols) {
+        strncpy(colNames[nf], cols[nf].col_name, 127);
+        colNames[nf][127] = '\0';
+        strncpy(colVals[nf], t, 255);
+        colVals[nf][255] = '\0';
+        nf++;
+        t = strtok(NULL, ";");
+    }
+
+    /* Evaluate each VIRTUAL column using cached expressions */
+    int changed = 0;
+    for (int i = 0; i < nf && i < vc->ncols; i++) {
+        if (vc->exprs[i]) {
+            char result[256];
+            if (expr_evaluate(vc->exprs[i],
+                              (const char (*)[128])colNames,
+                              (const char (*)[256])colVals,
+                              nf, result, sizeof(result))) {
+                strncpy(colVals[i], result, 255);
+                colVals[i][255] = '\0';
+                changed = 1;
+            }
+        }
+    }
+
+    if (changed) {
+        char *p = recBuf;
+        for (int i = 0; i < nf; i++) {
+            if (i > 0) *p++ = ';';
+            int len = strlen(colVals[i]);
+            memcpy(p, colVals[i], len);
+            p += len;
+        }
+        *p++ = ';';
+        *p = '\0';
+    }
+}
+
 /* ----------------------------------------------------------------
  *  Collect SELECT results into ResultSet
  * ---------------------------------------------------------------- */
@@ -578,6 +650,10 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
     BTree2 pk_tree = tapi_pk_tree(&td);
 
+    /* Pre-deserialize VIRTUAL generated column expressions (once per SELECT) */
+    VirtualColCache vcc;
+    vcc_init(&vcc, allCols, ncols);
+
     /* --- Try PK direct lookup or index-accelerated lookup --- */
     int used_index = 0;
     if (g_whereExpr) {
@@ -601,6 +677,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 if (bt2_search(&pk_tree, eq_val, &rid) == 0) {
                     char recBuf[RECORD_BUF_SIZE];
                     if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) > 0) {
+                        if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
                         int row = result_add_row(rs);
                         if (row >= 0) {
                             char temp[RECORD_BUF_SIZE];
@@ -644,6 +721,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     char recBuf[RECORD_BUF_SIZE];
                     if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
                         continue;
+                    if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
 
                     int row = result_add_row(rs);
                     if (row < 0) break;
@@ -693,6 +771,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     char recBuf[RECORD_BUF_SIZE];
                     if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
                         continue;
+                    if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
 
                     int row = result_add_row(rs);
                     if (row < 0) break;
@@ -745,6 +824,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                         char recBuf[RECORD_BUF_SIZE];
                         if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
                             continue;
+                        if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
 
                         int row = result_add_row(rs);
                         if (row < 0) break;
@@ -812,6 +892,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
         if (tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
+                if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
                 if (streaming) {
                     /* --- Streaming path: parse, filter, send directly --- */
                     char parseBuf[RECORD_BUF_SIZE];
