@@ -18,6 +18,7 @@ typedef struct UndoEntry {
     char *table;            /* table file path (e.g. "data/.../t.dat") */
     char *key;              /* primary key */
     char *old_data;         /* previous record data (NULL for INSERT) */
+    int   old_data_len;     /* binary tuple length (0 if old_data is NULL) */
     struct UndoEntry *next; /* linked list (stack: newest first) */
 } UndoEntry;
 
@@ -42,10 +43,11 @@ typedef struct {
 UndoLog *undo_log_create(void);
 void     undo_log_free(UndoLog *log);
 
-/* Append an undo entry (pushed to head = stack order) */
+/* Append an undo entry (pushed to head = stack order).
+ * old_data is a binary tuple (may contain NUL bytes), old_data_len is its length. */
 void undo_log_record(UndoLog *log, int op_type,
                      const char *table, const char *key,
-                     const char *old_data);
+                     const char *old_data, int old_data_len);
 
 /* Replay the undo log in reverse (ROLLBACK) — undoes all changes.
  * Returns 0 on success, -1 on error. */
@@ -65,6 +67,6 @@ void savepoint_release_after(SavePointStack *sp, int idx);
 /* The global callback installed while a transaction query runs.
  * Engine DML code calls this (if non-NULL) before modifying data. */
 void tx_undo_callback(int op_type, const char *table,
-                      const char *key, const char *data);
+                      const char *key, const char *data, int data_len);
 
 #endif /* TRANSACTION_H */

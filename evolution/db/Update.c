@@ -7,29 +7,14 @@
 #include "expression.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "tuple_format.h"
 
-/* Extract field at colIndex from semicolon-separated record */
-static void UpdateGetFieldValue(const char *data, int colIndex,
-                                char *buf, int bufSize)
-{
-    char tmp[2048];
-    char *t;
-    int idx = 0;
+/* Thin wrappers around shared tuple_format functions */
+#define UpdateExtractAllFields(data, dataLen, table_id, cols, ncols, fields, is_null_out, maxFields) \
+    tup_extract_fields_nm((data), (dataLen), (cols), (ncols), (fields), (is_null_out), (maxFields))
 
-    strncpy(tmp, data, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
-    t = strtok(tmp, ";");
-    while (t) {
-        if (idx == colIndex) {
-            strncpy(buf, t, bufSize - 1);
-            buf[bufSize - 1] = '\0';
-            return;
-        }
-        idx++;
-        t = strtok(NULL, ";");
-    }
-    buf[0] = '\0';
-}
+#define UpdateBuildBinaryRecord(fields, numFields, table_id, cols, ncols, out, outSize) \
+    tup_build_from_fields((fields), (numFields), (table_id), (cols), (ncols), (out), (outSize))
 
 /* Read column names from catalog */
 static int UpdateReadColumnNames(const char *tableName,
@@ -152,14 +137,18 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
         {
             char childPk[256], childRec[RECORD_BUF_SIZE];
             while (tapi_scan_next(&childCursor, childPk, childRec, sizeof(childRec)) == 0) {
+                int childRecLen = tup_record_len(childRec, sizeof(childRec));
+                char scanFields[64][256];
+                int scanNf = UpdateExtractAllFields(childRec, childRecLen,
+                                                     childTd.table_id,
+                                                     childCols, childNCols,
+                                                     scanFields, NULL, 64);
                 char childFkValue[1024] = "";
                 int first = 1;
                 for (int fc = 0; fc < fkColCount; fc++) {
-                    if (fkColIndices[fc] >= 0) {
-                        char fieldVal[256];
-                        UpdateGetFieldValue(childRec, fkColIndices[fc], fieldVal, sizeof(fieldVal));
+                    if (fkColIndices[fc] >= 0 && fkColIndices[fc] < scanNf) {
                         if (!first) strcat(childFkValue, "|");
-                        strcat(childFkValue, fieldVal);
+                        strcat(childFkValue, scanFields[fkColIndices[fc]]);
                         first = 0;
                     }
                 }
@@ -228,19 +217,13 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
             RowID childRid;
             if (bt2_search(&childPkTree, matchingChildKeys[m], &childRid) == 0) {
                 char childRec[RECORD_BUF_SIZE];
-                if (tapi_heap_read(childRid, childRec, sizeof(childRec)) > 0) {
+                int childRecLen = tapi_heap_read(childRid, childRec, sizeof(childRec));
+                if (childRecLen > 0) {
                     char fields[64][256];
-                    int numFields = 0;
-                    char tmpRec[RECORD_BUF_SIZE];
-                    strncpy(tmpRec, childRec, sizeof(tmpRec) - 1);
-                    tmpRec[sizeof(tmpRec) - 1] = '\0';
-                    char *tok = strtok(tmpRec, ";");
-                    while (tok && numFields < 64) {
-                        strncpy(fields[numFields], tok, 255);
-                        fields[numFields][255] = '\0';
-                        numFields++;
-                        tok = strtok(NULL, ";");
-                    }
+                    int numFields = UpdateExtractAllFields(childRec, childRecLen,
+                                                           childTd.table_id,
+                                                           childCols, childNCols,
+                                                           fields, NULL, 64);
 
                     for (int fc = 0; fc < fkColCount; fc++) {
                         if (fkColIndices[fc] >= 0 && fkColIndices[fc] < numFields) {
@@ -264,14 +247,13 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
                         }
                     }
 
-                    char newRec[RECORD_BUF_SIZE] = "";
-                    for (int f = 0; f < numFields; f++) {
-                        strcat(newRec, fields[f]);
-                        strcat(newRec, ";");
-                    }
-
-                    uint16_t newLen = (uint16_t)(strlen(newRec) + 1);
-                    RowID newRid = tapi_heap_update(&childTd, childRid, newRec, newLen);
+                    char newRec[RECORD_BUF_SIZE];
+                    int newLen = UpdateBuildBinaryRecord(
+                        (const char (*)[256])fields, numFields,
+                        childTd.table_id, childCols, childNCols,
+                        newRec, sizeof(newRec));
+                    if (newLen < 0) newLen = 0;
+                    RowID newRid = tapi_heap_update(&childTd, childRid, newRec, (uint16_t)newLen);
                     if (newRid.page_no != childRid.page_no ||
                         newRid.slot_idx != childRid.slot_idx) {
                         bt2_update(&childPkTree, matchingChildKeys[m], newRid);
@@ -298,8 +280,6 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                             const char *tblName)
 {
     char existingData[RECORD_BUF_SIZE];
-    char temp[RECORD_BUF_SIZE];
-    char *tok;
     int s, c, i;
 
     /* Fetch record by PK from B+ tree + heap */
@@ -307,26 +287,23 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     RowID rid;
     if (bt2_search(&pk_tree, pkKey, &rid) < 0)
         return -1;
-    if (tapi_heap_read(rid, existingData, sizeof(existingData)) < 0)
+    int existingDataLen = tapi_heap_read(rid, existingData, sizeof(existingData));
+    if (existingDataLen < 0)
         return -1;
 
     /* Log undo entry before modifying data */
     if (g_tx_undo_callback)
         g_tx_undo_callback(2 /*TX_OP_UPDATE*/, tblName,
-                           pkKey, existingData);
+                           pkKey, existingData, existingDataLen);
 
     /* Parse existing record into fields */
     char fields[64][256];
-    int numFields = 0;
-
-    strncpy(temp, existingData, sizeof(temp) - 1);
-    temp[sizeof(temp) - 1] = '\0';
-    tok = strtok(temp, ";");
-    while (tok && numFields < 64) {
-        strcpy(fields[numFields], tok);
-        numFields++;
-        tok = strtok(NULL, ";");
-    }
+    char oldFields[64][256]; /* saved copy before SET modification */
+    int is_null_arr[64];
+    int numFields = UpdateExtractAllFields(existingData, existingDataLen,
+                                            td->table_id, allCols, allNCols,
+                                            fields, is_null_arr, 64);
+    memcpy(oldFields, fields, sizeof(oldFields));
 
     /* Replace only the SET columns with new values */
     {
@@ -623,18 +600,17 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                 char uqPkBuf[256], uqRecBuf[RECORD_BUF_SIZE];
                 while (tapi_scan_next(&uqCursor, uqPkBuf, uqRecBuf, sizeof(uqRecBuf)) == 0) {
                     if (strcmp(uqPkBuf, pkKey) == 0) continue; /* skip self */
-                    char uqTmp[RECORD_BUF_SIZE];
-                    strncpy(uqTmp, uqRecBuf, sizeof(uqTmp) - 1);
-                    char *uqFields[64];
-                    int uqNf = 0;
-                    char *uf = strtok(uqTmp, ";");
-                    while (uf && uqNf < 64) { uqFields[uqNf++] = uf; uf = strtok(NULL, ";"); }
+                    int uqRecLen = tup_record_len(uqRecBuf, sizeof(uqRecBuf));
+                    char uqFieldsArr[64][256];
+                    int uqNf = UpdateExtractAllFields(uqRecBuf, uqRecLen,
+                                                       td->table_id, allCols, allNCols,
+                                                       uqFieldsArr, NULL, 64);
 
                     char existComposite[1024] = "";
                     for (int uc = 0; uc < numUqCols; uc++) {
                         if (uc > 0) strcat(existComposite, "|");
                         if (uqColIndices[uc] < uqNf)
-                            strcat(existComposite, uqFields[uqColIndices[uc]]);
+                            strcat(existComposite, uqFieldsArr[uqColIndices[uc]]);
                     }
                     if (strcmp(newComposite, existComposite) == 0) {
                         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
@@ -682,31 +658,13 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
-    /* Build updated record string */
+    /* Build updated binary record */
     {
-        char newRecord[RECORD_BUF_SIZE] = "";
-
-        for (i = 0; i < numFields; i++) {
-            strcat(newRecord, fields[i]);
-            strcat(newRecord, ";");
-        }
-
-        /* Save old field values for index update */
-        char oldFields[64][256];
-        {
-            char oldTemp[RECORD_BUF_SIZE];
-            char *otok;
-            int oCount = 0;
-            strncpy(oldTemp, existingData, sizeof(oldTemp) - 1);
-            oldTemp[sizeof(oldTemp) - 1] = '\0';
-            otok = strtok(oldTemp, ";");
-            while (otok && oCount < 64) {
-                strncpy(oldFields[oCount], otok, 255);
-                oldFields[oCount][255] = '\0';
-                oCount++;
-                otok = strtok(NULL, ";");
-            }
-        }
+        char newRecord[RECORD_BUF_SIZE];
+        int newLen = UpdateBuildBinaryRecord((const char (*)[256])fields, numFields,
+                                             td->table_id, allCols, allNCols,
+                                             newRecord, sizeof(newRecord));
+        if (newLen < 0) return -1;
 
         /* Load secondary indexes once for both pre-store and post-store */
         IndexDesc updIdx[16];
@@ -768,8 +726,7 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
 
         /* Update record in heap (may move to new page) */
-        uint16_t newLen = (uint16_t)(strlen(newRecord) + 1);
-        RowID newRid = tapi_heap_update(td, rid, newRecord, newLen);
+        RowID newRid = tapi_heap_update(td, rid, newRecord, (uint16_t)newLen);
         if (newRid.page_no == 0)
             return -1;
 
@@ -961,8 +918,16 @@ int UpdateProcess(void)
                         if (tapi_scan_begin(&td, &scanCur) == 0) {
                             char uPk[256], uRec[RECORD_BUF_SIZE];
                             while (tapi_scan_next(&scanCur, uPk, uRec, sizeof(uRec)) == 0) {
+                                int uRecLen = tup_record_len(uRec, sizeof(uRec));
+                                char uFields[64][256];
+                                int uNf = UpdateExtractAllFields(uRec, uRecLen,
+                                                                  td.table_id, allCols, allNCols,
+                                                                  uFields, NULL, 64);
                                 char existVal[256];
-                                UpdateGetFieldValue(uRec, c, existVal, sizeof(existVal));
+                                if (c < uNf)
+                                    strcpy(existVal, uFields[c]);
+                                else
+                                    existVal[0] = '\0';
                                 if (strcmp(allTokens[s], existVal) == 0) {
                                     snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                                              "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
@@ -1007,11 +972,12 @@ int UpdateProcess(void)
 
         if (tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
+                int recLen = tup_record_len(recBuf, sizeof(recBuf));
                 char colValues[64][256];
-                int cv;
-                for (cv = 0; cv < numCols && cv < 64; cv++) {
-                    UpdateGetFieldValue(recBuf, cv, colValues[cv], 256);
-                }
+                int numExtracted = UpdateExtractAllFields(recBuf, recLen,
+                                                          td.table_id, allCols, allNCols,
+                                                          colValues, NULL, 64);
+                (void)numExtracted;
 
                 char result[512];
                 int ok = expr_evaluate(g_whereExpr,

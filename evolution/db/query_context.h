@@ -118,7 +118,8 @@ typedef struct QueryContext {
 
     /* ---- Transaction callback ---- */
     void (*tx_undo_callback)(int op_type, const char *table,
-                             const char *key, const char *data);
+                             const char *key, const char *data,
+                             int data_len);
 
     /* ---- Expression pool (heap-allocated for size) ---- */
     ExprNode *exprNodePool;

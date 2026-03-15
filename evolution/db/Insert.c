@@ -7,6 +7,7 @@
 #include "expression.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "tuple_format.h"
 
 /* Row separator used between multiple value groups in g_insert. */
 #define ROW_SEP '\x02'
@@ -424,13 +425,15 @@ static int validate_unique(const char *tblName,
     char pkBuf[256];
     char recBuf[RECORD_BUF_SIZE];
     while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0) {
-        char tmp[RECORD_BUF_SIZE];
-        strncpy(tmp, recBuf, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-        char *fields[64];
-        int nf = 0;
-        char *f = strtok(tmp, ";");
-        while (f && nf < 64) { fields[nf++] = f; f = strtok(NULL, ";"); }
+        char fields[64][256];
+        int field_nulls[64];
+        int nf;
+
+        int rec_len = tup_record_len(recBuf, sizeof(recBuf));
+        if (rec_len <= 0) continue;
+        nf = tup_extract_fields(recBuf, rec_len, colDescs, ncols,
+                                fields, field_nulls, 64);
+        if (nf < 0) continue;
 
         /* Check single-column UNIQUE flags */
         for (int i = 0; i < numFlags && i < numValues; i++) {
@@ -704,7 +707,17 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
             if (tapi_scan_begin(&refTd, &scanCur) == 0) {
                 char scanKey[256], scanRec[RECORD_BUF_SIZE];
                 while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
-                    /* Extract referenced column values and build composite value */
+                    /* Extract fields from scanned record */
+                    char scanFields[64][256];
+                    int scanNulls[64];
+                    int snf;
+                    int sRecLen = tup_record_len(scanRec, sizeof(scanRec));
+                    if (sRecLen <= 0) continue;
+                    snf = tup_extract_fields(scanRec, sRecLen, refCols, refColCount,
+                                             scanFields, scanNulls, 64);
+                    if (snf < 0) continue;
+
+                    /* Build composite value from referenced columns */
                     char refRecValue[1024] = "";
                     char refColListBuf[256];
                     strncpy(refColListBuf, refColsCsv, sizeof(refColListBuf) - 1);
@@ -715,23 +728,9 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                     while (refColName) {
                         for (int k = 0; k < refColCount; k++) {
                             if (strcasecmp(refCols[k].col_name, refColName) == 0) {
-                                char fieldVal[256] = "";
-                                char recCopy[RECORD_BUF_SIZE];
-                                strncpy(recCopy, scanRec, sizeof(recCopy) - 1);
-                                recCopy[sizeof(recCopy) - 1] = '\0';
-                                char *field = strtok(recCopy, ";");
-                                int idx = 0;
-                                while (field) {
-                                    if (idx == k) {
-                                        strncpy(fieldVal, field, sizeof(fieldVal) - 1);
-                                        fieldVal[sizeof(fieldVal) - 1] = '\0';
-                                        break;
-                                    }
-                                    idx++;
-                                    field = strtok(NULL, ";");
-                                }
                                 if (!first) strcat(refRecValue, "|");
-                                strcat(refRecValue, fieldVal);
+                                if (k < snf)
+                                    strcat(refRecValue, scanFields[k]);
                                 first = 0;
                                 break;
                             }
@@ -780,14 +779,37 @@ static int apply_auto_increment(const char *tblName, char **vals, int numValues,
 }
 
 /* Store a single row into heap + PK B+ tree.
+ * Converts semicolon-delimited rowData to binary tuple before storing.
  * Returns 0 on success, 1 on duplicate key, -1 on error. */
 static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
                             const char *tblName, char *rowData)
 {
     char pkKey[1024];
 
-    /* Build PK key from record values */
-    if (tapi_build_pk_key(cols, ncols, rowData, pkKey, sizeof(pkKey)) < 0)
+    /* Parse semicolon-delimited rowData into fields */
+    char tmpRow[RECORD_BUF_SIZE];
+    strncpy(tmpRow, rowData, sizeof(tmpRow) - 1);
+    tmpRow[sizeof(tmpRow) - 1] = '\0';
+    char *vals[64];
+    int nv = split_row_values(tmpRow, vals, 64);
+
+    /* Build is_null array from NULL_MARKER */
+    int is_null[64];
+    const char *vals_ptrs[64];
+    for (int i = 0; i < nv; i++) {
+        is_null[i] = (strcmp(vals[i], "\x01NULL\x01") == 0) ? 1 : 0;
+        vals_ptrs[i] = vals[i];
+    }
+
+    /* Build PK key from parsed fields */
+    char fields[64][256];
+    for (int i = 0; i < nv && i < 64; i++) {
+        strncpy(fields[i], vals[i], 255);
+        fields[i][255] = '\0';
+    }
+    if (tapi_build_pk_key_from_fields(cols, ncols,
+                                       (const char (*)[256])fields, nv,
+                                       pkKey, sizeof(pkKey)) < 0)
         return -1;
 
     if (pkKey[0] == '\0') return -1;
@@ -800,11 +822,17 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
 
     /* Log undo entry before modifying data */
     if (g_tx_undo_callback)
-        g_tx_undo_callback(1 /*TX_OP_INSERT*/, tblName, pkKey, NULL);
+        g_tx_undo_callback(1 /*TX_OP_INSERT*/, tblName, pkKey, NULL, 0);
 
-    /* Insert record into heap page */
-    uint16_t rec_len = (uint16_t)(strlen(rowData) + 1);
-    RowID rid = tapi_heap_insert(td, rowData, rec_len);
+    /* Build binary tuple from string values */
+    char bin_buf[RECORD_BUF_SIZE];
+    int bin_len = tup_build(vals_ptrs, is_null, nv, td->table_id,
+                            cols, ncols, bin_buf, sizeof(bin_buf));
+    if (bin_len < 0) return -1;
+
+    /* Insert binary tuple into heap page */
+    uint16_t rec_len = (uint16_t)bin_len;
+    RowID rid = tapi_heap_insert(td, bin_buf, rec_len);
     if (rid.page_no == 0) return -1;
 
     /* Insert into PK B+ tree */
@@ -1033,6 +1061,13 @@ int InsertProcess(void)
             tapi_build_pk_key_from_vals(cols, ncols, valsPre, nvPre,
                                         prePkBuf, sizeof(prePkBuf));
 
+            /* Build field array for index key building */
+            char preFields[64][256];
+            for (int fi = 0; fi < nvPre && fi < 64; fi++) {
+                strncpy(preFields[fi], valsPre[fi], 255);
+                preFields[fi][255] = '\0';
+            }
+
             int ix;
             for (ix = 0; ix < nIdx; ix++) {
                 preIdxKeys[ix][0] = '\0';
@@ -1042,14 +1077,9 @@ int InsertProcess(void)
 
                 /* Build index key using common helper */
                 {
-                    char colVals[64][256];
-                    for (int ci = 0; ci < numCols2 && ci < nvPre; ci++) {
-                        strncpy(colVals[ci], valsPre[ci], 255);
-                        colVals[ci][255] = '\0';
-                    }
                     idx_build_key(&secIdx[ix],
                                   (const char (*)[128])colNames2, numCols2,
-                                  (const char (*)[256])colVals,
+                                  (const char (*)[256])preFields,
                                   preIdxKeys[ix], sizeof(preIdxKeys[ix]));
                 }
 

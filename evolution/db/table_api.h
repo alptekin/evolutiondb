@@ -11,6 +11,7 @@
 #include "catalog_internal.h"
 #include "btree2.h"
 #include "slotted.h"
+#include "tuple_format.h"
 
 /* ----------------------------------------------------------------
  *  Table resolution — catalog lookup helpers
@@ -61,18 +62,23 @@ static inline BTree2 tapi_pk_tree(const TableDesc *td)
     return tree;
 }
 
-/* Build composite PK key string from a semicolon-delimited record.
+/* Build composite PK key string from a binary tuple record.
  * PK columns are identified by ColumnDesc.is_pk.
  * Format: "val1" for single PK, "val1|val2" for composite.
  * Returns 0 on success, -1 on error. */
 int tapi_build_pk_key(const ColumnDesc *cols, int ncols,
-                      const char *record,
+                      const char *record, int record_len,
                       char *key_out, int key_size);
 
 /* Same as above but from pre-parsed value array. */
 int tapi_build_pk_key_from_vals(const ColumnDesc *cols, int ncols,
                                 char **vals, int nvals,
                                 char *key_out, int key_size);
+
+/* Build PK key from extracted fields (char[][256] from tup_extract_fields). */
+int tapi_build_pk_key_from_fields(const ColumnDesc *cols, int ncols,
+                                  const char fields[][256], int nfields,
+                                  char *key_out, int key_size);
 
 /* Get PK column indices into an array. Returns count of PK columns. */
 int tapi_get_pk_indices(const ColumnDesc *cols, int ncols,

@@ -498,41 +498,66 @@ static int can_stream_results(void)
     return 1;
 }
 
-/* Parse a record buffer into per-column string values.
- * Returns number of columns parsed. field_ptrs[] will point into parseBuf. */
-static int parse_record_fields(const char *recBuf, char *parseBuf, int parseBufSize,
+/* Parse a binary tuple record into per-column string values.
+ * Returns number of columns parsed. field_ptrs[] will point into thread-local storage. */
+static int parse_record_fields(const char *recBuf, int recLen,
+                               const ColumnDesc *cols, int ncols,
                                const char *field_ptrs[], int is_null[], int maxCols,
                                const ColumnInfo columns[])
 {
-    strncpy(parseBuf, recBuf, parseBufSize - 1);
-    parseBuf[parseBufSize - 1] = '\0';
-    int col = 0;
-    char *val = strtok(parseBuf, ";");
-    while (val && col < maxCols) {
-        if (strcmp(val, "\x01NULL\x01") == 0) {
+    static __thread char s_fields[64][256]; /* thread-local storage for field strings */
+    int nullArr[64];
+    int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
+                                s_fields, nullArr, maxCols < 64 ? maxCols : 64);
+    for (int col = 0; col < nf && col < maxCols; col++) {
+        if (nullArr[col]) {
             field_ptrs[col] = NULL;
             is_null[col] = 1;
         } else if (columns[col].pg_type_oid == PG_OID_BOOL) {
-            if (strncasecmp(val, "true", 4) == 0 ||
-                strcmp(val, "1") == 0 || strcmp(val, "t") == 0) {
+            if (strncasecmp(s_fields[col], "true", 4) == 0 ||
+                strcmp(s_fields[col], "1") == 0 || strcmp(s_fields[col], "t") == 0) {
                 field_ptrs[col] = "true";
             } else {
                 field_ptrs[col] = "false";
             }
             is_null[col] = 0;
         } else {
-            field_ptrs[col] = val;
+            field_ptrs[col] = s_fields[col];
             is_null[col] = 0;
         }
-        col++;
-        val = strtok(NULL, ";");
     }
-    return col;
+    return nf;
+}
+
+/* Populate a ResultSet row from a binary tuple record. */
+static void populate_result_row(ResultSet *rs, int row,
+                                const char *recBuf, int recLen,
+                                const ColumnDesc *cols, int ncols)
+{
+    char fields[64][256];
+    int nullArr[64];
+    int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
+                                fields, nullArr, 64);
+    for (int col = 0; col < nf && col < rs->num_cols; col++) {
+        if (nullArr[col]) {
+            result_set_null(rs, row, col);
+        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
+            if (strncasecmp(fields[col], "true", 4) == 0 ||
+                strcmp(fields[col], "1") == 0 ||
+                strcmp(fields[col], "t") == 0)
+                result_set_field(rs, row, col, "true");
+            else
+                result_set_field(rs, row, col, "false");
+        } else {
+            result_set_field(rs, row, col, fields[col]);
+        }
+    }
 }
 
 /* Pre-deserialized virtual column expressions (cached once per SELECT). */
 typedef struct {
     ExprNode *exprs[64];   /* NULL for non-virtual columns */
+    char      colNames[64][128]; /* column names for expr_evaluate */
     int       ncols;
     int       has_virtual;
 } VirtualColCache;
@@ -542,6 +567,8 @@ static void vcc_init(VirtualColCache *vc, const ColumnDesc *cols, int ncols)
     memset(vc, 0, sizeof(*vc));
     vc->ncols = ncols < 64 ? ncols : 64;
     for (int i = 0; i < vc->ncols; i++) {
+        strncpy(vc->colNames[i], cols[i].col_name, 127);
+        vc->colNames[i][127] = '\0';
         if (cols[i].generated_mode == GENMODE_VIRTUAL && cols[i].generated_expr[0]) {
             vc->exprs[i] = expr_deserialize(cols[i].generated_expr);
             if (vc->exprs[i]) vc->has_virtual = 1;
@@ -549,37 +576,29 @@ static void vcc_init(VirtualColCache *vc, const ColumnDesc *cols, int ncols)
     }
 }
 
-/* Evaluate VIRTUAL generated columns in a record buffer (in-place).
- * Replaces \x01NULL\x01 placeholders with computed values.
- * Caller must check vc->has_virtual before calling in hot loops. */
-static void eval_virtual_columns(char *recBuf, int recBufSize,
-                                 const ColumnDesc *cols, int ncols,
-                                 const VirtualColCache *vc)
+/* Evaluate VIRTUAL generated columns in a binary tuple record (in-place).
+ * Replaces NULL placeholders with computed values.
+ * Caller must check vc->has_virtual before calling in hot loops.
+ * Returns the new record length. */
+static int eval_virtual_columns(char *recBuf, int recBufSize,
+                                uint32_t table_id,
+                                const ColumnDesc *cols, int ncols,
+                                const VirtualColCache *vc)
 {
-    /* Parse record into fields */
-    char colNames[64][128];
-    char colVals[64][256];
-    char tmp[RECORD_BUF_SIZE];
-    strncpy(tmp, recBuf, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
-    int nf = 0;
-    char *t = strtok(tmp, ";");
-    while (t && nf < 64 && nf < ncols) {
-        strncpy(colNames[nf], cols[nf].col_name, 127);
-        colNames[nf][127] = '\0';
-        strncpy(colVals[nf], t, 255);
-        colVals[nf][255] = '\0';
-        nf++;
-        t = strtok(NULL, ";");
-    }
+    int recLen = tup_record_len(recBuf, recBufSize);
+    if (recLen <= 0) return recLen;
 
-    /* Evaluate each VIRTUAL column using cached expressions */
+    char colVals[64][256];
+    int nf = tup_extract_fields_nm(recBuf, recLen, cols, ncols,
+                                    colVals, NULL, 64);
+    if (nf <= 0) return recLen;
+
     int changed = 0;
     for (int i = 0; i < nf && i < vc->ncols; i++) {
         if (vc->exprs[i]) {
             char result[256];
             if (expr_evaluate(vc->exprs[i],
-                              (const char (*)[128])colNames,
+                              (const char (*)[128])vc->colNames,
                               (const char (*)[256])colVals,
                               nf, result, sizeof(result))) {
                 strncpy(colVals[i], result, 255);
@@ -590,16 +609,12 @@ static void eval_virtual_columns(char *recBuf, int recBufSize,
     }
 
     if (changed) {
-        char *p = recBuf;
-        for (int i = 0; i < nf; i++) {
-            if (i > 0) *p++ = ';';
-            int len = strlen(colVals[i]);
-            memcpy(p, colVals[i], len);
-            p += len;
-        }
-        *p++ = ';';
-        *p = '\0';
+        int newLen = tup_build_from_fields((const char (*)[256])colVals, nf,
+                                            table_id, cols, ncols,
+                                            recBuf, recBufSize);
+        return newLen;
     }
+    return recLen;
 }
 
 /* ----------------------------------------------------------------
@@ -676,31 +691,12 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                 RowID rid;
                 if (bt2_search(&pk_tree, eq_val, &rid) == 0) {
                     char recBuf[RECORD_BUF_SIZE];
-                    if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) > 0) {
-                        if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
+                    int recLen;
+                    if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) > 0) {
+                        if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
                         int row = result_add_row(rs);
                         if (row >= 0) {
-                            char temp[RECORD_BUF_SIZE];
-                            int col = 0;
-                            strncpy(temp, recBuf, sizeof(temp) - 1);
-                            temp[sizeof(temp) - 1] = '\0';
-                            char *val = strtok(temp, ";");
-                            while (val && col < rs->num_cols) {
-                                if (strcmp(val, "\x01NULL\x01") == 0) {
-                                    result_set_null(rs, row, col);
-                                } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                                    if (strncasecmp(val, "true", 4) == 0 ||
-                                        strcmp(val, "1") == 0 ||
-                                        strcmp(val, "t") == 0)
-                                        result_set_field(rs, row, col, "true");
-                                    else
-                                        result_set_field(rs, row, col, "false");
-                                } else {
-                                    result_set_field(rs, row, col, val);
-                                }
-                                col++;
-                                val = strtok(NULL, ";");
-                            }
+                            populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
                             count++;
                         }
                     }
@@ -719,35 +715,15 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0)
                         continue;
                     char recBuf[RECORD_BUF_SIZE];
-                    if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
+                    int recLen;
+                    if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) <= 0)
                         continue;
-                    if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
+                    if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
 
                     int row = result_add_row(rs);
                     if (row < 0) break;
 
-                    char temp[RECORD_BUF_SIZE];
-                    int col = 0;
-                    strncpy(temp, recBuf, sizeof(temp) - 1);
-                    temp[sizeof(temp) - 1] = '\0';
-
-                    char *val = strtok(temp, ";");
-                    while (val && col < rs->num_cols) {
-                        if (strcmp(val, "\x01NULL\x01") == 0) {
-                            result_set_null(rs, row, col);
-                        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                            if (strncasecmp(val, "true", 4) == 0 ||
-                                strcmp(val, "1") == 0 ||
-                                strcmp(val, "t") == 0)
-                                result_set_field(rs, row, col, "true");
-                            else
-                                result_set_field(rs, row, col, "false");
-                        } else {
-                            result_set_field(rs, row, col, val);
-                        }
-                        col++;
-                        val = strtok(NULL, ";");
-                    }
+                    populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
                     count++;
                 }
                 used_index = 1;
@@ -769,35 +745,15 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0)
                         continue;
                     char recBuf[RECORD_BUF_SIZE];
-                    if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
+                    int recLen;
+                    if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) <= 0)
                         continue;
-                    if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
+                    if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
 
                     int row = result_add_row(rs);
                     if (row < 0) break;
 
-                    char temp[RECORD_BUF_SIZE];
-                    int col = 0;
-                    strncpy(temp, recBuf, sizeof(temp) - 1);
-                    temp[sizeof(temp) - 1] = '\0';
-
-                    char *val = strtok(temp, ";");
-                    while (val && col < rs->num_cols) {
-                        if (strcmp(val, "\x01NULL\x01") == 0) {
-                            result_set_null(rs, row, col);
-                        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                            if (strncasecmp(val, "true", 4) == 0 ||
-                                strcmp(val, "1") == 0 ||
-                                strcmp(val, "t") == 0)
-                                result_set_field(rs, row, col, "true");
-                            else
-                                result_set_field(rs, row, col, "false");
-                        } else {
-                            result_set_field(rs, row, col, val);
-                        }
-                        col++;
-                        val = strtok(NULL, ";");
-                    }
+                    populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
                     count++;
                 }
                 used_index = 1;
@@ -822,35 +778,15 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                         if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0)
                             continue;
                         char recBuf[RECORD_BUF_SIZE];
-                        if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) <= 0)
+                        int recLen;
+                        if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) <= 0)
                             continue;
-                        if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
+                        if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
 
                         int row = result_add_row(rs);
                         if (row < 0) break;
 
-                        char temp[RECORD_BUF_SIZE];
-                        int col = 0;
-                        strncpy(temp, recBuf, sizeof(temp) - 1);
-                        temp[sizeof(temp) - 1] = '\0';
-
-                        char *val = strtok(temp, ";");
-                        while (val && col < rs->num_cols) {
-                            if (strcmp(val, "\x01NULL\x01") == 0) {
-                                result_set_null(rs, row, col);
-                            } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                                if (strncasecmp(val, "true", 4) == 0 ||
-                                    strcmp(val, "1") == 0 ||
-                                    strcmp(val, "t") == 0)
-                                    result_set_field(rs, row, col, "true");
-                                else
-                                    result_set_field(rs, row, col, "false");
-                            } else {
-                                result_set_field(rs, row, col, val);
-                            }
-                            col++;
-                            val = strtok(NULL, ";");
-                        }
+                        populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
                         count++;
                     }
                     used_index = 1;
@@ -892,15 +828,16 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
 
         if (tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
-                if (vcc.has_virtual) eval_virtual_columns(recBuf, sizeof(recBuf), allCols, ncols, &vcc);
+                int recLen = tup_record_len(recBuf, sizeof(recBuf));
+                if (recLen <= 0) continue;
+                if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
                 if (streaming) {
                     /* --- Streaming path: parse, filter, send directly --- */
-                    char parseBuf[RECORD_BUF_SIZE];
                     const char *fieldPtrs[MAX_COLUMNS];
                     int  fieldNulls[MAX_COLUMNS];
                     memset(fieldPtrs, 0, sizeof(fieldPtrs));
                     memset(fieldNulls, 0, sizeof(fieldNulls));
-                    parse_record_fields(recBuf, parseBuf, sizeof(parseBuf),
+                    parse_record_fields(recBuf, recLen, allCols, ncols,
                                         fieldPtrs, fieldNulls, rs->num_cols,
                                         rs->columns);
 
@@ -955,28 +892,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     int row = result_add_row(rs);
                     if (row < 0) break;
 
-                    char parseBuf[RECORD_BUF_SIZE];
-                    int col = 0;
-                    strncpy(parseBuf, recBuf, sizeof(parseBuf) - 1);
-                    parseBuf[sizeof(parseBuf) - 1] = '\0';
-
-                    char *val = strtok(parseBuf, ";");
-                    while (val && col < rs->num_cols) {
-                        if (strcmp(val, "\x01NULL\x01") == 0) {
-                            result_set_null(rs, row, col);
-                        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-                            if (strncasecmp(val, "true", 4) == 0 ||
-                                strcmp(val, "1") == 0 ||
-                                strcmp(val, "t") == 0)
-                                result_set_field(rs, row, col, "true");
-                            else
-                                result_set_field(rs, row, col, "false");
-                        } else {
-                            result_set_field(rs, row, col, val);
-                        }
-                        col++;
-                        val = strtok(NULL, ";");
-                    }
+                    populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
                     count++;
                 }
             }

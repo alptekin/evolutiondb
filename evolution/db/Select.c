@@ -6,6 +6,7 @@
 #include "database.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "tuple_format.h"
 
 static void PrintColumnHeaders(const char *tableName)
 {
@@ -27,16 +28,17 @@ static void PrintColumnHeaders(const char *tableName)
     printf("\n");
 }
 
-static void PrintRecord(const char *data)
+static void PrintRecord(const char *data, int dataLen,
+                        const ColumnDesc *cols, int ncols)
 {
-    char temp[1024];
-    char *val;
-
-    strcpy(temp, data);
-    val = strtok(temp, ";");
-    while (val) {
-        printf("%-20s", val);
-        val = strtok(NULL, ";");
+    char fields[64][256];
+    int is_null[64];
+    int nf = tup_extract_fields(data, dataLen, cols, ncols, fields, is_null, 64);
+    for (int i = 0; i < nf; i++) {
+        if (is_null[i])
+            printf("%-20s", "NULL");
+        else
+            printf("%-20s", fields[i]);
     }
     printf("\n");
 }
@@ -58,30 +60,29 @@ static int FindColumnIndex(const char *tableName, const char *colName)
     return -1;
 }
 
-/* Extract the value at column index from a semicolon-separated record */
-static void GetFieldValue(const char *data, int colIndex, char *buf, int bufSize)
+/* Extract the value at column index from a binary tuple record */
+static void GetFieldValue(const char *data, int dataLen,
+                          const ColumnDesc *cols, int ncols,
+                          int colIndex, char *buf, int bufSize)
 {
-    char temp[1024];
-    char *val;
-    int i = 0;
-
-    strcpy(temp, data);
-    val = strtok(temp, ";");
-    while (val) {
-        if (i == colIndex) {
-            strncpy(buf, val, bufSize - 1);
-            buf[bufSize - 1] = '\0';
-            return;
-        }
-        i++;
-        val = strtok(NULL, ";");
+    char fields[64][256];
+    int is_null[64];
+    int nf = tup_extract_fields(data, dataLen, cols, ncols, fields, is_null, 64);
+    if (colIndex < nf && !is_null[colIndex]) {
+        strncpy(buf, fields[colIndex], bufSize - 1);
+        buf[bufSize - 1] = '\0';
+    } else {
+        buf[0] = '\0';
     }
-    buf[0] = '\0';
 }
 
 typedef struct {
-    char data[1024];
+    char data[RECORD_BUF_SIZE];
+    int  dataLen;
 } RecordEntry;
+
+static __thread const ColumnDesc *s_sortCols;
+static __thread int s_sortNCols;
 
 static int CompareRecords(const void *a, const void *b)
 {
@@ -92,8 +93,10 @@ static int CompareRecords(const void *a, const void *b)
     double numA, numB;
     char *endA, *endB;
 
-    GetFieldValue(ra->data, g_sortColIndex, valA, sizeof(valA));
-    GetFieldValue(rb->data, g_sortColIndex, valB, sizeof(valB));
+    GetFieldValue(ra->data, ra->dataLen, s_sortCols, s_sortNCols,
+                  g_sortColIndex, valA, sizeof(valA));
+    GetFieldValue(rb->data, rb->dataLen, s_sortCols, s_sortNCols,
+                  g_sortColIndex, valB, sizeof(valB));
 
     numA = strtod(valA, &endA);
     numB = strtod(valB, &endB);
@@ -129,9 +132,11 @@ void SelectAll(void)
         return;
     }
 
-    /* Resolve table */
+    /* Resolve table with column metadata */
     TableDesc td;
-    if (tapi_resolve(tblName, &td, NULL, NULL) < 0) {
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
         printf("Error: table not found\n");
         TruncateSelect();
         return;
@@ -147,8 +152,10 @@ void SelectAll(void)
             /* Fall through to unordered scan */
             TableScanCursor cursor;
             if (tapi_scan_begin(&td, &cursor) == 0) {
-                while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0)
-                    PrintRecord(recBuf);
+                while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0) {
+                    int recLen = tup_record_len(recBuf, sizeof(recBuf));
+                    PrintRecord(recBuf, recLen, cols, ncols);
+                }
             }
         } else {
             RecordEntry records[500];
@@ -159,25 +166,29 @@ void SelectAll(void)
             if (tapi_scan_begin(&td, &cursor) == 0) {
                 while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0
                        && count < 500) {
-                    strncpy(records[count].data, recBuf,
-                            sizeof(records[count].data) - 1);
-                    records[count].data[sizeof(records[count].data) - 1] = '\0';
+                    int recLen = tup_record_len(recBuf, sizeof(recBuf));
+                    memcpy(records[count].data, recBuf, recLen);
+                    records[count].dataLen = recLen;
                     count++;
                 }
             }
 
             g_sortColIndex = colIdx;
             g_sortDesc = g_orderByDesc;
+            s_sortCols = cols;
+            s_sortNCols = ncols;
             qsort(records, count, sizeof(RecordEntry), CompareRecords);
 
             for (i = 0; i < count; i++)
-                PrintRecord(records[i].data);
+                PrintRecord(records[i].data, records[i].dataLen, cols, ncols);
         }
     } else {
         TableScanCursor cursor;
         if (tapi_scan_begin(&td, &cursor) == 0) {
-            while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0)
-                PrintRecord(recBuf);
+            while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0) {
+                int recLen = tup_record_len(recBuf, sizeof(recBuf));
+                PrintRecord(recBuf, recLen, cols, ncols);
+            }
         }
     }
 
@@ -222,9 +233,11 @@ int SelectProcess(void)
 
     str2 = strtok(g_insert, ";");
 
-    /* Resolve table */
+    /* Resolve table with column metadata */
     TableDesc td;
-    if (tapi_resolve(tblName, &td, NULL, NULL) < 0) {
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
         printf("Error: table not found\n");
         TruncateSelect();
         return -1;
@@ -235,9 +248,10 @@ int SelectProcess(void)
     RowID rid;
     if (str2 && bt2_search(&pk_tree, str2, &rid) == 0) {
         char recBuf[RECORD_BUF_SIZE];
-        if (tapi_heap_read(rid, recBuf, sizeof(recBuf)) > 0) {
+        int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
+        if (recLen > 0) {
             PrintColumnHeaders(tblName);
-            PrintRecord(recBuf);
+            PrintRecord(recBuf, recLen, cols, ncols);
         } else {
             printf("Record not found: %s\n", str2);
         }

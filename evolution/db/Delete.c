@@ -7,21 +7,18 @@
 #include "expression.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "tuple_format.h"
 
-static void GetFieldValue(const char *data, int colIndex,
-                          char *buf, int bufSize);
-
-/* Remove secondary index entries for a deleted record */
+/* Remove secondary index entries for a deleted record.
+ * Takes pre-extracted fields instead of raw record. */
 static void delete_secondary_indexes(const char *tblName,
                                      const char colNames[][128], int numCols,
-                                     const char *rec, const char *pkKey)
+                                     const char colVals[][256],
+                                     const char *pkKey)
 {
     IndexDesc delIdx[16];
     int nIdx = idx_load_secondary(tblName, delIdx, 16);
     if (nIdx <= 0) return;
-    char colVals[64][256];
-    for (int ci = 0; ci < numCols && ci < 64; ci++)
-        GetFieldValue(rec, ci, colVals[ci], sizeof(colVals[ci]));
     for (int ix = 0; ix < nIdx; ix++) {
         char idxKey[512];
         if (idx_build_key(&delIdx[ix],
@@ -34,49 +31,6 @@ static void delete_secondary_indexes(const char *tblName,
                      delIdx[ix].root_page, delIdx[ix].index_type);
             btree_delete(idxPath, idxKey, pkKey);
         }
-    }
-}
-
-/* Extract field at colIndex from semicolon-separated record */
-static void GetFieldValue(const char *data, int colIndex,
-                          char *buf, int bufSize)
-{
-    char temp[2048];
-    char *tok;
-    int i = 0;
-
-    strncpy(temp, data, sizeof(temp) - 1);
-    temp[sizeof(temp) - 1] = '\0';
-    tok = strtok(temp, ";");
-    while (tok) {
-        if (i == colIndex) {
-            strncpy(buf, tok, bufSize - 1);
-            buf[bufSize - 1] = '\0';
-            return;
-        }
-        i++;
-        tok = strtok(NULL, ";");
-    }
-    buf[0] = '\0';
-}
-
-/* Helper: extract field at colIndex from semicolon-separated record into fieldBuf */
-static void DeleteGetField(const char *rec, int colIndex, char *fieldBuf, int bufSize)
-{
-    char tmp[RECORD_BUF_SIZE];
-    strncpy(tmp, rec, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
-    char *tok = strtok(tmp, ";");
-    int idx = 0;
-    fieldBuf[0] = '\0';
-    while (tok) {
-        if (idx == colIndex) {
-            strncpy(fieldBuf, tok, bufSize - 1);
-            fieldBuf[bufSize - 1] = '\0';
-            return;
-        }
-        idx++;
-        tok = strtok(NULL, ";");
     }
 }
 
@@ -109,10 +63,13 @@ static int resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
  * - RESTRICT (0,3): reject if child rows reference this PK value
  * - CASCADE (1): delete child rows
  * - SET NULL (2): set FK columns to NULL in child rows
+ * - SET DEFAULT (4): set FK columns to DEFAULT in child rows
+ * deletedRecord is raw binary, deletedRecLen is its byte length.
  * Returns 0 on success, -1 on violation. */
 static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                                 const ColumnDesc *parentCols, int parentNCols,
-                                const char *deletedRecord, const char *deletedKey,
+                                const char *deletedRecord, int deletedRecLen,
+                                const char *deletedKey,
                                 int depth)
 {
     if (depth > 32) {
@@ -126,6 +83,14 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
     ConstraintDesc refConstraints[32];
     int numRefs = cat_list_referencing_fks(parentTd->table_id, refConstraints, 32);
     if (numRefs <= 0) return 0;
+
+    /* Extract parent record fields once */
+    char parentFields[64][256];
+    int parentIsNull[64];
+    int parentExtracted = tup_extract_fields(deletedRecord, deletedRecLen,
+                                              parentCols, parentNCols,
+                                              parentFields, parentIsNull, 64);
+    if (parentExtracted < 0) return -1;
 
     for (int ri = 0; ri < numRefs; ri++) {
         if (!refConstraints[ri].is_enabled) continue;
@@ -160,10 +125,8 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
             while (refColName) {
                 for (int k = 0; k < parentNCols; k++) {
                     if (strcasecmp(parentCols[k].col_name, refColName) == 0) {
-                        char fieldVal[256];
-                        DeleteGetField(deletedRecord, k, fieldVal, sizeof(fieldVal));
                         if (!first) strcat(parentValue, "|");
-                        strcat(parentValue, fieldVal);
+                        strcat(parentValue, parentFields[k]);
                         first = 0;
                         break;
                     }
@@ -216,15 +179,23 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
         {
             char childPk[256], childRec[RECORD_BUF_SIZE];
             while (tapi_scan_next(&childCursor, childPk, childRec, sizeof(childRec)) == 0) {
-                /* Build child FK value from record */
+                /* Extract fields from binary child record */
+                int childRecLen = tup_record_len(childRec, sizeof(childRec));
+                if (childRecLen < 0) continue;
+                char childFields[64][256];
+                int childIsNull[64];
+                int nf = tup_extract_fields(childRec, childRecLen,
+                                            childCols, childNCols,
+                                            childFields, childIsNull, 64);
+                if (nf < 0) continue;
+
+                /* Build child FK value from extracted fields */
                 char childFkValue[1024] = "";
                 int first = 1;
                 for (int fc = 0; fc < fkColCount; fc++) {
                     if (fkColIndices[fc] >= 0) {
-                        char fieldVal[256];
-                        DeleteGetField(childRec, fkColIndices[fc], fieldVal, sizeof(fieldVal));
                         if (!first) strcat(childFkValue, "|");
-                        strcat(childFkValue, fieldVal);
+                        strcat(childFkValue, childFields[fkColIndices[fc]]);
                         first = 0;
                     }
                 }
@@ -270,10 +241,12 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                 if (bt2_search(&childPkTree, matchingChildKeys[m], &childRid) == 0) {
                     /* Read child record for recursive cascade */
                     char childRecBuf[RECORD_BUF_SIZE];
-                    if (tapi_heap_read(childRid, childRecBuf, sizeof(childRecBuf)) > 0) {
+                    int childRecLen = tapi_heap_read(childRid, childRecBuf, sizeof(childRecBuf));
+                    if (childRecLen > 0) {
                         /* Recurse: cascade delete grandchildren before deleting child */
                         if (enforce_fk_on_delete_depth(&childTd, childCols, childNCols,
-                                                       childRecBuf, matchingChildKeys[m],
+                                                       childRecBuf, childRecLen,
+                                                       matchingChildKeys[m],
                                                        depth + 1) < 0) {
                             for (int mm = m; mm < matchCount; mm++) free(matchingChildKeys[mm]);
                             free(matchingChildKeys);
@@ -305,18 +278,16 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                 RowID childRid;
                 if (bt2_search(&childPkTree, matchingChildKeys[m], &childRid) == 0) {
                     char childRec[RECORD_BUF_SIZE];
-                    if (tapi_heap_read(childRid, childRec, sizeof(childRec)) > 0) {
+                    int childRecLen = tapi_heap_read(childRid, childRec, sizeof(childRec));
+                    if (childRecLen > 0) {
                         char fields[64][256];
-                        int numFields = 0;
-                        char tmpRec[RECORD_BUF_SIZE];
-                        strncpy(tmpRec, childRec, sizeof(tmpRec) - 1);
-                        tmpRec[sizeof(tmpRec) - 1] = '\0';
-                        char *tok = strtok(tmpRec, ";");
-                        while (tok && numFields < 64) {
-                            strncpy(fields[numFields], tok, 255);
-                            fields[numFields][255] = '\0';
-                            numFields++;
-                            tok = strtok(NULL, ";");
+                        int isNull[64];
+                        int numFields = tup_extract_fields(childRec, childRecLen,
+                                                           childCols, childNCols,
+                                                           fields, isNull, 64);
+                        if (numFields < 0) {
+                            free(matchingChildKeys[m]);
+                            continue;
                         }
 
                         for (int fc = 0; fc < fkColCount; fc++) {
@@ -324,20 +295,28 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                                 if (onDeleteAction == 4 && fkColIndices[fc] < numDefaults &&
                                     strcmp(childDefaults[fkColIndices[fc]], "\x01NONE\x01") != 0) {
                                     strcpy(fields[fkColIndices[fc]], childDefaults[fkColIndices[fc]]);
+                                    isNull[fkColIndices[fc]] = 0;
                                 } else {
-                                    strcpy(fields[fkColIndices[fc]], "\x01NULL\x01");
+                                    strcpy(fields[fkColIndices[fc]], NULL_MARKER);
+                                    isNull[fkColIndices[fc]] = 1;
                                 }
                             }
                         }
 
-                        char newRec[RECORD_BUF_SIZE] = "";
-                        for (int f = 0; f < numFields; f++) {
-                            strcat(newRec, fields[f]);
-                            strcat(newRec, ";");
+                        /* Build new binary tuple from modified fields */
+                        char newRec[RECORD_BUF_SIZE];
+                        int newLen = tup_build_from_fields(
+                                        (const char (*)[256])fields, numFields,
+                                        childTd.table_id,
+                                        childCols, childNCols,
+                                        newRec, sizeof(newRec));
+                        if (newLen < 0) {
+                            free(matchingChildKeys[m]);
+                            continue;
                         }
 
-                        uint16_t newLen = (uint16_t)(strlen(newRec) + 1);
-                        RowID newRid = tapi_heap_update(&childTd, childRid, newRec, newLen);
+                        RowID newRid = tapi_heap_update(&childTd, childRid,
+                                                        newRec, (uint16_t)newLen);
                         if (newRid.page_no != childRid.page_no ||
                             newRid.slot_idx != childRid.slot_idx) {
                             bt2_update(&childPkTree, matchingChildKeys[m], newRid);
@@ -357,10 +336,12 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
 
 static int enforce_fk_on_delete(const TableDesc *parentTd,
                                 const ColumnDesc *parentCols, int parentNCols,
-                                const char *deletedRecord, const char *deletedKey)
+                                const char *deletedRecord, int deletedRecLen,
+                                const char *deletedKey)
 {
     return enforce_fk_on_delete_depth(parentTd, parentCols, parentNCols,
-                                      deletedRecord, deletedKey, 0);
+                                      deletedRecord, deletedRecLen,
+                                      deletedKey, 0);
 }
 
 int DeleteProcess(void)
@@ -406,11 +387,13 @@ int DeleteProcess(void)
 
         if (tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
+                /* Extract fields from binary record */
+                int recLen = tup_record_len(recBuf, sizeof(recBuf));
+                if (recLen < 0) continue;
                 char colValues[64][256];
-                int c;
-                for (c = 0; c < numCols && c < 64; c++) {
-                    GetFieldValue(recBuf, c, colValues[c], 256);
-                }
+                int isNull[64];
+                tup_extract_fields(recBuf, recLen, cols, ncols,
+                                   colValues, isNull, 64);
 
                 char result[512];
                 int ok = expr_evaluate(g_whereExpr,
@@ -461,11 +444,13 @@ int DeleteProcess(void)
             if (matchKeys[i]) {
                 RowID rid;
                 if (bt2_search(&pk_tree, matchKeys[i], &rid) == 0) {
-                    /* Read record for undo log and index cleanup */
+                    /* Read binary record for undo log and index cleanup */
                     char rec[RECORD_BUF_SIZE];
-                    if (tapi_heap_read(rid, rec, sizeof(rec)) > 0) {
+                    int rec_len = tapi_heap_read(rid, rec, sizeof(rec));
+                    if (rec_len > 0) {
                         /* Enforce FK referential integrity before delete */
-                        if (enforce_fk_on_delete(&td, cols, ncols, rec, matchKeys[i]) < 0) {
+                        if (enforce_fk_on_delete(&td, cols, ncols,
+                                                 rec, rec_len, matchKeys[i]) < 0) {
                             /* RESTRICT: abort entire delete */
                             for (int mi = i; mi < matchCount; mi++)
                                 free(matchKeys[mi]);
@@ -475,13 +460,22 @@ int DeleteProcess(void)
                             return -1;
                         }
 
-                        /* Log undo entry */
+                        /* Log undo entry with raw binary data + length */
                         if (g_tx_undo_callback)
                             g_tx_undo_callback(3 /*TX_OP_DELETE*/,
-                                               g_tblDelName, matchKeys[i], rec);
+                                               g_tblDelName, matchKeys[i],
+                                               rec, rec_len);
+
+                        /* Extract fields for secondary index cleanup */
+                        char delFields[64][256];
+                        int delIsNull[64];
+                        tup_extract_fields(rec, rec_len, cols, ncols,
+                                           delFields, delIsNull, 64);
 
                         /* Remove from secondary B-tree indexes */
-                        delete_secondary_indexes(g_tblDelName, colNames, numCols, rec, matchKeys[i]);
+                        delete_secondary_indexes(g_tblDelName, colNames, numCols,
+                                                 (const char (*)[256])delFields,
+                                                 matchKeys[i]);
                     }
 
                     /* Delete from heap and PK B+ tree */
@@ -509,21 +503,30 @@ int DeleteProcess(void)
         RowID rid;
         if (bt2_search(&pk_tree, str, &rid) == 0) {
             char rec[RECORD_BUF_SIZE];
-            if (tapi_heap_read(rid, rec, sizeof(rec)) > 0) {
+            int rec_len = tapi_heap_read(rid, rec, sizeof(rec));
+            if (rec_len > 0) {
                 /* Enforce FK referential integrity */
-                if (enforce_fk_on_delete(&td, cols, ncols, rec, str) < 0) {
+                if (enforce_fk_on_delete(&td, cols, ncols,
+                                         rec, rec_len, str) < 0) {
                     g_deleteCount = 0;
                     TruncateDelete();
                     return -1;
                 }
 
-                /* Log undo entry */
+                /* Log undo entry with raw binary data + length */
                 if (g_tx_undo_callback)
                     g_tx_undo_callback(3 /*TX_OP_DELETE*/,
-                                       g_tblDelName, str, rec);
+                                       g_tblDelName, str, rec, rec_len);
+
+                /* Extract fields for secondary index cleanup */
+                char delFields[64][256];
+                int delIsNull[64];
+                tup_extract_fields(rec, rec_len, cols, ncols,
+                                   delFields, delIsNull, 64);
 
                 /* Remove from secondary B-tree indexes */
-                delete_secondary_indexes(g_tblDelName, colNames, numCols, rec, str);
+                delete_secondary_indexes(g_tblDelName, colNames, numCols,
+                                         (const char (*)[256])delFields, str);
             }
 
             tapi_heap_delete(rid);

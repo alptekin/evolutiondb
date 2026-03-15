@@ -61,7 +61,7 @@ static int move_records(uint32_t src_page_no, char *src_buf,
 
         /* Build PK key to update B+ tree */
         char pkKey[1024];
-        if (tapi_build_pk_key(cols, ncols, rec, pkKey, sizeof(pkKey)) == 0 &&
+        if (tapi_build_pk_key(cols, ncols, rec, rec_len, pkKey, sizeof(pkKey)) == 0 &&
             pkKey[0] != '\0') {
             RowID newRid = {dst_page_no, (uint16_t)dst_slot};
             bt2_update(pk_tree, pkKey, newRid);
