@@ -46,8 +46,7 @@ ADAPTOR_SRCS = main.c \
                tls.c
 
 # Evolution DB engine source files (no main.c!)
-EVO_DB_SRCS = $(EVO_DB)/db.c \
-              $(EVO_DB)/error.c \
+EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/Create.c \
               $(EVO_DB)/Select.c \
               $(EVO_DB)/Insert.c \

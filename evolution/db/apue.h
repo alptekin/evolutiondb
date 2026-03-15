@@ -95,23 +95,6 @@
         #define O_TRUNC _O_TRUNC
     #endif
 
-    /* File locking constants (emulated on Windows) */
-    #ifndef F_SETLK
-        #define F_SETLK   1
-    #endif
-    #ifndef F_SETLKW
-        #define F_SETLKW  2
-    #endif
-    #ifndef F_RDLCK
-        #define F_RDLCK   0
-    #endif
-    #ifndef F_WRLCK
-        #define F_WRLCK   1
-    #endif
-    #ifndef F_UNLCK
-        #define F_UNLCK   2
-    #endif
-
     #ifndef SEEK_SET
         #define SEEK_SET 0
     #endif
@@ -146,22 +129,6 @@
 #ifndef max
     #define max(a,b) ((a) > (b) ? (a) : (b))
 #endif
-
-/*
- * File locking support.
- */
-int lock_reg(int fd, int cmd, int type, off_t offset, int whence, off_t len);
-
-#define read_lock(fd, offset, whence, len) \
-        lock_reg((fd), F_SETLK, F_RDLCK, (offset), (whence), (len))
-#define readw_lock(fd, offset, whence, len) \
-        lock_reg((fd), F_SETLKW, F_RDLCK, (offset), (whence), (len))
-#define write_lock(fd, offset, whence, len) \
-        lock_reg((fd), F_SETLK, F_WRLCK, (offset), (whence), (len))
-#define writew_lock(fd, offset, whence, len) \
-        lock_reg((fd), F_SETLKW, F_WRLCK, (offset), (whence), (len))
-#define un_lock(fd, offset, whence, len) \
-        lock_reg((fd), F_SETLK, F_UNLCK, (offset), (whence), (len))
 
 /*
  * Error handling functions.
