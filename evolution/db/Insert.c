@@ -880,7 +880,7 @@ int InsertProcess(void)
     }
 
     /* GTT: ensure session-private PK tree exists */
-    if (td.is_temporary == 2 && gtt_ensure_storage(&td) < 0) {
+    if (td.is_temporary == TEMP_GLOBAL && gtt_ensure_storage(&td) < 0) {
         snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
                  "could not allocate storage for global temporary table");
         g_gui_error = 1;
@@ -1141,7 +1141,7 @@ int InsertProcess(void)
 
     /* Persist AUTO_INCREMENT counter */
     if (autoIncCol >= 0) {
-        if (td.is_temporary == 2) {
+        if (td.is_temporary == TEMP_GLOBAL) {
             /* GTT: update session override, not catalog */
             gtt_update_override(td.table_id, td.pk_root_page,
                                 td.heap_page, autoIncCounter);
