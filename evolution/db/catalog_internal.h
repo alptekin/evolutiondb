@@ -152,6 +152,8 @@ int cat_update_auto_inc(uint32_t table_id, const char *table_name,
                         uint32_t schema_id, int new_counter);
 int cat_update_heap_page(uint32_t table_id, const char *table_name,
                          uint32_t schema_id, uint32_t heap_page);
+int cat_update_pk_root(uint32_t table_id, const char *table_name,
+                       uint32_t schema_id, uint32_t pk_root_page);
 int cat_list_tables(uint32_t schema_id, TableDesc *out, int max);
 
 /* ----------------------------------------------------------------

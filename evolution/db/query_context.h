@@ -18,6 +18,11 @@
 #define RECORD_BUF_SIZE 8192
 #endif
 
+/* CTAS mode constants */
+#define CTAS_NONE       0   /* normal CREATE TABLE */
+#define CTAS_INFER      1   /* CREATE TABLE AS SELECT — infer cols from SELECT */
+#define CTAS_EXPLICIT   2   /* CREATE TABLE (cols) AS SELECT — explicit cols */
+
 /* ================================================================
  *  Sub-struct definitions
  * ================================================================ */
