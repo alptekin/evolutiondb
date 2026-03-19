@@ -186,7 +186,7 @@ double expr_evaluate_num(const ExprNode *e,
                          const char col_values[][256],
                          int num_cols);
 
-/* Evaluate g_limitExpr/g_offsetExpr into [start, end) range for a match array.
+/* Evaluate g_expr.limitExpr/g_expr.offsetExpr into [start, end) range for a match array.
  * Sets *start and *end (clamped to match_count). Returns 1 if LIMIT active. */
 int expr_eval_limit_range(int match_count, int *start, int *end);
 

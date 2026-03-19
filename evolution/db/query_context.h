@@ -5,7 +5,7 @@
  *   CreateOpts, InsertOpts, SelectOpts, UpdateOpts, DeleteOpts,
  *   DropOpts, IndexOpts, ExprOpts, ConstraintOpts, ErrorState
  *
- * Access pattern: g_create.tblName, g_ins.data, g_sel.whereExpr, etc.
+ * Access pattern: g_create.tblName, g_ins.data, g_expr.whereExpr, etc.
  */
 #ifndef QUERY_CONTEXT_H
 #define QUERY_CONTEXT_H

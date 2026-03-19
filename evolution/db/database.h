@@ -256,7 +256,7 @@ typedef void (*tx_undo_fn)(int op_type, const char *table,
                            const char *key, const char *data);
 
 /* Per-query thread-local context — provides all query-scoped globals
- * via compatibility macros (g_insert, g_tblName, g_whereExpr, etc.) */
+ * via struct accessors (g_create.tblName, g_ins.data, g_expr.whereExpr, etc.) */
 #include "query_context.h"
 
 #endif
