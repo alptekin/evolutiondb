@@ -112,12 +112,12 @@ int db_ext_path(const char *tableName, const char *ext, char *out, int outSize)
     int n = snprintf(out, outSize, "%s/%s/%s/%s.%s",
                      g_dbRoot, g_currentDatabase, g_currentSchema, tableName, ext);
     if (n < 0 || n >= outSize) {
-        g_gui_error = 1;
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        g_err.error = 1;
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "path too long for table \"%s\" (need %d, have %d)",
                  tableName, n, outSize);
-        strncpy(g_gui_error_sqlstate, "E0001", sizeof(g_gui_error_sqlstate) - 1);
-        g_gui_error_sqlstate[sizeof(g_gui_error_sqlstate) - 1] = '\0';
+        strncpy(g_err.sqlstate, "E0001", sizeof(g_err.sqlstate) - 1);
+        g_err.sqlstate[sizeof(g_err.sqlstate) - 1] = '\0';
         return -1;
     }
     return 0;
@@ -150,9 +150,9 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
     if (cat_find_database(name, &existing) == 0) {
         pthread_mutex_unlock(&g_metadata_lock);
         if (if_not_exists) return 0;
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "database \"%s\" already exists", name);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_DATABASE);
         return -1;
     }
@@ -161,9 +161,9 @@ int CreateDatabaseProcess(const char *name, int if_not_exists)
     int db_id = cat_create_database(name);
     if (db_id <= 0) {
         pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "could not create database \"%s\"", name);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_IO_ERROR);
         return -1;
     }
@@ -188,9 +188,9 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
     DatabaseDesc dbDesc;
     if (cat_find_database(g_currentDatabase, &dbDesc) != 0) {
         pthread_mutex_unlock(&g_metadata_lock);
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "current database \"%s\" not found", g_currentDatabase);
-        g_gui_error = 1;
+        g_err.error = 1;
         return -1;
     }
 
@@ -199,9 +199,9 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
     if (cat_find_schema(dbDesc.db_id, name, &existing) == 0) {
         pthread_mutex_unlock(&g_metadata_lock);
         if (if_not_exists) return 0;
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "schema \"%s\" already exists", name);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_SCHEMA);
         return -1;
     }
@@ -223,9 +223,9 @@ int UseDatabaseProcess(const char *name)
     /* Check if database exists in catalog */
     DatabaseDesc dbDesc;
     if (cat_find_database(name, &dbDesc) != 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "database \"%s\" does not exist", name);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_DATABASE);
         return -1;
     }
@@ -246,9 +246,9 @@ int SetSchemaProcess(const char *name)
     /* Look up current database */
     DatabaseDesc dbDesc;
     if (cat_find_database(g_currentDatabase, &dbDesc) != 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "database \"%s\" not found", g_currentDatabase);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_SCHEMA);
         return -1;
     }
@@ -256,10 +256,10 @@ int SetSchemaProcess(const char *name)
     /* Check if schema exists in catalog */
     SchemaDesc schDesc;
     if (cat_find_schema(dbDesc.db_id, name, &schDesc) != 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "schema \"%s\" does not exist in database \"%s\"",
                  name, g_currentDatabase);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_SCHEMA);
         return -1;
     }

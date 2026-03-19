@@ -22,21 +22,21 @@ QueryContext *qctx_alloc(void)
     if (!ctx) return NULL;
 
     /* Heap-allocate expression pool (too large for struct) */
-    ctx->exprNodePool = (ExprNode *)calloc(EXPR_POOL_SIZE, sizeof(ExprNode));
-    if (!ctx->exprNodePool) {
+    ctx->expr.nodePool = (ExprNode *)calloc(EXPR_POOL_SIZE, sizeof(ExprNode));
+    if (!ctx->expr.nodePool) {
         free(ctx);
         return NULL;
     }
-    ctx->exprNodePoolSize = EXPR_POOL_SIZE;
+    ctx->expr.nodePoolSize = EXPR_POOL_SIZE;
 
     /* Non-zero defaults (matching old static initializers) */
-    ctx->primaryKeyIndex = -1;
-    ctx->autoIncColIndex = -1;
-    ctx->autoIncStart    = 1;
-    ctx->autoIncStep     = 1;
+    ctx->create.primaryKeyIndex = -1;
+    ctx->create.autoIncColIndex = -1;
+    ctx->create.autoIncStart    = 1;
+    ctx->create.autoIncStep     = 1;
 
     /* Sort context default */
-    ctx->sortColIndex = -1;
+    ctx->select.sortColIndex = -1;
 
     /* Database/Schema defaults (sane fallback before SessionCtx loads) */
     strncpy(ctx->currentDatabase, "evosql", sizeof(ctx->currentDatabase) - 1);
@@ -48,6 +48,6 @@ QueryContext *qctx_alloc(void)
 void qctx_free(QueryContext *ctx)
 {
     if (!ctx) return;
-    free(ctx->exprNodePool);
+    free(ctx->expr.nodePool);
     free(ctx);
 }

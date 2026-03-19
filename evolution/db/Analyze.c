@@ -112,10 +112,10 @@ int AnalyzeTableProcess(void)
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int ncols = 0;
 
-    if (tapi_resolve(g_tblDropName, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "ERROR: table \"%s\" does not exist", g_tblDropName);
-        g_gui_error = 1;
+    if (tapi_resolve(g_drop.tblName, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "ERROR: table \"%s\" does not exist", g_drop.tblName);
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
         TruncateDrop();
         return -1;

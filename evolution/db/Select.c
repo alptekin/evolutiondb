@@ -94,9 +94,9 @@ static int CompareRecords(const void *a, const void *b)
     char *endA, *endB;
 
     GetFieldValue(ra->data, ra->dataLen, s_sortCols, s_sortNCols,
-                  g_sortColIndex, valA, sizeof(valA));
+                  g_sel.sortColIndex, valA, sizeof(valA));
     GetFieldValue(rb->data, rb->dataLen, s_sortCols, s_sortNCols,
-                  g_sortColIndex, valB, sizeof(valB));
+                  g_sel.sortColIndex, valB, sizeof(valB));
 
     numA = strtod(valA, &endA);
     numB = strtod(valB, &endB);
@@ -108,7 +108,7 @@ static int CompareRecords(const void *a, const void *b)
         result = strcmp(valA, valB);
     }
 
-    return g_sortDesc ? -result : result;
+    return g_sel.sortDesc ? -result : result;
 }
 
 void SelectAll(void)
@@ -118,7 +118,7 @@ void SelectAll(void)
     char recBuf[RECORD_BUF_SIZE];
 
     /* Extract table name without .dat extension */
-    strcpy(tblName, g_tblSelectionName);
+    strcpy(tblName, g_sel.tblName);
     char *dot = strstr(tblName, ".dat");
     if (dot)
         *dot = '\0';
@@ -127,7 +127,7 @@ void SelectAll(void)
     if (g_gui_mode) {
         char baseName[128];
         tapi_basename(tblName, baseName, sizeof(baseName));
-        strcpy(g_lastSelectTable, baseName);
+        strcpy(g_sel.lastTable, baseName);
         TruncateSelect();
         return;
     }
@@ -145,10 +145,10 @@ void SelectAll(void)
     PrintColumnHeaders(tblName);
 
     /* Check if ORDER BY is requested */
-    if (g_orderByColumn[0] != '\0') {
-        int colIdx = FindColumnIndex(tblName, g_orderByColumn);
+    if (g_sel.orderByColumn[0] != '\0') {
+        int colIdx = FindColumnIndex(tblName, g_sel.orderByColumn);
         if (colIdx < 0) {
-            printf("Error: column '%s' not found\n", g_orderByColumn);
+            printf("Error: column '%s' not found\n", g_sel.orderByColumn);
             /* Fall through to unordered scan */
             TableScanCursor cursor;
             if (tapi_scan_begin(&td, &cursor) == 0) {
@@ -173,8 +173,8 @@ void SelectAll(void)
                 }
             }
 
-            g_sortColIndex = colIdx;
-            g_sortDesc = g_orderByDesc;
+            g_sel.sortColIndex = colIdx;
+            g_sel.sortDesc = g_sel.orderByDesc;
             s_sortCols = cols;
             s_sortNCols = ncols;
             qsort(records, count, sizeof(RecordEntry), CompareRecords);
@@ -193,21 +193,21 @@ void SelectAll(void)
     }
 
     TruncateSelect();
-    g_orderByColumn[0] = '\0';
-    g_orderByDesc = 0;
+    g_sel.orderByColumn[0] = '\0';
+    g_sel.orderByDesc = 0;
 }
 
 int GetSelTableName(char *pname)
 {
-    db_table_path(pname, g_tblSelectionName, sizeof(g_tblSelectionName));
-    strcat(g_tblSelectionName, ".dat");
+    db_table_path(pname, g_sel.tblName, sizeof(g_sel.tblName));
+    strcat(g_sel.tblName, ".dat");
 
     return 0;
 }
 
 int GetSelection(char *pname)
 {
-    strcat(g_whereSel, pname);
+    strcat(g_expr.whereSel, pname);
     return 0;
 }
 
@@ -217,7 +217,7 @@ int SelectProcess(void)
     char tblName[1024];
 
     /* Extract table name without .dat extension */
-    strcpy(tblName, g_tblSelectionName);
+    strcpy(tblName, g_sel.tblName);
     char *dot = strstr(tblName, ".dat");
     if (dot)
         *dot = '\0';
@@ -226,12 +226,12 @@ int SelectProcess(void)
     if (g_gui_mode) {
         char baseName[128];
         tapi_basename(tblName, baseName, sizeof(baseName));
-        strcpy(g_lastSelectTable, baseName);
+        strcpy(g_sel.lastTable, baseName);
         TruncateSelect();
         return 0;
     }
 
-    str2 = strtok(g_insert, ";");
+    str2 = strtok(g_ins.data, ";");
 
     /* Resolve table with column metadata */
     TableDesc td;
@@ -265,25 +265,25 @@ int SelectProcess(void)
 
 int GetOrderByColumn(char *name)
 {
-    strcpy(g_orderByColumn, name);
+    strcpy(g_sel.orderByColumn, name);
     return 0;
 }
 
 void SetOrderByDirection(int desc)
 {
-    g_orderByDesc = desc;
+    g_sel.orderByDesc = desc;
 }
 
 void AddOrderByColumn(const char *name, int desc)
 {
-    if (g_orderByCount >= 8) return;
-    strncpy(g_orderByColumns[g_orderByCount], name, 255);
-    g_orderByColumns[g_orderByCount][255] = '\0';
-    g_orderByDescs[g_orderByCount] = desc;
-    g_orderByCount++;
-    if (g_orderByCount == 1) {
-        strcpy(g_orderByColumn, name);
-        g_orderByDesc = desc;
+    if (g_sel.orderByCount >= 8) return;
+    strncpy(g_sel.orderByColumns[g_sel.orderByCount], name, 255);
+    g_sel.orderByColumns[g_sel.orderByCount][255] = '\0';
+    g_sel.orderByDescs[g_sel.orderByCount] = desc;
+    g_sel.orderByCount++;
+    if (g_sel.orderByCount == 1) {
+        strcpy(g_sel.orderByColumn, name);
+        g_sel.orderByDesc = desc;
     }
 }
 
@@ -292,8 +292,8 @@ int TruncateSelect(void)
     int i;
 
     for (i = 0; i < 1024; ++i) {
-        g_insert[i] = '\0';
-        g_tblSelectionName[i] = '\0';
+        g_ins.data[i] = '\0';
+        g_sel.tblName[i] = '\0';
     }
 
     return 0;

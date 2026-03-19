@@ -128,7 +128,7 @@ int AuthenticateUser(const char *username, const char *password)
 /* ----------------------------------------------------------------
  *  CreateUserProcess — CREATE USER <name> PASSWORD '<pass>'
  *
- *  Returns 0 on success, -1 on error (sets g_gui_error_msg).
+ *  Returns 0 on success, -1 on error (sets g_err.errorMsg).
  * ---------------------------------------------------------------- */
 int CreateUserProcess(const char *username, const char *password)
 {
@@ -136,18 +136,18 @@ int CreateUserProcess(const char *username, const char *password)
     int result = 0;
 
     if (!username || !password || username[0] == '\0' || password[0] == '\0') {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "Username and password are required");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
         return -1;
     }
 
     /* Hash password before taking lock (expensive operation) */
     if (crypto_hash_password(password, hash_str, sizeof(hash_str)) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "Failed to hash password");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
         return -1;
     }
@@ -155,16 +155,16 @@ int CreateUserProcess(const char *username, const char *password)
     pthread_mutex_lock(&g_metadata_lock);
 
     if (cat_find_user(username, NULL) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "User '%s' already exists", username);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_OBJECT);
         result = -1;
     } else {
         if (cat_create_user(username, hash_str) < 0) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "Failed to create user '%s'", username);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
             result = -1;
         }
@@ -185,9 +185,9 @@ int DropUserProcess(const char *username)
     int result = 0;
 
     if (!username || username[0] == '\0') {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "Username is required");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
         return -1;
     }
@@ -195,9 +195,9 @@ int DropUserProcess(const char *username)
     pthread_mutex_lock(&g_metadata_lock);
 
     if (cat_drop_user(username) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "User '%s' does not exist", username);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         result = -1;
     }
@@ -218,18 +218,18 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
 
     if (!username || !new_password ||
         username[0] == '\0' || new_password[0] == '\0') {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "Username and new password are required");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
         return -1;
     }
 
     /* Hash new password before taking lock (expensive operation) */
     if (crypto_hash_password(new_password, hash_str, sizeof(hash_str)) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "Failed to hash password");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
         return -1;
     }
@@ -237,9 +237,9 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
     pthread_mutex_lock(&g_metadata_lock);
 
     if (cat_update_user(username, hash_str) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "User '%s' does not exist", username);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         result = -1;
     }

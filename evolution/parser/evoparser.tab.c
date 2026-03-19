@@ -3301,12 +3301,12 @@ yyreduce:
 
   case 41:
 #line 402 "parser/evoparser.y"
-    { (yyval.intval) = 1; if (g_inListCount < MAX_IN_LIST) g_inListExprs[g_inListCount++] = (yyvsp[(1) - (1)].exprval); ;}
+    { (yyval.intval) = 1; if (g_expr.inListCount < MAX_IN_LIST) g_expr.inListExprs[g_expr.inListCount++] = (yyvsp[(1) - (1)].exprval); ;}
     break;
 
   case 42:
 #line 403 "parser/evoparser.y"
-    { (yyval.intval) = 1 + (yyvsp[(3) - (3)].intval); if (g_inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_inListCount; _i>0; _i--) g_inListExprs[_i]=g_inListExprs[_i-1]; g_inListExprs[0]=(yyvsp[(1) - (3)].exprval); g_inListCount++; } ;}
+    { (yyval.intval) = 1 + (yyvsp[(3) - (3)].intval); if (g_expr.inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_expr.inListCount; _i>0; _i--) g_expr.inListExprs[_i]=g_expr.inListExprs[_i-1]; g_expr.inListExprs[0]=(yyvsp[(1) - (3)].exprval); g_expr.inListCount++; } ;}
     break;
 
   case 43:
@@ -3316,22 +3316,22 @@ yyreduce:
 
   case 45:
 #line 410 "parser/evoparser.y"
-    { g_inListCount = 0; ;}
+    { g_expr.inListCount = 0; ;}
     break;
 
   case 46:
 #line 410 "parser/evoparser.y"
-    { emit("ISIN %d", (yyvsp[(5) - (6)].intval)); (yyval.exprval) = expr_make_in((yyvsp[(1) - (6)].exprval), g_inListExprs, g_inListCount); ;}
+    { emit("ISIN %d", (yyvsp[(5) - (6)].intval)); (yyval.exprval) = expr_make_in((yyvsp[(1) - (6)].exprval), g_expr.inListExprs, g_expr.inListCount); ;}
     break;
 
   case 47:
 #line 411 "parser/evoparser.y"
-    { g_inListCount = 0; ;}
+    { g_expr.inListCount = 0; ;}
     break;
 
   case 48:
 #line 411 "parser/evoparser.y"
-    { emit("ISIN %d", (yyvsp[(6) - (7)].intval)); emit("NOT"); (yyval.exprval) = expr_make_not_in((yyvsp[(1) - (7)].exprval), g_inListExprs, g_inListCount); ;}
+    { emit("ISIN %d", (yyvsp[(6) - (7)].intval)); emit("NOT"); (yyval.exprval) = expr_make_not_in((yyvsp[(1) - (7)].exprval), g_expr.inListExprs, g_expr.inListCount); ;}
     break;
 
   case 49:
@@ -3562,31 +3562,31 @@ yyreduce:
 
   case 90:
 #line 490 "parser/evoparser.y"
-    { emit("CASEVAL %d 0", (yyvsp[(3) - (4)].intval)); (yyval.exprval) = expr_make_case_simple((yyvsp[(2) - (4)].exprval), g_caseWhenCount, NULL); ;}
+    { emit("CASEVAL %d 0", (yyvsp[(3) - (4)].intval)); (yyval.exprval) = expr_make_case_simple((yyvsp[(2) - (4)].exprval), g_expr.caseWhenCount, NULL); ;}
     break;
 
   case 91:
 #line 492 "parser/evoparser.y"
-    { emit("CASEVAL %d 1", (yyvsp[(3) - (6)].intval)); (yyval.exprval) = expr_make_case_simple((yyvsp[(2) - (6)].exprval), g_caseWhenCount, (yyvsp[(5) - (6)].exprval)); ;}
+    { emit("CASEVAL %d 1", (yyvsp[(3) - (6)].intval)); (yyval.exprval) = expr_make_case_simple((yyvsp[(2) - (6)].exprval), g_expr.caseWhenCount, (yyvsp[(5) - (6)].exprval)); ;}
     break;
 
   case 92:
 #line 494 "parser/evoparser.y"
-    { emit("CASE %d 0", (yyvsp[(2) - (3)].intval)); (yyval.exprval) = expr_make_case_searched(g_caseWhenCount, NULL); ;}
+    { emit("CASE %d 0", (yyvsp[(2) - (3)].intval)); (yyval.exprval) = expr_make_case_searched(g_expr.caseWhenCount, NULL); ;}
     break;
 
   case 93:
 #line 496 "parser/evoparser.y"
-    { emit("CASE %d 1", (yyvsp[(2) - (5)].intval)); (yyval.exprval) = expr_make_case_searched(g_caseWhenCount, (yyvsp[(4) - (5)].exprval)); ;}
+    { emit("CASE %d 1", (yyvsp[(2) - (5)].intval)); (yyval.exprval) = expr_make_case_searched(g_expr.caseWhenCount, (yyvsp[(4) - (5)].exprval)); ;}
     break;
 
   case 94:
 #line 500 "parser/evoparser.y"
     {
-        g_caseWhenCount = 0;
-        g_caseWhenExprs[0] = (yyvsp[(2) - (4)].exprval);
-        g_caseThenExprs[0] = (yyvsp[(4) - (4)].exprval);
-        g_caseWhenCount = 1;
+        g_expr.caseWhenCount = 0;
+        g_expr.caseWhenExprs[0] = (yyvsp[(2) - (4)].exprval);
+        g_expr.caseThenExprs[0] = (yyvsp[(4) - (4)].exprval);
+        g_expr.caseWhenCount = 1;
         (yyval.intval) = 1;
     ;}
     break;
@@ -3594,10 +3594,10 @@ yyreduce:
   case 95:
 #line 508 "parser/evoparser.y"
     {
-        if (g_caseWhenCount < MAX_CASE_WHENS) {
-            g_caseWhenExprs[g_caseWhenCount] = (yyvsp[(3) - (5)].exprval);
-            g_caseThenExprs[g_caseWhenCount] = (yyvsp[(5) - (5)].exprval);
-            g_caseWhenCount++;
+        if (g_expr.caseWhenCount < MAX_CASE_WHENS) {
+            g_expr.caseWhenExprs[g_expr.caseWhenCount] = (yyvsp[(3) - (5)].exprval);
+            g_expr.caseThenExprs[g_expr.caseWhenCount] = (yyvsp[(5) - (5)].exprval);
+            g_expr.caseWhenCount++;
         }
         (yyval.intval) = (yyvsp[(1) - (5)].intval)+1;
     ;}
@@ -3669,14 +3669,14 @@ yyreduce:
 
   case 104:
 #line 563 "parser/evoparser.y"
-    { emit("SELECTNODATA %d %d", (yyvsp[(2) - (3)].intval), (yyvsp[(3) - (3)].intval)); g_selectDistinct = ((yyvsp[(2) - (3)].intval) & 02) ? 1 : 0; ;}
+    { emit("SELECTNODATA %d %d", (yyvsp[(2) - (3)].intval), (yyvsp[(3) - (3)].intval)); g_sel.distinct = ((yyvsp[(2) - (3)].intval) & 02) ? 1 : 0; ;}
     break;
 
   case 105:
 #line 568 "parser/evoparser.y"
     {
         emit("SELECT %d %d %d", (yyvsp[(2) - (11)].intval), (yyvsp[(3) - (11)].intval), (yyvsp[(5) - (11)].intval));
-        g_selectDistinct = ((yyvsp[(2) - (11)].intval) & 02) ? 1 : 0;
+        g_sel.distinct = ((yyvsp[(2) - (11)].intval) & 02) ? 1 : 0;
         if ((yyvsp[(3) - (11)].intval) == 3)
             (yyval.intval) = 1;
         else
@@ -3686,7 +3686,7 @@ yyreduce:
 
   case 107:
 #line 579 "parser/evoparser.y"
-    { emit("WHERE"); g_whereExpr = (yyvsp[(2) - (2)].exprval); ;}
+    { emit("WHERE"); g_expr.whereExpr = (yyvsp[(2) - (2)].exprval); ;}
     break;
 
   case 109:
@@ -3698,9 +3698,9 @@ yyreduce:
 #line 584 "parser/evoparser.y"
     {
         emit("GROUPBY %d", (yyvsp[(2) - (2)].intval));
-        g_groupByCount = 0;
-        if (g_groupByCount < MAX_GROUP_BY)
-            g_groupByExprs[g_groupByCount++] = (yyvsp[(1) - (2)].exprval);
+        g_expr.groupByCount = 0;
+        if (g_expr.groupByCount < MAX_GROUP_BY)
+            g_expr.groupByExprs[g_expr.groupByCount++] = (yyvsp[(1) - (2)].exprval);
         (yyval.intval) = 1;
     ;}
     break;
@@ -3709,8 +3709,8 @@ yyreduce:
 #line 591 "parser/evoparser.y"
     {
         emit("GROUPBY %d", (yyvsp[(4) - (4)].intval));
-        if (g_groupByCount < MAX_GROUP_BY)
-            g_groupByExprs[g_groupByCount++] = (yyvsp[(3) - (4)].exprval);
+        if (g_expr.groupByCount < MAX_GROUP_BY)
+            g_expr.groupByExprs[g_expr.groupByCount++] = (yyvsp[(3) - (4)].exprval);
         (yyval.intval) = (yyvsp[(1) - (4)].intval) + 1;
     ;}
     break;
@@ -3742,7 +3742,7 @@ yyreduce:
 
   case 118:
 #line 609 "parser/evoparser.y"
-    { emit("HAVING"); g_havingExpr = (yyvsp[(2) - (2)].exprval); ;}
+    { emit("HAVING"); g_expr.havingExpr = (yyvsp[(2) - (2)].exprval); ;}
     break;
 
   case 123:
@@ -3761,17 +3761,17 @@ yyreduce:
 
   case 125:
 #line 629 "parser/evoparser.y"
-    { emit("LIMIT 1"); g_limitExpr = (yyvsp[(2) - (2)].exprval); ;}
+    { emit("LIMIT 1"); g_expr.limitExpr = (yyvsp[(2) - (2)].exprval); ;}
     break;
 
   case 126:
 #line 630 "parser/evoparser.y"
-    { emit("LIMIT 2"); g_offsetExpr = (yyvsp[(2) - (4)].exprval); g_limitExpr = (yyvsp[(4) - (4)].exprval); ;}
+    { emit("LIMIT 2"); g_expr.offsetExpr = (yyvsp[(2) - (4)].exprval); g_expr.limitExpr = (yyvsp[(4) - (4)].exprval); ;}
     break;
 
   case 127:
 #line 631 "parser/evoparser.y"
-    { emit("LIMIT OFFSET"); g_limitExpr = (yyvsp[(2) - (4)].exprval); g_offsetExpr = (yyvsp[(4) - (4)].exprval); ;}
+    { emit("LIMIT OFFSET"); g_expr.limitExpr = (yyvsp[(2) - (4)].exprval); g_expr.offsetExpr = (yyvsp[(4) - (4)].exprval); ;}
     break;
 
   case 129:
@@ -4104,7 +4104,7 @@ yyreduce:
 #line 803 "parser/evoparser.y"
     {
         emit("DROPTABLE %s", (yyvsp[(3) - (3)].strval));
-        g_dropIfExists = 0;
+        g_drop.ifExists = 0;
         GetDropTableName((yyvsp[(3) - (3)].strval));
         free((yyvsp[(3) - (3)].strval));
     ;}
@@ -4114,7 +4114,7 @@ yyreduce:
 #line 810 "parser/evoparser.y"
     {
         emit("DROPTABLE IF EXISTS %s", (yyvsp[(5) - (5)].strval));
-        g_dropIfExists = 1;
+        g_drop.ifExists = 1;
         GetDropTableName((yyvsp[(5) - (5)].strval));
         free((yyvsp[(5) - (5)].strval));
     ;}
@@ -4392,7 +4392,7 @@ yyreduce:
 #line 1034 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD FK %s %s", (yyvsp[(3) - (17)].strval), (yyvsp[(6) - (17)].strval));
-        strncpy(g_pendingConstraintName, (yyvsp[(6) - (17)].strval), 127);
+        strncpy(g_constr.pendingConstraintName, (yyvsp[(6) - (17)].strval), 127);
         AlterTableAddForeignKeyConstraint((yyvsp[(3) - (17)].strval), (yyvsp[(13) - (17)].strval));
         free((yyvsp[(3) - (17)].strval)); free((yyvsp[(6) - (17)].strval)); free((yyvsp[(13) - (17)].strval));
     ;}
@@ -4411,7 +4411,7 @@ yyreduce:
 #line 1047 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD FK NOT VALID %s %s", (yyvsp[(3) - (19)].strval), (yyvsp[(6) - (19)].strval));
-        strncpy(g_pendingConstraintName, (yyvsp[(6) - (19)].strval), 127);
+        strncpy(g_constr.pendingConstraintName, (yyvsp[(6) - (19)].strval), 127);
         AlterTableAddForeignKeyConstraintNotValid((yyvsp[(3) - (19)].strval), (yyvsp[(13) - (19)].strval));
         free((yyvsp[(3) - (19)].strval)); free((yyvsp[(6) - (19)].strval)); free((yyvsp[(13) - (19)].strval));
     ;}
@@ -4526,10 +4526,10 @@ yyreduce:
   case 251:
 #line 1125 "parser/evoparser.y"
     {
-        g_insertColumnCount = 0;
-        strncpy(g_insertColumns[g_insertColumnCount], (yyvsp[(1) - (1)].strval), 127);
-        g_insertColumns[g_insertColumnCount][127] = '\0';
-        g_insertColumnCount++;
+        g_ins.columnCount = 0;
+        strncpy(g_ins.columns[g_ins.columnCount], (yyvsp[(1) - (1)].strval), 127);
+        g_ins.columns[g_ins.columnCount][127] = '\0';
+        g_ins.columnCount++;
         emit("COLUMN %s", (yyvsp[(1) - (1)].strval));
         free((yyvsp[(1) - (1)].strval));
         (yyval.intval) = 1;
@@ -4539,10 +4539,10 @@ yyreduce:
   case 252:
 #line 1135 "parser/evoparser.y"
     {
-        if (g_insertColumnCount < 64) {
-            strncpy(g_insertColumns[g_insertColumnCount], (yyvsp[(3) - (3)].strval), 127);
-            g_insertColumns[g_insertColumnCount][127] = '\0';
-            g_insertColumnCount++;
+        if (g_ins.columnCount < 64) {
+            strncpy(g_ins.columns[g_ins.columnCount], (yyvsp[(3) - (3)].strval), 127);
+            g_ins.columns[g_ins.columnCount][127] = '\0';
+            g_ins.columnCount++;
         }
         emit("COLUMN %s", (yyvsp[(3) - (3)].strval));
         free((yyvsp[(3) - (3)].strval));
@@ -4798,7 +4798,7 @@ yyreduce:
 #line 1304 "parser/evoparser.y"
     {
         emit("CREATE %d %d %d %s", (yyvsp[(2) - (9)].intval), (yyvsp[(4) - (9)].intval), (yyvsp[(7) - (9)].intval), (yyvsp[(5) - (9)].strval));
-        g_isTemporary = (yyvsp[(2) - (9)].intval);
+        g_create.isTemporary = (yyvsp[(2) - (9)].intval);
         GetTableName((yyvsp[(5) - (9)].strval));
         free((yyvsp[(5) - (9)].strval));
     ;}
@@ -4806,7 +4806,7 @@ yyreduce:
 
   case 294:
 #line 1313 "parser/evoparser.y"
-    { emit("CREATE %d %d %d %s.%s", (yyvsp[(2) - (11)].intval), (yyvsp[(4) - (11)].intval), (yyvsp[(9) - (11)].intval), (yyvsp[(5) - (11)].strval), (yyvsp[(7) - (11)].strval)); g_isTemporary = (yyvsp[(2) - (11)].intval); free((yyvsp[(5) - (11)].strval)); free((yyvsp[(7) - (11)].strval)); ;}
+    { emit("CREATE %d %d %d %s.%s", (yyvsp[(2) - (11)].intval), (yyvsp[(4) - (11)].intval), (yyvsp[(9) - (11)].intval), (yyvsp[(5) - (11)].strval), (yyvsp[(7) - (11)].strval)); g_create.isTemporary = (yyvsp[(2) - (11)].intval); free((yyvsp[(5) - (11)].strval)); free((yyvsp[(7) - (11)].strval)); ;}
     break;
 
   case 296:
@@ -4821,12 +4821,12 @@ yyreduce:
 
   case 298:
 #line 1319 "parser/evoparser.y"
-    { emit("TABLE OPT ON COMMIT DELETE ROWS"); g_onCommitDelete = 1; ;}
+    { emit("TABLE OPT ON COMMIT DELETE ROWS"); g_create.onCommitDelete = 1; ;}
     break;
 
   case 299:
 #line 1320 "parser/evoparser.y"
-    { emit("TABLE OPT ON COMMIT PRESERVE ROWS"); g_onCommitDelete = 0; ;}
+    { emit("TABLE OPT ON COMMIT PRESERVE ROWS"); g_create.onCommitDelete = 0; ;}
     break;
 
   case 300:
@@ -4881,7 +4881,7 @@ yyreduce:
 
   case 310:
 #line 1351 "parser/evoparser.y"
-    { emit("PRIKEY %d", (yyvsp[(6) - (7)].intval)); g_pendingConstraintName[0] = '\0'; free((yyvsp[(2) - (7)].strval)); ;}
+    { emit("PRIKEY %d", (yyvsp[(6) - (7)].intval)); g_constr.pendingConstraintName[0] = '\0'; free((yyvsp[(2) - (7)].strval)); ;}
     break;
 
   case 311:
@@ -4911,7 +4911,7 @@ yyreduce:
 
   case 316:
 #line 1357 "parser/evoparser.y"
-    { emit("CHECK"); strncpy(g_checkNames[g_checkCount], (yyvsp[(2) - (6)].strval), 127); AddCheckConstraint((yyvsp[(5) - (6)].exprval)); free((yyvsp[(2) - (6)].strval)); ;}
+    { emit("CHECK"); strncpy(g_constr.checkNames[g_constr.checkCount], (yyvsp[(2) - (6)].strval), 127); AddCheckConstraint((yyvsp[(5) - (6)].exprval)); free((yyvsp[(2) - (6)].strval)); ;}
     break;
 
   case 317:
@@ -4926,12 +4926,12 @@ yyreduce:
 
   case 319:
 #line 1363 "parser/evoparser.y"
-    { emit("FOREIGNKEY"); strncpy(g_pendingConstraintName, (yyvsp[(2) - (13)].strval), 127); AddForeignKeyRefTable((yyvsp[(9) - (13)].strval)); free((yyvsp[(2) - (13)].strval)); free((yyvsp[(9) - (13)].strval)); ;}
+    { emit("FOREIGNKEY"); strncpy(g_constr.pendingConstraintName, (yyvsp[(2) - (13)].strval), 127); AddForeignKeyRefTable((yyvsp[(9) - (13)].strval)); free((yyvsp[(2) - (13)].strval)); free((yyvsp[(9) - (13)].strval)); ;}
     break;
 
   case 320:
 #line 1365 "parser/evoparser.y"
-    { emit("FOREIGNKEY CROSSSCHEMA"); strncpy(g_pendingConstraintName, (yyvsp[(2) - (15)].strval), 127); AddForeignKeyRefTableSchema((yyvsp[(9) - (15)].strval), (yyvsp[(11) - (15)].strval)); free((yyvsp[(2) - (15)].strval)); free((yyvsp[(9) - (15)].strval)); free((yyvsp[(11) - (15)].strval)); ;}
+    { emit("FOREIGNKEY CROSSSCHEMA"); strncpy(g_constr.pendingConstraintName, (yyvsp[(2) - (15)].strval), 127); AddForeignKeyRefTableSchema((yyvsp[(9) - (15)].strval), (yyvsp[(11) - (15)].strval)); free((yyvsp[(2) - (15)].strval)); free((yyvsp[(9) - (15)].strval)); free((yyvsp[(11) - (15)].strval)); ;}
     break;
 
   case 321:
@@ -4941,7 +4941,7 @@ yyreduce:
 
   case 322:
 #line 1369 "parser/evoparser.y"
-    { emit("UNIQUE %d", (yyvsp[(5) - (6)].intval)); strncpy(g_pendingConstraintName, (yyvsp[(2) - (6)].strval), 127); AddUniqueComplete(); free((yyvsp[(2) - (6)].strval)); ;}
+    { emit("UNIQUE %d", (yyvsp[(5) - (6)].intval)); strncpy(g_constr.pendingConstraintName, (yyvsp[(2) - (6)].strval), 127); AddUniqueComplete(); free((yyvsp[(2) - (6)].strval)); ;}
     break;
 
   case 323:
@@ -5217,7 +5217,7 @@ yyreduce:
 
   case 377:
 #line 1450 "parser/evoparser.y"
-    { emit("ATTR CHECK"); strncpy(g_checkNames[g_checkCount], (yyvsp[(3) - (7)].strval), 127); AddCheckConstraint((yyvsp[(6) - (7)].exprval)); free((yyvsp[(3) - (7)].strval)); (yyval.intval) = (yyvsp[(1) - (7)].intval) + 1; ;}
+    { emit("ATTR CHECK"); strncpy(g_constr.checkNames[g_constr.checkCount], (yyvsp[(3) - (7)].strval), 127); AddCheckConstraint((yyvsp[(6) - (7)].exprval)); free((yyvsp[(3) - (7)].strval)); (yyval.intval) = (yyvsp[(1) - (7)].intval) + 1; ;}
     break;
 
   case 378:

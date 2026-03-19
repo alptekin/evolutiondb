@@ -253,7 +253,7 @@ int HasGrantOption(const char *username,
  *  If a matching grant exists, merge the new privileges.
  *  Otherwise, create a new grant.
  *
- *  Returns 0 on success, -1 on error (sets g_gui_error_msg).
+ *  Returns 0 on success, -1 on error (sets g_err.errorMsg).
  * ---------------------------------------------------------------- */
 int GrantPrivilege(const char *username, int scope_type,
                    const char *scope_name, const char *privileges,
@@ -262,9 +262,9 @@ int GrantPrivilege(const char *username, int scope_type,
     unsigned new_mask = parse_privs(privileges);
 
     if (new_mask == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "Invalid privilege specification");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INSUFFICIENT_PRIVILEGE);
         return -1;
     }
@@ -310,9 +310,9 @@ int RevokePrivilege(const char *username, int scope_type,
     int result = 0;
 
     if (revoke_mask == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "Invalid privilege specification");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INSUFFICIENT_PRIVILEGE);
         return -1;
     }
@@ -321,9 +321,9 @@ int RevokePrivilege(const char *username, int scope_type,
 
     GrantDesc existing;
     if (cat_find_grant(username, scope_type, scope_name, &existing) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "No matching grant found for user '%s'", username);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_OBJECT);
         result = -1;
     } else {

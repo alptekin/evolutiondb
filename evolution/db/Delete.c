@@ -73,9 +73,9 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                                 int depth)
 {
     if (depth > 32) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "foreign key cascade depth exceeded (possible circular reference)");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
         return -1;
     }
@@ -220,12 +220,12 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
 
         if (onDeleteAction == 0 || onDeleteAction == 3 || onDeleteAction == 5) {
             /* RESTRICT / NO ACTION — reject delete */
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "update or delete on table \"%s\" violates foreign key constraint \"%s\" "
                      "on table \"%s\"",
                      parentTd->table_name, refConstraints[ri].constraint_name,
                      childTd.table_name);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
             for (int m = 0; m < matchCount; m++) free(matchingChildKeys[m]);
             free(matchingChildKeys);
@@ -350,9 +350,9 @@ int DeleteProcess(void)
     TableDesc td;
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int ncols;
-    if (tapi_resolve(g_tblDelName, &td, cols, &ncols) < 0) {
+    if (tapi_resolve(g_del.tblName, &td, cols, &ncols) < 0) {
         printf("Error: table not found\n");
-        g_deleteCount = 0;
+        g_del.rowCount = 0;
         TruncateDelete();
         return -1;
     }
@@ -368,7 +368,7 @@ int DeleteProcess(void)
 
     BTree2 pk_tree = tapi_pk_tree(&td);
 
-    if (g_whereExpr != NULL) {
+    if (g_expr.whereExpr != NULL) {
         /* ---------- Expression-based WHERE delete ---------- */
 
         /* Phase 1: iterate all records, evaluate WHERE, collect matching keys */
@@ -376,7 +376,7 @@ int DeleteProcess(void)
         int matchCount = 0;
         char **matchKeys = (char **)malloc(capacity * sizeof(char *));
         if (!matchKeys) {
-            g_deleteCount = 0;
+            g_del.rowCount = 0;
             TruncateDelete();
             return -1;
         }
@@ -396,7 +396,7 @@ int DeleteProcess(void)
                                    colValues, isNull, 64);
 
                 char result[512];
-                int ok = expr_evaluate(g_whereExpr,
+                int ok = expr_evaluate(g_expr.whereExpr,
                                        (const char (*)[128])colNames,
                                        (const char (*)[256])colValues,
                                        numCols,
@@ -455,7 +455,7 @@ int DeleteProcess(void)
                             for (int mi = i; mi < matchCount; mi++)
                                 free(matchKeys[mi]);
                             free(matchKeys);
-                            g_deleteCount = deleted;
+                            g_del.rowCount = deleted;
                             TruncateDelete();
                             return -1;
                         }
@@ -463,7 +463,7 @@ int DeleteProcess(void)
                         /* Log undo entry with raw binary data + length */
                         if (g_tx_undo_callback)
                             g_tx_undo_callback(3 /*TX_OP_DELETE*/,
-                                               g_tblDelName, matchKeys[i],
+                                               g_del.tblName, matchKeys[i],
                                                rec, rec_len);
 
                         /* Extract fields for secondary index cleanup */
@@ -473,7 +473,7 @@ int DeleteProcess(void)
                                            delFields, delIsNull, 64);
 
                         /* Remove from secondary B-tree indexes */
-                        delete_secondary_indexes(g_tblDelName, colNames, numCols,
+                        delete_secondary_indexes(g_del.tblName, colNames, numCols,
                                                  (const char (*)[256])delFields,
                                                  matchKeys[i]);
                     }
@@ -489,15 +489,15 @@ int DeleteProcess(void)
         }
         free(matchKeys);
 
-        g_deleteCount = deleted;
+        g_del.rowCount = deleted;
         if (deleted > 0)
             cat_increment_dml_counter(td.table_id);
         printf("%d record(s) deleted.\n", deleted);
     } else {
         /* ---------- Legacy PK-based delete ---------- */
-        char *str = strtok(g_insert, ";");
+        char *str = strtok(g_ins.data, ";");
         if (!str) {
-            g_deleteCount = 0;
+            g_del.rowCount = 0;
             TruncateDelete();
             return -1;
         }
@@ -510,7 +510,7 @@ int DeleteProcess(void)
                 /* Enforce FK referential integrity */
                 if (enforce_fk_on_delete(&td, cols, ncols,
                                          rec, rec_len, str) < 0) {
-                    g_deleteCount = 0;
+                    g_del.rowCount = 0;
                     TruncateDelete();
                     return -1;
                 }
@@ -518,7 +518,7 @@ int DeleteProcess(void)
                 /* Log undo entry with raw binary data + length */
                 if (g_tx_undo_callback)
                     g_tx_undo_callback(3 /*TX_OP_DELETE*/,
-                                       g_tblDelName, str, rec, rec_len);
+                                       g_del.tblName, str, rec, rec_len);
 
                 /* Extract fields for secondary index cleanup */
                 char delFields[64][256];
@@ -527,7 +527,7 @@ int DeleteProcess(void)
                                    delFields, delIsNull, 64);
 
                 /* Remove from secondary B-tree indexes */
-                delete_secondary_indexes(g_tblDelName, colNames, numCols,
+                delete_secondary_indexes(g_del.tblName, colNames, numCols,
                                          (const char (*)[256])delFields, str);
             }
 
@@ -535,11 +535,11 @@ int DeleteProcess(void)
             bt2_delete(&pk_tree, str);
             td.pk_root_page = pk_tree.root_page;
             printf("Record deleted successfully.\n");
-            g_deleteCount = 1;
+            g_del.rowCount = 1;
             cat_increment_dml_counter(td.table_id);
         } else {
             printf("Record not found: %s\n", str);
-            g_deleteCount = 0;
+            g_del.rowCount = 0;
         }
     }
 
@@ -552,8 +552,8 @@ int TruncateDelete(void)
     int i;
 
     for (i = 0; i < 1024; ++i) {
-        g_insert[i] = '\0';
-        g_tblDelName[i] = '\0';
+        g_ins.data[i] = '\0';
+        g_del.tblName[i] = '\0';
     }
 
     return 0;
@@ -561,7 +561,7 @@ int TruncateDelete(void)
 
 int GetDelTableName(char *pname)
 {
-    db_table_path(pname, g_tblDelName, sizeof(g_tblDelName));
+    db_table_path(pname, g_del.tblName, sizeof(g_del.tblName));
 
     return 0;
 }
