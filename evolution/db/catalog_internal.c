@@ -10,6 +10,7 @@
 #include <string.h>
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "database.h"
 
 /* ----------------------------------------------------------------
  *  Internal state
@@ -588,7 +589,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
     /* Create data B+ tree for this table's primary index
      * GTT: skip — each session allocates lazily */
     BTree2 pk_tree = {0};
-    if (is_temporary != 2) {
+    if (is_temporary != TEMP_GLOBAL) {
         if (bt2_create(&pk_tree) < 0)
             return -1;
     }
@@ -607,7 +608,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
     t.auto_inc_counter = auto_inc_start;
     t.auto_inc_step = auto_inc_step;
     t.is_temporary = is_temporary;
-    t.on_commit_delete = (is_temporary == 2) ? on_commit_delete : 0;
+    t.on_commit_delete = (is_temporary == TEMP_GLOBAL) ? on_commit_delete : 0;
 
     /* Store table descriptor */
     char record[CAT_MAX_RECORD_LEN];
