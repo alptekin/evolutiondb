@@ -11,6 +11,7 @@
 #include "../evolution/db/catalog_internal.h"
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/expression.h"
+#include "../evolution/db/tuple_format.h"
 #include "pg_protocol.h"
 #include "util.h"
 
@@ -136,6 +137,25 @@ static int type_encoding_to_pg_oid(int typeEncoding)
     case 18: return PG_OID_UUID;    /* UUID */
     case 22: return PG_OID_VARCHAR; /* BOOLEAN — send as VARCHAR to avoid DBeaver JDBC getByte() error */
     default: return PG_OID_TEXT;    /* BLOB, TEXT, ENUM, SET, etc. */
+    }
+}
+
+/* Reverse mapping: PG type OID → EvoSQL internal type encoding */
+static int pg_oid_to_type_encoding(int oid, int type_modifier)
+{
+    switch (oid) {
+    case PG_OID_INT4:    return 40004;    /* INT 4 bytes */
+    case PG_OID_INT8:    return 60008;    /* BIGINT 8 bytes */
+    case PG_OID_INT2:    return 20002;    /* SMALLINT 2 bytes */
+    case PG_OID_FLOAT4:  return 90004;    /* FLOAT 4 bytes */
+    case PG_OID_FLOAT8:  return 80008;    /* DOUBLE 8 bytes */
+    case PG_OID_VARCHAR:                  /* VARCHAR */
+        return 130000 + (type_modifier > 4 ? type_modifier - 4 : 255);
+    case PG_OID_BPCHAR:  return 120001;   /* CHAR(1) */
+    case PG_OID_TEXT:    return 140000;    /* TEXT */
+    case PG_OID_DATE:    return 100010;    /* DATE */
+    case PG_OID_UUID:    return 180036;    /* UUID */
+    default:             return 130255;    /* VARCHAR(255) fallback */
     }
 }
 
@@ -1788,6 +1808,199 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
  *
  *  IMPORTANT: Error functions (err_dump/err_sys) do longjmp(g_err.jmpbuf, 1)
  *  in GUI mode.  Therefore ANY code that can trigger errors MUST run inside
+ * ---------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------
+ *  ctas_insert_rows — bulk insert SELECT results into target table
+ *
+ *  Resolves the target table, builds binary tuples from ResultSet rows,
+ *  and inserts them with synthetic PK keys (CTAS_INFER) or actual
+ *  PK values (CTAS_EXPLICIT). Returns number of rows inserted.
+ * ---------------------------------------------------------------- */
+static int ctas_insert_rows(const char *tableName, const ResultSet *selectRs,
+                            int ctasMode, ResultSet *errRs)
+{
+    TableDesc td;
+    ColumnDesc newCols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+
+    if (tapi_resolve(tableName, &td, newCols, &ncols) < 0) {
+        result_set_error(errRs, "42P01",
+                         "CTAS: could not resolve target table");
+        return 0;
+    }
+
+    /* GTT: ensure session-private storage exists */
+    if (td.is_temporary == TEMP_GLOBAL && gtt_ensure_storage(&td) < 0) {
+        result_set_error(errRs, "53000",
+                         "could not allocate storage for global temporary table");
+        return 0;
+    }
+
+    /* Find PK column index from column metadata */
+    int pkIdx = 0;
+    for (int i = 0; i < ncols; i++) {
+        if (newCols[i].is_pk) { pkIdx = i; break; }
+    }
+
+    BTree2 pk_tree = tapi_pk_tree(&td);
+    int inserted = 0;
+
+    for (int r = 0; r < selectRs->num_rows; r++) {
+        /* Build fields array from SELECT row */
+        char fields[CAT_MAX_COLUMNS][256];
+        for (int c = 0; c < ncols; c++) {
+            if (c < selectRs->num_cols && selectRs->rows[r].fields[c] &&
+                !selectRs->rows[r].is_null[c]) {
+                strncpy(fields[c], selectRs->rows[r].fields[c], 255);
+                fields[c][255] = '\0';
+            } else {
+                strcpy(fields[c], "\x01NULL\x01");
+            }
+        }
+
+        /* Encode to binary tuple */
+        char tuple[RECORD_BUF_SIZE];
+        int tuple_len = tup_build_from_fields(
+            (const char (*)[256])fields, ncols,
+            td.table_id, newCols, ncols, tuple, sizeof(tuple));
+        if (tuple_len <= 0) continue;
+
+        /* PK key: synthetic row number (CTAS_INFER) or actual PK value */
+        char pkKey[256];
+        if (ctasMode == CTAS_INFER) {
+            snprintf(pkKey, sizeof(pkKey), "%d", r + 1);
+        } else {
+            if (pkIdx < selectRs->num_cols && selectRs->rows[r].fields[pkIdx])
+                strncpy(pkKey, selectRs->rows[r].fields[pkIdx], 255);
+            else
+                snprintf(pkKey, sizeof(pkKey), "%d", r + 1);
+            pkKey[255] = '\0';
+        }
+
+        /* Insert into heap + PK index */
+        RowID rid = tapi_heap_insert(&td, tuple, (uint16_t)tuple_len);
+        if (rid.page_no == 0) continue;
+        bt2_insert(&pk_tree, pkKey, rid);
+        td.pk_root_page = pk_tree.root_page;
+        inserted++;
+    }
+
+    /* Persist updated heap_page and pk_root_page */
+    cat_update_heap_page(td.table_id, td.table_name,
+                         td.schema_id, td.heap_page);
+    cat_update_pk_root(td.table_id, td.table_name,
+                       td.schema_id, td.pk_root_page);
+
+    return inserted;
+}
+
+/* ----------------------------------------------------------------
+ *  execute_ctas — CREATE TABLE AS SELECT execution
+ *
+ *  Called post-parse when g_create.ctasMode > 0.
+ *  1) Runs SELECT via collect_select_results to get column metadata + rows
+ *  2) For CTAS_INFER: creates table with inferred column types
+ *  3) Inserts all SELECT rows into the new table
+ * ---------------------------------------------------------------- */
+static void execute_ctas(const char *srcTable, ResultSet *rs, SessionCtx *ctx)
+{
+    /* Privilege check: CTAS needs SELECT in addition to CREATE */
+    if (ctx && !CheckPrivilege(ctx->username, ctx->database, ctx->schema,
+                               NULL, "SELECT")) {
+        result_set_error(rs, "42501",
+            "Permission denied: CTAS requires SELECT privilege");
+        return;
+    }
+
+    /* A) Execute the SELECT to collect column metadata and rows */
+    ResultSet selectRs;
+    memset(&selectRs, 0, sizeof(selectRs));  /* ensure stream_conn=NULL */
+    result_init(&selectRs);
+    collect_select_results(srcTable, &selectRs);
+
+    if (selectRs.has_error) {
+        result_set_error(rs, selectRs.error_sqlstate, selectRs.error_message);
+        result_free(&selectRs);
+        return;
+    }
+
+    if (selectRs.num_cols <= 0) {
+        result_set_error(rs, "42601", "SELECT returns no columns for CTAS");
+        result_free(&selectRs);
+        return;
+    }
+
+    /* B) For CTAS_INFER: create table with columns inferred from SELECT */
+    if (g_create.ctasMode == CTAS_INFER) {
+        ColumnDesc cols[64];
+        int ncols = selectRs.num_cols < 64 ? selectRs.num_cols : 64;
+
+        for (int i = 0; i < ncols; i++) {
+            memset(&cols[i], 0, sizeof(ColumnDesc));
+            strncpy(cols[i].col_name, selectRs.columns[i].name,
+                    CAT_MAX_NAME_LEN - 1);
+            cols[i].type_code = pg_oid_to_type_encoding(
+                selectRs.columns[i].pg_type_oid,
+                selectRs.columns[i].type_modifier);
+            strcpy(cols[i].default_val, "\x01NONE\x01");
+        }
+
+        /* Resolve current schema */
+        DatabaseDesc dbDesc;
+        if (cat_find_database(g_currentDatabase, &dbDesc) < 0) {
+            result_set_error(rs, "3D000",
+                             "database does not exist");
+            result_free(&selectRs);
+            return;
+        }
+        SchemaDesc schDesc;
+        if (cat_find_schema(dbDesc.db_id, g_currentSchema, &schDesc) < 0) {
+            result_set_error(rs, "3F000",
+                             "schema does not exist");
+            result_free(&selectRs);
+            return;
+        }
+
+        int rc = cat_create_table(schDesc.schema_id, g_create.ctasTableName,
+                                  cols, ncols, 0, -1, 1, 1,
+                                  g_create.ctasTemporary, 0);
+        if (rc < 0) {
+            if (g_create.ctasIfNotExists) {
+                /* Table already exists — silent success, no data insert */
+                snprintf(rs->command_tag, sizeof(rs->command_tag),
+                         "SELECT 0");
+                result_free(&selectRs);
+                return;
+            }
+            result_set_error(rs, "42P07",
+                             "table already exists");
+            result_free(&selectRs);
+            return;
+        }
+        g_create.lastCreatedTableId = (uint32_t)rc;
+    }
+
+    /* C) Insert SELECT rows into the new table */
+    int inserted = ctas_insert_rows(g_create.ctasTableName, &selectRs,
+                                     g_create.ctasMode, rs);
+
+    /* D) Register temp table if needed */
+    if (ctx && g_create.ctasTemporary == TEMP_LOCAL &&
+        g_create.lastCreatedTableId > 0) {
+        if (ctx->temp_table_count < 64)
+            ctx->temp_table_ids[ctx->temp_table_count++] =
+                g_create.lastCreatedTableId;
+    }
+
+    /* E) Command tag */
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", inserted);
+    result_free(&selectRs);
+}
+
+/* ----------------------------------------------------------------
+ *  execute_via_parser — execute SQL through Flex/Bison parser
+ *
  *  the setjmp scope, and the stdout/stderr restore MUST be guarded
  *  against double-close in case longjmp fires after the first restore.
  * ---------------------------------------------------------------- */
@@ -1856,6 +2069,10 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_create.isTemporary = 0;
     g_create.onCommitDelete = 1;  /* default: ON COMMIT DELETE ROWS */
     g_create.lastCreatedTableId = 0;
+    g_create.ctasMode = CTAS_NONE;
+    g_create.ctasTableName[0] = '\0';
+    g_create.ctasIfNotExists = 0;
+    g_create.ctasTemporary = 0;
     g_ins.data[0] = '\0';
     g_del.rowCount = 0;
     g_upd.rowCount = 0;
@@ -1944,9 +2161,16 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (saved_stdout >= 0) { dup2(saved_stdout, 1); close(saved_stdout); saved_stdout = -1; }
         if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); saved_stderr = -1; }
 
+        /* CTAS: intercept before normal SELECT collection */
+        if (!rs->has_error && g_create.ctasMode != CTAS_NONE &&
+            g_sel.lastTable[0] != '\0') {
+            execute_ctas(g_sel.lastTable, rs, ctx);
+            g_create.ctasMode = CTAS_NONE;
+            g_sel.lastTable[0] = '\0';
+        }
         /* Collect SELECT results — runs WITHOUT parser mutex, enabling
          * concurrent SELECT queries across different connections. */
-        if (!rs->has_error && g_sel.lastTable[0] != '\0') {
+        else if (!rs->has_error && g_sel.lastTable[0] != '\0') {
             collect_select_results(g_sel.lastTable, rs);
             g_sel.lastTable[0] = '\0';
         } else if (!rs->has_error && g_expr.selectExprCount > 0 && is_select_query(sql)) {
@@ -1995,8 +2219,9 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 }
             }
             snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
-        } else if (!rs->has_error) {
-            /* DDL/DML command — determine appropriate tag */
+        } else if (!rs->has_error && rs->command_tag[0] == '\0') {
+            /* DDL/DML command — determine appropriate tag
+             * Skip if already set (e.g., by execute_ctas) */
             if (is_create_query(sql)) {
                 /* Distinguish CREATE TABLE, CREATE DATABASE, CREATE SCHEMA, CREATE INDEX */
                 const char *p = sql;

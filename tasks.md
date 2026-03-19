@@ -690,7 +690,7 @@
 
 ---
 
-### Task 34: ⬜ CREATE TEMPORARY TABLE AS SELECT (Feature #94)
+### Task 34: ✅ CREATE TEMPORARY TABLE AS SELECT (Feature #94)
 
 **Goal:** `CREATE TEMPORARY TABLE tmp AS SELECT ...` — create and populate a temp table from a query result. In MySQL, MSSQL (SELECT INTO #tmp), and Oracle.
 

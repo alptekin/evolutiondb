@@ -1295,7 +1295,9 @@ USE NAME                                                                        
 stmt: create_table_stmt
     {
         emit("STMT");
-        CreateTableProcess();
+        if (g_create.ctasMode == CTAS_NONE || g_create.ctasMode == CTAS_EXPLICIT)
+            CreateTableProcess();
+        /* CTAS_INFER: table created in post-parse from SELECT result */
     }
 ;
 
@@ -1322,20 +1324,58 @@ opt_table_options: /* empty */
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
 '(' create_col_list ')'
-create_select_statement								{ emit("CREATESELECT %d %d %d %s", $2, $4, $7, $5); free($5); }
+create_select_statement {
+    emit("CREATESELECT %d %d %d %s", $2, $4, $7, $5);
+    g_create.ctasMode = CTAS_EXPLICIT;
+    strncpy(g_create.ctasTableName, $5, 255);
+    g_create.ctasTableName[255] = '\0';
+    g_create.ctasIfNotExists = $4;
+    g_create.ctasTemporary = $2;
+    g_create.isTemporary = $2;
+    GetTableName($5);
+    free($5);
+}
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
-create_select_statement								{ emit("CREATESELECT %d %d 0 %s", $2, $4, $5); free($5); }
+create_select_statement {
+    emit("CREATESELECT %d %d 0 %s", $2, $4, $5);
+    g_create.ctasMode = CTAS_INFER;
+    strncpy(g_create.ctasTableName, $5, 255);
+    g_create.ctasTableName[255] = '\0';
+    g_create.ctasIfNotExists = $4;
+    g_create.ctasTemporary = $2;
+    GetTableName($5);
+    free($5);
+}
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME '.' NAME
 '(' create_col_list ')'
-create_select_statement								{ emit("CREATESELECT %d %d 0 %s.%s", $2, $4, $5, $7); free($5); free($7); }
+create_select_statement {
+    emit("CREATESELECT %d %d %d %s.%s", $2, $4, $9, $5, $7);
+    g_create.ctasMode = CTAS_EXPLICIT;
+    strncpy(g_create.ctasTableName, $7, 255);
+    g_create.ctasTableName[255] = '\0';
+    g_create.ctasIfNotExists = $4;
+    g_create.ctasTemporary = $2;
+    g_create.isTemporary = $2;
+    GetTableName($7);
+    free($5); free($7);
+}
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME '.' NAME
-create_select_statement								{ emit("CREATESELECT %d %d 0 %s.%s", $2, $4, $5, $7); free($5); free($7); }
+create_select_statement {
+    emit("CREATESELECT %d %d 0 %s.%s", $2, $4, $5, $7);
+    g_create.ctasMode = CTAS_INFER;
+    strncpy(g_create.ctasTableName, $7, 255);
+    g_create.ctasTableName[255] = '\0';
+    g_create.ctasIfNotExists = $4;
+    g_create.ctasTemporary = $2;
+    GetTableName($7);
+    free($5); free($7);
+}
 ;
 
 opt_temporary: /* nil */							{ $$ = 0; }
@@ -1514,8 +1554,17 @@ enum_list: STRING								{ emit("ENUMVAL %s", $1); free($1); $$ = 1; }
 | enum_list ',' STRING								{ emit("ENUMVAL %s", $3); free($3); $$ = $1 + 1; }
 ;
 
-create_select_statement: opt_ignore_replace opt_as select_stmt 
-										{ emit("CREATESELECT %d", $1); }
+create_select_statement: opt_ignore_replace opt_as select_stmt
+    {
+        emit("CREATESELECT %d", $1);
+        /* In CTAS context, select_stmt is not a standalone stmt,
+         * so SelectProcess() is not called automatically.
+         * Call it here to set g_sel.lastTable for post-parse. */
+        if ($3 == 1)
+            SelectAll();
+        else
+            SelectProcess();
+    }
 ;
 
 opt_ignore_replace: /* nil */                                                   { $$ = 0; }
