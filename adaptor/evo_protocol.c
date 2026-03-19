@@ -13,6 +13,7 @@
 #include "evo_protocol.h"
 #include "query_executor.h"
 #include "result.h"
+#include "util.h"
 #include "server.h"          /* safe_query_execute */
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
@@ -24,44 +25,7 @@ extern mutex_t g_parse_lock;
  *  evo_secure_wipe — local copy to avoid crypto.h / OpenSSL clash
  *  (CWE-14: Compiler Removal of Code to Clear Buffers)
  * ---------------------------------------------------------------- */
-static void *(*const volatile evo_memset_ptr)(void *, int, size_t) = memset;
-static void evo_secure_wipe(void *ptr, size_t len)
-{
-    evo_memset_ptr(ptr, 0, len);
-}
-
-/* ----------------------------------------------------------------
- *  sql_redact_password — Redact PASSWORD clauses for safe logging
- * ---------------------------------------------------------------- */
-static void sql_redact_password(char *dst, size_t dst_size, const char *src)
-{
-    const char *p = src;
-    char *d = dst;
-    char *end = dst + dst_size - 1;
-
-    while (*p && d < end) {
-        if (strncasecmp(p, "PASSWORD", 8) == 0 &&
-            (p == src || isspace((unsigned char)p[-1])) &&
-            (p[8] == '\0' || isspace((unsigned char)p[8]))) {
-            const char *kw = "PASSWORD ";
-            while (*kw && d < end) *d++ = *kw++;
-            p += 8;
-            while (*p && isspace((unsigned char)*p)) p++;
-            if (*p == '\'') {
-                p++;
-                while (*p && *p != '\'') p++;
-                if (*p == '\'') p++;
-            } else {
-                while (*p && !isspace((unsigned char)*p) && *p != ';') p++;
-            }
-            const char *redacted = "'***'";
-            while (*redacted && d < end) *d++ = *redacted++;
-        } else {
-            *d++ = *p++;
-        }
-    }
-    *d = '\0';
-}
+/* evo_secure_wipe() and sql_redact_password() from util.h */
 
 /* ----------------------------------------------------------------
  *  Send helpers (text-line based)

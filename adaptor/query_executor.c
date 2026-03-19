@@ -12,6 +12,7 @@
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/expression.h"
 #include "pg_protocol.h"
+#include "util.h"
 
 /* Flex/Bison externs */
 extern int yyparse(void);
@@ -24,39 +25,6 @@ extern int yylineno;
 /* Parser mutex from server.c (serializes yyparse, not reentrant) */
 #include "platform.h"
 extern mutex_t g_parse_lock;
-
-/* ----------------------------------------------------------------
- *  sql_redact_password — Redact PASSWORD clauses for safe logging
- * ---------------------------------------------------------------- */
-static void sql_redact_password(char *dst, size_t dst_size, const char *src)
-{
-    const char *p = src;
-    char *d = dst;
-    char *end = dst + dst_size - 1;
-
-    while (*p && d < end) {
-        if (strncasecmp(p, "PASSWORD", 8) == 0 &&
-            (p == src || isspace((unsigned char)p[-1])) &&
-            (p[8] == '\0' || isspace((unsigned char)p[8]))) {
-            const char *kw = "PASSWORD ";
-            while (*kw && d < end) *d++ = *kw++;
-            p += 8;
-            while (*p && isspace((unsigned char)*p)) p++;
-            if (*p == '\'') {
-                p++;
-                while (*p && *p != '\'') p++;
-                if (*p == '\'') p++;
-            } else {
-                while (*p && !isspace((unsigned char)*p) && *p != ';') p++;
-            }
-            const char *redacted = "'***'";
-            while (*redacted && d < end) *d++ = *redacted++;
-        } else {
-            *d++ = *p++;
-        }
-    }
-    *d = '\0';
-}
 
 /* ----------------------------------------------------------------
  *  Engine initialization

@@ -19,50 +19,10 @@
 #include "tls.h"
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
+#include "util.h"
 
 /* From server.c — parser mutex for SERIALIZABLE cleanup */
 extern mutex_t g_parse_lock;
-
-/* ----------------------------------------------------------------
- *  sql_redact_password — Redact PASSWORD clauses for safe logging
- *
- *  Copies src into dst (up to dst_size), replacing any
- *  PASSWORD '<secret>' or PASSWORD <secret> with PASSWORD '***'.
- *  Case-insensitive matching.
- * ---------------------------------------------------------------- */
-static void sql_redact_password(char *dst, size_t dst_size, const char *src)
-{
-    const char *p = src;
-    char *d = dst;
-    char *end = dst + dst_size - 1;
-
-    while (*p && d < end) {
-        /* Look for PASSWORD keyword (case-insensitive) */
-        if (strncasecmp(p, "PASSWORD", 8) == 0 &&
-            (p == src || isspace((unsigned char)p[-1])) &&
-            (p[8] == '\0' || isspace((unsigned char)p[8]))) {
-            /* Copy "PASSWORD " */
-            const char *kw = "PASSWORD ";
-            while (*kw && d < end) *d++ = *kw++;
-            p += 8;
-            while (*p && isspace((unsigned char)*p)) p++;
-            /* Skip the actual password value */
-            if (*p == '\'') {
-                p++; /* skip opening quote */
-                while (*p && *p != '\'') p++;
-                if (*p == '\'') p++; /* skip closing quote */
-            } else {
-                while (*p && !isspace((unsigned char)*p) && *p != ';') p++;
-            }
-            /* Write redacted placeholder */
-            const char *redacted = "'***'";
-            while (*redacted && d < end) *d++ = *redacted++;
-        } else {
-            *d++ = *p++;
-        }
-    }
-    *d = '\0';
-}
 
 /* ----------------------------------------------------------------
  *  pg_handle_client — full PG v3 session for one connection
