@@ -2127,15 +2127,15 @@ static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
                            priv_buf, with_grant_option) == 0) {
             snprintf(rs->command_tag, sizeof(rs->command_tag), "GRANT");
         } else {
-            result_set_error(rs, "42501", g_gui_error_msg);
-            g_gui_error = 0;
+            result_set_error(rs, "42501", g_err.errorMsg);
+            g_err.error = 0;
         }
     } else {
         if (RevokePrivilege(target_user, scope_type, scope_name, priv_buf) == 0) {
             snprintf(rs->command_tag, sizeof(rs->command_tag), "REVOKE");
         } else {
-            result_set_error(rs, "42501", g_gui_error_msg);
-            g_gui_error = 0;
+            result_set_error(rs, "42501", g_err.errorMsg);
+            g_err.error = 0;
         }
     }
     return 1;
@@ -2189,8 +2189,8 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
         if (CreateUserProcess(username, password) == 0) {
             snprintf(rs->command_tag, sizeof(rs->command_tag), "CREATE USER");
         } else {
-            result_set_error(rs, "42710", g_gui_error_msg);
-            g_gui_error = 0;
+            result_set_error(rs, "42710", g_err.errorMsg);
+            g_err.error = 0;
         }
         evo_secure_wipe(password, sizeof(password));
         return 1;
@@ -2212,8 +2212,8 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
             DropUserGrants(username);   /* Also remove all grants for this user */
             snprintf(rs->command_tag, sizeof(rs->command_tag), "DROP USER");
         } else {
-            result_set_error(rs, "42704", g_gui_error_msg);
-            g_gui_error = 0;
+            result_set_error(rs, "42704", g_err.errorMsg);
+            g_err.error = 0;
         }
         return 1;
     }
@@ -2255,8 +2255,8 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
         if (AlterUserPasswordProcess(username, password) == 0) {
             snprintf(rs->command_tag, sizeof(rs->command_tag), "ALTER USER");
         } else {
-            result_set_error(rs, "42704", g_gui_error_msg);
-            g_gui_error = 0;
+            result_set_error(rs, "42704", g_err.errorMsg);
+            g_err.error = 0;
         }
         evo_secure_wipe(password, sizeof(password));
         return 1;

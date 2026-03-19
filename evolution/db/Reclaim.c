@@ -81,10 +81,10 @@ int ReclaimTableProcess(void)
     TableDesc td;
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int ncols;
-    if (tapi_resolve(g_tblDropName, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+    if (tapi_resolve(g_drop.tblName, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table not found");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
         TruncateDrop();
         return -1;

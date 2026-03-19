@@ -9,33 +9,33 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include "expression.h"
-#include "database.h"   /* query_context.h macros for g_exprNodePool etc. */
+#include "database.h"   /* query_context.h macros for g_expr.nodePool etc. */
 #include "crypto.h"
 
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)
 {
-    if (g_exprNodePoolUsed >= EXPR_POOL_SIZE) return NULL;
-    ExprNode *e = &g_exprNodePool[g_exprNodePoolUsed++];
+    if (g_expr.nodePoolUsed >= EXPR_POOL_SIZE) return NULL;
+    ExprNode *e = &g_expr.nodePool[g_expr.nodePoolUsed++];
     memset(e, 0, sizeof(*e));
     return e;
 }
 
 void expr_pool_reset(void)
 {
-    g_exprNodePoolUsed = 0;
-    g_selectExprCount = 0;
-    g_inListCount = 0;
-    g_caseWhenCount = 0;
-    g_whereExpr = NULL;
-    g_limitExpr = NULL;
-    g_offsetExpr = NULL;
-    g_groupByCount = 0;
-    g_havingExpr = NULL;
-    memset(g_selectExprs, 0, sizeof(g_selectExprs));
-    memset(g_groupByExprs, 0, sizeof(g_groupByExprs));
-    g_checkCount = 0;
-    memset(g_checkSerialized, 0, sizeof(g_checkSerialized));
+    g_expr.nodePoolUsed = 0;
+    g_expr.selectExprCount = 0;
+    g_expr.inListCount = 0;
+    g_expr.caseWhenCount = 0;
+    g_expr.whereExpr = NULL;
+    g_expr.limitExpr = NULL;
+    g_expr.offsetExpr = NULL;
+    g_expr.groupByCount = 0;
+    g_expr.havingExpr = NULL;
+    memset(g_expr.selectExprs, 0, sizeof(g_expr.selectExprs));
+    memset(g_expr.groupByExprs, 0, sizeof(g_expr.groupByExprs));
+    g_constr.checkCount = 0;
+    memset(g_constr.checkSerialized, 0, sizeof(g_constr.checkSerialized));
 }
 
 /* ---- Constructors ---- */
@@ -513,7 +513,7 @@ ExprNode *expr_make_max(ExprNode *arg)
 
 /* Searched CASE: CASE WHEN c1 THEN r1 WHEN c2 THEN r2 ... [ELSE e] END
  * Builds a right-nested chain: CASE_WHEN(c1, r1, CASE_WHEN(c2, r2, else_expr))
- * Uses g_caseWhenExprs[] and g_caseThenExprs[] collected during parsing. */
+ * Uses g_expr.caseWhenExprs[] and g_expr.caseThenExprs[] collected during parsing. */
 ExprNode *expr_make_case_searched(int count, ExprNode *else_expr)
 {
     if (count <= 0) return else_expr;
@@ -524,8 +524,8 @@ ExprNode *expr_make_case_searched(int count, ExprNode *else_expr)
         ExprNode *node = expr_alloc();
         if (!node) return NULL;
         node->type = EXPR_CASE_WHEN;
-        node->left  = g_caseWhenExprs[i];   /* condition */
-        node->right = g_caseThenExprs[i];   /* result */
+        node->left  = g_expr.caseWhenExprs[i];   /* condition */
+        node->right = g_expr.caseThenExprs[i];   /* result */
         node->extra = chain;                /* else/next branch */
         chain = node;
     }
@@ -545,8 +545,8 @@ ExprNode *expr_make_case_simple(ExprNode *operand, int count, ExprNode *else_exp
         if (!cmp) return NULL;
         cmp->type = EXPR_CMP_EQ;
         cmp->left = operand;
-        cmp->right = g_caseWhenExprs[i];
-        g_caseWhenExprs[i] = cmp;
+        cmp->right = g_expr.caseWhenExprs[i];
+        g_expr.caseWhenExprs[i] = cmp;
     }
     return expr_make_case_searched(count, else_expr);
 }
@@ -686,11 +686,11 @@ void expr_collect_aggregates(const ExprNode *e, const ExprNode **out, int *count
 /* ---- Store a select expression ---- */
 void expr_store_select(ExprNode *expr, const char *alias)
 {
-    if (g_selectExprCount >= MAX_SELECT_EXPRS) return;
+    if (g_expr.selectExprCount >= MAX_SELECT_EXPRS) return;
     if (expr && alias && alias[0]) {
         strncpy(expr->display, alias, sizeof(expr->display) - 1);
     }
-    g_selectExprs[g_selectExprCount++] = expr;
+    g_expr.selectExprs[g_expr.selectExprCount++] = expr;
 }
 
 /* ---- Check if expression is a plain column ---- */
@@ -1583,9 +1583,9 @@ ExprNode *expr_deserialize(const char *buf)
 
 void AddCheckConstraint(ExprNode *expr)
 {
-    if (!expr || g_checkCount >= MAX_CHECK_CONSTRAINTS) return;
-    expr_serialize(expr, g_checkSerialized[g_checkCount], 1024);
-    g_checkCount++;
+    if (!expr || g_constr.checkCount >= MAX_CHECK_CONSTRAINTS) return;
+    expr_serialize(expr, g_constr.checkSerialized[g_constr.checkCount], 1024);
+    g_constr.checkCount++;
 }
 
 /* ---- LIMIT/OFFSET range helper ---- */
@@ -1594,18 +1594,18 @@ int expr_eval_limit_range(int match_count, int *start, int *end)
 {
     *start = 0;
     *end = match_count;
-    if (!g_limitExpr) return 0;
+    if (!g_expr.limitExpr) return 0;
 
     char lbuf[64];
-    if (!expr_evaluate(g_limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
+    if (!expr_evaluate(g_expr.limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
         return 0;
 
     int lim = atoi(lbuf);
     if (lim < 0) lim = 0;
     int off = 0;
-    if (g_offsetExpr) {
+    if (g_expr.offsetExpr) {
         char obuf[64];
-        if (expr_evaluate(g_offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
+        if (expr_evaluate(g_expr.offsetExpr, NULL, NULL, 0, obuf, sizeof(obuf)))
             off = atoi(obuf);
         if (off < 0) off = 0;
     }

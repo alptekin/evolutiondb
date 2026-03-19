@@ -168,9 +168,9 @@ int ValidateValue(const char *value, int typeEncoding)
     case 6: /* BIGINT */
         strtol(value, &endptr, 10);
         if (*endptr != '\0') {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "expected integer value, got '%s'", value);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
             return -1;
         }
@@ -182,9 +182,9 @@ int ValidateValue(const char *value, int typeEncoding)
     case 11: /* DECIMAL */
         strtod(value, &endptr);
         if (*endptr != '\0') {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "expected numeric value, got '%s'", value);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
             return -1;
         }
@@ -193,10 +193,10 @@ int ValidateValue(const char *value, int typeEncoding)
     case 12: /* CHAR */
     case 13: /* VARCHAR */
         if (size > 0 && (int)strlen(value) > size) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "value '%.100s' exceeds %s(%d) length limit",
                      value, typeFamily == 12 ? "CHAR" : "VARCHAR", size);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_STRING_DATA_RIGHT_TRUNCATION);
             return -1;
         }
@@ -206,18 +206,18 @@ int ValidateValue(const char *value, int typeEncoding)
         if (strlen(value) != 36 ||
             value[8] != '-' || value[13] != '-' ||
             value[18] != '-' || value[23] != '-') {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "invalid UUID format: '%s'", value);
-            g_gui_error = 1;
+            g_err.error = 1;
             return -1;
         }
         for (int k = 0; k < 36; k++) {
             if (k == 8 || k == 13 || k == 18 || k == 23) continue;
             char ch = value[k];
             if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "invalid UUID: non-hex character at position %d", k);
-                g_gui_error = 1;
+                g_err.error = 1;
                 return -1;
             }
         }
@@ -227,9 +227,9 @@ int ValidateValue(const char *value, int typeEncoding)
         if (strcmp(value, "true") != 0 && strcmp(value, "false") != 0 &&
             strcmp(value, "TRUE") != 0 && strcmp(value, "FALSE") != 0 &&
             strcmp(value, "0") != 0 && strcmp(value, "1") != 0) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "expected BOOLEAN (true/false/0/1), got '%s'", value);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
             return -1;
         }
@@ -248,66 +248,66 @@ int ValidateValue(const char *value, int typeEncoding)
 
 void SetColumnNotNull(void)
 {
-    g_currentColNotNull = 1;
+    g_create.currentColNotNull = 1;
 }
 
 void SetColumnPrimaryKey(void)
 {
-    g_currentColPrimaryKey = 1;
+    g_create.currentColPrimaryKey = 1;
 }
 
 void SetColumnUnique(void)
 {
-    g_currentColUnique = 1;
+    g_create.currentColUnique = 1;
 }
 
 void SetColumnDefault(const char *value)
 {
     size_t len;
-    if (!value) { g_currentColDefault[0] = '\0'; return; }
+    if (!value) { g_create.currentColDefault[0] = '\0'; return; }
     len = strlen(value);
     /* Strip surrounding quotes if present (e.g. 'active' -> active) */
     if (len >= 2 && ((value[0] == '\'' && value[len-1] == '\'') ||
                      (value[0] == '"'  && value[len-1] == '"'))) {
         len -= 2;
-        if (len >= sizeof(g_currentColDefault))
-            len = sizeof(g_currentColDefault) - 1;
-        memcpy(g_currentColDefault, value + 1, len);
-        g_currentColDefault[len] = '\0';
+        if (len >= sizeof(g_create.currentColDefault))
+            len = sizeof(g_create.currentColDefault) - 1;
+        memcpy(g_create.currentColDefault, value + 1, len);
+        g_create.currentColDefault[len] = '\0';
     } else {
-        strncpy(g_currentColDefault, value, sizeof(g_currentColDefault) - 1);
-        g_currentColDefault[sizeof(g_currentColDefault) - 1] = '\0';
+        strncpy(g_create.currentColDefault, value, sizeof(g_create.currentColDefault) - 1);
+        g_create.currentColDefault[sizeof(g_create.currentColDefault) - 1] = '\0';
     }
 }
 
 void SetColumnAutoIncrement(int start, int step)
 {
-    g_currentColAutoIncrement = 1;
-    g_autoIncStart = (start > 0) ? start : 1;
-    g_autoIncStep  = (step  > 0) ? step  : 1;
+    g_create.currentColAutoIncrement = 1;
+    g_create.autoIncStart = (start > 0) ? start : 1;
+    g_create.autoIncStep  = (step  > 0) ? step  : 1;
 }
 
 void SetColumnGenerated(int mode, ExprNode *expr)
 {
-    g_currentColGeneratedMode = mode;
+    g_create.currentColGeneratedMode = mode;
     if (expr)
-        expr_serialize(expr, g_currentColGeneratedExpr, sizeof(g_currentColGeneratedExpr));
+        expr_serialize(expr, g_create.currentColGeneratedExpr, sizeof(g_create.currentColGeneratedExpr));
     else
-        g_currentColGeneratedExpr[0] = '\0';
+        g_create.currentColGeneratedExpr[0] = '\0';
 }
 
 void SetTableAutoIncrement(int startVal)
 {
     if (startVal > 0)
-        g_autoIncStart = startVal;
+        g_create.autoIncStart = startVal;
 }
 
 void AddPrimaryKeyColumn(const char *colName)
 {
-    if (g_pkColumnCount < 16) {
-        strncpy(g_pkColumnNames[g_pkColumnCount], colName, 127);
-        g_pkColumnNames[g_pkColumnCount][127] = '\0';
-        g_pkColumnCount++;
+    if (g_create.pkColumnCount < 16) {
+        strncpy(g_create.pkColumnNames[g_create.pkColumnCount], colName, 127);
+        g_create.pkColumnNames[g_create.pkColumnCount][127] = '\0';
+        g_create.pkColumnCount++;
     }
 }
 
@@ -318,24 +318,24 @@ void AddPrimaryKeyColumn(const char *colName)
 void AddUniqueColumn(const char *colName)
 {
     if (!colName) return;
-    if (g_uniqueCurCols[0] != '\0')
-        strcat(g_uniqueCurCols, ",");
-    strcat(g_uniqueCurCols, colName);
+    if (g_constr.uniqueCurCols[0] != '\0')
+        strcat(g_constr.uniqueCurCols, ",");
+    strcat(g_constr.uniqueCurCols, colName);
 }
 
 void AddUniqueComplete(void)
 {
-    if (g_uniqueCount >= 8) return;
+    if (g_constr.uniqueCount >= 8) return;
 
-    strncpy(g_uniqueLocalCols[g_uniqueCount], g_uniqueCurCols, 255);
-    g_uniqueLocalCols[g_uniqueCount][255] = '\0';
+    strncpy(g_constr.uniqueLocalCols[g_constr.uniqueCount], g_constr.uniqueCurCols, 255);
+    g_constr.uniqueLocalCols[g_constr.uniqueCount][255] = '\0';
     /* Copy pending constraint name if set */
-    strncpy(g_uniqueNames[g_uniqueCount], g_pendingConstraintName, 127);
-    g_uniqueNames[g_uniqueCount][127] = '\0';
-    g_pendingConstraintName[0] = '\0';
+    strncpy(g_constr.uniqueNames[g_constr.uniqueCount], g_constr.pendingConstraintName, 127);
+    g_constr.uniqueNames[g_constr.uniqueCount][127] = '\0';
+    g_constr.pendingConstraintName[0] = '\0';
 
-    g_uniqueCount++;
-    g_uniqueCurCols[0] = '\0';
+    g_constr.uniqueCount++;
+    g_constr.uniqueCurCols[0] = '\0';
 }
 
 /* ----------------------------------------------------------------
@@ -345,84 +345,84 @@ void AddUniqueComplete(void)
 void AddForeignKeyColumn(const char *colName)
 {
     if (!colName) return;
-    if (g_fkCurLocalCols[0] != '\0')
-        strcat(g_fkCurLocalCols, ",");
-    strcat(g_fkCurLocalCols, colName);
+    if (g_constr.fkCurLocalCols[0] != '\0')
+        strcat(g_constr.fkCurLocalCols, ",");
+    strcat(g_constr.fkCurLocalCols, colName);
 }
 
 void AddForeignKeyRefColumn(const char *colName)
 {
     if (!colName) return;
-    if (g_fkCurRefCols[0] != '\0')
-        strcat(g_fkCurRefCols, ",");
-    strcat(g_fkCurRefCols, colName);
+    if (g_constr.fkCurRefCols[0] != '\0')
+        strcat(g_constr.fkCurRefCols, ",");
+    strcat(g_constr.fkCurRefCols, colName);
 }
 
 void AddForeignKeyRefTable(const char *tableName)
 {
-    if (!tableName || g_fkCount >= 8) return;
+    if (!tableName || g_constr.fkCount >= 8) return;
 
-    strncpy(g_fkLocalCols[g_fkCount], g_fkCurLocalCols, 255);
-    g_fkLocalCols[g_fkCount][255] = '\0';
-    strncpy(g_fkRefTable[g_fkCount], tableName, 127);
-    g_fkRefTable[g_fkCount][127] = '\0';
-    strncpy(g_fkRefCols[g_fkCount], g_fkCurRefCols, 255);
-    g_fkRefCols[g_fkCount][255] = '\0';
+    strncpy(g_constr.fkLocalCols[g_constr.fkCount], g_constr.fkCurLocalCols, 255);
+    g_constr.fkLocalCols[g_constr.fkCount][255] = '\0';
+    strncpy(g_constr.fkRefTable[g_constr.fkCount], tableName, 127);
+    g_constr.fkRefTable[g_constr.fkCount][127] = '\0';
+    strncpy(g_constr.fkRefCols[g_constr.fkCount], g_constr.fkCurRefCols, 255);
+    g_constr.fkRefCols[g_constr.fkCount][255] = '\0';
     /* Copy pending constraint name if set */
-    strncpy(g_fkNames[g_fkCount], g_pendingConstraintName, 127);
-    g_fkNames[g_fkCount][127] = '\0';
-    g_pendingConstraintName[0] = '\0';
+    strncpy(g_constr.fkNames[g_constr.fkCount], g_constr.pendingConstraintName, 127);
+    g_constr.fkNames[g_constr.fkCount][127] = '\0';
+    g_constr.pendingConstraintName[0] = '\0';
     /* on_delete/on_update already set by SetForeignKey* or default 0 */
 
-    g_fkCount++;
+    g_constr.fkCount++;
 
     /* Reset current accumulators for next FK */
-    g_fkCurLocalCols[0] = '\0';
-    g_fkCurRefCols[0] = '\0';
+    g_constr.fkCurLocalCols[0] = '\0';
+    g_constr.fkCurRefCols[0] = '\0';
 }
 
 void SetForeignKeyOnDelete(int action)
 {
-    /* Set on the current FK being built (g_fkCount is the index) */
-    g_fkOnDelete[g_fkCount] = action;
+    /* Set on the current FK being built (g_constr.fkCount is the index) */
+    g_constr.fkOnDelete[g_constr.fkCount] = action;
 }
 
 void SetForeignKeyOnUpdate(int action)
 {
-    g_fkOnUpdate[g_fkCount] = action;
+    g_constr.fkOnUpdate[g_constr.fkCount] = action;
 }
 
 void SetForeignKeyMatchType(int matchType)
 {
-    g_fkMatchType[g_fkCount] = matchType;
+    g_constr.fkMatchType[g_constr.fkCount] = matchType;
 }
 
 void SetForeignKeyDeferrable(int mode)
 {
-    g_fkDeferrable[g_fkCount] = mode;
+    g_constr.fkDeferrable[g_constr.fkCount] = mode;
 }
 
 void AddForeignKeyRefTableSchema(const char *schemaName, const char *tableName)
 {
-    if (!tableName || !schemaName || g_fkCount >= 8) return;
+    if (!tableName || !schemaName || g_constr.fkCount >= 8) return;
 
-    strncpy(g_fkLocalCols[g_fkCount], g_fkCurLocalCols, 255);
-    g_fkLocalCols[g_fkCount][255] = '\0';
-    strncpy(g_fkRefTable[g_fkCount], tableName, 127);
-    g_fkRefTable[g_fkCount][127] = '\0';
-    strncpy(g_fkRefCols[g_fkCount], g_fkCurRefCols, 255);
-    g_fkRefCols[g_fkCount][255] = '\0';
-    strncpy(g_fkRefSchema[g_fkCount], schemaName, 127);
-    g_fkRefSchema[g_fkCount][127] = '\0';
+    strncpy(g_constr.fkLocalCols[g_constr.fkCount], g_constr.fkCurLocalCols, 255);
+    g_constr.fkLocalCols[g_constr.fkCount][255] = '\0';
+    strncpy(g_constr.fkRefTable[g_constr.fkCount], tableName, 127);
+    g_constr.fkRefTable[g_constr.fkCount][127] = '\0';
+    strncpy(g_constr.fkRefCols[g_constr.fkCount], g_constr.fkCurRefCols, 255);
+    g_constr.fkRefCols[g_constr.fkCount][255] = '\0';
+    strncpy(g_constr.fkRefSchema[g_constr.fkCount], schemaName, 127);
+    g_constr.fkRefSchema[g_constr.fkCount][127] = '\0';
     /* Copy pending constraint name if set */
-    strncpy(g_fkNames[g_fkCount], g_pendingConstraintName, 127);
-    g_fkNames[g_fkCount][127] = '\0';
-    g_pendingConstraintName[0] = '\0';
+    strncpy(g_constr.fkNames[g_constr.fkCount], g_constr.pendingConstraintName, 127);
+    g_constr.fkNames[g_constr.fkCount][127] = '\0';
+    g_constr.pendingConstraintName[0] = '\0';
 
-    g_fkCount++;
+    g_constr.fkCount++;
 
-    g_fkCurLocalCols[0] = '\0';
-    g_fkCurRefCols[0] = '\0';
+    g_constr.fkCurLocalCols[0] = '\0';
+    g_constr.fkCurRefCols[0] = '\0';
 }
 
 /* ----------------------------------------------------------------
@@ -433,14 +433,14 @@ int CreateTableProcess(void)
 {
     int padSize;
 
-    /* Count columns from g_columnDefs (format: "col1;col2;col3") */
+    /* Count columns from g_create.columnDefs (format: "col1;col2;col3") */
     int numCols = 0;
     char colNameArr[64][128];
     {
         char tmp[1024];
         char *tok;
-        if (g_columnDefs[0] != '\0') {
-            strcpy(tmp, g_columnDefs);
+        if (g_create.columnDefs[0] != '\0') {
+            strcpy(tmp, g_create.columnDefs);
             tok = strtok(tmp, ";");
             while (tok && numCols < 64) {
                 strncpy(colNameArr[numCols], tok, 127);
@@ -458,17 +458,17 @@ int CreateTableProcess(void)
     }
 
     /* Compute pad size */
-    padSize = g_totalColumnSize + numCols;
+    padSize = g_create.totalColumnSize + numCols;
     if (padSize < RECORD_PAD_SIZE)
         padSize = RECORD_PAD_SIZE;
 
-    /* Parse type encodings from g_columnTypeDefs */
+    /* Parse type encodings from g_create.columnTypeDefs */
     int typeVals[64];
     int numTypes = 0;
     {
         char tmp[1024];
         char *tok;
-        strcpy(tmp, g_columnTypeDefs);
+        strcpy(tmp, g_create.columnTypeDefs);
         tok = strtok(tmp, ";");
         while (tok && numTypes < 64) {
             typeVals[numTypes++] = atoi(tok);
@@ -482,7 +482,7 @@ int CreateTableProcess(void)
     {
         char tmp[1024];
         char *tok;
-        strcpy(tmp, g_columnNullFlags);
+        strcpy(tmp, g_create.columnNullFlags);
         tok = strtok(tmp, ";");
         while (tok && numNulls < 64) {
             nullFlags[numNulls++] = atoi(tok);
@@ -496,7 +496,7 @@ int CreateTableProcess(void)
     {
         char tmp[1024];
         char *tok;
-        strcpy(tmp, g_columnUniqueFlags);
+        strcpy(tmp, g_create.columnUniqueFlags);
         tok = strtok(tmp, ";");
         while (tok && numUniques < 64) {
             uniqueFlags[numUniques++] = atoi(tok);
@@ -510,7 +510,7 @@ int CreateTableProcess(void)
     {
         char tmp[4096];
         char *tok;
-        strcpy(tmp, g_columnDefaults);
+        strcpy(tmp, g_create.columnDefaults);
         tok = strtok(tmp, ";");
         while (tok && numDefaults < 64) {
             strncpy(defaultVals[numDefaults], tok, 255);
@@ -523,19 +523,19 @@ int CreateTableProcess(void)
     /* Resolve PK column indices */
     int pkIndices[16];
     int pkCount = 0;
-    if (g_pkColumnCount > 0) {
+    if (g_create.pkColumnCount > 0) {
         /* Table-level PRIMARY KEY (col1, col2, ...) */
-        for (int p = 0; p < g_pkColumnCount; p++) {
+        for (int p = 0; p < g_create.pkColumnCount; p++) {
             for (int j = 0; j < numCols; j++) {
-                if (strcasecmp(g_pkColumnNames[p], colNameArr[j]) == 0) {
+                if (strcasecmp(g_create.pkColumnNames[p], colNameArr[j]) == 0) {
                     pkIndices[pkCount++] = j;
                     break;
                 }
             }
         }
-    } else if (g_primaryKeyIndex >= 0) {
+    } else if (g_create.primaryKeyIndex >= 0) {
         /* Single-column PK from column definition */
-        pkIndices[0] = g_primaryKeyIndex;
+        pkIndices[0] = g_create.primaryKeyIndex;
         pkCount = 1;
     }
 
@@ -553,9 +553,9 @@ int CreateTableProcess(void)
         } else {
             strcpy(cols[i].default_val, "\x01NONE\x01");
         }
-        cols[i].generated_mode = (i < 64) ? g_columnGeneratedModes[i] : 0;
-        if (i < 64 && g_columnGeneratedExprs[i][0]) {
-            strncpy(cols[i].generated_expr, g_columnGeneratedExprs[i], 511);
+        cols[i].generated_mode = (i < 64) ? g_create.columnGeneratedModes[i] : 0;
+        if (i < 64 && g_create.columnGeneratedExprs[i][0]) {
+            strncpy(cols[i].generated_expr, g_create.columnGeneratedExprs[i], 511);
             cols[i].generated_expr[511] = '\0';
         } else {
             cols[i].generated_expr[0] = '\0';
@@ -572,80 +572,80 @@ int CreateTableProcess(void)
     DatabaseDesc dbDesc;
     SchemaDesc schDesc;
     if (cat_find_database(g_currentDatabase, &dbDesc) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "database \"%s\" not found", g_currentDatabase);
-        g_gui_error = 1;
+        g_err.error = 1;
         TruncateCreate();
         return -1;
     }
     if (cat_find_schema(dbDesc.db_id, g_currentSchema, &schDesc) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "schema \"%s\" not found", g_currentSchema);
-        g_gui_error = 1;
+        g_err.error = 1;
         TruncateCreate();
         return -1;
     }
 
-    /* Extract table name from g_tblName path */
+    /* Extract table name from g_create.tblName path */
     char tableName[CAT_MAX_NAME_LEN];
-    tapi_basename(g_tblName, tableName, sizeof(tableName));
+    tapi_basename(g_create.tblName, tableName, sizeof(tableName));
 
     /* Create table in catalog (also creates PK B+ tree internally) */
     int rc = cat_create_table(schDesc.schema_id, tableName,
                               cols, numCols, padSize,
-                              g_autoIncColIndex,
-                              g_autoIncStart - g_autoIncStep,
-                              g_autoIncStep,
-                              g_isTemporary, g_onCommitDelete);
+                              g_create.autoIncColIndex,
+                              g_create.autoIncStart - g_create.autoIncStep,
+                              g_create.autoIncStep,
+                              g_create.isTemporary, g_create.onCommitDelete);
     if (rc >= 0) {
-        g_lastCreatedTableId = (uint32_t)rc;  /* save for temp table tracking */
+        g_create.lastCreatedTableId = (uint32_t)rc;  /* save for temp table tracking */
     }
     if (rc < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table \"%s\" already exists", tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_TABLE);
         TruncateCreate();
         return -1;
     }
 
     /* Store CHECK constraints in catalog */
-    if (g_checkCount > 0) {
+    if (g_constr.checkCount > 0) {
         TableDesc td;
         if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
-            for (int ci = 0; ci < g_checkCount; ci++) {
+            for (int ci = 0; ci < g_constr.checkCount; ci++) {
                 /* Auto-generate name if not specified */
                 char cname[128];
-                if (g_checkNames[ci][0] != '\0') {
-                    strncpy(cname, g_checkNames[ci], sizeof(cname) - 1);
+                if (g_constr.checkNames[ci][0] != '\0') {
+                    strncpy(cname, g_constr.checkNames[ci], sizeof(cname) - 1);
                 } else {
                     snprintf(cname, sizeof(cname), "%s_check_%d", tableName, ci + 1);
                 }
                 cat_add_constraint(td.table_id, 'C', cname,
-                                   g_checkSerialized[ci], 0, "");
+                                   g_constr.checkSerialized[ci], 0, "");
             }
         }
     }
 
     /* Store FOREIGN KEY constraints in catalog */
-    if (g_fkCount > 0) {
+    if (g_constr.fkCount > 0) {
         TableDesc td;
         if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
-            for (int fi = 0; fi < g_fkCount; fi++) {
+            for (int fi = 0; fi < g_constr.fkCount; fi++) {
                 /* Resolve referenced table (cross-schema if specified) */
                 TableDesc refTd;
                 char refPath[1024];
-                if (g_fkRefSchema[fi][0] != '\0') {
+                if (g_constr.fkRefSchema[fi][0] != '\0') {
                     snprintf(refPath, sizeof(refPath), "root/%s/%s/%s",
-                             g_currentDatabase, g_fkRefSchema[fi], g_fkRefTable[fi]);
+                             g_currentDatabase, g_constr.fkRefSchema[fi], g_constr.fkRefTable[fi]);
                 } else {
-                    db_table_path(g_fkRefTable[fi], refPath, sizeof(refPath));
+                    db_table_path(g_constr.fkRefTable[fi], refPath, sizeof(refPath));
                 }
                 if (tapi_resolve(refPath, &refTd, NULL, NULL) < 0) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "referenced table \"%s\" does not exist",
-                             g_fkRefTable[fi]);
-                    g_gui_error = 1;
+                             g_constr.fkRefTable[fi]);
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE("42P01");
                     TruncateCreate();
                     return -1;
@@ -654,41 +654,41 @@ int CreateTableProcess(void)
                 /* Build definition: "local_cols|on_delete|on_update|match_type|deferrable" */
                 char definition[1024];
                 snprintf(definition, sizeof(definition), "%s|%d|%d|%d|%d",
-                         g_fkLocalCols[fi],
-                         g_fkOnDelete[fi],
-                         g_fkOnUpdate[fi],
-                         g_fkMatchType[fi],
-                         g_fkDeferrable[fi]);
+                         g_constr.fkLocalCols[fi],
+                         g_constr.fkOnDelete[fi],
+                         g_constr.fkOnUpdate[fi],
+                         g_constr.fkMatchType[fi],
+                         g_constr.fkDeferrable[fi]);
 
                 /* Auto-generate name if not specified */
                 char cname[128];
-                if (g_fkNames[fi][0] != '\0') {
-                    strncpy(cname, g_fkNames[fi], sizeof(cname) - 1);
+                if (g_constr.fkNames[fi][0] != '\0') {
+                    strncpy(cname, g_constr.fkNames[fi], sizeof(cname) - 1);
                 } else {
                     snprintf(cname, sizeof(cname), "%s_%s_fkey",
-                             tableName, g_fkLocalCols[fi]);
+                             tableName, g_constr.fkLocalCols[fi]);
                 }
                 cat_add_constraint(td.table_id, 'F', cname, definition,
-                                   refTd.table_id, g_fkRefCols[fi]);
+                                   refTd.table_id, g_constr.fkRefCols[fi]);
             }
         }
     }
 
     /* Store table-level UNIQUE constraints in catalog */
-    if (g_uniqueCount > 0) {
+    if (g_constr.uniqueCount > 0) {
         TableDesc td;
         if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
-            for (int ui = 0; ui < g_uniqueCount; ui++) {
+            for (int ui = 0; ui < g_constr.uniqueCount; ui++) {
                 /* Auto-generate name if not specified */
                 char cname[128];
-                if (g_uniqueNames[ui][0] != '\0') {
-                    strncpy(cname, g_uniqueNames[ui], sizeof(cname) - 1);
+                if (g_constr.uniqueNames[ui][0] != '\0') {
+                    strncpy(cname, g_constr.uniqueNames[ui], sizeof(cname) - 1);
                 } else {
                     snprintf(cname, sizeof(cname), "%s_%s_key",
-                             tableName, g_uniqueLocalCols[ui]);
+                             tableName, g_constr.uniqueLocalCols[ui]);
                 }
                 cat_add_constraint(td.table_id, 'U', cname,
-                                   g_uniqueLocalCols[ui], 0, "");
+                                   g_constr.uniqueLocalCols[ui], 0, "");
             }
         }
     }
@@ -708,116 +708,116 @@ void TruncateCreate(void)
     int i;
 
     for (i = 0; i < 1024; ++i) {
-        g_tblName[i] = '\0';
-        g_columnDefs[i] = '\0';
-        g_columnTypeDefs[i] = '\0';
-        g_columnNullFlags[i] = '\0';
-        g_columnUniqueFlags[i] = '\0';
+        g_create.tblName[i] = '\0';
+        g_create.columnDefs[i] = '\0';
+        g_create.columnTypeDefs[i] = '\0';
+        g_create.columnNullFlags[i] = '\0';
+        g_create.columnUniqueFlags[i] = '\0';
     }
-    memset(g_columnDefaults, 0, sizeof(g_columnDefaults));
-    g_currentColDefault[0] = '\0';
-    g_totalColumnSize = 0;
-    g_primaryKeyIndex = -1;
-    g_columnCount = 0;
-    g_currentColNotNull = 0;
-    g_currentColPrimaryKey = 0;
-    g_currentColUnique = 0;
-    g_currentColAutoIncrement = 0;
-    g_autoIncColIndex = -1;
-    g_autoIncStart = 1;
-    g_autoIncStep = 1;
-    g_pkColumnCount = 0;
-    memset(g_pkColumnNames, 0, sizeof(g_pkColumnNames));
+    memset(g_create.columnDefaults, 0, sizeof(g_create.columnDefaults));
+    g_create.currentColDefault[0] = '\0';
+    g_create.totalColumnSize = 0;
+    g_create.primaryKeyIndex = -1;
+    g_create.columnCount = 0;
+    g_create.currentColNotNull = 0;
+    g_create.currentColPrimaryKey = 0;
+    g_create.currentColUnique = 0;
+    g_create.currentColAutoIncrement = 0;
+    g_create.autoIncColIndex = -1;
+    g_create.autoIncStart = 1;
+    g_create.autoIncStep = 1;
+    g_create.pkColumnCount = 0;
+    memset(g_create.pkColumnNames, 0, sizeof(g_create.pkColumnNames));
 
     /* Reset FK state */
-    g_fkCount = 0;
-    memset(g_fkLocalCols, 0, sizeof(g_fkLocalCols));
-    memset(g_fkRefTable, 0, sizeof(g_fkRefTable));
-    memset(g_fkRefCols, 0, sizeof(g_fkRefCols));
-    memset(g_fkOnDelete, 0, sizeof(g_fkOnDelete));
-    memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
-    memset(g_fkMatchType, 0, sizeof(g_fkMatchType));
-    memset(g_fkDeferrable, 0, sizeof(g_fkDeferrable));
-    memset(g_fkRefSchema, 0, sizeof(g_fkRefSchema));
-    memset(g_fkNames, 0, sizeof(g_fkNames));
-    g_fkCurLocalCols[0] = '\0';
-    g_fkCurRefCols[0] = '\0';
+    g_constr.fkCount = 0;
+    memset(g_constr.fkLocalCols, 0, sizeof(g_constr.fkLocalCols));
+    memset(g_constr.fkRefTable, 0, sizeof(g_constr.fkRefTable));
+    memset(g_constr.fkRefCols, 0, sizeof(g_constr.fkRefCols));
+    memset(g_constr.fkOnDelete, 0, sizeof(g_constr.fkOnDelete));
+    memset(g_constr.fkOnUpdate, 0, sizeof(g_constr.fkOnUpdate));
+    memset(g_constr.fkMatchType, 0, sizeof(g_constr.fkMatchType));
+    memset(g_constr.fkDeferrable, 0, sizeof(g_constr.fkDeferrable));
+    memset(g_constr.fkRefSchema, 0, sizeof(g_constr.fkRefSchema));
+    memset(g_constr.fkNames, 0, sizeof(g_constr.fkNames));
+    g_constr.fkCurLocalCols[0] = '\0';
+    g_constr.fkCurRefCols[0] = '\0';
 
     /* Reset UNIQUE state */
-    g_uniqueCount = 0;
-    memset(g_uniqueLocalCols, 0, sizeof(g_uniqueLocalCols));
-    memset(g_uniqueNames, 0, sizeof(g_uniqueNames));
-    g_uniqueCurCols[0] = '\0';
+    g_constr.uniqueCount = 0;
+    memset(g_constr.uniqueLocalCols, 0, sizeof(g_constr.uniqueLocalCols));
+    memset(g_constr.uniqueNames, 0, sizeof(g_constr.uniqueNames));
+    g_constr.uniqueCurCols[0] = '\0';
 }
 
 int GetTableName(char *name)
 {
-    db_table_path(name, g_tblName, sizeof(g_tblName));
+    db_table_path(name, g_create.tblName, sizeof(g_create.tblName));
 
     return 0;
 }
 
 int GetColumnNames(char *name)
 {
-    if (g_columnDefs[0] != '\0')
-        strcat(g_columnDefs, ";");
-    strcat(g_columnDefs, name);
+    if (g_create.columnDefs[0] != '\0')
+        strcat(g_create.columnDefs, ";");
+    strcat(g_create.columnDefs, name);
 
     /* Accumulate NOT NULL flags (e.g. "1;0;1") */
     {
         char buf[4];
-        if (g_columnNullFlags[0] != '\0')
-            strcat(g_columnNullFlags, ";");
-        snprintf(buf, sizeof(buf), "%d", g_currentColNotNull ? 1 : 0);
-        strcat(g_columnNullFlags, buf);
+        if (g_create.columnNullFlags[0] != '\0')
+            strcat(g_create.columnNullFlags, ";");
+        snprintf(buf, sizeof(buf), "%d", g_create.currentColNotNull ? 1 : 0);
+        strcat(g_create.columnNullFlags, buf);
     }
 
     /* Accumulate UNIQUE flags (e.g. "0;1;0") */
     {
         char buf[4];
-        if (g_columnUniqueFlags[0] != '\0')
-            strcat(g_columnUniqueFlags, ";");
-        snprintf(buf, sizeof(buf), "%d", g_currentColUnique ? 1 : 0);
-        strcat(g_columnUniqueFlags, buf);
+        if (g_create.columnUniqueFlags[0] != '\0')
+            strcat(g_create.columnUniqueFlags, ";");
+        snprintf(buf, sizeof(buf), "%d", g_create.currentColUnique ? 1 : 0);
+        strcat(g_create.columnUniqueFlags, buf);
     }
 
     /* Accumulate DEFAULT values */
     {
-        if (g_columnDefaults[0] != '\0')
-            strcat(g_columnDefaults, ";");
-        if (g_currentColDefault[0] != '\0')
-            strcat(g_columnDefaults, g_currentColDefault);
+        if (g_create.columnDefaults[0] != '\0')
+            strcat(g_create.columnDefaults, ";");
+        if (g_create.currentColDefault[0] != '\0')
+            strcat(g_create.columnDefaults, g_create.currentColDefault);
         else
-            strcat(g_columnDefaults, "\x01NONE\x01");
+            strcat(g_create.columnDefaults, "\x01NONE\x01");
     }
 
     /* Record PRIMARY KEY column index */
-    if (g_currentColPrimaryKey)
-        g_primaryKeyIndex = g_columnCount;
+    if (g_create.currentColPrimaryKey)
+        g_create.primaryKeyIndex = g_create.columnCount;
 
     /* Record AUTO_INCREMENT column index */
-    if (g_currentColAutoIncrement)
-        g_autoIncColIndex = g_columnCount;
+    if (g_create.currentColAutoIncrement)
+        g_create.autoIncColIndex = g_create.columnCount;
 
     /* Accumulate generated column info */
-    if (g_columnCount < 64) {
-        g_columnGeneratedModes[g_columnCount] = g_currentColGeneratedMode;
-        if (g_currentColGeneratedExpr[0])
-            strncpy(g_columnGeneratedExprs[g_columnCount], g_currentColGeneratedExpr, 511);
+    if (g_create.columnCount < 64) {
+        g_create.columnGeneratedModes[g_create.columnCount] = g_create.currentColGeneratedMode;
+        if (g_create.currentColGeneratedExpr[0])
+            strncpy(g_create.columnGeneratedExprs[g_create.columnCount], g_create.currentColGeneratedExpr, 511);
         else
-            g_columnGeneratedExprs[g_columnCount][0] = '\0';
+            g_create.columnGeneratedExprs[g_create.columnCount][0] = '\0';
     }
 
-    g_columnCount++;
+    g_create.columnCount++;
 
     /* Reset per-column flags for next column */
-    g_currentColNotNull = 0;
-    g_currentColPrimaryKey = 0;
-    g_currentColUnique = 0;
-    g_currentColDefault[0] = '\0';
-    g_currentColAutoIncrement = 0;
-    g_currentColGeneratedMode = 0;
-    g_currentColGeneratedExpr[0] = '\0';
+    g_create.currentColNotNull = 0;
+    g_create.currentColPrimaryKey = 0;
+    g_create.currentColUnique = 0;
+    g_create.currentColDefault[0] = '\0';
+    g_create.currentColAutoIncrement = 0;
+    g_create.currentColGeneratedMode = 0;
+    g_create.currentColGeneratedExpr[0] = '\0';
 
     return 0;
 }
@@ -828,13 +828,13 @@ int GetColumnSize(int typeVal)
     int size = typeVal % 10000;
     if (size == 0)
         size = 12; /* default for INT, INTEGER, etc. */
-    g_totalColumnSize += size;
+    g_create.totalColumnSize += size;
 
-    /* Accumulate type encoding in g_columnTypeDefs (e.g. "40000;130050") */
-    if (g_columnTypeDefs[0] != '\0')
-        strcat(g_columnTypeDefs, ";");
+    /* Accumulate type encoding in g_create.columnTypeDefs (e.g. "40000;130050") */
+    if (g_create.columnTypeDefs[0] != '\0')
+        strcat(g_create.columnTypeDefs, ";");
     snprintf(buf, sizeof(buf), "%d", typeVal);
-    strcat(g_columnTypeDefs, buf);
+    strcat(g_create.columnTypeDefs, buf);
 
     return size;
 }
@@ -848,9 +848,9 @@ static int resolve_table_for_alter(const char *tableName, TableDesc *td)
     char tblPath[1024];
     db_table_path(tableName, tblPath, sizeof(tblPath));
     if (tapi_resolve(tblPath, td, NULL, NULL) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table \"%s\" does not exist", tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
@@ -866,9 +866,9 @@ int AlterTableAddCheckConstraint(const char *tableName, const char *constraintNa
     char tblPath[1024];
     db_table_path(tableName, tblPath, sizeof(tblPath));
     if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table \"%s\" does not exist", tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
@@ -876,9 +876,9 @@ int AlterTableAddCheckConstraint(const char *tableName, const char *constraintNa
     /* Check for duplicate constraint name */
     ConstraintDesc existing;
     if (cat_find_constraint_by_name(td.table_id, constraintName, &existing) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" already exists", constraintName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42710");
         return -1;
     }
@@ -917,10 +917,10 @@ int AlterTableAddCheckConstraint(const char *tableName, const char *constraintNa
                     }
                 }
                 if (!pass) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "check constraint \"%s\" is violated by existing row %d",
                              constraintName, rowNum);
-                    g_gui_error = 1;
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
                     return -1;
                 }
@@ -945,9 +945,9 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
     char tblPath[1024];
     db_table_path(tableName, tblPath, sizeof(tblPath));
     if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table \"%s\" does not exist", tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
@@ -955,16 +955,16 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
     /* Check for duplicate constraint name */
     ConstraintDesc existing;
     if (cat_find_constraint_by_name(td.table_id, constraintName, &existing) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" already exists", constraintName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42710");
         return -1;
     }
 
     /* Resolve column indices for the UNIQUE columns */
     char colListBuf[256];
-    strncpy(colListBuf, g_uniqueCurCols, sizeof(colListBuf) - 1);
+    strncpy(colListBuf, g_constr.uniqueCurCols, sizeof(colListBuf) - 1);
     colListBuf[sizeof(colListBuf) - 1] = '\0';
     int uqColIndices[16];
     int numUqCols = 0;
@@ -988,7 +988,7 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
         char (*allValues)[1024] = NULL;
         int rowCount = 0, rowCap = 64;
         allValues = malloc(rowCap * sizeof(*allValues));
-        if (!allValues) { g_uniqueCurCols[0] = '\0'; return -1; }
+        if (!allValues) { g_constr.uniqueCurCols[0] = '\0'; return -1; }
 
         TableScanCursor scanCur;
         if (tapi_scan_begin(&td, &scanCur) == 0) {
@@ -997,7 +997,7 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
                 if (rowCount >= rowCap) {
                     rowCap *= 2;
                     allValues = realloc(allValues, rowCap * sizeof(*allValues));
-                    if (!allValues) { g_uniqueCurCols[0] = '\0'; return -1; }
+                    if (!allValues) { g_constr.uniqueCurCols[0] = '\0'; return -1; }
                 }
                 /* Build composite unique value */
                 char composite[1024] = "";
@@ -1022,14 +1022,14 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
         for (int i = 0; i < rowCount; i++) {
             for (int j = i + 1; j < rowCount; j++) {
                 if (strcmp(allValues[i], allValues[j]) == 0) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "could not create unique constraint \"%s\": "
                              "duplicate key value \"%s\"",
                              constraintName, allValues[i]);
-                    g_gui_error = 1;
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                     free(allValues);
-                    g_uniqueCurCols[0] = '\0';
+                    g_constr.uniqueCurCols[0] = '\0';
                     return -1;
                 }
             }
@@ -1037,8 +1037,8 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
         free(allValues);
     }
 
-    cat_add_constraint(td.table_id, 'U', constraintName, g_uniqueCurCols, 0, "");
-    g_uniqueCurCols[0] = '\0';
+    cat_add_constraint(td.table_id, 'U', constraintName, g_constr.uniqueCurCols, 0, "");
+    g_constr.uniqueCurCols[0] = '\0';
     printf("command(s) completed successfully!..\n");
     return 0;
 }
@@ -1051,22 +1051,22 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
     char tblPath[1024];
     db_table_path(tableName, tblPath, sizeof(tblPath));
     if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table \"%s\" does not exist", tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
 
-    /* Use constraint name from g_pendingConstraintName */
-    const char *cname = g_pendingConstraintName;
+    /* Use constraint name from g_constr.pendingConstraintName */
+    const char *cname = g_constr.pendingConstraintName;
 
     /* Check for duplicate constraint name */
     ConstraintDesc existing;
     if (cat_find_constraint_by_name(td.table_id, cname, &existing) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" already exists", cname);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42710");
         return -1;
     }
@@ -1076,9 +1076,9 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
     char refPath[1024];
     db_table_path(refTableName, refPath, sizeof(refPath));
     if (tapi_resolve(refPath, &refTd, NULL, NULL) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "referenced table \"%s\" does not exist", refTableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
@@ -1089,7 +1089,7 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
         int fkColIndices[16];
         int numFkCols = 0;
         char colListBuf[256];
-        strncpy(colListBuf, g_fkCurLocalCols, sizeof(colListBuf) - 1);
+        strncpy(colListBuf, g_constr.fkCurLocalCols, sizeof(colListBuf) - 1);
         colListBuf[sizeof(colListBuf) - 1] = '\0';
         char *saveptr = NULL;
         char *colName = strtok_r(colListBuf, ",", &saveptr);
@@ -1130,17 +1130,17 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
 
                 RowID rid;
                 if (bt2_search(&refPkTree, fkValue, &rid) < 0) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "insert or update on table \"%s\" violates foreign key constraint \"%s\" "
                              "(value \"%s\" not found in referenced table \"%s\")",
                              tableName, cname, fkValue, refTd.table_name);
-                    g_gui_error = 1;
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                     /* Reset FK state */
-                    g_fkCount = 0;
-                    g_fkCurLocalCols[0] = '\0';
-                    g_fkCurRefCols[0] = '\0';
-                    g_pendingConstraintName[0] = '\0';
+                    g_constr.fkCount = 0;
+                    g_constr.fkCurLocalCols[0] = '\0';
+                    g_constr.fkCurRefCols[0] = '\0';
+                    g_constr.pendingConstraintName[0] = '\0';
                     return -1;
                 }
             }
@@ -1150,18 +1150,18 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
     /* Build definition from accumulated FK state */
     char definition[1024];
     snprintf(definition, sizeof(definition), "%s|%d|%d",
-             g_fkCurLocalCols, g_fkOnDelete[0], g_fkOnUpdate[0]);
+             g_constr.fkCurLocalCols, g_constr.fkOnDelete[0], g_constr.fkOnUpdate[0]);
 
     cat_add_constraint(td.table_id, 'F', cname, definition,
-                       refTd.table_id, g_fkCurRefCols);
+                       refTd.table_id, g_constr.fkCurRefCols);
 
     /* Reset FK state */
-    g_fkCount = 0;
-    g_fkCurLocalCols[0] = '\0';
-    g_fkCurRefCols[0] = '\0';
-    memset(g_fkOnDelete, 0, sizeof(g_fkOnDelete));
-    memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
-    g_pendingConstraintName[0] = '\0';
+    g_constr.fkCount = 0;
+    g_constr.fkCurLocalCols[0] = '\0';
+    g_constr.fkCurRefCols[0] = '\0';
+    memset(g_constr.fkOnDelete, 0, sizeof(g_constr.fkOnDelete));
+    memset(g_constr.fkOnUpdate, 0, sizeof(g_constr.fkOnUpdate));
+    g_constr.pendingConstraintName[0] = '\0';
 
     printf("command(s) completed successfully!..\n");
     return 0;
@@ -1174,10 +1174,10 @@ int AlterTableDropConstraint(const char *tableName, const char *constraintName)
 
     ConstraintDesc cd;
     if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" does not exist on table \"%s\"",
                  constraintName, tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42704");
         return -1;
     }
@@ -1196,10 +1196,10 @@ int AlterTableRenameConstraint(const char *tableName, const char *oldName, const
 
     ConstraintDesc cd;
     if (cat_find_constraint_by_name(td.table_id, oldName, &cd) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" does not exist on table \"%s\"",
                  oldName, tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42704");
         return -1;
     }
@@ -1207,9 +1207,9 @@ int AlterTableRenameConstraint(const char *tableName, const char *oldName, const
     /* Check new name not already in use */
     ConstraintDesc dup;
     if (cat_find_constraint_by_name(td.table_id, newName, &dup) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" already exists", newName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42710");
         return -1;
     }
@@ -1233,10 +1233,10 @@ int AlterTableEnableConstraint(const char *tableName, const char *constraintName
 
     ConstraintDesc cd;
     if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" does not exist on table \"%s\"",
                  constraintName, tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42704");
         return -1;
     }
@@ -1254,10 +1254,10 @@ int AlterTableDisableConstraint(const char *tableName, const char *constraintNam
 
     ConstraintDesc cd;
     if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" does not exist on table \"%s\"",
                  constraintName, tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42704");
         return -1;
     }
@@ -1278,9 +1278,9 @@ int AlterTableAddCheckConstraintNotValid(const char *tableName, const char *cons
 
     ConstraintDesc existing;
     if (cat_find_constraint_by_name(td.table_id, constraintName, &existing) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" already exists", constraintName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42710");
         return -1;
     }
@@ -1300,13 +1300,13 @@ int AlterTableAddForeignKeyConstraintNotValid(const char *tableName, const char 
     TableDesc td;
     if (resolve_table_for_alter(tableName, &td) < 0) return -1;
 
-    const char *cname = g_pendingConstraintName;
+    const char *cname = g_constr.pendingConstraintName;
 
     ConstraintDesc existing;
     if (cat_find_constraint_by_name(td.table_id, cname, &existing) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" already exists", cname);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42710");
         return -1;
     }
@@ -1315,27 +1315,27 @@ int AlterTableAddForeignKeyConstraintNotValid(const char *tableName, const char 
     char refPath[1024];
     db_table_path(refTableName, refPath, sizeof(refPath));
     if (tapi_resolve(refPath, &refTd, NULL, NULL) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "referenced table \"%s\" does not exist", refTableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
 
     char definition[1024];
     snprintf(definition, sizeof(definition), "%s|%d|%d",
-             g_fkCurLocalCols, g_fkOnDelete[0], g_fkOnUpdate[0]);
+             g_constr.fkCurLocalCols, g_constr.fkOnDelete[0], g_constr.fkOnUpdate[0]);
 
     /* NOT VALID: skip existing data validation */
     cat_add_constraint_ex(td.table_id, 'F', cname, definition,
-                          refTd.table_id, g_fkCurRefCols, 1, 0);
+                          refTd.table_id, g_constr.fkCurRefCols, 1, 0);
 
-    g_fkCount = 0;
-    g_fkCurLocalCols[0] = '\0';
-    g_fkCurRefCols[0] = '\0';
-    memset(g_fkOnDelete, 0, sizeof(g_fkOnDelete));
-    memset(g_fkOnUpdate, 0, sizeof(g_fkOnUpdate));
-    g_pendingConstraintName[0] = '\0';
+    g_constr.fkCount = 0;
+    g_constr.fkCurLocalCols[0] = '\0';
+    g_constr.fkCurRefCols[0] = '\0';
+    memset(g_constr.fkOnDelete, 0, sizeof(g_constr.fkOnDelete));
+    memset(g_constr.fkOnUpdate, 0, sizeof(g_constr.fkOnUpdate));
+    g_constr.pendingConstraintName[0] = '\0';
 
     printf("command(s) completed successfully!..\n");
     return 0;
@@ -1349,19 +1349,19 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
     char tblPath[1024];
     db_table_path(tableName, tblPath, sizeof(tblPath));
     if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table \"%s\" does not exist", tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
 
     ConstraintDesc cd;
     if (cat_find_constraint_by_name(td.table_id, constraintName, &cd) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "constraint \"%s\" does not exist on table \"%s\"",
                  constraintName, tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42704");
         return -1;
     }
@@ -1376,9 +1376,9 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
         /* Validate CHECK against all existing rows */
         ExprNode *expr = expr_deserialize(cd.definition);
         if (!expr) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "cannot deserialize check constraint \"%s\"", constraintName);
-            g_gui_error = 1;
+            g_err.error = 1;
             return -1;
         }
 
@@ -1411,10 +1411,10 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
                     }
                 }
                 if (!pass) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "check constraint \"%s\" is violated by existing row %d",
                              constraintName, rowNum);
-                    g_gui_error = 1;
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
                     return -1;
                 }
@@ -1424,9 +1424,9 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
         /* Validate FK against all existing rows */
         TableDesc refTd;
         if (cat_find_table_by_id(cd.ref_table_id, &refTd) < 0) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "referenced table not found for constraint \"%s\"", constraintName);
-            g_gui_error = 1;
+            g_err.error = 1;
             return -1;
         }
 
@@ -1478,11 +1478,11 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
 
                 RowID rid;
                 if (bt2_search(&refPkTree, fkValue, &rid) < 0) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "constraint \"%s\" is violated by existing data "
                              "(value \"%s\" not found in referenced table \"%s\")",
                              constraintName, fkValue, refTd.table_name);
-                    g_gui_error = 1;
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                     return -1;
                 }
@@ -1507,9 +1507,9 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
     char tblPath[1024];
     db_table_path(tableName, tblPath, sizeof(tblPath));
     if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "table \"%s\" does not exist", tableName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
         return -1;
     }
@@ -1517,9 +1517,9 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
     /* Check table doesn't already have a PK */
     for (int c = 0; c < ncols; c++) {
         if (cols[c].is_pk) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "table \"%s\" already has a primary key", tableName);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE("42710");
             return -1;
         }
@@ -1527,21 +1527,21 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
 
     /* Resolve PK column indices from pkColumnNames accumulated by parser */
     int pkColIndices[16];
-    int numPkCols = g_pkColumnCount;
+    int numPkCols = g_create.pkColumnCount;
     for (int p = 0; p < numPkCols; p++) {
         pkColIndices[p] = -1;
         for (int c = 0; c < ncols; c++) {
-            if (strcasecmp(cols[c].col_name, g_pkColumnNames[p]) == 0) {
+            if (strcasecmp(cols[c].col_name, g_create.pkColumnNames[p]) == 0) {
                 pkColIndices[p] = c;
                 break;
             }
         }
         if (pkColIndices[p] < 0) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "column \"%s\" does not exist", g_pkColumnNames[p]);
-            g_gui_error = 1;
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "column \"%s\" does not exist", g_create.pkColumnNames[p]);
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE("42703");
-            g_pkColumnCount = 0;
+            g_create.pkColumnCount = 0;
             return -1;
         }
     }
@@ -1551,7 +1551,7 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
         char (*allKeys)[1024] = NULL;
         int rowCount = 0, rowCap = 64;
         allKeys = malloc(rowCap * sizeof(*allKeys));
-        if (!allKeys) { g_pkColumnCount = 0; return -1; }
+        if (!allKeys) { g_create.pkColumnCount = 0; return -1; }
 
         TableScanCursor scanCur;
         if (tapi_scan_begin(&td, &scanCur) == 0) {
@@ -1573,13 +1573,13 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
                     if (p > 0) strcat(composite, "|");
                     if (pkColIndices[p] < nf) {
                         if (strcmp(fieldArr[pkColIndices[p]], NULL_MARKER) == 0) {
-                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "column \"%s\" contains null values (row %d)",
-                                     g_pkColumnNames[p], rowNum);
-                            g_gui_error = 1;
+                                     g_create.pkColumnNames[p], rowNum);
+                            g_err.error = 1;
                             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
                             free(allKeys);
-                            g_pkColumnCount = 0;
+                            g_create.pkColumnCount = 0;
                             return -1;
                         }
                         strcat(composite, fieldArr[pkColIndices[p]]);
@@ -1595,13 +1595,13 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
         for (int i = 0; i < rowCount; i++) {
             for (int j = i + 1; j < rowCount; j++) {
                 if (strcmp(allKeys[i], allKeys[j]) == 0) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "could not create primary key constraint: "
                              "duplicate key value \"%s\"", allKeys[i]);
-                    g_gui_error = 1;
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                     free(allKeys);
-                    g_pkColumnCount = 0;
+                    g_create.pkColumnCount = 0;
                     return -1;
                 }
             }
@@ -1613,11 +1613,11 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
     char pkDef[256] = "";
     for (int p = 0; p < numPkCols; p++) {
         if (p > 0) strcat(pkDef, ",");
-        strcat(pkDef, g_pkColumnNames[p]);
+        strcat(pkDef, g_create.pkColumnNames[p]);
     }
 
     cat_add_constraint(td.table_id, 'P', constraintName, pkDef, 0, "");
-    g_pkColumnCount = 0;
+    g_create.pkColumnCount = 0;
     printf("command(s) completed successfully!..\n");
     return 0;
 }
@@ -1644,9 +1644,9 @@ int CreateDomainProcess(const char *name, int typeVal, ExprNode *checkExpr,
     /* Check if domain already exists — search with table_id=0 */
     ConstraintDesc existing;
     if (cat_find_constraint_by_name(0, name, &existing) == 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "domain \"%s\" already exists", name);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42710");
         return -1;
     }
