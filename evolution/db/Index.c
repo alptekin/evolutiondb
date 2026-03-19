@@ -357,48 +357,48 @@ int btree_range(const char *path, const char *lo, const char *hi,
 
 void SetIndexInfo(const char *idxName, const char *tblName, const char *colName)
 {
-    strncpy(g_indexName, idxName, sizeof(g_indexName) - 1);
-    g_indexName[sizeof(g_indexName) - 1] = '\0';
-    strncpy(g_indexTableName, tblName, sizeof(g_indexTableName) - 1);
-    g_indexTableName[sizeof(g_indexTableName) - 1] = '\0';
+    strncpy(g_idx.name, idxName, sizeof(g_idx.name) - 1);
+    g_idx.name[sizeof(g_idx.name) - 1] = '\0';
+    strncpy(g_idx.tableName, tblName, sizeof(g_idx.tableName) - 1);
+    g_idx.tableName[sizeof(g_idx.tableName) - 1] = '\0';
     if (colName[0] != '\0') {
-        strncpy(g_indexColumnName, colName, sizeof(g_indexColumnName) - 1);
-        g_indexColumnName[sizeof(g_indexColumnName) - 1] = '\0';
+        strncpy(g_idx.columnName, colName, sizeof(g_idx.columnName) - 1);
+        g_idx.columnName[sizeof(g_idx.columnName) - 1] = '\0';
     }
 }
 
 void SetIndexAddColumn(const char *colName)
 {
-    if (g_indexColumnName[0] != '\0')
-        strcat(g_indexColumnName, ",");
-    strncat(g_indexColumnName, colName, sizeof(g_indexColumnName) - strlen(g_indexColumnName) - 1);
+    if (g_idx.columnName[0] != '\0')
+        strcat(g_idx.columnName, ",");
+    strncat(g_idx.columnName, colName, sizeof(g_idx.columnName) - strlen(g_idx.columnName) - 1);
 }
 
 void SetIndexUnique(void)
 {
-    g_indexUnique = 1;
+    g_idx.unique = 1;
 }
 
 void SetIndexIfNotExists(void)
 {
-    g_indexIfNotExists = 1;
+    g_idx.ifNotExists = 1;
 }
 
 void SetIndexExpression(ExprNode *expr)
 {
     if (!expr) return;
-    expr_serialize(expr, g_indexExprDef, sizeof(g_indexExprDef));
+    expr_serialize(expr, g_idx.exprDef, sizeof(g_idx.exprDef));
 }
 
 void SetIndexUsingHash(void)
 {
-    g_indexUsingHash = 1;
+    g_idx.usingHash = 1;
 }
 
 void SetDropIndexName(const char *idxName)
 {
-    strncpy(g_indexName, idxName, sizeof(g_indexName) - 1);
-    g_indexName[sizeof(g_indexName) - 1] = '\0';
+    strncpy(g_idx.name, idxName, sizeof(g_idx.name) - 1);
+    g_idx.name[sizeof(g_idx.name) - 1] = '\0';
 }
 
 /* ── Build composite index key from multiple column values ── */
@@ -521,24 +521,24 @@ int idx_build_key(const IndexDesc *idx,
 int CreateIndexProcess(void)
 {
     char tblPath[1024];
-    db_table_path(g_indexTableName, tblPath, sizeof(tblPath));
+    db_table_path(g_idx.tableName, tblPath, sizeof(tblPath));
 
     /* Resolve table via catalog */
     TableDesc td;
     ColumnDesc indexCols[CAT_MAX_COLUMNS];
     int indexNCols;
     if (tapi_resolve(tblPath, &td, indexCols, &indexNCols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "table '%s' does not exist", g_indexTableName);
-        g_gui_error = 1;
-        g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table '%s' does not exist", g_idx.tableName);
+        g_err.error = 1;
+        g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0;
         return -1;
     }
 
     /* Verify all columns exist */
     {
         char colCheck[256];
-        strncpy(colCheck, g_indexColumnName, sizeof(colCheck) - 1);
+        strncpy(colCheck, g_idx.columnName, sizeof(colCheck) - 1);
         colCheck[sizeof(colCheck) - 1] = '\0';
         char *ct = strtok(colCheck, ",");
         while (ct) {
@@ -547,11 +547,11 @@ int CreateIndexProcess(void)
                 if (strcasecmp(indexCols[i].col_name, ct) == 0) { found = 1; break; }
             }
             if (!found) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "column '%s' does not exist in table '%s'",
-                         ct, g_indexTableName);
-                g_gui_error = 1;
-                g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
+                         ct, g_idx.tableName);
+                g_err.error = 1;
+                g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0';
                 return -1;
             }
             ct = strtok(NULL, ",");
@@ -563,44 +563,44 @@ int CreateIndexProcess(void)
         IndexDesc existing[16];
         int n = cat_list_indexes(td.table_id, existing, 16);
         for (int i = 0; i < n; i++) {
-            if (strcasecmp(existing[i].col_list, g_indexColumnName) == 0 &&
+            if (strcasecmp(existing[i].col_list, g_idx.columnName) == 0 &&
                 existing[i].index_type != 'P') {
-                if (g_indexIfNotExists) {
-                    g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
+                if (g_idx.ifNotExists) {
+                    g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0;
                     return 0;
                 }
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                         "index already exists on column '%s'", g_indexColumnName);
-                g_gui_error = 1;
-                g_indexUnique = 0; g_indexIfNotExists = 0; g_indexExprDef[0] = '\0';
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "index already exists on column '%s'", g_idx.columnName);
+                g_err.error = 1;
+                g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0';
                 return -1;
             }
         }
     }
 
     /* Create index structure (B+ tree or hash) */
-    int useHash = g_indexUsingHash;
+    int useHash = g_idx.usingHash;
     BTree2 idx_tree = { .root_page = 0 };
     HashIndex hash_idx = { .dir_page = 0 };
     uint32_t idx_root = 0;
 
     if (useHash) {
         if (hash_idx_create(&hash_idx, HASH_DEFAULT_BUCKETS) < 0) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "failed to create hash index");
-            g_gui_error = 1;
-            g_indexUnique = 0; g_indexIfNotExists = 0;
-            g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
+            g_err.error = 1;
+            g_idx.unique = 0; g_idx.ifNotExists = 0;
+            g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0;
             return -1;
         }
         idx_root = hash_idx.dir_page;
     } else {
         if (bt2_create(&idx_tree) < 0) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "failed to create index B+ tree");
-            g_gui_error = 1;
-            g_indexUnique = 0; g_indexIfNotExists = 0;
-            g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
+            g_err.error = 1;
+            g_idx.unique = 0; g_idx.ifNotExists = 0;
+            g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0;
             return -1;
         }
         idx_root = idx_tree.root_page;
@@ -615,13 +615,13 @@ int CreateIndexProcess(void)
             colNames[ci][127] = '\0';
             numCols++;
         }
-        int isComposite = (strchr(g_indexColumnName, ',') != NULL);
-        int isExprIndex = (g_indexExprDef[0] != '\0');
+        int isComposite = (strchr(g_idx.columnName, ',') != NULL);
+        int isExprIndex = (g_idx.exprDef[0] != '\0');
 
         /* Deserialize expression for expression indexes */
         ExprNode *idxExpr = NULL;
         if (isExprIndex)
-            idxExpr = expr_deserialize(g_indexExprDef);
+            idxExpr = expr_deserialize(g_idx.exprDef);
 
         TableScanCursor scanCur;
         char pkBuf[256];
@@ -643,14 +643,14 @@ int CreateIndexProcess(void)
                                   (const char (*)[256])colValues,
                                   numCols, idxKey, sizeof(idxKey));
                 } else if (isComposite) {
-                    build_composite_key_from_record(g_indexColumnName,
+                    build_composite_key_from_record(g_idx.columnName,
                         (const char (*)[128])colNames, numCols,
                         indexCols, indexNCols, recBuf, recLen,
                         idxKey, sizeof(idxKey));
                 } else {
                     int colIdx = -1;
                     for (int ci = 0; ci < numCols; ci++) {
-                        if (strcasecmp(colNames[ci], g_indexColumnName) == 0)
+                        if (strcasecmp(colNames[ci], g_idx.columnName) == 0)
                             { colIdx = ci; break; }
                     }
                     if (colIdx >= 0 && colIdx < nv && !nullArr[colIdx])
@@ -658,21 +658,21 @@ int CreateIndexProcess(void)
                 }
 
                 if (idxKey[0]) {
-                    if (g_indexUnique) {
+                    if (g_idx.unique) {
                         /* Check for duplicate */
                         char dupCheck[1][256];
                         int dupCount = useHash
                             ? hash_idx_search(&hash_idx, idxKey, dupCheck, 1)
                             : sec_idx_search(idx_tree.root_page, idxKey, dupCheck, 1);
                         if (dupCount > 0) {
-                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "could not create unique index: duplicate key '%s'",
                                      idxKey);
-                            g_gui_error = 1;
+                            g_err.error = 1;
                             if (useHash) hash_idx_destroy(&hash_idx);
                             else bt2_destroy(&idx_tree);
-                            g_indexUnique = 0; g_indexIfNotExists = 0;
-                            g_indexExprDef[0] = '\0'; g_indexUsingHash = 0;
+                            g_idx.unique = 0; g_idx.ifNotExists = 0;
+                            g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0;
                             return -1;
                         }
                     }
@@ -700,22 +700,22 @@ int CreateIndexProcess(void)
     /* Register index in catalog */
     char idx_type;
     if (useHash)
-        idx_type = g_indexUnique ? 'V' : 'H';
+        idx_type = g_idx.unique ? 'V' : 'H';
     else
-        idx_type = g_indexUnique ? 'U' : 'N';
-    cat_create_index_ex(td.table_id, g_indexName, idx_root,
-                        g_indexColumnName, idx_type,
-                        g_indexExprDef[0] ? g_indexExprDef : NULL);
+        idx_type = g_idx.unique ? 'U' : 'N';
+    cat_create_index_ex(td.table_id, g_idx.name, idx_root,
+                        g_idx.columnName, idx_type,
+                        g_idx.exprDef[0] ? g_idx.exprDef : NULL);
 
     printf("Index '%s' created on %s(%s)%s%s%s.\n",
-           g_indexName, g_indexTableName, g_indexColumnName,
-           g_indexUnique ? " [UNIQUE]" : "",
+           g_idx.name, g_idx.tableName, g_idx.columnName,
+           g_idx.unique ? " [UNIQUE]" : "",
            useHash ? " [HASH]" : "",
-           g_indexExprDef[0] ? " [EXPRESSION]" : "");
-    g_indexUnique = 0;
-    g_indexIfNotExists = 0;
-    g_indexExprDef[0] = '\0';
-    g_indexUsingHash = 0;
+           g_idx.exprDef[0] ? " [EXPRESSION]" : "");
+    g_idx.unique = 0;
+    g_idx.ifNotExists = 0;
+    g_idx.exprDef[0] = '\0';
+    g_idx.usingHash = 0;
     return 0;
 }
 
@@ -724,18 +724,18 @@ int DropIndexProcess(void)
 {
     /* Find the index by name across all tables */
     IndexDesc idx;
-    if (cat_find_index_by_name(g_indexName, &idx) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "index '%s' does not exist", g_indexName);
-        g_gui_error = 1;
+    if (cat_find_index_by_name(g_idx.name, &idx) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "index '%s' does not exist", g_idx.name);
+        g_err.error = 1;
         return -1;
     }
 
     /* Prevent dropping PK index */
     if (idx.index_type == 'P') {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                 "cannot drop primary key index '%s'", g_indexName);
-        g_gui_error = 1;
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "cannot drop primary key index '%s'", g_idx.name);
+        g_err.error = 1;
         return -1;
     }
 
@@ -749,8 +749,8 @@ int DropIndexProcess(void)
     }
 
     /* Remove from catalog */
-    cat_drop_index(idx.table_id, g_indexName);
+    cat_drop_index(idx.table_id, g_idx.name);
 
-    printf("Index '%s' dropped.\n", g_indexName);
+    printf("Index '%s' dropped.\n", g_idx.name);
     return 0;
 }

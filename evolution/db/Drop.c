@@ -12,14 +12,14 @@ int DropTableProcess(void)
 {
     /* Resolve table via catalog */
     TableDesc td;
-    if (tapi_resolve(g_tblDropName, &td, NULL, NULL) < 0) {
-        if (g_dropIfExists) {
+    if (tapi_resolve(g_drop.tblName, &td, NULL, NULL) < 0) {
+        if (g_drop.ifExists) {
             /* IF EXISTS — silently succeed when table doesn't exist */
             printf("command(s) completed successfully!..\n");
             TruncateDrop();
             return 0;
         }
-        printf("Error: table '%s' not found\n", g_tblDropName);
+        printf("Error: table '%s' not found\n", g_drop.tblName);
         TruncateDrop();
         return -1;
     }
@@ -62,8 +62,8 @@ int TruncateTableProcess(void)
     TableDesc td;
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int ncols;
-    if (tapi_resolve(g_tblDropName, &td, cols, &ncols) < 0) {
-        printf("Error: table '%s' not found\n", g_tblDropName);
+    if (tapi_resolve(g_drop.tblName, &td, cols, &ncols) < 0) {
+        printf("Error: table '%s' not found\n", g_drop.tblName);
         TruncateDrop();
         return -1;
     }
@@ -109,7 +109,7 @@ int TruncateTableProcess(void)
 
 int GetDropTableName(char *pname)
 {
-    db_table_path(pname, g_tblDropName, sizeof(g_tblDropName));
+    db_table_path(pname, g_drop.tblName, sizeof(g_drop.tblName));
     return 0;
 }
 
@@ -118,7 +118,7 @@ int TruncateDrop(void)
     int i;
 
     for (i = 0; i < 1024; ++i) {
-        g_tblDropName[i] = '\0';
+        g_drop.tblName[i] = '\0';
     }
 
     return 0;
