@@ -197,6 +197,8 @@
 %token <intval> TINYINT
 %token TO
 %token TEMPORARY
+%token GLOBAL
+%token PRESERVE
 %token TEXT
 %token TIMESTAMP
 %token TABLE
@@ -1314,6 +1316,8 @@ create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME '.' NAME
 opt_table_options: /* empty */
     | opt_table_options AUTO_INCREMENT COMPARISON INTNUM { emit("TABLE OPT AUTOINC %d", $4); SetTableAutoIncrement($4); }
     | opt_table_options AUTO_INCREMENT INTNUM            { emit("TABLE OPT AUTOINC %d", $3); SetTableAutoIncrement($3); }
+    | opt_table_options ON NAME DELETE NAME              { emit("TABLE OPT ON COMMIT DELETE ROWS"); g_onCommitDelete = 1; }
+    | opt_table_options ON NAME PRESERVE NAME            { emit("TABLE OPT ON COMMIT PRESERVE ROWS"); g_onCommitDelete = 0; }
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
@@ -1335,7 +1339,8 @@ create_select_statement								{ emit("CREATESELECT %d %d 0 %s.%s", $2, $4, $5, 
 ;
 
 opt_temporary: /* nil */							{ $$ = 0; }
-| TEMPORARY									{ $$ = 1;}
+| TEMPORARY									{ $$ = 1; }
+| GLOBAL TEMPORARY							{ $$ = 2; }
 ;
 
 create_col_list: create_definition                                              { $$ = 1; }

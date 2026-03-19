@@ -523,6 +523,7 @@ cleanup:
 
     /* Auto-drop temporary tables for this session */
     session_drop_temp_tables(&session);
+    session_cleanup_gtt(&session);
 
     conn_tls_shutdown(&conn);
     if (pending_query) free(pending_query);

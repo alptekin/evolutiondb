@@ -72,7 +72,8 @@ typedef struct QueryContext {
     int  primaryKeyIndex;
     int  columnCount;
     int  totalColumnSize;
-    int  isTemporary;          /* 1 if CREATE TEMPORARY TABLE */
+    int  isTemporary;          /* 0=normal, 1=LOCAL TEMP, 2=GLOBAL TEMP */
+    int  onCommitDelete;       /* GTT: 1=ON COMMIT DELETE ROWS, 0=PRESERVE */
     uint32_t lastCreatedTableId; /* table_id of last created table (0 = none) */
 
     /* ---- Generated columns (accumulated during CREATE TABLE) ---- */
@@ -236,6 +237,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_columnCount           (g_qctx->columnCount)
 #define g_totalColumnSize       (g_qctx->totalColumnSize)
 #define g_isTemporary           (g_qctx->isTemporary)
+#define g_onCommitDelete        (g_qctx->onCommitDelete)
 #define g_lastCreatedTableId    (g_qctx->lastCreatedTableId)
 
 /* Generated columns */

@@ -232,6 +232,20 @@ void snowflake_init(void);
 /* LAST_INSERT_ID — per-session, synced via SessionCtx in query_executor */
 extern char g_last_insert_id[64];
 
+/* GTT override — per-session storage for global temporary tables.
+ * Set by adaptor before each query, used by tapi_resolve(). */
+#define MAX_GTT_PER_SESSION 32
+
+typedef struct {
+    uint32_t table_id;
+    uint32_t pk_root_page;
+    uint32_t heap_page;
+    int      auto_inc_counter;
+    int      on_commit_delete;  /* cached from catalog for fast COMMIT check */
+} GttOverride;
+extern GttOverride *g_gtt_overrides;
+extern int g_gtt_override_count;
+
 /* tx_undo_fn typedef — used by QueryContext, must be before its include */
 typedef void (*tx_undo_fn)(int op_type, const char *table,
                            const char *key, const char *data);

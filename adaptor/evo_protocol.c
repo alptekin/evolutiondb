@@ -309,6 +309,7 @@ void evo_handle_client(socket_t sock)
 
     /* Auto-drop temporary tables for this session */
     session_drop_temp_tables(&session);
+    session_cleanup_gtt(&session);
 
     conn_tls_shutdown(&conn);
     result_free(rs); free(rs);
