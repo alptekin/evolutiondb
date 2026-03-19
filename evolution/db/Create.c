@@ -596,7 +596,7 @@ int CreateTableProcess(void)
                               g_autoIncColIndex,
                               g_autoIncStart - g_autoIncStep,
                               g_autoIncStep,
-                              g_isTemporary);
+                              g_isTemporary, g_onCommitDelete);
     if (rc >= 0) {
         g_lastCreatedTableId = (uint32_t)rc;  /* save for temp table tracking */
     }

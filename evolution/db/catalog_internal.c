@@ -124,12 +124,12 @@ static void deserialize_schema(const char *buf, SchemaDesc *s)
 /* --- Table --- */
 static void serialize_table(const TableDesc *t, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d",
+    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d",
              t->table_id, t->schema_id, t->table_name,
              t->pk_root_page, t->heap_page,
              t->num_columns, t->pad_size,
              t->auto_inc_col, t->auto_inc_counter, t->auto_inc_step,
-             t->is_temporary);
+             t->is_temporary, t->on_commit_delete);
 }
 
 static void deserialize_table(const char *buf, TableDesc *t)
@@ -151,6 +151,12 @@ static void deserialize_table(const char *buf, TableDesc *t)
         p = next_field(p, field, sizeof(field)); t->is_temporary = atoi(field);
     } else {
         t->is_temporary = 0;
+    }
+    /* on_commit_delete — GTT only, optional */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->on_commit_delete = atoi(field);
+    } else {
+        t->on_commit_delete = 1; /* default: DELETE ROWS */
     }
     (void)p;
 }
@@ -570,7 +576,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
                      const ColumnDesc *cols, int ncols,
                      int pad_size, int auto_inc_col,
                      int auto_inc_start, int auto_inc_step,
-                     int is_temporary)
+                     int is_temporary, int on_commit_delete)
 {
     char key[CAT_MAX_KEY_LEN];
     make_table_key(schema_id, name, key, sizeof(key));
@@ -579,10 +585,13 @@ int cat_create_table(uint32_t schema_id, const char *name,
     if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], key, &existing) == 0)
         return -1;
 
-    /* Create data B+ tree for this table's primary index */
+    /* Create data B+ tree for this table's primary index
+     * GTT: skip — each session allocates lazily */
     BTree2 pk_tree = {0};
-    if (bt2_create(&pk_tree) < 0)
-        return -1;
+    if (is_temporary != 2) {
+        if (bt2_create(&pk_tree) < 0)
+            return -1;
+    }
 
     TableDesc t;
     memset(&t, 0, sizeof(t));
@@ -590,7 +599,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
     t.schema_id = schema_id;
     strncpy(t.table_name, name, CAT_MAX_NAME_LEN - 1);
     t.table_name[CAT_MAX_NAME_LEN - 1] = '\0';
-    t.pk_root_page = pk_tree.root_page;
+    t.pk_root_page = pk_tree.root_page;  /* 0 for GTT */
     t.heap_page = 0;  /* lazy alloc on first insert */
     t.num_columns = ncols;
     t.pad_size = pad_size;
@@ -598,6 +607,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
     t.auto_inc_counter = auto_inc_start;
     t.auto_inc_step = auto_inc_step;
     t.is_temporary = is_temporary;
+    t.on_commit_delete = (is_temporary == 2) ? on_commit_delete : 0;
 
     /* Store table descriptor */
     char record[CAT_MAX_RECORD_LEN];

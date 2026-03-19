@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "result.h"
 #include "transaction.h"
+#include "../evolution/db/database.h"
 
 /* ----------------------------------------------------------------
  *  Per-connection session context
@@ -29,6 +30,10 @@ typedef struct {
     uint32_t  temp_table_ids[64];
     int       temp_table_count;
 
+    /* Global Temporary Table — per-session storage overrides */
+    GttOverride gtt_data[MAX_GTT_PER_SESSION];
+    int       gtt_count;
+
     /* LAST_INSERT_ID — last auto-generated value (per-session) */
     char      last_insert_id[64];
 } SessionCtx;
@@ -50,5 +55,8 @@ void query_engine_init(void);
 
 /* Drop all temporary tables tracked in session context */
 void session_drop_temp_tables(SessionCtx *ctx);
+
+/* Clean up GTT session-private data on disconnect */
+void session_cleanup_gtt(SessionCtx *ctx);
 
 #endif /* QUERY_EXECUTOR_H */
