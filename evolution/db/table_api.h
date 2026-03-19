@@ -109,4 +109,12 @@ int tapi_scan_next(TableScanCursor *cursor,
 /* Walk the heap page chain and free all pages. */
 void tapi_free_heap_pages(const TableDesc *td);
 
+/* GTT: Ensure session-private PK tree exists. Lazy alloc on first INSERT.
+ * Updates g_gtt_overrides with new entry. Returns 0 ok, -1 error. */
+int gtt_ensure_storage(TableDesc *td);
+
+/* GTT: Update override entry after heap/pk changes (INSERT/UPDATE/DELETE). */
+void gtt_update_override(uint32_t table_id, uint32_t pk_root_page,
+                         uint32_t heap_page, int auto_inc_counter);
+
 #endif /* TABLE_API_H */

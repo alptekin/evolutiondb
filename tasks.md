@@ -671,7 +671,7 @@
 
 ---
 
-### Task 33: ⬜ Global Temporary Tables (Feature #93)
+### Task 33: ✅ Global Temporary Tables (Feature #93)
 
 **Goal:** Tables visible to all sessions but data is session-private. `CREATE GLOBAL TEMPORARY TABLE`. In MSSQL (##table) and Oracle (GLOBAL TEMPORARY).
 

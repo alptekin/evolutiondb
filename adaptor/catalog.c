@@ -555,6 +555,24 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 ctx->serializable_locked = 0;
                 mutex_unlock(&g_parse_lock);
             }
+            /* GTT ON COMMIT DELETE ROWS: purge session data */
+            for (int gi = 0; gi < ctx->gtt_count; gi++) {
+                if (ctx->gtt_data[gi].pk_root_page == 0) continue;
+                TableDesc gtd;
+                if (cat_find_table_by_id(ctx->gtt_data[gi].table_id, &gtd) < 0)
+                    continue;
+                if (gtd.on_commit_delete) {
+                    BTree2 pk = { .root_page = ctx->gtt_data[gi].pk_root_page };
+                    bt2_destroy(&pk);
+                    if (ctx->gtt_data[gi].heap_page != 0) {
+                        TableDesc tmpTd = {0};
+                        tmpTd.heap_page = ctx->gtt_data[gi].heap_page;
+                        tapi_free_heap_pages(&tmpTd);
+                    }
+                    ctx->gtt_data[gi].pk_root_page = 0;
+                    ctx->gtt_data[gi].heap_page = 0;
+                }
+            }
         }
         strcpy(rs->command_tag, "COMMIT");
         return 1;

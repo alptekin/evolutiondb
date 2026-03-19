@@ -36,6 +36,25 @@ int tapi_resolve(const char *name_or_path, TableDesc *td,
                           name, td) < 0)
         return -1;
 
+    /* GTT override: swap catalog pk/heap with session-private storage */
+    if (td->is_temporary == 2 && g_gtt_overrides) {
+        int found = 0;
+        for (int i = 0; i < g_gtt_override_count; i++) {
+            if (g_gtt_overrides[i].table_id == td->table_id) {
+                td->pk_root_page = g_gtt_overrides[i].pk_root_page;
+                td->heap_page = g_gtt_overrides[i].heap_page;
+                td->auto_inc_counter = g_gtt_overrides[i].auto_inc_counter;
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            /* Session hasn't touched this GTT yet — empty table */
+            td->pk_root_page = 0;
+            td->heap_page = 0;
+        }
+    }
+
     if (cols && ncols) {
         *ncols = cat_find_columns(td->table_id, cols, CAT_MAX_COLUMNS);
         if (*ncols < 0) return -1;
@@ -82,8 +101,14 @@ RowID tapi_heap_insert(TableDesc *td, const char *record, uint16_t rec_len)
 
     /* Update table's heap_page to point to the new page */
     td->heap_page = new_page;
-    cat_update_heap_page(td->table_id, td->table_name,
-                         td->schema_id, new_page);
+    if (td->is_temporary == 2) {
+        /* GTT: update session override, not catalog */
+        gtt_update_override(td->table_id, td->pk_root_page,
+                            new_page, td->auto_inc_counter);
+    } else {
+        cat_update_heap_page(td->table_id, td->table_name,
+                             td->schema_id, new_page);
+    }
 
     RowID rid = {new_page, (uint16_t)slot};
     return rid;
@@ -248,5 +273,45 @@ void tapi_free_heap_pages(const TableDesc *td)
         uint32_t next = hdr->next_page;
         pgm_free_page(page);
         page = next;
+    }
+}
+
+/* ----------------------------------------------------------------
+ *  GTT: Lazy storage initialization + override management
+ * ---------------------------------------------------------------- */
+
+int gtt_ensure_storage(TableDesc *td)
+{
+    if (td->is_temporary != 2 || td->pk_root_page != 0)
+        return 0;  /* not a GTT or already initialized */
+
+    BTree2 pk_tree = {0};
+    if (bt2_create(&pk_tree) < 0)
+        return -1;
+    td->pk_root_page = pk_tree.root_page;
+    /* heap_page stays 0 — tapi_heap_insert allocates lazily */
+
+    /* Register in override array */
+    if (g_gtt_overrides && g_gtt_override_count < 32) {
+        int idx = g_gtt_override_count++;
+        g_gtt_overrides[idx].table_id = td->table_id;
+        g_gtt_overrides[idx].pk_root_page = pk_tree.root_page;
+        g_gtt_overrides[idx].heap_page = 0;
+        g_gtt_overrides[idx].auto_inc_counter = td->auto_inc_counter;
+    }
+    return 0;
+}
+
+void gtt_update_override(uint32_t table_id, uint32_t pk_root_page,
+                         uint32_t heap_page, int auto_inc_counter)
+{
+    if (!g_gtt_overrides) return;
+    for (int i = 0; i < g_gtt_override_count; i++) {
+        if (g_gtt_overrides[i].table_id == table_id) {
+            g_gtt_overrides[i].pk_root_page = pk_root_page;
+            g_gtt_overrides[i].heap_page = heap_page;
+            g_gtt_overrides[i].auto_inc_counter = auto_inc_counter;
+            return;
+        }
     }
 }

@@ -879,6 +879,15 @@ int InsertProcess(void)
         return -1;
     }
 
+    /* GTT: ensure session-private PK tree exists */
+    if (td.is_temporary == 2 && gtt_ensure_storage(&td) < 0) {
+        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                 "could not allocate storage for global temporary table");
+        g_gui_error = 1;
+        TruncateInsert();
+        return -1;
+    }
+
     /* Split g_insert into rows using ROW_SEP */
     strncpy(allRows, g_insert, sizeof(allRows) - 1);
     allRows[sizeof(allRows) - 1] = '\0';
@@ -1132,8 +1141,14 @@ int InsertProcess(void)
 
     /* Persist AUTO_INCREMENT counter */
     if (autoIncCol >= 0) {
-        cat_update_auto_inc(td.table_id, td.table_name,
-                            td.schema_id, autoIncCounter);
+        if (td.is_temporary == 2) {
+            /* GTT: update session override, not catalog */
+            gtt_update_override(td.table_id, td.pk_root_page,
+                                td.heap_page, autoIncCounter);
+        } else {
+            cat_update_auto_inc(td.table_id, td.table_name,
+                                td.schema_id, autoIncCounter);
+        }
     }
 
     TruncateInsert();

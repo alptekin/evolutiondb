@@ -187,51 +187,53 @@
      TINYINT = 403,
      TO = 404,
      TEMPORARY = 405,
-     TEXT = 406,
-     TIMESTAMP = 407,
-     TABLE = 408,
-     THEN = 409,
-     TRAILING = 410,
-     TRUNCATE = 411,
-     TINYBLOB = 412,
-     TIME = 413,
-     UPDATE = 414,
-     UNSIGNED = 415,
-     UNIQUE = 416,
-     UUID = 417,
-     USING = 418,
-     USE = 419,
-     HASH = 420,
-     VALIDATE = 421,
-     VARCHAR = 422,
-     VALUES = 423,
-     VARBINARY = 424,
-     WHERE = 425,
-     WHEN = 426,
-     WITH = 427,
-     YEAR = 428,
-     YEAR_MONTH = 429,
-     ZEROFILL = 430,
-     EXISTS = 431,
-     FSUBSTRING = 432,
-     FTRIM = 433,
-     FDATE_ADD = 434,
-     FDATE_SUB = 435,
-     FCOUNT = 436,
-     FSUM = 437,
-     FAVG = 438,
-     FMIN = 439,
-     FMAX = 440,
-     FUPPER = 441,
-     FLOWER = 442,
-     FLENGTH = 443,
-     FCONCAT = 444,
-     FREPLACE = 445,
-     FCOALESCE = 446,
-     FGEN_RANDOM_UUID = 447,
-     FGEN_RANDOM_UUID_V7 = 448,
-     FSNOWFLAKE_ID = 449,
-     FLAST_INSERT_ID = 450
+     GLOBAL = 406,
+     PRESERVE = 407,
+     TEXT = 408,
+     TIMESTAMP = 409,
+     TABLE = 410,
+     THEN = 411,
+     TRAILING = 412,
+     TRUNCATE = 413,
+     TINYBLOB = 414,
+     TIME = 415,
+     UPDATE = 416,
+     UNSIGNED = 417,
+     UNIQUE = 418,
+     UUID = 419,
+     USING = 420,
+     USE = 421,
+     HASH = 422,
+     VALIDATE = 423,
+     VARCHAR = 424,
+     VALUES = 425,
+     VARBINARY = 426,
+     WHERE = 427,
+     WHEN = 428,
+     WITH = 429,
+     YEAR = 430,
+     YEAR_MONTH = 431,
+     ZEROFILL = 432,
+     EXISTS = 433,
+     FSUBSTRING = 434,
+     FTRIM = 435,
+     FDATE_ADD = 436,
+     FDATE_SUB = 437,
+     FCOUNT = 438,
+     FSUM = 439,
+     FAVG = 440,
+     FMIN = 441,
+     FMAX = 442,
+     FUPPER = 443,
+     FLOWER = 444,
+     FLENGTH = 445,
+     FCONCAT = 446,
+     FREPLACE = 447,
+     FCOALESCE = 448,
+     FGEN_RANDOM_UUID = 449,
+     FGEN_RANDOM_UUID_V7 = 450,
+     FSNOWFLAKE_ID = 451,
+     FLAST_INSERT_ID = 452
    };
 #endif
 /* Tokens.  */
@@ -383,51 +385,53 @@
 #define TINYINT 403
 #define TO 404
 #define TEMPORARY 405
-#define TEXT 406
-#define TIMESTAMP 407
-#define TABLE 408
-#define THEN 409
-#define TRAILING 410
-#define TRUNCATE 411
-#define TINYBLOB 412
-#define TIME 413
-#define UPDATE 414
-#define UNSIGNED 415
-#define UNIQUE 416
-#define UUID 417
-#define USING 418
-#define USE 419
-#define HASH 420
-#define VALIDATE 421
-#define VARCHAR 422
-#define VALUES 423
-#define VARBINARY 424
-#define WHERE 425
-#define WHEN 426
-#define WITH 427
-#define YEAR 428
-#define YEAR_MONTH 429
-#define ZEROFILL 430
-#define EXISTS 431
-#define FSUBSTRING 432
-#define FTRIM 433
-#define FDATE_ADD 434
-#define FDATE_SUB 435
-#define FCOUNT 436
-#define FSUM 437
-#define FAVG 438
-#define FMIN 439
-#define FMAX 440
-#define FUPPER 441
-#define FLOWER 442
-#define FLENGTH 443
-#define FCONCAT 444
-#define FREPLACE 445
-#define FCOALESCE 446
-#define FGEN_RANDOM_UUID 447
-#define FGEN_RANDOM_UUID_V7 448
-#define FSNOWFLAKE_ID 449
-#define FLAST_INSERT_ID 450
+#define GLOBAL 406
+#define PRESERVE 407
+#define TEXT 408
+#define TIMESTAMP 409
+#define TABLE 410
+#define THEN 411
+#define TRAILING 412
+#define TRUNCATE 413
+#define TINYBLOB 414
+#define TIME 415
+#define UPDATE 416
+#define UNSIGNED 417
+#define UNIQUE 418
+#define UUID 419
+#define USING 420
+#define USE 421
+#define HASH 422
+#define VALIDATE 423
+#define VARCHAR 424
+#define VALUES 425
+#define VARBINARY 426
+#define WHERE 427
+#define WHEN 428
+#define WITH 429
+#define YEAR 430
+#define YEAR_MONTH 431
+#define ZEROFILL 432
+#define EXISTS 433
+#define FSUBSTRING 434
+#define FTRIM 435
+#define FDATE_ADD 436
+#define FDATE_SUB 437
+#define FCOUNT 438
+#define FSUM 439
+#define FAVG 440
+#define FMIN 441
+#define FMAX 442
+#define FUPPER 443
+#define FLOWER 444
+#define FLENGTH 445
+#define FCONCAT 446
+#define FREPLACE 447
+#define FCOALESCE 448
+#define FGEN_RANDOM_UUID 449
+#define FGEN_RANDOM_UUID_V7 450
+#define FSNOWFLAKE_ID 451
+#define FLAST_INSERT_ID 452
 
 
 
@@ -443,7 +447,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 447 "parser/evoparser.tab.h"
+#line 451 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
