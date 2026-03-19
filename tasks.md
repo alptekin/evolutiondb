@@ -614,7 +614,7 @@
 
 ## Day 16 — DEFAULT & Computed Columns
 
-### Task 30: ⬜ Expression-Based DEFAULT Values (Feature #90)
+### Task 30: ✅ Expression-Based DEFAULT Values (Feature #90)
 
 **Goal:** `DEFAULT (col1 + col2)` or `DEFAULT (UPPER(name))` — defaults that reference other columns or expressions. In MySQL 8.0, MSSQL, and Oracle.
 
