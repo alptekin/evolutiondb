@@ -585,10 +585,13 @@ int cat_create_table(uint32_t schema_id, const char *name,
     if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], key, &existing) == 0)
         return -1;
 
-    /* Create data B+ tree for this table's primary index */
+    /* Create data B+ tree for this table's primary index
+     * GTT: skip — each session allocates lazily */
     BTree2 pk_tree = {0};
-    if (bt2_create(&pk_tree) < 0)
-        return -1;
+    if (is_temporary != 2) {
+        if (bt2_create(&pk_tree) < 0)
+            return -1;
+    }
 
     TableDesc t;
     memset(&t, 0, sizeof(t));
@@ -596,7 +599,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
     t.schema_id = schema_id;
     strncpy(t.table_name, name, CAT_MAX_NAME_LEN - 1);
     t.table_name[CAT_MAX_NAME_LEN - 1] = '\0';
-    t.pk_root_page = pk_tree.root_page;
+    t.pk_root_page = pk_tree.root_page;  /* 0 for GTT */
     t.heap_page = 0;  /* lazy alloc on first insert */
     t.num_columns = ncols;
     t.pad_size = pad_size;
@@ -605,13 +608,6 @@ int cat_create_table(uint32_t schema_id, const char *name,
     t.auto_inc_step = auto_inc_step;
     t.is_temporary = is_temporary;
     t.on_commit_delete = (is_temporary == 2) ? on_commit_delete : 0;
-
-    /* For GTT: don't create PK tree yet — each session allocates lazily */
-    if (is_temporary == 2) {
-        /* Destroy the PK tree we just created — not needed in catalog */
-        bt2_destroy(&pk_tree);
-        t.pk_root_page = 0;
-    }
 
     /* Store table descriptor */
     char record[CAT_MAX_RECORD_LEN];

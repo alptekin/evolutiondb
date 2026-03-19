@@ -285,19 +285,34 @@ int gtt_ensure_storage(TableDesc *td)
     if (td->is_temporary != 2 || td->pk_root_page != 0)
         return 0;  /* not a GTT or already initialized */
 
+    /* Check for existing entry (e.g., after ON COMMIT DELETE ROWS reset) */
+    if (g_gtt_overrides) {
+        for (int i = 0; i < g_gtt_override_count; i++) {
+            if (g_gtt_overrides[i].table_id == td->table_id) {
+                /* Re-initialize existing entry */
+                BTree2 pk_tree = {0};
+                if (bt2_create(&pk_tree) < 0) return -1;
+                td->pk_root_page = pk_tree.root_page;
+                g_gtt_overrides[i].pk_root_page = pk_tree.root_page;
+                g_gtt_overrides[i].heap_page = 0;
+                return 0;
+            }
+        }
+    }
+
     BTree2 pk_tree = {0};
     if (bt2_create(&pk_tree) < 0)
         return -1;
     td->pk_root_page = pk_tree.root_page;
-    /* heap_page stays 0 — tapi_heap_insert allocates lazily */
 
-    /* Register in override array */
-    if (g_gtt_overrides && g_gtt_override_count < 32) {
+    /* Register new entry in override array */
+    if (g_gtt_overrides && g_gtt_override_count < MAX_GTT_PER_SESSION) {
         int idx = g_gtt_override_count++;
         g_gtt_overrides[idx].table_id = td->table_id;
         g_gtt_overrides[idx].pk_root_page = pk_tree.root_page;
         g_gtt_overrides[idx].heap_page = 0;
         g_gtt_overrides[idx].auto_inc_counter = td->auto_inc_counter;
+        g_gtt_overrides[idx].on_commit_delete = td->on_commit_delete;
     }
     return 0;
 }

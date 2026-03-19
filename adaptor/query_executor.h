@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "result.h"
 #include "transaction.h"
+#include "../evolution/db/database.h"
 
 /* ----------------------------------------------------------------
  *  Per-connection session context
@@ -30,12 +31,7 @@ typedef struct {
     int       temp_table_count;
 
     /* Global Temporary Table — per-session storage overrides */
-    struct {
-        uint32_t table_id;
-        uint32_t pk_root_page;
-        uint32_t heap_page;
-        int      auto_inc_counter;
-    } gtt_data[32];
+    GttOverride gtt_data[MAX_GTT_PER_SESSION];
     int       gtt_count;
 
     /* LAST_INSERT_ID — last auto-generated value (per-session) */

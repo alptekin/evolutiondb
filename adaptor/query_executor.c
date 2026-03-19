@@ -2387,6 +2387,9 @@ void session_drop_temp_tables(SessionCtx *ctx)
     QueryContext *qctx = qctx_alloc();
     if (!qctx) return;
 
+    /* Acquire parse lock — page manager operations are not thread-safe */
+    mutex_lock(&g_parse_lock);
+
     g_qctx = qctx;
     db_set_current_database(ctx->database);
     db_set_current_schema(ctx->schema);
@@ -2426,6 +2429,8 @@ void session_drop_temp_tables(SessionCtx *ctx)
 
     qctx_free(qctx);
     g_qctx = NULL;
+
+    mutex_unlock(&g_parse_lock);
 }
 
 /* Clean up GTT session-private data on disconnect.
@@ -2437,6 +2442,9 @@ void session_cleanup_gtt(SessionCtx *ctx)
     QueryContext *qctx = qctx_alloc();
     if (!qctx) return;
 
+    /* Acquire parse lock — page manager operations are not thread-safe */
+    mutex_lock(&g_parse_lock);
+
     g_qctx = qctx;
     db_set_current_database(ctx->database);
     db_set_current_schema(ctx->schema);
@@ -2447,11 +2455,9 @@ void session_cleanup_gtt(SessionCtx *ctx)
         fprintf(stderr, "[GTT] Cleaning up session data for table_id=%u\n",
                 ctx->gtt_data[i].table_id);
 
-        /* Destroy session-private PK B+ tree */
         BTree2 pk = { .root_page = ctx->gtt_data[i].pk_root_page };
         bt2_destroy(&pk);
 
-        /* Free session-private heap pages */
         if (ctx->gtt_data[i].heap_page != 0) {
             TableDesc tmpTd = {0};
             tmpTd.heap_page = ctx->gtt_data[i].heap_page;
@@ -2462,6 +2468,8 @@ void session_cleanup_gtt(SessionCtx *ctx)
     ctx->gtt_count = 0;
     qctx_free(qctx);
     g_qctx = NULL;
+
+    mutex_unlock(&g_parse_lock);
 }
 
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
@@ -2493,8 +2501,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         db_set_current_schema(ctx->schema);
         strncpy(g_last_insert_id, ctx->last_insert_id, sizeof(g_last_insert_id) - 1);
         g_last_insert_id[sizeof(g_last_insert_id) - 1] = '\0';
-        /* Set up GTT overrides from session context */
-        g_gtt_overrides = (GttOverride *)ctx->gtt_data;
+        g_gtt_overrides = ctx->gtt_data;
         g_gtt_override_count = ctx->gtt_count;
     }
 
@@ -2856,7 +2863,6 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         ctx->schema[sizeof(ctx->schema) - 1] = '\0';
         strncpy(ctx->last_insert_id, g_last_insert_id, sizeof(ctx->last_insert_id) - 1);
         ctx->last_insert_id[sizeof(ctx->last_insert_id) - 1] = '\0';
-        /* Write back GTT override count (data is shared via pointer) */
         ctx->gtt_count = g_gtt_override_count;
         g_gtt_overrides = NULL;
         g_gtt_override_count = 0;
