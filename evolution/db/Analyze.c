@@ -15,6 +15,7 @@
 #include "database.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "btree2.h"
 
 /* Simple hash set for distinct value tracking (capped) */
 #define DISTINCT_CAP      10000
@@ -194,6 +195,29 @@ int AnalyzeTableProcess(void)
         }
         cs.avg_width = row_count > 0 ? (int)(width_sums[c] / row_count) : 0;
         cat_store_column_stats(&cs);
+    }
+
+    /* Collect and store index statistics */
+    {
+        IndexDesc indexes[32];
+        int nIdx = cat_list_indexes(td.table_id, indexes, 32);
+        for (int i = 0; i < nIdx; i++) {
+            BTree2 idxTree = {0};
+            idxTree.root_page = indexes[i].root_page;
+            BTree2Stats bstats;
+            if (bt2_stats(&idxTree, &bstats) == 0) {
+                IndexStatsDesc ist;
+                memset(&ist, 0, sizeof(ist));
+                ist.table_id = td.table_id;
+                strncpy(ist.index_name, indexes[i].index_name,
+                        CAT_MAX_NAME_LEN - 1);
+                ist.tree_depth = bstats.depth;
+                ist.leaf_pages = bstats.leaf_pages;
+                ist.total_entries = bstats.total_entries;
+                ist.avg_entries_per_leaf = (int)bstats.avg_entries_per_leaf;
+                cat_store_index_stats(&ist);
+            }
+        }
     }
 
     /* Cleanup */

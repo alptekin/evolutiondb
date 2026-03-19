@@ -36,6 +36,16 @@ typedef struct {
 } BTree2Cursor;
 
 /* ----------------------------------------------------------------
+ *  Tree statistics
+ * ---------------------------------------------------------------- */
+typedef struct {
+    int      depth;               /* levels root→leaf (1 = leaf-only) */
+    uint32_t leaf_pages;          /* number of leaf pages */
+    uint64_t total_entries;       /* active (non-deleted) entries */
+    double   avg_entries_per_leaf;
+} BTree2Stats;
+
+/* ----------------------------------------------------------------
  *  Tree operations
  * ---------------------------------------------------------------- */
 
@@ -82,5 +92,9 @@ int bt2_cursor_seek(BTree2 *tree, const char *key, BTree2Cursor *cur);
 
 /* Free all pages belonging to the tree (for DROP TABLE). */
 void bt2_destroy(BTree2 *tree);
+
+/* Compute tree statistics: depth, leaf/entry counts.
+ * Returns 0 on success, -1 if tree is empty. */
+int bt2_stats(BTree2 *tree, BTree2Stats *out);
 
 #endif /* BTREE2_H */
