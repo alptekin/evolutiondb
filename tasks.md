@@ -631,7 +631,7 @@
 
 ---
 
-### Task 31: ⬜ Generated / Computed Columns (Feature #91)
+### Task 31: ✅ Generated / Computed Columns (Feature #91)
 
 **Goal:** `col AS (expr) STORED` or `col AS (expr) VIRTUAL`. STORED = physically stored, VIRTUAL = computed on read. In MySQL, MSSQL, and Oracle.
 
@@ -652,7 +652,7 @@
 
 ## Day 17 — Type System & Temp Table Enhancements
 
-### Task 32: ⬜ UUID Binary Storage — 16-byte Native Type (Feature #92)
+### Task 32: ✅ UUID Binary Storage — 16-byte Native Type (Feature #92)
 
 **Goal:** Store UUID internally as 16 bytes instead of 36-char string. Accept/output canonical string format, store as binary for 2.25x space savings and faster comparison. In MySQL (BINARY(16)), MSSQL (uniqueidentifier), and Oracle (RAW(16)).
 
