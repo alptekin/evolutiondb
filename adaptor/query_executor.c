@@ -1886,6 +1886,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_indexUnique = 0;
     g_indexIfNotExists = 0;
     g_isTemporary = 0;
+    g_onCommitDelete = 1;  /* default: ON COMMIT DELETE ROWS */
     g_lastCreatedTableId = 0;
     g_insert[0] = '\0';
     g_deleteCount = 0;
@@ -2427,6 +2428,42 @@ void session_drop_temp_tables(SessionCtx *ctx)
     g_qctx = NULL;
 }
 
+/* Clean up GTT session-private data on disconnect.
+ * Unlike local temp tables, the table DEFINITION stays in catalog. */
+void session_cleanup_gtt(SessionCtx *ctx)
+{
+    if (!ctx || ctx->gtt_count <= 0) return;
+
+    QueryContext *qctx = qctx_alloc();
+    if (!qctx) return;
+
+    g_qctx = qctx;
+    db_set_current_database(ctx->database);
+    db_set_current_schema(ctx->schema);
+
+    for (int i = 0; i < ctx->gtt_count; i++) {
+        if (ctx->gtt_data[i].pk_root_page == 0) continue;
+
+        fprintf(stderr, "[GTT] Cleaning up session data for table_id=%u\n",
+                ctx->gtt_data[i].table_id);
+
+        /* Destroy session-private PK B+ tree */
+        BTree2 pk = { .root_page = ctx->gtt_data[i].pk_root_page };
+        bt2_destroy(&pk);
+
+        /* Free session-private heap pages */
+        if (ctx->gtt_data[i].heap_page != 0) {
+            TableDesc tmpTd = {0};
+            tmpTd.heap_page = ctx->gtt_data[i].heap_page;
+            tapi_free_heap_pages(&tmpTd);
+        }
+    }
+
+    ctx->gtt_count = 0;
+    qctx_free(qctx);
+    g_qctx = NULL;
+}
+
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
@@ -2456,6 +2493,9 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         db_set_current_schema(ctx->schema);
         strncpy(g_last_insert_id, ctx->last_insert_id, sizeof(g_last_insert_id) - 1);
         g_last_insert_id[sizeof(g_last_insert_id) - 1] = '\0';
+        /* Set up GTT overrides from session context */
+        g_gtt_overrides = (GttOverride *)ctx->gtt_data;
+        g_gtt_override_count = ctx->gtt_count;
     }
 
     /* First, try catalog/internal queries (before normalization) */
@@ -2791,8 +2831,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* Real EvoSQL query */
     execute_via_parser(normalized, rs, ctx);
 
-    /* Register temporary table in session context */
-    if (ctx && !rs->has_error && g_isTemporary && g_lastCreatedTableId > 0) {
+    /* Register local temporary table in session context (auto-drop on disconnect) */
+    if (ctx && !rs->has_error && g_isTemporary == 1 && g_lastCreatedTableId > 0) {
         if (ctx->temp_table_count < 64) {
             ctx->temp_table_ids[ctx->temp_table_count++] = g_lastCreatedTableId;
             fprintf(stderr, "[TEMP] Registered temporary table (id=%u) for session\n",
@@ -2816,5 +2856,9 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         ctx->schema[sizeof(ctx->schema) - 1] = '\0';
         strncpy(ctx->last_insert_id, g_last_insert_id, sizeof(ctx->last_insert_id) - 1);
         ctx->last_insert_id[sizeof(ctx->last_insert_id) - 1] = '\0';
+        /* Write back GTT override count (data is shared via pointer) */
+        ctx->gtt_count = g_gtt_override_count;
+        g_gtt_overrides = NULL;
+        g_gtt_override_count = 0;
     }
 }

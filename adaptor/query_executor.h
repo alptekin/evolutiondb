@@ -29,6 +29,15 @@ typedef struct {
     uint32_t  temp_table_ids[64];
     int       temp_table_count;
 
+    /* Global Temporary Table — per-session storage overrides */
+    struct {
+        uint32_t table_id;
+        uint32_t pk_root_page;
+        uint32_t heap_page;
+        int      auto_inc_counter;
+    } gtt_data[32];
+    int       gtt_count;
+
     /* LAST_INSERT_ID — last auto-generated value (per-session) */
     char      last_insert_id[64];
 } SessionCtx;
@@ -50,5 +59,8 @@ void query_engine_init(void);
 
 /* Drop all temporary tables tracked in session context */
 void session_drop_temp_tables(SessionCtx *ctx);
+
+/* Clean up GTT session-private data on disconnect */
+void session_cleanup_gtt(SessionCtx *ctx);
 
 #endif /* QUERY_EXECUTOR_H */

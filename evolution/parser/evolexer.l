@@ -236,6 +236,8 @@ SQL_SMALL_RESULT		{ return SQL_SMALL_RESULT; }
 STRAIGHT_JOIN			{ return STRAIGHT_JOIN; }
 TABLE					{ return TABLE; }
 TEMPORARY				{ return TEMPORARY; }
+GLOBAL					{ return GLOBAL; }
+PRESERVE				{ return PRESERVE; }
 
 TEXT					{ return TEXT; }
 THEN					{ return THEN; }
