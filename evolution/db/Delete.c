@@ -490,6 +490,8 @@ int DeleteProcess(void)
         free(matchKeys);
 
         g_deleteCount = deleted;
+        if (deleted > 0)
+            cat_increment_dml_counter(td.table_id);
         printf("%d record(s) deleted.\n", deleted);
     } else {
         /* ---------- Legacy PK-based delete ---------- */
@@ -534,6 +536,7 @@ int DeleteProcess(void)
             td.pk_root_page = pk_tree.root_page;
             printf("Record deleted successfully.\n");
             g_deleteCount = 1;
+            cat_increment_dml_counter(td.table_id);
         } else {
             printf("Record not found: %s\n", str);
             g_deleteCount = 0;
