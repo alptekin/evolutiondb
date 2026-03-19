@@ -234,6 +234,11 @@ extern char g_last_insert_id[64];
 
 /* GTT override — per-session storage for global temporary tables.
  * Set by adaptor before each query, used by tapi_resolve(). */
+/* Temporary table type constants */
+#define TEMP_NONE    0
+#define TEMP_LOCAL   1
+#define TEMP_GLOBAL  2
+
 #define MAX_GTT_PER_SESSION 32
 
 typedef struct {

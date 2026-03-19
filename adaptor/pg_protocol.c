@@ -4,16 +4,7 @@
 #include "pg_protocol.h"
 #include "tls.h"
 #include "../evolution/db/database.h"
-
-/* ----------------------------------------------------------------
- *  evo_secure_wipe — local copy to avoid crypto.h / OpenSSL clash
- *  (CWE-14: Compiler Removal of Code to Clear Buffers)
- * ---------------------------------------------------------------- */
-static void *(*const volatile pg_memset_ptr)(void *, int, size_t) = memset;
-static void evo_secure_wipe(void *ptr, size_t len)
-{
-    pg_memset_ptr(ptr, 0, len);
-}
+#include "util.h"
 
 /* ----------------------------------------------------------------
  *  Low-level I/O — use conn_t for TLS-transparent I/O
