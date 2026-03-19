@@ -1127,6 +1127,9 @@ int InsertProcess(void)
 
     printf("command(s) completed successfully!..\n");
 
+    if (g_insertCount > 0)
+        cat_increment_dml_counter(td.table_id);
+
     /* Persist AUTO_INCREMENT counter */
     if (autoIncCol >= 0) {
         cat_update_auto_inc(td.table_id, td.table_name,

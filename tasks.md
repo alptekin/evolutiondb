@@ -515,7 +515,7 @@
 
 ## Day 14 — Index & Query Planner
 
-### Task 26: ⬜ Index Statistics & ANALYZE TABLE (Feature #86)
+### Task 26: ✅ Index Statistics & ANALYZE TABLE (Feature #86)
 
 **Goal:** Collect table/index statistics (row count, distinct values, index depth) to enable future query optimization. In MySQL, MSSQL, and Oracle.
 
@@ -534,7 +534,7 @@
 
 ---
 
-### Task 27: ⬜ LIMIT / TOP for UPDATE & DELETE (Feature #87)
+### Task 27: ✅ LIMIT / TOP for UPDATE & DELETE (Feature #87)
 
 **Goal:** `DELETE FROM t WHERE ... LIMIT 10` and `UPDATE t SET ... WHERE ... LIMIT 5`. In MySQL (LIMIT), MSSQL (TOP), and Oracle (ROWNUM/FETCH FIRST).
 
@@ -555,7 +555,7 @@
 
 ## Day 15 — AUTO_INCREMENT & Identity Enhancements
 
-### Task 28: ⬜ LAST_INSERT_ID() / @@IDENTITY (Feature #88)
+### Task 28: ✅ LAST_INSERT_ID() / @@IDENTITY (Feature #88)
 
 **Goal:** Return the last auto-generated ID (AUTO_INCREMENT or snowflake_id DEFAULT) via `SELECT LAST_INSERT_ID()`. In MySQL and MSSQL (SCOPE_IDENTITY).
 
@@ -574,7 +574,7 @@
 
 ---
 
-### Task 29: ⬜ AUTO_INCREMENT Custom Start Value & Step (Feature #89)
+### Task 29: ✅ AUTO_INCREMENT Custom Start Value & Step (Feature #89)
 
 **Goal:** `AUTO_INCREMENT = 1000` at table level and `SET @@auto_increment_increment = 2`. In MySQL, MSSQL (IDENTITY(start, step)), and Oracle (GENERATED AS IDENTITY(START WITH n INCREMENT BY n)).
 
@@ -590,6 +590,25 @@
 | 8 | Run regression — all test suites pass. | `tests/` |
 | 9 | Full system test. | `Dockerfile` |
 | 10 | Verify counter persists across server restarts. | `tests/test_auto_inc_options.py` |
+
+---
+
+### Task 130: ⬜ @@IDENTITY / SCOPE_IDENTITY() / @@last_insert_id — Session Variable Aliases (Feature #132)
+
+**Goal:** MSSQL `@@IDENTITY`, `SCOPE_IDENTITY()` ve MySQL `@@last_insert_id` session variable'larını destekle. Hepsi mevcut `g_last_insert_id` altyapısına alias olarak bağlanır.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Lexer: `@@IDENTITY` tokeni — `@@` prefix'li identifier pattern ekle veya özel token olarak tanımla. `SCOPE_IDENTITY/"("` fonksiyon tokeni ekle. | `evolexer.l` |
+| 2 | Parser: `@@IDENTITY` expression kuralı — `expr_make_last_insert_id()` döndür (mevcut LAST_INSERT_ID ile aynı altyapı). | `evoparser.y` |
+| 3 | Parser: `SCOPE_IDENTITY '(' ')'` expression kuralı — `expr_make_last_insert_id()` döndür. EvoSQL'de scope ayrımı yok, LAST_INSERT_ID ile eşdeğer. | `evoparser.y` |
+| 4 | Parser: `@@last_insert_id` session variable — `expr_make_last_insert_id()` döndür. `@@` prefix'li variable erişiminin genel çözümü veya özel case. | `evoparser.y` |
+| 5 | `SELECT @@IDENTITY`, `SELECT SCOPE_IDENTITY()`, `SELECT @@last_insert_id` — üçü de aynı değeri döndürmeli. | — |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_identity_aliases.py`: `@@IDENTITY` after AUTO_INCREMENT INSERT, `SCOPE_IDENTITY()` after INSERT, `@@last_insert_id`, üçünün eşitliği, session isolation. | `tests/test_identity_aliases.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
 
 ---
 
@@ -1947,7 +1966,600 @@
 
 ---
 
-## Day 50 — Final Task
+## Day 50–54 — ANALYZE & Query Planner Enhancements
+
+### Task 99: ⬜ Histograms — Equi-Depth & Frequency (Feature #101)
+
+**Goal:** Build histogram support for column statistics. Equi-depth histograms for high-NDV columns, frequency histograms for low-NDV columns. MySQL 8.0 + PostgreSQL model: `ANALYZE TABLE t UPDATE HISTOGRAM ON col WITH n BUCKETS`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Design histogram storage: `HistogramDesc` struct — table_id, col_name, histogram_type ('F'=frequency, 'E'=equi-depth), num_buckets, bucket_bounds[], bucket_counts[]. Serialize as semicolon-delimited string in CAT_SYS_TABLE_STATS tree with key `"%010u:H:%s"`. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 2 | Implement frequency histogram builder — for columns where NDV ≤ num_buckets: store each distinct value + its count. Sort by value. | `evolution/db/Analyze.c` |
+| 3 | Implement equi-depth histogram builder — for columns where NDV > num_buckets: sort all values, divide into N equal-count buckets, store upper bound + cumulative count per bucket. | `evolution/db/Analyze.c` |
+| 4 | Parser: `ANALYZE TABLE t UPDATE HISTOGRAM ON col1, col2 WITH n BUCKETS` and `ANALYZE TABLE t DROP HISTOGRAM ON col1`. Add HISTOGRAM, BUCKETS tokens. | `evolexer.l`, `evoparser.y` |
+| 5 | Default behavior: `ANALYZE TABLE t` without HISTOGRAM clause — auto-build histograms for all columns (default 100 buckets). | `evolution/db/Analyze.c` |
+| 6 | EXPLAIN integration — use histogram for equality selectivity: look up bucket containing value, estimate rows from bucket count. Replace naive `rows/NDV` when histogram exists. | `adaptor/query_executor.c` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_histogram.py`: frequency vs equi-depth auto-selection, UPDATE/DROP HISTOGRAM, skewed data selectivity, uniform data selectivity. | `tests/test_histogram.py` |
+| 9 | Run regression — all test suites pass. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 100: ⬜ Range Selectivity Estimation (Feature #102)
+
+**Goal:** Enable row estimation for range predicates (`>`, `<`, `>=`, `<=`, `BETWEEN`). Use min/max interpolation (no histogram) or histogram bucket interpolation (when histogram exists).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Implement min/max linear interpolation: for `WHERE col > V`, estimate `rows * (max - V) / (max - min)`. Handle numeric and string types. | `adaptor/query_executor.c` |
+| 2 | Implement histogram-based range estimation: find bucket boundaries containing the range endpoints, sum full buckets + interpolate partial buckets. | `adaptor/query_executor.c` |
+| 3 | Extend EXPLAIN WHERE parser to detect `>`, `<`, `>=`, `<=`, `BETWEEN` operators (currently only `=`). | `adaptor/query_executor.c` |
+| 4 | Handle `BETWEEN a AND b` as combined range. | `adaptor/query_executor.c` |
+| 5 | Handle `LIKE 'prefix%'` as range: convert to `>= prefix AND < prefix_next`. | `adaptor/query_executor.c` |
+| 6 | Combined selectivity for AND/OR: `P(A AND B) = P(A) * P(B)`, `P(A OR B) = P(A) + P(B) - P(A)*P(B)` (independence assumption). | `adaptor/query_executor.c` |
+| 7 | Write unit tests — `tests/test_range_selectivity.py`: range estimates with/without histogram, BETWEEN, LIKE prefix, AND/OR combined. | `tests/test_range_selectivity.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 101: ⬜ Statistics System Views (Feature #103)
+
+**Goal:** Expose collected statistics via SQL-queryable views: `pg_stats` (column stats + histograms), `pg_stat_user_tables` (table stats + DML counters), `pg_stat_user_indexes` (index stats). Model after PostgreSQL.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `pg_stats` support to catalog emulation — columns: schemaname, tablename, attname, null_frac, n_distinct, avg_width, most_common_vals, most_common_freqs, histogram_bounds. Read from `cat_get_column_stats()` + `cat_get_histogram()`. | `adaptor/catalog.c` |
+| 2 | Add `pg_stat_user_tables` — columns: relname, n_live_tup (row_count), n_dead_tup (0), n_mod_since_analyze (dml_since_analyze), last_analyze, last_autoanalyze (NULL). Read from `cat_get_table_stats()`. | `adaptor/catalog.c` |
+| 3 | Add `pg_stat_user_indexes` — columns: indexrelname, idx_scan (0), idx_tup_read (total_entries), idx_tup_fetch (0). Plus custom columns: tree_depth, leaf_pages. Read from `cat_get_index_stats()`. | `adaptor/catalog.c` |
+| 4 | Wire views into `SELECT * FROM pg_stats WHERE tablename = 'x'` query path. Support WHERE filtering on tablename/attname. | `adaptor/catalog.c` |
+| 5 | Test via psql/DBeaver: `SELECT * FROM pg_stats`, `SELECT * FROM pg_stat_user_tables`. | Manual |
+| 6 | Write unit tests — `tests/test_stats_views.py`: query pg_stats after ANALYZE, verify row counts, verify null_frac, verify n_distinct. | `tests/test_stats_views.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify DBeaver table statistics tab works. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 102: ⬜ Sample-Based ANALYZE (Feature #104)
+
+**Goal:** `ANALYZE TABLE t WITH SAMPLE n PERCENT` and `ANALYZE TABLE t WITH SAMPLE n ROWS`. Avoid full table scan for large tables. Scale distinct count and null count estimates to total population.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: add `WITH SAMPLE n PERCENT` and `WITH SAMPLE n ROWS` optional clauses to `analyze_table_stmt`. Store sample_pct or sample_rows in QueryContext. | `evolexer.l`, `evoparser.y`, `evolution/db/query_context.h` |
+| 2 | Implement page-based sampling in AnalyzeTableProcess: randomly select `sample_pct%` of heap pages, scan only those pages. Use rand() seeded with time. | `evolution/db/Analyze.c` |
+| 3 | Implement row-based sampling: scan sequentially but skip rows with probability `1 - (sample_rows / estimated_total)`. Use reservoir sampling for exact N. | `evolution/db/Analyze.c` |
+| 4 | Scale estimates: `estimated_total = sampled_count * (total_pages / sampled_pages)`. Distinct count: HyperLogLog or linear scaling with correction factor. Null fraction: `sampled_nulls / sampled_rows`. | `evolution/db/Analyze.c` |
+| 5 | Default: `ANALYZE TABLE t` without SAMPLE clause — auto-select sample size: full scan if < 10K rows, 10% sample if > 10K rows. | `evolution/db/Analyze.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_sample_analyze.py`: sample vs full scan results within 20% margin, SAMPLE 50 PERCENT, SAMPLE 1000 ROWS. | `tests/test_sample_analyze.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 103: ⬜ Auto-Analyze — Threshold-Based Automatic Statistics (Feature #105)
+
+**Goal:** Automatically re-run ANALYZE when DML changes exceed a configurable threshold. PostgreSQL model: trigger when `dml_since_analyze > threshold + scale_factor * row_count`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add server config: `auto_analyze_threshold` (default 50), `auto_analyze_scale_factor` (default 0.1). Read from env vars `EVOSQL_AUTO_ANALYZE_THRESHOLD` and `EVOSQL_AUTO_ANALYZE_SCALE_FACTOR`. | `adaptor/server.c`, `evolution/db/database_globals.c` |
+| 2 | Add `cat_check_staleness()`: compare `dml_since_analyze` against `threshold + scale_factor * row_count`. Return 1 if stale. | `evolution/db/catalog_internal.c` |
+| 3 | Implement auto-analyze trigger point: after query execution completes (not during), check staleness for the touched table. Run ANALYZE asynchronously if stale. | `adaptor/query_executor.c` |
+| 4 | Prevent re-entrant ANALYZE: use a per-table "analyze in progress" flag to avoid concurrent auto-analyze. | `evolution/db/Analyze.c` |
+| 5 | Add `SET auto_analyze = OFF` to disable per-session. | `adaptor/catalog.c` |
+| 6 | Log auto-analyze events: `"AUTO-ANALYZE: table '%s' (%lu DML changes, threshold %lu)"`. | `evolution/db/Analyze.c` |
+| 7 | Write unit tests — `tests/test_auto_analyze.py`: insert > threshold rows, verify stats updated automatically on next query. | `tests/test_auto_analyze.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 104: ⬜ EXPLAIN ANALYZE — Actual vs Estimated Row Counts (Feature #106)
+
+**Goal:** `EXPLAIN ANALYZE SELECT ...` actually executes the query and reports actual row counts alongside estimated counts. PostgreSQL model: `"Seq Scan on t (rows=100) (actual rows=95, time=1.2ms)"`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Detect `EXPLAIN ANALYZE` prefix (vs plain `EXPLAIN`). Strip prefix and parse inner query. | `adaptor/query_executor.c` |
+| 2 | Execute the inner query with instrumentation: wrap SelectProcess with timing (gettimeofday before/after) and actual row counter. | `adaptor/query_executor.c` |
+| 3 | Collect actual metrics: actual_rows (from g_selectCount or result row count), actual_time_ms (wall clock). | `adaptor/query_executor.c` |
+| 4 | Format output: `"Seq Scan on t (est. rows=100) (actual rows=95, time=1.234ms)"`. Include both estimated and actual in same line. | `adaptor/query_executor.c` |
+| 5 | Handle non-SELECT: `EXPLAIN ANALYZE INSERT/UPDATE/DELETE` — report affected_rows and time. | `adaptor/query_executor.c` |
+| 6 | Write unit tests — `tests/test_explain_analyze.py`: compare estimated vs actual, verify timing present, verify INSERT/UPDATE/DELETE support. | `tests/test_explain_analyze.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 105: ⬜ Clustering Factor & Correlation (Feature #107)
+
+**Goal:** Compute clustering factor (Oracle) / correlation (PostgreSQL) during ANALYZE. Measures how well the physical row order matches the index key order. Critical for cost-based index scan vs full scan decision.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `clustering_factor` (uint64_t) and `correlation` (double) fields to `IndexStatsDesc`. Update serialize/deserialize. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 2 | Implement clustering factor computation in `bt2_stats()` or as separate function: scan index leaf chain in key order, for each consecutive pair of RowIDs check if they're on the same heap page. Clustering factor = number of page changes. | `evolution/db/btree2.c` or `evolution/db/Analyze.c` |
+| 3 | Implement correlation computation: Pearson correlation between index key rank and physical RowID rank. Values near ±1.0 = well-clustered, near 0.0 = random. | `evolution/db/Analyze.c` |
+| 4 | Store in catalog via extended `cat_store_index_stats()`. | `evolution/db/catalog_internal.c` |
+| 5 | Expose in EXPLAIN: when clustering_factor is high relative to row_count, note "poorly clustered" in plan output. | `adaptor/query_executor.c` |
+| 6 | Expose in `pg_stat_user_indexes` view (if Task 101 done). | `adaptor/catalog.c` |
+| 7 | Write unit tests — `tests/test_clustering.py`: sequential insert (high correlation), random insert (low correlation), verify values after ANALYZE. | `tests/test_clustering.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 106: ⬜ Cost-Based Optimizer — Index vs Full Scan (Feature #108)
+
+**Goal:** Replace rule-based "always use index if available" with cost-based comparison: estimate I/O cost of full table scan vs index scan + heap lookups. Choose the cheaper plan.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Define cost model constants: `SEQ_PAGE_COST = 1.0`, `RANDOM_PAGE_COST = 4.0`, `CPU_TUPLE_COST = 0.01`, `CPU_INDEX_TUPLE_COST = 0.005` (PostgreSQL defaults). Store as globals, configurable via `SET` commands. | `evolution/db/database_globals.c`, `evolution/db/database.h` |
+| 2 | Implement `cost_seq_scan()`: `cost = page_count * SEQ_PAGE_COST + row_count * CPU_TUPLE_COST`. Uses table stats. | `adaptor/query_executor.c` |
+| 3 | Implement `cost_index_scan()`: `cost = (selectivity * row_count * clustering_factor / page_count) * RANDOM_PAGE_COST + selectivity * row_count * CPU_INDEX_TUPLE_COST + tree_depth * RANDOM_PAGE_COST`. Uses index stats + selectivity estimate. | `adaptor/query_executor.c` |
+| 4 | Plan selection: compute both costs, choose lower. If no stats available, fall back to rule-based (use index). | `adaptor/query_executor.c` |
+| 5 | Show cost in EXPLAIN: `"Seq Scan on t (cost=0.00..35.50 rows=100)"` or `"Index Scan using idx on t (cost=0.28..8.27 rows=1)"`. | `adaptor/query_executor.c` |
+| 6 | Handle edge cases: empty table (always seq scan), no index (always seq scan), PK lookup (always index). | `adaptor/query_executor.c` |
+| 7 | Write unit tests — `tests/test_cost_optimizer.py`: high selectivity prefers index, low selectivity (full scan) prefers seq scan, cost values in EXPLAIN, no-stats fallback. | `tests/test_cost_optimizer.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 107: ⬜ Multi-Column & Expression Statistics (Feature #109)
+
+**Goal:** `CREATE STATISTICS s ON (col1, col2) FROM t` for correlated columns. Also expression statistics for functional indexes. PostgreSQL 10+ model.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `CREATE STATISTICS name ON (col1, col2) FROM table` and `DROP STATISTICS name`. Add STATISTICS token. | `evolexer.l`, `evoparser.y` |
+| 2 | Store multi-column stats in catalog: `MultiColStatsDesc` — stat_name, table_id, col_list, ndistinct (combined NDV), dependency info. New catalog tree `CAT_SYS_MULTI_STATS` or reuse stats tree. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 3 | Compute combined NDV during ANALYZE: scan table, build composite key from (col1, col2), count distinct. | `evolution/db/Analyze.c` |
+| 4 | Use in EXPLAIN: for multi-column WHERE (col1 = X AND col2 = Y), use combined NDV instead of `NDV1 * NDV2` (independence assumption). | `adaptor/query_executor.c` |
+| 5 | Expression statistics: `CREATE STATISTICS s ON (UPPER(col)) FROM t` — reuse expression index infrastructure for key building. | `evolution/db/Analyze.c`, `evolution/db/Index.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_multi_col_stats.py`: correlated columns, combined NDV, expression stats, EXPLAIN with multi-col stats. | `tests/test_multi_col_stats.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 108: ⬜ Column-Specific & Schema-Wide ANALYZE (Feature #110)
+
+**Goal:** `ANALYZE TABLE t (col1, col2)` to analyze specific columns only. `ANALYZE SCHEMA s` / `ANALYZE DATABASE` to analyze all tables in scope.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: extend `analyze_table_stmt` to accept optional column list: `ANALYZE TABLE name '(' column_list ')'`. | `evoparser.y` |
+| 2 | Store column list in QueryContext. In AnalyzeTableProcess, if column list provided, only compute stats for those columns (skip others). | `evolution/db/query_context.h`, `evolution/db/Analyze.c` |
+| 3 | Parser: `ANALYZE SCHEMA name` rule. | `evoparser.y` |
+| 4 | Implement AnalyzeSchemaProcess: iterate all tables in schema via `cat_list_tables()`, call AnalyzeTableProcess for each. | `evolution/db/Analyze.c` |
+| 5 | Parser: `ANALYZE DATABASE name` rule. | `evoparser.y` |
+| 6 | Implement AnalyzeDatabaseProcess: iterate all schemas via `cat_list_schemas()`, then all tables per schema. | `evolution/db/Analyze.c` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_analyze_scope.py`: column-specific analyze, schema-wide analyze, database-wide analyze. | `tests/test_analyze_scope.py` |
+| 9 | Run regression. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 109: ⬜ Top-N & Hybrid Histograms (Feature #111)
+
+**Goal:** Extend histogram support with Top-N (Oracle 12c) and Hybrid (MySQL 8.0) histogram types. Top-N stores the most frequent values when they cover a significant portion of rows. Hybrid combines singleton buckets for popular values with equi-depth for the rest.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Implement Top-N histogram: during ANALYZE, identify values whose combined frequency exceeds a threshold (e.g., top values covering > 50% of rows). Store as frequency histogram with just those values. | `evolution/db/Analyze.c` |
+| 2 | Implement Hybrid histogram: for remaining values not in Top-N, build equi-depth buckets. Store both MCV (most common values) list and equi-depth bounds in the same histogram. | `evolution/db/Analyze.c` |
+| 3 | Extend `HistogramDesc` to support hybrid type ('H'): add `mcv_values[]`, `mcv_freqs[]` fields alongside bucket bounds. Update serialize/deserialize. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 4 | Auto-selection logic: frequency if NDV ≤ buckets, top-N if top values dominate, hybrid if skewed, equi-depth if uniform. | `evolution/db/Analyze.c` |
+| 5 | EXPLAIN integration: for equality on MCV value, use exact frequency; for non-MCV value, use equi-depth bucket estimation. | `adaptor/query_executor.c` |
+| 6 | Write unit tests — `tests/test_histogram_advanced.py`: top-N detection with Zipf distribution, hybrid histogram, MCV vs non-MCV selectivity. | `tests/test_histogram_advanced.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver/psql. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 110: ⬜ Most Common Values (MCV) Lists (Feature #112)
+
+**Goal:** Store Most Common Values and their frequencies per column during ANALYZE. PostgreSQL model: `most_common_vals` and `most_common_freqs` arrays in `pg_stats`. Used by optimizer for non-uniform selectivity estimation.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Extend `ColumnStatsDesc` with `mcv_values[32][256]` and `mcv_freqs[32]` (top 32 most common values + frequencies). | `evolution/db/catalog_internal.h` |
+| 2 | During ANALYZE, after distinct counting, identify the top-N most frequent values from the `DistinctSet`. Track value→count mapping (extend dset or use separate counter). | `evolution/db/Analyze.c` |
+| 3 | Sort by frequency descending, store top 32 (or configurable `default_statistics_target`). Compute frequency as `count / row_count`. | `evolution/db/Analyze.c` |
+| 4 | Serialize/deserialize MCV arrays to catalog (semicolon-delimited within the column stats record, use `\x1f` separator between value-freq pairs). | `evolution/db/catalog_internal.c` |
+| 5 | EXPLAIN integration: for `WHERE col = 'val'`, first check if val is in MCV list. If yes, use exact frequency. If no, estimate from remaining rows: `(1 - sum(mcv_freqs)) / (NDV - mcv_count)`. | `adaptor/query_executor.c` |
+| 6 | Expose in `pg_stats` view (if Task 101 done): `most_common_vals`, `most_common_freqs` columns. | `adaptor/catalog.c` |
+| 7 | Write unit tests — `tests/test_mcv.py`: skewed data MCV detection, MCV-based selectivity vs naive NDV, MCV exposed in pg_stats. | `tests/test_mcv.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 111: ⬜ Functional Dependency Statistics (Feature #113)
+
+**Goal:** `CREATE STATISTICS s (dependencies) ON col1, col2 FROM t` — detect functional dependencies between columns. PostgreSQL 10+ model. When col1 determines col2, optimizer avoids over-estimating multi-column WHERE selectivity.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: extend `CREATE STATISTICS` (Task 107) to accept optional `(dependencies)` clause. | `evoparser.y` |
+| 2 | Implement dependency detection: for each column pair (A, B), compute `degree_of_dependency = 1 - (NDV(A,B) - NDV(A)) / row_count`. Values close to 1.0 mean A→B dependency. | `evolution/db/Analyze.c` |
+| 3 | Store dependency matrix in catalog: `MultiColStatsDesc.dependencies` — serialized as `"col1=>col2:0.95;col2=>col1:0.02"`. | `evolution/db/catalog_internal.c` |
+| 4 | EXPLAIN integration: when `WHERE col1 = X AND col2 = Y` and strong dependency A→B exists, use `selectivity(A)` instead of `selectivity(A) * selectivity(B)`. | `adaptor/query_executor.c` |
+| 5 | Write unit tests — `tests/test_dependencies.py`: country→city dependency, independent columns, dependency-adjusted selectivity. | `tests/test_dependencies.py` |
+| 6 | Run regression. | `tests/` |
+| 7 | Full system test. | `Dockerfile` |
+| 8 | Verify with DBeaver/psql. | Manual |
+| 9 | Update wiki. | Wiki |
+| 10 | Regenerate parser. | `evolution/parser/` |
+
+---
+
+### Task 112: ⬜ Filtered Statistics (Feature #114)
+
+**Goal:** `CREATE STATISTICS s ON col FROM t WHERE status = 'active'` — statistics computed only for rows matching a filter predicate. SQL Server model. Useful for multi-tenant tables or partitioned-by-value data.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: extend `CREATE STATISTICS` to accept optional `WHERE` clause. Store filter expression in catalog. | `evoparser.y` |
+| 2 | Store filtered stats in catalog: `FilteredStatsDesc` — stat_name, table_id, col_list, filter_expr (serialized RPN), stats values. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 3 | During ANALYZE for filtered stats: evaluate filter predicate per row, only include matching rows in stats computation. Reuse `evaluate_expr()` from expression.c. | `evolution/db/Analyze.c` |
+| 4 | EXPLAIN integration: when WHERE clause matches a filtered stat's filter, use the filtered stats for selectivity. | `adaptor/query_executor.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_filtered_stats.py`: filtered stats on active rows, unfiltered vs filtered selectivity difference. | `tests/test_filtered_stats.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver/psql. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 113: ⬜ Statistics Locking & Freezing (Feature #115)
+
+**Goal:** Prevent statistics from being overwritten by subsequent ANALYZE. Oracle model: `LOCK STATISTICS ON TABLE t` / `UNLOCK STATISTICS ON TABLE t`. SQL Server model: `UPDATE STATISTICS ... WITH NORECOMPUTE`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `LOCK STATISTICS ON TABLE name` and `UNLOCK STATISTICS ON TABLE name`. Add LOCK, UNLOCK, STATISTICS tokens (STATISTICS already added in Task 107). | `evolexer.l`, `evoparser.y` |
+| 2 | Add `stats_locked` (int, 0/1) field to `TableStatsDesc`. Update serialize/deserialize. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 3 | Implement LockStatsProcess / UnlockStatsProcess: set/clear `stats_locked` flag in catalog. | `evolution/db/Analyze.c` |
+| 4 | Guard in AnalyzeTableProcess: if `stats_locked == 1`, print warning and skip analysis (don't overwrite). | `evolution/db/Analyze.c` |
+| 5 | Guard in auto-analyze (if Task 103 done): skip locked tables. | `adaptor/query_executor.c` |
+| 6 | `ANALYZE TABLE t FORCE` — override lock for explicit force-analyze. | `evoparser.y`, `evolution/db/Analyze.c` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_stats_lock.py`: lock, analyze fails silently, unlock, analyze succeeds, FORCE overrides lock. | `tests/test_stats_lock.py` |
+| 9 | Run regression. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 114: ⬜ Manual Statistics Setting (Feature #116)
+
+**Goal:** Allow manually setting statistics values without running ANALYZE. Oracle model: `DBMS_STATS.SET_TABLE_STATS(numrows => 1000000)`. Useful for testing optimizer behavior or when actual ANALYZE is too expensive.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `SET STATISTICS ON TABLE name (ROW_COUNT = n, PAGE_COUNT = n)` and `SET STATISTICS ON TABLE name COLUMN col (DISTINCT_COUNT = n, NULL_COUNT = n)`. | `evoparser.y` |
+| 2 | Implement SetTableStatsProcess: validate parameters, build `TableStatsDesc`, call `cat_store_table_stats()`. | `evolution/db/Analyze.c` |
+| 3 | Implement SetColumnStatsProcess: validate parameters, build `ColumnStatsDesc`, call `cat_store_column_stats()`. | `evolution/db/Analyze.c` |
+| 4 | `RESET STATISTICS ON TABLE name` — delete stored stats, forcing EXPLAIN to show no estimate. | `evolution/db/Analyze.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_manual_stats.py`: set row_count, verify EXPLAIN uses it, set distinct_count, reset stats. | `tests/test_manual_stats.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver/psql. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 115: ⬜ Statistics Export & Import (Feature #117)
+
+**Goal:** Export statistics to a staging table and import them in another environment. Oracle model: `DBMS_STATS.EXPORT_TABLE_STATS` / `IMPORT_TABLE_STATS`. Useful for reproducing production query plans in development.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `EXPORT STATISTICS ON TABLE name TO staging_table` and `IMPORT STATISTICS ON TABLE name FROM staging_table`. Add EXPORT, IMPORT tokens. | `evolexer.l`, `evoparser.y` |
+| 2 | ExportStatsProcess: create staging table with schema (table_name, stat_type, stat_key, stat_value), INSERT all table/column/index stats as rows. | `evolution/db/Analyze.c` |
+| 3 | ImportStatsProcess: SELECT from staging table, parse rows, call `cat_store_table_stats()` / `cat_store_column_stats()` / `cat_store_index_stats()`. | `evolution/db/Analyze.c` |
+| 4 | Handle cross-table-id mapping: when importing, resolve table by name (not ID) since IDs differ between environments. | `evolution/db/Analyze.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_stats_export.py`: export stats, drop and re-create table, import stats, verify EXPLAIN uses imported values. | `tests/test_stats_export.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver/psql. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 116: ⬜ Pending Statistics — Test Before Publish (Feature #118)
+
+**Goal:** Gather statistics into a pending area without affecting the optimizer. Test them with `SET use_pending_statistics = ON`, then publish or discard. Oracle model: `DBMS_STATS.SET_TABLE_PREFS('PUBLISH','FALSE')`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `is_pending` (int, 0/1) field to `TableStatsDesc` and `ColumnStatsDesc`. Pending stats stored alongside published stats with different key prefix (`P:` instead of `_`). | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 2 | Parser: `ANALYZE TABLE t WITH PENDING` — gathers stats but marks them as pending. | `evoparser.y`, `evolution/db/Analyze.c` |
+| 3 | Session variable: `SET use_pending_statistics = ON/OFF`. When ON, EXPLAIN reads pending stats; when OFF, reads published stats. | `adaptor/catalog.c`, `adaptor/query_executor.c` |
+| 4 | `PUBLISH STATISTICS ON TABLE name` — copy pending stats to published, delete pending. | `evolution/db/Analyze.c` |
+| 5 | `DISCARD PENDING STATISTICS ON TABLE name` — delete pending stats without publishing. | `evolution/db/Analyze.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_pending_stats.py`: gather pending, EXPLAIN with/without pending, publish, discard. | `tests/test_pending_stats.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 117: ⬜ EXPLAIN Output Formats — JSON, XML, TEXT (Feature #119)
+
+**Goal:** Support multiple EXPLAIN output formats. PostgreSQL model: `EXPLAIN (FORMAT JSON) SELECT ...`, `EXPLAIN (FORMAT XML) SELECT ...`, `EXPLAIN (FORMAT YAML) SELECT ...`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: detect `EXPLAIN (FORMAT JSON)`, `EXPLAIN (FORMAT XML)`, `EXPLAIN (FORMAT TEXT)` prefix patterns. Default remains TEXT. Store format in a local variable. | `adaptor/query_executor.c` |
+| 2 | Refactor EXPLAIN to build a plan struct (PlanNode: scan_type, table_name, index_name, estimated_rows, cost, filter) instead of directly formatting a string. | `adaptor/query_executor.c` |
+| 3 | TEXT formatter: current single-line format (backward compatible). | `adaptor/query_executor.c` |
+| 4 | JSON formatter: `{"Plan": {"Node Type": "Seq Scan", "Relation Name": "t", "Estimated Rows": 100, "Cost": 35.5}}`. Return as single-column result. | `adaptor/query_executor.c` |
+| 5 | XML formatter: `<Plan><NodeType>Seq Scan</NodeType><RelationName>t</RelationName>...</Plan>`. | `adaptor/query_executor.c` |
+| 6 | YAML formatter: `Plan:\n  Node Type: Seq Scan\n  Relation Name: t\n  ...`. | `adaptor/query_executor.c` |
+| 7 | Write unit tests — `tests/test_explain_formats.py`: TEXT/JSON/XML/YAML output, parse JSON output, verify all fields present. | `tests/test_explain_formats.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver (uses JSON EXPLAIN for plan visualization). | Manual |
+
+---
+
+### Task 118: ⬜ Extended Table & Column Metrics (Feature #120)
+
+**Goal:** Compute additional statistics during ANALYZE: density (1/NDV), average row length, table size in bytes, correlation between column values and physical row order. Exposes via system views.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `density` (double) to `ColumnStatsDesc`: computed as `1.0 / distinct_count` (or 1.0 if distinct_count == 0). Store in catalog. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 2 | Add `avg_row_length` (int) to `TableStatsDesc`: sum of all column `avg_width` values. Computed during ANALYZE. | `evolution/db/catalog_internal.h`, `evolution/db/Analyze.c` |
+| 3 | Add `table_size_bytes` (uint64_t) to `TableStatsDesc`: `page_count * EVO_PAGE_SIZE`. | `evolution/db/catalog_internal.h`, `evolution/db/Analyze.c` |
+| 4 | Compute per-column `correlation` (double): Pearson correlation between column value rank and physical row position. Values near ±1.0 = ordered, near 0 = random. | `evolution/db/Analyze.c` |
+| 5 | Store correlation in `ColumnStatsDesc`. Update serialize/deserialize. | `evolution/db/catalog_internal.h`, `evolution/db/catalog_internal.c` |
+| 6 | Expose all new fields in system views (pg_stats, pg_stat_user_tables) if Task 101 done. | `adaptor/catalog.c` |
+| 7 | Update EXPLAIN to use density instead of computing `1/NDV` on the fly. | `adaptor/query_executor.c` |
+| 8 | Write unit tests — `tests/test_extended_stats.py`: density, avg_row_length, table_size_bytes, correlation values. | `tests/test_extended_stats.py` |
+| 9 | Run regression. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 119: ⬜ TABLESAMPLE Clause (Feature #121)
+
+**Goal:** `SELECT * FROM t TABLESAMPLE BERNOULLI(10)` and `TABLESAMPLE SYSTEM(5)` — return a random sample of rows. PostgreSQL model. Useful for ad-hoc data exploration and manual statistics verification.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `FROM name TABLESAMPLE BERNOULLI '(' number ')'` and `FROM name TABLESAMPLE SYSTEM '(' number ')'`. Add TABLESAMPLE, BERNOULLI, SYSTEM tokens. Store sample method + percentage in QueryContext. | `evolexer.l`, `evoparser.y`, `evolution/db/query_context.h` |
+| 2 | BERNOULLI sampling in SelectProcess: for each row in table scan, include with probability `pct/100` using `rand()`. Row-level granularity — unbiased but scans all pages. | `evolution/db/Select.c` |
+| 3 | SYSTEM sampling in SelectProcess: randomly select `pct%` of heap pages, return all rows from selected pages. Page-level granularity — faster but clustered bias. | `evolution/db/Select.c` |
+| 4 | Optional: `REPEATABLE(seed)` clause for deterministic sampling: `TABLESAMPLE BERNOULLI(10) REPEATABLE(42)`. Seed the PRNG for reproducible results. | `evoparser.y`, `evolution/db/Select.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_tablesample.py`: BERNOULLI ~10% of rows returned (within margin), SYSTEM returns full pages, REPEATABLE produces same result, 0% = no rows, 100% = all rows. | `tests/test_tablesample.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver/psql. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 120: ⬜ Incremental Statistics for Partitioned Tables (Feature #122)
+
+**Goal:** When table partitioning exists (Task 88), compute per-partition statistics and aggregate to global stats without re-scanning the entire table. Oracle model: `DBMS_STATS.GATHER_TABLE_STATS(INCREMENTAL => TRUE)`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Extend `TableStatsDesc` with `is_incremental` flag. When enabled, per-partition stats are gathered and global stats are derived from partition synopses. | `evolution/db/catalog_internal.h` |
+| 2 | Per-partition ANALYZE: `ANALYZE TABLE t PARTITION p1` — analyze only the specified partition. Store partition-level stats with key `"%010u:P:%s"` (table_id, partition_name). | `evolution/db/Analyze.c`, `evolution/db/catalog_internal.c` |
+| 3 | Global stats aggregation: sum row_count, sum page_count, merge NDV using HyperLogLog sketches (approximate NDV across partitions without full scan). | `evolution/db/Analyze.c` |
+| 4 | HyperLogLog implementation: compact 64-byte sketch per column per partition. Merge by taking max of corresponding registers. | `evolution/db/Analyze.c` |
+| 5 | Histogram aggregation: merge equi-depth histograms from partitions by re-bucketing combined boundary sets. | `evolution/db/Analyze.c` |
+| 6 | Parser: `ANALYZE TABLE t PARTITION name` rule. | `evoparser.y` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_incremental_stats.py`: per-partition analyze, global aggregation correctness, incremental after INSERT to one partition. | `tests/test_incremental_stats.py` |
+| 9 | Run regression. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+## Day 61–63 — LIMIT / TOP / FETCH Enhancements
+
+### Task 121: ⬜ FETCH FIRST/NEXT N ROWS ONLY — SQL:2008 Standard (Feature #123)
+
+**Goal:** SQL:2008 standard row limiting: `FETCH FIRST N ROWS ONLY`, `FETCH NEXT N ROWS ONLY`, `OFFSET M ROWS FETCH FIRST N ROWS ONLY`. Tüm major DB'ler destekliyor (PG, MySQL 8.0+, MSSQL 2012+, Oracle 12c+).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Lexer: FETCH, FIRST, NEXT, ROW, ROWS, ONLY tokenleri ekle. | `evolexer.l` |
+| 2 | Parser: `opt_fetch` kuralı — `FETCH FIRST expr ROW/ROWS ONLY` ve `FETCH NEXT expr ROW/ROWS ONLY`. `g_limitExpr`'e atama (mevcut LIMIT altyapısını kullan). | `evoparser.y` |
+| 3 | Parser: `OFFSET expr ROW/ROWS` standalone kuralı — `g_offsetExpr`'e atama. `opt_limit` kuralına `opt_offset opt_fetch` alternatifleri ekle. | `evoparser.y` |
+| 4 | `OFFSET M ROWS FETCH FIRST N ROWS ONLY` combined sözdizimi. | `evoparser.y` |
+| 5 | `FETCH FIRST 1 ROW ONLY` (tekil ROW) ve `FETCH NEXT 5 ROWS ONLY` (çoğul ROWS) her ikisini de destekle. | `evoparser.y` |
+| 6 | Mevcut `expr_eval_limit_range()` altyapısı yeniden kullanılır — yeni kod gerekmez. | — |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_fetch.py`: FETCH FIRST, FETCH NEXT, OFFSET ROWS FETCH, ROW vs ROWS, SELECT/DELETE/UPDATE ile kombinasyon. | `tests/test_fetch.py` |
+| 9 | Run regression. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 122: ⬜ TOP N — T-SQL Uyumluluk (Feature #124)
+
+**Goal:** `SELECT TOP N ...`, `SELECT TOP(N) ...`, `DELETE TOP(N) FROM ...`, `UPDATE TOP(N) ... SET ...`. MSSQL migration desteği.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Lexer: TOP tokeni ekle. | `evolexer.l` |
+| 2 | Parser: `select_opts` kuralına `TOP expr` ve `TOP '(' expr ')'` alternatifleri ekle. `g_limitExpr`'e atama. | `evoparser.y` |
+| 3 | Parser: `delete_opts` kuralına `TOP '(' expr ')'` ekle. | `evoparser.y` |
+| 4 | Parser: `update_opts` kuralına `TOP '(' expr ')'` ekle. | `evoparser.y` |
+| 5 | TOP ile LIMIT birlikte kullanılırsa hata ver (çakışma). | `evolution/db/Select.c` veya `adaptor/query_executor.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_top.py`: SELECT TOP N, TOP(N), DELETE TOP(N), UPDATE TOP(N), TOP + ORDER BY, TOP + WHERE. | `tests/test_top.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 123: ⬜ TOP N PERCENT (Feature #125)
+
+**Goal:** `SELECT TOP N PERCENT ...` ve `DELETE/UPDATE TOP(N) PERCENT ...`. Toplam satır sayısının yüzdesini döndürür. MSSQL özelliği.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Lexer: PERCENT tokeni ekle. | `evolexer.l` |
+| 2 | Parser: TOP kurallarına opsiyonel PERCENT ekle. QueryContext'e `g_topPercent` (int 0/1) flag'i ekle. | `evoparser.y`, `evolution/db/query_context.h` |
+| 3 | `expr_eval_limit_range()` fonksiyonuna percent modu ekle: `limit = (match_count * percent_val) / 100`, yukarı yuvarlama (CEILING). | `evolution/db/expression.c` |
+| 4 | SELECT, DELETE, UPDATE için PERCENT desteği. | `adaptor/query_executor.c`, `evolution/db/Delete.c`, `evolution/db/Update.c` |
+| 5 | Edge case: PERCENT 0 = 0 satır, PERCENT 100 = tümü, PERCENT > 100 = tümü. | `evolution/db/expression.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_top_percent.py`: TOP 10 PERCENT, TOP 50 PERCENT, TOP 100 PERCENT, TOP 0 PERCENT, PERCENT + WHERE. | `tests/test_top_percent.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 124: ⬜ WITH TIES (Feature #126)
+
+**Goal:** `SELECT TOP N WITH TIES ...` ve `FETCH FIRST N ROWS WITH TIES`. ORDER BY son değeriyle eşit olan ek satırları da dahil eder. PG 13+, Oracle 12c+, MSSQL.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Lexer: TIES tokeni ekle (WITH zaten var). | `evolexer.l` |
+| 2 | Parser: `opt_fetch` kuralına `FETCH FIRST expr ROWS WITH TIES` alternatifi ekle. `g_withTies` flag'i QueryContext'e ekle. TOP kurallarına da `WITH TIES` ekle. | `evoparser.y`, `evolution/db/query_context.h` |
+| 3 | `expr_eval_limit_range()` sonrasında WITH TIES kontrolü: son satırın ORDER BY değerini al, aynı değere sahip ek satırları dahil et. `effectiveEnd`'i genişlet. | `adaptor/query_executor.c` |
+| 4 | ORDER BY zorunluluk kontrolü: WITH TIES kullanılıp ORDER BY yoksa hata ver. | `adaptor/query_executor.c` |
+| 5 | DELETE ve UPDATE için WITH TIES: match listesinde son eşleşen değerle aynı ORDER BY değerine sahip satırları dahil et. | `evolution/db/Delete.c`, `evolution/db/Update.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_with_ties.py`: TOP 3 WITH TIES (4+ döner), FETCH FIRST 3 ROWS WITH TIES, WITH TIES + no ORDER BY → hata, tüm satırlar eşit → hepsi döner. | `tests/test_with_ties.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 125: ⬜ FETCH FIRST N PERCENT ROWS ONLY (Feature #127)
+
+**Goal:** `FETCH FIRST N PERCENT ROWS ONLY` — Oracle 12c+ row limiting clause ile yüzdelik. SQL standard extension.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `opt_fetch` kuralına `FETCH FIRST expr PERCENT ROW/ROWS ONLY` alternatifi ekle. `g_topPercent` flag'ini set et. | `evoparser.y` |
+| 2 | Mevcut PERCENT altyapısını (Task 123) yeniden kullan — `expr_eval_limit_range()` percent modu. | — |
+| 3 | `FETCH FIRST 10 PERCENT ROWS WITH TIES` kombinasyonu (Task 124 ile birlikte). | `evoparser.y` |
+| 4 | Regenerate parser. | `evolution/parser/` |
+| 5 | Write unit tests — `tests/test_fetch_percent.py`: FETCH FIRST 25 PERCENT, FETCH FIRST 50 PERCENT ROWS WITH TIES. | `tests/test_fetch_percent.py` |
+| 6 | Run regression. | `tests/` |
+| 7 | Full system test. | `Dockerfile` |
+| 8 | Verify with DBeaver/psql. | Manual |
+| 9 | Update wiki. | Wiki |
+| 10 | Verify with psql. | Manual |
+
+---
+
+### Task 126: ⬜ LIMIT ALL / LIMIT NULL & OFFSET Without LIMIT (Feature #128)
+
+**Goal:** PostgreSQL uyumlu edge case sözdizimi: `LIMIT ALL` (limit yok), `LIMIT NULL` (limit yok), `OFFSET N` (LIMIT olmadan sadece offset — tüm satırlar offset sonrasından).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Lexer: ALL tokeni zaten var mı kontrol et (yoksa ekle). | `evolexer.l` |
+| 2 | Parser: `opt_limit` kuralına `LIMIT ALL` alternatifi ekle — `g_limitExpr = NULL` (no limit). | `evoparser.y` |
+| 3 | Parser: `LIMIT NULL` → `g_limitExpr = NULL`. NULL literal'i expression olarak parse edilecek, `expr_eval_limit_range()` içinde NULL sonucunu no-limit olarak yorumla. | `evoparser.y`, `evolution/db/expression.c` |
+| 4 | Parser: `OFFSET expr` standalone (LIMIT olmadan) — `g_offsetExpr` set, `g_limitExpr = NULL`. `expr_eval_limit_range()` zaten LIMIT yoksa tüm satırları döndürüyor, sadece offset'i uygula. | `evoparser.y`, `evolution/db/expression.c` |
+| 5 | `expr_eval_limit_range()` güncelle: `g_offsetExpr` varken `g_limitExpr` yoksa, `end = match_count` (offset sonrası tümü). | `evolution/db/expression.c` |
+| 6 | Regenerate parser. | `evolution/parser/` |
+| 7 | Write unit tests — `tests/test_limit_edge.py`: LIMIT ALL, LIMIT NULL, OFFSET 5 (LIMIT olmadan), OFFSET 0 (noop). | `tests/test_limit_edge.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 127: ⬜ Early Termination for LIMIT (Feature #129)
+
+**Goal:** LIMIT N ile sorgu çalıştırırken N satır bulunduktan sonra taramayı durdur. Şu anda tüm eşleşen satırlar toplanıp sonra kesiliyor — büyük tablolarda ciddi performans kaybı.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | SELECT: `collect_select_results()` içinde LIMIT kontrolü — N satır toplandığında scan'i durdur. OFFSET varsa `offset + limit` kadar satır topla. | `adaptor/query_executor.c` |
+| 2 | DELETE: `DeleteProcess()` WHERE scan loop'unda `matchCount >= offset + limit` olunca `break`. | `evolution/db/Delete.c` |
+| 3 | UPDATE: `UpdateProcess()` WHERE scan loop'unda `matchCount >= offset + limit` olunca `break`. | `evolution/db/Update.c` |
+| 4 | ORDER BY + LIMIT: ORDER BY varsa early termination yapılamaz (tüm satırlar sıralanmalı). Bu durumu tespit et ve early termination'ı devre dışı bırak. | `adaptor/query_executor.c` |
+| 5 | GROUP BY/HAVING + LIMIT: Benzer kısıtlama — aggregation tamamlanmalı. | `adaptor/query_executor.c` |
+| 6 | Index scan + LIMIT: PK veya sıralı index scan'de zaten sıralı olduğundan ORDER BY + LIMIT'te bile early termination yapılabilir. | `adaptor/query_executor.c` |
+| 7 | Write unit tests — `tests/test_limit_perf.py`: büyük tablo (1000 satır), LIMIT 5'in hızlı olması, ORDER BY + LIMIT, GROUP BY + LIMIT. | `tests/test_limit_perf.py` |
+| 8 | Run regression. | `tests/` |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Verify with DBeaver/psql. | Manual |
+
+---
+
+### Task 128: ⬜ EXPLAIN'de LIMIT Node Gösterimi (Feature #130)
+
+**Goal:** EXPLAIN çıktısında LIMIT/OFFSET bilgisini göster. PostgreSQL model: `"Limit (rows=10)"` alt node'u. LIMIT kullanıldığında plan'da görünür olsun.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | EXPLAIN çıktısına LIMIT bilgisi ekle: LIMIT varsa `"  -> Limit (rows=N)"` veya `"  -> Limit (rows=N, offset=M)"` satırı ekle. | `adaptor/query_executor.c` |
+| 2 | TOP veya FETCH kullanıldığında da aynı LIMIT node'u göster. | `adaptor/query_executor.c` |
+| 3 | WITH TIES kullanıldığında `"  -> Limit (rows=N, with_ties=true)"`. | `adaptor/query_executor.c` |
+| 4 | PERCENT kullanıldığında `"  -> Limit (pct=10%)"`. | `adaptor/query_executor.c` |
+| 5 | Write unit tests — `tests/test_explain_limit.py`: EXPLAIN SELECT ... LIMIT, EXPLAIN DELETE ... LIMIT, EXPLAIN UPDATE ... LIMIT. | `tests/test_explain_limit.py` |
+| 6 | Run regression. | `tests/` |
+| 7 | Full system test. | `Dockerfile` |
+| 8 | Verify with DBeaver/psql. | Manual |
+| 9 | Update wiki. | Wiki |
+| 10 | Verify EXPLAIN ANALYZE (Task 104) ile kombinasyon. | Manual |
+
+---
+
+### Task 129: ⬜ SQL_CALC_FOUND_ROWS & FOUND_ROWS() (Feature #131)
+
+**Goal:** `SELECT SQL_CALC_FOUND_ROWS * FROM t LIMIT 10` sonrasında `SELECT FOUND_ROWS()` ile LIMIT öncesi toplam satır sayısını döndür. MySQL uyumluluk (8.0.17'de deprecated ama yaygın kullanımlı).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Lexer: SQL_CALC_FOUND_ROWS tokeni zaten var. FOUND_ROWS fonksiyon tokeni ekle: `FOUND_ROWS/"("`. | `evolexer.l` |
+| 2 | Parser: `select_opts` içinde `SQL_CALC_FOUND_ROWS` flag'ini set et (zaten parse ediliyor, QueryContext'e `g_calcFoundRows` ekle). | `evoparser.y`, `evolution/db/query_context.h` |
+| 3 | `collect_select_results()` içinde: `g_calcFoundRows` aktifse, LIMIT uygulamadan önce toplam satır sayısını session'a kaydet. | `adaptor/query_executor.c` |
+| 4 | Session context'e `last_found_rows` (uint64_t) alanı ekle. | `adaptor/pg_handler.c` veya session struct |
+| 5 | `SELECT FOUND_ROWS()` expression desteği: `EXPR_FOUND_ROWS` expression node, session'dan `last_found_rows` değerini oku. | `evolution/db/expression.h`, `evolution/db/expression.c` |
+| 6 | Parser: `FOUND_ROWS '(' ')'` expression kuralı. | `evoparser.y` |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Write unit tests — `tests/test_found_rows.py`: SQL_CALC_FOUND_ROWS + FOUND_ROWS(), LIMIT olmadan FOUND_ROWS, ardışık sorgular. | `tests/test_found_rows.py` |
+| 9 | Run regression. | `tests/` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+## Day 65 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
 
@@ -2054,6 +2666,38 @@
 | 78 | JIT Compilation Evaluation | 98 |
 | — | Dynamic allocation (storage fix) | 57 |
 | — | Semicolon-safe storage (storage fix) | 58 |
+| 101 | Histograms (Equi-Depth & Frequency) | 99 |
+| 102 | Range Selectivity Estimation | 100 |
+| 103 | Statistics System Views (pg_stats) | 101 |
+| 104 | Sample-Based ANALYZE | 102 |
+| 105 | Auto-Analyze (Threshold-Based) | 103 |
+| 106 | EXPLAIN ANALYZE (Actual vs Estimated) | 104 |
+| 107 | Clustering Factor & Correlation | 105 |
+| 108 | Cost-Based Optimizer (Index vs Full Scan) | 106 |
+| 109 | Multi-Column & Expression Statistics | 107 |
+| 110 | Column-Specific & Schema-Wide ANALYZE | 108 |
+| 111 | Top-N & Hybrid Histograms | 109 |
+| 112 | Most Common Values (MCV) Lists | 110 |
+| 113 | Functional Dependency Statistics | 111 |
+| 114 | Filtered Statistics | 112 |
+| 115 | Statistics Locking & Freezing | 113 |
+| 116 | Manual Statistics Setting | 114 |
+| 117 | Statistics Export & Import | 115 |
+| 118 | Pending Statistics (Test-Before-Publish) | 116 |
+| 119 | EXPLAIN Output Formats (JSON/XML/YAML) | 117 |
+| 120 | Extended Table & Column Metrics | 118 |
+| 121 | TABLESAMPLE Clause | 119 |
+| 122 | Incremental Statistics (Partitioned) | 120 |
+| 123 | FETCH FIRST/NEXT N ROWS ONLY (SQL:2008) | 121 |
+| 124 | TOP N (T-SQL Uyumluluk) | 122 |
+| 125 | TOP N PERCENT | 123 |
+| 126 | WITH TIES | 124 |
+| 127 | FETCH FIRST N PERCENT ROWS ONLY | 125 |
+| 128 | LIMIT ALL / LIMIT NULL / OFFSET Without LIMIT | 126 |
+| 129 | Early Termination for LIMIT | 127 |
+| 130 | EXPLAIN'de LIMIT Node | 128 |
+| 131 | SQL_CALC_FOUND_ROWS & FOUND_ROWS() | 129 |
+| 132 | @@IDENTITY / SCOPE_IDENTITY() / @@last_insert_id | 130 |
 
 ---
 

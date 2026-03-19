@@ -224,6 +224,7 @@ typedef struct {
     uint64_t row_count;
     uint32_t page_count;
     time_t   last_analyzed;
+    uint64_t dml_since_analyze;   /* DML count since last ANALYZE */
 } TableStatsDesc;
 
 typedef struct {
@@ -251,6 +252,32 @@ int cat_get_column_stats(uint32_t table_id, const char *col_name,
 
 /* List all column stats for a table. Returns count found. */
 int cat_list_column_stats(uint32_t table_id, ColumnStatsDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Index statistics (ANALYZE TABLE — per-index B+ tree stats)
+ * ---------------------------------------------------------------- */
+
+typedef struct {
+    uint32_t table_id;
+    char     index_name[CAT_MAX_NAME_LEN];
+    int      tree_depth;
+    uint32_t leaf_pages;
+    uint64_t total_entries;
+    int      avg_entries_per_leaf;
+} IndexStatsDesc;
+
+/* Store or update per-index statistics. */
+int cat_store_index_stats(const IndexStatsDesc *ist);
+
+/* Retrieve per-index statistics. Returns 0 on success, -1 if not found. */
+int cat_get_index_stats(uint32_t table_id, const char *index_name,
+                        IndexStatsDesc *out);
+
+/* List all index stats for a table. Returns count found. */
+int cat_list_index_stats(uint32_t table_id, IndexStatsDesc *out, int max);
+
+/* Increment DML counter for auto-analyze tracking. */
+int cat_increment_dml_counter(uint32_t table_id);
 
 /* ----------------------------------------------------------------
  *  Convenience
