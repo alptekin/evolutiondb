@@ -859,6 +859,43 @@ int cat_update_heap_page(uint32_t table_id, const char *table_name,
     return 0;
 }
 
+int cat_update_pk_root(uint32_t table_id, const char *table_name,
+                       uint32_t schema_id, uint32_t pk_root_page)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_table_key(schema_id, table_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    TableDesc t;
+    deserialize_table(record, &t);
+    t.pk_root_page = pk_root_page;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_table(&t, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+    return 0;
+}
+
 int cat_list_tables(uint32_t schema_id, TableDesc *out, int max)
 {
     char prefix[CAT_MAX_KEY_LEN];
