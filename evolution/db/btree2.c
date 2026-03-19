@@ -997,3 +997,57 @@ void bt2_destroy(BTree2 *tree)
     destroy_recursive(tree->root_page);
     tree->root_page = 0;
 }
+
+/* ----------------------------------------------------------------
+ *  bt2_stats — compute tree depth, leaf page count, entry count
+ * ---------------------------------------------------------------- */
+int bt2_stats(BTree2 *tree, BTree2Stats *out)
+{
+    if (!tree || tree->root_page == 0 || !out) return -1;
+    memset(out, 0, sizeof(*out));
+
+    char page[EVO_PAGE_SIZE];
+    uint32_t page_no = tree->root_page;
+
+    /* Phase 1: descend child[0] to find depth and leftmost leaf */
+    pgm_read_page(page_no, page);
+    int depth = 1;
+    while (node_type(page) == PAGE_BTREE_INT) {
+        uint32_t child = (uint32_t)internal_read_child(page, 0);
+        if (child == 0) break;
+        page_no = child;
+        pgm_read_page(page_no, page);
+        depth++;
+    }
+    out->depth = depth;
+    uint32_t leftmost_leaf = page_no;
+
+    /* Phase 2: walk leaf chain, count pages and active entries */
+    uint32_t leaf_count = 0;
+    uint64_t total_entries = 0;
+    page_no = leftmost_leaf;
+
+    while (page_no != 0) {
+        pgm_read_page(page_no, page);
+        NodeHeader *nh = node_hdr(page);
+        leaf_count++;
+
+        int pos = 0;
+        for (int i = 0; i < nh->num_keys; i++) {
+            RowID rid;
+            int consumed = leaf_read_entry(page, pos, NULL, NULL, &rid);
+            if (rid.page_no != 0 || rid.slot_idx != 0)
+                total_entries++;
+            pos += consumed;
+        }
+
+        page_no = ((PageHeader *)page)->next_page;
+    }
+
+    out->leaf_pages = leaf_count;
+    out->total_entries = total_entries;
+    out->avg_entries_per_leaf = leaf_count > 0
+        ? (double)total_entries / (double)leaf_count : 0.0;
+
+    return 0;
+}

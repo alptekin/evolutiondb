@@ -1039,6 +1039,8 @@ int UpdateProcess(void)
         free(matchKeys);
 
         g_updateCount = updated;
+        if (updated > 0)
+            cat_increment_dml_counter(td.table_id);
         printf("%d record(s) updated.\n", updated);
     } else {
         /* ---------- Legacy PK-based update ---------- */
@@ -1052,6 +1054,7 @@ int UpdateProcess(void)
                              (const char (*)[256])metaCols, numMetaCols,
                              tblName) == 0) {
             g_updateCount = 1;
+            cat_increment_dml_counter(td.table_id);
         } else {
             printf("Record not found for key: %s\n", key);
             g_updateCount = 0;
