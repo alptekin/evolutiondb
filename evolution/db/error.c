@@ -27,7 +27,7 @@ err_sys(const char *fmt, ...)
     va_start(ap, fmt);
     err_doit(1, errno, fmt, ap);
     va_end(ap);
-    if (g_gui_mode) { g_gui_error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SYSTEM_ERROR); longjmp(g_gui_jmpbuf, 1); }
+    if (g_gui_mode) { g_err.error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SYSTEM_ERROR); longjmp(g_err.jmpbuf, 1); }
     exit(1);
 }
 /*
@@ -42,7 +42,7 @@ err_exit(int error, const char *fmt, ...)
     va_start(ap, fmt);
     err_doit(1, error, fmt, ap);
     va_end(ap);
-    if (g_gui_mode) { g_gui_error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR); longjmp(g_gui_jmpbuf, 1); }
+    if (g_gui_mode) { g_err.error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR); longjmp(g_err.jmpbuf, 1); }
     exit(1);
 }
 /*
@@ -56,7 +56,7 @@ err_dump(const char *fmt, ...)
     va_start(ap, fmt);
     err_doit(1, errno, fmt, ap);
     va_end(ap);
-    if (g_gui_mode) { g_gui_error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SYSTEM_ERROR); longjmp(g_gui_jmpbuf, 1); }
+    if (g_gui_mode) { g_err.error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SYSTEM_ERROR); longjmp(g_err.jmpbuf, 1); }
     abort();        /* dump core and terminate */
     exit(1);        /* shouldn't get here */
 }
@@ -83,7 +83,7 @@ err_quit(const char *fmt, ...)
     va_start(ap, fmt);
     err_doit(0, 0, fmt, ap);
     va_end(ap);
-    if (g_gui_mode) { g_gui_error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR); longjmp(g_gui_jmpbuf, 1); }
+    if (g_gui_mode) { g_err.error = 1; EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR); longjmp(g_err.jmpbuf, 1); }
     exit(1);
 }
 /*

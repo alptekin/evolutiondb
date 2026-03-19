@@ -18,16 +18,16 @@
 /*
  * Convenience macro: set the global SQLSTATE in one line.
  * Usage: EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
- * Requires database.h (for g_gui_error_sqlstate extern).
+ * Requires database.h (for g_err.sqlstate extern).
  */
 #define EVOSQL_SET_SQLSTATE(code) \
     do { \
-        g_gui_error_sqlstate[0] = (code)[0]; \
-        g_gui_error_sqlstate[1] = (code)[1]; \
-        g_gui_error_sqlstate[2] = (code)[2]; \
-        g_gui_error_sqlstate[3] = (code)[3]; \
-        g_gui_error_sqlstate[4] = (code)[4]; \
-        g_gui_error_sqlstate[5] = '\0';      \
+        g_err.sqlstate[0] = (code)[0]; \
+        g_err.sqlstate[1] = (code)[1]; \
+        g_err.sqlstate[2] = (code)[2]; \
+        g_err.sqlstate[3] = (code)[3]; \
+        g_err.sqlstate[4] = (code)[4]; \
+        g_err.sqlstate[5] = '\0';      \
     } while (0)
 
 /* ================================================================

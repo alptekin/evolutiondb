@@ -399,16 +399,16 @@ expr: expr BETWEEN expr AND expr %prec BETWEEN                                  
 | expr NOT BETWEEN expr AND expr %prec BETWEEN                                  { emit("NOTBETWEEN"); $$ = expr_make_not_between($1, $4, $6); }
 ;
 
-val_list: expr									{ $$ = 1; if (g_inListCount < MAX_IN_LIST) g_inListExprs[g_inListCount++] = $1; }
-| expr ',' val_list								{ $$ = 1 + $3; if (g_inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_inListCount; _i>0; _i--) g_inListExprs[_i]=g_inListExprs[_i-1]; g_inListExprs[0]=$1; g_inListCount++; } }
+val_list: expr									{ $$ = 1; if (g_expr.inListCount < MAX_IN_LIST) g_expr.inListExprs[g_expr.inListCount++] = $1; }
+| expr ',' val_list								{ $$ = 1 + $3; if (g_expr.inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_expr.inListCount; _i>0; _i--) g_expr.inListExprs[_i]=g_expr.inListExprs[_i-1]; g_expr.inListExprs[0]=$1; g_expr.inListCount++; } }
 ;
 
 opt_val_list: /* nil */								{ $$ = 0; }
 | val_list
 ;
 
-expr: expr IN '(' { g_inListCount = 0; } val_list ')'                           { emit("ISIN %d", $5); $$ = expr_make_in($1, g_inListExprs, g_inListCount); }
-| expr NOT IN '(' { g_inListCount = 0; } val_list ')'                           { emit("ISIN %d", $6); emit("NOT"); $$ = expr_make_not_in($1, g_inListExprs, g_inListCount); }
+expr: expr IN '(' { g_expr.inListCount = 0; } val_list ')'                           { emit("ISIN %d", $5); $$ = expr_make_in($1, g_expr.inListExprs, g_expr.inListCount); }
+| expr NOT IN '(' { g_expr.inListCount = 0; } val_list ')'                           { emit("ISIN %d", $6); emit("NOT"); $$ = expr_make_not_in($1, g_expr.inListExprs, g_expr.inListCount); }
 | expr IN '(' select_stmt ')'                                                   { emit("CMPANYSELECT 4"); $$ = $1; }
 | expr NOT IN '(' select_stmt ')'                                               { emit("CMPALLSELECT 3"); $$ = $1; }
 | EXISTS '(' select_stmt ')'                                                    { emit("EXISTSSELECT"); if($1)emit("NOT"); $$ = NULL; }
@@ -487,29 +487,29 @@ interval_exp: INTERVAL expr DAY_HOUR                                            
 ;
 
 expr: CASE expr case_list END
-    { emit("CASEVAL %d 0", $3); $$ = expr_make_case_simple($2, g_caseWhenCount, NULL); }
+    { emit("CASEVAL %d 0", $3); $$ = expr_make_case_simple($2, g_expr.caseWhenCount, NULL); }
 | CASE expr case_list ELSE expr END
-    { emit("CASEVAL %d 1", $3); $$ = expr_make_case_simple($2, g_caseWhenCount, $5); }
+    { emit("CASEVAL %d 1", $3); $$ = expr_make_case_simple($2, g_expr.caseWhenCount, $5); }
 | CASE case_list END
-    { emit("CASE %d 0", $2); $$ = expr_make_case_searched(g_caseWhenCount, NULL); }
+    { emit("CASE %d 0", $2); $$ = expr_make_case_searched(g_expr.caseWhenCount, NULL); }
 | CASE case_list ELSE expr END
-    { emit("CASE %d 1", $2); $$ = expr_make_case_searched(g_caseWhenCount, $4); }
+    { emit("CASE %d 1", $2); $$ = expr_make_case_searched(g_expr.caseWhenCount, $4); }
 ;
 
 case_list: WHEN expr THEN expr
     {
-        g_caseWhenCount = 0;
-        g_caseWhenExprs[0] = $2;
-        g_caseThenExprs[0] = $4;
-        g_caseWhenCount = 1;
+        g_expr.caseWhenCount = 0;
+        g_expr.caseWhenExprs[0] = $2;
+        g_expr.caseThenExprs[0] = $4;
+        g_expr.caseWhenCount = 1;
         $$ = 1;
     }
 | case_list WHEN expr THEN expr
     {
-        if (g_caseWhenCount < MAX_CASE_WHENS) {
-            g_caseWhenExprs[g_caseWhenCount] = $3;
-            g_caseThenExprs[g_caseWhenCount] = $5;
-            g_caseWhenCount++;
+        if (g_expr.caseWhenCount < MAX_CASE_WHENS) {
+            g_expr.caseWhenExprs[g_expr.caseWhenCount] = $3;
+            g_expr.caseThenExprs[g_expr.caseWhenCount] = $5;
+            g_expr.caseWhenCount++;
         }
         $$ = $1+1;
     }
@@ -560,14 +560,14 @@ stmt: select_stmt
     }
 ;
 
-select_stmt: SELECT select_opts select_expr_list                                { emit("SELECTNODATA %d %d", $2, $3); g_selectDistinct = ($2 & 02) ? 1 : 0; } ;
+select_stmt: SELECT select_opts select_expr_list                                { emit("SELECTNODATA %d %d", $2, $3); g_sel.distinct = ($2 & 02) ? 1 : 0; } ;
 | SELECT select_opts select_expr_list 
 FROM table_references
 opt_where opt_groupby opt_having opt_orderby opt_limit
 opt_into_list
     {
         emit("SELECT %d %d %d", $2, $3, $5);
-        g_selectDistinct = ($2 & 02) ? 1 : 0;
+        g_sel.distinct = ($2 & 02) ? 1 : 0;
         if ($3 == 3)
             $$ = 1;
         else
@@ -576,22 +576,22 @@ opt_into_list
 ;
 
 opt_where: /* nil */
-| WHERE expr									{ emit("WHERE"); g_whereExpr = $2; };
+| WHERE expr									{ emit("WHERE"); g_expr.whereExpr = $2; };
 opt_groupby: /* nil */
 | GROUP BY groupby_list opt_with_rollup                                         { emit("GROUPBYLIST %d %d", $3, $4); }
 ;
 
 groupby_list: expr opt_asc_desc   {
         emit("GROUPBY %d", $2);
-        g_groupByCount = 0;
-        if (g_groupByCount < MAX_GROUP_BY)
-            g_groupByExprs[g_groupByCount++] = $1;
+        g_expr.groupByCount = 0;
+        if (g_expr.groupByCount < MAX_GROUP_BY)
+            g_expr.groupByExprs[g_expr.groupByCount++] = $1;
         $$ = 1;
     }
 | groupby_list ',' expr opt_asc_desc  {
         emit("GROUPBY %d", $4);
-        if (g_groupByCount < MAX_GROUP_BY)
-            g_groupByExprs[g_groupByCount++] = $3;
+        if (g_expr.groupByCount < MAX_GROUP_BY)
+            g_expr.groupByExprs[g_expr.groupByCount++] = $3;
         $$ = $1 + 1;
     }
 ;
@@ -606,7 +606,7 @@ opt_with_rollup: /* nil */							{ $$ = 0; }
 ;
 
 opt_having: /* nil */
-| HAVING expr									{ emit("HAVING"); g_havingExpr = $2; }
+| HAVING expr									{ emit("HAVING"); g_expr.havingExpr = $2; }
 ;
 
 opt_orderby: /* nil */
@@ -626,9 +626,9 @@ orderby_item: NAME opt_asc_desc
 ;
 
 opt_limit: /* nil */ { /* no limit */ }
-| LIMIT expr                                               { emit("LIMIT 1"); g_limitExpr = $2; }
-| LIMIT expr ',' expr								{ emit("LIMIT 2"); g_offsetExpr = $2; g_limitExpr = $4; }
-| LIMIT expr OFFSET expr							{ emit("LIMIT OFFSET"); g_limitExpr = $2; g_offsetExpr = $4; }
+| LIMIT expr                                               { emit("LIMIT 1"); g_expr.limitExpr = $2; }
+| LIMIT expr ',' expr								{ emit("LIMIT 2"); g_expr.offsetExpr = $2; g_expr.limitExpr = $4; }
+| LIMIT expr OFFSET expr							{ emit("LIMIT OFFSET"); g_expr.limitExpr = $2; g_expr.offsetExpr = $4; }
 ;
 
 opt_into_list: /* nil */
@@ -802,14 +802,14 @@ stmt: drop_table_stmt
 drop_table_stmt: DROP TABLE NAME
     {
         emit("DROPTABLE %s", $3);
-        g_dropIfExists = 0;
+        g_drop.ifExists = 0;
         GetDropTableName($3);
         free($3);
     }
 | DROP TABLE IF EXISTS NAME
     {
         emit("DROPTABLE IF EXISTS %s", $5);
-        g_dropIfExists = 1;
+        g_drop.ifExists = 1;
         GetDropTableName($5);
         free($5);
     }
@@ -1033,7 +1033,7 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
 | ALTER TABLE NAME ADD CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
     {
         emit("ALTER TABLE ADD FK %s %s", $3, $6);
-        strncpy(g_pendingConstraintName, $6, 127);
+        strncpy(g_constr.pendingConstraintName, $6, 127);
         AlterTableAddForeignKeyConstraint($3, $13);
         free($3); free($6); free($13);
     }
@@ -1046,7 +1046,7 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
 | ALTER TABLE NAME ADD CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions NOT VALIDATE
     {
         emit("ALTER TABLE ADD FK NOT VALID %s %s", $3, $6);
-        strncpy(g_pendingConstraintName, $6, 127);
+        strncpy(g_constr.pendingConstraintName, $6, 127);
         AlterTableAddForeignKeyConstraintNotValid($3, $13);
         free($3); free($6); free($13);
     }
@@ -1123,20 +1123,20 @@ opt_col_names: /* nil */
 
 insert_col_list: NAME
     {
-        g_insertColumnCount = 0;
-        strncpy(g_insertColumns[g_insertColumnCount], $1, 127);
-        g_insertColumns[g_insertColumnCount][127] = '\0';
-        g_insertColumnCount++;
+        g_ins.columnCount = 0;
+        strncpy(g_ins.columns[g_ins.columnCount], $1, 127);
+        g_ins.columns[g_ins.columnCount][127] = '\0';
+        g_ins.columnCount++;
         emit("COLUMN %s", $1);
         free($1);
         $$ = 1;
     }
 | insert_col_list ',' NAME
     {
-        if (g_insertColumnCount < 64) {
-            strncpy(g_insertColumns[g_insertColumnCount], $3, 127);
-            g_insertColumns[g_insertColumnCount][127] = '\0';
-            g_insertColumnCount++;
+        if (g_ins.columnCount < 64) {
+            strncpy(g_ins.columns[g_ins.columnCount], $3, 127);
+            g_ins.columns[g_ins.columnCount][127] = '\0';
+            g_ins.columnCount++;
         }
         emit("COLUMN %s", $3);
         free($3);
@@ -1303,21 +1303,21 @@ create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
 '(' create_col_list ')' opt_table_options
     {
         emit("CREATE %d %d %d %s", $2, $4, $7, $5);
-        g_isTemporary = $2;
+        g_create.isTemporary = $2;
         GetTableName($5);
         free($5);
     }
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME '.' NAME
-'(' create_col_list ')' opt_table_options               { emit("CREATE %d %d %d %s.%s", $2, $4, $9, $5, $7); g_isTemporary = $2; free($5); free($7); }
+'(' create_col_list ')' opt_table_options               { emit("CREATE %d %d %d %s.%s", $2, $4, $9, $5, $7); g_create.isTemporary = $2; free($5); free($7); }
 ;
 
 opt_table_options: /* empty */
     | opt_table_options AUTO_INCREMENT COMPARISON INTNUM { emit("TABLE OPT AUTOINC %d", $4); SetTableAutoIncrement($4); }
     | opt_table_options AUTO_INCREMENT INTNUM            { emit("TABLE OPT AUTOINC %d", $3); SetTableAutoIncrement($3); }
-    | opt_table_options ON NAME DELETE NAME              { emit("TABLE OPT ON COMMIT DELETE ROWS"); g_onCommitDelete = 1; }
-    | opt_table_options ON NAME PRESERVE NAME            { emit("TABLE OPT ON COMMIT PRESERVE ROWS"); g_onCommitDelete = 0; }
+    | opt_table_options ON NAME DELETE NAME              { emit("TABLE OPT ON COMMIT DELETE ROWS"); g_create.onCommitDelete = 1; }
+    | opt_table_options ON NAME PRESERVE NAME            { emit("TABLE OPT ON COMMIT PRESERVE ROWS"); g_create.onCommitDelete = 0; }
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
@@ -1348,25 +1348,25 @@ create_col_list: create_definition                                              
 ;
 
 create_definition: PRIMARY KEY '(' pk_column_list ')'                            { emit("PRIKEY %d", $4); }
-| CONSTRAINT NAME PRIMARY KEY '(' pk_column_list ')'                            { emit("PRIKEY %d", $6); g_pendingConstraintName[0] = '\0'; free($2); }
+| CONSTRAINT NAME PRIMARY KEY '(' pk_column_list ')'                            { emit("PRIKEY %d", $6); g_constr.pendingConstraintName[0] = '\0'; free($2); }
 | KEY '(' column_list ')'							{ emit("KEY %d", $3); }
 | INDEX '(' column_list ')'							{ emit("KEY %d", $3); }
 | FULLTEXT INDEX '(' column_list ')'                                            { emit("TEXTINDEX %d", $4); }
 | FULLTEXT KEY '(' column_list ')'                                              { emit("TEXTINDEX %d", $4); }
 | CHECK '(' expr ')'                                                            { emit("CHECK"); AddCheckConstraint($3); }
-| CONSTRAINT NAME CHECK '(' expr ')'                                            { emit("CHECK"); strncpy(g_checkNames[g_checkCount], $2, 127); AddCheckConstraint($5); free($2); }
+| CONSTRAINT NAME CHECK '(' expr ')'                                            { emit("CHECK"); strncpy(g_constr.checkNames[g_constr.checkCount], $2, 127); AddCheckConstraint($5); free($2); }
 | FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
     { emit("FOREIGNKEY"); AddForeignKeyRefTable($7); free($7); }
 | FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '.' NAME '(' fk_ref_column_list ')' fk_actions
     { emit("FOREIGNKEY CROSSSCHEMA"); AddForeignKeyRefTableSchema($7, $9); free($7); free($9); }
 | CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '(' fk_ref_column_list ')' fk_actions
-    { emit("FOREIGNKEY"); strncpy(g_pendingConstraintName, $2, 127); AddForeignKeyRefTable($9); free($2); free($9); }
+    { emit("FOREIGNKEY"); strncpy(g_constr.pendingConstraintName, $2, 127); AddForeignKeyRefTable($9); free($2); free($9); }
 | CONSTRAINT NAME FOREIGN KEY '(' fk_column_list ')' REFERENCES NAME '.' NAME '(' fk_ref_column_list ')' fk_actions
-    { emit("FOREIGNKEY CROSSSCHEMA"); strncpy(g_pendingConstraintName, $2, 127); AddForeignKeyRefTableSchema($9, $11); free($2); free($9); free($11); }
+    { emit("FOREIGNKEY CROSSSCHEMA"); strncpy(g_constr.pendingConstraintName, $2, 127); AddForeignKeyRefTableSchema($9, $11); free($2); free($9); free($11); }
 | UNIQUE '(' unique_column_list ')'
     { emit("UNIQUE %d", $3); AddUniqueComplete(); }
 | CONSTRAINT NAME UNIQUE '(' unique_column_list ')'
-    { emit("UNIQUE %d", $5); strncpy(g_pendingConstraintName, $2, 127); AddUniqueComplete(); free($2); }
+    { emit("UNIQUE %d", $5); strncpy(g_constr.pendingConstraintName, $2, 127); AddUniqueComplete(); free($2); }
 ;
 
 pk_column_list: NAME                                                            { emit("PRIKEY_COL %s", $1); AddPrimaryKeyColumn($1); free($1); $$ = 1; }
@@ -1447,7 +1447,7 @@ column_atts: /* nil */								{ $$ = 0; }
 | column_atts CHECK '(' expr ')'                                                { emit("ATTR CHECK"); AddCheckConstraint($4); $$ = $1 + 1; }
 | column_atts CONSTRAINT NAME UNIQUE                                            { emit("ATTR UNIQUE"); SetColumnUnique(); free($3); $$ = $1 + 1; }
 | column_atts CONSTRAINT NAME PRIMARY KEY                                       { emit("ATTR PRIKEY"); SetColumnPrimaryKey(); free($3); $$ = $1 + 1; }
-| column_atts CONSTRAINT NAME CHECK '(' expr ')'                               { emit("ATTR CHECK"); strncpy(g_checkNames[g_checkCount], $3, 127); AddCheckConstraint($6); free($3); $$ = $1 + 1; }
+| column_atts CONSTRAINT NAME CHECK '(' expr ')'                               { emit("ATTR CHECK"); strncpy(g_constr.checkNames[g_constr.checkCount], $3, 127); AddCheckConstraint($6); free($3); $$ = $1 + 1; }
 | column_atts GENERATED ALWAYS AS '(' expr ')' STORED                          { emit("ATTR GENERATED STORED"); SetColumnGenerated(1, $6); $$ = $1 + 1; }
 | column_atts GENERATED ALWAYS AS '(' expr ')' VIRTUAL                         { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, $6); $$ = $1 + 1; }
 | column_atts GENERATED ALWAYS AS '(' expr ')'                                 { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, $6); $$ = $1 + 1; }

@@ -9,7 +9,7 @@
 #include "table_api.h"
 #include "tuple_format.h"
 
-/* Row separator used between multiple value groups in g_insert. */
+/* Row separator used between multiple value groups in g_ins.data. */
 #define ROW_SEP '\x02'
 
 /* Capture first auto-generated value for LAST_INSERT_ID() */
@@ -23,28 +23,28 @@ static void capture_generated_id(const char *val)
 
 int GetInsertions(char *name)
 {
-    strcat(g_insert, name);
-    strcat(g_insert, ";");
+    strcat(g_ins.data, name);
+    strcat(g_ins.data, ";");
 
     return 1;
 }
 
 int InsertRowSeparator(void)
 {
-    int len = (int)strlen(g_insert);
-    if (len > 0 && g_insert[len - 1] == ';') {
-        g_insert[len - 1] = ROW_SEP;
+    int len = (int)strlen(g_ins.data);
+    if (len > 0 && g_ins.data[len - 1] == ';') {
+        g_ins.data[len - 1] = ROW_SEP;
     } else {
-        g_insert[len] = ROW_SEP;
-        g_insert[len + 1] = '\0';
+        g_ins.data[len] = ROW_SEP;
+        g_ins.data[len + 1] = '\0';
     }
     return 1;
 }
 
 int TruncateInsert(void)
 {
-    memset(g_insert, '\0', RECORD_BUF_SIZE);
-    memset(g_tblInsertionName, '\0', 1024);
+    memset(g_ins.data, '\0', RECORD_BUF_SIZE);
+    memset(g_ins.tblName, '\0', 1024);
 
     return 1;
 }
@@ -93,7 +93,7 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
     char buf[RECORD_BUF_SIZE];
     char valBuf[RECORD_BUF_SIZE];
 
-    if (g_insertColumnCount <= 0) return 0;
+    if (g_ins.columnCount <= 0) return 0;
 
     numTableCols = InsertReadColumnNames(tblName, tableColNames, 64);
     if (numTableCols <= 0) return 0;
@@ -102,11 +102,11 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
     valBuf[sizeof(valBuf) - 1] = '\0';
     numUserVals = split_row_values(valBuf, userVals, 64);
 
-    if (numUserVals != g_insertColumnCount) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+    if (numUserVals != g_ins.columnCount) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "INSERT has %d value(s) but %d column(s) specified",
-                 numUserVals, g_insertColumnCount);
-        g_gui_error = 1;
+                 numUserVals, g_ins.columnCount);
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
         return -1;
     }
@@ -117,17 +117,17 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
     int reorderNcols;
     tapi_resolve(tblName, &reorderTd, reorderCols, &reorderNcols);
 
-    for (i = 0; i < g_insertColumnCount; i++) {
+    for (i = 0; i < g_ins.columnCount; i++) {
         int found = 0;
         for (j = 0; j < numTableCols; j++) {
-            if (strcasecmp(g_insertColumns[i], tableColNames[j]) == 0) {
+            if (strcasecmp(g_ins.columns[i], tableColNames[j]) == 0) {
                 found = 1;
                 /* Block writes to generated columns */
                 if (j < reorderNcols && reorderCols[j].generated_mode != GENMODE_NONE) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "cannot insert a non-DEFAULT value into column \"%s\" "
-                             "because it is a generated column", g_insertColumns[i]);
-                    g_gui_error = 1;
+                             "because it is a generated column", g_ins.columns[i]);
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
                     return -1;
                 }
@@ -135,9 +135,9 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
             }
         }
         if (!found) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
-                     "column \"%s\" does not exist in table", g_insertColumns[i]);
-            g_gui_error = 1;
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "column \"%s\" does not exist in table", g_ins.columns[i]);
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_COLUMN);
             return -1;
         }
@@ -156,8 +156,8 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
     buf[0] = '\0';
     for (i = 0; i < numTableCols; i++) {
         int userIdx = -1;
-        for (j = 0; j < g_insertColumnCount; j++) {
-            if (strcasecmp(tableColNames[i], g_insertColumns[j]) == 0) {
+        for (j = 0; j < g_ins.columnCount; j++) {
+            if (strcasecmp(tableColNames[i], g_ins.columns[j]) == 0) {
                 userIdx = j;
                 break;
             }
@@ -310,10 +310,10 @@ static int validate_types(const char *tblName, char **vals, int numValues)
     if (numTypes <= 0) return 0;
 
     if (numValues != numTypes) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "INSERT has %d value(s) but table has %d column(s)",
                  numValues, numTypes);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
         return -1;
     }
@@ -339,10 +339,10 @@ static int validate_not_null(const char *tblName, char **vals, int numValues)
             char colNames[64][128];
             int nc = InsertReadColumnNames(tblName, colNames, 64);
 
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "null value in column \"%s\" violates not-null constraint",
                      (i < nc) ? colNames[i] : "unknown");
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
             return -1;
         }
@@ -440,10 +440,10 @@ static int validate_unique(const char *tblName,
             if (!uniqueFlags[i]) continue;
             if (strcmp(vals[i], "\x01NULL\x01") == 0) continue;
             if (i < nf && strcmp(vals[i], fields[i]) == 0) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
                          (i < numColNames) ? colNames[i] : "unknown", vals[i]);
-                g_gui_error = 1;
+                g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                 return -1;
             }
@@ -467,10 +467,10 @@ static int validate_unique(const char *tblName,
             }
             if (allNull) continue; /* NULL composites don't violate UNIQUE */
             if (strcmp(newComposite, existComposite) == 0) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "duplicate key value violates unique constraint \"%s\"",
                          info->name);
-                g_gui_error = 1;
+                g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                 return -1;
             }
@@ -529,10 +529,10 @@ static int validate_check(const char *tblName, char **vals, int numValues)
         }
 
         if (!pass) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "new row violates check constraint \"%s\"",
                      constraintNames[i]);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
             return -1;
         }
@@ -627,11 +627,11 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
 
         /* MATCH FULL: all columns must be NULL or all must be non-NULL */
         if (matchType == 1 && anyNull && !allNull) {
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "insert or update on table violates foreign key constraint \"%s\" "
                      "(MATCH FULL does not allow mixing of null and nonnull values)",
                      constraints[ci].constraint_name);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
             return -1;
         }
@@ -692,11 +692,11 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
             BTree2 refPkTree = tapi_pk_tree(&refTd);
             RowID rid;
             if (bt2_search(&refPkTree, fkValue, &rid) < 0) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "insert or update on table violates foreign key constraint \"%s\" "
                          "(value \"%s\" not found in referenced table \"%s\")",
                          constraints[ci].constraint_name, fkValue, refTd.table_name);
-                g_gui_error = 1;
+                g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                 return -1;
             }
@@ -744,11 +744,11 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                 }
             }
             if (!found) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "insert or update on table violates foreign key constraint \"%s\" "
                          "(value \"%s\" not found in referenced table \"%s\")",
                          constraints[ci].constraint_name, fkValue, refTd.table_name);
-                g_gui_error = 1;
+                g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                 return -1;
             }
@@ -860,7 +860,7 @@ int InsertProcess(void)
     char (*reorderedRows)[RECORD_BUF_SIZE] = NULL;
 
     /* Extract base table name */
-    strcpy(tblName, g_tblInsertionName);
+    strcpy(tblName, g_ins.tblName);
     {
         char *dot = strstr(tblName, ".dat");
         if (dot) *dot = '\0';
@@ -871,9 +871,9 @@ int InsertProcess(void)
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int ncols;
     if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "could not open table \"%s\"", tblName);
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
         TruncateInsert();
         return -1;
@@ -881,15 +881,15 @@ int InsertProcess(void)
 
     /* GTT: ensure session-private PK tree exists */
     if (td.is_temporary == TEMP_GLOBAL && gtt_ensure_storage(&td) < 0) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "could not allocate storage for global temporary table");
-        g_gui_error = 1;
+        g_err.error = 1;
         TruncateInsert();
         return -1;
     }
 
-    /* Split g_insert into rows using ROW_SEP */
-    strncpy(allRows, g_insert, sizeof(allRows) - 1);
+    /* Split g_ins.data into rows using ROW_SEP */
+    strncpy(allRows, g_ins.data, sizeof(allRows) - 1);
     allRows[sizeof(allRows) - 1] = '\0';
 
     numRows = 0;
@@ -911,9 +911,9 @@ int InsertProcess(void)
     reorderedRows =
         (char (*)[RECORD_BUF_SIZE])malloc(256 * RECORD_BUF_SIZE);
     if (!reorderedRows) {
-        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "out of memory for INSERT batch");
-        g_gui_error = 1;
+        g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INTERNAL_ERROR);
         TruncateInsert();
         return -1;
@@ -938,7 +938,7 @@ int InsertProcess(void)
         strncpy(reorderedRows[i], rowPtrs[i], RECORD_BUF_SIZE - 1);
         reorderedRows[i][RECORD_BUF_SIZE - 1] = '\0';
 
-        if (g_insertColumnCount > 0) {
+        if (g_ins.columnCount > 0) {
             if (reorder_row_for_column_map(tblName, reorderedRows[i]) != 0) {
                 TruncateInsert();
                 retval = -1; goto cleanup;
@@ -1051,7 +1051,7 @@ int InsertProcess(void)
         numCols2 = InsertReadColumnNames(tblName, colNames2, 64);
 
     /* Insert each row */
-    g_insertCount = 0;
+    g_ins.rowCount = 0;
     for (i = 0; i < numRows; i++) {
         /* Pre-insert: check unique index constraints BEFORE storing */
         char preIdxKeys[16][512];
@@ -1095,10 +1095,10 @@ int InsertProcess(void)
                 if (preIdxKeys[ix][0] && (secIdx[ix].index_type == 'U' || secIdx[ix].index_type == 'V')) {
                     char dupCheck[1][256];
                     if (btree_search(preIdxPaths[ix], preIdxKeys[ix], dupCheck, 1) > 0) {
-                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                  "duplicate key value violates unique index \"%s\" (key=%s)",
                                  secIdx[ix].index_name, preIdxKeys[ix]);
-                        g_gui_error = 1;
+                        g_err.error = 1;
                         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                         TruncateInsert();
                         retval = -1; goto cleanup;
@@ -1114,15 +1114,15 @@ int InsertProcess(void)
             strncpy(valBuf2, reorderedRows[i], sizeof(valBuf2) - 1);
             valBuf2[sizeof(valBuf2) - 1] = '\0';
             key = strtok(valBuf2, ";");
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "duplicate key value violates unique constraint (key=%s, row %d)",
                      key ? key : "?", i + 1);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
             TruncateInsert();
             retval = -1; goto cleanup;
         }
-        g_insertCount++;
+        g_ins.rowCount++;
 
         /* Post-insert: update secondary B-tree indexes */
         if (nIdx > 0) {
@@ -1136,7 +1136,7 @@ int InsertProcess(void)
 
     printf("command(s) completed successfully!..\n");
 
-    if (g_insertCount > 0)
+    if (g_ins.rowCount > 0)
         cat_increment_dml_counter(td.table_id);
 
     /* Persist AUTO_INCREMENT counter */
@@ -1172,7 +1172,7 @@ char *ParseInsertion(char *arr)
 
 int GetInsertionTableName(char *name)
 {
-    db_table_path(name, g_tblInsertionName, sizeof(g_tblInsertionName));
+    db_table_path(name, g_ins.tblName, sizeof(g_ins.tblName));
 
     return 0;
 }

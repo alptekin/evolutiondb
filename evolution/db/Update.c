@@ -172,12 +172,12 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
 
         if (onUpdateAction == 0 || onUpdateAction == 3 || onUpdateAction == 5) {
             /* RESTRICT / NO ACTION — reject update */
-            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "update or delete on table \"%s\" violates foreign key constraint \"%s\" "
                      "on table \"%s\"",
                      parentTd->table_name, refConstraints[ri].constraint_name,
                      childTd.table_name);
-            g_gui_error = 1;
+            g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
             for (int m = 0; m < matchCount; m++) free(matchingChildKeys[m]);
             free(matchingChildKeys);
@@ -313,10 +313,10 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                 if (strcmp(metaCols[c], setCols[s]) == 0) {
                     /* Block SET on generated columns */
                     if (c < allNCols && allCols[c].generated_mode != GENMODE_NONE) {
-                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                  "column \"%s\" can only be updated to DEFAULT "
                                  "because it is a generated column", setCols[s]);
-                        g_gui_error = 1;
+                        g_err.error = 1;
                         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
                         return -1;
                     }
@@ -397,10 +397,10 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                     }
                 }
                 if (!pass) {
-                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "new row violates check constraint \"%s\"",
                              checkNames[ci]);
-                    g_gui_error = 1;
+                    g_err.error = 1;
                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
                     return -1;
                 }
@@ -486,11 +486,11 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
             /* MATCH FULL: reject mixed NULL/non-NULL */
             if (fkMatchType == 1 && anyNull && !allNull) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "insert or update on table violates foreign key constraint \"%s\" "
                          "(MATCH FULL does not allow mixing of null and nonnull values)",
                          fkConstraints[fi].constraint_name);
-                g_gui_error = 1;
+                g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                 return -1;
             }
@@ -524,11 +524,11 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             BTree2 refPkTree = tapi_pk_tree(&refTd);
             RowID refRid;
             if (bt2_search(&refPkTree, fkValue, &refRid) < 0) {
-                snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "insert or update on table violates foreign key constraint \"%s\" "
                          "(value \"%s\" not found in referenced table \"%s\")",
                          fkConstraints[fi].constraint_name, fkValue, refTd.table_name);
-                g_gui_error = 1;
+                g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
                 return -1;
             }
@@ -613,10 +613,10 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                             strcat(existComposite, uqFieldsArr[uqColIndices[uc]]);
                     }
                     if (strcmp(newComposite, existComposite) == 0) {
-                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                  "duplicate key value violates unique constraint \"%s\"",
                                  uqCons[ui].constraint_name);
-                        g_gui_error = 1;
+                        g_err.error = 1;
                         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                         return -1;
                     }
@@ -714,10 +714,10 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                                  updIdx[ix].root_page, updIdx[ix].index_type);
                         char dupCheck[1][256];
                         if (btree_search(idxPath, newKey, dupCheck, 1) > 0) {
-                            snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "duplicate key value violates unique index \"%s\" (key=%s)",
                                      updIdx[ix].index_name, newKey);
-                            g_gui_error = 1;
+                            g_err.error = 1;
                             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
                             return -1;
                         }
@@ -791,11 +791,11 @@ int UpdateProcess(void)
     char *tok;
     int s, c;
 
-    /* Parse g_insert tokens: SET values followed by WHERE data */
+    /* Parse g_ins.data tokens: SET values followed by WHERE data */
     char allTokens[64][256];
     int numTokens = 0;
 
-    strcpy(temp, g_insert);
+    strcpy(temp, g_ins.data);
     tok = strtok(temp, ";");
     while (tok && numTokens < 64) {
         strcpy(allTokens[numTokens], tok);
@@ -803,11 +803,11 @@ int UpdateProcess(void)
         tok = strtok(NULL, ";");
     }
 
-    /* Parse SET column names from g_columnNames */
+    /* Parse SET column names from g_ins.columnNames */
     char setCols[64][256];
     int numSetCols = 0;
 
-    strcpy(temp, g_columnNames);
+    strcpy(temp, g_ins.columnNames);
     tok = strtok(temp, ";");
     while (tok && numSetCols < 64) {
         strcpy(setCols[numSetCols], tok);
@@ -816,12 +816,12 @@ int UpdateProcess(void)
     }
 
     int numSetVals;
-    if (g_whereExpr != NULL) {
+    if (g_expr.whereExpr != NULL) {
         numSetVals = numSetCols;
     } else {
         if (numTokens < 2) {
             printf("Error: UPDATE requires at least a SET value and a WHERE key\n");
-            g_updateCount = 0;
+            g_upd.rowCount = 0;
             TruncateUpdate();
             return -1;
         }
@@ -829,7 +829,7 @@ int UpdateProcess(void)
     }
 
     /* Get table name (remove .dat extension) */
-    strcpy(tblName, g_tblSelectionName);
+    strcpy(tblName, g_sel.tblName);
     {
         char *dot = strstr(tblName, ".dat");
         if (dot) *dot = '\0';
@@ -841,7 +841,7 @@ int UpdateProcess(void)
     int allNCols;
     if (tapi_resolve(tblName, &td, allCols, &allNCols) < 0) {
         printf("Error: table not found\n");
-        g_updateCount = 0;
+        g_upd.rowCount = 0;
         TruncateUpdate();
         return -1;
     }
@@ -868,7 +868,7 @@ int UpdateProcess(void)
                 for (c = 0; c < numMetaCols; c++) {
                     if (strcmp(metaCols[c], setCols[s]) == 0) {
                         if (c < numTypes && ValidateValue(allTokens[s], colTypes[c]) != 0) {
-                            g_updateCount = 0;
+                            g_upd.rowCount = 0;
                             TruncateUpdate();
                             return -1;
                         }
@@ -887,12 +887,12 @@ int UpdateProcess(void)
                 if (strcmp(metaCols[c], setCols[s]) == 0) {
                     if (c < allNCols && allCols[c].is_not_null &&
                         allTokens[s][0] == '\0') {
-                        snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                  "null value in column \"%s\" violates not-null constraint",
                                  setCols[s]);
-                        g_gui_error = 1;
+                        g_err.error = 1;
                         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_NOT_NULL_VIOLATION);
-                        g_updateCount = 0;
+                        g_upd.rowCount = 0;
                         TruncateUpdate();
                         return -1;
                     }
@@ -929,12 +929,12 @@ int UpdateProcess(void)
                                 else
                                     existVal[0] = '\0';
                                 if (strcmp(allTokens[s], existVal) == 0) {
-                                    snprintf(g_gui_error_msg, sizeof(g_gui_error_msg),
+                                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                              "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
                                              setCols[s], allTokens[s]);
-                                    g_gui_error = 1;
+                                    g_err.error = 1;
                                     EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
-                                    g_updateCount = 0;
+                                    g_upd.rowCount = 0;
                                     TruncateUpdate();
                                     return -1;
                                 }
@@ -947,7 +947,7 @@ int UpdateProcess(void)
         }
     }
 
-    if (g_whereExpr != NULL) {
+    if (g_expr.whereExpr != NULL) {
         /* ---------- Expression-based WHERE update ---------- */
         char colNames[64][128];
         int numCols = numMetaCols;
@@ -961,7 +961,7 @@ int UpdateProcess(void)
         int matchCount = 0;
         char **matchKeys = (char **)malloc(capacity * sizeof(char *));
         if (!matchKeys) {
-            g_updateCount = 0;
+            g_upd.rowCount = 0;
             TruncateUpdate();
             return -1;
         }
@@ -980,7 +980,7 @@ int UpdateProcess(void)
                 (void)numExtracted;
 
                 char result[512];
-                int ok = expr_evaluate(g_whereExpr,
+                int ok = expr_evaluate(g_expr.whereExpr,
                                        (const char (*)[128])colNames,
                                        (const char (*)[256])colValues,
                                        numCols,
@@ -1038,7 +1038,7 @@ int UpdateProcess(void)
         }
         free(matchKeys);
 
-        g_updateCount = updated;
+        g_upd.rowCount = updated;
         if (updated > 0)
             cat_increment_dml_counter(td.table_id);
         printf("%d record(s) updated.\n", updated);
@@ -1053,11 +1053,11 @@ int UpdateProcess(void)
                              numSetCols, numSetVals,
                              (const char (*)[256])metaCols, numMetaCols,
                              tblName) == 0) {
-            g_updateCount = 1;
+            g_upd.rowCount = 1;
             cat_increment_dml_counter(td.table_id);
         } else {
             printf("Record not found for key: %s\n", key);
-            g_updateCount = 0;
+            g_upd.rowCount = 0;
         }
     }
 
@@ -1069,22 +1069,22 @@ int UpdateProcess(void)
 
 int GetUpdateTableName(char *pname)
 {
-    db_table_path(pname, g_tblUpdateTableName, sizeof(g_tblUpdateTableName));
+    db_table_path(pname, g_upd.tblName, sizeof(g_upd.tblName));
     return 0;
 }
 
 int GetUpdateColumnName(char *pname)
 {
-    strcat(g_columnNames, pname);
-    strcat(g_columnNames, ";");
+    strcat(g_ins.columnNames, pname);
+    strcat(g_ins.columnNames, ";");
     return 0;
 }
 
 int TruncateUpdate(void)
 {
-    memset(g_columnNames, '\0', 1024);
-    memset(g_insert, '\0', RECORD_BUF_SIZE);
-    memset(g_tblSelectionName, '\0', 1024);
+    memset(g_ins.columnNames, '\0', 1024);
+    memset(g_ins.data, '\0', RECORD_BUF_SIZE);
+    memset(g_sel.tblName, '\0', 1024);
 
     return 0;
 }
