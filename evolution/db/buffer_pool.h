@@ -79,6 +79,7 @@ int  bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring);
 void bp_flush_fd(int fd);       /* write all dirty pages for fd */
 void bp_invalidate_fd(int fd);  /* drop all pages for fd (flush first) */
 void bp_flush_all(void);        /* write all dirty pages */
+void bp_wal_flush_dirty(int fd);/* log all dirty pages for fd to WAL (no disk write) */
 
 /* ----------------------------------------------------------------
  *  Statistics

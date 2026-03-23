@@ -693,6 +693,31 @@ void bp_flush_all(void)
     }
 }
 
+void bp_wal_flush_dirty(int fd)
+{
+    extern uint32_t wal_log_page(uint32_t, const void *, uint16_t);
+    extern int wal_is_active(void);
+    if (!g_pool || !wal_is_active()) return;
+
+    int logged = 0;
+    int pi;
+    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+        BPPartition *part = &g_pool->parts[pi];
+        int i;
+        bp_mutex_lock(&part->lock);
+        for (i = 0; i < part->num_pages; i++) {
+            BPPage *p = &part->pages[i];
+            if (p->fd == fd && p->dirty) {
+                wal_log_page((uint32_t)p->page_no, p->data,
+                             (uint16_t)p->valid_len);
+                logged++;
+            }
+        }
+        bp_mutex_unlock(&part->lock);
+    }
+    (void)logged;
+}
+
 /* ================================================================
  *  Statistics — aggregate across all partitions
  * ================================================================ */

@@ -125,6 +125,9 @@ void     pgm_set_catalog_root(CatalogID id, uint32_t page_no);
 /* Get/set auto-increment IDs. */
 uint32_t pgm_next_id(int id_type); /* 0=table, 1=schema, 2=db */
 
+/* Re-read FileHeader from disk (after WAL recovery invalidates buffer pool). */
+void pgm_reload_header(void);
+
 /* MVCC: atomically increment and return the next transaction ID. */
 uint32_t pgm_next_xid(void);
 

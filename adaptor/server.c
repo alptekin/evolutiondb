@@ -81,6 +81,14 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (rs->has_error) {
             clog_set_aborted(qctx->mvcc_xid);
         } else {
+            /* WAL: flush all dirty pages to WAL before commit.
+             * This guarantees durability — if the server crashes after
+             * commit returns, the WAL has the page images for recovery. */
+            {
+                extern void bp_wal_flush_dirty(int fd);
+                extern int pgm_get_fd(void);
+                bp_wal_flush_dirty(pgm_get_fd());
+            }
             uint32_t csn = pgm_next_csn();
             clog_set_committed_csn(qctx->mvcc_xid, csn);
         }
@@ -137,7 +145,7 @@ void server_init(void)
     rwlock_init(&g_parse_lock);
     mutex_init(&g_conn_lock);
     bp_init(BP_DEFAULT_PAGES);   /* 32768 pages = 128 MB buffer pool */
-    query_engine_init();
+    query_engine_init();         /* opens data file, WAL replay, reads catalog */
     snowflake_init();
     mvcc_init();
     vmap_init();
@@ -145,6 +153,11 @@ void server_init(void)
 
 void server_cleanup(void)
 {
+    /* WAL checkpoint before pgm_shutdown flushes buffer pool */
+    {
+        extern void wal_shutdown(void);
+        wal_shutdown();
+    }
     pgm_shutdown();   /* flushes FileHeader + buffer pool + closes fd */
     bp_destroy();
     rwlock_destroy(&g_parse_lock);

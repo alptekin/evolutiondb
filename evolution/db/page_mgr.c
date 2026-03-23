@@ -199,16 +199,40 @@ int pgm_init(const char *filepath)
     /* Try to open existing file */
     g_global_fd = open(filepath, O_RDWR, 0644);
     if (g_global_fd >= 0) {
-        /* Existing file — read and validate header */
-        if (read_header() < 0) {
-            close(g_global_fd);
-            g_global_fd = -1;
-            pthread_mutex_unlock(&g_pgm_lock);
-            return -1;
+        /* Phase 1: Read header to get TDE state */
+        int header_ok = 0;
+        if (read_header() == 0 && g_header.magic == EVO_MAGIC)
+            header_ok = 1;
+
+        /* Phase 2: Initialize TDE if header is valid and encrypted */
+        if (header_ok) {
+            const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
+            int has_key = (enc_key && enc_key[0]);
+            if (g_header.encryption_enabled && has_key)
+                pcrypt_init_existing(g_header.encryption_salt,
+                                     g_header.wrapped_dek,
+                                     g_header.page_iv_prefix);
         }
-        if (g_header.magic != EVO_MAGIC) {
-            fprintf(stderr, "page_mgr: invalid magic number 0x%08X\n",
-                    g_header.magic);
+
+        /* Phase 3: WAL replay (can now encrypt pages if TDE is active) */
+        {
+            extern int wal_init(int data_fd);
+            int wal_recovered = wal_init(g_global_fd);
+            if (wal_recovered > 0) {
+                fprintf(stderr, "[WAL] Crash recovery: %d page(s) restored\n",
+                        wal_recovered);
+                /* Re-read header after replay (page 0 may have been recovered) */
+                /* Read directly from file, bypassing buffer pool */
+                pread(g_global_fd, &g_header, sizeof(FileHeader), 0);
+                header_ok = (g_header.magic == EVO_MAGIC) ? 1 : 0;
+            }
+        }
+
+        /* Phase 4: Validate header */
+        if (!header_ok) {
+            if (g_header.magic != EVO_MAGIC)
+                fprintf(stderr, "page_mgr: invalid magic number 0x%08X\n",
+                        g_header.magic);
             close(g_global_fd);
             g_global_fd = -1;
             pthread_mutex_unlock(&g_pgm_lock);
@@ -229,8 +253,10 @@ int pgm_init(const char *filepath)
             int has_key = (enc_key && enc_key[0]);
 
             if (g_header.encryption_enabled && has_key) {
-                /* Encrypted DB + key provided → unlock */
-                if (pcrypt_init_existing(g_header.encryption_salt,
+                /* Encrypted DB + key provided → unlock
+                 * (may already be init'd from Phase 2 above — pcrypt handles this) */
+                if (!pcrypt_is_enabled() &&
+                    pcrypt_init_existing(g_header.encryption_salt,
                                          g_header.wrapped_dek,
                                          g_header.page_iv_prefix) < 0) {
                     fprintf(stderr,
@@ -268,6 +294,11 @@ int pgm_init(const char *filepath)
     /* File doesn't exist — create new */
     if (errno == ENOENT) {
         int ret = create_new_file(filepath);
+        if (ret == 0) {
+            /* Initialize WAL for new database */
+            extern int wal_init(int data_fd);
+            wal_init(g_global_fd);
+        }
         pthread_mutex_unlock(&g_pgm_lock);
         return ret;
     }
@@ -429,6 +460,14 @@ uint32_t pgm_next_id(int id_type)
 
     pthread_mutex_unlock(&g_pgm_lock);
     return val;
+}
+
+void pgm_reload_header(void)
+{
+    pthread_mutex_lock(&g_pgm_lock);
+    read_header();
+    g_header_dirty = 0;
+    pthread_mutex_unlock(&g_pgm_lock);
 }
 
 uint32_t pgm_next_xid(void)

@@ -562,6 +562,12 @@ static int handle_transaction(const char *sql, ResultSet *rs,
             } else {
                 /* MVCC: mark committed in CLOG with CSN */
                 if (ctx->tx_xid > 0) {
+                    /* WAL: flush dirty pages before commit for durability */
+                    {
+                        extern void bp_wal_flush_dirty(int fd);
+                        extern int pgm_get_fd(void);
+                        bp_wal_flush_dirty(pgm_get_fd());
+                    }
                     uint32_t csn = pgm_next_csn();
                     clog_set_committed_csn(ctx->tx_xid, csn);
                     mvcc_unregister_tx(ctx->tx_xid);
