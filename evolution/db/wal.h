@@ -39,8 +39,8 @@ typedef struct {
     uint32_t next_lsn;         /* next LSN to assign */
 } WalHeader;
 
-/* WAL record (fixed-size header + page data + CRC) */
-#define WAL_RECORD_HEADER_SIZE  10  /* lsn(4) + page_no(4) + page_len(2) */
+/* WAL record header: [lsn:4][page_no:4][page_len:2][timestamp:8] + page_data + crc:4 */
+#define WAL_RECORD_HEADER_SIZE  18  /* lsn(4) + page_no(4) + page_len(2) + timestamp(8) */
 #define WAL_CRC_SIZE             4
 
 /* ----------------------------------------------------------------
@@ -64,7 +64,8 @@ uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len
 /* Perform a checkpoint:
  * 1. Caller must flush all dirty buffer pool pages first
  * 2. Advances checkpoint_lsn to next_lsn
- * 3. Truncates WAL file (removes old records)
+ * 3. Archives WAL to evosql.wal.archive (for time-travel recovery)
+ * 4. Truncates active WAL file
  * Returns 0 on success, -1 on error. */
 int wal_checkpoint(void);
 
@@ -74,5 +75,23 @@ void wal_shutdown(void);
 
 /* Check if WAL is active (initialized and operational). */
 int wal_is_active(void);
+
+/* ----------------------------------------------------------------
+ *  Time-Travel Recovery (EvoSQL Snapshot Restore)
+ *
+ *  Replays archived WAL records up to a target timestamp,
+ *  restoring the database to that point in time.
+ * ---------------------------------------------------------------- */
+
+/* Restore the database to a specific point in time.
+ * Replays WAL archive records with timestamp <= target_epoch.
+ * The database file must be a base snapshot taken before the target time.
+ * Returns number of pages restored, or -1 on error. */
+int wal_restore_to_timestamp(int data_fd, int64_t target_epoch);
+
+/* Get the timestamp range available in the WAL archive.
+ * Returns 0 on success, -1 if no archive exists.
+ * min_ts and max_ts are set to epoch seconds. */
+int wal_archive_range(int64_t *min_ts, int64_t *max_ts);
 
 #endif /* WAL_H */
