@@ -340,6 +340,9 @@ uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len
         return 0;
     }
 
+    /* Notify replication sender of new WAL data (non-blocking). */
+    { extern void repl_notify_new_wal(void); repl_notify_new_wal(); }
+
     /* NOTE: fsync deferred to wal_fsync() at commit time for batching.
      * Multiple pages are written sequentially, then a single fsync
      * flushes them all — ~100x faster than per-page fsync. */

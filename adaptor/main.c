@@ -7,6 +7,7 @@
  *
  * Usage:
  *   evosql-server [--pg-port PORT] [--evo-port PORT]
+ *                 [--replication-port PORT] [--replica HOST:PORT]
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
@@ -16,6 +17,7 @@
 #include "server.h"
 #include "pg_handler.h"
 #include "evo_protocol.h"
+#include "replication.h"
 #include "tls.h"
 
 #define DEFAULT_PG_PORT   5433
@@ -68,6 +70,8 @@ int main(int argc, char *argv[])
     int pg_port  = DEFAULT_PG_PORT;
     int evo_port = DEFAULT_EVO_PORT;
     int buffer_pool_pages = 0;  /* 0 = use default */
+    int repl_port = 0;         /* 0 = replication disabled */
+    const char *replica_target = NULL;  /* --replica host:port */
     int i;
 
     /* Parse CLI arguments */
@@ -78,6 +82,10 @@ int main(int argc, char *argv[])
             evo_port = atoi(argv[++i]);
         else if (strcmp(argv[i], "--buffer-pool-size") == 0 && i + 1 < argc)
             buffer_pool_pages = parse_buffer_size(argv[++i]);
+        else if (strcmp(argv[i], "--replication-port") == 0 && i + 1 < argc)
+            repl_port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--replica") == 0 && i + 1 < argc)
+            replica_target = argv[++i];
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
     }
@@ -127,8 +135,39 @@ int main(int argc, char *argv[])
     printf("  EVO protocol on port %d\n", evo_port);
     printf("  TLS: %s\n", tls_is_available() ? "enabled" : "disabled");
     printf("  Max connections: %d\n", get_max_connections());
+    if (repl_port > 0)
+        printf("  Replication: sender on port %d\n", repl_port);
+    if (replica_target)
+        printf("  Replication: replica of %s\n", replica_target);
     printf("==============================================\n");
     fflush(stdout);
+
+    /* Start replication sender if configured */
+    if (repl_port > 0) {
+        extern int repl_start_sender(int);
+        repl_start_sender(repl_port);
+    }
+
+    /* Start replica receiver if configured */
+    if (replica_target) {
+        char host[256] = "127.0.0.1";
+        int rport = REPL_DEFAULT_PORT;
+        /* Parse host:port */
+        const char *colon = strchr(replica_target, ':');
+        if (colon) {
+            int hlen = (int)(colon - replica_target);
+            if (hlen > 0 && hlen < 255) {
+                strncpy(host, replica_target, hlen);
+                host[hlen] = '\0';
+            }
+            rport = atoi(colon + 1);
+        } else {
+            strncpy(host, replica_target, 255);
+        }
+        extern int repl_start_receiver(const char *, int, int);
+        extern int pgm_get_fd(void);
+        repl_start_receiver(host, rport, pgm_get_fd());
+    }
 
     /* Start EVO listener in a background thread */
     static ListenerArg evo_arg;
