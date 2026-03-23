@@ -835,6 +835,16 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
             char recBuf[RECORD_BUF_SIZE];
             int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
             if (recLen > 0 && mvcc_is_visible(recBuf, recLen, &snap)) {
+                /* FOR UPDATE/SHARE: acquire row lock on PK lookup */
+                if (g_sel.forUpdate && ctx && ctx->tx_xid > 0) {
+                    extern int lock_row_acquire(uint32_t, const char *, uint32_t, int);
+                    int lm = (g_sel.forUpdate == 1) ? 2 : 1;
+                    if (lock_row_acquire(td.table_id, whereVal, ctx->tx_xid, lm) != 0) {
+                        result_set_error(rs, "55P03", "could not obtain lock on row");
+                        rwlock_rdunlock(&g_parse_lock);
+                        return;
+                    }
+                }
                 int row = result_add_row(rs);
                 if (row >= 0)
                     populate_result_row(rs, row, recBuf, recLen, cols, ncols);
@@ -851,6 +861,16 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
             int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
             if (recLen <= 0) continue;
             if (!mvcc_is_visible(recBuf, recLen, &snap)) continue;
+            /* FOR UPDATE/SHARE: acquire row lock */
+            if (g_sel.forUpdate && ctx && ctx->tx_xid > 0) {
+                extern int lock_row_acquire(uint32_t, const char *, uint32_t, int);
+                int lm = (g_sel.forUpdate == 1) ? 2 : 1;
+                if (lock_row_acquire(td.table_id, matchPKs[m], ctx->tx_xid, lm) != 0) {
+                    result_set_error(rs, "55P03", "could not obtain lock on row");
+                    rwlock_rdunlock(&g_parse_lock);
+                    return;
+                }
+            }
             int row = result_add_row(rs);
             if (row < 0) break;
             populate_result_row(rs, row, recBuf, recLen, cols, ncols);
@@ -867,7 +887,8 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
  *  Collect SELECT results into ResultSet
  * ---------------------------------------------------------------- */
 static void collect_select_results(const char *tableName, ResultSet *rs,
-                                   const Snapshot *snap)
+                                   const Snapshot *snap,
+                                   int forUpdate, uint32_t lock_xid)
 {
     int count = 0;
 
@@ -1086,6 +1107,18 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
             while (tapi_scan_next_mvcc(&cursor, keyBuf, recBuf, sizeof(recBuf), snap) == 0) {
                 int recLen = tup_record_len(recBuf, sizeof(recBuf));
                 if (recLen <= 0) continue;
+
+                /* FOR UPDATE/SHARE: acquire row lock before including in result */
+                if (forUpdate && lock_xid > 0) {
+                    extern int lock_row_acquire(uint32_t, const char *, uint32_t, int);
+                    int lock_mode = (forUpdate == 1) ? 2 /*LOCK_EXCLUSIVE*/ : 1 /*LOCK_SHARED*/;
+                    if (lock_row_acquire(td.table_id, keyBuf, lock_xid, lock_mode) != 0) {
+                        result_set_error(rs, "55P03",
+                            "could not obtain lock on row");
+                        return;
+                    }
+                }
+
                 if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
                 if (streaming) {
                     /* --- Streaming path: parse, filter, send directly --- */
@@ -2185,7 +2218,7 @@ static void execute_ctas(const char *srcTable, ResultSet *rs, SessionCtx *ctx)
     ResultSet selectRs;
     memset(&selectRs, 0, sizeof(selectRs));  /* ensure stream_conn=NULL */
     result_init(&selectRs);
-    collect_select_results(srcTable, &selectRs, NULL);
+    collect_select_results(srcTable, &selectRs, NULL, 0, 0);
 
     if (selectRs.has_error) {
         result_set_error(rs, selectRs.error_sqlstate, selectRs.error_message);
@@ -2492,10 +2525,30 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 }
             }
 
-            rwlock_rdlock(&g_parse_lock);
-            collect_select_results(g_sel.lastTable, rs,
-                                   ctx ? &ctx->snapshot : NULL);
-            rwlock_rdunlock(&g_parse_lock);
+            /* FOR UPDATE requires write lock (DML-level) for row locking.
+             * Regular SELECT uses read lock (concurrent). */
+            if (g_sel.forUpdate) {
+                /* FOR UPDATE needs an XID for lock ownership */
+                if (ctx && ctx->tx_xid == 0 && g_sel.forUpdate) {
+                    /* Auto-transaction: assign ephemeral XID */
+                    extern uint32_t mvcc_ensure_xid(uint32_t *);
+                    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+                    if (!ctx->in_transaction)
+                        ctx->tx_xid = g_qctx->mvcc_xid;
+                }
+                rwlock_wrlock(&g_parse_lock);
+                collect_select_results(g_sel.lastTable, rs,
+                                       ctx ? &ctx->snapshot : NULL,
+                                       g_sel.forUpdate,
+                                       ctx ? ctx->tx_xid : 0);
+                rwlock_wrunlock(&g_parse_lock);
+            } else {
+                rwlock_rdlock(&g_parse_lock);
+                collect_select_results(g_sel.lastTable, rs,
+                                       ctx ? &ctx->snapshot : NULL,
+                                       0, 0);
+                rwlock_rdunlock(&g_parse_lock);
+            }
             g_sel.lastTable[0] = '\0';
         } else if (!rs->has_error && g_expr.selectExprCount > 0 && is_select_query(sql)) {
             /* Tableless SELECT: SELECT 1+2, SELECT 1=1 AND 2=2, etc.

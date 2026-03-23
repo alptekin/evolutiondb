@@ -154,6 +154,7 @@ LEADING					{ return LEADING; }
 LEFT					{ return LEFT; }
 LIKE					{ return LIKE; }
 LIMIT					{ return LIMIT; }
+LOCKED					{ return LOCKED; }
 OFFSET					{ return OFFSET; }
 
 
@@ -213,7 +214,8 @@ RESTRICT				{ return RESTRICT; }
 RIGHT					{ return RIGHT; }
 ROLLUP					{ return ROLLUP; }
 SCHEMA					{ return SCHEMA; }
-
+SHARE					{ return SHARE; }
+SKIP					{ return SKIP; }
 
 SELECT					{ return SELECT; }
 

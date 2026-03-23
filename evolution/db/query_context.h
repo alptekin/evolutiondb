@@ -96,6 +96,8 @@ typedef struct {
     /* Sort context (qsort callback) */
     int  sortColIndex;
     int  sortDesc;
+    /* FOR UPDATE / FOR SHARE locking */
+    int  forUpdate;       /* 0=none, 1=FOR UPDATE, 2=FOR SHARE */
 } SelectOpts;
 
 /* ---- UPDATE ---- */
