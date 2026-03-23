@@ -110,12 +110,61 @@ static int modes_conflict(int held, int requested)
 }
 
 /* ================================================================
+ *  Deadlock detection — wait-for graph cycle check
+ *
+ *  Before a transaction waits for a lock, we check if the holder
+ *  (directly or transitively) is waiting for a lock held by the
+ *  requester. If so, we have a cycle → deadlock.
+ *
+ *  Algorithm: DFS from holder_xid following "waits-for" edges.
+ *  An edge A→B exists when A is waiting for a lock held by B.
+ *  We track waiting state via a parallel array.
+ * ================================================================ */
+
+#define MAX_DEADLOCK_DEPTH 64
+
+/* Track which XID each waiting XID is blocked by.
+ * g_wait_for[xid % WAIT_TABLE_SIZE] = blocking_xid (0 = not waiting) */
+#define WAIT_TABLE_SIZE 4096
+static uint32_t g_wait_for[WAIT_TABLE_SIZE];
+
+static void wait_for_set(uint32_t waiter, uint32_t blocker)
+{
+    g_wait_for[waiter % WAIT_TABLE_SIZE] = blocker;
+}
+
+static void wait_for_clear(uint32_t waiter)
+{
+    g_wait_for[waiter % WAIT_TABLE_SIZE] = 0;
+}
+
+/* Check if requester_xid would deadlock by waiting for holder_xid.
+ * Returns 1 if deadlock detected, 0 otherwise.
+ * Must be called while holding g_lock_mutex. */
+static int detect_deadlock(uint32_t requester_xid, uint32_t holder_xid)
+{
+    if (requester_xid == 0 || holder_xid == 0) return 0;
+    if (requester_xid == holder_xid) return 0;
+
+    /* DFS: follow wait-for chain from holder */
+    uint32_t current = holder_xid;
+    for (int depth = 0; depth < MAX_DEADLOCK_DEPTH; depth++) {
+        uint32_t blocked_by = g_wait_for[current % WAIT_TABLE_SIZE];
+        if (blocked_by == 0) return 0;          /* not waiting → no cycle */
+        if (blocked_by == requester_xid) return 1; /* cycle! */
+        current = blocked_by;
+    }
+    return 0;  /* chain too long, assume no deadlock */
+}
+
+/* ================================================================
  *  Public API
  * ================================================================ */
 
 void lock_mgr_init(void)
 {
     memset(g_lock_table, 0, sizeof(g_lock_table));
+    memset(g_wait_for, 0, sizeof(g_wait_for));
     g_lock_count = 0;
 }
 
@@ -173,7 +222,14 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
         return LOCK_OK;
     }
 
-    /* Wait for the lock to be released, with timeout */
+    /* Deadlock detection: check if waiting would create a cycle */
+    if (detect_deadlock(xid, e->holder_xid)) {
+        pthread_mutex_unlock(&g_lock_mutex);
+        return LOCK_DEADLOCK;
+    }
+
+    /* Register in wait-for graph before sleeping */
+    wait_for_set(xid, e->holder_xid);
     e->waiter_count++;
 
     struct timespec ts;
@@ -202,12 +258,15 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
         e = find_entry(table_id, pk_key, bucket);
         if (!e) {
             /* Lock was freed — create our own */
+            wait_for_clear(xid);
             create_entry(table_id, pk_key, xid, mode, bucket);
             pthread_mutex_unlock(&g_lock_mutex);
             return LOCK_OK;
         }
     }
 
+    /* Clear wait-for registration */
+    wait_for_clear(xid);
     if (e) e->waiter_count--;
 
     if (result == LOCK_OK && e) {

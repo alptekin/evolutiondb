@@ -490,14 +490,25 @@ int DeleteProcess(void)
 
                     /* Acquire exclusive row lock for this DELETE */
                     mvcc_ensure_xid(&g_qctx->mvcc_xid);
-                    if (lock_row_acquire(td.table_id, matchKeys[i],
-                                         g_qctx->mvcc_xid,
-                                         LOCK_EXCLUSIVE) != LOCK_OK) {
-                        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                                 "could not obtain lock on row (key=%s)",
-                                 matchKeys[i]);
-                        g_err.error = 1;
-                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
+                    {
+                        int lr = lock_row_acquire(td.table_id, matchKeys[i],
+                                                  g_qctx->mvcc_xid,
+                                                  LOCK_EXCLUSIVE);
+                        if (lr == LOCK_DEADLOCK) {
+                            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                                     "deadlock detected while waiting for lock on row (key=%s)",
+                                     matchKeys[i]);
+                            g_err.error = 1;
+                            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DEADLOCK_DETECTED);
+                        } else if (lr != LOCK_OK) {
+                            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                                     "could not obtain lock on row (key=%s)",
+                                     matchKeys[i]);
+                            g_err.error = 1;
+                            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
+                        }
+                    }
+                    if (g_err.error) {
                         for (int mi = i; mi < matchCount; mi++)
                             free(matchKeys[mi]);
                         free(matchKeys);
