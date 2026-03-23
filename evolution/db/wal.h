@@ -41,6 +41,11 @@ typedef struct {
 
 /* WAL record header: [lsn:4][page_no:4][page_len:2][timestamp:8] + page_data + crc:4 */
 #define WAL_RECORD_HEADER_SIZE  18  /* lsn(4) + page_no(4) + page_len(2) + timestamp(8) */
+
+/* Special page_no values for non-page WAL records */
+#define WAL_PAGE_XA_PREPARE  0xFFFFFFFE  /* XA PREPARE: data = xa_xid + mvcc_xid */
+#define WAL_PAGE_XA_COMMIT   0xFFFFFFFD  /* XA COMMIT: data = xa_xid */
+#define WAL_PAGE_XA_ROLLBACK 0xFFFFFFFC  /* XA ROLLBACK: data = xa_xid */
 #define WAL_CRC_SIZE             4
 
 /* ----------------------------------------------------------------
@@ -86,6 +91,12 @@ int wal_replay_remaining(void);
 /* Batch fsync: flush all pending WAL writes to disk.
  * Called once at commit (not per-page) for ~100x speedup. */
 void wal_fsync(void);
+
+/* Log an XA PREPARE record to WAL (crash-safe prepared TX persistence). */
+uint32_t wal_log_xa_prepare(const char *xa_xid, uint32_t mvcc_xid);
+
+/* Log an XA COMMIT/ROLLBACK record to WAL (marks prepared TX as resolved). */
+uint32_t wal_log_xa_resolve(const char *xa_xid, int commit);
 
 /* Check if WAL is active (initialized and operational). */
 int wal_is_active(void);
