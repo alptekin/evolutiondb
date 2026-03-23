@@ -778,7 +778,7 @@
 
 ---
 
-### Task 38: ⬜ Deadlock Detection & Resolution (Feature #98)
+### Task 38: ✅ Deadlock Detection & Resolution (Feature #98)
 
 **Goal:** Detect deadlocks between concurrent transactions and abort one to resolve. In MySQL, MSSQL, and Oracle.
 
@@ -1896,7 +1896,7 @@
 
 ## Day 48 — WAL & File Locking
 
-### Task 94: ⬜ WAL / Crash Recovery (Feature #66)
+### Task 94: ✅ WAL / Crash Recovery (Feature #66)
 
 **Goal:** Implement basic Write-Ahead Log for crash recovery.
 
@@ -1915,7 +1915,7 @@
 
 ---
 
-### Task 95: ⬜ Concurrent Write Safety / Lock Manager (Feature #67)
+### Task 95: ✅ Concurrent Write Safety / Lock Manager (Feature #67)
 
 **Goal:** Replace global mutex with finer-grained concurrency control. Single `evosql.db` file means `flock()` is not suitable — use in-memory lock manager instead.
 
