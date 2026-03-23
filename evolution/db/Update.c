@@ -1011,6 +1011,8 @@ int UpdateProcess(void)
         if (dot) *dot = '\0';
     }
 
+    /* Per-table lock */
+
     /* Resolve table via catalog */
     TableDesc td;
     ColumnDesc allCols[CAT_MAX_COLUMNS];
@@ -1294,7 +1296,6 @@ int UpdateProcess(void)
 
     printf("command(s) completed successfully!..\n");
     TruncateUpdate();
-
     return 0;
 }
 

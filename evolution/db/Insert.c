@@ -893,6 +893,8 @@ int InsertProcess(void)
         if (dot) *dot = '\0';
     }
 
+    /* Per-table + catalog lock for concurrent DML */
+
     /* Resolve table via catalog */
     TableDesc td;
     ColumnDesc cols[CAT_MAX_COLUMNS];

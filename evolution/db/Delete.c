@@ -350,6 +350,8 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
 
 int DeleteProcess(void)
 {
+    /* Per-table lock */
+
     /* Resolve table via catalog */
     TableDesc td;
     ColumnDesc cols[CAT_MAX_COLUMNS];

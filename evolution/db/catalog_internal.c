@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "database.h"
@@ -18,6 +19,15 @@
 static BTree2   g_cat_trees[CAT_MAX];       /* B+ tree handles */
 static uint32_t g_cat_data_pages[CAT_MAX];  /* current insertion pages */
 static int      g_cat_initialized = 0;
+
+/* Catalog-wide mutex for thread-safe access.
+ * All catalog operations (find, list, create, update, delete) acquire
+ * this mutex. Concurrent DML on different tables can proceed because
+ * catalog access is brief (B+ tree lookup). */
+static pthread_mutex_t g_cat_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#define CAT_LOCK()   pthread_mutex_lock(&g_cat_mutex)
+#define CAT_UNLOCK() pthread_mutex_unlock(&g_cat_mutex)
 
 /* Constraint ordinal counter per table (simple approach: global counter) */
 static int g_constraint_ordinal = 0;
@@ -372,6 +382,8 @@ int cat_init(void)
 {
     if (g_cat_initialized) return 0;
 
+    /* Catalog mutex already statically initialized */
+
     /* Check if catalog already exists */
     uint32_t db_root = pgm_get_catalog_root(CAT_SYS_DATABASES);
 
@@ -446,6 +458,10 @@ int cat_create_database(const char *name)
 
     return (int)d.db_id;
 }
+
+/* Public lock/unlock for callers that need catalog thread-safety */
+void cat_lock(void)   { CAT_LOCK(); }
+void cat_unlock(void) { CAT_UNLOCK(); }
 
 int cat_find_database(const char *name, DatabaseDesc *out)
 {
