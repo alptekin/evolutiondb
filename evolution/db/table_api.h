@@ -122,6 +122,19 @@ int tapi_scan_next_mvcc(TableScanCursor *cursor,
                         const struct Snapshot *snap);
 
 /* ----------------------------------------------------------------
+ *  HOT chain following — find newest version on same page
+ * ---------------------------------------------------------------- */
+struct Snapshot;
+
+/* If the tuple at `rid` has HOT_UPDATED flag, scan the same page for
+ * the newest visible version (HEAP_ONLY tuple with matching table_id).
+ * Copies the newest visible record to out_rec and sets *out_rid.
+ * Returns record length on success, -1 if no newer version found. */
+int tapi_follow_hot_chain(RowID rid, const char *old_rec, int old_len,
+                          const struct Snapshot *snap,
+                          char *out_rec, int out_size, RowID *out_rid);
+
+/* ----------------------------------------------------------------
  *  Free all heap pages (for DROP TABLE / TRUNCATE)
  * ---------------------------------------------------------------- */
 

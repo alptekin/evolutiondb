@@ -293,12 +293,26 @@ int tapi_scan_next(TableScanCursor *cursor,
         if (tup_has_mvcc(record_out, rec_len)) {
             uint32_t xmin = tup_get_xmin(record_out, rec_len);
             uint32_t xmax = tup_get_xmax(record_out, rec_len);
-            if (xmax != 0 && clog_is_committed(xmax))
+            if (xmax != 0 && clog_is_committed(xmax)) {
+                /* HOT chain: if old version is soft-deleted but HOT_UPDATED,
+                 * follow chain to find the current version */
+                if (tup_is_hot_updated(record_out, rec_len)) {
+                    RowID hot_rid;
+                    int hot_len = tapi_follow_hot_chain(rid, record_out, rec_len,
+                                                         NULL, record_out,
+                                                         rec_out_size, &hot_rid);
+                    if (hot_len > 0) {
+                        rec_len = hot_len;
+                        goto dml_found;
+                    }
+                }
                 continue;  /* soft-deleted and committed — skip */
+            }
             if (mvcc_xid_is_crashed(xmin))
                 continue;  /* crashed insert — skip */
         }
 
+dml_found:
         return 0;
     }
 }
@@ -323,9 +337,22 @@ int tapi_scan_next_mvcc(TableScanCursor *cursor,
         /* VMAP fast-skip: if entire page is all-visible, skip per-tuple check */
         if (snap && vmap_is_visible(rid.page_no)) {
             /* All tuples on this page are visible — skip MVCC check */
-        } else if (snap && !mvcc_is_visible(record_out, rec_len, snap))
+        } else if (snap && !mvcc_is_visible(record_out, rec_len, snap)) {
+            /* Not visible — but if it's a HOT chain root, follow to newer version */
+            if (tup_is_hot_updated(record_out, rec_len)) {
+                RowID hot_rid;
+                int hot_len = tapi_follow_hot_chain(rid, record_out, rec_len,
+                                                     snap, record_out,
+                                                     rec_out_size, &hot_rid);
+                if (hot_len > 0) {
+                    rec_len = hot_len;
+                    goto found;  /* HOT result — skip HEAP_ONLY filter */
+                }
+            }
             continue;  /* invisible to this snapshot */
+        }
 
+found:
         /* Lazily set hint bit so future reads skip CLOG */
         if (snap && tup_has_mvcc(record_out, rec_len) &&
             !(record_out[TUPLE_PREFIX_SIZE + 3] & TUPLE_FLAG_XMIN_COMMITTED))
@@ -333,6 +360,77 @@ int tapi_scan_next_mvcc(TableScanCursor *cursor,
 
         return 0;
     }
+}
+
+/* ----------------------------------------------------------------
+ *  HOT chain following
+ * ---------------------------------------------------------------- */
+
+int tapi_follow_hot_chain(RowID rid, const char *old_rec, int old_len,
+                          const Snapshot *snap,
+                          char *out_rec, int out_size, RowID *out_rid)
+{
+    if (!tup_is_hot_updated(old_rec, old_len))
+        return -1;  /* not a HOT chain root */
+
+    uint32_t table_id = tup_get_table_id(old_rec);
+    uint32_t old_xmax = tup_get_xmax(old_rec, old_len);
+    if (old_xmax == 0) return -1;  /* no deleter = not updated */
+
+    /* Scan all slots on the same page for a HEAP_ONLY tuple
+     * whose xmin matches old_xmax (the UPDATE's XID). */
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+
+    SlottedHeader *sh = (SlottedHeader *)((char *)page_buf + PAGE_HEADER_SIZE);
+
+    /* Follow the chain: scan all slots for matching xmin, restart if chain continues */
+    int best_len = -1;
+    int max_chain = 16;  /* prevent infinite loops */
+
+    while (max_chain-- > 0) {
+        int found_next = 0;
+        for (uint16_t si = 0; si < sh->num_slots; si++) {
+            SlotEntry *se = (SlotEntry *)((char *)page_buf + PAGE_HEADER_SIZE +
+                             SLOTTED_HEADER_SIZE + si * SLOT_ENTRY_SIZE);
+            if (se->offset == 0) continue;
+
+            char *rec = (char *)page_buf + se->offset;
+            int rec_len = (int)se->length;
+
+            if (!tup_is_binary(rec, rec_len)) continue;
+            if (tup_get_table_id(rec) != table_id) continue;
+            if (!tup_is_heap_only(rec, rec_len)) continue;
+            if (!tup_has_mvcc(rec, rec_len)) continue;
+
+            uint32_t xmin = tup_get_xmin(rec, rec_len);
+            if (xmin != old_xmax) continue;  /* not our successor */
+
+            /* Found a chain link */
+            int copy_len = rec_len < out_size ? rec_len : out_size;
+            memcpy(out_rec, rec, copy_len);
+            if (copy_len < out_size) out_rec[copy_len] = '\0';
+            if (out_rid) {
+                out_rid->page_no = rid.page_no;
+                out_rid->slot_idx = si;
+            }
+            best_len = rec_len;
+
+            /* Continue chain if this link is also HOT_UPDATED */
+            if (tup_is_hot_updated(rec, rec_len)) {
+                old_xmax = tup_get_xmax(rec, rec_len);
+                found_next = 1;
+            }
+            break;
+        }
+        if (!found_next) break;  /* end of chain or no more links */
+    }
+
+    /* Final visibility check on the last version found */
+    if (best_len > 0 && snap && !mvcc_is_visible(out_rec, best_len, snap))
+        return -1;
+
+    return best_len;
 }
 
 /* ----------------------------------------------------------------

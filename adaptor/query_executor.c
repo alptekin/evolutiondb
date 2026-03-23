@@ -834,6 +834,15 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (bt2_search(&pk_tree, whereVal, &rid) == 0) {
             char recBuf[RECORD_BUF_SIZE];
             int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
+            /* Follow HOT chain if PK points to an old HOT_UPDATED version */
+            if (recLen > 0 && !mvcc_is_visible(recBuf, recLen, &snap) &&
+                tup_is_hot_updated(recBuf, recLen)) {
+                RowID hot_rid;
+                int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                     &snap, recBuf,
+                                                     sizeof(recBuf), &hot_rid);
+                if (hot_len > 0) recLen = hot_len;
+            }
             if (recLen > 0 && mvcc_is_visible(recBuf, recLen, &snap)) {
                 /* FOR UPDATE/SHARE: acquire row lock on PK lookup */
                 if (g_sel.forUpdate && ctx && ctx->tx_xid > 0) {
@@ -961,6 +970,15 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                     char recBuf[RECORD_BUF_SIZE];
                     int recLen;
                     if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) > 0) {
+                        /* Follow HOT chain if PK points to old HOT_UPDATED version */
+                        if (snap && !mvcc_is_visible(recBuf, recLen, snap) &&
+                            tup_is_hot_updated(recBuf, recLen)) {
+                            RowID hot_rid;
+                            int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                                 snap, recBuf,
+                                                                 sizeof(recBuf), &hot_rid);
+                            if (hot_len > 0) recLen = hot_len;
+                        }
                         /* MVCC visibility check */
                         if (!snap || mvcc_is_visible(recBuf, recLen, snap)) {
                             if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
@@ -989,6 +1007,15 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                     int recLen;
                     if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) <= 0)
                         continue;
+                    /* HOT chain following for secondary index path */
+                    if (snap && !mvcc_is_visible(recBuf, recLen, snap) &&
+                        tup_is_hot_updated(recBuf, recLen)) {
+                        RowID hot_rid;
+                        int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                             snap, recBuf,
+                                                             sizeof(recBuf), &hot_rid);
+                        if (hot_len > 0) recLen = hot_len;
+                    }
                     if (snap && !mvcc_is_visible(recBuf, recLen, snap))
                         continue;
                     if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
