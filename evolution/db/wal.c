@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/time.h>
 #include "wal.h"
 #include "page_mgr.h"
 #include "page_crypt.h"
@@ -245,7 +246,7 @@ uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len
 
     uint32_t lsn = g_wal_header.next_lsn++;
 
-    /* Build record: [lsn:4][page_no:4][page_len:2][page_data][crc:4] */
+    /* Build record: [lsn:4][page_no:4][page_len:2][timestamp:8][page_data][crc:4] */
     size_t rec_size = WAL_RECORD_HEADER_SIZE + page_len + WAL_CRC_SIZE;
     char *rec = (char *)malloc(rec_size);
     if (!rec) {
@@ -256,6 +257,12 @@ uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len
     memcpy(rec, &lsn, 4);
     memcpy(rec + 4, &page_no, 4);
     memcpy(rec + 8, &page_len, 2);
+    {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        int64_t epoch_us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
+        memcpy(rec + 10, &epoch_us, 8);
+    }
     memcpy(rec + WAL_RECORD_HEADER_SIZE, page_data, page_len);
 
     /* CRC covers header + page data */
@@ -287,10 +294,34 @@ int wal_checkpoint(void)
 
     pthread_mutex_lock(&g_wal_lock);
 
+    /* Archive: append current WAL records to archive file before truncating.
+     * This enables Time-Travel Recovery (restore to a past timestamp). */
+    {
+        off_t wal_size = lseek(g_wal_fd, 0, SEEK_END);
+        if (wal_size > (off_t)sizeof(WalHeader)) {
+            char archive_path[2048];
+            snprintf(archive_path, sizeof(archive_path), "%s.archive", g_wal_path);
+            int afd = open(archive_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (afd >= 0) {
+                /* Copy records (skip WAL header) to archive */
+                off_t src = sizeof(WalHeader);
+                char copy_buf[8192];
+                while (src < wal_size) {
+                    ssize_t n = pread(g_wal_fd, copy_buf, sizeof(copy_buf), src);
+                    if (n <= 0) break;
+                    write(afd, copy_buf, n);
+                    src += n;
+                }
+                fsync(afd);
+                close(afd);
+            }
+        }
+    }
+
     /* Advance checkpoint to current position */
     g_wal_header.checkpoint_lsn = g_wal_header.next_lsn - 1;
 
-    /* Truncate WAL file (remove all records, keep header) */
+    /* Truncate active WAL file (remove all records, keep header) */
     ftruncate(g_wal_fd, sizeof(WalHeader));
     wal_flush_header();
 
@@ -316,4 +347,119 @@ void wal_shutdown(void)
 int wal_is_active(void)
 {
     return g_wal_active;
+}
+
+/* ================================================================
+ *  Time-Travel Recovery — restore to a past timestamp
+ * ================================================================ */
+
+int wal_restore_to_timestamp(int data_fd, int64_t target_epoch_us)
+{
+    char archive_path[2048];
+    snprintf(archive_path, sizeof(archive_path), "%s.archive", g_wal_path);
+
+    int afd = open(archive_path, O_RDONLY);
+    if (afd < 0) {
+        fprintf(stderr, "[WAL] No archive file found at %s\n", archive_path);
+        return -1;
+    }
+
+    off_t file_size = lseek(afd, 0, SEEK_END);
+    off_t pos = 0;
+    int restored = 0;
+    char page_buf[EVO_PAGE_SIZE];
+
+    while (pos < file_size) {
+        uint32_t rec_lsn;
+        uint32_t rec_page_no;
+        uint16_t rec_page_len;
+        int64_t  rec_timestamp;
+
+        if (pread(afd, &rec_lsn, 4, pos) != 4) break;
+        if (pread(afd, &rec_page_no, 4, pos + 4) != 4) break;
+        if (pread(afd, &rec_page_len, 2, pos + 8) != 2) break;
+        if (pread(afd, &rec_timestamp, 8, pos + 10) != 8) break;
+
+        if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) break;
+
+        /* Stop if record is past the target timestamp */
+        if (rec_timestamp > target_epoch_us) break;
+
+        /* Read page data */
+        if (pread(afd, page_buf, rec_page_len, pos + WAL_RECORD_HEADER_SIZE)
+            != (ssize_t)rec_page_len)
+            break;
+
+        /* Verify CRC */
+        uint32_t stored_crc;
+        off_t crc_off = pos + WAL_RECORD_HEADER_SIZE + rec_page_len;
+        if (pread(afd, &stored_crc, 4, crc_off) != 4) break;
+
+        size_t crc_len = WAL_RECORD_HEADER_SIZE + rec_page_len;
+        char *crc_buf = (char *)malloc(crc_len);
+        if (!crc_buf) break;
+        pread(afd, crc_buf, crc_len, pos);
+        uint32_t computed_crc = wal_crc32(crc_buf, crc_len);
+        free(crc_buf);
+
+        if (computed_crc != stored_crc) break;
+
+        /* Apply page to data file (with TDE encryption if needed) */
+        off_t data_offset = (off_t)rec_page_no * EVO_PAGE_SIZE;
+        if (pcrypt_is_enabled() && rec_page_no > 0) {
+            uint8_t enc_buf[EVO_PAGE_SIZE];
+            memcpy(enc_buf, page_buf, rec_page_len);
+            pcrypt_encrypt_page(enc_buf, rec_page_no);
+            pwrite(data_fd, enc_buf, rec_page_len, data_offset);
+        } else {
+            pwrite(data_fd, page_buf, rec_page_len, data_offset);
+        }
+        restored++;
+
+        pos += WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+    }
+
+    if (restored > 0) fsync(data_fd);
+    close(afd);
+
+    fprintf(stderr, "[WAL] Time-Travel Recovery: restored %d page(s) to target timestamp\n",
+            restored);
+    return restored;
+}
+
+int wal_archive_range(int64_t *min_ts, int64_t *max_ts)
+{
+    char archive_path[2048];
+    snprintf(archive_path, sizeof(archive_path), "%s.archive", g_wal_path);
+
+    int afd = open(archive_path, O_RDONLY);
+    if (afd < 0) return -1;
+
+    off_t file_size = lseek(afd, 0, SEEK_END);
+    if (file_size < (off_t)WAL_RECORD_HEADER_SIZE) {
+        close(afd);
+        return -1;
+    }
+
+    /* Read first record's timestamp */
+    int64_t first_ts = 0;
+    pread(afd, &first_ts, 8, 10);  /* offset 10 = after lsn(4)+page_no(4)+len(2) */
+
+    /* Scan to last record's timestamp */
+    off_t pos = 0;
+    int64_t last_ts = first_ts;
+    while (pos < file_size) {
+        uint16_t rec_page_len;
+        int64_t rec_ts;
+        if (pread(afd, &rec_page_len, 2, pos + 8) != 2) break;
+        if (pread(afd, &rec_ts, 8, pos + 10) != 8) break;
+        if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) break;
+        last_ts = rec_ts;
+        pos += WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+    }
+
+    close(afd);
+    if (min_ts) *min_ts = first_ts;
+    if (max_ts) *max_ts = last_ts;
+    return 0;
 }
