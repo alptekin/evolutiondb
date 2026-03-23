@@ -12,6 +12,7 @@
 #include "database.h"
 #include "mvcc.h"
 #include "vmap.h"
+#include "buffer_pool.h"
 
 /* ----------------------------------------------------------------
  *  Table resolution
@@ -272,7 +273,33 @@ int tapi_get_pk_indices(const ColumnDesc *cols, int ncols,
 int tapi_scan_begin(const TableDesc *td, TableScanCursor *cursor)
 {
     cursor->tree = tapi_pk_tree(td);
+    cursor->ring = NULL;  /* ring buffer allocated by caller for read-only scans */
     return bt2_cursor_first(&cursor->tree, &cursor->bt_cursor);
+}
+
+void tapi_scan_end(TableScanCursor *cursor)
+{
+    if (cursor->ring) {
+        bp_ring_free((BPRing *)cursor->ring);
+        cursor->ring = NULL;
+    }
+}
+
+/* Read a heap record using the scan's ring buffer (anti-pollution). */
+static int tapi_heap_read_ring(RowID rid, char *buf, int bufsize, void *ring)
+{
+    if (rid.page_no == 0) return -1;
+    char page_buf[EVO_PAGE_SIZE];
+    off_t offset = (off_t)rid.page_no * EVO_PAGE_SIZE;
+    int fd = pgm_get_fd();
+    if (ring)
+        bp_read_seq(fd, page_buf, EVO_PAGE_SIZE, offset, (BPRing *)ring);
+    else
+        pgm_read_page(rid.page_no, page_buf);
+    int len = slot_read(page_buf, rid.slot_idx, buf, (uint16_t)bufsize);
+    if (len > 0 && len < bufsize)
+        buf[len] = '\0';
+    return len;
 }
 
 int tapi_scan_next(TableScanCursor *cursor,
@@ -327,8 +354,10 @@ int tapi_scan_next_mvcc(TableScanCursor *cursor,
 {
     while (1) {
         RowID rid;
-        if (bt2_cursor_next(&cursor->bt_cursor, pk_key_out, &rid) < 0)
+        if (bt2_cursor_next(&cursor->bt_cursor, pk_key_out, &rid) < 0) {
+            tapi_scan_end(cursor);
             return -1;
+        }
 
         int rec_len = tapi_heap_read(rid, record_out, rec_out_size);
         if (rec_len < 0)
