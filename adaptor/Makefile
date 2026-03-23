@@ -46,6 +46,7 @@ ADAPTOR_SRCS = main.c \
                catalog.c \
                query_executor.c \
                transaction.c \
+               xa_transaction.c \
                tls.c \
                util.c
 

@@ -42,6 +42,10 @@ typedef struct {
     uint32_t  tx_xid;            /* current transaction XID (0 = read-only/none) */
     Snapshot  snapshot;           /* active snapshot for SELECT visibility */
     int       snapshot_valid;     /* 1 if snapshot has been taken */
+
+    /* XA Distributed Transaction state */
+    int       xa_state;           /* XA_STATE_* (0 = not in XA) */
+    char      xa_xid[128];       /* XA transaction identifier */
 } SessionCtx;
 
 /*
