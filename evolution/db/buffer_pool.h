@@ -10,6 +10,7 @@
 #define BUFFER_POOL_H
 
 #include <sys/types.h>
+#include <stdint.h>
 #include <stdatomic.h>
 
 #define BP_PAGE_SIZE     4096
@@ -80,7 +81,8 @@ int  bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring);
 void bp_flush_fd(int fd);       /* write all dirty pages for fd */
 void bp_invalidate_fd(int fd);  /* drop all pages for fd (flush first) */
 void bp_flush_all(void);        /* write all dirty pages */
-void bp_wal_flush_dirty(int fd);/* log all dirty pages for fd to WAL (no disk write) */
+void bp_wal_flush_dirty(int fd);/* log dirty pages to WAL + single fsync */
+void bp_track_dirty(uint32_t page_no); /* track page for efficient WAL flush */
 
 /* ----------------------------------------------------------------
  *  Statistics
