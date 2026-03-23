@@ -12,6 +12,7 @@
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/expression.h"
 #include "../evolution/db/tuple_format.h"
+#include "../evolution/db/buffer_pool.h"
 #include "pg_protocol.h"
 #include "util.h"
 

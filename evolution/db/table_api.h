@@ -96,11 +96,17 @@ int tapi_get_pk_indices(const ColumnDesc *cols, int ncols,
 typedef struct {
     BTree2Cursor bt_cursor;
     BTree2       tree;
+    void        *ring;          /* BPRing* — anti-pollution ring buffer for sequential scan */
 } TableScanCursor;
 
 /* Begin a full scan over all records (ordered by PK).
+ * Allocates a ring buffer for sequential I/O (anti-pollution).
  * Returns 0 on success, -1 if table is empty. */
 int tapi_scan_begin(const TableDesc *td, TableScanCursor *cursor);
+
+/* End a scan and free the ring buffer. Optional — only needed if
+ * the caller breaks out of the scan loop early. */
+void tapi_scan_end(TableScanCursor *cursor);
 
 /* Get next record in scan.
  * Fills pk_key_out (null-terminated) and record_out (null-terminated).
