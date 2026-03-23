@@ -10,6 +10,9 @@ TLS ?= 0
 ifeq ($(UNAME),Linux)
     LDFLAGS = -lpthread
     EXE = evosql-server
+else ifeq ($(UNAME),Darwin)
+    LDFLAGS = -lpthread
+    EXE = evosql-server
 else
     # Fix linker temp-file permission issue on Windows
     export TEMP = /tmp
@@ -72,7 +75,14 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/table_api.c \
               $(EVO_DB)/tuple_format.c \
               $(EVO_DB)/hash_idx.c \
-              $(EVO_DB)/page_crypt.c
+              $(EVO_DB)/page_crypt.c \
+              $(EVO_DB)/mvcc.c \
+              $(EVO_DB)/vmap.c \
+              $(EVO_DB)/wal.c \
+              $(EVO_DB)/lock_mgr.c \
+              $(EVO_DB)/auto_reclaim.c \
+              $(EVO_DB)/conflict_guard.c \
+              $(EVO_DB)/table_lock.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

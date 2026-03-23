@@ -74,30 +74,119 @@ int tup_record_len(const char *bin_rec, int buf_len)
 }
 
 /* ----------------------------------------------------------------
+ *  MVCC accessors
+ * ---------------------------------------------------------------- */
+
+int tup_has_mvcc(const char *tuple_data, int tuple_len)
+{
+    if (tuple_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE)
+        return 0;
+    if ((unsigned char)tuple_data[0] != TUPLE_MAGIC)
+        return 0;
+    uint8_t flags = (uint8_t)tuple_data[TUPLE_PREFIX_SIZE + 3];
+    return (flags & TUPLE_FLAG_MVCC) ? 1 : 0;
+}
+
+uint32_t tup_get_xmin(const char *tuple_data, int tuple_len)
+{
+    if (!tup_has_mvcc(tuple_data, tuple_len))
+        return 0;
+    /* xmin is at offset TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE */
+    uint32_t xmin;
+    memcpy(&xmin, tuple_data + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE, 4);
+    return xmin;
+}
+
+uint32_t tup_get_xmax(const char *tuple_data, int tuple_len)
+{
+    if (!tup_has_mvcc(tuple_data, tuple_len))
+        return 0;
+    /* xmax is at offset TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + 4 */
+    uint32_t xmax;
+    memcpy(&xmax, tuple_data + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + 4, 4);
+    return xmax;
+}
+
+int tup_set_xmax(char *tuple_data, int tuple_len, uint32_t xmax)
+{
+    if (!tup_has_mvcc(tuple_data, tuple_len))
+        return -1;
+    memcpy(tuple_data + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + 4, &xmax, 4);
+    return 0;
+}
+
+int tup_freeze_xmin(char *tuple_data, int tuple_len)
+{
+    if (!tup_has_mvcc(tuple_data, tuple_len))
+        return -1;
+    /* Replace xmin with XID_FROZEN (1) */
+    uint32_t frozen = 1;  /* XID_FROZEN */
+    memcpy(tuple_data + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE, &frozen, 4);
+    /* Set XMIN_COMMITTED hint bit so future reads skip CLOG entirely */
+    tuple_data[TUPLE_PREFIX_SIZE + 3] |= TUPLE_FLAG_XMIN_COMMITTED;
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ *  HOT (Heap-Only Tuple) flag accessors
+ * ---------------------------------------------------------------- */
+
+int tup_set_hot_updated(char *tuple_data, int tuple_len)
+{
+    if (tuple_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE) return -1;
+    tuple_data[TUPLE_PREFIX_SIZE + 3] |= TUPLE_FLAG_HOT_UPDATED;
+    return 0;
+}
+
+int tup_set_heap_only(char *tuple_data, int tuple_len)
+{
+    if (tuple_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE) return -1;
+    tuple_data[TUPLE_PREFIX_SIZE + 3] |= TUPLE_FLAG_HEAP_ONLY;
+    return 0;
+}
+
+int tup_is_hot_updated(const char *tuple_data, int tuple_len)
+{
+    if (tuple_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE) return 0;
+    return (tuple_data[TUPLE_PREFIX_SIZE + 3] & TUPLE_FLAG_HOT_UPDATED) ? 1 : 0;
+}
+
+int tup_is_heap_only(const char *tuple_data, int tuple_len)
+{
+    if (tuple_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE) return 0;
+    return (tuple_data[TUPLE_PREFIX_SIZE + 3] & TUPLE_FLAG_HEAP_ONLY) ? 1 : 0;
+}
+
+/* ----------------------------------------------------------------
  *  tup_build — string values → binary tuple
  * ---------------------------------------------------------------- */
 int tup_build(const char **vals, const int *is_null, int nvals,
               uint32_t table_id,
               const ColumnDesc *cols, int ncols,
-              char *out, int buf_size)
+              char *out, int buf_size,
+              uint32_t xmin)
 {
     int num = ncols < nvals ? ncols : nvals;
     if (num > TUPLE_MAX_COLS) num = TUPLE_MAX_COLS;
     if (buf_size < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + 1)
         return -1;
 
+    /* MVCC header size (0 or 8 bytes) */
+    int mvcc_size = (xmin > 0) ? TUPLE_MVCC_SIZE : 0;
+
     /* Null bitmap size */
     int bm_bytes = (num + 7) / 8;
 
-    /* Start writing after prefix + header + bitmap */
-    int data_off = TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + bm_bytes;
+    /* Start writing after prefix + header + mvcc + bitmap */
+    int data_off = TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + mvcc_size + bm_bytes;
     int pos = data_off;
 
     /* Clear bitmap area */
-    uint8_t *bm = (uint8_t *)(out + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE);
+    uint8_t *bm = (uint8_t *)(out + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + mvcc_size);
     memset(bm, 0, bm_bytes);
 
     uint8_t flags = 0;
+    if (xmin > 0) flags |= TUPLE_FLAG_MVCC;
 
     for (int i = 0; i < num; i++) {
         if (is_null[i] || vals[i] == NULL ||
@@ -187,6 +276,13 @@ int tup_build(const char **vals, const int *is_null, int nvals,
     out[TUPLE_PREFIX_SIZE + 2] = (uint8_t)num;
     out[TUPLE_PREFIX_SIZE + 3] = flags;
 
+    /* Write MVCC xmin/xmax if enabled */
+    if (xmin > 0) {
+        uint32_t xmax = 0;
+        memcpy(out + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE, &xmin, 4);
+        memcpy(out + TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE + 4, &xmax, 4);
+    }
+
     return pos;
 }
 
@@ -211,9 +307,12 @@ int tup_extract_fields(const char *bin_rec, int bin_len,
     if (num > ncols) num = ncols;
     if (num > max_fields) num = max_fields;
 
+    /* Skip MVCC header (xmin + xmax) if present */
+    int mvcc_size = (flags & TUPLE_FLAG_MVCC) ? TUPLE_MVCC_SIZE : 0;
+
     int bm_bytes = (num_cols + 7) / 8;
-    const uint8_t *bm = (const uint8_t *)(body + TUPLE_HEADER_SIZE);
-    int data_off = TUPLE_HEADER_SIZE + bm_bytes;
+    const uint8_t *bm = (const uint8_t *)(body + TUPLE_HEADER_SIZE + mvcc_size);
+    int data_off = TUPLE_HEADER_SIZE + mvcc_size + bm_bytes;
     int pos = data_off;
     int body_len = bin_len - TUPLE_PREFIX_SIZE;
 
@@ -333,18 +432,18 @@ int tup_build_from_fields(const char fields[][256], int nfields,
         }
     }
     return tup_build(valPtrs, nullFlags, n, table_id,
-                     cols, ncols, out, buf_size);
+                     cols, ncols, out, buf_size, 0);
 }
 
 /* ----------------------------------------------------------------
  *  Column cache
  * ---------------------------------------------------------------- */
-static struct {
+static __thread struct {
     uint32_t   table_id;
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int        ncols;
 } g_col_cache[COL_CACHE_SIZE];
-static int g_col_cache_init = 0;
+static __thread int g_col_cache_init = 0;
 
 int cached_find_columns(uint32_t table_id, ColumnDesc *cols)
 {

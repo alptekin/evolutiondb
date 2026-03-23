@@ -10,13 +10,22 @@
 	#include "../db/database.h"
 	#include "../db/expression.h"
 
-	void yyerror(char *s, ...);
-	void emit(char *s, ...);
-	int yylex(void);
+	void yyerror(void *scanner, const char *s, ...);
+	void emit(const char *s, ...);
 
-	/* Track alias for current select_expr */
-	static char g_currentAlias[128];
+	/* Forward declare yylex for reentrant parser */
+	#ifndef YY_DECL
+	union YYSTYPE;
+	int yylex(union YYSTYPE *lvalp, void *scanner);
+	#endif
+
+	/* Track alias for current select_expr — thread-local */
+	static __thread char g_currentAlias[128];
 %}
+
+%pure-parser
+%parse-param {void *scanner}
+%lex-param   {void *scanner}
 %union {
 	int intval;
 	double floatval;
@@ -85,6 +94,8 @@
 %token CURRENT_TIME
 %token CHAR
 %token COLLATE
+%token COLUMN
+%token CONCURRENTLY
 
 %token DATABASE
 %token DEFERRABLE
@@ -151,6 +162,7 @@
 %token LEFT
 %token LEADING
 %token LIMIT
+%token LOCKED
 %token OFFSET
 %token LONGBLOB
 
@@ -184,6 +196,8 @@
 
 %token SQL_SMALL_RESULT
 %token SCHEMA
+%token SHARE
+%token SKIP
 %token SOME
 %token SQL_CALC_FOUND_ROWS
 %token SQL_BIG_RESULT
@@ -561,10 +575,10 @@ stmt: select_stmt
 ;
 
 select_stmt: SELECT select_opts select_expr_list                                { emit("SELECTNODATA %d %d", $2, $3); g_sel.distinct = ($2 & 02) ? 1 : 0; } ;
-| SELECT select_opts select_expr_list 
+| SELECT select_opts select_expr_list
 FROM table_references
 opt_where opt_groupby opt_having opt_orderby opt_limit
-opt_into_list
+opt_for_update opt_into_list
     {
         emit("SELECT %d %d %d", $2, $3, $5);
         g_sel.distinct = ($2 & 02) ? 1 : 0;
@@ -631,6 +645,13 @@ opt_limit: /* nil */ { /* no limit */ }
 | LIMIT expr OFFSET expr							{ emit("LIMIT OFFSET"); g_expr.limitExpr = $2; g_expr.offsetExpr = $4; }
 ;
 
+opt_for_update: /* nil */                                  { /* no locking */ }
+| FOR UPDATE                                               { g_sel.forUpdate = 1; emit("FOR UPDATE"); }
+| FOR SHARE                                                { g_sel.forUpdate = 2; emit("FOR SHARE"); }
+| FOR UPDATE SKIP LOCKED                                   { g_sel.forUpdate = 1; emit("FOR UPDATE SKIP LOCKED"); }
+| FOR SHARE SKIP LOCKED                                    { g_sel.forUpdate = 2; emit("FOR SHARE SKIP LOCKED"); }
+;
+
 opt_into_list: /* nil */
 | INTO column_list								{ emit("INTO %d", $2); }
 ;
@@ -640,14 +661,14 @@ column_list: NAME								{ emit("COLUMN %s", $1); free($1); $$ = 1; }
 ;
 
 select_opts:									{ $$ = 0; }
-| select_opts ALL								{ if($1 & 01) yyerror("duplicate ALL option"); $$ = $1 | 01; }
-| select_opts DISTINCT								{ if($1 & 02) yyerror("duplicate DISTINCT option"); $$ = $1 | 02; }
-| select_opts DISTINCTROW							{ if($1 & 04) yyerror("duplicate DISTINCTROW option"); $$ = $1 | 04; }
-| select_opts HIGH_PRIORITY							{ if($1 & 010) yyerror("duplicate HIGH_PRIORITY option"); $$ = $1 | 010; }
-| select_opts STRAIGHT_JOIN							{ if($1 & 020) yyerror("duplicate STRAIGHT_JOIN option"); $$ = $1 | 020; }
-| select_opts SQL_SMALL_RESULT                                                  { if($1 & 040) yyerror("duplicate SQL_SMALL_RESULT option"); $$ = $1 | 040; }
-| select_opts SQL_BIG_RESULT                                                    { if($1 & 0100) yyerror("duplicate SQL_BIG_RESULT option"); $$ = $1 | 0100; }
-| select_opts SQL_CALC_FOUND_ROWS                                               { if($1 & 0200) yyerror("duplicate SQL_CALC_FOUND_ROWS option"); $$ = $1 | 0200; }
+| select_opts ALL								{ if($1 & 01) yyerror(scanner, "duplicate ALL option"); $$ = $1 | 01; }
+| select_opts DISTINCT								{ if($1 & 02) yyerror(scanner, "duplicate DISTINCT option"); $$ = $1 | 02; }
+| select_opts DISTINCTROW							{ if($1 & 04) yyerror(scanner, "duplicate DISTINCTROW option"); $$ = $1 | 04; }
+| select_opts HIGH_PRIORITY							{ if($1 & 010) yyerror(scanner, "duplicate HIGH_PRIORITY option"); $$ = $1 | 010; }
+| select_opts STRAIGHT_JOIN							{ if($1 & 020) yyerror(scanner, "duplicate STRAIGHT_JOIN option"); $$ = $1 | 020; }
+| select_opts SQL_SMALL_RESULT                                                  { if($1 & 040) yyerror(scanner, "duplicate SQL_SMALL_RESULT option"); $$ = $1 | 040; }
+| select_opts SQL_BIG_RESULT                                                    { if($1 & 0100) yyerror(scanner, "duplicate SQL_BIG_RESULT option"); $$ = $1 | 0100; }
+| select_opts SQL_CALC_FOUND_ROWS                                               { if($1 & 0200) yyerror(scanner, "duplicate SQL_CALC_FOUND_ROWS option"); $$ = $1 | 0200; }
 ;
 
 select_expr_list: select_expr                                                   { $$ = 1; }
@@ -894,6 +915,61 @@ create_index_stmt: CREATE INDEX NAME ON NAME '(' index_col_list ')'
         free($6);
         free($8);
     }
+| CREATE INDEX CONCURRENTLY NAME ON NAME '(' index_col_list ')'
+    {
+        emit("CREATEINDEX CONCURRENTLY %s ON %s", $4, $6);
+        SetIndexConcurrent();
+        SetIndexInfo($4, $6, "");
+        free($4);
+        free($6);
+    }
+| CREATE INDEX CONCURRENTLY IF EXISTS NAME ON NAME '(' index_col_list ')'
+    {
+        emit("CREATEINDEX CONCURRENTLY IF NOT EXISTS %s ON %s", $6, $8);
+        SetIndexConcurrent();
+        SetIndexIfNotExists();
+        SetIndexInfo($6, $8, "");
+        free($6);
+        free($8);
+    }
+| CREATE UNIQUE INDEX CONCURRENTLY NAME ON NAME '(' index_col_list ')'
+    {
+        emit("CREATEUNIQUEINDEX CONCURRENTLY %s ON %s", $5, $7);
+        SetIndexUnique();
+        SetIndexConcurrent();
+        SetIndexInfo($5, $7, "");
+        free($5);
+        free($7);
+    }
+| CREATE UNIQUE INDEX CONCURRENTLY IF EXISTS NAME ON NAME '(' index_col_list ')'
+    {
+        emit("CREATEUNIQUEINDEX CONCURRENTLY IF NOT EXISTS %s ON %s", $7, $9);
+        SetIndexUnique();
+        SetIndexConcurrent();
+        SetIndexIfNotExists();
+        SetIndexInfo($7, $9, "");
+        free($7);
+        free($9);
+    }
+| CREATE INDEX CONCURRENTLY NAME ON NAME USING HASH '(' index_col_list ')'
+    {
+        emit("CREATEHASHINDEX CONCURRENTLY %s ON %s", $4, $6);
+        SetIndexConcurrent();
+        SetIndexUsingHash();
+        SetIndexInfo($4, $6, "");
+        free($4);
+        free($6);
+    }
+| CREATE UNIQUE INDEX CONCURRENTLY NAME ON NAME USING HASH '(' index_col_list ')'
+    {
+        emit("CREATEUNIQUEHASHINDEX CONCURRENTLY %s ON %s", $5, $7);
+        SetIndexUnique();
+        SetIndexConcurrent();
+        SetIndexUsingHash();
+        SetIndexInfo($5, $7, "");
+        free($5);
+        free($7);
+    }
 ;
 
 index_col_list: NAME
@@ -1086,6 +1162,12 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         AlterTableValidateConstraint($3, $6);
         free($3); free($6);
     }
+| ALTER TABLE NAME ADD COLUMN NAME data_type
+    {
+        emit("ALTER TABLE ADD COLUMN %s %s %d", $3, $6, $7);
+        AlterTableAddColumn($3, $6, $7);
+        free($3); free($6);
+    }
 ;
 
 stmt: insert_stmt
@@ -1158,10 +1240,10 @@ insert_stmt: INSERT insert_opts opt_into NAME SET insert_asgn_list opt_ondupupda
                                                                                 { emit("INSERTASGN %d %d %s", $2, $6, $4); free($4); }
 ;
 
-insert_asgn_list: NAME COMPARISON expr                                          { if ($2 != 4) { yyerror("bad insert assignment to %s", $1); YYERROR; } emit("ASSIGN %s", $1); free($1); $$ = 1; }
-| NAME COMPARISON DEFAULT							{ if ($2 != 4) { yyerror("bad insert assignment to %s", $1); YYERROR; } emit("DEFAULT"); emit("ASSIGN %s", $1); free($1); $$ = 1; }
-| insert_asgn_list ',' NAME COMPARISON expr                                     { if ($4 != 4) { yyerror("bad insert assignment to %s", $1); YYERROR; } emit("ASSIGN %s", $3); free($3); $$ = $1 + 1; }
-| insert_asgn_list ',' NAME COMPARISON DEFAULT                                  { if ($4 != 4) { yyerror("bad insert assignment to %s", $1); YYERROR; } emit("DEFAULT"); emit("ASSIGN %s", $3); free($3); $$ = $1 + 1; }
+insert_asgn_list: NAME COMPARISON expr                                          { if ($2 != 4) { yyerror(scanner, "bad insert assignment to %s", $1); YYERROR; } emit("ASSIGN %s", $1); free($1); $$ = 1; }
+| NAME COMPARISON DEFAULT							{ if ($2 != 4) { yyerror(scanner, "bad insert assignment to %s", $1); YYERROR; } emit("DEFAULT"); emit("ASSIGN %s", $1); free($1); $$ = 1; }
+| insert_asgn_list ',' NAME COMPARISON expr                                     { if ($4 != 4) { yyerror(scanner, "bad insert assignment to %s", $1); YYERROR; } emit("ASSIGN %s", $3); free($3); $$ = $1 + 1; }
+| insert_asgn_list ',' NAME COMPARISON DEFAULT                                  { if ($4 != 4) { yyerror(scanner, "bad insert assignment to %s", $1); YYERROR; } emit("DEFAULT"); emit("ASSIGN %s", $3); free($3); $$ = $1 + 1; }
 ;
 
 
@@ -1209,18 +1291,18 @@ update_asgn_list:
 NAME COMPARISON expr
     {
         if ($2 != 4) {
-            yyerror("bad update assignment to %s", $1);
-            YYERROR; 
+            yyerror(scanner, "bad update assignment to %s", $1);
+            YYERROR;
         }
         emit("ASSIGN1 %s", $1);
         GetUpdateColumnName($1); /*for first column name after the SET Terminal symbol*/
         free($1);
         $$ = 1;
     }
-| NAME '.' NAME COMPARISON expr                                                 
+| NAME '.' NAME COMPARISON expr
     {
         if ($4 != 4) {
-            yyerror("bad update assignment to %s", $1);
+            yyerror(scanner, "bad update assignment to %s", $1);
             YYERROR;
         }
         emit("ASSIGN2 %s.%s", $1, $3);
@@ -1231,7 +1313,7 @@ NAME COMPARISON expr
 | update_asgn_list ',' NAME COMPARISON expr
     {
         if ($4 != 4) {
-            yyerror("bad update assignment to %s", $3);
+            yyerror(scanner, "bad update assignment to %s", $3);
             YYERROR;
         }
         emit("ASSIGN3 %s", $3);
@@ -1242,7 +1324,7 @@ NAME COMPARISON expr
 | update_asgn_list ',' NAME '.' NAME COMPARISON expr
     {
         if ($6 != 4) {
-            yyerror("bad update assignment to %s.$s", $3, $5);
+            yyerror(scanner, "bad update assignment to %s.$s", $3, $5);
             YYERROR;
         }
         emit("ASSIGN4 %s.%s", $3, $5);
@@ -1262,7 +1344,7 @@ CREATE DATABASE opt_if_not_exists NAME                                          
 ;
 
 opt_if_not_exists: /* nil */                                                    { $$ = 0; }
-| IF EXISTS									{ if(!$2) { yyerror("IF EXISTS doesn't exist"); YYERROR; } $$ = $2; /* NOT EXISTS hack */ }
+| IF EXISTS									{ if(!$2) { yyerror(scanner, "IF EXISTS doesn't exist"); YYERROR; } $$ = $2; /* NOT EXISTS hack */ }
 ;
 
 /** create domain **/
@@ -1581,14 +1663,13 @@ set_stmt: SET SCHEMA NAME                                                       
 | SET set_list ;
 set_list: set_expr | set_list ',' set_expr ;
 set_expr:
-USERVAR COMPARISON expr								{ if ($2 != 4) { yyerror("bad set to @%s", $1); YYERROR; } emit("SET %s", $1); free($1); }
+USERVAR COMPARISON expr								{ if ($2 != 4) { yyerror(scanner, "bad set to @%s", $1); YYERROR; } emit("SET %s", $1); free($1); }
 | USERVAR ASSIGN expr								{ emit("SET %s", $1); free($1); }
 ;
 
 %%
-void emit(char *s, ...)
+void emit(const char *s, ...)
 {
-	extern int yylineno;
 	va_list ap;
 	if (g_gui_mode) return;
 	va_start(ap, s);
@@ -1596,12 +1677,11 @@ void emit(char *s, ...)
 	vfprintf(stdout, s, ap);
 	printf("\n");
 }
-void yyerror(char *s, ...)
+void yyerror(void *scanner, const char *s, ...)
 {
-	extern int yylineno;
 	va_list ap;
 	va_start(ap, s);
-	fprintf(stderr, "%d: error: ", yylineno);
+	fprintf(stderr, "error: ");
 	vfprintf(stderr, s, ap);
 	fprintf(stderr, "\n");
 }

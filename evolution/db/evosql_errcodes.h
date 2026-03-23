@@ -114,6 +114,18 @@
 #define EVOSQL_ERRCODE_UNDEFINED_SCHEMA                "3F000"
 
 /* ================================================================
+ * Class 40 — Transaction Rollback
+ * ================================================================ */
+#define EVOSQL_ERRCODE_TRANSACTION_ROLLBACK            "40000"
+#define EVOSQL_ERRCODE_SERIALIZATION_FAILURE           "40001"
+#define EVOSQL_ERRCODE_DEADLOCK_DETECTED               "40P01"
+
+/* ================================================================
+ * Class 55 — Object Not In Prerequisite State
+ * ================================================================ */
+#define EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE              "55P03"
+
+/* ================================================================
  * Class 42 — Syntax Error or Access Rule Violation (ISO + EvoSQL vendor)
  * ================================================================ */
 #define EVOSQL_ERRCODE_SYNTAX_ERROR_OR_ACCESS_VIOLATION "42000"

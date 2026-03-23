@@ -14,6 +14,12 @@
 #include <stdint.h>
 #include "expression.h"   /* ExprNode, constants */
 
+/* Forward declaration — full definition in database.h / slotted.h */
+#ifndef ROWID_DEFINED
+#define ROWID_DEFINED
+typedef struct { uint32_t page_no; uint16_t slot_idx; } RowID;
+#endif
+
 #ifndef RECORD_BUF_SIZE
 #define RECORD_BUF_SIZE 8192
 #endif
@@ -90,6 +96,8 @@ typedef struct {
     /* Sort context (qsort callback) */
     int  sortColIndex;
     int  sortDesc;
+    /* FOR UPDATE / FOR SHARE locking */
+    int  forUpdate;       /* 0=none, 1=FOR UPDATE, 2=FOR SHARE */
 } SelectOpts;
 
 /* ---- UPDATE ---- */
@@ -119,6 +127,9 @@ typedef struct {
     int  ifNotExists;
     char exprDef[1024];
     int  usingHash;
+    int  concurrent;          /* CREATE INDEX CONCURRENTLY */
+    uint32_t concTableId;     /* saved by Phase1 for Phase2 */
+    uint32_t concRootPage;    /* saved by Phase1 for Phase2 */
 } IndexOpts;
 
 /* ---- WHERE / Expressions ---- */
@@ -197,7 +208,9 @@ typedef struct QueryContext {
     char           temp[1024];
     void         (*tx_undo_callback)(int op_type, const char *table,
                                      const char *key, const char *data,
-                                     int data_len);
+                                     int data_len, RowID old_rid);
+    /* MVCC: current transaction ID for DML operations (0 = no MVCC) */
+    uint32_t       mvcc_xid;
 } QueryContext;
 
 /* ================================================================
