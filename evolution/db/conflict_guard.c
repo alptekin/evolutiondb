@@ -9,6 +9,7 @@
 #include <string.h>
 #include <pthread.h>
 #include "conflict_guard.h"
+#include "expression.h"  /* ExprNode, expr_deserialize, expr_evaluate */
 
 /* ================================================================
  *  SIRead interest: records that a TX read a specific row
@@ -21,6 +22,14 @@ typedef struct {
 /* ================================================================
  *  Per-TX conflict state
  * ================================================================ */
+/* Predicate lock: serialized WHERE expression for a table */
+typedef struct {
+    uint32_t table_id;
+    char     expr_str[1024];       /* serialized RPN expression */
+    char     col_names[64][128];   /* column name context */
+    int      num_cols;
+} PredicateLock;
+
 typedef struct {
     uint32_t     xid;
     int          active;
@@ -30,6 +39,8 @@ typedef struct {
     uint32_t     rw_out_to;       /* XID that caused rw-out (for error msg) */
     ReadInterest reads[CG_MAX_READS];
     int          read_count;
+    PredicateLock predicates[CG_MAX_PREDICATES];
+    int          predicate_count;
 } CGTxState;
 
 /* ================================================================
@@ -166,4 +177,90 @@ int cg_check_commit(uint32_t xid)
     }
     pthread_mutex_unlock(&g_cg_lock);
     return result;
+}
+
+/* ================================================================
+ *  Predicate Locking
+ * ================================================================ */
+
+void cg_record_predicate(uint32_t reader_xid, uint32_t table_id,
+                          const char *expr_str,
+                          const char *col_names, int name_stride,
+                          int num_cols)
+{
+    if (reader_xid == 0 || !expr_str || !expr_str[0]) return;
+
+    pthread_mutex_lock(&g_cg_lock);
+    CGTxState *tx = find_tx(reader_xid);
+    if (tx && tx->predicate_count < CG_MAX_PREDICATES) {
+        PredicateLock *pl = &tx->predicates[tx->predicate_count];
+        pl->table_id = table_id;
+        strncpy(pl->expr_str, expr_str, sizeof(pl->expr_str) - 1);
+        pl->expr_str[sizeof(pl->expr_str) - 1] = '\0';
+        pl->num_cols = num_cols < 64 ? num_cols : 64;
+        for (int i = 0; i < pl->num_cols; i++) {
+            const char *src = col_names + i * name_stride;
+            strncpy(pl->col_names[i], src, 127);
+            pl->col_names[i][127] = '\0';
+        }
+        tx->predicate_count++;
+    }
+    pthread_mutex_unlock(&g_cg_lock);
+}
+
+void cg_check_predicate_conflict(uint32_t writer_xid, uint32_t table_id,
+                                  const char *col_names, int name_stride,
+                                  const char *col_values, int val_stride,
+                                  int num_cols)
+{
+    if (writer_xid == 0) return;
+
+    pthread_mutex_lock(&g_cg_lock);
+
+    for (int i = 0; i < CG_MAX_TXS; i++) {
+        CGTxState *reader = &g_cg_txs[i];
+        if (!reader->active || reader->xid == writer_xid) continue;
+
+        for (int pi = 0; pi < reader->predicate_count; pi++) {
+            PredicateLock *pl = &reader->predicates[pi];
+            if (pl->table_id != table_id) continue;
+
+            /* Deserialize the predicate expression */
+            ExprNode *expr = expr_deserialize(pl->expr_str);
+            if (!expr) continue;
+
+            /* Build col_names and col_values arrays for evaluation */
+            char evalResult[512];
+            int ok = expr_evaluate(expr,
+                                   (const char (*)[128])pl->col_names,
+                                   (const char (*)[256])col_values,
+                                   num_cols < pl->num_cols ? num_cols : pl->num_cols,
+                                   evalResult, sizeof(evalResult));
+
+            int match = 0;
+            if (ok) {
+                if (strcmp(evalResult, "t") == 0 ||
+                    strcasecmp(evalResult, "true") == 0 ||
+                    strcmp(evalResult, "1") == 0)
+                    match = 1;
+                else {
+                    double v = strtod(evalResult, NULL);
+                    if (v != 0.0) match = 1;
+                }
+            }
+
+            if (match) {
+                /* RW conflict: reader's predicate matches writer's new row */
+                reader->has_rw_in = 1;
+                reader->rw_in_from = writer_xid;
+                CGTxState *writer = find_tx(writer_xid);
+                if (writer) {
+                    writer->has_rw_out = 1;
+                    writer->rw_out_to = reader->xid;
+                }
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&g_cg_lock);
 }

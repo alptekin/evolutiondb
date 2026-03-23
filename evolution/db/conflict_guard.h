@@ -22,6 +22,9 @@
 /* Maximum tracked read interests per transaction */
 #define CG_MAX_READS   256
 
+/* Maximum predicate locks per transaction */
+#define CG_MAX_PREDICATES 16
+
 /* Maximum concurrent SERIALIZABLE transactions */
 #define CG_MAX_TXS     64
 
@@ -55,5 +58,31 @@ void cg_check_write(uint32_t writer_xid, uint32_t table_id, const char *pk_key);
  * Returns CG_OK if safe, CG_SERIALIZATION_FAILURE if dangerous structure detected.
  * A "dangerous structure" = TX has both rw-in AND rw-out edges. */
 int cg_check_commit(uint32_t xid);
+
+/* ----------------------------------------------------------------
+ *  Predicate Locking — catches UPDATE-based phantom reads
+ *
+ *  When a SERIALIZABLE TX executes SELECT with WHERE, the serialized
+ *  WHERE expression is stored. On UPDATE/INSERT by another TX, the
+ *  new row values are evaluated against stored predicates. If a match
+ *  is found, RW-dependency edges are created.
+ * ---------------------------------------------------------------- */
+
+/* Record a predicate (serialized WHERE expression) for a SERIALIZABLE TX.
+ * table_name + col_names needed for expression evaluation context.
+ * expr_str is the serialized RPN expression (from expr_serialize). */
+void cg_record_predicate(uint32_t reader_xid, uint32_t table_id,
+                          const char *expr_str,
+                          const char *col_names, int name_stride,
+                          int num_cols);
+
+/* Check if a new/modified row matches any stored predicate from other TXs.
+ * If match → marks RW edges (same as cg_check_write).
+ * col_values/val_stride: field values of the new row.
+ * col_names/name_stride: column name array for expression evaluation. */
+void cg_check_predicate_conflict(uint32_t writer_xid, uint32_t table_id,
+                                  const char *col_names, int name_stride,
+                                  const char *col_values, int val_stride,
+                                  int num_cols);
 
 #endif /* CONFLICT_GUARD_H */
