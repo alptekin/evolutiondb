@@ -214,15 +214,35 @@ int pgm_init(const char *filepath)
                                      g_header.page_iv_prefix);
         }
 
-        /* Phase 3: WAL replay (can now encrypt pages if TDE is active) */
+        /* Phase 3: WAL recovery — two-pass approach for TDE compatibility.
+         * Pass 1 (inside wal_init): Replay page 0 (FileHeader, plaintext)
+         * Then re-read header + re-init TDE from recovered data.
+         * Pass 2 (wal_replay_remaining): Replay data pages with TDE. */
         {
             extern int wal_init(int data_fd);
-            int wal_recovered = wal_init(g_global_fd);
-            if (wal_recovered > 0) {
+            extern int wal_replay_remaining(void);
+            extern void bp_invalidate_fd(int fd);
+            int pass1 = wal_init(g_global_fd);
+            if (pass1 > 0) {
+                /* Page 0 was recovered — re-read header */
+                bp_invalidate_fd(g_global_fd);
+                pread(g_global_fd, &g_header, sizeof(FileHeader), 0);
+                header_ok = (g_header.magic == EVO_MAGIC) ? 1 : 0;
+                /* Re-init TDE from recovered header if encrypted */
+                if (header_ok && g_header.encryption_enabled) {
+                    const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
+                    if (enc_key && enc_key[0] && !pcrypt_is_enabled())
+                        pcrypt_init_existing(g_header.encryption_salt,
+                                             g_header.wrapped_dek,
+                                             g_header.page_iv_prefix);
+                }
+            }
+            /* Pass 2: replay data pages (with TDE now active) */
+            int pass2 = wal_replay_remaining();
+            if (pass1 > 0 || pass2 > 0) {
                 fprintf(stderr, "[WAL] Crash recovery: %d page(s) restored\n",
-                        wal_recovered);
-                /* Re-read header after replay (page 0 may have been recovered) */
-                /* Read directly from file, bypassing buffer pool */
+                        pass1 + pass2);
+                bp_invalidate_fd(g_global_fd);
                 pread(g_global_fd, &g_header, sizeof(FileHeader), 0);
                 header_ok = (g_header.magic == EVO_MAGIC) ? 1 : 0;
             }

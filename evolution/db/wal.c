@@ -101,77 +101,106 @@ static void wal_flush_header(void)
 
 /* Replay WAL records from checkpoint_lsn to end of file.
  * Applies full page images directly to the data file. */
-static int wal_replay(void)
+/* Replay a single WAL record at the given offset.
+ * If skip_page0 is 1, skips page 0 records.
+ * If only_page0 is 1, only replays page 0 records.
+ * Returns: 1 if replayed, 0 if skipped, -1 if error/end. */
+static int replay_one_record(off_t pos, off_t file_size,
+                              int only_page0, int skip_page0,
+                              off_t *next_pos)
 {
-    if (g_wal_fd < 0 || g_data_fd < 0) return -1;
-
-    off_t file_size = lseek(g_wal_fd, 0, SEEK_END);
-    if (file_size <= (off_t)sizeof(WalHeader))
-        return 0;  /* no records to replay */
-
-    off_t pos = sizeof(WalHeader);
-    int replayed = 0;
     char page_buf[EVO_PAGE_SIZE];
+    uint32_t rec_lsn, rec_page_no;
+    uint16_t rec_page_len;
 
+    if (pread(g_wal_fd, &rec_lsn, 4, pos) != 4) return -1;
+    if (pread(g_wal_fd, &rec_page_no, 4, pos + 4) != 4) return -1;
+    if (pread(g_wal_fd, &rec_page_len, 2, pos + 8) != 2) return -1;
+    if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) return -1;
+
+    *next_pos = pos + WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+
+    /* Filter by page number */
+    if (only_page0 && rec_page_no != 0) return 0;
+    if (skip_page0 && rec_page_no == 0) return 0;
+
+    /* Read page data */
+    if (pread(g_wal_fd, page_buf, rec_page_len, pos + WAL_RECORD_HEADER_SIZE)
+        != (ssize_t)rec_page_len)
+        return -1;
+
+    /* Verify CRC */
+    uint32_t stored_crc;
+    if (pread(g_wal_fd, &stored_crc, 4,
+              pos + WAL_RECORD_HEADER_SIZE + rec_page_len) != 4)
+        return -1;
+    size_t crc_len = WAL_RECORD_HEADER_SIZE + rec_page_len;
+    char *crc_buf = (char *)malloc(crc_len);
+    if (!crc_buf) return -1;
+    pread(g_wal_fd, crc_buf, crc_len, pos);
+    uint32_t computed_crc = wal_crc32(crc_buf, crc_len);
+    free(crc_buf);
+    if (computed_crc != stored_crc) return -1;
+
+    /* Only replay records past checkpoint */
+    if (rec_lsn <= g_wal_header.checkpoint_lsn) return 0;
+
+    /* Write to data file (with TDE encryption for pages > 0) */
+    off_t data_offset = (off_t)rec_page_no * EVO_PAGE_SIZE;
+    if (pcrypt_is_enabled() && rec_page_no > 0) {
+        uint8_t enc_buf[EVO_PAGE_SIZE];
+        memcpy(enc_buf, page_buf, rec_page_len);
+        pcrypt_encrypt_page(enc_buf, rec_page_no);
+        pwrite(g_data_fd, enc_buf, rec_page_len, data_offset);
+    } else {
+        pwrite(g_data_fd, page_buf, rec_page_len, data_offset);
+    }
+    return 1;
+}
+
+/* Check if there are pending WAL records to replay */
+static int wal_has_pending(void)
+{
+    off_t file_size = lseek(g_wal_fd, 0, SEEK_END);
+    return (file_size > (off_t)sizeof(WalHeader)) ? 1 : 0;
+}
+
+/* Pass 1: Replay only page 0 (FileHeader) — always plaintext.
+ * Returns number of page-0 records replayed. */
+static int wal_replay_page0(void)
+{
+    if (g_wal_fd < 0 || g_data_fd < 0) return 0;
+    off_t file_size = lseek(g_wal_fd, 0, SEEK_END);
+    int replayed = 0;
+    off_t pos = sizeof(WalHeader);
     while (pos < file_size) {
-        /* Read record header */
-        uint32_t rec_lsn;
-        uint32_t rec_page_no;
-        uint16_t rec_page_len;
-
-        if (pread(g_wal_fd, &rec_lsn, 4, pos) != 4) break;
-        if (pread(g_wal_fd, &rec_page_no, 4, pos + 4) != 4) break;
-        if (pread(g_wal_fd, &rec_page_len, 2, pos + 8) != 2) break;
-
-        if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) break;
-
-        /* Read page data */
-        if (pread(g_wal_fd, page_buf, rec_page_len, pos + WAL_RECORD_HEADER_SIZE)
-            != (ssize_t)rec_page_len)
-            break;
-
-        /* Read and verify CRC */
-        uint32_t stored_crc;
-        off_t crc_off = pos + WAL_RECORD_HEADER_SIZE + rec_page_len;
-        if (pread(g_wal_fd, &stored_crc, 4, crc_off) != 4) break;
-
-        /* CRC covers header + page data */
-        size_t crc_len = WAL_RECORD_HEADER_SIZE + rec_page_len;
-        char *crc_buf = (char *)malloc(crc_len);
-        if (!crc_buf) break;
-        pread(g_wal_fd, crc_buf, crc_len, pos);
-        uint32_t computed_crc = wal_crc32(crc_buf, crc_len);
-        free(crc_buf);
-
-        if (computed_crc != stored_crc) {
-            fprintf(stderr, "[WAL] CRC mismatch at offset %lld, stopping replay\n",
-                    (long long)pos);
-            break;
-        }
-
-        /* Only replay records past the checkpoint */
-        if (rec_lsn > g_wal_header.checkpoint_lsn) {
-            off_t data_offset = (off_t)rec_page_no * EVO_PAGE_SIZE;
-            /* TDE: encrypt the page before writing to data file
-             * (WAL stores plaintext; data file stores encrypted) */
-            if (pcrypt_is_enabled() && rec_page_no > 0) {
-                uint8_t enc_buf[EVO_PAGE_SIZE];
-                memcpy(enc_buf, page_buf, rec_page_len);
-                pcrypt_encrypt_page(enc_buf, rec_page_no);
-                pwrite(g_data_fd, enc_buf, rec_page_len, data_offset);
-            } else {
-                pwrite(g_data_fd, page_buf, rec_page_len, data_offset);
-            }
-            replayed++;
-        }
-
-        pos += WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+        off_t next;
+        int r = replay_one_record(pos, file_size, 1, 0, &next);
+        if (r < 0) break;
+        if (r > 0) replayed++;
+        pos = next;
     }
+    if (replayed > 0) fsync(g_data_fd);
+    return replayed;
+}
 
-    if (replayed > 0) {
-        fsync(g_data_fd);
-        fprintf(stderr, "[WAL] Recovery: replayed %d page(s)\n", replayed);
+/* Pass 2: Replay all non-page-0 records (with TDE encryption).
+ * Must be called AFTER TDE is initialized from the recovered header. */
+static int wal_replay_data(void)
+{
+    if (g_wal_fd < 0 || g_data_fd < 0) return 0;
+    off_t file_size = lseek(g_wal_fd, 0, SEEK_END);
+    int replayed = 0;
+    off_t pos = sizeof(WalHeader);
+    while (pos < file_size) {
+        off_t next;
+        int r = replay_one_record(pos, file_size, 0, 1, &next);
+        if (r < 0) break;
+        if (r > 0) replayed++;
+        pos = next;
     }
+    if (replayed > 0) fsync(g_data_fd);
+    return replayed;
 
     return replayed;
 }
@@ -207,13 +236,15 @@ int wal_init(int data_fd)
             goto init_new;
         }
 
-        /* Replay pending records (crash recovery) */
-        int recovered = wal_replay();
-        if (recovered > 0) {
-            /* After replay, checkpoint to clear the WAL */
-            g_wal_header.checkpoint_lsn = g_wal_header.next_lsn;
-            ftruncate(g_wal_fd, sizeof(WalHeader));
-            wal_flush_header();
+        /* Two-pass crash recovery:
+         *   Pass 1: Replay page 0 (FileHeader, always plaintext)
+         *   → caller re-reads header + inits TDE from recovered data
+         *   Pass 2: Replay data pages (with TDE encryption) */
+        int recovered = 0;
+        if (wal_has_pending()) {
+            recovered += wal_replay_page0();
+            /* TDE may not be active yet — Pass 2 is deferred to
+             * wal_replay_remaining() called by pgm_init after TDE init */
         }
         g_wal_active = 1;
         fprintf(stderr, "[WAL] Initialized (checkpoint_lsn=%u, next_lsn=%u)\n",
@@ -236,6 +267,23 @@ init_new:
     fprintf(stderr, "[WAL] Initialized (checkpoint_lsn=%u, next_lsn=%u)\n",
             g_wal_header.checkpoint_lsn, g_wal_header.next_lsn);
     return 0;
+}
+
+int wal_replay_remaining(void)
+{
+    if (!g_wal_active || g_wal_fd < 0) return 0;
+    if (!wal_has_pending()) return 0;
+
+    int recovered = wal_replay_data();
+    if (recovered > 0)
+        fprintf(stderr, "[WAL] Pass 2: replayed %d data page(s)\n", recovered);
+
+    /* Checkpoint: clear WAL after full recovery */
+    g_wal_header.checkpoint_lsn = g_wal_header.next_lsn;
+    ftruncate(g_wal_fd, sizeof(WalHeader));
+    wal_flush_header();
+
+    return recovered;
 }
 
 uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len)
