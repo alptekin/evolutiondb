@@ -408,6 +408,21 @@ int wal_checkpoint(void)
     ftruncate(g_wal_fd, sizeof(WalHeader));
     wal_flush_header();
 
+    /* GAP-A fix: Re-write active PREPARE records to the new WAL.
+     * Without this, prepared TXs would be lost after checkpoint. */
+    {
+        extern int xa_list_prepared(void *, int);
+        typedef struct { char xid[128]; uint32_t mvcc_xid; int active; } XARec;
+        XARec recs[64];
+        int n = xa_list_prepared(recs, 64);
+        if (n > 0) {
+            pthread_mutex_unlock(&g_wal_lock);
+            for (int i = 0; i < n; i++)
+                wal_log_xa_prepare(recs[i].xid, recs[i].mvcc_xid);
+            pthread_mutex_lock(&g_wal_lock);
+        }
+    }
+
     pthread_mutex_unlock(&g_wal_lock);
     return 0;
 }

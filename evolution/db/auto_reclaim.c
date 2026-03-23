@@ -43,6 +43,15 @@ static void *auto_reclaim_worker(void *arg)
 
         if (!g_reclaim_running) break;
 
+        /* XA orphan cleanup — rollback prepared TXs older than timeout */
+        {
+            extern int xa_cleanup_orphans(void);
+            int cleaned = xa_cleanup_orphans();
+            if (cleaned > 0)
+                fprintf(stderr, "[auto-RECLAIM] Cleaned %d orphan XA transaction(s)\n",
+                        cleaned);
+        }
+
         /* Scan all databases → schemas → tables */
         DatabaseDesc dbs[8];
         int ndb = cat_list_databases(dbs, 8);
