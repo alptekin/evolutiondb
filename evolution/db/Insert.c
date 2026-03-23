@@ -8,6 +8,9 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "tuple_format.h"
+#include "vmap.h"
+#include "mvcc.h"
+#include "table_lock.h"
 
 /* Row separator used between multiple value groups in g_ins.data. */
 #define ROW_SEP '\x02'
@@ -820,20 +823,44 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     if (bt2_search(&pk_tree, pkKey, &existing) == 0)
         return 1; /* duplicate */
 
+    /* Gap lock check: if a SERIALIZABLE TX holds a gap lock covering
+     * this key, the INSERT must wait (prevents phantom reads). */
+    if (g_qctx->mvcc_xid > 0) {
+        extern int lock_gap_check_insert(uint32_t, const char *, uint32_t);
+        int gr = lock_gap_check_insert(td->table_id, pkKey, g_qctx->mvcc_xid);
+        if (gr != 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "could not serialize access: gap lock conflict on INSERT (key=%s)",
+                     pkKey);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SERIALIZATION_FAILURE);
+            return -1;
+        }
+    }
+
     /* Log undo entry before modifying data */
-    if (g_tx_undo_callback)
-        g_tx_undo_callback(1 /*TX_OP_INSERT*/, tblName, pkKey, NULL, 0);
+    if (g_tx_undo_callback) {
+        RowID zero_rid = {0, 0};
+        g_tx_undo_callback(1 /*TX_OP_INSERT*/, tblName, pkKey, NULL, 0, zero_rid);
+    }
+
+    /* MVCC: ensure we have a transaction ID for this DML */
+    mvcc_ensure_xid(&g_qctx->mvcc_xid);
 
     /* Build binary tuple from string values */
     char bin_buf[RECORD_BUF_SIZE];
     int bin_len = tup_build(vals_ptrs, is_null, nv, td->table_id,
-                            cols, ncols, bin_buf, sizeof(bin_buf));
+                            cols, ncols, bin_buf, sizeof(bin_buf),
+                            g_qctx->mvcc_xid);
     if (bin_len < 0) return -1;
 
     /* Insert binary tuple into heap page */
     uint16_t rec_len = (uint16_t)bin_len;
     RowID rid = tapi_heap_insert(td, bin_buf, rec_len);
     if (rid.page_no == 0) return -1;
+
+    /* VMAP: clear all-visible flag for the affected heap page */
+    vmap_clear(rid.page_no);
 
     /* Insert into PK B+ tree */
     if (bt2_insert(&pk_tree, pkKey, rid) != 0) {
@@ -866,6 +893,8 @@ int InsertProcess(void)
         if (dot) *dot = '\0';
     }
 
+    /* Per-table + catalog lock for concurrent DML */
+
     /* Resolve table via catalog */
     TableDesc td;
     ColumnDesc cols[CAT_MAX_COLUMNS];
@@ -876,7 +905,7 @@ int InsertProcess(void)
         g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
         TruncateInsert();
-        return -1;
+        retval = -1; goto cleanup;
     }
 
     /* GTT: ensure session-private PK tree exists */
@@ -885,7 +914,7 @@ int InsertProcess(void)
                  "could not allocate storage for global temporary table");
         g_err.error = 1;
         TruncateInsert();
-        return -1;
+        retval = -1; goto cleanup;
     }
 
     /* Split g_ins.data into rows using ROW_SEP */
@@ -1123,6 +1152,9 @@ int InsertProcess(void)
             retval = -1; goto cleanup;
         }
         g_ins.rowCount++;
+
+        /* Log for concurrent index build (Phase 3 reconciliation) */
+        conc_mod_log_append(td.table_id, prePkBuf);
 
         /* Post-insert: update secondary B-tree indexes */
         if (nIdx > 0) {

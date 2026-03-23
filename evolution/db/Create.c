@@ -1622,6 +1622,98 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
     return 0;
 }
 
+/* ---- ALTER TABLE ADD COLUMN ---- */
+
+int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table \"%s\" does not exist", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Check duplicate column name */
+    for (int i = 0; i < ncols; i++) {
+        if (strcasecmp(cols[i].col_name, colName) == 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "column \"%s\" of relation \"%s\" already exists",
+                     colName, tableName);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE("42701");
+            return -1;
+        }
+    }
+
+    /* Column count limit */
+    if (ncols >= CAT_MAX_COLUMNS) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "tables can have at most %d columns", CAT_MAX_COLUMNS);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("54011");
+        return -1;
+    }
+
+    /* NOT NULL without DEFAULT: reject if table has existing rows
+     * (they would have NULL for the new column) */
+    if (g_create.currentColNotNull &&
+        (g_create.currentColDefault[0] == '\0' ||
+         strcmp(g_create.currentColDefault, "\x01NONE\x01") == 0)) {
+        if (td.heap_page != 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "column \"%s\" of relation \"%s\" contains null values",
+                     colName, tableName);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE("23502");
+            return -1;
+        }
+    }
+
+    /* Build new ColumnDesc */
+    ColumnDesc newCol;
+    memset(&newCol, 0, sizeof(newCol));
+    newCol.table_id = td.table_id;
+    newCol.col_ordinal = ncols;
+    strncpy(newCol.col_name, colName, CAT_MAX_NAME_LEN - 1);
+    newCol.type_code = typeCode;
+    newCol.is_not_null = g_create.currentColNotNull;
+    newCol.is_unique = g_create.currentColUnique;
+    newCol.is_pk = 0;  /* Cannot add PK column via ADD COLUMN */
+
+    if (g_create.currentColDefault[0] != '\0')
+        strncpy(newCol.default_val, g_create.currentColDefault,
+                CAT_MAX_DEFAULT_LEN - 1);
+    else
+        strcpy(newCol.default_val, "\x01NONE\x01");
+
+    newCol.generated_mode = g_create.currentColGeneratedMode;
+    if (g_create.currentColGeneratedExpr[0])
+        strncpy(newCol.generated_expr, g_create.currentColGeneratedExpr, 511);
+
+    /* Insert column into catalog */
+    if (cat_add_column(td.table_id, &newCol) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "could not add column \"%s\" to table \"%s\"",
+                 colName, tableName);
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Update table num_columns */
+    cat_update_num_columns(td.table_id, td.table_name,
+                           td.schema_id, ncols + 1);
+
+    printf("ALTER TABLE\n");
+    return 0;
+}
+
 /* ---- Feature 6: CREATE DOMAIN ---- */
 
 int CreateDomainProcess(const char *name, int typeVal, ExprNode *checkExpr,

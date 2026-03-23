@@ -12,16 +12,24 @@
 #include "../evolution/db/database.h"
 #include "../evolution/db/buffer_pool.h"
 #include "../evolution/db/query_context.h"
+#include "../evolution/db/mvcc.h"
+#include "../evolution/db/page_mgr.h"
+#include "../evolution/db/vmap.h"
 
 /* ================================================================
  *  Shared state — used by all protocol servers
  * ================================================================ */
 
-/* Parser mutex — serializes yyparse() (Flex/Bison not reentrant).
- * SELECT execution (collect_select_results) runs WITHOUT this mutex,
- * enabling concurrent SELECT queries.  DML runs inside yyparse()
- * so it is still serialized. */
-mutex_t g_parse_lock;
+/* Parser rwlock — serializes yyparse() (Flex/Bison not reentrant).
+ * DML: write-lock during yyparse (which includes execution).
+ * SELECT: write-lock for yyparse, then read-lock for collect_select_results.
+ * Multiple readers (SELECT collect) can run concurrently. */
+rwlock_t g_parse_lock;
+
+/* DML serialization mutex — serializes DML execution but does NOT block readers.
+ * SELECT uses rdlock(g_parse_lock) which coexists with this mutex.
+ * DML acquires this mutex instead of wrlock(g_parse_lock). */
+mutex_t g_dml_mutex;
 
 /* Connection limits */
 static int     g_max_connections    = 100;
@@ -52,6 +60,12 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
     g_qctx = qctx;
 
+    /* MVCC: propagate XID for explicit transactions.
+     * Auto-commit DML gets a lazy XID via mvcc_ensure_xid() in DML code.
+     * Read-only queries (SELECT) never need an XID — zero overhead. */
+    if (ctx && ctx->tx_xid > 0)
+        qctx->mvcc_xid = ctx->tx_xid;
+
     /* Install undo-log callback while in a transaction */
     if (ctx && ctx->in_transaction && ctx->undo_log) {
         g_current_undo_log = ctx->undo_log;
@@ -66,6 +80,32 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* If error occurred within a transaction, mark it as aborted */
     if (ctx && ctx->in_transaction && rs->has_error)
         ctx->tx_aborted = 1;
+
+    /* MVCC: auto-commit — if DML assigned a lazy XID, commit/abort it now */
+    if (ctx && !ctx->in_transaction && qctx->mvcc_xid > 0) {
+        if (rs->has_error) {
+            clog_set_aborted(qctx->mvcc_xid);
+        } else {
+            /* WAL: flush all dirty pages to WAL before commit.
+             * This guarantees durability — if the server crashes after
+             * commit returns, the WAL has the page images for recovery. */
+            {
+                extern void bp_wal_flush_dirty(int fd);
+                extern int pgm_get_fd(void);
+                bp_wal_flush_dirty(pgm_get_fd());
+            }
+            uint32_t csn = pgm_next_csn();
+            clog_set_committed_csn(qctx->mvcc_xid, csn);
+        }
+        /* Release all row locks held by this auto-committed transaction */
+        {
+            extern void lock_release_all(uint32_t xid);
+            extern void lock_gap_release_all(uint32_t xid);
+            lock_release_all(qctx->mvcc_xid);
+            lock_gap_release_all(qctx->mvcc_xid);
+        }
+        mvcc_unregister_tx(qctx->mvcc_xid);
+    }
 
     /* Clear callback after query (next query will re-set if needed) */
     g_tx_undo_callback = NULL;
@@ -114,18 +154,31 @@ static THREAD_RETURN client_thread(THREAD_PARAM param)
 void server_init(void)
 {
     socket_init();
-    mutex_init(&g_parse_lock);
+    rwlock_init(&g_parse_lock);
+    mutex_init(&g_dml_mutex);
     mutex_init(&g_conn_lock);
-    bp_init(BP_DEFAULT_PAGES);   /* 256 pages = 1 MB buffer pool */
-    query_engine_init();
+    bp_init(BP_DEFAULT_PAGES);   /* 32768 pages = 128 MB buffer pool */
+    query_engine_init();         /* opens data file, WAL replay, reads catalog */
     snowflake_init();
+    mvcc_init();
+    vmap_init();
+    { extern void lock_mgr_init(void); lock_mgr_init(); }
+    { extern void cg_init(void); cg_init(); }
+    { extern void table_lock_init(void); table_lock_init(); }
+    auto_reclaim_start();
 }
 
 void server_cleanup(void)
 {
-    bp_flush_all();
+    auto_reclaim_stop();
+    /* WAL checkpoint before pgm_shutdown flushes buffer pool */
+    {
+        extern void wal_shutdown(void);
+        wal_shutdown();
+    }
+    pgm_shutdown();   /* flushes FileHeader + buffer pool + closes fd */
     bp_destroy();
-    mutex_destroy(&g_parse_lock);
+    rwlock_destroy(&g_parse_lock);
     mutex_destroy(&g_conn_lock);
     socket_cleanup();
 }

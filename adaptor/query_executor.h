@@ -5,6 +5,7 @@
 #include "result.h"
 #include "transaction.h"
 #include "../evolution/db/database.h"
+#include "../evolution/db/mvcc.h"
 
 /* ----------------------------------------------------------------
  *  Per-connection session context
@@ -36,6 +37,11 @@ typedef struct {
 
     /* LAST_INSERT_ID — last auto-generated value (per-session) */
     char      last_insert_id[64];
+
+    /* MVCC — transaction ID and snapshot */
+    uint32_t  tx_xid;            /* current transaction XID (0 = read-only/none) */
+    Snapshot  snapshot;           /* active snapshot for SELECT visibility */
+    int       snapshot_valid;     /* 1 if snapshot has been taken */
 } SessionCtx;
 
 /*

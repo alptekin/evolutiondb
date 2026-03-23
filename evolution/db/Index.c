@@ -18,6 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifdef __linux__
+#include <sched.h>          /* sched_yield */
+#endif
 #include "database.h"
 #include "expression.h"
 #include "catalog_internal.h"
@@ -25,9 +28,186 @@
 #include "hash_idx.h"
 #include "tuple_format.h"
 
+#define CONC_BATCH_SIZE 100  /* rows per batch for CONCURRENTLY populate */
+#define CONC_MOD_LOG_INIT_CAP 256
+
 /* Separator between indexed value and PK in secondary index keys.
  * Using \x1F (Unit Separator) — sorts before printable chars, won't appear in data */
 #define SEC_IDX_SEP '\x1f'
+
+/* Mutex callback struct — used by Phase2/Phase3 to lock/unlock without
+ * including platform.h.  Single definition, also matched in query_executor.c. */
+typedef struct { void (*lock)(void*); void (*unlock)(void*); void *mtx; } MutexOps;
+
+/* Reset all g_idx flags to default after index create completes or fails. */
+static void idx_reset_flags(void)
+{
+    g_idx.concurrent = 0;
+    g_idx.unique = 0;
+    g_idx.ifNotExists = 0;
+    g_idx.exprDef[0] = '\0';
+    g_idx.usingHash = 0;
+}
+
+/* ── Concurrent index build modification log ── */
+
+static void conc_mod_log_init(uint32_t table_id,
+                               const char *col_name, const char *expr_def)
+{
+    g_conc_mod_log.table_id = table_id;
+    g_conc_mod_log.count = 0;
+    g_conc_mod_log.capacity = CONC_MOD_LOG_INIT_CAP;
+    strncpy(g_conc_mod_log.col_name, col_name, sizeof(g_conc_mod_log.col_name) - 1);
+    g_conc_mod_log.col_name[sizeof(g_conc_mod_log.col_name) - 1] = '\0';
+    g_conc_mod_log.expr_def[0] = '\0';
+    if (expr_def && expr_def[0])
+        strncpy(g_conc_mod_log.expr_def, expr_def,
+                sizeof(g_conc_mod_log.expr_def) - 1);
+    g_conc_mod_log.pks = malloc(sizeof(char *) * CONC_MOD_LOG_INIT_CAP);
+    g_conc_mod_log.old_keys = malloc(sizeof(char *) * CONC_MOD_LOG_INIT_CAP);
+    if (!g_conc_mod_log.pks || !g_conc_mod_log.old_keys) {
+        free(g_conc_mod_log.pks);
+        free(g_conc_mod_log.old_keys);
+        g_conc_mod_log.pks = NULL;
+        g_conc_mod_log.old_keys = NULL;
+        g_conc_mod_log.capacity = 0;
+        g_conc_mod_log.active = 0;
+        return;
+    }
+    g_conc_mod_log.active = 1;
+}
+
+/* Grow both parallel arrays. Returns 0 on success, -1 on OOM. */
+static int conc_mod_log_grow(void)
+{
+    int new_cap = g_conc_mod_log.capacity * 2;
+    char **tmp_pk = realloc(g_conc_mod_log.pks, sizeof(char *) * new_cap);
+    if (!tmp_pk) return -1;
+    g_conc_mod_log.pks = tmp_pk;
+    char **tmp_ok = realloc(g_conc_mod_log.old_keys, sizeof(char *) * new_cap);
+    if (!tmp_ok) return -1;
+    g_conc_mod_log.old_keys = tmp_ok;
+    g_conc_mod_log.capacity = new_cap;
+    return 0;
+}
+
+/* Append for INSERT — no old value. */
+void conc_mod_log_append(uint32_t table_id, const char *pk_key)
+{
+    if (!g_conc_mod_log.active) return;
+    if (table_id != g_conc_mod_log.table_id) return;
+    if (!pk_key || !pk_key[0]) return;
+
+    if (g_conc_mod_log.count >= g_conc_mod_log.capacity)
+        if (conc_mod_log_grow() < 0) return;
+    char *dup = strdup(pk_key);
+    if (!dup) return;
+    int idx = g_conc_mod_log.count++;
+    g_conc_mod_log.pks[idx] = dup;
+    g_conc_mod_log.old_keys[idx] = NULL;  /* INSERT — no old value */
+}
+
+/* Append for DELETE/UPDATE — builds old composite key from field arrays. */
+void conc_mod_log_record(uint32_t table_id, const char *pk_key,
+                          const char *col_names_buf, int name_stride,
+                          const char *col_values_buf, int val_stride,
+                          int num_cols)
+{
+    if (!g_conc_mod_log.active) return;
+    if (table_id != g_conc_mod_log.table_id) return;
+    if (!pk_key || !pk_key[0]) return;
+
+    /* Build old indexed value using stored column info */
+    char old_val[512] = "";
+    const char *cn = g_conc_mod_log.col_name;
+
+    if (g_conc_mod_log.expr_def[0]) {
+        /* Expression index — build a temp IndexDesc for idx_build_key_ex */
+        IndexDesc tmp_idx;
+        memset(&tmp_idx, 0, sizeof(tmp_idx));
+        strncpy(tmp_idx.col_list, cn, sizeof(tmp_idx.col_list) - 1);
+        strncpy(tmp_idx.expr_def, g_conc_mod_log.expr_def,
+                sizeof(tmp_idx.expr_def) - 1);
+        idx_build_key_ex(&tmp_idx, col_names_buf, name_stride,
+                         col_values_buf, val_stride, num_cols,
+                         old_val, sizeof(old_val));
+    } else if (strchr(cn, ',')) {
+        /* Composite index */
+        IndexDesc tmp_idx;
+        memset(&tmp_idx, 0, sizeof(tmp_idx));
+        strncpy(tmp_idx.col_list, cn, sizeof(tmp_idx.col_list) - 1);
+        idx_build_key_ex(&tmp_idx, col_names_buf, name_stride,
+                         col_values_buf, val_stride, num_cols,
+                         old_val, sizeof(old_val));
+    } else {
+        /* Single column — direct lookup */
+        for (int i = 0; i < num_cols; i++) {
+            const char *name = col_names_buf + i * name_stride;
+            if (strcasecmp(name, cn) == 0) {
+                const char *val = col_values_buf + i * val_stride;
+                strncpy(old_val, val, sizeof(old_val) - 1);
+                break;
+            }
+        }
+    }
+
+    if (g_conc_mod_log.count >= g_conc_mod_log.capacity)
+        if (conc_mod_log_grow() < 0) return;
+    char *dup_pk = strdup(pk_key);
+    if (!dup_pk) return;
+    int i = g_conc_mod_log.count++;
+    g_conc_mod_log.pks[i] = dup_pk;
+
+    if (old_val[0]) {
+        /* Build composite key: "old_val\x1fPK" */
+        char composite[BT2_MAX_KEY_LEN + 1];
+        snprintf(composite, sizeof(composite), "%s%c%s",
+                 old_val, SEC_IDX_SEP, pk_key);
+        g_conc_mod_log.old_keys[i] = strdup(composite);
+    } else {
+        g_conc_mod_log.old_keys[i] = NULL;
+    }
+}
+
+static void conc_mod_log_clear(void)
+{
+    for (int i = 0; i < g_conc_mod_log.count; i++) {
+        free(g_conc_mod_log.pks[i]);
+        free(g_conc_mod_log.old_keys[i]);
+    }
+    free(g_conc_mod_log.pks);
+    free(g_conc_mod_log.old_keys);
+    g_conc_mod_log.pks = NULL;
+    g_conc_mod_log.old_keys = NULL;
+    g_conc_mod_log.count = 0;
+    g_conc_mod_log.capacity = 0;
+    g_conc_mod_log.active = 0;
+    g_conc_mod_log.table_id = 0;
+}
+
+/* Deduplicate in-place — keep FIRST old_key per PK. */
+static void conc_mod_log_dedup(void)
+{
+    if (g_conc_mod_log.count <= 1) return;
+    int w = 0;
+    for (int r = 0; r < g_conc_mod_log.count; r++) {
+        int dup = 0;
+        for (int j = 0; j < w; j++) {
+            if (strcmp(g_conc_mod_log.pks[r], g_conc_mod_log.pks[j]) == 0) {
+                dup = 1; break;
+            }
+        }
+        if (dup) {
+            free(g_conc_mod_log.pks[r]);
+            free(g_conc_mod_log.old_keys[r]);
+        } else {
+            g_conc_mod_log.pks[w] = g_conc_mod_log.pks[r];
+            g_conc_mod_log.old_keys[w] = g_conc_mod_log.old_keys[r];
+            w++;
+        }
+    }
+    g_conc_mod_log.count = w;
+}
 
 /* ── Secondary index helper: build composite key ── */
 static void sec_idx_make_key(const char *indexed_val, const char *pk,
@@ -216,6 +396,7 @@ int idx_load_secondary(const char *tblName, IndexDesc *out, int max)
     int count = 0;
     for (int i = 0; i < n && count < max; i++) {
         if (all[i].index_type == 'P') continue;
+        if (all[i].is_ready != IDX_READY) continue;  /* skip CONCURRENTLY building */
         out[count++] = all[i];
     }
     return count;
@@ -393,6 +574,11 @@ void SetIndexExpression(ExprNode *expr)
 void SetIndexUsingHash(void)
 {
     g_idx.usingHash = 1;
+}
+
+void SetIndexConcurrent(void)
+{
+    g_idx.concurrent = 1;
 }
 
 void SetDropIndexName(const char *idxName)
@@ -606,6 +792,26 @@ int CreateIndexProcess(void)
         idx_root = idx_tree.root_page;
     }
 
+    /* Determine index type */
+    char idx_type;
+    if (useHash)
+        idx_type = g_idx.unique ? 'V' : 'H';
+    else
+        idx_type = g_idx.unique ? 'U' : 'N';
+
+    /* CONCURRENTLY: register as IDX_BUILDING, save state, skip population.
+     * Phase2 will populate with batch-unlock pattern post-parse. */
+    if (g_idx.concurrent) {
+        cat_create_index_ex(td.table_id, g_idx.name, idx_root,
+                            g_idx.columnName, idx_type,
+                            g_idx.exprDef[0] ? g_idx.exprDef : NULL);
+        cat_update_index_ready(td.table_id, g_idx.name, IDX_BUILDING);
+        g_idx.concTableId = td.table_id;
+        g_idx.concRootPage = idx_root;
+        /* Don't reset flags — Phase2 needs them */
+        return 0;
+    }
+
     /* Populate index from existing rows */
     {
         char colNames[64][128];
@@ -698,11 +904,6 @@ int CreateIndexProcess(void)
     idx_root = useHash ? hash_idx.dir_page : idx_tree.root_page;
 
     /* Register index in catalog */
-    char idx_type;
-    if (useHash)
-        idx_type = g_idx.unique ? 'V' : 'H';
-    else
-        idx_type = g_idx.unique ? 'U' : 'N';
     cat_create_index_ex(td.table_id, g_idx.name, idx_root,
                         g_idx.columnName, idx_type,
                         g_idx.exprDef[0] ? g_idx.exprDef : NULL);
@@ -712,10 +913,262 @@ int CreateIndexProcess(void)
            g_idx.unique ? " [UNIQUE]" : "",
            useHash ? " [HASH]" : "",
            g_idx.exprDef[0] ? " [EXPRESSION]" : "");
-    g_idx.unique = 0;
-    g_idx.ifNotExists = 0;
-    g_idx.exprDef[0] = '\0';
-    g_idx.usingHash = 0;
+    idx_reset_flags();
+    return 0;
+}
+
+/* ── CREATE INDEX CONCURRENTLY — Phase 2 (batch-unlock populate) ──
+ * Called AFTER yyparse with mutex RELEASED.
+ * mutex_ptr points to a MutexOps struct (defined at file scope above). */
+int CreateIndexConcurrentlyPhase2(void *mutex_ptr)
+{
+    MutexOps *ops = (MutexOps *)mutex_ptr;
+
+    char tblPath[1024];
+    db_table_path(g_idx.tableName, tblPath, sizeof(tblPath));
+
+    /* Re-resolve table (under lock for first batch) */
+    ops->lock(ops->mtx);
+
+    TableDesc td;
+    ColumnDesc indexCols[CAT_MAX_COLUMNS];
+    int indexNCols;
+    if (tapi_resolve(tblPath, &td, indexCols, &indexNCols) < 0) {
+        /* Table disappeared between Phase1 and Phase2 */
+        cat_drop_index(g_idx.concTableId, g_idx.name);
+        ops->unlock(ops->mtx);
+        idx_reset_flags();
+        return -1;
+    }
+
+    /* Activate modification log — DML on this table during Phase 2
+     * will append affected PKs so Phase 3 can reconcile. */
+    conc_mod_log_init(td.table_id, g_idx.columnName,
+                      g_idx.exprDef[0] ? g_idx.exprDef : NULL);
+
+    BTree2 idx_tree = { .root_page = g_idx.concRootPage };
+    int isUnique = g_idx.unique;
+
+    char colNames[64][128];
+    int numCols = 0;
+    for (int ci = 0; ci < indexNCols && ci < 64; ci++) {
+        strncpy(colNames[ci], indexCols[ci].col_name, 127);
+        colNames[ci][127] = '\0';
+        numCols++;
+    }
+    int isComposite = (strchr(g_idx.columnName, ',') != NULL);
+    int isExprIndex = (g_idx.exprDef[0] != '\0');
+    ExprNode *idxExpr = NULL;
+    if (isExprIndex)
+        idxExpr = expr_deserialize(g_idx.exprDef);
+
+    TableScanCursor scanCur;
+    char pkBuf[256];
+    char recBuf[RECORD_BUF_SIZE];
+    int batch_count = 0;
+
+    if (tapi_scan_begin(&td, &scanCur) == 0) {
+        while (tapi_scan_next(&scanCur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
+            char idxKey[512] = "";
+
+            int recLen = tup_record_len(recBuf, sizeof(recBuf));
+            char colValues[64][256];
+            int nullArr[64];
+            int nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
+                                         colValues, nullArr, 64);
+
+            if (isExprIndex && idxExpr) {
+                expr_evaluate(idxExpr,
+                              (const char (*)[128])colNames,
+                              (const char (*)[256])colValues,
+                              numCols, idxKey, sizeof(idxKey));
+            } else if (isComposite) {
+                build_composite_key_from_record(g_idx.columnName,
+                    (const char (*)[128])colNames, numCols,
+                    indexCols, indexNCols, recBuf, recLen,
+                    idxKey, sizeof(idxKey));
+            } else {
+                int colIdx = -1;
+                for (int ci = 0; ci < numCols; ci++) {
+                    if (strcasecmp(colNames[ci], g_idx.columnName) == 0)
+                        { colIdx = ci; break; }
+                }
+                if (colIdx >= 0 && colIdx < nv && !nullArr[colIdx])
+                    strncpy(idxKey, colValues[colIdx], sizeof(idxKey) - 1);
+            }
+
+            if (idxKey[0]) {
+                if (isUnique) {
+                    char dupCheck[1][256];
+                    int dupCount = sec_idx_search(idx_tree.root_page, idxKey,
+                                                   dupCheck, 1);
+                    if (dupCount > 0) {
+                        /* Unique violation — drop the partial index */
+                        bt2_destroy(&idx_tree);
+                        cat_drop_index(g_idx.concTableId, g_idx.name);
+                        conc_mod_log_clear();
+                        ops->unlock(ops->mtx);
+                        idx_reset_flags();
+                        return -1;
+                    }
+                }
+
+                char compositeKey[BT2_MAX_KEY_LEN + 1];
+                sec_idx_make_key(idxKey, pkBuf, compositeKey, sizeof(compositeKey));
+
+                BTree2 pk_tree = tapi_pk_tree(&td);
+                RowID heap_rid;
+                if (bt2_search(&pk_tree, pkBuf, &heap_rid) == 0) {
+                    bt2_insert(&idx_tree, compositeKey, heap_rid);
+                }
+            }
+
+            batch_count++;
+            if (batch_count >= CONC_BATCH_SIZE) {
+                batch_count = 0;
+                /* Batch-unlock: release mutex to let other queries proceed.
+                 * Cursor page/slot positions remain valid because:
+                 * 1. B+ tree splits only move entries to RIGHT siblings
+                 *    (cursor is at current page, entries before it stay put)
+                 * 2. Deletes use lazy marking (RowID {0,0}), don't move entries
+                 * 3. Phase 3 reconciles any missed/duplicate entries from
+                 *    concurrent DML during gaps */
+                ops->unlock(ops->mtx);
+#ifdef __linux__
+                sched_yield();
+#endif
+                ops->lock(ops->mtx);
+            }
+        }
+    }
+
+    /* Update root page (may have changed due to splits).
+     * Do NOT mark IDX_READY yet — Phase 3 will reconcile first. */
+    cat_update_index_root(g_idx.concTableId, g_idx.name, idx_tree.root_page);
+    g_idx.concRootPage = idx_tree.root_page;
+
+    /* Deactivate log — no more entries accepted */
+    g_conc_mod_log.active = 0;
+
+    ops->unlock(ops->mtx);
+
+    /* Don't reset flags — Phase 3 needs them */
+    return 0;
+}
+
+/* ── CREATE INDEX CONCURRENTLY — Phase 3 (reconcile modifications) ──
+ * Runs under mutex. Deduplicates and processes the mod log built during
+ * Phase 2.  For each modified PK: reads current row state, ensures the
+ * index entry is correct.  Then marks index as IDX_READY. */
+int CreateIndexConcurrentlyPhase3(void *mutex_ptr)
+{
+    MutexOps *ops = (MutexOps *)mutex_ptr;
+
+    ops->lock(ops->mtx);
+
+    /* Deduplicate log before processing */
+    conc_mod_log_dedup();
+
+    int logCount = g_conc_mod_log.count;
+    if (logCount == 0) {
+        /* No modifications during Phase 2 — just mark ready */
+        cat_update_index_ready(g_idx.concTableId, g_idx.name, IDX_READY);
+        conc_mod_log_clear();
+        ops->unlock(ops->mtx);
+        idx_reset_flags();
+        return 0;
+    }
+
+    /* Re-resolve table */
+    char tblPath[1024];
+    db_table_path(g_idx.tableName, tblPath, sizeof(tblPath));
+    TableDesc td;
+    ColumnDesc indexCols[CAT_MAX_COLUMNS];
+    int indexNCols;
+    if (tapi_resolve(tblPath, &td, indexCols, &indexNCols) < 0) {
+        conc_mod_log_clear();
+        ops->unlock(ops->mtx);
+        idx_reset_flags();
+        return -1;
+    }
+
+    BTree2 idx_tree = { .root_page = g_idx.concRootPage };
+    BTree2 pk_tree = tapi_pk_tree(&td);
+
+    char colNames[64][128];
+    int numCols = 0;
+    for (int ci = 0; ci < indexNCols && ci < 64; ci++) {
+        strncpy(colNames[ci], indexCols[ci].col_name, 127);
+        colNames[ci][127] = '\0';
+        numCols++;
+    }
+    int isComposite = (strchr(g_idx.columnName, ',') != NULL);
+    int isExprIndex = (g_idx.exprDef[0] != '\0');
+    ExprNode *idxExpr = NULL;
+    if (isExprIndex)
+        idxExpr = expr_deserialize(g_idx.exprDef);
+
+    /* Process each modified PK */
+    for (int i = 0; i < logCount; i++) {
+        const char *pk = g_conc_mod_log.pks[i];
+        const char *old_key = g_conc_mod_log.old_keys[i];
+
+        /* Step 1: Remove old index entry if we have old_key (O(log N)).
+         * old_key is the composite "old_val\x1fPK" captured at DML time.
+         * bt2_delete returns -1 if not found — safe to ignore. */
+        if (old_key && old_key[0])
+            bt2_delete(&idx_tree, old_key);
+
+        /* Step 2: If row still exists, insert current value */
+        RowID heap_rid;
+        if (bt2_search(&pk_tree, pk, &heap_rid) == 0) {
+            char recBuf[RECORD_BUF_SIZE];
+            if (tapi_heap_read(heap_rid, recBuf, sizeof(recBuf)) < 0)
+                continue;
+
+            int recLen = tup_record_len(recBuf, sizeof(recBuf));
+            char colValues[64][256];
+            int nullArr[64];
+            int nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
+                                         colValues, nullArr, 64);
+
+            char idxKey[512] = "";
+            if (isExprIndex && idxExpr) {
+                expr_evaluate(idxExpr,
+                              (const char (*)[128])colNames,
+                              (const char (*)[256])colValues,
+                              numCols, idxKey, sizeof(idxKey));
+            } else if (isComposite) {
+                build_composite_key_from_record(g_idx.columnName,
+                    (const char (*)[128])colNames, numCols,
+                    indexCols, indexNCols, recBuf, recLen,
+                    idxKey, sizeof(idxKey));
+            } else {
+                int colIdx = -1;
+                for (int ci = 0; ci < numCols; ci++) {
+                    if (strcasecmp(colNames[ci], g_idx.columnName) == 0)
+                        { colIdx = ci; break; }
+                }
+                if (colIdx >= 0 && colIdx < nv && !nullArr[colIdx])
+                    strncpy(idxKey, colValues[colIdx], sizeof(idxKey) - 1);
+            }
+
+            if (idxKey[0]) {
+                char compositeKey[BT2_MAX_KEY_LEN + 1];
+                sec_idx_make_key(idxKey, pk, compositeKey, sizeof(compositeKey));
+                bt2_insert(&idx_tree, compositeKey, heap_rid);
+            }
+        }
+    }
+
+    /* Update final root page and mark ready */
+    cat_update_index_root(g_idx.concTableId, g_idx.name, idx_tree.root_page);
+    cat_update_index_ready(g_idx.concTableId, g_idx.name, IDX_READY);
+
+    conc_mod_log_clear();
+    ops->unlock(ops->mtx);
+
+    idx_reset_flags();
     return 0;
 }
 

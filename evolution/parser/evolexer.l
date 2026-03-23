@@ -2,7 +2,7 @@
 -                    Scanner for evosql subset                        -
 -----------------------------------------------------------------------*/
 
-%option noyywrap nodefault yylineno case-insensitive
+%option noyywrap nodefault yylineno case-insensitive reentrant bison-bridge
 %{
 	#define _CRT_SECURE_NO_WARNINGS
 	#include "evoparser.tab.h"
@@ -10,8 +10,8 @@
 	#include <string.h>
 	#include <stdlib.h>
 
-	void yyerror(char *s, ...);
-	int oldstate;
+	void yyerror(void *scanner, const char *s, ...);
+	static __thread int t_oldstate;
 %}
 %x COMMENT
 %s BTWMODE
@@ -47,6 +47,8 @@ BY						{ return BY; }
 
 CASCADE					{ return CASCADE; }
 CASE					{ return CASE; }
+COLUMN					{ return COLUMN; }
+CONCURRENTLY			{ return CONCURRENTLY; }
 
 CHAR(ACTER)?			{ return CHAR; }
 
@@ -104,8 +106,8 @@ EXPLAIN					{ return EXPLAIN; }
 END						{ return END; }
 ENUM					{ return ENUM; }
 ESCAPED					{ return ESCAPED; }
-EXISTS					{ yylval.subtok = 0; return EXISTS; }
-NOT[ \t\n]+EXISTS		{ yylval.subtok = 1; return EXISTS; }
+EXISTS					{ yylval->subtok = 0; return EXISTS; }
+NOT[ \t\n]+EXISTS		{ yylval->subtok = 1; return EXISTS; }
 
 
 
@@ -152,6 +154,7 @@ LEADING					{ return LEADING; }
 LEFT					{ return LEFT; }
 LIKE					{ return LIKE; }
 LIMIT					{ return LIMIT; }
+LOCKED					{ return LOCKED; }
 OFFSET					{ return OFFSET; }
 
 
@@ -204,14 +207,15 @@ REGEXP|RLIKE			{ return REGEXP; }
 RECLAIM					{ return RECLAIM; }
 REFERENCES				{ return REFERENCES; }
 RENAME					{ return RENAME; }
-REPLACE					{ int c = input(); unput(c); if(c == '(') return FREPLACE; return REPLACE; }
+REPLACE					{ int c = input(yyscanner); unput(c); if(c == '(') return FREPLACE; return REPLACE; }
 RESTRICT				{ return RESTRICT; }
 
 
 RIGHT					{ return RIGHT; }
 ROLLUP					{ return ROLLUP; }
 SCHEMA					{ return SCHEMA; }
-
+SHARE					{ return SHARE; }
+SKIP					{ return SKIP; }
 
 SELECT					{ return SELECT; }
 
@@ -264,7 +268,7 @@ USING					{ return USING; }
 VALIDATE				{ return VALIDATE; }
 VALUES					{ return VALUES; }
 VIRTUAL					{ return VIRTUAL; }
-VALUE					{ yylval.strval = strdup("VALUE"); return NAME; }
+VALUE					{ yylval->strval = strdup("VALUE"); return NAME; }
 VARBINARY				{ return VARBINARY; }
 VARCHAR(ACTER)?			{ return VARCHAR; }
 
@@ -279,46 +283,46 @@ YEAR_MONTH				{ return YEAR_MONTH; }
 ZEROFILL				{ return ZEROFILL; }
 
 
--?[0-9]+				{ yylval.intval = atoi(yytext); return INTNUM; }			/* numbers */
+-?[0-9]+				{ yylval->intval = atoi(yytext); return INTNUM; }			/* numbers */
 -?[0-9]+"."[0-9]* |
 -?"."[0-9]+ |
 -?[0-9]+E[-+]?[0-9]+ |
 -?[0-9]+"."[0-9]*E[-+]?[0-9]+ |
--?"."[0-9]+E[-+]?[0-9]+ { yylval.floatval = atof(yytext) ;return APPROXNUM; }
+-?"."[0-9]+E[-+]?[0-9]+ { yylval->floatval = atof(yytext) ;return APPROXNUM; }
 
 
-TRUE					{ yylval.intval = 1; return BOOL; }							/* booleans */
-UNKNOWN					{ yylval.intval = -1; return BOOL; }
-FALSE					{ yylval.intval = 0; return BOOL; }
+TRUE					{ yylval->intval = 1; return BOOL; }							/* booleans */
+UNKNOWN					{ yylval->intval = -1; return BOOL; }
+FALSE					{ yylval->intval = 0; return BOOL; }
 
 
 '(\\.|''|[^'\n])*' |																/* strings */
-\"(\\.|\"\"|[^"\n])*\"	{ yylval.strval = strdup(yytext); return STRING; }
-'(\\.|[^'\n])*$			{ yyerror("Unterminated string %s", yytext); }
-\"(\\.|[^"\n])*$		{ yyerror("Unterminated string %s", yytext); }
+\"(\\.|\"\"|[^"\n])*\"	{ yylval->strval = strdup(yytext); return STRING; }
+'(\\.|[^'\n])*$			{ yyerror(yyscanner, "Unterminated string %s", yytext); }
+\"(\\.|[^"\n])*$		{ yyerror(yyscanner, "Unterminated string %s", yytext); }
 
 
 X'[0-9A-F]+' |																		/* hex strings */
-0X[0-9A-F]+				{ yylval.strval = strdup(yytext); return STRING; }
+0X[0-9A-F]+				{ yylval->strval = strdup(yytext); return STRING; }
 
 
 0B[01]+ |																			/* bit strings */
-B'[01]+'				{ yylval.strval = strdup(yytext); return STRING; }
+B'[01]+'				{ yylval->strval = strdup(yytext); return STRING; }
 
 
 [-+&~|^/%*(),.;!]		{ return yytext[0]; }										/* operators */
 "&&"					{ return ANDOP; }
 "||"					{ return OR; }
-"="						{ yylval.subtok = 4; return COMPARISON; }
-"<=>"					{ yylval.subtok = 12; return COMPARISON; }
-">="					{ yylval.subtok = 6; return COMPARISON; }
-">"						{ yylval.subtok = 2; return COMPARISON; }
-"<="					{ yylval.subtok = 5; return COMPARISON; }
-"<"						{ yylval.subtok = 1; return COMPARISON; }
+"="						{ yylval->subtok = 4; return COMPARISON; }
+"<=>"					{ yylval->subtok = 12; return COMPARISON; }
+">="					{ yylval->subtok = 6; return COMPARISON; }
+">"						{ yylval->subtok = 2; return COMPARISON; }
+"<="					{ yylval->subtok = 5; return COMPARISON; }
+"<"						{ yylval->subtok = 1; return COMPARISON; }
 "!=" |
-"<>"					{ yylval.subtok = 3; return COMPARISON; }
-"<<"					{ yylval.subtok = 1; return SHIFT; }
-">>"					{ yylval.subtok = 2; return SHIFT; }
+"<>"					{ yylval->subtok = 3; return COMPARISON; }
+"<<"					{ yylval->subtok = 1; return SHIFT; }
+">>"					{ yylval->subtok = 2; return SHIFT; }
 ":="					{ return ASSIGN; }
 
 
@@ -337,35 +341,35 @@ SNOWFLAKE_ID/"("		{ return FSNOWFLAKE_ID; }
 DATE_ADD/"("			{ return FDATE_ADD; }
 DATE_SUB/"("			{ return FDATE_SUB; }
 
-COUNT					{ int c = input(); unput(c); if(c == '(') return FCOUNT; yylval.strval = strdup(yytext); return NAME; }  /* check trailing context manually */
-SUM						{ int c = input(); unput(c); if(c == '(') return FSUM; yylval.strval = strdup(yytext); return NAME; }
-AVG						{ int c = input(); unput(c); if(c == '(') return FAVG; yylval.strval = strdup(yytext); return NAME; }
-MIN						{ int c = input(); unput(c); if(c == '(') return FMIN; yylval.strval = strdup(yytext); return NAME; }
-MAX						{ int c = input(); unput(c); if(c == '(') return FMAX; yylval.strval = strdup(yytext); return NAME; }
+COUNT					{ int c = input(yyscanner); unput(c); if(c == '(') return FCOUNT; yylval->strval = strdup(yytext); return NAME; }  /* check trailing context manually */
+SUM						{ int c = input(yyscanner); unput(c); if(c == '(') return FSUM; yylval->strval = strdup(yytext); return NAME; }
+AVG						{ int c = input(yyscanner); unput(c); if(c == '(') return FAVG; yylval->strval = strdup(yytext); return NAME; }
+MIN						{ int c = input(yyscanner); unput(c); if(c == '(') return FMIN; yylval->strval = strdup(yytext); return NAME; }
+MAX						{ int c = input(yyscanner); unput(c); if(c == '(') return FMAX; yylval->strval = strdup(yytext); return NAME; }
 
 
-[A-Za-z][A-Za-z0-9_]*	{ yylval.strval = strdup(yytext); return NAME; }			/* names */
-`[^`/\\.\n]+`			{ yylval.strval = strdup(yytext+1); yylval.strval[yyleng-2] = 0; return NAME; }
-`[^`\n]*$				{ yyerror("unterminated quoted name %s", yytext); }
+[A-Za-z][A-Za-z0-9_]*	{ yylval->strval = strdup(yytext); return NAME; }			/* names */
+`[^`/\\.\n]+`			{ yylval->strval = strdup(yytext+1); yylval->strval[yyleng-2] = 0; return NAME; }
+`[^`\n]*$				{ yyerror(yyscanner, "unterminated quoted name %s", yytext); }
 
 
 @[0-9a-z_.$]+ |																		/* user variables */
 @\"[^"\n]+\" |
 @`[^`\n]+` |
-@'[^'\n]+'				{ yylval.strval = strdup(yytext+1); return USERVAR; }
+@'[^'\n]+'				{ yylval->strval = strdup(yytext+1); return USERVAR; }
 @\"[^"\n]*$ |
 @`[^`\n]*$ |
-@'[^'\n]*$				{ yyerror("unterminated quoted user variable %s", yytext); }
+@'[^'\n]*$				{ yyerror(yyscanner, "unterminated quoted user variable %s", yytext); }
 
 
 #.* ;																				/* comments */
 "--"[ \t].* ;
-"/*"					{ oldstate = YY_START; BEGIN COMMENT; }
-<COMMENT>"*/"			{ BEGIN oldstate; }
+"/*"					{ t_oldstate = YY_START; BEGIN COMMENT; }
+<COMMENT>"*/"			{ BEGIN(t_oldstate); }
 <COMMENT>.|\n ;
-<COMMENT><<EOF>>		{ yyerror("unclosed comment"); }
+<COMMENT><<EOF>>		{ yyerror(yyscanner, "unclosed comment"); }
 
 
 [ \t\n] /* whitespace */															/* everything else */
-.						{ yyerror("mystery character '%c'", *yytext); }
+.						{ yyerror(yyscanner, "mystery character '%c'", *yytext); }
 %%

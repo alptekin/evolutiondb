@@ -130,6 +130,8 @@ static int create_new_file(const char *filepath)
     g_header.next_table_id  = 1;
     g_header.next_schema_id = 1;
     g_header.next_db_id     = 1;
+    g_header.next_xid       = 2;  /* XID 1 = XID_FROZEN (reserved) */
+    g_header.next_csn       = 1;
 
     /* Extend file to initial size */
     off_t file_size = (off_t)PGM_INITIAL_PAGES * EVO_PAGE_SIZE;
@@ -197,16 +199,60 @@ int pgm_init(const char *filepath)
     /* Try to open existing file */
     g_global_fd = open(filepath, O_RDWR, 0644);
     if (g_global_fd >= 0) {
-        /* Existing file — read and validate header */
-        if (read_header() < 0) {
-            close(g_global_fd);
-            g_global_fd = -1;
-            pthread_mutex_unlock(&g_pgm_lock);
-            return -1;
+        /* Phase 1: Read header to get TDE state */
+        int header_ok = 0;
+        if (read_header() == 0 && g_header.magic == EVO_MAGIC)
+            header_ok = 1;
+
+        /* Phase 2: Initialize TDE if header is valid and encrypted */
+        if (header_ok) {
+            const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
+            int has_key = (enc_key && enc_key[0]);
+            if (g_header.encryption_enabled && has_key)
+                pcrypt_init_existing(g_header.encryption_salt,
+                                     g_header.wrapped_dek,
+                                     g_header.page_iv_prefix);
         }
-        if (g_header.magic != EVO_MAGIC) {
-            fprintf(stderr, "page_mgr: invalid magic number 0x%08X\n",
-                    g_header.magic);
+
+        /* Phase 3: WAL recovery — two-pass approach for TDE compatibility.
+         * Pass 1 (inside wal_init): Replay page 0 (FileHeader, plaintext)
+         * Then re-read header + re-init TDE from recovered data.
+         * Pass 2 (wal_replay_remaining): Replay data pages with TDE. */
+        {
+            extern int wal_init(int data_fd);
+            extern int wal_replay_remaining(void);
+            extern void bp_invalidate_fd(int fd);
+            int pass1 = wal_init(g_global_fd);
+            if (pass1 > 0) {
+                /* Page 0 was recovered — re-read header */
+                bp_invalidate_fd(g_global_fd);
+                pread(g_global_fd, &g_header, sizeof(FileHeader), 0);
+                header_ok = (g_header.magic == EVO_MAGIC) ? 1 : 0;
+                /* Re-init TDE from recovered header if encrypted */
+                if (header_ok && g_header.encryption_enabled) {
+                    const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
+                    if (enc_key && enc_key[0] && !pcrypt_is_enabled())
+                        pcrypt_init_existing(g_header.encryption_salt,
+                                             g_header.wrapped_dek,
+                                             g_header.page_iv_prefix);
+                }
+            }
+            /* Pass 2: replay data pages (with TDE now active) */
+            int pass2 = wal_replay_remaining();
+            if (pass1 > 0 || pass2 > 0) {
+                fprintf(stderr, "[WAL] Crash recovery: %d page(s) restored\n",
+                        pass1 + pass2);
+                bp_invalidate_fd(g_global_fd);
+                pread(g_global_fd, &g_header, sizeof(FileHeader), 0);
+                header_ok = (g_header.magic == EVO_MAGIC) ? 1 : 0;
+            }
+        }
+
+        /* Phase 4: Validate header */
+        if (!header_ok) {
+            if (g_header.magic != EVO_MAGIC)
+                fprintf(stderr, "page_mgr: invalid magic number 0x%08X\n",
+                        g_header.magic);
             close(g_global_fd);
             g_global_fd = -1;
             pthread_mutex_unlock(&g_pgm_lock);
@@ -227,8 +273,10 @@ int pgm_init(const char *filepath)
             int has_key = (enc_key && enc_key[0]);
 
             if (g_header.encryption_enabled && has_key) {
-                /* Encrypted DB + key provided → unlock */
-                if (pcrypt_init_existing(g_header.encryption_salt,
+                /* Encrypted DB + key provided → unlock
+                 * (may already be init'd from Phase 2 above — pcrypt handles this) */
+                if (!pcrypt_is_enabled() &&
+                    pcrypt_init_existing(g_header.encryption_salt,
                                          g_header.wrapped_dek,
                                          g_header.page_iv_prefix) < 0) {
                     fprintf(stderr,
@@ -266,6 +314,11 @@ int pgm_init(const char *filepath)
     /* File doesn't exist — create new */
     if (errno == ENOENT) {
         int ret = create_new_file(filepath);
+        if (ret == 0) {
+            /* Initialize WAL for new database */
+            extern int wal_init(int data_fd);
+            wal_init(g_global_fd);
+        }
         pthread_mutex_unlock(&g_pgm_lock);
         return ret;
     }
@@ -426,6 +479,57 @@ uint32_t pgm_next_id(int id_type)
     flush_header_if_dirty();
 
     pthread_mutex_unlock(&g_pgm_lock);
+    return val;
+}
+
+void pgm_reload_header(void)
+{
+    pthread_mutex_lock(&g_pgm_lock);
+    read_header();
+    g_header_dirty = 0;
+    pthread_mutex_unlock(&g_pgm_lock);
+}
+
+uint32_t pgm_next_xid(void)
+{
+    uint32_t val;
+
+    pthread_mutex_lock(&g_pgm_lock);
+    val = g_header.next_xid++;
+    mark_header_dirty();
+    /* No flush here — deferred to pgm_flush()/pgm_shutdown() for performance.
+     * On crash, next_xid may go backward, but unfinished XIDs show as
+     * IN_PROGRESS in CLOG and are treated as aborted. */
+
+    /* XID wraparound warning — log once when threshold is crossed */
+    if (val == 2000000000u) {
+        fprintf(stderr, "WARNING: transaction ID %u approaching wraparound limit. "
+                "Run RECLAIM TABLE on all tables to freeze old XIDs.\n", val);
+    }
+    pthread_mutex_unlock(&g_pgm_lock);
+
+    return val;
+}
+
+uint32_t pgm_peek_xid(void)
+{
+    uint32_t val;
+    pthread_mutex_lock(&g_pgm_lock);
+    val = g_header.next_xid;
+    pthread_mutex_unlock(&g_pgm_lock);
+    return val;
+}
+
+uint32_t pgm_next_csn(void)
+{
+    uint32_t val;
+
+    pthread_mutex_lock(&g_pgm_lock);
+    val = g_header.next_csn++;
+    mark_header_dirty();
+    /* Deferred flush — same rationale as pgm_next_xid(). */
+    pthread_mutex_unlock(&g_pgm_lock);
+
     return val;
 }
 

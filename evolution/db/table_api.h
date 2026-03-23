@@ -44,6 +44,12 @@ int tapi_heap_read(RowID rid, char *buf, int bufsize);
  * Returns 0 on success, -1 on error. */
 int tapi_heap_delete(RowID rid);
 
+/* MVCC soft-delete: set xmax on a heap tuple without physically deleting it.
+ * The PK tree entry is preserved so concurrent readers can check visibility.
+ * Returns 0 on success, -1 if not an MVCC tuple (caller should fall back
+ * to physical delete). */
+int tapi_heap_set_xmax(RowID rid, uint32_t xmax);
+
 /* Update a record at RowID. If the new record doesn't fit in-place,
  * deletes old and inserts into a page with space.
  * Returns new RowID (may differ from old_rid). Returns {0,0} on error. */
@@ -90,17 +96,49 @@ int tapi_get_pk_indices(const ColumnDesc *cols, int ncols,
 typedef struct {
     BTree2Cursor bt_cursor;
     BTree2       tree;
+    void        *ring;          /* BPRing* — anti-pollution ring buffer for sequential scan */
 } TableScanCursor;
 
 /* Begin a full scan over all records (ordered by PK).
+ * Allocates a ring buffer for sequential I/O (anti-pollution).
  * Returns 0 on success, -1 if table is empty. */
 int tapi_scan_begin(const TableDesc *td, TableScanCursor *cursor);
+
+/* End a scan and free the ring buffer. Optional — only needed if
+ * the caller breaks out of the scan loop early. */
+void tapi_scan_end(TableScanCursor *cursor);
 
 /* Get next record in scan.
  * Fills pk_key_out (null-terminated) and record_out (null-terminated).
  * Returns 0 on success, -1 when done. */
 int tapi_scan_next(TableScanCursor *cursor,
                    char *pk_key_out, char *record_out, int rec_out_size);
+
+/* ----------------------------------------------------------------
+ *  MVCC-aware scan — skips tuples not visible to the snapshot
+ * ---------------------------------------------------------------- */
+struct Snapshot;  /* forward declaration — full definition in mvcc.h */
+
+/* Get next visible record in scan, using MVCC visibility filtering.
+ * Skips tuples whose xmin/xmax make them invisible to the snapshot.
+ * Pre-MVCC tuples (no MVCC flag) are always visible.
+ * Returns 0 on success, -1 when done. */
+int tapi_scan_next_mvcc(TableScanCursor *cursor,
+                        char *pk_key_out, char *record_out, int rec_out_size,
+                        const struct Snapshot *snap);
+
+/* ----------------------------------------------------------------
+ *  HOT chain following — find newest version on same page
+ * ---------------------------------------------------------------- */
+struct Snapshot;
+
+/* If the tuple at `rid` has HOT_UPDATED flag, scan the same page for
+ * the newest visible version (HEAP_ONLY tuple with matching table_id).
+ * Copies the newest visible record to out_rec and sets *out_rid.
+ * Returns record length on success, -1 if no newer version found. */
+int tapi_follow_hot_chain(RowID rid, const char *old_rec, int old_len,
+                          const struct Snapshot *snap,
+                          char *out_rec, int out_size, RowID *out_rid);
 
 /* ----------------------------------------------------------------
  *  Free all heap pages (for DROP TABLE / TRUNCATE)

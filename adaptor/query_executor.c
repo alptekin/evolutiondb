@@ -12,20 +12,23 @@
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/expression.h"
 #include "../evolution/db/tuple_format.h"
+#include "../evolution/db/buffer_pool.h"
 #include "pg_protocol.h"
 #include "util.h"
 
-/* Flex/Bison externs */
-extern int yyparse(void);
+/* Flex/Bison externs (reentrant parser) */
+typedef void *yyscan_t;
+extern int yyparse(void *scanner);
 typedef struct yy_buffer_state *YY_BUFFER_STATE;
-extern YY_BUFFER_STATE yy_scan_string(const char *str);
-extern void yy_delete_buffer(YY_BUFFER_STATE buf);
-extern int yylex_destroy(void);
-extern int yylineno;
+extern int yylex_init(yyscan_t *scanner);
+extern void yyset_lineno(int lineno, yyscan_t scanner);
+extern YY_BUFFER_STATE yy_scan_string(const char *str, yyscan_t scanner);
+extern void yy_delete_buffer(YY_BUFFER_STATE buf, yyscan_t scanner);
+extern int yylex_destroy(yyscan_t scanner);
 
 /* Parser mutex from server.c (serializes yyparse, not reentrant) */
 #include "platform.h"
-extern mutex_t g_parse_lock;
+extern rwlock_t g_parse_lock;
 
 /* ----------------------------------------------------------------
  *  Engine initialization
@@ -91,6 +94,16 @@ static int is_truncate_query(const char *sql)
     while (*sql && isspace((unsigned char)*sql)) sql++;
     return (strncasecmp(sql, "TRUNCATE", 8) == 0);
 }
+
+static int is_alter_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "ALTER", 5) == 0);
+}
+
+/* rwlock adapters for CreateIndexConcurrentlyPhase2 (void* interface) */
+static void conc_lock(void *m)   { rwlock_wrlock((rwlock_t *)m); }
+static void conc_unlock(void *m) { rwlock_wrunlock((rwlock_t *)m); }
 
 static int is_analyze_query(const char *sql)
 {
@@ -540,6 +553,16 @@ static void populate_result_row(ResultSet *rs, int row,
             result_set_field(rs, row, col, fields[col]);
         }
     }
+    /* Schema evolution: fill columns added after this record was inserted.
+     * Use DEFAULT value if available, otherwise NULL. */
+    for (int col = nf; col < rs->num_cols && col < ncols; col++) {
+        if (cols[col].default_val[0] != '\0' &&
+            strcmp(cols[col].default_val, "\x01NONE\x01") != 0) {
+            result_set_field(rs, row, col, cols[col].default_val);
+        } else {
+            result_set_null(rs, row, col);
+        }
+    }
 }
 
 /* Pre-deserialized virtual column expressions (cached once per SELECT). */
@@ -606,11 +629,352 @@ static int eval_virtual_columns(char *recBuf, int recBufSize,
 }
 
 /* ----------------------------------------------------------------
+ *  Fast-path SELECT: skip yyparse for simple PK/index lookups
+ *
+ *  Detects: SELECT <cols> FROM <table> WHERE <col> = <value>
+ *  Extracts components via string matching, resolves table from catalog,
+ *  checks if WHERE column is PK, does direct bt2_search + heap read.
+ *  Returns 1 if handled, 0 if not a fast-path candidate.
+ * ---------------------------------------------------------------- */
+static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
+{
+    /* Quick reject: must contain FROM and WHERE with simple = */
+    const char *from_pos = NULL, *where_pos = NULL;
+    {
+        const char *p = sql;
+        while (*p) {
+            if (!from_pos && strncasecmp(p, "FROM", 4) == 0 &&
+                (p == sql || !isalnum((unsigned char)*(p-1))) &&
+                isspace((unsigned char)p[4]))
+                from_pos = p;
+            if (!where_pos && strncasecmp(p, "WHERE", 5) == 0 &&
+                (p == sql || !isalnum((unsigned char)*(p-1))) &&
+                isspace((unsigned char)p[5]))
+                where_pos = p;
+            p++;
+        }
+    }
+    if (!from_pos || !where_pos) return 0;
+
+    /* Parse column list: SELECT * or SELECT col1, col2, ... */
+    int has_star = 0;
+    char fast_cols[16][128];
+    int fast_ncols = 0;
+    {
+        const char *sel = sql;
+        while (*sel && isspace((unsigned char)*sel)) sel++;
+        sel += 6; /* skip "SELECT" */
+        while (*sel && isspace((unsigned char)*sel)) sel++;
+        const char *scan = sel;
+        while (scan < from_pos) {
+            if (*scan == '*') { has_star = 1; break; }
+            scan++;
+        }
+        if (!has_star) {
+            /* Parse comma-separated column names */
+            const char *p = sel;
+            while (p < from_pos && fast_ncols < 16) {
+                while (p < from_pos && isspace((unsigned char)*p)) p++;
+                int ci = 0;
+                while (p < from_pos && *p != ',' &&
+                       !isspace((unsigned char)*p) && ci < 127)
+                    fast_cols[fast_ncols][ci++] = *p++;
+                fast_cols[fast_ncols][ci] = '\0';
+                if (ci > 0) fast_ncols++;
+                while (p < from_pos && (isspace((unsigned char)*p) || *p == ',')) p++;
+            }
+            /* Reject if any "column" contains AS, (, ), or other complex syntax */
+            for (int i = 0; i < fast_ncols; i++) {
+                if (strchr(fast_cols[i], '(') || strchr(fast_cols[i], ')') ||
+                    strcasecmp(fast_cols[i], "AS") == 0 ||
+                    strcasecmp(fast_cols[i], "DISTINCT") == 0)
+                    return 0;  /* too complex for fast-path */
+            }
+            if (fast_ncols == 0) return 0;
+        }
+    }
+
+    /* Reject: GROUP BY, ORDER BY, HAVING, JOIN, LIMIT, OFFSET, subqueries.
+     * Uses word-boundary checks to avoid matching inside identifiers (e.g. "orders").
+     * Skips single-quoted string literals to avoid false positives. */
+    {
+        const char *p = where_pos + 5; /* scan only after WHERE — FROM/table already parsed */
+        while (*p) {
+            if (*p == '\'') { /* skip string literal */
+                p++;
+                while (*p && *p != '\'') p++;
+                if (*p) p++;
+                continue;
+            }
+            if (*p == '(') return 0;
+            /* Check keywords with word boundary: prev char not alnum/_, next char not alnum/_ */
+            int at_word_start = (p == sql || (!isalnum((unsigned char)*(p-1)) && *(p-1) != '_'));
+            if (at_word_start) {
+                struct { const char *kw; int len; } kws[] = {
+                    {"GROUP",5}, {"ORDER",5}, {"HAVING",6}, {"JOIN",4}, {"LIMIT",5}, {"OFFSET",6}, {NULL,0}
+                };
+                for (int k = 0; kws[k].kw; k++) {
+                    if (strncasecmp(p, kws[k].kw, kws[k].len) == 0) {
+                        char after = p[kws[k].len];
+                        if (!isalnum((unsigned char)after) && after != '_')
+                            return 0; /* real keyword, not part of identifier */
+                    }
+                }
+            }
+            p++;
+        }
+    }
+
+    /* Extract table name from "FROM <table>" */
+    char tblName[256];
+    {
+        const char *t = from_pos + 4;
+        while (*t && isspace((unsigned char)*t)) t++;
+        int ti = 0;
+        while (*t && (isalnum((unsigned char)*t) || *t == '_') && ti < 255)
+            tblName[ti++] = *t++;
+        tblName[ti] = '\0';
+        if (!tblName[0]) return 0;
+    }
+
+    /* Extract "WHERE col = value" — only simple equality */
+    char whereCol[128], whereVal[256];
+    {
+        const char *w = where_pos + 5;
+        while (*w && isspace((unsigned char)*w)) w++;
+        int ci = 0;
+        while (*w && (isalnum((unsigned char)*w) || *w == '_') && ci < 127)
+            whereCol[ci++] = *w++;
+        whereCol[ci] = '\0';
+        while (*w && isspace((unsigned char)*w)) w++;
+        if (*w != '=') return 0;  /* only = operator */
+        w++;
+        while (*w && isspace((unsigned char)*w)) w++;
+        int vi = 0;
+        if (*w == '\'') {
+            w++;
+            /* Handle SQL escaped quotes: '' → ' */
+            while (*w && vi < 255) {
+                if (*w == '\'') {
+                    if (*(w+1) == '\'') { whereVal[vi++] = '\''; w += 2; }
+                    else break;
+                } else {
+                    whereVal[vi++] = *w++;
+                }
+            }
+        } else {
+            while (*w && !isspace((unsigned char)*w) && *w != ';' && vi < 255)
+                whereVal[vi++] = *w++;
+        }
+        whereVal[vi] = '\0';
+        if (!whereCol[0] || !whereVal[0]) return 0;
+        /* Reject if there's AND/OR after the value (with word boundary) */
+        while (*w && (*w == '\'' || isspace((unsigned char)*w) || *w == ';')) w++;
+        if (*w && strncasecmp(w, "AND", 3) == 0 &&
+            !isalnum((unsigned char)w[3]) && w[3] != '_') return 0;
+        if (*w && strncasecmp(w, "OR", 2) == 0 &&
+            !isalnum((unsigned char)w[2]) && w[2] != '_') return 0;
+    }
+
+    /* Acquire read lock for data access — protects against concurrent DML
+     * modifying B+ tree structure or heap pages while we read them. */
+    rwlock_rdlock(&g_parse_lock);
+
+    /* Resolve table */
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
+        rwlock_rdunlock(&g_parse_lock);
+        return 0;
+    }
+
+    /* Reject tables with VIRTUAL generated columns — fast-path can't evaluate them */
+    for (int i = 0; i < ncols; i++) {
+        if (cols[i].generated_mode == GENMODE_VIRTUAL) {
+            rwlock_rdunlock(&g_parse_lock);
+            return 0;
+        }
+    }
+
+    /* Check if WHERE column is the primary key */
+    int is_pk = 0, pk_col_idx = -1;
+    for (int i = 0; i < ncols; i++) {
+        if (cols[i].is_pk && strcasecmp(cols[i].col_name, whereCol) == 0) {
+            is_pk = 1;
+            pk_col_idx = i;
+            break;
+        }
+    }
+
+    char secIdxPath[1024] = "";
+    if (!is_pk) {
+        /* Check secondary index */
+        if (!index_exists(tblName, whereCol, secIdxPath, sizeof(secIdxPath))) {
+            rwlock_rdunlock(&g_parse_lock);
+            return 0;  /* no index — fall through to parser for full scan */
+        }
+    }
+
+    /* ── Fast-path execution ── */
+    rs->is_select = 1;
+
+    /* Set up column metadata */
+    {
+        unsigned int tableOid = 5381;
+        { const char *p = tblName; while (*p) { tableOid = ((tableOid << 5) + tableOid) + (unsigned char)*p++; } }
+        tableOid = 16384 + (tableOid % 100000);
+
+        if (has_star) {
+            /* SELECT * — add all columns */
+            for (int i = 0; i < ncols; i++) {
+                int oid = type_encoding_to_pg_oid(cols[i].type_code);
+                result_add_column(rs, cols[i].col_name, oid);
+                rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
+                rs->columns[rs->num_cols - 1].attnum = i + 1;
+                int family = cols[i].type_code / 10000;
+                int size = cols[i].type_code % 10000;
+                if ((family == 12 || family == 13) && size > 0)
+                    rs->columns[rs->num_cols - 1].type_modifier = size + 4;
+            }
+        } else {
+            /* SELECT col1, col2, ... — add only requested columns */
+            for (int fi = 0; fi < fast_ncols; fi++) {
+                for (int i = 0; i < ncols; i++) {
+                    if (strcasecmp(cols[i].col_name, fast_cols[fi]) == 0) {
+                        int oid = type_encoding_to_pg_oid(cols[i].type_code);
+                        result_add_column(rs, cols[i].col_name, oid);
+                        rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
+                        rs->columns[rs->num_cols - 1].attnum = i + 1;
+                        int family = cols[i].type_code / 10000;
+                        int size = cols[i].type_code % 10000;
+                        if ((family == 12 || family == 13) && size > 0)
+                            rs->columns[rs->num_cols - 1].type_modifier = size + 4;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Take MVCC snapshot */
+    Snapshot snap;
+    memset(&snap, 0, sizeof(snap));
+    if (ctx) {
+        if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
+            snap = ctx->snapshot;
+        } else {
+            mvcc_snapshot_take(&snap);
+            snap.my_xid = ctx->tx_xid;
+        }
+    }
+
+    /* PK lookup */
+    BTree2 pk_tree = tapi_pk_tree(&td);
+
+    if (is_pk) {
+        RowID rid;
+        if (bt2_search(&pk_tree, whereVal, &rid) == 0) {
+            char recBuf[RECORD_BUF_SIZE];
+            int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
+            /* Follow HOT chain if PK points to an old HOT_UPDATED version */
+            if (recLen > 0 && !mvcc_is_visible(recBuf, recLen, &snap) &&
+                tup_is_hot_updated(recBuf, recLen)) {
+                RowID hot_rid;
+                int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                     &snap, recBuf,
+                                                     sizeof(recBuf), &hot_rid);
+                if (hot_len > 0) recLen = hot_len;
+            }
+            if (recLen > 0 && mvcc_is_visible(recBuf, recLen, &snap)) {
+                /* FOR UPDATE/SHARE: acquire row lock on PK lookup */
+                if (g_sel.forUpdate && ctx && ctx->tx_xid > 0) {
+                    extern int lock_row_acquire(uint32_t, const char *, uint32_t, int);
+                    int lm = (g_sel.forUpdate == 1) ? 2 : 1;
+                    if (lock_row_acquire(td.table_id, whereVal, ctx->tx_xid, lm) != 0) {
+                        result_set_error(rs, "55P03", "could not obtain lock on row");
+                        rwlock_rdunlock(&g_parse_lock);
+                        return;
+                    }
+                }
+                int row = result_add_row(rs);
+                if (row >= 0) {
+                    if (has_star) {
+                        populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+                    } else {
+                        /* Column-filtered: extract all then map to selected */
+                        char fields[64][256];
+                        int nullArr[64];
+                        int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
+                                                     fields, nullArr, 64);
+                        for (int fi = 0; fi < fast_ncols && fi < rs->num_cols; fi++) {
+                            for (int ci = 0; ci < ncols && ci < nf; ci++) {
+                                if (strcasecmp(cols[ci].col_name, fast_cols[fi]) == 0) {
+                                    if (nullArr[ci])
+                                        result_set_null(rs, row, fi);
+                                    else
+                                        result_set_field(rs, row, fi, fields[ci]);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        /* Secondary index lookup — reuse secIdxPath from earlier check */
+        char matchPKs[256][256];
+        int nMatch = btree_search(secIdxPath, whereVal, matchPKs, 256);
+        for (int m = 0; m < nMatch; m++) {
+            RowID rid;
+            if (bt2_search(&pk_tree, matchPKs[m], &rid) != 0) continue;
+            char recBuf[RECORD_BUF_SIZE];
+            int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
+            if (recLen <= 0) continue;
+            /* HOT chain following for secondary index path */
+            if (!mvcc_is_visible(recBuf, recLen, &snap) &&
+                tup_is_hot_updated(recBuf, recLen)) {
+                RowID hot_rid;
+                int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                     &snap, recBuf,
+                                                     sizeof(recBuf), &hot_rid);
+                if (hot_len > 0) recLen = hot_len;
+            }
+            if (!mvcc_is_visible(recBuf, recLen, &snap)) continue;
+            /* FOR UPDATE/SHARE: acquire row lock */
+            if (g_sel.forUpdate && ctx && ctx->tx_xid > 0) {
+                extern int lock_row_acquire(uint32_t, const char *, uint32_t, int);
+                int lm = (g_sel.forUpdate == 1) ? 2 : 1;
+                if (lock_row_acquire(td.table_id, matchPKs[m], ctx->tx_xid, lm) != 0) {
+                    result_set_error(rs, "55P03", "could not obtain lock on row");
+                    rwlock_rdunlock(&g_parse_lock);
+                    return;
+                }
+            }
+            int row = result_add_row(rs);
+            if (row < 0) break;
+            populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+        }
+    }
+
+    rwlock_rdunlock(&g_parse_lock);
+
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
+    return 1;  /* handled */
+}
+
+/* ----------------------------------------------------------------
  *  Collect SELECT results into ResultSet
  * ---------------------------------------------------------------- */
-static void collect_select_results(const char *tableName, ResultSet *rs)
+static void collect_select_results(const char *tableName, ResultSet *rs,
+                                   const Snapshot *snap,
+                                   int forUpdate, uint32_t lock_xid)
 {
     int count = 0;
+    /* Gap lock tracking: first and last PK key seen during scan */
+    char gap_first_key[256] = "";
+    char gap_last_key[256] = "";
 
     rs->is_select = 1;
 
@@ -681,11 +1045,23 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     char recBuf[RECORD_BUF_SIZE];
                     int recLen;
                     if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) > 0) {
-                        if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
-                        int row = result_add_row(rs);
-                        if (row >= 0) {
-                            populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
-                            count++;
+                        /* Follow HOT chain if PK points to old HOT_UPDATED version */
+                        if (snap && !mvcc_is_visible(recBuf, recLen, snap) &&
+                            tup_is_hot_updated(recBuf, recLen)) {
+                            RowID hot_rid;
+                            int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                                 snap, recBuf,
+                                                                 sizeof(recBuf), &hot_rid);
+                            if (hot_len > 0) recLen = hot_len;
+                        }
+                        /* MVCC visibility check */
+                        if (!snap || mvcc_is_visible(recBuf, recLen, snap)) {
+                            if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
+                            int row = result_add_row(rs);
+                            if (row >= 0) {
+                                populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
+                                count++;
+                            }
                         }
                     }
                 }
@@ -705,6 +1081,17 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     char recBuf[RECORD_BUF_SIZE];
                     int recLen;
                     if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) <= 0)
+                        continue;
+                    /* HOT chain following for secondary index path */
+                    if (snap && !mvcc_is_visible(recBuf, recLen, snap) &&
+                        tup_is_hot_updated(recBuf, recLen)) {
+                        RowID hot_rid;
+                        int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                             snap, recBuf,
+                                                             sizeof(recBuf), &hot_rid);
+                        if (hot_len > 0) recLen = hot_len;
+                    }
+                    if (snap && !mvcc_is_visible(recBuf, recLen, snap))
                         continue;
                     if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
 
@@ -735,6 +1122,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                     char recBuf[RECORD_BUF_SIZE];
                     int recLen;
                     if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) <= 0)
+                        continue;
+                    if (snap && !mvcc_is_visible(recBuf, recLen, snap))
                         continue;
                     if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
 
@@ -768,6 +1157,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
                         char recBuf[RECORD_BUF_SIZE];
                         int recLen;
                         if ((recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf))) <= 0)
+                            continue;
+                        if (snap && !mvcc_is_visible(recBuf, recLen, snap))
                             continue;
                         if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
 
@@ -815,9 +1206,31 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
         char recBuf[RECORD_BUF_SIZE];
 
         if (tapi_scan_begin(&td, &cursor) == 0) {
-            while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
+            while (tapi_scan_next_mvcc(&cursor, keyBuf, recBuf, sizeof(recBuf), snap) == 0) {
                 int recLen = tup_record_len(recBuf, sizeof(recBuf));
                 if (recLen <= 0) continue;
+
+                /* FOR UPDATE/SHARE: acquire row lock before including in result */
+                if (forUpdate && lock_xid > 0) {
+                    extern int lock_row_acquire(uint32_t, const char *, uint32_t, int);
+                    int lock_mode = (forUpdate == 1) ? 2 /*LOCK_EXCLUSIVE*/ : 1 /*LOCK_SHARED*/;
+                    if (lock_row_acquire(td.table_id, keyBuf, lock_xid, lock_mode) != 0) {
+                        result_set_error(rs, "55P03",
+                            "could not obtain lock on row");
+                        return;
+                    }
+                }
+
+                /* Conflict Guard + Gap Lock: for SERIALIZABLE TX */
+                if (lock_xid > 0 && !forUpdate) {
+                    extern void cg_record_read(uint32_t, uint32_t, const char *);
+                    cg_record_read(lock_xid, td.table_id, keyBuf);
+                    /* Track scan range for gap lock */
+                    if (gap_first_key[0] == '\0')
+                        strncpy(gap_first_key, keyBuf, 255);
+                    strncpy(gap_last_key, keyBuf, 255);
+                }
+
                 if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
                 if (streaming) {
                     /* --- Streaming path: parse, filter, send directly --- */
@@ -892,6 +1305,37 @@ static void collect_select_results(const char *tableName, ResultSet *rs)
             snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
             pg_send_command_complete((conn_t *)rs->stream_conn, rs->command_tag);
             return;  /* skip all post-processing */
+        }
+    }
+
+    /* Gap lock: after scan completes, lock the scanned range to prevent
+     * phantom inserts. Covers (first_key, last_key] + gap before first
+     * and after last (using "" for infinity). */
+    if (lock_xid > 0 && !forUpdate && gap_first_key[0]) {
+        extern void lock_gap_acquire(uint32_t, const char *, const char *, uint32_t);
+        lock_gap_acquire(td.table_id, "", gap_last_key, lock_xid);
+        lock_gap_acquire(td.table_id, gap_last_key, "", lock_xid);
+    }
+
+    /* Predicate lock: record WHERE expression for UPDATE-based phantom detection.
+     * When another TX updates a row to match this predicate → conflict. */
+    if (lock_xid > 0 && !forUpdate && g_expr.whereExpr) {
+        extern void cg_record_predicate(uint32_t, uint32_t, const char *,
+                                         const char *, int, int);
+        char serialized_buf[1024];
+        int ser_len = expr_serialize(g_expr.whereExpr, serialized_buf,
+                                      sizeof(serialized_buf));
+        if (ser_len > 0) {
+            char *serialized = serialized_buf;
+            char predColNames[64][128];
+            int predNCols = 0;
+            for (int i = 0; i < ncols && i < 64; i++) {
+                strncpy(predColNames[i], allCols[i].col_name, 127);
+                predColNames[i][127] = '\0';
+                predNCols++;
+            }
+            cg_record_predicate(lock_xid, td.table_id, serialized,
+                                 (const char *)predColNames, 128, predNCols);
         }
     }
 
@@ -1917,7 +2361,7 @@ static void execute_ctas(const char *srcTable, ResultSet *rs, SessionCtx *ctx)
     ResultSet selectRs;
     memset(&selectRs, 0, sizeof(selectRs));  /* ensure stream_conn=NULL */
     result_init(&selectRs);
-    collect_select_results(srcTable, &selectRs);
+    collect_select_results(srcTable, &selectRs, NULL, 0, 0);
 
     if (selectRs.has_error) {
         result_set_error(rs, selectRs.error_sqlstate, selectRs.error_message);
@@ -2012,6 +2456,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     volatile int saved_stderr = -1;
     volatile YY_BUFFER_STATE scan_buf = NULL;
     volatile int parse_mutex_held = 0;
+    yyscan_t local_scanner = NULL;
 
     /* Make a mutable copy, strip \r */
     sqlCopy = strdup(sql);
@@ -2066,6 +2511,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_idx.columnName[0] = '\0';
     g_idx.unique = 0;
     g_idx.ifNotExists = 0;
+    g_idx.concurrent = 0;
     g_create.isTemporary = 0;
     g_create.onCommitDelete = 1;  /* default: ON COMMIT DELETE ROWS */
     g_create.lastCreatedTableId = 0;
@@ -2088,6 +2534,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_create.totalColumnSize = 0;
     g_create.currentColNotNull = 0;
     g_create.currentColPrimaryKey = 0;
+    g_create.currentColUnique = 0;
+    g_create.currentColAutoIncrement = 0;
+    g_create.currentColDefault[0] = '\0';
+    g_create.currentColGeneratedMode = 0;
+    g_create.currentColGeneratedExpr[0] = '\0';
     g_create.columnNullFlags[0] = '\0';
     g_create.primaryKeyIndex = -1;
     g_create.columnCount = 0;
@@ -2116,26 +2567,34 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (setjmp(g_err.jmpbuf) == 0) {
         int parse_result;
 
-        /* Lock parser mutex — Flex/Bison are not reentrant.
-         * DML (INSERT/UPDATE/DELETE) executes inside yyparse() actions,
-         * so it is serialized.  SELECT only sets g_sel.lastTable
-         * inside yyparse; actual data collection runs AFTER unlock.
-         * Skip lock/unlock if SERIALIZABLE transaction already holds it. */
+        /* Reentrant parser: each call gets its own scanner instance.
+         * DML uses g_dml_mutex for serialization (doesn't block readers).
+         * SELECT doesn't need any lock for parsing (g_qctx is thread-local). */
         int already_locked = (ctx && ctx->serializable_locked);
-        if (!already_locked) {
-            mutex_lock(&g_parse_lock);
+        int is_readonly = is_select_query(sql);
+
+        /* DML/DDL: global DML mutex serializes all writes.
+         * SELECT uses rdlock (concurrent with DML). DML doesn't block readers.
+         * Per-table locks in Process functions provide additional fine-grained
+         * serialization (infrastructure for future concurrent DML). */
+        if (!already_locked && !is_readonly) {
+            extern mutex_t g_dml_mutex;
+            mutex_lock(&g_dml_mutex);
             parse_mutex_held = 1;
         }
 
-        yylineno = 1;
-        scan_buf = yy_scan_string(sqlCopy);
-        parse_result = yyparse();
-        yy_delete_buffer((YY_BUFFER_STATE)scan_buf);
-        yylex_destroy();
+        yylex_init(&local_scanner);
+        scan_buf = yy_scan_string(sqlCopy, local_scanner);
+        yyset_lineno(1, local_scanner);
+        parse_result = yyparse(local_scanner);
+        yy_delete_buffer((YY_BUFFER_STATE)scan_buf, local_scanner);
+        yylex_destroy(local_scanner);
         scan_buf = NULL;
+        local_scanner = NULL;
 
-        if (!already_locked) {
-            mutex_unlock(&g_parse_lock);
+        if (parse_mutex_held && !already_locked) {
+            extern mutex_t g_dml_mutex;
+            mutex_unlock(&g_dml_mutex);
             parse_mutex_held = 0;
         }
 
@@ -2161,6 +2620,35 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (saved_stdout >= 0) { dup2(saved_stdout, 1); close(saved_stdout); saved_stdout = -1; }
         if (saved_stderr >= 0) { dup2(saved_stderr, 2); close(saved_stderr); saved_stderr = -1; }
 
+        /* CREATE INDEX CONCURRENTLY — Phase2: batch-unlock populate.
+         * Phase1 (inside yyparse) registered the index as IDX_BUILDING.
+         * Phase2 runs post-parse WITHOUT holding the mutex continuously,
+         * yielding after every CONC_BATCH_SIZE rows. */
+        if (!rs->has_error && g_idx.concurrent) {
+            struct { void (*lock)(void*); void (*unlock)(void*); void *mtx; } ops
+                = { conc_lock, conc_unlock, &g_parse_lock };
+            int rc = CreateIndexConcurrentlyPhase2(&ops);
+            if (rc < 0) {
+                rs->has_error = 1;
+                strcpy(rs->error_sqlstate,
+                       g_err.sqlstate[0] ? g_err.sqlstate : "XX000");
+                snprintf(rs->error_message, sizeof(rs->error_message),
+                         "%.500s", g_err.errorMsg[0] ? g_err.errorMsg
+                         : "concurrent index build failed");
+            } else {
+                /* Phase 3: reconcile DML that occurred during Phase 2 */
+                rc = CreateIndexConcurrentlyPhase3(&ops);
+                if (rc < 0) {
+                    rs->has_error = 1;
+                    strcpy(rs->error_sqlstate, "XX000");
+                    snprintf(rs->error_message, sizeof(rs->error_message),
+                             "concurrent index build Phase 3 reconciliation failed");
+                } else {
+                    strcpy(rs->command_tag, "CREATE INDEX");
+                }
+            }
+        }
+
         /* CTAS: intercept before normal SELECT collection */
         if (!rs->has_error && g_create.ctasMode != CTAS_NONE &&
             g_sel.lastTable[0] != '\0') {
@@ -2168,10 +2656,48 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
             g_create.ctasMode = CTAS_NONE;
             g_sel.lastTable[0] = '\0';
         }
-        /* Collect SELECT results — runs WITHOUT parser mutex, enabling
-         * concurrent SELECT queries across different connections. */
+        /* Collect SELECT results — runs under read lock, enabling
+         * concurrent SELECT queries across different connections.
+         * Take a snapshot before collecting for MVCC visibility. */
         else if (!rs->has_error && g_sel.lastTable[0] != '\0') {
-            collect_select_results(g_sel.lastTable, rs);
+            /* Take snapshot for MVCC visibility filtering */
+            if (ctx) {
+                if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
+                    /* REPEATABLE READ / SERIALIZABLE: reuse TX snapshot */
+                } else {
+                    /* READ COMMITTED: per-statement snapshot */
+                    mvcc_snapshot_take(&ctx->snapshot);
+                    ctx->snapshot.my_xid = ctx->tx_xid;
+                    ctx->snapshot_valid = 1;
+                }
+            }
+
+            /* FOR UPDATE requires write lock (DML-level) for row locking.
+             * Regular SELECT uses read lock (concurrent). */
+            if (g_sel.forUpdate) {
+                /* FOR UPDATE needs an XID for lock ownership */
+                if (ctx && ctx->tx_xid == 0 && g_sel.forUpdate) {
+                    /* Auto-transaction: assign ephemeral XID */
+                    extern uint32_t mvcc_ensure_xid(uint32_t *);
+                    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+                    if (!ctx->in_transaction)
+                        ctx->tx_xid = g_qctx->mvcc_xid;
+                }
+                { extern mutex_t g_dml_mutex; mutex_lock(&g_dml_mutex); }
+                collect_select_results(g_sel.lastTable, rs,
+                                       ctx ? &ctx->snapshot : NULL,
+                                       g_sel.forUpdate,
+                                       ctx ? ctx->tx_xid : 0);
+                { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
+            } else {
+                /* Pass tx_xid for Conflict Guard read tracking in SERIALIZABLE */
+                uint32_t cg_xid = (ctx && ctx->serializable_locked) ? ctx->tx_xid : 0;
+                rwlock_rdlock(&g_parse_lock);
+                collect_select_results(g_sel.lastTable, rs,
+                                       ctx ? &ctx->snapshot : NULL,
+                                       0, cg_xid);
+                rwlock_rdunlock(&g_parse_lock);
+            }
             g_sel.lastTable[0] = '\0';
         } else if (!rs->has_error && g_expr.selectExprCount > 0 && is_select_query(sql)) {
             /* Tableless SELECT: SELECT 1+2, SELECT 1=1 AND 2=2, etc.
@@ -2270,14 +2796,19 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         /* Error occurred via longjmp (err_sys/err_quit/err_dump).
          * Clean up Flex scanner and release parser mutex if held.
          * Don't release if SERIALIZABLE transaction owns the lock. */
-        if (parse_mutex_held) {
+        /* Clean up scanner on error */
+        if (local_scanner) {
             if (scan_buf) {
-                yy_delete_buffer((YY_BUFFER_STATE)scan_buf);
-                yylex_destroy();
+                yy_delete_buffer((YY_BUFFER_STATE)scan_buf, local_scanner);
                 scan_buf = NULL;
             }
+            yylex_destroy(local_scanner);
+            local_scanner = NULL;
+        }
+        if (parse_mutex_held) {
             if (!(ctx && ctx->serializable_locked)) {
-                mutex_unlock(&g_parse_lock);
+                extern mutex_t g_dml_mutex;
+                mutex_unlock(&g_dml_mutex);
             }
             parse_mutex_held = 0;
         }
@@ -2580,8 +3111,8 @@ void session_drop_temp_tables(SessionCtx *ctx)
     QueryContext *qctx = qctx_alloc();
     if (!qctx) return;
 
-    /* Acquire parse lock — page manager operations are not thread-safe */
-    mutex_lock(&g_parse_lock);
+    /* Acquire DML mutex — page manager operations need serialization */
+    { extern mutex_t g_dml_mutex; mutex_lock(&g_dml_mutex); }
 
     g_qctx = qctx;
     db_set_current_database(ctx->database);
@@ -2623,7 +3154,7 @@ void session_drop_temp_tables(SessionCtx *ctx)
     qctx_free(qctx);
     g_qctx = NULL;
 
-    mutex_unlock(&g_parse_lock);
+    { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
 }
 
 /* Clean up GTT session-private data on disconnect.
@@ -2635,8 +3166,8 @@ void session_cleanup_gtt(SessionCtx *ctx)
     QueryContext *qctx = qctx_alloc();
     if (!qctx) return;
 
-    /* Acquire parse lock — page manager operations are not thread-safe */
-    mutex_lock(&g_parse_lock);
+    /* Acquire DML mutex — page manager operations need serialization */
+    { extern mutex_t g_dml_mutex; mutex_lock(&g_dml_mutex); }
 
     g_qctx = qctx;
     db_set_current_database(ctx->database);
@@ -2662,7 +3193,7 @@ void session_cleanup_gtt(SessionCtx *ctx)
     qctx_free(qctx);
     g_qctx = NULL;
 
-    mutex_unlock(&g_parse_lock);
+    { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
 }
 
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
@@ -2726,6 +3257,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         else if (is_create_query(sql))   needed_priv = "CREATE";
         else if (is_drop_query(sql))     needed_priv = "DROP";
         else if (is_truncate_query(sql)) needed_priv = "DELETE";
+        else if (is_alter_query(sql))    needed_priv = "CREATE";
 
         if (needed_priv) {
             /* Extract table name from query for TABLE-level check.
@@ -3025,6 +3557,17 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         fflush(stdout);
     }
 
+    /* ── Fast-path: PK/index lookup without yyparse ──
+     * Pattern: SELECT <cols> FROM <table> WHERE <col> = <value>
+     * Skips yyparse (~30μs savings) by extracting table/col/value via
+     * string matching and calling collect_select_results directly. */
+    if (is_select_query(normalized) && !is_explain_query(sql)) {
+        if (try_fast_select(normalized, rs, ctx)) {
+            /* Fast-path handled the query — skip parser */
+            goto writeback_session;
+        }
+    }
+
     /* Parse selected columns from SQL for filtering */
     parse_select_columns(normalized);
 
@@ -3040,6 +3583,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+writeback_session:
     /* Restore original db/schema context if we switched */
     if (qualified) {
         db_set_current_database(saved_db);

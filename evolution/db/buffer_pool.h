@@ -10,9 +10,11 @@
 #define BUFFER_POOL_H
 
 #include <sys/types.h>
+#include <stdint.h>
+#include <stdatomic.h>
 
 #define BP_PAGE_SIZE     4096
-#define BP_DEFAULT_PAGES 256    /* 1MB default pool */
+#define BP_DEFAULT_PAGES 32768  /* 128MB default pool (32768 × 4KB pages) */
 #define BP_RING_SIZE     8      /* sequential scan ring buffer */
 #define BP_MAX_USAGE     5      /* max usage_count (matches PostgreSQL) */
 
@@ -25,8 +27,9 @@ typedef struct {
     char     data[BP_PAGE_SIZE];
     int      valid_len;     /* bytes actually loaded (< PAGE_SIZE near EOF) */
     int      dirty;         /* modified since load? */
-    int      pin_count;     /* >0 = in use, cannot evict */
+    atomic_int pin_count;   /* >0 = in use, cannot evict (atomic for lock-free unpin) */
     int      usage_count;   /* 0..BP_MAX_USAGE, clock sweep counter */
+    atomic_uint seq;        /* seqlock: odd = write in progress, even = stable */
 } BPPage;
 
 /* ----------------------------------------------------------------
@@ -78,6 +81,8 @@ int  bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring);
 void bp_flush_fd(int fd);       /* write all dirty pages for fd */
 void bp_invalidate_fd(int fd);  /* drop all pages for fd (flush first) */
 void bp_flush_all(void);        /* write all dirty pages */
+void bp_wal_flush_dirty(int fd);/* log dirty pages to WAL + single fsync */
+void bp_track_dirty(uint32_t page_no); /* track page for efficient WAL flush */
 
 /* ----------------------------------------------------------------
  *  Statistics

@@ -40,7 +40,7 @@ void db_ensure_root(void)
     {
         char dbFile[1024];
         snprintf(dbFile, sizeof(dbFile), "%s/evosql.db", ROOT_DIR);
-        pgm_init(dbFile);
+        pgm_init(dbFile);  /* WAL replay happens inside pgm_init if needed */
         cat_init();  /* Creates default db/schema/admin on first run */
     }
 

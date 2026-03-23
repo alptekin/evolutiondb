@@ -21,8 +21,8 @@
 #include "../evolution/db/query_context.h"
 #include "util.h"
 
-/* From server.c — parser mutex for SERIALIZABLE cleanup */
-extern mutex_t g_parse_lock;
+/* From server.c — parser rwlock for SERIALIZABLE cleanup */
+extern rwlock_t g_parse_lock;
 
 /* ----------------------------------------------------------------
  *  pg_handle_client — full PG v3 session for one connection
@@ -476,8 +476,9 @@ cleanup:
         session.undo_log = NULL;
         session.in_transaction = 0;
         if (session.serializable_locked) {
+            extern void cg_unregister_tx(uint32_t);
+            if (session.tx_xid > 0) cg_unregister_tx(session.tx_xid);
             session.serializable_locked = 0;
-            mutex_unlock(&g_parse_lock);
         }
     }
 
