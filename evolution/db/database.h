@@ -58,6 +58,7 @@ int InsertProcess(void);
 int DropTableProcess(void);
 int TruncateTableProcess(void);
 int ReclaimTableProcess(void);
+int should_auto_reclaim(uint32_t table_id);
 int AnalyzeTableProcess(void);
 int CreateDatabaseProcess(const char *name, int if_not_exists);
 int CreateSchemaProcess(const char *name, int if_not_exists);
@@ -74,6 +75,30 @@ void SetIndexUnique(void);
 void SetIndexIfNotExists(void);
 void SetIndexExpression(struct ExprNode *expr);
 void SetIndexUsingHash(void);
+void SetIndexConcurrent(void);
+int  CreateIndexConcurrentlyPhase2(void *mutex_ptr);
+int  CreateIndexConcurrentlyPhase3(void *mutex_ptr);
+
+/* Concurrent index build modification log — tracks DML during Phase 2 */
+typedef struct {
+    uint32_t table_id;    /* table being indexed */
+    int      active;      /* 1 while Phase 2 is in progress */
+    char     col_name[256]; /* indexed column(s) — for building old keys */
+    char     expr_def[1024]; /* expression index def (empty if plain) */
+    char   **pks;         /* array of strdup'd PK strings */
+    char   **old_keys;    /* parallel: old composite key "val\x1fPK", NULL for INSERT */
+    int      count;
+    int      capacity;
+} ConcModLog;
+extern ConcModLog g_conc_mod_log;
+
+/* Simple append — INSERT only (no old value) */
+void conc_mod_log_append(uint32_t table_id, const char *pk_key);
+/* DML append — builds old composite key from field arrays (DELETE/UPDATE) */
+void conc_mod_log_record(uint32_t table_id, const char *pk_key,
+                          const char *col_names_buf, int name_stride,
+                          const char *col_values_buf, int val_stride,
+                          int num_cols);
 
 /* B-tree index API */
 int  btree_create(const char *path);
@@ -181,6 +206,9 @@ int AlterTableRenameConstraint(const char *tableName, const char *oldName, const
 int AlterTableEnableConstraint(const char *tableName, const char *constraintName);
 int AlterTableDisableConstraint(const char *tableName, const char *constraintName);
 int AlterTableValidateConstraint(const char *tableName, const char *constraintName);
+
+/* ALTER TABLE ADD/DROP COLUMN */
+int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode);
 
 /* CREATE DOMAIN */
 int CreateDomainProcess(const char *name, int typeVal, struct ExprNode *checkExpr,

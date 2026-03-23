@@ -130,6 +130,8 @@ static int create_new_file(const char *filepath)
     g_header.next_table_id  = 1;
     g_header.next_schema_id = 1;
     g_header.next_db_id     = 1;
+    g_header.next_xid       = 2;  /* XID 1 = XID_FROZEN (reserved) */
+    g_header.next_csn       = 1;
 
     /* Extend file to initial size */
     off_t file_size = (off_t)PGM_INITIAL_PAGES * EVO_PAGE_SIZE;
@@ -426,6 +428,49 @@ uint32_t pgm_next_id(int id_type)
     flush_header_if_dirty();
 
     pthread_mutex_unlock(&g_pgm_lock);
+    return val;
+}
+
+uint32_t pgm_next_xid(void)
+{
+    uint32_t val;
+
+    pthread_mutex_lock(&g_pgm_lock);
+    val = g_header.next_xid++;
+    mark_header_dirty();
+    /* No flush here — deferred to pgm_flush()/pgm_shutdown() for performance.
+     * On crash, next_xid may go backward, but unfinished XIDs show as
+     * IN_PROGRESS in CLOG and are treated as aborted. */
+
+    /* XID wraparound warning — log once when threshold is crossed */
+    if (val == 2000000000u) {
+        fprintf(stderr, "WARNING: transaction ID %u approaching wraparound limit. "
+                "Run RECLAIM TABLE on all tables to freeze old XIDs.\n", val);
+    }
+    pthread_mutex_unlock(&g_pgm_lock);
+
+    return val;
+}
+
+uint32_t pgm_peek_xid(void)
+{
+    uint32_t val;
+    pthread_mutex_lock(&g_pgm_lock);
+    val = g_header.next_xid;
+    pthread_mutex_unlock(&g_pgm_lock);
+    return val;
+}
+
+uint32_t pgm_next_csn(void)
+{
+    uint32_t val;
+
+    pthread_mutex_lock(&g_pgm_lock);
+    val = g_header.next_csn++;
+    mark_header_dirty();
+    /* Deferred flush — same rationale as pgm_next_xid(). */
+    pthread_mutex_unlock(&g_pgm_lock);
+
     return val;
 }
 

@@ -74,6 +74,10 @@ typedef struct {
 #define GENMODE_STORED  1
 #define GENMODE_VIRTUAL 2
 
+/* Index readiness state */
+#define IDX_BUILDING  0   /* CONCURRENTLY build in progress */
+#define IDX_READY     1   /* ready for query planner */
+
 typedef struct IndexDesc {
     uint32_t table_id;
     char     index_name[CAT_MAX_NAME_LEN];
@@ -81,6 +85,7 @@ typedef struct IndexDesc {
     char     col_list[CAT_MAX_NAME_LEN];   /* comma-separated column names */
     char     index_type;                    /* 'P' primary, 'U' unique, 'N' normal, 'H' hash, 'V' unique hash */
     char     expr_def[1024];               /* expression index: serialized RPN, empty if plain column */
+    int      is_ready;                     /* IDX_BUILDING or IDX_READY */
 } IndexDesc;
 
 typedef struct {
@@ -160,6 +165,9 @@ int cat_list_tables(uint32_t schema_id, TableDesc *out, int max);
  *  Column operations
  * ---------------------------------------------------------------- */
 int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max);
+int cat_add_column(uint32_t table_id, const ColumnDesc *col);
+int cat_update_num_columns(uint32_t table_id, const char *table_name,
+                           uint32_t schema_id, int new_count);
 
 /* ----------------------------------------------------------------
  *  Index operations
@@ -176,6 +184,8 @@ int cat_list_indexes(uint32_t table_id, IndexDesc *out, int max);
 int cat_drop_index(uint32_t table_id, const char *name);
 int cat_update_index_root(uint32_t table_id, const char *name,
                           uint32_t new_root_page);
+int cat_update_index_ready(uint32_t table_id, const char *index_name,
+                           int is_ready);
 
 /* ----------------------------------------------------------------
  *  Constraint operations
@@ -228,6 +238,9 @@ typedef struct {
     uint32_t page_count;
     time_t   last_analyzed;
     uint64_t dml_since_analyze;   /* DML count since last ANALYZE */
+    uint64_t dead_tuple_count;    /* estimated dead tuples from UPDATE/DELETE */
+    uint32_t last_reclaim_xid;   /* XID of the last RECLAIM run */
+    uint32_t frozen_xid;         /* oldest non-frozen XID in this table (0 = never frozen) */
 } TableStatsDesc;
 
 typedef struct {
@@ -281,6 +294,9 @@ int cat_list_index_stats(uint32_t table_id, IndexStatsDesc *out, int max);
 
 /* Increment DML counter for auto-analyze tracking. */
 int cat_increment_dml_counter(uint32_t table_id);
+
+/* Increment dead tuple counter for a table (called after DELETE/UPDATE). */
+int cat_increment_dead_tuples(uint32_t table_id, int count);
 
 /* ----------------------------------------------------------------
  *  Convenience

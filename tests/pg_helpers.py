@@ -132,7 +132,29 @@ def conn(host=HOST, port=PORT, user=DEFAULT_USER, password=DEFAULT_PASS,
          database="testdb"):
     """Open a new PG connection with authentication. Returns the socket."""
     s = socket.socket()
-    s.settimeout(5)
+    s.settimeout(30)
     s.connect((host, port))
     pg_startup(s, user=user, database=database, password=password)
     return s
+
+
+class PGConnection:
+    """High-level PG connection wrapper with query() and close() methods."""
+
+    def __init__(self, host=HOST, port=PORT, user=DEFAULT_USER,
+                 password=DEFAULT_PASS, database="testdb"):
+        self._sock = conn(host=host, port=port, user=user,
+                          password=password, database=database)
+
+    def query(self, sql):
+        """Execute SQL and return result rows. Raises on error."""
+        cols, rows, err, tag = simple_query(self._sock, sql)
+        if err:
+            raise RuntimeError(err)
+        return rows
+
+    def close(self):
+        """Close the underlying socket."""
+        if self._sock:
+            self._sock.close()
+            self._sock = None

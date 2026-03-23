@@ -44,7 +44,8 @@ void undo_log_free(UndoLog *log)
 
 void undo_log_record(UndoLog *log, int op_type,
                      const char *table, const char *key,
-                     const char *old_data, int old_data_len)
+                     const char *old_data, int old_data_len,
+                     RowID old_rid)
 {
     if (!log) return;
     UndoEntry *e = (UndoEntry *)calloc(1, sizeof(UndoEntry));
@@ -54,6 +55,7 @@ void undo_log_record(UndoLog *log, int op_type,
     e->key          = key   ? strdup(key)   : NULL;
     e->old_data_len = 0;
     e->old_data     = NULL;
+    e->old_rid      = old_rid;
     if (old_data && old_data_len > 0) {
         e->old_data = (char *)malloc(old_data_len);
         if (e->old_data) {
@@ -91,19 +93,42 @@ static void undo_single_entry(UndoEntry *e)
         break;
     }
     case TX_OP_UPDATE: {
-        if (e->old_data && e->old_data_len > 0) {
-            RowID rid;
-            if (bt2_search(&pk_tree, e->key, &rid) == 0) {
-                uint16_t rec_len = (uint16_t)e->old_data_len;
-                RowID new_rid = tapi_heap_update(&td, rid, e->old_data, rec_len);
-                if (new_rid.page_no != rid.page_no || new_rid.slot_idx != rid.slot_idx)
-                    bt2_update(&pk_tree, e->key, new_rid);
+        /* Non-destructive UPDATE rollback:
+         * PK tree points to new version → delete it.
+         * Old version was soft-deleted (xmax set) → clear xmax to restore.
+         * Fall back to re-inserting old_data if old version was physically deleted. */
+        RowID new_rid;
+        if (bt2_search(&pk_tree, e->key, &new_rid) == 0)
+            tapi_heap_delete(new_rid);
+
+        if (e->old_rid.page_no != 0) {
+            /* Try to restore the soft-deleted old version */
+            if (tapi_heap_set_xmax(e->old_rid, 0) == 0) {
+                bt2_update(&pk_tree, e->key, e->old_rid);
+            } else if (e->old_data && e->old_data_len > 0) {
+                /* Old slot was physically deleted (pre-MVCC) — re-insert */
+                RowID re_rid = tapi_heap_insert(&td, e->old_data,
+                                                (uint16_t)e->old_data_len);
+                if (re_rid.page_no != 0)
+                    bt2_update(&pk_tree, e->key, re_rid);
             }
+        } else if (e->old_data && e->old_data_len > 0) {
+            /* Legacy fallback: no old_rid stored — re-insert old data */
+            RowID re_rid = tapi_heap_insert(&td, e->old_data,
+                                            (uint16_t)e->old_data_len);
+            if (re_rid.page_no != 0)
+                bt2_update(&pk_tree, e->key, re_rid);
         }
         break;
     }
     case TX_OP_DELETE: {
-        if (e->old_data && e->old_data_len > 0) {
+        /* MVCC soft-delete rollback: clear xmax to "un-delete" the tuple.
+         * The PK tree entry was preserved during soft-delete. */
+        RowID del_rid;
+        if (bt2_search(&pk_tree, e->key, &del_rid) == 0) {
+            tapi_heap_set_xmax(del_rid, 0);  /* clear xmax = un-delete */
+        } else if (e->old_data && e->old_data_len > 0) {
+            /* Fallback for pre-MVCC physical delete: re-insert old data */
             uint16_t rec_len = (uint16_t)e->old_data_len;
             RowID rid = tapi_heap_insert(&td, e->old_data, rec_len);
             if (rid.page_no != 0) {
@@ -200,8 +225,10 @@ void savepoint_release_after(SavePointStack *sp, int idx)
 
 /* Callback invoked by engine DML code */
 void tx_undo_callback(int op_type, const char *table,
-                      const char *key, const char *data, int data_len)
+                      const char *key, const char *data, int data_len,
+                      RowID old_rid)
 {
     if (g_current_undo_log)
-        undo_log_record(g_current_undo_log, op_type, table, key, data, data_len);
+        undo_log_record(g_current_undo_log, op_type, table, key,
+                        data, data_len, old_rid);
 }

@@ -8,6 +8,8 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "tuple_format.h"
+#include "vmap.h"
+#include "mvcc.h"
 
 /* Remove secondary index entries for a deleted record.
  * Takes pre-extracted fields instead of raw record. */
@@ -461,10 +463,12 @@ int DeleteProcess(void)
                         }
 
                         /* Log undo entry with raw binary data + length */
-                        if (g_tx_undo_callback)
+                        if (g_tx_undo_callback) {
+                            RowID zero_rid = {0, 0};
                             g_tx_undo_callback(3 /*TX_OP_DELETE*/,
                                                g_del.tblName, matchKeys[i],
-                                               rec, rec_len);
+                                               rec, rec_len, zero_rid);
+                        }
 
                         /* Extract fields for secondary index cleanup */
                         char delFields[64][256];
@@ -476,12 +480,25 @@ int DeleteProcess(void)
                         delete_secondary_indexes(g_del.tblName, colNames, numCols,
                                                  (const char (*)[256])delFields,
                                                  matchKeys[i]);
+
+                        /* Log for concurrent index build (Phase 3) */
+                        conc_mod_log_record(td.table_id, matchKeys[i],
+                                            (const char *)colNames, 128,
+                                            (const char *)delFields, 256, numCols);
                     }
 
-                    /* Delete from heap and PK B+ tree */
-                    tapi_heap_delete(rid);
-                    bt2_delete(&pk_tree, matchKeys[i]);
-                    td.pk_root_page = pk_tree.root_page;
+                    /* MVCC soft-delete: set xmax instead of physical removal.
+                     * The PK tree entry stays so concurrent readers can find
+                     * the record and check visibility. RECLAIM will physically
+                     * remove tuples whose xmax is committed + expired. */
+                    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+                    vmap_clear(rid.page_no);
+                    if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
+                        /* Pre-MVCC tuple — fall back to physical delete */
+                        tapi_heap_delete(rid);
+                        bt2_delete(&pk_tree, matchKeys[i]);
+                        td.pk_root_page = pk_tree.root_page;
+                    }
                     deleted++;
                 }
                 free(matchKeys[i]);
@@ -490,8 +507,10 @@ int DeleteProcess(void)
         free(matchKeys);
 
         g_del.rowCount = deleted;
-        if (deleted > 0)
+        if (deleted > 0) {
             cat_increment_dml_counter(td.table_id);
+            cat_increment_dead_tuples(td.table_id, deleted);
+        }
         printf("%d record(s) deleted.\n", deleted);
     } else {
         /* ---------- Legacy PK-based delete ---------- */
@@ -516,9 +535,12 @@ int DeleteProcess(void)
                 }
 
                 /* Log undo entry with raw binary data + length */
-                if (g_tx_undo_callback)
+                if (g_tx_undo_callback) {
+                    RowID zero_rid = {0, 0};
                     g_tx_undo_callback(3 /*TX_OP_DELETE*/,
-                                       g_del.tblName, str, rec, rec_len);
+                                       g_del.tblName, str, rec, rec_len,
+                                       zero_rid);
+                }
 
                 /* Extract fields for secondary index cleanup */
                 char delFields[64][256];
@@ -529,14 +551,26 @@ int DeleteProcess(void)
                 /* Remove from secondary B-tree indexes */
                 delete_secondary_indexes(g_del.tblName, colNames, numCols,
                                          (const char (*)[256])delFields, str);
+
+                /* Log for concurrent index build (Phase 3) */
+                conc_mod_log_record(td.table_id, str,
+                                    (const char *)colNames, 128,
+                                    (const char *)delFields, 256, numCols);
             }
 
-            tapi_heap_delete(rid);
-            bt2_delete(&pk_tree, str);
-            td.pk_root_page = pk_tree.root_page;
+            /* MVCC soft-delete: set xmax, keep PK entry for visibility */
+            mvcc_ensure_xid(&g_qctx->mvcc_xid);
+            vmap_clear(rid.page_no);
+            if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
+                /* Pre-MVCC tuple — fall back to physical delete */
+                tapi_heap_delete(rid);
+                bt2_delete(&pk_tree, str);
+                td.pk_root_page = pk_tree.root_page;
+            }
             printf("Record deleted successfully.\n");
             g_del.rowCount = 1;
             cat_increment_dml_counter(td.table_id);
+            cat_increment_dead_tuples(td.table_id, 1);
         } else {
             printf("Record not found: %s\n", str);
             g_del.rowCount = 0;

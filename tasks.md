@@ -751,7 +751,15 @@
 
 ## Day 19 — MVCC & Deadlock
 
-### Task 37: ⬜ MVCC — Multi-Version Concurrency Control (Feature #97)
+### Task 37: ✅ MVCC — Multi-Version Concurrency Control (Feature #97)
+**All 7 layers implemented — 285 tests pass, 0 regressions.**
+- Layer 1: Core MVCC — XID, CLOG, snapshots, tuple xmin/xmax, rwlock, visibility (10/10 tests)
+- Layer 2: RECLAIM dead tuples — Phase 0 removes committed-deleted + aborted-insert tuples (8/8 tests)
+- Layer 3: HOT updates — skip index updates when non-indexed columns change (7/7 tests)
+- Layer 4: Visibility Map — per-page all-visible bit, DML clears, RECLAIM sets
+- Layer 5: SSI — deferred to future (requires row-level locking infrastructure)
+- Layer 6: CSN — commit sequence numbers for O(1) visibility, ring buffer cache
+- Layer 7: Auto-RECLAIM — dead_tuple_count tracking, 20% threshold, counter reset on RECLAIM
 
 **Goal:** Readers never block writers, writers never block readers. Each transaction sees a consistent snapshot. In MySQL (InnoDB), MSSQL (snapshot isolation), and Oracle.
 
@@ -907,7 +915,7 @@
 
 ---
 
-### Task 45: ⬜ ALTER TABLE — ADD COLUMN (Feature #5, Part 1)
+### Task 45: ✅ ALTER TABLE — ADD COLUMN (Feature #5, Part 1)
 
 **Goal:** No schema evolution exists. Implement `ALTER TABLE t ADD [COLUMN] col type [constraints]`.
 
@@ -2559,7 +2567,180 @@
 
 ---
 
-## Day 65 — Final Task
+## Day 66–69 — CTAS & INSERT SELECT Enhancements
+
+### Task 131: ⬜ SELECT INTO — MSSQL/PostgreSQL Syntax (Feature #133)
+
+**Goal:** `SELECT * INTO new_table FROM src` ve `SELECT * INTO #temp FROM src`. PostgreSQL ve MSSQL uyumlu alternatif CTAS sözdizimi.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `select_stmt` kuralına `INTO NAME` clause ekle. `opt_into_list` rule'unu genişlet. | `evoparser.y` |
+| 2 | `SELECT INTO` algılandığında `g_create.ctasMode = CTAS_INFER`, `g_create.ctasTableName` set et. | `evoparser.y` |
+| 3 | `#name` prefix'i ile local temp, `##name` ile global temp tablo oluştur (MSSQL uyumluluk). | `evoparser.y`, `evolexer.l` |
+| 4 | Post-parse'ta `execute_ctas()` çağır (mevcut altyapıyı yeniden kullan). | `adaptor/query_executor.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_select_into.py`: SELECT INTO, SELECT INTO #temp, WHERE/ORDER BY ile. | `tests/test_select_into.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver/psql. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 132: ⬜ CREATE TABLE AS SELECT WITH NO DATA / WITH DATA (Feature #134)
+
+**Goal:** `CREATE TABLE t AS SELECT ... WITH NO DATA` — sadece yapı kopyala, data insert etme. PostgreSQL sözdizimi.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `create_select_statement` rule'una opsiyonel `WITH DATA` ve `WITH NO DATA` clause ekle. | `evoparser.y` |
+| 2 | QueryContext'e `ctasWithData` flag ekle (default 1 = WITH DATA). | `evolution/db/query_context.h` |
+| 3 | `execute_ctas()` içinde: `ctasWithData == 0` ise `ctas_insert_rows()` çağırma, sadece tablo oluştur. | `adaptor/query_executor.c` |
+| 4 | Command tag: `WITH NO DATA` → `"SELECT 0"`. | `adaptor/query_executor.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_ctas_no_data.py`: WITH NO DATA yapı doğrulama, WITH DATA (default) data doğrulama. | `tests/test_ctas_no_data.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Verify with DBeaver/psql. | Manual |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 133: ⬜ CTAS Atomicity — Transaction Rollback (Feature #135)
+
+**Goal:** CTAS hata durumunda partial insert bırakmamalı. Tablo oluşturma + data insert tek atomik işlem olmalı.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `execute_ctas()` başında implicit BEGIN (transaction yoksa). | `adaptor/query_executor.c` |
+| 2 | `ctas_insert_rows()` hata dönerse: oluşturulan tabloyu DROP et + implicit ROLLBACK. | `adaptor/query_executor.c` |
+| 3 | Başarı durumunda implicit COMMIT. | `adaptor/query_executor.c` |
+| 4 | Mevcut transaction içinde CTAS: hata durumunda transaction'ı abort et (PostgreSQL davranışı). | `adaptor/query_executor.c` |
+| 5 | Write unit tests — `tests/test_ctas_atomic.py`: partial insert sonrası tablo temiz, hata sonrası rollback. | `tests/test_ctas_atomic.py` |
+| 6 | Run regression. | `tests/` |
+| 7 | Full system test. | `Dockerfile` |
+| 8 | Verify with DBeaver/psql. | Manual |
+| 9 | Update wiki. | Wiki |
+| 10 | Verify transaction isolation. | Manual |
+
+---
+
+### Task 134: ⬜ Expression Column Type Inference for CTAS (Feature #136)
+
+**Goal:** `CREATE TABLE t AS SELECT col1 + col2 AS sum_val FROM src` — expression sonucu column tipi doğru çıkarılmalı. Şu anda VARCHAR(255) fallback kullanılıyor.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `collect_select_results()` içinde expression column'ları için PG type OID doğru set et: arithmetic → INT/FLOAT, string func → VARCHAR, boolean → BOOL. | `adaptor/query_executor.c` |
+| 2 | `pg_oid_to_type_encoding()` fonksiyonuna TIMESTAMP (1114) ve BOOLEAN (16→220001 düzelt) desteği ekle. | `adaptor/query_executor.c` |
+| 3 | Expression type inference: `ExprNode.type` → PG OID mapping fonksiyonu. | `evolution/db/expression.c` |
+| 4 | Write unit tests — `tests/test_ctas_types.py`: arithmetic expression → INT, string func → VARCHAR, CAST → hedef tip. | `tests/test_ctas_types.py` |
+| 5 | Run regression. | `tests/` |
+| 6 | Full system test. | `Dockerfile` |
+| 7 | Verify with DBeaver. | Manual |
+| 8 | Update wiki. | Wiki |
+| 9 | Edge cases: NULL expression, mixed type arithmetic. | `tests/test_ctas_types.py` |
+| 10 | Verify type modifiers (VARCHAR length) preserved. | `tests/test_ctas_types.py` |
+
+---
+
+### Task 135: ⬜ CTAS with Aggregate / GROUP BY Source (Feature #137)
+
+**Goal:** `CREATE TABLE stats AS SELECT category, COUNT(*), AVG(price) FROM products GROUP BY category` — aggregate sorgu sonucundan tablo oluşturma.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `collect_select_results()` aggregate + GROUP BY path'ini CTAS context'inde test et. | `adaptor/query_executor.c` |
+| 2 | Aggregate sonuç column'ları için tip inference: COUNT→BIGINT, SUM→numeric type, AVG→FLOAT. | `adaptor/query_executor.c` |
+| 3 | HAVING clause desteği CTAS'ta. | `adaptor/query_executor.c` |
+| 4 | Write unit tests — `tests/test_ctas_aggregate.py`: GROUP BY + COUNT/SUM/AVG, HAVING, empty groups. | `tests/test_ctas_aggregate.py` |
+| 5 | Run regression. | `tests/` |
+| 6 | Full system test. | `Dockerfile` |
+| 7 | Verify with DBeaver. | Manual |
+| 8 | Update wiki. | Wiki |
+| 9 | Edge cases: GROUP BY multiple columns, NULL groups. | `tests/test_ctas_aggregate.py` |
+| 10 | Verify column naming for unnamed aggregates. | `tests/test_ctas_aggregate.py` |
+
+---
+
+### Task 136: ⬜ CTAS in Transaction (Feature #138)
+
+**Goal:** `BEGIN; CREATE TABLE t AS SELECT ...; COMMIT/ROLLBACK;` — CTAS transaction içinde çalışabilmeli, rollback'te tablo + data geri alınabilmeli.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `execute_ctas()` undo log entegrasyonu: tablo oluşturma + data insert undo log'a kaydedilmeli. | `adaptor/query_executor.c`, `adaptor/transaction.c` |
+| 2 | ROLLBACK durumunda: oluşturulan tabloyu DROP et, insert edilen data'yı temizle. | `adaptor/transaction.c` |
+| 3 | COMMIT durumunda: normal persist. | `adaptor/query_executor.c` |
+| 4 | Write unit tests — `tests/test_ctas_transaction.py`: BEGIN + CTAS + ROLLBACK → tablo yok, BEGIN + CTAS + COMMIT → tablo var. | `tests/test_ctas_transaction.py` |
+| 5 | Run regression. | `tests/` |
+| 6 | Full system test. | `Dockerfile` |
+| 7 | Verify with DBeaver. | Manual |
+| 8 | Savepoint + CTAS kombinasyonu. | `tests/test_ctas_transaction.py` |
+| 9 | Nested transaction CTAS. | `tests/test_ctas_transaction.py` |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 137: ⬜ CREATE TABLE LIKE — Structure Copy (Feature #139)
+
+**Goal:** `CREATE TABLE t2 (LIKE t1 INCLUDING ALL)` — kaynak tablonun yapısını (column, constraint, index, default) kopyala. PostgreSQL modeli.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `CREATE TABLE t2 (LIKE t1)` ve `CREATE TABLE t2 (LIKE t1 INCLUDING ALL/DEFAULTS/CONSTRAINTS/INDEXES)`. LIKE token ekle. | `evolexer.l`, `evoparser.y` |
+| 2 | `CreateLikeProcess()`: kaynak tabloyu resolve et, ColumnDesc array'ini kopyala, constraint'leri kopyala. | `evolution/db/Create.c` |
+| 3 | `INCLUDING DEFAULTS`: default_val kopyala. `INCLUDING CONSTRAINTS`: CHECK/UNIQUE/FK kopyala. `INCLUDING INDEXES`: secondary index'leri oluştur. | `evolution/db/Create.c` |
+| 4 | `INCLUDING ALL`: hepsini kopyala. `EXCLUDING ALL`: sadece column yapısı. | `evolution/db/Create.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_create_like.py`: LIKE basic, INCLUDING ALL, INCLUDING DEFAULTS, column type preservation. | `tests/test_create_like.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | LIKE + AS SELECT kombinasyonu. | `tests/test_create_like.py` |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 138: ⬜ CREATE UNLOGGED TABLE AS SELECT (Feature #140)
+
+**Goal:** `CREATE UNLOGGED TABLE t AS SELECT ...` — WAL/redo log bypass ile hızlı bulk tablo oluşturma. PostgreSQL modeli. Crash sonrası data kaybolabilir.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `opt_temporary` rule'una `UNLOGGED` alternatifi ekle. `UNLOGGED` token. | `evolexer.l`, `evoparser.y` |
+| 2 | `TableDesc.is_unlogged` flag ekle. | `evolution/db/catalog_internal.h` |
+| 3 | UNLOGGED tablolar için buffer pool write-through skip (dirty page flush atla). | `evolution/db/buffer_pool.c` |
+| 4 | Crash recovery: UNLOGGED tabloları truncate et (PostgreSQL davranışı). | `evolution/db/DatabaseMgmt.c` |
+| 5 | Regenerate parser. | `evolution/parser/` |
+| 6 | Write unit tests — `tests/test_unlogged.py`: UNLOGGED CTAS, performance comparison. | `tests/test_unlogged.py` |
+| 7 | Run regression. | `tests/` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | information_schema'da `relpersistence = 'u'` gösterimi. | `adaptor/catalog.c` |
+| 10 | Update wiki. | Wiki |
+
+---
+
+### Task 139: ⬜ CTAS Field Truncation Fix — Large Column Support (Feature #141)
+
+**Goal:** `ctas_insert_rows()` içindeki `fields[64][256]` limiti büyük VARCHAR/TEXT column'ları 255 byte'ta kesiyor. Dynamic allocation ile sınır kaldırılmalı.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `ctas_insert_rows()` içinde `fields` array'ini `malloc` ile dynamic allocate et. Column value boyutunu `selectRs->rows[r].fields[c]` uzunluğuna göre belirle. | `adaptor/query_executor.c` |
+| 2 | Alternatif: `tup_build` API'sini doğrudan `const char **vals` pointer array ile çağır (kopyalama yapmadan). | `adaptor/query_executor.c` |
+| 3 | Test: 1000+ karakter VARCHAR column ile CTAS — data truncation olmadığını doğrula. | `tests/test_ctas.py` |
+| 4 | Run regression. | `tests/` |
+| 5 | Full system test. | `Dockerfile` |
+| 6 | Verify with DBeaver. | Manual |
+| 7 | Performance: kopyalama overhead'ını minimize et. | `adaptor/query_executor.c` |
+| 8 | Edge cases: NULL columns, empty strings, binary data. | `tests/test_ctas.py` |
+| 9 | Update wiki. | Wiki |
+| 10 | Memory cleanup (free) doğrulama. | `adaptor/query_executor.c` |
+
+---
+
+## Day 70 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
 
@@ -2698,6 +2879,15 @@
 | 130 | EXPLAIN'de LIMIT Node | 128 |
 | 131 | SQL_CALC_FOUND_ROWS & FOUND_ROWS() | 129 |
 | 132 | @@IDENTITY / SCOPE_IDENTITY() / @@last_insert_id | 130 |
+| 133 | SELECT INTO (MSSQL/PG syntax) | 131 |
+| 134 | CTAS WITH NO DATA / WITH DATA | 132 |
+| 135 | CTAS Atomicity (Transaction Rollback) | 133 |
+| 136 | Expression Column Type Inference for CTAS | 134 |
+| 137 | CTAS with Aggregate / GROUP BY | 135 |
+| 138 | CTAS in Transaction | 136 |
+| 139 | CREATE TABLE LIKE (Structure Copy) | 137 |
+| 140 | CREATE UNLOGGED TABLE AS SELECT | 138 |
+| 141 | CTAS Field Truncation Fix | 139 |
 
 ---
 

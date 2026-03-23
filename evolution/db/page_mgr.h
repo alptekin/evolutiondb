@@ -31,7 +31,9 @@ typedef enum {
     PAGE_BTREE_LEAF = 3,   /* B+ tree leaf node */
     PAGE_OVERFLOW   = 4,   /* overflow for large records */
     PAGE_HASH_DIR   = 5,   /* hash index directory page */
-    PAGE_HASH_BKT   = 6    /* hash index bucket page */
+    PAGE_HASH_BKT   = 6,   /* hash index bucket page */
+    PAGE_CLOG       = 7,   /* MVCC commit log page */
+    PAGE_VMAP       = 8    /* visibility map page */
 } PageType;
 
 /* ----------------------------------------------------------------
@@ -64,7 +66,9 @@ typedef enum {
     CAT_SYS_USERS      = 6,
     CAT_SYS_GRANTS     = 7,
     CAT_SYS_TABLE_STATS = 8,
-    CAT_MAX             = 9
+    CAT_SYS_CLOG        = 9,
+    CAT_SYS_VMAP         = 10,
+    CAT_MAX              = 11
 } CatalogID;
 
 typedef struct {
@@ -77,12 +81,14 @@ typedef struct {
     uint32_t next_table_id;                    /* auto-increment for table IDs */
     uint32_t next_schema_id;                   /* auto-increment for schema IDs */
     uint32_t next_db_id;                       /* auto-increment for database IDs */
+    uint32_t next_xid;                         /* MVCC: next transaction ID */
+    uint32_t next_csn;                         /* MVCC: next commit sequence number */
     /* --- Transparent Data Encryption (TDE) fields --- */
     uint8_t  encryption_enabled;               /* 0=off, 1=AES-256 TDE active */
     uint8_t  encryption_salt[16];              /* PBKDF2 salt for MEK derivation */
     uint8_t  wrapped_dek[48];                  /* DEK encrypted with MEK (32 ct + 16 GCM tag) */
     uint8_t  page_iv_prefix[8];               /* fixed CTR IV prefix (never changes on rekey) */
-    uint8_t  reserved[EVO_PAGE_SIZE - 165];    /* pad to full page (92 + 73 = 165) */
+    uint8_t  reserved[EVO_PAGE_SIZE - 173];    /* pad to full page (92 + 4 + 4 + 73 = 173) */
 } FileHeader;
 
 /* ----------------------------------------------------------------
@@ -118,6 +124,15 @@ void     pgm_set_catalog_root(CatalogID id, uint32_t page_no);
 
 /* Get/set auto-increment IDs. */
 uint32_t pgm_next_id(int id_type); /* 0=table, 1=schema, 2=db */
+
+/* MVCC: atomically increment and return the next transaction ID. */
+uint32_t pgm_next_xid(void);
+
+/* MVCC: read the current next_xid without incrementing (for freeze age calc). */
+uint32_t pgm_peek_xid(void);
+
+/* MVCC: atomically increment and return the next commit sequence number. */
+uint32_t pgm_next_csn(void);
 
 /* Get the global file descriptor (for direct buffer pool access if needed). */
 int  pgm_get_fd(void);

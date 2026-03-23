@@ -10,6 +10,8 @@ LDFLAGS =
 
 ifeq ($(UNAME),Linux)
     EXE = evosql
+else ifeq ($(UNAME),Darwin)
+    EXE = evosql
 else
     EXE = evosql.exe
 endif
@@ -43,7 +45,9 @@ SRCS = main.c \
        db/table_api.c \
        db/tuple_format.c \
        db/hash_idx.c \
-       db/page_crypt.c
+       db/page_crypt.c \
+       db/mvcc.c \
+       db/vmap.c
 
 OBJS = $(SRCS:.c=.o)
 
