@@ -40,6 +40,10 @@ int  get_active_connections(void);
 
 /* Initialise the engine and shared locks.  Call once from main(). */
 void server_init(void);
+void server_init_ex(int buffer_pool_pages);  /* 0 = default (128MB) */
+
+/* Get current buffer pool size in pages. */
+int server_get_buffer_pool_pages(void);
 
 /* Start an accept loop on `port` using `handler` for each connection.
  * `label` is used in log messages (e.g. "PG", "EVO").

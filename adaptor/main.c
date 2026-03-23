@@ -50,10 +50,24 @@ static THREAD_RETURN listener_thread(THREAD_PARAM param)
     return 0;
 }
 
+/* Parse size string: "128MB", "1GB", "32768" (pages), "512M" */
+static int parse_buffer_size(const char *s)
+{
+    char *end;
+    long val = strtol(s, &end, 10);
+    if (val <= 0) return 0;
+    /* Unit suffix → convert to 4KB pages */
+    if (*end == 'G' || *end == 'g')      return (int)(val * 1024 * 1024 / 4);  /* GB → pages */
+    else if (*end == 'M' || *end == 'm') return (int)(val * 1024 / 4);          /* MB → pages */
+    else if (*end == 'K' || *end == 'k') return (int)(val / 4);                 /* KB → pages */
+    return (int)val;  /* raw page count */
+}
+
 int main(int argc, char *argv[])
 {
     int pg_port  = DEFAULT_PG_PORT;
     int evo_port = DEFAULT_EVO_PORT;
+    int buffer_pool_pages = 0;  /* 0 = use default */
     int i;
 
     /* Parse CLI arguments */
@@ -62,8 +76,17 @@ int main(int argc, char *argv[])
             pg_port = atoi(argv[++i]);
         else if (strcmp(argv[i], "--evo-port") == 0 && i + 1 < argc)
             evo_port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--buffer-pool-size") == 0 && i + 1 < argc)
+            buffer_pool_pages = parse_buffer_size(argv[++i]);
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
+    }
+
+    /* Environment variable override (MySQL-style: bytes or with suffix) */
+    if (buffer_pool_pages == 0) {
+        const char *env = getenv("EVOSQL_BUFFER_POOL_SIZE");
+        if (env && env[0])
+            buffer_pool_pages = parse_buffer_size(env);
     }
 
 #ifndef _WIN32
@@ -73,7 +96,7 @@ int main(int argc, char *argv[])
 #endif
 
     /* Initialise engine, locks, socket subsystem */
-    server_init();
+    server_init_ex(buffer_pool_pages);
 
     /* TLS initialisation — read cert/key paths from environment */
     {

@@ -151,13 +151,26 @@ static THREAD_RETURN client_thread(THREAD_PARAM param)
 /* ================================================================
  *  Public API
  * ================================================================ */
-void server_init(void)
+static int g_buffer_pool_pages = 0;  /* actual pages allocated */
+
+void server_init(void) { server_init_ex(0); }
+
+void server_init_ex(int buffer_pool_pages)
 {
     socket_init();
     rwlock_init(&g_parse_lock);
     mutex_init(&g_dml_mutex);
     mutex_init(&g_conn_lock);
-    bp_init(BP_DEFAULT_PAGES);   /* 32768 pages = 128 MB buffer pool */
+    g_buffer_pool_pages = (buffer_pool_pages > 0) ? buffer_pool_pages : BP_DEFAULT_PAGES;
+    bp_init(g_buffer_pool_pages);
+
+    {
+        int mb = g_buffer_pool_pages * 4 / 1024;
+        if (mb > 0)
+            fprintf(stderr, "[BufferPool] %d pages (%d MB)\n", g_buffer_pool_pages, mb);
+        else
+            fprintf(stderr, "[BufferPool] %d pages (%d KB)\n", g_buffer_pool_pages, g_buffer_pool_pages * 4);
+    }
     query_engine_init();         /* opens data file, WAL replay, reads catalog */
     snowflake_init();
     mvcc_init();
@@ -167,6 +180,8 @@ void server_init(void)
     { extern void table_lock_init(void); table_lock_init(); }
     auto_reclaim_start();
 }
+
+int server_get_buffer_pool_pages(void) { return g_buffer_pool_pages; }
 
 void server_cleanup(void)
 {
