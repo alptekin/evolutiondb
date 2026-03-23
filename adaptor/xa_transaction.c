@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include "xa_transaction.h"
 #include "../evolution/db/wal.h"
 
@@ -44,6 +45,8 @@ int xa_persist_prepare(const char *xa_xid, uint32_t mvcc_xid)
             g_xa_records[i].xid[XA_ID_MAX - 1] = '\0';
             g_xa_records[i].mvcc_xid = mvcc_xid;
             g_xa_records[i].active = 1;
+            { struct timeval tv; gettimeofday(&tv, NULL);
+              g_xa_records[i].prepare_time = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec; }
 
             /* Write PREPARE record to WAL (crash-safe) */
             wal_log_xa_prepare(xa_xid, mvcc_xid);
@@ -89,4 +92,44 @@ uint32_t xa_find_prepared(const char *xa_xid)
             return g_xa_records[i].mvcc_xid;
     }
     return 0;
+}
+
+int xa_cleanup_orphans(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t now_us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
+    int64_t timeout_us = (int64_t)XA_ORPHAN_TIMEOUT_SEC * 1000000LL;
+    int cleaned = 0;
+
+    for (int i = 0; i < XA_MAX_PREPARED; i++) {
+        if (!g_xa_records[i].active) continue;
+        if (g_xa_records[i].prepare_time == 0) continue;  /* no timestamp */
+
+        int64_t age_us = now_us - g_xa_records[i].prepare_time;
+        if (age_us > timeout_us) {
+            fprintf(stderr, "[XA] Orphan cleanup: rolling back '%s' "
+                    "(prepared %lld seconds ago)\n",
+                    g_xa_records[i].xid, (long long)(age_us / 1000000));
+
+            /* Abort the orphaned TX */
+            uint32_t mvcc_xid = g_xa_records[i].mvcc_xid;
+            {
+                extern void clog_set_aborted(uint32_t);
+                extern void lock_release_all(uint32_t);
+                extern void lock_gap_release_all(uint32_t);
+                extern void mvcc_unregister_tx(uint32_t);
+                clog_set_aborted(mvcc_xid);
+                lock_release_all(mvcc_xid);
+                lock_gap_release_all(mvcc_xid);
+                mvcc_unregister_tx(mvcc_xid);
+            }
+            wal_log_xa_resolve(g_xa_records[i].xid, 0);  /* WAL ROLLBACK record */
+
+            g_xa_records[i].active = 0;
+            g_xa_records[i].xid[0] = '\0';
+            cleaned++;
+        }
+    }
+    return cleaned;
 }

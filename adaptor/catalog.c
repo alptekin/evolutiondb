@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/time.h>
+#include <time.h>
 #include "platform.h"
 #include "catalog.h"
 #include "../evolution/db/database.h"
@@ -661,9 +663,10 @@ static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
-    /* XA COMMIT 'xid' */
+    /* XA COMMIT 'xid' [ONE PHASE]
+     * ONE PHASE: skip PREPARE, commit directly from ENDED state (MySQL/Oracle compat)
+     * Normal: commit from PREPARED state (2PC) or ENDED state (1PC optimization) */
     if (strncasecmp(cmd, "COMMIT", 6) == 0) {
-        /* Can commit from PREPARED state (2PC) or ENDED state (1PC optimization) */
         if (ctx->xa_state != 3 && ctx->xa_state != 2) {
             /* Try to commit a previously prepared TX (different session) */
             const char *xid_start = xa_extract_xid(sql, 2);
@@ -773,20 +776,41 @@ static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
-    /* XA RECOVER — list all prepared transactions */
+    /* XA RECOVER — list all prepared transactions (with timestamps) */
     if (strncasecmp(cmd, "RECOVER", 7) == 0) {
         rs->is_select = 1;
         result_add_column(rs, "xa_xid", PG_OID_TEXT);
         result_add_column(rs, "mvcc_xid", PG_OID_INT4);
+        result_add_column(rs, "prepared_at", PG_OID_TEXT);
+        result_add_column(rs, "age_seconds", PG_OID_INT4);
 
         XAPreparedRecord recs[XA_MAX_PREPARED];
         int n = xa_list_prepared(recs, XA_MAX_PREPARED);
+
+        struct timeval now_tv;
+        gettimeofday(&now_tv, NULL);
+        int64_t now_us = (int64_t)now_tv.tv_sec * 1000000LL + now_tv.tv_usec;
+
         for (int i = 0; i < n; i++) {
             int row = result_add_row(rs);
             result_set_field(rs, row, 0, recs[i].xid);
-            char buf[32];
+            char buf[64];
             snprintf(buf, sizeof(buf), "%u", recs[i].mvcc_xid);
             result_set_field(rs, row, 1, buf);
+
+            /* Timestamp as ISO string */
+            if (recs[i].prepare_time > 0) {
+                time_t sec = (time_t)(recs[i].prepare_time / 1000000);
+                struct tm *tm = localtime(&sec);
+                strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+                result_set_field(rs, row, 2, buf);
+                int64_t age_sec = (now_us - recs[i].prepare_time) / 1000000;
+                snprintf(buf, sizeof(buf), "%lld", (long long)age_sec);
+                result_set_field(rs, row, 3, buf);
+            } else {
+                result_set_field(rs, row, 2, "unknown");
+                result_set_field(rs, row, 3, "0");
+            }
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "XA RECOVER");
         return 1;

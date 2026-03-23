@@ -33,11 +33,15 @@
 /* Max concurrent prepared transactions */
 #define XA_MAX_PREPARED 64
 
-/* XA prepared transaction record (persisted to disk) */
+/* Default orphan TX timeout: 5 minutes (seconds) */
+#define XA_ORPHAN_TIMEOUT_SEC 300
+
+/* XA prepared transaction record (persisted via WAL) */
 typedef struct {
     char     xid[XA_ID_MAX];     /* XA transaction identifier */
     uint32_t mvcc_xid;           /* internal MVCC transaction ID */
     int      active;             /* 1 = prepared, 0 = free slot */
+    int64_t  prepare_time;       /* epoch microseconds when PREPARE was issued */
 } XAPreparedRecord;
 
 /* Initialize XA subsystem. Loads prepared records from disk. */
@@ -58,5 +62,10 @@ int xa_list_prepared(XAPreparedRecord *out, int max);
 
 /* Find a prepared transaction by XA ID. Returns mvcc_xid or 0. */
 uint32_t xa_find_prepared(const char *xa_xid);
+
+/* Cleanup orphan prepared TXs older than XA_ORPHAN_TIMEOUT_SEC.
+ * Called periodically by auto-reclaim background thread.
+ * Rolls back expired prepared TXs. Returns number cleaned. */
+int xa_cleanup_orphans(void);
 
 #endif /* XA_TRANSACTION_H */
