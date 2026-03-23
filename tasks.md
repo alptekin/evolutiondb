@@ -711,7 +711,7 @@
 
 ## Day 18 — Infrastructure & Concurrency
 
-### Task 35: ⬜ Online DDL — Non-Blocking Schema Changes (Feature #95)
+### Task 35: ✅ Online DDL — Non-Blocking Schema Changes (Feature #95)
 
 **Goal:** ALTER TABLE operations (ADD/DROP COLUMN, ADD INDEX) without locking the table for reads. In MySQL (ALGORITHM=INPLACE), MSSQL (ONLINE=ON), and Oracle.
 
