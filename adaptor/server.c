@@ -178,6 +178,7 @@ void server_init_ex(int buffer_pool_pages)
     { extern void lock_mgr_init(void); lock_mgr_init(); }
     { extern void cg_init(void); cg_init(); }
     { extern void table_lock_init(void); table_lock_init(); }
+    { extern void xa_init(void); xa_init(); }
     auto_reclaim_start();
 }
 

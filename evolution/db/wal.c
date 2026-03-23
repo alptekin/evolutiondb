@@ -145,6 +145,12 @@ static int replay_one_record(off_t pos, off_t file_size,
     /* Only replay records past checkpoint */
     if (rec_lsn <= g_wal_header.checkpoint_lsn) return 0;
 
+    /* XA records: don't write to data file — handle in-memory */
+    if (rec_page_no >= 0xFFFFFFFC) {
+        /* XA PREPARE/COMMIT/ROLLBACK record — handled by xa_init after replay */
+        return 1;  /* counted as replayed but no disk write */
+    }
+
     /* Write to data file (with TDE encryption for pages > 0) */
     off_t data_offset = (off_t)rec_page_no * EVO_PAGE_SIZE;
     if (pcrypt_is_enabled() && rec_page_no > 0) {
@@ -342,6 +348,29 @@ uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len
     return lsn;
 }
 
+uint32_t wal_log_xa_prepare(const char *xa_xid, uint32_t mvcc_xid)
+{
+    /* Build payload: [xa_xid_len:2][xa_xid:N][mvcc_xid:4] */
+    uint16_t xid_len = (uint16_t)strlen(xa_xid);
+    uint16_t payload_len = 2 + xid_len + 4;
+    char payload[256];
+    memcpy(payload, &xid_len, 2);
+    memcpy(payload + 2, xa_xid, xid_len);
+    memcpy(payload + 2 + xid_len, &mvcc_xid, 4);
+    return wal_log_page(WAL_PAGE_XA_PREPARE, payload, payload_len);
+}
+
+uint32_t wal_log_xa_resolve(const char *xa_xid, int commit)
+{
+    uint16_t xid_len = (uint16_t)strlen(xa_xid);
+    uint16_t payload_len = 2 + xid_len;
+    char payload[256];
+    memcpy(payload, &xid_len, 2);
+    memcpy(payload + 2, xa_xid, xid_len);
+    uint32_t page_no = commit ? WAL_PAGE_XA_COMMIT : WAL_PAGE_XA_ROLLBACK;
+    return wal_log_page(page_no, payload, payload_len);
+}
+
 int wal_checkpoint(void)
 {
     if (!g_wal_active || g_wal_fd < 0) return -1;
@@ -378,6 +407,21 @@ int wal_checkpoint(void)
     /* Truncate active WAL file (remove all records, keep header) */
     ftruncate(g_wal_fd, sizeof(WalHeader));
     wal_flush_header();
+
+    /* GAP-A fix: Re-write active PREPARE records to the new WAL.
+     * Without this, prepared TXs would be lost after checkpoint. */
+    {
+        extern int xa_list_prepared(void *, int);
+        typedef struct { char xid[128]; uint32_t mvcc_xid; int active; } XARec;
+        XARec recs[64];
+        int n = xa_list_prepared(recs, 64);
+        if (n > 0) {
+            pthread_mutex_unlock(&g_wal_lock);
+            for (int i = 0; i < n; i++)
+                wal_log_xa_prepare(recs[i].xid, recs[i].mvcc_xid);
+            pthread_mutex_lock(&g_wal_lock);
+        }
+    }
 
     pthread_mutex_unlock(&g_wal_lock);
     return 0;
