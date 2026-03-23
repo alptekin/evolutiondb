@@ -28,6 +28,7 @@ typedef struct {
     int      dirty;         /* modified since load? */
     atomic_int pin_count;   /* >0 = in use, cannot evict (atomic for lock-free unpin) */
     int      usage_count;   /* 0..BP_MAX_USAGE, clock sweep counter */
+    atomic_uint seq;        /* seqlock: odd = write in progress, even = stable */
 } BPPage;
 
 /* ----------------------------------------------------------------
