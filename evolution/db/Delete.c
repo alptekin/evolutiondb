@@ -10,6 +10,7 @@
 #include "tuple_format.h"
 #include "vmap.h"
 #include "mvcc.h"
+#include "lock_mgr.h"
 
 /* Remove secondary index entries for a deleted record.
  * Takes pre-extracted fields instead of raw record. */
@@ -487,11 +488,28 @@ int DeleteProcess(void)
                                             (const char *)delFields, 256, numCols);
                     }
 
+                    /* Acquire exclusive row lock for this DELETE */
+                    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+                    if (lock_row_acquire(td.table_id, matchKeys[i],
+                                         g_qctx->mvcc_xid,
+                                         LOCK_EXCLUSIVE) != LOCK_OK) {
+                        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                                 "could not obtain lock on row (key=%s)",
+                                 matchKeys[i]);
+                        g_err.error = 1;
+                        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
+                        for (int mi = i; mi < matchCount; mi++)
+                            free(matchKeys[mi]);
+                        free(matchKeys);
+                        g_del.rowCount = deleted;
+                        TruncateDelete();
+                        return -1;
+                    }
+
                     /* MVCC soft-delete: set xmax instead of physical removal.
                      * The PK tree entry stays so concurrent readers can find
                      * the record and check visibility. RECLAIM will physically
                      * remove tuples whose xmax is committed + expired. */
-                    mvcc_ensure_xid(&g_qctx->mvcc_xid);
                     vmap_clear(rid.page_no);
                     if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
                         /* Pre-MVCC tuple — fall back to physical delete */

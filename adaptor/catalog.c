@@ -556,6 +556,7 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 /* MVCC: mark aborted in CLOG */
                 if (ctx->tx_xid > 0) {
                     clog_set_aborted(ctx->tx_xid);
+                    { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid); }
                     mvcc_unregister_tx(ctx->tx_xid);
                     ctx->tx_xid = 0;
                 }
@@ -570,6 +571,7 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                     }
                     uint32_t csn = pgm_next_csn();
                     clog_set_committed_csn(ctx->tx_xid, csn);
+                    { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid); }
                     mvcc_unregister_tx(ctx->tx_xid);
                     ctx->tx_xid = 0;
                 }
