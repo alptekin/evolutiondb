@@ -490,6 +490,9 @@ int DeleteProcess(void)
 
                     /* Acquire exclusive row lock for this DELETE */
                     mvcc_ensure_xid(&g_qctx->mvcc_xid);
+                    /* Conflict Guard: notify write */
+                    { extern void cg_check_write(uint32_t, uint32_t, const char *);
+                      cg_check_write(g_qctx->mvcc_xid, td.table_id, matchKeys[i]); }
                     {
                         int lr = lock_row_acquire(td.table_id, matchKeys[i],
                                                   g_qctx->mvcc_xid,

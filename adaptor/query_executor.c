@@ -1218,6 +1218,12 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                     }
                 }
 
+                /* Conflict Guard: record read interest for SERIALIZABLE TX */
+                if (lock_xid > 0 && !forUpdate) {
+                    extern void cg_record_read(uint32_t, uint32_t, const char *);
+                    cg_record_read(lock_xid, td.table_id, keyBuf);
+                }
+
                 if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
                 if (streaming) {
                     /* --- Streaming path: parse, filter, send directly --- */
@@ -2642,10 +2648,12 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
                                        ctx ? ctx->tx_xid : 0);
                 rwlock_wrunlock(&g_parse_lock);
             } else {
+                /* Pass tx_xid for Conflict Guard read tracking in SERIALIZABLE */
+                uint32_t cg_xid = (ctx && ctx->serializable_locked) ? ctx->tx_xid : 0;
                 rwlock_rdlock(&g_parse_lock);
                 collect_select_results(g_sel.lastTable, rs,
                                        ctx ? &ctx->snapshot : NULL,
-                                       0, 0);
+                                       0, cg_xid);
                 rwlock_rdunlock(&g_parse_lock);
             }
             g_sel.lastTable[0] = '\0';

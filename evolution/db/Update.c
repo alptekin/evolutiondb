@@ -341,6 +341,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
     /* Acquire exclusive row lock for this UPDATE */
     mvcc_ensure_xid(&g_qctx->mvcc_xid);
+    /* Conflict Guard: notify that we're writing this row */
+    { extern void cg_check_write(uint32_t, uint32_t, const char *);
+      cg_check_write(g_qctx->mvcc_xid, td->table_id, pkKey); }
     {
         int lr = lock_row_acquire(td->table_id, pkKey, g_qctx->mvcc_xid,
                                   LOCK_EXCLUSIVE);

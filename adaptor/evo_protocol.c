@@ -266,8 +266,9 @@ void evo_handle_client(socket_t sock)
         session.undo_log = NULL;
         session.in_transaction = 0;
         if (session.serializable_locked) {
+            extern void cg_unregister_tx(uint32_t);
+            if (session.tx_xid > 0) cg_unregister_tx(session.tx_xid);
             session.serializable_locked = 0;
-            rwlock_wrunlock(&g_parse_lock);
         }
     }
 
