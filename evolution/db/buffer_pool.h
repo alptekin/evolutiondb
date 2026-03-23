@@ -10,9 +10,10 @@
 #define BUFFER_POOL_H
 
 #include <sys/types.h>
+#include <stdatomic.h>
 
 #define BP_PAGE_SIZE     4096
-#define BP_DEFAULT_PAGES 256    /* 1MB default pool */
+#define BP_DEFAULT_PAGES 32768  /* 128MB default pool (32768 × 4KB pages) */
 #define BP_RING_SIZE     8      /* sequential scan ring buffer */
 #define BP_MAX_USAGE     5      /* max usage_count (matches PostgreSQL) */
 
@@ -25,7 +26,7 @@ typedef struct {
     char     data[BP_PAGE_SIZE];
     int      valid_len;     /* bytes actually loaded (< PAGE_SIZE near EOF) */
     int      dirty;         /* modified since load? */
-    int      pin_count;     /* >0 = in use, cannot evict */
+    atomic_int pin_count;   /* >0 = in use, cannot evict (atomic for lock-free unpin) */
     int      usage_count;   /* 0..BP_MAX_USAGE, clock sweep counter */
 } BPPage;
 

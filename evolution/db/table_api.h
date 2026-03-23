@@ -44,6 +44,12 @@ int tapi_heap_read(RowID rid, char *buf, int bufsize);
  * Returns 0 on success, -1 on error. */
 int tapi_heap_delete(RowID rid);
 
+/* MVCC soft-delete: set xmax on a heap tuple without physically deleting it.
+ * The PK tree entry is preserved so concurrent readers can check visibility.
+ * Returns 0 on success, -1 if not an MVCC tuple (caller should fall back
+ * to physical delete). */
+int tapi_heap_set_xmax(RowID rid, uint32_t xmax);
+
 /* Update a record at RowID. If the new record doesn't fit in-place,
  * deletes old and inserts into a page with space.
  * Returns new RowID (may differ from old_rid). Returns {0,0} on error. */
@@ -101,6 +107,19 @@ int tapi_scan_begin(const TableDesc *td, TableScanCursor *cursor);
  * Returns 0 on success, -1 when done. */
 int tapi_scan_next(TableScanCursor *cursor,
                    char *pk_key_out, char *record_out, int rec_out_size);
+
+/* ----------------------------------------------------------------
+ *  MVCC-aware scan — skips tuples not visible to the snapshot
+ * ---------------------------------------------------------------- */
+struct Snapshot;  /* forward declaration — full definition in mvcc.h */
+
+/* Get next visible record in scan, using MVCC visibility filtering.
+ * Skips tuples whose xmin/xmax make them invisible to the snapshot.
+ * Pre-MVCC tuples (no MVCC flag) are always visible.
+ * Returns 0 on success, -1 when done. */
+int tapi_scan_next_mvcc(TableScanCursor *cursor,
+                        char *pk_key_out, char *record_out, int rec_out_size,
+                        const struct Snapshot *snap);
 
 /* ----------------------------------------------------------------
  *  Free all heap pages (for DROP TABLE / TRUNCATE)

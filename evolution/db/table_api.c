@@ -10,6 +10,8 @@
 #include "table_api.h"
 #include "tuple_format.h"
 #include "database.h"
+#include "mvcc.h"
+#include "vmap.h"
 
 /* ----------------------------------------------------------------
  *  Table resolution
@@ -138,6 +140,34 @@ int tapi_heap_delete(RowID rid)
     return ret;
 }
 
+/* MVCC soft-delete: set xmax on a heap tuple without physically deleting it.
+ * The record stays on the page and the PK tree entry is preserved so that
+ * concurrent readers with older snapshots can still find and check visibility.
+ * Returns 0 on success, -1 if not an MVCC tuple (caller should fall back
+ * to physical delete). */
+int tapi_heap_set_xmax(RowID rid, uint32_t xmax)
+{
+    if (rid.page_no == 0) return -1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+
+    char rec[RECORD_BUF_SIZE];
+    int rec_len = slot_read(page_buf, rid.slot_idx, rec, sizeof(rec));
+    if (rec_len <= 0) return -1;
+
+    if (tup_set_xmax(rec, rec_len, xmax) < 0)
+        return -1;  /* not an MVCC tuple */
+
+    /* Write modified record back — tup_set_xmax only touches xmax field,
+     * so the record length is unchanged and slot_update will succeed in-place. */
+    if (slot_update(page_buf, rid.slot_idx, rec, (uint16_t)rec_len) < 0)
+        return -1;
+
+    pgm_write_page(rid.page_no, page_buf);
+    return 0;
+}
+
 RowID tapi_heap_update(TableDesc *td, RowID old_rid,
                        const char *new_record, uint16_t rec_len)
 {
@@ -248,14 +278,61 @@ int tapi_scan_begin(const TableDesc *td, TableScanCursor *cursor)
 int tapi_scan_next(TableScanCursor *cursor,
                    char *pk_key_out, char *record_out, int rec_out_size)
 {
-    RowID rid;
-    if (bt2_cursor_next(&cursor->bt_cursor, pk_key_out, &rid) < 0)
-        return -1;
+    while (1) {
+        RowID rid;
+        if (bt2_cursor_next(&cursor->bt_cursor, pk_key_out, &rid) < 0)
+            return -1;
 
-    if (tapi_heap_read(rid, record_out, rec_out_size) < 0)
-        return -1;
+        int rec_len = tapi_heap_read(rid, record_out, rec_out_size);
+        if (rec_len < 0)
+            continue;  /* deleted slot */
 
-    return 0;
+        /* Skip invisible MVCC tuples:
+         * - Soft-deleted (xmax committed) — row was deleted
+         * - Crashed insert (xmin IN_PROGRESS from previous session) */
+        if (tup_has_mvcc(record_out, rec_len)) {
+            uint32_t xmin = tup_get_xmin(record_out, rec_len);
+            uint32_t xmax = tup_get_xmax(record_out, rec_len);
+            if (xmax != 0 && clog_is_committed(xmax))
+                continue;  /* soft-deleted and committed — skip */
+            if (mvcc_xid_is_crashed(xmin))
+                continue;  /* crashed insert — skip */
+        }
+
+        return 0;
+    }
+}
+
+/* ----------------------------------------------------------------
+ *  MVCC-aware scan
+ * ---------------------------------------------------------------- */
+
+int tapi_scan_next_mvcc(TableScanCursor *cursor,
+                        char *pk_key_out, char *record_out, int rec_out_size,
+                        const Snapshot *snap)
+{
+    while (1) {
+        RowID rid;
+        if (bt2_cursor_next(&cursor->bt_cursor, pk_key_out, &rid) < 0)
+            return -1;
+
+        int rec_len = tapi_heap_read(rid, record_out, rec_out_size);
+        if (rec_len < 0)
+            continue;  /* deleted slot — skip */
+
+        /* VMAP fast-skip: if entire page is all-visible, skip per-tuple check */
+        if (snap && vmap_is_visible(rid.page_no)) {
+            /* All tuples on this page are visible — skip MVCC check */
+        } else if (snap && !mvcc_is_visible(record_out, rec_len, snap))
+            continue;  /* invisible to this snapshot */
+
+        /* Lazily set hint bit so future reads skip CLOG */
+        if (snap && tup_has_mvcc(record_out, rec_len) &&
+            !(record_out[TUPLE_PREFIX_SIZE + 3] & TUPLE_FLAG_XMIN_COMMITTED))
+            mvcc_set_hint_committed(rid.page_no, rid.slot_idx);
+
+        return 0;
+    }
 }
 
 /* ----------------------------------------------------------------

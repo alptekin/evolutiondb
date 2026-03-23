@@ -1,8 +1,10 @@
 /*
- * buffer_pool.c — Clock Sweep Buffer Pool for EvoSQL
+ * buffer_pool.c — Partitioned Clock Sweep Buffer Pool for EvoSQL
  *
  * Write-back cache with Clock Sweep eviction (PostgreSQL-style).
- * Internal mutex for concurrency-readiness.
+ * Partitioned mutexes: page_no % BP_NUM_PARTITIONS determines which
+ * partition (and mutex) a page belongs to, allowing concurrent access
+ * to pages in different partitions.
  */
 #include "buffer_pool.h"
 #include "page_crypt.h"
@@ -27,24 +29,40 @@ typedef pthread_mutex_t bp_mutex_t;
 #define bp_mutex_destroy(m) pthread_mutex_destroy(m)
 #endif
 
+/* Number of partitions — each has its own mutex, hash table, clock hand */
+#define BP_NUM_PARTITIONS 16
+
 /* ================================================================
- *  Pool singleton
+ *  Partition — each partition manages a subset of pages
  * ================================================================ */
 typedef struct {
     BPPage       *pages;
     int           num_pages;
     int           clock_hand;
-    int          *hash_table;   /* open-addressing → page index (-1 = empty) */
-    int           hash_size;    /* power of 2 */
+    int          *hash_table;
+    int           hash_size;
     bp_mutex_t    lock;
     unsigned long hits, misses, evictions, flushes;
+} BPPartition;
+
+/* ================================================================
+ *  Pool singleton — array of partitions
+ * ================================================================ */
+typedef struct {
+    BPPartition   parts[BP_NUM_PARTITIONS];
+    int           total_pages;
 } BufferPool;
 
 static BufferPool *g_pool = NULL;
 
+/* Map a page_no to its partition index */
+static inline int bp_part_idx(off_t page_no)
+{
+    return (int)((unsigned long)page_no % BP_NUM_PARTITIONS);
+}
+
 /* ================================================================
- *  Portable pread / pwrite  (no SEEK_CUR dependency)
- *  Safe because pool mutex serialises all calls.
+ *  Portable pread / pwrite
  * ================================================================ */
 static ssize_t bp_pread(int fd, void *buf, size_t count, off_t offset)
 {
@@ -60,9 +78,41 @@ static ssize_t bp_pwrite(int fd, const void *buf, size_t count, off_t offset)
     return write(fd, buf, (unsigned int)count);
 }
 
+/* Global I/O mutex — used only for bp_write_append (lseek SEEK_END)
+ * and Windows fallback. Normal reads/writes use pread/pwrite on POSIX. */
+static bp_mutex_t g_io_lock;
+
+#ifdef _WIN32
+static ssize_t bp_pread_safe(int fd, void *buf, size_t count, off_t offset)
+{
+    ssize_t n;
+    bp_mutex_lock(&g_io_lock);
+    n = bp_pread(fd, buf, count, offset);
+    bp_mutex_unlock(&g_io_lock);
+    return n;
+}
+static ssize_t bp_pwrite_safe(int fd, const void *buf, size_t count, off_t offset)
+{
+    ssize_t n;
+    bp_mutex_lock(&g_io_lock);
+    n = bp_pwrite(fd, buf, count, offset);
+    bp_mutex_unlock(&g_io_lock);
+    return n;
+}
+#else
+/* POSIX: pread/pwrite are atomic positioned I/O — no locking needed */
+static ssize_t bp_pread_safe(int fd, void *buf, size_t count, off_t offset)
+{
+    return pread(fd, buf, count, offset);
+}
+static ssize_t bp_pwrite_safe(int fd, const void *buf, size_t count, off_t offset)
+{
+    return pwrite(fd, buf, count, offset);
+}
+#endif
+
 /* ================================================================
- *  TDE helpers — encrypt before disk write, decrypt after disk read.
- *  Operates on full-page buffers only.  Page 0 is always plaintext.
+ *  TDE helpers
  * ================================================================ */
 static void bp_encrypt_and_write(int fd, const void *data, size_t len,
                                  off_t page_no)
@@ -71,9 +121,9 @@ static void bp_encrypt_and_write(int fd, const void *data, size_t len,
         uint8_t enc[BP_PAGE_SIZE];
         memcpy(enc, data, len);
         pcrypt_encrypt_page(enc, (uint32_t)page_no);
-        bp_pwrite(fd, enc, len, page_no * BP_PAGE_SIZE);
+        bp_pwrite_safe(fd, enc, len, page_no * BP_PAGE_SIZE);
     } else {
-        bp_pwrite(fd, data, len, page_no * BP_PAGE_SIZE);
+        bp_pwrite_safe(fd, data, len, page_no * BP_PAGE_SIZE);
     }
 }
 
@@ -84,7 +134,7 @@ static void bp_write_page_to_disk(BPPage *p)
 
 static ssize_t bp_read_page_from_disk(int fd, char *data, off_t page_no)
 {
-    ssize_t n = bp_pread(fd, data, BP_PAGE_SIZE, page_no * BP_PAGE_SIZE);
+    ssize_t n = bp_pread_safe(fd, data, BP_PAGE_SIZE, page_no * BP_PAGE_SIZE);
     if (n > 0 && pcrypt_is_enabled() && page_no > 0) {
         pcrypt_decrypt_page((uint8_t *)data, (uint32_t)page_no);
     }
@@ -92,8 +142,7 @@ static ssize_t bp_read_page_from_disk(int fd, char *data, off_t page_no)
 }
 
 /* ================================================================
- *  Hash table — open addressing, linear probing
- *  Key = (fd, page_no)  →  value = page index in pages[]
+ *  Per-partition hash table — open addressing, linear probing
  * ================================================================ */
 static unsigned int bp_hash_key(int fd, off_t page_no)
 {
@@ -102,57 +151,55 @@ static unsigned int bp_hash_key(int fd, off_t page_no)
     return h;
 }
 
-static int bp_hash_lookup(int fd, off_t page_no)
+static int part_hash_lookup(BPPartition *part, int fd, off_t page_no)
 {
-    unsigned int h = bp_hash_key(fd, page_no) & (unsigned)(g_pool->hash_size - 1);
+    unsigned int h = bp_hash_key(fd, page_no) & (unsigned)(part->hash_size - 1);
     int i;
-    for (i = 0; i < g_pool->hash_size; i++) {
-        int slot = (int)((h + (unsigned)i) & (unsigned)(g_pool->hash_size - 1));
-        int idx = g_pool->hash_table[slot];
+    for (i = 0; i < part->hash_size; i++) {
+        int slot = (int)((h + (unsigned)i) & (unsigned)(part->hash_size - 1));
+        int idx = part->hash_table[slot];
         if (idx == -1)
             return -1;
-        if (g_pool->pages[idx].fd == fd && g_pool->pages[idx].page_no == page_no)
+        if (part->pages[idx].fd == fd && part->pages[idx].page_no == page_no)
             return idx;
     }
     return -1;
 }
 
-static void bp_hash_insert(int fd, off_t page_no, int page_idx)
+static void part_hash_insert(BPPartition *part, int fd, off_t page_no, int page_idx)
 {
-    unsigned int h = bp_hash_key(fd, page_no) & (unsigned)(g_pool->hash_size - 1);
+    unsigned int h = bp_hash_key(fd, page_no) & (unsigned)(part->hash_size - 1);
     int i;
-    for (i = 0; i < g_pool->hash_size; i++) {
-        int slot = (int)((h + (unsigned)i) & (unsigned)(g_pool->hash_size - 1));
-        if (g_pool->hash_table[slot] == -1) {
-            g_pool->hash_table[slot] = page_idx;
+    for (i = 0; i < part->hash_size; i++) {
+        int slot = (int)((h + (unsigned)i) & (unsigned)(part->hash_size - 1));
+        if (part->hash_table[slot] == -1) {
+            part->hash_table[slot] = page_idx;
             return;
         }
     }
-    /* Should never happen: hash_size >> num_pages */
 }
 
-static void bp_hash_remove(int fd, off_t page_no)
+static void part_hash_remove(BPPartition *part, int fd, off_t page_no)
 {
-    unsigned int h = bp_hash_key(fd, page_no) & (unsigned)(g_pool->hash_size - 1);
+    unsigned int h = bp_hash_key(fd, page_no) & (unsigned)(part->hash_size - 1);
     int i;
-    for (i = 0; i < g_pool->hash_size; i++) {
-        int slot = (int)((h + (unsigned)i) & (unsigned)(g_pool->hash_size - 1));
-        int idx = g_pool->hash_table[slot];
+    for (i = 0; i < part->hash_size; i++) {
+        int slot = (int)((h + (unsigned)i) & (unsigned)(part->hash_size - 1));
+        int idx = part->hash_table[slot];
         if (idx == -1)
             return;
-        if (g_pool->pages[idx].fd == fd && g_pool->pages[idx].page_no == page_no) {
-            /* Remove and re-hash subsequent cluster entries */
+        if (part->pages[idx].fd == fd && part->pages[idx].page_no == page_no) {
             int j;
-            g_pool->hash_table[slot] = -1;
-            for (j = 1; j < g_pool->hash_size; j++) {
-                int next = (int)((h + (unsigned)(i + j)) & (unsigned)(g_pool->hash_size - 1));
-                int rehash_idx = g_pool->hash_table[next];
+            part->hash_table[slot] = -1;
+            for (j = 1; j < part->hash_size; j++) {
+                int next = (int)((h + (unsigned)(i + j)) & (unsigned)(part->hash_size - 1));
+                int rehash_idx = part->hash_table[next];
                 if (rehash_idx == -1)
                     break;
-                g_pool->hash_table[next] = -1;
-                bp_hash_insert(g_pool->pages[rehash_idx].fd,
-                               g_pool->pages[rehash_idx].page_no,
-                               rehash_idx);
+                part->hash_table[next] = -1;
+                part_hash_insert(part, part->pages[rehash_idx].fd,
+                                 part->pages[rehash_idx].page_no,
+                                 rehash_idx);
             }
             return;
         }
@@ -160,57 +207,55 @@ static void bp_hash_remove(int fd, off_t page_no)
 }
 
 /* ================================================================
- *  Clock Sweep victim selection
+ *  Per-partition clock sweep
  * ================================================================ */
-static int bp_find_victim(void)
+static int part_find_victim(BPPartition *part)
 {
     int loops = 0;
-    int max_loops = g_pool->num_pages * (BP_MAX_USAGE + 2);
+    int max_loops = part->num_pages * (BP_MAX_USAGE + 2);
 
     while (loops < max_loops) {
-        BPPage *p = &g_pool->pages[g_pool->clock_hand];
-        if (p->pin_count == 0) {
+        BPPage *p = &part->pages[part->clock_hand];
+        if (atomic_load(&p->pin_count) == 0) {
             if (p->usage_count == 0 || p->fd == -1) {
-                int victim = g_pool->clock_hand;
-                g_pool->clock_hand = (g_pool->clock_hand + 1) % g_pool->num_pages;
+                int victim = part->clock_hand;
+                part->clock_hand = (part->clock_hand + 1) % part->num_pages;
                 return victim;
             }
             p->usage_count--;
         }
-        g_pool->clock_hand = (g_pool->clock_hand + 1) % g_pool->num_pages;
+        part->clock_hand = (part->clock_hand + 1) % part->num_pages;
         loops++;
     }
-    return -1;  /* all pages pinned — shouldn't happen */
+    return -1;
 }
 
-/* Evict a page: flush if dirty, remove from hash */
-static void bp_evict(int idx)
+static void part_evict(BPPartition *part, int idx)
 {
-    BPPage *p = &g_pool->pages[idx];
+    BPPage *p = &part->pages[idx];
     if (p->fd >= 0) {
         if (p->dirty) {
             bp_write_page_to_disk(p);
-            g_pool->flushes++;
+            part->flushes++;
             p->dirty = 0;
         }
-        bp_hash_remove(p->fd, p->page_no);
-        g_pool->evictions++;
+        part_hash_remove(part, p->fd, p->page_no);
+        part->evictions++;
         p->fd = -1;
     }
 }
 
-/* Load a page from disk into a victim slot */
-static int bp_load_page(int fd, off_t page_no)
+static int part_load_page(BPPartition *part, int fd, off_t page_no)
 {
     ssize_t n;
     BPPage *p;
-    int idx = bp_find_victim();
+    int idx = part_find_victim(part);
     if (idx == -1)
         return -1;
 
-    bp_evict(idx);
+    part_evict(part, idx);
 
-    p = &g_pool->pages[idx];
+    p = &part->pages[idx];
     n = bp_read_page_from_disk(fd, p->data, page_no);
     if (n < 0) n = 0;
 
@@ -218,26 +263,25 @@ static int bp_load_page(int fd, off_t page_no)
     p->page_no     = page_no;
     p->valid_len   = (int)n;
     p->dirty       = 0;
-    p->pin_count   = 0;
+    atomic_store(&p->pin_count, 0);
     p->usage_count = 1;
 
-    bp_hash_insert(fd, page_no, idx);
+    part_hash_insert(part, fd, page_no, idx);
     return idx;
 }
 
-/* Get or load a page, returns page index */
-static int bp_get_page(int fd, off_t page_no)
+static int part_get_page(BPPartition *part, int fd, off_t page_no)
 {
-    int idx = bp_hash_lookup(fd, page_no);
+    int idx = part_hash_lookup(part, fd, page_no);
     if (idx >= 0) {
-        BPPage *p = &g_pool->pages[idx];
+        BPPage *p = &part->pages[idx];
         if (p->usage_count < BP_MAX_USAGE)
             p->usage_count++;
-        g_pool->hits++;
+        part->hits++;
         return idx;
     }
-    g_pool->misses++;
-    return bp_load_page(fd, page_no);
+    part->misses++;
+    return part_load_page(part, fd, page_no);
 }
 
 /* ================================================================
@@ -245,7 +289,7 @@ static int bp_get_page(int fd, off_t page_no)
  * ================================================================ */
 void bp_init(int num_pages)
 {
-    int i, hash_size;
+    int i, pages_per_part, hash_size;
 
     if (num_pages <= 0)
         num_pages = BP_DEFAULT_PAGES;
@@ -254,46 +298,61 @@ void bp_init(int num_pages)
     if (!g_pool)
         err_dump("bp_init: calloc error");
 
-    g_pool->pages = (BPPage *)calloc((size_t)num_pages, sizeof(BPPage));
-    if (!g_pool->pages)
-        err_dump("bp_init: calloc error for pages");
+    g_pool->total_pages = num_pages;
+    pages_per_part = num_pages / BP_NUM_PARTITIONS;
+    if (pages_per_part < 16) pages_per_part = 16;
 
-    g_pool->num_pages  = num_pages;
-    g_pool->clock_hand = 0;
+    bp_mutex_init(&g_io_lock);
 
-    for (i = 0; i < num_pages; i++)
-        g_pool->pages[i].fd = -1;
+    for (i = 0; i < BP_NUM_PARTITIONS; i++) {
+        BPPartition *part = &g_pool->parts[i];
+        int j;
 
-    /* Hash table: power-of-2, at least 4× num_pages */
-    hash_size = 1;
-    while (hash_size < num_pages * 4)
-        hash_size <<= 1;
-    g_pool->hash_size  = hash_size;
-    g_pool->hash_table = (int *)malloc((size_t)hash_size * sizeof(int));
-    if (!g_pool->hash_table)
-        err_dump("bp_init: malloc error for hash table");
-    for (i = 0; i < hash_size; i++)
-        g_pool->hash_table[i] = -1;
+        part->num_pages = pages_per_part;
+        part->pages = (BPPage *)calloc((size_t)pages_per_part, sizeof(BPPage));
+        if (!part->pages)
+            err_dump("bp_init: calloc error for partition pages");
 
-    bp_mutex_init(&g_pool->lock);
+        part->clock_hand = 0;
 
-    g_pool->hits = g_pool->misses = g_pool->evictions = g_pool->flushes = 0;
+        for (j = 0; j < pages_per_part; j++)
+            part->pages[j].fd = -1;
+
+        /* Hash table: power-of-2, at least 4× partition pages */
+        hash_size = 1;
+        while (hash_size < pages_per_part * 4)
+            hash_size <<= 1;
+        part->hash_size  = hash_size;
+        part->hash_table = (int *)malloc((size_t)hash_size * sizeof(int));
+        if (!part->hash_table)
+            err_dump("bp_init: malloc error for hash table");
+        for (j = 0; j < hash_size; j++)
+            part->hash_table[j] = -1;
+
+        bp_mutex_init(&part->lock);
+        part->hits = part->misses = part->evictions = part->flushes = 0;
+    }
 }
 
 void bp_destroy(void)
 {
+    int i;
     if (!g_pool)
         return;
     bp_flush_all();
-    bp_mutex_destroy(&g_pool->lock);
-    free(g_pool->pages);
-    free(g_pool->hash_table);
+    for (i = 0; i < BP_NUM_PARTITIONS; i++) {
+        BPPartition *part = &g_pool->parts[i];
+        bp_mutex_destroy(&part->lock);
+        free(part->pages);
+        free(part->hash_table);
+    }
+    bp_mutex_destroy(&g_io_lock);
     free(g_pool);
     g_pool = NULL;
 }
 
 /* ================================================================
- *  Core I/O
+ *  Core I/O — partitioned locking
  * ================================================================ */
 int bp_read(int fd, void *buf, size_t count, off_t offset)
 {
@@ -302,11 +361,12 @@ int bp_read(int fd, void *buf, size_t count, off_t offset)
     size_t buf_pos = 0;
 
     if (!g_pool) {
-        /* Fallback: direct I/O if pool not initialized */
-        return (int)bp_pread(fd, buf, count, offset);
+        ssize_t n;
+        bp_mutex_lock(&g_io_lock);
+        n = bp_pread(fd, buf, count, offset);
+        bp_mutex_unlock(&g_io_lock);
+        return (int)n;
     }
-
-    bp_mutex_lock(&g_pool->lock);
 
     while (remaining > 0) {
         off_t  page_no     = (offset + (off_t)buf_pos) / BP_PAGE_SIZE;
@@ -315,26 +375,43 @@ int bp_read(int fd, void *buf, size_t count, off_t offset)
         BPPage *p;
         int    idx;
 
-        idx = bp_get_page(fd, page_no);
+        int pi = bp_part_idx(page_no);
+        BPPartition *part = &g_pool->parts[pi];
+
+        bp_mutex_lock(&part->lock);
+
+        idx = part_get_page(part, fd, page_no);
         if (idx < 0) {
-            bp_mutex_unlock(&g_pool->lock);
+            bp_mutex_unlock(&part->lock);
             return -1;
         }
 
-        p = &g_pool->pages[idx];
+        p = &part->pages[idx];
+        atomic_fetch_add(&p->pin_count, 1);  /* pin: prevent eviction */
+
         avail = (size_t)(p->valid_len - page_offset);
-        if ((int)avail <= 0)
-            break;  /* EOF */
+        if ((int)avail <= 0) {
+            atomic_fetch_sub(&p->pin_count, 1);
+            bp_mutex_unlock(&part->lock);
+            break;
+        }
         to_copy = remaining < avail ? remaining : avail;
         to_copy = to_copy < (size_t)(BP_PAGE_SIZE - page_offset)
                     ? to_copy
                     : (size_t)(BP_PAGE_SIZE - page_offset);
+
+        bp_mutex_unlock(&part->lock);  /* release lock BEFORE memcpy */
+
+        /* memcpy runs without holding any lock — pin protects from eviction */
         memcpy(dst + buf_pos, p->data + page_offset, to_copy);
+
+        /* Atomic unpin — no lock needed (Oracle-style) */
+        atomic_fetch_sub(&p->pin_count, 1);
+
         buf_pos   += to_copy;
         remaining -= to_copy;
     }
 
-    bp_mutex_unlock(&g_pool->lock);
     return (int)buf_pos;
 }
 
@@ -344,10 +421,13 @@ int bp_write(int fd, const void *buf, size_t count, off_t offset)
     size_t remaining = count;
     size_t buf_pos = 0;
 
-    if (!g_pool)
-        return (int)bp_pwrite(fd, buf, count, offset);
-
-    bp_mutex_lock(&g_pool->lock);
+    if (!g_pool) {
+        ssize_t n;
+        bp_mutex_lock(&g_io_lock);
+        n = bp_pwrite(fd, buf, count, offset);
+        bp_mutex_unlock(&g_io_lock);
+        return (int)n;
+    }
 
     while (remaining > 0) {
         off_t  page_no     = (offset + (off_t)buf_pos) / BP_PAGE_SIZE;
@@ -358,36 +438,39 @@ int bp_write(int fd, const void *buf, size_t count, off_t offset)
         BPPage *p;
         int    idx;
 
-        idx = bp_hash_lookup(fd, page_no);
+        int pi = bp_part_idx(page_no);
+        BPPartition *part = &g_pool->parts[pi];
+
+        bp_mutex_lock(&part->lock);
+
+        idx = part_hash_lookup(part, fd, page_no);
         if (idx >= 0) {
-            /* Page in cache — update it */
-            p = &g_pool->pages[idx];
+            p = &part->pages[idx];
             if (p->usage_count < BP_MAX_USAGE)
                 p->usage_count++;
-            g_pool->hits++;
+            part->hits++;
         } else {
-            /* Load page first (may be partial overwrite) */
-            g_pool->misses++;
-            idx = bp_load_page(fd, page_no);
+            part->misses++;
+            idx = part_load_page(part, fd, page_no);
             if (idx < 0) {
-                bp_mutex_unlock(&g_pool->lock);
+                bp_mutex_unlock(&part->lock);
                 return -1;
             }
-            p = &g_pool->pages[idx];
+            p = &part->pages[idx];
         }
 
         memcpy(p->data + page_offset, src + buf_pos, to_write);
         p->dirty = 1;
 
-        /* Extend valid_len if writing past current end */
         if (page_offset + (int)to_write > p->valid_len)
             p->valid_len = page_offset + (int)to_write;
+
+        bp_mutex_unlock(&part->lock);
 
         buf_pos   += to_write;
         remaining -= to_write;
     }
 
-    bp_mutex_unlock(&g_pool->lock);
     return (int)buf_pos;
 }
 
@@ -396,46 +479,58 @@ int bp_write_append(int fd, const void *buf, size_t count, off_t *out_offset)
     off_t end_off;
 
     if (!g_pool) {
+        bp_mutex_lock(&g_io_lock);
         end_off = lseek(fd, 0, SEEK_END);
-        if (end_off == (off_t)-1) return -1;
+        if (end_off == (off_t)-1) { bp_mutex_unlock(&g_io_lock); return -1; }
         if (out_offset) *out_offset = end_off;
-        return (int)bp_pwrite(fd, buf, count, end_off);
+        bp_pwrite(fd, buf, count, end_off);
+        bp_mutex_unlock(&g_io_lock);
+        return (int)count;
     }
 
-    bp_mutex_lock(&g_pool->lock);
-
-    /* Flush dirty pages for this fd so lseek(SEEK_END) is accurate */
+    /* Flush all dirty pages for this fd across ALL partitions */
     {
-        int i;
-        for (i = 0; i < g_pool->num_pages; i++) {
-            BPPage *p = &g_pool->pages[i];
-            if (p->fd == fd && p->dirty) {
-                bp_write_page_to_disk(p);
-                g_pool->flushes++;
-                p->dirty = 0;
+        int pi;
+        for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+            BPPartition *part = &g_pool->parts[pi];
+            int j;
+            bp_mutex_lock(&part->lock);
+            for (j = 0; j < part->num_pages; j++) {
+                BPPage *p = &part->pages[j];
+                if (p->fd == fd && p->dirty) {
+                    bp_write_page_to_disk(p);
+                    part->flushes++;
+                    p->dirty = 0;
+                }
             }
+            bp_mutex_unlock(&part->lock);
         }
     }
 
+    bp_mutex_lock(&g_io_lock);
     end_off = lseek(fd, 0, SEEK_END);
     if (end_off == (off_t)-1) {
-        bp_mutex_unlock(&g_pool->lock);
+        bp_mutex_unlock(&g_io_lock);
         return -1;
     }
     if (out_offset)
         *out_offset = end_off;
 
-    /* Write through to disk (encrypt if page-aligned append) */
+    /* Write through to disk */
     {
         off_t page_no = end_off / BP_PAGE_SIZE;
         if (pcrypt_is_enabled() && count == BP_PAGE_SIZE && page_no > 0) {
-            bp_encrypt_and_write(fd, buf, count, page_no);
+            uint8_t enc[BP_PAGE_SIZE];
+            memcpy(enc, buf, count);
+            pcrypt_encrypt_page(enc, (uint32_t)page_no);
+            bp_pwrite(fd, enc, count, end_off);
         } else {
             bp_pwrite(fd, buf, count, end_off);
         }
     }
+    bp_mutex_unlock(&g_io_lock);
 
-    /* Cache the written data */
+    /* Cache the written data in appropriate partition */
     {
         const char *src = (const char *)buf;
         size_t remaining = count;
@@ -447,10 +542,14 @@ int bp_write_append(int fd, const void *buf, size_t count, off_t *out_offset)
             size_t to_write    = remaining < (size_t)(BP_PAGE_SIZE - page_offset)
                                    ? remaining
                                    : (size_t)(BP_PAGE_SIZE - page_offset);
-            int idx = bp_hash_lookup(fd, page_no);
 
+            int pi = bp_part_idx(page_no);
+            BPPartition *part = &g_pool->parts[pi];
+
+            bp_mutex_lock(&part->lock);
+            int idx = part_hash_lookup(part, fd, page_no);
             if (idx >= 0) {
-                BPPage *p = &g_pool->pages[idx];
+                BPPage *p = &part->pages[idx];
                 memcpy(p->data + page_offset, src + buf_pos, to_write);
                 if (page_offset + (int)to_write > p->valid_len)
                     p->valid_len = page_offset + (int)to_write;
@@ -458,14 +557,13 @@ int bp_write_append(int fd, const void *buf, size_t count, off_t *out_offset)
                 if (p->usage_count < BP_MAX_USAGE)
                     p->usage_count++;
             }
-            /* If page not in cache, skip caching — it'll be loaded on demand */
+            bp_mutex_unlock(&part->lock);
 
             buf_pos   += to_write;
             remaining -= to_write;
         }
     }
 
-    bp_mutex_unlock(&g_pool->lock);
     return (int)count;
 }
 
@@ -488,7 +586,6 @@ int bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring)
         BPPage *p = NULL;
         int    i;
 
-        /* Search ring for cached page */
         for (i = 0; i < BP_RING_SIZE; i++) {
             if (ring->pages[i].fd == fd && ring->pages[i].page_no == page_no) {
                 p = &ring->pages[i];
@@ -497,7 +594,6 @@ int bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring)
         }
 
         if (!p) {
-            /* Load into next ring slot (round-robin) */
             ssize_t n;
             p = &ring->pages[ring->next_slot];
             ring->next_slot = (ring->next_slot + 1) % BP_RING_SIZE;
@@ -512,7 +608,7 @@ int bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring)
 
         avail = (size_t)(p->valid_len - page_offset);
         if ((int)avail <= 0)
-            break;  /* EOF */
+            break;
         to_copy = remaining < avail ? remaining : avail;
         to_copy = to_copy < (size_t)(BP_PAGE_SIZE - page_offset)
                     ? to_copy
@@ -526,88 +622,109 @@ int bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring)
 }
 
 /* ================================================================
- *  Maintenance
+ *  Maintenance — iterate all partitions
  * ================================================================ */
 void bp_flush_fd(int fd)
 {
-    int i;
+    int pi;
     if (!g_pool) return;
 
-    bp_mutex_lock(&g_pool->lock);
-    for (i = 0; i < g_pool->num_pages; i++) {
-        BPPage *p = &g_pool->pages[i];
-        if (p->fd == fd && p->dirty) {
-            bp_write_page_to_disk(p);
-            g_pool->flushes++;
-            p->dirty = 0;
+    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+        BPPartition *part = &g_pool->parts[pi];
+        int i;
+        bp_mutex_lock(&part->lock);
+        for (i = 0; i < part->num_pages; i++) {
+            BPPage *p = &part->pages[i];
+            if (p->fd == fd && p->dirty) {
+                bp_write_page_to_disk(p);
+                part->flushes++;
+                p->dirty = 0;
+            }
         }
+        bp_mutex_unlock(&part->lock);
     }
-    bp_mutex_unlock(&g_pool->lock);
 }
 
 void bp_invalidate_fd(int fd)
 {
-    int i;
+    int pi;
     if (!g_pool) return;
 
-    bp_mutex_lock(&g_pool->lock);
-    for (i = 0; i < g_pool->num_pages; i++) {
-        BPPage *p = &g_pool->pages[i];
-        if (p->fd == fd) {
-            if (p->dirty) {
-                bp_write_page_to_disk(p);
-                g_pool->flushes++;
+    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+        BPPartition *part = &g_pool->parts[pi];
+        int i;
+        bp_mutex_lock(&part->lock);
+        for (i = 0; i < part->num_pages; i++) {
+            BPPage *p = &part->pages[i];
+            if (p->fd == fd) {
+                if (p->dirty) {
+                    bp_write_page_to_disk(p);
+                    part->flushes++;
+                }
+                part_hash_remove(part, p->fd, p->page_no);
+                p->fd          = -1;
+                p->dirty       = 0;
+                atomic_store(&p->pin_count, 0);
+                p->usage_count = 0;
             }
-            bp_hash_remove(p->fd, p->page_no);
-            p->fd          = -1;
-            p->dirty       = 0;
-            p->pin_count   = 0;
-            p->usage_count = 0;
         }
+        bp_mutex_unlock(&part->lock);
     }
-    bp_mutex_unlock(&g_pool->lock);
 }
 
 void bp_flush_all(void)
 {
-    int i;
+    int pi;
     if (!g_pool) return;
 
-    bp_mutex_lock(&g_pool->lock);
-    for (i = 0; i < g_pool->num_pages; i++) {
-        BPPage *p = &g_pool->pages[i];
-        if (p->fd >= 0 && p->dirty) {
-            bp_write_page_to_disk(p);
-            g_pool->flushes++;
-            p->dirty = 0;
+    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+        BPPartition *part = &g_pool->parts[pi];
+        int i;
+        bp_mutex_lock(&part->lock);
+        for (i = 0; i < part->num_pages; i++) {
+            BPPage *p = &part->pages[i];
+            if (p->fd >= 0 && p->dirty) {
+                bp_write_page_to_disk(p);
+                part->flushes++;
+                p->dirty = 0;
+            }
         }
+        bp_mutex_unlock(&part->lock);
     }
-    bp_mutex_unlock(&g_pool->lock);
 }
 
 /* ================================================================
- *  Statistics
+ *  Statistics — aggregate across all partitions
  * ================================================================ */
 void bp_get_stats(BPStats *out)
 {
+    int pi;
     if (!g_pool) {
         memset(out, 0, sizeof(*out));
         return;
     }
-    bp_mutex_lock(&g_pool->lock);
-    out->hits       = g_pool->hits;
-    out->misses     = g_pool->misses;
-    out->evictions  = g_pool->evictions;
-    out->flushes    = g_pool->flushes;
-    bp_mutex_unlock(&g_pool->lock);
+    out->hits = out->misses = out->evictions = out->flushes = 0;
+    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+        BPPartition *part = &g_pool->parts[pi];
+        bp_mutex_lock(&part->lock);
+        out->hits      += part->hits;
+        out->misses    += part->misses;
+        out->evictions += part->evictions;
+        out->flushes   += part->flushes;
+        bp_mutex_unlock(&part->lock);
+    }
 }
 
 void bp_reset_stats(void)
 {
+    int pi;
     if (!g_pool) return;
-    bp_mutex_lock(&g_pool->lock);
-    g_pool->hits = g_pool->misses = g_pool->evictions = g_pool->flushes = 0;
-    bp_mutex_unlock(&g_pool->lock);
+    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+        BPPartition *part = &g_pool->parts[pi];
+        bp_mutex_lock(&part->lock);
+        part->hits = part->misses = part->evictions = part->flushes = 0;
+        bp_mutex_unlock(&part->lock);
+    }
 }
 
 /* ================================================================

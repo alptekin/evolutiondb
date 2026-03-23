@@ -8,13 +8,40 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "tuple_format.h"
+#include "vmap.h"
+#include "mvcc.h"
 
 /* Thin wrappers around shared tuple_format functions */
 #define UpdateExtractAllFields(data, dataLen, table_id, cols, ncols, fields, is_null_out, maxFields) \
     tup_extract_fields_nm((data), (dataLen), (cols), (ncols), (fields), (is_null_out), (maxFields))
 
 #define UpdateBuildBinaryRecord(fields, numFields, table_id, cols, ncols, out, outSize) \
-    tup_build_from_fields((fields), (numFields), (table_id), (cols), (ncols), (out), (outSize))
+    update_build_mvcc_record((fields), (numFields), (table_id), (cols), (ncols), (out), (outSize))
+
+/* Build binary tuple with MVCC xmin from current transaction */
+static int update_build_mvcc_record(const char fields[][256], int nfields,
+                                     uint32_t table_id,
+                                     const ColumnDesc *cols, int ncols,
+                                     char *out, int buf_size)
+{
+    const char *valPtrs[64];
+    int nullFlags[64];
+    int n = nfields < 64 ? nfields : 64;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(fields[i], "\x01NULL\x01") == 0) {
+            valPtrs[i] = NULL;
+            nullFlags[i] = 1;
+        } else {
+            valPtrs[i] = fields[i];
+            nullFlags[i] = 0;
+        }
+    }
+    /* Stamp MVCC xmin so concurrent readers with older snapshots
+     * see the old version, not this updated one */
+    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+    return tup_build(valPtrs, nullFlags, n, table_id,
+                     cols, ncols, out, buf_size, g_qctx->mvcc_xid);
+}
 
 /* Read column names from catalog */
 static int UpdateReadColumnNames(const char *tableName,
@@ -253,9 +280,16 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
                         childTd.table_id, childCols, childNCols,
                         newRec, sizeof(newRec));
                     if (newLen < 0) newLen = 0;
-                    RowID newRid = tapi_heap_update(&childTd, childRid, newRec, (uint16_t)newLen);
-                    if (newRid.page_no != childRid.page_no ||
-                        newRid.slot_idx != childRid.slot_idx) {
+
+                    /* Non-destructive: soft-delete old child record */
+                    vmap_clear(childRid.page_no);
+                    if (tapi_heap_set_xmax(childRid, g_qctx->mvcc_xid) < 0)
+                        tapi_heap_delete(childRid);
+
+                    /* Insert new child version */
+                    RowID newRid = tapi_heap_insert(&childTd, newRec, (uint16_t)newLen);
+                    if (newRid.page_no != 0) {
+                        vmap_clear(newRid.page_no);
                         bt2_update(&childPkTree, matchingChildKeys[m], newRid);
                         childTd.pk_root_page = childPkTree.root_page;
                     }
@@ -291,10 +325,11 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     if (existingDataLen < 0)
         return -1;
 
-    /* Log undo entry before modifying data */
+    /* Log undo entry before modifying data.
+     * Pass old RowID so rollback can restore the soft-deleted old version. */
     if (g_tx_undo_callback)
         g_tx_undo_callback(2 /*TX_OP_UPDATE*/, tblName,
-                           pkKey, existingData, existingDataLen);
+                           pkKey, existingData, existingDataLen, rid);
 
     /* Parse existing record into fields */
     char fields[64][256];
@@ -670,8 +705,38 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         IndexDesc updIdx[16];
         int nIdx = (tblName && tblName[0]) ? idx_load_secondary(tblName, updIdx, 16) : 0;
 
-        /* Pre-store: check unique index constraints */
+        /* HOT (Heap-Only Tuple) optimization: check if any SET column is
+         * covered by a secondary index.  When no indexed column changes,
+         * we can skip all secondary index I/O (0 index writes). */
+        int hot_eligible = 1;
         if (nIdx > 0) {
+            int minSetH = numSetVals < numSetCols ? numSetVals : numSetCols;
+            for (int ix = 0; ix < nIdx && hot_eligible; ix++) {
+                if (updIdx[ix].expr_def[0]) {
+                    /* Expression index: conservatively assume affected */
+                    hot_eligible = 0;
+                    break;
+                }
+                char colSpec[256];
+                strncpy(colSpec, updIdx[ix].col_list, sizeof(colSpec) - 1);
+                colSpec[sizeof(colSpec) - 1] = '\0';
+                char *saveptr = NULL;
+                char *ct = strtok_r(colSpec, ",", &saveptr);
+                while (ct) {
+                    for (int si = 0; si < minSetH; si++) {
+                        if (strcasecmp(setCols[si], ct) == 0) {
+                            hot_eligible = 0;
+                            break;
+                        }
+                    }
+                    if (!hot_eligible) break;
+                    ct = strtok_r(NULL, ",", &saveptr);
+                }
+            }
+        }
+
+        /* Pre-store: check unique index constraints (skip if HOT eligible) */
+        if (nIdx > 0 && !hot_eligible) {
                 int ix;
                 for (ix = 0; ix < nIdx; ix++) {
                     if (updIdx[ix].index_type != 'U' && updIdx[ix].index_type != 'V') continue;
@@ -725,19 +790,40 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                 }
         }
 
-        /* Update record in heap (may move to new page) */
-        RowID newRid = tapi_heap_update(td, rid, newRecord, (uint16_t)newLen);
-        if (newRid.page_no == 0)
-            return -1;
+        /* Non-destructive UPDATE (MVCC):
+         * Instead of overwriting the old record in-place, we:
+         *   1. Soft-delete old tuple (set xmax = current XID)
+         *   2. Insert new tuple on heap (new location)
+         *   3. Update PK B+ tree to point to new RowID
+         * This preserves the old version on the heap page for proper
+         * RECLAIM cleanup and future concurrent reader visibility. */
 
-        /* If record moved, update PK B+ tree */
-        if (newRid.page_no != rid.page_no || newRid.slot_idx != rid.slot_idx) {
-            bt2_update(&pk_tree, pkKey, newRid);
-            td->pk_root_page = pk_tree.root_page;
+        /* Soft-delete old tuple */
+        vmap_clear(rid.page_no);
+        if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
+            /* Pre-MVCC tuple: physically delete old record */
+            tapi_heap_delete(rid);
         }
 
-        /* Post-store: update secondary B-tree indexes for changed columns */
-        if (nIdx > 0) {
+        /* Insert new version on heap */
+        RowID newRid = tapi_heap_insert(td, newRecord, (uint16_t)newLen);
+        if (newRid.page_no == 0)
+            return -1;
+        vmap_clear(newRid.page_no);
+
+        /* Update PK B+ tree to point to new version */
+        bt2_update(&pk_tree, pkKey, newRid);
+        td->pk_root_page = pk_tree.root_page;
+
+        /* HOT path: if no indexed column changed, skip all secondary
+         * index maintenance (0 index I/O). */
+        if (hot_eligible && nIdx > 0) {
+            /* No secondary index updates needed — 0 index I/O */
+        }
+
+        /* Post-store: update secondary B-tree indexes for changed columns
+         * (skipped entirely when HOT eligible) */
+        if (nIdx > 0 && !hot_eligible) {
                 int ix;
                 for (ix = 0; ix < nIdx; ix++) {
                     int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
@@ -1026,26 +1112,73 @@ int UpdateProcess(void)
         int i;
         for (i = effectiveStart; i < effectiveEnd; i++) {
             if (matchKeys[i]) {
+                /* Capture old field values for concurrent index log
+                 * BEFORE ApplyUpdateToRow modifies the record */
+                char updOldFields[64][256];
+                int updOldNCols = 0;
+                if (g_conc_mod_log.active &&
+                    td.table_id == g_conc_mod_log.table_id) {
+                    BTree2 upk = tapi_pk_tree(&td);
+                    RowID urid;
+                    if (bt2_search(&upk, matchKeys[i], &urid) == 0) {
+                        char urec[RECORD_BUF_SIZE];
+                        int ulen = tapi_heap_read(urid, urec, sizeof(urec));
+                        if (ulen > 0) {
+                            int urecLen = tup_record_len(urec, sizeof(urec));
+                            updOldNCols = tup_extract_fields(urec, urecLen,
+                                allCols, allNCols, updOldFields, NULL, 64);
+                        }
+                    }
+                }
+
                 if (ApplyUpdateToRow(&td, allCols, allNCols, matchKeys[i],
                                      (const char (*)[256])setCols,
                                      (const char (*)[256])allTokens,
                                      numSetCols, numSetVals,
                                      (const char (*)[256])metaCols, numMetaCols,
-                                     tblName) == 0)
+                                     tblName) == 0) {
                     updated++;
+                    if (updOldNCols > 0)
+                        conc_mod_log_record(td.table_id, matchKeys[i],
+                                            (const char *)metaCols, 256,
+                                            (const char *)updOldFields, 256,
+                                            numMetaCols);
+                    else
+                        conc_mod_log_append(td.table_id, matchKeys[i]);
+                }
                 free(matchKeys[i]);
             }
         }
         free(matchKeys);
 
         g_upd.rowCount = updated;
-        if (updated > 0)
+        if (updated > 0) {
             cat_increment_dml_counter(td.table_id);
+            cat_increment_dead_tuples(td.table_id, updated);
+        }
         printf("%d record(s) updated.\n", updated);
     } else {
         /* ---------- Legacy PK-based update ---------- */
         char key[256];
         strcpy(key, allTokens[numTokens - 1]);
+
+        /* Capture old fields before update for concurrent index log */
+        char updOldFields2[64][256];
+        int updOldNCols2 = 0;
+        if (g_conc_mod_log.active &&
+            td.table_id == g_conc_mod_log.table_id) {
+            BTree2 upk = tapi_pk_tree(&td);
+            RowID urid;
+            if (bt2_search(&upk, key, &urid) == 0) {
+                char urec[RECORD_BUF_SIZE];
+                int ulen = tapi_heap_read(urid, urec, sizeof(urec));
+                if (ulen > 0) {
+                    int urecLen = tup_record_len(urec, sizeof(urec));
+                    updOldNCols2 = tup_extract_fields(urec, urecLen,
+                        allCols, allNCols, updOldFields2, NULL, 64);
+                }
+            }
+        }
 
         if (ApplyUpdateToRow(&td, allCols, allNCols, key,
                              (const char (*)[256])setCols,
@@ -1055,6 +1188,14 @@ int UpdateProcess(void)
                              tblName) == 0) {
             g_upd.rowCount = 1;
             cat_increment_dml_counter(td.table_id);
+            cat_increment_dead_tuples(td.table_id, 1);
+            if (updOldNCols2 > 0)
+                conc_mod_log_record(td.table_id, key,
+                                    (const char *)metaCols, 256,
+                                    (const char *)updOldFields2, 256,
+                                    numMetaCols);
+            else
+                conc_mod_log_append(td.table_id, key);
         } else {
             printf("Record not found for key: %s\n", key);
             g_upd.rowCount = 0;

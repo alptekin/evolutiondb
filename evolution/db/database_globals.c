@@ -28,3 +28,6 @@ char g_last_insert_id[64] = "";
 /* GTT override — per-session storage for global temporary tables */
 GttOverride *g_gtt_overrides = NULL;
 int g_gtt_override_count = 0;
+
+/* Concurrent index build modification log */
+ConcModLog g_conc_mod_log = {0};

@@ -24,7 +24,13 @@
 #define TUPLE_MAGIC          0xE7
 #define TUPLE_PREFIX_SIZE    5     /* magic(1) + table_id(4) */
 #define TUPLE_HEADER_SIZE    4     /* total_len(2) + num_cols(1) + flags(1) */
-#define TUPLE_FLAG_HAS_NULLS 0x01
+#define TUPLE_FLAG_HAS_NULLS    0x01
+#define TUPLE_FLAG_MVCC         0x02   /* tuple carries xmin/xmax MVCC fields */
+#define TUPLE_FLAG_HOT_UPDATED  0x04   /* this tuple has a newer version on same page */
+#define TUPLE_FLAG_HEAP_ONLY    0x08   /* reachable only via HOT chain, not indexed */
+#define TUPLE_FLAG_XMIN_COMMITTED 0x10 /* hint: xmin is known committed (skip CLOG) */
+#define TUPLE_FLAG_XMIN_ABORTED   0x20 /* hint: xmin is known aborted (skip CLOG) */
+#define TUPLE_MVCC_SIZE         8      /* xmin(4) + xmax(4) bytes */
 #define TUPLE_MAX_COLS       255
 
 /* Check if raw data starts with binary tuple magic byte */
@@ -45,17 +51,53 @@ static inline uint32_t tup_get_table_id(const char *bin_rec)
 int tup_record_len(const char *bin_rec, int buf_len);
 
 /* ----------------------------------------------------------------
+ *  MVCC accessors — read/write xmin/xmax from tuple header
+ *
+ *  When TUPLE_FLAG_MVCC is set in flags byte, 8 bytes follow the
+ *  flags byte: [xmin:4B LE][xmax:4B LE], before the null bitmap.
+ * ---------------------------------------------------------------- */
+
+/* Returns 1 if the tuple carries MVCC fields, 0 otherwise */
+int      tup_has_mvcc(const char *tuple_data, int tuple_len);
+
+/* Read xmin/xmax from MVCC tuple. Returns 0 if no MVCC flag. */
+uint32_t tup_get_xmin(const char *tuple_data, int tuple_len);
+uint32_t tup_get_xmax(const char *tuple_data, int tuple_len);
+
+/* Set xmax on an existing MVCC tuple (for DELETE/UPDATE marking).
+ * The tuple must already have TUPLE_FLAG_MVCC set.
+ * Writes directly into the buffer (caller must persist the page).
+ * Returns 0 on success, -1 if not an MVCC tuple. */
+int      tup_set_xmax(char *tuple_data, int tuple_len, uint32_t xmax);
+
+/* Freeze an MVCC tuple: replace xmin with XID_FROZEN (1) and set
+ * XMIN_COMMITTED hint bit. After freezing, the tuple is always visible
+ * without CLOG lookup, and the original XID can be recycled.
+ * Returns 0 on success, -1 if not an MVCC tuple. */
+int      tup_freeze_xmin(char *tuple_data, int tuple_len);
+
+/* HOT (Heap-Only Tuple) chain: set/check flags on tuples.
+ * HOT_UPDATED on old version means a newer version exists on the same page.
+ * HEAP_ONLY on new version means it is not referenced by any index. */
+int  tup_set_hot_updated(char *tuple_data, int tuple_len);
+int  tup_set_heap_only(char *tuple_data, int tuple_len);
+int  tup_is_hot_updated(const char *tuple_data, int tuple_len);
+int  tup_is_heap_only(const char *tuple_data, int tuple_len);
+
+/* ----------------------------------------------------------------
  *  Build binary tuple from string values
  *
  *  vals[i]    = string value for column i, or NULL
  *  is_null[i] = 1 if column i is NULL (vals[i] ignored)
- *  Writes full record [magic][table_id][header][bitmap][data] into out.
+ *  xmin       = inserting transaction ID (0 = no MVCC header)
+ *  Writes full record [magic][table_id][header][mvcc?][bitmap][data] into out.
  *  Returns total bytes written, or -1 on error.
  * ---------------------------------------------------------------- */
 int tup_build(const char **vals, const int *is_null, int nvals,
               uint32_t table_id,
               const ColumnDesc *cols, int ncols,
-              char *out, int buf_size);
+              char *out, int buf_size,
+              uint32_t xmin);
 
 /* ----------------------------------------------------------------
  *  Extract fields from binary tuple

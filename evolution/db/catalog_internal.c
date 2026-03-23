@@ -199,10 +199,11 @@ static void deserialize_column(const char *buf, ColumnDesc *c)
 /* --- Index --- */
 static void serialize_index(const IndexDesc *idx, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%s;%u;%s;%c;%s",
+    snprintf(buf, size, "%u;%s;%u;%s;%c;%s;%d",
              idx->table_id, idx->index_name,
              idx->root_page, idx->col_list, idx->index_type,
-             idx->expr_def[0] ? idx->expr_def : "");
+             idx->expr_def[0] ? idx->expr_def : "",
+             idx->is_ready);
 }
 
 static void deserialize_index(const char *buf, IndexDesc *idx)
@@ -218,8 +219,16 @@ static void deserialize_index(const char *buf, IndexDesc *idx)
     /* expr_def — 6th field, may be absent in old records */
     idx->expr_def[0] = '\0';
     if (p && *p) {
-        next_field(p, idx->expr_def, sizeof(idx->expr_def));
+        p = next_field(p, idx->expr_def, sizeof(idx->expr_def));
     }
+    /* is_ready — 7th field, default 1 for backward compatibility */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field));
+        idx->is_ready = atoi(field);
+    } else {
+        idx->is_ready = IDX_READY;
+    }
+    (void)p;
 }
 
 /* --- Constraint --- */
@@ -948,6 +957,63 @@ int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max)
     return count;
 }
 
+int cat_add_column(uint32_t table_id, const ColumnDesc *col)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_column_key(table_id, col->col_ordinal, key, sizeof(key));
+
+    /* Check if already exists */
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_COLUMNS], key, &existing) == 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    serialize_column(col, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+
+    RowID rid = cat_store_record(CAT_SYS_COLUMNS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+
+    return bt2_insert(&g_cat_trees[CAT_SYS_COLUMNS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_update_num_columns(uint32_t table_id, const char *table_name,
+                           uint32_t schema_id, int new_count)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_table_key(schema_id, table_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    TableDesc t;
+    deserialize_table(record, &t);
+    t.num_columns = new_count;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_table(&t, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+    return 0;
+}
+
 /* ----------------------------------------------------------------
  *  Index operations
  * ---------------------------------------------------------------- */
@@ -972,6 +1038,7 @@ int cat_create_index_ex(uint32_t table_id, const char *name,
     idx.index_type = index_type;
     if (expr_def && expr_def[0])
         strncpy(idx.expr_def, expr_def, sizeof(idx.expr_def) - 1);
+    idx.is_ready = IDX_READY;
 
     char record[CAT_MAX_RECORD_LEN];
     serialize_index(&idx, record, sizeof(record));
@@ -1100,6 +1167,43 @@ int cat_update_index_root(uint32_t table_id, const char *name,
     }
 
     /* Delete old, insert new, update B+ tree */
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_INDEXES, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_INDEXES], key, new_rid);
+    return 0;
+}
+
+int cat_update_index_ready(uint32_t table_id, const char *index_name,
+                           int is_ready)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_index_key(table_id, index_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_INDEXES], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    IndexDesc idx;
+    deserialize_index(record, &idx);
+    idx.is_ready = is_ready;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_index(&idx, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
     cat_delete_record(rid);
     RowID new_rid = cat_store_record(CAT_SYS_INDEXES, new_record, new_len);
     if (new_rid.page_no == 0) return -1;
@@ -1508,10 +1612,13 @@ static void make_col_stats_key(uint32_t table_id, const char *col_name,
 
 static void serialize_table_stats(const TableStatsDesc *ts, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%lu;%u;%ld;%lu",
+    snprintf(buf, size, "%u;%lu;%u;%ld;%lu;%lu;%u;%u",
              ts->table_id, (unsigned long)ts->row_count,
              ts->page_count, (long)ts->last_analyzed,
-             (unsigned long)ts->dml_since_analyze);
+             (unsigned long)ts->dml_since_analyze,
+             (unsigned long)ts->dead_tuple_count,
+             ts->last_reclaim_xid,
+             ts->frozen_xid);
 }
 
 static void deserialize_table_stats(const char *buf, TableStatsDesc *ts)
@@ -1523,6 +1630,22 @@ static void deserialize_table_stats(const char *buf, TableStatsDesc *ts)
     p = next_field(p, field, sizeof(field)); ts->page_count = (uint32_t)atoi(field);
     p = next_field(p, field, sizeof(field)); ts->last_analyzed = (time_t)strtol(field, NULL, 10);
     p = next_field(p, field, sizeof(field)); ts->dml_since_analyze = (uint64_t)strtoul(field, NULL, 10);
+    /* New fields — backward compatible: default to 0 if missing */
+    ts->dead_tuple_count = 0;
+    ts->last_reclaim_xid = 0;
+    ts->frozen_xid = 0;
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field));
+        ts->dead_tuple_count = (uint64_t)strtoul(field, NULL, 10);
+    }
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field));
+        ts->last_reclaim_xid = (uint32_t)strtoul(field, NULL, 10);
+    }
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field));
+        ts->frozen_xid = (uint32_t)strtoul(field, NULL, 10);
+    }
     (void)p;
 }
 
@@ -1746,6 +1869,18 @@ int cat_increment_dml_counter(uint32_t table_id)
     if (cat_get_table_stats(table_id, &ts) < 0)
         return 0;  /* no stats yet, nothing to track */
     ts.dml_since_analyze++;
+    return cat_store_table_stats(&ts);
+}
+
+int cat_increment_dead_tuples(uint32_t table_id, int count)
+{
+    TableStatsDesc ts;
+    if (cat_get_table_stats(table_id, &ts) < 0) {
+        /* No stats record yet — create one */
+        memset(&ts, 0, sizeof(ts));
+        ts.table_id = table_id;
+    }
+    ts.dead_tuple_count += count;
     return cat_store_table_stats(&ts);
 }
 

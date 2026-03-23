@@ -62,6 +62,15 @@ typedef CRITICAL_SECTION  mutex_t;
 #define mutex_unlock(m)   LeaveCriticalSection(m)
 #define mutex_destroy(m)  DeleteCriticalSection(m)
 
+/* Read-Write Lock (SRWLOCK) */
+typedef SRWLOCK rwlock_t;
+#define rwlock_init(rw)     InitializeSRWLock(rw)
+#define rwlock_destroy(rw)  ((void)(rw))
+#define rwlock_rdlock(rw)   AcquireSRWLockShared(rw)
+#define rwlock_rdunlock(rw) ReleaseSRWLockShared(rw)
+#define rwlock_wrlock(rw)   AcquireSRWLockExclusive(rw)
+#define rwlock_wrunlock(rw) ReleaseSRWLockExclusive(rw)
+
 /* Threading */
 #define THREAD_RETURN  DWORD WINAPI
 #define THREAD_PARAM   LPVOID
@@ -162,6 +171,15 @@ typedef pthread_mutex_t  mutex_t;
 #define mutex_lock(m)    pthread_mutex_lock(m)
 #define mutex_unlock(m)  pthread_mutex_unlock(m)
 #define mutex_destroy(m) pthread_mutex_destroy(m)
+
+/* Read-Write Lock (pthread) */
+typedef pthread_rwlock_t rwlock_t;
+#define rwlock_init(rw)     pthread_rwlock_init(rw, NULL)
+#define rwlock_destroy(rw)  pthread_rwlock_destroy(rw)
+#define rwlock_rdlock(rw)   pthread_rwlock_rdlock(rw)
+#define rwlock_rdunlock(rw) pthread_rwlock_unlock(rw)
+#define rwlock_wrlock(rw)   pthread_rwlock_wrlock(rw)
+#define rwlock_wrunlock(rw) pthread_rwlock_unlock(rw)
 
 /* Threading */
 #define THREAD_RETURN  void*

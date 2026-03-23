@@ -18,8 +18,8 @@
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
 
-/* From server.c — parser mutex for SERIALIZABLE cleanup */
-extern mutex_t g_parse_lock;
+/* From server.c — parser rwlock for SERIALIZABLE cleanup */
+extern rwlock_t g_parse_lock;
 
 /* ----------------------------------------------------------------
  *  evo_secure_wipe — local copy to avoid crypto.h / OpenSSL clash
@@ -267,7 +267,7 @@ void evo_handle_client(socket_t sock)
         session.in_transaction = 0;
         if (session.serializable_locked) {
             session.serializable_locked = 0;
-            mutex_unlock(&g_parse_lock);
+            rwlock_wrunlock(&g_parse_lock);
         }
     }
 
