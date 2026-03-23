@@ -10,6 +10,7 @@
 #include "../evolution/db/catalog_internal.h"
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/mvcc.h"
+#include "../evolution/db/buffer_pool.h"
 
 /* From main.c — connection limit accessors */
 extern int  get_max_connections(void);
@@ -502,7 +503,44 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         result_set_field(rs, row, 0, "on");
     else if (stristr_found(sql, "search_path"))
         result_set_field(rs, row, 0, "\"$user\", default");
-    else
+    else if (stristr_found(sql, "buffer_pool_stats")) {
+        /* SHOW buffer_pool_stats — detailed hit rate and I/O stats */
+        extern int server_get_buffer_pool_pages(void);
+        rs->num_rows = 0; rs->num_cols = 0;
+        result_add_column(rs, "pool_pages", PG_OID_TEXT);
+        result_add_column(rs, "pool_mb", PG_OID_TEXT);
+        result_add_column(rs, "hits", PG_OID_TEXT);
+        result_add_column(rs, "misses", PG_OID_TEXT);
+        result_add_column(rs, "hit_rate", PG_OID_TEXT);
+        result_add_column(rs, "evictions", PG_OID_TEXT);
+        result_add_column(rs, "flushes", PG_OID_TEXT);
+        BPStats stats;
+        bp_get_stats(&stats);
+        int pages = server_get_buffer_pool_pages();
+        row = result_add_row(rs);
+        char b[64];
+        snprintf(b, sizeof(b), "%d", pages); result_set_field(rs, row, 0, b);
+        snprintf(b, sizeof(b), "%d", pages * 4 / 1024); result_set_field(rs, row, 1, b);
+        snprintf(b, sizeof(b), "%lu", stats.hits); result_set_field(rs, row, 2, b);
+        snprintf(b, sizeof(b), "%lu", stats.misses); result_set_field(rs, row, 3, b);
+        unsigned long total = stats.hits + stats.misses;
+        if (total > 0)
+            snprintf(b, sizeof(b), "%.1f%%", (double)stats.hits * 100.0 / total);
+        else
+            snprintf(b, sizeof(b), "N/A");
+        result_set_field(rs, row, 4, b);
+        snprintf(b, sizeof(b), "%lu", stats.evictions); result_set_field(rs, row, 5, b);
+        snprintf(b, sizeof(b), "%lu", stats.flushes); result_set_field(rs, row, 6, b);
+    } else if (stristr_found(sql, "buffer_pool_size") ||
+               stristr_found(sql, "shared_buffers") ||          /* PostgreSQL */
+               stristr_found(sql, "innodb_buffer_pool_size") || /* MySQL */
+               stristr_found(sql, "db_cache_size")) {           /* Oracle */
+        extern int server_get_buffer_pool_pages(void);
+        int pages = server_get_buffer_pool_pages();
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%d MB (%d pages)", pages * 4 / 1024, pages);
+        result_set_field(rs, row, 0, buf);
+    } else
         result_set_field(rs, row, 0, "");
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
