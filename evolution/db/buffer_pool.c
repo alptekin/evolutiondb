@@ -127,6 +127,9 @@ static void bp_encrypt_and_write(int fd, const void *data, size_t len,
     }
 }
 
+/* Forward declaration for dirty page tracker */
+void bp_track_dirty(uint32_t page_no);
+
 static void bp_write_page_to_disk(BPPage *p)
 {
     bp_encrypt_and_write(p->fd, p->data, (size_t)p->valid_len, p->page_no);
@@ -482,7 +485,10 @@ int bp_write(int fd, const void *buf, size_t count, off_t offset)
         atomic_thread_fence(memory_order_release);
 
         memcpy(p->data + page_offset, src + buf_pos, to_write);
-        p->dirty = 1;
+        if (!p->dirty) {
+            p->dirty = 1;
+            bp_track_dirty((uint32_t)p->page_no);
+        }
 
         if (page_offset + (int)to_write > p->valid_len)
             p->valid_len = page_offset + (int)to_write;
@@ -719,29 +725,72 @@ void bp_flush_all(void)
     }
 }
 
+/* ── Dirty page tracker for efficient WAL flush ──
+ * Instead of scanning 32K buffer pool pages, track which pages
+ * were dirtied since the last WAL flush. Max 256 tracked pages;
+ * if overflow, falls back to full scan. */
+#define DIRTY_TRACK_MAX 256
+static uint32_t g_dirty_pages[DIRTY_TRACK_MAX];
+static int      g_dirty_count = 0;
+static int      g_dirty_overflow = 0;  /* 1 = too many, need full scan */
+
+void bp_track_dirty(uint32_t page_no)
+{
+    if (g_dirty_overflow) return;
+    if (g_dirty_count >= DIRTY_TRACK_MAX) {
+        g_dirty_overflow = 1;
+        return;
+    }
+    /* Avoid duplicates (simple linear scan — max 256 entries) */
+    for (int i = 0; i < g_dirty_count; i++)
+        if (g_dirty_pages[i] == page_no) return;
+    g_dirty_pages[g_dirty_count++] = page_no;
+}
+
 void bp_wal_flush_dirty(int fd)
 {
     extern uint32_t wal_log_page(uint32_t, const void *, uint16_t);
+    extern void wal_fsync(void);
     extern int wal_is_active(void);
     if (!g_pool || !wal_is_active()) return;
 
-    int logged = 0;
-    int pi;
-    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
-        BPPartition *part = &g_pool->parts[pi];
-        int i;
-        bp_mutex_lock(&part->lock);
-        for (i = 0; i < part->num_pages; i++) {
-            BPPage *p = &part->pages[i];
-            if (p->fd == fd && p->dirty) {
-                wal_log_page((uint32_t)p->page_no, p->data,
-                             (uint16_t)p->valid_len);
-                logged++;
+    if (!g_dirty_overflow && g_dirty_count > 0) {
+        /* Fast path: only log tracked dirty pages */
+        for (int d = 0; d < g_dirty_count; d++) {
+            uint32_t pno = g_dirty_pages[d];
+            int pi = bp_part_idx((off_t)pno);
+            BPPartition *part = &g_pool->parts[pi];
+            bp_mutex_lock(&part->lock);
+            int idx = part_hash_lookup(part, fd, (off_t)pno);
+            if (idx >= 0) {
+                BPPage *p = &part->pages[idx];
+                if (p->dirty)
+                    wal_log_page(pno, p->data, (uint16_t)p->valid_len);
             }
+            bp_mutex_unlock(&part->lock);
         }
-        bp_mutex_unlock(&part->lock);
+    } else if (g_dirty_overflow) {
+        /* Fallback: full scan (rare — only if >256 pages dirtied in one TX) */
+        int pi;
+        for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+            BPPartition *part = &g_pool->parts[pi];
+            bp_mutex_lock(&part->lock);
+            for (int i = 0; i < part->num_pages; i++) {
+                BPPage *p = &part->pages[i];
+                if (p->fd == fd && p->dirty)
+                    wal_log_page((uint32_t)p->page_no, p->data,
+                                 (uint16_t)p->valid_len);
+            }
+            bp_mutex_unlock(&part->lock);
+        }
     }
-    (void)logged;
+
+    /* Single fsync for all logged pages */
+    wal_fsync();
+
+    /* Reset tracker */
+    g_dirty_count = 0;
+    g_dirty_overflow = 0;
 }
 
 /* ================================================================

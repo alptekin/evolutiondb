@@ -73,10 +73,19 @@ int wal_checkpoint(void);
  * the WAL file. */
 void wal_shutdown(void);
 
+/* Flush WAL to disk (single fsync). Called at commit time after
+ * all dirty pages have been logged via wal_log_page(). This is the
+ * write-ahead guarantee: WAL is durable before commit returns. */
+void wal_fsync(void);
+
 /* Complete WAL recovery Pass 2: replay data pages (non-page-0).
  * Must be called AFTER TDE is initialized from the recovered FileHeader.
  * Checkpoints (truncates WAL) after replay. Returns pages replayed. */
 int wal_replay_remaining(void);
+
+/* Batch fsync: flush all pending WAL writes to disk.
+ * Called once at commit (not per-page) for ~100x speedup. */
+void wal_fsync(void);
 
 /* Check if WAL is active (initialized and operational). */
 int wal_is_active(void);
