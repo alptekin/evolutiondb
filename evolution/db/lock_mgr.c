@@ -354,3 +354,164 @@ int lock_mgr_count(void)
 {
     return g_lock_count;
 }
+
+/* ================================================================
+ *  Gap Locking — prevent phantom reads in SERIALIZABLE
+ *
+ *  Gap locks cover key ranges (lo, hi] on a table. INSERT operations
+ *  check if their key falls within any active gap lock held by a
+ *  different XID. If so, the INSERT waits (with timeout).
+ *
+ *  Gap locks don't conflict with each other (only with INSERT).
+ * ================================================================ */
+
+#define GAP_TABLE_SIZE  512
+#define GAP_KEY_MAX     256
+
+typedef struct GapEntry {
+    uint32_t         table_id;
+    char             lo[GAP_KEY_MAX];   /* "" = negative infinity */
+    char             hi[GAP_KEY_MAX];   /* "" = positive infinity */
+    uint32_t         holder_xid;
+    pthread_cond_t   cond;
+    int              waiter_count;
+    struct GapEntry *next;
+} GapEntry;
+
+static GapEntry *g_gap_table[GAP_TABLE_SIZE];
+
+static uint32_t gap_hash(uint32_t table_id)
+{
+    return (table_id * 2654435761u) % GAP_TABLE_SIZE;
+}
+
+/* Check if key falls within range (lo, hi].
+ * Empty lo = -infinity, empty hi = +infinity. */
+static int key_in_gap(const char *key, const char *lo, const char *hi)
+{
+    /* key > lo  (or lo is -infinity) */
+    int above_lo = (lo[0] == '\0') || (strcmp(key, lo) > 0);
+    /* key <= hi (or hi is +infinity) */
+    int below_hi = (hi[0] == '\0') || (strcmp(key, hi) <= 0);
+    return above_lo && below_hi;
+}
+
+void lock_gap_acquire(uint32_t table_id, const char *gap_lo,
+                      const char *gap_hi, uint32_t xid)
+{
+    if (xid == 0) return;
+
+    uint32_t bucket = gap_hash(table_id);
+
+    pthread_mutex_lock(&g_lock_mutex);
+
+    /* Check for duplicate — same TX, same range */
+    GapEntry *e = g_gap_table[bucket];
+    while (e) {
+        if (e->table_id == table_id && e->holder_xid == xid &&
+            strcmp(e->lo, gap_lo ? gap_lo : "") == 0 &&
+            strcmp(e->hi, gap_hi ? gap_hi : "") == 0) {
+            pthread_mutex_unlock(&g_lock_mutex);
+            return;  /* already held */
+        }
+        e = e->next;
+    }
+
+    /* Create new gap entry */
+    GapEntry *g = (GapEntry *)calloc(1, sizeof(GapEntry));
+    if (!g) { pthread_mutex_unlock(&g_lock_mutex); return; }
+    g->table_id = table_id;
+    strncpy(g->lo, gap_lo ? gap_lo : "", GAP_KEY_MAX - 1);
+    strncpy(g->hi, gap_hi ? gap_hi : "", GAP_KEY_MAX - 1);
+    g->holder_xid = xid;
+    g->waiter_count = 0;
+    pthread_cond_init(&g->cond, NULL);
+    g->next = g_gap_table[bucket];
+    g_gap_table[bucket] = g;
+
+    pthread_mutex_unlock(&g_lock_mutex);
+}
+
+int lock_gap_check_insert(uint32_t table_id, const char *key, uint32_t xid)
+{
+    if (xid == 0 || !key) return LOCK_OK;
+
+    uint32_t bucket = gap_hash(table_id);
+
+    pthread_mutex_lock(&g_lock_mutex);
+
+    /* Scan gap entries for this table */
+    GapEntry *e = g_gap_table[bucket];
+    GapEntry *blocker = NULL;
+    while (e) {
+        if (e->table_id == table_id && e->holder_xid != xid &&
+            key_in_gap(key, e->lo, e->hi)) {
+            blocker = e;
+            break;
+        }
+        e = e->next;
+    }
+
+    if (!blocker) {
+        pthread_mutex_unlock(&g_lock_mutex);
+        return LOCK_OK;
+    }
+
+    /* Wait for the gap lock to be released */
+    blocker->waiter_count++;
+
+    struct timespec ts;
+    {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        ts.tv_sec = tv.tv_sec + LOCK_WAIT_TIMEOUT_MS / 1000;
+        ts.tv_nsec = tv.tv_usec * 1000 +
+                     (LOCK_WAIT_TIMEOUT_MS % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+    }
+
+    int result = LOCK_OK;
+    while (blocker->holder_xid != 0 && blocker->holder_xid != xid) {
+        int rc = pthread_cond_timedwait(&blocker->cond, &g_lock_mutex, &ts);
+        if (rc != 0) {
+            result = LOCK_TIMEOUT;
+            break;
+        }
+    }
+
+    blocker->waiter_count--;
+    pthread_mutex_unlock(&g_lock_mutex);
+    return result;
+}
+
+void lock_gap_release_all(uint32_t xid)
+{
+    if (xid == 0) return;
+
+    pthread_mutex_lock(&g_lock_mutex);
+
+    for (int i = 0; i < GAP_TABLE_SIZE; i++) {
+        GapEntry **pp = &g_gap_table[i];
+        while (*pp) {
+            GapEntry *e = *pp;
+            if (e->holder_xid == xid) {
+                if (e->waiter_count > 0) {
+                    e->holder_xid = 0;
+                    pthread_cond_broadcast(&e->cond);
+                    pp = &e->next;
+                } else {
+                    *pp = e->next;
+                    pthread_cond_destroy(&e->cond);
+                    free(e);
+                }
+            } else {
+                pp = &e->next;
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&g_lock_mutex);
+}
