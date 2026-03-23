@@ -18,6 +18,7 @@
 #include "pg_handler.h"
 #include "evo_protocol.h"
 #include "replication.h"
+#include "raft.h"
 #include "tls.h"
 
 #define DEFAULT_PG_PORT   5433
@@ -72,6 +73,8 @@ int main(int argc, char *argv[])
     int buffer_pool_pages = 0;  /* 0 = use default */
     int repl_port = 0;         /* 0 = replication disabled */
     const char *replica_target = NULL;  /* --replica host:port */
+    const char *cluster_nodes = NULL;   /* --cluster node1:port,node2:port,... */
+    int node_id = -1;                   /* --node-id 0/1/2/... */
     int i;
 
     /* Parse CLI arguments */
@@ -86,6 +89,10 @@ int main(int argc, char *argv[])
             repl_port = atoi(argv[++i]);
         else if (strcmp(argv[i], "--replica") == 0 && i + 1 < argc)
             replica_target = argv[++i];
+        else if (strcmp(argv[i], "--cluster") == 0 && i + 1 < argc)
+            cluster_nodes = argv[++i];
+        else if (strcmp(argv[i], "--node-id") == 0 && i + 1 < argc)
+            node_id = atoi(argv[++i]);
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
     }
@@ -167,6 +174,12 @@ int main(int argc, char *argv[])
         extern int repl_start_receiver(const char *, int, int);
         extern int pgm_get_fd(void);
         repl_start_receiver(host, rport, pgm_get_fd());
+    }
+
+    /* Start Raft consensus if cluster configured */
+    if (cluster_nodes && node_id >= 0) {
+        if (raft_init(cluster_nodes, node_id) == 0)
+            raft_start();
     }
 
     /* Start EVO listener in a background thread */

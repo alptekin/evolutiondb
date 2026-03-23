@@ -506,7 +506,31 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         result_set_field(rs, row, 0, "on");
     else if (stristr_found(sql, "search_path"))
         result_set_field(rs, row, 0, "\"$user\", default");
-    else if (stristr_found(sql, "buffer_pool_stats")) {
+    else if (stristr_found(sql, "cluster") || stristr_found(sql, "replication_status")) {
+        /* SHOW CLUSTER STATUS / SHOW REPLICATION STATUS */
+        extern int raft_get_role(void);
+        extern uint32_t raft_get_term(void);
+        extern int raft_get_leader_id(void);
+        extern void raft_get_lag(uint32_t *, uint32_t *, int *);
+        rs->num_rows = 0; rs->num_cols = 0;
+        result_add_column(rs, "role", PG_OID_TEXT);
+        result_add_column(rs, "term", PG_OID_TEXT);
+        result_add_column(rs, "leader_id", PG_OID_TEXT);
+        result_add_column(rs, "my_lsn", PG_OID_TEXT);
+        row = result_add_row(rs);
+        int raft_role = raft_get_role();
+        result_set_field(rs, row, 0,
+            raft_role == 2 ? "LEADER" : raft_role == 1 ? "CANDIDATE" : "FOLLOWER");
+        char b2[32];
+        snprintf(b2, sizeof(b2), "%u", raft_get_term());
+        result_set_field(rs, row, 1, b2);
+        snprintf(b2, sizeof(b2), "%d", raft_get_leader_id());
+        result_set_field(rs, row, 2, b2);
+        uint32_t my_lsn2; uint32_t lags2[7]; int nn2;
+        raft_get_lag(&my_lsn2, lags2, &nn2);
+        snprintf(b2, sizeof(b2), "%u", my_lsn2);
+        result_set_field(rs, row, 3, b2);
+    } else if (stristr_found(sql, "buffer_pool_stats")) {
         /* SHOW buffer_pool_stats — detailed hit rate and I/O stats */
         extern int server_get_buffer_pool_pages(void);
         rs->num_rows = 0; rs->num_cols = 0;
