@@ -655,20 +655,42 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
     if (!from_pos || !where_pos) return 0;
 
-    /* Only handle SELECT * — column filtering requires parser */
+    /* Parse column list: SELECT * or SELECT col1, col2, ... */
+    int has_star = 0;
+    char fast_cols[16][128];
+    int fast_ncols = 0;
     {
         const char *sel = sql;
         while (*sel && isspace((unsigned char)*sel)) sel++;
         sel += 6; /* skip "SELECT" */
         while (*sel && isspace((unsigned char)*sel)) sel++;
-        /* Check for "SELECT *" or "SELECT col1, col2, ..." up to FROM */
-        int has_star = 0;
         const char *scan = sel;
         while (scan < from_pos) {
             if (*scan == '*') { has_star = 1; break; }
             scan++;
         }
-        if (!has_star) return 0;  /* not SELECT * — use parser for column filtering */
+        if (!has_star) {
+            /* Parse comma-separated column names */
+            const char *p = sel;
+            while (p < from_pos && fast_ncols < 16) {
+                while (p < from_pos && isspace((unsigned char)*p)) p++;
+                int ci = 0;
+                while (p < from_pos && *p != ',' &&
+                       !isspace((unsigned char)*p) && ci < 127)
+                    fast_cols[fast_ncols][ci++] = *p++;
+                fast_cols[fast_ncols][ci] = '\0';
+                if (ci > 0) fast_ncols++;
+                while (p < from_pos && (isspace((unsigned char)*p) || *p == ',')) p++;
+            }
+            /* Reject if any "column" contains AS, (, ), or other complex syntax */
+            for (int i = 0; i < fast_ncols; i++) {
+                if (strchr(fast_cols[i], '(') || strchr(fast_cols[i], ')') ||
+                    strcasecmp(fast_cols[i], "AS") == 0 ||
+                    strcasecmp(fast_cols[i], "DISTINCT") == 0)
+                    return 0;  /* too complex for fast-path */
+            }
+            if (fast_ncols == 0) return 0;
+        }
     }
 
     /* Reject: GROUP BY, ORDER BY, HAVING, JOIN, LIMIT, OFFSET, subqueries.
@@ -802,15 +824,35 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
         { const char *p = tblName; while (*p) { tableOid = ((tableOid << 5) + tableOid) + (unsigned char)*p++; } }
         tableOid = 16384 + (tableOid % 100000);
 
-        for (int i = 0; i < ncols; i++) {
-            int oid = type_encoding_to_pg_oid(cols[i].type_code);
-            result_add_column(rs, cols[i].col_name, oid);
-            rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
-            rs->columns[rs->num_cols - 1].attnum = i + 1;
-            int family = cols[i].type_code / 10000;
-            int size = cols[i].type_code % 10000;
-            if ((family == 12 || family == 13) && size > 0)
-                rs->columns[rs->num_cols - 1].type_modifier = size + 4;
+        if (has_star) {
+            /* SELECT * — add all columns */
+            for (int i = 0; i < ncols; i++) {
+                int oid = type_encoding_to_pg_oid(cols[i].type_code);
+                result_add_column(rs, cols[i].col_name, oid);
+                rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
+                rs->columns[rs->num_cols - 1].attnum = i + 1;
+                int family = cols[i].type_code / 10000;
+                int size = cols[i].type_code % 10000;
+                if ((family == 12 || family == 13) && size > 0)
+                    rs->columns[rs->num_cols - 1].type_modifier = size + 4;
+            }
+        } else {
+            /* SELECT col1, col2, ... — add only requested columns */
+            for (int fi = 0; fi < fast_ncols; fi++) {
+                for (int i = 0; i < ncols; i++) {
+                    if (strcasecmp(cols[i].col_name, fast_cols[fi]) == 0) {
+                        int oid = type_encoding_to_pg_oid(cols[i].type_code);
+                        result_add_column(rs, cols[i].col_name, oid);
+                        rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
+                        rs->columns[rs->num_cols - 1].attnum = i + 1;
+                        int family = cols[i].type_code / 10000;
+                        int size = cols[i].type_code % 10000;
+                        if ((family == 12 || family == 13) && size > 0)
+                            rs->columns[rs->num_cols - 1].type_modifier = size + 4;
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -855,8 +897,28 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     }
                 }
                 int row = result_add_row(rs);
-                if (row >= 0)
-                    populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+                if (row >= 0) {
+                    if (has_star) {
+                        populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+                    } else {
+                        /* Column-filtered: extract all then map to selected */
+                        char fields[64][256];
+                        int nullArr[64];
+                        int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
+                                                     fields, nullArr, 64);
+                        for (int fi = 0; fi < fast_ncols && fi < rs->num_cols; fi++) {
+                            for (int ci = 0; ci < ncols && ci < nf; ci++) {
+                                if (strcasecmp(cols[ci].col_name, fast_cols[fi]) == 0) {
+                                    if (nullArr[ci])
+                                        result_set_null(rs, row, fi);
+                                    else
+                                        result_set_field(rs, row, fi, fields[ci]);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     } else {
@@ -869,6 +931,15 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
             char recBuf[RECORD_BUF_SIZE];
             int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
             if (recLen <= 0) continue;
+            /* HOT chain following for secondary index path */
+            if (!mvcc_is_visible(recBuf, recLen, &snap) &&
+                tup_is_hot_updated(recBuf, recLen)) {
+                RowID hot_rid;
+                int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                     &snap, recBuf,
+                                                     sizeof(recBuf), &hot_rid);
+                if (hot_len > 0) recLen = hot_len;
+            }
             if (!mvcc_is_visible(recBuf, recLen, &snap)) continue;
             /* FOR UPDATE/SHARE: acquire row lock */
             if (g_sel.forUpdate && ctx && ctx->tx_xid > 0) {
