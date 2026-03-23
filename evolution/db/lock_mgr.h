@@ -70,4 +70,29 @@ int lock_row_check(uint32_t table_id, const char *pk_key, uint32_t *holder_xid);
 /* Get count of currently held locks (for diagnostics). */
 int lock_mgr_count(void);
 
+/* ----------------------------------------------------------------
+ *  Gap Locking — prevents phantom reads in SERIALIZABLE
+ *
+ *  A gap lock covers a key range (gap_lo, gap_hi] on a table.
+ *  INSERT must check if its key falls within any gap lock.
+ *  Gap locks are held by SERIALIZABLE transactions and released
+ *  at COMMIT/ROLLBACK like row locks.
+ *
+ *  gap_lo = "" means "negative infinity" (start of table)
+ *  gap_hi = "" means "positive infinity" (end of table)
+ * ---------------------------------------------------------------- */
+
+/* Acquire a gap lock on range (gap_lo, gap_hi] for a table.
+ * Called during SERIALIZABLE range scans (WHERE col > val, etc.).
+ * Multiple gap locks from different TXs can overlap (shared). */
+void lock_gap_acquire(uint32_t table_id, const char *gap_lo,
+                      const char *gap_hi, uint32_t xid);
+
+/* Check if an INSERT key falls within any gap lock held by other TXs.
+ * Returns LOCK_OK if no conflict, LOCK_TIMEOUT if blocked (with wait). */
+int lock_gap_check_insert(uint32_t table_id, const char *key, uint32_t xid);
+
+/* Release all gap locks held by a given XID. */
+void lock_gap_release_all(uint32_t xid);
+
 #endif /* LOCK_MGR_H */

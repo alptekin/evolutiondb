@@ -822,6 +822,21 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     if (bt2_search(&pk_tree, pkKey, &existing) == 0)
         return 1; /* duplicate */
 
+    /* Gap lock check: if a SERIALIZABLE TX holds a gap lock covering
+     * this key, the INSERT must wait (prevents phantom reads). */
+    if (g_qctx->mvcc_xid > 0) {
+        extern int lock_gap_check_insert(uint32_t, const char *, uint32_t);
+        int gr = lock_gap_check_insert(td->table_id, pkKey, g_qctx->mvcc_xid);
+        if (gr != 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "could not serialize access: gap lock conflict on INSERT (key=%s)",
+                     pkKey);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SERIALIZATION_FAILURE);
+            return -1;
+        }
+    }
+
     /* Log undo entry before modifying data */
     if (g_tx_undo_callback) {
         RowID zero_rid = {0, 0};

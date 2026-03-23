@@ -972,6 +972,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                                    int forUpdate, uint32_t lock_xid)
 {
     int count = 0;
+    /* Gap lock tracking: first and last PK key seen during scan */
+    char gap_first_key[256] = "";
+    char gap_last_key[256] = "";
 
     rs->is_select = 1;
 
@@ -1218,10 +1221,14 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                     }
                 }
 
-                /* Conflict Guard: record read interest for SERIALIZABLE TX */
+                /* Conflict Guard + Gap Lock: for SERIALIZABLE TX */
                 if (lock_xid > 0 && !forUpdate) {
                     extern void cg_record_read(uint32_t, uint32_t, const char *);
                     cg_record_read(lock_xid, td.table_id, keyBuf);
+                    /* Track scan range for gap lock */
+                    if (gap_first_key[0] == '\0')
+                        strncpy(gap_first_key, keyBuf, 255);
+                    strncpy(gap_last_key, keyBuf, 255);
                 }
 
                 if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
@@ -1299,6 +1306,17 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
             pg_send_command_complete((conn_t *)rs->stream_conn, rs->command_tag);
             return;  /* skip all post-processing */
         }
+    }
+
+    /* Gap lock: after scan completes, lock the scanned range to prevent
+     * phantom inserts. Covers (first_key, last_key] + gap before first
+     * and after last (using "" for infinity). */
+    if (lock_xid > 0 && !forUpdate && gap_first_key[0]) {
+        extern void lock_gap_acquire(uint32_t, const char *, const char *, uint32_t);
+        /* Lock range: ("", last_key] covers entire scanned range + before */
+        lock_gap_acquire(td.table_id, "", gap_last_key, lock_xid);
+        /* Lock range after last key: (last_key, "") covers future inserts */
+        lock_gap_acquire(td.table_id, gap_last_key, "", lock_xid);
     }
 
     /* NOTE: ORDER BY sort is deferred to end of function, after all

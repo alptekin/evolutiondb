@@ -95,7 +95,9 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         /* Release all row locks held by this auto-committed transaction */
         {
             extern void lock_release_all(uint32_t xid);
+            extern void lock_gap_release_all(uint32_t xid);
             lock_release_all(qctx->mvcc_xid);
+            lock_gap_release_all(qctx->mvcc_xid);
         }
         mvcc_unregister_tx(qctx->mvcc_xid);
     }
