@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/time.h>
+#include <time.h>
 #include "platform.h"
 #include "catalog.h"
 #include "../evolution/db/database.h"
@@ -11,6 +13,7 @@
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/mvcc.h"
 #include "../evolution/db/buffer_pool.h"
+#include "xa_transaction.h"
 
 /* From main.c — connection limit accessors */
 extern int  get_max_connections(void);
@@ -547,9 +550,282 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
     return 1;
 }
 
+/* ---- XA helper: extract XID string from "XA <CMD> 'xid'" ---- */
+static const char *xa_extract_xid(const char *sql, int skip_words)
+{
+    const char *p = sql;
+    for (int w = 0; w < skip_words; w++) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        while (*p && !isspace((unsigned char)*p) && *p != '\'') p++;
+    }
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p == '\'') p++;
+    return p;  /* points to start of xid (may end at '\'' or '\0') */
+}
+
+static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
+{
+    if (!starts_with_i(sql, "XA ")) return 0;
+    if (!ctx) { result_init(rs); return 0; }
+
+    result_init(rs);
+    const char *cmd = sql + 3;
+    while (*cmd && isspace((unsigned char)*cmd)) cmd++;
+
+    /* XA START 'xid' */
+    if (strncasecmp(cmd, "START", 5) == 0 || strncasecmp(cmd, "BEGIN", 5) == 0) {
+        if (ctx->in_transaction || ctx->xa_state != 0) {
+            rs->has_error = 1;
+            snprintf(rs->error_message, sizeof(rs->error_message),
+                     "XA START: transaction already active");
+            strcpy(rs->error_sqlstate, "25000");
+            return 1;
+        }
+        /* Extract XID */
+        const char *xid_start = xa_extract_xid(sql, 2);
+        int xi = 0;
+        while (xid_start[xi] && xid_start[xi] != '\'' && xid_start[xi] != ';'
+               && xi < 127)
+            ctx->xa_xid[xi] = xid_start[xi], xi++;
+        ctx->xa_xid[xi] = '\0';
+
+        /* Start transaction (same as BEGIN) */
+        ctx->in_transaction = 1;
+        ctx->tx_aborted = 0;
+        if (ctx->undo_log) undo_log_free(ctx->undo_log);
+        ctx->undo_log = undo_log_create();
+        savepoint_stack_init(&ctx->savepoints);
+        ctx->tx_xid = mvcc_assign_xid();
+        mvcc_register_tx(ctx->tx_xid);
+        mvcc_snapshot_take(&ctx->snapshot);
+        ctx->snapshot.my_xid = ctx->tx_xid;
+        ctx->snapshot_valid = 1;
+        ctx->xa_state = 1; /* ACTIVE */
+
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "XA START");
+        return 1;
+    }
+
+    /* XA END 'xid' */
+    if (strncasecmp(cmd, "END", 3) == 0) {
+        if (ctx->xa_state != 1) {
+            rs->has_error = 1;
+            snprintf(rs->error_message, sizeof(rs->error_message),
+                     "XA END: transaction not in ACTIVE state");
+            strcpy(rs->error_sqlstate, "25000");
+            return 1;
+        }
+        ctx->xa_state = 2; /* ENDED */
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "XA END");
+        return 1;
+    }
+
+    /* XA PREPARE 'xid' */
+    if (strncasecmp(cmd, "PREPARE", 7) == 0) {
+        if (ctx->xa_state != 2) {
+            rs->has_error = 1;
+            snprintf(rs->error_message, sizeof(rs->error_message),
+                     "XA PREPARE: transaction not in ENDED state");
+            strcpy(rs->error_sqlstate, "25000");
+            return 1;
+        }
+        if (ctx->tx_aborted) {
+            rs->has_error = 1;
+            snprintf(rs->error_message, sizeof(rs->error_message),
+                     "XA PREPARE: transaction is aborted, must ROLLBACK");
+            strcpy(rs->error_sqlstate, "25P02");
+            return 1;
+        }
+
+        /* WAL flush for durability */
+        {
+            extern void bp_wal_flush_dirty(int fd);
+            extern int pgm_get_fd(void);
+            bp_wal_flush_dirty(pgm_get_fd());
+        }
+
+        /* Persist PREPARE record to disk (survives crash) */
+        {
+            extern int xa_persist_prepare(const char *, uint32_t);
+            if (xa_persist_prepare(ctx->xa_xid, ctx->tx_xid) < 0) {
+                rs->has_error = 1;
+                snprintf(rs->error_message, sizeof(rs->error_message),
+                         "XA PREPARE: too many prepared transactions");
+                strcpy(rs->error_sqlstate, "54000");
+                return 1;
+            }
+        }
+
+        ctx->xa_state = 3; /* PREPARED */
+        /* Don't commit or unregister yet — stays in prepared state */
+        fprintf(stderr, "[XA] PREPARE '%s' (xid=%u)\n", ctx->xa_xid, ctx->tx_xid);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "XA PREPARE");
+        return 1;
+    }
+
+    /* XA COMMIT 'xid' [ONE PHASE]
+     * ONE PHASE: skip PREPARE, commit directly from ENDED state (MySQL/Oracle compat)
+     * Normal: commit from PREPARED state (2PC) or ENDED state (1PC optimization) */
+    if (strncasecmp(cmd, "COMMIT", 6) == 0) {
+        if (ctx->xa_state != 3 && ctx->xa_state != 2) {
+            /* Try to commit a previously prepared TX (different session) */
+            const char *xid_start = xa_extract_xid(sql, 2);
+            char xa_xid[128] = "";
+            int xi = 0;
+            while (xid_start[xi] && xid_start[xi] != '\'' && xid_start[xi] != ';'
+                   && xi < 127)
+                xa_xid[xi] = xid_start[xi], xi++;
+            xa_xid[xi] = '\0';
+
+            extern uint32_t xa_find_prepared(const char *);
+            uint32_t mvcc_xid = xa_find_prepared(xa_xid);
+            if (mvcc_xid == 0) {
+                rs->has_error = 1;
+                snprintf(rs->error_message, sizeof(rs->error_message),
+                         "XA COMMIT: '%s' not found in prepared state", xa_xid);
+                strcpy(rs->error_sqlstate, "25000");
+                return 1;
+            }
+            /* Commit the prepared TX */
+            uint32_t csn = pgm_next_csn();
+            clog_set_committed_csn(mvcc_xid, csn);
+            { extern void lock_release_all(uint32_t); lock_release_all(mvcc_xid);
+              extern void lock_gap_release_all(uint32_t); lock_gap_release_all(mvcc_xid); }
+            mvcc_unregister_tx(mvcc_xid);
+            { extern int xa_remove_prepared(const char *); xa_remove_prepared(xa_xid);
+              extern uint32_t wal_log_xa_resolve(const char *, int); wal_log_xa_resolve(xa_xid, 1); }
+            fprintf(stderr, "[XA] COMMIT '%s' (xid=%u) — from prepared\n", xa_xid, mvcc_xid);
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "XA COMMIT");
+            return 1;
+        }
+
+        /* Commit from current session */
+        if (ctx->tx_xid > 0) {
+            { extern void bp_wal_flush_dirty(int fd); extern int pgm_get_fd(void);
+              bp_wal_flush_dirty(pgm_get_fd()); }
+            uint32_t csn = pgm_next_csn();
+            clog_set_committed_csn(ctx->tx_xid, csn);
+            { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid);
+              extern void lock_gap_release_all(uint32_t); lock_gap_release_all(ctx->tx_xid); }
+            { extern void cg_unregister_tx(uint32_t); cg_unregister_tx(ctx->tx_xid); }
+            mvcc_unregister_tx(ctx->tx_xid);
+            { extern int xa_remove_prepared(const char *); xa_remove_prepared(ctx->xa_xid); }
+        }
+        if (ctx->undo_log) { undo_log_free(ctx->undo_log); ctx->undo_log = NULL; }
+        ctx->in_transaction = 0;
+        ctx->tx_aborted = 0;
+        ctx->snapshot_valid = 0;
+        ctx->xa_state = 0;
+        ctx->xa_xid[0] = '\0';
+        ctx->tx_xid = 0;
+        fprintf(stderr, "[XA] COMMIT '%s'\n", ctx->xa_xid);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "XA COMMIT");
+        return 1;
+    }
+
+    /* XA ROLLBACK 'xid' */
+    if (strncasecmp(cmd, "ROLLBACK", 8) == 0) {
+        if (ctx->xa_state == 0) {
+            /* Try to rollback a previously prepared TX */
+            const char *xid_start = xa_extract_xid(sql, 2);
+            char xa_xid[128] = "";
+            int xi = 0;
+            while (xid_start[xi] && xid_start[xi] != '\'' && xid_start[xi] != ';'
+                   && xi < 127)
+                xa_xid[xi] = xid_start[xi], xi++;
+            xa_xid[xi] = '\0';
+
+            extern uint32_t xa_find_prepared(const char *);
+            uint32_t mvcc_xid = xa_find_prepared(xa_xid);
+            if (mvcc_xid == 0) {
+                rs->has_error = 1;
+                snprintf(rs->error_message, sizeof(rs->error_message),
+                         "XA ROLLBACK: '%s' not found", xa_xid);
+                strcpy(rs->error_sqlstate, "25000");
+                return 1;
+            }
+            clog_set_aborted(mvcc_xid);
+            { extern void lock_release_all(uint32_t); lock_release_all(mvcc_xid);
+              extern void lock_gap_release_all(uint32_t); lock_gap_release_all(mvcc_xid); }
+            mvcc_unregister_tx(mvcc_xid);
+            { extern int xa_remove_prepared(const char *); xa_remove_prepared(xa_xid);
+              extern uint32_t wal_log_xa_resolve(const char *, int); wal_log_xa_resolve(xa_xid, 0); }
+            fprintf(stderr, "[XA] ROLLBACK '%s' (xid=%u) — from prepared\n", xa_xid, mvcc_xid);
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "XA ROLLBACK");
+            return 1;
+        }
+
+        /* Rollback from current session */
+        if (ctx->undo_log) undo_log_rollback(ctx->undo_log);
+        if (ctx->tx_xid > 0) {
+            clog_set_aborted(ctx->tx_xid);
+            { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid);
+              extern void lock_gap_release_all(uint32_t); lock_gap_release_all(ctx->tx_xid); }
+            { extern void cg_unregister_tx(uint32_t); cg_unregister_tx(ctx->tx_xid); }
+            mvcc_unregister_tx(ctx->tx_xid);
+            { extern int xa_remove_prepared(const char *); xa_remove_prepared(ctx->xa_xid); }
+        }
+        if (ctx->undo_log) { undo_log_free(ctx->undo_log); ctx->undo_log = NULL; }
+        ctx->in_transaction = 0;
+        ctx->tx_aborted = 0;
+        ctx->snapshot_valid = 0;
+        ctx->xa_state = 0;
+        ctx->xa_xid[0] = '\0';
+        ctx->tx_xid = 0;
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "XA ROLLBACK");
+        return 1;
+    }
+
+    /* XA RECOVER — list all prepared transactions (with timestamps) */
+    if (strncasecmp(cmd, "RECOVER", 7) == 0) {
+        rs->is_select = 1;
+        result_add_column(rs, "xa_xid", PG_OID_TEXT);
+        result_add_column(rs, "mvcc_xid", PG_OID_INT4);
+        result_add_column(rs, "prepared_at", PG_OID_TEXT);
+        result_add_column(rs, "age_seconds", PG_OID_INT4);
+
+        XAPreparedRecord recs[XA_MAX_PREPARED];
+        int n = xa_list_prepared(recs, XA_MAX_PREPARED);
+
+        struct timeval now_tv;
+        gettimeofday(&now_tv, NULL);
+        int64_t now_us = (int64_t)now_tv.tv_sec * 1000000LL + now_tv.tv_usec;
+
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, recs[i].xid);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%u", recs[i].mvcc_xid);
+            result_set_field(rs, row, 1, buf);
+
+            /* Timestamp as ISO string */
+            if (recs[i].prepare_time > 0) {
+                time_t sec = (time_t)(recs[i].prepare_time / 1000000);
+                struct tm *tm = localtime(&sec);
+                strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+                result_set_field(rs, row, 2, buf);
+                int64_t age_sec = (now_us - recs[i].prepare_time) / 1000000;
+                snprintf(buf, sizeof(buf), "%lld", (long long)age_sec);
+                result_set_field(rs, row, 3, buf);
+            } else {
+                result_set_field(rs, row, 2, "unknown");
+                result_set_field(rs, row, 3, "0");
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "XA RECOVER");
+        return 1;
+    }
+
+    return 0;
+}
+
 static int handle_transaction(const char *sql, ResultSet *rs,
                               SessionCtx *ctx)
 {
+    /* XA commands first */
+    if (starts_with_i(sql, "XA "))
+        return handle_xa(sql, rs, ctx);
+
     result_init(rs);
 
     if (starts_with_i(sql, "BEGIN") ||
