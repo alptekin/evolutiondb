@@ -1313,10 +1313,30 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
      * and after last (using "" for infinity). */
     if (lock_xid > 0 && !forUpdate && gap_first_key[0]) {
         extern void lock_gap_acquire(uint32_t, const char *, const char *, uint32_t);
-        /* Lock range: ("", last_key] covers entire scanned range + before */
         lock_gap_acquire(td.table_id, "", gap_last_key, lock_xid);
-        /* Lock range after last key: (last_key, "") covers future inserts */
         lock_gap_acquire(td.table_id, gap_last_key, "", lock_xid);
+    }
+
+    /* Predicate lock: record WHERE expression for UPDATE-based phantom detection.
+     * When another TX updates a row to match this predicate → conflict. */
+    if (lock_xid > 0 && !forUpdate && g_expr.whereExpr) {
+        extern void cg_record_predicate(uint32_t, uint32_t, const char *,
+                                         const char *, int, int);
+        char serialized_buf[1024];
+        int ser_len = expr_serialize(g_expr.whereExpr, serialized_buf,
+                                      sizeof(serialized_buf));
+        if (ser_len > 0) {
+            char *serialized = serialized_buf;
+            char predColNames[64][128];
+            int predNCols = 0;
+            for (int i = 0; i < ncols && i < 64; i++) {
+                strncpy(predColNames[i], allCols[i].col_name, 127);
+                predColNames[i][127] = '\0';
+                predNCols++;
+            }
+            cg_record_predicate(lock_xid, td.table_id, serialized,
+                                 (const char *)predColNames, 128, predNCols);
+        }
     }
 
     /* NOTE: ORDER BY sort is deferred to end of function, after all

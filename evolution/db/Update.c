@@ -730,6 +730,17 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
+    /* Predicate lock check: evaluate stored predicates against new field values.
+     * If a SERIALIZABLE TX has a predicate matching these values → RW conflict. */
+    {
+        extern void cg_check_predicate_conflict(uint32_t, uint32_t,
+            const char *, int, const char *, int, int);
+        cg_check_predicate_conflict(g_qctx->mvcc_xid, td->table_id,
+                                     (const char *)metaCols, 256,
+                                     (const char *)fields, 256,
+                                     numMetaCols);
+    }
+
     /* Build updated binary record */
     {
         char newRecord[RECORD_BUF_SIZE];
