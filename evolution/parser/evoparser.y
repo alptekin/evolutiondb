@@ -162,6 +162,7 @@
 %token LEFT
 %token LEADING
 %token LIMIT
+%token LOCKED
 %token OFFSET
 %token LONGBLOB
 
@@ -195,6 +196,8 @@
 
 %token SQL_SMALL_RESULT
 %token SCHEMA
+%token SHARE
+%token SKIP
 %token SOME
 %token SQL_CALC_FOUND_ROWS
 %token SQL_BIG_RESULT
@@ -572,10 +575,10 @@ stmt: select_stmt
 ;
 
 select_stmt: SELECT select_opts select_expr_list                                { emit("SELECTNODATA %d %d", $2, $3); g_sel.distinct = ($2 & 02) ? 1 : 0; } ;
-| SELECT select_opts select_expr_list 
+| SELECT select_opts select_expr_list
 FROM table_references
 opt_where opt_groupby opt_having opt_orderby opt_limit
-opt_into_list
+opt_for_update opt_into_list
     {
         emit("SELECT %d %d %d", $2, $3, $5);
         g_sel.distinct = ($2 & 02) ? 1 : 0;
@@ -640,6 +643,13 @@ opt_limit: /* nil */ { /* no limit */ }
 | LIMIT expr                                               { emit("LIMIT 1"); g_expr.limitExpr = $2; }
 | LIMIT expr ',' expr								{ emit("LIMIT 2"); g_expr.offsetExpr = $2; g_expr.limitExpr = $4; }
 | LIMIT expr OFFSET expr							{ emit("LIMIT OFFSET"); g_expr.limitExpr = $2; g_expr.offsetExpr = $4; }
+;
+
+opt_for_update: /* nil */                                  { /* no locking */ }
+| FOR UPDATE                                               { g_sel.forUpdate = 1; emit("FOR UPDATE"); }
+| FOR SHARE                                                { g_sel.forUpdate = 2; emit("FOR SHARE"); }
+| FOR UPDATE SKIP LOCKED                                   { g_sel.forUpdate = 1; emit("FOR UPDATE SKIP LOCKED"); }
+| FOR SHARE SKIP LOCKED                                    { g_sel.forUpdate = 2; emit("FOR SHARE SKIP LOCKED"); }
 ;
 
 opt_into_list: /* nil */
