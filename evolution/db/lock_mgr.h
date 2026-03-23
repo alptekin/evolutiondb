@@ -33,6 +33,7 @@
 #define LOCK_OK         0
 #define LOCK_TIMEOUT   -1
 #define LOCK_ERROR     -2
+#define LOCK_DEADLOCK  -3
 
 /* Default lock wait timeout in milliseconds (5 seconds) */
 #define LOCK_WAIT_TIMEOUT_MS  5000

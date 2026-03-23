@@ -328,13 +328,22 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
     /* Acquire exclusive row lock for this UPDATE */
     mvcc_ensure_xid(&g_qctx->mvcc_xid);
-    if (lock_row_acquire(td->table_id, pkKey, g_qctx->mvcc_xid,
-                         LOCK_EXCLUSIVE) != LOCK_OK) {
-        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                 "could not obtain lock on row (key=%s)", pkKey);
-        g_err.error = 1;
-        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
-        return -1;
+    {
+        int lr = lock_row_acquire(td->table_id, pkKey, g_qctx->mvcc_xid,
+                                  LOCK_EXCLUSIVE);
+        if (lr == LOCK_DEADLOCK) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "deadlock detected while waiting for lock on row (key=%s)", pkKey);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DEADLOCK_DETECTED);
+            return -1;
+        } else if (lr != LOCK_OK) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "could not obtain lock on row (key=%s)", pkKey);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
+            return -1;
+        }
     }
 
     /* Log undo entry before modifying data.
