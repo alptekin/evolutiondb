@@ -27,6 +27,12 @@
 static volatile int g_repl_running = 0;
 static int          g_is_replica = 0;
 
+/* Forward declarations for CDC */
+static repl_change_callback g_cdc_callback;
+static void *g_cdc_ctx;
+static void cdc_decode_page(const char *page_data, uint16_t page_len,
+                             uint32_t page_no, int64_t timestamp);
+
 /* ================================================================
  *  Master: WAL sender
  * ================================================================ */
@@ -319,6 +325,13 @@ static void *receiver_loop(void *arg)
                 }
                 records++;
 
+                /* CDC: decode page image for logical replication events */
+                if (g_cdc_callback && rec_page_no > 0) {
+                    int64_t ts = 0;
+                    memcpy(&ts, rec + 10, 8);  /* timestamp at offset 10 */
+                    cdc_decode_page(page_data, rec_page_len, rec_page_no, ts);
+                }
+
                 if (records % 1000 == 0)
                     fprintf(stderr, "[REPL] Replayed %d records\n", records);
             }
@@ -385,4 +398,85 @@ void repl_stop_receiver(void)
 int repl_is_replica(void)
 {
     return g_is_replica;
+}
+
+/* ================================================================
+ *  Logical Replication — Change Data Capture (CDC)
+ *
+ *  Decodes WAL page images by comparing tuple MVCC headers:
+ *  - Tuple with xmin > 0 and xmax == 0 → INSERT
+ *  - Tuple with xmax > 0 → DELETE (or UPDATE old version)
+ *  - HEAP_ONLY tuple with xmin > 0 → UPDATE new version
+ * ================================================================ */
+
+/* g_cdc_callback and g_cdc_ctx declared above as forward declarations */
+
+void repl_set_change_callback(repl_change_callback cb, void *ctx)
+{
+    g_cdc_callback = cb;
+    g_cdc_ctx = ctx;
+}
+
+/* Decode a WAL page image and emit CDC events.
+ * Called during replica WAL replay if a callback is registered. */
+static void cdc_decode_page(const char *page_data, uint16_t page_len,
+                             uint32_t page_no, int64_t timestamp)
+{
+    if (!g_cdc_callback || page_len < 16) return;
+
+    /* Read slotted page header */
+    uint16_t num_slots;
+    memcpy(&num_slots, page_data + 16, 2);  /* SlottedHeader.num_slots at offset 16 */
+
+    for (uint16_t si = 0; si < num_slots && si < 256; si++) {
+        /* SlotEntry at offset 16 + 6 + si*4 */
+        uint16_t rec_offset, rec_len;
+        int slot_off = 16 + 6 + si * 4;
+        if (slot_off + 4 > page_len) break;
+        memcpy(&rec_offset, page_data + slot_off, 2);
+        memcpy(&rec_len, page_data + slot_off + 2, 2);
+        if (rec_offset == 0 || rec_offset + rec_len > page_len) continue;
+
+        const char *rec = page_data + rec_offset;
+
+        /* Check tuple magic (0xE7) */
+        if ((unsigned char)rec[0] != 0xE7) continue;
+        if (rec_len < 9 + 8) continue;  /* prefix(5) + header(4) + mvcc(8) min */
+
+        /* Check MVCC flag */
+        uint8_t flags = (uint8_t)rec[8];  /* prefix(5) + header byte 3 */
+        if (!(flags & 0x02)) continue;  /* no MVCC header */
+
+        /* Read xmin/xmax */
+        uint32_t xmin, xmax;
+        memcpy(&xmin, rec + 9, 4);
+        memcpy(&xmax, rec + 13, 4);
+
+        /* Read table_id from prefix */
+        uint32_t table_id;
+        memcpy(&table_id, rec + 1, 4);
+
+        ReplicationChangeEvent event;
+        event.table_id = table_id;
+        event.timestamp = timestamp;
+        event.pk_key[0] = '\0';
+
+        if (xmax == 0 && xmin > 0) {
+            /* Live tuple — could be INSERT */
+            if (flags & 0x08) {
+                /* HEAP_ONLY = UPDATE new version */
+                event.type = 'U';
+                event.xid = xmin;
+            } else {
+                event.type = 'I';
+                event.xid = xmin;
+            }
+            g_cdc_callback(&event, g_cdc_ctx);
+        } else if (xmax > 0 && !(flags & 0x04)) {
+            /* xmax set, not HOT_UPDATED → DELETE */
+            event.type = 'D';
+            event.xid = xmax;
+            g_cdc_callback(&event, g_cdc_ctx);
+        }
+    }
 }

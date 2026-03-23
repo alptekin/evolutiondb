@@ -56,4 +56,32 @@ void repl_stop_receiver(void);
 /* Check if running in replica mode. */
 int repl_is_replica(void);
 
+/* ----------------------------------------------------------------
+ *  Logical Replication — Change Data Capture (CDC)
+ *
+ *  Decodes WAL page images into row-level change events.
+ *  Used by replicas or external consumers (ETL, event streaming).
+ *
+ *  Change event types:
+ *    'I' = INSERT (new tuple visible)
+ *    'U' = UPDATE (old tuple xmax set + new tuple inserted)
+ *    'D' = DELETE (tuple xmax set)
+ * ---------------------------------------------------------------- */
+
+/* Change event from WAL decode */
+typedef struct {
+    char     type;                /* 'I', 'U', 'D' */
+    uint32_t table_id;           /* from tuple header */
+    uint32_t xid;                /* transaction ID (xmin for I/U, xmax for D) */
+    char     pk_key[256];        /* primary key value */
+    int64_t  timestamp;          /* WAL record timestamp (epoch microseconds) */
+} ReplicationChangeEvent;
+
+/* Callback for logical replication consumers */
+typedef void (*repl_change_callback)(const ReplicationChangeEvent *event, void *ctx);
+
+/* Register a CDC callback. Called for each decoded change event
+ * during WAL replay/streaming. */
+void repl_set_change_callback(repl_change_callback cb, void *ctx);
+
 #endif /* REPLICATION_H */

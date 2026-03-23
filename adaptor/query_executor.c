@@ -2578,6 +2578,18 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
          * Per-table locks in Process functions provide additional fine-grained
          * serialization (infrastructure for future concurrent DML). */
         if (!already_locked && !is_readonly) {
+            /* Replica mode: reject all DML/DDL (read-only hot standby) */
+            extern int repl_is_replica(void);
+            if (repl_is_replica()) {
+                rs->has_error = 1;
+                strcpy(rs->error_sqlstate, "25006");
+                snprintf(rs->error_message, sizeof(rs->error_message),
+                         "cannot execute %s in a read-only transaction (replica mode)",
+                         is_insert_query(sql) ? "INSERT" :
+                         is_update_query(sql) ? "UPDATE" :
+                         is_delete_query(sql) ? "DELETE" : "DDL");
+                goto parser_done;
+            }
             extern mutex_t g_dml_mutex;
             mutex_lock(&g_dml_mutex);
             parse_mutex_held = 1;
@@ -2598,6 +2610,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
             parse_mutex_held = 0;
         }
 
+parser_done:
         /* yyparse returns 0 on success, 1 on syntax error, 2 on OOM */
         if (parse_result != 0) {
             rs->has_error = 1;
