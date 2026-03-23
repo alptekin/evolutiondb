@@ -73,6 +73,11 @@ int wal_checkpoint(void);
  * the WAL file. */
 void wal_shutdown(void);
 
+/* Complete WAL recovery Pass 2: replay data pages (non-page-0).
+ * Must be called AFTER TDE is initialized from the recovered FileHeader.
+ * Checkpoints (truncates WAL) after replay. Returns pages replayed. */
+int wal_replay_remaining(void);
+
 /* Check if WAL is active (initialized and operational). */
 int wal_is_active(void);
 
