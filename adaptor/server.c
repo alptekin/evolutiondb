@@ -155,6 +155,7 @@ void server_init(void)
     mvcc_init();
     vmap_init();
     { extern void lock_mgr_init(void); lock_mgr_init(); }
+    { extern void cg_init(void); cg_init(); }
     auto_reclaim_start();
 }
 

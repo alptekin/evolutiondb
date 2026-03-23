@@ -538,10 +538,11 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                     ctx->snapshot.my_xid = ctx->tx_xid;
                     ctx->snapshot_valid = 1;
                 }
-                /* SERIALIZABLE: hold parse lock for entire transaction */
+                /* SERIALIZABLE: register with Conflict Guard for write skew detection */
                 if (ctx->isolation_level == 3) {
-                    rwlock_wrlock(&g_parse_lock);
-                    ctx->serializable_locked = 1;
+                    extern void cg_register_tx(uint32_t);
+                    cg_register_tx(ctx->tx_xid);
+                    ctx->serializable_locked = 1;  /* flag reused: 1 = CG active */
                 }
             }
         }
@@ -561,6 +562,34 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                     ctx->tx_xid = 0;
                 }
             } else {
+                /* Conflict Guard: check for serialization failure before commit */
+                if (ctx->serializable_locked && ctx->tx_xid > 0) {
+                    extern int cg_check_commit(uint32_t);
+                    if (cg_check_commit(ctx->tx_xid) != 0) {
+                        /* Dangerous structure detected → abort */
+                        snprintf(rs->error_message, sizeof(rs->error_message),
+                                 "could not serialize access due to "
+                                 "read/write dependencies among transactions");
+                        rs->has_error = 1;
+                        strncpy(rs->error_sqlstate, "40001", 6);
+                        /* Fall through to aborted-TX handling */
+                        ctx->tx_aborted = 1;
+                        if (ctx->undo_log) undo_log_rollback(ctx->undo_log);
+                        if (ctx->tx_xid > 0) {
+                            clog_set_aborted(ctx->tx_xid);
+                            { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid); }
+                            { extern void cg_unregister_tx(uint32_t); cg_unregister_tx(ctx->tx_xid); }
+                            mvcc_unregister_tx(ctx->tx_xid);
+                            ctx->tx_xid = 0;
+                        }
+                        ctx->in_transaction = 0;
+                        ctx->tx_aborted = 0;
+                        ctx->snapshot_valid = 0;
+                        ctx->serializable_locked = 0;
+                        strcpy(rs->command_tag, "ROLLBACK");
+                        return 1;
+                    }
+                }
                 /* MVCC: mark committed in CLOG with CSN */
                 if (ctx->tx_xid > 0) {
                     /* WAL: flush dirty pages before commit for durability */
@@ -584,10 +613,11 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 ctx->undo_log = NULL;
             }
             savepoint_stack_init(&ctx->savepoints);
-            /* Release SERIALIZABLE lock */
+            /* Unregister from Conflict Guard */
             if (ctx->serializable_locked) {
+                extern void cg_unregister_tx(uint32_t);
+                if (ctx->tx_xid > 0) cg_unregister_tx(ctx->tx_xid);
                 ctx->serializable_locked = 0;
-                rwlock_wrunlock(&g_parse_lock);
             }
             /* GTT ON COMMIT DELETE ROWS: purge session data under mutex */
             {
@@ -683,10 +713,11 @@ static int handle_transaction(const char *sql, ResultSet *rs,
             ctx->tx_aborted = 0;
             ctx->snapshot_valid = 0;
             savepoint_stack_init(&ctx->savepoints);
-            /* Release SERIALIZABLE lock */
+            /* Unregister from Conflict Guard */
             if (ctx->serializable_locked) {
+                extern void cg_unregister_tx(uint32_t);
+                if (ctx->tx_xid > 0) cg_unregister_tx(ctx->tx_xid);
                 ctx->serializable_locked = 0;
-                rwlock_wrunlock(&g_parse_lock);
             }
         }
         strcpy(rs->command_tag, "ROLLBACK");
