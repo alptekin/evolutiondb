@@ -11,6 +11,7 @@
 #include "vmap.h"
 #include "mvcc.h"
 #include "lock_mgr.h"
+#include "page_mgr.h"
 
 /* Thin wrappers around shared tuple_format functions */
 #define UpdateExtractAllFields(data, dataLen, table_id, cols, ncols, fields, is_null_out, maxFields) \
@@ -325,6 +326,18 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     int existingDataLen = tapi_heap_read(rid, existingData, sizeof(existingData));
     if (existingDataLen < 0)
         return -1;
+
+    /* Follow HOT chain if the PK entry points to an old HOT_UPDATED version */
+    if (tup_is_hot_updated(existingData, existingDataLen)) {
+        RowID hot_rid;
+        int hot_len = tapi_follow_hot_chain(rid, existingData, existingDataLen,
+                                             NULL, existingData,
+                                             sizeof(existingData), &hot_rid);
+        if (hot_len > 0) {
+            existingDataLen = hot_len;
+            rid = hot_rid;  /* update rid to point to the current version */
+        }
+    }
 
     /* Acquire exclusive row lock for this UPDATE */
     mvcc_ensure_xid(&g_qctx->mvcc_xid);
@@ -726,10 +739,10 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         IndexDesc updIdx[16];
         int nIdx = (tblName && tblName[0]) ? idx_load_secondary(tblName, updIdx, 16) : 0;
 
-        /* HOT (Heap-Only Tuple) optimization: check if any SET column is
-         * covered by a secondary index.  When no indexed column changes,
-         * we can skip all secondary index I/O (0 index writes). */
-        int hot_eligible = 1;
+        /* HOT (Heap-Only Tuple) optimization: only when secondary indexes
+         * exist and no SET column touches an indexed column. Without
+         * secondary indexes, HOT provides no benefit (PK update is needed). */
+        int hot_eligible = (nIdx > 0) ? 1 : 0;
         if (nIdx > 0) {
             int minSetH = numSetVals < numSetCols ? numSetVals : numSetCols;
             for (int ix = 0; ix < nIdx && hot_eligible; ix++) {
@@ -817,29 +830,70 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
          *   2. Insert new tuple on heap (new location)
          *   3. Update PK B+ tree to point to new RowID
          * This preserves the old version on the heap page for proper
-         * RECLAIM cleanup and future concurrent reader visibility. */
+         * RECLAIM cleanup and future concurrent reader visibility.
+         *
+         * HOT optimization: if no indexed column changed AND the new
+         * tuple fits on the same page, insert as HEAP_ONLY and skip
+         * PK tree update entirely (persistent HOT chain). */
 
         /* Soft-delete old tuple */
         vmap_clear(rid.page_no);
         if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
             /* Pre-MVCC tuple: physically delete old record */
             tapi_heap_delete(rid);
+            hot_eligible = 0;  /* can't HOT without MVCC old version */
         }
 
-        /* Insert new version on heap */
-        RowID newRid = tapi_heap_insert(td, newRecord, (uint16_t)newLen);
-        if (newRid.page_no == 0)
-            return -1;
+        RowID newRid;
+        int hot_applied = 0;
+
+        /* Try HOT path: insert on same page as old version */
+        if (hot_eligible) {
+            char page_buf[EVO_PAGE_SIZE];
+            pgm_read_page(rid.page_no, page_buf);
+            int new_slot = slot_insert(page_buf, newRecord, (uint16_t)newLen);
+            if (new_slot >= 0) {
+                /* Set HEAP_ONLY on new tuple (in page buffer) */
+                SlotEntry *se = (SlotEntry *)((char *)page_buf +
+                    PAGE_HEADER_SIZE + SLOTTED_HEADER_SIZE +
+                    new_slot * SLOT_ENTRY_SIZE);
+                char *new_rec = (char *)page_buf + se->offset;
+                tup_set_heap_only(new_rec, se->length);
+
+                /* Set HOT_UPDATED on old tuple (in page buffer) */
+                {
+                    char old_rec[RECORD_BUF_SIZE];
+                    int old_len = slot_read(page_buf, rid.slot_idx,
+                                            old_rec, sizeof(old_rec));
+                    if (old_len > 0) {
+                        tup_set_hot_updated(old_rec, old_len);
+                        slot_update(page_buf, rid.slot_idx,
+                                    old_rec, (uint16_t)old_len);
+                    }
+                }
+
+                pgm_write_page(rid.page_no, page_buf);
+                newRid.page_no = rid.page_no;
+                newRid.slot_idx = (uint16_t)new_slot;
+                hot_applied = 1;
+                /* PK tree stays pointing to old version — no bt2_update */
+            }
+        }
+
+        /* Fall back to normal non-destructive update */
+        if (!hot_applied) {
+            newRid = tapi_heap_insert(td, newRecord, (uint16_t)newLen);
+            if (newRid.page_no == 0)
+                return -1;
+            /* Update PK B+ tree to point to new version */
+            bt2_update(&pk_tree, pkKey, newRid);
+            td->pk_root_page = pk_tree.root_page;
+        }
         vmap_clear(newRid.page_no);
 
-        /* Update PK B+ tree to point to new version */
-        bt2_update(&pk_tree, pkKey, newRid);
-        td->pk_root_page = pk_tree.root_page;
-
-        /* HOT path: if no indexed column changed, skip all secondary
-         * index maintenance (0 index I/O). */
+        /* HOT path: no secondary index updates needed */
         if (hot_eligible && nIdx > 0) {
-            /* No secondary index updates needed — 0 index I/O */
+            /* 0 index I/O — HOT skips all secondary index maintenance */
         }
 
         /* Post-store: update secondary B-tree indexes for changed columns
