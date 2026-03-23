@@ -123,6 +123,11 @@ typedef struct {
  * Must be called after pgm_init(). Returns 0 on success, -1 on error. */
 int  cat_init(void);
 
+/* Thread-safe catalog locking — callers wrap catalog access sequences.
+ * Use when multiple catalog calls must be atomic (e.g., resolve table). */
+void cat_lock(void);
+void cat_unlock(void);
+
 /* Flush and shutdown catalog. */
 void cat_shutdown(void);
 

@@ -2573,9 +2573,10 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         int already_locked = (ctx && ctx->serializable_locked);
         int is_readonly = is_select_query(sql);
 
-        /* DML/DDL: global DML mutex serializes all writes (catalog not thread-safe).
-         * Per-table locks inside Process functions add fine-grained serialization
-         * for future concurrent DML when catalog becomes thread-safe. */
+        /* DML/DDL: global DML mutex serializes all writes.
+         * SELECT uses rdlock (concurrent with DML). DML doesn't block readers.
+         * Per-table locks in Process functions provide additional fine-grained
+         * serialization (infrastructure for future concurrent DML). */
         if (!already_locked && !is_readonly) {
             extern mutex_t g_dml_mutex;
             mutex_lock(&g_dml_mutex);
