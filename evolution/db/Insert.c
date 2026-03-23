@@ -10,6 +10,7 @@
 #include "tuple_format.h"
 #include "vmap.h"
 #include "mvcc.h"
+#include "table_lock.h"
 
 /* Row separator used between multiple value groups in g_ins.data. */
 #define ROW_SEP '\x02'
@@ -902,7 +903,7 @@ int InsertProcess(void)
         g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
         TruncateInsert();
-        return -1;
+        retval = -1; goto cleanup;
     }
 
     /* GTT: ensure session-private PK tree exists */
@@ -911,7 +912,7 @@ int InsertProcess(void)
                  "could not allocate storage for global temporary table");
         g_err.error = 1;
         TruncateInsert();
-        return -1;
+        retval = -1; goto cleanup;
     }
 
     /* Split g_ins.data into rows using ROW_SEP */

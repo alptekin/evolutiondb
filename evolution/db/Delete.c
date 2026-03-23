@@ -11,6 +11,7 @@
 #include "vmap.h"
 #include "mvcc.h"
 #include "lock_mgr.h"
+#include "table_lock.h"
 
 /* Remove secondary index entries for a deleted record.
  * Takes pre-extracted fields instead of raw record. */

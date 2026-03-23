@@ -12,6 +12,7 @@
 #include "mvcc.h"
 #include "lock_mgr.h"
 #include "page_mgr.h"
+#include "table_lock.h"
 
 /* Thin wrappers around shared tuple_format functions */
 #define UpdateExtractAllFields(data, dataLen, table_id, cols, ncols, fields, is_null_out, maxFields) \
