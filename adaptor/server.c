@@ -155,10 +155,12 @@ void server_init(void)
     mvcc_init();
     vmap_init();
     { extern void lock_mgr_init(void); lock_mgr_init(); }
+    auto_reclaim_start();
 }
 
 void server_cleanup(void)
 {
+    auto_reclaim_stop();
     /* WAL checkpoint before pgm_shutdown flushes buffer pool */
     {
         extern void wal_shutdown(void);

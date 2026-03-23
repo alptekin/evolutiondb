@@ -59,6 +59,8 @@ int DropTableProcess(void);
 int TruncateTableProcess(void);
 int ReclaimTableProcess(void);
 int should_auto_reclaim(uint32_t table_id);
+void auto_reclaim_start(void);
+void auto_reclaim_stop(void);
 int AnalyzeTableProcess(void);
 int CreateDatabaseProcess(const char *name, int if_not_exists);
 int CreateSchemaProcess(const char *name, int if_not_exists);

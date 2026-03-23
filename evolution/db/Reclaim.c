@@ -22,15 +22,19 @@
  */
 
 /* Check if auto-RECLAIM should run for a table.
- * Returns 1 if dead_tuple_count / row_count > 20% threshold. */
+ * Returns 1 if dead tuples exceed threshold:
+ *   - If row_count available: dead > 20% of rows
+ *   - If row_count unknown (no ANALYZE): dead > 50 absolute */
 int should_auto_reclaim(uint32_t table_id)
 {
     TableStatsDesc ts;
     if (cat_get_table_stats(table_id, &ts) < 0)
         return 0;
-    if (ts.row_count == 0) return 0;
-    /* Threshold: 20% dead tuples */
-    return (ts.dead_tuple_count * 100 / ts.row_count) > 20;
+    if (ts.dead_tuple_count == 0) return 0;
+    if (ts.row_count > 0)
+        return (ts.dead_tuple_count * 100 / ts.row_count) > 20;
+    /* No ANALYZE data — use absolute threshold */
+    return ts.dead_tuple_count > 50;
 }
 
 /* Collect all heap page numbers into an array.
