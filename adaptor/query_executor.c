@@ -2568,15 +2568,16 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         int parse_result;
 
         /* Reentrant parser: each call gets its own scanner instance.
-         * wrlock during parse+execute (Process functions modify shared state).
-         * Skip lock/unlock if SERIALIZABLE transaction already holds it. */
+         * DML uses g_dml_mutex for serialization (doesn't block readers).
+         * SELECT doesn't need any lock for parsing (g_qctx is thread-local). */
         int already_locked = (ctx && ctx->serializable_locked);
         int is_readonly = is_select_query(sql);
 
-        /* SELECT: no lock needed for parsing (reentrant parser is thread-safe).
-         * DML/DDL: wrlock during parse+execute (Process functions modify shared state). */
+        /* DML/DDL: acquire DML mutex (serializes writes, doesn't block reads).
+         * SELECT: no lock needed for yyparse. */
         if (!already_locked && !is_readonly) {
-            rwlock_wrlock(&g_parse_lock);
+            extern mutex_t g_dml_mutex;
+            mutex_lock(&g_dml_mutex);
             parse_mutex_held = 1;
         }
 
@@ -2590,7 +2591,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         local_scanner = NULL;
 
         if (!already_locked && !is_readonly) {
-            rwlock_wrunlock(&g_parse_lock);
+            extern mutex_t g_dml_mutex;
+            mutex_unlock(&g_dml_mutex);
             parse_mutex_held = 0;
         }
 
@@ -2679,12 +2681,12 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     if (!ctx->in_transaction)
                         ctx->tx_xid = g_qctx->mvcc_xid;
                 }
-                rwlock_wrlock(&g_parse_lock);
+                { extern mutex_t g_dml_mutex; mutex_lock(&g_dml_mutex); }
                 collect_select_results(g_sel.lastTable, rs,
                                        ctx ? &ctx->snapshot : NULL,
                                        g_sel.forUpdate,
                                        ctx ? ctx->tx_xid : 0);
-                rwlock_wrunlock(&g_parse_lock);
+                { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
             } else {
                 /* Pass tx_xid for Conflict Guard read tracking in SERIALIZABLE */
                 uint32_t cg_xid = (ctx && ctx->serializable_locked) ? ctx->tx_xid : 0;
@@ -2803,7 +2805,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
         if (parse_mutex_held) {
             if (!(ctx && ctx->serializable_locked)) {
-                rwlock_wrunlock(&g_parse_lock);
+                extern mutex_t g_dml_mutex;
+                mutex_unlock(&g_dml_mutex);
             }
             parse_mutex_held = 0;
         }
@@ -3106,8 +3109,8 @@ void session_drop_temp_tables(SessionCtx *ctx)
     QueryContext *qctx = qctx_alloc();
     if (!qctx) return;
 
-    /* Acquire parse lock — page manager operations are not thread-safe */
-    rwlock_wrlock(&g_parse_lock);
+    /* Acquire DML mutex — page manager operations need serialization */
+    { extern mutex_t g_dml_mutex; mutex_lock(&g_dml_mutex); }
 
     g_qctx = qctx;
     db_set_current_database(ctx->database);
@@ -3149,7 +3152,7 @@ void session_drop_temp_tables(SessionCtx *ctx)
     qctx_free(qctx);
     g_qctx = NULL;
 
-    rwlock_wrunlock(&g_parse_lock);
+    { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
 }
 
 /* Clean up GTT session-private data on disconnect.
@@ -3161,8 +3164,8 @@ void session_cleanup_gtt(SessionCtx *ctx)
     QueryContext *qctx = qctx_alloc();
     if (!qctx) return;
 
-    /* Acquire parse lock — page manager operations are not thread-safe */
-    rwlock_wrlock(&g_parse_lock);
+    /* Acquire DML mutex — page manager operations need serialization */
+    { extern mutex_t g_dml_mutex; mutex_lock(&g_dml_mutex); }
 
     g_qctx = qctx;
     db_set_current_database(ctx->database);
@@ -3188,7 +3191,7 @@ void session_cleanup_gtt(SessionCtx *ctx)
     qctx_free(qctx);
     g_qctx = NULL;
 
-    rwlock_wrunlock(&g_parse_lock);
+    { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
 }
 
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)

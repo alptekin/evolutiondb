@@ -26,6 +26,11 @@
  * Multiple readers (SELECT collect) can run concurrently. */
 rwlock_t g_parse_lock;
 
+/* DML serialization mutex — serializes DML execution but does NOT block readers.
+ * SELECT uses rdlock(g_parse_lock) which coexists with this mutex.
+ * DML acquires this mutex instead of wrlock(g_parse_lock). */
+mutex_t g_dml_mutex;
+
 /* Connection limits */
 static int     g_max_connections    = 100;
 static int     g_active_connections = 0;
@@ -150,6 +155,7 @@ void server_init(void)
 {
     socket_init();
     rwlock_init(&g_parse_lock);
+    mutex_init(&g_dml_mutex);
     mutex_init(&g_conn_lock);
     bp_init(BP_DEFAULT_PAGES);   /* 32768 pages = 128 MB buffer pool */
     query_engine_init();         /* opens data file, WAL replay, reads catalog */
