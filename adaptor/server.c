@@ -164,6 +164,7 @@ void server_init(void)
     vmap_init();
     { extern void lock_mgr_init(void); lock_mgr_init(); }
     { extern void cg_init(void); cg_init(); }
+    { extern void table_lock_init(void); table_lock_init(); }
     auto_reclaim_start();
 }
 
