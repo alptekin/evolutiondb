@@ -264,6 +264,7 @@ static int part_load_page(BPPartition *part, int fd, off_t page_no)
     p->valid_len   = (int)n;
     p->dirty       = 0;
     atomic_store(&p->pin_count, 0);
+    atomic_store(&p->seq, 0);     /* seqlock: stable (even) after load */
     p->usage_count = 1;
 
     part_hash_insert(part, fd, page_no, idx);
@@ -402,8 +403,25 @@ int bp_read(int fd, void *buf, size_t count, off_t offset)
 
         bp_mutex_unlock(&part->lock);  /* release lock BEFORE memcpy */
 
-        /* memcpy runs without holding any lock — pin protects from eviction */
-        memcpy(dst + buf_pos, p->data + page_offset, to_copy);
+        /* Lock-free read with seqlock: memcpy runs without any lock.
+         * Pin protects from eviction. Seqlock detects concurrent writes:
+         * if seq changed during memcpy, a writer was modifying the page
+         * and we may have a torn read — retry. */
+        {
+            int retries = 0;
+            unsigned int seq0, seq1;
+            do {
+                seq0 = atomic_load(&p->seq);
+                if (seq0 & 1) { /* writer in progress — spin briefly */
+                    retries++;
+                    continue;
+                }
+                atomic_thread_fence(memory_order_acquire);
+                memcpy(dst + buf_pos, p->data + page_offset, to_copy);
+                atomic_thread_fence(memory_order_acquire);
+                seq1 = atomic_load(&p->seq);
+            } while (seq0 != seq1 && retries++ < 100);
+        }
 
         /* Atomic unpin — no lock needed (Oracle-style) */
         atomic_fetch_sub(&p->pin_count, 1);
@@ -459,11 +477,19 @@ int bp_write(int fd, const void *buf, size_t count, off_t offset)
             p = &part->pages[idx];
         }
 
+        /* Seqlock: increment to odd (write in progress) */
+        atomic_fetch_add(&p->seq, 1);
+        atomic_thread_fence(memory_order_release);
+
         memcpy(p->data + page_offset, src + buf_pos, to_write);
         p->dirty = 1;
 
         if (page_offset + (int)to_write > p->valid_len)
             p->valid_len = page_offset + (int)to_write;
+
+        /* Seqlock: increment to even (write complete) */
+        atomic_thread_fence(memory_order_release);
+        atomic_fetch_add(&p->seq, 1);
 
         bp_mutex_unlock(&part->lock);
 
