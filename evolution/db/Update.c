@@ -10,6 +10,7 @@
 #include "tuple_format.h"
 #include "vmap.h"
 #include "mvcc.h"
+#include "lock_mgr.h"
 
 /* Thin wrappers around shared tuple_format functions */
 #define UpdateExtractAllFields(data, dataLen, table_id, cols, ncols, fields, is_null_out, maxFields) \
@@ -324,6 +325,17 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     int existingDataLen = tapi_heap_read(rid, existingData, sizeof(existingData));
     if (existingDataLen < 0)
         return -1;
+
+    /* Acquire exclusive row lock for this UPDATE */
+    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+    if (lock_row_acquire(td->table_id, pkKey, g_qctx->mvcc_xid,
+                         LOCK_EXCLUSIVE) != LOCK_OK) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "could not obtain lock on row (key=%s)", pkKey);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
+        return -1;
+    }
 
     /* Log undo entry before modifying data.
      * Pass old RowID so rollback can restore the soft-deleted old version. */

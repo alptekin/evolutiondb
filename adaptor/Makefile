@@ -78,7 +78,8 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/page_crypt.c \
               $(EVO_DB)/mvcc.c \
               $(EVO_DB)/vmap.c \
-              $(EVO_DB)/wal.c
+              $(EVO_DB)/wal.c \
+              $(EVO_DB)/lock_mgr.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

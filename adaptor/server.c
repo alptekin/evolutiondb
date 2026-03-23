@@ -92,6 +92,11 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
             uint32_t csn = pgm_next_csn();
             clog_set_committed_csn(qctx->mvcc_xid, csn);
         }
+        /* Release all row locks held by this auto-committed transaction */
+        {
+            extern void lock_release_all(uint32_t xid);
+            lock_release_all(qctx->mvcc_xid);
+        }
         mvcc_unregister_tx(qctx->mvcc_xid);
     }
 
@@ -149,6 +154,7 @@ void server_init(void)
     snowflake_init();
     mvcc_init();
     vmap_init();
+    { extern void lock_mgr_init(void); lock_mgr_init(); }
 }
 
 void server_cleanup(void)
