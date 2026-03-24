@@ -276,13 +276,33 @@ static int recv_all(int fd, void *buf, size_t n)
     return 0;
 }
 
+/* Replication slot: persist last received LSN to file */
+static uint32_t g_last_received_lsn = 0;
+static const char *g_slot_path = "root/evosql.slot";
+
+static void slot_save(uint32_t lsn)
+{
+    g_last_received_lsn = lsn;
+    int fd = open(g_slot_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) { write(fd, &lsn, 4); close(fd); }
+}
+
+static uint32_t slot_load(void)
+{
+    uint32_t lsn = 0;
+    int fd = open(g_slot_path, O_RDONLY);
+    if (fd >= 0) { read(fd, &lsn, 4); close(fd); }
+    g_last_received_lsn = lsn;
+    return lsn;
+}
+
 static void *receiver_loop(void *arg)
 {
     int sock = *(int *)arg;
     int data_fd = *((int *)arg + 1);
     free(arg);
 
-    fprintf(stderr, "[REPL] WAL receiver started, replaying to data file\n");
+    fprintf(stderr, "[REPL] WAL receiver started (last_lsn=%u)\n", g_last_received_lsn);
 
     int records = 0;
     while (g_repl_running) {
@@ -325,6 +345,14 @@ static void *receiver_loop(void *arg)
                 }
                 records++;
 
+                /* Update replication slot LSN (persist every 100 records) */
+                {
+                    uint32_t rec_lsn;
+                    memcpy(&rec_lsn, rec, 4);
+                    g_last_received_lsn = rec_lsn;
+                    if (records % 100 == 0) slot_save(rec_lsn);
+                }
+
                 /* CDC: decode page image for logical replication events */
                 if (g_cdc_callback && rec_page_no > 0) {
                     int64_t ts = 0;
@@ -340,8 +368,66 @@ static void *receiver_loop(void *arg)
         }
     }
 
-    fprintf(stderr, "[REPL] WAL receiver stopped after %d records\n", records);
+    if (g_last_received_lsn > 0) slot_save(g_last_received_lsn);
+    fprintf(stderr, "[REPL] WAL receiver stopped after %d records (last_lsn=%u)\n",
+            records, g_last_received_lsn);
     close(sock);
+    return NULL;
+}
+
+/* Auto-reconnect wrapper — retries connection with exponential backoff */
+static char g_master_host[256];
+static int  g_master_port;
+static int  g_data_fd_saved;
+
+static void *reconnect_loop(void *arg)
+{
+    (void)arg;
+    int backoff_sec = 1;
+
+    while (g_repl_running) {
+        /* Load last confirmed LSN */
+        uint32_t start_lsn = slot_load();
+
+        /* Connect to master */
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) { sleep(backoff_sec); continue; }
+
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(g_master_port);
+        struct hostent *he = gethostbyname(g_master_host);
+        if (he) memcpy(&addr.sin_addr, he->h_addr, he->h_length);
+        else addr.sin_addr.s_addr = inet_addr(g_master_host);
+
+        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            close(sock);
+            fprintf(stderr, "[REPL] Cannot connect to master %s:%d — retry in %ds\n",
+                    g_master_host, g_master_port, backoff_sec);
+            sleep(backoff_sec);
+            if (backoff_sec < 30) backoff_sec *= 2;  /* exponential backoff, max 30s */
+            continue;
+        }
+
+        backoff_sec = 1;  /* reset on successful connect */
+        fprintf(stderr, "[REPL] Connected to master %s:%d (resume from LSN %u)\n",
+                g_master_host, g_master_port, start_lsn);
+
+        /* Send handshake with last known LSN */
+        char handshake[64];
+        snprintf(handshake, sizeof(handshake), "REPLICATE %u\n", start_lsn);
+        send(sock, handshake, strlen(handshake), 0);
+
+        /* Run receiver loop (blocks until disconnect) */
+        int *args = malloc(sizeof(int) * 2);
+        args[0] = sock;
+        args[1] = g_data_fd_saved;
+        receiver_loop(args);  /* blocks until connection drops */
+
+        if (g_repl_running)
+            fprintf(stderr, "[REPL] Connection lost — reconnecting...\n");
+    }
     return NULL;
 }
 
@@ -349,42 +435,15 @@ int repl_start_receiver(const char *master_host, int master_port, int data_fd)
 {
     g_is_replica = 1;
     g_repl_running = 1;
+    strncpy(g_master_host, master_host, 255);
+    g_master_port = master_port;
+    g_data_fd_saved = data_fd;
 
-    /* Connect to master */
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        fprintf(stderr, "[REPL] Cannot create socket\n");
-        return -1;
-    }
+    /* Load persisted LSN */
+    slot_load();
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(master_port);
-
-    struct hostent *he = gethostbyname(master_host);
-    if (he) memcpy(&addr.sin_addr, he->h_addr, he->h_length);
-    else addr.sin_addr.s_addr = inet_addr(master_host);
-
-    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "[REPL] Cannot connect to master %s:%d: %s\n",
-                master_host, master_port, strerror(errno));
-        close(sock);
-        return -1;
-    }
-
-    fprintf(stderr, "[REPL] Connected to master %s:%d\n", master_host, master_port);
-
-    /* Send handshake with last known LSN */
-    char handshake[64];
-    snprintf(handshake, sizeof(handshake), "REPLICATE 0\n");
-    send(sock, handshake, strlen(handshake), 0);
-
-    /* Start receiver thread */
-    int *args = malloc(sizeof(int) * 2);
-    args[0] = sock;
-    args[1] = data_fd;
-    pthread_create(&g_receiver_thread, NULL, receiver_loop, args);
+    /* Start auto-reconnect thread */
+    pthread_create(&g_receiver_thread, NULL, reconnect_loop, NULL);
 
     return 0;
 }
