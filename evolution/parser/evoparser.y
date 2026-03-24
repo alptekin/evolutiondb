@@ -157,6 +157,7 @@
 
 %token KEY
 
+%token LESS
 %token LONGTEXT
 %token LOW_PRIORITY
 %token LEFT
@@ -167,11 +168,13 @@
 %token LONGBLOB
 
 %token MATCH
+%token MAXVALUE
 %token MEDIUMTEXT
 %token MEDIUMBLOB
 %token MEDIUMINT
 
 %token NATURAL
+%token NODE
 %token NO_ACTION
 %token NULLX
 
@@ -185,6 +188,7 @@
 
 %token QUICK
 
+%token RANGE
 %token REAL
 %token RECLAIM
 %token REFERENCES
@@ -196,6 +200,8 @@
 
 %token SQL_SMALL_RESULT
 %token SCHEMA
+%token SHARD
+%token SHARDS
 %token SHARE
 %token SKIP
 %token SOME
@@ -214,6 +220,7 @@
 %token GLOBAL
 %token PRESERVE
 %token TEXT
+%token THAN
 %token TIMESTAMP
 %token TABLE
 %token THEN
@@ -323,7 +330,7 @@ expr: NAME
         $$ = expr_make_column($1);
         free($1);
     }
-| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); $$ = expr_make_column($3); free($1); free($3); }
+| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
 | USERVAR									{ emit("USERVAR %s", $1); $$ = expr_make_string($1); free($1); }
 | STRING
     {
@@ -705,9 +712,10 @@ NAME opt_as_alias index_hint
     {
         emit("TABLE %s", $1);
         GetSelTableName($1);
+        if (g_qctx) AddJoinTable($1, g_currentAlias);
         free($1);
     }
-| NAME '.' NAME opt_as_alias index_hint                                         { emit("TABLE %s.%s", $1, $3); free($1); free($3); }
+| NAME '.' NAME opt_as_alias index_hint                                         { emit("TABLE %s.%s", $1, $3); if (g_qctx) AddJoinTable($3, g_currentAlias); free($1); free($3); }
 | table_subquery opt_as NAME                                                    { emit("SUBQUERYAS %s", $3); free($3); }
 | '(' table_references ')'							{ emit("TABLEREFERENCES %d", $2); }
 ;
@@ -718,15 +726,15 @@ opt_as: AS
 
 join_table:
 table_reference opt_inner_cross JOIN table_factor opt_join_condition
-										{ emit("JOIN %d", 100+$2); }
+										{ emit("JOIN %d", 100+$2); SetLastJoinType(100+$2); }
 | table_reference STRAIGHT_JOIN table_factor
-										{ emit("JOIN %d", 200); }
+										{ emit("JOIN %d", 200); SetLastJoinType(200); }
 | table_reference STRAIGHT_JOIN table_factor ON expr
-										{ emit("JOIN %d", 200); }
+										{ emit("JOIN %d", 200); SetLastJoinType(200); SetJoinOnExpr($5); }
 | table_reference left_or_right opt_outer JOIN table_factor join_condition
-										{ emit("JOIN %d", 300+$2+$3); }
+										{ emit("JOIN %d", 300+$2+$3); SetLastJoinType(300+$2+$3); }
 | table_reference NATURAL opt_left_or_right_outer JOIN table_factor
-										{ emit("JOIN %d", 400+$3); }
+										{ emit("JOIN %d", 400+$3); SetLastJoinType(400+$3); }
 ;
 
 opt_inner_cross: /* nil */							{ $$ = 0; }
@@ -751,7 +759,7 @@ opt_join_condition: /* nil */
 | join_condition
 ;
 
-join_condition: ON expr								{ emit("ONEXPR"); }
+join_condition: ON expr								{ emit("ONEXPR"); SetJoinOnExpr($2); }
 | USING '(' column_list ')'							{ emit("USING %d", $3); }
 ;
 
@@ -1402,6 +1410,36 @@ opt_table_options: /* empty */
     | opt_table_options AUTO_INCREMENT INTNUM            { emit("TABLE OPT AUTOINC %d", $3); SetTableAutoIncrement($3); }
     | opt_table_options ON NAME DELETE NAME              { emit("TABLE OPT ON COMMIT DELETE ROWS"); g_create.onCommitDelete = 1; }
     | opt_table_options ON NAME PRESERVE NAME            { emit("TABLE OPT ON COMMIT PRESERVE ROWS"); g_create.onCommitDelete = 0; }
+    | opt_table_options SHARD BY HASH '(' NAME ')' SHARDS INTNUM
+        { emit("SHARD HASH %s %d", $6, $9); SetShardHash($6, $9); free($6); }
+    | opt_table_options SHARD BY RANGE '(' NAME ')' '(' shard_range_list ')'
+        { emit("SHARD RANGE %s", $6); SetShardRange($6); free($6); }
+;
+
+shard_range_list: shard_range_def
+    | shard_range_list ',' shard_range_def
+;
+
+shard_range_def: SHARD NAME VALUES LESS THAN STRING ON NODE INTNUM
+    {
+        char *sv = $6;
+        int slen = (int)strlen(sv);
+        char stripped[256];
+        if (slen >= 2 && (sv[0] == '\'' || sv[0] == '"')) {
+            strncpy(stripped, sv + 1, slen - 2);
+            stripped[slen - 2] = '\0';
+        } else {
+            strncpy(stripped, sv, sizeof(stripped) - 1);
+            stripped[sizeof(stripped) - 1] = '\0';
+        }
+        AddShardRangeDef($2, stripped, $9);
+        free($2); free(sv);
+    }
+    | SHARD NAME VALUES LESS THAN MAXVALUE ON NODE INTNUM
+    {
+        AddShardRangeDef($2, "", $9);
+        free($2);
+    }
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME

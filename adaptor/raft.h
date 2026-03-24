@@ -113,4 +113,9 @@ void raft_get_lag(uint32_t *my_lsn, uint32_t lags[], int *num_nodes);
 int raft_add_member(const char *host, int port);
 int raft_remove_member(int node_id);
 
+/* Distributed query engine: node info accessors */
+int raft_get_num_nodes(void);
+int raft_get_my_node_id(void);
+int raft_get_node_host_port(int node_id, char *host, int host_size, int *port);
+
 #endif /* RAFT_H */

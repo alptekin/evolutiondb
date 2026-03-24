@@ -599,6 +599,18 @@ int CreateTableProcess(void)
                               g_create.isTemporary, g_create.onCommitDelete);
     if (rc >= 0) {
         g_create.lastCreatedTableId = (uint32_t)rc;  /* save for temp table tracking */
+
+        /* Distributed: mark table as remote if ON NODE specified */
+        extern __thread uint32_t g_dist_create_node_id;
+        if (g_dist_create_node_id > 0) {
+            uint32_t node_id = g_dist_create_node_id - 1;
+            g_dist_create_node_id = 0;
+            cat_update_owner_node((uint32_t)rc, tableName,
+                                  schDesc.schema_id, node_id);
+            /* Remote table: clear local PK tree and heap (data lives on remote node) */
+            cat_update_pk_root((uint32_t)rc, tableName, schDesc.schema_id, 0);
+            cat_update_heap_page((uint32_t)rc, tableName, schDesc.schema_id, 0);
+        }
     }
     if (rc < 0) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
@@ -693,6 +705,70 @@ int CreateTableProcess(void)
         }
     }
 
+    /* Store shard metadata if SHARD BY specified */
+    if (g_create.shardType != 0) {
+        TableDesc td;
+        if (cat_find_table(schDesc.schema_id, tableName, &td) == 0) {
+            /* Validate shard key column exists */
+            ColumnDesc shardCols[CAT_MAX_COLUMNS];
+            int snc = cat_find_columns(td.table_id, shardCols, CAT_MAX_COLUMNS);
+            int found = 0;
+            for (int si = 0; si < snc; si++) {
+                if (strcasecmp(shardCols[si].col_name, g_create.shardKey) == 0) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "shard key column \"%s\" not found", g_create.shardKey);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE("42703");
+                TruncateCreate();
+                return -1;
+            }
+
+            /* Update table's shard info */
+            int sirc = cat_update_shard_info(td.table_id, tableName, schDesc.schema_id,
+                                  g_create.shardType, g_create.shardKey,
+                                  g_create.shardType == 1 ? g_create.shardCount
+                                                          : g_create.shardRangeCount);
+            (void)sirc;
+
+            if (g_create.shardType == 1) {
+                /* HASH: create shard_count entries with round-robin node assignment */
+                extern int dist_is_enabled(void);
+                extern int dist_get_num_nodes(void);
+                int num_nodes = dist_is_enabled() ? dist_get_num_nodes() : 1;
+                if (num_nodes < 1) num_nodes = 1;
+                for (int si = 0; si < g_create.shardCount; si++) {
+                    ShardDesc sd;
+                    memset(&sd, 0, sizeof(sd));
+                    sd.table_id = td.table_id;
+                    sd.shard_ordinal = si;
+                    snprintf(sd.shard_name, sizeof(sd.shard_name), "s%d", si);
+                    sd.owner_node_id = si % num_nodes;
+                    sd.range_bound[0] = '\0';
+                    cat_create_shard(&sd);
+                }
+            } else {
+                /* RANGE: create entries from shardRanges */
+                for (int si = 0; si < g_create.shardRangeCount; si++) {
+                    ShardDesc sd;
+                    memset(&sd, 0, sizeof(sd));
+                    sd.table_id = td.table_id;
+                    sd.shard_ordinal = si;
+                    strncpy(sd.shard_name, g_create.shardRanges[si].name,
+                            sizeof(sd.shard_name) - 1);
+                    sd.owner_node_id = g_create.shardRanges[si].node_id;
+                    strncpy(sd.range_bound, g_create.shardRanges[si].bound,
+                            sizeof(sd.range_bound) - 1);
+                    cat_create_shard(&sd);
+                }
+            }
+        }
+    }
+
     printf("command(s) completed successfully!..\n");
     TruncateCreate();
 
@@ -728,6 +804,12 @@ void TruncateCreate(void)
     g_create.autoIncStep = 1;
     g_create.pkColumnCount = 0;
     memset(g_create.pkColumnNames, 0, sizeof(g_create.pkColumnNames));
+
+    /* Reset shard state */
+    g_create.shardType = 0;
+    g_create.shardKey[0] = '\0';
+    g_create.shardCount = 0;
+    g_create.shardRangeCount = 0;
 
     /* Reset FK state */
     g_constr.fkCount = 0;
@@ -1746,4 +1828,37 @@ int CreateDomainProcess(const char *name, int typeVal, ExprNode *checkExpr,
     cat_add_constraint(0, 'D', name, definition, 0, "");
     printf("command(s) completed successfully!..\n");
     return 0;
+}
+
+/* ================================================================
+ *  Shard parser helpers
+ * ================================================================ */
+
+void SetShardHash(const char *colName, int shardCount)
+{
+    g_create.shardType = 1; /* SHARD_HASH */
+    strncpy(g_create.shardKey, colName, sizeof(g_create.shardKey) - 1);
+    g_create.shardKey[sizeof(g_create.shardKey) - 1] = '\0';
+    g_create.shardCount = shardCount;
+    g_create.shardRangeCount = 0;
+}
+
+void SetShardRange(const char *colName)
+{
+    g_create.shardType = 2; /* SHARD_RANGE */
+    strncpy(g_create.shardKey, colName, sizeof(g_create.shardKey) - 1);
+    g_create.shardKey[sizeof(g_create.shardKey) - 1] = '\0';
+    g_create.shardCount = g_create.shardRangeCount;
+}
+
+void AddShardRangeDef(const char *name, const char *bound, int node_id)
+{
+    int i = g_create.shardRangeCount;
+    if (i >= 7) return;
+    strncpy(g_create.shardRanges[i].name, name, 63);
+    g_create.shardRanges[i].name[63] = '\0';
+    strncpy(g_create.shardRanges[i].bound, bound, 255);
+    g_create.shardRanges[i].bound[255] = '\0';
+    g_create.shardRanges[i].node_id = node_id;
+    g_create.shardRangeCount++;
 }

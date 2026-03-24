@@ -49,6 +49,9 @@ ADAPTOR_SRCS = main.c \
                xa_transaction.c \
                replication.c \
                raft.c \
+               distributed.c \
+               shard.c \
+               join.c \
                tls.c \
                util.c
 

@@ -68,6 +68,12 @@ typedef struct {
     char     currentColGeneratedExpr[512];
     int      columnGeneratedModes[64];
     char     columnGeneratedExprs[64][512];
+    /* Sharding */
+    int      shardType;           /* SHARD_NONE/HASH/RANGE */
+    char     shardKey[128];
+    int      shardCount;          /* HASH: shard count */
+    struct { char name[64]; char bound[256]; int node_id; } shardRanges[7];
+    int      shardRangeCount;
 } CreateOpts;
 
 /* ---- INSERT ---- */
@@ -98,6 +104,13 @@ typedef struct {
     int  sortDesc;
     /* FOR UPDATE / FOR SHARE locking */
     int  forUpdate;       /* 0=none, 1=FOR UPDATE, 2=FOR SHARE */
+    /* JOIN multi-table tracking */
+#define MAX_JOIN_TABLES 8
+    int   joinTableCount;
+    char  joinTables[MAX_JOIN_TABLES][256];
+    char  joinAliases[MAX_JOIN_TABLES][128];
+    int   joinTypes[MAX_JOIN_TABLES];  /* 0=FROM, 100+=INNER, 300+=LEFT/RIGHT */
+    ExprNode *joinOnExprs[MAX_JOIN_TABLES]; /* ON condition for tables[1..n] */
 } SelectOpts;
 
 /* ---- UPDATE ---- */
@@ -211,6 +224,8 @@ typedef struct QueryContext {
                                      int data_len, RowID old_rid);
     /* MVCC: current transaction ID for DML operations (0 = no MVCC) */
     uint32_t       mvcc_xid;
+    /* Distributed: target node for CREATE TABLE ON NODE N */
+    uint32_t       create_on_node_id;
 } QueryContext;
 
 /* ================================================================
