@@ -870,7 +870,11 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     }
 
     /* Update pk_root_page if it changed (bt2_insert may split root) */
-    td->pk_root_page = pk_tree.root_page;
+    if (pk_tree.root_page != td->pk_root_page) {
+        td->pk_root_page = pk_tree.root_page;
+        cat_update_pk_root(td->table_id, td->table_name,
+                           td->schema_id, pk_tree.root_page);
+    }
 
     return 0;
 }
