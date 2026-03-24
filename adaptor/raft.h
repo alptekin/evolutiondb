@@ -109,4 +109,8 @@ int raft_sync_commit(uint32_t lsn);
  * Fills lags[] with (my_lsn - node_lsn) for each node. */
 void raft_get_lag(uint32_t *my_lsn, uint32_t lags[], int *num_nodes);
 
+/* GAP-D8: Online member add/remove */
+int raft_add_member(const char *host, int port);
+int raft_remove_member(int node_id);
+
 #endif /* RAFT_H */

@@ -84,4 +84,69 @@ typedef void (*repl_change_callback)(const ReplicationChangeEvent *event, void *
  * during WAL replay/streaming. */
 void repl_set_change_callback(repl_change_callback cb, void *ctx);
 
+/* ----------------------------------------------------------------
+ *  GAP-D11: Replication TLS
+ * ---------------------------------------------------------------- */
+
+/* Enable TLS for replication connections (uses server TLS certs). */
+void repl_enable_tls(int enabled);
+
+/* ----------------------------------------------------------------
+ *  GAP-D12: Replication Authentication
+ * ---------------------------------------------------------------- */
+
+/* Set replication credentials (master verifies on connect). */
+void repl_set_auth(const char *user, const char *password);
+
+/* ----------------------------------------------------------------
+ *  GAP-D4: Multi-Replica Slot Tracking
+ * ---------------------------------------------------------------- */
+
+#define REPL_MAX_SLOTS 16
+
+typedef struct {
+    char     replica_id[64];     /* replica identifier */
+    uint32_t confirmed_lsn;     /* last confirmed LSN */
+    int      active;             /* 1 = connected */
+    int64_t  last_seen;          /* epoch microseconds */
+} ReplicationSlot;
+
+/* List all replication slots. Returns count. */
+int repl_list_slots(ReplicationSlot *out, int max);
+
+/* ----------------------------------------------------------------
+ *  GAP-D9: Base Backup
+ * ---------------------------------------------------------------- */
+
+/* Create a base backup: copy data file + record WAL position.
+ * backup_path: destination file path.
+ * Returns 0 on success, -1 on error. */
+int repl_create_backup(const char *backup_path);
+
+/* ----------------------------------------------------------------
+ *  GAP-D1: Auto-Promote (follower → leader transition)
+ * ---------------------------------------------------------------- */
+
+/* Promote this replica to standalone master (stop receiving WAL,
+ * accept DML). Called after Raft election or manual promote. */
+int repl_promote(void);
+
+/* ----------------------------------------------------------------
+ *  GAP-D7: CDC Streaming Protocol
+ * ---------------------------------------------------------------- */
+
+/* Start CDC streaming server on given port.
+ * External consumers connect and receive change events as JSON lines. */
+int repl_start_cdc_server(int port);
+
+/* ----------------------------------------------------------------
+ *  GAP-D8: Online Member Add/Remove
+ * ---------------------------------------------------------------- */
+
+/* Add a new node to the Raft cluster (online, no restart needed). */
+int repl_add_member(const char *host, int port);
+
+/* Remove a node from the Raft cluster. */
+int repl_remove_member(int node_id);
+
 #endif /* REPLICATION_H */
