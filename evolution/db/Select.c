@@ -211,6 +211,42 @@ int GetSelection(char *pname)
     return 0;
 }
 
+/* ================================================================
+ *  JOIN parser helpers
+ * ================================================================ */
+
+void AddJoinTable(const char *name, const char *alias)
+{
+    int i = g_sel.joinTableCount;
+    if (i >= MAX_JOIN_TABLES) return;
+    strncpy(g_sel.joinTables[i], name, 255);
+    g_sel.joinTables[i][255] = '\0';
+    if (alias && alias[0]) {
+        strncpy(g_sel.joinAliases[i], alias, 127);
+        g_sel.joinAliases[i][127] = '\0';
+    } else {
+        strncpy(g_sel.joinAliases[i], name, 127);
+        g_sel.joinAliases[i][127] = '\0';
+    }
+    g_sel.joinTypes[i] = (i == 0) ? 0 : 100; /* first table = FROM, rest default INNER */
+    g_sel.joinOnExprs[i] = NULL;
+    g_sel.joinTableCount++;
+}
+
+void SetLastJoinType(int type)
+{
+    int i = g_sel.joinTableCount - 1;
+    if (i < 0) return;
+    g_sel.joinTypes[i] = type;
+}
+
+void SetJoinOnExpr(struct ExprNode *expr)
+{
+    int i = g_sel.joinTableCount - 1;
+    if (i < 0) return;
+    g_sel.joinOnExprs[i] = expr;
+}
+
 int SelectProcess(void)
 {
     char *str2 = NULL;
@@ -295,6 +331,10 @@ int TruncateSelect(void)
         g_ins.data[i] = '\0';
         g_sel.tblName[i] = '\0';
     }
+
+    /* NOTE: Do NOT reset JOIN state here — it's needed post-parse
+     * for join execution in query_executor.c. JOIN state is reset
+     * in execute_via_parser after use. */
 
     return 0;
 }

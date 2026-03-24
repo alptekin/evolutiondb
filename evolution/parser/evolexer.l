@@ -152,6 +152,7 @@ KEY					{ return KEY; }
 LEADING					{ return LEADING; }
 
 LEFT					{ return LEFT; }
+LESS					{ return LESS; }
 LIKE					{ return LIKE; }
 LIMIT					{ return LIMIT; }
 LOCKED					{ return LOCKED; }
@@ -168,6 +169,7 @@ LONGTEXT				{ return LONGTEXT; }
 LOW_PRIORITY			{ return LOW_PRIORITY; }
 
 MATCH					{ return MATCH; }
+MAXVALUE				{ return MAXVALUE; }
 MEDIUMBLOB				{ return MEDIUMBLOB; }
 MIDDLEINT|MEDIUMINT		{ return MEDIUMINT; }
 MEDIUMTEXT				{ return MEDIUMTEXT; }
@@ -176,6 +178,7 @@ MEDIUMTEXT				{ return MEDIUMTEXT; }
 MOD						{ return MOD; }
 
 NATURAL					{ return NATURAL; }
+NODE					{ return NODE; }
 NO[ \t]+ACTION				{ return NO_ACTION; }
 NOT						{ return NOT; }
 
@@ -204,6 +207,7 @@ REGEXP|RLIKE			{ return REGEXP; }
 
 
 
+RANGE					{ return RANGE; }
 RECLAIM					{ return RECLAIM; }
 REFERENCES				{ return REFERENCES; }
 RENAME					{ return RENAME; }
@@ -214,6 +218,8 @@ RESTRICT				{ return RESTRICT; }
 RIGHT					{ return RIGHT; }
 ROLLUP					{ return ROLLUP; }
 SCHEMA					{ return SCHEMA; }
+SHARD					{ return SHARD; }
+SHARDS					{ return SHARDS; }
 SHARE					{ return SHARE; }
 SKIP					{ return SKIP; }
 
@@ -244,6 +250,7 @@ GLOBAL					{ return GLOBAL; }
 PRESERVE				{ return PRESERVE; }
 
 TEXT					{ return TEXT; }
+THAN					{ return THAN; }
 THEN					{ return THEN; }
 TIME					{ return TIME; }
 TIMESTAMP				{ return TIMESTAMP; }

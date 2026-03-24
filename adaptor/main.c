@@ -19,6 +19,7 @@
 #include "evo_protocol.h"
 #include "replication.h"
 #include "raft.h"
+#include "distributed.h"
 #include "tls.h"
 
 #define DEFAULT_PG_PORT   5433
@@ -75,6 +76,7 @@ int main(int argc, char *argv[])
     const char *replica_target = NULL;  /* --replica host:port */
     const char *cluster_nodes = NULL;   /* --cluster node1:port,node2:port,... */
     int node_id = -1;                   /* --node-id 0/1/2/... */
+    int dist_port = 9969;              /* --dist-port (distributed query engine) */
     int i;
 
     /* Parse CLI arguments */
@@ -93,6 +95,8 @@ int main(int argc, char *argv[])
             cluster_nodes = argv[++i];
         else if (strcmp(argv[i], "--node-id") == 0 && i + 1 < argc)
             node_id = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--dist-port") == 0 && i + 1 < argc)
+            dist_port = atoi(argv[++i]);
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
     }
@@ -180,6 +184,33 @@ int main(int argc, char *argv[])
     if (cluster_nodes && node_id >= 0) {
         if (raft_init(cluster_nodes, node_id) == 0)
             raft_start();
+    }
+
+    /* Start distributed query engine if cluster configured */
+    if (cluster_nodes && node_id >= 0) {
+        dist_init(node_id, pg_port);
+        /* Register all cluster nodes for distributed routing */
+        {
+            int nn = raft_get_num_nodes();
+            for (int ni = 0; ni < nn; ni++) {
+                char host[256];
+                int rport;
+                if (raft_get_node_host_port(ni, host, sizeof(host), &rport) == 0) {
+                    /* Compute PG port for each node: base pg_port + (node_id - my_id) offset
+                     * Default assumption: pg_port increments by 1 per node */
+                    int node_pg_port = pg_port + (ni - node_id);
+                    int node_dist_port = dist_port + (ni - node_id);
+                    dist_register_node(ni, host, node_pg_port, node_dist_port);
+                }
+            }
+        }
+        /* Start distributed listener thread */
+        static ListenerArg dist_arg;
+        dist_arg.port    = dist_port;
+        dist_arg.label   = "DIST";
+        dist_arg.handler = dist_handle_client;
+        thread_create(listener_thread, (THREAD_PARAM)&dist_arg);
+        printf("  DIST engine on port %d (node %d)\n", dist_port, node_id);
     }
 
     /* Start EVO listener in a background thread */

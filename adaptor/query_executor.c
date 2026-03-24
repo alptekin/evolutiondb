@@ -14,6 +14,7 @@
 #include "../evolution/db/tuple_format.h"
 #include "../evolution/db/buffer_pool.h"
 #include "pg_protocol.h"
+#include "join.h"
 #include "util.h"
 
 /* Flex/Bison externs (reentrant parser) */
@@ -130,7 +131,7 @@ static int is_explain_query(const char *sql)
 }
 
 /* Map EvoSQL type encoding to PostgreSQL type OID */
-static int type_encoding_to_pg_oid(int typeEncoding)
+int type_encoding_to_pg_oid(int typeEncoding)
 {
     int family = typeEncoding / 10000;
     switch (family) {
@@ -894,7 +895,7 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     if (lock_row_acquire(td.table_id, whereVal, ctx->tx_xid, lm) != 0) {
                         result_set_error(rs, "55P03", "could not obtain lock on row");
                         rwlock_rdunlock(&g_parse_lock);
-                        return;
+                        return 0;
                     }
                 }
                 int row = result_add_row(rs);
@@ -949,7 +950,7 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 if (lock_row_acquire(td.table_id, matchPKs[m], ctx->tx_xid, lm) != 0) {
                     result_set_error(rs, "55P03", "could not obtain lock on row");
                     rwlock_rdunlock(&g_parse_lock);
-                    return;
+                    return 0;
                 }
             }
             int row = result_add_row(rs);
@@ -2531,6 +2532,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_sel.orderByDesc = 0;
     g_sel.orderByCount = 0;
     g_sel.distinct = 0;
+    g_sel.joinTableCount = 0;
+    memset(g_sel.joinOnExprs, 0, sizeof(g_sel.joinOnExprs));
     g_create.totalColumnSize = 0;
     g_create.currentColNotNull = 0;
     g_create.currentColPrimaryKey = 0;
@@ -2667,6 +2670,108 @@ parser_done:
             g_sel.lastTable[0] != '\0') {
             execute_ctas(g_sel.lastTable, rs, ctx);
             g_create.ctasMode = CTAS_NONE;
+            g_sel.lastTable[0] = '\0';
+        }
+        /* Multi-table JOIN: if parser detected multiple tables, use join engine */
+        else if (!rs->has_error && g_sel.joinTableCount > 1) {
+            /* Take snapshot for MVCC visibility */
+            if (ctx) {
+                if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
+                    /* REPEATABLE READ / SERIALIZABLE: reuse TX snapshot */
+                } else {
+                    mvcc_snapshot_take(&ctx->snapshot);
+                    ctx->snapshot.my_xid = ctx->tx_xid;
+                    ctx->snapshot_valid = 1;
+                }
+            }
+
+            /* Build JoinPlan from parsed state (JoinPlan from join.h) */
+            JoinPlan plan;
+            memset(&plan, 0, sizeof(plan));
+            plan.num_tables = g_sel.joinTableCount;
+            for (int ji = 0; ji < g_sel.joinTableCount && ji < 8; ji++) {
+                strncpy(plan.tables[ji].name, g_sel.joinTables[ji], 255);
+                strncpy(plan.tables[ji].alias, g_sel.joinAliases[ji], 127);
+                plan.join_types[ji] = g_sel.joinTypes[ji];
+                plan.join_conds[ji] = g_sel.joinOnExprs[ji];
+                /* Resolve table to get owner_node */
+                TableDesc jtd;
+                const char *jdb = ctx ? ctx->database : "evosql";
+                const char *jsch = ctx ? ctx->schema : "default";
+                if (cat_resolve_table(jdb, jsch, g_sel.joinTables[ji], &jtd) == 0) {
+                    plan.tables[ji].owner_node = (int)jtd.owner_node_id;
+                    plan.tables[ji].table_id = jtd.table_id;
+                }
+            }
+            plan.where_expr = g_expr.whereExpr;
+
+            rwlock_rdlock(&g_parse_lock);
+            join_execute(&plan, rs, ctx, ctx ? &ctx->snapshot : NULL);
+            rwlock_rdunlock(&g_parse_lock);
+
+            /* Column projection: if SELECT specified columns (not *),
+             * filter the join result to only include requested columns. */
+            if (!rs->has_error && g_sel.columnCount > 0) {
+                /* Map requested columns to join result positions */
+                int col_map[64];
+                int map_count = 0;
+                for (int ci = 0; ci < g_sel.columnCount && ci < 64; ci++) {
+                    col_map[ci] = -1;
+                    for (int ji = 0; ji < rs->num_cols; ji++) {
+                        if (strcasecmp(rs->columns[ji].name, g_sel.columns[ci]) == 0) {
+                            col_map[ci] = ji;
+                            break;
+                        }
+                    }
+                    /* Fallback: try bare name match (e.g. "name" matches "c.name") */
+                    if (col_map[ci] < 0) {
+                        for (int ji = 0; ji < rs->num_cols; ji++) {
+                            const char *dot = strrchr(rs->columns[ji].name, '.');
+                            const char *bare = dot ? dot + 1 : rs->columns[ji].name;
+                            if (strcasecmp(bare, g_sel.columns[ci]) == 0) {
+                                col_map[ci] = ji;
+                                break;
+                            }
+                        }
+                    }
+                    if (col_map[ci] >= 0) map_count++;
+                }
+
+                if (map_count > 0) {
+                    /* Build projected result */
+                    ResultSet projected;
+                    result_init(&projected);
+                    projected.is_select = 1;
+                    for (int ci = 0; ci < g_sel.columnCount; ci++) {
+                        if (col_map[ci] >= 0)
+                            result_add_column(&projected, g_sel.columns[ci],
+                                              rs->columns[col_map[ci]].pg_type_oid);
+                        else
+                            result_add_column(&projected, g_sel.columns[ci], 25);
+                    }
+                    for (int ri = 0; ri < rs->num_rows; ri++) {
+                        int row = result_add_row(&projected);
+                        if (row < 0) break;
+                        for (int ci = 0; ci < g_sel.columnCount; ci++) {
+                            if (col_map[ci] >= 0) {
+                                if (rs->rows[ri].is_null[col_map[ci]])
+                                    result_set_null(&projected, row, ci);
+                                else if (rs->rows[ri].fields[col_map[ci]])
+                                    result_set_field(&projected, row, ci,
+                                                     rs->rows[ri].fields[col_map[ci]]);
+                            } else {
+                                result_set_null(&projected, row, ci);
+                            }
+                        }
+                    }
+                    /* Swap projected into rs */
+                    result_free(rs);
+                    *rs = projected;
+                    snprintf(rs->command_tag, sizeof(rs->command_tag),
+                             "SELECT %d", rs->num_rows);
+                }
+            }
+
             g_sel.lastTable[0] = '\0';
         }
         /* Collect SELECT results — runs under read lock, enabling
@@ -2889,90 +2994,103 @@ static void normalize_sql(char *sql)
     *dst = '\0';
     strcpy(sql, buf);
 
-    /* Pass 3: Remove "alias." prefix from qualified references
-     *   alias.*       → *       (e.g. s.* → *)
-     *   alias.column  → column  (e.g. x.id → id)
-     * Only triggers when char before dot is a letter/underscore (not digit,
-     * so 3.14 is left alone) and char after dot is letter/underscore or '*'. */
-    src = sql;
-    dst = buf;
-    while (*src) {
-        if (*src == '.' && dst > buf &&
-            (isalpha((unsigned char)*(src - 1)) || *(src - 1) == '_') &&
-            (src[1] == '*' || isalpha((unsigned char)src[1]) || src[1] == '_')) {
-            /* Walk backwards in dst to erase the alias word */
-            char *alias_start = dst - 1;
-            while (alias_start > buf && (isalnum((unsigned char)*(alias_start-1)) || *(alias_start-1) == '_'))
-                alias_start--;
-            dst = alias_start;
-            src++;  /* skip the dot, next char (*|column) will be copied normally */
-        } else {
-            *dst++ = *src++;
-        }
-    }
-    *dst = '\0';
-    strcpy(sql, buf);
-
-    /* Pass 4: Remove "AS <alias>" after table name in FROM clause ONLY.
-     * We locate the FROM clause boundaries, then only strip aliases there.
-     * DBeaver sends e.g. FROM students AS s — we strip " AS s". */
+    /* Detect JOIN keyword once — used by Pass 3 and Pass 4 */
+    int has_join = 0;
     {
-        /* Find FROM keyword (case-insensitive, word boundary) */
-        const char *from_start = NULL;
-        const char *from_end = NULL;
-        const char *scan = sql;
-        while (*scan) {
-            if (strncasecmp(scan, "FROM", 4) == 0 &&
-                (scan == sql || !isalnum((unsigned char)*(scan-1))) &&
-                (scan[4] == ' ' || scan[4] == '\t' || scan[4] == '\n')) {
-                from_start = scan + 4;
+        const char *j = sql;
+        while (*j) {
+            if (strncasecmp(j, "JOIN", 4) == 0 &&
+                (j == sql || !isalnum((unsigned char)*(j-1))) &&
+                !isalnum((unsigned char)j[4])) {
+                has_join = 1;
                 break;
             }
-            scan++;
+            j++;
         }
-        if (from_start) {
-            /* FROM clause ends at WHERE/GROUP/HAVING/ORDER/LIMIT/UNION or end */
-            const char *kw;
-            from_end = from_start + strlen(from_start);
-            for (kw = from_start; *kw; kw++) {
-                if ((strncasecmp(kw, "WHERE", 5) == 0 ||
-                     strncasecmp(kw, "GROUP", 5) == 0 ||
-                     strncasecmp(kw, "ORDER", 5) == 0 ||
-                     strncasecmp(kw, "LIMIT", 5) == 0 ||
-                     strncasecmp(kw, "UNION", 5) == 0) &&
-                    (kw == from_start || !isalnum((unsigned char)*(kw-1))) &&
-                    !isalnum((unsigned char)kw[5])) {
-                    from_end = kw;
-                    break;
-                }
-                if (strncasecmp(kw, "HAVING", 6) == 0 &&
-                    (kw == from_start || !isalnum((unsigned char)*(kw-1))) &&
-                    !isalnum((unsigned char)kw[6])) {
-                    from_end = kw;
-                    break;
-                }
-            }
-        }
+    }
 
-        src = sql;
-        dst = buf;
-        while (*src) {
-            /* Only strip " AS alias" when src is within the FROM clause region */
-            if (from_start && src >= from_start && src < from_end &&
-                (*src == ' ' || *src == '\t') &&
-                strncasecmp(src + 1, "AS ", 3) == 0 &&
-                (isalpha((unsigned char)src[4]) || src[4] == '_')) {
-                /* Skip " AS alias" */
-                char *p = (char *)src + 4;
-                while (*p && (isalnum((unsigned char)*p) || *p == '_'))
-                    p++;
-                src = p;
-            } else {
-                *dst++ = *src++;
+    /* Pass 3: Remove "alias." prefix from qualified references.
+     * SKIP for JOIN queries — qualified names needed for ON conditions. */
+    {
+        if (!has_join) {
+            src = sql;
+            dst = buf;
+            while (*src) {
+                if (*src == '.' && dst > buf &&
+                    (isalpha((unsigned char)*(src - 1)) || *(src - 1) == '_') &&
+                    (src[1] == '*' || isalpha((unsigned char)src[1]) || src[1] == '_')) {
+                    char *alias_start = dst - 1;
+                    while (alias_start > buf && (isalnum((unsigned char)*(alias_start-1)) || *(alias_start-1) == '_'))
+                        alias_start--;
+                    dst = alias_start;
+                    src++;
+                } else {
+                    *dst++ = *src++;
+                }
             }
+            *dst = '\0';
+            strcpy(sql, buf);
         }
-        *dst = '\0';
-        strcpy(sql, buf);
+    }
+
+    /* Pass 4: Remove "AS <alias>" after table name in FROM clause ONLY.
+     * DBeaver sends e.g. FROM students AS s — we strip " AS s".
+     * SKIP for JOIN queries — aliases are needed by the parser. */
+    {
+        if (!has_join) {
+            const char *from_start = NULL;
+            const char *from_end = NULL;
+            const char *scan = sql;
+            while (*scan) {
+                if (strncasecmp(scan, "FROM", 4) == 0 &&
+                    (scan == sql || !isalnum((unsigned char)*(scan-1))) &&
+                    (scan[4] == ' ' || scan[4] == '\t' || scan[4] == '\n')) {
+                    from_start = scan + 4;
+                    break;
+                }
+                scan++;
+            }
+            if (from_start) {
+                const char *kw;
+                from_end = from_start + strlen(from_start);
+                for (kw = from_start; *kw; kw++) {
+                    if ((strncasecmp(kw, "WHERE", 5) == 0 ||
+                         strncasecmp(kw, "GROUP", 5) == 0 ||
+                         strncasecmp(kw, "ORDER", 5) == 0 ||
+                         strncasecmp(kw, "LIMIT", 5) == 0 ||
+                         strncasecmp(kw, "UNION", 5) == 0) &&
+                        (kw == from_start || !isalnum((unsigned char)*(kw-1))) &&
+                        !isalnum((unsigned char)kw[5])) {
+                        from_end = kw;
+                        break;
+                    }
+                    if (strncasecmp(kw, "HAVING", 6) == 0 &&
+                        (kw == from_start || !isalnum((unsigned char)*(kw-1))) &&
+                        !isalnum((unsigned char)kw[6])) {
+                        from_end = kw;
+                        break;
+                    }
+                }
+            }
+
+            src = sql;
+            dst = buf;
+            while (*src) {
+                if (from_start && src >= from_start && src < from_end &&
+                    (*src == ' ' || *src == '\t') &&
+                    strncasecmp(src + 1, "AS ", 3) == 0 &&
+                    (isalpha((unsigned char)src[4]) || src[4] == '_')) {
+                    char *p = (char *)src + 4;
+                    while (*p && (isalnum((unsigned char)*p) || *p == '_'))
+                        p++;
+                    src = p;
+                } else {
+                    *dst++ = *src++;
+                }
+            }
+            *dst = '\0';
+            strcpy(sql, buf);
+        }
     }
 
     /* Clean up: strip trailing whitespace */
@@ -3240,6 +3358,19 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         g_last_insert_id[sizeof(g_last_insert_id) - 1] = '\0';
         g_gtt_overrides = ctx->gtt_data;
         g_gtt_override_count = ctx->gtt_count;
+    }
+
+    /* Distributed routing — forward to remote node if table is remote */
+    {
+        extern int dist_is_enabled(void);
+        extern int dist_try_route(const char *sql, ResultSet *rs, SessionCtx *ctx);
+        if (dist_is_enabled()) {
+            extern rwlock_t g_parse_lock;
+            rwlock_rdlock(&g_parse_lock);
+            int routed = dist_try_route(sql, rs, ctx);
+            rwlock_rdunlock(&g_parse_lock);
+            if (routed) return;
+        }
     }
 
     /* First, try catalog/internal queries (before normalization) */
@@ -3583,6 +3714,29 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* Parse selected columns from SQL for filtering */
     parse_select_columns(normalized);
+
+    /* Distributed: CREATE TABLE ... ON NODE N — strip suffix, set node ID */
+    {
+        extern __thread uint32_t g_dist_create_node_id;
+        if (g_dist_create_node_id > 0 && is_create_query(normalized)) {
+            /* Strip "ON NODE N" from the end of SQL for parser */
+            char *on_node_pos = NULL;
+            char *scan_node = normalized;
+            while (*scan_node) {
+                if (strncasecmp(scan_node, "ON NODE", 7) == 0 &&
+                    (scan_node == normalized || isspace((unsigned char)scan_node[-1])))
+                    on_node_pos = scan_node;
+                scan_node++;
+            }
+            if (on_node_pos) {
+                while (on_node_pos > normalized && isspace((unsigned char)on_node_pos[-1]))
+                    on_node_pos--;
+                *on_node_pos = '\0';
+            }
+        } else {
+            g_dist_create_node_id = 0;
+        }
+    }
 
     /* Real EvoSQL query */
     execute_via_parser(normalized, rs, ctx);
