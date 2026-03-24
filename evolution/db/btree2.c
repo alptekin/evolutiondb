@@ -486,7 +486,7 @@ static int insert_recursive(uint32_t page_no,
                     pgm_write_page(page_no, page);
                     return 0;
                 }
-                return 1;  /* duplicate */
+                return -2;  /* duplicate key — NOT a split */
             }
             if (cmp < 0) {
                 insert_before = i;
