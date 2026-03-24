@@ -69,4 +69,7 @@ void session_drop_temp_tables(SessionCtx *ctx);
 /* Clean up GTT session-private data on disconnect */
 void session_cleanup_gtt(SessionCtx *ctx);
 
+/* Map EvoSQL type encoding to PostgreSQL type OID */
+int type_encoding_to_pg_oid(int typeEncoding);
+
 #endif /* QUERY_EXECUTOR_H */

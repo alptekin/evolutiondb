@@ -512,3 +512,19 @@ int raft_remove_member(int node_id)
             node_id, g_num_nodes);
     return 0;
 }
+
+/* ----------------------------------------------------------------
+ *  Distributed query engine: node info accessors
+ * ---------------------------------------------------------------- */
+
+int raft_get_num_nodes(void)   { return g_num_nodes; }
+int raft_get_my_node_id(void)  { return g_my_id; }
+
+int raft_get_node_host_port(int node_id, char *host, int host_size, int *port)
+{
+    if (node_id < 0 || node_id >= g_num_nodes) return -1;
+    strncpy(host, g_nodes[node_id].host, host_size - 1);
+    host[host_size - 1] = '\0';
+    *port = g_nodes[node_id].port;
+    return 0;
+}

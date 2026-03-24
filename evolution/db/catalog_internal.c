@@ -135,12 +135,16 @@ static void deserialize_schema(const char *buf, SchemaDesc *s)
 /* --- Table --- */
 static void serialize_table(const TableDesc *t, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d",
+    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d",
              t->table_id, t->schema_id, t->table_name,
              t->pk_root_page, t->heap_page,
              t->num_columns, t->pad_size,
              t->auto_inc_col, t->auto_inc_counter, t->auto_inc_step,
-             t->is_temporary, t->on_commit_delete);
+             t->is_temporary, t->on_commit_delete,
+             t->owner_node_id,
+             t->shard_type,
+             t->shard_key[0] ? t->shard_key : "",
+             t->shard_count);
 }
 
 static void deserialize_table(const char *buf, TableDesc *t)
@@ -168,6 +172,30 @@ static void deserialize_table(const char *buf, TableDesc *t)
         p = next_field(p, field, sizeof(field)); t->on_commit_delete = atoi(field);
     } else {
         t->on_commit_delete = 1; /* default: DELETE ROWS */
+    }
+    /* owner_node_id — distributed placement, optional */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->owner_node_id = (uint32_t)atoi(field);
+    } else {
+        t->owner_node_id = 0; /* default: local */
+    }
+    /* shard_type — optional */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->shard_type = atoi(field);
+    } else {
+        t->shard_type = SHARD_NONE;
+    }
+    /* shard_key — optional */
+    if (p && *p) {
+        p = next_field(p, t->shard_key, CAT_MAX_NAME_LEN);
+    } else {
+        t->shard_key[0] = '\0';
+    }
+    /* shard_count — optional */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->shard_count = atoi(field);
+    } else {
+        t->shard_count = 0;
     }
     (void)p;
 }
@@ -901,6 +929,43 @@ int cat_update_pk_root(uint32_t table_id, const char *table_name,
     TableDesc t;
     deserialize_table(record, &t);
     t.pk_root_page = pk_root_page;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_table(&t, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+    return 0;
+}
+
+int cat_update_owner_node(uint32_t table_id, const char *table_name,
+                          uint32_t schema_id, uint32_t owner_node_id)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_table_key(schema_id, table_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    TableDesc t;
+    deserialize_table(record, &t);
+    t.owner_node_id = owner_node_id;
 
     char new_record[CAT_MAX_RECORD_LEN];
     serialize_table(&t, new_record, sizeof(new_record));
@@ -1916,4 +1981,195 @@ int cat_resolve_table(const char *db_name, const char *schema_name,
         return -1;
 
     return cat_find_table(schema.schema_id, table_name, out);
+}
+
+/* ================================================================
+ *  Shard operations (CAT_SYS_SHARDS)
+ * ================================================================ */
+
+static void make_shard_key(uint32_t table_id, int ordinal,
+                           char *out, int size)
+{
+    snprintf(out, size, "%010u:%010d", table_id, ordinal);
+}
+
+static void serialize_shard(const ShardDesc *s, char *buf, int size)
+{
+    snprintf(buf, size, "%u;%d;%s;%d;%s",
+             s->table_id, s->shard_ordinal, s->shard_name,
+             s->owner_node_id, s->range_bound);
+}
+
+static void deserialize_shard(const char *buf, ShardDesc *s)
+{
+    char field[256];
+    const char *p = buf;
+    p = next_field(p, field, sizeof(field)); s->table_id = (uint32_t)atoi(field);
+    p = next_field(p, field, sizeof(field)); s->shard_ordinal = atoi(field);
+    p = next_field(p, s->shard_name, CAT_MAX_NAME_LEN);
+    p = next_field(p, field, sizeof(field)); s->owner_node_id = atoi(field);
+    p = next_field(p, s->range_bound, sizeof(s->range_bound));
+    (void)p;
+}
+
+int cat_create_shard(const ShardDesc *sd)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_shard_key(sd->table_id, sd->shard_ordinal, key, sizeof(key));
+
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SHARDS], key, &existing) == 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    serialize_shard(sd, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+
+    RowID rid = cat_store_record(CAT_SYS_SHARDS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+
+    return bt2_insert(&g_cat_trees[CAT_SYS_SHARDS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_list_shards(uint32_t table_id, ShardDesc *out, int max)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+
+    BTree2Cursor cur;
+    int seek_rc = bt2_cursor_seek(&g_cat_trees[CAT_SYS_SHARDS], prefix, &cur);
+    if (seek_rc < 0)
+        return 0;
+
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max) {
+        int next_rc = bt2_cursor_next(&cur, key, &rid);
+        if (next_rc != 0) break;
+        if (strncmp(key, prefix, strlen(prefix)) != 0) break;
+        char record[CAT_MAX_RECORD_LEN];
+        int rr = cat_read_record(rid, record, sizeof(record));
+        if (rr > 0) {
+            deserialize_shard(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}
+
+int cat_find_shard(uint32_t table_id, int ordinal, ShardDesc *out)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_shard_key(table_id, ordinal, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SHARDS], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    deserialize_shard(record, out);
+    return 0;
+}
+
+int cat_drop_shards(uint32_t table_id)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+
+    BTree2Cursor cur;
+    char keys[64][BT2_MAX_KEY_LEN + 1];
+    RowID rids[64];
+    int count = 0;
+
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_SHARDS], prefix, &cur) == 0) {
+        char key[BT2_MAX_KEY_LEN + 1];
+        RowID rid;
+        while (count < 64 && bt2_cursor_next(&cur, key, &rid) == 0) {
+            if (strncmp(key, prefix, strlen(prefix)) != 0) break;
+            strncpy(keys[count], key, BT2_MAX_KEY_LEN);
+            keys[count][BT2_MAX_KEY_LEN] = '\0';
+            rids[count] = rid;
+            count++;
+        }
+    }
+
+    for (int i = 0; i < count; i++) {
+        cat_delete_record(rids[i]);
+        bt2_delete(&g_cat_trees[CAT_SYS_SHARDS], keys[i]);
+    }
+    return count;
+}
+
+int cat_update_shard_owner(uint32_t table_id, int ordinal, int new_owner)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_shard_key(table_id, ordinal, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SHARDS], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    ShardDesc sd;
+    deserialize_shard(record, &sd);
+    sd.owner_node_id = new_owner;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_shard(&sd, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_SHARDS, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_SHARDS], key, new_rid);
+    return 0;
+}
+
+int cat_update_shard_info(uint32_t table_id, const char *table_name,
+                          uint32_t schema_id, int shard_type,
+                          const char *shard_key, int shard_count)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_table_key(schema_id, table_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    TableDesc t;
+    deserialize_table(record, &t);
+    t.shard_type = shard_type;
+    strncpy(t.shard_key, shard_key, CAT_MAX_NAME_LEN - 1);
+    t.shard_key[CAT_MAX_NAME_LEN - 1] = '\0';
+    t.shard_count = shard_count;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_table(&t, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+    return 0;
 }
