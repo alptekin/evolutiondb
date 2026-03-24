@@ -472,3 +472,43 @@ void raft_get_lag(uint32_t *my_lsn, uint32_t lags[], int *num_nodes)
             lags[i] = g_my_lsn - g_nodes[i].last_confirmed_lsn;
     }
 }
+
+/* GAP-D8: Online member add */
+int raft_add_member(const char *host, int port)
+{
+    pthread_mutex_lock(&g_raft_lock);
+    if (g_num_nodes >= RAFT_MAX_NODES) {
+        pthread_mutex_unlock(&g_raft_lock);
+        return -1;
+    }
+    int idx = g_num_nodes++;
+    strncpy(g_nodes[idx].host, host, 255);
+    g_nodes[idx].port = port;
+    g_nodes[idx].sock = -1;
+    g_nodes[idx].connected = 0;
+    g_nodes[idx].last_confirmed_lsn = 0;
+    pthread_mutex_unlock(&g_raft_lock);
+    fprintf(stderr, "[RAFT] Added member %s:%d (node %d)\n", host, port, idx);
+    return idx;
+}
+
+/* GAP-D8: Online member remove */
+int raft_remove_member(int node_id)
+{
+    pthread_mutex_lock(&g_raft_lock);
+    if (node_id < 0 || node_id >= g_num_nodes || node_id == g_my_id) {
+        pthread_mutex_unlock(&g_raft_lock);
+        return -1;
+    }
+    if (g_nodes[node_id].sock >= 0)
+        close(g_nodes[node_id].sock);
+    /* Shift remaining nodes */
+    for (int i = node_id; i < g_num_nodes - 1; i++)
+        g_nodes[i] = g_nodes[i + 1];
+    g_num_nodes--;
+    if (g_my_id > node_id) g_my_id--;
+    pthread_mutex_unlock(&g_raft_lock);
+    fprintf(stderr, "[RAFT] Removed member %d (cluster now %d nodes)\n",
+            node_id, g_num_nodes);
+    return 0;
+}
