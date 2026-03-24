@@ -101,6 +101,10 @@ int raft_is_leader(void);
  * Returns 1 if majority ACK'd, 0 if not (async replication). */
 int raft_replicate_wal(uint32_t lsn);
 
+/* Synchronous commit: wait until majority has ACK'd the given LSN.
+ * Blocks up to 500ms. Returns 1 if majority confirmed, 0 on timeout. */
+int raft_sync_commit(uint32_t lsn);
+
 /* Get replication lag info for monitoring.
  * Fills lags[] with (my_lsn - node_lsn) for each node. */
 void raft_get_lag(uint32_t *my_lsn, uint32_t lags[], int *num_nodes);
