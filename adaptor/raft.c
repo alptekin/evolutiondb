@@ -440,6 +440,27 @@ int raft_replicate_wal(uint32_t lsn)
     return (acks >= majority) ? 1 : 0;
 }
 
+/* Synchronous commit: wait until majority has ACK'd the given LSN.
+ * Returns 1 if majority confirmed, 0 if timeout (500ms). */
+int raft_sync_commit(uint32_t lsn)
+{
+    if (g_role != RAFT_LEADER || g_num_nodes <= 1) return 1;
+
+    int majority = g_num_nodes / 2 + 1;
+    int64_t deadline = now_ms() + 500;  /* 500ms timeout */
+
+    while (now_ms() < deadline) {
+        int acks = 1;  /* self */
+        for (int i = 0; i < g_num_nodes; i++) {
+            if (i == g_my_id) continue;
+            if (g_nodes[i].last_confirmed_lsn >= lsn) acks++;
+        }
+        if (acks >= majority) return 1;
+        usleep(10 * 1000);  /* poll every 10ms */
+    }
+    return 0;  /* timeout — async fallback */
+}
+
 void raft_get_lag(uint32_t *my_lsn, uint32_t lags[], int *num_nodes)
 {
     *my_lsn = g_my_lsn;
