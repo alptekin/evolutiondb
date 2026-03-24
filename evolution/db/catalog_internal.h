@@ -42,6 +42,11 @@ typedef struct {
     char     schema_name[CAT_MAX_NAME_LEN];
 } SchemaDesc;
 
+/* Shard type constants */
+#define SHARD_NONE   0
+#define SHARD_HASH   1
+#define SHARD_RANGE  2
+
 typedef struct {
     uint32_t table_id;
     uint32_t schema_id;
@@ -55,7 +60,19 @@ typedef struct {
     int      auto_inc_step;
     int      is_temporary;     /* 0=normal, 1=LOCAL TEMPORARY, 2=GLOBAL TEMPORARY */
     int      on_commit_delete; /* GTT only: 1=ON COMMIT DELETE ROWS (default), 0=PRESERVE ROWS */
+    uint32_t owner_node_id;   /* distributed: 0=local (default), >0=remote node */
+    int      shard_type;       /* SHARD_NONE / SHARD_HASH / SHARD_RANGE */
+    char     shard_key[CAT_MAX_NAME_LEN]; /* column name used for sharding */
+    int      shard_count;      /* HASH: number of shards */
 } TableDesc;
+
+typedef struct {
+    uint32_t table_id;
+    int      shard_ordinal;          /* 0-based shard index */
+    char     shard_name[CAT_MAX_NAME_LEN];
+    int      owner_node_id;
+    char     range_bound[256];       /* RANGE: upper bound, "" = MAXVALUE */
+} ShardDesc;
 
 typedef struct {
     uint32_t table_id;
@@ -165,6 +182,24 @@ int cat_update_heap_page(uint32_t table_id, const char *table_name,
 int cat_update_pk_root(uint32_t table_id, const char *table_name,
                        uint32_t schema_id, uint32_t pk_root_page);
 int cat_list_tables(uint32_t schema_id, TableDesc *out, int max);
+
+/* Update owner_node_id for distributed table placement. */
+int cat_update_owner_node(uint32_t table_id, const char *table_name,
+                          uint32_t schema_id, uint32_t owner_node_id);
+
+/* Update shard metadata for a table. */
+int cat_update_shard_info(uint32_t table_id, const char *table_name,
+                          uint32_t schema_id, int shard_type,
+                          const char *shard_key, int shard_count);
+
+/* ----------------------------------------------------------------
+ *  Shard operations (CAT_SYS_SHARDS)
+ * ---------------------------------------------------------------- */
+int cat_create_shard(const ShardDesc *sd);
+int cat_list_shards(uint32_t table_id, ShardDesc *out, int max);
+int cat_find_shard(uint32_t table_id, int ordinal, ShardDesc *out);
+int cat_drop_shards(uint32_t table_id);
+int cat_update_shard_owner(uint32_t table_id, int ordinal, int new_owner);
 
 /* ----------------------------------------------------------------
  *  Column operations

@@ -743,8 +743,18 @@ double expr_evaluate_num(const ExprNode *e,
     case EXPR_COLUMN: {
         int c;
         for (c = 0; c < num_cols; c++) {
-            if (strcasecmp(col_names[c], e->val.col_name) == 0) {
+            if (strcasecmp(col_names[c], e->val.col_name) == 0)
                 return strtod(col_values[c], NULL);
+        }
+        /* Qualified fallback */
+        {
+            const char *dot = strchr(e->val.col_name, '.');
+            const char *bare = dot ? dot + 1 : e->val.col_name;
+            for (c = 0; c < num_cols; c++) {
+                const char *cn_bare = strrchr(col_names[c], '.');
+                cn_bare = cn_bare ? cn_bare + 1 : col_names[c];
+                if (strcasecmp(cn_bare, bare) == 0)
+                    return strtod(col_values[c], NULL);
             }
         }
         return 0.0;
@@ -824,16 +834,28 @@ int expr_evaluate(const ExprNode *e,
      * (preserves formatting: dates, strings, booleans, etc.) */
     if (e->type == EXPR_COLUMN) {
         int c;
+        /* Exact match first */
         for (c = 0; c < num_cols; c++) {
             if (strcasecmp(col_names[c], e->val.col_name) == 0) {
-                /* If the column value is NULL_MARKER, signal NULL */
-                if (strcmp(col_values[c], NULL_MARKER) == 0) {
-                    out_buf[0] = '\0';
-                    return 0;
-                }
+                if (strcmp(col_values[c], NULL_MARKER) == 0) { out_buf[0] = '\0'; return 0; }
                 strncpy(out_buf, col_values[c], buf_size - 1);
                 out_buf[buf_size - 1] = '\0';
                 return 1;
+            }
+        }
+        /* Qualified fallback: strip qualifier */
+        {
+            const char *dot = strchr(e->val.col_name, '.');
+            const char *bare = dot ? dot + 1 : e->val.col_name;
+            for (c = 0; c < num_cols; c++) {
+                const char *cn_bare = strrchr(col_names[c], '.');
+                cn_bare = cn_bare ? cn_bare + 1 : col_names[c];
+                if (strcasecmp(cn_bare, bare) == 0) {
+                    if (strcmp(col_values[c], NULL_MARKER) == 0) { out_buf[0] = '\0'; return 0; }
+                    strncpy(out_buf, col_values[c], buf_size - 1);
+                    out_buf[buf_size - 1] = '\0';
+                    return 1;
+                }
             }
         }
         out_buf[0] = '\0';

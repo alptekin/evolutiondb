@@ -2681,6 +2681,218 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
 /* ----------------------------------------------------------------
  *  Main dispatch
  * ---------------------------------------------------------------- */
+/* ----------------------------------------------------------------
+ *  Distributed commands: SHOW TABLE PLACEMENT, SHOW NODES,
+ *  MOVE TABLE x TO NODE N, CREATE TABLE ... ON NODE N
+ * ---------------------------------------------------------------- */
+static int handle_distributed(const char *sql, ResultSet *rs, SessionCtx *ctx)
+{
+    extern int dist_is_enabled(void);
+    extern int dist_get_my_id(void);
+    extern int dist_get_num_nodes(void);
+    extern int dist_get_node_info(int node_id, void *out);
+    extern int dist_move_table(const char *table_name, int dest_node_id,
+                               ResultSet *rs, SessionCtx *ctx);
+
+    /* SHOW TABLE PLACEMENT */
+    if (starts_with_i(sql, "SHOW") && stristr_found(sql, "placement")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "table_name", PG_OID_TEXT);
+        result_add_column(rs, "schema", PG_OID_TEXT);
+        result_add_column(rs, "owner_node_id", PG_OID_INT4);
+        result_add_column(rs, "location", PG_OID_TEXT);
+
+        DatabaseDesc dbDesc;
+        const char *db = ctx ? ctx->database : "evosql";
+        if (cat_find_database(db, &dbDesc) == 0) {
+            /* List all schemas in this database */
+            SchemaDesc schemas[32];
+            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            for (int si = 0; si < ns; si++) {
+                TableDesc tables[256];
+                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                for (int ti = 0; ti < nt; ti++) {
+                    if (tables[ti].is_temporary) continue;
+                    int row = result_add_row(rs);
+                    result_set_field(rs, row, 0, tables[ti].table_name);
+                    result_set_field(rs, row, 1, schemas[si].schema_name);
+                    char node_str[16];
+                    snprintf(node_str, sizeof(node_str), "%u", tables[ti].owner_node_id);
+                    result_set_field(rs, row, 2, node_str);
+                    int my_id = dist_is_enabled() ? dist_get_my_id() : 0;
+                    if ((int)tables[ti].owner_node_id == my_id || tables[ti].owner_node_id == 0)
+                        result_set_field(rs, row, 3, "LOCAL");
+                    else
+                        result_set_field(rs, row, 3, "REMOTE");
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* SHOW NODES */
+    if (starts_with_i(sql, "SHOW") && stristr_found(sql, "nodes")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "node_id", PG_OID_INT4);
+        result_add_column(rs, "host", PG_OID_TEXT);
+        result_add_column(rs, "pg_port", PG_OID_INT4);
+        result_add_column(rs, "role", PG_OID_TEXT);
+
+        if (dist_is_enabled()) {
+            int nn = dist_get_num_nodes();
+            int my_id = dist_get_my_id();
+            for (int i = 0; i < nn; i++) {
+                /* Use a temporary struct to get node info */
+                typedef struct { char host[256]; int pg_port; int dist_port; } DNI;
+                DNI ni;
+                memset(&ni, 0, sizeof(ni));
+                dist_get_node_info(i, &ni);
+
+                int row = result_add_row(rs);
+                char id_str[16];
+                snprintf(id_str, sizeof(id_str), "%d", i);
+                result_set_field(rs, row, 0, id_str);
+                result_set_field(rs, row, 1, ni.host);
+                char port_str[16];
+                snprintf(port_str, sizeof(port_str), "%d", ni.pg_port);
+                result_set_field(rs, row, 2, port_str);
+                result_set_field(rs, row, 3, (i == my_id) ? "SELF" : "PEER");
+            }
+        } else {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, "0");
+            result_set_field(rs, row, 1, "localhost");
+            result_set_field(rs, row, 2, "5433");
+            result_set_field(rs, row, 3, "STANDALONE");
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* MOVE TABLE <name> TO NODE <n> */
+    if (starts_with_i(sql, "MOVE")) {
+        const char *p = sql + 4;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "TABLE", 5) != 0) return 0;
+        p += 5;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        /* Extract table name */
+        char tname[256];
+        int ti = 0;
+        while (*p && !isspace((unsigned char)*p) && *p != ';' && ti < 255)
+            tname[ti++] = *p++;
+        tname[ti] = '\0';
+
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "TO", 2) != 0) {
+            result_set_error(rs, "42601", "Syntax: MOVE TABLE <name> TO NODE <n>");
+            return 1;
+        }
+        p += 2;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "NODE", 4) != 0) {
+            result_set_error(rs, "42601", "Syntax: MOVE TABLE <name> TO NODE <n>");
+            return 1;
+        }
+        p += 4;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        int dest = atoi(p);
+        result_init(rs);
+        dist_move_table(tname, dest, rs, ctx);
+        return 1;
+    }
+
+    /* SHOW SHARDS <table_name> */
+    if (starts_with_i(sql, "SHOW") && stristr_found(sql, "shards")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "shard_name", PG_OID_TEXT);
+        result_add_column(rs, "ordinal", PG_OID_INT4);
+        result_add_column(rs, "owner_node_id", PG_OID_INT4);
+        result_add_column(rs, "range_bound", PG_OID_TEXT);
+        result_add_column(rs, "shard_type", PG_OID_TEXT);
+        result_add_column(rs, "shard_key", PG_OID_TEXT);
+
+        /* Extract table name from "SHOW SHARDS <table>" */
+        const char *p = sql;
+        while (*p && isspace((unsigned char)*p)) p++;
+        p += 4; /* SHOW */
+        while (*p && isspace((unsigned char)*p)) p++;
+        /* Skip "SHARDS" */
+        if (strncasecmp(p, "SHARDS", 6) == 0) p += 6;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        char tname[256];
+        int ti = 0;
+        while (*p && !isspace((unsigned char)*p) && *p != ';' && ti < 255)
+            tname[ti++] = *p++;
+        tname[ti] = '\0';
+
+        if (tname[0]) {
+            const char *db = ctx ? ctx->database : "evosql";
+            const char *sch = ctx ? ctx->schema : "default";
+            TableDesc td;
+            int rc = cat_resolve_table(db, sch, tname, &td);
+            if (rc == 0 && td.shard_type != 0) {
+                ShardDesc shards[7];
+                int ns = cat_list_shards(td.table_id, shards, 7);
+                for (int si = 0; si < ns; si++) {
+                    int row = result_add_row(rs);
+                    result_set_field(rs, row, 0, shards[si].shard_name);
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%d", shards[si].shard_ordinal);
+                    result_set_field(rs, row, 1, buf);
+                    snprintf(buf, sizeof(buf), "%d", shards[si].owner_node_id);
+                    result_set_field(rs, row, 2, buf);
+                    result_set_field(rs, row, 3,
+                        shards[si].range_bound[0] ? shards[si].range_bound : "MAXVALUE");
+                    result_set_field(rs, row, 4,
+                        td.shard_type == 1 ? "HASH" : "RANGE");
+                    result_set_field(rs, row, 5, td.shard_key);
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* CREATE TABLE ... ON NODE <n> — set thread-local for query_executor to strip.
+     * Only match ON NODE outside parentheses (avoids SHARD range definitions). */
+    if (starts_with_i(sql, "CREATE") && stristr_found(sql, "ON NODE")) {
+        const char *on_node = NULL;
+        const char *scan = sql;
+        int paren_depth = 0;
+        while (*scan) {
+            if (*scan == '(') paren_depth++;
+            else if (*scan == ')') { if (paren_depth > 0) paren_depth--; }
+            else if (paren_depth == 0 &&
+                     strncasecmp(scan, "ON NODE", 7) == 0 &&
+                     (scan == sql || isspace((unsigned char)scan[-1])) &&
+                     (scan[7] == '\0' || isspace((unsigned char)scan[7]))) {
+                on_node = scan;
+            }
+            scan++;
+        }
+        if (on_node) {
+            int node_id = atoi(on_node + 7);
+            /* Store node_id + 1 so that node 0 is distinguishable from "not set" */
+            extern __thread uint32_t g_dist_create_node_id;
+            g_dist_create_node_id = (uint32_t)(node_id + 1);
+            return 0; /* Let it fall through — ID picked up in query_execute */
+        }
+    }
+
+    return 0;
+}
+
+/* Thread-local for CREATE TABLE ON NODE N */
+__thread uint32_t g_dist_create_node_id = 0;
+
 int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     /* Empty or whitespace-only query */
@@ -2693,6 +2905,9 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
             return 1;
         }
     }
+
+    /* Distributed commands: SHOW TABLE PLACEMENT, SHOW NODES, MOVE TABLE */
+    if (handle_distributed(sql, rs, ctx)) return 1;
 
     /* User management: CREATE/DROP/ALTER USER */
     if (handle_user_mgmt(sql, rs)) return 1;

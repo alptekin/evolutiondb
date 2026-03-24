@@ -191,6 +191,7 @@ typedef pthread_rwlock_t rwlock_t;
         pthread_attr_t _attr;                                          \
         pthread_attr_init(&_attr);                                     \
         pthread_attr_setdetachstate(&_attr, PTHREAD_CREATE_DETACHED);  \
+        pthread_attr_setstacksize(&_attr, 8 * 1024 * 1024);           \
         if (pthread_create(&_tid, &_attr, fn, arg) != 0)               \
             fprintf(stderr, "pthread_create failed: %s\n",             \
                     strerror(errno));                                  \

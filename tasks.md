@@ -730,7 +730,7 @@
 
 ---
 
-### Task 36: ⬜ Configurable Buffer Pool Size (Feature #96)
+### Task 36: ✅ Configurable Buffer Pool Size (Feature #96)
 
 **Goal:** `SET buffer_pool_size = <pages>` or command-line `--buffer-pool-size`. In MySQL (innodb_buffer_pool_size), MSSQL (max server memory), and Oracle (SGA).
 
@@ -799,7 +799,7 @@
 
 ## Day 20 — Distributed & Reliability
 
-### Task 39: ⬜ XA Transactions — 2-Phase Commit (Feature #99)
+### Task 39: ✅ XA Transactions — 2-Phase Commit (Feature #99)
 
 **Goal:** Distributed transaction support via XA protocol. `XA START`, `XA END`, `XA PREPARE`, `XA COMMIT`. In MySQL, MSSQL, and Oracle.
 

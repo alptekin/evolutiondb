@@ -181,6 +181,16 @@ int ReadCheckConstraints(const char *tblName, char constraints[][1024], int maxC
 int ReadCheckConstraintsWithNames(const char *tblName, char constraints[][1024],
                                    char names[][128], int maxConstraints);
 
+/* Shard parser helpers (Create.c) */
+void SetShardHash(const char *colName, int shardCount);
+void SetShardRange(const char *colName);
+void AddShardRangeDef(const char *name, const char *bound, int node_id);
+
+/* JOIN parser helpers (Select.c) */
+void AddJoinTable(const char *name, const char *alias);
+void SetLastJoinType(int type);
+void SetJoinOnExpr(struct ExprNode *expr);
+
 /* Table-level UNIQUE parser helpers */
 void AddUniqueColumn(const char *colName);
 void AddUniqueComplete(void);
