@@ -128,6 +128,72 @@ def run():
     simple_query(s, "DROP TABLE trunc_fk_parent")
 
     # ═══════════════════════════════════════════
+    print("\n=== CASCADE ===")
+
+    simple_query(s, "CREATE TABLE cas_parent (id INTEGER PRIMARY KEY, name VARCHAR(50))")
+    simple_query(s, "CREATE TABLE cas_child (id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY (pid) REFERENCES cas_parent(id))")
+    simple_query(s, "INSERT INTO cas_parent VALUES (1, 'p1')")
+    simple_query(s, "INSERT INTO cas_child VALUES (10, 1)")
+
+    # CASCADE should truncate child automatically
+    _, _, err, _ = simple_query(s, "TRUNCATE TABLE cas_parent CASCADE")
+    check("TRUNCATE CASCADE succeeds", err is None)
+    check("CASCADE: parent empty", count(s, "cas_parent") == 0)
+    check("CASCADE: child empty", count(s, "cas_child") == 0)
+
+    # Re-insert and verify
+    simple_query(s, "INSERT INTO cas_parent VALUES (2, 'p2')")
+    check("CASCADE: re-insert works", count(s, "cas_parent") == 1)
+
+    simple_query(s, "DROP TABLE cas_child")
+    simple_query(s, "DROP TABLE cas_parent")
+
+    # ═══════════════════════════════════════════
+    print("\n=== CONTINUE IDENTITY ===")
+
+    simple_query(s, "CREATE TABLE ci_test (id INTEGER PRIMARY KEY AUTO_INCREMENT, name VARCHAR(50))")
+    simple_query(s, "INSERT INTO ci_test (name) VALUES ('a')")
+    simple_query(s, "INSERT INTO ci_test (name) VALUES ('b')")
+    simple_query(s, "INSERT INTO ci_test (name) VALUES ('c')")
+
+    # CONTINUE IDENTITY: counter should NOT reset
+    simple_query(s, "TRUNCATE TABLE ci_test CONTINUE IDENTITY")
+    simple_query(s, "INSERT INTO ci_test (name) VALUES ('after')")
+    _, r, _, _ = simple_query(s, "SELECT id FROM ci_test")
+    ci_id = int(r[0][0]) if r else 0
+    check(f"CONTINUE IDENTITY: id={ci_id} > 1 (counter preserved)", ci_id > 1)
+
+    # RESTART IDENTITY (default): counter should reset
+    simple_query(s, "TRUNCATE TABLE ci_test RESTART IDENTITY")
+    simple_query(s, "INSERT INTO ci_test (name) VALUES ('restart')")
+    _, r, _, _ = simple_query(s, "SELECT id FROM ci_test")
+    ri_id = int(r[0][0]) if r else 99
+    check("RESTART IDENTITY: id=1", ri_id == 1)
+
+    simple_query(s, "DROP TABLE ci_test")
+
+    # ═══════════════════════════════════════════
+    print("\n=== Multi-Table TRUNCATE ===")
+
+    simple_query(s, "CREATE TABLE mt1 (id INTEGER PRIMARY KEY, v VARCHAR(50))")
+    simple_query(s, "CREATE TABLE mt2 (id INTEGER PRIMARY KEY, v VARCHAR(50))")
+    simple_query(s, "CREATE TABLE mt3 (id INTEGER PRIMARY KEY, v VARCHAR(50))")
+    for i in range(1, 11):
+        simple_query(s, f"INSERT INTO mt1 VALUES ({i}, 'a{i}')")
+        simple_query(s, f"INSERT INTO mt2 VALUES ({i}, 'b{i}')")
+        simple_query(s, f"INSERT INTO mt3 VALUES ({i}, 'c{i}')")
+
+    _, _, err, _ = simple_query(s, "TRUNCATE TABLE mt1, mt2, mt3")
+    check("Multi-table TRUNCATE succeeds", err is None)
+    check("mt1 empty", count(s, "mt1") == 0)
+    check("mt2 empty", count(s, "mt2") == 0)
+    check("mt3 empty", count(s, "mt3") == 0)
+
+    simple_query(s, "DROP TABLE mt3")
+    simple_query(s, "DROP TABLE mt2")
+    simple_query(s, "DROP TABLE mt1")
+
+    # ═══════════════════════════════════════════
     print("\n=== Sharded Tables ===")
 
     # SHARD BY HASH

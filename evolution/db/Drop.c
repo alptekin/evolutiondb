@@ -56,49 +56,50 @@ int DropTableProcess(void)
     return 0;
 }
 
-int TruncateTableProcess(void)
+/* ----------------------------------------------------------------
+ *  TRUNCATE helper: truncate a single table (core logic)
+ *  Returns 0 on success, -1 on error (sets g_err).
+ * ---------------------------------------------------------------- */
+static int truncate_single_table(const char *tblName, int cascade, int continueIdentity)
 {
-    /* Step 1: Resolve table */
     TableDesc td;
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int ncols;
-    if (tapi_resolve(g_drop.tblName, &td, cols, &ncols) < 0) {
-        if (g_drop.ifExists) {
-            printf("command(s) completed successfully!..\n");
-            TruncateDrop();
-            return 0;
-        }
+    if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                 "table \"%s\" does not exist", g_drop.tblName);
+                 "table \"%s\" does not exist", tblName);
         g_err.error = 1;
         EVOSQL_SET_SQLSTATE("42P01");
-        TruncateDrop();
         return -1;
     }
 
-    /* Step 2: FK referential integrity check — reject if other tables
-     * reference this table and have data (RESTRICT semantics). */
+    /* FK referential integrity check */
     {
         ConstraintDesc refs[32];
         int nrefs = cat_list_referencing_fks(td.table_id, refs, 32);
         for (int i = 0; i < nrefs; i++) {
-            /* Check if the referencing table has any rows */
             TableDesc ref_td;
             if (cat_find_table_by_id(refs[i].table_id, &ref_td) == 0 &&
                 ref_td.table_id != td.table_id) { /* skip self-ref */
                 if (ref_td.pk_root_page != 0 && ref_td.heap_page != 0) {
-                    /* Quick check: try to read first row */
                     TableScanCursor sc;
                     if (tapi_scan_begin(&ref_td, &sc) == 0) {
                         char pk[256], rec[256];
                         if (tapi_scan_next(&sc, pk, rec, sizeof(rec)) == 0) {
-                            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                                     "cannot truncate table \"%s\": referenced by foreign key from \"%s\"",
-                                     g_drop.tblName, ref_td.table_name);
-                            g_err.error = 1;
-                            EVOSQL_SET_SQLSTATE("23503");
-                            TruncateDrop();
-                            return -1;
+                            if (cascade) {
+                                /* CASCADE: truncate referencing table first */
+                                int rc = truncate_single_table(ref_td.table_name,
+                                                                cascade, continueIdentity);
+                                if (rc < 0) return rc;
+                            } else {
+                                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                                         "cannot truncate table \"%s\": "
+                                         "referenced by foreign key from \"%s\"",
+                                         tblName, ref_td.table_name);
+                                g_err.error = 1;
+                                EVOSQL_SET_SQLSTATE("23503");
+                                return -1;
+                            }
                         }
                     }
                 }
@@ -106,30 +107,24 @@ int TruncateTableProcess(void)
         }
     }
 
-    /* Step 3: Destroy all secondary indexes and recreate empty */
+    /* Destroy all secondary indexes and recreate empty */
     {
         IndexDesc indexes[32];
         int nIdx = cat_list_indexes(td.table_id, indexes, 32);
         for (int ix = 0; ix < nIdx; ix++) {
-            if (indexes[ix].index_type == 'P') continue; /* PK handled separately */
+            if (indexes[ix].index_type == 'P') continue;
             if (indexes[ix].root_page == 0) continue;
 
-            /* Destroy old tree */
             if (indexes[ix].index_type == 'H' || indexes[ix].index_type == 'V') {
                 HashIndex hi = { .dir_page = indexes[ix].root_page };
                 hash_idx_destroy(&hi);
-            } else {
-                BTree2 idx_tree = { .root_page = indexes[ix].root_page };
-                bt2_destroy(&idx_tree);
-            }
-
-            /* Create new empty tree */
-            if (indexes[ix].index_type == 'H' || indexes[ix].index_type == 'V') {
                 HashIndex new_hi;
                 hash_idx_create(&new_hi, 16);
                 cat_update_index_root(td.table_id, indexes[ix].index_name,
                                        new_hi.dir_page);
             } else {
+                BTree2 idx_tree = { .root_page = indexes[ix].root_page };
+                bt2_destroy(&idx_tree);
                 BTree2 new_tree = {0};
                 bt2_create(&new_tree);
                 cat_update_index_root(td.table_id, indexes[ix].index_name,
@@ -138,37 +133,84 @@ int TruncateTableProcess(void)
         }
     }
 
-    /* Step 4: Destroy PK B+ tree and recreate empty */
+    /* Destroy PK B+ tree and recreate empty */
     {
         BTree2 pk_tree = tapi_pk_tree(&td);
         if (pk_tree.root_page != 0)
             bt2_destroy(&pk_tree);
-
         BTree2 new_pk = {0};
         bt2_create(&new_pk);
         cat_update_pk_root(td.table_id, td.table_name,
                            td.schema_id, new_pk.root_page);
     }
 
-    /* Step 5: Free all heap pages — next INSERT will allocate fresh ones */
+    /* Free all heap pages */
     tapi_free_heap_pages(&td);
     cat_update_heap_page(td.table_id, td.table_name, td.schema_id, 0);
 
-    /* Step 6: Reset AUTO_INCREMENT counter (0 so next insert gives 1) */
-    if (td.auto_inc_col >= 0) {
+    /* Reset AUTO_INCREMENT (unless CONTINUE IDENTITY) */
+    if (td.auto_inc_col >= 0 && !continueIdentity) {
         cat_update_auto_inc(td.table_id, td.table_name,
                             td.schema_id, 0);
     }
 
-    /* Step 7: Reset table statistics */
+    /* Reset table statistics */
     {
         TableStatsDesc ts = {0};
         ts.table_id = td.table_id;
         ts.row_count = 0;
         ts.page_count = 1;
-        ts.dead_tuple_count = 0;
-        ts.last_reclaim_xid = 0;
         cat_store_table_stats(&ts);
+    }
+
+    return 0;
+}
+
+/* Parser helpers */
+void TruncateAddTable(const char *name)
+{
+    int idx = g_drop.truncExtraCount;
+    if (idx >= 7) return;
+    char resolved[1024];
+    db_table_path(name, resolved, sizeof(resolved));
+    strncpy(g_drop.truncExtraTables[idx], resolved, 255);
+    g_drop.truncExtraTables[idx][255] = '\0';
+    g_drop.truncExtraCount++;
+}
+
+void TruncateSetCascade(void)
+{
+    g_drop.truncCascade = 1;
+}
+
+void TruncateSetContinueIdentity(void)
+{
+    g_drop.truncContinueIdentity = 1;
+}
+
+/* ----------------------------------------------------------------
+ *  TruncateTableProcess — main entry point (supports CASCADE,
+ *  CONTINUE IDENTITY, multi-table TRUNCATE)
+ * ---------------------------------------------------------------- */
+int TruncateTableProcess(void)
+{
+    int cascade = g_drop.truncCascade;
+    int contId  = g_drop.truncContinueIdentity;
+
+    /* Truncate primary table */
+    int rc = truncate_single_table(g_drop.tblName, cascade, contId);
+    if (rc < 0) {
+        TruncateDrop();
+        return rc;
+    }
+
+    /* Truncate extra tables (multi-table: TRUNCATE TABLE t1, t2, t3) */
+    for (int i = 0; i < g_drop.truncExtraCount; i++) {
+        rc = truncate_single_table(g_drop.truncExtraTables[i], cascade, contId);
+        if (rc < 0) {
+            TruncateDrop();
+            return rc;
+        }
     }
 
     printf("command(s) completed successfully!..\n");
@@ -189,6 +231,9 @@ int TruncateDrop(void)
     for (i = 0; i < 1024; ++i) {
         g_drop.tblName[i] = '\0';
     }
+    g_drop.truncCascade = 0;
+    g_drop.truncContinueIdentity = 0;
+    g_drop.truncExtraCount = 0;
 
     return 0;
 }

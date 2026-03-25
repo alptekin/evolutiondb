@@ -70,6 +70,8 @@
 %token ALWAYS
 
 %token IDENTITY
+%token CONTINUE
+%token RESTART
 %token GENERATED
 %token STORED
 %token VIRTUAL
@@ -1043,7 +1045,7 @@ drop_index_stmt: DROP INDEX NAME
 ;
 
 /** truncate table **/
-stmt: truncate_table_stmt
+stmt: truncate_table_stmt opt_truncate_options
     {
         emit("STMT");
         TruncateTableProcess();
@@ -1056,6 +1058,33 @@ truncate_table_stmt: TRUNCATE TABLE NAME
         GetDropTableName($3);
         free($3);
     }
+| TRUNCATE TABLE NAME ',' truncate_extra_tables
+    {
+        emit("TRUNCATETABLE %s (+multi)", $3);
+        GetDropTableName($3);
+        free($3);
+    }
+;
+
+truncate_extra_tables: NAME
+    {
+        emit("TRUNCATE_EXTRA %s", $1);
+        TruncateAddTable($1);
+        free($1);
+    }
+| truncate_extra_tables ',' NAME
+    {
+        emit("TRUNCATE_EXTRA %s", $3);
+        TruncateAddTable($3);
+        free($3);
+    }
+;
+
+opt_truncate_options: /* empty */
+| opt_truncate_options CASCADE                  { emit("TRUNCATE CASCADE"); TruncateSetCascade(); }
+| opt_truncate_options RESTRICT                 { emit("TRUNCATE RESTRICT"); }
+| opt_truncate_options RESTART IDENTITY         { emit("TRUNCATE RESTART IDENTITY"); }
+| opt_truncate_options CONTINUE IDENTITY        { emit("TRUNCATE CONTINUE IDENTITY"); TruncateSetContinueIdentity(); }
 ;
 
 /** reclaim table — defragmentation **/
