@@ -285,6 +285,27 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
         return pg_handle_startup(conn, out_user, user_size);
     }
 
+    /* CancelRequest — cancel a running query on another connection.
+     * Format: [len=16][code=80877102][pid:4][secret:4]
+     * We look up the session by pid+secret and set its cancel flag.
+     * This connection is closed immediately after (PG spec). */
+    if (protocol == PG_CANCEL_REQUEST) {
+        if (msg_len >= 16) {
+            int cancel_pid = ((unsigned char)buf[8]  << 24) |
+                             ((unsigned char)buf[9]  << 16) |
+                             ((unsigned char)buf[10] <<  8) |
+                             ((unsigned char)buf[11]);
+            int cancel_key = ((unsigned char)buf[12] << 24) |
+                             ((unsigned char)buf[13] << 16) |
+                             ((unsigned char)buf[14] <<  8) |
+                             ((unsigned char)buf[15]);
+            extern int session_cancel_by_key(int, int);
+            session_cancel_by_key(cancel_pid, cancel_key);
+            fprintf(stderr, "[PG] CancelRequest for pid=%d\n", cancel_pid);
+        }
+        return -1;  /* close this connection (PG spec) */
+    }
+
     if (protocol != PG_PROTOCOL_V3) {
         printf("[adaptor] Unsupported protocol version: %d\n", protocol);
         return -1;
@@ -375,13 +396,9 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
     pg_send_parameter_status(conn, "session_authorization", startup_user);
     pg_send_parameter_status(conn, "IntervalStyle", "postgres");
 
-    /* BackendKeyData — required by JDBC/DBeaver */
-    fprintf(stderr, "[debug] sending backend_key_data...\n"); fflush(stderr);
-    pg_send_backend_key_data(conn, platform_getpid(), 12345);
-
-    /* ReadyForQuery — idle */
-    fprintf(stderr, "[debug] sending ready_for_query...\n"); fflush(stderr);
-    pg_send_ready_for_query(conn, 'I');
+    /* NOTE: BackendKeyData and ReadyForQuery are sent by the caller
+     * (pg_handler.c) so that BackendKeyData can include the session_id
+     * and random cancel_key generated after startup completes. */
 
     fprintf(stderr, "[debug] startup handshake done!\n"); fflush(stderr);
     printf("[adaptor] Startup handshake completed (user: %s)\n", startup_user);

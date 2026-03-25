@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <sys/time.h>
 #include "lock_mgr.h"
+#include "database.h"   /* g_lock_timeout_ms */
 
 /* ================================================================
  *  Lock entry and hash table
@@ -232,13 +233,17 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
     wait_for_set(xid, e->holder_xid);
     e->waiter_count++;
 
+    /* Use per-session lock timeout if set, otherwise default */
+    int wait_ms = (g_lock_timeout_ms > 0) ? g_lock_timeout_ms
+                                           : LOCK_WAIT_TIMEOUT_MS;
+
     struct timespec ts;
     {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        ts.tv_sec = tv.tv_sec + LOCK_WAIT_TIMEOUT_MS / 1000;
+        ts.tv_sec = tv.tv_sec + wait_ms / 1000;
         ts.tv_nsec = tv.tv_usec * 1000 +
-                     (LOCK_WAIT_TIMEOUT_MS % 1000) * 1000000L;
+                     (wait_ms % 1000) * 1000000L;
         if (ts.tv_nsec >= 1000000000L) {
             ts.tv_sec++;
             ts.tv_nsec -= 1000000000L;
@@ -460,13 +465,16 @@ int lock_gap_check_insert(uint32_t table_id, const char *key, uint32_t xid)
     /* Wait for the gap lock to be released */
     blocker->waiter_count++;
 
+    int gap_wait_ms = (g_lock_timeout_ms > 0) ? g_lock_timeout_ms
+                                                : LOCK_WAIT_TIMEOUT_MS;
+
     struct timespec ts;
     {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        ts.tv_sec = tv.tv_sec + LOCK_WAIT_TIMEOUT_MS / 1000;
+        ts.tv_sec = tv.tv_sec + gap_wait_ms / 1000;
         ts.tv_nsec = tv.tv_usec * 1000 +
-                     (LOCK_WAIT_TIMEOUT_MS % 1000) * 1000000L;
+                     (gap_wait_ms % 1000) * 1000000L;
         if (ts.tv_nsec >= 1000000000L) {
             ts.tv_sec++;
             ts.tv_nsec -= 1000000000L;

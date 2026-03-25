@@ -835,7 +835,7 @@
 | 9 | Write unit tests — `tests/test_truncate.py`: truncate empty table, truncate with data, verify auto_inc reset, FK check. | `tests/test_truncate.py` |
 | 10 | Run regression + full system test. | `tests/`, `Dockerfile` |
 
-### Task 41: ⬜ Query Timeout, Statement Cancellation & Delay Functions (Features #75, #76, #77)
+### Task 41: ✅ Query Timeout, Statement Cancellation & Delay Functions (Features #75, #76, #77)
 
 **Goal:** Implement `SET statement_timeout = <ms>` to prevent runaway queries + `evo_sleep(ms)` and `evo_jitter(min_ms, max_ms)` SQL functions for artificial delay injection (pg_jitter-style). Uses a cross-platform watchdog thread approach — spawn a monitoring thread before query execution that sets a cancellation flag after timeout. The delay functions enable chaos-engineering style testing of timeout/retry behaviour.
 

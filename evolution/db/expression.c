@@ -212,6 +212,27 @@ ExprNode *expr_make_last_insert_id(void)
     return e;
 }
 
+ExprNode *expr_make_evo_sleep(ExprNode *duration)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_EVO_SLEEP;
+    e->left = duration;
+    strcpy(e->display, "evo_sleep");
+    return e;
+}
+
+ExprNode *expr_make_evo_jitter(ExprNode *min_ms, ExprNode *max_ms)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_EVO_JITTER;
+    e->left = min_ms;
+    e->right = max_ms;
+    strcpy(e->display, "evo_jitter");
+    return e;
+}
+
 void snowflake_init(void)
 {
     char *env = getenv("EVOSQL_MACHINE_ID");
@@ -1357,6 +1378,61 @@ int expr_evaluate(const ExprNode *e,
         } else {
             snprintf(out_buf, buf_size, "%s", g_last_insert_id);
         }
+        return 1;
+    }
+
+    /* evo_sleep(ms) — interruptible delay, returns 0 */
+    if (e->type == EXPR_EVO_SLEEP) {
+        char dur_str[64];
+        int dur_ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                              num_cols, dur_str, sizeof(dur_str)) : 0;
+        int ms = dur_ok ? atoi(dur_str) : 0;
+        if (ms > 0) {
+            /* Sleep in 50ms chunks so timeout/cancel can interrupt */
+            int remaining = ms;
+            while (remaining > 0) {
+                int chunk = remaining > 50 ? 50 : remaining;
+                usleep((unsigned)chunk * 1000);
+                remaining -= chunk;
+                /* Check cancellation via thread-local global */
+                extern volatile __thread int g_query_cancelled;
+                if (g_query_cancelled) {
+                    snprintf(out_buf, buf_size, "0");
+                    return 0;  /* signal interruption */
+                }
+            }
+        }
+        snprintf(out_buf, buf_size, "0");
+        return 1;
+    }
+
+    /* evo_jitter(min_ms, max_ms) — random delay, returns actual ms */
+    if (e->type == EXPR_EVO_JITTER) {
+        char min_str[64], max_str[64];
+        int min_ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                              num_cols, min_str, sizeof(min_str)) : 0;
+        int max_ok = e->right ? expr_evaluate(e->right, col_names, col_values,
+                                               num_cols, max_str, sizeof(max_str)) : 0;
+        int min_ms = min_ok ? atoi(min_str) : 0;
+        int max_ms = max_ok ? atoi(max_str) : 0;
+        if (max_ms < min_ms) max_ms = min_ms;
+        int delay = min_ms;
+        if (max_ms > min_ms)
+            delay = min_ms + (rand() % (max_ms - min_ms + 1));
+        if (delay > 0) {
+            int remaining = delay;
+            while (remaining > 0) {
+                int chunk = remaining > 50 ? 50 : remaining;
+                usleep((unsigned)chunk * 1000);
+                remaining -= chunk;
+                extern volatile __thread int g_query_cancelled;
+                if (g_query_cancelled) {
+                    snprintf(out_buf, buf_size, "%d", delay - remaining);
+                    return 0;
+                }
+            }
+        }
+        snprintf(out_buf, buf_size, "%d", delay);
         return 1;
     }
 
