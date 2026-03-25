@@ -142,6 +142,8 @@ INT4?|INTEGER			{ return INTEGER; }
 INTERVAL				{ return INTERVAL; }
 INTO					{ return INTO; }
 IS						{ return IS; }
+CONTINUE				{ return CONTINUE; }
+RESTART					{ return RESTART; }
 
 JOIN					{ return JOIN; }
 IDENTITY				{ return IDENTITY; }

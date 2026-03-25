@@ -2507,6 +2507,9 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_upd.tblName[0] = '\0';
     g_del.tblName[0] = '\0';
     g_drop.tblName[0] = '\0';
+    g_drop.truncCascade = 0;
+    g_drop.truncContinueIdentity = 0;
+    g_drop.truncExtraCount = 0;
     g_idx.name[0] = '\0';
     g_idx.tableName[0] = '\0';
     g_idx.columnName[0] = '\0';
