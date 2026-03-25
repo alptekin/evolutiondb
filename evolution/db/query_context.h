@@ -129,6 +129,12 @@ typedef struct {
 typedef struct {
     char tblName[1024];             /* was tblDropName */
     int  ifExists;                  /* was dropIfExists */
+    /* TRUNCATE options */
+    int  truncCascade;              /* 1 = CASCADE, 0 = RESTRICT (default) */
+    int  truncContinueIdentity;     /* 1 = CONTINUE IDENTITY, 0 = RESTART (default) */
+    /* Multi-table TRUNCATE: extra table names */
+    char truncExtraTables[7][256];
+    int  truncExtraCount;
 } DropOpts;
 
 /* ---- INDEX ---- */
