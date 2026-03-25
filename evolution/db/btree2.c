@@ -114,7 +114,7 @@ static int leaf_write_entry(void *page, int pos,
 {
     uint8_t *data = (uint8_t *)page + NODE_DATA_OFF + pos;
     data[0] = (uint8_t)klen;
-    memcpy(data + 1, key, klen);
+    memmove(data + 1, key, klen);  /* memmove: key may point into same page */
     memcpy(data + 1 + klen, &rid.page_no, 4);
     memcpy(data + 1 + klen + 4, &rid.slot_idx, 2);
     return 1 + klen + ROWID_SIZE;
