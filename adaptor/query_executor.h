@@ -46,6 +46,12 @@ typedef struct {
     /* XA Distributed Transaction state */
     int       xa_state;           /* XA_STATE_* (0 = not in XA) */
     char      xa_xid[128];       /* XA transaction identifier */
+
+    /* Query timeout & cancellation */
+    int       statement_timeout_ms; /* 0 = no timeout (default) */
+    volatile int cancel_requested;  /* 1 = cancel current query */
+    int64_t   query_start_ms;       /* timestamp when current query started */
+    int       cancel_key;           /* secret for CancelRequest */
 } SessionCtx;
 
 /*

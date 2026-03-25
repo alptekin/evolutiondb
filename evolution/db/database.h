@@ -14,6 +14,9 @@ typedef struct { uint32_t page_no; uint16_t slot_idx; } RowID;
 /* Forward declaration — full definition in expression.h */
 struct ExprNode;
 
+/* Query cancellation flag — thread-local, set by watchdog or CancelRequest */
+extern __thread volatile int g_query_cancelled;
+
 
 /* Minimum padded record size - ensures UPDATE can overwrite in-place */
 #define RECORD_PAD_SIZE 256

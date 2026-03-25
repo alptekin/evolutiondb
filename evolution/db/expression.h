@@ -66,6 +66,8 @@ typedef enum {
     EXPR_GEN_RANDOM_UUID_V7, /* gen_random_uuid_v7() — v7 time-ordered */
     EXPR_SNOWFLAKE_ID,       /* snowflake_id() — 64-bit time-ordered ID */
     EXPR_LAST_INSERT_ID,     /* last_insert_id() — per-session last generated value */
+    EXPR_EVO_SLEEP,          /* evo_sleep(ms) — delay function */
+    EXPR_EVO_JITTER,         /* evo_jitter(min_ms, max_ms) — random delay */
     EXPR_FUNC_CALL,       /* function call (future) */
     EXPR_STAR             /* SELECT * (sentinel) */
 } ExprNodeType;
@@ -133,6 +135,8 @@ ExprNode *expr_make_gen_random_uuid(void);
 ExprNode *expr_make_gen_random_uuid_v7(void);
 ExprNode *expr_make_snowflake_id(void);
 ExprNode *expr_make_last_insert_id(void);
+ExprNode *expr_make_evo_sleep(ExprNode *duration);
+ExprNode *expr_make_evo_jitter(ExprNode *min_ms, ExprNode *max_ms);
 
 /* Constants for expression array sizes */
 #define MAX_CASE_WHENS 32

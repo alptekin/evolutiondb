@@ -141,6 +141,7 @@ static inline void meta_iter_close(MetaIterator *it) {
  *  Linux / POSIX
  * ================================================================ */
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -200,6 +201,16 @@ typedef pthread_rwlock_t rwlock_t;
 
 /* Process ID */
 #define platform_getpid()  ((int)getpid())
+
+/* Cross-platform sleep (milliseconds) */
+#define platform_sleep_ms(ms)  usleep((unsigned)(ms) * 1000)
+
+/* Current time in milliseconds (monotonic-ish) */
+static inline int64_t platform_now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
 
 /* Directory listing (glob-based *.meta scanning) */
 typedef struct {

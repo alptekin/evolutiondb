@@ -49,6 +49,28 @@ extern __thread UndoLog *g_current_undo_log;
 #endif
 
 /* ---- Thread-safe query execution ---- */
+/* ── Statement timeout watchdog ── */
+typedef struct {
+    volatile int *cancel_flag;
+    volatile int *done_flag;
+    int timeout_ms;
+} WatchdogArg;
+
+static THREAD_RETURN watchdog_fn(THREAD_PARAM param)
+{
+    WatchdogArg *arg = (WatchdogArg *)param;
+    int elapsed = 0;
+    while (elapsed < arg->timeout_ms) {
+        platform_sleep_ms(10);
+        elapsed += 10;
+        if (*(arg->done_flag)) break;
+    }
+    if (!*(arg->done_flag))
+        *(arg->cancel_flag) = 1;
+    free(arg);
+    return 0;
+}
+
 void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     /* Allocate per-query context (thread-local) */
@@ -75,7 +97,31 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         g_tx_undo_callback = NULL;
     }
 
+    /* Statement timeout: start watchdog thread if configured */
+    extern __thread volatile int g_query_cancelled;
+    g_query_cancelled = 0;
+    volatile int query_done = 0;
+
+    if (ctx && ctx->statement_timeout_ms > 0) {
+        WatchdogArg *warg = (WatchdogArg *)malloc(sizeof(WatchdogArg));
+        if (warg) {
+            warg->cancel_flag = &g_query_cancelled;
+            warg->done_flag = &query_done;
+            warg->timeout_ms = ctx->statement_timeout_ms;
+            thread_create(watchdog_fn, warg);
+        }
+    }
+
     query_execute(sql, rs, ctx);
+
+    /* Signal watchdog to stop */
+    query_done = 1;
+
+    /* Check if query was cancelled by timeout */
+    if (g_query_cancelled && !rs->has_error) {
+        result_set_error(rs, "57014", "canceling statement due to statement timeout");
+    }
+    g_query_cancelled = 0;
 
     /* If error occurred within a transaction, mark it as aborted */
     if (ctx && ctx->in_transaction && rs->has_error)
