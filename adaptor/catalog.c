@@ -326,12 +326,18 @@ static int handle_set(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
-    /* SET statement_timeout = N (milliseconds, 0 = disabled) */
+    /* SET evo_statement_timeout = N (ms, 0 = disabled)
+     * Also accepts alias: SET statement_timeout = N */
     {
         const char *p = sql + 3;
         while (*p && isspace((unsigned char)*p)) p++;
-        if (strncasecmp(p, "statement_timeout", 17) == 0) {
-            p += 17;
+        int is_timeout = 0;
+        if (strncasecmp(p, "evo_statement_timeout", 21) == 0) {
+            p += 21; is_timeout = 1;
+        } else if (strncasecmp(p, "statement_timeout", 17) == 0) {
+            p += 17; is_timeout = 1;
+        }
+        if (is_timeout) {
             while (*p && (isspace((unsigned char)*p) || *p == '=' || *p == '\'')) p++;
             int val = atoi(p);
             if (ctx) ctx->statement_timeout_ms = (val >= 0) ? val : 0;
