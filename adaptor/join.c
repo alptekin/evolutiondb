@@ -395,14 +395,18 @@ int join_execute(JoinPlan *plan, ResultSet *rs, SessionCtx *ctx,
                 }
 
                 if (left_col && right_col) {
-                    /* Find left_col in merged columns (search all preceding tables) */
+                    /* Find left_col in merged columns.
+                     * Prefer the table matching la (left alias) if available. */
                     int merged_off = 0;
                     for (int j = 0; j < i; j++) {
-                        /* Check bare name and qualified name */
-                        for (int k = 0; k < tables[j].ncols; k++) {
-                            if (strcasecmp(tables[j].cols[k].col_name, left_col) == 0) {
-                                tables[i].left_key_idx = merged_off + k;
-                                goto found_left;
+                        int alias_match = (la[0] && (strcasecmp(tables[j].alias, la) == 0 ||
+                                                      strcasecmp(tables[j].name, la) == 0));
+                        if (la[0] == '\0' || alias_match) {
+                            for (int k = 0; k < tables[j].ncols; k++) {
+                                if (strcasecmp(tables[j].cols[k].col_name, left_col) == 0) {
+                                    tables[i].left_key_idx = merged_off + k;
+                                    goto found_left;
+                                }
                             }
                         }
                         merged_off += tables[j].ncols;
