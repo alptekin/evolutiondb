@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_COLUMNS   64
+#define MAX_COLUMNS   256
 #define MAX_ROWS_INIT 256    /* initial capacity, grows dynamically */
 #define MAX_FIELD_LEN 256    /* max length for temp buffers (not storage) */
 #define MAX_COL_NAME  128

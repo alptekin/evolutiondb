@@ -207,7 +207,11 @@ int GetSelTableName(char *pname)
 
 int GetSelection(char *pname)
 {
-    strcat(g_expr.whereSel, pname);
+    /* Guard against buffer overflow */
+    size_t cur = strlen(g_expr.whereSel);
+    size_t add = strlen(pname);
+    if (cur + add < sizeof(g_expr.whereSel) - 1)
+        strcat(g_expr.whereSel, pname);
     return 0;
 }
 
