@@ -2350,6 +2350,266 @@ static int ctas_insert_rows(const char *tableName, const ResultSet *selectRs,
 }
 
 /* ----------------------------------------------------------------
+ *  execute_insert_select — INSERT INTO ... SELECT execution
+ *
+ *  Called post-parse when g_ins.insertFromSelect is set.
+ *  1) Runs SELECT via collect_select_results (or join_execute) to get rows
+ *  2) Validates column count against target table
+ *  3) Converts ResultSet rows to g_ins.data format and calls InsertProcess
+ * ---------------------------------------------------------------- */
+static void execute_insert_select(const char *srcTable, ResultSet *rs, SessionCtx *ctx)
+{
+    /* Privilege check: needs both SELECT and INSERT */
+    if (ctx) {
+        if (!CheckPrivilege(ctx->username, ctx->database, ctx->schema,
+                            srcTable, "SELECT")) {
+            result_set_error(rs, "42501",
+                "Permission denied: INSERT...SELECT requires SELECT privilege");
+            return;
+        }
+        if (!CheckPrivilege(ctx->username, ctx->database, ctx->schema,
+                            g_ins.tblName, "INSERT")) {
+            result_set_error(rs, "42501",
+                "Permission denied: INSERT...SELECT requires INSERT privilege");
+            return;
+        }
+    }
+
+    /* A) Execute the SELECT to collect rows */
+    ResultSet selectRs;
+    memset(&selectRs, 0, sizeof(selectRs));
+    result_init(&selectRs);
+
+    /* Take MVCC snapshot */
+    if (ctx) {
+        if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
+            /* REPEATABLE READ / SERIALIZABLE: reuse TX snapshot */
+        } else {
+            mvcc_snapshot_take(&ctx->snapshot);
+            ctx->snapshot.my_xid = ctx->tx_xid;
+            ctx->snapshot_valid = 1;
+        }
+    }
+
+    if (g_sel.joinTableCount > 1) {
+        /* JOIN source */
+        JoinPlan plan;
+        memset(&plan, 0, sizeof(plan));
+        plan.num_tables = g_sel.joinTableCount;
+        for (int ji = 0; ji < g_sel.joinTableCount && ji < 8; ji++) {
+            strncpy(plan.tables[ji].name, g_sel.joinTables[ji], 255);
+            strncpy(plan.tables[ji].alias, g_sel.joinAliases[ji], 127);
+            plan.join_types[ji] = g_sel.joinTypes[ji];
+            plan.join_conds[ji] = g_sel.joinOnExprs[ji];
+            TableDesc jtd;
+            const char *jdb = ctx ? ctx->database : "evosql";
+            const char *jsch = ctx ? ctx->schema : "default";
+            if (cat_resolve_table(jdb, jsch, g_sel.joinTables[ji], &jtd) == 0) {
+                plan.tables[ji].owner_node = (int)jtd.owner_node_id;
+                plan.tables[ji].table_id = jtd.table_id;
+            }
+        }
+        plan.where_expr = g_expr.whereExpr;
+        join_execute(&plan, &selectRs, ctx, ctx ? &ctx->snapshot : NULL);
+
+        /* Column projection for JOIN results: join_execute returns all
+         * columns from all tables, so we need to project down. */
+        if (!selectRs.has_error && g_sel.columnCount > 0) {
+            int col_map[64];
+            int map_count = 0;
+            for (int ci = 0; ci < g_sel.columnCount && ci < 64; ci++) {
+                col_map[ci] = -1;
+                for (int ji = 0; ji < selectRs.num_cols; ji++) {
+                    if (strcasecmp(selectRs.columns[ji].name, g_sel.columns[ci]) == 0) {
+                        col_map[ci] = ji; break;
+                    }
+                }
+                if (col_map[ci] < 0) {
+                    for (int ji = 0; ji < selectRs.num_cols; ji++) {
+                        const char *dot = strrchr(selectRs.columns[ji].name, '.');
+                        const char *bare = dot ? dot + 1 : selectRs.columns[ji].name;
+                        if (strcasecmp(bare, g_sel.columns[ci]) == 0) {
+                            col_map[ci] = ji; break;
+                        }
+                    }
+                }
+                if (col_map[ci] >= 0) map_count++;
+            }
+            if (map_count > 0) {
+                ResultSet projected;
+                result_init(&projected);
+                projected.is_select = 1;
+                for (int ci = 0; ci < g_sel.columnCount; ci++) {
+                    if (col_map[ci] >= 0)
+                        result_add_column(&projected, g_sel.columns[ci],
+                                          selectRs.columns[col_map[ci]].pg_type_oid);
+                    else
+                        result_add_column(&projected, g_sel.columns[ci], 25);
+                }
+                for (int ri = 0; ri < selectRs.num_rows; ri++) {
+                    int row = result_add_row(&projected);
+                    if (row < 0) break;
+                    for (int ci = 0; ci < g_sel.columnCount; ci++) {
+                        if (col_map[ci] >= 0) {
+                            if (selectRs.rows[ri].is_null[col_map[ci]])
+                                result_set_null(&projected, row, ci);
+                            else if (selectRs.rows[ri].fields[col_map[ci]])
+                                result_set_field(&projected, row, ci,
+                                                 selectRs.rows[ri].fields[col_map[ci]]);
+                        } else {
+                            result_set_null(&projected, row, ci);
+                        }
+                    }
+                }
+                result_free(&selectRs);
+                selectRs = projected;
+            }
+        }
+    } else {
+        /* Single-table SELECT: collect_select_results already handles
+         * expression evaluation and column filtering internally. */
+        collect_select_results(srcTable, &selectRs,
+                               ctx ? &ctx->snapshot : NULL, 0, 0);
+    }
+
+    if (selectRs.has_error) {
+        result_set_error(rs, selectRs.error_sqlstate, selectRs.error_message);
+        result_free(&selectRs);
+        return;
+    }
+
+    /* B) Resolve target table to validate column count */
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    char tblName[1024];
+    strncpy(tblName, g_ins.tblName, sizeof(tblName) - 1);
+    tblName[sizeof(tblName) - 1] = '\0';
+    { char *dot = strstr(tblName, ".dat"); if (dot) *dot = '\0'; }
+
+    if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
+        result_set_error(rs, "42P01", "INSERT...SELECT: target table does not exist");
+        result_free(&selectRs);
+        return;
+    }
+
+    /* Column count validation */
+    int expectedCols = (g_ins.columnCount > 0) ? g_ins.columnCount : ncols;
+    if (selectRs.num_cols != expectedCols) {
+        char emsg[256];
+        snprintf(emsg, sizeof(emsg),
+                 "INSERT...SELECT: SELECT returns %d column(s) but target expects %d",
+                 selectRs.num_cols, expectedCols);
+        result_set_error(rs, "42601", emsg);
+        result_free(&selectRs);
+        return;
+    }
+
+    /* C) Empty result: success with 0 rows */
+    if (selectRs.num_rows == 0) {
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "INSERT 0 0");
+        result_free(&selectRs);
+        return;
+    }
+
+    /* D) Convert ResultSet rows to g_ins.data and call InsertProcess in batches.
+     * InsertProcess supports up to 256 rows at a time via ROW_SEP.
+     * Batch size is dynamically reduced to stay within RECORD_BUF_SIZE. */
+    int totalInserted = 0;
+    int r = 0;
+    const int buf_limit = RECORD_BUF_SIZE - 64; /* leave safety margin */
+
+    while (r < selectRs.num_rows) {
+        /* Check query cancellation */
+        if (g_query_cancelled) {
+            result_set_error(rs, "57014", "canceling statement due to statement timeout");
+            break;
+        }
+
+        /* Build g_ins.data one row at a time, flushing batch when buffer is near full */
+        g_ins.data[0] = '\0';
+        int batchCount = 0;
+        int pos = 0;
+
+        while (r + batchCount < selectRs.num_rows && batchCount < 256) {
+            int bi = r + batchCount;
+
+            /* Estimate row size before appending */
+            int rowSize = 1; /* ROW_SEP or terminator */
+            for (int c = 0; c < selectRs.num_cols; c++) {
+                if (selectRs.rows[bi].is_null[c] || !selectRs.rows[bi].fields[c])
+                    rowSize += 7 + 1; /* \x01NULL\x01; */
+                else
+                    rowSize += (int)strlen(selectRs.rows[bi].fields[c]) + 1;
+            }
+
+            /* Stop batch if this row would overflow the buffer */
+            if (pos + rowSize >= buf_limit) {
+                if (batchCount == 0) {
+                    result_set_error(rs, "54000",
+                        "INSERT...SELECT: row too large for insert buffer");
+                    goto ins_sel_done;
+                }
+                break;
+            }
+
+            /* Add ROW_SEP between rows */
+            if (batchCount > 0) {
+                if (pos > 0 && g_ins.data[pos - 1] == ';')
+                    g_ins.data[pos - 1] = '\x02';
+                else
+                    g_ins.data[pos++] = '\x02';
+            }
+
+            /* Append row fields as semicolon-delimited string */
+            for (int c = 0; c < selectRs.num_cols; c++) {
+                const char *val;
+                if (selectRs.rows[bi].is_null[c] || !selectRs.rows[bi].fields[c])
+                    val = "\x01NULL\x01";
+                else
+                    val = selectRs.rows[bi].fields[c];
+                int vlen = (int)strlen(val);
+                memcpy(g_ins.data + pos, val, vlen);
+                pos += vlen;
+                g_ins.data[pos++] = ';';
+            }
+            g_ins.data[pos] = '\0';
+            batchCount++;
+        }
+
+        /* Set table name for InsertProcess */
+        strncpy(g_ins.tblName, tblName, sizeof(g_ins.tblName) - 1);
+        g_ins.tblName[sizeof(g_ins.tblName) - 1] = '\0';
+
+        /* Call InsertProcess — it handles all validation:
+         * column reorder, AUTO_INCREMENT, generated columns,
+         * type/null/unique/check/FK validation, store, secondary indexes */
+        g_err.error = 0;
+        g_err.errorMsg[0] = '\0';
+        int rc = InsertProcess();
+
+        if (rc != 0 || g_err.error) {
+            /* Propagate error */
+            result_set_error(rs,
+                g_err.sqlstate[0] ? g_err.sqlstate : "42000",
+                g_err.errorMsg[0] ? g_err.errorMsg : "INSERT...SELECT failed");
+            break;
+        }
+
+        totalInserted += g_ins.rowCount;
+        r += batchCount;
+    }
+
+ins_sel_done:
+    if (!rs->has_error) {
+        snprintf(rs->command_tag, sizeof(rs->command_tag),
+                 "INSERT 0 %d", totalInserted);
+    }
+
+    result_free(&selectRs);
+}
+
+/* ----------------------------------------------------------------
  *  execute_ctas — CREATE TABLE AS SELECT execution
  *
  *  Called post-parse when g_create.ctasMode > 0.
@@ -2537,6 +2797,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_upd.rowCount = 0;
     g_ins.rowCount = 0;
     g_ins.columnCount = 0;
+    g_ins.insertFromSelect = 0;
     g_expr.whereSel[0] = '\0';
     g_create.columnDefs[0] = '\0';
     g_ins.columnNames[0] = '\0';
@@ -2683,6 +2944,26 @@ parser_done:
             execute_ctas(g_sel.lastTable, rs, ctx);
             g_create.ctasMode = CTAS_NONE;
             g_sel.lastTable[0] = '\0';
+        }
+        /* INSERT...SELECT: intercept before normal SELECT collection.
+         * The SELECT part was parsed but not collected yet; we collect
+         * it inside execute_insert_select and feed rows to InsertProcess. */
+        else if (!rs->has_error && g_ins.insertFromSelect &&
+                 (g_sel.lastTable[0] != '\0' || g_sel.joinTableCount > 1)) {
+            {
+                extern mutex_t g_dml_mutex;
+                mutex_lock(&g_dml_mutex);
+            }
+            execute_insert_select(
+                g_sel.lastTable[0] ? g_sel.lastTable : g_sel.joinTables[0],
+                rs, ctx);
+            {
+                extern mutex_t g_dml_mutex;
+                mutex_unlock(&g_dml_mutex);
+            }
+            g_ins.insertFromSelect = 0;
+            g_sel.lastTable[0] = '\0';
+            g_sel.joinTableCount = 0;
         }
         /* Multi-table JOIN: if parser detected multiple tables, use join engine */
         else if (!rs->has_error && g_sel.joinTableCount > 1) {
@@ -3741,8 +4022,21 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
-    /* Parse selected columns from SQL for filtering */
-    parse_select_columns(normalized);
+    /* Parse selected columns from SQL for filtering.
+     * For INSERT...SELECT, parse from the SELECT keyword. */
+    if (is_insert_query(normalized)) {
+        const char *sel = normalized;
+        while (*sel) {
+            if (strncasecmp(sel, "SELECT", 6) == 0 &&
+                (sel == normalized || isspace((unsigned char)sel[-1])))
+                break;
+            sel++;
+        }
+        if (*sel)
+            parse_select_columns(sel);
+    } else {
+        parse_select_columns(normalized);
+    }
 
     /* Distributed: CREATE TABLE ... ON NODE N — strip suffix, set node ID */
     {
