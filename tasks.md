@@ -818,7 +818,7 @@
 
 ---
 
-### Task 40: ⬜ TRUNCATE TABLE — Fast DDL Delete (Feature #100)
+### Task 40: ✅ TRUNCATE TABLE — Fast DDL Delete (Feature #100)
 
 **Goal:** `TRUNCATE TABLE name` — remove all rows without scanning (reset heap + index). Much faster than `DELETE FROM table`. In MySQL, MSSQL, and Oracle.
 
