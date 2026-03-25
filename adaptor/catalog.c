@@ -2047,10 +2047,29 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         result_add_column(rs, "conkey", PG_OID_TEXT);
         result_add_column(rs, "confkey", PG_OID_TEXT);
         result_add_column(rs, "description", PG_OID_TEXT);
+        /* Extra columns for DBeaver JOIN query */
+        result_add_column(rs, "tabrelname", PG_OID_TEXT);
+        result_add_column(rs, "refnamespace", PG_OID_INT4);
+        result_add_column(rs, "consrc_copy", PG_OID_TEXT);
 
         /* Resolve the namespace OID for the current schema */
         char conNsOid[32] = "2200";
         schema_name_to_oid(db_get_current_schema(), conNsOid, sizeof(conNsOid));
+
+        /* Extract conrelid filter: WHERE c.conrelid = <oid> or conrelid=<oid> */
+        uint32_t filter_conrelid = 0;
+        {
+            const char *p = sql;
+            while (*p) {
+                if (strncasecmp(p, "conrelid", 8) == 0) {
+                    const char *q = p + 8;
+                    while (*q == ' ' || *q == '=') q++;
+                    if (*q >= '0' && *q <= '9')
+                        filter_conrelid = (uint32_t)atol(q);
+                }
+                p++;
+            }
+        }
 
         /* Scan tables via catalog for constraints */
         int count = 0;
@@ -2061,6 +2080,10 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
             TableDesc tables[256];
             int nt = cat_list_tables(schDescCon.schema_id, tables, 256);
             for (int t = 0; t < nt; t++) {
+                /* Apply conrelid filter if DBeaver sent WHERE */
+                if (filter_conrelid != 0 &&
+                    stable_table_oid(tables[t].table_name) != filter_conrelid)
+                    continue;
                 ConstraintDesc cons[64];
                 int ncons = cat_list_constraints(tables[t].table_id, cons, 64);
                 for (int ci = 0; ci < ncons; ci++) {
@@ -2225,6 +2248,10 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     else
                         result_set_null(rs, row, 16);              /* confkey */
                     result_set_null(rs, row, 17);                /* description */
+                    /* DBeaver JOIN extras */
+                    result_set_field(rs, row, 18, tables[t].table_name); /* tabrelname */
+                    result_set_field(rs, row, 19, conNsOid);    /* refnamespace */
+                    result_set_null(rs, row, 20);               /* consrc_copy */
                     count++;
                 }
             }
