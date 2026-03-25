@@ -84,6 +84,7 @@ typedef struct {
     char columns[64][128];          /* was insertColumns */
     int  columnCount;               /* was insertColumnCount */
     int  rowCount;                  /* was insertCount */
+    int  insertFromSelect;          /* 1 = INSERT...SELECT mode */
 } InsertOpts;
 
 /* ---- SELECT ---- */
