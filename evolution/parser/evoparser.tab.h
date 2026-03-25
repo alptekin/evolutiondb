@@ -247,7 +247,9 @@
      FGEN_RANDOM_UUID = 463,
      FGEN_RANDOM_UUID_V7 = 464,
      FSNOWFLAKE_ID = 465,
-     FLAST_INSERT_ID = 466
+     FLAST_INSERT_ID = 466,
+     FEVO_SLEEP = 467,
+     FEVO_JITTER = 468
    };
 #endif
 /* Tokens.  */
@@ -460,6 +462,8 @@
 #define FGEN_RANDOM_UUID_V7 464
 #define FSNOWFLAKE_ID 465
 #define FLAST_INSERT_ID 466
+#define FEVO_SLEEP 467
+#define FEVO_JITTER 468
 
 
 
@@ -475,7 +479,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 479 "parser/evoparser.tab.h"
+#line 483 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

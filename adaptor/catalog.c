@@ -326,6 +326,21 @@ static int handle_set(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+    /* SET statement_timeout = N (milliseconds, 0 = disabled) */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "statement_timeout", 17) == 0) {
+            p += 17;
+            while (*p && (isspace((unsigned char)*p) || *p == '=' || *p == '\'')) p++;
+            int val = atoi(p);
+            if (ctx) ctx->statement_timeout_ms = (val >= 0) ? val : 0;
+            result_init(rs);
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SET");
+            return 1;
+        }
+    }
+
     result_init(rs);
     strcpy(rs->command_tag, "SET");
     return 1;

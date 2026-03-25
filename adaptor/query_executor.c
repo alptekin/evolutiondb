@@ -1208,6 +1208,15 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
 
         if (tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next_mvcc(&cursor, keyBuf, recBuf, sizeof(recBuf), snap) == 0) {
+                /* Check query cancellation (timeout or CancelRequest) */
+                {
+                    extern __thread volatile int g_query_cancelled;
+                    if (g_query_cancelled) {
+                        result_set_error(rs, "57014", "canceling statement due to statement timeout");
+                        break;
+                    }
+                }
+
                 int recLen = tup_record_len(recBuf, sizeof(recBuf));
                 if (recLen <= 0) continue;
 
