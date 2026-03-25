@@ -113,12 +113,9 @@ static int CompareRecords(const void *a, const void *b)
 
 void SelectAll(void)
 {
-    char tblName[1024];
-    char pkBuf[256];
-    char recBuf[RECORD_BUF_SIZE];
-
-    /* Extract table name without .dat extension */
-    strcpy(tblName, g_sel.tblName);
+    char tblName[256];
+    strncpy(tblName, g_sel.tblName, sizeof(tblName) - 1);
+    tblName[sizeof(tblName) - 1] = '\0';
     char *dot = strstr(tblName, ".dat");
     if (dot)
         *dot = '\0';
@@ -127,10 +124,15 @@ void SelectAll(void)
     if (g_gui_mode) {
         char baseName[128];
         tapi_basename(tblName, baseName, sizeof(baseName));
-        strcpy(g_sel.lastTable, baseName);
+        strncpy(g_sel.lastTable, baseName, sizeof(g_sel.lastTable) - 1);
+        g_sel.lastTable[sizeof(g_sel.lastTable) - 1] = '\0';
         TruncateSelect();
         return;
     }
+
+    /* Large buffers declared after GUI early-return to reduce stack frame */
+    char pkBuf[256];
+    char recBuf[RECORD_BUF_SIZE];
 
     /* Resolve table with column metadata */
     TableDesc td;
