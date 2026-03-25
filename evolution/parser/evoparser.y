@@ -1220,14 +1220,26 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
 stmt: insert_stmt
     {
         emit("STMT");
-        InsertProcess();
+        if (!g_ins.insertFromSelect)
+            InsertProcess();
     }
 ;
 
-insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_list opt_ondupupdate 
+insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_list opt_ondupupdate
     {
         emit("INSERTVALS %d %d %s", $2, $7, $4);
         GetInsertionTableName($4);
+        free($4);
+    }
+| INSERT insert_opts opt_into NAME opt_col_names select_stmt
+    {
+        emit("INSERTSELECT %d %s", $2, $4);
+        GetInsertionTableName($4);
+        g_ins.insertFromSelect = 1;
+        if ($6 == 1)
+            SelectAll();
+        else
+            SelectProcess();
         free($4);
     }
 ;
