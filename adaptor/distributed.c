@@ -496,6 +496,9 @@ void dist_handle_client(socket_t sock)
     if (pg_handle_startup(&conn, username, sizeof(username)) < 0) {
         return;
     }
+    /* Send BackendKeyData + ReadyForQuery (pg_handle_startup no longer does) */
+    pg_send_backend_key_data(&conn, platform_getpid(), 0);
+    pg_send_ready_for_query(&conn, 'I');
 
     /* Query loop */
     while (1) {

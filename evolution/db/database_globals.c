@@ -34,3 +34,6 @@ ConcModLog g_conc_mod_log = {0};
 
 /* Query cancellation flag — thread-local, set by watchdog or CancelRequest */
 __thread volatile int g_query_cancelled = 0;
+
+/* Lock wait timeout — thread-local, 0 = use default */
+__thread int g_lock_timeout_ms = 0;

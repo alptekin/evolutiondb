@@ -17,6 +17,10 @@ struct ExprNode;
 /* Query cancellation flag — thread-local, set by watchdog or CancelRequest */
 extern __thread volatile int g_query_cancelled;
 
+/* Lock wait timeout — thread-local, set from SessionCtx.evo_lock_timeout_ms
+ * 0 = use default (LOCK_WAIT_TIMEOUT_MS = 5000ms) */
+extern __thread int g_lock_timeout_ms;
+
 
 /* Minimum padded record size - ensures UPDATE can overwrite in-place */
 #define RECORD_PAD_SIZE 256
