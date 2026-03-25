@@ -54,11 +54,11 @@ def run():
     check("evo_jitter(0,0) returns 0", rows and rows[0][0] == '0')
 
     # ═══════════════════════════════════════════
-    print("\n=== SET statement_timeout ===")
+    print("\n=== SET evo_statement_timeout ===")
 
     # Set timeout
-    _, _, err, _ = simple_query(s, "SET statement_timeout = 200")
-    check("SET statement_timeout succeeds", err is None)
+    _, _, err, _ = simple_query(s, "SET evo_statement_timeout = 200")
+    check("SET evo_statement_timeout succeeds", err is None)
 
     # Query that finishes within timeout
     t0 = time.time()
@@ -74,7 +74,7 @@ def run():
     check(f"Timeout triggered in ~200ms (was {elapsed:.0f}ms)", elapsed < 1000)
 
     # Disable timeout (wait for watchdog thread to finish)
-    simple_query(s, "SET statement_timeout = 0")
+    simple_query(s, "SET evo_statement_timeout = 0")
     time.sleep(0.3)  # let watchdog thread expire
     t0 = time.time()
     _, rows, err, _ = simple_query(s, "SELECT evo_sleep(100)")
@@ -93,11 +93,11 @@ def run():
     check("Normal scan: 1000 rows", rows and len(rows) == 1000)
 
     # With very short timeout (should cancel during scan... or not if scan is fast)
-    simple_query(s, "SET statement_timeout = 1")
+    simple_query(s, "SET evo_statement_timeout = 1")
     _, rows, err, _ = simple_query(s, "SELECT evo_sleep(500)")
     check("1ms timeout cancels sleep", err is not None and "timeout" in err.lower())
 
-    simple_query(s, "SET statement_timeout = 0")
+    simple_query(s, "SET evo_statement_timeout = 0")
     simple_query(s, "DROP TABLE timeout_test")
 
     # ═══════════════════════════════════════════
