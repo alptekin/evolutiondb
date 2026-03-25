@@ -34,6 +34,9 @@
 	struct ExprNode *exprval;
 }
 
+/* Initialize parser semantic value to suppress valgrind warnings */
+%initial-action { memset(&$$, 0, sizeof($$)); }
+
 /* names and literal values */
 %token <strval> NAME
 %token <strval> STRING
