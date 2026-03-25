@@ -2047,10 +2047,29 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         result_add_column(rs, "conkey", PG_OID_TEXT);
         result_add_column(rs, "confkey", PG_OID_TEXT);
         result_add_column(rs, "description", PG_OID_TEXT);
+        /* Extra columns for DBeaver JOIN query */
+        result_add_column(rs, "tabrelname", PG_OID_TEXT);
+        result_add_column(rs, "refnamespace", PG_OID_INT4);
+        result_add_column(rs, "consrc_copy", PG_OID_TEXT);
 
         /* Resolve the namespace OID for the current schema */
         char conNsOid[32] = "2200";
         schema_name_to_oid(db_get_current_schema(), conNsOid, sizeof(conNsOid));
+
+        /* Extract conrelid filter: WHERE c.conrelid = <oid> or conrelid=<oid> */
+        uint32_t filter_conrelid = 0;
+        {
+            const char *p = sql;
+            while (*p) {
+                if (strncasecmp(p, "conrelid", 8) == 0) {
+                    const char *q = p + 8;
+                    while (*q == ' ' || *q == '=') q++;
+                    if (*q >= '0' && *q <= '9')
+                        filter_conrelid = (uint32_t)atol(q);
+                }
+                p++;
+            }
+        }
 
         /* Scan tables via catalog for constraints */
         int count = 0;
@@ -2061,6 +2080,10 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
             TableDesc tables[256];
             int nt = cat_list_tables(schDescCon.schema_id, tables, 256);
             for (int t = 0; t < nt; t++) {
+                /* Apply conrelid filter if DBeaver sent WHERE */
+                if (filter_conrelid != 0 &&
+                    stable_table_oid(tables[t].table_name) != filter_conrelid)
+                    continue;
                 ConstraintDesc cons[64];
                 int ncons = cat_list_constraints(tables[t].table_id, cons, 64);
                 for (int ci = 0; ci < ncons; ci++) {
@@ -2120,15 +2143,88 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     } else if (contype[0] == 'c') {
                         snprintf(conkeyStr, sizeof(conkeyStr), "{}");
                     } else if (contype[0] == 'f') {
-                        snprintf(conkeyStr, sizeof(conkeyStr), "{1}");
+                        /* Parse FK local columns from definition: "col1,col2|on_delete|on_update" */
+                        ColumnDesc fk_cols[CAT_MAX_COLUMNS];
+                        int fk_ncols = cat_find_columns(tables[t].table_id, fk_cols, CAT_MAX_COLUMNS);
+                        char fk_def[1024];
+                        strncpy(fk_def, cons[ci].definition, sizeof(fk_def) - 1);
+                        fk_def[sizeof(fk_def) - 1] = '\0';
+                        char *pipe = strchr(fk_def, '|');
+                        if (pipe) *pipe = '\0'; /* truncate at | to get local col names */
+                        /* Find ordinal position of each local FK column */
+                        int fk_pos_len = 0;
+                        char fk_pos[256] = "{";
+                        char *saveptr = NULL;
+                        char *fk_tok = strtok_r(fk_def, ",", &saveptr);
+                        while (fk_tok) {
+                            while (*fk_tok == ' ') fk_tok++;
+                            for (int k = 0; k < fk_ncols; k++) {
+                                if (strcasecmp(fk_cols[k].col_name, fk_tok) == 0) {
+                                    if (fk_pos_len > 0) strcat(fk_pos, ",");
+                                    char tmp[16]; snprintf(tmp, sizeof(tmp), "%d", k + 1);
+                                    strcat(fk_pos, tmp);
+                                    fk_pos_len++;
+                                    break;
+                                }
+                            }
+                            fk_tok = strtok_r(NULL, ",", &saveptr);
+                        }
+                        strcat(fk_pos, "}");
+                        strncpy(conkeyStr, fk_pos, sizeof(conkeyStr) - 1);
                     } else {
                         snprintf(conkeyStr, sizeof(conkeyStr), "{}");
                     }
 
                     char confrelStr[16] = "0";
+                    char confkeyStr[64] = "";
                     if (contype[0] == 'f' && cons[ci].ref_table_id != 0) {
-                        /* Try to find ref table name for OID */
-                        snprintf(confrelStr, sizeof(confrelStr), "%u", cons[ci].ref_table_id);
+                        /* Resolve ref table name → stable OID for DBeaver */
+                        TableDesc refTd;
+                        ColumnDesc refCols[CAT_MAX_COLUMNS];
+                        int refNcols = 0;
+                        /* Find ref table by ID across all schemas */
+                        {
+                            SchemaDesc schemas[32];
+                            int ns = cat_list_schemas(dbDescCon.db_id, schemas, 32);
+                            for (int si = 0; si < ns; si++) {
+                                TableDesc allTbls[256];
+                                int ntbls = cat_list_tables(schemas[si].schema_id, allTbls, 256);
+                                for (int ti2 = 0; ti2 < ntbls; ti2++) {
+                                    if (allTbls[ti2].table_id == cons[ci].ref_table_id) {
+                                        snprintf(confrelStr, sizeof(confrelStr), "%u",
+                                                 stable_table_oid(allTbls[ti2].table_name));
+                                        refTd = allTbls[ti2];
+                                        refNcols = cat_find_columns(refTd.table_id, refCols, CAT_MAX_COLUMNS);
+                                        goto ref_found;
+                                    }
+                                }
+                            }
+                        }
+                        ref_found:
+                        /* Build confkey from ref_columns */
+                        if (cons[ci].ref_columns[0] && refNcols > 0) {
+                            char rc_buf[256];
+                            strncpy(rc_buf, cons[ci].ref_columns, sizeof(rc_buf) - 1);
+                            rc_buf[sizeof(rc_buf) - 1] = '\0';
+                            int ck_len = 0;
+                            strcpy(confkeyStr, "{");
+                            char *sv2 = NULL;
+                            char *rtok = strtok_r(rc_buf, ",", &sv2);
+                            while (rtok) {
+                                while (*rtok == ' ') rtok++;
+                                for (int k = 0; k < refNcols; k++) {
+                                    if (strcasecmp(refCols[k].col_name, rtok) == 0) {
+                                        if (ck_len > 0) strcat(confkeyStr, ",");
+                                        char tmp[16]; snprintf(tmp, sizeof(tmp), "%d", k + 1);
+                                        strcat(confkeyStr, tmp);
+                                        ck_len++;
+                                        break;
+                                    }
+                                }
+                                rtok = strtok_r(NULL, ",", &sv2);
+                            }
+                            strcat(confkeyStr, "}");
+                        }
                     }
 
                     result_set_field(rs, row, 0, oidStr);       /* oid */
@@ -2147,11 +2243,15 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     result_set_field(rs, row, 13, " ");          /* confdeltype */
                     result_set_field(rs, row, 14, " ");          /* confmatchtype */
                     result_set_field(rs, row, 15, conkeyStr);    /* conkey */
-                    if (contype[0] == 'f' && cons[ci].ref_columns[0])
-                        result_set_field(rs, row, 16, cons[ci].ref_columns); /* confkey */
+                    if (contype[0] == 'f' && confkeyStr[0])
+                        result_set_field(rs, row, 16, confkeyStr); /* confkey */
                     else
-                        result_set_null(rs, row, 16);            /* confkey */
+                        result_set_null(rs, row, 16);              /* confkey */
                     result_set_null(rs, row, 17);                /* description */
+                    /* DBeaver JOIN extras */
+                    result_set_field(rs, row, 18, tables[t].table_name); /* tabrelname */
+                    result_set_field(rs, row, 19, conNsOid);    /* refnamespace */
+                    result_set_null(rs, row, 20);               /* consrc_copy */
                     count++;
                 }
             }

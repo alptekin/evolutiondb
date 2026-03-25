@@ -3336,6 +3336,23 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     result_init(rs);
 
+    /* Reject queries exceeding internal buffer size (prevents stack overflow) */
+    size_t sql_len = strlen(sql);
+    if (sql_len >= sizeof(normalized) - 4) {
+        result_set_error(rs, "54000", "query too long (max 8KB)");
+        return;
+    }
+    /* Reject queries with too many commas (proxy for column/value count) */
+    {
+        int commas = 0;
+        for (size_t ci = 0; ci < sql_len; ci++)
+            if (sql[ci] == ',') commas++;
+        if (commas > 200) {
+            result_set_error(rs, "54011", "too many columns or values (max 200)");
+            return;
+        }
+    }
+
     /* If transaction is aborted, only allow ROLLBACK/COMMIT/SAVEPOINT/RELEASE */
     if (ctx && ctx->tx_aborted) {
         if (strncasecmp(sql, "ROLLBACK", 8) != 0 &&

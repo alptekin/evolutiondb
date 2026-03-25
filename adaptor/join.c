@@ -1,8 +1,9 @@
 /*
- * join.c — JOIN Execution Engine for EvoSQL
+ * join.c — Iterator/Pipeline JOIN Engine for EvoSQL
  *
- * Multi-table JOIN support: nested-loop and hash join algorithms.
- * Handles INNER, LEFT, RIGHT, CROSS, and NATURAL joins.
+ * Uses Volcano-style pipelining: no full table materialization.
+ * Each table is accessed one row at a time via scan or PK lookup.
+ * Memory usage: O(num_tables) not O(table_size).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,16 +15,289 @@
 #include "../evolution/db/tuple_format.h"
 #include "../evolution/db/mvcc.h"
 #include "../evolution/db/database.h"
+#include "../evolution/db/btree2.h"
 
 /* ================================================================
- *  collect_single_table — fetch all rows from one table
+ *  Per-table info resolved before pipeline starts
  * ================================================================ */
+typedef struct {
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char alias[128];
+    char name[256];
+    int join_type;
 
-void collect_single_table(const char *name, ResultSet *rs,
-                          const void *snap)
+    /* For tables[1..n]: join key mapping */
+    int left_key_idx;         /* merged-row column index for left key (-1=none) */
+    int right_key_col_idx;    /* column index in this table for right key */
+    int right_key_is_pk;      /* 1 if right key is PK → use bt2_search */
+
+    /* For tables[0]: WHERE push-down */
+    int where_push_col_idx;   /* column index for WHERE literal (-1=full scan) */
+    int where_push_is_pk;     /* 1 if WHERE column is PK */
+    char where_push_val[256]; /* literal value from WHERE */
+} PipeTable;
+
+/* ================================================================
+ *  Predicate analysis helpers
+ * ================================================================ */
+static int extract_eq_literal(const ExprNode *expr,
+                               char *alias, char *col, char *value)
+{
+    if (!expr || expr->type != EXPR_CMP_EQ) return 0;
+    for (int swap = 0; swap < 2; swap++) {
+        const ExprNode *c = swap ? expr->right : expr->left;
+        const ExprNode *v = swap ? expr->left : expr->right;
+        if (c->type == EXPR_COLUMN) {
+            const char *dot = strchr(c->val.col_name, '.');
+            if (dot) {
+                int n = (int)(dot - c->val.col_name);
+                memcpy(alias, c->val.col_name, n); alias[n] = '\0';
+                strncpy(col, dot + 1, 127); col[127] = '\0';
+            } else {
+                alias[0] = '\0';
+                strncpy(col, c->val.col_name, 127); col[127] = '\0';
+            }
+            if (v->type == EXPR_LITERAL_INT) {
+                snprintf(value, 256, "%d", v->val.intval); return 1;
+            } else if (v->type == EXPR_LITERAL_STR) {
+                strncpy(value, v->val.strval, 255); value[255] = '\0'; return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Walk AND tree to find alias.col = literal */
+static int extract_eq_for_alias(const ExprNode *expr, const char *target_alias,
+                                 const char *target_name,
+                                 char *col, char *value)
+{
+    if (!expr) return 0;
+    if (expr->type == EXPR_AND) {
+        if (extract_eq_for_alias(expr->left, target_alias, target_name, col, value)) return 1;
+        return extract_eq_for_alias(expr->right, target_alias, target_name, col, value);
+    }
+    char a[128], c[128], v[256];
+    if (extract_eq_literal(expr, a, c, v)) {
+        if (a[0] == '\0' || strcasecmp(a, target_alias) == 0 ||
+            strcasecmp(a, target_name) == 0) {
+            strncpy(col, c, 127); col[127] = '\0';
+            strncpy(value, v, 255); value[255] = '\0';
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int extract_eq_columns(const ExprNode *expr,
+                                char *la, char *lc, char *ra, char *rc)
+{
+    if (!expr || expr->type != EXPR_CMP_EQ) return 0;
+    if (!expr->left || expr->left->type != EXPR_COLUMN) return 0;
+    if (!expr->right || expr->right->type != EXPR_COLUMN) return 0;
+    const char *l = expr->left->val.col_name;
+    const char *r = expr->right->val.col_name;
+    const char *ld = strchr(l, '.'), *rd = strchr(r, '.');
+    if (ld) { int n=(int)(ld-l); memcpy(la,l,n); la[n]='\0'; strncpy(lc,ld+1,127); lc[127]='\0'; }
+    else { la[0]='\0'; strncpy(lc,l,127); lc[127]='\0'; }
+    if (rd) { int n=(int)(rd-r); memcpy(ra,r,n); ra[n]='\0'; strncpy(rc,rd+1,127); rc[127]='\0'; }
+    else { ra[0]='\0'; strncpy(rc,r,127); rc[127]='\0'; }
+    return 1;
+}
+
+static int find_col_idx(const ColumnDesc cols[], int n, const char *name)
+{
+    for (int i = 0; i < n; i++)
+        if (strcasecmp(cols[i].col_name, name) == 0) return i;
+    return -1;
+}
+
+/* ================================================================
+ *  Pipeline recursion — heart of the iterator model
+ *
+ *  merged_fields/merged_null: accumulated columns from tables[0..depth-1]
+ *  merged_ncols: count of accumulated columns so far
+ *  At depth == num_tables: emit the complete joined row
+ * ================================================================ */
+static void pipeline_recurse(
+    PipeTable *tables, int num_tables, int depth,
+    char (*merged_fields)[256], int *merged_null, int merged_ncols,
+    /* Column name metadata (read-only, set up before pipeline) */
+    char (*col_names)[128], int *col_oids, int total_cols,
+    ExprNode *where_expr, ResultSet *rs, const Snapshot *snap)
+{
+    /* ── End of pipeline: evaluate WHERE and emit ── */
+    if (depth >= num_tables) {
+        if (where_expr) {
+            static __thread char en[MAX_COLUMNS][128];
+            static __thread char ev[MAX_COLUMNS][256];
+            for (int c = 0; c < merged_ncols && c < MAX_COLUMNS; c++) {
+                strncpy(en[c], col_names[c], 127); en[c][127] = '\0';
+                if (merged_null[c]) strcpy(ev[c], "\x01NULL\x01");
+                else { strncpy(ev[c], merged_fields[c], 255); ev[c][255] = '\0'; }
+            }
+            char result[256];
+            int ok = expr_evaluate(where_expr, en, ev, merged_ncols, result, sizeof(result));
+            if (!ok || strcmp(result,"0")==0 || strcasecmp(result,"false")==0 || strcasecmp(result,"f")==0)
+                return;
+        }
+        int row = result_add_row(rs);
+        if (row < 0) return;
+        for (int c = 0; c < merged_ncols; c++) {
+            if (merged_null[c]) result_set_null(rs, row, c);
+            else result_set_field(rs, row, c, merged_fields[c]);
+        }
+        return;
+    }
+
+    PipeTable *ti = &tables[depth];
+    int base = merged_ncols;
+
+    /* Helper: extract record fields and append to merged row */
+    #define APPEND_FIELDS(record, recLen) do { \
+        char _f[64][256]; int _n[64]; \
+        int _nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, _f, _n, 64); \
+        for (int _c = 0; _c < _nf && (base+_c) < total_cols; _c++) { \
+            if (_n[_c]) { merged_fields[base+_c][0]='\0'; merged_null[base+_c]=1; } \
+            else { strncpy(merged_fields[base+_c], _f[_c], 255); \
+                   merged_fields[base+_c][255]='\0'; merged_null[base+_c]=0; } \
+        } \
+    } while(0)
+
+    #define APPEND_NULLS() do { \
+        for (int _c = 0; _c < ti->ncols && (base+_c) < total_cols; _c++) { \
+            merged_fields[base+_c][0]='\0'; merged_null[base+_c]=1; } \
+    } while(0)
+
+    int is_left = (ti->join_type == 301 || ti->join_type == 305);
+
+    if (depth == 0) {
+        /* ── First table: WHERE push-down or full scan ── */
+        if (ti->where_push_col_idx >= 0 && ti->where_push_is_pk) {
+            /* PK lookup */
+            BTree2 pk = { .root_page = ti->td.pk_root_page };
+            RowID rid;
+            if (bt2_search(&pk, ti->where_push_val, &rid) == 0) {
+                char record[RECORD_BUF_SIZE];
+                int recLen = tapi_heap_read(rid, record, sizeof(record));
+                if (recLen > 0 && (!snap || mvcc_is_visible(record, recLen, snap))) {
+                    APPEND_FIELDS(record, recLen);
+                    pipeline_recurse(tables, num_tables, 1,
+                                     merged_fields, merged_null, base + ti->ncols,
+                                     col_names, col_oids, total_cols,
+                                     where_expr, rs, snap);
+                }
+            }
+        } else {
+            /* Full scan (with optional column filter for non-PK WHERE) */
+            TableScanCursor cursor;
+            if (tapi_scan_begin(&ti->td, &cursor) != 0) return;
+            char pk_key[256], record[RECORD_BUF_SIZE];
+            while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
+                int recLen = tup_record_len(record, sizeof(record));
+                if (snap && !mvcc_is_visible(record, recLen, snap)) continue;
+
+                /* Non-PK WHERE push-down filter */
+                if (ti->where_push_col_idx >= 0) {
+                    char fields[64][256]; int is_n[64];
+                    int nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, fields, is_n, 64);
+                    if (ti->where_push_col_idx < nf &&
+                        !is_n[ti->where_push_col_idx] &&
+                        strcmp(fields[ti->where_push_col_idx], ti->where_push_val) != 0)
+                        continue;
+                }
+
+                APPEND_FIELDS(record, recLen);
+                pipeline_recurse(tables, num_tables, 1,
+                                 merged_fields, merged_null, base + ti->ncols,
+                                 col_names, col_oids, total_cols,
+                                 where_expr, rs, snap);
+            }
+        }
+    } else {
+        /* ── Subsequent tables: join by key ── */
+        const char *key_val = (ti->left_key_idx >= 0 && ti->left_key_idx < base)
+                              ? merged_fields[ti->left_key_idx] : NULL;
+        int matched = 0;
+
+        if (key_val && ti->right_key_is_pk) {
+            /* PK index lookup — O(log n) */
+            BTree2 pk = { .root_page = ti->td.pk_root_page };
+            RowID rid;
+            if (bt2_search(&pk, key_val, &rid) == 0) {
+                char record[RECORD_BUF_SIZE];
+                int recLen = tapi_heap_read(rid, record, sizeof(record));
+                if (recLen > 0 && (!snap || mvcc_is_visible(record, recLen, snap))) {
+                    APPEND_FIELDS(record, recLen);
+                    pipeline_recurse(tables, num_tables, depth + 1,
+                                     merged_fields, merged_null, base + ti->ncols,
+                                     col_names, col_oids, total_cols,
+                                     where_expr, rs, snap);
+                    matched = 1;
+                }
+            }
+        } else if (key_val && ti->right_key_col_idx >= 0) {
+            /* Non-PK: full scan with column equality filter */
+            TableScanCursor cursor;
+            if (tapi_scan_begin(&ti->td, &cursor) == 0) {
+                char pk_key[256], record[RECORD_BUF_SIZE];
+                while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
+                    int recLen = tup_record_len(record, sizeof(record));
+                    if (snap && !mvcc_is_visible(record, recLen, snap)) continue;
+                    char fields[64][256]; int is_n[64];
+                    int nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, fields, is_n, 64);
+                    if (ti->right_key_col_idx >= nf) continue;
+                    if (is_n[ti->right_key_col_idx]) continue;
+                    if (strcmp(fields[ti->right_key_col_idx], key_val) != 0) continue;
+
+                    APPEND_FIELDS(record, recLen);
+                    pipeline_recurse(tables, num_tables, depth + 1,
+                                     merged_fields, merged_null, base + ti->ncols,
+                                     col_names, col_oids, total_cols,
+                                     where_expr, rs, snap);
+                    matched = 1;
+                }
+            }
+        } else {
+            /* CROSS JOIN or no key: full scan, no filter */
+            TableScanCursor cursor;
+            if (tapi_scan_begin(&ti->td, &cursor) == 0) {
+                char pk_key[256], record[RECORD_BUF_SIZE];
+                while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
+                    int recLen = tup_record_len(record, sizeof(record));
+                    if (snap && !mvcc_is_visible(record, recLen, snap)) continue;
+                    APPEND_FIELDS(record, recLen);
+                    pipeline_recurse(tables, num_tables, depth + 1,
+                                     merged_fields, merged_null, base + ti->ncols,
+                                     col_names, col_oids, total_cols,
+                                     where_expr, rs, snap);
+                    matched = 1;
+                }
+            }
+        }
+
+        /* LEFT JOIN: emit NULLs if no match */
+        if (!matched && is_left) {
+            APPEND_NULLS();
+            pipeline_recurse(tables, num_tables, depth + 1,
+                             merged_fields, merged_null, base + ti->ncols,
+                             col_names, col_oids, total_cols,
+                             where_expr, rs, snap);
+        }
+    }
+
+    #undef APPEND_FIELDS
+    #undef APPEND_NULLS
+}
+
+/* ================================================================
+ *  collect_single_table — public API (used by scatter-gather etc.)
+ * ================================================================ */
+void collect_single_table(const char *name, ResultSet *rs, const void *snap)
 {
     rs->is_select = 1;
-
     TableDesc td;
     ColumnDesc allCols[CAT_MAX_COLUMNS];
     int ncols;
@@ -31,335 +305,173 @@ void collect_single_table(const char *name, ResultSet *rs,
         result_set_error(rs, "42P01", "relation does not exist");
         return;
     }
+    for (int i = 0; i < ncols; i++)
+        result_add_column(rs, allCols[i].col_name,
+                          type_encoding_to_pg_oid(allCols[i].type_code));
 
-    /* Set up column metadata */
-    for (int i = 0; i < ncols; i++) {
-        int oid = type_encoding_to_pg_oid(allCols[i].type_code);
-        result_add_column(rs, allCols[i].col_name, oid);
-    }
-
-    /* Full table scan with MVCC visibility */
     TableScanCursor cursor;
     if (tapi_scan_begin(&td, &cursor) != 0) return;
-
-    char pk_key[256];
-    char record[RECORD_BUF_SIZE];
+    char pk_key[256], record[RECORD_BUF_SIZE];
     const Snapshot *mvcc_snap = (const Snapshot *)snap;
-
     while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
         int recLen = tup_record_len(record, sizeof(record));
-
-        /* MVCC visibility check */
-        if (mvcc_snap && !mvcc_is_visible(record, recLen, mvcc_snap))
-            continue;
-
-        /* Extract fields */
-        char fields[64][256];
-        int is_null[64];
-        int nf = tup_extract_fields(record, recLen, allCols, ncols,
-                                     fields, is_null, 64);
-
+        if (mvcc_snap && !mvcc_is_visible(record, recLen, mvcc_snap)) continue;
+        char fields[64][256]; int is_null[64];
+        int nf = tup_extract_fields(record, recLen, allCols, ncols, fields, is_null, 64);
         int row = result_add_row(rs);
         if (row < 0) break;
         for (int i = 0; i < nf; i++) {
-            if (is_null[i])
-                result_set_null(rs, row, i);
-            else
-                result_set_field(rs, row, i, fields[i]);
+            if (is_null[i]) result_set_null(rs, row, i);
+            else result_set_field(rs, row, i, fields[i]);
         }
     }
-
-    snprintf(rs->command_tag, sizeof(rs->command_tag),
-             "SELECT %d", rs->num_rows);
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
 }
 
 /* ================================================================
- *  Nested-loop join
+ *  join_execute — main entry point (pipeline model)
  * ================================================================ */
-
-/* Build merged column names: "alias.col" */
-static void build_merged_names(const ResultSet *rs, const char *alias,
-                                char out[][128], int *count, int offset)
-{
-    for (int i = 0; i < rs->num_cols; i++) {
-        snprintf(out[offset + i], 128, "%s.%s", alias, rs->columns[i].name);
-    }
-    *count = offset + rs->num_cols;
-}
-
-static int nested_loop_join(ResultSet *left, ResultSet *right,
-                            int join_type, ExprNode *on_cond,
-                            const char *left_alias, const char *right_alias,
-                            ResultSet *out)
-{
-    int lc = left->num_cols;
-    int rc = right->num_cols;
-    int total_cols = lc + rc;
-    if (total_cols > MAX_COLUMNS) total_cols = MAX_COLUMNS;
-
-    /* Build merged column namespace */
-    char merged_names[MAX_COLUMNS][128];
-    int mn_count = 0;
-    build_merged_names(left, left_alias, merged_names, &mn_count, 0);
-    build_merged_names(right, right_alias, merged_names, &mn_count, lc);
-
-    /* Set up output columns */
-    out->is_select = 1;
-    for (int i = 0; i < lc && i < MAX_COLUMNS; i++)
-        result_add_column(out, merged_names[i], left->columns[i].pg_type_oid);
-    for (int i = 0; i < rc && lc + i < MAX_COLUMNS; i++)
-        result_add_column(out, merged_names[lc + i], right->columns[i].pg_type_oid);
-
-    /* LEFT JOIN: 301 or 305 (with OUTER). RIGHT JOIN: 302 or 306 (with OUTER) */
-    int is_left = (join_type == 301 || join_type == 305);
-    int is_right = (join_type == 302 || join_type == 306);
-
-    /* Track which right rows were matched (for RIGHT JOIN) */
-    int *right_matched = NULL;
-    if (is_right) {
-        right_matched = calloc(right->num_rows > 0 ? right->num_rows : 1, sizeof(int));
-    }
-
-    /* Thread-local eval buffers (outside loops to avoid re-declaration) */
-    static __thread char col_names[MAX_COLUMNS][128];
-    static __thread char col_values[MAX_COLUMNS][256];
-
-    for (int li = 0; li < left->num_rows; li++) {
-        int matched = 0;
-
-        /* Prepare left-side column names + values once per left row */
-        if (on_cond) {
-            for (int c = 0; c < lc && c < MAX_COLUMNS; c++) {
-                strncpy(col_names[c], merged_names[c], 127);
-                col_names[c][127] = '\0';
-                if (left->rows[li].is_null[c])
-                    strcpy(col_values[c], "\x01NULL\x01");
-                else if (left->rows[li].fields[c])
-                    strncpy(col_values[c], left->rows[li].fields[c], 255);
-                else
-                    col_values[c][0] = '\0';
-                col_values[c][255] = '\0';
-            }
-        }
-
-        for (int ri = 0; ri < right->num_rows; ri++) {
-            /* Build merged row for ON condition evaluation */
-            if (on_cond) {
-                int nc = lc;
-                /* Only rebuild right columns per right row */
-                for (int c = 0; c < rc && nc < MAX_COLUMNS; c++) {
-                    strncpy(col_names[nc], merged_names[lc + c], 127);
-                    col_names[nc][127] = '\0';
-                    if (right->rows[ri].is_null[c])
-                        strcpy(col_values[nc], "\x01NULL\x01");
-                    else if (right->rows[ri].fields[c])
-                        strncpy(col_values[nc], right->rows[ri].fields[c], 255);
-                    else
-                        col_values[nc][0] = '\0';
-                    col_values[nc][255] = '\0';
-                    nc++;
-                }
-
-                char result[256];
-                int ok = expr_evaluate(on_cond, col_names, col_values, nc,
-                                        result, sizeof(result));
-                if (!ok || strcmp(result, "0") == 0 ||
-                    strcasecmp(result, "false") == 0 ||
-                    strcasecmp(result, "f") == 0)
-                    continue; /* ON condition not met */
-            }
-
-            /* Match — emit row */
-            int row = result_add_row(out);
-            if (row < 0) goto done;
-            for (int c = 0; c < lc; c++) {
-                if (left->rows[li].is_null[c])
-                    result_set_null(out, row, c);
-                else if (left->rows[li].fields[c])
-                    result_set_field(out, row, c, left->rows[li].fields[c]);
-            }
-            for (int c = 0; c < rc; c++) {
-                if (right->rows[ri].is_null[c])
-                    result_set_null(out, row, lc + c);
-                else if (right->rows[ri].fields[c])
-                    result_set_field(out, row, lc + c, right->rows[ri].fields[c]);
-            }
-            matched = 1;
-            if (right_matched) right_matched[ri] = 1;
-        }
-
-        /* LEFT JOIN: emit left row with NULLs if no match */
-        if (!matched && is_left) {
-            int row = result_add_row(out);
-            if (row < 0) goto done;
-            for (int c = 0; c < lc; c++) {
-                if (left->rows[li].is_null[c])
-                    result_set_null(out, row, c);
-                else if (left->rows[li].fields[c])
-                    result_set_field(out, row, c, left->rows[li].fields[c]);
-            }
-            for (int c = 0; c < rc; c++)
-                result_set_null(out, row, lc + c);
-        }
-    }
-
-    /* RIGHT JOIN: emit unmatched right rows with NULL left */
-    if (is_right && right_matched) {
-        for (int ri = 0; ri < right->num_rows; ri++) {
-            if (right_matched[ri]) continue;
-            int row = result_add_row(out);
-            if (row < 0) break;
-            for (int c = 0; c < lc; c++)
-                result_set_null(out, row, c);
-            for (int c = 0; c < rc; c++) {
-                if (right->rows[ri].is_null[c])
-                    result_set_null(out, row, lc + c);
-                else if (right->rows[ri].fields[c])
-                    result_set_field(out, row, lc + c, right->rows[ri].fields[c]);
-            }
-        }
-    }
-
-done:
-    if (right_matched) free(right_matched);
-    return 0;
-}
-
-/* ================================================================
- *  join_execute — main entry point
- * ================================================================ */
-
 int join_execute(JoinPlan *plan, ResultSet *rs, SessionCtx *ctx,
                  const void *snap)
 {
     if (plan->num_tables < 2) return -1;
 
-    extern int dist_is_enabled(void);
-    extern int dist_get_my_id(void);
+    /* ── Phase 1: Resolve all tables and analyze predicates ── */
+    PipeTable *tables = (PipeTable *)calloc(plan->num_tables, sizeof(PipeTable));
+    if (!tables) { result_set_error(rs, "53000", "out of memory"); return -1; }
 
-    /* Step 1: Materialize each table */
-    ResultSet table_rs[8];
+    int total_cols = 0;
+
     for (int i = 0; i < plan->num_tables; i++) {
-        result_init(&table_rs[i]);
+        PipeTable *pt = &tables[i];
+        strncpy(pt->name, plan->tables[i].name, 255);
+        strncpy(pt->alias, plan->tables[i].alias, 127);
+        pt->join_type = plan->join_types[i];
+        pt->left_key_idx = -1;
+        pt->right_key_col_idx = -1;
+        pt->where_push_col_idx = -1;
 
-        int is_remote = 0;
-        if (dist_is_enabled() && plan->tables[i].owner_node != 0 &&
-            plan->tables[i].owner_node != dist_get_my_id()) {
-            is_remote = 1;
-        }
-
-        if (is_remote) {
-            char select_sql[512];
-            snprintf(select_sql, sizeof(select_sql),
-                     "SELECT * FROM %s", plan->tables[i].name);
-            dist_forward_query(plan->tables[i].owner_node, select_sql,
-                               &table_rs[i]);
-        } else {
-            collect_single_table(plan->tables[i].name, &table_rs[i], snap);
-        }
-
-        if (table_rs[i].has_error) {
-            result_set_error(rs, table_rs[i].error_sqlstate,
-                             table_rs[i].error_message);
-            for (int j = 0; j <= i; j++) result_free(&table_rs[j]);
+        if (tapi_resolve(pt->name, &pt->td, pt->cols, &pt->ncols) < 0) {
+            result_set_error(rs, "42P01", "relation does not exist");
+            free(tables);
             return -1;
+        }
+        total_cols += pt->ncols;
+    }
+
+    if (total_cols > MAX_COLUMNS) total_cols = MAX_COLUMNS;
+
+    /* ── Phase 2: Analyze WHERE for first-table push-down ── */
+    if (plan->where_expr) {
+        char col[128], val[256];
+        if (extract_eq_for_alias(plan->where_expr,
+                                  tables[0].alias, tables[0].name, col, val)) {
+            int cidx = find_col_idx(tables[0].cols, tables[0].ncols, col);
+            if (cidx >= 0) {
+                tables[0].where_push_col_idx = cidx;
+                tables[0].where_push_is_pk = tables[0].cols[cidx].is_pk;
+                strncpy(tables[0].where_push_val, val, 255);
+            }
         }
     }
 
-    /* Step 2: Join tables left to right */
-    ResultSet *current = &table_rs[0];
-    ResultSet *intermediate = NULL;  /* heap-allocated intermediate result */
-
+    /* ── Phase 3: Analyze ON conditions for join key mapping ── */
+    int col_offset = tables[0].ncols;  /* merged column offset for table[1] */
     for (int i = 1; i < plan->num_tables; i++) {
-        ResultSet *new_result = (ResultSet *)malloc(sizeof(ResultSet));
-        if (!new_result) {
-            result_set_error(rs, "53000", "out of memory for join");
-            for (int j = 0; j < plan->num_tables; j++) result_free(&table_rs[j]);
-            if (intermediate) { result_free(intermediate); free(intermediate); }
-            return -1;
-        }
-        result_init(new_result);
-
-        int jt = plan->join_types[i];
         ExprNode *cond = plan->join_conds[i];
+        if (cond) {
+            char la[128], lc[128], ra[128], rc[128];
+            if (extract_eq_columns(cond, la, lc, ra, rc)) {
+                /* Determine which side is left (merged) and which is right (new table) */
+                const char *r_alias = tables[i].alias;
+                const char *r_name = tables[i].name;
+                char *left_col = NULL, *right_col = NULL;
 
-        /* For multi-table chains, use the merged alias from first join */
-        const char *left_alias = (i == 1) ? plan->tables[0].alias : "";
-        const char *right_alias = plan->tables[i].alias;
+                if (strcasecmp(ra, r_alias) == 0 || strcasecmp(ra, r_name) == 0) {
+                    left_col = lc; right_col = rc;  /* la.lc = ra.rc */
+                } else if (strcasecmp(la, r_alias) == 0 || strcasecmp(la, r_name) == 0) {
+                    left_col = rc; right_col = lc;  /* swapped */
+                    char tmp[128]; strcpy(tmp, la); strcpy(la, ra); strcpy(ra, tmp);
+                }
 
-        nested_loop_join(current, &table_rs[i], jt, cond,
-                         left_alias, right_alias, new_result);
+                if (left_col && right_col) {
+                    /* Find left_col in merged columns.
+                     * Prefer the table matching la (left alias) if available. */
+                    int merged_off = 0;
+                    for (int j = 0; j < i; j++) {
+                        int alias_match = (la[0] && (strcasecmp(tables[j].alias, la) == 0 ||
+                                                      strcasecmp(tables[j].name, la) == 0));
+                        if (la[0] == '\0' || alias_match) {
+                            for (int k = 0; k < tables[j].ncols; k++) {
+                                if (strcasecmp(tables[j].cols[k].col_name, left_col) == 0) {
+                                    tables[i].left_key_idx = merged_off + k;
+                                    goto found_left;
+                                }
+                            }
+                        }
+                        merged_off += tables[j].ncols;
+                    }
+                    found_left:
 
-        /* Free previous intermediate */
-        if (intermediate) {
-            result_free(intermediate);
-            free(intermediate);
-        }
-
-        intermediate = new_result;
-        current = intermediate;
-    }
-
-    /* Step 3: Apply WHERE filter on joined result */
-    if (plan->where_expr && current->num_rows > 0) {
-        static __thread char w_col_names[MAX_COLUMNS][128];
-        static __thread char w_col_values[MAX_COLUMNS][256];
-        for (int ri = current->num_rows - 1; ri >= 0; ri--) {
-
-            for (int c = 0; c < current->num_cols; c++) {
-                strncpy(w_col_names[c], current->columns[c].name, 127);
-                w_col_names[c][127] = '\0';
-                if (current->rows[ri].is_null[c])
-                    strcpy(w_col_values[c], "\x01NULL\x01");
-                else if (current->rows[ri].fields[c])
-                    strncpy(w_col_values[c], current->rows[ri].fields[c], 255);
-                else
-                    w_col_values[c][0] = '\0';
-                w_col_values[c][255] = '\0';
-            }
-
-            char result[256];
-            int ok = expr_evaluate(plan->where_expr, w_col_names, w_col_values,
-                                    current->num_cols, result, sizeof(result));
-            if (!ok || strcmp(result, "0") == 0 ||
-                strcasecmp(result, "false") == 0 || strcasecmp(result, "f") == 0) {
-                /* Remove this row */
-                row_clear(&current->rows[ri]);
-                /* Shift remaining rows down */
-                for (int j = ri; j < current->num_rows - 1; j++)
-                    row_move(&current->rows[j], &current->rows[j+1]);
-                current->num_rows--;
+                    /* Find right_col in this table */
+                    int ridx = find_col_idx(tables[i].cols, tables[i].ncols, right_col);
+                    if (ridx >= 0) {
+                        tables[i].right_key_col_idx = ridx;
+                        tables[i].right_key_is_pk = tables[i].cols[ridx].is_pk;
+                    }
+                }
             }
         }
+        col_offset += tables[i].ncols;
     }
 
-    /* Step 4: Copy result to output rs */
+    /* ── Phase 4: Build output column headers ── */
     rs->is_select = 1;
-    for (int c = 0; c < current->num_cols; c++)
-        result_add_column(rs, current->columns[c].name,
-                          current->columns[c].pg_type_oid);
+    char (*col_names)[128] = (char (*)[128])calloc(total_cols, 128);
+    int *col_oids = (int *)calloc(total_cols, sizeof(int));
+    if (!col_names || !col_oids) {
+        free(tables); free(col_names); free(col_oids);
+        result_set_error(rs, "53000", "out of memory");
+        return -1;
+    }
 
-    for (int r = 0; r < current->num_rows; r++) {
-        int row = result_add_row(rs);
-        if (row < 0) break;
-        for (int c = 0; c < current->num_cols; c++) {
-            if (current->rows[r].is_null[c])
-                result_set_null(rs, row, c);
-            else if (current->rows[r].fields[c])
-                result_set_field(rs, row, c, current->rows[r].fields[c]);
+    int ci = 0;
+    for (int t = 0; t < plan->num_tables; t++) {
+        for (int c = 0; c < tables[t].ncols && ci < total_cols; c++) {
+            if (tables[t].alias[0])
+                snprintf(col_names[ci], 128, "%s.%s",
+                         tables[t].alias, tables[t].cols[c].col_name);
+            else
+                strncpy(col_names[ci], tables[t].cols[c].col_name, 127);
+            col_oids[ci] = type_encoding_to_pg_oid(tables[t].cols[c].type_code);
+            result_add_column(rs, col_names[ci], col_oids[ci]);
+            ci++;
         }
     }
 
-    snprintf(rs->command_tag, sizeof(rs->command_tag),
-             "SELECT %d", rs->num_rows);
+    /* ── Phase 5: Execute pipeline ── */
+    char (*merged_fields)[256] = (char (*)[256])calloc(total_cols, 256);
+    int *merged_null = (int *)calloc(total_cols, sizeof(int));
+    if (!merged_fields || !merged_null) {
+        free(tables); free(col_names); free(col_oids);
+        free(merged_fields); free(merged_null);
+        result_set_error(rs, "53000", "out of memory");
+        return -1;
+    }
+
+    pipeline_recurse(tables, plan->num_tables, 0,
+                     merged_fields, merged_null, 0,
+                     col_names, col_oids, total_cols,
+                     plan->where_expr, rs,
+                     (const Snapshot *)snap);
+
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
 
     /* Cleanup */
-    for (int i = 0; i < plan->num_tables; i++)
-        result_free(&table_rs[i]);
-    if (intermediate) {
-        result_free(intermediate);
-        free(intermediate);
-    }
-
+    free(tables);
+    free(col_names);
+    free(col_oids);
+    free(merged_fields);
+    free(merged_null);
     return 0;
 }
