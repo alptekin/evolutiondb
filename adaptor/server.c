@@ -41,6 +41,123 @@ int  get_max_connections(void)      { return g_max_connections; }
 void set_max_connections(int n)     { if (n > 0) g_max_connections = n; }
 int  get_active_connections(void)   { return g_active_connections; }
 
+/* ================================================================
+ *  Session registry — global array of active sessions
+ * ================================================================ */
+static ActiveSession  g_sessions[MAX_SESSIONS];
+static mutex_t        g_session_lock;
+static int            g_next_session_id = 1;
+
+int session_register(SessionCtx *ctx, volatile int *cancel_flag)
+{
+    mutex_lock(&g_session_lock);
+    int sid = g_next_session_id++;
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (!g_sessions[i].active) {
+            g_sessions[i].session_id     = sid;
+            g_sessions[i].ctx            = ctx;
+            g_sessions[i].connect_time_ms = platform_now_ms();
+            g_sessions[i].query_start_ms = 0;
+            g_sessions[i].current_query[0] = '\0';
+            g_sessions[i].active         = 1;
+            g_sessions[i].cancel_flag    = cancel_flag;
+            mutex_unlock(&g_session_lock);
+            return sid;
+        }
+    }
+    mutex_unlock(&g_session_lock);
+    return sid;  /* all slots full — still return a valid ID */
+}
+
+void session_unregister(int session_id)
+{
+    mutex_lock(&g_session_lock);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].active && g_sessions[i].session_id == session_id) {
+            g_sessions[i].active = 0;
+            g_sessions[i].ctx = NULL;
+            g_sessions[i].cancel_flag = NULL;
+            break;
+        }
+    }
+    mutex_unlock(&g_session_lock);
+}
+
+void session_set_query(int session_id, const char *sql)
+{
+    mutex_lock(&g_session_lock);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].active && g_sessions[i].session_id == session_id) {
+            g_sessions[i].query_start_ms = platform_now_ms();
+            strncpy(g_sessions[i].current_query, sql, 255);
+            g_sessions[i].current_query[255] = '\0';
+            break;
+        }
+    }
+    mutex_unlock(&g_session_lock);
+}
+
+void session_clear_query(int session_id)
+{
+    mutex_lock(&g_session_lock);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].active && g_sessions[i].session_id == session_id) {
+            g_sessions[i].query_start_ms = 0;
+            g_sessions[i].current_query[0] = '\0';
+            break;
+        }
+    }
+    mutex_unlock(&g_session_lock);
+}
+
+int session_cancel(int session_id)
+{
+    mutex_lock(&g_session_lock);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].active && g_sessions[i].session_id == session_id) {
+            if (g_sessions[i].ctx)
+                g_sessions[i].ctx->cancel_requested = 1;
+            if (g_sessions[i].cancel_flag)
+                *(g_sessions[i].cancel_flag) = 1;
+            mutex_unlock(&g_session_lock);
+            return 1;
+        }
+    }
+    mutex_unlock(&g_session_lock);
+    return 0;
+}
+
+int session_cancel_by_key(int session_id, int cancel_key)
+{
+    mutex_lock(&g_session_lock);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].active && g_sessions[i].session_id == session_id &&
+            g_sessions[i].ctx && g_sessions[i].ctx->cancel_key == cancel_key) {
+            g_sessions[i].ctx->cancel_requested = 1;
+            if (g_sessions[i].cancel_flag)
+                *(g_sessions[i].cancel_flag) = 1;
+            mutex_unlock(&g_session_lock);
+            return 1;
+        }
+    }
+    mutex_unlock(&g_session_lock);
+    return 0;
+}
+
+int session_list(ActiveSession *out, int max)
+{
+    int count = 0;
+    mutex_lock(&g_session_lock);
+    for (int i = 0; i < MAX_SESSIONS && count < max; i++) {
+        if (g_sessions[i].active) {
+            out[count] = g_sessions[i];
+            count++;
+        }
+    }
+    mutex_unlock(&g_session_lock);
+    return count;
+}
+
 /* From transaction.c — thread-local per-connection undo log */
 #if defined(_WIN32)
 extern __declspec(thread) UndoLog *g_current_undo_log;
@@ -95,6 +212,22 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     } else {
         g_current_undo_log = NULL;
         g_tx_undo_callback = NULL;
+    }
+
+    /* Check if cancel was requested between queries (e.g., KILL QUERY) */
+    if (ctx && ctx->cancel_requested) {
+        ctx->cancel_requested = 0;
+        result_init(rs);
+        result_set_error(rs, "57014", "canceling statement due to user request");
+        qctx_free(qctx);
+        g_qctx = NULL;
+        return;
+    }
+
+    /* Propagate per-session lock timeout to thread-local */
+    {
+        extern __thread int g_lock_timeout_ms;
+        g_lock_timeout_ms = (ctx) ? ctx->evo_lock_timeout_ms : 0;
     }
 
     /* Statement timeout: start watchdog thread if configured */
@@ -207,6 +340,8 @@ void server_init_ex(int buffer_pool_pages)
     rwlock_init(&g_parse_lock);
     mutex_init(&g_dml_mutex);
     mutex_init(&g_conn_lock);
+    mutex_init(&g_session_lock);
+    memset(g_sessions, 0, sizeof(g_sessions));
     g_buffer_pool_pages = (buffer_pool_pages > 0) ? buffer_pool_pages : BP_DEFAULT_PAGES;
     bp_init(g_buffer_pool_pages);
 

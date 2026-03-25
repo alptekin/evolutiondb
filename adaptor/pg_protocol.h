@@ -37,6 +37,7 @@
 #define PG_PROTOCOL_V3  196608   /* 3.0 */
 #define PG_SSL_REQUEST     80877103
 #define PG_GSSENC_REQUEST  80877104
+#define PG_CANCEL_REQUEST  80877102
 
 /* Authentication sub-types (inside R message) */
 #define PG_AUTH_OK                0

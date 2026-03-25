@@ -54,4 +54,39 @@ void server_listen(int port, const char *label, protocol_handler_fn handler);
 /* Cleanup (called after all servers stop — usually never). */
 void server_cleanup(void);
 
+/* ----------------------------------------------------------------
+ *  Session registry — tracks active connections for
+ *  SHOW EVO_SESSIONS / SHOW EVO_PROCESSES / KILL QUERY / CancelRequest
+ * ---------------------------------------------------------------- */
+#define MAX_SESSIONS 256
+
+typedef struct {
+    int          session_id;         /* unique ID (sent as PG "pid") */
+    SessionCtx  *ctx;                /* pointer to session context */
+    int64_t      connect_time_ms;    /* epoch ms when connected */
+    int64_t      query_start_ms;     /* epoch ms when current query started (0=idle) */
+    char         current_query[256]; /* truncated SQL of running query */
+    int          active;             /* 1 = slot in use */
+    volatile int *cancel_flag;       /* points to thread's g_query_cancelled */
+} ActiveSession;
+
+/* Register a new session. Returns a unique session_id (>= 1). */
+int  session_register(SessionCtx *ctx, volatile int *cancel_flag);
+
+/* Unregister session on disconnect. */
+void session_unregister(int session_id);
+
+/* Record that a query has started / finished. */
+void session_set_query(int session_id, const char *sql);
+void session_clear_query(int session_id);
+
+/* Cancel a session's running query by session_id. Returns 1 if found. */
+int  session_cancel(int session_id);
+
+/* Cancel a session by (session_id, cancel_key) — for PG CancelRequest. */
+int  session_cancel_by_key(int session_id, int cancel_key);
+
+/* Copy active sessions into caller-provided buffer. Returns count. */
+int  session_list(ActiveSession *out, int max);
+
 #endif /* SERVER_H */
