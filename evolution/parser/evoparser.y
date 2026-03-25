@@ -275,6 +275,8 @@
 %token FGEN_RANDOM_UUID_V7
 %token FSNOWFLAKE_ID
 %token FLAST_INSERT_ID
+%token FEVO_SLEEP
+%token FEVO_JITTER
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -486,6 +488,14 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FLAST_INSERT_ID '(' ')'                          {
                                                         emit("CALL 0 LAST_INSERT_ID");
                                                         $$ = expr_make_last_insert_id();
+                                                    }
+| FEVO_SLEEP '(' expr ')'                          {
+                                                        emit("CALL 1 EVO_SLEEP");
+                                                        $$ = expr_make_evo_sleep($3);
+                                                    }
+| FEVO_JITTER '(' expr ',' expr ')'                {
+                                                        emit("CALL 2 EVO_JITTER");
+                                                        $$ = expr_make_evo_jitter($3, $5);
                                                     }
 ;
 

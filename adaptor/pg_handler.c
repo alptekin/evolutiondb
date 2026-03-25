@@ -76,8 +76,49 @@ void pg_handle_client(socket_t client_sock)
     /* Store authenticated username in session */
     strncpy(session.username, auth_user, sizeof(session.username) - 1);
 
+    /* Register in session registry + generate cancel key */
+    {
+        extern __thread volatile int g_query_cancelled;
+        session.session_id = session_register(&session, &g_query_cancelled);
+        /* Generate random cancel key */
+        {
+            extern void crypto_random_bytes(unsigned char *, int);
+            unsigned char rbuf[4];
+            crypto_random_bytes(rbuf, 4);
+            session.cancel_key = (int)(
+                ((uint32_t)rbuf[0] << 24) | ((uint32_t)rbuf[1] << 16) |
+                ((uint32_t)rbuf[2] <<  8) |  (uint32_t)rbuf[3]);
+            if (session.cancel_key == 0) session.cancel_key = 1;
+        }
+    }
+
+    /* Send BackendKeyData (with session_id + cancel_key) then ReadyForQuery.
+     * pg_handle_startup no longer sends these — we do it here so BackendKeyData
+     * includes the session registry ID and random cancel secret. */
+    pg_send_backend_key_data(&conn, session.session_id, session.cancel_key);
+    pg_send_ready_for_query(&conn, 'I');
+
     /* Step 2: Query loop */
     while (1) {
+        /* Idle timeout — wait for data with timeout using select() */
+        if (session.evo_idle_timeout_ms > 0) {
+            fd_set rfds;
+            struct timeval tv;
+            FD_ZERO(&rfds);
+            FD_SET(conn.sock, &rfds);
+            tv.tv_sec  = session.evo_idle_timeout_ms / 1000;
+            tv.tv_usec = (session.evo_idle_timeout_ms % 1000) * 1000;
+            int sr = select((int)conn.sock + 1, &rfds, NULL, NULL, &tv);
+            if (sr == 0) {
+                pg_send_error(&conn, "FATAL", "57P05",
+                    "terminating connection due to idle timeout");
+                printf("[PG] Idle timeout (%d ms)\n", session.evo_idle_timeout_ms);
+                fflush(stdout);
+                break;
+            }
+            /* sr < 0 = error, sr > 0 = data ready — fall through */
+        }
+
         if (pg_read_message(&conn, &msg_type, msg_buf, &msg_len) < 0) {
             printf("[PG] Connection closed by client\n");
             break;
@@ -147,7 +188,9 @@ void pg_handle_client(socket_t client_sock)
                         rs->stream_conn = NULL;
                 }
 
+                session_set_query(session.session_id, stmt);
                 safe_query_execute(stmt, rs, &session);
+                session_clear_query(session.session_id);
 
                 if (rs->streamed_rows > 0) {
                     /* Already sent to client during scan — nothing to do */
@@ -343,7 +386,9 @@ void pg_handle_client(socket_t client_sock)
             }
 
             if (pending_query && pending_query[0] != '\0') {
+                session_set_query(session.session_id, pending_query);
                 safe_query_execute(pending_query, rs, &session);
+                session_clear_query(session.session_id);
                 pending_described = 1;
 
                 if (rs->is_select && !rs->has_error && rs->num_cols > 0) {
@@ -379,7 +424,9 @@ void pg_handle_client(socket_t client_sock)
 
             if (pending_query && pending_query[0] != '\0') {
                 if (!pending_described) {
+                    session_set_query(session.session_id, pending_query);
                     safe_query_execute(pending_query, rs, &session);
+                    session_clear_query(session.session_id);
                 }
 
                 if (rs->has_error) {
@@ -481,6 +528,9 @@ cleanup:
             session.serializable_locked = 0;
         }
     }
+
+    /* Unregister from session registry */
+    session_unregister(session.session_id);
 
     /* Auto-drop temporary tables for this session */
     session_drop_temp_tables(&session);

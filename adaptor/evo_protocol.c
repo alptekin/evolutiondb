@@ -190,8 +190,31 @@ void evo_handle_client(socket_t sock)
 
     evo_sendf(&conn, "AUTH_OK\n");
 
+    /* Register in session registry */
+    {
+        extern __thread volatile int g_query_cancelled;
+        session.session_id = session_register(&session, &g_query_cancelled);
+    }
+
     /* Step 2: Command loop */
     while (1) {
+        /* Idle timeout — wait for data with timeout using select() */
+        if (session.evo_idle_timeout_ms > 0) {
+            fd_set rfds;
+            struct timeval tv;
+            FD_ZERO(&rfds);
+            FD_SET(conn.sock, &rfds);
+            tv.tv_sec  = session.evo_idle_timeout_ms / 1000;
+            tv.tv_usec = (session.evo_idle_timeout_ms % 1000) * 1000;
+            int sr = select((int)conn.sock + 1, &rfds, NULL, NULL, &tv);
+            if (sr == 0) {
+                evo_sendf(&conn, "ERR 57P05 idle timeout\n");
+                printf("[EVO] Idle timeout (%d ms)\n", session.evo_idle_timeout_ms);
+                fflush(stdout);
+                break;
+            }
+        }
+
         if (conn_recv_line(&conn, line, sizeof(line)) < 0) {
             printf("[EVO] Connection closed by client\n");
             break;
@@ -229,7 +252,9 @@ void evo_handle_client(socket_t sock)
             }
 
             /* Execute */
+            session_set_query(session.session_id, sql);
             safe_query_execute(sql, rs, &session);
+            session_clear_query(session.session_id);
 
             if (rs->has_error) {
                 evo_sendf(&conn, "ERR %s %s\n",
@@ -271,6 +296,9 @@ void evo_handle_client(socket_t sock)
             session.serializable_locked = 0;
         }
     }
+
+    /* Unregister from session registry */
+    session_unregister(session.session_id);
 
     /* Auto-drop temporary tables for this session */
     session_drop_temp_tables(&session);

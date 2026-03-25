@@ -347,6 +347,8 @@ LAST_INSERT_ID/"("		{ return FLAST_INSERT_ID; }
 GEN_RANDOM_UUID_V7/"("	{ return FGEN_RANDOM_UUID_V7; }
 GEN_RANDOM_UUID/"("		{ return FGEN_RANDOM_UUID; }
 SNOWFLAKE_ID/"("		{ return FSNOWFLAKE_ID; }
+EVO_SLEEP/"("			{ return FEVO_SLEEP; }
+EVO_JITTER/"("			{ return FEVO_JITTER; }
 DATE_ADD/"("			{ return FDATE_ADD; }
 DATE_SUB/"("			{ return FDATE_SUB; }
 

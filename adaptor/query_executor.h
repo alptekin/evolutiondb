@@ -46,6 +46,21 @@ typedef struct {
     /* XA Distributed Transaction state */
     int       xa_state;           /* XA_STATE_* (0 = not in XA) */
     char      xa_xid[128];       /* XA transaction identifier */
+
+    /* Query timeout & cancellation */
+    int       statement_timeout_ms; /* 0 = no timeout (default) */
+    volatile int cancel_requested;  /* 1 = cancel current query */
+    int64_t   query_start_ms;       /* timestamp when current query started */
+    int       cancel_key;           /* random secret for PG CancelRequest */
+
+    /* Lock timeout — per-session override for row-lock wait (ms, 0 = default 5s) */
+    int       evo_lock_timeout_ms;
+
+    /* Idle timeout — disconnect after N ms of inactivity (0 = disabled) */
+    int       evo_idle_timeout_ms;
+
+    /* Session registry ID (used as PG "pid" in BackendKeyData) */
+    int       session_id;
 } SessionCtx;
 
 /*

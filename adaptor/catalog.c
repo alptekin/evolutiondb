@@ -14,6 +14,7 @@
 #include "../evolution/db/mvcc.h"
 #include "../evolution/db/buffer_pool.h"
 #include "xa_transaction.h"
+#include "server.h"       /* session_register/list/cancel */
 
 /* From main.c — connection limit accessors */
 extern int  get_max_connections(void);
@@ -326,6 +327,57 @@ static int handle_set(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+    /* SET evo_statement_timeout = N (ms, 0 = disabled)
+     * Also accepts alias: SET statement_timeout = N */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        int is_timeout = 0;
+        if (strncasecmp(p, "evo_statement_timeout", 21) == 0) {
+            p += 21; is_timeout = 1;
+        } else if (strncasecmp(p, "statement_timeout", 17) == 0) {
+            p += 17; is_timeout = 1;
+        }
+        if (is_timeout) {
+            while (*p && (isspace((unsigned char)*p) || *p == '=' || *p == '\'')) p++;
+            int val = atoi(p);
+            if (ctx) ctx->statement_timeout_ms = (val >= 0) ? val : 0;
+            result_init(rs);
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SET");
+            return 1;
+        }
+    }
+
+    /* SET EVO_LOCK_TIMEOUT = N (ms, 0 = use default 5000ms) */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "evo_lock_timeout", 16) == 0) {
+            p += 16;
+            while (*p && (isspace((unsigned char)*p) || *p == '=' || *p == '\'')) p++;
+            int val = atoi(p);
+            if (ctx) ctx->evo_lock_timeout_ms = (val >= 0) ? val : 0;
+            result_init(rs);
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SET");
+            return 1;
+        }
+    }
+
+    /* SET EVO_IDLE_TIMEOUT = N (ms, 0 = disabled) */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "evo_idle_timeout", 16) == 0) {
+            p += 16;
+            while (*p && (isspace((unsigned char)*p) || *p == '=' || *p == '\'')) p++;
+            int val = atoi(p);
+            if (ctx) ctx->evo_idle_timeout_ms = (val >= 0) ? val : 0;
+            result_init(rs);
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SET");
+            return 1;
+        }
+    }
+
     result_init(rs);
     strcpy(rs->command_tag, "SET");
     return 1;
@@ -482,6 +534,80 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* ── SHOW EVO_SESSIONS ── */
+    if (stristr_found(sql, "evo_sessions")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "pid",       PG_OID_TEXT);
+        result_add_column(rs, "username",  PG_OID_TEXT);
+        result_add_column(rs, "database",  PG_OID_TEXT);
+        result_add_column(rs, "state",     PG_OID_TEXT);
+        result_add_column(rs, "duration_ms", PG_OID_TEXT);
+
+        ActiveSession sessions[MAX_SESSIONS];
+        int ns = session_list(sessions, MAX_SESSIONS);
+        int64_t now = platform_now_ms();
+        for (int i = 0; i < ns; i++) {
+            int row = result_add_row(rs);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%d", sessions[i].session_id);
+            result_set_field(rs, row, 0, buf);
+            result_set_field(rs, row, 1,
+                sessions[i].ctx ? sessions[i].ctx->username : "");
+            result_set_field(rs, row, 2,
+                sessions[i].ctx ? sessions[i].ctx->database : "");
+            if (sessions[i].query_start_ms > 0) {
+                result_set_field(rs, row, 3, "active");
+                snprintf(buf, sizeof(buf), "%lld",
+                         (long long)(now - sessions[i].query_start_ms));
+            } else {
+                result_set_field(rs, row, 3, "idle");
+                snprintf(buf, sizeof(buf), "0");
+            }
+            result_set_field(rs, row, 4, buf);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* ── SHOW EVO_PROCESSES ── */
+    if (stristr_found(sql, "evo_processes")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "pid",       PG_OID_TEXT);
+        result_add_column(rs, "username",  PG_OID_TEXT);
+        result_add_column(rs, "database",  PG_OID_TEXT);
+        result_add_column(rs, "state",     PG_OID_TEXT);
+        result_add_column(rs, "duration_ms", PG_OID_TEXT);
+        result_add_column(rs, "query",     PG_OID_TEXT);
+
+        ActiveSession sessions[MAX_SESSIONS];
+        int ns = session_list(sessions, MAX_SESSIONS);
+        int64_t now = platform_now_ms();
+        for (int i = 0; i < ns; i++) {
+            int row = result_add_row(rs);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%d", sessions[i].session_id);
+            result_set_field(rs, row, 0, buf);
+            result_set_field(rs, row, 1,
+                sessions[i].ctx ? sessions[i].ctx->username : "");
+            result_set_field(rs, row, 2,
+                sessions[i].ctx ? sessions[i].ctx->database : "");
+            if (sessions[i].query_start_ms > 0) {
+                result_set_field(rs, row, 3, "active");
+                snprintf(buf, sizeof(buf), "%lld",
+                         (long long)(now - sessions[i].query_start_ms));
+            } else {
+                result_set_field(rs, row, 3, "idle");
+                snprintf(buf, sizeof(buf), "0");
+            }
+            result_set_field(rs, row, 4, buf);
+            result_set_field(rs, row, 5, sessions[i].current_query);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* ── Other SHOW variables ── */
     result_init(rs);
     rs->is_select = 1;
@@ -495,6 +621,19 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
     } else if (stristr_found(sql, "active_connections")) {
         char buf[32];
         snprintf(buf, sizeof(buf), "%d", get_active_connections());
+        result_set_field(rs, row, 0, buf);
+    } else if (stristr_found(sql, "evo_statement_timeout") ||
+               stristr_found(sql, "statement_timeout")) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", ctx ? ctx->statement_timeout_ms : 0);
+        result_set_field(rs, row, 0, buf);
+    } else if (stristr_found(sql, "evo_lock_timeout")) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", ctx ? ctx->evo_lock_timeout_ms : 0);
+        result_set_field(rs, row, 0, buf);
+    } else if (stristr_found(sql, "evo_idle_timeout")) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", ctx ? ctx->evo_idle_timeout_ms : 0);
         result_set_field(rs, row, 0, buf);
     } else if (stristr_found(sql, "transaction_isolation") || stristr_found(sql, "transaction isolation"))
         result_set_field(rs, row, 0, isolation_level_name(ctx ? ctx->isolation_level : 1));
@@ -572,6 +711,53 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
     return 1;
+}
+
+/* ── KILL QUERY <pid> — cancel a running query by session ID ── */
+static int handle_kill(const char *sql, ResultSet *rs, SessionCtx *ctx)
+{
+    if (!starts_with_i(sql, "KILL"))
+        return 0;
+
+    const char *p = sql + 4;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* KILL QUERY <pid> */
+    if (strncasecmp(p, "QUERY", 5) == 0) {
+        p += 5;
+        while (*p && isspace((unsigned char)*p)) p++;
+        int target_pid = atoi(p);
+        if (target_pid <= 0) {
+            result_init(rs);
+            result_set_error(rs, "22023", "invalid session pid");
+            return 1;
+        }
+        int found = session_cancel(target_pid);
+        result_init(rs);
+        if (found) {
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "KILL");
+        } else {
+            result_set_error(rs, "HY000", "session not found");
+        }
+        return 1;
+    }
+
+    /* KILL <pid> — alias for KILL QUERY <pid> */
+    {
+        int target_pid = atoi(p);
+        if (target_pid > 0) {
+            int found = session_cancel(target_pid);
+            result_init(rs);
+            if (found) {
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "KILL");
+            } else {
+                result_set_error(rs, "HY000", "session not found");
+            }
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 /* ---- XA helper: extract XID string from "XA <CMD> 'xid'" ---- */
@@ -3020,6 +3206,9 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* SHOW */
     if (handle_show(sql, rs, ctx)) return 1;
+
+    /* KILL QUERY */
+    if (handle_kill(sql, rs, ctx)) return 1;
 
     /* Transaction commands */
     if (handle_transaction(sql, rs, ctx)) return 1;
