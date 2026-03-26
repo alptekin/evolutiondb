@@ -59,6 +59,10 @@ void AddOrderByColumn(const char *name, int desc);
 
 int UpdateProcess(void);
 int DeleteProcess(void);
+void AddDeleteTarget(const char *name);
+void SetMultiDelete(void);
+int evo_delete_row(const char *tableName,
+                   const char *pkKey, uint32_t mvcc_xid);
 int SelectProcess(void);
 int CreateTableProcess(void);
 int InsertProcess(void);
