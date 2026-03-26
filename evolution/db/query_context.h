@@ -124,6 +124,10 @@ typedef struct {
 typedef struct {
     char tblName[1024];             /* was tblDelName */
     int  rowCount;                  /* was deleteCount */
+    /* Multi-table DELETE */
+    int  multiDelete;               /* 1 = multi-table DELETE active */
+    int  deleteTargetCount;
+    char deleteTargets[MAX_JOIN_TABLES][256];
 } DeleteOpts;
 
 /* ---- DROP ---- */
