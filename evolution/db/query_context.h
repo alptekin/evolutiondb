@@ -118,6 +118,12 @@ typedef struct {
 typedef struct {
     char tblName[1024];             /* was tblUpdateTableName */
     int  rowCount;                  /* was updateCount */
+    /* Multi-table UPDATE */
+    int  multiUpdate;               /* 1 = multi-table UPDATE active */
+    int  setCount;                  /* total qualified SET assignments */
+    char setTargetTable[64][128];   /* table prefix from SET t1.col = ... */
+    char setTargetCol[64][128];     /* column name */
+    ExprNode *setValueExprs[64];    /* RHS expression */
 } UpdateOpts;
 
 /* ---- DELETE ---- */

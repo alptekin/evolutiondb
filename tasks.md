@@ -896,7 +896,7 @@
 
 ## Day 23 — Multi-Table UPDATE & ALTER TABLE ADD COLUMN
 
-### Task 44: ⬜ Multi-Table UPDATE (Feature #20)
+### Task 44: ✅ Multi-Table UPDATE (Feature #20)
 
 **Goal:** Implement `UPDATE t1 JOIN t2 ON ... SET t1.col = t2.col WHERE ...`.
 

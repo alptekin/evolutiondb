@@ -1,6 +1,6 @@
-# EvolutionDB — Missing Features & Roadmap
+# EvolutionDB — Feature Status & Roadmap
 
-> Comparison with MySQL and PostgreSQL.  
+> Comparison with MySQL and PostgreSQL.
 > ✅ = Implemented &nbsp; 🔧 = Parsed but not executed &nbsp; ❌ = Not implemented
 
 ---
@@ -9,26 +9,26 @@
 
 | # | Feature | MySQL | PG | EvoSQL | Notes |
 |---|---------|:-----:|:--:|:------:|-------|
-| 1 | JOIN (INNER/LEFT/RIGHT/CROSS/NATURAL) | ✅ | ✅ | 🔧 | Grammar exists, no multi-table execution |
+| 1 | JOIN (INNER/LEFT/RIGHT/CROSS/NATURAL) | ✅ | ✅ | ✅ | Volcano-style pipeline join engine (join.c), up to 8 tables |
 | 2 | Subqueries (WHERE, FROM, SELECT) | ✅ | ✅ | 🔧 | Grammar exists, no subquery execution |
 | 3 | Subquery comparison (ANY/SOME/ALL) | ✅ | ✅ | 🔧 | Grammar exists, no evaluation |
 | 4 | UNION / UNION ALL / INTERSECT / EXCEPT | ✅ | ✅ | ❌ | |
-| 5 | ALTER TABLE (ADD/DROP/MODIFY/RENAME COLUMN) | ✅ | ✅ | ❌ | No schema evolution |
-| 6 | FOREIGN KEY constraints | ✅ | ✅ | ❌ | No referential integrity |
-| 7 | CHECK constraints | ✅ | ✅ | ❌ | |
-| 8 | DEFAULT value enforcement | ✅ | ✅ | 🔧 | Parsed but not stored/applied |
-| 9 | AUTO_INCREMENT / SERIAL | ✅ | ✅ | 🔧 | Parsed but no counter/enforcement |
-| 10 | UNIQUE constraint enforcement | ✅ | ✅ | 🔧 | Parsed but duplicates allowed |
-| 11 | Composite PRIMARY KEY | ✅ | ✅ | 🔧 | Parser accepts but only single-column PK stored |
-| 12 | Real transactions (ACID) | ✅ | ✅ | 🔧 | BEGIN/COMMIT/ROLLBACK accepted but no-op |
-| 13 | Indexes (B-tree, Hash, GiST, GIN) | ✅ | ✅ | 🔧 | Page-based B+ tree implemented (btree2.c), not yet wired into DML modules |
-| 14 | Multi-row INSERT | ✅ | ✅ | 🔧 | Parser accepts but only first row inserted |
-| 15 | INSERT INTO ... SELECT | ✅ | ✅ | ❌ | |
-| 16 | INSERT with column list mapping | ✅ | ✅ | 🔧 | Parser accepts but column mapping not used |
-| 17 | DELETE with expression-based WHERE | ✅ | ✅ | ❌ | Only deletes by primary key |
-| 18 | UPDATE with expression-based WHERE | ✅ | ✅ | ❌ | Only updates by primary key |
-| 19 | Multi-table DELETE | ✅ | ✅ | 🔧 | Grammar exists, no execution |
-| 20 | Multi-table UPDATE | ✅ | ✅ | ❌ | |
+| 5 | ALTER TABLE (ADD/DROP/MODIFY/RENAME COLUMN) | ✅ | ✅ | 🔧 | ADD COLUMN implemented; DROP/MODIFY/RENAME pending |
+| 6 | FOREIGN KEY constraints | ✅ | ✅ | ✅ | CASCADE, SET NULL, RESTRICT, SET DEFAULT, NO ACTION; ON DELETE + ON UPDATE; cross-schema |
+| 7 | CHECK constraints | ✅ | ✅ | ✅ | Named constraints, NOT VALID, ENABLE/DISABLE/VALIDATE |
+| 8 | DEFAULT value enforcement | ✅ | ✅ | ✅ | Literals, CURRENT_TIMESTAMP, gen_random_uuid(), expressions |
+| 9 | AUTO_INCREMENT / SERIAL / IDENTITY | ✅ | ✅ | ✅ | Custom start value and step, LAST_INSERT_ID() |
+| 10 | UNIQUE constraint enforcement | ✅ | ✅ | ✅ | Table-level and column-level, composite UNIQUE |
+| 11 | Composite PRIMARY KEY | ✅ | ✅ | ✅ | Pipe-delimited composite key in B+ tree |
+| 12 | Real transactions (ACID) | ✅ | ✅ | ✅ | BEGIN/COMMIT/ROLLBACK, undo log, MVCC, SAVEPOINT |
+| 13 | Indexes (B-tree, Hash) | ✅ | ✅ | ✅ | B+ tree, hash index, expression index, composite index, CONCURRENTLY |
+| 14 | Multi-row INSERT | ✅ | ✅ | ✅ | VALUES (a), (b), (c) — batch insert |
+| 15 | INSERT INTO ... SELECT | ✅ | ✅ | ✅ | With column mapping, WHERE, JOIN source |
+| 16 | INSERT with column list mapping | ✅ | ✅ | ✅ | Reorder + fill missing with DEFAULT/NULL |
+| 17 | DELETE with expression-based WHERE | ✅ | ✅ | ✅ | Two-phase collect-then-delete with LIMIT/OFFSET |
+| 18 | UPDATE with expression-based WHERE | ✅ | ✅ | ✅ | MVCC non-destructive update (soft-delete old + insert new) |
+| 19 | Multi-table DELETE | ✅ | ✅ | ✅ | MySQL syntax 1 + 2, USING, multi-target, LEFT JOIN orphan pattern |
+| 20 | Multi-table UPDATE | ✅ | ✅ | ✅ | Cross-table SET values, alias support, expr evaluation from join row |
 
 ## 🟠 Important — Commonly Used
 
@@ -41,14 +41,14 @@
 | 25 | Prepared Statements (server-side) | ✅ | ✅ | 🔧 | Extended query protocol stubs only |
 | 26 | Window Functions (ROW_NUMBER, RANK, OVER) | ✅ | ✅ | ❌ | |
 | 27 | CTEs (WITH ... AS) | ✅ | ✅ | ❌ | |
-| 28 | EXPLAIN / EXPLAIN ANALYZE | ✅ | ✅ | ❌ | |
-| 29 | DROP DATABASE | ✅ | ✅ | ❌ | CREATE exists but DROP missing |
-| 30 | DROP SCHEMA | ✅ | ✅ | ❌ | CREATE exists but DROP missing |
+| 28 | EXPLAIN / EXPLAIN ANALYZE | ✅ | ✅ | ✅ | EXPLAIN shows access method (PK Lookup, Index Scan, Seq Scan) |
+| 29 | DROP DATABASE | ✅ | ✅ | ❌ | CREATE DATABASE exists |
+| 30 | DROP SCHEMA | ✅ | ✅ | ❌ | CREATE SCHEMA exists |
 | 31 | RENAME TABLE | ✅ | ✅ | ❌ | |
 | 32 | ON DUPLICATE KEY UPDATE | ✅ | ❌ | 🔧 | Parsed but not executed |
 | 33 | REPLACE INTO | ✅ | ❌ | 🔧 | Parsed but not executed |
-| 34 | CREATE TABLE ... SELECT | ✅ | ✅ | 🔧 | Parsed but not executed |
-| 35 | ORDER BY expression / ordinal position | ✅ | ✅ | ❌ | Column names only |
+| 34 | CREATE TABLE AS SELECT (CTAS) | ✅ | ✅ | ✅ | INFER + EXPLICIT modes, TEMPORARY support |
+| 35 | ORDER BY expression / ordinal position | ✅ | ✅ | 🔧 | Multi-column ORDER BY works; expression/ordinal pending |
 | 36 | SET @var = ... (user variables) | ✅ | ❌ | ❌ | |
 
 ## 🟡 Moderate — Standard SQL
@@ -61,23 +61,23 @@
 | 40 | REGEXP / RLIKE | ✅ | ✅ | 🔧 | Parsed but not evaluated |
 | 41 | EXISTS | ✅ | ✅ | 🔧 | Parsed but not evaluated |
 | 42 | IS TRUE / IS FALSE / IS UNKNOWN | ✅ | ✅ | 🔧 | Parsed but not evaluated |
-| 43 | INTERVAL (date arithmetic) | ✅ | ✅ | 🔧 | Parsed but not evaluated |
+| 43 | INTERVAL (date arithmetic) | ✅ | ✅ | 🔧 | DATE_ADD/DATE_SUB parsed, evaluation pending |
 | 44 | GROUP_CONCAT / STRING_AGG | ✅ | ✅ | ❌ | |
-| 45 | CONCAT with 3+ arguments | ✅ | ✅ | ❌ | Only 2-arg CONCAT works |
+| 45 | CONCAT with 3+ arguments | ✅ | ✅ | ❌ | 2-arg CONCAT works |
 | 46 | \|\| string concatenation operator | ❌ | ✅ | ❌ | |
 | 47 | NULL-safe comparison (`<=>`) | ✅ | ❌ | 🔧 | Token exists but not evaluated |
-| 48 | String: LEFT, RIGHT, LPAD, RPAD, REVERSE, REPEAT, INSTR, LOCATE, POSITION | ✅ | ✅ | ❌ | |
+| 48 | String: LEFT, RIGHT, LPAD, RPAD, REVERSE, REPEAT, INSTR, LOCATE, POSITION | ✅ | ✅ | ❌ | UPPER, LOWER, LENGTH, SUBSTRING, TRIM, REPLACE, CONCAT implemented |
 | 49 | Math: ABS, CEIL, FLOOR, ROUND, POWER, SQRT, LOG, RAND | ✅ | ✅ | ❌ | |
-| 50 | Date: NOW, DATE_ADD, DATE_SUB, DATEDIFF, DATE_FORMAT, EXTRACT, YEAR, MONTH, DAY | ✅ | ✅ | 🔧 | DATE_ADD/SUB parsed but not evaluated |
+| 50 | Date: NOW, DATE_ADD, DATE_SUB, DATEDIFF, DATE_FORMAT, EXTRACT | ✅ | ✅ | 🔧 | CURRENT_TIMESTAMP/DATE/TIME work; DATE_ADD/SUB parsed |
 
 ## 🔵 Advanced — Enterprise / Production
 
 | # | Feature | MySQL | PG | EvoSQL | Notes |
 |---|---------|:-----:|:--:|:------:|-------|
 | 51 | JSON / JSONB support | ✅ | ✅ | ❌ | |
-| 52 | Full-text search (MATCH AGAINST / tsvector) | ✅ | ✅ | ❌ | |
-| 53 | Table partitioning | ✅ | ✅ | ❌ | |
-| 54 | Replication | ✅ | ✅ | ❌ | |
+| 52 | Full-text search | ✅ | ✅ | ❌ | |
+| 53 | Table partitioning | ✅ | ✅ | ❌ | Sharding (hash/range) implemented instead |
+| 54 | Replication | ✅ | ✅ | ✅ | Logical replication, Raft consensus, read replicas |
 | 55 | Sequences (CREATE SEQUENCE, NEXTVAL) | ❌ | ✅ | ❌ | |
 | 56 | RETURNING clause | ❌ | ✅ | ❌ | |
 | 57 | UPSERT (INSERT ... ON CONFLICT) | ❌ | ✅ | ❌ | |
@@ -88,48 +88,64 @@
 | 62 | LISTEN / NOTIFY | ❌ | ✅ | ❌ | |
 | 63 | Table inheritance | ❌ | ✅ | ❌ | |
 | 64 | Row-level security | ❌ | ✅ | ❌ | |
-| 65 | Roles (vs individual users) | ✅ | ✅ | ❌ | Users only, no roles |
-| 66 | WAL / crash recovery | ✅ | ✅ | ❌ | Not crash-safe |
-| 67 | Concurrent write safety (file locking / MVCC) | ✅ | ✅ | ❌ | Mutex per query but no file-level locking |
-| 68 | Connection pooling | ✅ | ✅ | ❌ | |
-| 69 | SELECT INTO | ✅ | ✅ | ❌ | |
+| 65 | Roles (vs individual users) | ✅ | ✅ | ❌ | Users + GRANT/REVOKE, no role hierarchy |
+| 66 | WAL / crash recovery | ✅ | ✅ | ✅ | FPI-based WAL, checkpoint, crash recovery replay |
+| 67 | MVCC (Multi-Version Concurrency Control) | ✅ | ✅ | ✅ | 7 layers: Snapshots, CLOG, RECLAIM, HOT, VMAP, CSN, Auto-RECLAIM |
+| 68 | Connection pooling | ✅ | ✅ | ❌ | Thread-per-connection model |
+| 69 | SELECT INTO | ✅ | ✅ | ❌ | CTAS available as alternative |
 
 ## 🏗️ Architecture & Operations
 
 | # | Feature | MySQL | PG | EvoSQL | Notes |
 |---|---------|:-----:|:--:|:------:|-------|
-| 70 | Buffer Pool Manager (LRU page cache) | ✅ | ✅ | ✅ | Clock Sweep buffer pool (4KB pages, like PostgreSQL) with anti-pollution ring buffer |
-| 71 | RECLAIM (storage garbage collection) | ✅ (OPTIMIZE TABLE) | ✅ (VACUUM) | ❌ | Deleted records blanked but space never reclaimed |
-| 72 | Temporary Tables (session-scoped) | ✅ | ✅ | 🔧 | `opt_temporary` parsed but not executed |
-| 73 | Native UUID type & gen_random_uuid() | ❌ | ✅ | ❌ | UUID OID 2950 in catalog but no generation/validation |
-| 74 | Snowflake ID generation (SNOWFLAKE keyword) | ❌ | ❌ | ❌ | Twitter Snowflake: 41-bit timestamp + 10-bit machine + 12-bit sequence |
-| 75 | Query Timeout & Statement Cancellation | ✅ | ✅ | ❌ | No watchdog; runaway queries block connection forever |
-| 76 | `evo_sleep(ms)` — artificial delay function | ❌ | ✅ (`pg_sleep`) | ❌ | Block for N ms; interruptible by statement_timeout; chaos-engineering |
-| 77 | `evo_jitter(min_ms, max_ms)` — random delay function | ❌ (`pg_jitter` ext) | ❌ (`pg_jitter` ext) | ❌ | Random delay [min,max] ms; returns actual delay; pg_jitter-inspired |
-| 78 | JIT Compilation Evaluation | ✅ (LLVM) | ✅ (LLVM / pg_jitter) | ❌ | Profile-driven decision at hardening phase; SLJIT/AsmJIT if expr eval >30% CPU on 100K+ rows |
+| 70 | Buffer Pool Manager | ✅ | ✅ | ✅ | Clock Sweep (PG algorithm), configurable size, anti-pollution ring |
+| 71 | RECLAIM / VACUUM | ✅ | ✅ | ✅ | 6-phase defrag, dead tuple cleanup, XID freeze, auto-RECLAIM at 20% threshold |
+| 72 | Temporary Tables | ✅ | ✅ | ✅ | LOCAL + GLOBAL TEMPORARY, ON COMMIT DELETE/PRESERVE ROWS |
+| 73 | Native UUID type & gen_random_uuid() | ❌ | ✅ | ✅ | UUID v4 + v7 (RFC 9562), 16-byte binary storage |
+| 74 | Snowflake ID generation | ❌ | ❌ | ✅ | 64-bit time-ordered ID (snowflake_id() function) |
+| 75 | Query Timeout & Statement Cancellation | ✅ | ✅ | ✅ | evo_statement_timeout, KILL QUERY, PG CancelRequest, idle timeout |
+| 76 | `evo_sleep(ms)` — delay function | ❌ | ✅ | ✅ | Interruptible by statement_timeout |
+| 77 | `evo_jitter(min_ms, max_ms)` — random delay | ❌ | ❌ | ✅ | Returns actual delay in ms |
+| 78 | JIT Compilation | ✅ | ✅ | ❌ | |
+| 79 | Transparent Data Encryption (TDE) | ❌ | ❌ | ✅ | MEK/DEK two-layer, AES-256-CTR pages, AES-256-GCM DEK wrap |
+| 80 | TLS / SSL | ✅ | ✅ | ✅ | Auto self-signed certs, STARTTLS for EVO protocol |
+| 81 | Deadlock Detection | ✅ | ✅ | ✅ | Timeout-based row-level lock manager |
+| 82 | XA Distributed Transactions | ✅ | ❌ | ✅ | XA START/END/PREPARE/COMMIT/ROLLBACK, WAL-persisted |
+| 83 | SAVEPOINT / ROLLBACK TO | ✅ | ✅ | ✅ | Nested savepoints, partial rollback |
+| 84 | Isolation Levels | ✅ | ✅ | ✅ | READ COMMITTED (default), REPEATABLE READ |
+| 85 | Hash Index | ✅ | ✅ | ✅ | FNV-1a, static hashing with overflow chains |
+| 86 | Expression Index | ❌ | ✅ | ✅ | UPPER(), LOWER(), LENGTH(), CONCAT() |
+| 87 | ANALYZE TABLE (statistics) | ✅ | ✅ | ✅ | Table + column + index statistics |
+| 88 | TRUNCATE TABLE | ✅ | ✅ | ✅ | CASCADE, RESTART/CONTINUE IDENTITY, multi-table |
+| 89 | Generated Columns | ✅ | ✅ | ✅ | STORED + VIRTUAL |
+| 90 | FOR UPDATE / FOR SHARE | ✅ | ✅ | ✅ | Row-level locking, SKIP LOCKED syntax |
+| 91 | CREATE INDEX CONCURRENTLY | ❌ | ✅ | ✅ | 3-phase non-blocking build |
+| 92 | Sharding | ✅ (Vitess) | ✅ (Citus) | ✅ | Hash/range sharding, Raft consensus |
+| 93 | SHOW PROCESSLIST / sessions | ✅ | ✅ | ✅ | Session registry, SHOW EVO_SESSIONS |
+| 94 | Constraint Management | ✅ | ✅ | ✅ | Named constraints, NOT VALID, ENABLE/DISABLE/VALIDATE |
+| 95 | ALTER TABLE ADD COLUMN | ✅ | ✅ | ✅ | Existing rows return NULL for new column |
 
-## ⚙️ Storage Engine Limitations
+## ⚙️ Resolved Storage Limitations
 
-| Limitation | Current | Ideal |
-|-----------|---------|-------|
-| All queries full table scan | O(n) | B-tree index O(log n) — **B+ tree ready (btree2.c), pending DML integration** |
-| Record size cap | ~8 KB | Configurable / TOAST |
-| Max ORDER BY rows | 500 (static array) | Dynamic allocation |
-| Max UPDATE/DROP rows | 200 (static array) | Dynamic allocation |
-| Semicolon in data | Corrupts records | Escaped/binary storage |
-| Concurrent writes | Global mutex | Row-level locking / MVCC |
-| Crash recovery | None | WAL + checkpoints |
+| Item | Status | Notes |
+|------|--------|-------|
+| B+ tree index O(log n) | ✅ Resolved | btree2.c integrated into all DML |
+| Binary tuple format | ✅ Resolved | Type-specific encoding, no semicolons |
+| Dynamic allocation | ✅ Resolved | No static caps on ORDER BY, UPDATE, DELETE |
+| Row-level locking / MVCC | ✅ Resolved | lock_mgr.c + 7-layer MVCC |
+| Crash recovery | ✅ Resolved | FPI-based WAL + checkpoint |
+| Record size cap | ~8 KB | TOAST not yet implemented |
+| Connection pooling | ❌ | Thread-per-connection model |
 
-## 🏗️ Unified Storage Migration (In Progress)
-
-Migrating from 9+ separate file types to a single global binary file with page-based storage. Current status:
+## 🏗️ Unified Storage Migration — Complete ✅
 
 | Phase | Component | Status |
 |-------|-----------|--------|
-| 1 | Page Manager + Slotted Pages | ✅ Done (18/18 tests) |
-| 2 | B+ Tree | ✅ Done (13/13 tests) |
-| 3 | System Catalog | ✅ Done (30/30 tests) |
-| 4 | Table API (drop-in replacement for APUE) | TODO |
-| 5 | Metadata Migration (Create.c, DatabaseMgmt.c, etc.) | TODO |
-| 6 | Index Integration (Index.c -> btree2) | TODO |
-| 7 | FOREIGN KEY (trivial with catalog) | TODO |
+| 1 | Page Manager + Slotted Pages | ✅ (18/18 tests) |
+| 2 | B+ Tree | ✅ (13/13 tests) |
+| 3 | System Catalog (12 B+ trees) | ✅ (30/30 tests) |
+| 4 | Table API + DML Migration | ✅ |
+| 5 | Metadata Migration (UserMgmt, GrantMgmt) | ✅ |
+| 6 | Secondary Index Migration (Index.c → btree2) | ✅ |
+| 7 | FOREIGN KEY Constraints | ✅ (22/22 tests) |
+| 8 | File I/O Elimination | ✅ (all fopen removed) |
