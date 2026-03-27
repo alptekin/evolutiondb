@@ -405,6 +405,88 @@ int ReclaimTableProcess(void)
         }
     }
 
+    /* Phase 7: Column Drop Rewrite — rewrite tuples without dropped columns,
+     * then remove dropped column records from catalog and renumber ordinals. */
+    {
+        int has_dropped = 0;
+        for (int ci = 0; ci < ncols; ci++) {
+            if (cols[ci].is_dropped) { has_dropped = 1; break; }
+        }
+        if (has_dropped) {
+            /* Build active column list (non-dropped) */
+            ColumnDesc activeCols[CAT_MAX_COLUMNS];
+            int nactive = 0;
+            for (int ci = 0; ci < ncols; ci++) {
+                if (!cols[ci].is_dropped)
+                    activeCols[nactive++] = cols[ci];
+            }
+
+            /* Rewrite all tuples without dropped columns */
+            int rewritten = 0;
+            BTree2 rw_pk = tapi_pk_tree(&td);
+            TableScanCursor rwCur;
+            if (tapi_scan_begin(&td, &rwCur) == 0) {
+                char rwPk[256], rwRec[RECORD_BUF_SIZE];
+                while (tapi_scan_next(&rwCur, rwPk, rwRec, sizeof(rwRec)) == 0) {
+                    int rwLen = tup_record_len(rwRec, sizeof(rwRec));
+                    if (rwLen <= 0) continue;
+
+                    /* Extract all physical fields */
+                    char allFields[64][256];
+                    int allNull[64];
+                    int nf = tup_extract_fields(rwRec, rwLen, cols, ncols,
+                                                allFields, allNull, 64);
+                    if (nf < 0) continue;
+
+                    /* Build new tuple with only active columns */
+                    const char *newVals[64];
+                    int newNull[64];
+                    int nv = 0;
+                    for (int ci = 0; ci < nf && ci < ncols; ci++) {
+                        if (cols[ci].is_dropped) continue;
+                        newVals[nv] = allNull[ci] ? NULL : allFields[ci];
+                        newNull[nv] = allNull[ci];
+                        nv++;
+                    }
+
+                    /* Get xmin from old tuple for MVCC continuity */
+                    uint32_t xmin = 0;
+                    if (tup_has_mvcc(rwRec, rwLen))
+                        xmin = tup_get_xmin(rwRec, rwLen);
+
+                    char newRec[RECORD_BUF_SIZE];
+                    int newLen = tup_build(newVals, newNull, nv,
+                                           td.table_id, activeCols, nactive,
+                                           newRec, sizeof(newRec), xmin);
+                    if (newLen <= 0) continue;
+
+                    /* Find current RowID and update in-place */
+                    RowID rid;
+                    if (bt2_search(&rw_pk, rwPk, &rid) != 0) continue;
+                    RowID new_rid = tapi_heap_update(&td, rid, newRec, (uint16_t)newLen);
+                    if (new_rid.page_no != rid.page_no || new_rid.slot_idx != rid.slot_idx)
+                        bt2_update(&rw_pk, rwPk, new_rid);
+                    rewritten++;
+                }
+            }
+
+            /* Remove dropped columns from catalog and renumber */
+            int new_ncols = cat_remove_dropped_columns(td.table_id);
+            if (new_ncols > 0) {
+                cat_update_num_columns(td.table_id, td.table_name,
+                                       td.schema_id, new_ncols);
+            }
+
+            /* Invalidate column cache */
+            { extern void col_cache_invalidate(uint32_t);
+              col_cache_invalidate(td.table_id); }
+
+            if (rewritten > 0)
+                printf("RECLAIM: rewrote %d tuples (dropped %d columns)\n",
+                       rewritten, ncols - nactive);
+        }
+    }
+
     printf("RECLAIM: %d dead tuples removed, %d tuples frozen, "
            "compacted %d bytes, moved %d records, freed %d pages (%d pages remain)\n",
            dead_count, freeze_count, totalCompacted, totalMoved, pagesFreed, numLive);

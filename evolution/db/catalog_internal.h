@@ -85,6 +85,7 @@ typedef struct {
     char     default_val[CAT_MAX_DEFAULT_LEN];
     int      generated_mode;   /* GENMODE_NONE / GENMODE_STORED / GENMODE_VIRTUAL */
     char     generated_expr[512]; /* serialized RPN expression */
+    int      is_dropped;      /* 1 = column dropped (lazy placeholder) */
 } ColumnDesc;
 
 #define GENMODE_NONE    0
@@ -206,6 +207,8 @@ int cat_update_shard_owner(uint32_t table_id, int ordinal, int new_owner);
  * ---------------------------------------------------------------- */
 int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max);
 int cat_add_column(uint32_t table_id, const ColumnDesc *col);
+int cat_drop_column(uint32_t table_id, int col_ordinal);
+int cat_remove_dropped_columns(uint32_t table_id);
 int cat_update_num_columns(uint32_t table_id, const char *table_name,
                            uint32_t schema_id, int new_count);
 
