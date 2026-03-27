@@ -58,6 +58,12 @@ void SetOrderByDirection(int desc);
 void AddOrderByColumn(const char *name, int desc);
 
 int UpdateProcess(void);
+void SetMultiUpdate(void);
+void AddMultiUpdateSet(const char *table, const char *col,
+                       struct ExprNode *expr);
+int evo_update_row(const char *tableName, const char *pkKey,
+                   const char setCols[][128], const char setVals[][256],
+                   int numSets, uint32_t mvcc_xid);
 int DeleteProcess(void);
 void AddDeleteTarget(const char *name);
 void SetMultiDelete(void);

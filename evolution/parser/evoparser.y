@@ -1334,16 +1334,20 @@ opt_ondupupdate									{ emit("REPLACESELECT %d %s", $2, $4); free($4); }
 ;
 
 /** update **/
-stmt: update_stmt                                                               
+stmt: update_stmt
     {
         emit("STMT");
-        UpdateProcess();
+        if (!g_upd.multiUpdate) {
+            UpdateProcess();
+        }
     }
 ;
 update_stmt: UPDATE update_opts table_references
 SET update_asgn_list opt_where opt_orderby opt_limit
     {
         emit("UPDATE %d %d %d", $2, $3, $5);
+        if (g_qctx && g_sel.joinTableCount > 1 && !g_upd.multiUpdate)
+            SetMultiUpdate();
     }
 ;
 
@@ -1371,6 +1375,7 @@ NAME COMPARISON expr
             YYERROR;
         }
         emit("ASSIGN2 %s.%s", $1, $3);
+        if (g_qctx) { AddMultiUpdateSet($1, $3, $5); SetMultiUpdate(); }
         free($1);
         free($3);
         $$ = 1;
@@ -1389,13 +1394,14 @@ NAME COMPARISON expr
 | update_asgn_list ',' NAME '.' NAME COMPARISON expr
     {
         if ($6 != 4) {
-            yyerror(scanner, "bad update assignment to %s.$s", $3, $5);
+            yyerror(scanner, "bad update assignment to %s.%s", $3, $5);
             YYERROR;
         }
         emit("ASSIGN4 %s.%s", $3, $5);
+        if (g_qctx) { AddMultiUpdateSet($3, $5, $7); SetMultiUpdate(); }
         free($3);
         free($5);
-        $$ = 1;
+        $$ = $1 + 1;
     }
 ;
 
