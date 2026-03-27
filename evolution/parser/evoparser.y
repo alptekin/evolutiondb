@@ -1221,6 +1221,18 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         AlterTableAddColumn($3, $6, $7);
         free($3); free($6);
     }
+| ALTER TABLE NAME DROP COLUMN NAME
+    {
+        emit("ALTER TABLE DROP COLUMN %s %s", $3, $6);
+        AlterTableDropColumn($3, $6);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME DROP NAME
+    {
+        emit("ALTER TABLE DROP COLUMN %s %s", $3, $5);
+        AlterTableDropColumn($3, $5);
+        free($3); free($5);
+    }
 ;
 
 stmt: insert_stmt

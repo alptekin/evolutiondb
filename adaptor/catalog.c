@@ -1612,6 +1612,7 @@ int catalog_list_columns(const char *table_name, ResultSet *rs)
     ColumnDesc cols[CAT_MAX_COLUMNS];
     int ncols = cat_find_columns(tblDesc.table_id, cols, CAT_MAX_COLUMNS);
     for (int i = 0; i < ncols; i++) {
+        if (cols[i].is_dropped) continue;
         ordinal++;
         int row = result_add_row(rs);
         if (row < 0) break;
@@ -1666,6 +1667,7 @@ static int catalog_list_all_columns(ResultSet *rs)
         ColumnDesc cols[CAT_MAX_COLUMNS];
         int ncols = cat_find_columns(tables[t].table_id, cols, CAT_MAX_COLUMNS);
         for (int c = 0; c < ncols; c++) {
+            if (cols[c].is_dropped) continue;
             int row = result_add_row(rs);
             if (row < 0) break;
 

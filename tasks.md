@@ -936,7 +936,7 @@
 
 ## Day 24 — ALTER TABLE DROP & MODIFY COLUMN
 
-### Task 46: ⬜ ALTER TABLE — DROP COLUMN (Feature #5, Part 2)
+### Task 46: ✅ ALTER TABLE — DROP COLUMN (Feature #5, Part 2)
 
 **Goal:** Implement `ALTER TABLE t DROP [COLUMN] col`.
 

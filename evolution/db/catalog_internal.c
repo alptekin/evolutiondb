@@ -203,12 +203,13 @@ static void deserialize_table(const char *buf, TableDesc *t)
 /* --- Column --- */
 static void serialize_column(const ColumnDesc *c, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%d;%s;%d;%d;%d;%d;%s;%d;%s",
+    snprintf(buf, size, "%u;%d;%s;%d;%d;%d;%d;%s;%d;%s;%d",
              c->table_id, c->col_ordinal, c->col_name,
              c->type_code, c->is_not_null, c->is_unique, c->is_pk,
              c->default_val,
              c->generated_mode,
-             c->generated_expr[0] ? c->generated_expr : "");
+             c->generated_expr[0] ? c->generated_expr : "",
+             c->is_dropped);
 }
 
 static void deserialize_column(const char *buf, ColumnDesc *c)
@@ -226,11 +227,18 @@ static void deserialize_column(const char *buf, ColumnDesc *c)
     /* generated_mode — 9th field, may be absent in old records */
     c->generated_mode = 0;
     c->generated_expr[0] = '\0';
+    c->is_dropped = 0;
     if (p && *p) {
         p = next_field(p, field, sizeof(field));
         c->generated_mode = atoi(field);
-        if (p && *p)
-            next_field(p, c->generated_expr, sizeof(c->generated_expr));
+        if (p && *p) {
+            p = next_field(p, c->generated_expr, sizeof(c->generated_expr));
+            /* is_dropped — 11th field, may be absent in old records */
+            if (p && *p) {
+                next_field(p, field, sizeof(field));
+                c->is_dropped = atoi(field);
+            }
+        }
     }
 }
 
@@ -1056,6 +1064,71 @@ int cat_add_column(uint32_t table_id, const ColumnDesc *col)
     if (rid.page_no == 0) return -1;
 
     return bt2_insert(&g_cat_trees[CAT_SYS_COLUMNS], key, rid) == 0 ? 0 : -1;
+}
+
+/* Mark a column as dropped (lazy). Preserves type_code for binary decoding. */
+int cat_drop_column(uint32_t table_id, int col_ordinal)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_column_key(table_id, col_ordinal, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_COLUMNS], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    ColumnDesc col;
+    deserialize_column(record, &col);
+    col.is_dropped = 1;
+    snprintf(col.col_name, CAT_MAX_NAME_LEN, "........dropped.%d........", col_ordinal);
+
+    serialize_column(&col, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+
+    /* Delete old + insert new (record size may differ) */
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_COLUMNS], key);
+
+    RowID new_rid = cat_store_record(CAT_SYS_COLUMNS, record, rec_len);
+    if (new_rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_COLUMNS], key, new_rid) == 0 ? 0 : -1;
+}
+
+/* Physically remove all dropped columns and renumber ordinals (Phase 2). */
+int cat_remove_dropped_columns(uint32_t table_id)
+{
+    ColumnDesc all_cols[CAT_MAX_COLUMNS];
+    int ncols = cat_find_columns(table_id, all_cols, CAT_MAX_COLUMNS);
+
+    /* Check if any dropped */
+    int has_dropped = 0;
+    for (int i = 0; i < ncols; i++) {
+        if (all_cols[i].is_dropped) { has_dropped = 1; break; }
+    }
+    if (!has_dropped) return 0;
+
+    /* Delete ALL column records for this table */
+    for (int i = 0; i < ncols; i++) {
+        char key[CAT_MAX_KEY_LEN];
+        make_column_key(table_id, all_cols[i].col_ordinal, key, sizeof(key));
+        RowID rid;
+        if (bt2_search(&g_cat_trees[CAT_SYS_COLUMNS], key, &rid) == 0) {
+            cat_delete_record(rid);
+            bt2_delete(&g_cat_trees[CAT_SYS_COLUMNS], key);
+        }
+    }
+
+    /* Re-insert only active columns with renumbered ordinals */
+    int new_ordinal = 0;
+    for (int i = 0; i < ncols; i++) {
+        if (all_cols[i].is_dropped) continue;
+        all_cols[i].col_ordinal = new_ordinal++;
+        cat_add_column(table_id, &all_cols[i]);
+    }
+    return new_ordinal;
 }
 
 int cat_update_num_columns(uint32_t table_id, const char *table_name,
