@@ -38,6 +38,21 @@ static void delete_secondary_indexes(const char *tblName,
     }
 }
 
+/* ---- Multi-table DELETE parser helpers ---- */
+void AddDeleteTarget(const char *name)
+{
+    if (g_del.deleteTargetCount < MAX_JOIN_TABLES) {
+        strncpy(g_del.deleteTargets[g_del.deleteTargetCount], name, 255);
+        g_del.deleteTargets[g_del.deleteTargetCount][255] = '\0';
+        g_del.deleteTargetCount++;
+    }
+}
+
+void SetMultiDelete(void)
+{
+    g_del.multiDelete = 1;
+}
+
 /* Find a table by table_id across all schemas in current database.
  * Returns 0 on success, -1 on not found. */
 static int resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
@@ -613,6 +628,97 @@ int DeleteProcess(void)
     }
 
     TruncateDelete();
+    return 0;
+}
+
+/* Delete a single row by PK key.
+ * Caller must ensure mvcc_xid is valid (call mvcc_ensure_xid beforehand).
+ * Returns 0 on success, -1 on error (g_err populated). */
+int evo_delete_row(const char *tableName,
+                   const char *pkKey, uint32_t mvcc_xid)
+{
+    if (!g_qctx) return -1;
+
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(tableName, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table \"%s\" not found", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
+        return -1;
+    }
+
+    char colNames[64][128];
+    int numCols = 0;
+    for (int i = 0; i < ncols && i < 64; i++) {
+        strncpy(colNames[i], cols[i].col_name, 127);
+        colNames[i][127] = '\0';
+        numCols++;
+    }
+
+    BTree2 pk_tree = tapi_pk_tree(&td);
+    RowID rid;
+    if (bt2_search(&pk_tree, pkKey, &rid) != 0)
+        return 0; /* row already gone (concurrent delete) */
+
+    char rec[RECORD_BUF_SIZE];
+    int rec_len = tapi_heap_read(rid, rec, sizeof(rec));
+    if (rec_len > 0) {
+        if (enforce_fk_on_delete(&td, cols, ncols,
+                                 rec, rec_len, pkKey) < 0)
+            return -1;
+
+        if (g_tx_undo_callback) {
+            RowID zero_rid = {0, 0};
+            g_tx_undo_callback(3 /*TX_OP_DELETE*/, tableName, pkKey,
+                               rec, rec_len, zero_rid);
+        }
+
+        char delFields[64][256];
+        int delIsNull[64];
+        tup_extract_fields(rec, rec_len, cols, ncols,
+                           delFields, delIsNull, 64);
+        delete_secondary_indexes(tableName, colNames, numCols,
+                                 (const char (*)[256])delFields, pkKey);
+
+        conc_mod_log_record(td.table_id, pkKey,
+                            (const char *)colNames, 128,
+                            (const char *)delFields, 256, numCols);
+    } else {
+        /* Heap read failed — record corrupt or already gone */
+        return 0;
+    }
+
+    { extern void cg_check_write(uint32_t, uint32_t, const char *);
+      cg_check_write(mvcc_xid, td.table_id, pkKey); }
+
+    int lr = lock_row_acquire(td.table_id, pkKey,
+                              mvcc_xid, LOCK_EXCLUSIVE);
+    if (lr == LOCK_DEADLOCK) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "deadlock detected while waiting for lock on row (key=%s)",
+                 pkKey);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DEADLOCK_DETECTED);
+        return -1;
+    } else if (lr != LOCK_OK) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "could not obtain lock on row (key=%s)", pkKey);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
+        return -1;
+    }
+
+    vmap_clear(rid.page_no);
+    if (tapi_heap_set_xmax(rid, mvcc_xid) < 0) {
+        tapi_heap_delete(rid);
+        bt2_delete(&pk_tree, pkKey);
+    }
+
+    cat_increment_dml_counter(td.table_id);
+    cat_increment_dead_tuples(td.table_id, 1);
     return 0;
 }
 

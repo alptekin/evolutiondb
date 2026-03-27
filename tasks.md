@@ -856,7 +856,7 @@
 
 ## Day 22 — INSERT...SELECT & Multi-Table DELETE
 
-### Task 42: ⬜ INSERT INTO ... SELECT (Feature #15)
+### Task 42: ✅ INSERT INTO ... SELECT (Feature #15)
 
 **Goal:** Implement inserting rows from a SELECT query result.
 
@@ -875,7 +875,7 @@
 
 ---
 
-### Task 43: ⬜ Multi-Table DELETE (Feature #19)
+### Task 43: ✅ Multi-Table DELETE (Feature #19)
 
 **Goal:** Grammar exists for multi-table DELETE but no execution. Implement `DELETE t1 FROM t1 JOIN t2 ON ... WHERE ...`.
 
@@ -896,7 +896,7 @@
 
 ## Day 23 — Multi-Table UPDATE & ALTER TABLE ADD COLUMN
 
-### Task 44: ⬜ Multi-Table UPDATE (Feature #20)
+### Task 44: ✅ Multi-Table UPDATE (Feature #20)
 
 **Goal:** Implement `UPDATE t1 JOIN t2 ON ... SET t1.col = t2.col WHERE ...`.
 

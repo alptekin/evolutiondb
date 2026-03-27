@@ -65,6 +65,24 @@ static int UpdateReadColumnNames(const char *tableName,
     return count;
 }
 
+/* ---- Multi-table UPDATE parser helpers ---- */
+void SetMultiUpdate(void)
+{
+    g_upd.multiUpdate = 1;
+}
+
+void AddMultiUpdateSet(const char *table, const char *col, ExprNode *expr)
+{
+    if (g_upd.setCount < 64) {
+        strncpy(g_upd.setTargetTable[g_upd.setCount], table, 127);
+        g_upd.setTargetTable[g_upd.setCount][127] = '\0';
+        strncpy(g_upd.setTargetCol[g_upd.setCount], col, 127);
+        g_upd.setTargetCol[g_upd.setCount][127] = '\0';
+        g_upd.setValueExprs[g_upd.setCount] = expr;
+        g_upd.setCount++;
+    }
+}
+
 /* Helper: resolve table by ID across schemas in current database */
 static int update_resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
                                       ColumnDesc *outCols, int *outNCols)
@@ -958,6 +976,57 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     }
 
     return 0;
+}
+
+/* evo_update_row — Update a single row by PK key with given SET cols/vals.
+ * Caller provides resolved column names and values.
+ * Returns 0 on success, -1 on error (g_err populated). */
+int evo_update_row(const char *tableName, const char *pkKey,
+                   const char setCols[][128], const char setVals[][256],
+                   int numSets, uint32_t mvcc_xid)
+{
+    if (!g_qctx) return -1;
+
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    if (tapi_resolve(tableName, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table \"%s\" not found", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
+        return -1;
+    }
+
+    /* Build column name arrays for ApplyUpdateToRow */
+    char metaCols[64][256];
+    int numMetaCols = 0;
+    for (int i = 0; i < ncols && i < 64; i++) {
+        strncpy(metaCols[i], cols[i].col_name, 255);
+        metaCols[i][255] = '\0';
+        numMetaCols++;
+    }
+
+    /* Convert setCols from char[][128] to char[][256] for ApplyUpdateToRow */
+    char setColsBuf[64][256];
+    char setValsBuf[64][256];
+    int n = numSets < 64 ? numSets : 64;
+    for (int i = 0; i < n; i++) {
+        strncpy(setColsBuf[i], setCols[i], 255);
+        setColsBuf[i][255] = '\0';
+        strncpy(setValsBuf[i], setVals[i], 255);
+        setValsBuf[i][255] = '\0';
+    }
+
+    /* Ensure XID for MVCC */
+    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+
+    return ApplyUpdateToRow(&td, cols, ncols, pkKey,
+                            (const char (*)[256])setColsBuf,
+                            (const char (*)[256])setValsBuf,
+                            n, n,
+                            (const char (*)[256])metaCols, numMetaCols,
+                            tableName);
 }
 
 int UpdateProcess(void)
