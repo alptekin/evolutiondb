@@ -531,7 +531,8 @@ static int parse_record_fields(const char *recBuf, int recLen,
     return nf;
 }
 
-/* Populate a ResultSet row from a binary tuple record. */
+/* Populate a ResultSet row from a binary tuple record.
+ * Skips dropped columns (is_dropped) when mapping physical → logical. */
 static void populate_result_row(ResultSet *rs, int row,
                                 const char *recBuf, int recLen,
                                 const ColumnDesc *cols, int ncols)
@@ -540,19 +541,22 @@ static void populate_result_row(ResultSet *rs, int row,
     int nullArr[64];
     int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
                                 fields, nullArr, 64);
-    for (int col = 0; col < nf && col < rs->num_cols; col++) {
-        if (nullArr[col]) {
-            result_set_null(rs, row, col);
-        } else if (rs->columns[col].pg_type_oid == PG_OID_BOOL) {
-            if (strncasecmp(fields[col], "true", 4) == 0 ||
-                strcmp(fields[col], "1") == 0 ||
-                strcmp(fields[col], "t") == 0)
-                result_set_field(rs, row, col, "true");
+    int logical = 0;  /* result column index (skips dropped) */
+    for (int phys = 0; phys < nf && logical < rs->num_cols; phys++) {
+        if (phys < ncols && cols[phys].is_dropped) continue;
+        if (nullArr[phys]) {
+            result_set_null(rs, row, logical);
+        } else if (rs->columns[logical].pg_type_oid == PG_OID_BOOL) {
+            if (strncasecmp(fields[phys], "true", 4) == 0 ||
+                strcmp(fields[phys], "1") == 0 ||
+                strcmp(fields[phys], "t") == 0)
+                result_set_field(rs, row, logical, "true");
             else
-                result_set_field(rs, row, col, "false");
+                result_set_field(rs, row, logical, "false");
         } else {
-            result_set_field(rs, row, col, fields[col]);
+            result_set_field(rs, row, logical, fields[phys]);
         }
+        logical++;
     }
     /* Schema evolution: fill columns added after this record was inserted.
      * Use DEFAULT value if available, otherwise NULL. */
@@ -827,8 +831,9 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
         tableOid = 16384 + (tableOid % 100000);
 
         if (has_star) {
-            /* SELECT * — add all columns */
+            /* SELECT * — add all non-dropped columns */
             for (int i = 0; i < ncols; i++) {
+                if (cols[i].is_dropped) continue;
                 int oid = type_encoding_to_pg_oid(cols[i].type_code);
                 result_add_column(rs, cols[i].col_name, oid);
                 rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;
@@ -1004,6 +1009,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
 
         int colIdx;
         for (colIdx = 0; colIdx < ncols; colIdx++) {
+            if (allCols[colIdx].is_dropped) continue;
             int oid = type_encoding_to_pg_oid(allCols[colIdx].type_code);
             result_add_column(rs, allCols[colIdx].col_name, oid);
             rs->columns[rs->num_cols - 1].table_oid = (int)tableOid;

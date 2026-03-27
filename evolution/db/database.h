@@ -241,6 +241,7 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
 
 /* ALTER TABLE ADD/DROP COLUMN */
 int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode);
+int AlterTableDropColumn(const char *tableName, const char *colName);
 
 /* CREATE DOMAIN */
 int CreateDomainProcess(const char *name, int typeVal, struct ExprNode *checkExpr,
