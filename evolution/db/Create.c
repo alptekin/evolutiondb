@@ -1796,6 +1796,149 @@ int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode
     return 0;
 }
 
+int AlterTableDropColumn(const char *tableName, const char *colName)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table \"%s\" does not exist", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Find the column */
+    int target = -1;
+    for (int i = 0; i < ncols; i++) {
+        if (!cols[i].is_dropped && strcasecmp(cols[i].col_name, colName) == 0) {
+            target = i;
+            break;
+        }
+    }
+    if (target < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "column \"%s\" of relation \"%s\" does not exist",
+                 colName, tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42703");
+        return -1;
+    }
+
+    /* Reject PK column */
+    if (cols[target].is_pk) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "cannot drop column \"%s\" because it is part of the primary key",
+                 colName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("2BP01");
+        return -1;
+    }
+
+    /* Reject last active column */
+    int active_count = 0;
+    for (int i = 0; i < ncols; i++) {
+        if (!cols[i].is_dropped) active_count++;
+    }
+    if (active_count <= 1) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "cannot drop the only column of table \"%s\"", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("2BP01");
+        return -1;
+    }
+
+    /* Reject if column has secondary index */
+    IndexDesc indexes[16];
+    int nidx = cat_list_indexes(td.table_id, indexes, 16);
+    for (int i = 0; i < nidx; i++) {
+        if (indexes[i].index_type == 'P') continue; /* skip PK index */
+        /* Check if dropped column appears in index col_list */
+        char colList[256];
+        strncpy(colList, indexes[i].col_list, 255);
+        colList[255] = '\0';
+        char *saveptr = NULL;
+        char *tok = strtok_r(colList, ",", &saveptr);
+        while (tok) {
+            if (strcasecmp(tok, colName) == 0) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "cannot drop column \"%s\" because index \"%s\" depends on it",
+                         colName, indexes[i].index_name);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE("2BP01");
+                return -1;
+            }
+            tok = strtok_r(NULL, ",", &saveptr);
+        }
+    }
+
+    /* Reject if FK references this column */
+    ConstraintDesc constraints[32];
+    int ncon = cat_list_constraints(td.table_id, constraints, 32);
+    for (int i = 0; i < ncon; i++) {
+        if (constraints[i].constraint_type == 'F') {
+            /* Check local cols in definition */
+            char def[1024];
+            strncpy(def, constraints[i].definition, sizeof(def) - 1);
+            def[sizeof(def) - 1] = '\0';
+            char *pipe = strchr(def, '|');
+            if (pipe) *pipe = '\0';
+            char *saveptr = NULL;
+            char *tok = strtok_r(def, ",", &saveptr);
+            while (tok) {
+                if (strcasecmp(tok, colName) == 0) {
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                             "cannot drop column \"%s\" because foreign key \"%s\" depends on it",
+                             colName, constraints[i].constraint_name);
+                    g_err.error = 1;
+                    EVOSQL_SET_SQLSTATE("2BP01");
+                    return -1;
+                }
+                tok = strtok_r(NULL, ",", &saveptr);
+            }
+        }
+        if (constraints[i].constraint_type == 'U') {
+            /* Check UNIQUE constraint columns */
+            char def[1024];
+            strncpy(def, constraints[i].definition, sizeof(def) - 1);
+            def[sizeof(def) - 1] = '\0';
+            char *saveptr = NULL;
+            char *tok = strtok_r(def, ",", &saveptr);
+            while (tok) {
+                if (strcasecmp(tok, colName) == 0) {
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                             "cannot drop column \"%s\" because unique constraint \"%s\" depends on it",
+                             colName, constraints[i].constraint_name);
+                    g_err.error = 1;
+                    EVOSQL_SET_SQLSTATE("2BP01");
+                    return -1;
+                }
+                tok = strtok_r(NULL, ",", &saveptr);
+            }
+        }
+    }
+
+    /* Mark column as dropped */
+    if (cat_drop_column(td.table_id, cols[target].col_ordinal) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "could not drop column \"%s\" from table \"%s\"",
+                 colName, tableName);
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Invalidate column cache */
+    { extern void col_cache_invalidate(uint32_t);
+      col_cache_invalidate(td.table_id); }
+
+    printf("ALTER TABLE\n");
+    return 0;
+}
+
 /* ---- Feature 6: CREATE DOMAIN ---- */
 
 int CreateDomainProcess(const char *name, int typeVal, ExprNode *checkExpr,

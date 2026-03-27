@@ -312,17 +312,49 @@ static int validate_types(const char *tblName, char **vals, int numValues)
 
     if (numTypes <= 0) return 0;
 
-    if (numValues != numTypes) {
+    /* Count active (non-dropped) columns for validation */
+    int activeTypes = numTypes;
+    {
+        TableDesc tmpTd;
+        ColumnDesc tmpCols[CAT_MAX_COLUMNS];
+        int tmpNcols;
+        if (tapi_resolve(tblName, &tmpTd, tmpCols, &tmpNcols) == 0) {
+            int active = 0;
+            for (int ac = 0; ac < tmpNcols; ac++) {
+                if (!tmpCols[ac].is_dropped) active++;
+            }
+            if (active > 0 && active < numTypes) activeTypes = active;
+        }
+    }
+    if (numValues != activeTypes) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "INSERT has %d value(s) but table has %d column(s)",
-                 numValues, numTypes);
+                 numValues, activeTypes);
         g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
         return -1;
     }
-    for (i = 0; i < numValues; i++) {
-        if (ValidateValue(vals[i], colTypes[i]) != 0)
-            return -1;
+    /* Validate values against active (non-dropped) column types */
+    {
+        int activeTypes[64];
+        int na = 0;
+        TableDesc vtd;
+        ColumnDesc vcols[CAT_MAX_COLUMNS];
+        int vncols;
+        if (tapi_resolve(tblName, &vtd, vcols, &vncols) == 0) {
+            for (int ac = 0; ac < vncols && na < 64; ac++) {
+                if (!vcols[ac].is_dropped)
+                    activeTypes[na++] = colTypes[ac];
+            }
+        } else {
+            for (i = 0; i < numTypes && i < 64; i++)
+                activeTypes[i] = colTypes[i];
+            na = numTypes;
+        }
+        for (i = 0; i < numValues && i < na; i++) {
+            if (ValidateValue(vals[i], activeTypes[i]) != 0)
+                return -1;
+        }
     }
     return 0;
 }
@@ -804,10 +836,44 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
         vals_ptrs[i] = vals[i];
     }
 
-    /* Build PK key from parsed fields */
+    /* Expand values to include NULL for dropped columns.
+     * User-provided values map to active (non-dropped) columns only;
+     * dropped columns are filled with NULL at their physical position. */
+    {
+        int has_dropped = 0;
+        for (int i = 0; i < ncols; i++) {
+            if (cols[i].is_dropped) { has_dropped = 1; break; }
+        }
+        if (has_dropped) {
+            const char *orig_vals[64];
+            int orig_null[64];
+            int orig_nv = nv;
+            for (int i = 0; i < orig_nv && i < 64; i++) {
+                orig_vals[i] = vals_ptrs[i];
+                orig_null[i] = is_null[i];
+            }
+            int vi = 0;
+            nv = ncols;
+            for (int i = 0; i < ncols && i < 64; i++) {
+                if (cols[i].is_dropped) {
+                    vals_ptrs[i] = "\x01NULL\x01";
+                    is_null[i] = 1;
+                } else if (vi < orig_nv) {
+                    vals_ptrs[i] = orig_vals[vi];
+                    is_null[i] = orig_null[vi];
+                    vi++;
+                } else {
+                    vals_ptrs[i] = "\x01NULL\x01";
+                    is_null[i] = 1;
+                }
+            }
+        }
+    }
+
+    /* Build PK key from parsed fields (use vals_ptrs which includes dropped col NULLs) */
     char fields[64][256];
     for (int i = 0; i < nv && i < 64; i++) {
-        strncpy(fields[i], vals[i], 255);
+        strncpy(fields[i], vals_ptrs[i], 255);
         fields[i][255] = '\0';
     }
     if (tapi_build_pk_key_from_fields(cols, ncols,
