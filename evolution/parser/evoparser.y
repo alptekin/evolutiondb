@@ -800,7 +800,9 @@ table_subquery: '(' select_stmt ')'                                             
 stmt: delete_stmt
     {
         emit("STMT");
-        DeleteProcess();
+        if (!g_del.multiDelete) {
+            DeleteProcess();
+        }
     }
 ;
 
@@ -820,16 +822,20 @@ delete_opts: delete_opts LOW_PRIORITY                                           
 ;
 
 /* multitable delete, first version */
-delete_stmt: DELETE delete_opts delete_list FROM table_references opt_where	{ emit("DELETEMULTI %d %d %d", $2, $3, $5); }
+delete_stmt: DELETE delete_opts delete_list FROM table_references opt_where
+    { emit("DELETEMULTI %d %d %d", $2, $3, $5); if (g_qctx) SetMultiDelete(); }
 ;
 
-delete_list: NAME opt_dot_star                                                  { emit("TABLE %s", $1); free($1); $$ = 1; }
-| delete_list ',' NAME opt_dot_star                                             { emit("TABLE %s", $3); free($3); $$ = $1 + 1; }
+delete_list: NAME opt_dot_star
+    { emit("TABLE %s", $1); if (g_qctx) AddDeleteTarget($1); free($1); $$ = 1; }
+| delete_list ',' NAME opt_dot_star
+    { emit("TABLE %s", $3); if (g_qctx) AddDeleteTarget($3); free($3); $$ = $1 + 1; }
 ;
 
 opt_dot_star: /* nil */ | '.' '*' ;
 /* multitable delete, second version */
-delete_stmt: DELETE delete_opts FROM delete_list USING table_references opt_where	{ emit("DELETEMULTI %d %d %d", $2, $4, $6); }
+delete_stmt: DELETE delete_opts FROM delete_list USING table_references opt_where
+    { emit("DELETEMULTI %d %d %d", $2, $4, $6); if (g_qctx) SetMultiDelete(); }
 ;
 
 /** drop table **/
@@ -1328,16 +1334,20 @@ opt_ondupupdate									{ emit("REPLACESELECT %d %s", $2, $4); free($4); }
 ;
 
 /** update **/
-stmt: update_stmt                                                               
+stmt: update_stmt
     {
         emit("STMT");
-        UpdateProcess();
+        if (!g_upd.multiUpdate) {
+            UpdateProcess();
+        }
     }
 ;
 update_stmt: UPDATE update_opts table_references
 SET update_asgn_list opt_where opt_orderby opt_limit
     {
         emit("UPDATE %d %d %d", $2, $3, $5);
+        if (g_qctx && g_sel.joinTableCount > 1 && !g_upd.multiUpdate)
+            SetMultiUpdate();
     }
 ;
 
@@ -1365,6 +1375,7 @@ NAME COMPARISON expr
             YYERROR;
         }
         emit("ASSIGN2 %s.%s", $1, $3);
+        if (g_qctx) { AddMultiUpdateSet($1, $3, $5); SetMultiUpdate(); }
         free($1);
         free($3);
         $$ = 1;
@@ -1383,13 +1394,14 @@ NAME COMPARISON expr
 | update_asgn_list ',' NAME '.' NAME COMPARISON expr
     {
         if ($6 != 4) {
-            yyerror(scanner, "bad update assignment to %s.$s", $3, $5);
+            yyerror(scanner, "bad update assignment to %s.%s", $3, $5);
             YYERROR;
         }
         emit("ASSIGN4 %s.%s", $3, $5);
+        if (g_qctx) { AddMultiUpdateSet($3, $5, $7); SetMultiUpdate(); }
         free($3);
         free($5);
-        $$ = 1;
+        $$ = $1 + 1;
     }
 ;
 

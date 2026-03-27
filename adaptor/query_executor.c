@@ -2349,6 +2349,491 @@ static int ctas_insert_rows(const char *tableName, const ResultSet *selectRs,
     return inserted;
 }
 
+/* Find the PK column index for a target table in a join result.
+ * Checks: alias.pkCol, tableName.pkCol, bare pkCol (single target).
+ * Returns column index or -1 if not found. */
+static int find_pk_col_in_join_result(const ResultSet *joinRs,
+                                       const char *targetName,
+                                       const char *pkColName)
+{
+    for (int c = 0; c < joinRs->num_cols; c++) {
+        const char *cn = joinRs->columns[c].name;
+        const char *dot = strchr(cn, '.');
+        if (dot) {
+            char prefix[128];
+            int plen = (int)(dot - cn);
+            if (plen > 127) plen = 127;
+            memcpy(prefix, cn, plen);
+            prefix[plen] = '\0';
+            const char *colPart = dot + 1;
+            if (strcasecmp(prefix, targetName) == 0 &&
+                strcasecmp(colPart, pkColName) == 0)
+                return c;
+            /* Check aliases from join state */
+            for (int ji = 0; ji < g_sel.joinTableCount; ji++) {
+                if (strcasecmp(g_sel.joinTables[ji], targetName) == 0 &&
+                    strcasecmp(prefix, g_sel.joinAliases[ji]) == 0 &&
+                    strcasecmp(colPart, pkColName) == 0)
+                    return c;
+            }
+        } else if (strcasecmp(cn, pkColName) == 0 &&
+                   g_del.deleteTargetCount == 1) {
+            return c;
+        }
+    }
+    /* Fallback: try table_name.pk_col pattern */
+    char qualified[256];
+    snprintf(qualified, sizeof(qualified), "%s.%s", targetName, pkColName);
+    for (int c = 0; c < joinRs->num_cols; c++) {
+        if (strcasecmp(joinRs->columns[c].name, qualified) == 0)
+            return c;
+    }
+    return -1;
+}
+
+/* Multi-table DELETE: join target tables, then delete matching rows. */
+static void execute_multi_delete(ResultSet *rs, SessionCtx *ctx)
+{
+    if (ctx) {
+        for (int t = 0; t < g_del.deleteTargetCount; t++) {
+            if (!CheckPrivilege(ctx->username, ctx->database, ctx->schema,
+                                g_del.deleteTargets[t], "DELETE")) {
+                result_set_error(rs, "42501",
+                    "permission denied: DELETE on target table");
+                return;
+            }
+        }
+    }
+
+    Snapshot snap;
+    memset(&snap, 0, sizeof(snap));
+    if (ctx) {
+        if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
+            snap = ctx->snapshot;
+        } else {
+            mvcc_snapshot_take(&snap);
+            snap.my_xid = ctx->tx_xid;
+            ctx->snapshot = snap;
+            ctx->snapshot_valid = 1;
+        }
+    } else {
+        mvcc_snapshot_take(&snap);
+    }
+
+    JoinPlan plan;
+    memset(&plan, 0, sizeof(plan));
+    plan.num_tables = g_sel.joinTableCount;
+    for (int ji = 0; ji < g_sel.joinTableCount && ji < 8; ji++) {
+        strncpy(plan.tables[ji].name, g_sel.joinTables[ji], 255);
+        plan.tables[ji].name[255] = '\0';
+        strncpy(plan.tables[ji].alias, g_sel.joinAliases[ji], 127);
+        plan.tables[ji].alias[127] = '\0';
+        plan.join_types[ji] = g_sel.joinTypes[ji];
+        plan.join_conds[ji] = g_sel.joinOnExprs[ji];
+    }
+    plan.where_expr = g_expr.whereExpr;
+
+    ResultSet joinRs;
+    result_init(&joinRs);
+    int jrc = join_execute(&plan, &joinRs, ctx, &snap);
+    if (jrc < 0 || joinRs.has_error) {
+        if (joinRs.has_error)
+            result_set_error(rs, joinRs.error_sqlstate, joinRs.error_message);
+        else
+            result_set_error(rs, "XX000", "multi-table DELETE join failed");
+        result_free(&joinRs);
+        return;
+    }
+
+    int total_deleted = 0;
+
+    /* Ensure XID once for the entire multi-delete operation */
+    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+    uint32_t xid = g_qctx->mvcc_xid;
+    if (ctx && ctx->tx_xid == 0)
+        ctx->tx_xid = xid;
+
+    for (int t = 0; t < g_del.deleteTargetCount; t++) {
+        const char *targetName = g_del.deleteTargets[t];
+
+        TableDesc td;
+        ColumnDesc cols[CAT_MAX_COLUMNS];
+        int ncols;
+        if (tapi_resolve(targetName, &td, cols, &ncols) < 0) {
+            result_set_error(rs, "42P01", "target table not found for DELETE");
+            result_free(&joinRs);
+            return;
+        }
+
+        char pkColName[128] = "";
+        for (int c = 0; c < ncols; c++) {
+            if (cols[c].is_pk) {
+                strncpy(pkColName, cols[c].col_name, 127);
+                pkColName[127] = '\0';
+                break;
+            }
+        }
+        if (pkColName[0] == '\0') {
+            result_set_error(rs, "42E16",
+                "target table has no primary key for multi-table DELETE");
+            result_free(&joinRs);
+            return;
+        }
+
+        int pkColIdx = find_pk_col_in_join_result(&joinRs, targetName,
+                                                    pkColName);
+        if (pkColIdx < 0) {
+            result_set_error(rs, "42703",
+                "could not find PK column in join result for DELETE target");
+            result_free(&joinRs);
+            return;
+        }
+
+        /* Collect unique PK values (O(n^2) dedup, acceptable for join results) */
+        char **pkValues = NULL;
+        int pkCount = 0;
+        int pkCapacity = 0;
+        for (int r = 0; r < joinRs.num_rows; r++) {
+            const char *val = joinRs.rows[r].fields[pkColIdx];
+            if (!val || joinRs.rows[r].is_null[pkColIdx]) continue;
+            int dup = 0;
+            for (int d = 0; d < pkCount; d++) {
+                if (strcmp(pkValues[d], val) == 0) { dup = 1; break; }
+            }
+            if (dup) continue;
+            if (pkCount >= pkCapacity) {
+                pkCapacity = pkCapacity == 0 ? 32 : pkCapacity * 2;
+                char **tmp = (char **)realloc(pkValues,
+                                               pkCapacity * sizeof(char *));
+                if (!tmp) break;
+                pkValues = tmp;
+            }
+            char *dup_val = strdup(val);
+            if (!dup_val) break;
+            pkValues[pkCount++] = dup_val;
+        }
+
+        for (int d = 0; d < pkCount; d++) {
+            int rc = evo_delete_row(targetName, pkValues[d], xid);
+            if (rc < 0) {
+                result_set_error(rs, g_err.sqlstate, g_err.errorMsg);
+                for (int f = d; f < pkCount; f++) free(pkValues[f]);
+                free(pkValues);
+                result_free(&joinRs);
+                g_del.rowCount = total_deleted;
+                return;
+            }
+            total_deleted++;
+            free(pkValues[d]);
+        }
+        free(pkValues);
+    }
+
+    result_free(&joinRs);
+    g_del.rowCount = total_deleted;
+    printf("%d record(s) deleted (multi-table).\n", total_deleted);
+}
+
+/* ----------------------------------------------------------------
+ *  execute_multi_update — Multi-table UPDATE with JOIN
+ *
+ *  Called post-parse when g_upd.multiUpdate is set.
+ *  1) Builds JoinPlan, runs join_execute
+ *  2) Resolves SET values from join result columns
+ *  3) For each target row, calls evo_update_row()
+ * ---------------------------------------------------------------- */
+static void execute_multi_update(ResultSet *rs, SessionCtx *ctx)
+{
+    /* Collect unique target tables from SET assignments.
+     * Resolve aliases to real table names via join state. */
+    char targetTables[8][256];
+    int targetCount = 0;
+    for (int s = 0; s < g_upd.setCount; s++) {
+        if (g_upd.setTargetTable[s][0] == '\0') continue;
+        /* Resolve alias → real name */
+        const char *realName = g_upd.setTargetTable[s];
+        for (int ji = 0; ji < g_sel.joinTableCount; ji++) {
+            if (strcasecmp(g_sel.joinAliases[ji], g_upd.setTargetTable[s]) == 0) {
+                realName = g_sel.joinTables[ji];
+                break;
+            }
+        }
+        int found = 0;
+        for (int t = 0; t < targetCount; t++) {
+            if (strcasecmp(targetTables[t], realName) == 0) {
+                found = 1; break;
+            }
+        }
+        if (!found && targetCount < 8) {
+            strncpy(targetTables[targetCount], realName, 255);
+            targetTables[targetCount][255] = '\0';
+            targetCount++;
+        }
+    }
+
+    /* Privilege check */
+    if (ctx) {
+        for (int t = 0; t < targetCount; t++) {
+            if (!CheckPrivilege(ctx->username, ctx->database, ctx->schema,
+                                targetTables[t], "UPDATE")) {
+                result_set_error(rs, "42501",
+                    "permission denied: UPDATE on target table");
+                return;
+            }
+        }
+    }
+
+    /* MVCC snapshot */
+    Snapshot snap;
+    memset(&snap, 0, sizeof(snap));
+    if (ctx) {
+        if (ctx->isolation_level >= 2 && ctx->snapshot_valid)
+            snap = ctx->snapshot;
+        else {
+            mvcc_snapshot_take(&snap);
+            snap.my_xid = ctx->tx_xid;
+            ctx->snapshot = snap;
+            ctx->snapshot_valid = 1;
+        }
+    } else {
+        mvcc_snapshot_take(&snap);
+    }
+
+    /* Build JoinPlan */
+    JoinPlan plan;
+    memset(&plan, 0, sizeof(plan));
+    plan.num_tables = g_sel.joinTableCount;
+    for (int ji = 0; ji < g_sel.joinTableCount && ji < 8; ji++) {
+        strncpy(plan.tables[ji].name, g_sel.joinTables[ji], 255);
+        plan.tables[ji].name[255] = '\0';
+        strncpy(plan.tables[ji].alias, g_sel.joinAliases[ji], 127);
+        plan.tables[ji].alias[127] = '\0';
+        plan.join_types[ji] = g_sel.joinTypes[ji];
+        plan.join_conds[ji] = g_sel.joinOnExprs[ji];
+    }
+    plan.where_expr = g_expr.whereExpr;
+
+    /* Execute JOIN */
+    ResultSet joinRs;
+    result_init(&joinRs);
+    int jrc = join_execute(&plan, &joinRs, ctx, &snap);
+    if (jrc < 0 || joinRs.has_error) {
+        if (joinRs.has_error)
+            result_set_error(rs, joinRs.error_sqlstate, joinRs.error_message);
+        else
+            result_set_error(rs, "XX000", "multi-table UPDATE join failed");
+        result_free(&joinRs);
+        return;
+    }
+
+    int total_updated = 0;
+
+    /* Ensure XID once */
+    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+    uint32_t xid = g_qctx->mvcc_xid;
+    if (ctx && ctx->tx_xid == 0)
+        ctx->tx_xid = xid;
+
+    /* Build column name/value arrays from join result for expr_evaluate */
+    char (*joinColNames)[128] = NULL;
+    int joinNumCols = joinRs.num_cols;
+    if (joinNumCols > 0) {
+        joinColNames = (char (*)[128])calloc(joinNumCols, 128);
+        if (!joinColNames) {
+            result_free(&joinRs);
+            return;
+        }
+        for (int c = 0; c < joinNumCols; c++) {
+            strncpy(joinColNames[c], joinRs.columns[c].name, 127);
+            joinColNames[c][127] = '\0';
+        }
+    }
+
+    /* Process each target table */
+    for (int t = 0; t < targetCount; t++) {
+        const char *targetName = targetTables[t];
+
+        /* Resolve target table PK */
+        TableDesc td;
+        ColumnDesc cols[CAT_MAX_COLUMNS];
+        int ncols;
+        if (tapi_resolve(targetName, &td, cols, &ncols) < 0) {
+            result_set_error(rs, "42P01", "target table not found for UPDATE");
+            free(joinColNames);
+            result_free(&joinRs);
+            return;
+        }
+
+        char pkColName[128] = "";
+        for (int c = 0; c < ncols; c++) {
+            if (cols[c].is_pk) {
+                strncpy(pkColName, cols[c].col_name, 127);
+                pkColName[127] = '\0';
+                break;
+            }
+        }
+        if (pkColName[0] == '\0') {
+            result_set_error(rs, "42E16",
+                "target table has no primary key for multi-table UPDATE");
+            free(joinColNames);
+            result_free(&joinRs);
+            return;
+        }
+
+        int pkColIdx = find_pk_col_in_join_result(&joinRs, targetName, pkColName);
+        if (pkColIdx < 0) {
+            result_set_error(rs, "42703",
+                "could not find PK column in join result for UPDATE target");
+            free(joinColNames);
+            result_free(&joinRs);
+            return;
+        }
+
+        /* Collect SET assignments for this target table */
+        int myCols[64];
+        int mySetCount = 0;
+        for (int s = 0; s < g_upd.setCount; s++) {
+            if (strcasecmp(g_upd.setTargetTable[s], targetName) == 0 ||
+                /* Match by alias */
+                (g_upd.setTargetTable[s][0] != '\0')) {
+                /* Verify this SET belongs to targetName */
+                int match = (strcasecmp(g_upd.setTargetTable[s], targetName) == 0);
+                if (!match) {
+                    for (int ji = 0; ji < g_sel.joinTableCount; ji++) {
+                        if (strcasecmp(g_sel.joinTables[ji], targetName) == 0 &&
+                            strcasecmp(g_upd.setTargetTable[s], g_sel.joinAliases[ji]) == 0) {
+                            match = 1; break;
+                        }
+                    }
+                }
+                if (match && mySetCount < 64)
+                    myCols[mySetCount++] = s;
+            }
+        }
+        if (mySetCount == 0) continue;
+
+        /* For each join row: resolve SET values, collect per-PK updates */
+        /* Use dedup: last row wins for same PK (MySQL semantics) */
+        char **pkValues = NULL;
+        char (**setColArrays)[128] = NULL;
+        char (**setValArrays)[256] = NULL;
+        int pkCount = 0;
+        int pkCapacity = 0;
+
+        for (int r = 0; r < joinRs.num_rows; r++) {
+            const char *pk = joinRs.rows[r].fields[pkColIdx];
+            if (!pk || joinRs.rows[r].is_null[pkColIdx]) continue;
+
+            /* Resolve SET values from this join row */
+            char resolvedCols[64][128];
+            char resolvedVals[64][256];
+            int nResolved = 0;
+            for (int m = 0; m < mySetCount; m++) {
+                int si = myCols[m];
+                strncpy(resolvedCols[nResolved], g_upd.setTargetCol[si], 127);
+                resolvedCols[nResolved][127] = '\0';
+
+                /* Evaluate RHS expression against join row */
+                ExprNode *valExpr = g_upd.setValueExprs[si];
+                if (valExpr) {
+                    /* Build value array from join row */
+                    char (*joinVals)[256] = (char (*)[256])calloc(joinNumCols, 256);
+                    if (joinVals) {
+                        for (int c = 0; c < joinNumCols; c++) {
+                            if (joinRs.rows[r].fields[c] && !joinRs.rows[r].is_null[c])
+                                strncpy(joinVals[c], joinRs.rows[r].fields[c], 255);
+                            else
+                                strcpy(joinVals[c], "\x01NULL\x01");
+                        }
+                        char result[256];
+                        int ok = expr_evaluate(valExpr,
+                                              (const char (*)[128])joinColNames,
+                                              (const char (*)[256])joinVals,
+                                              joinNumCols,
+                                              result, sizeof(result));
+                        if (ok && strcmp(result, "\x01NULL\x01") != 0)
+                            strncpy(resolvedVals[nResolved], result, 255);
+                        else
+                            strcpy(resolvedVals[nResolved], "\x01NULL\x01");
+                        free(joinVals);
+                    } else {
+                        strcpy(resolvedVals[nResolved], "\x01NULL\x01");
+                    }
+                } else {
+                    strcpy(resolvedVals[nResolved], "\x01NULL\x01");
+                }
+                resolvedVals[nResolved][255] = '\0';
+                nResolved++;
+            }
+
+            /* Dedup: find existing entry or add new */
+            int existing = -1;
+            for (int d = 0; d < pkCount; d++) {
+                if (strcmp(pkValues[d], pk) == 0) { existing = d; break; }
+            }
+            if (existing >= 0) {
+                /* Overwrite with latest values (last row wins) */
+                memcpy(setColArrays[existing], resolvedCols, nResolved * 128);
+                memcpy(setValArrays[existing], resolvedVals, nResolved * 256);
+            } else {
+                /* Add new entry */
+                if (pkCount >= pkCapacity) {
+                    pkCapacity = pkCapacity == 0 ? 32 : pkCapacity * 2;
+                    char **tmpPk = realloc(pkValues, pkCapacity * sizeof(char *));
+                    char (**tmpCols)[128] = realloc(setColArrays, pkCapacity * sizeof(*setColArrays));
+                    char (**tmpVals)[256] = realloc(setValArrays, pkCapacity * sizeof(*setValArrays));
+                    if (!tmpPk || !tmpCols || !tmpVals) break;
+                    pkValues = tmpPk;
+                    setColArrays = tmpCols;
+                    setValArrays = tmpVals;
+                }
+                char *dupPk = strdup(pk);
+                if (!dupPk) break;
+                pkValues[pkCount] = dupPk;
+                setColArrays[pkCount] = malloc(64 * 128);
+                setValArrays[pkCount] = malloc(64 * 256);
+                if (!setColArrays[pkCount] || !setValArrays[pkCount]) {
+                    free(dupPk); break;
+                }
+                memcpy(setColArrays[pkCount], resolvedCols, nResolved * 128);
+                memcpy(setValArrays[pkCount], resolvedVals, nResolved * 256);
+                pkCount++;
+            }
+        }
+
+        /* Apply updates */
+        for (int d = 0; d < pkCount; d++) {
+            int rc = evo_update_row(targetName, pkValues[d],
+                                    (const char (*)[128])setColArrays[d],
+                                    (const char (*)[256])setValArrays[d],
+                                    mySetCount, xid);
+            if (rc < 0) {
+                result_set_error(rs, g_err.sqlstate, g_err.errorMsg);
+                for (int f = d; f < pkCount; f++) {
+                    free(pkValues[f]);
+                    free(setColArrays[f]);
+                    free(setValArrays[f]);
+                }
+                free(pkValues); free(setColArrays); free(setValArrays);
+                free(joinColNames);
+                result_free(&joinRs);
+                g_upd.rowCount = total_updated;
+                return;
+            }
+            total_updated++;
+            free(pkValues[d]);
+            free(setColArrays[d]);
+            free(setValArrays[d]);
+        }
+        free(pkValues); free(setColArrays); free(setValArrays);
+    }
+
+    free(joinColNames);
+    result_free(&joinRs);
+    g_upd.rowCount = total_updated;
+    printf("%d record(s) updated (multi-table).\n", total_updated);
+}
+
 /* ----------------------------------------------------------------
  *  execute_insert_select — INSERT INTO ... SELECT execution
  *
@@ -2774,7 +3259,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_create.tblName[0] = '\0';
     g_ins.tblName[0] = '\0';
     g_upd.tblName[0] = '\0';
+    g_upd.multiUpdate = 0;
+    g_upd.setCount = 0;
     g_del.tblName[0] = '\0';
+    g_del.multiDelete = 0;
+    g_del.deleteTargetCount = 0;
     g_drop.tblName[0] = '\0';
     g_drop.truncCascade = 0;
     g_drop.truncContinueIdentity = 0;
@@ -2943,6 +3432,46 @@ parser_done:
             g_sel.lastTable[0] != '\0') {
             execute_ctas(g_sel.lastTable, rs, ctx);
             g_create.ctasMode = CTAS_NONE;
+            g_sel.lastTable[0] = '\0';
+        }
+        /* Multi-table DELETE: join + per-target deletion */
+        else if (!rs->has_error && g_del.multiDelete &&
+                 g_sel.joinTableCount > 0) {
+            {
+                extern mutex_t g_dml_mutex;
+                mutex_lock(&g_dml_mutex);
+            }
+            execute_multi_delete(rs, ctx);
+            {
+                extern mutex_t g_dml_mutex;
+                mutex_unlock(&g_dml_mutex);
+            }
+            if (!rs->has_error)
+                snprintf(rs->command_tag, sizeof(rs->command_tag),
+                         "DELETE %d", g_del.rowCount);
+            g_del.multiDelete = 0;
+            g_del.deleteTargetCount = 0;
+            g_sel.joinTableCount = 0;
+            g_sel.lastTable[0] = '\0';
+        }
+        /* Multi-table UPDATE: join + per-target update */
+        else if (!rs->has_error && g_upd.multiUpdate &&
+                 g_sel.joinTableCount > 0) {
+            {
+                extern mutex_t g_dml_mutex;
+                mutex_lock(&g_dml_mutex);
+            }
+            execute_multi_update(rs, ctx);
+            {
+                extern mutex_t g_dml_mutex;
+                mutex_unlock(&g_dml_mutex);
+            }
+            if (!rs->has_error)
+                snprintf(rs->command_tag, sizeof(rs->command_tag),
+                         "UPDATE %d", g_upd.rowCount);
+            g_upd.multiUpdate = 0;
+            g_upd.setCount = 0;
+            g_sel.joinTableCount = 0;
             g_sel.lastTable[0] = '\0';
         }
         /* INSERT...SELECT: intercept before normal SELECT collection.
