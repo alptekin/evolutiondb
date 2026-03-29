@@ -216,6 +216,88 @@ int CreateSchemaProcess(const char *name, int if_not_exists)
 }
 
 /* ----------------------------------------------------------------
+ *  DROP DATABASE
+ * ---------------------------------------------------------------- */
+int DropDatabaseProcess(const char *name, int if_exists)
+{
+    DatabaseDesc dbDesc;
+    if (cat_find_database(name, &dbDesc) != 0) {
+        if (if_exists) {
+            printf("DROP DATABASE\n");
+            return 0;
+        }
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "database \"%s\" does not exist", name);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("3D000");
+        return -1;
+    }
+
+    /* Cannot drop current database */
+    if (strcasecmp(name, g_currentDatabase) == 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "cannot drop the currently open database \"%s\"", name);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("55006");
+        return -1;
+    }
+
+    /* Cascade: drop all schemas and their tables */
+    SchemaDesc schemas[16];
+    int ns = cat_list_schemas(dbDesc.db_id, schemas, 16);
+    for (int si = 0; si < ns; si++) {
+        TableDesc tables[64];
+        int nt = cat_list_tables(schemas[si].schema_id, tables, 64);
+        for (int ti = 0; ti < nt; ti++) {
+            cat_drop_table(tables[ti].table_id);
+        }
+        cat_drop_schema(dbDesc.db_id, schemas[si].schema_name);
+    }
+    cat_drop_database(name);
+
+    printf("DROP DATABASE\n");
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ *  DROP SCHEMA
+ * ---------------------------------------------------------------- */
+int DropSchemaProcess(const char *name, int if_exists)
+{
+    DatabaseDesc dbDesc;
+    if (cat_find_database(g_currentDatabase, &dbDesc) != 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "current database \"%s\" not found", g_currentDatabase);
+        g_err.error = 1;
+        return -1;
+    }
+
+    SchemaDesc schDesc;
+    if (cat_find_schema(dbDesc.db_id, name, &schDesc) != 0) {
+        if (if_exists) {
+            printf("DROP SCHEMA\n");
+            return 0;
+        }
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "schema \"%s\" does not exist", name);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("3F000");
+        return -1;
+    }
+
+    /* Cascade: drop all tables in schema */
+    TableDesc tables[64];
+    int nt = cat_list_tables(schDesc.schema_id, tables, 64);
+    for (int ti = 0; ti < nt; ti++) {
+        cat_drop_table(tables[ti].table_id);
+    }
+    cat_drop_schema(dbDesc.db_id, name);
+
+    printf("DROP SCHEMA\n");
+    return 0;
+}
+
+/* ----------------------------------------------------------------
  *  USE <database>  — switch the active database
  * ---------------------------------------------------------------- */
 int UseDatabaseProcess(const char *name)
