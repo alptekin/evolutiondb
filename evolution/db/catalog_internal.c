@@ -744,6 +744,41 @@ int cat_find_table_by_id(uint32_t table_id, TableDesc *out)
     return -1;
 }
 
+int cat_rename_table(uint32_t table_id, uint32_t schema_id,
+                     const char *old_name, const char *new_name)
+{
+    char old_key[CAT_MAX_KEY_LEN];
+    make_table_key(schema_id, old_name, old_key, sizeof(old_key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], old_key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    TableDesc td;
+    deserialize_table(record, &td);
+    strncpy(td.table_name, new_name, CAT_MAX_NAME_LEN - 1);
+    td.table_name[CAT_MAX_NAME_LEN - 1] = '\0';
+
+    /* Delete old key, insert with new key */
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_TABLES], old_key);
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_table(&td, new_record, sizeof(new_record));
+    int rec_len = (int)strlen(new_record) + 1;
+
+    char new_key[CAT_MAX_KEY_LEN];
+    make_table_key(schema_id, new_name, new_key, sizeof(new_key));
+
+    RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, rec_len);
+    if (new_rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_TABLES], new_key, new_rid) == 0 ? 0 : -1;
+}
+
 int cat_drop_table(uint32_t table_id)
 {
     /* Find and delete the table record by scanning */

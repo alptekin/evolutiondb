@@ -175,6 +175,8 @@ int cat_create_table(uint32_t schema_id, const char *name,
                      int is_temporary, int on_commit_delete);
 int cat_find_table(uint32_t schema_id, const char *name, TableDesc *out);
 int cat_find_table_by_id(uint32_t table_id, TableDesc *out);
+int cat_rename_table(uint32_t table_id, uint32_t schema_id,
+                     const char *old_name, const char *new_name);
 int cat_drop_table(uint32_t table_id);
 int cat_update_auto_inc(uint32_t table_id, const char *table_name,
                         uint32_t schema_id, int new_counter);
