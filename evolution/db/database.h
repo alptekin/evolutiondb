@@ -84,6 +84,9 @@ void auto_reclaim_stop(void);
 int AnalyzeTableProcess(void);
 int CreateDatabaseProcess(const char *name, int if_not_exists);
 int CreateSchemaProcess(const char *name, int if_not_exists);
+int DropDatabaseProcess(const char *name, int if_exists);
+int DropSchemaProcess(const char *name, int if_exists);
+int RenameTableProcess(const char *oldName, const char *newName);
 int UseDatabaseProcess(const char *name);
 int SetSchemaProcess(const char *name);
 

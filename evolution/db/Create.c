@@ -2337,6 +2337,49 @@ int AlterTableChangeColumn(const char *tableName, const char *oldName,
     return AlterTableModifyColumn(tableName, newName, newTypeCode);
 }
 
+/* ---- RENAME TABLE ---- */
+int RenameTableProcess(const char *oldName, const char *newName)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char oldPath[1024], newPath[1024];
+    db_table_path(oldName, oldPath, sizeof(oldPath));
+    db_table_path(newName, newPath, sizeof(newPath));
+
+    if (tapi_resolve(oldPath, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table \"%s\" does not exist", oldName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Check new name not already in use */
+    {
+        TableDesc tmp;
+        ColumnDesc tmpC[1];
+        int tmpN;
+        if (tapi_resolve(newPath, &tmp, tmpC, &tmpN) == 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "table \"%s\" already exists", newName);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE("42P07");
+            return -1;
+        }
+    }
+
+    /* Rename in catalog: delete old key, insert with new name */
+    cat_rename_table(td.table_id, td.schema_id, td.table_name, newName);
+
+    /* Invalidate column cache */
+    { extern void col_cache_invalidate(uint32_t);
+      col_cache_invalidate(td.table_id); }
+
+    printf("RENAME TABLE\n");
+    return 0;
+}
+
 /* ---- Feature 6: CREATE DOMAIN ---- */
 
 int CreateDomainProcess(const char *name, int typeVal, ExprNode *checkExpr,

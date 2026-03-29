@@ -1462,6 +1462,11 @@ NAME COMPARISON expr
     }
 ;
 
+/** rename table **/
+stmt: RENAME TABLE NAME TO NAME
+    { emit("RENAMETABLE %s %s", $3, $5); RenameTableProcess($3, $5); free($3); free($5); }
+;
+
 /** create database **/
 stmt: create_database_stmt							{ emit("STMT"); }
 ;
@@ -1469,6 +1474,17 @@ stmt: create_database_stmt							{ emit("STMT"); }
 create_database_stmt:
 CREATE DATABASE opt_if_not_exists NAME                                          { emit("CREATEDATABASE %d %s", $3, $4); CreateDatabaseProcess($4, $3); free($4); }
 | CREATE SCHEMA opt_if_not_exists NAME                                          { emit("CREATESCHEMA %d %s", $3, $4); CreateSchemaProcess($4, $3); free($4); }
+;
+
+/** drop database / schema **/
+stmt: DROP DATABASE NAME
+    { emit("DROPDATABASE %s", $3); DropDatabaseProcess($3, 0); free($3); }
+| DROP DATABASE IF EXISTS NAME
+    { emit("DROPDATABASE IF EXISTS %s", $5); DropDatabaseProcess($5, 1); free($5); }
+| DROP SCHEMA NAME
+    { emit("DROPSCHEMA %s", $3); DropSchemaProcess($3, 0); free($3); }
+| DROP SCHEMA IF EXISTS NAME
+    { emit("DROPSCHEMA IF EXISTS %s", $5); DropSchemaProcess($5, 1); free($5); }
 ;
 
 opt_if_not_exists: /* nil */                                                    { $$ = 0; }
