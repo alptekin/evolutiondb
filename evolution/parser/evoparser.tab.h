@@ -61,196 +61,199 @@
      UMINUS = 277,
      ALTER = 278,
      ADD = 279,
-     ALL = 280,
-     ANALYZE = 281,
-     ANY = 282,
-     AUTO_INCREMENT = 283,
-     ASC = 284,
-     AND = 285,
-     AS = 286,
-     ALWAYS = 287,
-     IDENTITY = 288,
-     CONTINUE = 289,
-     RESTART = 290,
-     GENERATED = 291,
-     STORED = 292,
-     VIRTUAL = 293,
-     BLOB = 294,
-     BOOLEAN = 295,
-     BY = 296,
-     BINARY = 297,
-     BOTH = 298,
-     BIGINT = 299,
-     BIT = 300,
-     CONSTRAINT = 301,
-     CURRENT_TIMESTAMP = 302,
-     CREATE = 303,
-     CASCADE = 304,
-     CROSS = 305,
-     CASE = 306,
-     CHECK = 307,
-     COMMENT = 308,
-     CURRENT_DATE = 309,
-     CURRENT_TIME = 310,
-     CHAR = 311,
-     COLLATE = 312,
-     COLUMN = 313,
-     CONCURRENTLY = 314,
-     DATABASE = 315,
-     DEFERRABLE = 316,
-     DEFERRED = 317,
-     DISABLE = 318,
-     DOMAIN = 319,
-     DELAYED = 320,
-     DAY_HOUR = 321,
-     DAY_MICROSECOND = 322,
-     DISTINCT = 323,
-     DELETE = 324,
-     DROP = 325,
-     DAY_MINUTE = 326,
-     DISTINCTROW = 327,
-     DAY_SECOND = 328,
-     DESC = 329,
-     DEFAULT = 330,
-     DOUBLE = 331,
-     DATETIME = 332,
-     DECIMAL = 333,
-     DATE = 334,
-     ENABLE = 335,
-     ESCAPED = 336,
-     ENUM = 337,
-     END = 338,
-     ELSE = 339,
-     EXPLAIN = 340,
-     FLOAT = 341,
-     FORCE = 342,
-     FOREIGN = 343,
-     FROM = 344,
-     FULL = 345,
-     FULLTEXT = 346,
-     FOR = 347,
-     GROUP = 348,
-     HOUR_MINUTE = 349,
-     HOUR_MICROSECOND = 350,
-     HIGH_PRIORITY = 351,
-     HOUR_SECOND = 352,
-     HAVING = 353,
-     IMMEDIATE = 354,
-     INITIALLY = 355,
-     INTEGER = 356,
-     INNER = 357,
-     IGNORE = 358,
-     INDEX = 359,
-     IF = 360,
-     INSERT = 361,
-     INTO = 362,
-     INT = 363,
-     INTERVAL = 364,
-     JOIN = 365,
-     KEY = 366,
-     LESS = 367,
-     LONGTEXT = 368,
-     LOW_PRIORITY = 369,
-     LEFT = 370,
-     LEADING = 371,
-     LIMIT = 372,
-     LOCKED = 373,
-     OFFSET = 374,
-     LONGBLOB = 375,
-     MATCH = 376,
-     MAXVALUE = 377,
-     MEDIUMTEXT = 378,
-     MODIFY = 379,
-     MEDIUMBLOB = 380,
-     MEDIUMINT = 381,
-     NATURAL = 382,
-     NODE = 383,
-     NO_ACTION = 384,
-     NULLX = 385,
-     OUTER = 386,
-     ON = 387,
-     ORDER = 388,
-     ONDUPLICATE = 389,
-     PARTIAL = 390,
-     PRIMARY = 391,
-     QUICK = 392,
-     RANGE = 393,
-     REAL = 394,
-     RECLAIM = 395,
-     REFERENCES = 396,
-     RENAME = 397,
-     RESTRICT = 398,
-     ROLLUP = 399,
-     RIGHT = 400,
-     REPLACE = 401,
-     SQL_SMALL_RESULT = 402,
-     SCHEMA = 403,
-     SHARD = 404,
-     SHARDS = 405,
-     SHARE = 406,
-     SKIP = 407,
-     SOME = 408,
-     SQL_CALC_FOUND_ROWS = 409,
-     SQL_BIG_RESULT = 410,
-     SIMPLE = 411,
-     STRAIGHT_JOIN = 412,
-     SMALLINT = 413,
-     SET = 414,
-     SELECT = 415,
-     TINYTEXT = 416,
-     TINYINT = 417,
-     TO = 418,
-     TEMPORARY = 419,
-     GLOBAL = 420,
-     PRESERVE = 421,
-     TEXT = 422,
-     THAN = 423,
-     TIMESTAMP = 424,
-     TABLE = 425,
-     THEN = 426,
-     TRAILING = 427,
-     TRUNCATE = 428,
-     TINYBLOB = 429,
-     TIME = 430,
-     UPDATE = 431,
-     UNSIGNED = 432,
-     UNIQUE = 433,
-     UUID = 434,
-     USING = 435,
-     USE = 436,
-     HASH = 437,
-     VALIDATE = 438,
-     VARCHAR = 439,
-     VALUES = 440,
-     VARBINARY = 441,
-     WHERE = 442,
-     WHEN = 443,
-     WITH = 444,
-     YEAR = 445,
-     YEAR_MONTH = 446,
-     ZEROFILL = 447,
-     EXISTS = 448,
-     FSUBSTRING = 449,
-     FTRIM = 450,
-     FDATE_ADD = 451,
-     FDATE_SUB = 452,
-     FCOUNT = 453,
-     FSUM = 454,
-     FAVG = 455,
-     FMIN = 456,
-     FMAX = 457,
-     FUPPER = 458,
-     FLOWER = 459,
-     FLENGTH = 460,
-     FCONCAT = 461,
-     FREPLACE = 462,
-     FCOALESCE = 463,
-     FGEN_RANDOM_UUID = 464,
-     FGEN_RANDOM_UUID_V7 = 465,
-     FSNOWFLAKE_ID = 466,
-     FLAST_INSERT_ID = 467,
-     FEVO_SLEEP = 468,
-     FEVO_JITTER = 469
+     AFTER = 280,
+     ALL = 281,
+     ANALYZE = 282,
+     ANY = 283,
+     AUTO_INCREMENT = 284,
+     ASC = 285,
+     AND = 286,
+     AS = 287,
+     ALWAYS = 288,
+     IDENTITY = 289,
+     CONTINUE = 290,
+     RESTART = 291,
+     GENERATED = 292,
+     STORED = 293,
+     VIRTUAL = 294,
+     BLOB = 295,
+     BOOLEAN = 296,
+     BY = 297,
+     BINARY = 298,
+     BOTH = 299,
+     BIGINT = 300,
+     BIT = 301,
+     CONSTRAINT = 302,
+     CURRENT_TIMESTAMP = 303,
+     CREATE = 304,
+     CASCADE = 305,
+     CHANGE = 306,
+     CROSS = 307,
+     CASE = 308,
+     CHECK = 309,
+     COMMENT = 310,
+     CURRENT_DATE = 311,
+     CURRENT_TIME = 312,
+     CHAR = 313,
+     COLLATE = 314,
+     COLUMN = 315,
+     CONCURRENTLY = 316,
+     DATABASE = 317,
+     DEFERRABLE = 318,
+     DEFERRED = 319,
+     DISABLE = 320,
+     DOMAIN = 321,
+     DELAYED = 322,
+     DAY_HOUR = 323,
+     DAY_MICROSECOND = 324,
+     DISTINCT = 325,
+     DELETE = 326,
+     DROP = 327,
+     DAY_MINUTE = 328,
+     DISTINCTROW = 329,
+     DAY_SECOND = 330,
+     DESC = 331,
+     DEFAULT = 332,
+     DOUBLE = 333,
+     DATETIME = 334,
+     DECIMAL = 335,
+     DATE = 336,
+     ENABLE = 337,
+     ESCAPED = 338,
+     ENUM = 339,
+     END = 340,
+     ELSE = 341,
+     EXPLAIN = 342,
+     FIRST = 343,
+     FLOAT = 344,
+     FORCE = 345,
+     FOREIGN = 346,
+     FROM = 347,
+     FULL = 348,
+     FULLTEXT = 349,
+     FOR = 350,
+     GROUP = 351,
+     HOUR_MINUTE = 352,
+     HOUR_MICROSECOND = 353,
+     HIGH_PRIORITY = 354,
+     HOUR_SECOND = 355,
+     HAVING = 356,
+     IMMEDIATE = 357,
+     INITIALLY = 358,
+     INTEGER = 359,
+     INNER = 360,
+     IGNORE = 361,
+     INDEX = 362,
+     IF = 363,
+     INSERT = 364,
+     INTO = 365,
+     INT = 366,
+     INTERVAL = 367,
+     JOIN = 368,
+     KEY = 369,
+     LESS = 370,
+     LONGTEXT = 371,
+     LOW_PRIORITY = 372,
+     LEFT = 373,
+     LEADING = 374,
+     LIMIT = 375,
+     LOCKED = 376,
+     OFFSET = 377,
+     LONGBLOB = 378,
+     MATCH = 379,
+     MAXVALUE = 380,
+     MEDIUMTEXT = 381,
+     MODIFY = 382,
+     MEDIUMBLOB = 383,
+     MEDIUMINT = 384,
+     NATURAL = 385,
+     NODE = 386,
+     NO_ACTION = 387,
+     NULLX = 388,
+     OUTER = 389,
+     ON = 390,
+     ORDER = 391,
+     ONDUPLICATE = 392,
+     PARTIAL = 393,
+     PRIMARY = 394,
+     QUICK = 395,
+     RANGE = 396,
+     REAL = 397,
+     RECLAIM = 398,
+     REFERENCES = 399,
+     RENAME = 400,
+     RESTRICT = 401,
+     ROLLUP = 402,
+     RIGHT = 403,
+     REPLACE = 404,
+     SQL_SMALL_RESULT = 405,
+     SCHEMA = 406,
+     SHARD = 407,
+     SHARDS = 408,
+     SHARE = 409,
+     SKIP = 410,
+     SOME = 411,
+     SQL_CALC_FOUND_ROWS = 412,
+     SQL_BIG_RESULT = 413,
+     SIMPLE = 414,
+     STRAIGHT_JOIN = 415,
+     SMALLINT = 416,
+     SET = 417,
+     SELECT = 418,
+     TINYTEXT = 419,
+     TINYINT = 420,
+     TO = 421,
+     TEMPORARY = 422,
+     GLOBAL = 423,
+     PRESERVE = 424,
+     TEXT = 425,
+     THAN = 426,
+     TIMESTAMP = 427,
+     TABLE = 428,
+     THEN = 429,
+     TRAILING = 430,
+     TRUNCATE = 431,
+     TINYBLOB = 432,
+     TIME = 433,
+     UPDATE = 434,
+     UNSIGNED = 435,
+     UNIQUE = 436,
+     UUID = 437,
+     USING = 438,
+     USE = 439,
+     HASH = 440,
+     VALIDATE = 441,
+     VARCHAR = 442,
+     VALUES = 443,
+     VARBINARY = 444,
+     WHERE = 445,
+     WHEN = 446,
+     WITH = 447,
+     YEAR = 448,
+     YEAR_MONTH = 449,
+     ZEROFILL = 450,
+     EXISTS = 451,
+     FSUBSTRING = 452,
+     FTRIM = 453,
+     FDATE_ADD = 454,
+     FDATE_SUB = 455,
+     FCOUNT = 456,
+     FSUM = 457,
+     FAVG = 458,
+     FMIN = 459,
+     FMAX = 460,
+     FUPPER = 461,
+     FLOWER = 462,
+     FLENGTH = 463,
+     FCONCAT = 464,
+     FREPLACE = 465,
+     FCOALESCE = 466,
+     FGEN_RANDOM_UUID = 467,
+     FGEN_RANDOM_UUID_V7 = 468,
+     FSNOWFLAKE_ID = 469,
+     FLAST_INSERT_ID = 470,
+     FEVO_SLEEP = 471,
+     FEVO_JITTER = 472
    };
 #endif
 /* Tokens.  */
@@ -276,196 +279,199 @@
 #define UMINUS 277
 #define ALTER 278
 #define ADD 279
-#define ALL 280
-#define ANALYZE 281
-#define ANY 282
-#define AUTO_INCREMENT 283
-#define ASC 284
-#define AND 285
-#define AS 286
-#define ALWAYS 287
-#define IDENTITY 288
-#define CONTINUE 289
-#define RESTART 290
-#define GENERATED 291
-#define STORED 292
-#define VIRTUAL 293
-#define BLOB 294
-#define BOOLEAN 295
-#define BY 296
-#define BINARY 297
-#define BOTH 298
-#define BIGINT 299
-#define BIT 300
-#define CONSTRAINT 301
-#define CURRENT_TIMESTAMP 302
-#define CREATE 303
-#define CASCADE 304
-#define CROSS 305
-#define CASE 306
-#define CHECK 307
-#define COMMENT 308
-#define CURRENT_DATE 309
-#define CURRENT_TIME 310
-#define CHAR 311
-#define COLLATE 312
-#define COLUMN 313
-#define CONCURRENTLY 314
-#define DATABASE 315
-#define DEFERRABLE 316
-#define DEFERRED 317
-#define DISABLE 318
-#define DOMAIN 319
-#define DELAYED 320
-#define DAY_HOUR 321
-#define DAY_MICROSECOND 322
-#define DISTINCT 323
-#define DELETE 324
-#define DROP 325
-#define DAY_MINUTE 326
-#define DISTINCTROW 327
-#define DAY_SECOND 328
-#define DESC 329
-#define DEFAULT 330
-#define DOUBLE 331
-#define DATETIME 332
-#define DECIMAL 333
-#define DATE 334
-#define ENABLE 335
-#define ESCAPED 336
-#define ENUM 337
-#define END 338
-#define ELSE 339
-#define EXPLAIN 340
-#define FLOAT 341
-#define FORCE 342
-#define FOREIGN 343
-#define FROM 344
-#define FULL 345
-#define FULLTEXT 346
-#define FOR 347
-#define GROUP 348
-#define HOUR_MINUTE 349
-#define HOUR_MICROSECOND 350
-#define HIGH_PRIORITY 351
-#define HOUR_SECOND 352
-#define HAVING 353
-#define IMMEDIATE 354
-#define INITIALLY 355
-#define INTEGER 356
-#define INNER 357
-#define IGNORE 358
-#define INDEX 359
-#define IF 360
-#define INSERT 361
-#define INTO 362
-#define INT 363
-#define INTERVAL 364
-#define JOIN 365
-#define KEY 366
-#define LESS 367
-#define LONGTEXT 368
-#define LOW_PRIORITY 369
-#define LEFT 370
-#define LEADING 371
-#define LIMIT 372
-#define LOCKED 373
-#define OFFSET 374
-#define LONGBLOB 375
-#define MATCH 376
-#define MAXVALUE 377
-#define MEDIUMTEXT 378
-#define MODIFY 379
-#define MEDIUMBLOB 380
-#define MEDIUMINT 381
-#define NATURAL 382
-#define NODE 383
-#define NO_ACTION 384
-#define NULLX 385
-#define OUTER 386
-#define ON 387
-#define ORDER 388
-#define ONDUPLICATE 389
-#define PARTIAL 390
-#define PRIMARY 391
-#define QUICK 392
-#define RANGE 393
-#define REAL 394
-#define RECLAIM 395
-#define REFERENCES 396
-#define RENAME 397
-#define RESTRICT 398
-#define ROLLUP 399
-#define RIGHT 400
-#define REPLACE 401
-#define SQL_SMALL_RESULT 402
-#define SCHEMA 403
-#define SHARD 404
-#define SHARDS 405
-#define SHARE 406
-#define SKIP 407
-#define SOME 408
-#define SQL_CALC_FOUND_ROWS 409
-#define SQL_BIG_RESULT 410
-#define SIMPLE 411
-#define STRAIGHT_JOIN 412
-#define SMALLINT 413
-#define SET 414
-#define SELECT 415
-#define TINYTEXT 416
-#define TINYINT 417
-#define TO 418
-#define TEMPORARY 419
-#define GLOBAL 420
-#define PRESERVE 421
-#define TEXT 422
-#define THAN 423
-#define TIMESTAMP 424
-#define TABLE 425
-#define THEN 426
-#define TRAILING 427
-#define TRUNCATE 428
-#define TINYBLOB 429
-#define TIME 430
-#define UPDATE 431
-#define UNSIGNED 432
-#define UNIQUE 433
-#define UUID 434
-#define USING 435
-#define USE 436
-#define HASH 437
-#define VALIDATE 438
-#define VARCHAR 439
-#define VALUES 440
-#define VARBINARY 441
-#define WHERE 442
-#define WHEN 443
-#define WITH 444
-#define YEAR 445
-#define YEAR_MONTH 446
-#define ZEROFILL 447
-#define EXISTS 448
-#define FSUBSTRING 449
-#define FTRIM 450
-#define FDATE_ADD 451
-#define FDATE_SUB 452
-#define FCOUNT 453
-#define FSUM 454
-#define FAVG 455
-#define FMIN 456
-#define FMAX 457
-#define FUPPER 458
-#define FLOWER 459
-#define FLENGTH 460
-#define FCONCAT 461
-#define FREPLACE 462
-#define FCOALESCE 463
-#define FGEN_RANDOM_UUID 464
-#define FGEN_RANDOM_UUID_V7 465
-#define FSNOWFLAKE_ID 466
-#define FLAST_INSERT_ID 467
-#define FEVO_SLEEP 468
-#define FEVO_JITTER 469
+#define AFTER 280
+#define ALL 281
+#define ANALYZE 282
+#define ANY 283
+#define AUTO_INCREMENT 284
+#define ASC 285
+#define AND 286
+#define AS 287
+#define ALWAYS 288
+#define IDENTITY 289
+#define CONTINUE 290
+#define RESTART 291
+#define GENERATED 292
+#define STORED 293
+#define VIRTUAL 294
+#define BLOB 295
+#define BOOLEAN 296
+#define BY 297
+#define BINARY 298
+#define BOTH 299
+#define BIGINT 300
+#define BIT 301
+#define CONSTRAINT 302
+#define CURRENT_TIMESTAMP 303
+#define CREATE 304
+#define CASCADE 305
+#define CHANGE 306
+#define CROSS 307
+#define CASE 308
+#define CHECK 309
+#define COMMENT 310
+#define CURRENT_DATE 311
+#define CURRENT_TIME 312
+#define CHAR 313
+#define COLLATE 314
+#define COLUMN 315
+#define CONCURRENTLY 316
+#define DATABASE 317
+#define DEFERRABLE 318
+#define DEFERRED 319
+#define DISABLE 320
+#define DOMAIN 321
+#define DELAYED 322
+#define DAY_HOUR 323
+#define DAY_MICROSECOND 324
+#define DISTINCT 325
+#define DELETE 326
+#define DROP 327
+#define DAY_MINUTE 328
+#define DISTINCTROW 329
+#define DAY_SECOND 330
+#define DESC 331
+#define DEFAULT 332
+#define DOUBLE 333
+#define DATETIME 334
+#define DECIMAL 335
+#define DATE 336
+#define ENABLE 337
+#define ESCAPED 338
+#define ENUM 339
+#define END 340
+#define ELSE 341
+#define EXPLAIN 342
+#define FIRST 343
+#define FLOAT 344
+#define FORCE 345
+#define FOREIGN 346
+#define FROM 347
+#define FULL 348
+#define FULLTEXT 349
+#define FOR 350
+#define GROUP 351
+#define HOUR_MINUTE 352
+#define HOUR_MICROSECOND 353
+#define HIGH_PRIORITY 354
+#define HOUR_SECOND 355
+#define HAVING 356
+#define IMMEDIATE 357
+#define INITIALLY 358
+#define INTEGER 359
+#define INNER 360
+#define IGNORE 361
+#define INDEX 362
+#define IF 363
+#define INSERT 364
+#define INTO 365
+#define INT 366
+#define INTERVAL 367
+#define JOIN 368
+#define KEY 369
+#define LESS 370
+#define LONGTEXT 371
+#define LOW_PRIORITY 372
+#define LEFT 373
+#define LEADING 374
+#define LIMIT 375
+#define LOCKED 376
+#define OFFSET 377
+#define LONGBLOB 378
+#define MATCH 379
+#define MAXVALUE 380
+#define MEDIUMTEXT 381
+#define MODIFY 382
+#define MEDIUMBLOB 383
+#define MEDIUMINT 384
+#define NATURAL 385
+#define NODE 386
+#define NO_ACTION 387
+#define NULLX 388
+#define OUTER 389
+#define ON 390
+#define ORDER 391
+#define ONDUPLICATE 392
+#define PARTIAL 393
+#define PRIMARY 394
+#define QUICK 395
+#define RANGE 396
+#define REAL 397
+#define RECLAIM 398
+#define REFERENCES 399
+#define RENAME 400
+#define RESTRICT 401
+#define ROLLUP 402
+#define RIGHT 403
+#define REPLACE 404
+#define SQL_SMALL_RESULT 405
+#define SCHEMA 406
+#define SHARD 407
+#define SHARDS 408
+#define SHARE 409
+#define SKIP 410
+#define SOME 411
+#define SQL_CALC_FOUND_ROWS 412
+#define SQL_BIG_RESULT 413
+#define SIMPLE 414
+#define STRAIGHT_JOIN 415
+#define SMALLINT 416
+#define SET 417
+#define SELECT 418
+#define TINYTEXT 419
+#define TINYINT 420
+#define TO 421
+#define TEMPORARY 422
+#define GLOBAL 423
+#define PRESERVE 424
+#define TEXT 425
+#define THAN 426
+#define TIMESTAMP 427
+#define TABLE 428
+#define THEN 429
+#define TRAILING 430
+#define TRUNCATE 431
+#define TINYBLOB 432
+#define TIME 433
+#define UPDATE 434
+#define UNSIGNED 435
+#define UNIQUE 436
+#define UUID 437
+#define USING 438
+#define USE 439
+#define HASH 440
+#define VALIDATE 441
+#define VARCHAR 442
+#define VALUES 443
+#define VARBINARY 444
+#define WHERE 445
+#define WHEN 446
+#define WITH 447
+#define YEAR 448
+#define YEAR_MONTH 449
+#define ZEROFILL 450
+#define EXISTS 451
+#define FSUBSTRING 452
+#define FTRIM 453
+#define FDATE_ADD 454
+#define FDATE_SUB 455
+#define FCOUNT 456
+#define FSUM 457
+#define FAVG 458
+#define FMIN 459
+#define FMAX 460
+#define FUPPER 461
+#define FLOWER 462
+#define FLENGTH 463
+#define FCONCAT 464
+#define FREPLACE 465
+#define FCOALESCE 466
+#define FGEN_RANDOM_UUID 467
+#define FGEN_RANDOM_UUID_V7 468
+#define FSNOWFLAKE_ID 469
+#define FLAST_INSERT_ID 470
+#define FEVO_SLEEP 471
+#define FEVO_JITTER 472
 
 
 
@@ -481,7 +487,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 485 "parser/evoparser.tab.h"
+#line 491 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

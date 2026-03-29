@@ -1199,6 +1199,59 @@ int cat_update_index_col_list(uint32_t table_id, const char *index_name,
     return 0;
 }
 
+/* Move a column from old_ordinal to new_ordinal, shifting others. */
+int cat_reorder_column(uint32_t table_id, int old_ordinal, int new_ordinal)
+{
+    ColumnDesc all[CAT_MAX_COLUMNS];
+    int n = cat_find_columns(table_id, all, CAT_MAX_COLUMNS);
+    if (n <= 0) return -1;
+    if (old_ordinal == new_ordinal) return 0;
+
+    /* Find the column being moved */
+    ColumnDesc moving;
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (all[i].col_ordinal == old_ordinal) {
+            moving = all[i]; found = 1; break;
+        }
+    }
+    if (!found) return -1;
+
+    /* Delete all column records */
+    for (int i = 0; i < n; i++) {
+        char key[CAT_MAX_KEY_LEN];
+        make_column_key(table_id, all[i].col_ordinal, key, sizeof(key));
+        RowID rid;
+        if (bt2_search(&g_cat_trees[CAT_SYS_COLUMNS], key, &rid) == 0) {
+            cat_delete_record(rid);
+            bt2_delete(&g_cat_trees[CAT_SYS_COLUMNS], key);
+        }
+    }
+
+    /* Build reordered list: remove moving col, insert at new position */
+    ColumnDesc reordered[CAT_MAX_COLUMNS];
+    int ri = 0;
+    for (int i = 0; i < n; i++) {
+        if (all[i].col_ordinal == old_ordinal) continue;
+        reordered[ri++] = all[i];
+    }
+    /* Insert moving at new_ordinal (clamped) */
+    int insert_pos = new_ordinal;
+    if (insert_pos > ri) insert_pos = ri;
+    if (insert_pos < 0) insert_pos = 0;
+    for (int i = ri; i > insert_pos; i--)
+        reordered[i] = reordered[i - 1];
+    reordered[insert_pos] = moving;
+    ri++;
+
+    /* Renumber and reinsert */
+    for (int i = 0; i < ri; i++) {
+        reordered[i].col_ordinal = i;
+        cat_add_column(table_id, &reordered[i]);
+    }
+    return 0;
+}
+
 int cat_update_num_columns(uint32_t table_id, const char *table_name,
                            uint32_t schema_id, int new_count)
 {
