@@ -20,6 +20,7 @@
 
 
 ADD						{ return ADD; }					/* keywords */
+AFTER					{ return AFTER; }
 ALL						{ return ALL; }
 ANALYZE					{ return ANALYZE; }
 
@@ -35,6 +36,7 @@ ASC						{ return ASC; }
 AUTO_INCREMENT			{ return AUTO_INCREMENT; }
 
 BETWEEN					{ BEGIN BTWMODE; return BETWEEN; }
+CHANGE					{ return CHANGE; }
 INT8|BIGINT				{ return BIGINT; }
 BINARY					{ return BINARY; }
 BIT						{ return BIT; }
@@ -111,6 +113,7 @@ NOT[ \t\n]+EXISTS		{ yylval->subtok = 1; return EXISTS; }
 
 
 
+FIRST					{ return FIRST; }
 FLOAT4?					{ return FLOAT; }
 FOR						{ return FOR; }
 FORCE					{ return FORCE; }
