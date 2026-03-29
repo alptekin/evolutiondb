@@ -60,6 +60,7 @@
 %nonassoc UMINUS
 %token ALTER
 %token ADD
+%token AFTER
 %token ALL
 %token ANALYZE
 %token ANY
@@ -88,6 +89,7 @@
 %token CURRENT_TIMESTAMP
 %token CREATE
 %token CASCADE
+%token CHANGE
 %token CROSS
 %token CASE
 %token CHECK
@@ -127,6 +129,7 @@
 %token ELSE
 %token EXPLAIN
 
+%token FIRST
 %token FLOAT
 %token FORCE
 %token FOREIGN
@@ -172,6 +175,7 @@
 %token MATCH
 %token MAXVALUE
 %token MEDIUMTEXT
+%token MODIFY
 %token MEDIUMBLOB
 %token MEDIUMINT
 
@@ -1215,7 +1219,7 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         AlterTableValidateConstraint($3, $6);
         free($3); free($6);
     }
-| ALTER TABLE NAME ADD COLUMN NAME data_type
+| ALTER TABLE NAME ADD COLUMN NAME data_type column_atts opt_col_position
     {
         emit("ALTER TABLE ADD COLUMN %s %s %d", $3, $6, $7);
         AlterTableAddColumn($3, $6, $7);
@@ -1233,6 +1237,47 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         AlterTableDropColumn($3, $5);
         free($3); free($5);
     }
+| ALTER TABLE NAME RENAME COLUMN NAME TO NAME
+    {
+        emit("ALTER TABLE RENAME COLUMN %s %s %s", $3, $6, $8);
+        AlterTableRenameColumn($3, $6, $8);
+        free($3); free($6); free($8);
+    }
+| ALTER TABLE NAME RENAME NAME TO NAME
+    {
+        emit("ALTER TABLE RENAME COLUMN %s %s %s", $3, $5, $7);
+        AlterTableRenameColumn($3, $5, $7);
+        free($3); free($5); free($7);
+    }
+| ALTER TABLE NAME MODIFY COLUMN NAME data_type column_atts opt_col_position
+    {
+        emit("ALTER TABLE MODIFY COLUMN %s %s %d", $3, $6, $7);
+        AlterTableModifyColumn($3, $6, $7);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME MODIFY NAME data_type column_atts opt_col_position
+    {
+        emit("ALTER TABLE MODIFY COLUMN %s %s %d", $3, $5, $6);
+        AlterTableModifyColumn($3, $5, $6);
+        free($3); free($5);
+    }
+| ALTER TABLE NAME CHANGE COLUMN NAME NAME data_type column_atts opt_col_position
+    {
+        emit("ALTER TABLE CHANGE COLUMN %s %s %s %d", $3, $6, $7, $8);
+        AlterTableChangeColumn($3, $6, $7, $8);
+        free($3); free($6); free($7);
+    }
+| ALTER TABLE NAME CHANGE NAME NAME data_type column_atts opt_col_position
+    {
+        emit("ALTER TABLE CHANGE COLUMN %s %s %s %d", $3, $5, $6, $7);
+        AlterTableChangeColumn($3, $5, $6, $7);
+        free($3); free($5); free($6);
+    }
+;
+
+opt_col_position: /* nil */                     { }
+| FIRST                                         { if (g_qctx) g_upd.colPosition = 1; }
+| AFTER NAME                                    { if (g_qctx) { g_upd.colPosition = 2; strncpy(g_upd.colPositionAfter, $2, 127); g_upd.colPositionAfter[127] = '\0'; } free($2); }
 ;
 
 stmt: insert_stmt

@@ -124,6 +124,9 @@ typedef struct {
     char setTargetTable[64][128];   /* table prefix from SET t1.col = ... */
     char setTargetCol[64][128];     /* column name */
     ExprNode *setValueExprs[64];    /* RHS expression */
+    /* Column position (MODIFY ... FIRST/AFTER) */
+    int  colPosition;               /* 0=none, 1=FIRST, 2=AFTER */
+    char colPositionAfter[128];     /* column name for AFTER */
 } UpdateOpts;
 
 /* ---- DELETE ---- */
