@@ -1131,6 +1131,127 @@ int cat_remove_dropped_columns(uint32_t table_id)
     return new_ordinal;
 }
 
+/* Update a column's metadata in-place. */
+int cat_update_column(uint32_t table_id, int col_ordinal, const ColumnDesc *updated)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_column_key(table_id, col_ordinal, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_COLUMNS], key, &rid) < 0)
+        return -1;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_column(updated, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    /* Try in-place update */
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    /* Fallback: delete + reinsert + update B+ tree */
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_COLUMNS, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+    bt2_update(&g_cat_trees[CAT_SYS_COLUMNS], key, new_rid);
+    return 0;
+}
+
+/* Update an index's col_list field (used by RENAME COLUMN). */
+int cat_update_index_col_list(uint32_t table_id, const char *index_name,
+                              const char *new_col_list)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_index_key(table_id, index_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_INDEXES], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    IndexDesc idx;
+    deserialize_index(record, &idx);
+    strncpy(idx.col_list, new_col_list, sizeof(idx.col_list) - 1);
+    idx.col_list[sizeof(idx.col_list) - 1] = '\0';
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_index(&idx, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_INDEXES, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+    bt2_update(&g_cat_trees[CAT_SYS_INDEXES], key, new_rid);
+    return 0;
+}
+
+/* Move a column from old_ordinal to new_ordinal, shifting others. */
+int cat_reorder_column(uint32_t table_id, int old_ordinal, int new_ordinal)
+{
+    ColumnDesc all[CAT_MAX_COLUMNS];
+    int n = cat_find_columns(table_id, all, CAT_MAX_COLUMNS);
+    if (n <= 0) return -1;
+    if (old_ordinal == new_ordinal) return 0;
+
+    /* Find the column being moved */
+    ColumnDesc moving;
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (all[i].col_ordinal == old_ordinal) {
+            moving = all[i]; found = 1; break;
+        }
+    }
+    if (!found) return -1;
+
+    /* Delete all column records */
+    for (int i = 0; i < n; i++) {
+        char key[CAT_MAX_KEY_LEN];
+        make_column_key(table_id, all[i].col_ordinal, key, sizeof(key));
+        RowID rid;
+        if (bt2_search(&g_cat_trees[CAT_SYS_COLUMNS], key, &rid) == 0) {
+            cat_delete_record(rid);
+            bt2_delete(&g_cat_trees[CAT_SYS_COLUMNS], key);
+        }
+    }
+
+    /* Build reordered list: remove moving col, insert at new position */
+    ColumnDesc reordered[CAT_MAX_COLUMNS];
+    int ri = 0;
+    for (int i = 0; i < n; i++) {
+        if (all[i].col_ordinal == old_ordinal) continue;
+        reordered[ri++] = all[i];
+    }
+    /* Insert moving at new_ordinal (clamped) */
+    int insert_pos = new_ordinal;
+    if (insert_pos > ri) insert_pos = ri;
+    if (insert_pos < 0) insert_pos = 0;
+    for (int i = ri; i > insert_pos; i--)
+        reordered[i] = reordered[i - 1];
+    reordered[insert_pos] = moving;
+    ri++;
+
+    /* Renumber and reinsert */
+    for (int i = 0; i < ri; i++) {
+        reordered[i].col_ordinal = i;
+        cat_add_column(table_id, &reordered[i]);
+    }
+    return 0;
+}
+
 int cat_update_num_columns(uint32_t table_id, const char *table_name,
                            uint32_t schema_id, int new_count)
 {

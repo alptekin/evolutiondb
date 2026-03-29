@@ -1792,6 +1792,84 @@ int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode
     cat_update_num_columns(td.table_id, td.table_name,
                            td.schema_id, ncols + 1);
 
+    /* Handle FIRST/AFTER position for newly added column */
+    if (g_upd.colPosition == 1 || (g_upd.colPosition == 2 && g_upd.colPositionAfter[0])) {
+        int new_col_ordinal = ncols; /* just added at end */
+        int target_ord = 0;
+        if (g_upd.colPosition == 2) {
+            for (int i = 0; i < ncols; i++) {
+                if (!cols[i].is_dropped &&
+                    strcasecmp(cols[i].col_name, g_upd.colPositionAfter) == 0) {
+                    target_ord = cols[i].col_ordinal + 1;
+                    break;
+                }
+            }
+        }
+        cat_reorder_column(td.table_id, new_col_ordinal, target_ord);
+
+        /* Rewrite existing tuples: old tuples don't have the new column,
+         * but cat_reorder_column changed ordinals. We need to rebuild tuples
+         * with NULL at the new column's physical position. */
+        ColumnDesc newCols[CAT_MAX_COLUMNS];
+        int newNcols = cat_find_columns(td.table_id, newCols, CAT_MAX_COLUMNS);
+
+        BTree2 pk = tapi_pk_tree(&td);
+        TableScanCursor cur;
+        if (tapi_scan_begin(&td, &cur) == 0) {
+            char pkBuf[256], recBuf[RECORD_BUF_SIZE];
+            while (tapi_scan_next(&cur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
+                int rlen = tup_record_len(recBuf, sizeof(recBuf));
+                if (rlen <= 0) continue;
+
+                /* Extract with OLD layout (ncols columns, before add) */
+                char oldFields[64][256];
+                int oldNull[64];
+                int nf = tup_extract_fields(recBuf, rlen, cols, ncols,
+                                            oldFields, oldNull, 64);
+                if (nf <= 0) continue;
+
+                /* Build new tuple with reordered columns */
+                const char *newVals[64];
+                int newNull2[64];
+                for (int ni = 0; ni < newNcols && ni < 64; ni++) {
+                    /* Find this column in old layout by name */
+                    int found = 0;
+                    for (int oi = 0; oi < nf; oi++) {
+                        if (strcasecmp(newCols[ni].col_name, cols[oi].col_name) == 0) {
+                            newVals[ni] = oldNull[oi] ? NULL : oldFields[oi];
+                            newNull2[ni] = oldNull[oi];
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        newVals[ni] = NULL; /* new column = NULL */
+                        newNull2[ni] = 1;
+                    }
+                }
+
+                uint32_t xmin = 0;
+                if (tup_has_mvcc(recBuf, rlen))
+                    xmin = tup_get_xmin(recBuf, rlen);
+                char newRec[RECORD_BUF_SIZE];
+                int newLen = tup_build(newVals, newNull2, newNcols,
+                                       td.table_id, newCols, newNcols,
+                                       newRec, sizeof(newRec), xmin);
+                if (newLen <= 0) continue;
+
+                RowID rid;
+                if (bt2_search(&pk, pkBuf, &rid) != 0) continue;
+                RowID new_rid = tapi_heap_update(&td, rid, newRec, (uint16_t)newLen);
+                if (new_rid.page_no != rid.page_no || new_rid.slot_idx != rid.slot_idx)
+                    bt2_update(&pk, pkBuf, new_rid);
+            }
+        }
+        { extern void col_cache_invalidate(uint32_t);
+          col_cache_invalidate(td.table_id); }
+    }
+    g_upd.colPosition = 0;
+    g_upd.colPositionAfter[0] = '\0';
+
     printf("ALTER TABLE\n");
     return 0;
 }
@@ -1937,6 +2015,326 @@ int AlterTableDropColumn(const char *tableName, const char *colName)
 
     printf("ALTER TABLE\n");
     return 0;
+}
+
+/* ---- RENAME COLUMN ---- */
+int AlterTableRenameColumn(const char *tableName, const char *oldName, const char *newName)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table \"%s\" does not exist", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Find column by old name */
+    int target = -1;
+    for (int i = 0; i < ncols; i++) {
+        if (!cols[i].is_dropped && strcasecmp(cols[i].col_name, oldName) == 0) {
+            target = i; break;
+        }
+    }
+    if (target < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "column \"%s\" of relation \"%s\" does not exist", oldName, tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42703");
+        return -1;
+    }
+
+    /* Check new name not already in use */
+    for (int i = 0; i < ncols; i++) {
+        if (!cols[i].is_dropped && i != target &&
+            strcasecmp(cols[i].col_name, newName) == 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "column \"%s\" of relation \"%s\" already exists", newName, tableName);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE("42701");
+            return -1;
+        }
+    }
+
+    /* Update column name in catalog */
+    strncpy(cols[target].col_name, newName, CAT_MAX_NAME_LEN - 1);
+    cols[target].col_name[CAT_MAX_NAME_LEN - 1] = '\0';
+    cat_update_column(td.table_id, cols[target].col_ordinal, &cols[target]);
+
+    /* Update secondary index col_list references */
+    IndexDesc indexes[16];
+    int nidx = cat_list_indexes(td.table_id, indexes, 16);
+    for (int i = 0; i < nidx; i++) {
+        char colList[256];
+        strncpy(colList, indexes[i].col_list, 255);
+        colList[255] = '\0';
+        int changed = 0;
+        char newList[256] = "";
+        char *saveptr = NULL;
+        char *tok = strtok_r(colList, ",", &saveptr);
+        while (tok) {
+            if (newList[0]) strncat(newList, ",", sizeof(newList) - strlen(newList) - 1);
+            if (strcasecmp(tok, oldName) == 0) {
+                strncat(newList, newName, sizeof(newList) - strlen(newList) - 1);
+                changed = 1;
+            } else {
+                strncat(newList, tok, sizeof(newList) - strlen(newList) - 1);
+            }
+            tok = strtok_r(NULL, ",", &saveptr);
+        }
+        if (changed) {
+            strncpy(indexes[i].col_list, newList, CAT_MAX_NAME_LEN - 1);
+            indexes[i].col_list[CAT_MAX_NAME_LEN - 1] = '\0';
+            cat_update_index_col_list(td.table_id, indexes[i].index_name,
+                                      indexes[i].col_list);
+        }
+    }
+
+    /* Invalidate column cache */
+    { extern void col_cache_invalidate(uint32_t);
+      col_cache_invalidate(td.table_id); }
+
+    printf("ALTER TABLE\n");
+    return 0;
+}
+
+/* ---- MODIFY COLUMN ---- */
+
+static int evo_type_is_compatible(int old_type, int new_type)
+{
+    if (old_type == new_type) return 1;
+    int old_fam = old_type / 10000;
+    int new_fam = new_type / 10000;
+    int old_size = old_type % 10000;
+    int new_size = new_type % 10000;
+
+    /* Same family required */
+    if (old_fam != new_fam) return 0;
+
+    /* String families (CHAR=12, VARCHAR=13): widening only */
+    if (old_fam == 12 || old_fam == 13) {
+        return new_size >= old_size;
+    }
+
+    /* Fixed-width families: same family = same encoding */
+    return 1;
+}
+
+int AlterTableModifyColumn(const char *tableName, const char *colName, int newTypeCode)
+{
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols;
+    char tblPath[1024];
+    db_table_path(tableName, tblPath, sizeof(tblPath));
+
+    if (tapi_resolve(tblPath, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "table \"%s\" does not exist", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    /* Find column */
+    int target = -1;
+    for (int i = 0; i < ncols; i++) {
+        if (!cols[i].is_dropped && strcasecmp(cols[i].col_name, colName) == 0) {
+            target = i; break;
+        }
+    }
+    if (target < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "column \"%s\" of relation \"%s\" does not exist", colName, tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42703");
+        return -1;
+    }
+
+    /* Reject PK type change */
+    if (cols[target].is_pk && cols[target].type_code != newTypeCode) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "cannot change type of column \"%s\" because it is part of the primary key",
+                 colName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("2BP01");
+        return -1;
+    }
+
+    /* Check type compatibility */
+    if (!evo_type_is_compatible(cols[target].type_code, newTypeCode)) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "column \"%s\" cannot be cast automatically to type %d",
+                 colName, newTypeCode);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42804");
+        return -1;
+    }
+
+    /* NOT NULL check: if adding NOT NULL, scan for existing NULLs */
+    if (g_create.currentColNotNull && !cols[target].is_not_null) {
+        TableScanCursor cursor;
+        if (tapi_scan_begin(&td, &cursor) == 0) {
+            char pk[256], rec[RECORD_BUF_SIZE];
+            while (tapi_scan_next(&cursor, pk, rec, sizeof(rec)) == 0) {
+                int rlen = tup_record_len(rec, sizeof(rec));
+                if (rlen <= 0) continue;
+                char flds[64][256];
+                int nulls[64];
+                tup_extract_fields(rec, rlen, cols, ncols, flds, nulls, 64);
+                if (target < ncols && nulls[target]) {
+                    tapi_scan_end(&cursor);
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                             "column \"%s\" of relation \"%s\" contains null values",
+                             colName, tableName);
+                    g_err.error = 1;
+                    EVOSQL_SET_SQLSTATE("23502");
+                    return -1;
+                }
+            }
+        }
+    }
+
+    /* Update catalog */
+    cols[target].type_code = newTypeCode;
+    cols[target].is_not_null = g_create.currentColNotNull;
+    cols[target].is_unique = g_create.currentColUnique;
+    if (g_create.currentColDefault[0])
+        strncpy(cols[target].default_val, g_create.currentColDefault, 255);
+
+    cat_update_column(td.table_id, cols[target].col_ordinal, &cols[target]);
+
+    /* Handle FIRST/AFTER column position — eager rewrite */
+    if (g_upd.colPosition == 1 || (g_upd.colPosition == 2 && g_upd.colPositionAfter[0])) {
+        int new_ord = 0;
+        if (g_upd.colPosition == 2) {
+            int after_ord = -1;
+            for (int i = 0; i < ncols; i++) {
+                if (!cols[i].is_dropped &&
+                    strcasecmp(cols[i].col_name, g_upd.colPositionAfter) == 0) {
+                    after_ord = cols[i].col_ordinal;
+                    break;
+                }
+            }
+            if (after_ord < 0) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "column \"%s\" does not exist (AFTER)", g_upd.colPositionAfter);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE("42703");
+                return -1;
+            }
+            new_ord = after_ord + 1;
+        }
+        /* Save old column order for reading tuples */
+        ColumnDesc oldCols[CAT_MAX_COLUMNS];
+        memcpy(oldCols, cols, ncols * sizeof(ColumnDesc));
+
+        /* Reorder in catalog */
+        cat_reorder_column(td.table_id, cols[target].col_ordinal, new_ord);
+
+        /* Read new column order */
+        ColumnDesc newCols[CAT_MAX_COLUMNS];
+        int newNcols = cat_find_columns(td.table_id, newCols, CAT_MAX_COLUMNS);
+
+        /* Build mapping: newCols[i].col_name → oldCols position */
+        int mapping[CAT_MAX_COLUMNS]; /* mapping[new_idx] = old_idx */
+        for (int ni = 0; ni < newNcols; ni++) {
+            mapping[ni] = ni; /* default: same position */
+            for (int oi = 0; oi < ncols; oi++) {
+                if (strcasecmp(newCols[ni].col_name, oldCols[oi].col_name) == 0) {
+                    mapping[ni] = oi;
+                    break;
+                }
+            }
+        }
+
+        /* Rewrite all tuples with new column order */
+        BTree2 pk = tapi_pk_tree(&td);
+        TableScanCursor cur;
+        if (tapi_scan_begin(&td, &cur) == 0) {
+            char pkBuf[256], recBuf[RECORD_BUF_SIZE];
+            while (tapi_scan_next(&cur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
+                int rlen = tup_record_len(recBuf, sizeof(recBuf));
+                if (rlen <= 0) continue;
+
+                /* Extract fields in OLD order */
+                char oldFields[64][256];
+                int oldNull[64];
+                int nf = tup_extract_fields(recBuf, rlen, oldCols, ncols,
+                                            oldFields, oldNull, 64);
+                if (nf <= 0) continue;
+
+                /* Remap to NEW order */
+                const char *newVals[64];
+                int newNull2[64];
+                for (int ni = 0; ni < newNcols && ni < 64; ni++) {
+                    int oi = mapping[ni];
+                    if (oi < nf) {
+                        newVals[ni] = oldNull[oi] ? NULL : oldFields[oi];
+                        newNull2[ni] = oldNull[oi];
+                    } else {
+                        newVals[ni] = NULL;
+                        newNull2[ni] = 1;
+                    }
+                }
+
+                /* Build new tuple */
+                uint32_t xmin = 0;
+                if (tup_has_mvcc(recBuf, rlen))
+                    xmin = tup_get_xmin(recBuf, rlen);
+                char newRec[RECORD_BUF_SIZE];
+                int newLen = tup_build(newVals, newNull2, newNcols,
+                                       td.table_id, newCols, newNcols,
+                                       newRec, sizeof(newRec), xmin);
+                if (newLen <= 0) continue;
+
+                /* Update in-place */
+                RowID rid;
+                if (bt2_search(&pk, pkBuf, &rid) != 0) continue;
+                RowID new_rid = tapi_heap_update(&td, rid, newRec, (uint16_t)newLen);
+                if (new_rid.page_no != rid.page_no || new_rid.slot_idx != rid.slot_idx)
+                    bt2_update(&pk, pkBuf, new_rid);
+            }
+        }
+    }
+    g_upd.colPosition = 0;
+    g_upd.colPositionAfter[0] = '\0';
+
+    /* Invalidate column cache */
+    { extern void col_cache_invalidate(uint32_t);
+      col_cache_invalidate(td.table_id); }
+
+    printf("ALTER TABLE\n");
+    return 0;
+}
+
+/* ---- CHANGE COLUMN (MySQL: rename + modify + optional reposition) ---- */
+int AlterTableChangeColumn(const char *tableName, const char *oldName,
+                           const char *newName, int newTypeCode)
+{
+    /* Save position before rename clears state */
+    int savedPos = g_upd.colPosition;
+    char savedAfter[128];
+    strncpy(savedAfter, g_upd.colPositionAfter, 127);
+    savedAfter[127] = '\0';
+
+    /* Step 1: Rename if names differ */
+    if (strcasecmp(oldName, newName) != 0) {
+        int rc = AlterTableRenameColumn(tableName, oldName, newName);
+        if (rc < 0) return rc;
+    }
+
+    /* Step 2: Modify type/attributes + position */
+    g_upd.colPosition = savedPos;
+    strncpy(g_upd.colPositionAfter, savedAfter, 127);
+    g_upd.colPositionAfter[127] = '\0';
+
+    return AlterTableModifyColumn(tableName, newName, newTypeCode);
 }
 
 /* ---- Feature 6: CREATE DOMAIN ---- */

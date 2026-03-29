@@ -3267,6 +3267,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_upd.tblName[0] = '\0';
     g_upd.multiUpdate = 0;
     g_upd.setCount = 0;
+    g_upd.colPosition = 0;
+    g_upd.colPositionAfter[0] = '\0';
     g_del.tblName[0] = '\0';
     g_del.multiDelete = 0;
     g_del.deleteTargetCount = 0;
