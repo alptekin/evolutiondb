@@ -48,3 +48,7 @@ tmpclaude-*
 __pycache__/
 tests/
 wiki/
+*.claude
+wal.*
+*.wal
+*.db
