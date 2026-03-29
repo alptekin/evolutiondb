@@ -976,7 +976,7 @@
 
 ## Day 25 — RENAME TABLE & DROP DATABASE/SCHEMA
 
-### Task 48: ⬜ RENAME TABLE (Feature #31)
+### Task 48: ✅ RENAME TABLE (Feature #31)
 
 **Goal:** Implement `RENAME TABLE old TO new` / `ALTER TABLE old RENAME TO new`.
 
@@ -995,7 +995,7 @@
 
 ---
 
-### Task 49: ⬜ DROP DATABASE & DROP SCHEMA (Features #29, #30)
+### Task 49: ✅ DROP DATABASE & DROP SCHEMA (Features #29, #30)
 
 **Goal:** CREATE DATABASE/SCHEMA exist but DROP is missing. Implement both.
 
