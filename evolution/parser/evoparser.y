@@ -172,6 +172,7 @@
 %token MATCH
 %token MAXVALUE
 %token MEDIUMTEXT
+%token MODIFY
 %token MEDIUMBLOB
 %token MEDIUMINT
 
@@ -1231,6 +1232,30 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
     {
         emit("ALTER TABLE DROP COLUMN %s %s", $3, $5);
         AlterTableDropColumn($3, $5);
+        free($3); free($5);
+    }
+| ALTER TABLE NAME RENAME COLUMN NAME TO NAME
+    {
+        emit("ALTER TABLE RENAME COLUMN %s %s %s", $3, $6, $8);
+        AlterTableRenameColumn($3, $6, $8);
+        free($3); free($6); free($8);
+    }
+| ALTER TABLE NAME RENAME NAME TO NAME
+    {
+        emit("ALTER TABLE RENAME COLUMN %s %s %s", $3, $5, $7);
+        AlterTableRenameColumn($3, $5, $7);
+        free($3); free($5); free($7);
+    }
+| ALTER TABLE NAME MODIFY COLUMN NAME data_type column_atts
+    {
+        emit("ALTER TABLE MODIFY COLUMN %s %s %d", $3, $6, $7);
+        AlterTableModifyColumn($3, $6, $7);
+        free($3); free($6);
+    }
+| ALTER TABLE NAME MODIFY NAME data_type column_atts
+    {
+        emit("ALTER TABLE MODIFY COLUMN %s %s %d", $3, $5, $6);
+        AlterTableModifyColumn($3, $5, $6);
         free($3); free($5);
     }
 ;

@@ -174,6 +174,7 @@ MATCH					{ return MATCH; }
 MAXVALUE				{ return MAXVALUE; }
 MEDIUMBLOB				{ return MEDIUMBLOB; }
 MIDDLEINT|MEDIUMINT		{ return MEDIUMINT; }
+MODIFY					{ return MODIFY; }
 MEDIUMTEXT				{ return MEDIUMTEXT; }
 
 

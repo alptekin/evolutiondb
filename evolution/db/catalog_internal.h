@@ -209,6 +209,8 @@ int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max);
 int cat_add_column(uint32_t table_id, const ColumnDesc *col);
 int cat_drop_column(uint32_t table_id, int col_ordinal);
 int cat_remove_dropped_columns(uint32_t table_id);
+int cat_update_column(uint32_t table_id, int col_ordinal, const ColumnDesc *updated);
+int cat_update_index_col_list(uint32_t table_id, const char *index_name, const char *new_col_list);
 int cat_update_num_columns(uint32_t table_id, const char *table_name,
                            uint32_t schema_id, int new_count);
 
