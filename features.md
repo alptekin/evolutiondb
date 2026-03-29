@@ -13,7 +13,7 @@
 | 2 | Subqueries (WHERE, FROM, SELECT) | ✅ | ✅ | 🔧 | Grammar exists, no subquery execution |
 | 3 | Subquery comparison (ANY/SOME/ALL) | ✅ | ✅ | 🔧 | Grammar exists, no evaluation |
 | 4 | UNION / UNION ALL / INTERSECT / EXCEPT | ✅ | ✅ | ❌ | |
-| 5 | ALTER TABLE (ADD/DROP/MODIFY/RENAME COLUMN) | ✅ | ✅ | 🔧 | ADD COLUMN implemented; DROP/MODIFY/RENAME pending |
+| 5 | ALTER TABLE (ADD/DROP/MODIFY/RENAME COLUMN) | ✅ | ✅ | ✅ | ADD/DROP/MODIFY/RENAME COLUMN — hybrid DROP (lazy+RECLAIM rewrite) |
 | 6 | FOREIGN KEY constraints | ✅ | ✅ | ✅ | CASCADE, SET NULL, RESTRICT, SET DEFAULT, NO ACTION; ON DELETE + ON UPDATE; cross-schema |
 | 7 | CHECK constraints | ✅ | ✅ | ✅ | Named constraints, NOT VALID, ENABLE/DISABLE/VALIDATE |
 | 8 | DEFAULT value enforcement | ✅ | ✅ | ✅ | Literals, CURRENT_TIMESTAMP, gen_random_uuid(), expressions |

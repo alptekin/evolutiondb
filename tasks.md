@@ -955,7 +955,7 @@
 
 ---
 
-### Task 47: ⬜ ALTER TABLE — MODIFY & RENAME COLUMN (Feature #5, Part 3)
+### Task 47: ✅ ALTER TABLE — MODIFY & RENAME COLUMN (Feature #5, Part 3)
 
 **Goal:** Implement `ALTER TABLE t MODIFY COLUMN col new_type` and `ALTER TABLE t RENAME COLUMN old TO new`.
 
