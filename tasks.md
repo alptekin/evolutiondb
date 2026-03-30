@@ -1115,7 +1115,7 @@
 
 ---
 
-### Task 55: ⬜ EXISTS & ANY/SOME/ALL Subqueries (Feature #3)
+### Task 55: ✅ EXISTS & ANY/SOME/ALL Subqueries (Feature #3)
 
 **Goal:** Implement EXISTS, NOT EXISTS, ANY/SOME/ALL subquery operators.
 

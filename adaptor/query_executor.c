@@ -4767,14 +4767,15 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 inner[ilen] = '\0';
 
                 /* Determine subquery type from context before '(' */
-                int subq_type = 0; /* 0=scalar, 1=IN, 2=NOT IN, 3=EXISTS, 4=NOT EXISTS */
+                /* 0=scalar, 1=IN, 2=NOT IN, 3=EXISTS, 4=NOT EXISTS, 5=ANY, 6=ALL */
+                int subq_type = 0;
                 int replace_start = i;
+                int cmp_op = 0; /* comparison operator char for ANY/ALL */
                 {
                     int j = i - 1;
                     while (j >= 0 && isspace((unsigned char)mat[j])) j--;
                     if (j >= 1 && strncasecmp(mat + j - 1, "IN", 2) == 0 &&
                         (j - 2 < 0 || !isalnum((unsigned char)mat[j - 2]))) {
-                        /* Check for NOT IN */
                         int k = j - 2;
                         while (k >= 0 && isspace((unsigned char)mat[k])) k--;
                         if (k >= 2 && strncasecmp(mat + k - 2, "NOT", 3) == 0 &&
@@ -4796,6 +4797,26 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                             subq_type = 3;
                             replace_start = j - 5;
                         }
+                    } else if ((j >= 2 && strncasecmp(mat + j - 2, "ANY", 3) == 0 &&
+                               (j - 3 < 0 || !isalnum((unsigned char)mat[j - 3]))) ||
+                              (j >= 3 && strncasecmp(mat + j - 3, "SOME", 4) == 0 &&
+                               (j - 4 < 0 || !isalnum((unsigned char)mat[j - 4])))) {
+                        /* expr op ANY/SOME (SELECT ...) */
+                        int kw_len = (j >= 3 && strncasecmp(mat + j - 3, "SOME", 4) == 0) ? 4 : 3;
+                        int k = j - kw_len;
+                        while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                        if (k >= 0 && (mat[k] == '>' || mat[k] == '<' || mat[k] == '='))
+                            cmp_op = mat[k];
+                        subq_type = 5;
+                        replace_start = i; /* replace from '(' only, keep op expr */
+                    } else if (j >= 2 && strncasecmp(mat + j - 2, "ALL", 3) == 0 &&
+                               (j - 3 < 0 || !isalnum((unsigned char)mat[j - 3]))) {
+                        int k = j - 3;
+                        while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                        if (k >= 0 && (mat[k] == '>' || mat[k] == '<' || mat[k] == '='))
+                            cmp_op = mat[k];
+                        subq_type = 6;
+                        replace_start = i;
                     }
                 }
 
@@ -4832,6 +4853,72 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     int exists = (sub_rs.num_rows > 0);
                     if (subq_type == 4) exists = !exists;
                     strcpy(replacement, exists ? "1" : "0");
+                } else if (subq_type == 5) {
+                    /* ANY/SOME → replace "ANY (SELECT ...)" with IN (...) for =,
+                     * or with single aggregate value for >/</< */
+                    if (cmp_op == '=') {
+                        /* = ANY → same as IN */
+                        /* Replace: op ANY (SELECT...) → IN (v1,v2,...) */
+                        /* Back up replace_start to include "= ANY " */
+                        int k = replace_start - 1;
+                        while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                        /* Skip ANY/SOME keyword */
+                        while (k >= 0 && isalpha((unsigned char)mat[k])) k--;
+                        while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                        /* Skip '=' */
+                        if (k >= 0 && mat[k] == '=') replace_start = k;
+                        strcpy(replacement, "IN (");
+                        if (sub_rs.num_rows == 0) strcat(replacement, "NULL");
+                        else for (int r = 0; r < sub_rs.num_rows && r < 500; r++) {
+                            if (r > 0) strcat(replacement, ",");
+                            strcat(replacement, "'");
+                            if (sub_rs.rows[r].fields[0] && !sub_rs.rows[r].is_null[0])
+                                strncat(replacement, sub_rs.rows[r].fields[0],
+                                        sizeof(replacement) - strlen(replacement) - 10);
+                            strcat(replacement, "'");
+                        }
+                        strcat(replacement, ")");
+                    } else {
+                        /* >/< ANY → compare with MIN (for >) or MAX (for <) */
+                        /* Find min/max from results */
+                        double extreme = 0;
+                        int has_val = 0;
+                        for (int r = 0; r < sub_rs.num_rows; r++) {
+                            if (sub_rs.rows[r].fields[0] && !sub_rs.rows[r].is_null[0]) {
+                                double v = strtod(sub_rs.rows[r].fields[0], NULL);
+                                if (!has_val) { extreme = v; has_val = 1; }
+                                else if (cmp_op == '>' && v < extreme) extreme = v; /* MIN for > ANY */
+                                else if (cmp_op == '<' && v > extreme) extreme = v; /* MAX for < ANY */
+                            }
+                        }
+                        /* Replace ANY(...) with literal */
+                        int k = replace_start - 1;
+                        while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                        while (k >= 0 && isalpha((unsigned char)mat[k])) k--;
+                        replace_start = k + 1;
+                        if (has_val) snprintf(replacement, sizeof(replacement), "%g", extreme);
+                        else strcpy(replacement, "NULL");
+                    }
+                } else if (subq_type == 6) {
+                    /* ALL → for = ALL: true only if all values equal (rare, replace with single check)
+                     * for > ALL: compare with MAX, for < ALL: compare with MIN */
+                    double extreme = 0;
+                    int has_val = 0;
+                    for (int r = 0; r < sub_rs.num_rows; r++) {
+                        if (sub_rs.rows[r].fields[0] && !sub_rs.rows[r].is_null[0]) {
+                            double v = strtod(sub_rs.rows[r].fields[0], NULL);
+                            if (!has_val) { extreme = v; has_val = 1; }
+                            else if (cmp_op == '>' && v > extreme) extreme = v; /* MAX for > ALL */
+                            else if (cmp_op == '<' && v < extreme) extreme = v; /* MIN for < ALL */
+                            else if (cmp_op == '=' && v != extreme) { has_val = 0; break; } /* not all equal */
+                        }
+                    }
+                    int k = replace_start - 1;
+                    while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                    while (k >= 0 && isalpha((unsigned char)mat[k])) k--;
+                    replace_start = k + 1;
+                    if (has_val) snprintf(replacement, sizeof(replacement), "%g", extreme);
+                    else strcpy(replacement, "NULL");
                 } else {
                     /* Scalar → replace (SELECT ...) with 'value' */
                     if (sub_rs.num_rows > 0 && sub_rs.rows[0].fields[0] &&
