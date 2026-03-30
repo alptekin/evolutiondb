@@ -1096,7 +1096,7 @@
 
 ## Day 28 — Subqueries
 
-### Task 54: ⬜ Scalar & WHERE Subqueries (Feature #2)
+### Task 54: ✅ Scalar & WHERE Subqueries (Feature #2)
 
 **Goal:** Implement subquery execution in WHERE and SELECT clauses.
 

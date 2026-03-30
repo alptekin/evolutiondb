@@ -12,6 +12,13 @@
 
 	void yyerror(void *scanner, const char *s, ...);
 	static __thread int t_oldstate;
+
+	/* Subquery SQL extraction: track byte position in input */
+	__thread int g_lex_pos = 0;
+	__thread const char *g_lex_input = NULL;
+	__thread int g_in_subquery = 0;
+
+	#define YY_USER_ACTION  g_lex_pos += yyleng;
 %}
 %x COMMENT
 %s BTWMODE
