@@ -4157,6 +4157,416 @@ void session_cleanup_gtt(SessionCtx *ctx)
     { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
 }
 
+/* ================================================================
+ *  Set Operations: UNION / UNION ALL / INTERSECT / EXCEPT / MINUS
+ * ================================================================ */
+
+#define EVO_SETOP_UNION         1
+#define EVO_SETOP_UNION_ALL     2
+#define EVO_SETOP_INTERSECT     3
+#define EVO_SETOP_INTERSECT_ALL 4
+#define EVO_SETOP_EXCEPT        5
+#define EVO_SETOP_EXCEPT_ALL    6
+
+/* Detect top-level set operation keyword in SQL.
+ * Returns operation type and split position, or 0 if none found.
+ * Splits at last UNION/EXCEPT/MINUS (INTERSECT binds tighter). */
+static int evo_detect_set_op(const char *sql, int *split_pos)
+{
+    int len = (int)strlen(sql);
+    int depth = 0;       /* parenthesis depth */
+    int in_str = 0;      /* inside single-quoted string */
+    int last_union = -1, last_except = -1, last_intersect = -1;
+    int last_union_type = 0, last_except_type = 0, last_intersect_type = 0;
+
+    for (int i = 0; i < len; i++) {
+        char c = sql[i];
+        if (in_str) {
+            if (c == '\'' && (i + 1 >= len || sql[i + 1] != '\''))
+                in_str = 0;
+            else if (c == '\'' && i + 1 < len && sql[i + 1] == '\'')
+                i++; /* escaped quote */
+            continue;
+        }
+        if (c == '\'') { in_str = 1; continue; }
+        if (c == '(') { depth++; continue; }
+        if (c == ')') { depth--; continue; }
+        if (depth != 0) continue;
+
+        /* Check keywords at word boundary */
+        if (i > 0 && !isspace((unsigned char)sql[i - 1]) && sql[i - 1] != ')') continue;
+
+        if (strncasecmp(sql + i, "UNION", 5) == 0 &&
+            (i + 5 >= len || !isalnum((unsigned char)sql[i + 5]))) {
+            /* Check for UNION ALL */
+            int j = i + 5;
+            while (j < len && isspace((unsigned char)sql[j])) j++;
+            if (strncasecmp(sql + j, "ALL", 3) == 0 &&
+                (j + 3 >= len || !isalnum((unsigned char)sql[j + 3]))) {
+                last_union = i;
+                last_union_type = EVO_SETOP_UNION_ALL;
+            } else {
+                last_union = i;
+                last_union_type = EVO_SETOP_UNION;
+            }
+        }
+        else if (strncasecmp(sql + i, "EXCEPT", 6) == 0 &&
+                 (i + 6 >= len || !isalnum((unsigned char)sql[i + 6]))) {
+            int j = i + 6;
+            while (j < len && isspace((unsigned char)sql[j])) j++;
+            if (strncasecmp(sql + j, "ALL", 3) == 0 &&
+                (j + 3 >= len || !isalnum((unsigned char)sql[j + 3]))) {
+                last_except = i;
+                last_except_type = EVO_SETOP_EXCEPT_ALL;
+            } else {
+                last_except = i;
+                last_except_type = EVO_SETOP_EXCEPT;
+            }
+        }
+        else if (strncasecmp(sql + i, "MINUS", 5) == 0 &&
+                 (i + 5 >= len || !isalnum((unsigned char)sql[i + 5]))) {
+            last_except = i;
+            last_except_type = EVO_SETOP_EXCEPT; /* MINUS = EXCEPT */
+        }
+        else if (strncasecmp(sql + i, "INTERSECT", 9) == 0 &&
+                 (i + 9 >= len || !isalnum((unsigned char)sql[i + 9]))) {
+            int j = i + 9;
+            while (j < len && isspace((unsigned char)sql[j])) j++;
+            if (strncasecmp(sql + j, "ALL", 3) == 0 &&
+                (j + 3 >= len || !isalnum((unsigned char)sql[j + 3]))) {
+                last_intersect = i;
+                last_intersect_type = EVO_SETOP_INTERSECT_ALL;
+            } else {
+                last_intersect = i;
+                last_intersect_type = EVO_SETOP_INTERSECT;
+            }
+        }
+    }
+
+    /* UNION/EXCEPT/MINUS have lower precedence than INTERSECT.
+     * Split at last UNION/EXCEPT first; if none, split at last INTERSECT. */
+    if (last_union >= 0 || last_except >= 0) {
+        if (last_union >= last_except) {
+            *split_pos = last_union;
+            return last_union_type;
+        } else {
+            *split_pos = last_except;
+            return last_except_type;
+        }
+    }
+    if (last_intersect >= 0) {
+        *split_pos = last_intersect;
+        return last_intersect_type;
+    }
+    return 0;
+}
+
+/* Compare two result rows for equality (NULL == NULL for set operations). */
+static int evo_rows_equal(const ResultSet *rs, int r1, int r2)
+{
+    for (int c = 0; c < rs->num_cols; c++) {
+        int n1 = rs->rows[r1].is_null[c];
+        int n2 = rs->rows[r2].is_null[c];
+        if (n1 && n2) continue;
+        if (n1 != n2) return 0;
+        const char *v1 = rs->rows[r1].fields[c];
+        const char *v2 = rs->rows[r2].fields[c];
+        if (!v1 || !v2) return 0;
+        if (strcmp(v1, v2) != 0) return 0;
+    }
+    return 1;
+}
+
+/* Compare a row from rs1 with a row from rs2 */
+static int evo_rows_equal_cross(const ResultSet *rs1, int r1,
+                                 const ResultSet *rs2, int r2)
+{
+    int nc = rs1->num_cols < rs2->num_cols ? rs1->num_cols : rs2->num_cols;
+    for (int c = 0; c < nc; c++) {
+        int n1 = rs1->rows[r1].is_null[c];
+        int n2 = rs2->rows[r2].is_null[c];
+        if (n1 && n2) continue;
+        if (n1 != n2) return 0;
+        const char *v1 = rs1->rows[r1].fields[c];
+        const char *v2 = rs2->rows[r2].fields[c];
+        if (!v1 || !v2) return 0;
+        if (strcmp(v1, v2) != 0) return 0;
+    }
+    return 1;
+}
+
+/* Copy a row from src to dst ResultSet */
+static void evo_copy_row(ResultSet *dst, const ResultSet *src, int src_row)
+{
+    int row = result_add_row(dst);
+    if (row < 0) return;
+    for (int c = 0; c < dst->num_cols && c < src->num_cols; c++) {
+        if (src->rows[src_row].is_null[c])
+            result_set_null(dst, row, c);
+        else if (src->rows[src_row].fields[c])
+            result_set_field(dst, row, c, src->rows[src_row].fields[c]);
+    }
+}
+
+/* Check if row exists in result set (for dedup) */
+static int evo_row_exists(const ResultSet *rs, int check_row, int up_to)
+{
+    for (int r = 0; r < up_to; r++) {
+        if (evo_rows_equal(rs, r, check_row)) return 1;
+    }
+    return 0;
+}
+
+/* Combine two result sets based on set operation type */
+static void evo_combine_results(const ResultSet *left, const ResultSet *right,
+                                 int op_type, ResultSet *out)
+{
+    result_init(out);
+    /* Copy column metadata from left */
+    for (int c = 0; c < left->num_cols; c++) {
+        result_add_column(out, left->columns[c].name,
+                          left->columns[c].pg_type_oid);
+    }
+
+    switch (op_type) {
+    case EVO_SETOP_UNION_ALL:
+        for (int r = 0; r < left->num_rows; r++) evo_copy_row(out, left, r);
+        for (int r = 0; r < right->num_rows; r++) evo_copy_row(out, right, r);
+        break;
+
+    case EVO_SETOP_UNION:
+        for (int r = 0; r < left->num_rows; r++) evo_copy_row(out, left, r);
+        for (int r = 0; r < right->num_rows; r++) evo_copy_row(out, right, r);
+        /* Dedup */
+        for (int r = out->num_rows - 1; r > 0; r--) {
+            if (evo_row_exists(out, r, r)) {
+                /* Mark as removed by setting all fields NULL + a flag.
+                 * Simpler: compact array by shifting. */
+                for (int s = r; s < out->num_rows - 1; s++)
+                    out->rows[s] = out->rows[s + 1];
+                out->num_rows--;
+            }
+        }
+        break;
+
+    case EVO_SETOP_INTERSECT:
+        for (int lr = 0; lr < left->num_rows; lr++) {
+            int found = 0;
+            for (int rr = 0; rr < right->num_rows; rr++) {
+                if (evo_rows_equal_cross(left, lr, right, rr)) {
+                    found = 1; break;
+                }
+            }
+            if (found) {
+                evo_copy_row(out, left, lr);
+                /* Dedup: check if already in output */
+                if (out->num_rows > 1 &&
+                    evo_row_exists(out, out->num_rows - 1, out->num_rows - 1)) {
+                    out->num_rows--;
+                }
+            }
+        }
+        break;
+
+    case EVO_SETOP_INTERSECT_ALL: {
+        /* Track how many times each right row has been matched */
+        int *right_used = (int *)calloc(right->num_rows, sizeof(int));
+        for (int lr = 0; lr < left->num_rows; lr++) {
+            for (int rr = 0; rr < right->num_rows; rr++) {
+                if (!right_used[rr] &&
+                    evo_rows_equal_cross(left, lr, right, rr)) {
+                    evo_copy_row(out, left, lr);
+                    right_used[rr] = 1;
+                    break;
+                }
+            }
+        }
+        free(right_used);
+        break;
+    }
+
+    case EVO_SETOP_EXCEPT:
+        for (int lr = 0; lr < left->num_rows; lr++) {
+            int found = 0;
+            for (int rr = 0; rr < right->num_rows; rr++) {
+                if (evo_rows_equal_cross(left, lr, right, rr)) {
+                    found = 1; break;
+                }
+            }
+            if (!found) {
+                evo_copy_row(out, left, lr);
+                if (out->num_rows > 1 &&
+                    evo_row_exists(out, out->num_rows - 1, out->num_rows - 1)) {
+                    out->num_rows--;
+                }
+            }
+        }
+        break;
+
+    case EVO_SETOP_EXCEPT_ALL: {
+        int *right_used = (int *)calloc(right->num_rows, sizeof(int));
+        for (int lr = 0; lr < left->num_rows; lr++) {
+            int found = 0;
+            for (int rr = 0; rr < right->num_rows; rr++) {
+                if (!right_used[rr] &&
+                    evo_rows_equal_cross(left, lr, right, rr)) {
+                    right_used[rr] = 1;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) evo_copy_row(out, left, lr);
+        }
+        free(right_used);
+        break;
+    }
+    }
+}
+
+/* Get keyword length for splitting */
+static int evo_setop_keyword_len(int op_type)
+{
+    switch (op_type) {
+    case EVO_SETOP_UNION:         return 5;  /* "UNION" */
+    case EVO_SETOP_UNION_ALL:     return 9;  /* "UNION ALL" (approx) */
+    case EVO_SETOP_INTERSECT:     return 9;  /* "INTERSECT" */
+    case EVO_SETOP_INTERSECT_ALL: return 13; /* "INTERSECT ALL" */
+    case EVO_SETOP_EXCEPT:        return 6;  /* "EXCEPT" or "MINUS"(5) */
+    case EVO_SETOP_EXCEPT_ALL:    return 10; /* "EXCEPT ALL" */
+    default: return 5;
+    }
+}
+
+/* Execute a set operation by splitting SQL, running each part, combining */
+static void execute_set_operation(const char *sql, ResultSet *rs,
+                                   SessionCtx *ctx, int op_type, int split_pos)
+{
+    int sql_len = (int)strlen(sql);
+
+    /* Split into left and right SQL */
+    char *left_sql = (char *)malloc(split_pos + 1);
+    if (!left_sql) { result_set_error(rs, "XX000", "out of memory"); return; }
+    memcpy(left_sql, sql, split_pos);
+    left_sql[split_pos] = '\0';
+    /* Trim trailing whitespace */
+    int lt = split_pos - 1;
+    while (lt >= 0 && isspace((unsigned char)left_sql[lt])) left_sql[lt--] = '\0';
+
+    /* Skip keyword */
+    int right_start = split_pos;
+    /* Skip the keyword itself */
+    while (right_start < sql_len && isspace((unsigned char)sql[right_start])) right_start++;
+    /* Skip UNION/INTERSECT/EXCEPT/MINUS */
+    if (strncasecmp(sql + right_start, "UNION", 5) == 0) right_start += 5;
+    else if (strncasecmp(sql + right_start, "INTERSECT", 9) == 0) right_start += 9;
+    else if (strncasecmp(sql + right_start, "EXCEPT", 6) == 0) right_start += 6;
+    else if (strncasecmp(sql + right_start, "MINUS", 5) == 0) right_start += 5;
+    /* Skip optional ALL */
+    while (right_start < sql_len && isspace((unsigned char)sql[right_start])) right_start++;
+    if (strncasecmp(sql + right_start, "ALL", 3) == 0 &&
+        (right_start + 3 >= sql_len || !isalnum((unsigned char)sql[right_start + 3])))
+        right_start += 3;
+    while (right_start < sql_len && isspace((unsigned char)sql[right_start])) right_start++;
+
+    char *right_sql = strdup(sql + right_start);
+    if (!right_sql) { free(left_sql); result_set_error(rs, "XX000", "out of memory"); return; }
+
+    /* Extract trailing LIMIT/ORDER BY from right_sql (applies to combined result) */
+    int combined_limit = -1;
+    int combined_offset = 0;
+    {
+        /* Scan for top-level LIMIT at end of right_sql */
+        int rlen = (int)strlen(right_sql);
+        int depth = 0, in_s = 0;
+        int last_limit = -1, last_order = -1;
+        for (int i = 0; i < rlen; i++) {
+            if (in_s) { if (right_sql[i] == '\'') in_s = 0; continue; }
+            if (right_sql[i] == '\'') { in_s = 1; continue; }
+            if (right_sql[i] == '(') depth++;
+            if (right_sql[i] == ')') depth--;
+            if (depth != 0) continue;
+            if (i > 0 && !isspace((unsigned char)right_sql[i-1]) && right_sql[i-1] != ')') continue;
+            if (strncasecmp(right_sql + i, "LIMIT", 5) == 0 &&
+                (i + 5 >= rlen || !isalnum((unsigned char)right_sql[i+5])))
+                last_limit = i;
+            if (strncasecmp(right_sql + i, "ORDER", 5) == 0 &&
+                (i + 5 >= rlen || !isalnum((unsigned char)right_sql[i+5])))
+                last_order = i;
+        }
+        if (last_limit >= 0) {
+            combined_limit = atoi(right_sql + last_limit + 5);
+            /* Check for OFFSET */
+            char *off = strcasestr(right_sql + last_limit, "OFFSET");
+            if (off) combined_offset = atoi(off + 6);
+            right_sql[last_limit] = '\0';
+            /* Trim */
+            int t = last_limit - 1;
+            while (t >= 0 && isspace((unsigned char)right_sql[t])) right_sql[t--] = '\0';
+        }
+        /* ORDER BY extraction — strip from right, apply after combine */
+        /* For simplicity, leave ORDER BY in right_sql for now (handled per-query) */
+    }
+
+    /* Execute left sub-query */
+    ResultSet left_rs;
+    memset(&left_rs, 0, sizeof(left_rs));
+    result_init(&left_rs);
+    query_execute(left_sql, &left_rs, ctx);
+    free(left_sql);
+
+    if (left_rs.has_error) {
+        result_set_error(rs, left_rs.error_sqlstate, left_rs.error_message);
+        result_free(&left_rs);
+        free(right_sql);
+        return;
+    }
+
+    /* Execute right sub-query */
+    ResultSet right_rs;
+    memset(&right_rs, 0, sizeof(right_rs));
+    result_init(&right_rs);
+    query_execute(right_sql, &right_rs, ctx);
+    free(right_sql);
+
+    if (right_rs.has_error) {
+        result_set_error(rs, right_rs.error_sqlstate, right_rs.error_message);
+        result_free(&left_rs);
+        result_free(&right_rs);
+        return;
+    }
+
+    /* Validate column count match */
+    if (left_rs.num_cols != right_rs.num_cols) {
+        result_set_error(rs, "42601",
+            "each UNION/INTERSECT/EXCEPT query must have the same number of columns");
+        result_free(&left_rs);
+        result_free(&right_rs);
+        return;
+    }
+
+    /* Combine results */
+    evo_combine_results(&left_rs, &right_rs, op_type, rs);
+    result_free(&left_rs);
+    result_free(&right_rs);
+
+    /* Apply combined LIMIT/OFFSET if extracted */
+    if (combined_limit >= 0) {
+        int start = combined_offset;
+        int end = start + combined_limit;
+        if (start > rs->num_rows) start = rs->num_rows;
+        if (end > rs->num_rows) end = rs->num_rows;
+        /* Shift rows to remove offset, then truncate */
+        if (start > 0) {
+            for (int r = 0; r < end - start; r++)
+                rs->rows[r] = rs->rows[r + start];
+        }
+        rs->num_rows = end - start;
+    }
+
+    rs->is_select = 1;
+    snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
+}
+
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
@@ -4262,6 +4672,16 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     "Permission denied: insufficient privileges");
                 return;
             }
+        }
+    }
+
+    /* ── Set operations: UNION / INTERSECT / EXCEPT / MINUS ── */
+    {
+        int setop_type = 0, setop_split = 0;
+        setop_type = evo_detect_set_op(sql, &setop_split);
+        if (setop_type != 0) {
+            execute_set_operation(sql, rs, ctx, setop_type, setop_split);
+            goto writeback_session;
         }
     }
 
