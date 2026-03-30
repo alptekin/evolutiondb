@@ -1911,10 +1911,19 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
             int c;
             orderCols[k] = -1;
             orderDescs[k] = g_sel.orderByDescs[k];
-            for (c = 0; c < rs->num_cols; c++) {
-                if (strcasecmp(rs->columns[c].name, g_sel.orderByColumns[k]) == 0) {
-                    orderCols[k] = c;
-                    break;
+            /* Ordinal position: ORDER BY 1, 2, ... */
+            char *endp;
+            long ord = strtol(g_sel.orderByColumns[k], &endp, 10);
+            if (*endp == '\0' && g_sel.orderByColumns[k][0] != '\0' &&
+                ord >= 1 && ord <= rs->num_cols) {
+                orderCols[k] = (int)(ord - 1);
+            } else {
+                /* Column name matching */
+                for (c = 0; c < rs->num_cols; c++) {
+                    if (strcasecmp(rs->columns[c].name, g_sel.orderByColumns[k]) == 0) {
+                        orderCols[k] = c;
+                        break;
+                    }
                 }
             }
             if (orderCols[k] >= 0)
