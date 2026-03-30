@@ -1016,7 +1016,7 @@
 
 ## Day 26 — UNION & ORDER BY Expressions
 
-### Task 50: ⬜ UNION / UNION ALL / INTERSECT / EXCEPT (Feature #4)
+### Task 50: ✅ UNION / UNION ALL / INTERSECT / EXCEPT (Feature #4)
 
 **Goal:** Implement set operations on query results.
 
