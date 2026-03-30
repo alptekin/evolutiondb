@@ -124,6 +124,7 @@
 
 %token ENABLE
 %token ESCAPED
+%token EXCEPT
 %token ENUM
 %token END
 %token ELSE
@@ -154,6 +155,7 @@
 %token INDEX
 %token IF
 %token INSERT
+%token INTERSECT
 %token INTO
 %token INT
 %token INTERVAL
@@ -175,6 +177,7 @@
 %token MATCH
 %token MAXVALUE
 %token MEDIUMTEXT
+%token MINUS
 %token MODIFY
 %token MEDIUMBLOB
 %token MEDIUMINT
@@ -237,6 +240,7 @@
 
 %token UPDATE
 %token UNSIGNED
+%token UNION
 %token UNIQUE
 %token UUID
 %token USING

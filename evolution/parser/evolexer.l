@@ -108,6 +108,7 @@ EXPLAIN					{ return EXPLAIN; }
 END						{ return END; }
 ENUM					{ return ENUM; }
 ESCAPED					{ return ESCAPED; }
+EXCEPT					{ return EXCEPT; }
 EXISTS					{ yylval->subtok = 0; return EXISTS; }
 NOT[ \t\n]+EXISTS		{ yylval->subtok = 1; return EXISTS; }
 
@@ -141,6 +142,7 @@ INNER					{ return INNER; }
 
 
 INSERT					{ return INSERT; }
+INTERSECT				{ return INTERSECT; }
 INT4?|INTEGER			{ return INTEGER; }
 INTERVAL				{ return INTERVAL; }
 INTO					{ return INTO; }
@@ -177,6 +179,7 @@ MATCH					{ return MATCH; }
 MAXVALUE				{ return MAXVALUE; }
 MEDIUMBLOB				{ return MEDIUMBLOB; }
 MIDDLEINT|MEDIUMINT		{ return MEDIUMINT; }
+MINUS					{ return MINUS; }
 MODIFY					{ return MODIFY; }
 MEDIUMTEXT				{ return MEDIUMTEXT; }
 
@@ -269,6 +272,7 @@ TRUNCATE				{ return TRUNCATE; }
 
 
 
+UNION					{ return UNION; }
 UNIQUE					{ return UNIQUE; }
 
 UNSIGNED				{ return UNSIGNED; }
