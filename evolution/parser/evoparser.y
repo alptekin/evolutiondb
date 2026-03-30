@@ -171,7 +171,6 @@
 %token HIGH_PRIORITY
 %token HOUR_SECOND
 %token HAVING
-
 %token IMMEDIATE
 %token INITIALLY
 %token INTEGER
@@ -292,7 +291,7 @@
 /* functions with special syntax */
 %token FSUBSTRING
 %token FTRIM
-%token FDATE_ADD FDATE_SUB
+%token FDATE_ADD FDATE_SUB FDATEDIFF FYEAR FMONTH FDAY FHOUR FMINUTE FSECOND FNOW
 %token FLEFT FRIGHT FLPAD FRPAD FREVERSE FREPEAT FINSTR FLOCATE
 %token FABS FCEIL FFLOOR FROUND FPOWER FSQRT FMOD FRAND FLOG FLOG10 FSIGN FPI
 %token FCOUNT
@@ -352,6 +351,7 @@
 
 %type <exprval> expr
 %type <exprval> select_expr
+%type <exprval> interval_exp
 
 %start stmt_list
 %%
@@ -552,6 +552,15 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FLOG10 '(' expr ')'                              { emit("CALL 1 LOG10"); $$ = expr_make_func1(EXPR_LOG10, $3, "LOG10"); }
 | FSIGN '(' expr ')'                               { emit("CALL 1 SIGN"); $$ = expr_make_func1(EXPR_SIGN, $3, "SIGN"); }
 | FPI '(' ')'                                      { emit("CALL 0 PI"); $$ = expr_make_func0(EXPR_PI, "PI"); }
+/* Date functions */
+| FNOW '(' ')'                                     { emit("CALL 0 NOW"); $$ = expr_make_func0(EXPR_NOW, "NOW"); }
+| FDATEDIFF '(' expr ',' expr ')'                  { emit("CALL 2 DATEDIFF"); $$ = expr_make_func2(EXPR_DATEDIFF, $3, $5, "DATEDIFF"); }
+| FYEAR '(' expr ')'                               { emit("CALL 1 YEAR"); $$ = expr_make_func1(EXPR_YEAR, $3, "YEAR"); }
+| FMONTH '(' expr ')'                              { emit("CALL 1 MONTH"); $$ = expr_make_func1(EXPR_MONTH, $3, "MONTH"); }
+| FDAY '(' expr ')'                                { emit("CALL 1 DAY"); $$ = expr_make_func1(EXPR_DAY, $3, "DAY"); }
+| FHOUR '(' expr ')'                               { emit("CALL 1 HOUR"); $$ = expr_make_func1(EXPR_HOUR, $3, "HOUR"); }
+| FMINUTE '(' expr ')'                             { emit("CALL 1 MINUTE"); $$ = expr_make_func1(EXPR_MINUTE, $3, "MINUTE"); }
+| FSECOND '(' expr ')'                             { emit("CALL 1 SECOND"); $$ = expr_make_func1(EXPR_SECOND, $3, "SECOND"); }
 | FCONCAT '(' expr ',' expr ',' expr ')'           { emit("CALL 3 CONCAT"); $$ = expr_make_concat(expr_make_concat($3, $5), $7); }
 | FCONCAT '(' expr ',' expr ',' expr ',' expr ')'  { emit("CALL 4 CONCAT"); $$ = expr_make_concat(expr_make_concat(expr_make_concat($3, $5), $7), $9); }
 | FGEN_RANDOM_UUID '(' ')'                         {
@@ -594,19 +603,28 @@ trim_ltb: LEADING								{ emit("NUMBER 1"); $$ = 1; }
 | BOTH										{ emit("NUMBER 3"); $$ = 3; }
 ;
 
-expr: FDATE_ADD '(' expr ',' interval_exp ')'                                   { emit("CALL 3 DATE_ADD"); $$ = expr_make_column("DATE_ADD"); }
-| FDATE_SUB '(' expr ',' interval_exp ')'                                       { emit("CALL 3 DATE_SUB"); $$ = expr_make_column("DATE_SUB"); }
+expr: FDATE_ADD '(' expr ',' interval_exp ')'
+    {
+        emit("CALL 3 DATE_ADD");
+        /* $5 = unit code (encoded as literal), interval value is in $5's left child */
+        $$ = expr_make_func3(EXPR_DATE_ADD, $3, $5, NULL, "DATE_ADD");
+    }
+| FDATE_SUB '(' expr ',' interval_exp ')'
+    {
+        emit("CALL 3 DATE_SUB");
+        $$ = expr_make_func3(EXPR_DATE_SUB, $3, $5, NULL, "DATE_SUB");
+    }
 ;
 
-interval_exp: INTERVAL expr DAY_HOUR                                            { emit("NUMBER 1"); }
-| INTERVAL expr DAY_MICROSECOND                                                 { emit("NUMBER 2"); }
-| INTERVAL expr DAY_MINUTE							{ emit("NUMBER 3"); }
-| INTERVAL expr DAY_SECOND							{ emit("NUMBER 4"); }
-| INTERVAL expr YEAR_MONTH							{ emit("NUMBER 5"); }
-| INTERVAL expr YEAR								{ emit("NUMBER 6"); }
-| INTERVAL expr HOUR_MICROSECOND                                                { emit("NUMBER 7"); }
-| INTERVAL expr HOUR_MINUTE							{ emit("NUMBER 8"); }
-| INTERVAL expr HOUR_SECOND							{ emit("NUMBER 9"); }
+interval_exp: INTERVAL expr YEAR                      { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "YEAR"); }
+| INTERVAL expr DAY_HOUR                              { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "DAY"); }
+| INTERVAL expr DAY_MICROSECOND                       { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "DAY"); }
+| INTERVAL expr DAY_MINUTE                            { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "DAY"); }
+| INTERVAL expr DAY_SECOND                            { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "DAY"); }
+| INTERVAL expr YEAR_MONTH                            { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "MONTH"); }
+| INTERVAL expr HOUR_MICROSECOND                      { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "HOUR"); }
+| INTERVAL expr HOUR_MINUTE                           { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "HOUR"); }
+| INTERVAL expr HOUR_SECOND                           { $$ = $2; if ($$) snprintf($$->display, sizeof($$->display), "HOUR"); }
 ;
 
 expr: CASE expr case_list END

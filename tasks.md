@@ -1195,7 +1195,7 @@
 
 ---
 
-### Task 59: ⬜ Date Functions & INTERVAL (Features #50, #43)
+### Task 59: ✅ Date Functions & INTERVAL (Features #50, #43)
 
 **Goal:** Implement NOW, DATEDIFF, DATE_FORMAT, EXTRACT, YEAR, MONTH, DAY. Wire DATE_ADD/DATE_SUB and INTERVAL evaluation.
 

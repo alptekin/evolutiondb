@@ -241,43 +241,51 @@
      FTRIM = 457,
      FDATE_ADD = 458,
      FDATE_SUB = 459,
-     FLEFT = 460,
-     FRIGHT = 461,
-     FLPAD = 462,
-     FRPAD = 463,
-     FREVERSE = 464,
-     FREPEAT = 465,
-     FINSTR = 466,
-     FLOCATE = 467,
-     FABS = 468,
-     FCEIL = 469,
-     FFLOOR = 470,
-     FROUND = 471,
-     FPOWER = 472,
-     FSQRT = 473,
-     FMOD = 474,
-     FRAND = 475,
-     FLOG = 476,
-     FLOG10 = 477,
-     FSIGN = 478,
-     FPI = 479,
-     FCOUNT = 480,
-     FSUM = 481,
-     FAVG = 482,
-     FMIN = 483,
-     FMAX = 484,
-     FUPPER = 485,
-     FLOWER = 486,
-     FLENGTH = 487,
-     FCONCAT = 488,
-     FREPLACE = 489,
-     FCOALESCE = 490,
-     FGEN_RANDOM_UUID = 491,
-     FGEN_RANDOM_UUID_V7 = 492,
-     FSNOWFLAKE_ID = 493,
-     FLAST_INSERT_ID = 494,
-     FEVO_SLEEP = 495,
-     FEVO_JITTER = 496
+     FDATEDIFF = 460,
+     FYEAR = 461,
+     FMONTH = 462,
+     FDAY = 463,
+     FHOUR = 464,
+     FMINUTE = 465,
+     FSECOND = 466,
+     FNOW = 467,
+     FLEFT = 468,
+     FRIGHT = 469,
+     FLPAD = 470,
+     FRPAD = 471,
+     FREVERSE = 472,
+     FREPEAT = 473,
+     FINSTR = 474,
+     FLOCATE = 475,
+     FABS = 476,
+     FCEIL = 477,
+     FFLOOR = 478,
+     FROUND = 479,
+     FPOWER = 480,
+     FSQRT = 481,
+     FMOD = 482,
+     FRAND = 483,
+     FLOG = 484,
+     FLOG10 = 485,
+     FSIGN = 486,
+     FPI = 487,
+     FCOUNT = 488,
+     FSUM = 489,
+     FAVG = 490,
+     FMIN = 491,
+     FMAX = 492,
+     FUPPER = 493,
+     FLOWER = 494,
+     FLENGTH = 495,
+     FCONCAT = 496,
+     FREPLACE = 497,
+     FCOALESCE = 498,
+     FGEN_RANDOM_UUID = 499,
+     FGEN_RANDOM_UUID_V7 = 500,
+     FSNOWFLAKE_ID = 501,
+     FLAST_INSERT_ID = 502,
+     FEVO_SLEEP = 503,
+     FEVO_JITTER = 504
    };
 #endif
 /* Tokens.  */
@@ -483,43 +491,51 @@
 #define FTRIM 457
 #define FDATE_ADD 458
 #define FDATE_SUB 459
-#define FLEFT 460
-#define FRIGHT 461
-#define FLPAD 462
-#define FRPAD 463
-#define FREVERSE 464
-#define FREPEAT 465
-#define FINSTR 466
-#define FLOCATE 467
-#define FABS 468
-#define FCEIL 469
-#define FFLOOR 470
-#define FROUND 471
-#define FPOWER 472
-#define FSQRT 473
-#define FMOD 474
-#define FRAND 475
-#define FLOG 476
-#define FLOG10 477
-#define FSIGN 478
-#define FPI 479
-#define FCOUNT 480
-#define FSUM 481
-#define FAVG 482
-#define FMIN 483
-#define FMAX 484
-#define FUPPER 485
-#define FLOWER 486
-#define FLENGTH 487
-#define FCONCAT 488
-#define FREPLACE 489
-#define FCOALESCE 490
-#define FGEN_RANDOM_UUID 491
-#define FGEN_RANDOM_UUID_V7 492
-#define FSNOWFLAKE_ID 493
-#define FLAST_INSERT_ID 494
-#define FEVO_SLEEP 495
-#define FEVO_JITTER 496
+#define FDATEDIFF 460
+#define FYEAR 461
+#define FMONTH 462
+#define FDAY 463
+#define FHOUR 464
+#define FMINUTE 465
+#define FSECOND 466
+#define FNOW 467
+#define FLEFT 468
+#define FRIGHT 469
+#define FLPAD 470
+#define FRPAD 471
+#define FREVERSE 472
+#define FREPEAT 473
+#define FINSTR 474
+#define FLOCATE 475
+#define FABS 476
+#define FCEIL 477
+#define FFLOOR 478
+#define FROUND 479
+#define FPOWER 480
+#define FSQRT 481
+#define FMOD 482
+#define FRAND 483
+#define FLOG 484
+#define FLOG10 485
+#define FSIGN 486
+#define FPI 487
+#define FCOUNT 488
+#define FSUM 489
+#define FAVG 490
+#define FMIN 491
+#define FMAX 492
+#define FUPPER 493
+#define FLOWER 494
+#define FLENGTH 495
+#define FCONCAT 496
+#define FREPLACE 497
+#define FCOALESCE 498
+#define FGEN_RANDOM_UUID 499
+#define FGEN_RANDOM_UUID_V7 500
+#define FSNOWFLAKE_ID 501
+#define FLAST_INSERT_ID 502
+#define FEVO_SLEEP 503
+#define FEVO_JITTER 504
 
 
 
@@ -535,7 +551,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 539 "parser/evoparser.tab.h"
+#line 555 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
