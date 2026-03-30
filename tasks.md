@@ -1056,7 +1056,7 @@
 
 ## Day 27 — JOIN (Part 1)
 
-### Task 52: ⬜ INNER JOIN Execution (Feature #1, Part 1)
+### Task 52: ✅ INNER JOIN Execution (Feature #1, Part 1)
 
 **Goal:** Grammar for JOINs exists. Implement INNER JOIN execution.
 
@@ -1075,7 +1075,7 @@
 
 ---
 
-### Task 53: ⬜ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
+### Task 53: ✅ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
 
 **Goal:** Extend join engine for LEFT, RIGHT, CROSS, and NATURAL joins.
 
@@ -1195,7 +1195,7 @@
 
 ---
 
-### Task 59: ⬜ Date Functions & INTERVAL (Features #50, #43)
+### Task 59: ✅ Date Functions & INTERVAL (Features #50, #43)
 
 **Goal:** Implement NOW, DATEDIFF, DATE_FORMAT, EXTRACT, YEAR, MONTH, DAY. Wire DATE_ADD/DATE_SUB and INTERVAL evaluation.
 
