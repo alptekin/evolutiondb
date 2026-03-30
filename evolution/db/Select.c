@@ -199,6 +199,10 @@ void SelectAll(void)
 
 int GetSelTableName(char *pname)
 {
+    /* Skip if inside subquery parse — don't clobber outer query state */
+    extern __thread int g_in_subquery;
+    if (g_in_subquery) return 0;
+
     db_table_path(pname, g_sel.tblName, sizeof(g_sel.tblName));
     strcat(g_sel.tblName, ".dat");
 
@@ -221,6 +225,8 @@ int GetSelection(char *pname)
 
 void AddJoinTable(const char *name, const char *alias)
 {
+    extern __thread int g_in_subquery;
+    if (g_in_subquery) return;
     int i = g_sel.joinTableCount;
     if (i >= MAX_JOIN_TABLES) return;
     strncpy(g_sel.joinTables[i], name, 255);
@@ -253,6 +259,10 @@ void SetJoinOnExpr(struct ExprNode *expr)
 
 int SelectProcess(void)
 {
+    /* Skip if inside subquery parse */
+    extern __thread int g_in_subquery;
+    if (g_in_subquery) return 0;
+
     char *str2 = NULL;
     char tblName[1024];
 

@@ -3218,6 +3218,29 @@ static void execute_ctas(const char *srcTable, ResultSet *rs, SessionCtx *ctx)
  *  the setjmp scope, and the stdout/stderr restore MUST be guarded
  *  against double-close in case longjmp fires after the first restore.
  * ---------------------------------------------------------------- */
+/* Subquery execution callback — called from expr_evaluate via function pointer.
+ * Executes inner SELECT via recursive query_execute, returns first column values. */
+static int evo_subquery_exec(const char *sql, char out_values[][256],
+                              int *out_count, int max_values, void *ctx)
+{
+    SessionCtx *session = (SessionCtx *)ctx;
+    ResultSet rs;
+    memset(&rs, 0, sizeof(rs));
+    result_init(&rs);
+    query_execute(sql, &rs, session);
+    *out_count = 0;
+    for (int r = 0; r < rs.num_rows && *out_count < max_values; r++) {
+        if (rs.rows[r].fields[0] && !rs.rows[r].is_null[0]) {
+            strncpy(out_values[*out_count], rs.rows[r].fields[0], 255);
+            out_values[*out_count][255] = '\0';
+            (*out_count)++;
+        }
+    }
+    int err = rs.has_error;
+    result_free(&rs);
+    return err ? -1 : 0;
+}
+
 static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char *sqlCopy;
@@ -3227,6 +3250,12 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     volatile YY_BUFFER_STATE scan_buf = NULL;
     volatile int parse_mutex_held = 0;
     yyscan_t local_scanner = NULL;
+
+    /* Set subquery callback for recursive execution */
+    if (g_qctx) {
+        g_qctx->subquery_fn = evo_subquery_exec;
+        g_qctx->subquery_ctx = ctx;
+    }
 
     /* Make a mutable copy, strip \r */
     sqlCopy = strdup(sql);
@@ -3380,6 +3409,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         yylex_init(&local_scanner);
         scan_buf = yy_scan_string(sqlCopy, local_scanner);
         yyset_lineno(1, local_scanner);
+        /* Set lexer position tracking for subquery SQL extraction */
+        { extern __thread int g_lex_pos;
+          extern __thread const char *g_lex_input;
+          g_lex_pos = 0;
+          g_lex_input = sqlCopy; }
         parse_result = yyparse(local_scanner);
         yy_delete_buffer((YY_BUFFER_STATE)scan_buf, local_scanner);
         yylex_destroy(local_scanner);
@@ -4681,6 +4715,151 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     "Permission denied: insufficient privileges");
                 return;
             }
+        }
+    }
+
+    /* ── Pre-parse subquery materialization ── */
+    /* Scan for (SELECT ...) patterns, execute inner SELECT, replace with result */
+    {
+        char mat[8192];
+        strncpy(mat, sql, sizeof(mat) - 1);
+        mat[sizeof(mat) - 1] = '\0';
+        int changed = 1;
+        int iterations = 0;
+        while (changed && iterations < 10) {
+            changed = 0;
+            iterations++;
+            int len = (int)strlen(mat);
+            /* Scan for IN (SELECT, NOT IN (SELECT, op (SELECT, EXISTS (SELECT */
+            for (int i = 0; i < len - 8; i++) {
+                /* Skip string literals */
+                if (mat[i] == '\'') {
+                    i++;
+                    while (i < len && mat[i] != '\'') i++;
+                    continue;
+                }
+                /* Look for (SELECT at this position */
+                if (mat[i] != '(' || strncasecmp(mat + i + 1, "SELECT", 6) != 0)
+                    continue;
+                if (i + 7 < len && isalnum((unsigned char)mat[i + 7]))
+                    continue; /* not a keyword boundary */
+
+                /* Find balanced closing ')' */
+                int depth = 1, end = i + 1;
+                int in_str = 0;
+                while (end < len && depth > 0) {
+                    if (in_str) {
+                        if (mat[end] == '\'') in_str = 0;
+                        end++; continue;
+                    }
+                    if (mat[end] == '\'') { in_str = 1; end++; continue; }
+                    if (mat[end] == '(') depth++;
+                    else if (mat[end] == ')') depth--;
+                    if (depth > 0) end++;
+                }
+                if (depth != 0) break; /* unbalanced */
+
+                /* Extract inner SQL: mat[i+1 .. end-1] */
+                char inner[4096];
+                int ilen = end - i - 1;
+                if (ilen >= (int)sizeof(inner)) break;
+                memcpy(inner, mat + i + 1, ilen);
+                inner[ilen] = '\0';
+
+                /* Determine subquery type from context before '(' */
+                int subq_type = 0; /* 0=scalar, 1=IN, 2=NOT IN, 3=EXISTS, 4=NOT EXISTS */
+                int replace_start = i;
+                {
+                    int j = i - 1;
+                    while (j >= 0 && isspace((unsigned char)mat[j])) j--;
+                    if (j >= 1 && strncasecmp(mat + j - 1, "IN", 2) == 0 &&
+                        (j - 2 < 0 || !isalnum((unsigned char)mat[j - 2]))) {
+                        /* Check for NOT IN */
+                        int k = j - 2;
+                        while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                        if (k >= 2 && strncasecmp(mat + k - 2, "NOT", 3) == 0 &&
+                            (k - 3 < 0 || !isalnum((unsigned char)mat[k - 3]))) {
+                            subq_type = 2;
+                            replace_start = k - 2;
+                        } else {
+                            subq_type = 1;
+                            replace_start = j - 1;
+                        }
+                    } else if (j >= 5 && strncasecmp(mat + j - 5, "EXISTS", 6) == 0 &&
+                               (j - 6 < 0 || !isalnum((unsigned char)mat[j - 6]))) {
+                        int k = j - 6;
+                        while (k >= 0 && isspace((unsigned char)mat[k])) k--;
+                        if (k >= 2 && strncasecmp(mat + k - 2, "NOT", 3) == 0) {
+                            subq_type = 4;
+                            replace_start = k - 2;
+                        } else {
+                            subq_type = 3;
+                            replace_start = j - 5;
+                        }
+                    }
+                }
+
+                /* Execute inner SELECT */
+                ResultSet sub_rs;
+                memset(&sub_rs, 0, sizeof(sub_rs));
+                result_init(&sub_rs);
+                query_execute(inner, &sub_rs, ctx);
+
+                /* Build replacement string */
+                char replacement[4096];
+                replacement[0] = '\0';
+
+                if (subq_type == 1 || subq_type == 2) {
+                    /* IN / NOT IN → replace "IN (SELECT ...)" with "IN (v1, v2, ...)" */
+                    const char *prefix = (subq_type == 2) ? "NOT IN " : "IN ";
+                    strcpy(replacement, prefix);
+                    strcat(replacement, "(");
+                    if (sub_rs.num_rows == 0) {
+                        strcat(replacement, "NULL");
+                    } else {
+                        for (int r = 0; r < sub_rs.num_rows && r < 500; r++) {
+                            if (r > 0) strcat(replacement, ",");
+                            strcat(replacement, "'");
+                            if (sub_rs.rows[r].fields[0] && !sub_rs.rows[r].is_null[0])
+                                strncat(replacement, sub_rs.rows[r].fields[0],
+                                        sizeof(replacement) - strlen(replacement) - 10);
+                            strcat(replacement, "'");
+                        }
+                    }
+                    strcat(replacement, ")");
+                } else if (subq_type == 3 || subq_type == 4) {
+                    /* EXISTS / NOT EXISTS → replace with 1 or 0 */
+                    int exists = (sub_rs.num_rows > 0);
+                    if (subq_type == 4) exists = !exists;
+                    strcpy(replacement, exists ? "1" : "0");
+                } else {
+                    /* Scalar → replace (SELECT ...) with 'value' */
+                    if (sub_rs.num_rows > 0 && sub_rs.rows[0].fields[0] &&
+                        !sub_rs.rows[0].is_null[0]) {
+                        snprintf(replacement, sizeof(replacement), "'%s'",
+                                 sub_rs.rows[0].fields[0]);
+                    } else {
+                        strcpy(replacement, "NULL");
+                    }
+                }
+                result_free(&sub_rs);
+
+                /* Replace in mat: mat[replace_start .. end] → replacement */
+                int replace_len = end + 1 - replace_start;
+                int repl_len = (int)strlen(replacement);
+                int new_len = len - replace_len + repl_len;
+                if (new_len >= (int)sizeof(mat)) break;
+                memmove(mat + replace_start + repl_len,
+                        mat + replace_start + replace_len,
+                        len - replace_start - replace_len + 1);
+                memcpy(mat + replace_start, replacement, repl_len);
+                changed = 1;
+                break; /* restart scan from beginning */
+            }
+        }
+        if (strcmp(mat, sql) != 0) {
+            /* SQL was rewritten — use materialized version */
+            sql = mat;
         }
     }
 
