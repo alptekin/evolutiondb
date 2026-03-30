@@ -1136,7 +1136,7 @@
 
 ## Day 29 — String Functions & Multi-arg CONCAT
 
-### Task 56: ⬜ String Functions (Feature #48)
+### Task 56: ✅ String Functions (Feature #48)
 
 **Goal:** Add LEFT, RIGHT, LPAD, RPAD, REVERSE, REPEAT, INSTR, LOCATE, POSITION to expression engine.
 
@@ -1155,7 +1155,7 @@
 
 ---
 
-### Task 57: ⬜ CONCAT 3+ args & || Operator (Features #45, #46)
+### Task 57: ✅ CONCAT 3+ args & || Operator (Features #45, #46)
 
 **Goal:** Extend CONCAT to support 3+ arguments and add `||` string concatenation operator.
 
@@ -1176,7 +1176,7 @@
 
 ## Day 30 — Math & Date Functions
 
-### Task 58: ⬜ Math Functions (Feature #49)
+### Task 58: ✅ Math Functions (Feature #49)
 
 **Goal:** Implement ABS, CEIL, FLOOR, ROUND, POWER, SQRT, LOG, RAND.
 

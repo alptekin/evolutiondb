@@ -8,10 +8,10 @@ UNAME := $(shell uname -s 2>/dev/null || echo Windows)
 TLS ?= 0
 
 ifeq ($(UNAME),Linux)
-    LDFLAGS = -lpthread
+    LDFLAGS = -lpthread -lm
     EXE = evosql-server
 else ifeq ($(UNAME),Darwin)
-    LDFLAGS = -lpthread
+    LDFLAGS = -lpthread -lm
     EXE = evosql-server
 else
     # Fix linker temp-file permission issue on Windows

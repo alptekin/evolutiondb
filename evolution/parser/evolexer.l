@@ -184,7 +184,7 @@ MODIFY					{ return MODIFY; }
 MEDIUMTEXT				{ return MEDIUMTEXT; }
 
 
-MOD						{ return MOD; }
+MOD						{ int c = input(yyscanner); unput(c); if(c == '(') return FMOD; return MOD; }
 
 NATURAL					{ return NATURAL; }
 NODE					{ return NODE; }
@@ -359,6 +359,27 @@ EVO_SLEEP/"("			{ return FEVO_SLEEP; }
 EVO_JITTER/"("			{ return FEVO_JITTER; }
 DATE_ADD/"("			{ return FDATE_ADD; }
 DATE_SUB/"("			{ return FDATE_SUB; }
+LEFT/"("				{ return FLEFT; }
+RIGHT/"("				{ return FRIGHT; }
+LPAD/"("				{ return FLPAD; }
+RPAD/"("				{ return FRPAD; }
+REVERSE/"("				{ return FREVERSE; }
+REPEAT/"("				{ return FREPEAT; }
+INSTR/"("				{ return FINSTR; }
+LOCATE/"("				{ return FLOCATE; }
+ABS/"("					{ return FABS; }
+CEIL/"("				{ return FCEIL; }
+CEILING/"("				{ return FCEIL; }
+FLOOR/"("				{ return FFLOOR; }
+ROUND/"("				{ return FROUND; }
+POWER/"("				{ return FPOWER; }
+POW/"("					{ return FPOWER; }
+SQRT/"("				{ return FSQRT; }
+RAND/"("				{ return FRAND; }
+LOG/"("					{ return FLOG; }
+LOG10/"("				{ return FLOG10; }
+SIGN/"("				{ return FSIGN; }
+PI/"("					{ return FPI; }
 
 COUNT					{ int c = input(yyscanner); unput(c); if(c == '(') return FCOUNT; yylval->strval = strdup(yytext); return NAME; }  /* check trailing context manually */
 SUM						{ int c = input(yyscanner); unput(c); if(c == '(') return FSUM; yylval->strval = strdup(yytext); return NAME; }
