@@ -1056,7 +1056,7 @@
 
 ## Day 27 — JOIN (Part 1)
 
-### Task 52: ⬜ INNER JOIN Execution (Feature #1, Part 1)
+### Task 52: ✅ INNER JOIN Execution (Feature #1, Part 1)
 
 **Goal:** Grammar for JOINs exists. Implement INNER JOIN execution.
 
@@ -1075,7 +1075,7 @@
 
 ---
 
-### Task 53: ⬜ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
+### Task 53: ✅ LEFT / RIGHT / CROSS / NATURAL JOIN (Feature #1, Part 2)
 
 **Goal:** Extend join engine for LEFT, RIGHT, CROSS, and NATURAL joins.
 
