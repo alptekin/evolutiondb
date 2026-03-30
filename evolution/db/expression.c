@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -230,6 +231,49 @@ ExprNode *expr_make_evo_jitter(ExprNode *min_ms, ExprNode *max_ms)
     e->left = min_ms;
     e->right = max_ms;
     strcpy(e->display, "evo_jitter");
+    return e;
+}
+
+ExprNode *expr_make_func0(ExprNodeType type, const char *name)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = type;
+    snprintf(e->display, sizeof(e->display), "%s()", name);
+    return e;
+}
+
+ExprNode *expr_make_func1(ExprNodeType type, ExprNode *a, const char *name)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = type;
+    e->left = a;
+    snprintf(e->display, sizeof(e->display), "%s(%s)", name, a ? a->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_func2(ExprNodeType type, ExprNode *a, ExprNode *b, const char *name)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = type;
+    e->left = a;
+    e->right = b;
+    snprintf(e->display, sizeof(e->display), "%s(%s,%s)", name,
+             a ? a->display : "?", b ? b->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_func3(ExprNodeType type, ExprNode *a, ExprNode *b, ExprNode *c, const char *name)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = type;
+    e->left = a;
+    e->right = b;
+    e->extra = c;
+    snprintf(e->display, sizeof(e->display), "%s(...)", name);
     return e;
 }
 
@@ -1433,6 +1477,203 @@ int expr_evaluate(const ExprNode *e,
             }
         }
         snprintf(out_buf, buf_size, "%d", delay);
+        return 1;
+    }
+
+    /* ── String functions ── */
+    if (e->type == EXPR_LEFT) {
+        char s[512], n[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, s, sizeof(s)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, n, sizeof(n)) : 0;
+        if (!ok1 || strcmp(s, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int len = ok2 ? atoi(n) : 0;
+        if (len < 0) len = 0;
+        if (len > (int)strlen(s)) len = (int)strlen(s);
+        strncpy(out_buf, s, len);
+        out_buf[len] = '\0';
+        return 1;
+    }
+    if (e->type == EXPR_RIGHT) {
+        char s[512], n[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, s, sizeof(s)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, n, sizeof(n)) : 0;
+        if (!ok1 || strcmp(s, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int len = ok2 ? atoi(n) : 0;
+        int slen = (int)strlen(s);
+        if (len < 0) len = 0;
+        if (len > slen) len = slen;
+        strncpy(out_buf, s + slen - len, len);
+        out_buf[len] = '\0';
+        return 1;
+    }
+    if (e->type == EXPR_LPAD) {
+        char s[512], nstr[64], pad[64];
+        expr_evaluate(e->left, col_names, col_values, num_cols, s, sizeof(s));
+        expr_evaluate(e->right, col_names, col_values, num_cols, nstr, sizeof(nstr));
+        int padok = e->extra ? expr_evaluate(e->extra, col_names, col_values, num_cols, pad, sizeof(pad)) : 0;
+        if (!padok) strcpy(pad, " ");
+        int target = atoi(nstr);
+        int slen = (int)strlen(s);
+        int plen = (int)strlen(pad);
+        if (plen == 0) plen = 1;
+        out_buf[0] = '\0';
+        int pos = 0;
+        for (int i = 0; i < target - slen && pos < (int)buf_size - 1; i++)
+            out_buf[pos++] = pad[i % plen];
+        out_buf[pos] = '\0';
+        strncat(out_buf, s, buf_size - pos - 1);
+        return 1;
+    }
+    if (e->type == EXPR_RPAD) {
+        char s[512], nstr[64], pad[64];
+        expr_evaluate(e->left, col_names, col_values, num_cols, s, sizeof(s));
+        expr_evaluate(e->right, col_names, col_values, num_cols, nstr, sizeof(nstr));
+        int padok = e->extra ? expr_evaluate(e->extra, col_names, col_values, num_cols, pad, sizeof(pad)) : 0;
+        if (!padok) strcpy(pad, " ");
+        int target = atoi(nstr);
+        int slen = (int)strlen(s);
+        int plen = (int)strlen(pad);
+        if (plen == 0) plen = 1;
+        strncpy(out_buf, s, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        int pos = slen;
+        for (int i = 0; i < target - slen && pos < (int)buf_size - 1; i++)
+            out_buf[pos++] = pad[i % plen];
+        out_buf[pos] = '\0';
+        return 1;
+    }
+    if (e->type == EXPR_REVERSE) {
+        char s[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, s, sizeof(s)) : 0;
+        if (!ok || strcmp(s, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int slen = (int)strlen(s);
+        int i;
+        for (i = 0; i < slen && i < (int)buf_size - 1; i++)
+            out_buf[i] = s[slen - 1 - i];
+        out_buf[i] = '\0';
+        return 1;
+    }
+    if (e->type == EXPR_REPEAT) {
+        char s[512], n[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, s, sizeof(s)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, n, sizeof(n)) : 0;
+        if (!ok1 || strcmp(s, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int cnt = ok2 ? atoi(n) : 0;
+        out_buf[0] = '\0';
+        for (int i = 0; i < cnt; i++)
+            strncat(out_buf, s, buf_size - strlen(out_buf) - 1);
+        return 1;
+    }
+    if (e->type == EXPR_INSTR) {
+        char s[512], sub[256];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, s, sizeof(s)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, sub, sizeof(sub)) : 0;
+        if (!ok1 || !ok2) { snprintf(out_buf, buf_size, "0"); return 1; }
+        char *p = strstr(s, sub);
+        snprintf(out_buf, buf_size, "%d", p ? (int)(p - s) + 1 : 0);
+        return 1;
+    }
+    if (e->type == EXPR_LOCATE) {
+        /* LOCATE(substr, str) — same as INSTR but args reversed */
+        char sub[256], s[512];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, sub, sizeof(sub)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, s, sizeof(s)) : 0;
+        if (!ok1 || !ok2) { snprintf(out_buf, buf_size, "0"); return 1; }
+        char *p = strstr(s, sub);
+        snprintf(out_buf, buf_size, "%d", p ? (int)(p - s) + 1 : 0);
+        return 1;
+    }
+
+    /* ── Math functions ── */
+    if (e->type == EXPR_ABS) {
+        char v[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        double d = strtod(v, NULL);
+        snprintf(out_buf, buf_size, "%g", fabs(d));
+        return 1;
+    }
+    if (e->type == EXPR_CEIL) {
+        char v[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%g", ceil(strtod(v, NULL)));
+        return 1;
+    }
+    if (e->type == EXPR_FLOOR) {
+        char v[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%g", floor(strtod(v, NULL)));
+        return 1;
+    }
+    if (e->type == EXPR_ROUND) {
+        char v[64], d[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int digits = 0;
+        if (e->right) {
+            expr_evaluate(e->right, col_names, col_values, num_cols, d, sizeof(d));
+            digits = atoi(d);
+        }
+        double val = strtod(v, NULL);
+        double factor = pow(10.0, digits);
+        snprintf(out_buf, buf_size, "%g", round(val * factor) / factor);
+        return 1;
+    }
+    if (e->type == EXPR_POWER) {
+        char a[64], b[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, a, sizeof(a)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, b, sizeof(b)) : 0;
+        if (!ok1 || !ok2) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%g", pow(strtod(a, NULL), strtod(b, NULL)));
+        return 1;
+    }
+    if (e->type == EXPR_SQRT) {
+        char v[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%g", sqrt(strtod(v, NULL)));
+        return 1;
+    }
+    if (e->type == EXPR_MODFN) {
+        char a[64], b[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, a, sizeof(a)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, b, sizeof(b)) : 0;
+        if (!ok1 || !ok2) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        double db = strtod(b, NULL);
+        if (db == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%g", fmod(strtod(a, NULL), db));
+        return 1;
+    }
+    if (e->type == EXPR_RAND) {
+        snprintf(out_buf, buf_size, "%.17g", (double)rand() / RAND_MAX);
+        return 1;
+    }
+    if (e->type == EXPR_LOG) {
+        char v[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%g", log(strtod(v, NULL)));
+        return 1;
+    }
+    if (e->type == EXPR_LOG10) {
+        char v[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%g", log10(strtod(v, NULL)));
+        return 1;
+    }
+    if (e->type == EXPR_SIGN) {
+        char v[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        double d = strtod(v, NULL);
+        snprintf(out_buf, buf_size, "%d", d > 0 ? 1 : d < 0 ? -1 : 0);
+        return 1;
+    }
+    if (e->type == EXPR_PI) {
+        snprintf(out_buf, buf_size, "%.15g", 3.141592653589793);
         return 1;
     }
 
