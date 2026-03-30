@@ -1035,7 +1035,7 @@
 
 ---
 
-### Task 51: ⬜ ORDER BY Expression & Ordinal Position (Feature #35)
+### Task 51: ✅ ORDER BY Expression & Ordinal Position (Feature #35)
 
 **Goal:** ORDER BY currently only accepts column names. Support expressions and ordinal positions (`ORDER BY 1`, `ORDER BY col+1`).
 
