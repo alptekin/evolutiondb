@@ -93,6 +93,17 @@ typedef enum {
     EXPR_SIGN,            /* SIGN(x) — -1, 0, 1 */
     EXPR_PI,              /* PI() — 3.14159... */
     EXPR_CONCAT_MULTI,    /* CONCAT(a, b, c, ...) — 3+ args */
+    /* Date functions */
+    EXPR_NOW,             /* NOW() */
+    EXPR_DATE_ADD,        /* DATE_ADD(date, interval) */
+    EXPR_DATE_SUB,        /* DATE_SUB(date, interval) */
+    EXPR_DATEDIFF,        /* DATEDIFF(date1, date2) */
+    EXPR_YEAR,            /* YEAR(date) */
+    EXPR_MONTH,           /* MONTH(date) */
+    EXPR_DAY,             /* DAY(date) */
+    EXPR_HOUR,            /* HOUR(datetime) */
+    EXPR_MINUTE,          /* MINUTE(datetime) */
+    EXPR_SECOND,          /* SECOND(datetime) */
     /* Subqueries */
     EXPR_SUBQUERY,        /* (SELECT ...) — scalar, returns single value */
     EXPR_IN_SUBQUERY,     /* expr IN (SELECT ...) */

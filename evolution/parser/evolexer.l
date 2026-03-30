@@ -17,8 +17,6 @@
 	__thread int g_lex_pos = 0;
 	__thread const char *g_lex_input = NULL;
 	__thread int g_in_subquery = 0;
-
-	#define YY_USER_ACTION  g_lex_pos += yyleng;
 %}
 %x COMMENT
 %s BTWMODE
@@ -302,7 +300,7 @@ WHERE					{ return WHERE; }
 WITH					{ return WITH; }
 
 XOR						{ return XOR; }
-YEAR					{ return YEAR; }
+YEAR					{ int c = input(yyscanner); unput(c); if(c == '(') return FYEAR; return YEAR; }
 YEAR_MONTH				{ return YEAR_MONTH; }
 ZEROFILL				{ return ZEROFILL; }
 
@@ -366,6 +364,8 @@ EVO_SLEEP/"("			{ return FEVO_SLEEP; }
 EVO_JITTER/"("			{ return FEVO_JITTER; }
 DATE_ADD/"("			{ return FDATE_ADD; }
 DATE_SUB/"("			{ return FDATE_SUB; }
+DATEDIFF/"("			{ return FDATEDIFF; }
+NOW/"("					{ return FNOW; }
 LEFT/"("				{ return FLEFT; }
 RIGHT/"("				{ return FRIGHT; }
 LPAD/"("				{ return FLPAD; }

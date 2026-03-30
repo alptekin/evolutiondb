@@ -1723,6 +1723,67 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
 
+    /* ── Date functions ── */
+    if (e->type == EXPR_NOW) {
+        time_t t = time(NULL);
+        struct tm *tm = localtime(&t);
+        snprintf(out_buf, buf_size, "%04d-%02d-%02d %02d:%02d:%02d",
+                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+                 tm->tm_hour, tm->tm_min, tm->tm_sec);
+        return 1;
+    }
+    if (e->type == EXPR_DATEDIFF) {
+        char d1[64], d2[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, d1, sizeof(d1)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, d2, sizeof(d2)) : 0;
+        if (!ok1 || !ok2) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        struct tm t1 = {0}, t2 = {0};
+        sscanf(d1, "%d-%d-%d", &t1.tm_year, &t1.tm_mon, &t1.tm_mday);
+        sscanf(d2, "%d-%d-%d", &t2.tm_year, &t2.tm_mon, &t2.tm_mday);
+        t1.tm_year -= 1900; t1.tm_mon -= 1;
+        t2.tm_year -= 1900; t2.tm_mon -= 1;
+        time_t tt1 = mktime(&t1), tt2 = mktime(&t2);
+        snprintf(out_buf, buf_size, "%d", (int)(difftime(tt1, tt2) / 86400));
+        return 1;
+    }
+    if (e->type == EXPR_DATE_ADD || e->type == EXPR_DATE_SUB) {
+        char dt[64], nstr[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, dt, sizeof(dt)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, nstr, sizeof(nstr)) : 0;
+        if (!ok1 || !ok2) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int n = atoi(nstr);
+        if (e->type == EXPR_DATE_SUB) n = -n;
+        struct tm tm = {0};
+        sscanf(dt, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday);
+        tm.tm_year -= 1900; tm.tm_mon -= 1;
+        const char *unit = e->right ? e->right->display : "DAY";
+        if (strcasecmp(unit, "YEAR") == 0) tm.tm_year += n;
+        else if (strcasecmp(unit, "MONTH") == 0) tm.tm_mon += n;
+        else if (strcasecmp(unit, "HOUR") == 0) tm.tm_hour += n;
+        else tm.tm_mday += n;
+        mktime(&tm);
+        snprintf(out_buf, buf_size, "%04d-%02d-%02d",
+                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+        return 1;
+    }
+    if (e->type == EXPR_YEAR || e->type == EXPR_MONTH || e->type == EXPR_DAY ||
+        e->type == EXPR_HOUR || e->type == EXPR_MINUTE || e->type == EXPR_SECOND) {
+        char dt[64];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, dt, sizeof(dt)) : 0;
+        if (!ok || strcmp(dt, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int yr = 0, mo = 0, dy = 0, hr = 0, mi = 0, se = 0;
+        sscanf(dt, "%d-%d-%d %d:%d:%d", &yr, &mo, &dy, &hr, &mi, &se);
+        int val = 0;
+        if (e->type == EXPR_YEAR) val = yr;
+        else if (e->type == EXPR_MONTH) val = mo;
+        else if (e->type == EXPR_DAY) val = dy;
+        else if (e->type == EXPR_HOUR) val = hr;
+        else if (e->type == EXPR_MINUTE) val = mi;
+        else if (e->type == EXPR_SECOND) val = se;
+        snprintf(out_buf, buf_size, "%d", val);
+        return 1;
+    }
+
     /* ── Subquery evaluation ── */
     if (e->type == EXPR_SUBQUERY) {
         if (!e->subquery_sql || !g_qctx || !g_qctx->subquery_fn) {
