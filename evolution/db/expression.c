@@ -277,6 +277,52 @@ ExprNode *expr_make_func3(ExprNodeType type, ExprNode *a, ExprNode *b, ExprNode 
     return e;
 }
 
+/* ── Subquery constructors ── */
+
+ExprNode *expr_make_subquery(const char *sql)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_SUBQUERY;
+    e->subquery_sql = sql ? strdup(sql) : NULL;
+    snprintf(e->display, sizeof(e->display), "(SELECT ...)");
+    return e;
+}
+
+ExprNode *expr_make_in_subquery(ExprNode *left, const char *sql)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_IN_SUBQUERY;
+    e->left = left;
+    e->subquery_sql = sql ? strdup(sql) : NULL;
+    snprintf(e->display, sizeof(e->display), "IN(SELECT ...)");
+    return e;
+}
+
+ExprNode *expr_make_not_in_subquery(ExprNode *left, const char *sql)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_NOT_IN_SUBQUERY;
+    e->left = left;
+    e->subquery_sql = sql ? strdup(sql) : NULL;
+    snprintf(e->display, sizeof(e->display), "NOT IN(SELECT ...)");
+    return e;
+}
+
+ExprNode *expr_make_exists_subquery(const char *sql, int negated)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_EXISTS_SUBQUERY;
+    e->val.intval = negated;
+    e->subquery_sql = sql ? strdup(sql) : NULL;
+    snprintf(e->display, sizeof(e->display), "%sEXISTS(SELECT ...)",
+             negated ? "NOT " : "");
+    return e;
+}
+
 void snowflake_init(void)
 {
     char *env = getenv("EVOSQL_MACHINE_ID");
@@ -1674,6 +1720,61 @@ int expr_evaluate(const ExprNode *e,
     }
     if (e->type == EXPR_PI) {
         snprintf(out_buf, buf_size, "%.15g", 3.141592653589793);
+        return 1;
+    }
+
+    /* ── Subquery evaluation ── */
+    if (e->type == EXPR_SUBQUERY) {
+        if (!e->subquery_sql || !g_qctx || !g_qctx->subquery_fn) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        char vals[1][256];
+        int cnt = 0;
+        g_qctx->subquery_fn(e->subquery_sql, vals, &cnt, 1, g_qctx->subquery_ctx);
+        if (cnt > 0)
+            strncpy(out_buf, vals[0], buf_size);
+        else
+            strncpy(out_buf, NULL_MARKER, buf_size);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
+    if (e->type == EXPR_IN_SUBQUERY || e->type == EXPR_NOT_IN_SUBQUERY) {
+        if (!e->subquery_sql || !g_qctx || !g_qctx->subquery_fn) {
+            strncpy(out_buf, "f", buf_size);
+            return 1;
+        }
+        char lhs[512];
+        int lhs_ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                              num_cols, lhs, sizeof(lhs)) : 0;
+        if (!lhs_ok || strcmp(lhs, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        char vals[256][256];
+        int cnt = 0;
+        g_qctx->subquery_fn(e->subquery_sql, vals, &cnt, 256, g_qctx->subquery_ctx);
+        int found = 0;
+        for (int i = 0; i < cnt; i++) {
+            if (strcmp(lhs, vals[i]) == 0) { found = 1; break; }
+        }
+        if (e->type == EXPR_NOT_IN_SUBQUERY) found = !found;
+        strncpy(out_buf, found ? "t" : "f", buf_size);
+        return 1;
+    }
+
+    if (e->type == EXPR_EXISTS_SUBQUERY) {
+        if (!e->subquery_sql || !g_qctx || !g_qctx->subquery_fn) {
+            strncpy(out_buf, "f", buf_size);
+            return 1;
+        }
+        char vals[1][256];
+        int cnt = 0;
+        g_qctx->subquery_fn(e->subquery_sql, vals, &cnt, 1, g_qctx->subquery_ctx);
+        int exists = (cnt > 0);
+        if (e->val.intval) exists = !exists; /* NOT EXISTS */
+        strncpy(out_buf, exists ? "t" : "f", buf_size);
         return 1;
     }
 

@@ -92,7 +92,12 @@ typedef enum {
     EXPR_LOG10,           /* LOG10(x) */
     EXPR_SIGN,            /* SIGN(x) — -1, 0, 1 */
     EXPR_PI,              /* PI() — 3.14159... */
-    EXPR_CONCAT_MULTI     /* CONCAT(a, b, c, ...) — 3+ args */
+    EXPR_CONCAT_MULTI,    /* CONCAT(a, b, c, ...) — 3+ args */
+    /* Subqueries */
+    EXPR_SUBQUERY,        /* (SELECT ...) — scalar, returns single value */
+    EXPR_IN_SUBQUERY,     /* expr IN (SELECT ...) */
+    EXPR_NOT_IN_SUBQUERY, /* expr NOT IN (SELECT ...) */
+    EXPR_EXISTS_SUBQUERY  /* EXISTS (SELECT ...) / NOT EXISTS */
 } ExprNodeType;
 
 typedef struct ExprNode {
@@ -106,6 +111,7 @@ typedef struct ExprNode {
     struct ExprNode *left;      /* left operand (binary ops) or sole operand (NEG) */
     struct ExprNode *right;     /* right operand (binary ops) */
     struct ExprNode *extra;     /* CASE_WHEN: else/next branch */
+    char *subquery_sql;         /* heap-allocated subquery SQL (EXPR_*_SUBQUERY) */
     char display[256];          /* display label / alias */
 } ExprNode;
 
@@ -166,6 +172,12 @@ ExprNode *expr_make_func0(ExprNodeType type, const char *name);
 ExprNode *expr_make_func1(ExprNodeType type, ExprNode *a, const char *name);
 ExprNode *expr_make_func2(ExprNodeType type, ExprNode *a, ExprNode *b, const char *name);
 ExprNode *expr_make_func3(ExprNodeType type, ExprNode *a, ExprNode *b, ExprNode *c, const char *name);
+
+/* Subquery constructors */
+ExprNode *expr_make_subquery(const char *sql);
+ExprNode *expr_make_in_subquery(ExprNode *left, const char *sql);
+ExprNode *expr_make_not_in_subquery(ExprNode *left, const char *sql);
+ExprNode *expr_make_exists_subquery(const char *sql, int negated);
 
 /* Constants for expression array sizes */
 #define MAX_CASE_WHENS 32
