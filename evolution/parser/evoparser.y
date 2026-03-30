@@ -268,6 +268,8 @@
 %token FSUBSTRING
 %token FTRIM
 %token FDATE_ADD FDATE_SUB
+%token FLEFT FRIGHT FLPAD FRPAD FREVERSE FREPEAT FINSTR FLOCATE
+%token FABS FCEIL FFLOOR FROUND FPOWER FSQRT FMOD FRAND FLOG FLOG10 FSIGN FPI
 %token FCOUNT
 %token FSUM
 %token FAVG
@@ -472,6 +474,29 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FCONCAT '(' expr ',' expr ')'                    { emit("CALL 2 CONCAT"); $$ = expr_make_concat($3, $5); }
 | FREPLACE '(' expr ',' expr ',' expr ')'          { emit("CALL 3 REPLACE"); $$ = expr_make_replace($3, $5, $7); }
 | FCOALESCE '(' expr ',' expr ')'                  { emit("CALL 2 COALESCE"); $$ = expr_make_coalesce($3, $5); }
+| FLEFT '(' expr ',' expr ')'                      { emit("CALL 2 LEFT"); $$ = expr_make_func2(EXPR_LEFT, $3, $5, "LEFT"); }
+| FRIGHT '(' expr ',' expr ')'                     { emit("CALL 2 RIGHT"); $$ = expr_make_func2(EXPR_RIGHT, $3, $5, "RIGHT"); }
+| FLPAD '(' expr ',' expr ',' expr ')'             { emit("CALL 3 LPAD"); $$ = expr_make_func3(EXPR_LPAD, $3, $5, $7, "LPAD"); }
+| FRPAD '(' expr ',' expr ',' expr ')'             { emit("CALL 3 RPAD"); $$ = expr_make_func3(EXPR_RPAD, $3, $5, $7, "RPAD"); }
+| FREVERSE '(' expr ')'                            { emit("CALL 1 REVERSE"); $$ = expr_make_func1(EXPR_REVERSE, $3, "REVERSE"); }
+| FREPEAT '(' expr ',' expr ')'                    { emit("CALL 2 REPEAT"); $$ = expr_make_func2(EXPR_REPEAT, $3, $5, "REPEAT"); }
+| FINSTR '(' expr ',' expr ')'                     { emit("CALL 2 INSTR"); $$ = expr_make_func2(EXPR_INSTR, $3, $5, "INSTR"); }
+| FLOCATE '(' expr ',' expr ')'                    { emit("CALL 2 LOCATE"); $$ = expr_make_func2(EXPR_LOCATE, $3, $5, "LOCATE"); }
+| FABS '(' expr ')'                                { emit("CALL 1 ABS"); $$ = expr_make_func1(EXPR_ABS, $3, "ABS"); }
+| FCEIL '(' expr ')'                               { emit("CALL 1 CEIL"); $$ = expr_make_func1(EXPR_CEIL, $3, "CEIL"); }
+| FFLOOR '(' expr ')'                              { emit("CALL 1 FLOOR"); $$ = expr_make_func1(EXPR_FLOOR, $3, "FLOOR"); }
+| FROUND '(' expr ',' expr ')'                     { emit("CALL 2 ROUND"); $$ = expr_make_func2(EXPR_ROUND, $3, $5, "ROUND"); }
+| FROUND '(' expr ')'                              { emit("CALL 1 ROUND"); $$ = expr_make_func1(EXPR_ROUND, $3, "ROUND"); }
+| FPOWER '(' expr ',' expr ')'                     { emit("CALL 2 POWER"); $$ = expr_make_func2(EXPR_POWER, $3, $5, "POWER"); }
+| FSQRT '(' expr ')'                               { emit("CALL 1 SQRT"); $$ = expr_make_func1(EXPR_SQRT, $3, "SQRT"); }
+| FMOD '(' expr ',' expr ')'                       { emit("CALL 2 MOD"); $$ = expr_make_func2(EXPR_MODFN, $3, $5, "MOD"); }
+| FRAND '(' ')'                                    { emit("CALL 0 RAND"); $$ = expr_make_func0(EXPR_RAND, "RAND"); }
+| FLOG '(' expr ')'                                { emit("CALL 1 LOG"); $$ = expr_make_func1(EXPR_LOG, $3, "LOG"); }
+| FLOG10 '(' expr ')'                              { emit("CALL 1 LOG10"); $$ = expr_make_func1(EXPR_LOG10, $3, "LOG10"); }
+| FSIGN '(' expr ')'                               { emit("CALL 1 SIGN"); $$ = expr_make_func1(EXPR_SIGN, $3, "SIGN"); }
+| FPI '(' ')'                                      { emit("CALL 0 PI"); $$ = expr_make_func0(EXPR_PI, "PI"); }
+| FCONCAT '(' expr ',' expr ',' expr ')'           { emit("CALL 3 CONCAT"); $$ = expr_make_concat(expr_make_concat($3, $5), $7); }
+| FCONCAT '(' expr ',' expr ',' expr ',' expr ')'  { emit("CALL 4 CONCAT"); $$ = expr_make_concat(expr_make_concat(expr_make_concat($3, $5), $7), $9); }
 | FGEN_RANDOM_UUID '(' ')'                         {
                                                         emit("CALL 0 GEN_RANDOM_UUID");
                                                         $$ = expr_make_gen_random_uuid();

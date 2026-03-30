@@ -69,7 +69,30 @@ typedef enum {
     EXPR_EVO_SLEEP,          /* evo_sleep(ms) — delay function */
     EXPR_EVO_JITTER,         /* evo_jitter(min_ms, max_ms) — random delay */
     EXPR_FUNC_CALL,       /* function call (future) */
-    EXPR_STAR             /* SELECT * (sentinel) */
+    EXPR_STAR,            /* SELECT * (sentinel) */
+    /* String functions */
+    EXPR_LEFT,            /* LEFT(str, n) */
+    EXPR_RIGHT,           /* RIGHT(str, n) */
+    EXPR_LPAD,            /* LPAD(str, len, pad) */
+    EXPR_RPAD,            /* RPAD(str, len, pad) */
+    EXPR_REVERSE,         /* REVERSE(str) */
+    EXPR_REPEAT,          /* REPEAT(str, n) */
+    EXPR_INSTR,           /* INSTR(str, substr) */
+    EXPR_LOCATE,          /* LOCATE(substr, str) */
+    /* Math functions */
+    EXPR_ABS,             /* ABS(x) */
+    EXPR_CEIL,            /* CEIL(x) / CEILING(x) */
+    EXPR_FLOOR,           /* FLOOR(x) */
+    EXPR_ROUND,           /* ROUND(x [, d]) */
+    EXPR_POWER,           /* POWER(x, y) / POW(x, y) */
+    EXPR_SQRT,            /* SQRT(x) */
+    EXPR_MODFN,           /* MOD(x, y) — function form */
+    EXPR_RAND,            /* RAND() */
+    EXPR_LOG,             /* LOG(x) — natural log */
+    EXPR_LOG10,           /* LOG10(x) */
+    EXPR_SIGN,            /* SIGN(x) — -1, 0, 1 */
+    EXPR_PI,              /* PI() — 3.14159... */
+    EXPR_CONCAT_MULTI     /* CONCAT(a, b, c, ...) — 3+ args */
 } ExprNodeType;
 
 typedef struct ExprNode {
@@ -137,6 +160,12 @@ ExprNode *expr_make_snowflake_id(void);
 ExprNode *expr_make_last_insert_id(void);
 ExprNode *expr_make_evo_sleep(ExprNode *duration);
 ExprNode *expr_make_evo_jitter(ExprNode *min_ms, ExprNode *max_ms);
+
+/* Generic function constructors */
+ExprNode *expr_make_func0(ExprNodeType type, const char *name);
+ExprNode *expr_make_func1(ExprNodeType type, ExprNode *a, const char *name);
+ExprNode *expr_make_func2(ExprNodeType type, ExprNode *a, ExprNode *b, const char *name);
+ExprNode *expr_make_func3(ExprNodeType type, ExprNode *a, ExprNode *b, ExprNode *c, const char *name);
 
 /* Constants for expression array sizes */
 #define MAX_CASE_WHENS 32
