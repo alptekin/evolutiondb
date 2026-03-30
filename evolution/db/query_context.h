@@ -246,6 +246,10 @@ typedef struct QueryContext {
     uint32_t       mvcc_xid;
     /* Distributed: target node for CREATE TABLE ON NODE N */
     uint32_t       create_on_node_id;
+    /* Subquery execution callback (set by adaptor, called by expression engine) */
+    int          (*subquery_fn)(const char *sql, char out_values[][256],
+                                int *out_count, int max_values, void *ctx);
+    void          *subquery_ctx;  /* SessionCtx* cast to void* */
 } QueryContext;
 
 /* ================================================================

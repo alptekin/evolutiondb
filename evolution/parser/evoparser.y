@@ -13,6 +13,31 @@
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
 
+	/* Subquery SQL extraction helpers */
+	extern __thread int g_lex_pos;
+	extern __thread const char *g_lex_input;
+	extern __thread int g_in_subquery;
+	static __thread int g_subq_mark = 0;
+
+	static char *evo_extract_subq_sql(void) {
+		if (!g_lex_input) return strdup("");
+		int end = g_lex_pos - 1; /* exclude closing ')' */
+		int len = end - g_subq_mark;
+		if (len <= 0) return strdup("");
+		char *sql = (char *)malloc(len + 1);
+		if (!sql) return strdup("");
+		memcpy(sql, g_lex_input + g_subq_mark, len);
+		sql[len] = '\0';
+		/* Trim leading/trailing whitespace */
+		char *s = sql;
+		while (*s && (*s == ' ' || *s == '\t' || *s == '\n')) s++;
+		if (s != sql) memmove(sql, s, strlen(s) + 1);
+		int sl = (int)strlen(sql);
+		while (sl > 0 && (sql[sl-1] == ' ' || sql[sl-1] == '\t' || sql[sl-1] == '\n'))
+			sql[--sl] = '\0';
+		return sql;
+	}
+
 	/* Forward declare yylex for reentrant parser */
 	#ifndef YY_DECL
 	union YYSTYPE;
@@ -416,11 +441,22 @@ expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3)
         emit("CMP %d", $2);
         $$ = expr_make_cmp($2, $1, $3);
     }
-/* recursive selects and comparisons thereto */
-| expr COMPARISON '(' select_stmt ')'                                           { emit("CMPSELECT %d", $2); $$ = $1; }
-| expr COMPARISON ANY '(' select_stmt ')'                                       { emit("CMPANYSELECT %d", $2); $$ = $1; }
-| expr COMPARISON SOME '(' select_stmt ')'                                      { emit("CMPANYSELECT %d", $2); $$ = $1; }
-| expr COMPARISON ALL '(' select_stmt ')'                                       { emit("CMPALLSELECT %d", $2); $$ = $1; }
+/* scalar subquery comparison: expr op (SELECT ...) */
+| expr COMPARISON '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
+    {
+        g_in_subquery = 0;
+        char *sql = evo_extract_subq_sql();
+        emit("CMPSELECT %d", $2);
+        ExprNode *sub = expr_make_subquery(sql);
+        $$ = expr_make_cmp($2, $1, sub);
+        free(sql);
+    }
+| expr COMPARISON ANY '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
+    { g_in_subquery = 0; emit("CMPANYSELECT %d", $2); $$ = $1; /* TODO: ANY/SOME/ALL */ }
+| expr COMPARISON SOME '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
+    { g_in_subquery = 0; emit("CMPANYSELECT %d", $2); $$ = $1; }
+| expr COMPARISON ALL '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
+    { g_in_subquery = 0; emit("CMPALLSELECT %d", $2); $$ = $1; }
 ;
 
 expr: expr IS NULLX								{ emit("ISNULL"); $$ = expr_make_is_null($1); }
@@ -444,9 +480,30 @@ opt_val_list: /* nil */								{ $$ = 0; }
 
 expr: expr IN '(' { g_expr.inListCount = 0; } val_list ')'                           { emit("ISIN %d", $5); $$ = expr_make_in($1, g_expr.inListExprs, g_expr.inListCount); }
 | expr NOT IN '(' { g_expr.inListCount = 0; } val_list ')'                           { emit("ISIN %d", $6); emit("NOT"); $$ = expr_make_not_in($1, g_expr.inListExprs, g_expr.inListCount); }
-| expr IN '(' select_stmt ')'                                                   { emit("CMPANYSELECT 4"); $$ = $1; }
-| expr NOT IN '(' select_stmt ')'                                               { emit("CMPALLSELECT 3"); $$ = $1; }
-| EXISTS '(' select_stmt ')'                                                    { emit("EXISTSSELECT"); if($1)emit("NOT"); $$ = NULL; }
+| expr IN '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
+    {
+        g_in_subquery = 0;
+        char *sql = evo_extract_subq_sql();
+        emit("INSELECT");
+        $$ = expr_make_in_subquery($1, sql);
+        free(sql);
+    }
+| expr NOT IN '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
+    {
+        g_in_subquery = 0;
+        char *sql = evo_extract_subq_sql();
+        emit("NOTINSELECT");
+        $$ = expr_make_not_in_subquery($1, sql);
+        free(sql);
+    }
+| EXISTS '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
+    {
+        g_in_subquery = 0;
+        char *sql = evo_extract_subq_sql();
+        emit("EXISTSSELECT");
+        $$ = expr_make_exists_subquery(sql, $1);
+        free(sql);
+    }
 ;
 
 /* regular functions */
