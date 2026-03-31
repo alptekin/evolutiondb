@@ -129,6 +129,7 @@ FOREIGN					{ return FOREIGN; }
 
 FROM					{ return FROM; }
 FULL					{ return FULL; }
+GROUP_CONCAT/"("		{ return FGROUP_CONCAT; }
 FULLTEXT				{ return FULLTEXT; }
 
 GENERATED				{ return GENERATED; }
@@ -244,6 +245,7 @@ SKIP					{ return SKIP; }
 SELECT					{ return SELECT; }
 
 
+SEPARATOR				{ return SEPARATOR; }
 SET						{ return SET; }
 
 SIMPLE					{ return SIMPLE; }

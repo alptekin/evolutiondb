@@ -6,6 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <regex.h>
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -772,7 +773,8 @@ int expr_is_aggregate(const ExprNode *e)
     if (!e) return 0;
     return (e->type == EXPR_COUNT_STAR || e->type == EXPR_COUNT ||
             e->type == EXPR_SUM || e->type == EXPR_AVG ||
-            e->type == EXPR_MIN || e->type == EXPR_MAX);
+            e->type == EXPR_MIN || e->type == EXPR_MAX ||
+            e->type == EXPR_GROUP_CONCAT);
 }
 
 /* ---- Collect aggregate nodes from an expression tree ---- */
@@ -1720,6 +1722,28 @@ int expr_evaluate(const ExprNode *e,
     }
     if (e->type == EXPR_PI) {
         snprintf(out_buf, buf_size, "%.15g", 3.141592653589793);
+        return 1;
+    }
+
+    /* ── REGEXP ── */
+    if (e->type == EXPR_REGEXP || e->type == EXPR_NOT_REGEXP) {
+        char str[512], pat[256];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, str, sizeof(str)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, pat, sizeof(pat)) : 0;
+        if (!ok1 || !ok2 || strcmp(str, NULL_MARKER) == 0 || strcmp(pat, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        regex_t regex;
+        int rc = regcomp(&regex, pat, REG_EXTENDED | REG_NOSUB);
+        if (rc != 0) {
+            strncpy(out_buf, "f", buf_size);
+            return 1;
+        }
+        int match = (regexec(&regex, str, 0, NULL, 0) == 0);
+        regfree(&regex);
+        if (e->type == EXPR_NOT_REGEXP) match = !match;
+        strncpy(out_buf, match ? "t" : "f", buf_size);
         return 1;
     }
 

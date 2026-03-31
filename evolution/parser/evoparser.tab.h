@@ -275,23 +275,25 @@
      FIFNULL = 491,
      FIF = 492,
      UNKNOWN = 493,
-     FCOUNT = 494,
-     FSUM = 495,
-     FAVG = 496,
-     FMIN = 497,
-     FMAX = 498,
-     FUPPER = 499,
-     FLOWER = 500,
-     FLENGTH = 501,
-     FCONCAT = 502,
-     FREPLACE = 503,
-     FCOALESCE = 504,
-     FGEN_RANDOM_UUID = 505,
-     FGEN_RANDOM_UUID_V7 = 506,
-     FSNOWFLAKE_ID = 507,
-     FLAST_INSERT_ID = 508,
-     FEVO_SLEEP = 509,
-     FEVO_JITTER = 510
+     FGROUP_CONCAT = 494,
+     SEPARATOR = 495,
+     FCOUNT = 496,
+     FSUM = 497,
+     FAVG = 498,
+     FMIN = 499,
+     FMAX = 500,
+     FUPPER = 501,
+     FLOWER = 502,
+     FLENGTH = 503,
+     FCONCAT = 504,
+     FREPLACE = 505,
+     FCOALESCE = 506,
+     FGEN_RANDOM_UUID = 507,
+     FGEN_RANDOM_UUID_V7 = 508,
+     FSNOWFLAKE_ID = 509,
+     FLAST_INSERT_ID = 510,
+     FEVO_SLEEP = 511,
+     FEVO_JITTER = 512
    };
 #endif
 /* Tokens.  */
@@ -531,23 +533,25 @@
 #define FIFNULL 491
 #define FIF 492
 #define UNKNOWN 493
-#define FCOUNT 494
-#define FSUM 495
-#define FAVG 496
-#define FMIN 497
-#define FMAX 498
-#define FUPPER 499
-#define FLOWER 500
-#define FLENGTH 501
-#define FCONCAT 502
-#define FREPLACE 503
-#define FCOALESCE 504
-#define FGEN_RANDOM_UUID 505
-#define FGEN_RANDOM_UUID_V7 506
-#define FSNOWFLAKE_ID 507
-#define FLAST_INSERT_ID 508
-#define FEVO_SLEEP 509
-#define FEVO_JITTER 510
+#define FGROUP_CONCAT 494
+#define SEPARATOR 495
+#define FCOUNT 496
+#define FSUM 497
+#define FAVG 498
+#define FMIN 499
+#define FMAX 500
+#define FUPPER 501
+#define FLOWER 502
+#define FLENGTH 503
+#define FCONCAT 504
+#define FREPLACE 505
+#define FCOALESCE 506
+#define FGEN_RANDOM_UUID 507
+#define FGEN_RANDOM_UUID_V7 508
+#define FSNOWFLAKE_ID 509
+#define FLAST_INSERT_ID 510
+#define FEVO_SLEEP 511
+#define FEVO_JITTER 512
 
 
 
@@ -563,7 +567,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 567 "parser/evoparser.tab.h"
+#line 571 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
