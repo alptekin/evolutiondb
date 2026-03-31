@@ -295,6 +295,7 @@
 %token FLEFT FRIGHT FLPAD FRPAD FREVERSE FREPEAT FINSTR FLOCATE
 %token FABS FCEIL FFLOOR FROUND FPOWER FSQRT FMOD FRAND FLOG FLOG10 FSIGN FPI
 %token FCAST FCONVERT FNULLIF FIFNULL FIF UNKNOWN
+%token FGROUP_CONCAT SEPARATOR
 %token FCOUNT
 %token FSUM
 %token FAVG
@@ -518,6 +519,8 @@ expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); $$ = expr_make_count_star(); 
 | FAVG '(' expr ')'									{ emit(" CALL 1 AVG"); $$ = expr_make_avg($3); }
 | FMIN '(' expr ')'									{ emit(" CALL 1 MIN"); $$ = expr_make_min($3); }
 | FMAX '(' expr ')'									{ emit(" CALL 1 MAX"); $$ = expr_make_max($3); }
+| FGROUP_CONCAT '(' expr ')'                       { emit("CALL 1 GROUP_CONCAT"); ExprNode *e = expr_make_func1(EXPR_GROUP_CONCAT, $3, "GROUP_CONCAT"); if(e) strcpy(e->val.strval, ","); $$ = e; }
+| FGROUP_CONCAT '(' expr SEPARATOR STRING ')'       { emit("CALL 2 GROUP_CONCAT"); ExprNode *e = expr_make_func1(EXPR_GROUP_CONCAT, $3, "GROUP_CONCAT"); if(e) strncpy(e->val.strval, $5, 255); free($5); $$ = e; }
 ;
 expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = expr_make_substring($3, $5, $7); }
 | FSUBSTRING '(' expr ',' expr ')'                 { emit("CALL 2 SUBSTR"); $$ = expr_make_substring($3, $5, NULL); }
@@ -670,8 +673,8 @@ expr: expr LIKE expr								{ emit("LIKE"); $$ = expr_make_like($1, $3); }
 | expr NOT LIKE expr								{ emit("NOTLIKE"); $$ = expr_make_not_like($1, $4); }
 ;
 
-expr: expr REGEXP expr								{ emit("REGEXP"); $$ = $1; }
-| expr NOT REGEXP expr								{ emit("REGEXP"); emit("NOT"); $$ = $1; }
+expr: expr REGEXP expr								{ emit("REGEXP"); $$ = expr_make_func2(EXPR_REGEXP, $1, $3, "REGEXP"); }
+| expr NOT REGEXP expr								{ emit("REGEXP NOT"); $$ = expr_make_func2(EXPR_NOT_REGEXP, $1, $4, "NOT REGEXP"); }
 ;
 
 expr: CURRENT_TIMESTAMP

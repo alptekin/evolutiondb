@@ -93,6 +93,11 @@ typedef enum {
     EXPR_SIGN,            /* SIGN(x) — -1, 0, 1 */
     EXPR_PI,              /* PI() — 3.14159... */
     EXPR_CONCAT_MULTI,    /* CONCAT(a, b, c, ...) — 3+ args */
+    /* REGEXP */
+    EXPR_REGEXP,          /* expr REGEXP pattern */
+    EXPR_NOT_REGEXP,      /* expr NOT REGEXP pattern */
+    /* GROUP_CONCAT aggregate */
+    EXPR_GROUP_CONCAT,    /* GROUP_CONCAT(expr [SEPARATOR str]) */
     /* CAST / type conversion / conditionals */
     EXPR_CAST,            /* CAST(expr AS type) / CONVERT(expr, type) */
     EXPR_NULLIF,          /* NULLIF(a, b) — NULL if equal */
