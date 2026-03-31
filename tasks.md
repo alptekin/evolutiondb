@@ -1275,7 +1275,7 @@
 
 ---
 
-### Task 63: ⬜ REGEXP / RLIKE Evaluation (Feature #40)
+### Task 63: ✅ REGEXP / RLIKE Evaluation (Feature #40)
 
 **Goal:** REGEXP is parsed but not evaluated. Implement regex matching using POSIX regex.
 
@@ -1296,7 +1296,7 @@
 
 ## Day 33 — GROUP_CONCAT & SET Variables
 
-### Task 64: ⬜ GROUP_CONCAT / STRING_AGG (Feature #44)
+### Task 64: ✅ GROUP_CONCAT / STRING_AGG (Feature #44)
 
 **Goal:** Implement GROUP_CONCAT aggregate function.
 

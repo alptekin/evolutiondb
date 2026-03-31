@@ -1659,6 +1659,32 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                             rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
                             rs->columns[s].type_len = -1;
                         }
+                    } else if (g_expr.selectExprs[s]->type == EXPR_GROUP_CONCAT) {
+                        char concat_buf[4096] = "";
+                        const char *sep = g_expr.selectExprs[s]->val.strval[0]
+                                          ? g_expr.selectExprs[s]->val.strval : ",";
+                        int first = 1, r;
+                        for (r = 0; r < origNumRows; r++) {
+                            if (groups[r] != gi) continue;
+                            char colValues[MAX_COLUMNS][256];
+                            BUILD_COL_VALUES(r, colValues);
+                            char result[MAX_FIELD_LEN];
+                            if (expr_evaluate(g_expr.selectExprs[s]->left,
+                                    (const char (*)[128])colNames,
+                                    (const char (*)[256])colValues,
+                                    origNumCols, result, sizeof(result)) &&
+                                strcmp(result, NULL_MARKER) != 0) {
+                                if (!first) strncat(concat_buf, sep,
+                                    sizeof(concat_buf) - strlen(concat_buf) - 1);
+                                strncat(concat_buf, result,
+                                    sizeof(concat_buf) - strlen(concat_buf) - 1);
+                                first = 0;
+                            }
+                        }
+                        if (first)
+                            row_set_null(&aggRow, s);
+                        else
+                            row_set(&aggRow, s, concat_buf);
                     } else {
                         /* Non-aggregate expression — evaluate against first row of group */
                         int firstRow = groupFirstRow[gi];
