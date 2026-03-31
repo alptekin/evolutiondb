@@ -294,6 +294,7 @@
 %token FDATE_ADD FDATE_SUB FDATEDIFF FYEAR FMONTH FDAY FHOUR FMINUTE FSECOND FNOW
 %token FLEFT FRIGHT FLPAD FRPAD FREVERSE FREPEAT FINSTR FLOCATE
 %token FABS FCEIL FFLOOR FROUND FPOWER FSQRT FMOD FRAND FLOG FLOG10 FSIGN FPI
+%token FCAST FCONVERT FNULLIF FIFNULL FIF UNKNOWN
 %token FCOUNT
 %token FSUM
 %token FAVG
@@ -561,6 +562,15 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FHOUR '(' expr ')'                               { emit("CALL 1 HOUR"); $$ = expr_make_func1(EXPR_HOUR, $3, "HOUR"); }
 | FMINUTE '(' expr ')'                             { emit("CALL 1 MINUTE"); $$ = expr_make_func1(EXPR_MINUTE, $3, "MINUTE"); }
 | FSECOND '(' expr ')'                             { emit("CALL 1 SECOND"); $$ = expr_make_func1(EXPR_SECOND, $3, "SECOND"); }
+/* CAST / CONVERT */
+| FCAST '(' expr AS data_type ')'                  { emit("CAST %d", $5); ExprNode *e = expr_make_func1(EXPR_CAST, $3, "CAST"); if(e) e->val.intval = $5; $$ = e; }
+| FCONVERT '(' expr ',' data_type ')'              { emit("CONVERT %d", $5); ExprNode *e = expr_make_func1(EXPR_CAST, $3, "CONVERT"); if(e) e->val.intval = $5; $$ = e; }
+/* NULLIF / IFNULL / IF */
+| FNULLIF '(' expr ',' expr ')'                    { emit("CALL 2 NULLIF"); $$ = expr_make_func2(EXPR_NULLIF, $3, $5, "NULLIF"); }
+| FIFNULL '(' expr ',' expr ')'                    { emit("CALL 2 IFNULL"); $$ = expr_make_func2(EXPR_IFNULL, $3, $5, "IFNULL"); }
+| FIF '(' expr ',' expr ',' expr ')'               { emit("CALL 3 IF"); $$ = expr_make_func3(EXPR_IF, $3, $5, $7, "IF"); }
+/* IS UNKNOWN → alias for IS NULL */
+| expr IS UNKNOWN                                   { emit("ISUNKNOWN"); $$ = expr_make_is_null($1); }
 | FCONCAT '(' expr ',' expr ',' expr ')'           { emit("CALL 3 CONCAT"); $$ = expr_make_concat(expr_make_concat($3, $5), $7); }
 | FCONCAT '(' expr ',' expr ',' expr ',' expr ')'  { emit("CALL 4 CONCAT"); $$ = expr_make_concat(expr_make_concat(expr_make_concat($3, $5), $7), $9); }
 | FGEN_RANDOM_UUID '(' ')'                         {

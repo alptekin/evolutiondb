@@ -269,23 +269,29 @@
      FLOG10 = 485,
      FSIGN = 486,
      FPI = 487,
-     FCOUNT = 488,
-     FSUM = 489,
-     FAVG = 490,
-     FMIN = 491,
-     FMAX = 492,
-     FUPPER = 493,
-     FLOWER = 494,
-     FLENGTH = 495,
-     FCONCAT = 496,
-     FREPLACE = 497,
-     FCOALESCE = 498,
-     FGEN_RANDOM_UUID = 499,
-     FGEN_RANDOM_UUID_V7 = 500,
-     FSNOWFLAKE_ID = 501,
-     FLAST_INSERT_ID = 502,
-     FEVO_SLEEP = 503,
-     FEVO_JITTER = 504
+     FCAST = 488,
+     FCONVERT = 489,
+     FNULLIF = 490,
+     FIFNULL = 491,
+     FIF = 492,
+     UNKNOWN = 493,
+     FCOUNT = 494,
+     FSUM = 495,
+     FAVG = 496,
+     FMIN = 497,
+     FMAX = 498,
+     FUPPER = 499,
+     FLOWER = 500,
+     FLENGTH = 501,
+     FCONCAT = 502,
+     FREPLACE = 503,
+     FCOALESCE = 504,
+     FGEN_RANDOM_UUID = 505,
+     FGEN_RANDOM_UUID_V7 = 506,
+     FSNOWFLAKE_ID = 507,
+     FLAST_INSERT_ID = 508,
+     FEVO_SLEEP = 509,
+     FEVO_JITTER = 510
    };
 #endif
 /* Tokens.  */
@@ -519,23 +525,29 @@
 #define FLOG10 485
 #define FSIGN 486
 #define FPI 487
-#define FCOUNT 488
-#define FSUM 489
-#define FAVG 490
-#define FMIN 491
-#define FMAX 492
-#define FUPPER 493
-#define FLOWER 494
-#define FLENGTH 495
-#define FCONCAT 496
-#define FREPLACE 497
-#define FCOALESCE 498
-#define FGEN_RANDOM_UUID 499
-#define FGEN_RANDOM_UUID_V7 500
-#define FSNOWFLAKE_ID 501
-#define FLAST_INSERT_ID 502
-#define FEVO_SLEEP 503
-#define FEVO_JITTER 504
+#define FCAST 488
+#define FCONVERT 489
+#define FNULLIF 490
+#define FIFNULL 491
+#define FIF 492
+#define UNKNOWN 493
+#define FCOUNT 494
+#define FSUM 495
+#define FAVG 496
+#define FMIN 497
+#define FMAX 498
+#define FUPPER 499
+#define FLOWER 500
+#define FLENGTH 501
+#define FCONCAT 502
+#define FREPLACE 503
+#define FCOALESCE 504
+#define FGEN_RANDOM_UUID 505
+#define FGEN_RANDOM_UUID_V7 506
+#define FSNOWFLAKE_ID 507
+#define FLAST_INSERT_ID 508
+#define FEVO_SLEEP 509
+#define FEVO_JITTER 510
 
 
 
@@ -551,7 +563,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 555 "parser/evoparser.tab.h"
+#line 567 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
