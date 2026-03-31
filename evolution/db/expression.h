@@ -93,6 +93,14 @@ typedef enum {
     EXPR_SIGN,            /* SIGN(x) — -1, 0, 1 */
     EXPR_PI,              /* PI() — 3.14159... */
     EXPR_CONCAT_MULTI,    /* CONCAT(a, b, c, ...) — 3+ args */
+    /* CAST / type conversion / conditionals */
+    EXPR_CAST,            /* CAST(expr AS type) / CONVERT(expr, type) */
+    EXPR_NULLIF,          /* NULLIF(a, b) — NULL if equal */
+    EXPR_IFNULL,          /* IFNULL(a, b) — b if a is NULL */
+    EXPR_IF,              /* IF(cond, then, else) */
+    EXPR_IS_TRUE,         /* expr IS TRUE */
+    EXPR_IS_FALSE,        /* expr IS FALSE */
+    EXPR_NULL_SAFE_EQ,    /* a <=> b — NULL-safe equality */
     /* Date functions */
     EXPR_NOW,             /* NOW() */
     EXPR_DATE_ADD,        /* DATE_ADD(date, interval) */

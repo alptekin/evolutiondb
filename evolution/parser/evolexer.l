@@ -54,8 +54,10 @@ BY						{ return BY; }
 
 CASCADE					{ return CASCADE; }
 CASE					{ return CASE; }
+CAST/"("				{ return FCAST; }
 COLUMN					{ return COLUMN; }
 CONCURRENTLY			{ return CONCURRENTLY; }
+CONVERT/"("				{ return FCONVERT; }
 
 CHAR(ACTER)?			{ return CHAR; }
 
@@ -137,7 +139,9 @@ HIGH_PRIORITY			{ return HIGH_PRIORITY; }
 HOUR_MICROSECOND		{ return HOUR_MICROSECOND; }
 HOUR_MINUTE				{ return HOUR_MINUTE; }
 HOUR_SECOND				{ return HOUR_SECOND; }
-IF						{ return IF; }
+IF						{ int c = input(yyscanner); unput(c); if(c == '(') return FIF; return IF; }
+IFNULL/"("				{ return FIFNULL; }
+NULLIF/"("				{ return FNULLIF; }
 IGNORE					{ return IGNORE; }
 IMMEDIATE				{ return IMMEDIATE; }
 INITIALLY				{ return INITIALLY; }
@@ -279,7 +283,7 @@ TRUNCATE				{ return TRUNCATE; }
 
 UNION					{ return UNION; }
 UNIQUE					{ return UNIQUE; }
-
+UNKNOWN					{ return UNKNOWN; }
 UNSIGNED				{ return UNSIGNED; }
 UPDATE					{ return UPDATE; }
 UUID					{ return UUID; }

@@ -1723,6 +1723,100 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
 
+    /* ── CAST / NULLIF / IF / IS TRUE ── */
+    if (e->type == EXPR_CAST) {
+        char v[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        if (!ok || strcmp(v, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int target_family = e->val.intval / 10000;
+        if (target_family >= 1 && target_family <= 6) {
+            /* INT types */
+            long lv = strtol(v, NULL, 10);
+            snprintf(out_buf, buf_size, "%ld", lv);
+        } else if (target_family == 7 || target_family == 8 || target_family == 9) {
+            /* FLOAT/DOUBLE types */
+            double dv = strtod(v, NULL);
+            snprintf(out_buf, buf_size, "%g", dv);
+        } else if (target_family == 22) {
+            /* BOOLEAN */
+            double dv = strtod(v, NULL);
+            strncpy(out_buf, dv != 0 ? "true" : "false", buf_size);
+        } else {
+            /* VARCHAR/CHAR/TEXT/DATE — string passthrough */
+            strncpy(out_buf, v, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+        }
+        return 1;
+    }
+    if (e->type == EXPR_NULLIF) {
+        char a[512], b[512];
+        int ok_a = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, a, sizeof(a)) : 0;
+        int ok_b = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, b, sizeof(b)) : 0;
+        if (ok_a && ok_b && strcmp(a, b) == 0)
+            strncpy(out_buf, NULL_MARKER, buf_size);
+        else if (ok_a)
+            strncpy(out_buf, a, buf_size);
+        else
+            strncpy(out_buf, NULL_MARKER, buf_size);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+    if (e->type == EXPR_IFNULL) {
+        char a[512];
+        int ok_a = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, a, sizeof(a)) : 0;
+        if (ok_a && strcmp(a, NULL_MARKER) != 0) {
+            strncpy(out_buf, a, buf_size);
+        } else {
+            char b[512];
+            e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, b, sizeof(b)) : 0;
+            strncpy(out_buf, b, buf_size);
+        }
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+    if (e->type == EXPR_IF) {
+        char cond[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, cond, sizeof(cond)) : 0;
+        int truthy = 0;
+        if (ok && strcmp(cond, NULL_MARKER) != 0) {
+            if (strcmp(cond, "t") == 0 || strcasecmp(cond, "true") == 0 || strcmp(cond, "1") == 0)
+                truthy = 1;
+            else {
+                double v = strtod(cond, NULL);
+                if (v != 0.0) truthy = 1;
+            }
+        }
+        ExprNode *branch = truthy ? e->right : e->extra;
+        if (branch)
+            expr_evaluate(branch, col_names, col_values, num_cols, out_buf, buf_size);
+        else
+            strncpy(out_buf, NULL_MARKER, buf_size);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+    if (e->type == EXPR_IS_TRUE) {
+        char v[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        int is_true = 0;
+        if (ok && strcmp(v, NULL_MARKER) != 0) {
+            if (strcmp(v, "t") == 0 || strcasecmp(v, "true") == 0 || strcmp(v, "1") == 0)
+                is_true = 1;
+        }
+        strncpy(out_buf, is_true ? "t" : "f", buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_IS_FALSE) {
+        char v[512];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v, sizeof(v)) : 0;
+        int is_false = 0;
+        if (ok && strcmp(v, NULL_MARKER) != 0) {
+            if (strcmp(v, "f") == 0 || strcasecmp(v, "false") == 0 || strcmp(v, "0") == 0)
+                is_false = 1;
+        }
+        strncpy(out_buf, is_false ? "t" : "f", buf_size);
+        return 1;
+    }
+
     /* ── Date functions ── */
     if (e->type == EXPR_NOW) {
         time_t t = time(NULL);
