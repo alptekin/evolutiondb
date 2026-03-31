@@ -1216,7 +1216,7 @@
 
 ## Day 31 — Utility Functions
 
-### Task 60: ⬜ CAST / CONVERT (Feature #37)
+### Task 60: ✅ CAST / CONVERT (Feature #37)
 
 **Goal:** Implement type casting: `CAST(expr AS type)`, `CONVERT(expr, type)`.
 
@@ -1235,7 +1235,7 @@
 
 ---
 
-### Task 61: ⬜ NULLIF, IF, IFNULL (Features #38, #39)
+### Task 61: ✅ NULLIF, IF, IFNULL (Features #38, #39)
 
 **Goal:** Implement NULLIF(), IF(), IFNULL() functions.
 
@@ -1256,7 +1256,7 @@
 
 ## Day 32 — Boolean Operators & REGEXP
 
-### Task 62: ⬜ IS TRUE / IS FALSE / IS UNKNOWN & NULL-safe <=> (Features #42, #47)
+### Task 62: ✅ IS TRUE / IS FALSE / IS UNKNOWN & NULL-safe <=> (Features #42, #47)
 
 **Goal:** Implement boolean truth-value tests and NULL-safe comparison operator.
 
