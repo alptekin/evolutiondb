@@ -886,8 +886,17 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     /* Check for duplicate PK */
     BTree2 pk_tree = tapi_pk_tree(td);
     RowID existing;
-    if (bt2_search(&pk_tree, pkKey, &existing) == 0)
-        return 1; /* duplicate */
+    if (bt2_search(&pk_tree, pkKey, &existing) == 0) {
+        if (g_ins.rowCount == -2) {
+            /* REPLACE mode: delete existing, then insert new */
+            extern int evo_delete_row(const char *, const char *, uint32_t);
+            mvcc_ensure_xid(&g_qctx->mvcc_xid);
+            evo_delete_row(tblName, pkKey, g_qctx->mvcc_xid);
+            pk_tree = tapi_pk_tree(td);
+        } else {
+            return 1; /* duplicate */
+        }
+    }
 
     /* Gap lock check: if a SERIALIZABLE TX holds a gap lock covering
      * this key, the INSERT must wait (prevents phantom reads). */

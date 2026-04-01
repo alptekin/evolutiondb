@@ -93,6 +93,8 @@ typedef enum {
     EXPR_SIGN,            /* SIGN(x) — -1, 0, 1 */
     EXPR_PI,              /* PI() — 3.14159... */
     EXPR_CONCAT_MULTI,    /* CONCAT(a, b, c, ...) — 3+ args */
+    /* User variables */
+    EXPR_USERVAR,         /* @variable — session user variable */
     /* REGEXP */
     EXPR_REGEXP,          /* expr REGEXP pattern */
     EXPR_NOT_REGEXP,      /* expr NOT REGEXP pattern */
