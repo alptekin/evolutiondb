@@ -4907,8 +4907,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                                     while (ml > 0 && (merged[ml-1] == ';' || isspace((unsigned char)merged[ml-1])))
                                         merged[--ml] = '\0';
 
-                                    /* Note: column projection (SELECT col FROM view)
-                                     * not yet supported — view always returns all columns */
+                                    /* Column projection deferred */
 
                                     /* Append outer WHERE */
                                     if (outer_where[0]) {
@@ -4947,7 +4946,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 }
             }
             /* DML on view: simple table name substitution */
-            if (0) {  /* DML on view — deferred */
+            if (0) { /* DML on view — deferred: crashes, needs investigation */
                 /* Extract table name from DML */
                 const char *q = sql;
                 while (*q && isspace((unsigned char)*q)) q++;

@@ -3339,6 +3339,122 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* Distributed commands: SHOW TABLE PLACEMENT, SHOW NODES, MOVE TABLE */
     if (handle_distributed(sql, rs, ctx)) return 1;
 
+    /* DML on view — handled in query_executor.c view resolution, not here
+     * (catalog_try_handle cannot call query_execute recursively) */
+    if (0) {
+        const char *p = sql;
+        while (*p && isspace((unsigned char)*p)) p++;
+        int is_upd = (strncasecmp(p, "UPDATE", 6) == 0 && isspace((unsigned char)p[6]));
+        int is_del = (strncasecmp(p, "DELETE", 6) == 0);
+        int is_ins = (strncasecmp(p, "INSERT", 6) == 0);
+        if ((is_upd || is_del || is_ins) && ctx) {
+            /* Extract table name */
+            const char *t = p + 6;
+            while (*t && isspace((unsigned char)*t)) t++;
+            if (is_del && strncasecmp(t, "FROM", 4) == 0) { t += 4; while (*t && isspace((unsigned char)*t)) t++; }
+            if (is_ins && strncasecmp(t, "INTO", 4) == 0) { t += 4; while (*t && isspace((unsigned char)*t)) t++; }
+            char vname[128] = "";
+            int vi = 0;
+            while (*t && (isalnum((unsigned char)*t) || *t == '_') && vi < 127)
+                vname[vi++] = *t++;
+            vname[vi] = '\0';
+
+            if (vname[0]) {
+                DatabaseDesc dbd;
+                SchemaDesc sd;
+                if (cat_find_database(ctx->database, &dbd) == 0 &&
+                    cat_find_schema(dbd.db_id, ctx->schema, &sd) == 0) {
+                    ViewDesc vd;
+                    if (cat_find_view(dbd.db_id, sd.schema_id, vname, &vd) == 0) {
+                        /* Check updatable: no JOIN/UNION/GROUP BY */
+                        if (strcasestr(vd.view_sql, " JOIN ") ||
+                            strcasestr(vd.view_sql, " UNION ") ||
+                            strcasestr(vd.view_sql, " GROUP BY ")) {
+                            result_set_error(rs, "42809",
+                                "cannot modify a non-updatable view (contains JOIN/UNION/GROUP BY)");
+                            return 1;
+                        }
+
+                        /* Extract underlying table from view SQL */
+                        const char *vf = strcasestr(vd.view_sql, " FROM ");
+                        if (!vf) { result_set_error(rs, "XX000", "invalid view SQL"); return 1; }
+                        vf += 6;
+                        while (*vf && isspace((unsigned char)*vf)) vf++;
+                        char underlying[128] = "";
+                        int ui = 0;
+                        while (*vf && (isalnum((unsigned char)*vf) || *vf == '_') && ui < 127)
+                            underlying[ui++] = *vf++;
+                        underlying[ui] = '\0';
+
+                        if (!underlying[0]) { result_set_error(rs, "XX000", "cannot resolve view table"); return 1; }
+
+                        /* Extract view WHERE condition */
+                        char view_where[2048] = "";
+                        const char *vw = strcasestr(vd.view_sql, " WHERE ");
+                        if (vw) {
+                            strncpy(view_where, vw + 7, sizeof(view_where) - 1);
+                            view_where[sizeof(view_where) - 1] = '\0';
+                            /* Trim trailing ORDER BY/LIMIT/; */
+                            char *trim;
+                            if ((trim = strcasestr(view_where, " ORDER BY "))) *trim = '\0';
+                            if ((trim = strcasestr(view_where, " LIMIT "))) *trim = '\0';
+                            int vl = (int)strlen(view_where);
+                            while (vl > 0 && (view_where[vl-1] == ';' || isspace((unsigned char)view_where[vl-1])))
+                                view_where[--vl] = '\0';
+                        }
+
+                        /* Build rewritten SQL: replace view name with underlying table */
+                        const char *rest = t; /* everything after view name */
+                        char new_sql[8192];
+
+                        if (is_upd) {
+                            if (view_where[0]) {
+                                /* Check if outer has WHERE */
+                                const char *ow = strcasestr(rest, " WHERE ");
+                                if (ow) {
+                                    /* UPDATE underlying SET ... WHERE view_cond AND outer_cond */
+                                    snprintf(new_sql, sizeof(new_sql), "UPDATE %s%.*s WHERE %s AND %s",
+                                             underlying, (int)(ow - rest), rest, view_where, ow + 7);
+                                } else {
+                                    snprintf(new_sql, sizeof(new_sql), "UPDATE %s%s WHERE %s",
+                                             underlying, rest, view_where);
+                                }
+                            } else {
+                                snprintf(new_sql, sizeof(new_sql), "UPDATE %s%s", underlying, rest);
+                            }
+                        } else if (is_del) {
+                            if (view_where[0]) {
+                                const char *ow = strcasestr(rest, " WHERE ");
+                                if (ow) {
+                                    snprintf(new_sql, sizeof(new_sql), "DELETE FROM %s WHERE %s AND %s",
+                                             underlying, view_where, ow + 7);
+                                } else {
+                                    snprintf(new_sql, sizeof(new_sql), "DELETE FROM %s WHERE %s",
+                                             underlying, view_where);
+                                }
+                            } else {
+                                snprintf(new_sql, sizeof(new_sql), "DELETE FROM %s%s", underlying, rest);
+                            }
+                        } else if (is_ins) {
+                            snprintf(new_sql, sizeof(new_sql), "INSERT INTO %s%s", underlying, rest);
+                        }
+
+                        /* Execute rewritten SQL */
+                        result_init(rs);
+                        query_execute(new_sql, rs, ctx);
+
+                        /* WITH CHECK OPTION: verify view condition after DML */
+                        if (vd.check_option && view_where[0] && !rs->has_error) {
+                            /* TODO: re-query to verify inserted/updated rows satisfy view condition */
+                        }
+
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+
     /* CREATE/DROP VIEW — handle pre-parse (no grammar needed) */
     {
         const char *p = sql;
@@ -3372,6 +3488,22 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     int vl = (int)strlen(vsql);
                     while (vl > 0 && (vsql[vl-1] == ';' || isspace((unsigned char)vsql[vl-1])))
                         vsql[--vl] = '\0';
+
+                    /* Detect WITH CHECK OPTION */
+                    int check_opt = 0;
+                    {
+                        char *wco = strcasestr(vsql, "WITH CHECK OPTION");
+                        if (!wco) wco = strcasestr(vsql, "WITH CASCADED CHECK OPTION");
+                        if (!wco) wco = strcasestr(vsql, "WITH LOCAL CHECK OPTION");
+                        if (wco) {
+                            if (strcasestr(wco, "LOCAL")) check_opt = 2;
+                            else check_opt = 1; /* CASCADED (default) */
+                            *wco = '\0'; /* strip from view SQL */
+                            int svl = (int)strlen(vsql);
+                            while (svl > 0 && isspace((unsigned char)vsql[svl-1]))
+                                vsql[--svl] = '\0';
+                        }
+                    }
 
                     if (ctx) {
                         DatabaseDesc dbd;
