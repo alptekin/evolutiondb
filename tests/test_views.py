@@ -189,6 +189,70 @@ def test_show_create_view(s):
     if err: print(f"    err: {err}"); return False
     return len(rows) == 1 and 'SELECT' in str(rows[0])
 
+def test_outer_where(s):
+    """T14: Outer WHERE on view"""
+    run(s, "DROP TABLE IF EXISTS vw_emp")
+    run(s, "DROP VIEW IF EXISTS vw_all")
+    run(s, "CREATE TABLE vw_emp (id INT PRIMARY KEY, name VARCHAR(50), dept VARCHAR(20))")
+    run(s, "INSERT INTO vw_emp VALUES (1, 'Alice', 'Eng')")
+    run(s, "INSERT INTO vw_emp VALUES (2, 'Bob', 'Sales')")
+    run(s, "INSERT INTO vw_emp VALUES (3, 'Carol', 'Eng')")
+    run(s, "CREATE VIEW vw_all AS SELECT * FROM vw_emp")
+    _, rows, err, _ = run(s, "SELECT * FROM vw_all WHERE dept = 'Eng'")
+    run(s, "DROP VIEW IF EXISTS vw_all")
+    run(s, "DROP TABLE IF EXISTS vw_emp")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 2
+
+def test_outer_orderby(s):
+    """T15: ORDER BY on view"""
+    run(s, "DROP TABLE IF EXISTS vw_nums")
+    run(s, "DROP VIEW IF EXISTS vw_nv")
+    run(s, "CREATE TABLE vw_nums (id INT PRIMARY KEY, val INT)")
+    run(s, "INSERT INTO vw_nums VALUES (1, 30)")
+    run(s, "INSERT INTO vw_nums VALUES (2, 10)")
+    run(s, "INSERT INTO vw_nums VALUES (3, 20)")
+    run(s, "CREATE VIEW vw_nv AS SELECT * FROM vw_nums")
+    _, rows, err, _ = run(s, "SELECT * FROM vw_nv ORDER BY val")
+    run(s, "DROP VIEW IF EXISTS vw_nv")
+    run(s, "DROP TABLE IF EXISTS vw_nums")
+    if err: print(f"    err: {err}"); return False
+    return rows[0][1] == '10' and rows[2][1] == '30'
+
+def test_outer_limit(s):
+    """T16: LIMIT on view"""
+    run(s, "DROP TABLE IF EXISTS vw_many")
+    run(s, "DROP VIEW IF EXISTS vw_mv")
+    run(s, "CREATE TABLE vw_many (id INT PRIMARY KEY, val INT)")
+    for i in range(5):
+        run(s, f"INSERT INTO vw_many VALUES ({i}, {i*10})")
+    run(s, "CREATE VIEW vw_mv AS SELECT * FROM vw_many")
+    _, rows, err, _ = run(s, "SELECT * FROM vw_mv LIMIT 3")
+    run(s, "DROP VIEW IF EXISTS vw_mv")
+    run(s, "DROP TABLE IF EXISTS vw_many")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 3
+
+def test_combined_clauses(s):
+    """T17: Combined WHERE + ORDER BY + LIMIT on view"""
+    run(s, "DROP TABLE IF EXISTS vw_comb")
+    run(s, "DROP VIEW IF EXISTS vw_cv")
+    run(s, "CREATE TABLE vw_comb (id INT PRIMARY KEY, name VARCHAR(50), score INT)")
+    run(s, "INSERT INTO vw_comb VALUES (1, 'Alice', 90)")
+    run(s, "INSERT INTO vw_comb VALUES (2, 'Bob', 70)")
+    run(s, "INSERT INTO vw_comb VALUES (3, 'Carol', 85)")
+    run(s, "INSERT INTO vw_comb VALUES (4, 'Dave', 60)")
+    run(s, "CREATE VIEW vw_cv AS SELECT * FROM vw_comb WHERE score >= 70")
+    _, rows, err, _ = run(s, "SELECT * FROM vw_cv WHERE score < 90 ORDER BY score LIMIT 1")
+    run(s, "DROP VIEW IF EXISTS vw_cv")
+    run(s, "DROP TABLE IF EXISTS vw_comb")
+    if err: print(f"    err: {err}"); return False
+    # View WHERE: score >= 70 → Bob(70), Carol(85), Alice(90)
+    # Outer WHERE: score < 90 → Bob(70), Carol(85)
+    # ORDER BY score → Bob first
+    # LIMIT 1 → just Bob
+    return len(rows) == 1 and rows[0][1] == 'Bob'
+
 if __name__ == "__main__":
     print("=== Views Tests ===")
     test("T1: CREATE + SELECT", test_create_select)
@@ -204,5 +268,9 @@ if __name__ == "__main__":
     test("T11: nested views", test_nested_views)
     test("T12: SHOW VIEWS", test_show_views)
     test("T13: SHOW CREATE VIEW", test_show_create_view)
+    test("T14: outer WHERE on view", test_outer_where)
+    test("T15: ORDER BY on view", test_outer_orderby)
+    test("T16: LIMIT on view", test_outer_limit)
+    test("T17: combined clauses", test_combined_clauses)
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)
