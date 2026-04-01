@@ -1315,7 +1315,7 @@
 
 ---
 
-### Task 65: ⬜ SET @var = ... User Variables (Feature #36)
+### Task 65: ✅ SET @var = ... User Variables (Feature #36)
 
 **Goal:** Implement session-scoped user variables: `SET @name = expr`, `SELECT @name`.
 
@@ -1336,7 +1336,7 @@
 
 ## Day 34 — ON DUPLICATE KEY UPDATE & REPLACE INTO
 
-### Task 66: ⬜ ON DUPLICATE KEY UPDATE (Feature #32)
+### Task 66: ✅ ON DUPLICATE KEY UPDATE (Feature #32)
 
 **Goal:** Parsed but not executed. Implement upsert semantics for MySQL-style ON DUPLICATE KEY UPDATE.
 
@@ -1355,7 +1355,7 @@
 
 ---
 
-### Task 67: ⬜ REPLACE INTO (Feature #33)
+### Task 67: ✅ REPLACE INTO (Feature #33)
 
 **Goal:** Parsed but not executed. Implement `REPLACE INTO` — delete existing then insert, or just insert.
 
@@ -1376,7 +1376,7 @@
 
 ## Day 35 — CREATE TABLE...SELECT & EXPLAIN
 
-### Task 68: ⬜ CREATE TABLE ... SELECT (Feature #34)
+### Task 68: ✅ CREATE TABLE ... SELECT (Feature #34)
 
 **Goal:** Parsed but not executed. Implement creating a table from a SELECT query result.
 
@@ -1395,7 +1395,7 @@
 
 ---
 
-### Task 69: ⬜ EXPLAIN / EXPLAIN ANALYZE (Feature #28)
+### Task 69: ✅ EXPLAIN / EXPLAIN ANALYZE (Feature #28)
 
 **Goal:** Show query execution plan.
 

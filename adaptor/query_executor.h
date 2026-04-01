@@ -61,6 +61,11 @@ typedef struct {
 
     /* Session registry ID (used as PG "pid" in BackendKeyData) */
     int       session_id;
+
+    /* User variables — SET @var = value */
+    char      user_var_names[64][128];
+    char      user_var_values[64][256];
+    int       user_var_count;
 } SessionCtx;
 
 /*

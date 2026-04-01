@@ -250,6 +250,9 @@ typedef struct QueryContext {
     int          (*subquery_fn)(const char *sql, char out_values[][256],
                                 int *out_count, int max_values, void *ctx);
     void          *subquery_ctx;  /* SessionCtx* cast to void* */
+    /* User variable lookup callback */
+    int          (*uservar_fn)(const char *name, char *out, int out_size, void *ctx);
+    void          *uservar_ctx;
 } QueryContext;
 
 /* ================================================================
