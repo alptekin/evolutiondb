@@ -62,6 +62,14 @@ typedef struct {
     /* Session registry ID (used as PG "pid" in BackendKeyData) */
     int       session_id;
 
+    /* Prepared statements cache (SQL-level PREPARE/EXECUTE) */
+    struct {
+        char  name[64];
+        char *query;        /* heap-allocated SQL */
+        int   param_count;
+    } prepared_stmts[32];
+    int prepared_stmt_count;
+
     /* User variables — SET @var = value */
     char      user_var_names[64][128];
     char      user_var_values[64][256];

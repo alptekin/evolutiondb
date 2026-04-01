@@ -1435,7 +1435,7 @@
 
 ---
 
-### Task 71: ⬜ Prepared Statements (Feature #25)
+### Task 71: ✅ Prepared Statements (Feature #25)
 
 **Goal:** PG wire protocol extended query has stubs. Implement Parse/Bind/Describe/Execute.
 
