@@ -3568,6 +3568,169 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+    /* PREPARE / EXECUTE / DEALLOCATE — SQL-level prepared statements */
+    {
+        const char *p = sql;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "PREPARE", 7) == 0 && isspace((unsigned char)p[7])) {
+            const char *q = p + 8;
+            while (*q && isspace((unsigned char)*q)) q++;
+            char sname[64] = "";
+            int si = 0;
+            while (*q && (isalnum((unsigned char)*q) || *q == '_') && si < 63)
+                sname[si++] = *q++;
+            sname[si] = '\0';
+            while (*q && isspace((unsigned char)*q)) q++;
+            /* Skip optional (type_list) */
+            if (*q == '(') {
+                while (*q && *q != ')') q++;
+                if (*q == ')') q++;
+                while (*q && isspace((unsigned char)*q)) q++;
+            }
+            if (strncasecmp(q, "AS", 2) == 0 && isspace((unsigned char)q[2])) {
+                q += 3;
+                while (*q && isspace((unsigned char)*q)) q++;
+                char stmt_sql[4096];
+                strncpy(stmt_sql, q, sizeof(stmt_sql) - 1);
+                stmt_sql[sizeof(stmt_sql) - 1] = '\0';
+                int sl = (int)strlen(stmt_sql);
+                while (sl > 0 && (stmt_sql[sl-1] == ';' || isspace((unsigned char)stmt_sql[sl-1])))
+                    stmt_sql[--sl] = '\0';
+
+                if (ctx && sname[0]) {
+                    /* Find or create slot */
+                    int slot = -1;
+                    for (int i = 0; i < ctx->prepared_stmt_count; i++) {
+                        if (strcasecmp(ctx->prepared_stmts[i].name, sname) == 0) {
+                            slot = i;
+                            if (ctx->prepared_stmts[i].query) free(ctx->prepared_stmts[i].query);
+                            break;
+                        }
+                    }
+                    if (slot < 0 && ctx->prepared_stmt_count < 32)
+                        slot = ctx->prepared_stmt_count++;
+                    if (slot >= 0) {
+                        strncpy(ctx->prepared_stmts[slot].name, sname, 63);
+                        ctx->prepared_stmts[slot].query = strdup(stmt_sql);
+                        /* Count $N params */
+                        int pc = 0;
+                        for (const char *s = stmt_sql; *s; s++) {
+                            if (*s == '$' && isdigit((unsigned char)s[1])) {
+                                int n = atoi(s + 1);
+                                if (n > pc) pc = n;
+                            }
+                        }
+                        ctx->prepared_stmts[slot].param_count = pc;
+                    }
+                }
+                result_init(rs);
+                strcpy(rs->command_tag, "PREPARE");
+                return 1;
+            }
+        }
+        if (strncasecmp(p, "EXECUTE", 7) == 0 && isspace((unsigned char)p[7])) {
+            const char *q = p + 8;
+            while (*q && isspace((unsigned char)*q)) q++;
+            char sname[64] = "";
+            int si = 0;
+            while (*q && (isalnum((unsigned char)*q) || *q == '_') && si < 63)
+                sname[si++] = *q++;
+            sname[si] = '\0';
+
+            if (ctx && sname[0]) {
+                /* Find prepared statement */
+                int slot = -1;
+                for (int i = 0; i < ctx->prepared_stmt_count; i++) {
+                    if (strcasecmp(ctx->prepared_stmts[i].name, sname) == 0) {
+                        slot = i; break;
+                    }
+                }
+                if (slot < 0) {
+                    result_set_error(rs, "26000", "prepared statement does not exist");
+                    return 1;
+                }
+
+                /* Extract params from (val1, val2, ...) */
+                while (*q && isspace((unsigned char)*q)) q++;
+                char exec_sql[8192];
+                strncpy(exec_sql, ctx->prepared_stmts[slot].query, sizeof(exec_sql) - 1);
+                exec_sql[sizeof(exec_sql) - 1] = '\0';
+
+                if (*q == '(') {
+                    q++;
+                    int pnum = 1;
+                    while (*q && *q != ')') {
+                        while (*q && isspace((unsigned char)*q)) q++;
+                        char val[256] = "";
+                        int vi = 0;
+                        if (*q == '\'') {
+                            q++;
+                            while (*q && *q != '\'' && vi < 255) val[vi++] = *q++;
+                            if (*q == '\'') q++;
+                        } else {
+                            while (*q && *q != ',' && *q != ')' && vi < 255) val[vi++] = *q++;
+                        }
+                        val[vi] = '\0';
+                        /* Trim */
+                        int vl = vi - 1;
+                        while (vl >= 0 && isspace((unsigned char)val[vl])) val[vl--] = '\0';
+
+                        /* Replace $N in exec_sql */
+                        char placeholder[8];
+                        snprintf(placeholder, sizeof(placeholder), "$%d", pnum);
+                        char *pos = strstr(exec_sql, placeholder);
+                        if (pos) {
+                            char quoted[260];
+                            snprintf(quoted, sizeof(quoted), "'%s'", val);
+                            int pl = (int)strlen(placeholder);
+                            int ql = (int)strlen(quoted);
+                            memmove(pos + ql, pos + pl, strlen(pos + pl) + 1);
+                            memcpy(pos, quoted, ql);
+                        }
+                        pnum++;
+                        if (*q == ',') q++;
+                    }
+                }
+
+                result_init(rs);
+                query_execute(exec_sql, rs, ctx);
+                return 1;
+            }
+        }
+        if (strncasecmp(p, "DEALLOCATE", 10) == 0 && isspace((unsigned char)p[10])) {
+            const char *q = p + 11;
+            while (*q && isspace((unsigned char)*q)) q++;
+            /* Skip optional PREPARE keyword */
+            if (strncasecmp(q, "PREPARE", 7) == 0) { q += 7; while (*q && isspace((unsigned char)*q)) q++; }
+            char sname[64] = "";
+            int si = 0;
+            while (*q && (isalnum((unsigned char)*q) || *q == '_') && si < 63)
+                sname[si++] = *q++;
+            sname[si] = '\0';
+
+            if (ctx && sname[0]) {
+                if (strcasecmp(sname, "ALL") == 0) {
+                    for (int i = 0; i < ctx->prepared_stmt_count; i++) {
+                        if (ctx->prepared_stmts[i].query) free(ctx->prepared_stmts[i].query);
+                        ctx->prepared_stmts[i].query = NULL;
+                    }
+                    ctx->prepared_stmt_count = 0;
+                } else {
+                    for (int i = 0; i < ctx->prepared_stmt_count; i++) {
+                        if (strcasecmp(ctx->prepared_stmts[i].name, sname) == 0) {
+                            if (ctx->prepared_stmts[i].query) free(ctx->prepared_stmts[i].query);
+                            ctx->prepared_stmts[i] = ctx->prepared_stmts[--ctx->prepared_stmt_count];
+                            break;
+                        }
+                    }
+                }
+            }
+            result_init(rs);
+            strcpy(rs->command_tag, "DEALLOCATE");
+            return 1;
+        }
+    }
+
     /* User management: CREATE/DROP/ALTER USER */
     if (handle_user_mgmt(sql, rs)) return 1;
 
