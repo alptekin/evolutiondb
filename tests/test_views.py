@@ -147,6 +147,48 @@ def test_view_count(s):
     # View returns COUNT(*) as a single-row result
     return len(rows) == 1 and '2' in str(rows[0])
 
+def test_nested_views(s):
+    """T11: Nested view — view referencing another view"""
+    run(s, "DROP TABLE IF EXISTS vw_base")
+    run(s, "DROP VIEW IF EXISTS vw_inner")
+    run(s, "DROP VIEW IF EXISTS vw_outer")
+    run(s, "CREATE TABLE vw_base (id INT PRIMARY KEY, val INT)")
+    run(s, "INSERT INTO vw_base VALUES (1, 10)")
+    run(s, "INSERT INTO vw_base VALUES (2, 20)")
+    run(s, "CREATE VIEW vw_inner AS SELECT * FROM vw_base WHERE val > 5")
+    run(s, "CREATE VIEW vw_outer AS SELECT * FROM vw_inner")
+    _, rows, err, _ = run(s, "SELECT * FROM vw_outer")
+    run(s, "DROP VIEW IF EXISTS vw_outer")
+    run(s, "DROP VIEW IF EXISTS vw_inner")
+    run(s, "DROP TABLE IF EXISTS vw_base")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 2
+
+def test_show_views(s):
+    """T12: SHOW VIEWS"""
+    run(s, "DROP TABLE IF EXISTS sv_t")
+    run(s, "DROP VIEW IF EXISTS sv_v")
+    run(s, "CREATE TABLE sv_t (id INT PRIMARY KEY)")
+    run(s, "CREATE VIEW sv_v AS SELECT * FROM sv_t")
+    _, rows, err, _ = run(s, "SHOW VIEWS")
+    run(s, "DROP VIEW IF EXISTS sv_v")
+    run(s, "DROP TABLE IF EXISTS sv_t")
+    if err: print(f"    err: {err}"); return False
+    found = any('sv_v' in str(r) for r in rows)
+    return found
+
+def test_show_create_view(s):
+    """T13: SHOW CREATE VIEW"""
+    run(s, "DROP TABLE IF EXISTS sc_t")
+    run(s, "DROP VIEW IF EXISTS sc_v")
+    run(s, "CREATE TABLE sc_t (id INT PRIMARY KEY)")
+    run(s, "CREATE VIEW sc_v AS SELECT * FROM sc_t")
+    _, rows, err, _ = run(s, "SHOW CREATE VIEW sc_v")
+    run(s, "DROP VIEW IF EXISTS sc_v")
+    run(s, "DROP TABLE IF EXISTS sc_t")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 1 and 'SELECT' in str(rows[0])
+
 if __name__ == "__main__":
     print("=== Views Tests ===")
     test("T1: CREATE + SELECT", test_create_select)
@@ -159,5 +201,8 @@ if __name__ == "__main__":
     test("T8: SELECT dropped view error", test_select_dropped_view_error)
     test("T9: DROP nonexistent error", test_drop_nonexistent_error)
     test("T10: view with aggregate", test_view_count)
+    test("T11: nested views", test_nested_views)
+    test("T12: SHOW VIEWS", test_show_views)
+    test("T13: SHOW CREATE VIEW", test_show_create_view)
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)
