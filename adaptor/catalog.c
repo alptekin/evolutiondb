@@ -533,6 +533,72 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* ── SHOW VIEWS ── */
+    if (stristr_found(sql, "views")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "view_name", PG_OID_TEXT);
+        result_add_column(rs, "view_sql", PG_OID_TEXT);
+        DatabaseDesc vdb;
+        if (ctx && cat_find_database(ctx->database, &vdb) == 0) {
+            SchemaDesc vsch;
+            if (cat_find_schema(vdb.db_id, ctx->schema, &vsch) == 0) {
+                ViewDesc views[64];
+                int nv = cat_list_views(vsch.schema_id, views, 64);
+                for (int i = 0; i < nv; i++) {
+                    int row = result_add_row(rs);
+                    result_set_field(rs, row, 0, views[i].view_name);
+                    result_set_field(rs, row, 1, views[i].view_sql);
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* ── SHOW CREATE VIEW name ── */
+    if (strncasecmp(sql + 4, " CREATE VIEW", 12) == 0 ||
+        strncasecmp(sql + 4, "  CREATE VIEW", 13) == 0) {
+        const char *p = sql + 4;
+        while (*p && isspace((unsigned char)*p)) p++;
+        p += 6; /* skip CREATE */
+        while (*p && isspace((unsigned char)*p)) p++;
+        p += 4; /* skip VIEW */
+        while (*p && isspace((unsigned char)*p)) p++;
+        char vname[128] = "";
+        int vi = 0;
+        while (*p && (isalnum((unsigned char)*p) || *p == '_') && vi < 127)
+            vname[vi++] = *p++;
+        vname[vi] = '\0';
+
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "View", PG_OID_TEXT);
+        result_add_column(rs, "Create View", PG_OID_TEXT);
+
+        if (ctx && vname[0]) {
+            DatabaseDesc vdb;
+            SchemaDesc vsch;
+            if (cat_find_database(ctx->database, &vdb) == 0 &&
+                cat_find_schema(vdb.db_id, ctx->schema, &vsch) == 0) {
+                ViewDesc vd;
+                if (cat_find_view(vdb.db_id, vsch.schema_id, vname, &vd) == 0) {
+                    int row = result_add_row(rs);
+                    result_set_field(rs, row, 0, vname);
+                    char create_stmt[4200];
+                    snprintf(create_stmt, sizeof(create_stmt),
+                             "CREATE VIEW %s AS %s", vname, vd.view_sql);
+                    result_set_field(rs, row, 1, create_stmt);
+                } else {
+                    result_set_error(rs, "42P01", "view does not exist");
+                    return 1;
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* ── SHOW USERS ── */
     if (stristr_found(sql, "users")) {
         result_init(rs);
