@@ -131,6 +131,14 @@ typedef struct {
     int  grant_option;
 } GrantDesc;
 
+typedef struct {
+    uint32_t view_id;
+    uint32_t db_id;
+    uint32_t schema_id;
+    char     view_name[CAT_MAX_NAME_LEN];
+    char     view_sql[4096];
+} ViewDesc;
+
 /* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
@@ -345,6 +353,16 @@ int cat_increment_dml_counter(uint32_t table_id);
 
 /* Increment dead tuple counter for a table (called after DELETE/UPDATE). */
 int cat_increment_dead_tuples(uint32_t table_id, int count);
+
+/* ----------------------------------------------------------------
+ *  View operations
+ * ---------------------------------------------------------------- */
+int cat_create_view(uint32_t db_id, uint32_t schema_id,
+                    const char *name, const char *sql);
+int cat_find_view(uint32_t db_id, uint32_t schema_id,
+                  const char *name, ViewDesc *out);
+int cat_drop_view(uint32_t db_id, uint32_t schema_id, const char *name);
+int cat_list_views(uint32_t schema_id, ViewDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Convenience

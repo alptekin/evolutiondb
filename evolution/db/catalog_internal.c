@@ -428,6 +428,13 @@ int cat_init(void)
         for (int i = 0; i < CAT_MAX; i++) {
             g_cat_trees[i].root_page = pgm_get_catalog_root((CatalogID)i);
         }
+        /* Lazy-create new catalog trees added after initial bootstrap */
+        for (int i = 0; i < CAT_MAX; i++) {
+            if (g_cat_trees[i].root_page == 0 && i >= CAT_SYS_VIEWS) {
+                bt2_create(&g_cat_trees[i]);
+                pgm_set_catalog_root((CatalogID)i, g_cat_trees[i].root_page);
+            }
+        }
         for (int i = 0; i < CAT_MAX; i++)
             g_cat_data_pages[i] = 0;  /* lazy alloc on first insert */
         g_cat_initialized = 1;
@@ -2401,4 +2408,107 @@ int cat_update_shard_info(uint32_t table_id, const char *table_name,
 
     bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
     return 0;
+}
+
+/* ================================================================
+ *  View operations
+ * ================================================================ */
+
+static void make_view_key(uint32_t schema_id, const char *name,
+                          char *out, int size)
+{
+    snprintf(out, size, "%010u:%s", schema_id, name);
+}
+
+static void serialize_view(const ViewDesc *v, char *buf, int size)
+{
+    snprintf(buf, size, "%u;%u;%u;%s;%s",
+             v->view_id, v->db_id, v->schema_id, v->view_name, v->view_sql);
+}
+
+static void deserialize_view(const char *buf, ViewDesc *v)
+{
+    char field[128];
+    const char *p = buf;
+    p = next_field(p, field, sizeof(field)); v->view_id = (uint32_t)atoi(field);
+    p = next_field(p, field, sizeof(field)); v->db_id = (uint32_t)atoi(field);
+    p = next_field(p, field, sizeof(field)); v->schema_id = (uint32_t)atoi(field);
+    p = next_field(p, v->view_name, CAT_MAX_NAME_LEN);
+    if (p && *p) {
+        strncpy(v->view_sql, p, sizeof(v->view_sql) - 1);
+        v->view_sql[sizeof(v->view_sql) - 1] = '\0';
+    } else {
+        v->view_sql[0] = '\0';
+    }
+}
+
+int cat_create_view(uint32_t db_id, uint32_t schema_id,
+                    const char *name, const char *sql)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_view_key(schema_id, name, key, sizeof(key));
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_VIEWS], key, &existing) == 0)
+        return -1;
+    ViewDesc v;
+    memset(&v, 0, sizeof(v));
+    v.view_id = pgm_next_id(0);
+    v.db_id = db_id;
+    v.schema_id = schema_id;
+    strncpy(v.view_name, name, CAT_MAX_NAME_LEN - 1);
+    strncpy(v.view_sql, sql, sizeof(v.view_sql) - 1);
+    char record[8192];
+    serialize_view(&v, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_VIEWS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_VIEWS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_view(uint32_t db_id, uint32_t schema_id,
+                  const char *name, ViewDesc *out)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_view_key(schema_id, name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_VIEWS], key, &rid) < 0)
+        return -1;
+    char record[8192];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+    deserialize_view(record, out);
+    return 0;
+}
+
+int cat_drop_view(uint32_t db_id, uint32_t schema_id, const char *name)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_view_key(schema_id, name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_VIEWS], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_VIEWS], key);
+    return 0;
+}
+
+int cat_list_views(uint32_t schema_id, ViewDesc *out, int max)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(schema_id, prefix, sizeof(prefix));
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_VIEWS], prefix, &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, strlen(prefix)) != 0) break;
+        char record[8192];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_view(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
 }
