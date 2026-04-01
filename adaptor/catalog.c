@@ -261,6 +261,82 @@ static int handle_set(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (!starts_with_i(sql, "SET"))
         return 0;
 
+    /* SET @var = expr — user variables */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == '@') {
+            p++; /* skip @ */
+            char varname[128] = "";
+            int vi = 0;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_') && vi < 127)
+                varname[vi++] = *p++;
+            varname[vi] = '\0';
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (*p == '=') {
+                p++;
+                while (*p && isspace((unsigned char)*p)) p++;
+                /* Evaluate the RHS value — simple: strip quotes, or use as literal */
+                char value[256] = "";
+                if (*p == '\'') {
+                    p++;
+                    int vl = 0;
+                    while (*p && *p != '\'' && vl < 255) value[vl++] = *p++;
+                    value[vl] = '\0';
+                } else {
+                    /* Numeric or expression — try simple eval */
+                    strncpy(value, p, 255);
+                    value[255] = '\0';
+                    /* Trim trailing semicolon/whitespace */
+                    int vl = (int)strlen(value);
+                    while (vl > 0 && (value[vl-1] == ';' || isspace((unsigned char)value[vl-1])))
+                        value[--vl] = '\0';
+                    /* Simple arithmetic: try to evaluate */
+                    char *endp;
+                    double d = strtod(value, &endp);
+                    if (*endp == '\0' && value[0] != '\0') {
+                        if (d == (double)(long long)d)
+                            snprintf(value, sizeof(value), "%lld", (long long)d);
+                        else
+                            snprintf(value, sizeof(value), "%g", d);
+                    }
+                    /* Handle simple expressions: a + b, a - b, etc. */
+                    char *plus = strchr(value, '+');
+                    char *minus = strrchr(value, '-');
+                    if (plus && plus != value) {
+                        double a = strtod(value, NULL);
+                        double b = strtod(plus + 1, NULL);
+                        snprintf(value, sizeof(value), "%g", a + b);
+                    } else if (minus && minus != value && *(minus-1) != 'e' && *(minus-1) != 'E') {
+                        double a = strtod(value, NULL);
+                        double b = strtod(minus + 1, NULL);
+                        snprintf(value, sizeof(value), "%g", a - b);
+                    }
+                }
+                if (ctx && varname[0]) {
+                    /* Find or create variable slot */
+                    int slot = -1;
+                    for (int i = 0; i < ctx->user_var_count; i++) {
+                        if (strcasecmp(ctx->user_var_names[i], varname) == 0) {
+                            slot = i; break;
+                        }
+                    }
+                    if (slot < 0 && ctx->user_var_count < 64) {
+                        slot = ctx->user_var_count++;
+                        strncpy(ctx->user_var_names[slot], varname, 127);
+                        ctx->user_var_names[slot][127] = '\0';
+                    }
+                    if (slot >= 0) {
+                        strncpy(ctx->user_var_values[slot], value, 255);
+                        ctx->user_var_values[slot][255] = '\0';
+                    }
+                }
+                strcpy(rs->command_tag, "SET");
+                return 1;
+            }
+        }
+    }
+
     /* SET SCHEMA <name> must go to the parser, not be stubbed */
     {
         const char *p = sql + 3;

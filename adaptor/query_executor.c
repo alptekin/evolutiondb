@@ -3244,6 +3244,21 @@ static void execute_ctas(const char *srcTable, ResultSet *rs, SessionCtx *ctx)
  *  the setjmp scope, and the stdout/stderr restore MUST be guarded
  *  against double-close in case longjmp fires after the first restore.
  * ---------------------------------------------------------------- */
+/* User variable lookup callback */
+static int evo_uservar_lookup(const char *name, char *out, int out_size, void *ctx)
+{
+    SessionCtx *session = (SessionCtx *)ctx;
+    if (!session) return -1;
+    for (int i = 0; i < session->user_var_count; i++) {
+        if (strcasecmp(session->user_var_names[i], name) == 0) {
+            strncpy(out, session->user_var_values[i], out_size - 1);
+            out[out_size - 1] = '\0';
+            return 0;
+        }
+    }
+    return -1; /* not found */
+}
+
 /* Subquery execution callback — called from expr_evaluate via function pointer.
  * Executes inner SELECT via recursive query_execute, returns first column values. */
 static int evo_subquery_exec(const char *sql, char out_values[][256],
@@ -3281,6 +3296,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (g_qctx) {
         g_qctx->subquery_fn = evo_subquery_exec;
         g_qctx->subquery_ctx = ctx;
+        g_qctx->uservar_fn = evo_uservar_lookup;
+        g_qctx->uservar_ctx = ctx;
     }
 
     /* Make a mutable copy, strip \r */
