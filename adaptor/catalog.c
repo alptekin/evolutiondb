@@ -3273,6 +3273,103 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* Distributed commands: SHOW TABLE PLACEMENT, SHOW NODES, MOVE TABLE */
     if (handle_distributed(sql, rs, ctx)) return 1;
 
+    /* CREATE/DROP VIEW — handle pre-parse (no grammar needed) */
+    {
+        const char *p = sql;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "CREATE", 6) == 0 && isspace((unsigned char)p[6])) {
+            const char *q = p + 7;
+            while (*q && isspace((unsigned char)*q)) q++;
+            int is_replace = 0;
+            if (strncasecmp(q, "OR", 2) == 0 && isspace((unsigned char)q[2])) {
+                q += 3;
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (strncasecmp(q, "REPLACE", 7) == 0) { is_replace = 1; q += 7; }
+                while (*q && isspace((unsigned char)*q)) q++;
+            }
+            if (strncasecmp(q, "VIEW", 4) == 0 && isspace((unsigned char)q[4])) {
+                q += 5;
+                while (*q && isspace((unsigned char)*q)) q++;
+                char vname[128] = "";
+                int vi = 0;
+                while (*q && (isalnum((unsigned char)*q) || *q == '_') && vi < 127)
+                    vname[vi++] = *q++;
+                vname[vi] = '\0';
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (strncasecmp(q, "AS", 2) == 0 && isspace((unsigned char)q[2])) {
+                    q += 3;
+                    while (*q && isspace((unsigned char)*q)) q++;
+                    /* q now points to the SELECT SQL */
+                    char vsql[4096];
+                    strncpy(vsql, q, sizeof(vsql) - 1);
+                    vsql[sizeof(vsql) - 1] = '\0';
+                    int vl = (int)strlen(vsql);
+                    while (vl > 0 && (vsql[vl-1] == ';' || isspace((unsigned char)vsql[vl-1])))
+                        vsql[--vl] = '\0';
+
+                    if (ctx) {
+                        DatabaseDesc dbd;
+                        SchemaDesc sd;
+                        if (cat_find_database(ctx->database, &dbd) == 0 &&
+                            cat_find_schema(dbd.db_id, ctx->schema, &sd) == 0) {
+                            ViewDesc existing;
+                            if (cat_find_view(dbd.db_id, sd.schema_id, vname, &existing) == 0) {
+                                if (is_replace) {
+                                    cat_drop_view(dbd.db_id, sd.schema_id, vname);
+                                } else {
+                                    result_set_error(rs, "42P07", "view already exists");
+                                    return 1;
+                                }
+                            }
+                            if (cat_create_view(dbd.db_id, sd.schema_id, vname, vsql) == 0) {
+                                strcpy(rs->command_tag, "CREATE VIEW");
+                                return 1;
+                            }
+                        }
+                    }
+                    result_set_error(rs, "XX000", "could not create view");
+                    return 1;
+                }
+            }
+        }
+        if (strncasecmp(p, "DROP", 4) == 0 && isspace((unsigned char)p[4])) {
+            const char *q = p + 5;
+            while (*q && isspace((unsigned char)*q)) q++;
+            if (strncasecmp(q, "VIEW", 4) == 0 && isspace((unsigned char)q[4])) {
+                q += 5;
+                while (*q && isspace((unsigned char)*q)) q++;
+                int if_exists = 0;
+                if (strncasecmp(q, "IF", 2) == 0 && isspace((unsigned char)q[2])) {
+                    q += 3;
+                    while (*q && isspace((unsigned char)*q)) q++;
+                    if (strncasecmp(q, "EXISTS", 6) == 0) { if_exists = 1; q += 6; }
+                    while (*q && isspace((unsigned char)*q)) q++;
+                }
+                char vname[128] = "";
+                int vi = 0;
+                while (*q && (isalnum((unsigned char)*q) || *q == '_') && vi < 127)
+                    vname[vi++] = *q++;
+                vname[vi] = '\0';
+                if (ctx) {
+                    DatabaseDesc dbd;
+                    SchemaDesc sd;
+                    if (cat_find_database(ctx->database, &dbd) == 0 &&
+                        cat_find_schema(dbd.db_id, ctx->schema, &sd) == 0) {
+                        ViewDesc vd;
+                        if (cat_find_view(dbd.db_id, sd.schema_id, vname, &vd) == 0) {
+                            cat_drop_view(dbd.db_id, sd.schema_id, vname);
+                        } else if (!if_exists) {
+                            result_set_error(rs, "42P01", "view does not exist");
+                            return 1;
+                        }
+                    }
+                }
+                strcpy(rs->command_tag, "DROP VIEW");
+                return 1;
+            }
+        }
+    }
+
     /* User management: CREATE/DROP/ALTER USER */
     if (handle_user_mgmt(sql, rs)) return 1;
 

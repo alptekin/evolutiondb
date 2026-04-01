@@ -3995,7 +3995,8 @@ static void normalize_sql(char *sql)
                 if (from_start && src >= from_start && src < from_end &&
                     (*src == ' ' || *src == '\t') &&
                     strncasecmp(src + 1, "AS ", 3) == 0 &&
-                    (isalpha((unsigned char)src[4]) || src[4] == '_')) {
+                    (isalpha((unsigned char)src[4]) || src[4] == '_') &&
+                    src > sql && *(src - 1) != ')') {  /* preserve AS after derived tables */
                     char *p = (char *)src + 4;
                     while (*p && (isalnum((unsigned char)*p) || *p == '_'))
                         p++;
@@ -4656,6 +4657,7 @@ static void execute_set_operation(const char *sql, ResultSet *rs,
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
+    char *view_rewritten = NULL;
     char saved_db[256] = "";
     char saved_schema[256] = "";
     int qualified = 0;
@@ -4761,6 +4763,63 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+    /* ── View resolution: replace view names with (view_sql) AS name ── */
+    {
+        if ((is_select_query(sql) || is_insert_query(sql) ||
+             is_update_query(sql) || is_delete_query(sql)) && ctx) {
+            DatabaseDesc vdb;
+            SchemaDesc vsch;
+            if (cat_find_database(ctx->database, &vdb) == 0 &&
+                cat_find_schema(vdb.db_id, ctx->schema, &vsch) == 0) {
+                char vmat[8192];
+                strncpy(vmat, sql, sizeof(vmat) - 1);
+                vmat[sizeof(vmat) - 1] = '\0';
+                int vchanged = 1;
+                while (vchanged) {
+                    vchanged = 0;
+                    int vlen = (int)strlen(vmat);
+                    for (int vi = 0; vi < vlen - 5; vi++) {
+                        if (vmat[vi] == '\'') { vi++; while (vi < vlen && vmat[vi] != '\'') vi++; continue; }
+                        int is_from = (strncasecmp(vmat + vi, "FROM ", 5) == 0);
+                        int is_join = (strncasecmp(vmat + vi, "JOIN ", 5) == 0);
+                        if (!is_from && !is_join) continue;
+                        int ns = vi + 5;
+                        while (ns < vlen && isspace((unsigned char)vmat[ns])) ns++;
+                        if (ns >= vlen || vmat[ns] == '(') continue; /* derived table */
+                        if (!isalpha((unsigned char)vmat[ns]) && vmat[ns] != '_') continue;
+                        int ne = ns;
+                        while (ne < vlen && (isalnum((unsigned char)vmat[ne]) || vmat[ne] == '_')) ne++;
+                        char tname[128];
+                        int tl = ne - ns;
+                        if (tl >= 128 || tl == 0) continue;
+                        memcpy(tname, vmat + ns, tl);
+                        tname[tl] = '\0';
+                        if (strcasecmp(tname, "SELECT") == 0 || strcasecmp(tname, "WHERE") == 0 ||
+                            strcasecmp(tname, "SET") == 0 || strcasecmp(tname, "VALUES") == 0 ||
+                            strcasecmp(tname, "ON") == 0 || strcasecmp(tname, "USING") == 0) continue;
+                        ViewDesc vd;
+                        if (cat_find_view(vdb.db_id, vsch.schema_id, tname, &vd) == 0) {
+                            char repl[4200];
+                            snprintf(repl, sizeof(repl), "(%s) AS %s", vd.view_sql, tname);
+                            int rl = (int)strlen(repl);
+                            int nlen = vlen - tl + rl;
+                            if (nlen < (int)sizeof(vmat)) {
+                                memmove(vmat + ns + rl, vmat + ne, vlen - ne + 1);
+                                memcpy(vmat + ns, repl, rl);
+                                vchanged = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (strcmp(vmat, sql) != 0) {
+                    view_rewritten = strdup(vmat);
+                    sql = view_rewritten;
+                }
+            }
+        }
+    }
+
     /* ── Pre-parse subquery materialization ── */
     /* Scan for (SELECT ...) patterns, execute inner SELECT, replace with result */
     {
@@ -4786,6 +4845,22 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     continue;
                 if (i + 7 < len && isalnum((unsigned char)mat[i + 7]))
                     continue; /* not a keyword boundary */
+                /* Skip derived tables and view subqueries: only process
+                 * (SELECT if preceded by operator, IN, EXISTS — not FROM/JOIN/AS */
+                {
+                    int j = i - 1;
+                    while (j >= 0 && isspace((unsigned char)mat[j])) j--;
+                    if (j >= 0) {
+                        /* Check what precedes the '(' */
+                        if (j >= 3 && strncasecmp(mat + j - 3, "FROM", 4) == 0) continue;
+                        if (j >= 3 && strncasecmp(mat + j - 3, "JOIN", 4) == 0) continue;
+                        if (j >= 1 && strncasecmp(mat + j - 1, "AS", 2) == 0) continue;
+                        /* Also skip if preceded by comma (select list or value list) */
+                        if (mat[j] == ',') continue;
+                        /* Skip if at start of SQL (standalone subquery) */
+                        if (j < 0) continue;
+                    }
+                }
 
                 /* Find balanced closing ')' */
                 int depth = 1, end = i + 1;
@@ -5349,6 +5424,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
 
 writeback_session:
+    if (view_rewritten) { free(view_rewritten); view_rewritten = NULL; }
     /* Restore original db/schema context if we switched */
     if (qualified) {
         db_set_current_database(saved_db);

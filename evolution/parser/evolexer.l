@@ -286,6 +286,7 @@ TRUNCATE				{ return TRUNCATE; }
 UNION					{ return UNION; }
 UNIQUE					{ return UNIQUE; }
 UNKNOWN					{ return UNKNOWN; }
+VIEW					{ return VIEW; }
 UNSIGNED				{ return UNSIGNED; }
 UPDATE					{ return UPDATE; }
 UUID					{ return UUID; }
