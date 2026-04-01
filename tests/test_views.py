@@ -253,6 +253,66 @@ def test_combined_clauses(s):
     # LIMIT 1 → just Bob
     return len(rows) == 1 and rows[0][1] == 'Bob'
 
+def test_updatable_update(s):
+    """T18: UPDATE on view → updates underlying table"""
+    run(s, "DROP TABLE IF EXISTS uv_t")
+    run(s, "DROP VIEW IF EXISTS uv_v")
+    run(s, "CREATE TABLE uv_t (id INT PRIMARY KEY, name VARCHAR(50), status VARCHAR(20))")
+    run(s, "INSERT INTO uv_t VALUES (1, 'Alice', 'active')")
+    run(s, "INSERT INTO uv_t VALUES (2, 'Bob', 'active')")
+    run(s, "CREATE VIEW uv_v AS SELECT * FROM uv_t WHERE status = 'active'")
+    _, _, err, _ = run(s, "UPDATE uv_v SET name = 'Alice Updated' WHERE id = 1")
+    if err: print(f"    err: {err}"); run(s, "DROP VIEW IF EXISTS uv_v"); run(s, "DROP TABLE IF EXISTS uv_t"); return False
+    _, rows, _, _ = run(s, "SELECT name FROM uv_t WHERE id = 1")
+    run(s, "DROP VIEW IF EXISTS uv_v")
+    run(s, "DROP TABLE IF EXISTS uv_t")
+    return rows[0][0] == 'Alice Updated'
+
+def test_updatable_delete(s):
+    """T19: DELETE on view → deletes from underlying table"""
+    run(s, "DROP TABLE IF EXISTS uv_t")
+    run(s, "DROP VIEW IF EXISTS uv_v")
+    run(s, "CREATE TABLE uv_t (id INT PRIMARY KEY, status VARCHAR(20))")
+    run(s, "INSERT INTO uv_t VALUES (1, 'active')")
+    run(s, "INSERT INTO uv_t VALUES (2, 'inactive')")
+    run(s, "CREATE VIEW uv_v AS SELECT * FROM uv_t WHERE status = 'active'")
+    _, _, err, _ = run(s, "DELETE FROM uv_v WHERE id = 1")
+    if err: print(f"    err: {err}"); run(s, "DROP VIEW IF EXISTS uv_v"); run(s, "DROP TABLE IF EXISTS uv_t"); return False
+    _, rows, _, _ = run(s, "SELECT * FROM uv_t")
+    run(s, "DROP VIEW IF EXISTS uv_v")
+    run(s, "DROP TABLE IF EXISTS uv_t")
+    return len(rows) == 1  # only id=2 remains
+
+def test_updatable_insert(s):
+    """T20: INSERT into view → inserts into underlying table"""
+    run(s, "DROP TABLE IF EXISTS uv_t")
+    run(s, "DROP VIEW IF EXISTS uv_v")
+    run(s, "CREATE TABLE uv_t (id INT PRIMARY KEY, name VARCHAR(50))")
+    run(s, "CREATE VIEW uv_v AS SELECT * FROM uv_t")
+    _, _, err, _ = run(s, "INSERT INTO uv_v VALUES (1, 'Alice')")
+    if err: print(f"    err: {err}"); run(s, "DROP VIEW IF EXISTS uv_v"); run(s, "DROP TABLE IF EXISTS uv_t"); return False
+    _, rows, _, _ = run(s, "SELECT * FROM uv_t")
+    run(s, "DROP VIEW IF EXISTS uv_v")
+    run(s, "DROP TABLE IF EXISTS uv_t")
+    return len(rows) == 1 and rows[0][1] == 'Alice'
+
+def test_view_dependency(s):
+    """T21: DROP TABLE with dependent view → error"""
+    run(s, "DROP VIEW IF EXISTS dep_v")
+    run(s, "DROP TABLE IF EXISTS dep_t")
+    run(s, "CREATE TABLE dep_t (id INT PRIMARY KEY)")
+    run(s, "CREATE VIEW dep_v AS SELECT * FROM dep_t")
+    _, _, err, _ = run(s, "DROP TABLE dep_t")
+    if err and 'view' in err.lower():
+        # Expected: cannot drop table with dependent view
+        run(s, "DROP VIEW IF EXISTS dep_v")
+        run(s, "DROP TABLE IF EXISTS dep_t")
+        return True
+    # If no error, table was dropped (dependency check not enforced)
+    run(s, "DROP VIEW IF EXISTS dep_v")
+    run(s, "DROP TABLE IF EXISTS dep_t")
+    return False
+
 if __name__ == "__main__":
     print("=== Views Tests ===")
     test("T1: CREATE + SELECT", test_create_select)
@@ -272,5 +332,6 @@ if __name__ == "__main__":
     test("T15: ORDER BY on view", test_outer_orderby)
     test("T16: LIMIT on view", test_outer_limit)
     test("T17: combined clauses", test_combined_clauses)
+    test("T18: DROP TABLE with view dep", test_view_dependency)
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)
