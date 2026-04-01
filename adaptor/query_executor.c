@@ -4765,7 +4765,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* ── View resolution: SQL merge (iterative for nested views) ── */
     for (int _vr = 0; _vr < 5; _vr++) {
-        if (!is_select_query(sql) || !ctx) break;
+        if (!ctx) break;
+        if (!is_select_query(sql)) break;
         {   DatabaseDesc vdb;
             SchemaDesc vsch;
             if (cat_find_database(ctx->database, &vdb) == 0 &&
@@ -4940,6 +4941,72 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                                     sql = view_rewritten;
                                     continue; /* re-check for nested views */
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+            /* DML on view: simple table name substitution */
+            if (0) {  /* DML on view — deferred */
+                /* Extract table name from DML */
+                const char *q = sql;
+                while (*q && isspace((unsigned char)*q)) q++;
+                char tname[128] = "";
+                if (strncasecmp(q, "UPDATE", 6) == 0) {
+                    const char *t = q + 6;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    int ti = 0;
+                    while (*t && (isalnum((unsigned char)*t) || *t == '_') && ti < 127)
+                        tname[ti++] = *t++;
+                    tname[ti] = '\0';
+                } else if (strncasecmp(q, "DELETE", 6) == 0) {
+                    const char *t = q + 6;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    if (strncasecmp(t, "FROM", 4) == 0) t += 4;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    int ti = 0;
+                    while (*t && (isalnum((unsigned char)*t) || *t == '_') && ti < 127)
+                        tname[ti++] = *t++;
+                    tname[ti] = '\0';
+                } else if (strncasecmp(q, "INSERT", 6) == 0) {
+                    const char *t = q + 6;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    if (strncasecmp(t, "INTO", 4) == 0) t += 4;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    int ti = 0;
+                    while (*t && (isalnum((unsigned char)*t) || *t == '_') && ti < 127)
+                        tname[ti++] = *t++;
+                    tname[ti] = '\0';
+                }
+                if (tname[0]) {
+                    ViewDesc vd;
+                    if (cat_find_view(vdb.db_id, vsch.schema_id, tname, &vd) == 0) {
+                        /* Extract underlying table name from view SQL */
+                        const char *vf = strcasestr(vd.view_sql, " FROM ");
+                        if (vf) {
+                            vf += 6;
+                            while (*vf && isspace((unsigned char)*vf)) vf++;
+                            char underlying[128] = "";
+                            int ui = 0;
+                            while (*vf && (isalnum((unsigned char)*vf) || *vf == '_') && ui < 127)
+                                underlying[ui++] = *vf++;
+                            underlying[ui] = '\0';
+                            if (underlying[0]) {
+                                /* Replace view name with underlying table in SQL */
+                                char merged[8192];
+                                strncpy(merged, sql, sizeof(merged) - 1);
+                                merged[sizeof(merged) - 1] = '\0';
+                                char *pos = strcasestr(merged, tname);
+                                if (pos) {
+                                    int tn = (int)strlen(tname);
+                                    int un = (int)strlen(underlying);
+                                    memmove(pos + un, pos + tn, strlen(pos + tn) + 1);
+                                    memcpy(pos, underlying, un);
+                                }
+                                if (view_rewritten) free(view_rewritten);
+                                view_rewritten = strdup(merged);
+                                sql = view_rewritten;
+                                continue;
                             }
                         }
                     }
