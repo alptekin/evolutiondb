@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include "database.h"
 #include "expression.h"   /* NULL_MARKER */
@@ -2445,4 +2446,112 @@ void AddShardRangeDef(const char *name, const char *bound, int node_id)
     g_create.shardRanges[i].bound[255] = '\0';
     g_create.shardRanges[i].node_id = node_id;
     g_create.shardRangeCount++;
+}
+
+/* ---- CREATE / DROP VIEW ---- */
+
+int CreateViewProcess(const char *viewName)
+{
+    /* Extract view SQL from the original SQL input.
+     * The original SQL is: "CREATE [OR REPLACE] VIEW name AS SELECT ..."
+     * We need everything after "AS " */
+    extern __thread const char *g_lex_input;
+    char viewSql[4096] = "";
+    if (g_lex_input) {
+        const char *as = strcasestr(g_lex_input, " AS ");
+        if (as) {
+            const char *sel = as + 4;
+            while (*sel && isspace((unsigned char)*sel)) sel++;
+            strncpy(viewSql, sel, sizeof(viewSql) - 1);
+            viewSql[sizeof(viewSql) - 1] = '\0';
+            /* Trim trailing whitespace/semicolons */
+            int len = (int)strlen(viewSql);
+            while (len > 0 && (viewSql[len-1] == ';' || isspace((unsigned char)viewSql[len-1])))
+                viewSql[--len] = '\0';
+        }
+    }
+
+    if (viewSql[0] == '\0') {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "could not extract view SQL for \"%s\"", viewName);
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Resolve current database and schema */
+    DatabaseDesc dbDesc;
+    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "current database not found");
+        g_err.error = 1;
+        return -1;
+    }
+    SchemaDesc schDesc;
+    const char *schema = db_get_current_schema();
+    if (cat_find_schema(dbDesc.db_id, schema, &schDesc) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "current schema not found");
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Check for OR REPLACE — if view exists, drop it first */
+    ViewDesc existing;
+    if (cat_find_view(dbDesc.db_id, schDesc.schema_id, viewName, &existing) == 0) {
+        /* Check if OR REPLACE was specified (heuristic: check original SQL) */
+        if (g_lex_input && strcasestr(g_lex_input, "OR REPLACE")) {
+            cat_drop_view(dbDesc.db_id, schDesc.schema_id, viewName);
+        } else {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "view \"%s\" already exists", viewName);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE("42P07");
+            return -1;
+        }
+    }
+
+    if (cat_create_view(dbDesc.db_id, schDesc.schema_id, viewName, viewSql) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "could not create view \"%s\"", viewName);
+        g_err.error = 1;
+        return -1;
+    }
+
+    printf("CREATE VIEW\n");
+    return 0;
+}
+
+int DropViewProcess(const char *viewName, int ifExists)
+{
+    DatabaseDesc dbDesc;
+    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) {
+        if (ifExists) { printf("DROP VIEW\n"); return 0; }
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "current database not found");
+        g_err.error = 1;
+        return -1;
+    }
+    SchemaDesc schDesc;
+    const char *schema = db_get_current_schema();
+    if (cat_find_schema(dbDesc.db_id, schema, &schDesc) < 0) {
+        if (ifExists) { printf("DROP VIEW\n"); return 0; }
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "current schema not found");
+        g_err.error = 1;
+        return -1;
+    }
+
+    ViewDesc vd;
+    if (cat_find_view(dbDesc.db_id, schDesc.schema_id, viewName, &vd) < 0) {
+        if (ifExists) { printf("DROP VIEW\n"); return 0; }
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "view \"%s\" does not exist", viewName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42P01");
+        return -1;
+    }
+
+    cat_drop_view(dbDesc.db_id, schDesc.schema_id, viewName);
+    printf("DROP VIEW\n");
+    return 0;
 }

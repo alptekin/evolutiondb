@@ -533,6 +533,72 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* ── SHOW VIEWS ── */
+    if (stristr_found(sql, "views")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "view_name", PG_OID_TEXT);
+        result_add_column(rs, "view_sql", PG_OID_TEXT);
+        DatabaseDesc vdb;
+        if (ctx && cat_find_database(ctx->database, &vdb) == 0) {
+            SchemaDesc vsch;
+            if (cat_find_schema(vdb.db_id, ctx->schema, &vsch) == 0) {
+                ViewDesc views[64];
+                int nv = cat_list_views(vsch.schema_id, views, 64);
+                for (int i = 0; i < nv; i++) {
+                    int row = result_add_row(rs);
+                    result_set_field(rs, row, 0, views[i].view_name);
+                    result_set_field(rs, row, 1, views[i].view_sql);
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* ── SHOW CREATE VIEW name ── */
+    if (strncasecmp(sql + 4, " CREATE VIEW", 12) == 0 ||
+        strncasecmp(sql + 4, "  CREATE VIEW", 13) == 0) {
+        const char *p = sql + 4;
+        while (*p && isspace((unsigned char)*p)) p++;
+        p += 6; /* skip CREATE */
+        while (*p && isspace((unsigned char)*p)) p++;
+        p += 4; /* skip VIEW */
+        while (*p && isspace((unsigned char)*p)) p++;
+        char vname[128] = "";
+        int vi = 0;
+        while (*p && (isalnum((unsigned char)*p) || *p == '_') && vi < 127)
+            vname[vi++] = *p++;
+        vname[vi] = '\0';
+
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "View", PG_OID_TEXT);
+        result_add_column(rs, "Create View", PG_OID_TEXT);
+
+        if (ctx && vname[0]) {
+            DatabaseDesc vdb;
+            SchemaDesc vsch;
+            if (cat_find_database(ctx->database, &vdb) == 0 &&
+                cat_find_schema(vdb.db_id, ctx->schema, &vsch) == 0) {
+                ViewDesc vd;
+                if (cat_find_view(vdb.db_id, vsch.schema_id, vname, &vd) == 0) {
+                    int row = result_add_row(rs);
+                    result_set_field(rs, row, 0, vname);
+                    char create_stmt[4200];
+                    snprintf(create_stmt, sizeof(create_stmt),
+                             "CREATE VIEW %s AS %s", vname, vd.view_sql);
+                    result_set_field(rs, row, 1, create_stmt);
+                } else {
+                    result_set_error(rs, "42P01", "view does not exist");
+                    return 1;
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* ── SHOW USERS ── */
     if (stristr_found(sql, "users")) {
         result_init(rs);
@@ -3272,6 +3338,235 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* Distributed commands: SHOW TABLE PLACEMENT, SHOW NODES, MOVE TABLE */
     if (handle_distributed(sql, rs, ctx)) return 1;
+
+    /* DML on view — handled in query_executor.c view resolution, not here
+     * (catalog_try_handle cannot call query_execute recursively) */
+    if (0) {
+        const char *p = sql;
+        while (*p && isspace((unsigned char)*p)) p++;
+        int is_upd = (strncasecmp(p, "UPDATE", 6) == 0 && isspace((unsigned char)p[6]));
+        int is_del = (strncasecmp(p, "DELETE", 6) == 0);
+        int is_ins = (strncasecmp(p, "INSERT", 6) == 0);
+        if ((is_upd || is_del || is_ins) && ctx) {
+            /* Extract table name */
+            const char *t = p + 6;
+            while (*t && isspace((unsigned char)*t)) t++;
+            if (is_del && strncasecmp(t, "FROM", 4) == 0) { t += 4; while (*t && isspace((unsigned char)*t)) t++; }
+            if (is_ins && strncasecmp(t, "INTO", 4) == 0) { t += 4; while (*t && isspace((unsigned char)*t)) t++; }
+            char vname[128] = "";
+            int vi = 0;
+            while (*t && (isalnum((unsigned char)*t) || *t == '_') && vi < 127)
+                vname[vi++] = *t++;
+            vname[vi] = '\0';
+
+            if (vname[0]) {
+                DatabaseDesc dbd;
+                SchemaDesc sd;
+                if (cat_find_database(ctx->database, &dbd) == 0 &&
+                    cat_find_schema(dbd.db_id, ctx->schema, &sd) == 0) {
+                    ViewDesc vd;
+                    if (cat_find_view(dbd.db_id, sd.schema_id, vname, &vd) == 0) {
+                        /* Check updatable: no JOIN/UNION/GROUP BY */
+                        if (strcasestr(vd.view_sql, " JOIN ") ||
+                            strcasestr(vd.view_sql, " UNION ") ||
+                            strcasestr(vd.view_sql, " GROUP BY ")) {
+                            result_set_error(rs, "42809",
+                                "cannot modify a non-updatable view (contains JOIN/UNION/GROUP BY)");
+                            return 1;
+                        }
+
+                        /* Extract underlying table from view SQL */
+                        const char *vf = strcasestr(vd.view_sql, " FROM ");
+                        if (!vf) { result_set_error(rs, "XX000", "invalid view SQL"); return 1; }
+                        vf += 6;
+                        while (*vf && isspace((unsigned char)*vf)) vf++;
+                        char underlying[128] = "";
+                        int ui = 0;
+                        while (*vf && (isalnum((unsigned char)*vf) || *vf == '_') && ui < 127)
+                            underlying[ui++] = *vf++;
+                        underlying[ui] = '\0';
+
+                        if (!underlying[0]) { result_set_error(rs, "XX000", "cannot resolve view table"); return 1; }
+
+                        /* Extract view WHERE condition */
+                        char view_where[2048] = "";
+                        const char *vw = strcasestr(vd.view_sql, " WHERE ");
+                        if (vw) {
+                            strncpy(view_where, vw + 7, sizeof(view_where) - 1);
+                            view_where[sizeof(view_where) - 1] = '\0';
+                            /* Trim trailing ORDER BY/LIMIT/; */
+                            char *trim;
+                            if ((trim = strcasestr(view_where, " ORDER BY "))) *trim = '\0';
+                            if ((trim = strcasestr(view_where, " LIMIT "))) *trim = '\0';
+                            int vl = (int)strlen(view_where);
+                            while (vl > 0 && (view_where[vl-1] == ';' || isspace((unsigned char)view_where[vl-1])))
+                                view_where[--vl] = '\0';
+                        }
+
+                        /* Build rewritten SQL: replace view name with underlying table */
+                        const char *rest = t; /* everything after view name */
+                        char new_sql[8192];
+
+                        if (is_upd) {
+                            if (view_where[0]) {
+                                /* Check if outer has WHERE */
+                                const char *ow = strcasestr(rest, " WHERE ");
+                                if (ow) {
+                                    /* UPDATE underlying SET ... WHERE view_cond AND outer_cond */
+                                    snprintf(new_sql, sizeof(new_sql), "UPDATE %s%.*s WHERE %s AND %s",
+                                             underlying, (int)(ow - rest), rest, view_where, ow + 7);
+                                } else {
+                                    snprintf(new_sql, sizeof(new_sql), "UPDATE %s%s WHERE %s",
+                                             underlying, rest, view_where);
+                                }
+                            } else {
+                                snprintf(new_sql, sizeof(new_sql), "UPDATE %s%s", underlying, rest);
+                            }
+                        } else if (is_del) {
+                            if (view_where[0]) {
+                                const char *ow = strcasestr(rest, " WHERE ");
+                                if (ow) {
+                                    snprintf(new_sql, sizeof(new_sql), "DELETE FROM %s WHERE %s AND %s",
+                                             underlying, view_where, ow + 7);
+                                } else {
+                                    snprintf(new_sql, sizeof(new_sql), "DELETE FROM %s WHERE %s",
+                                             underlying, view_where);
+                                }
+                            } else {
+                                snprintf(new_sql, sizeof(new_sql), "DELETE FROM %s%s", underlying, rest);
+                            }
+                        } else if (is_ins) {
+                            snprintf(new_sql, sizeof(new_sql), "INSERT INTO %s%s", underlying, rest);
+                        }
+
+                        /* Execute rewritten SQL */
+                        result_init(rs);
+                        query_execute(new_sql, rs, ctx);
+
+                        /* WITH CHECK OPTION: verify view condition after DML */
+                        if (vd.check_option && view_where[0] && !rs->has_error) {
+                            /* TODO: re-query to verify inserted/updated rows satisfy view condition */
+                        }
+
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /* CREATE/DROP VIEW — handle pre-parse (no grammar needed) */
+    {
+        const char *p = sql;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "CREATE", 6) == 0 && isspace((unsigned char)p[6])) {
+            const char *q = p + 7;
+            while (*q && isspace((unsigned char)*q)) q++;
+            int is_replace = 0;
+            if (strncasecmp(q, "OR", 2) == 0 && isspace((unsigned char)q[2])) {
+                q += 3;
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (strncasecmp(q, "REPLACE", 7) == 0) { is_replace = 1; q += 7; }
+                while (*q && isspace((unsigned char)*q)) q++;
+            }
+            if (strncasecmp(q, "VIEW", 4) == 0 && isspace((unsigned char)q[4])) {
+                q += 5;
+                while (*q && isspace((unsigned char)*q)) q++;
+                char vname[128] = "";
+                int vi = 0;
+                while (*q && (isalnum((unsigned char)*q) || *q == '_') && vi < 127)
+                    vname[vi++] = *q++;
+                vname[vi] = '\0';
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (strncasecmp(q, "AS", 2) == 0 && isspace((unsigned char)q[2])) {
+                    q += 3;
+                    while (*q && isspace((unsigned char)*q)) q++;
+                    /* q now points to the SELECT SQL */
+                    char vsql[4096];
+                    strncpy(vsql, q, sizeof(vsql) - 1);
+                    vsql[sizeof(vsql) - 1] = '\0';
+                    int vl = (int)strlen(vsql);
+                    while (vl > 0 && (vsql[vl-1] == ';' || isspace((unsigned char)vsql[vl-1])))
+                        vsql[--vl] = '\0';
+
+                    /* Detect WITH CHECK OPTION */
+                    int check_opt = 0;
+                    {
+                        char *wco = strcasestr(vsql, "WITH CHECK OPTION");
+                        if (!wco) wco = strcasestr(vsql, "WITH CASCADED CHECK OPTION");
+                        if (!wco) wco = strcasestr(vsql, "WITH LOCAL CHECK OPTION");
+                        if (wco) {
+                            if (strcasestr(wco, "LOCAL")) check_opt = 2;
+                            else check_opt = 1; /* CASCADED (default) */
+                            *wco = '\0'; /* strip from view SQL */
+                            int svl = (int)strlen(vsql);
+                            while (svl > 0 && isspace((unsigned char)vsql[svl-1]))
+                                vsql[--svl] = '\0';
+                        }
+                    }
+
+                    if (ctx) {
+                        DatabaseDesc dbd;
+                        SchemaDesc sd;
+                        if (cat_find_database(ctx->database, &dbd) == 0 &&
+                            cat_find_schema(dbd.db_id, ctx->schema, &sd) == 0) {
+                            ViewDesc existing;
+                            if (cat_find_view(dbd.db_id, sd.schema_id, vname, &existing) == 0) {
+                                if (is_replace) {
+                                    cat_drop_view(dbd.db_id, sd.schema_id, vname);
+                                } else {
+                                    result_set_error(rs, "42P07", "view already exists");
+                                    return 1;
+                                }
+                            }
+                            if (cat_create_view(dbd.db_id, sd.schema_id, vname, vsql) == 0) {
+                                strcpy(rs->command_tag, "CREATE VIEW");
+                                return 1;
+                            }
+                        }
+                    }
+                    result_set_error(rs, "XX000", "could not create view");
+                    return 1;
+                }
+            }
+        }
+        if (strncasecmp(p, "DROP", 4) == 0 && isspace((unsigned char)p[4])) {
+            const char *q = p + 5;
+            while (*q && isspace((unsigned char)*q)) q++;
+            if (strncasecmp(q, "VIEW", 4) == 0 && isspace((unsigned char)q[4])) {
+                q += 5;
+                while (*q && isspace((unsigned char)*q)) q++;
+                int if_exists = 0;
+                if (strncasecmp(q, "IF", 2) == 0 && isspace((unsigned char)q[2])) {
+                    q += 3;
+                    while (*q && isspace((unsigned char)*q)) q++;
+                    if (strncasecmp(q, "EXISTS", 6) == 0) { if_exists = 1; q += 6; }
+                    while (*q && isspace((unsigned char)*q)) q++;
+                }
+                char vname[128] = "";
+                int vi = 0;
+                while (*q && (isalnum((unsigned char)*q) || *q == '_') && vi < 127)
+                    vname[vi++] = *q++;
+                vname[vi] = '\0';
+                if (ctx) {
+                    DatabaseDesc dbd;
+                    SchemaDesc sd;
+                    if (cat_find_database(ctx->database, &dbd) == 0 &&
+                        cat_find_schema(dbd.db_id, ctx->schema, &sd) == 0) {
+                        ViewDesc vd;
+                        if (cat_find_view(dbd.db_id, sd.schema_id, vname, &vd) == 0) {
+                            cat_drop_view(dbd.db_id, sd.schema_id, vname);
+                        } else if (!if_exists) {
+                            result_set_error(rs, "42P01", "view does not exist");
+                            return 1;
+                        }
+                    }
+                }
+                strcpy(rs->command_tag, "DROP VIEW");
+                return 1;
+            }
+        }
+    }
 
     /* User management: CREATE/DROP/ALTER USER */
     if (handle_user_mgmt(sql, rs)) return 1;

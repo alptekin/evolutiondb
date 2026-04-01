@@ -69,7 +69,8 @@ typedef enum {
     CAT_SYS_CLOG        = 9,
     CAT_SYS_VMAP         = 10,
     CAT_SYS_SHARDS       = 11,
-    CAT_MAX              = 12
+    CAT_SYS_VIEWS        = 12,
+    CAT_MAX              = 13
 } CatalogID;
 
 typedef struct {
