@@ -372,7 +372,7 @@ expr: NAME
         free($1);
     }
 | NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
-| USERVAR									{ emit("USERVAR %s", $1); $$ = expr_make_string($1); free($1); }
+| USERVAR									{ emit("USERVAR %s", $1); ExprNode *uv = expr_make_func0(EXPR_USERVAR, $1); if(uv) strncpy(uv->val.strval, $1, 255); free($1); $$ = uv; }
 | STRING
     {
         char *sv = $1;
@@ -1495,13 +1495,13 @@ insert_asgn_list: NAME COMPARISON expr                                          
 
 
 /** replace just like insert **/
-stmt: replace_stmt								{ emit("STMT"); }
+stmt: replace_stmt								{ emit("STMT"); InsertProcess(); }
 ;
 
 replace_stmt: REPLACE insert_opts opt_into NAME
 opt_col_names
 VALUES insert_vals_list
-opt_ondupupdate									{ emit("REPLACEVALS %d %d %s", $2, $7, $4); free($4); }
+opt_ondupupdate									{ emit("REPLACEVALS %d %d %s", $2, $7, $4); GetInsertionTableName($4); if (g_qctx) g_ins.rowCount = -2; /* REPLACE flag */ free($4); }
 ;
 
 replace_stmt: REPLACE insert_opts opt_into NAME

@@ -1725,6 +1725,16 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
 
+    /* ── User variables ── */
+    if (e->type == EXPR_USERVAR) {
+        if (g_qctx && g_qctx->uservar_fn) {
+            if (g_qctx->uservar_fn(e->val.strval, out_buf, buf_size, g_qctx->uservar_ctx) == 0)
+                return 1;
+        }
+        strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+
     /* ── REGEXP ── */
     if (e->type == EXPR_REGEXP || e->type == EXPR_NOT_REGEXP) {
         char str[512], pat[256];
