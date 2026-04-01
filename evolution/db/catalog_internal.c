@@ -2434,6 +2434,7 @@ static void deserialize_view(const char *buf, ViewDesc *v)
     p = next_field(p, field, sizeof(field)); v->db_id = (uint32_t)atoi(field);
     p = next_field(p, field, sizeof(field)); v->schema_id = (uint32_t)atoi(field);
     p = next_field(p, v->view_name, CAT_MAX_NAME_LEN);
+    v->check_option = 0;
     if (p && *p) {
         strncpy(v->view_sql, p, sizeof(v->view_sql) - 1);
         v->view_sql[sizeof(v->view_sql) - 1] = '\0';

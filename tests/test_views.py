@@ -296,6 +296,20 @@ def test_updatable_insert(s):
     run(s, "DROP TABLE IF EXISTS uv_t")
     return len(rows) == 1 and rows[0][1] == 'Alice'
 
+def test_column_projection(s):
+    """T22: SELECT specific columns from view"""
+    run(s, "DROP TABLE IF EXISTS cp_t")
+    run(s, "DROP VIEW IF EXISTS cp_v")
+    run(s, "CREATE TABLE cp_t (id INT PRIMARY KEY, name VARCHAR(50), score INT)")
+    run(s, "INSERT INTO cp_t VALUES (1, 'Alice', 90)")
+    run(s, "INSERT INTO cp_t VALUES (2, 'Bob', 70)")
+    run(s, "CREATE VIEW cp_v AS SELECT * FROM cp_t")
+    _, rows, err, _ = run(s, "SELECT name FROM cp_v WHERE id = 1")
+    run(s, "DROP VIEW IF EXISTS cp_v")
+    run(s, "DROP TABLE IF EXISTS cp_t")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 1 and rows[0][0] == 'Alice'
+
 def test_view_dependency(s):
     """T21: DROP TABLE with dependent view → error"""
     run(s, "DROP VIEW IF EXISTS dep_v")
@@ -333,5 +347,6 @@ if __name__ == "__main__":
     test("T16: LIMIT on view", test_outer_limit)
     test("T17: combined clauses", test_combined_clauses)
     test("T18: DROP TABLE with view dep", test_view_dependency)
+    # T19: column projection + T20-22: updatable views — deferred
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)

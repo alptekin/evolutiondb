@@ -137,6 +137,7 @@ typedef struct {
     uint32_t schema_id;
     char     view_name[CAT_MAX_NAME_LEN];
     char     view_sql[4096];
+    int      check_option;   /* 0=none, 1=CASCADED, 2=LOCAL */
 } ViewDesc;
 
 /* ----------------------------------------------------------------
