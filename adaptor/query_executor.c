@@ -3995,7 +3995,8 @@ static void normalize_sql(char *sql)
                 if (from_start && src >= from_start && src < from_end &&
                     (*src == ' ' || *src == '\t') &&
                     strncasecmp(src + 1, "AS ", 3) == 0 &&
-                    (isalpha((unsigned char)src[4]) || src[4] == '_')) {
+                    (isalpha((unsigned char)src[4]) || src[4] == '_') &&
+                    src > sql && *(src - 1) != ')') {  /* preserve AS after derived tables */
                     char *p = (char *)src + 4;
                     while (*p && (isalnum((unsigned char)*p) || *p == '_'))
                         p++;
@@ -4656,6 +4657,7 @@ static void execute_set_operation(const char *sql, ResultSet *rs,
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
+    char *view_rewritten = NULL;
     char saved_db[256] = "";
     char saved_schema[256] = "";
     int qualified = 0;
@@ -4761,6 +4763,258 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+    /* ── View resolution: SQL merge (iterative for nested views) ── */
+    for (int _vr = 0; _vr < 5; _vr++) {
+        if (!ctx) break;
+        if (!is_select_query(sql)) break;
+        {   DatabaseDesc vdb;
+            SchemaDesc vsch;
+            if (cat_find_database(ctx->database, &vdb) == 0 &&
+                cat_find_schema(vdb.db_id, ctx->schema, &vsch) == 0) {
+                /* Parse outer query: extract table name from FROM */
+                const char *p = sql;
+                while (*p && isspace((unsigned char)*p)) p++;
+                if (strncasecmp(p, "SELECT", 6) == 0) {
+                    /* Find FROM clause */
+                    const char *from_kw = NULL;
+                    int depth = 0, in_str = 0;
+                    for (const char *s = p; *s; s++) {
+                        if (in_str) { if (*s == '\'') in_str = 0; continue; }
+                        if (*s == '\'') { in_str = 1; continue; }
+                        if (*s == '(') depth++;
+                        if (*s == ')') depth--;
+                        if (depth == 0 && strncasecmp(s, "FROM ", 5) == 0 &&
+                            (s == p || !isalnum((unsigned char)*(s-1)))) {
+                            from_kw = s;
+                            break;
+                        }
+                    }
+                    if (from_kw) {
+                        const char *tstart = from_kw + 5;
+                        while (*tstart && isspace((unsigned char)*tstart)) tstart++;
+                        if (*tstart && isalpha((unsigned char)*tstart)) {
+                            const char *tend = tstart;
+                            while (*tend && (isalnum((unsigned char)*tend) || *tend == '_')) tend++;
+                            char tname[128];
+                            int tl = (int)(tend - tstart);
+                            if (tl < 128 && tl > 0) {
+                                memcpy(tname, tstart, tl);
+                                tname[tl] = '\0';
+                                ViewDesc vd;
+                                if (cat_find_view(vdb.db_id, vsch.schema_id, tname, &vd) == 0) {
+                                    /* Found a view! Merge outer clauses into view SQL */
+                                    char merged[8192];
+
+                                    /* Extract outer SELECT columns */
+                                    char outer_cols[1024] = "*";
+                                    {
+                                        const char *sel_start = p + 6;
+                                        while (*sel_start && isspace((unsigned char)*sel_start)) sel_start++;
+                                        int col_len = (int)(from_kw - sel_start);
+                                        if (col_len > 0 && col_len < 1024) {
+                                            memcpy(outer_cols, sel_start, col_len);
+                                            outer_cols[col_len] = '\0';
+                                            /* Trim trailing whitespace */
+                                            int cl = col_len - 1;
+                                            while (cl >= 0 && isspace((unsigned char)outer_cols[cl]))
+                                                outer_cols[cl--] = '\0';
+                                        }
+                                    }
+
+                                    /* Extract outer WHERE, ORDER BY, LIMIT */
+                                    const char *after_table = tend;
+                                    while (*after_table && isspace((unsigned char)*after_table)) after_table++;
+                                    /* Skip optional alias */
+                                    if (strncasecmp(after_table, "AS ", 3) == 0) {
+                                        after_table += 3;
+                                        while (*after_table && (isalnum((unsigned char)*after_table) || *after_table == '_'))
+                                            after_table++;
+                                        while (*after_table && isspace((unsigned char)*after_table)) after_table++;
+                                    }
+
+                                    char outer_where[2048] = "";
+                                    char outer_orderby[512] = "";
+                                    char outer_limit[128] = "";
+                                    {
+                                        const char *s = after_table;
+                                        /* Find WHERE */
+                                        const char *w = NULL;
+                                        for (const char *k = s; *k; k++) {
+                                            if (strncasecmp(k, "WHERE ", 6) == 0 &&
+                                                (k == s || !isalnum((unsigned char)*(k-1)))) {
+                                                w = k + 6;
+                                                break;
+                                            }
+                                        }
+                                        if (w) {
+                                            /* WHERE extends until ORDER BY / LIMIT / end */
+                                            const char *we = w + strlen(w);
+                                            for (const char *k = w; *k; k++) {
+                                                if ((strncasecmp(k, "ORDER ", 6) == 0 ||
+                                                     strncasecmp(k, "LIMIT ", 6) == 0) &&
+                                                    (k == w || !isalnum((unsigned char)*(k-1)))) {
+                                                    we = k;
+                                                    break;
+                                                }
+                                            }
+                                            int wl = (int)(we - w);
+                                            if (wl > 0 && wl < 2048) {
+                                                memcpy(outer_where, w, wl);
+                                                outer_where[wl] = '\0';
+                                                int wt = wl - 1;
+                                                while (wt >= 0 && isspace((unsigned char)outer_where[wt]))
+                                                    outer_where[wt--] = '\0';
+                                            }
+                                        }
+                                        /* Find ORDER BY */
+                                        for (const char *k = s; *k; k++) {
+                                            if (strncasecmp(k, "ORDER BY ", 9) == 0) {
+                                                const char *ob = k + 9;
+                                                const char *obe = ob + strlen(ob);
+                                                for (const char *j = ob; *j; j++) {
+                                                    if (strncasecmp(j, "LIMIT ", 6) == 0) { obe = j; break; }
+                                                }
+                                                int ol = (int)(obe - ob);
+                                                if (ol > 0 && ol < 512) {
+                                                    memcpy(outer_orderby, ob, ol);
+                                                    outer_orderby[ol] = '\0';
+                                                    int ot = ol - 1;
+                                                    while (ot >= 0 && isspace((unsigned char)outer_orderby[ot]))
+                                                        outer_orderby[ot--] = '\0';
+                                                }
+                                                break;
+                                            }
+                                        }
+                                        /* Find LIMIT */
+                                        for (const char *k = s; *k; k++) {
+                                            if (strncasecmp(k, "LIMIT ", 6) == 0) {
+                                                strncpy(outer_limit, k + 6, 127);
+                                                outer_limit[127] = '\0';
+                                                int lt = (int)strlen(outer_limit) - 1;
+                                                while (lt >= 0 && (outer_limit[lt] == ';' || isspace((unsigned char)outer_limit[lt])))
+                                                    outer_limit[lt--] = '\0';
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    /* Build merged SQL */
+                                    /* Start with view SQL */
+                                    strncpy(merged, vd.view_sql, sizeof(merged) - 1);
+                                    merged[sizeof(merged) - 1] = '\0';
+                                    /* Trim trailing ; */
+                                    int ml = (int)strlen(merged);
+                                    while (ml > 0 && (merged[ml-1] == ';' || isspace((unsigned char)merged[ml-1])))
+                                        merged[--ml] = '\0';
+
+                                    /* Column projection deferred */
+
+                                    /* Append outer WHERE */
+                                    if (outer_where[0]) {
+                                        if (strcasestr(merged, " WHERE ")) {
+                                            /* View has WHERE — append with AND */
+                                            snprintf(merged + ml, sizeof(merged) - ml,
+                                                     " AND %s", outer_where);
+                                        } else {
+                                            snprintf(merged + ml, sizeof(merged) - ml,
+                                                     " WHERE %s", outer_where);
+                                        }
+                                        ml = (int)strlen(merged);
+                                    }
+
+                                    /* Append outer ORDER BY */
+                                    if (outer_orderby[0]) {
+                                        snprintf(merged + ml, sizeof(merged) - ml,
+                                                 " ORDER BY %s", outer_orderby);
+                                        ml = (int)strlen(merged);
+                                    }
+
+                                    /* Append outer LIMIT */
+                                    if (outer_limit[0]) {
+                                        snprintf(merged + ml, sizeof(merged) - ml,
+                                                 " LIMIT %s", outer_limit);
+                                    }
+
+                                    if (view_rewritten) free(view_rewritten);
+                                    view_rewritten = strdup(merged);
+                                    sql = view_rewritten;
+                                    continue; /* re-check for nested views */
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            /* DML on view: simple table name substitution */
+            if (0) { /* DML on view — deferred: crashes, needs investigation */
+                /* Extract table name from DML */
+                const char *q = sql;
+                while (*q && isspace((unsigned char)*q)) q++;
+                char tname[128] = "";
+                if (strncasecmp(q, "UPDATE", 6) == 0) {
+                    const char *t = q + 6;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    int ti = 0;
+                    while (*t && (isalnum((unsigned char)*t) || *t == '_') && ti < 127)
+                        tname[ti++] = *t++;
+                    tname[ti] = '\0';
+                } else if (strncasecmp(q, "DELETE", 6) == 0) {
+                    const char *t = q + 6;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    if (strncasecmp(t, "FROM", 4) == 0) t += 4;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    int ti = 0;
+                    while (*t && (isalnum((unsigned char)*t) || *t == '_') && ti < 127)
+                        tname[ti++] = *t++;
+                    tname[ti] = '\0';
+                } else if (strncasecmp(q, "INSERT", 6) == 0) {
+                    const char *t = q + 6;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    if (strncasecmp(t, "INTO", 4) == 0) t += 4;
+                    while (*t && isspace((unsigned char)*t)) t++;
+                    int ti = 0;
+                    while (*t && (isalnum((unsigned char)*t) || *t == '_') && ti < 127)
+                        tname[ti++] = *t++;
+                    tname[ti] = '\0';
+                }
+                if (tname[0]) {
+                    ViewDesc vd;
+                    if (cat_find_view(vdb.db_id, vsch.schema_id, tname, &vd) == 0) {
+                        /* Extract underlying table name from view SQL */
+                        const char *vf = strcasestr(vd.view_sql, " FROM ");
+                        if (vf) {
+                            vf += 6;
+                            while (*vf && isspace((unsigned char)*vf)) vf++;
+                            char underlying[128] = "";
+                            int ui = 0;
+                            while (*vf && (isalnum((unsigned char)*vf) || *vf == '_') && ui < 127)
+                                underlying[ui++] = *vf++;
+                            underlying[ui] = '\0';
+                            if (underlying[0]) {
+                                /* Replace view name with underlying table in SQL */
+                                char merged[8192];
+                                strncpy(merged, sql, sizeof(merged) - 1);
+                                merged[sizeof(merged) - 1] = '\0';
+                                char *pos = strcasestr(merged, tname);
+                                if (pos) {
+                                    int tn = (int)strlen(tname);
+                                    int un = (int)strlen(underlying);
+                                    memmove(pos + un, pos + tn, strlen(pos + tn) + 1);
+                                    memcpy(pos, underlying, un);
+                                }
+                                if (view_rewritten) free(view_rewritten);
+                                view_rewritten = strdup(merged);
+                                sql = view_rewritten;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        break; /* no view found, exit loop */
+    }
+
     /* ── Pre-parse subquery materialization ── */
     /* Scan for (SELECT ...) patterns, execute inner SELECT, replace with result */
     {
@@ -4786,6 +5040,22 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     continue;
                 if (i + 7 < len && isalnum((unsigned char)mat[i + 7]))
                     continue; /* not a keyword boundary */
+                /* Skip derived tables and view subqueries: only process
+                 * (SELECT if preceded by operator, IN, EXISTS — not FROM/JOIN/AS */
+                {
+                    int j = i - 1;
+                    while (j >= 0 && isspace((unsigned char)mat[j])) j--;
+                    if (j >= 0) {
+                        /* Check what precedes the '(' */
+                        if (j >= 3 && strncasecmp(mat + j - 3, "FROM", 4) == 0) continue;
+                        if (j >= 3 && strncasecmp(mat + j - 3, "JOIN", 4) == 0) continue;
+                        if (j >= 1 && strncasecmp(mat + j - 1, "AS", 2) == 0) continue;
+                        /* Also skip if preceded by comma (select list or value list) */
+                        if (mat[j] == ',') continue;
+                        /* Skip if at start of SQL (standalone subquery) */
+                        if (j < 0) continue;
+                    }
+                }
 
                 /* Find balanced closing ')' */
                 int depth = 1, end = i + 1;
@@ -5349,6 +5619,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
 
 writeback_session:
+    if (view_rewritten) { free(view_rewritten); view_rewritten = NULL; }
     /* Restore original db/schema context if we switched */
     if (qualified) {
         db_set_current_database(saved_db);

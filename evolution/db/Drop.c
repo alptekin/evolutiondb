@@ -24,6 +24,30 @@ int DropTableProcess(void)
         return -1;
     }
 
+    /* Check view dependencies — reject if a view references this table */
+    {
+        DatabaseDesc dbDesc;
+        if (cat_find_database(g_currentDatabase, &dbDesc) == 0) {
+            SchemaDesc schemas[16];
+            int ns = cat_list_schemas(dbDesc.db_id, schemas, 16);
+            for (int si = 0; si < ns; si++) {
+                ViewDesc views[32];
+                int nv = cat_list_views(schemas[si].schema_id, views, 32);
+                for (int vi = 0; vi < nv; vi++) {
+                    if (strcasestr(views[vi].view_sql, td.table_name)) {
+                        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                                 "cannot drop table \"%s\": view \"%s\" depends on it",
+                                 td.table_name, views[vi].view_name);
+                        g_err.error = 1;
+                        EVOSQL_SET_SQLSTATE("2BP01");
+                        TruncateDrop();
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+
     /* Destroy PK B+ tree */
     BTree2 pk_tree = tapi_pk_tree(&td);
     bt2_destroy(&pk_tree);

@@ -267,6 +267,7 @@
 %token UNION
 %token UNIQUE
 %token UUID
+%token VIEW
 %token USING
 %token USE
 %token HASH
@@ -1614,6 +1615,8 @@ stmt: DROP DATABASE NAME
 opt_if_not_exists: /* nil */                                                    { $$ = 0; }
 | IF EXISTS									{ if(!$2) { yyerror(scanner, "IF EXISTS doesn't exist"); YYERROR; } $$ = $2; /* NOT EXISTS hack */ }
 ;
+
+/* CREATE/DROP VIEW handled in catalog.c pre-parse */
 
 /** create domain **/
 stmt: create_domain_stmt                                                        { emit("STMT"); }

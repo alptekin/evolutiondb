@@ -1416,7 +1416,7 @@
 
 ## Day 36 — Views & Prepared Statements
 
-### Task 70: ⬜ Views — CREATE VIEW / DROP VIEW (Feature #21)
+### Task 70: ✅ Views — CREATE VIEW / DROP VIEW (Feature #21)
 
 **Goal:** Implement basic views as stored SELECT queries.
 

@@ -245,6 +245,8 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
 /* ALTER TABLE ADD/DROP COLUMN */
 int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode);
 int AlterTableDropColumn(const char *tableName, const char *colName);
+int CreateViewProcess(const char *viewName);
+int DropViewProcess(const char *viewName, int ifExists);
 int AlterTableRenameColumn(const char *tableName, const char *oldName, const char *newName);
 int AlterTableModifyColumn(const char *tableName, const char *colName, int newTypeCode);
 int AlterTableChangeColumn(const char *tableName, const char *oldName,

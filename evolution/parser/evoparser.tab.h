@@ -223,77 +223,78 @@
      UNION = 439,
      UNIQUE = 440,
      UUID = 441,
-     USING = 442,
-     USE = 443,
-     HASH = 444,
-     VALIDATE = 445,
-     VARCHAR = 446,
-     VALUES = 447,
-     VARBINARY = 448,
-     WHERE = 449,
-     WHEN = 450,
-     WITH = 451,
-     YEAR = 452,
-     YEAR_MONTH = 453,
-     ZEROFILL = 454,
-     EXISTS = 455,
-     FSUBSTRING = 456,
-     FTRIM = 457,
-     FDATE_ADD = 458,
-     FDATE_SUB = 459,
-     FDATEDIFF = 460,
-     FYEAR = 461,
-     FMONTH = 462,
-     FDAY = 463,
-     FHOUR = 464,
-     FMINUTE = 465,
-     FSECOND = 466,
-     FNOW = 467,
-     FLEFT = 468,
-     FRIGHT = 469,
-     FLPAD = 470,
-     FRPAD = 471,
-     FREVERSE = 472,
-     FREPEAT = 473,
-     FINSTR = 474,
-     FLOCATE = 475,
-     FABS = 476,
-     FCEIL = 477,
-     FFLOOR = 478,
-     FROUND = 479,
-     FPOWER = 480,
-     FSQRT = 481,
-     FMOD = 482,
-     FRAND = 483,
-     FLOG = 484,
-     FLOG10 = 485,
-     FSIGN = 486,
-     FPI = 487,
-     FCAST = 488,
-     FCONVERT = 489,
-     FNULLIF = 490,
-     FIFNULL = 491,
-     FIF = 492,
-     UNKNOWN = 493,
-     FGROUP_CONCAT = 494,
-     SEPARATOR = 495,
-     FCOUNT = 496,
-     FSUM = 497,
-     FAVG = 498,
-     FMIN = 499,
-     FMAX = 500,
-     FUPPER = 501,
-     FLOWER = 502,
-     FLENGTH = 503,
-     FCONCAT = 504,
-     FREPLACE = 505,
-     FCOALESCE = 506,
-     FGEN_RANDOM_UUID = 507,
-     FGEN_RANDOM_UUID_V7 = 508,
-     FSNOWFLAKE_ID = 509,
-     FLAST_INSERT_ID = 510,
-     FEVO_SLEEP = 511,
-     FEVO_JITTER = 512
+     VIEW = 442,
+     USING = 443,
+     USE = 444,
+     HASH = 445,
+     VALIDATE = 446,
+     VARCHAR = 447,
+     VALUES = 448,
+     VARBINARY = 449,
+     WHERE = 450,
+     WHEN = 451,
+     WITH = 452,
+     YEAR = 453,
+     YEAR_MONTH = 454,
+     ZEROFILL = 455,
+     EXISTS = 456,
+     FSUBSTRING = 457,
+     FTRIM = 458,
+     FDATE_ADD = 459,
+     FDATE_SUB = 460,
+     FDATEDIFF = 461,
+     FYEAR = 462,
+     FMONTH = 463,
+     FDAY = 464,
+     FHOUR = 465,
+     FMINUTE = 466,
+     FSECOND = 467,
+     FNOW = 468,
+     FLEFT = 469,
+     FRIGHT = 470,
+     FLPAD = 471,
+     FRPAD = 472,
+     FREVERSE = 473,
+     FREPEAT = 474,
+     FINSTR = 475,
+     FLOCATE = 476,
+     FABS = 477,
+     FCEIL = 478,
+     FFLOOR = 479,
+     FROUND = 480,
+     FPOWER = 481,
+     FSQRT = 482,
+     FMOD = 483,
+     FRAND = 484,
+     FLOG = 485,
+     FLOG10 = 486,
+     FSIGN = 487,
+     FPI = 488,
+     FCAST = 489,
+     FCONVERT = 490,
+     FNULLIF = 491,
+     FIFNULL = 492,
+     FIF = 493,
+     UNKNOWN = 494,
+     FGROUP_CONCAT = 495,
+     SEPARATOR = 496,
+     FCOUNT = 497,
+     FSUM = 498,
+     FAVG = 499,
+     FMIN = 500,
+     FMAX = 501,
+     FUPPER = 502,
+     FLOWER = 503,
+     FLENGTH = 504,
+     FCONCAT = 505,
+     FREPLACE = 506,
+     FCOALESCE = 507,
+     FGEN_RANDOM_UUID = 508,
+     FGEN_RANDOM_UUID_V7 = 509,
+     FSNOWFLAKE_ID = 510,
+     FLAST_INSERT_ID = 511,
+     FEVO_SLEEP = 512,
+     FEVO_JITTER = 513
    };
 #endif
 /* Tokens.  */
@@ -481,77 +482,78 @@
 #define UNION 439
 #define UNIQUE 440
 #define UUID 441
-#define USING 442
-#define USE 443
-#define HASH 444
-#define VALIDATE 445
-#define VARCHAR 446
-#define VALUES 447
-#define VARBINARY 448
-#define WHERE 449
-#define WHEN 450
-#define WITH 451
-#define YEAR 452
-#define YEAR_MONTH 453
-#define ZEROFILL 454
-#define EXISTS 455
-#define FSUBSTRING 456
-#define FTRIM 457
-#define FDATE_ADD 458
-#define FDATE_SUB 459
-#define FDATEDIFF 460
-#define FYEAR 461
-#define FMONTH 462
-#define FDAY 463
-#define FHOUR 464
-#define FMINUTE 465
-#define FSECOND 466
-#define FNOW 467
-#define FLEFT 468
-#define FRIGHT 469
-#define FLPAD 470
-#define FRPAD 471
-#define FREVERSE 472
-#define FREPEAT 473
-#define FINSTR 474
-#define FLOCATE 475
-#define FABS 476
-#define FCEIL 477
-#define FFLOOR 478
-#define FROUND 479
-#define FPOWER 480
-#define FSQRT 481
-#define FMOD 482
-#define FRAND 483
-#define FLOG 484
-#define FLOG10 485
-#define FSIGN 486
-#define FPI 487
-#define FCAST 488
-#define FCONVERT 489
-#define FNULLIF 490
-#define FIFNULL 491
-#define FIF 492
-#define UNKNOWN 493
-#define FGROUP_CONCAT 494
-#define SEPARATOR 495
-#define FCOUNT 496
-#define FSUM 497
-#define FAVG 498
-#define FMIN 499
-#define FMAX 500
-#define FUPPER 501
-#define FLOWER 502
-#define FLENGTH 503
-#define FCONCAT 504
-#define FREPLACE 505
-#define FCOALESCE 506
-#define FGEN_RANDOM_UUID 507
-#define FGEN_RANDOM_UUID_V7 508
-#define FSNOWFLAKE_ID 509
-#define FLAST_INSERT_ID 510
-#define FEVO_SLEEP 511
-#define FEVO_JITTER 512
+#define VIEW 442
+#define USING 443
+#define USE 444
+#define HASH 445
+#define VALIDATE 446
+#define VARCHAR 447
+#define VALUES 448
+#define VARBINARY 449
+#define WHERE 450
+#define WHEN 451
+#define WITH 452
+#define YEAR 453
+#define YEAR_MONTH 454
+#define ZEROFILL 455
+#define EXISTS 456
+#define FSUBSTRING 457
+#define FTRIM 458
+#define FDATE_ADD 459
+#define FDATE_SUB 460
+#define FDATEDIFF 461
+#define FYEAR 462
+#define FMONTH 463
+#define FDAY 464
+#define FHOUR 465
+#define FMINUTE 466
+#define FSECOND 467
+#define FNOW 468
+#define FLEFT 469
+#define FRIGHT 470
+#define FLPAD 471
+#define FRPAD 472
+#define FREVERSE 473
+#define FREPEAT 474
+#define FINSTR 475
+#define FLOCATE 476
+#define FABS 477
+#define FCEIL 478
+#define FFLOOR 479
+#define FROUND 480
+#define FPOWER 481
+#define FSQRT 482
+#define FMOD 483
+#define FRAND 484
+#define FLOG 485
+#define FLOG10 486
+#define FSIGN 487
+#define FPI 488
+#define FCAST 489
+#define FCONVERT 490
+#define FNULLIF 491
+#define FIFNULL 492
+#define FIF 493
+#define UNKNOWN 494
+#define FGROUP_CONCAT 495
+#define SEPARATOR 496
+#define FCOUNT 497
+#define FSUM 498
+#define FAVG 499
+#define FMIN 500
+#define FMAX 501
+#define FUPPER 502
+#define FLOWER 503
+#define FLENGTH 504
+#define FCONCAT 505
+#define FREPLACE 506
+#define FCOALESCE 507
+#define FGEN_RANDOM_UUID 508
+#define FGEN_RANDOM_UUID_V7 509
+#define FSNOWFLAKE_ID 510
+#define FLAST_INSERT_ID 511
+#define FEVO_SLEEP 512
+#define FEVO_JITTER 513
 
 
 
@@ -567,7 +569,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 571 "parser/evoparser.tab.h"
+#line 573 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
