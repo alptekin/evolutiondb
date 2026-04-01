@@ -52,3 +52,4 @@ wiki/
 wal.*
 *.wal
 *.db
+*.archive
