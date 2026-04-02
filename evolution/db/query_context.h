@@ -165,6 +165,22 @@ typedef struct {
     uint32_t concRootPage;    /* saved by Phase1 for Phase2 */
 } IndexOpts;
 
+/* ---- Window Function Spec ---- */
+#define MAX_WINDOW_FUNCS 16
+
+typedef struct {
+    int       expr_idx;              /* index in selectExprs[] */
+    int       func_type;             /* EXPR_ROW_NUMBER etc. */
+    char      partition_cols[8][128];/* PARTITION BY columns */
+    int       partition_col_count;
+    char      order_cols[8][128];    /* ORDER BY columns */
+    int       order_descs[8];        /* per-column ASC/DESC */
+    int       order_col_count;
+    ExprNode *arg_expr;              /* argument for window aggregates */
+    int       offset;                /* LEAD/LAG offset (default 1) */
+    char      default_val[256];      /* LEAD/LAG default ("" = NULL) */
+} WindowSpec;
+
 /* ---- WHERE / Expressions ---- */
 typedef struct {
     char      whereSel[1024];
@@ -181,6 +197,9 @@ typedef struct {
     ExprNode *caseWhenExprs[MAX_CASE_WHENS];
     ExprNode *caseThenExprs[MAX_CASE_WHENS];
     int       caseWhenCount;
+    /* Window functions */
+    WindowSpec windowSpecs[MAX_WINDOW_FUNCS];
+    int        windowSpecCount;
     /* Expression pool */
     ExprNode *nodePool;
     int       nodePoolSize;

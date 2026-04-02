@@ -204,8 +204,9 @@ NOT						{ return NOT; }
 NULL					{ return NULLX; }
 
 ON						{ return ON; }
+OVER					{ return OVER; }
 PARTIAL					{ return PARTIAL; }
-
+PARTITION				{ return PARTITION; }
 
 
 OR						{ return OR; }
@@ -394,6 +395,15 @@ LOG/"("					{ return FLOG; }
 LOG10/"("				{ return FLOG10; }
 SIGN/"("				{ return FSIGN; }
 PI/"("					{ return FPI; }
+
+ROW_NUMBER/"("			{ return FROW_NUMBER; }
+RANK					{ int c = input(yyscanner); unput(c); if(c == '(') return FRANK; yylval->strval = strdup(yytext); return NAME; }
+DENSE_RANK/"("			{ return FDENSE_RANK; }
+LEAD/"("				{ return FLEAD; }
+LAG/"("					{ return FLAG; }
+NTILE/"("				{ return FNTILE; }
+PERCENT_RANK/"("		{ return FPERCENT_RANK; }
+CUME_DIST/"("			{ return FCUME_DIST; }
 
 COUNT					{ int c = input(yyscanner); unput(c); if(c == '(') return FCOUNT; yylval->strval = strdup(yytext); return NAME; }  /* check trailing context manually */
 SUM						{ int c = input(yyscanner); unput(c); if(c == '(') return FSUM; yylval->strval = strdup(yytext); return NAME; }
