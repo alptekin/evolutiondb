@@ -34,8 +34,10 @@ void expr_pool_reset(void)
     g_expr.offsetExpr = NULL;
     g_expr.groupByCount = 0;
     g_expr.havingExpr = NULL;
+    g_expr.windowSpecCount = 0;
     memset(g_expr.selectExprs, 0, sizeof(g_expr.selectExprs));
     memset(g_expr.groupByExprs, 0, sizeof(g_expr.groupByExprs));
+    memset(g_expr.windowSpecs, 0, sizeof(g_expr.windowSpecs));
     g_constr.checkCount = 0;
     memset(g_constr.checkSerialized, 0, sizeof(g_constr.checkSerialized));
 }
@@ -767,6 +769,28 @@ ExprNode *expr_make_coalesce(ExprNode *a, ExprNode *b)
     return e;
 }
 
+/* ---- Window function constructor and predicate ---- */
+ExprNode *expr_make_window(ExprNodeType type, ExprNode *arg, const char *name)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = type;
+    e->left = arg;
+    if (arg && arg->display[0])
+        snprintf(e->display, sizeof(e->display), "%s(%s)", name, arg->display);
+    else if (arg)
+        snprintf(e->display, sizeof(e->display), "%s(expr)", name);
+    else
+        snprintf(e->display, sizeof(e->display), "%s", name);
+    return e;
+}
+
+int expr_is_window(const ExprNode *e)
+{
+    if (!e) return 0;
+    return (e->type >= EXPR_ROW_NUMBER && e->type <= EXPR_WIN_CUME_DIST);
+}
+
 /* ---- Check if expression is an aggregate ---- */
 int expr_is_aggregate(const ExprNode *e)
 {
@@ -969,6 +993,24 @@ int expr_evaluate(const ExprNode *e,
                     out_buf[buf_size - 1] = '\0';
                     return 1;
                 }
+            }
+        }
+        out_buf[0] = '\0';
+        return 0;
+    }
+
+    /* Window functions: look up pre-computed value by display name */
+    if (expr_is_window(e)) {
+        int c;
+        for (c = 0; c < num_cols; c++) {
+            if (strcasecmp(col_names[c], e->display) == 0) {
+                if (strcmp(col_values[c], NULL_MARKER) == 0) {
+                    out_buf[0] = '\0';
+                    return 0;
+                }
+                strncpy(out_buf, col_values[c], buf_size - 1);
+                out_buf[buf_size - 1] = '\0';
+                return 1;
             }
         }
         out_buf[0] = '\0';

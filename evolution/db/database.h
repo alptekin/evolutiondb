@@ -57,6 +57,13 @@ int GetOrderByColumn(char *name);
 void SetOrderByDirection(int desc);
 void AddOrderByColumn(const char *name, int desc);
 
+/* Window function parser helpers */
+void AddWindowSpec(int funcType, struct ExprNode *arg);
+void AddWindowPartitionCol(const char *col);
+void AddWindowOrderCol(const char *col, int desc);
+void SetWindowOffset(int offset);
+void SetWindowDefault(const char *val);
+
 int UpdateProcess(void);
 void SetMultiUpdate(void);
 void AddMultiUpdateSet(const char *table, const char *col,

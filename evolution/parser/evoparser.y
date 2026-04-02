@@ -314,6 +314,9 @@
 %token FLAST_INSERT_ID
 %token FEVO_SLEEP
 %token FEVO_JITTER
+%token FROW_NUMBER FRANK FDENSE_RANK
+%token FLEAD FLAG FNTILE FPERCENT_RANK FCUME_DIST
+%token OVER PARTITION
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -523,6 +526,53 @@ expr: FCOUNT '(' '*' ')'							{ emit("COUNTALL"); $$ = expr_make_count_star(); 
 | FGROUP_CONCAT '(' expr ')'                       { emit("CALL 1 GROUP_CONCAT"); ExprNode *e = expr_make_func1(EXPR_GROUP_CONCAT, $3, "GROUP_CONCAT"); if(e) strcpy(e->val.strval, ","); $$ = e; }
 | FGROUP_CONCAT '(' expr SEPARATOR STRING ')'       { emit("CALL 2 GROUP_CONCAT"); ExprNode *e = expr_make_func1(EXPR_GROUP_CONCAT, $3, "GROUP_CONCAT"); if(e) strncpy(e->val.strval, $5, 255); free($5); $$ = e; }
 ;
+
+/* window functions — ranking */
+expr: FROW_NUMBER '(' ')' OVER '(' { AddWindowSpec(EXPR_ROW_NUMBER, NULL); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW ROW_NUMBER"); $$ = expr_make_window(EXPR_ROW_NUMBER, NULL, "ROW_NUMBER()"); }
+| FRANK '(' ')' OVER '(' { AddWindowSpec(EXPR_RANK, NULL); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW RANK"); $$ = expr_make_window(EXPR_RANK, NULL, "RANK()"); }
+| FDENSE_RANK '(' ')' OVER '(' { AddWindowSpec(EXPR_DENSE_RANK, NULL); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW DENSE_RANK"); $$ = expr_make_window(EXPR_DENSE_RANK, NULL, "DENSE_RANK()"); }
+/* window functions — aggregates */
+| FSUM '(' expr ')' OVER '(' { AddWindowSpec(EXPR_WIN_SUM, $3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW SUM"); $$ = expr_make_window(EXPR_WIN_SUM, $3, "SUM"); }
+| FCOUNT '(' '*' ')' OVER '(' { AddWindowSpec(EXPR_WIN_COUNT_STAR, NULL); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW COUNT_STAR"); $$ = expr_make_window(EXPR_WIN_COUNT_STAR, NULL, "COUNT"); }
+| FCOUNT '(' expr ')' OVER '(' { AddWindowSpec(EXPR_WIN_COUNT, $3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW COUNT"); $$ = expr_make_window(EXPR_WIN_COUNT, $3, "COUNT"); }
+| FAVG '(' expr ')' OVER '(' { AddWindowSpec(EXPR_WIN_AVG, $3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW AVG"); $$ = expr_make_window(EXPR_WIN_AVG, $3, "AVG"); }
+| FMIN '(' expr ')' OVER '(' { AddWindowSpec(EXPR_WIN_MIN, $3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW MIN"); $$ = expr_make_window(EXPR_WIN_MIN, $3, "MIN"); }
+| FMAX '(' expr ')' OVER '(' { AddWindowSpec(EXPR_WIN_MAX, $3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW MAX"); $$ = expr_make_window(EXPR_WIN_MAX, $3, "MAX"); }
+/* LEAD / LAG offset functions */
+| FLEAD '(' expr ')' OVER '(' { AddWindowSpec(EXPR_WIN_LEAD, $3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LEAD"); $$ = expr_make_window(EXPR_WIN_LEAD, $3, "LEAD"); }
+| FLEAD '(' expr ',' INTNUM ')' OVER '(' { AddWindowSpec(EXPR_WIN_LEAD, $3); SetWindowOffset($5); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LEAD"); $$ = expr_make_window(EXPR_WIN_LEAD, $3, "LEAD"); }
+| FLEAD '(' expr ',' INTNUM ',' STRING ')' OVER '(' { AddWindowSpec(EXPR_WIN_LEAD, $3); SetWindowOffset($5); SetWindowDefault($7); free($7); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LEAD"); $$ = expr_make_window(EXPR_WIN_LEAD, $3, "LEAD"); }
+| FLEAD '(' expr ',' INTNUM ',' INTNUM ')' OVER '(' { AddWindowSpec(EXPR_WIN_LEAD, $3); SetWindowOffset($5); char _b[32]; snprintf(_b,sizeof(_b),"%d",$7); SetWindowDefault(_b); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LEAD"); $$ = expr_make_window(EXPR_WIN_LEAD, $3, "LEAD"); }
+| FLAG '(' expr ')' OVER '(' { AddWindowSpec(EXPR_WIN_LAG, $3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LAG"); $$ = expr_make_window(EXPR_WIN_LAG, $3, "LAG"); }
+| FLAG '(' expr ',' INTNUM ')' OVER '(' { AddWindowSpec(EXPR_WIN_LAG, $3); SetWindowOffset($5); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LAG"); $$ = expr_make_window(EXPR_WIN_LAG, $3, "LAG"); }
+| FLAG '(' expr ',' INTNUM ',' STRING ')' OVER '(' { AddWindowSpec(EXPR_WIN_LAG, $3); SetWindowOffset($5); SetWindowDefault($7); free($7); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LAG"); $$ = expr_make_window(EXPR_WIN_LAG, $3, "LAG"); }
+| FLAG '(' expr ',' INTNUM ',' INTNUM ')' OVER '(' { AddWindowSpec(EXPR_WIN_LAG, $3); SetWindowOffset($5); char _b2[32]; snprintf(_b2,sizeof(_b2),"%d",$7); SetWindowDefault(_b2); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW LAG"); $$ = expr_make_window(EXPR_WIN_LAG, $3, "LAG"); }
+/* NTILE / PERCENT_RANK / CUME_DIST */
+| FNTILE '(' INTNUM ')' OVER '(' { AddWindowSpec(EXPR_WIN_NTILE, NULL); SetWindowOffset($3); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW NTILE"); ExprNode *e = expr_make_window(EXPR_WIN_NTILE, NULL, "NTILE()"); if(e) e->val.intval = $3; $$ = e; }
+| FPERCENT_RANK '(' ')' OVER '(' { AddWindowSpec(EXPR_WIN_PERCENT_RANK, NULL); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW PERCENT_RANK"); $$ = expr_make_window(EXPR_WIN_PERCENT_RANK, NULL, "PERCENT_RANK()"); }
+| FCUME_DIST '(' ')' OVER '(' { AddWindowSpec(EXPR_WIN_CUME_DIST, NULL); } opt_window_partition opt_window_orderby ')'
+    { emit("WINDOW CUME_DIST"); $$ = expr_make_window(EXPR_WIN_CUME_DIST, NULL, "CUME_DIST()"); }
+;
+
 expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = expr_make_substring($3, $5, $7); }
 | FSUBSTRING '(' expr ',' expr ')'                 { emit("CALL 2 SUBSTR"); $$ = expr_make_substring($3, $5, NULL); }
 | FSUBSTRING '(' expr FROM expr ')'                { emit("CALL 2 SUBSTR"); $$ = expr_make_substring($3, $5, NULL); }
@@ -762,6 +812,27 @@ opt_with_rollup: /* nil */							{ $$ = 0; }
 
 opt_having: /* nil */
 | HAVING expr									{ emit("HAVING"); g_expr.havingExpr = $2; }
+;
+
+/* window function clauses */
+opt_window_partition: /* nil */
+| PARTITION BY window_partition_list
+;
+
+window_partition_list: NAME
+    { emit("WINDOW PARTITION %s", $1); AddWindowPartitionCol($1); free($1); }
+| window_partition_list ',' NAME
+    { emit("WINDOW PARTITION %s", $3); AddWindowPartitionCol($3); free($3); }
+;
+
+opt_window_orderby: /* nil */
+| ORDER BY window_orderby_list
+;
+
+window_orderby_list: NAME opt_asc_desc
+    { emit("WINDOW ORDER %s %d", $1, $2); AddWindowOrderCol($1, $2); free($1); }
+| window_orderby_list ',' NAME opt_asc_desc
+    { emit("WINDOW ORDER %s %d", $3, $4); AddWindowOrderCol($3, $4); free($3); }
 ;
 
 opt_orderby: /* nil */
