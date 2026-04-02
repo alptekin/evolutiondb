@@ -479,7 +479,7 @@ static int find_expr_index_match(const char *tableName, const ExprNode *whereExp
 /* Check if query can use streaming (no post-processing needed) */
 static int can_stream_results(void)
 {
-    /* Aggregates in SELECT prevent streaming */
+    /* Aggregates and window functions in SELECT prevent streaming */
     int i;
     for (i = 0; i < g_expr.selectExprCount; i++) {
         if (!g_expr.selectExprs[i]) continue;
@@ -487,6 +487,8 @@ static int can_stream_results(void)
         if (t == EXPR_COUNT_STAR || t == EXPR_COUNT ||
             t == EXPR_SUM || t == EXPR_AVG ||
             t == EXPR_MIN || t == EXPR_MAX)
+            return 0;
+        if (expr_is_window(g_expr.selectExprs[i]))
             return 0;
     }
     if (g_sel.orderByCount > 0 || g_sel.orderByColumn[0] != '\0') return 0;
@@ -968,6 +970,315 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
     return 1;  /* handled */
+}
+
+/* ----------------------------------------------------------------
+ *  Window function post-processing — qsort comparator context
+ * ---------------------------------------------------------------- */
+static __thread ResultSet *g_win_rs;
+static __thread int g_win_part_cols[8];
+static __thread int g_win_part_col_count;
+static __thread int g_win_ord_cols[8];
+static __thread int g_win_ord_descs[8];
+static __thread int g_win_ord_col_count;
+
+static int win_col_cmp(ResultSet *rs, int ra, int rb, int col) {
+    int na = rs->rows[ra].is_null[col];
+    int nb = rs->rows[rb].is_null[col];
+    if (na && nb) return 0;
+    if (na) return 1;
+    if (nb) return -1;
+    const char *va = rs->rows[ra].fields[col];
+    const char *vb = rs->rows[rb].fields[col];
+    char *ea, *eb;
+    double da = strtod(va ? va : "", &ea);
+    double db = strtod(vb ? vb : "", &eb);
+    if (*ea == '\0' && *eb == '\0' && va && vb && va[0] && vb[0])
+        return (da > db) ? 1 : (da < db) ? -1 : 0;
+    return strcasecmp(va ? va : "", vb ? vb : "");
+}
+
+static int win_sort_cmp(const void *a, const void *b) {
+    int ia = *(const int *)a, ib = *(const int *)b;
+    int cmp = 0, k;
+    for (k = 0; k < g_win_part_col_count && cmp == 0; k++)
+        cmp = win_col_cmp(g_win_rs, ia, ib, g_win_part_cols[k]);
+    for (k = 0; k < g_win_ord_col_count && cmp == 0; k++) {
+        cmp = win_col_cmp(g_win_rs, ia, ib, g_win_ord_cols[k]);
+        if (g_win_ord_descs[k]) cmp = -cmp;
+    }
+    return cmp;
+}
+
+static int win_same_partition(ResultSet *rs, int ra, int rb,
+                              int *pcols, int pcnt) {
+    int k;
+    for (k = 0; k < pcnt; k++) {
+        if (win_col_cmp(rs, ra, rb, pcols[k]) != 0) return 0;
+    }
+    return 1;
+}
+
+static int win_same_order(ResultSet *rs, int ra, int rb,
+                          int *ocols, int ocnt) {
+    int k;
+    for (k = 0; k < ocnt; k++) {
+        if (win_col_cmp(rs, ra, rb, ocols[k]) != 0) return 0;
+    }
+    return 1;
+}
+
+/* ----------------------------------------------------------------
+ *  Window function post-processing
+ * ---------------------------------------------------------------- */
+static void apply_window_functions(ResultSet *rs)
+{
+    if (g_expr.windowSpecCount == 0 || rs->num_rows == 0 || rs->num_cols == 0)
+        return;
+
+    int nrows = rs->num_rows;
+    int w;
+
+    for (w = 0; w < g_expr.windowSpecCount; w++) {
+        WindowSpec *ws = &g_expr.windowSpecs[w];
+
+        /* Resolve multi-column partition indices */
+        int part_cols[8], part_cnt = 0;
+        { int k, c;
+          for (k = 0; k < ws->partition_col_count && k < 8; k++) {
+            for (c = 0; c < rs->num_cols; c++) {
+                if (strcasecmp(rs->columns[c].name, ws->partition_cols[k]) == 0) {
+                    part_cols[part_cnt++] = c; break;
+                }
+            }
+          }
+        }
+
+        /* Resolve multi-column order indices */
+        int ord_cols[8], ord_descs[8], ord_cnt = 0;
+        { int k, c;
+          for (k = 0; k < ws->order_col_count && k < 8; k++) {
+            for (c = 0; c < rs->num_cols; c++) {
+                if (strcasecmp(rs->columns[c].name, ws->order_cols[k]) == 0) {
+                    ord_cols[ord_cnt] = c;
+                    ord_descs[ord_cnt] = ws->order_descs[k];
+                    ord_cnt++; break;
+                }
+            }
+          }
+        }
+
+        /* Resolve argument column index */
+        int arg_col = -1;
+        if (ws->arg_expr && ws->arg_expr->type == EXPR_COLUMN) {
+            int c;
+            for (c = 0; c < rs->num_cols; c++) {
+                if (strcasecmp(rs->columns[c].name, ws->arg_expr->val.col_name) == 0) {
+                    arg_col = c; break;
+                }
+            }
+        }
+
+        /* Build sorted index array + qsort */
+        int *sorted = malloc(nrows * sizeof(int));
+        if (!sorted) continue;
+        int i;
+        for (i = 0; i < nrows; i++) sorted[i] = i;
+
+        g_win_rs = rs;
+        memcpy(g_win_part_cols, part_cols, sizeof(int) * part_cnt);
+        g_win_part_col_count = part_cnt;
+        memcpy(g_win_ord_cols, ord_cols, sizeof(int) * ord_cnt);
+        memcpy(g_win_ord_descs, ord_descs, sizeof(int) * ord_cnt);
+        g_win_ord_col_count = ord_cnt;
+        qsort(sorted, nrows, sizeof(int), win_sort_cmp);
+
+        /* Allocate per-original-row result values */
+        char **win_vals = calloc(nrows, sizeof(char *));
+        if (!win_vals) { free(sorted); continue; }
+
+        /* Walk sorted rows, compute per-partition */
+        int part_start = 0;
+        while (part_start < nrows) {
+            int part_end = part_start + 1;
+            if (part_cnt == 0) {
+                part_end = nrows;
+            } else {
+                while (part_end < nrows &&
+                       win_same_partition(rs, sorted[part_start], sorted[part_end],
+                                          part_cols, part_cnt))
+                    part_end++;
+            }
+
+            int ft = ws->func_type;
+            int part_size = part_end - part_start;
+
+            if (ft == EXPR_WIN_SUM || ft == EXPR_WIN_COUNT || ft == EXPR_WIN_COUNT_STAR ||
+                ft == EXPR_WIN_AVG || ft == EXPR_WIN_MIN || ft == EXPR_WIN_MAX) {
+                /* Window aggregates: compute over entire partition */
+                double sum = 0; int count = 0;
+                double min_v = 0, max_v = 0;
+                int min_init = 0, max_init = 0;
+                for (i = part_start; i < part_end; i++) {
+                    int row_idx = sorted[i];
+                    if (ft == EXPR_WIN_COUNT_STAR) { count++; continue; }
+                    if (arg_col < 0) continue;
+                    if (rs->rows[row_idx].is_null[arg_col]) continue;
+                    const char *v = rs->rows[row_idx].fields[arg_col];
+                    if (!v || !v[0]) continue;
+                    double dv = atof(v);
+                    count++; sum += dv;
+                    if (!min_init || dv < min_v) { min_v = dv; min_init = 1; }
+                    if (!max_init || dv > max_v) { max_v = dv; max_init = 1; }
+                }
+                char buf[64];
+                for (i = part_start; i < part_end; i++) {
+                    int row_idx = sorted[i];
+                    switch (ft) {
+                    case EXPR_WIN_SUM:
+                        if (sum == (int)sum) snprintf(buf, sizeof(buf), "%d", (int)sum);
+                        else snprintf(buf, sizeof(buf), "%.6g", sum);
+                        break;
+                    case EXPR_WIN_COUNT: case EXPR_WIN_COUNT_STAR:
+                        snprintf(buf, sizeof(buf), "%d", count); break;
+                    case EXPR_WIN_AVG:
+                        if (count > 0) snprintf(buf, sizeof(buf), "%.6g", sum / count);
+                        else snprintf(buf, sizeof(buf), "0");
+                        break;
+                    case EXPR_WIN_MIN:
+                        if (min_init) { if (min_v == (int)min_v) snprintf(buf, sizeof(buf), "%d", (int)min_v);
+                        else snprintf(buf, sizeof(buf), "%.6g", min_v); }
+                        else buf[0] = '\0';
+                        break;
+                    case EXPR_WIN_MAX:
+                        if (max_init) { if (max_v == (int)max_v) snprintf(buf, sizeof(buf), "%d", (int)max_v);
+                        else snprintf(buf, sizeof(buf), "%.6g", max_v); }
+                        else buf[0] = '\0';
+                        break;
+                    default: buf[0] = '\0'; break;
+                    }
+                    win_vals[row_idx] = strdup(buf);
+                }
+            } else {
+                /* Ranking + offset + statistical functions */
+                int rank = 1, dense_rank = 1;
+                for (i = part_start; i < part_end; i++) {
+                    int row_idx = sorted[i];
+                    char buf[256];
+                    buf[0] = '\0';
+
+                    /* Check if order values changed from previous row */
+                    int same_ord = 0;
+                    if (i > part_start && ord_cnt > 0)
+                        same_ord = win_same_order(rs, sorted[i-1], sorted[i],
+                                                  ord_cols, ord_cnt);
+
+                    switch (ft) {
+                    case EXPR_ROW_NUMBER:
+                        snprintf(buf, sizeof(buf), "%d", i - part_start + 1);
+                        break;
+                    case EXPR_RANK:
+                        if (i > part_start && !same_ord)
+                            rank = i - part_start + 1;
+                        snprintf(buf, sizeof(buf), "%d", rank);
+                        break;
+                    case EXPR_DENSE_RANK:
+                        if (i > part_start && !same_ord)
+                            dense_rank++;
+                        snprintf(buf, sizeof(buf), "%d", dense_rank);
+                        break;
+                    case EXPR_WIN_LEAD: {
+                        int off = (ws->offset > 0) ? ws->offset : 1;
+                        int target = i + off;
+                        if (target < part_end && arg_col >= 0) {
+                            int tr = sorted[target];
+                            if (!rs->rows[tr].is_null[arg_col]) {
+                                const char *v = rs->rows[tr].fields[arg_col];
+                                snprintf(buf, sizeof(buf), "%s", v ? v : "");
+                            } else if (ws->default_val[0])
+                                snprintf(buf, sizeof(buf), "%s", ws->default_val);
+                            else { win_vals[row_idx] = NULL; continue; }
+                        } else if (ws->default_val[0])
+                            snprintf(buf, sizeof(buf), "%s", ws->default_val);
+                        else { win_vals[row_idx] = NULL; continue; }
+                        break;
+                    }
+                    case EXPR_WIN_LAG: {
+                        int off = (ws->offset > 0) ? ws->offset : 1;
+                        int target = i - off;
+                        if (target >= part_start && arg_col >= 0) {
+                            int tr = sorted[target];
+                            if (!rs->rows[tr].is_null[arg_col]) {
+                                const char *v = rs->rows[tr].fields[arg_col];
+                                snprintf(buf, sizeof(buf), "%s", v ? v : "");
+                            } else if (ws->default_val[0])
+                                snprintf(buf, sizeof(buf), "%s", ws->default_val);
+                            else { win_vals[row_idx] = NULL; continue; }
+                        } else if (ws->default_val[0])
+                            snprintf(buf, sizeof(buf), "%s", ws->default_val);
+                        else { win_vals[row_idx] = NULL; continue; }
+                        break;
+                    }
+                    case EXPR_WIN_NTILE: {
+                        int n = ws->offset;
+                        if (n <= 0) n = 1;
+                        int bucket = ((i - part_start) * n / part_size) + 1;
+                        if (bucket > n) bucket = n;
+                        snprintf(buf, sizeof(buf), "%d", bucket);
+                        break;
+                    }
+                    case EXPR_WIN_PERCENT_RANK: {
+                        if (i > part_start && !same_ord)
+                            rank = i - part_start + 1;
+                        double pr = (part_size <= 1) ? 0.0 :
+                            (double)(rank - 1) / (double)(part_size - 1);
+                        snprintf(buf, sizeof(buf), "%.6g", pr);
+                        break;
+                    }
+                    case EXPR_WIN_CUME_DIST: {
+                        /* Count how many rows have order value <= current */
+                        int le = 0, j;
+                        for (j = part_start; j < part_end; j++) {
+                            int c = win_col_cmp(rs, sorted[j], sorted[i],
+                                                ord_cnt > 0 ? ord_cols[0] : 0);
+                            if (ord_cnt > 0 && g_win_ord_descs[0]) c = -c;
+                            if (c <= 0) le++;
+                        }
+                        double cd = (double)le / (double)part_size;
+                        snprintf(buf, sizeof(buf), "%.6g", cd);
+                        break;
+                    }
+                    default: buf[0] = '\0'; break;
+                    }
+                    win_vals[row_idx] = strdup(buf);
+                }
+            }
+            part_start = part_end;
+        }
+
+        /* Add synthetic column to ResultSet */
+        int new_col = rs->num_cols;
+        if (new_col < MAX_COLUMNS) {
+            const char *col_name = "?window?";
+            int idx = ws->expr_idx;
+            if (idx >= 0 && idx < g_expr.selectExprCount && g_expr.selectExprs[idx])
+                col_name = g_expr.selectExprs[idx]->display;
+            result_add_column(rs, col_name, 20);
+            for (i = 0; i < nrows; i++) {
+                if (win_vals[i]) {
+                    row_set(&rs->rows[i], new_col, win_vals[i]);
+                    rs->rows[i].num_fields = rs->num_cols;
+                } else {
+                    row_set_null(&rs->rows[i], new_col);
+                    rs->rows[i].num_fields = rs->num_cols;
+                }
+            }
+        }
+
+        for (i = 0; i < nrows; i++) free(win_vals[i]);
+        free(win_vals);
+        free(sorted);
+    }
 }
 
 /* ----------------------------------------------------------------
@@ -1926,6 +2237,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
         }
     }
 
+    /* --- Window function post-processing (after GROUP BY, before ORDER BY) --- */
+    apply_window_functions(rs);
+
     /* --- ORDER BY (applied after WHERE and GROUP BY, before column filtering) --- */
     if (g_sel.orderByCount > 0 && rs->num_rows > 1) {
         /* Resolve column indices for all ORDER BY columns */
@@ -1956,43 +2270,33 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                 numOrderKeys = k + 1;
         }
         if (numOrderKeys > 0) {
-            /* Bubble sort with multi-key comparison */
-            int i, j;
-            for (i = 0; i < rs->num_rows - 1; i++) {
-                for (j = 0; j < rs->num_rows - 1 - i; j++) {
-                    int cmp = 0;
-                    for (k = 0; k < numOrderKeys && cmp == 0; k++) {
-                        int col = orderCols[k];
-                        int null_a = rs->rows[j].is_null[col];
-                        int null_b = rs->rows[j+1].is_null[col];
-                        if (null_a && null_b) cmp = 0;
-                        else if (null_a) cmp = 1;
-                        else if (null_b) cmp = -1;
-                        else {
-                            char *a = rs->rows[j].fields[col];
-                            char *b = rs->rows[j+1].fields[col];
-                            char *endA, *endB;
-                            double numA = strtod(a, &endA);
-                            double numB = strtod(b, &endB);
-                            if (*endA == '\0' && *endB == '\0' &&
-                                a[0] != '\0' && b[0] != '\0') {
-                                cmp = (numA > numB) ? 1 : (numA < numB) ? -1 : 0;
-                            } else {
-                                cmp = strcmp(a, b);
-                            }
-                        }
-                        if (orderDescs[k]) cmp = -cmp;
-                    }
-                    if (cmp > 0) {
-                        Row tmp = rs->rows[j];
-                        rs->rows[j] = rs->rows[j+1];
-                        rs->rows[j+1] = tmp;
-                    }
+            /* qsort with multi-key comparison (reuse window sort context) */
+            g_win_rs = rs;
+            g_win_part_col_count = 0; /* no partition keys for ORDER BY */
+            memcpy(g_win_ord_cols, orderCols, sizeof(int) * numOrderKeys);
+            memcpy(g_win_ord_descs, orderDescs, sizeof(int) * numOrderKeys);
+            g_win_ord_col_count = numOrderKeys;
+
+            /* Build index array, sort, then reorder rows */
+            int *idx = malloc(rs->num_rows * sizeof(int));
+            if (idx) {
+                int i;
+                for (i = 0; i < rs->num_rows; i++) idx[i] = i;
+                qsort(idx, rs->num_rows, sizeof(int), win_sort_cmp);
+
+                /* Reorder rows in-place using sorted index */
+                Row *tmp = malloc(rs->num_rows * sizeof(Row));
+                if (tmp) {
+                    for (i = 0; i < rs->num_rows; i++)
+                        tmp[i] = rs->rows[idx[i]];
+                    memcpy(rs->rows, tmp, rs->num_rows * sizeof(Row));
+                    free(tmp);
                 }
+                free(idx);
             }
         }
     } else if (g_sel.orderByColumn[0] != '\0' && rs->num_rows > 1) {
-        /* Legacy single-column ORDER BY fallback */
+        /* Legacy single-column ORDER BY fallback — also via qsort */
         int orderCol = -1;
         int c;
         for (c = 0; c < rs->num_cols; c++) {
@@ -2002,36 +2306,26 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
             }
         }
         if (orderCol >= 0) {
-            int i, j;
-            int desc = g_sel.orderByDesc;
-            for (i = 0; i < rs->num_rows - 1; i++) {
-                for (j = 0; j < rs->num_rows - 1 - i; j++) {
-                    int null_a = rs->rows[j].is_null[orderCol];
-                    int null_b = rs->rows[j+1].is_null[orderCol];
-                    int cmp;
-                    if (null_a && null_b) cmp = 0;
-                    else if (null_a) cmp = 1;
-                    else if (null_b) cmp = -1;
-                    else {
-                        char *a = rs->rows[j].fields[orderCol];
-                        char *b = rs->rows[j+1].fields[orderCol];
-                        char *endA, *endB;
-                        double numA = strtod(a, &endA);
-                        double numB = strtod(b, &endB);
-                        if (*endA == '\0' && *endB == '\0' &&
-                            a[0] != '\0' && b[0] != '\0') {
-                            cmp = (numA > numB) ? 1 : (numA < numB) ? -1 : 0;
-                        } else {
-                            cmp = strcmp(a, b);
-                        }
-                    }
-                    if (desc) cmp = -cmp;
-                    if (cmp > 0) {
-                        Row tmp = rs->rows[j];
-                        rs->rows[j] = rs->rows[j+1];
-                        rs->rows[j+1] = tmp;
-                    }
+            g_win_rs = rs;
+            g_win_part_col_count = 0;
+            g_win_ord_cols[0] = orderCol;
+            g_win_ord_descs[0] = g_sel.orderByDesc;
+            g_win_ord_col_count = 1;
+
+            int *idx = malloc(rs->num_rows * sizeof(int));
+            if (idx) {
+                int i;
+                for (i = 0; i < rs->num_rows; i++) idx[i] = i;
+                qsort(idx, rs->num_rows, sizeof(int), win_sort_cmp);
+
+                Row *tmp = malloc(rs->num_rows * sizeof(Row));
+                if (tmp) {
+                    for (i = 0; i < rs->num_rows; i++)
+                        tmp[i] = rs->rows[idx[i]];
+                    memcpy(rs->rows, tmp, rs->num_rows * sizeof(Row));
+                    free(tmp);
                 }
+                free(idx);
             }
         }
     }

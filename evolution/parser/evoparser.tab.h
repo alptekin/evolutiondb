@@ -294,7 +294,17 @@
      FSNOWFLAKE_ID = 510,
      FLAST_INSERT_ID = 511,
      FEVO_SLEEP = 512,
-     FEVO_JITTER = 513
+     FEVO_JITTER = 513,
+     FROW_NUMBER = 514,
+     FRANK = 515,
+     FDENSE_RANK = 516,
+     FLEAD = 517,
+     FLAG = 518,
+     FNTILE = 519,
+     FPERCENT_RANK = 520,
+     FCUME_DIST = 521,
+     OVER = 522,
+     PARTITION = 523
    };
 #endif
 /* Tokens.  */
@@ -554,13 +564,23 @@
 #define FLAST_INSERT_ID 511
 #define FEVO_SLEEP 512
 #define FEVO_JITTER 513
+#define FROW_NUMBER 514
+#define FRANK 515
+#define FDENSE_RANK 516
+#define FLEAD 517
+#define FLAG 518
+#define FNTILE 519
+#define FPERCENT_RANK 520
+#define FCUME_DIST 521
+#define OVER 522
+#define PARTITION 523
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 54 "parser/evoparser.y"
+#line 54 "evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -569,7 +589,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 573 "parser/evoparser.tab.h"
+#line 593 "evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

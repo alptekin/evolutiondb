@@ -337,6 +337,60 @@ void AddOrderByColumn(const char *name, int desc)
     }
 }
 
+/* ================================================================
+ *  Window function parser helpers
+ * ================================================================ */
+
+void AddWindowSpec(int funcType, ExprNode *arg)
+{
+    extern __thread int g_in_subquery;
+    if (g_in_subquery) return;
+    if (g_expr.windowSpecCount >= MAX_WINDOW_FUNCS) return;
+    WindowSpec *ws = &g_expr.windowSpecs[g_expr.windowSpecCount];
+    memset(ws, 0, sizeof(WindowSpec));
+    ws->expr_idx = g_expr.selectExprCount;
+    ws->func_type = funcType;
+    ws->arg_expr = arg;
+    g_expr.windowSpecCount++;
+}
+
+void AddWindowPartitionCol(const char *col)
+{
+    if (g_expr.windowSpecCount <= 0) return;
+    WindowSpec *ws = &g_expr.windowSpecs[g_expr.windowSpecCount - 1];
+    int i = ws->partition_col_count;
+    if (i >= 8) return;
+    strncpy(ws->partition_cols[i], col, 127);
+    ws->partition_cols[i][127] = '\0';
+    ws->partition_col_count++;
+}
+
+void AddWindowOrderCol(const char *col, int desc)
+{
+    if (g_expr.windowSpecCount <= 0) return;
+    WindowSpec *ws = &g_expr.windowSpecs[g_expr.windowSpecCount - 1];
+    int i = ws->order_col_count;
+    if (i >= 8) return;
+    strncpy(ws->order_cols[i], col, 127);
+    ws->order_cols[i][127] = '\0';
+    ws->order_descs[i] = desc;
+    ws->order_col_count++;
+}
+
+void SetWindowOffset(int offset)
+{
+    if (g_expr.windowSpecCount <= 0) return;
+    g_expr.windowSpecs[g_expr.windowSpecCount - 1].offset = offset;
+}
+
+void SetWindowDefault(const char *val)
+{
+    if (g_expr.windowSpecCount <= 0) return;
+    WindowSpec *ws = &g_expr.windowSpecs[g_expr.windowSpecCount - 1];
+    strncpy(ws->default_val, val, 255);
+    ws->default_val[255] = '\0';
+}
+
 int TruncateSelect(void)
 {
     int i;

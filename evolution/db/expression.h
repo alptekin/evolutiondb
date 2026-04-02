@@ -123,7 +123,22 @@ typedef enum {
     EXPR_SUBQUERY,        /* (SELECT ...) — scalar, returns single value */
     EXPR_IN_SUBQUERY,     /* expr IN (SELECT ...) */
     EXPR_NOT_IN_SUBQUERY, /* expr NOT IN (SELECT ...) */
-    EXPR_EXISTS_SUBQUERY  /* EXISTS (SELECT ...) / NOT EXISTS */
+    EXPR_EXISTS_SUBQUERY, /* EXISTS (SELECT ...) / NOT EXISTS */
+    /* Window functions */
+    EXPR_ROW_NUMBER,      /* ROW_NUMBER() OVER (...) */
+    EXPR_RANK,            /* RANK() OVER (...) */
+    EXPR_DENSE_RANK,      /* DENSE_RANK() OVER (...) */
+    EXPR_WIN_SUM,         /* SUM(expr) OVER (...) */
+    EXPR_WIN_COUNT,       /* COUNT(expr) OVER (...) */
+    EXPR_WIN_COUNT_STAR,  /* COUNT(*) OVER (...) */
+    EXPR_WIN_AVG,         /* AVG(expr) OVER (...) */
+    EXPR_WIN_MIN,         /* MIN(expr) OVER (...) */
+    EXPR_WIN_MAX,         /* MAX(expr) OVER (...) */
+    EXPR_WIN_LEAD,        /* LEAD(expr [, offset [, default]]) OVER (...) */
+    EXPR_WIN_LAG,         /* LAG(expr [, offset [, default]]) OVER (...) */
+    EXPR_WIN_NTILE,       /* NTILE(n) OVER (...) */
+    EXPR_WIN_PERCENT_RANK,/* PERCENT_RANK() OVER (...) */
+    EXPR_WIN_CUME_DIST    /* CUME_DIST() OVER (...) */
 } ExprNodeType;
 
 typedef struct ExprNode {
@@ -208,6 +223,10 @@ ExprNode *expr_make_exists_subquery(const char *sql, int negated);
 /* Constants for expression array sizes */
 #define MAX_CASE_WHENS 32
 #define MAX_GROUP_BY 16
+
+/* Window function constructor and predicate */
+ExprNode *expr_make_window(ExprNodeType type, ExprNode *arg, const char *name);
+int expr_is_window(const ExprNode *e);
 
 /* Check if any select expression is an aggregate function */
 int expr_is_aggregate(const ExprNode *e);
