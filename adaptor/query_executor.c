@@ -4951,11 +4951,11 @@ static void execute_set_operation(const char *sql, ResultSet *rs,
 /* ----------------------------------------------------------------
  *  CTE (Common Table Expressions) — WITH ... AS pre-parse handler
  * ---------------------------------------------------------------- */
-#define MAX_CTE 8
+#define MAX_CTE 16
 
 typedef struct {
-    char name[128];
-    char sql[4096];
+    char  name[128];
+    char *sql;       /* heap-allocated */
 } CteDef;
 
 /* Extract CTE definitions from WITH ... AS (...) prefix.
@@ -5007,8 +5007,9 @@ static int evo_extract_ctes(const char *sql, CteDef *ctes, int *cte_count,
         if (depth != 0) return 0;
 
         int sql_len = (int)(p - sql_start);
-        if (sql_len >= 4096) return 0;
-        strncpy(ctes[*cte_count].sql, sql_start, sql_len);
+        ctes[*cte_count].sql = malloc(sql_len + 1);
+        if (!ctes[*cte_count].sql) return 0;
+        memcpy(ctes[*cte_count].sql, sql_start, sql_len);
         ctes[*cte_count].sql[sql_len] = '\0';
 
         p++; /* skip closing ) */
@@ -5034,7 +5035,8 @@ static void evo_cte_replace_name(char *buf, int bufsz, const char *from, const c
 {
     int flen = (int)strlen(from);
     int tlen = (int)strlen(to);
-    char tmp[8192];
+    char *tmp = malloc(bufsz);
+    if (!tmp) return;
     char *dst = tmp;
     const char *src = buf;
 
@@ -5063,6 +5065,7 @@ static void evo_cte_replace_name(char *buf, int bufsz, const char *from, const c
     *dst = '\0';
     strncpy(buf, tmp, bufsz - 1);
     buf[bufsz - 1] = '\0';
+    free(tmp);
 }
 
 /* Map PG type OID to SQL type name for CREATE TABLE */
@@ -5082,6 +5085,7 @@ static const char *evo_pg_oid_to_type(int oid) {
 static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     CteDef ctes[MAX_CTE];
+    memset(ctes, 0, sizeof(ctes));
     int cte_count = 0;
     const char *main_query = NULL;
 
@@ -5095,11 +5099,13 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     for (int i = 0; i < cte_count; i++) {
         /* Resolve previous CTE names in this CTE's SQL */
-        char resolved[4096];
-        strncpy(resolved, ctes[i].sql, sizeof(resolved) - 1);
-        resolved[sizeof(resolved) - 1] = '\0';
+        int res_sz = (int)strlen(ctes[i].sql) + 2048;
+        char *resolved = malloc(res_sz);
+        if (!resolved) goto cleanup;
+        strncpy(resolved, ctes[i].sql, res_sz - 1);
+        resolved[res_sz - 1] = '\0';
         for (int j = 0; j < materialized; j++)
-            evo_cte_replace_name(resolved, sizeof(resolved),
+            evo_cte_replace_name(resolved, res_sz,
                                  ctes[j].name, temp_names[j]);
 
         /* Execute CTE query */
@@ -5109,23 +5115,13 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
         query_execute(resolved, &cte_rs, ctx);
 
         if (cte_rs.has_error) {
-            /* Propagate error, cleanup */
             snprintf(rs->error_message, sizeof(rs->error_message),
                      "CTE '%s': %s", ctes[i].name, cte_rs.error_message);
             strncpy(rs->error_sqlstate, cte_rs.error_sqlstate, 5);
             rs->has_error = 1;
             result_free(&cte_rs);
-            for (int j = 0; j < materialized; j++) {
-                char drop_sql[256];
-                snprintf(drop_sql, sizeof(drop_sql),
-                         "DROP TABLE IF EXISTS %s", temp_names[j]);
-                ResultSet tmp_rs;
-                memset(&tmp_rs, 0, sizeof(tmp_rs));
-                result_init(&tmp_rs);
-                query_execute(drop_sql, &tmp_rs, ctx);
-                result_free(&tmp_rs);
-            }
-            return 1;
+            free(resolved);
+            goto cleanup;
         }
 
         /* Build temp table name */
@@ -5135,8 +5131,10 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (cte_rs.num_cols > 0) {
             /* Use CREATE TEMPORARY TABLE ... AS SELECT to materialize CTE.
              * Since CTE query may have complex expressions, build from resolved SQL. */
-            char ctas[4096];
-            snprintf(ctas, sizeof(ctas),
+            int ctas_sz = (int)strlen(resolved) + 256;
+            char *ctas = malloc(ctas_sz);
+            if (!ctas) { free(resolved); goto cleanup; }
+            snprintf(ctas, ctas_sz,
                      "CREATE TEMPORARY TABLE %s AS %s", temp_names[i], resolved);
 
             ResultSet tmp_rs;
@@ -5150,36 +5148,37 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 rs->has_error = 1;
                 result_free(&tmp_rs);
                 result_free(&cte_rs);
-                for (int j = 0; j < materialized; j++) {
-                    char drop_sql[256];
-                    snprintf(drop_sql, sizeof(drop_sql),
-                             "DROP TABLE IF EXISTS %s", temp_names[j]);
-                    ResultSet dr;
-                    memset(&dr, 0, sizeof(dr));
-                    result_init(&dr);
-                    query_execute(drop_sql, &dr, ctx);
-                    result_free(&dr);
-                }
-                return 1;
+                free(ctas);
+                free(resolved);
+                goto cleanup;
             }
             result_free(&tmp_rs);
+            free(ctas);
         }
         result_free(&cte_rs);
+        free(resolved);
         materialized++;
     }
 
-    /* Build main query with CTE names replaced by temp table names */
-    char final_sql[8192];
-    strncpy(final_sql, main_query, sizeof(final_sql) - 1);
-    final_sql[sizeof(final_sql) - 1] = '\0';
-    for (int i = 0; i < cte_count; i++)
-        evo_cte_replace_name(final_sql, sizeof(final_sql),
-                             ctes[i].name, temp_names[i]);
+    {
+        /* Build main query with CTE names replaced by temp table names */
+        int fsz = (int)strlen(main_query) + cte_count * 256 + 512;
+        char *final_sql = malloc(fsz);
+        if (final_sql) {
+            strncpy(final_sql, main_query, fsz - 1);
+            final_sql[fsz - 1] = '\0';
+            for (int i = 0; i < cte_count; i++)
+                evo_cte_replace_name(final_sql, fsz,
+                                     ctes[i].name, temp_names[i]);
 
-    /* Execute main query */
-    query_execute(final_sql, rs, ctx);
+            /* Execute main query */
+            query_execute(final_sql, rs, ctx);
+            free(final_sql);
+        }
+    }
 
-    /* Cleanup: drop all temp tables */
+cleanup:
+    /* Drop all temp tables */
     for (int i = 0; i < materialized; i++) {
         char drop_sql[256];
         snprintf(drop_sql, sizeof(drop_sql),
@@ -5190,6 +5189,9 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
         query_execute(drop_sql, &tmp_rs, ctx);
         result_free(&tmp_rs);
     }
+    /* Free heap-allocated CTE SQL strings */
+    for (int i = 0; i < cte_count; i++)
+        free(ctes[i].sql);
 
     return 1;
 }
