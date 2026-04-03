@@ -849,6 +849,13 @@ orderby_item: NAME opt_asc_desc
         AddOrderByColumn($1, $2);
         free($1);
     }
+| NAME '.' NAME opt_asc_desc
+    {
+        char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3);
+        emit("ORDERBY %s %d", qn, $4);
+        AddOrderByColumn(qn, $4);
+        free($1); free($3);
+    }
 | INTNUM opt_asc_desc
     {
         char buf[16];
