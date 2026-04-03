@@ -4948,6 +4948,252 @@ static void execute_set_operation(const char *sql, ResultSet *rs,
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
 }
 
+/* ----------------------------------------------------------------
+ *  CTE (Common Table Expressions) — WITH ... AS pre-parse handler
+ * ---------------------------------------------------------------- */
+#define MAX_CTE 8
+
+typedef struct {
+    char name[128];
+    char sql[4096];
+} CteDef;
+
+/* Extract CTE definitions from WITH ... AS (...) prefix.
+ * Returns 1 on success, 0 if not a CTE query. */
+static int evo_extract_ctes(const char *sql, CteDef *ctes, int *cte_count,
+                            const char **main_query)
+{
+    const char *p = sql;
+    /* Skip whitespace */
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (strncasecmp(p, "WITH ", 5) != 0) return 0;
+    p += 5;
+    while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+
+    *cte_count = 0;
+
+    while (*cte_count < MAX_CTE) {
+        /* Parse CTE name */
+        const char *name_start = p;
+        while (*p && ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+               (*p >= '0' && *p <= '9') || *p == '_'))
+            p++;
+        int name_len = (int)(p - name_start);
+        if (name_len == 0 || name_len >= 128) return 0;
+
+        strncpy(ctes[*cte_count].name, name_start, name_len);
+        ctes[*cte_count].name[name_len] = '\0';
+
+        /* Skip whitespace + AS */
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (strncasecmp(p, "AS", 2) != 0) return 0;
+        p += 2;
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+
+        /* Extract parenthesized SQL with balanced parens */
+        if (*p != '(') return 0;
+        p++; /* skip opening ( */
+        int depth = 1;
+        const char *sql_start = p;
+        int in_string = 0;
+        while (*p && depth > 0) {
+            if (*p == '\'' && !in_string) { in_string = 1; p++; continue; }
+            if (*p == '\'' && in_string) { in_string = 0; p++; continue; }
+            if (in_string) { p++; continue; }
+            if (*p == '(') depth++;
+            else if (*p == ')') { depth--; if (depth == 0) break; }
+            p++;
+        }
+        if (depth != 0) return 0;
+
+        int sql_len = (int)(p - sql_start);
+        if (sql_len >= 4096) return 0;
+        strncpy(ctes[*cte_count].sql, sql_start, sql_len);
+        ctes[*cte_count].sql[sql_len] = '\0';
+
+        p++; /* skip closing ) */
+        (*cte_count)++;
+
+        /* Skip whitespace, check for comma (more CTEs) or end */
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (*p == ',') {
+            p++;
+            while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+            continue;
+        }
+        break;
+    }
+
+    if (*cte_count == 0) return 0;
+    *main_query = p;
+    return 1;
+}
+
+/* Replace all occurrences of 'from' with 'to' in sql (case-insensitive, word boundary) */
+static void evo_cte_replace_name(char *buf, int bufsz, const char *from, const char *to)
+{
+    int flen = (int)strlen(from);
+    int tlen = (int)strlen(to);
+    char tmp[8192];
+    char *dst = tmp;
+    const char *src = buf;
+
+    while (*src) {
+        if (strncasecmp(src, from, flen) == 0) {
+            /* Check word boundary — must not be part of a larger identifier */
+            char before = (src > buf) ? *(src - 1) : ' ';
+            char after = *(src + flen);
+            int before_ok = !(before >= 'A' && before <= 'Z') &&
+                            !(before >= 'a' && before <= 'z') &&
+                            !(before >= '0' && before <= '9') && before != '_';
+            int after_ok = !(after >= 'A' && after <= 'Z') &&
+                           !(after >= 'a' && after <= 'z') &&
+                           !(after >= '0' && after <= '9') && after != '_';
+            if (before_ok && after_ok) {
+                if ((dst - tmp) + tlen >= bufsz - 1) break;
+                memcpy(dst, to, tlen);
+                dst += tlen;
+                src += flen;
+                continue;
+            }
+        }
+        if ((dst - tmp) >= bufsz - 2) break;
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+    strncpy(buf, tmp, bufsz - 1);
+    buf[bufsz - 1] = '\0';
+}
+
+/* Map PG type OID to SQL type name for CREATE TABLE */
+static const char *evo_pg_oid_to_type(int oid) {
+    switch (oid) {
+    case 20: case 21: case 23: return "INT";
+    case 700: case 701: return "FLOAT";
+    case 1043: return "VARCHAR(256)";
+    case 25: return "VARCHAR(256)";
+    case 1082: return "DATE";
+    case 1114: return "TIMESTAMP";
+    case 2950: return "UUID";
+    default: return "VARCHAR(256)";
+    }
+}
+
+static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
+{
+    CteDef ctes[MAX_CTE];
+    int cte_count = 0;
+    const char *main_query = NULL;
+
+    if (!evo_extract_ctes(sql, ctes, &cte_count, &main_query))
+        return 0;
+    if (cte_count == 0 || !main_query || !main_query[0])
+        return 0;
+
+    char temp_names[MAX_CTE][128];
+    int materialized = 0;
+
+    for (int i = 0; i < cte_count; i++) {
+        /* Resolve previous CTE names in this CTE's SQL */
+        char resolved[4096];
+        strncpy(resolved, ctes[i].sql, sizeof(resolved) - 1);
+        resolved[sizeof(resolved) - 1] = '\0';
+        for (int j = 0; j < materialized; j++)
+            evo_cte_replace_name(resolved, sizeof(resolved),
+                                 ctes[j].name, temp_names[j]);
+
+        /* Execute CTE query */
+        ResultSet cte_rs;
+        memset(&cte_rs, 0, sizeof(cte_rs));
+        result_init(&cte_rs);
+        query_execute(resolved, &cte_rs, ctx);
+
+        if (cte_rs.has_error) {
+            /* Propagate error, cleanup */
+            snprintf(rs->error_message, sizeof(rs->error_message),
+                     "CTE '%s': %s", ctes[i].name, cte_rs.error_message);
+            strncpy(rs->error_sqlstate, cte_rs.error_sqlstate, 5);
+            rs->has_error = 1;
+            result_free(&cte_rs);
+            for (int j = 0; j < materialized; j++) {
+                char drop_sql[256];
+                snprintf(drop_sql, sizeof(drop_sql),
+                         "DROP TABLE IF EXISTS %s", temp_names[j]);
+                ResultSet tmp_rs;
+                memset(&tmp_rs, 0, sizeof(tmp_rs));
+                result_init(&tmp_rs);
+                query_execute(drop_sql, &tmp_rs, ctx);
+                result_free(&tmp_rs);
+            }
+            return 1;
+        }
+
+        /* Build temp table name */
+        snprintf(temp_names[i], sizeof(temp_names[i]), "__cte_%s", ctes[i].name);
+
+        /* Create temp table via CTAS — single statement, avoids MVCC snapshot issues */
+        if (cte_rs.num_cols > 0) {
+            /* Use CREATE TEMPORARY TABLE ... AS SELECT to materialize CTE.
+             * Since CTE query may have complex expressions, build from resolved SQL. */
+            char ctas[4096];
+            snprintf(ctas, sizeof(ctas),
+                     "CREATE TEMPORARY TABLE %s AS %s", temp_names[i], resolved);
+
+            ResultSet tmp_rs;
+            memset(&tmp_rs, 0, sizeof(tmp_rs));
+            result_init(&tmp_rs);
+            query_execute(ctas, &tmp_rs, ctx);
+            if (tmp_rs.has_error) {
+                snprintf(rs->error_message, sizeof(rs->error_message),
+                         "CTE '%s': %s", ctes[i].name, tmp_rs.error_message);
+                strncpy(rs->error_sqlstate, tmp_rs.error_sqlstate, 5);
+                rs->has_error = 1;
+                result_free(&tmp_rs);
+                result_free(&cte_rs);
+                for (int j = 0; j < materialized; j++) {
+                    char drop_sql[256];
+                    snprintf(drop_sql, sizeof(drop_sql),
+                             "DROP TABLE IF EXISTS %s", temp_names[j]);
+                    ResultSet dr;
+                    memset(&dr, 0, sizeof(dr));
+                    result_init(&dr);
+                    query_execute(drop_sql, &dr, ctx);
+                    result_free(&dr);
+                }
+                return 1;
+            }
+            result_free(&tmp_rs);
+        }
+        result_free(&cte_rs);
+        materialized++;
+    }
+
+    /* Build main query with CTE names replaced by temp table names */
+    char final_sql[8192];
+    strncpy(final_sql, main_query, sizeof(final_sql) - 1);
+    final_sql[sizeof(final_sql) - 1] = '\0';
+    for (int i = 0; i < cte_count; i++)
+        evo_cte_replace_name(final_sql, sizeof(final_sql),
+                             ctes[i].name, temp_names[i]);
+
+    /* Execute main query */
+    query_execute(final_sql, rs, ctx);
+
+    /* Cleanup: drop all temp tables */
+    for (int i = 0; i < materialized; i++) {
+        char drop_sql[256];
+        snprintf(drop_sql, sizeof(drop_sql),
+                 "DROP TABLE IF EXISTS %s", temp_names[i]);
+        ResultSet tmp_rs;
+        memset(&tmp_rs, 0, sizeof(tmp_rs));
+        result_init(&tmp_rs);
+        query_execute(drop_sql, &tmp_rs, ctx);
+        result_free(&tmp_rs);
+    }
+
+    return 1;
+}
+
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
@@ -5011,6 +5257,10 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
             if (routed) return;
         }
     }
+
+    /* CTE — WITH ... AS (...) pre-parse handling */
+    if (evo_handle_cte(sql, rs, ctx))
+        return;
 
     /* First, try catalog/internal queries (before normalization) */
     if (catalog_try_handle(sql, rs, ctx)) {
