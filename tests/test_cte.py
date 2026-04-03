@@ -227,6 +227,82 @@ def test_cte_large(s):
     if err: print(f"    err: {err}"); return False
     return len(rows) == 1 and int(rows[0][0]) == 5  # all match salary > 0
 
+# --- T22: Column list alias ---
+def test_column_alias(s):
+    setup(s)
+    _, rows, err, _ = run(s, "WITH t(isim, maas) AS (SELECT name, salary FROM emp) SELECT isim, maas FROM t ORDER BY isim")
+    teardown(s)
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 5 and rows[0][0] == 'Alice'
+
+# --- T23: Column alias partial (fewer aliases than columns) ---
+def test_column_alias_partial(s):
+    setup(s)
+    _, rows, err, _ = run(s, "WITH t(isim) AS (SELECT name, salary FROM emp) SELECT isim FROM t ORDER BY isim")
+    teardown(s)
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 5 and rows[0][0] == 'Alice'
+
+# --- T24: UNION ALL in CTE ---
+def test_cte_union_all(s):
+    setup(s)
+    _, rows, err, _ = run(s, "WITH combined AS (SELECT name FROM emp WHERE dept = 'ENG' UNION ALL SELECT name FROM emp WHERE dept = 'HR') SELECT * FROM combined ORDER BY name")
+    teardown(s)
+    if err: print(f"    err: {err}"); return False
+    names = [r[0] for r in rows]
+    return len(rows) == 5 and 'Alice' in names and 'Diana' in names
+
+# --- T25: UNION (dedup) in CTE ---
+def test_cte_union(s):
+    setup(s)
+    _, rows, err, _ = run(s, "WITH combined AS (SELECT name FROM emp WHERE salary > 80 UNION SELECT name FROM emp WHERE dept = 'HR') SELECT * FROM combined ORDER BY name")
+    teardown(s)
+    if err: print(f"    err: {err}"); return False
+    # salary>80: Alice, Charlie, Eve; HR: Charlie, Diana → UNION dedup → Alice, Charlie, Diana, Eve = 4
+    return len(rows) == 4
+
+# --- T26: RECURSIVE basic tree ---
+def test_recursive_basic(s):
+    run(s, "DROP TABLE IF EXISTS tree")
+    run(s, "CREATE TABLE tree (id INT PRIMARY KEY, name VARCHAR(50), parent_id INT)")
+    run(s, "INSERT INTO tree VALUES (1, 'Root', NULL)")
+    run(s, "INSERT INTO tree VALUES (2, 'A', 1)")
+    run(s, "INSERT INTO tree VALUES (3, 'B', 1)")
+    run(s, "INSERT INTO tree VALUES (4, 'A1', 2)")
+    _, rows, err, _ = run(s, "WITH RECURSIVE hier AS (SELECT id, name, parent_id FROM tree WHERE parent_id IS NULL UNION ALL SELECT t.id, t.name, t.parent_id FROM tree t JOIN hier h ON t.parent_id = h.id) SELECT name FROM hier ORDER BY name")
+    run(s, "DROP TABLE IF EXISTS tree")
+    if err: print(f"    err: {err}"); return False
+    names = sorted([r[0] for r in rows])
+    return names == ['A', 'A1', 'B', 'Root']
+
+# --- T27: RECURSIVE multi-level ---
+def test_recursive_multi_level(s):
+    run(s, "DROP TABLE IF EXISTS tree")
+    run(s, "CREATE TABLE tree (id INT PRIMARY KEY, name VARCHAR(50), parent_id INT)")
+    run(s, "INSERT INTO tree VALUES (1, 'Root', NULL)")
+    run(s, "INSERT INTO tree VALUES (2, 'L1A', 1)")
+    run(s, "INSERT INTO tree VALUES (3, 'L1B', 1)")
+    run(s, "INSERT INTO tree VALUES (4, 'L2A', 2)")
+    run(s, "INSERT INTO tree VALUES (5, 'L2B', 3)")
+    run(s, "INSERT INTO tree VALUES (6, 'L3A', 4)")
+    _, rows, err, _ = run(s, "WITH RECURSIVE hier AS (SELECT id, name FROM tree WHERE name = 'Root' UNION ALL SELECT t.id, t.name FROM tree t JOIN hier h ON t.parent_id = h.id) SELECT name FROM hier ORDER BY name")
+    run(s, "DROP TABLE IF EXISTS tree")
+    if err: print(f"    err: {err}"); return False
+    names = sorted([r[0] for r in rows])
+    return len(rows) == 6 and 'L3A' in names and 'Root' in names
+
+# --- T28: RECURSIVE terminates (no infinite loop) ---
+def test_recursive_terminates(s):
+    run(s, "DROP TABLE IF EXISTS tree")
+    run(s, "CREATE TABLE tree (id INT PRIMARY KEY, name VARCHAR(50), parent_id INT)")
+    run(s, "INSERT INTO tree VALUES (1, 'Root', NULL)")
+    run(s, "INSERT INTO tree VALUES (2, 'Child', 1)")
+    # Simple 2-level tree — should terminate in 2 iterations
+    _, rows, err, _ = run(s, "WITH RECURSIVE h AS (SELECT id, name FROM tree WHERE parent_id IS NULL UNION ALL SELECT t.id, t.name FROM tree t JOIN h ON t.parent_id = h.id) SELECT * FROM h")
+    run(s, "DROP TABLE IF EXISTS tree")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 2
+
 if __name__ == "__main__":
     print("=== CTE (Common Table Expressions) Tests ===")
     test("T1: Basic CTE", test_basic_cte)
@@ -251,5 +327,13 @@ if __name__ == "__main__":
     test("T19: CTE COUNT(*)", test_cte_count)
     test("T20: CTE in subquery", test_cte_in_subquery)
     test("T21: Large CTE (buffer stress)", test_cte_large)
+    print("--- G2/G3/G1 Gap Fix Tests ---")
+    test("T22: Column list alias", test_column_alias)
+    test("T23: Column alias partial", test_column_alias_partial)
+    test("T24: UNION ALL in CTE", test_cte_union_all)
+    test("T25: UNION in CTE", test_cte_union)
+    test("T26: RECURSIVE basic tree", test_recursive_basic)
+    test("T27: RECURSIVE multi-level", test_recursive_multi_level)
+    test("T28: RECURSIVE terminates", test_recursive_terminates)
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)
