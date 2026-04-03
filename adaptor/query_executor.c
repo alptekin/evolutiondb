@@ -5247,41 +5247,36 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 }
             }
 
-            /* 3. Iterative recursive execution */
-            int max_iter = 100;
-            for (int iter = 0; iter < max_iter; iter++) {
-                /* Build recursive SQL with CTE name replaced by temp table */
-                int rsz = (int)strlen(recur_sql) + 2048;
-                char *iter_sql = malloc(rsz);
-                strncpy(iter_sql, recur_sql, rsz - 1);
-                iter_sql[rsz - 1] = '\0';
-                evo_cte_replace_name(iter_sql, rsz, ctes[i].name, temp_names[i]);
-                /* Also replace earlier CTE names */
-                for (int j = 0; j < materialized; j++)
-                    evo_cte_replace_name(iter_sql, rsz, ctes[j].name, temp_names[j]);
-
-                ResultSet iter_rs;
-                memset(&iter_rs, 0, sizeof(iter_rs));
-                result_init(&iter_rs);
-                query_execute(iter_sql, &iter_rs, ctx);
-                free(iter_sql);
-
-                if (iter_rs.has_error || iter_rs.num_rows == 0) {
-                    result_free(&iter_rs);
-                    break;
+            /* 3. Create working table (holds only last iteration's rows) */
+            char work_name[160];
+            snprintf(work_name, sizeof(work_name), "%s_work", temp_names[i]);
+            {
+                /* Clone table structure for working table */
+                int wddl_sz = anchor_rs.num_cols * 300 + 256;
+                char *wddl = malloc(wddl_sz);
+                int woff = snprintf(wddl, wddl_sz, "CREATE TEMPORARY TABLE %s (", work_name);
+                for (int c = 0; c < anchor_rs.num_cols && woff < wddl_sz - 100; c++) {
+                    if (c > 0) woff += snprintf(wddl + woff, wddl_sz - woff, ", ");
+                    woff += snprintf(wddl + woff, wddl_sz - woff, "%s %s",
+                                     anchor_rs.columns[c].name,
+                                     evo_pg_oid_to_type(anchor_rs.columns[c].pg_type_oid));
                 }
+                snprintf(wddl + woff, wddl_sz - woff, ")");
+                ResultSet wr; memset(&wr, 0, sizeof(wr)); result_init(&wr);
+                query_execute(wddl, &wr, ctx);
+                result_free(&wr); free(wddl);
 
-                /* Insert new rows into temp table */
-                for (int r = 0; r < iter_rs.num_rows; r++) {
-                    int isz = iter_rs.num_cols * 300 + 256;
+                /* Populate working table with anchor rows */
+                for (int r = 0; r < anchor_rs.num_rows; r++) {
+                    int isz = anchor_rs.num_cols * 300 + 256;
                     char *ins = malloc(isz);
-                    int ioff = snprintf(ins, isz, "INSERT INTO %s VALUES (", temp_names[i]);
-                    for (int c = 0; c < iter_rs.num_cols && ioff < isz - 100; c++) {
+                    int ioff = snprintf(ins, isz, "INSERT INTO %s VALUES (", work_name);
+                    for (int c = 0; c < anchor_rs.num_cols && ioff < isz - 100; c++) {
                         if (c > 0) ioff += snprintf(ins + ioff, isz - ioff, ", ");
-                        if (iter_rs.rows[r].is_null[c])
+                        if (anchor_rs.rows[r].is_null[c])
                             ioff += snprintf(ins + ioff, isz - ioff, "NULL");
                         else {
-                            const char *v = iter_rs.rows[r].fields[c];
+                            const char *v = anchor_rs.rows[r].fields[c];
                             ioff += snprintf(ins + ioff, isz - ioff, "'");
                             for (const char *vp = v; vp && *vp && ioff < isz - 10; vp++) {
                                 if (*vp == '\'') ioff += snprintf(ins + ioff, isz - ioff, "''");
@@ -5296,14 +5291,109 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     query_execute(ins, &ir, ctx);
                     { extern __thread QueryContext *g_qctx;
                       if (g_qctx && g_qctx->mvcc_xid > 0) {
-                          uint32_t csn = pgm_next_csn();
-                          clog_set_committed_csn(g_qctx->mvcc_xid, csn);
+                          clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
                           g_qctx->mvcc_xid = 0;
                       }
                     }
                     result_free(&ir); free(ins);
                 }
+            }
+
+            /* 4. Iterative recursive execution using working table */
+            #define RECURSIVE_MAX_ITER 100
+            for (int iter = 0; iter < RECURSIVE_MAX_ITER; iter++) {
+                /* Build recursive SQL: CTE name → working table */
+                int rsz = (int)strlen(recur_sql) + 2048;
+                char *iter_sql = malloc(rsz);
+                strncpy(iter_sql, recur_sql, rsz - 1);
+                iter_sql[rsz - 1] = '\0';
+                evo_cte_replace_name(iter_sql, rsz, ctes[i].name, work_name);
+                for (int j = 0; j < materialized; j++)
+                    evo_cte_replace_name(iter_sql, rsz, ctes[j].name, temp_names[j]);
+
+                ResultSet iter_rs;
+                memset(&iter_rs, 0, sizeof(iter_rs));
+                result_init(&iter_rs);
+                query_execute(iter_sql, &iter_rs, ctx);
+                free(iter_sql);
+
+                if (iter_rs.has_error || iter_rs.num_rows == 0) {
+                    result_free(&iter_rs);
+                    break;
+                }
+
+                /* Clear working table for next iteration */
+                { char trunc[256];
+                  snprintf(trunc, sizeof(trunc), "DELETE FROM %s WHERE 1=1", work_name);
+                  ResultSet tr; memset(&tr, 0, sizeof(tr)); result_init(&tr);
+                  query_execute(trunc, &tr, ctx);
+                  { extern __thread QueryContext *g_qctx;
+                    if (g_qctx && g_qctx->mvcc_xid > 0) {
+                        clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
+                        g_qctx->mvcc_xid = 0;
+                    }
+                  }
+                  result_free(&tr);
+                }
+
+                /* Insert new rows into BOTH accumulated and working tables */
+                for (int r = 0; r < iter_rs.num_rows; r++) {
+                    int isz = iter_rs.num_cols * 300 + 256;
+                    char *vals = malloc(isz);
+                    int ioff = snprintf(vals, isz, "(");
+                    for (int c = 0; c < iter_rs.num_cols && ioff < isz - 100; c++) {
+                        if (c > 0) ioff += snprintf(vals + ioff, isz - ioff, ", ");
+                        if (iter_rs.rows[r].is_null[c])
+                            ioff += snprintf(vals + ioff, isz - ioff, "NULL");
+                        else {
+                            const char *v = iter_rs.rows[r].fields[c];
+                            ioff += snprintf(vals + ioff, isz - ioff, "'");
+                            for (const char *vp = v; vp && *vp && ioff < isz - 10; vp++) {
+                                if (*vp == '\'') ioff += snprintf(vals + ioff, isz - ioff, "''");
+                                else vals[ioff++] = *vp;
+                            }
+                            vals[ioff] = '\0';
+                            ioff += snprintf(vals + ioff, isz - ioff, "'");
+                        }
+                    }
+                    snprintf(vals + ioff, isz - ioff, ")");
+
+                    /* Insert into accumulated table */
+                    char *ins1 = malloc(isz + 256);
+                    snprintf(ins1, isz + 256, "INSERT INTO %s VALUES %s", temp_names[i], vals);
+                    ResultSet ir1; memset(&ir1, 0, sizeof(ir1)); result_init(&ir1);
+                    query_execute(ins1, &ir1, ctx);
+                    { extern __thread QueryContext *g_qctx;
+                      if (g_qctx && g_qctx->mvcc_xid > 0) {
+                          clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
+                          g_qctx->mvcc_xid = 0;
+                      }
+                    }
+                    result_free(&ir1); free(ins1);
+
+                    /* Insert into working table */
+                    char *ins2 = malloc(isz + 256);
+                    snprintf(ins2, isz + 256, "INSERT INTO %s VALUES %s", work_name, vals);
+                    ResultSet ir2; memset(&ir2, 0, sizeof(ir2)); result_init(&ir2);
+                    query_execute(ins2, &ir2, ctx);
+                    { extern __thread QueryContext *g_qctx;
+                      if (g_qctx && g_qctx->mvcc_xid > 0) {
+                          clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
+                          g_qctx->mvcc_xid = 0;
+                      }
+                    }
+                    result_free(&ir2); free(ins2);
+                    free(vals);
+                }
                 result_free(&iter_rs);
+            }
+
+            /* Drop working table */
+            { char drop_work[256];
+              snprintf(drop_work, sizeof(drop_work), "DROP TABLE IF EXISTS %s", work_name);
+              ResultSet dw; memset(&dw, 0, sizeof(dw)); result_init(&dw);
+              query_execute(drop_work, &dw, ctx);
+              result_free(&dw);
             }
 
             result_free(&anchor_rs);
