@@ -3921,8 +3921,17 @@ parser_done:
             rwlock_rdunlock(&g_parse_lock);
 
             /* Column projection: if SELECT specified columns (not *),
-             * filter the join result to only include requested columns. */
-            if (!rs->has_error && g_sel.columnCount > 0) {
+             * filter the join result to only include requested columns.
+             * Skip if selectExprs has expressions — handled by expr eval below. */
+            int has_join_expr = 0;
+            if (g_expr.selectExprCount > 0) {
+                for (int si = 0; si < g_expr.selectExprCount; si++) {
+                    if (g_expr.selectExprs[si] && !expr_is_column(g_expr.selectExprs[si])) {
+                        has_join_expr = 1; break;
+                    }
+                }
+            }
+            if (!rs->has_error && g_sel.columnCount > 0 && !has_join_expr) {
                 /* Map requested columns to join result positions */
                 int col_map[64];
                 int map_count = 0;
@@ -3980,6 +3989,83 @@ parser_done:
                     *rs = projected;
                     snprintf(rs->command_tag, sizeof(rs->command_tag),
                              "SELECT %d", rs->num_rows);
+                }
+            }
+
+            /* Expression evaluation for JOIN results (e.g., p.id + 1) */
+            if (!rs->has_error && g_expr.selectExprCount > 0 && rs->num_cols > 0) {
+                int has_expr = 0;
+                for (int si = 0; si < g_expr.selectExprCount; si++) {
+                    if (g_expr.selectExprs[si] && !expr_is_column(g_expr.selectExprs[si])) {
+                        has_expr = 1; break;
+                    }
+                }
+                if (has_expr) {
+                    /* Build column context from JOIN result */
+                    char cn[MAX_COLUMNS][128];
+                    int nc = rs->num_cols;
+                    for (int c = 0; c < nc && c < MAX_COLUMNS; c++) {
+                        strncpy(cn[c], rs->columns[c].name, 127);
+                        cn[c][127] = '\0';
+                    }
+
+                    /* Set up new column headers from selectExprs */
+                    int new_nc = g_expr.selectExprCount;
+                    ColumnInfo origCols[MAX_COLUMNS];
+                    memcpy(origCols, rs->columns, sizeof(ColumnInfo) * nc);
+                    rs->num_cols = new_nc;
+                    for (int c = 0; c < new_nc; c++) {
+                        memset(&rs->columns[c], 0, sizeof(ColumnInfo));
+                        if (g_expr.selectExprs[c])
+                            strncpy(rs->columns[c].name, g_expr.selectExprs[c]->display,
+                                    MAX_COL_NAME - 1);
+                        else
+                            strncpy(rs->columns[c].name, "?column?", MAX_COL_NAME - 1);
+                        /* Infer type from original column if plain column */
+                        if (g_expr.selectExprs[c] && expr_is_column(g_expr.selectExprs[c])) {
+                            for (int oc = 0; oc < nc; oc++) {
+                                if (strcasecmp(origCols[oc].name,
+                                               g_expr.selectExprs[c]->val.col_name) == 0) {
+                                    rs->columns[c].pg_type_oid = origCols[oc].pg_type_oid;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    /* Evaluate expressions for each row */
+                    for (int r = 0; r < rs->num_rows; r++) {
+                        char cv[MAX_COLUMNS][256];
+                        for (int c = 0; c < nc && c < MAX_COLUMNS; c++) {
+                            if (rs->rows[r].is_null[c])
+                                strcpy(cv[c], "\x01NULL\x01");
+                            else {
+                                const char *fv = rs->rows[r].fields[c];
+                                strncpy(cv[c], fv ? fv : "", 255);
+                                cv[c][255] = '\0';
+                            }
+                        }
+
+                        row_clear(&rs->rows[r]);
+                        memset(&rs->rows[r], 0, sizeof(Row));
+                        rs->rows[r].num_fields = new_nc;
+
+                        for (int c = 0; c < new_nc; c++) {
+                            if (!g_expr.selectExprs[c]) {
+                                rs->rows[r].is_null[c] = 1; continue;
+                            }
+                            char result[4096];
+                            if (expr_evaluate(g_expr.selectExprs[c],
+                                    (const char (*)[128])cn,
+                                    (const char (*)[256])cv, nc,
+                                    result, sizeof(result)) &&
+                                strcmp(result, "\x01NULL\x01") != 0) {
+                                row_set(&rs->rows[r], c, result);
+                            } else {
+                                row_set_null(&rs->rows[r], c);
+                            }
+                        }
+                    }
                 }
             }
 
