@@ -303,6 +303,40 @@ def test_recursive_terminates(s):
     if err: print(f"    err: {err}"); return False
     return len(rows) == 2
 
+# --- T29: RECURSIVE arithmetic sequence ---
+def test_recursive_arithmetic(s):
+    run(s, "DROP TABLE IF EXISTS nums")
+    run(s, "CREATE TABLE nums (n INT PRIMARY KEY)")
+    run(s, "INSERT INTO nums VALUES (1)")
+    _, rows, err, _ = run(s, "WITH RECURSIVE seq AS (SELECT n FROM nums WHERE n = 1 UNION ALL SELECT n + 1 AS n FROM seq WHERE n < 5) SELECT n FROM seq ORDER BY n")
+    run(s, "DROP TABLE IF EXISTS nums")
+    if err: print(f"    err: {err}"); return False
+    vals = [r[0] for r in rows]
+    return vals == ['1', '2', '3', '4', '5']
+
+# --- T30: RECURSIVE terminates on no new rows ---
+def test_recursive_fixed_point(s):
+    run(s, "DROP TABLE IF EXISTS tree")
+    run(s, "CREATE TABLE tree (id INT PRIMARY KEY, name VARCHAR(50), parent_id INT)")
+    run(s, "INSERT INTO tree VALUES (1, 'Root', NULL)")
+    run(s, "INSERT INTO tree VALUES (2, 'Child', 1)")
+    # 2 levels: Root → Child, then recursive finds no more children → stops
+    _, rows, err, _ = run(s, "WITH RECURSIVE h AS (SELECT id, name FROM tree WHERE parent_id IS NULL UNION ALL SELECT t.id, t.name FROM tree t JOIN h ON t.parent_id = h.id) SELECT COUNT(*) FROM h")
+    run(s, "DROP TABLE IF EXISTS tree")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 1 and int(rows[0][0]) == 2
+
+# --- T31: RECURSIVE arithmetic descending ---
+def test_recursive_descending(s):
+    run(s, "DROP TABLE IF EXISTS nums")
+    run(s, "CREATE TABLE nums (n INT PRIMARY KEY)")
+    run(s, "INSERT INTO nums VALUES (10)")
+    _, rows, err, _ = run(s, "WITH RECURSIVE seq AS (SELECT n FROM nums UNION ALL SELECT n - 1 AS n FROM seq WHERE n > 6) SELECT n FROM seq ORDER BY n")
+    run(s, "DROP TABLE IF EXISTS nums")
+    if err: print(f"    err: {err}"); return False
+    vals = [r[0] for r in rows]
+    return vals == ['6', '7', '8', '9', '10']
+
 if __name__ == "__main__":
     print("=== CTE (Common Table Expressions) Tests ===")
     test("T1: Basic CTE", test_basic_cte)
@@ -335,5 +369,8 @@ if __name__ == "__main__":
     test("T26: RECURSIVE basic tree", test_recursive_basic)
     test("T27: RECURSIVE multi-level", test_recursive_multi_level)
     test("T28: RECURSIVE terminates", test_recursive_terminates)
+    test("T29: RECURSIVE arithmetic", test_recursive_arithmetic)
+    test("T30: RECURSIVE fixed point", test_recursive_fixed_point)
+    test("T31: RECURSIVE descending", test_recursive_descending)
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)
