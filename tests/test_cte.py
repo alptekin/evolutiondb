@@ -365,6 +365,26 @@ def test_join_expression(s):
     if err: print(f"    err: {err}"); return False
     return len(rows) == 1 and rows[0][0] == 'A' and rows[0][1] == '101'
 
+# --- T34: Implicit cross join ---
+def test_implicit_cross_join(s):
+    run(s, "DROP TABLE IF EXISTS t1")
+    run(s, "CREATE TABLE t1 (id INT PRIMARY KEY, val INT)")
+    run(s, "INSERT INTO t1 VALUES (1, 10)")
+    run(s, "INSERT INTO t1 VALUES (2, 20)")
+    _, rows, err, _ = run(s, "SELECT a.id, a.val, b.id, b.val FROM t1 a, t1 b WHERE a.id = b.id")
+    run(s, "DROP TABLE IF EXISTS t1")
+    if err: print(f"    err: {err}"); return False
+    vals = sorted([r[0] for r in rows])
+    return len(rows) == 2 and vals == ['1', '2']
+
+# --- T35: CTE double reference via implicit join ---
+def test_cte_double_ref_implicit(s):
+    setup(s)
+    _, rows, err, _ = run(s, "WITH t AS (SELECT id, name FROM emp) SELECT a.name, b.name FROM t a, t b WHERE a.id = b.id")
+    teardown(s)
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 5 and all(r[0] == r[1] for r in rows)
+
 if __name__ == "__main__":
     print("=== CTE (Common Table Expressions) Tests ===")
     test("T1: Basic CTE", test_basic_cte)
@@ -402,5 +422,7 @@ if __name__ == "__main__":
     test("T31: RECURSIVE descending", test_recursive_descending)
     test("T32: RECURSIVE depth expr", test_recursive_depth)
     test("T33: JOIN expression eval", test_join_expression)
+    test("T34: Implicit cross join", test_implicit_cross_join)
+    test("T35: CTE double ref implicit", test_cte_double_ref_implicit)
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)

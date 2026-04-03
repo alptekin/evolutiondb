@@ -4291,7 +4291,8 @@ static void normalize_sql(char *sql)
     *dst = '\0';
     strcpy(sql, buf);
 
-    /* Detect JOIN keyword once — used by Pass 3 and Pass 4 */
+    /* Detect JOIN keyword or implicit cross join (FROM t1, t2)
+     * — used by Pass 3 and Pass 4 to preserve alias qualifiers */
     int has_join = 0;
     {
         const char *j = sql;
@@ -4303,6 +4304,40 @@ static void normalize_sql(char *sql)
                 break;
             }
             j++;
+        }
+        /* Also detect implicit cross join: comma in FROM clause */
+        if (!has_join) {
+            const char *from = NULL;
+            { const char *s = sql;
+              while (*s) {
+                  if (strncasecmp(s, "FROM ", 5) == 0 &&
+                      (s == sql || !isalnum((unsigned char)*(s-1)))) {
+                      from = s; break;
+                  }
+                  s++;
+              }
+            }
+            if (from) {
+                const char *p = from + 5;
+                int depth = 0, in_str = 0;
+                while (*p) {
+                    if (*p == '\'') in_str = !in_str;
+                    if (in_str) { p++; continue; }
+                    if (*p == '(') depth++;
+                    else if (*p == ')') depth--;
+                    /* Stop at WHERE/ORDER/GROUP/LIMIT/HAVING */
+                    if (depth == 0 && (strncasecmp(p, "WHERE", 5) == 0 ||
+                        strncasecmp(p, "ORDER", 5) == 0 ||
+                        strncasecmp(p, "GROUP", 5) == 0 ||
+                        strncasecmp(p, "LIMIT", 5) == 0 ||
+                        strncasecmp(p, "HAVING", 6) == 0))
+                        break;
+                    if (depth == 0 && *p == ',') {
+                        has_join = 1; break;
+                    }
+                    p++;
+                }
+            }
         }
     }
 
