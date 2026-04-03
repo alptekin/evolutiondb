@@ -337,6 +337,34 @@ def test_recursive_descending(s):
     vals = [r[0] for r in rows]
     return vals == ['6', '7', '8', '9', '10']
 
+# --- T32: RECURSIVE depth expression (h.depth + 1 in JOIN) ---
+def test_recursive_depth(s):
+    run(s, "DROP TABLE IF EXISTS tree")
+    run(s, "CREATE TABLE tree (id INT PRIMARY KEY, name VARCHAR(50), parent_id INT)")
+    run(s, "INSERT INTO tree VALUES (1, 'Root', NULL)")
+    run(s, "INSERT INTO tree VALUES (2, 'A', 1)")
+    run(s, "INSERT INTO tree VALUES (3, 'B', 1)")
+    run(s, "INSERT INTO tree VALUES (4, 'A1', 2)")
+    _, rows, err, _ = run(s, "WITH RECURSIVE hier AS (SELECT id, name, 0 AS depth FROM tree WHERE parent_id IS NULL UNION ALL SELECT t.id, t.name, h.depth + 1 FROM tree t JOIN hier h ON t.parent_id = h.id) SELECT name, depth FROM hier ORDER BY depth, name")
+    run(s, "DROP TABLE IF EXISTS tree")
+    if err: print(f"    err: {err}"); return False
+    depth_map = {r[0]: r[1] for r in rows}
+    return (depth_map.get('Root') == '0' and
+            depth_map.get('A') == '1' and
+            depth_map.get('B') == '1' and
+            depth_map.get('A1') == '2')
+
+# --- T33: JOIN expression eval (p.id + 100) ---
+def test_join_expression(s):
+    run(s, "DROP TABLE IF EXISTS tree")
+    run(s, "CREATE TABLE tree (id INT PRIMARY KEY, name VARCHAR(50), parent_id INT)")
+    run(s, "INSERT INTO tree VALUES (1, 'Root', NULL)")
+    run(s, "INSERT INTO tree VALUES (2, 'A', 1)")
+    _, rows, err, _ = run(s, "SELECT t.name, p.id + 100 AS calc FROM tree t JOIN tree p ON t.parent_id = p.id")
+    run(s, "DROP TABLE IF EXISTS tree")
+    if err: print(f"    err: {err}"); return False
+    return len(rows) == 1 and rows[0][0] == 'A' and rows[0][1] == '101'
+
 if __name__ == "__main__":
     print("=== CTE (Common Table Expressions) Tests ===")
     test("T1: Basic CTE", test_basic_cte)
@@ -372,5 +400,7 @@ if __name__ == "__main__":
     test("T29: RECURSIVE arithmetic", test_recursive_arithmetic)
     test("T30: RECURSIVE fixed point", test_recursive_fixed_point)
     test("T31: RECURSIVE descending", test_recursive_descending)
+    test("T32: RECURSIVE depth expr", test_recursive_depth)
+    test("T33: JOIN expression eval", test_join_expression)
     print(f"\nResults: {PASS} passed, {FAIL} failed out of {PASS + FAIL}")
     sys.exit(0 if FAIL == 0 else 1)
