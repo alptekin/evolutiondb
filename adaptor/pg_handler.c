@@ -151,13 +151,36 @@ void pg_handle_client(socket_t client_sock)
                 char *stmt = remaining;
                 char *semi = NULL;
                 int in_single = 0, in_double = 0;
+                int begin_depth = 0;
                 char *p;
                 for (p = remaining; *p; p++) {
                     if (*p == '\'' && !in_double) in_single = !in_single;
                     else if (*p == '"' && !in_single) in_double = !in_double;
-                    else if (*p == ';' && !in_single && !in_double) {
-                        semi = p;
-                        break;
+                    else if (!in_single && !in_double) {
+                        /* Track BEGIN...END nesting for procedure bodies */
+                        if (strncasecmp(p, "BEGIN", 5) == 0 &&
+                            (p == remaining || !isalnum((unsigned char)p[-1])) &&
+                            !isalnum((unsigned char)p[5])) {
+                            begin_depth++;
+                            p += 4; /* skip BEGI, loop increments to N */
+                        }
+                        else if (begin_depth > 0 &&
+                                 strncasecmp(p, "END", 3) == 0 &&
+                                 (p == remaining || !isalnum((unsigned char)p[-1])) &&
+                                 !isalnum((unsigned char)p[3])) {
+                            /* Only decrement for standalone END (procedure body end),
+                             * not for END IF, END WHILE, END LOOP, END FOR, END CASE, END FOREACH */
+                            char *ep = (char *)p + 3;
+                            while (*ep && isspace((unsigned char)*ep)) ep++;
+                            if (!*ep || *ep == ';' || *ep == '\n' || *ep == '\r') {
+                                begin_depth--;
+                            }
+                            p += 2;
+                        }
+                        else if (*p == ';' && begin_depth == 0) {
+                            semi = p;
+                            break;
+                        }
                     }
                 }
 
