@@ -102,6 +102,7 @@
 %token STORED
 %token VIRTUAL
 
+%token BEGINWORK
 %token BLOB
 %token BOOLEAN
 %token BY
@@ -109,6 +110,10 @@
 %token BOTH
 %token BIGINT
 %token BIT
+
+%token CALL
+%token CLOSE
+%token CURSOR
 
 %token CONSTRAINT
 %token CURRENT_TIMESTAMP
@@ -127,9 +132,11 @@
 %token CONCURRENTLY
 
 %token DATABASE
+%token DECLARE
 %token DEFERRABLE
 %token DEFERRED
 %token DISABLE
+%token DO
 %token DOMAIN
 %token DELAYED
 %token DAY_HOUR
@@ -147,31 +154,39 @@
 %token DECIMAL
 %token DATE
 
+%token ELSEIF
 %token ENABLE
 %token ESCAPED
 %token EXCEPT
 %token ENUM
 %token END
 %token ELSE
+%token EXECUTE
+%token EXIT
 %token EXPLAIN
 
+%token FETCH
 %token FIRST
+%token FOREACH
 %token FLOAT
 %token FORCE
 %token FOREIGN
 %token FROM
 %token FULL
 %token FULLTEXT
+%token FUNCTION
 %token FOR
 
 %token GROUP
 
+%token HANDLER
 %token HOUR_MINUTE
 %token HOUR_MICROSECOND
 %token HIGH_PRIORITY
 %token HOUR_SECOND
 %token HAVING
 %token IMMEDIATE
+%token INOUT
 %token INITIALLY
 %token INTEGER
 %token INNER
@@ -183,10 +198,13 @@
 %token INTO
 %token INT
 %token INTERVAL
+%token ITERATE
 
 %token JOIN
 
 %token KEY
+%token LEAVE
+%token LOOP
 
 %token LESS
 %token LONGTEXT
@@ -211,6 +229,8 @@
 %token NO_ACTION
 %token NULLX
 
+%token OPEN
+%token OUT
 %token OUTER
 %token ON
 %token ORDER
@@ -218,6 +238,7 @@
 
 %token PARTIAL
 %token PRIMARY
+%token PROCEDURE
 
 %token QUICK
 
@@ -226,10 +247,16 @@
 %token RECLAIM
 %token REFERENCES
 %token RENAME
+%token RESIGNAL
 %token RESTRICT
+%token RETURN
+%token RETURNS
 %token ROLLUP
 %token RIGHT
 %token REPLACE
+
+%token SIGNAL
+%token UNTIL
 
 %token SQL_SMALL_RESULT
 %token SCHEMA
@@ -279,6 +306,7 @@
 
 %token WHERE
 %token WHEN
+%token WHILE
 %token WITH
 
 %token YEAR
@@ -2044,6 +2072,200 @@ set_list: set_expr | set_list ',' set_expr ;
 set_expr:
 USERVAR COMPARISON expr								{ if ($2 != 4) { yyerror(scanner, "bad set to @%s", $1); YYERROR; } emit("SET %s", $1); free($1); }
 | USERVAR ASSIGN expr								{ emit("SET %s", $1); free($1); }
+;
+
+/* ================================================================
+ *  CREATE PROCEDURE / FUNCTION
+ *  Body captured from g_lex_input in CreateProcedureProcess()
+ * ================================================================ */
+
+stmt: create_procedure_stmt                         { emit("STMT"); CreateProcedureProcess(); }
+;
+
+create_procedure_stmt:
+  CREATE PROCEDURE NAME '(' opt_proc_params ')' AS BEGINWORK proc_body_skip END
+    {
+        emit("CREATEPROCEDURE %s", $3);
+        evo_set_proc_name($3, 0);
+        free($3);
+    }
+| CREATE PROCEDURE NAME '(' opt_proc_params ')' BEGINWORK proc_body_skip END
+    {
+        emit("CREATEPROCEDURE %s", $3);
+        evo_set_proc_name($3, 0);
+        free($3);
+    }
+| CREATE OR REPLACE PROCEDURE NAME '(' opt_proc_params ')' AS BEGINWORK proc_body_skip END
+    {
+        emit("CREATEORREPLACEPROCEDURE %s", $5);
+        evo_set_proc_name($5, 0);
+        evo_set_proc_replace(1);
+        free($5);
+    }
+| CREATE OR REPLACE PROCEDURE NAME '(' opt_proc_params ')' BEGINWORK proc_body_skip END
+    {
+        emit("CREATEORREPLACEPROCEDURE %s", $5);
+        evo_set_proc_name($5, 0);
+        evo_set_proc_replace(1);
+        free($5);
+    }
+| CREATE FUNCTION NAME '(' opt_proc_params ')' RETURNS proc_return_type AS BEGINWORK proc_body_skip END
+    {
+        emit("CREATEFUNCTION %s", $3);
+        evo_set_proc_name($3, 1);
+        free($3);
+    }
+| CREATE FUNCTION NAME '(' opt_proc_params ')' RETURNS proc_return_type BEGINWORK proc_body_skip END
+    {
+        emit("CREATEFUNCTION %s", $3);
+        evo_set_proc_name($3, 1);
+        free($3);
+    }
+| CREATE OR REPLACE FUNCTION NAME '(' opt_proc_params ')' RETURNS proc_return_type AS BEGINWORK proc_body_skip END
+    {
+        emit("CREATEORREPLACEFUNCTION %s", $5);
+        evo_set_proc_name($5, 1);
+        evo_set_proc_replace(1);
+        free($5);
+    }
+| CREATE OR REPLACE FUNCTION NAME '(' opt_proc_params ')' RETURNS proc_return_type BEGINWORK proc_body_skip END
+    {
+        emit("CREATEORREPLACEFUNCTION %s", $5);
+        evo_set_proc_name($5, 1);
+        evo_set_proc_replace(1);
+        free($5);
+    }
+;
+
+opt_proc_params: /* empty */
+| proc_param_list
+;
+
+proc_param_list: proc_param
+| proc_param_list ',' proc_param
+;
+
+proc_param: NAME data_type                          { evo_add_proc_param($1, "IN"); free($1); }
+| IN NAME data_type                                 { evo_add_proc_param($2, "IN"); free($2); }
+| OUT NAME data_type                                { evo_add_proc_param($2, "OUT"); free($2); }
+| INOUT NAME data_type                              { evo_add_proc_param($2, "INOUT"); free($2); }
+;
+
+proc_return_type: INTEGER                           { evo_set_proc_return_type("INT"); }
+| INT                                               { evo_set_proc_return_type("INT"); }
+| VARCHAR                                           { evo_set_proc_return_type("VARCHAR"); }
+| TEXT                                              { evo_set_proc_return_type("TEXT"); }
+| BOOLEAN                                           { evo_set_proc_return_type("BOOLEAN"); }
+| FLOAT                                             { evo_set_proc_return_type("FLOAT"); }
+| DOUBLE                                            { evo_set_proc_return_type("DOUBLE"); }
+| BIGINT                                            { evo_set_proc_return_type("BIGINT"); }
+| DATE                                              { evo_set_proc_return_type("DATE"); }
+| TIMESTAMP                                         { evo_set_proc_return_type("TIMESTAMP"); }
+;
+
+/* Skip over procedure body tokens — the raw text is captured from
+ * g_lex_input in CreateProcedureProcess(). Nested BEGIN...END blocks
+ * are tracked: each BEGINWORK increments depth, each END decrements.
+ * The outer END (depth==0) terminates the rule. */
+proc_body_skip: /* empty */
+| proc_body_skip proc_body_any
+| proc_body_skip BEGINWORK proc_body_skip END       /* nested BEGIN...END */
+| proc_body_skip IF proc_body_skip END IF           /* IF...END IF */
+| proc_body_skip WHILE proc_body_skip END WHILE     /* WHILE...END WHILE */
+| proc_body_skip LOOP proc_body_skip END LOOP       /* LOOP...END LOOP */
+| proc_body_skip FOREACH proc_body_skip END FOREACH /* FOREACH...END FOREACH */
+| proc_body_skip CASE proc_body_skip END CASE       /* CASE...END CASE */
+;
+
+proc_body_any: NAME         { free($1); }
+| STRING                    { free($1); }
+| INTNUM | APPROXNUM | BOOL
+| COMPARISON | NOT | OR | ANDOP | IN | AND
+| SELECT | INSERT | UPDATE | DELETE | FROM | WHERE | SET | INTO | VALUES
+| CREATE | DROP | TABLE | INDEX | THEN | ELSE | ELSEIF
+| DECLARE | DO | CALL | RETURN
+| LEAVE | ITERATE | CURSOR | OPEN | FETCH | CLOSE | HANDLER | EXIT | OUT | INOUT | FOR | CONTINUE
+| SIGNAL | RESIGNAL | EXECUTE | UNTIL
+| AS | ON | ORDER | BY | GROUP | HAVING | LIMIT | OFFSET
+| JOIN | LEFT | RIGHT | INNER | OUTER | FULL | CROSS | NATURAL | USING
+| NULLX | DEFAULT | PRIMARY | KEY | UNIQUE | CHECK | FOREIGN | REFERENCES
+| CASCADE | RESTRICT | NO_ACTION
+| INTEGER | INT | VARCHAR | TEXT | BOOLEAN | FLOAT | DOUBLE | BIGINT
+| DATE | TIMESTAMP | SMALLINT | DECIMAL | CHAR | UUID | BLOB
+| UNION | EXCEPT | INTERSECT | ALL | DISTINCT | EXISTS | WHEN
+| WITH | PROCEDURE | FUNCTION | RETURNS
+| '(' | ')' | ',' | ';' | '.' | '+' | '-' | '*' | '/' | '%' | '!' | '='
+| FCOUNT | FSUM | FAVG | FMIN | FMAX
+| USERVAR                   { free($1); }
+;
+
+/* ================================================================
+ *  DROP PROCEDURE / FUNCTION
+ * ================================================================ */
+
+stmt: drop_procedure_stmt                           { emit("STMT"); DropProcedureProcess(); }
+;
+
+drop_procedure_stmt:
+  DROP PROCEDURE NAME
+    {
+        emit("DROPPROCEDURE %s", $3);
+        evo_set_proc_drop($3, 0);
+        free($3);
+    }
+| DROP PROCEDURE IF EXISTS NAME
+    {
+        emit("DROPPROCEDURE IF EXISTS %s", $5);
+        evo_set_proc_drop($5, 1);
+        free($5);
+    }
+| DROP FUNCTION NAME
+    {
+        emit("DROPFUNCTION %s", $3);
+        evo_set_proc_drop($3, 0);
+        free($3);
+    }
+| DROP FUNCTION IF EXISTS NAME
+    {
+        emit("DROPFUNCTION IF EXISTS %s", $5);
+        evo_set_proc_drop($5, 1);
+        free($5);
+    }
+;
+
+/* ================================================================
+ *  CALL procedure
+ * ================================================================ */
+
+stmt: call_stmt                                     { emit("STMT"); CallProcedureProcess(); }
+;
+
+call_stmt:
+  CALL NAME '(' ')'
+    {
+        emit("CALL %s 0", $2);
+        evo_set_call_name($2);
+        free($2);
+    }
+| CALL NAME '(' call_arg_list ')'
+    {
+        emit("CALL %s", $2);
+        evo_set_call_name($2);
+        free($2);
+    }
+;
+
+call_arg_list: call_arg
+| call_arg_list ',' call_arg
+;
+
+call_arg: INTNUM                                    { char buf[32]; snprintf(buf,sizeof(buf),"%d",$1); evo_add_call_arg(buf); }
+| STRING                                            { evo_add_call_arg($1); free($1); }
+| APPROXNUM                                         { char buf[64]; snprintf(buf,sizeof(buf),"%g",$1); evo_add_call_arg(buf); }
+| NULLX                                             { evo_add_call_arg("NULL"); }
+| BOOL                                              { evo_add_call_arg($1 ? "TRUE" : "FALSE"); }
+| NAME                                              { evo_add_call_arg($1); free($1); }
+| USERVAR                                           { char buf[256]; snprintf(buf,sizeof(buf),"@%s",$1); evo_add_call_arg(buf); free($1); }
 ;
 
 %%

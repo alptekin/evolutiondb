@@ -259,6 +259,47 @@ int AlterTableModifyColumn(const char *tableName, const char *colName, int newTy
 int AlterTableChangeColumn(const char *tableName, const char *oldName,
                            const char *newName, int newTypeCode);
 
+/* Stored Procedures / Functions (Procedure.c) */
+int CreateProcedureProcess(void);
+int DropProcedureProcess(void);
+int CallProcedureProcess(void);
+
+/* Block map for procedure control flow */
+#define BLOCK_IF       0
+#define BLOCK_ELSEIF   1
+#define BLOCK_ELSE     2
+#define BLOCK_WHILE    3
+#define BLOCK_LOOP     4
+#define BLOCK_FOR      5
+#define BLOCK_CASE     6
+#define BLOCK_WHEN     7
+#define BLOCK_FOREACH  8
+#define BLOCK_END      9
+
+typedef struct {
+    int type;        /* BLOCK_IF, BLOCK_WHILE, etc. */
+    int match_idx;   /* next branch: IF→ELSEIF→ELSE, or END for WHILE/LOOP */
+    int end_idx;     /* END xxx index that closes this entire block */
+    int start_idx;   /* back-pointer: END WHILE → WHILE, END LOOP → LOOP */
+    char label[64];  /* optional label for LEAVE/ITERATE */
+} BlockEntry;
+
+/* Enhanced statement splitter for control flow */
+int split_proc_statements(const char *body, char stmts[][4096], int max_stmts);
+
+/* Build block map from split statements */
+int proc_build_block_map(char stmts[][4096], int stmt_count,
+                         BlockEntry map[], int map_size);
+
+/* Parser helpers for procedure grammar */
+void evo_set_proc_name(const char *name, int isFunction);
+void evo_set_proc_replace(int orReplace);
+void evo_set_proc_return_type(const char *type);
+void evo_add_proc_param(const char *name, const char *mode);
+void evo_set_proc_drop(const char *name, int ifExists);
+void evo_set_call_name(const char *name);
+void evo_add_call_arg(const char *val);
+
 /* CREATE DOMAIN */
 int CreateDomainProcess(const char *name, int typeVal, struct ExprNode *checkExpr,
                         int notNull, int hasCheck);

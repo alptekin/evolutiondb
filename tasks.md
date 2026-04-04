@@ -1456,7 +1456,7 @@
 
 ## Day 37 — Window Functions & CTEs
 
-### Task 72: ⬜ Window Functions (Feature #26)
+### Task 72: ✅ Window Functions (Feature #26)
 
 **Goal:** Implement ROW_NUMBER(), RANK(), DENSE_RANK() with OVER (PARTITION BY ... ORDER BY ...).
 
@@ -1475,7 +1475,7 @@
 
 ---
 
-### Task 73: ⬜ CTEs — WITH ... AS (Feature #27)
+### Task 73: ✅ CTEs — WITH ... AS (Feature #27)
 
 **Goal:** Implement Common Table Expressions.
 
@@ -1496,7 +1496,7 @@
 
 ## Day 38 — Stored Procedures & Triggers
 
-### Task 74: ⬜ Stored Procedures / Functions (Feature #22)
+### Task 74: ✅ Stored Procedures / Functions (Feature #22)
 
 **Goal:** Implement basic stored procedure support: CREATE PROCEDURE, CALL, DROP PROCEDURE.
 
