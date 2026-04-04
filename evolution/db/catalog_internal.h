@@ -140,6 +140,17 @@ typedef struct {
     int      check_option;   /* 0=none, 1=CASCADED, 2=LOCAL */
 } ViewDesc;
 
+typedef struct {
+    uint32_t proc_id;
+    uint32_t db_id;
+    uint32_t schema_id;
+    char     proc_name[CAT_MAX_NAME_LEN];
+    char     param_list[1024];   /* "p1 INT,p2 VARCHAR(50)" */
+    char     return_type[64];    /* empty for procedures */
+    int      is_function;        /* 0=PROCEDURE, 1=FUNCTION */
+    char     body[8192];         /* raw SQL between BEGIN...END */
+} ProcedureDesc;
+
 /* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
@@ -364,6 +375,18 @@ int cat_find_view(uint32_t db_id, uint32_t schema_id,
                   const char *name, ViewDesc *out);
 int cat_drop_view(uint32_t db_id, uint32_t schema_id, const char *name);
 int cat_list_views(uint32_t schema_id, ViewDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Procedure / Function operations
+ * ---------------------------------------------------------------- */
+int cat_create_procedure(uint32_t db_id, uint32_t schema_id,
+                         const char *name, const char *param_list,
+                         const char *return_type, int is_function,
+                         const char *body);
+int cat_find_procedure(uint32_t db_id, uint32_t schema_id,
+                       const char *name, ProcedureDesc *out);
+int cat_drop_procedure(uint32_t db_id, uint32_t schema_id, const char *name);
+int cat_list_procedures(uint32_t schema_id, ProcedureDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Convenience

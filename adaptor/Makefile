@@ -88,7 +88,8 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/lock_mgr.c \
               $(EVO_DB)/auto_reclaim.c \
               $(EVO_DB)/conflict_guard.c \
-              $(EVO_DB)/table_lock.c
+              $(EVO_DB)/table_lock.c \
+              $(EVO_DB)/Procedure.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \
