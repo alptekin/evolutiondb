@@ -47,7 +47,8 @@ SRCS = main.c \
        db/hash_idx.c \
        db/page_crypt.c \
        db/mvcc.c \
-       db/vmap.c
+       db/vmap.c \
+       db/Procedure.c
 
 OBJS = $(SRCS:.c=.o)
 

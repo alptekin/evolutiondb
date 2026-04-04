@@ -131,6 +131,35 @@ static int is_explain_query(const char *sql)
     return (strncasecmp(sql, "EXPLAIN", 7) == 0 && isspace((unsigned char)sql[7]));
 }
 
+static int is_call_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "CALL", 4) == 0 && isspace((unsigned char)sql[4]));
+}
+
+static int is_create_procedure_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    if (strncasecmp(sql, "CREATE", 6) != 0) return 0;
+    sql += 6;
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    if (strncasecmp(sql, "OR", 2) == 0 && isspace((unsigned char)sql[2])) {
+        sql += 2;
+        while (*sql && isspace((unsigned char)*sql)) sql++;
+        if (strncasecmp(sql, "REPLACE", 7) == 0) { sql += 7; while (*sql && isspace((unsigned char)*sql)) sql++; }
+    }
+    return (strncasecmp(sql, "PROCEDURE", 9) == 0 || strncasecmp(sql, "FUNCTION", 8) == 0);
+}
+
+static int is_drop_procedure_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    if (strncasecmp(sql, "DROP", 4) != 0) return 0;
+    sql += 4;
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "PROCEDURE", 9) == 0 || strncasecmp(sql, "FUNCTION", 8) == 0);
+}
+
 /* Map EvoSQL type encoding to PostgreSQL type OID */
 int type_encoding_to_pg_oid(int typeEncoding)
 {
@@ -3577,6 +3606,1236 @@ static int evo_subquery_exec(const char *sql, char out_values[][256],
     return err ? -1 : 0;
 }
 
+/* ================================================================
+ *  CALL procedure execution — runs after yyparse() sets g_proc.callName
+ *  Looks up procedure in catalog, binds args, executes body statements.
+ * ================================================================ */
+/* ================================================================
+ *  Procedure execution helpers
+ * ================================================================ */
+
+/* Build combined param + local variable name/value arrays */
+static void proc_build_all_names(
+    const char *pnames[], const char *pvals[], int param_count,
+    char local_names[][128], char local_vals[][256], int local_count,
+    const char *out_names[], const char *out_vals[], int *out_count)
+{
+    *out_count = 0;
+    for (int k = 0; k < param_count && *out_count < 48; k++) {
+        out_names[*out_count] = pnames[k];
+        out_vals[*out_count] = pvals[k];
+        (*out_count)++;
+    }
+    for (int k = 0; k < local_count && *out_count < 48; k++) {
+        out_names[*out_count] = local_names[k];
+        out_vals[*out_count] = local_vals[k];
+        (*out_count)++;
+    }
+}
+
+/* Evaluate a boolean condition via SELECT (condition).
+ * Returns 1=true, 0=false, -1=error */
+static int proc_eval_condition(const char *condition, SessionCtx *ctx,
+                               const char *names[], const char *vals[], int count)
+{
+    extern void substitute_params(const char *sql, char *out, int out_size,
+                                  const char *param_names[], const char *arg_vals[],
+                                  int param_count);
+    char sub_cond[2048];
+    substitute_params(condition, sub_cond, sizeof(sub_cond), names, vals, count);
+
+    char sql[2048];
+    snprintf(sql, sizeof(sql), "SELECT (%s)", sub_cond);
+
+    ResultSet crs;
+    memset(&crs, 0, sizeof(crs));
+    result_init(&crs);
+    query_execute(sql, &crs, ctx);
+
+    int result = 0;
+    if (!crs.has_error && crs.num_rows > 0 && crs.rows[0].fields[0]) {
+        const char *v = crs.rows[0].fields[0];
+        result = (atoi(v) != 0) || strcasecmp(v, "true") == 0 || strcasecmp(v, "t") == 0;
+    }
+    int err = crs.has_error;
+    result_free(&crs);
+    return err ? -1 : result;
+}
+
+/* Execute a SQL statement, substitute params, return ResultSet */
+static int proc_exec_sql(const char *raw, SessionCtx *ctx,
+                         const char *names[], const char *vals[], int count,
+                         ResultSet *sub_rs)
+{
+    extern void substitute_params(const char *sql, char *out, int out_size,
+                                  const char *param_names[], const char *arg_vals[],
+                                  int param_count);
+    char substituted[4096];
+    substitute_params(raw, substituted, sizeof(substituted), names, vals, count);
+    memset(sub_rs, 0, sizeof(*sub_rs));
+    result_init(sub_rs);
+    query_execute(substituted, sub_rs, ctx);
+    return sub_rs->has_error ? -1 : 0;
+}
+
+/* Transfer ResultSet columns+rows from src to dst */
+static void proc_transfer_result(ResultSet *dst, ResultSet *src)
+{
+    for (int c = 0; c < src->num_cols; c++)
+        result_add_column(dst, src->columns[c].name, src->columns[c].pg_type_oid);
+    for (int r = 0; r < src->num_rows; r++) {
+        result_add_row(dst);
+        for (int c = 0; c < src->num_cols; c++) {
+            if (src->rows[r].is_null[c])
+                result_set_null(dst, r, c);
+            else if (src->rows[r].fields[c])
+                result_set_field(dst, r, c, src->rows[r].fields[c]);
+        }
+    }
+    dst->is_select = src->is_select;
+}
+
+/* Extract condition from "IF cond THEN" or "WHILE cond DO" or "ELSEIF cond THEN" */
+static int proc_extract_condition(const char *stmt, const char *start_kw,
+                                  const char *end_kw, char *cond, int cond_size)
+{
+    const char *p = stmt;
+    while (*p && isspace((unsigned char)*p)) p++;
+    int kwlen = (int)strlen(start_kw);
+    if (strncasecmp(p, start_kw, kwlen) != 0) return -1;
+    p += kwlen;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Find end keyword */
+    const char *end = NULL;
+    const char *q = p;
+    while (*q) {
+        if (*q == '\'') { q++; while (*q && *q != '\'') q++; if (*q) q++; continue; }
+        if (strncasecmp(q, end_kw, strlen(end_kw)) == 0 &&
+            (q == p || !isalnum((unsigned char)q[-1])) &&
+            !isalnum((unsigned char)q[strlen(end_kw)])) {
+            end = q; break;
+        }
+        q++;
+    }
+    if (!end) return -1;
+
+    int len = (int)(end - p);
+    while (len > 0 && isspace((unsigned char)p[len-1])) len--;
+    if (len >= cond_size) len = cond_size - 1;
+    memcpy(cond, p, len);
+    cond[len] = '\0';
+    return 0;
+}
+
+/* Find or create a local variable, return index */
+static int proc_find_or_create_var(const char *name, char names[][128],
+                                   char vals[][256], int *count, int max)
+{
+    for (int k = 0; k < *count; k++)
+        if (strcasecmp(names[k], name) == 0) return k;
+    if (*count >= max) return -1;
+    int idx = *count;
+    strncpy(names[idx], name, 127);
+    vals[idx][0] = '\0';
+    (*count)++;
+    return idx;
+}
+
+/* Find a local variable, return index or -1 */
+static int proc_find_var(const char *name, char names[][128], int count)
+{
+    for (int k = 0; k < count; k++)
+        if (strcasecmp(names[k], name) == 0) return k;
+    return -1;
+}
+
+/* ================================================================
+ *  CALL procedure execution — full control flow engine
+ * ================================================================ */
+static void execute_call_procedure(ResultSet *rs, SessionCtx *ctx)
+{
+    /* Resolve current database and schema */
+    DatabaseDesc dbDesc;
+    if (cat_find_database(ctx->database, &dbDesc) < 0) {
+        result_set_error(rs, "3D000", "database not found");
+        return;
+    }
+    SchemaDesc schDesc;
+    if (cat_find_schema(dbDesc.db_id, ctx->schema, &schDesc) < 0) {
+        result_set_error(rs, "3F000", "schema not found");
+        return;
+    }
+
+    /* Look up procedure */
+    ProcedureDesc proc;
+    if (cat_find_procedure(dbDesc.db_id, schDesc.schema_id,
+                           g_proc.callName, &proc) < 0) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "procedure \"%s\" does not exist", g_proc.callName);
+        result_set_error(rs, "42883", msg);
+        return;
+    }
+
+    /* Parse parameter definitions */
+    char param_names[16][128];
+    char param_types[16][64];
+    memset(param_names, 0, sizeof(param_names));
+    memset(param_types, 0, sizeof(param_types));
+    char param_modes[16][8];
+    memset(param_modes, 0, sizeof(param_modes));
+    extern int parse_param_defs(const char *param_list,
+                                char names[][128], char types[][64],
+                                char modes[][8], int max);
+    int param_count = parse_param_defs(proc.param_list, param_names, param_types,
+                                        param_modes, 16);
+
+    /* Validate arg count (OUT params don't require an arg for now, but we count all) */
+    if (g_proc.argCount != param_count) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "procedure \"%s\" expects %d arguments, got %d",
+                 g_proc.callName, param_count, g_proc.argCount);
+        result_set_error(rs, "42883", msg);
+        return;
+    }
+
+    /* Split body into control-flow-aware statements */
+    char (*stmts)[4096] = malloc(128 * 4096);
+    if (!stmts) { result_set_error(rs, "53200", "out of memory"); return; }
+    int stmt_count = split_proc_statements(proc.body, stmts, 128);
+
+    /* Build block map for control flow */
+    BlockEntry *bmap = calloc(128, sizeof(BlockEntry));
+    if (!bmap) { free(stmts); result_set_error(rs, "53200", "out of memory"); return; }
+    proc_build_block_map(stmts, stmt_count, bmap, 128);
+
+    /* Copy args to local storage — g_proc gets zeroed by recursive query_execute */
+    char arg_copies[16][256];
+    char arg_caller_refs[16][256]; /* Original caller refs for OUT writeback */
+    memset(arg_copies, 0, sizeof(arg_copies));
+    memset(arg_caller_refs, 0, sizeof(arg_caller_refs));
+    for (int i = 0; i < param_count && i < 16; i++) {
+        strncpy(arg_copies[i], g_proc.args[i], sizeof(arg_copies[0]) - 1);
+        strncpy(arg_caller_refs[i], g_proc.args[i], sizeof(arg_caller_refs[0]) - 1);
+        /* For INOUT params: resolve @var to its current value */
+        if (strcasecmp(param_modes[i], "INOUT") == 0 &&
+            arg_copies[i][0] == '@' && ctx) {
+            const char *vname = arg_copies[i] + 1;
+            for (int uv = 0; uv < ctx->user_var_count; uv++) {
+                if (strcasecmp(ctx->user_var_names[uv], vname) == 0) {
+                    strncpy(arg_copies[i], ctx->user_var_values[uv], 255);
+                    break;
+                }
+            }
+        }
+    }
+
+    const char *pnames[16];
+    const char *pvals[16];
+    for (int i = 0; i < param_count; i++) {
+        pnames[i] = param_names[i];
+        pvals[i] = arg_copies[i];
+    }
+
+    extern void substitute_params(const char *sql, char *out, int out_size,
+                                  const char *param_names[], const char *arg_vals[],
+                                  int param_count);
+
+    /* Local variable storage */
+    char local_var_names[32][128];
+    char local_var_values[32][256];
+    int local_var_count = 0;
+    memset(local_var_names, 0, sizeof(local_var_names));
+    memset(local_var_values, 0, sizeof(local_var_values));
+
+    /* Cursor storage */
+    typedef struct { char name[128]; char query[4096]; ResultSet crs; int pos; int is_open; } PCursor;
+    PCursor cursors[8];
+    int cursor_count = 0;
+    memset(cursors, 0, sizeof(cursors));
+
+    /* Handler storage */
+    typedef struct { int type; /* 0=CONTINUE,1=EXIT */ char cond[64]; char action[4096]; } PHandler;
+    PHandler handlers[8];
+    int handler_count = 0;
+    memset(handlers, 0, sizeof(handlers));
+
+    int not_found_flag = 0; /* set to 1 when FETCH hits end */
+    int max_iterations = 10000;
+    int total_iterations = 0;
+
+    /* Build combined name/value arrays — refreshed in loop */
+    const char *all_names[48];
+    const char *all_vals[48];
+    int all_count = 0;
+
+    #define REFRESH_ALL() proc_build_all_names(pnames, pvals, param_count, \
+        local_var_names, local_var_values, local_var_count, \
+        all_names, all_vals, &all_count)
+
+    /* Skip-to stack: when IF/CASE branch is taken, skip to end when hitting ELSEIF/ELSE/WHEN */
+    int skip_to_end[16]; /* end_idx values for active IF/CASE chains */
+    int skip_depth = 0;
+
+    int i = 0;
+    while (i < stmt_count) {
+        if (++total_iterations > max_iterations) {
+            result_set_error(rs, "54001", "procedure exceeded maximum iterations (10000)");
+            goto cleanup;
+        }
+
+        char *raw = stmts[i];
+        while (*raw && isspace((unsigned char)*raw)) raw++;
+        if (!*raw) { i++; continue; }
+
+        /* Check skip-to: if we hit an ELSEIF/ELSE/WHEN for a taken branch, skip to end */
+        if (skip_depth > 0) {
+            int matched_skip = 0;
+            for (int sd = 0; sd < skip_depth; sd++) {
+                if (i >= skip_to_end[sd]) {
+                    /* Past this end — remove from stack */
+                    for (int k = sd; k < skip_depth - 1; k++)
+                        skip_to_end[k] = skip_to_end[k+1];
+                    skip_depth--;
+                    sd--;
+                    continue;
+                }
+                if ((bmap[i].type == BLOCK_ELSEIF || bmap[i].type == BLOCK_ELSE ||
+                     bmap[i].type == BLOCK_WHEN) &&
+                    bmap[i].end_idx == skip_to_end[sd]) {
+                    i = skip_to_end[sd] + 1; /* jump past END IF/CASE */
+                    matched_skip = 1;
+                    break;
+                }
+            }
+            if (matched_skip) continue;
+        }
+
+        REFRESH_ALL();
+
+        /* ---- DECLARE variable ---- */
+        if (strncasecmp(raw, "DECLARE", 7) == 0 && isspace((unsigned char)raw[7])) {
+            char *p = raw + 7;
+            while (*p && isspace((unsigned char)*p)) p++;
+
+            /* DECLARE ... CURSOR FOR ... */
+            {
+                const char *ctest = p;
+                while (*ctest && !isspace((unsigned char)*ctest)) ctest++;
+                while (*ctest && isspace((unsigned char)*ctest)) ctest++;
+                if (strncasecmp(ctest, "CURSOR", 6) == 0 && cursor_count < 8) {
+                    char cname[128] = "";
+                    int ni = 0;
+                    while (*p && !isspace((unsigned char)*p) && ni < 127) cname[ni++] = *p++;
+                    cname[ni] = '\0';
+                    /* Skip "CURSOR FOR" */
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    if (strncasecmp(p, "CURSOR", 6) == 0) p += 6;
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    if (strncasecmp(p, "FOR", 3) == 0) p += 3;
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    strncpy(cursors[cursor_count].name, cname, 127);
+                    strncpy(cursors[cursor_count].query, p, 4095);
+                    cursors[cursor_count].pos = -1;
+                    cursors[cursor_count].is_open = 0;
+                    cursor_count++;
+                    i++; continue;
+                }
+            }
+
+            /* DECLARE ... HANDLER ... */
+            if (strncasecmp(p, "CONTINUE", 8) == 0 || strncasecmp(p, "EXIT", 4) == 0) {
+                int htype = (strncasecmp(p, "EXIT", 4) == 0) ? 1 : 0;
+                while (*p && !isspace((unsigned char)*p)) p++;
+                while (*p && isspace((unsigned char)*p)) p++;
+                if (strncasecmp(p, "HANDLER", 7) == 0 && handler_count < 8) {
+                    p += 7;
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    if (strncasecmp(p, "FOR", 3) == 0) p += 3;
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    /* Extract condition: NOT FOUND, SQLEXCEPTION, etc. */
+                    char hcond[64] = "";
+                    if (strncasecmp(p, "NOT FOUND", 9) == 0) {
+                        strcpy(hcond, "NOT FOUND"); p += 9;
+                    } else if (strncasecmp(p, "SQLEXCEPTION", 12) == 0) {
+                        strcpy(hcond, "SQLEXCEPTION"); p += 12;
+                    } else if (strncasecmp(p, "SQLWARNING", 10) == 0) {
+                        strcpy(hcond, "SQLWARNING"); p += 10;
+                    }
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    handlers[handler_count].type = htype;
+                    strncpy(handlers[handler_count].cond, hcond, 63);
+                    strncpy(handlers[handler_count].action, p, 4095);
+                    handler_count++;
+                    i++; continue;
+                }
+            }
+
+            /* DECLARE variable TYPE [DEFAULT value] */
+            if (local_var_count < 32) {
+                char *vn = local_var_names[local_var_count];
+                int vni = 0;
+                while (*p && !isspace((unsigned char)*p) && vni < 127) vn[vni++] = *p++;
+                vn[vni] = '\0';
+                while (*p && isspace((unsigned char)*p)) p++;
+                while (*p && !isspace((unsigned char)*p)) p++; /* skip type */
+                while (*p && isspace((unsigned char)*p)) p++;
+                if (*p == '(') { while (*p && *p != ')') p++; if (*p) p++; }
+                while (*p && isspace((unsigned char)*p)) p++;
+                if (strncasecmp(p, "DEFAULT", 7) == 0) {
+                    p += 7;
+                    while (*p && isspace((unsigned char)*p)) p++;
+                    strncpy(local_var_values[local_var_count], p,
+                            sizeof(local_var_values[0]) - 1);
+                } else {
+                    local_var_values[local_var_count][0] = '\0';
+                }
+                local_var_count++;
+            }
+            i++; continue;
+        }
+
+        /* ---- SET varname = expr ---- */
+        if (strncasecmp(raw, "SET", 3) == 0 && isspace((unsigned char)raw[3])) {
+            char *p = raw + 3;
+            while (*p && isspace((unsigned char)*p)) p++;
+            char varname[128] = "";
+            int vni = 0;
+            while (*p && !isspace((unsigned char)*p) && *p != '=' && vni < 127)
+                varname[vni++] = *p++;
+            varname[vni] = '\0';
+            while (*p && (isspace((unsigned char)*p) || *p == '=')) p++;
+
+            /* Evaluate expression via SELECT */
+            char sub_expr[1024];
+            substitute_params(p, sub_expr, sizeof(sub_expr), all_names, all_vals, all_count);
+            char eval_sql[2048];
+            snprintf(eval_sql, sizeof(eval_sql), "SELECT %s", sub_expr);
+            ResultSet evrs;
+            memset(&evrs, 0, sizeof(evrs));
+            result_init(&evrs);
+            query_execute(eval_sql, &evrs, ctx);
+            if (!evrs.has_error && evrs.num_rows > 0 && evrs.rows[0].fields[0]) {
+                const char *result_val = evrs.rows[0].fields[0];
+                int vi = proc_find_var(varname, local_var_names, local_var_count);
+                if (vi >= 0) {
+                    strncpy(local_var_values[vi], result_val, 255);
+                } else {
+                    /* Also check procedure parameters (for OUT/INOUT writeback) */
+                    for (int pi = 0; pi < param_count; pi++) {
+                        if (strcasecmp(param_names[pi], varname) == 0) {
+                            strncpy(arg_copies[pi], result_val, 255);
+                            break;
+                        }
+                    }
+                }
+            }
+            result_free(&evrs);
+            i++; continue;
+        }
+
+        /* ---- IF...THEN ---- */
+        if (strncasecmp(raw, "IF", 2) == 0 && isspace((unsigned char)raw[2]) &&
+            bmap[i].type == BLOCK_IF) {
+            char cond[1024];
+            if (proc_extract_condition(raw, "IF", "THEN", cond, sizeof(cond)) == 0) {
+                int cv = proc_eval_condition(cond, ctx, all_names, all_vals, all_count);
+                if (cv > 0) {
+                    /* Push skip-to for this IF chain — when we hit ELSEIF/ELSE, skip to end */
+                    if (skip_depth < 16 && bmap[i].end_idx >= 0)
+                        skip_to_end[skip_depth++] = bmap[i].end_idx;
+                    i++; /* execute body */
+                } else {
+                    /* Jump to ELSEIF/ELSE/END IF */
+                    i = bmap[i].match_idx;
+                }
+            } else {
+                i++;
+            }
+            continue;
+        }
+
+        /* ---- ELSEIF...THEN ---- */
+        if (strncasecmp(raw, "ELSEIF", 6) == 0 && bmap[i].type == BLOCK_ELSEIF) {
+            char cond[1024];
+            if (proc_extract_condition(raw, "ELSEIF", "THEN", cond, sizeof(cond)) == 0) {
+                int cv = proc_eval_condition(cond, ctx, all_names, all_vals, all_count);
+                if (cv > 0) {
+                    if (skip_depth < 16 && bmap[i].end_idx >= 0)
+                        skip_to_end[skip_depth++] = bmap[i].end_idx;
+                    i++;
+                } else {
+                    i = bmap[i].match_idx;
+                }
+            } else {
+                i++;
+            }
+            continue;
+        }
+
+        /* ---- ELSE ---- */
+        if (strncasecmp(raw, "ELSE", 4) == 0 && !isalnum((unsigned char)raw[4]) &&
+            bmap[i].type == BLOCK_ELSE) {
+            i++; /* enter else body */
+            continue;
+        }
+
+        /* ---- END IF / END WHILE / END LOOP / END FOR / END FOREACH / END CASE ---- */
+        if (strncasecmp(raw, "END", 3) == 0 && isspace((unsigned char)raw[3])) {
+            const char *ep = raw + 3;
+            while (*ep && isspace((unsigned char)*ep)) ep++;
+
+            if (strncasecmp(ep, "IF", 2) == 0 && !isalnum((unsigned char)ep[2])) {
+                i++; continue;
+            }
+            if (strncasecmp(ep, "WHILE", 5) == 0 && !isalnum((unsigned char)ep[5])) {
+                /* Jump back to WHILE */
+                if (bmap[i].start_idx >= 0) i = bmap[i].start_idx;
+                else i++;
+                continue;
+            }
+            if (strncasecmp(ep, "LOOP", 4) == 0 && !isalnum((unsigned char)ep[4])) {
+                if (bmap[i].start_idx >= 0) i = bmap[i].start_idx;
+                else i++;
+                continue;
+            }
+            if (strncasecmp(ep, "FOR", 3) == 0 && !isalnum((unsigned char)ep[3])) {
+                if (bmap[i].start_idx >= 0) i = bmap[i].start_idx;
+                else i++;
+                continue;
+            }
+            if (strncasecmp(ep, "FOREACH", 7) == 0 && !isalnum((unsigned char)ep[7])) {
+                if (bmap[i].start_idx >= 0) i = bmap[i].start_idx;
+                else i++;
+                continue;
+            }
+            if (strncasecmp(ep, "CASE", 4) == 0) {
+                i++; continue;
+            }
+            i++; continue;
+        }
+
+        /* ---- WHILE...DO ---- */
+        if (strncasecmp(raw, "WHILE", 5) == 0 && isspace((unsigned char)raw[5]) &&
+            bmap[i].type == BLOCK_WHILE) {
+            char cond[1024];
+            if (proc_extract_condition(raw, "WHILE", "DO", cond, sizeof(cond)) == 0) {
+                int cv = proc_eval_condition(cond, ctx, all_names, all_vals, all_count);
+                if (cv > 0) {
+                    i++;
+                } else {
+                    i = bmap[i].end_idx + 1;
+                }
+            } else {
+                i = bmap[i].end_idx + 1;
+            }
+            continue;
+        }
+
+        /* ---- LOOP ---- */
+        if (bmap[i].type == BLOCK_LOOP) {
+            i++; continue;
+        }
+
+        /* ---- LEAVE [label] ---- */
+        if (strncasecmp(raw, "LEAVE", 5) == 0) {
+            /* Find enclosing LOOP/WHILE/FOR/FOREACH and jump past its END */
+            char label[64] = "";
+            const char *lp = raw + 5;
+            while (*lp && isspace((unsigned char)*lp)) lp++;
+            if (*lp) { strncpy(label, lp, 63); }
+            /* Search block map for enclosing loop */
+            for (int b = i - 1; b >= 0; b--) {
+                if (bmap[b].type == BLOCK_LOOP || bmap[b].type == BLOCK_WHILE ||
+                    bmap[b].type == BLOCK_FOR || bmap[b].type == BLOCK_FOREACH) {
+                    if (label[0] == '\0' || strcasecmp(bmap[b].label, label) == 0) {
+                        i = bmap[b].end_idx + 1;
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* ---- ITERATE [label] ---- */
+        if (strncasecmp(raw, "ITERATE", 7) == 0) {
+            char label[64] = "";
+            const char *lp = raw + 7;
+            while (*lp && isspace((unsigned char)*lp)) lp++;
+            if (*lp) strncpy(label, lp, 63);
+            for (int b = i - 1; b >= 0; b--) {
+                if (bmap[b].type == BLOCK_LOOP || bmap[b].type == BLOCK_WHILE ||
+                    bmap[b].type == BLOCK_FOR || bmap[b].type == BLOCK_FOREACH) {
+                    if (label[0] == '\0' || strcasecmp(bmap[b].label, label) == 0) {
+                        i = b; break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* ---- FOR var IN start..end DO ---- */
+        if (strncasecmp(raw, "FOR", 3) == 0 && isspace((unsigned char)raw[3]) &&
+            bmap[i].type == BLOCK_FOR) {
+            char *p = raw + 3;
+            while (*p && isspace((unsigned char)*p)) p++;
+            char varname[128] = "";
+            int vni = 0;
+            while (*p && !isspace((unsigned char)*p) && vni < 127) varname[vni++] = *p++;
+            varname[vni] = '\0';
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (strncasecmp(p, "IN", 2) == 0) p += 2;
+            while (*p && isspace((unsigned char)*p)) p++;
+
+            /* Parse start..end, substitute params */
+            char range_buf[256];
+            substitute_params(p, range_buf, sizeof(range_buf), all_names, all_vals, all_count);
+            /* Remove trailing DO */
+            { char *dp = range_buf + strlen(range_buf);
+              /* Find last "DO" (case-insensitive) */
+              while (dp > range_buf + 1) {
+                  dp--;
+                  if ((dp[0] == 'D' || dp[0] == 'd') && (dp[1] == 'O' || dp[1] == 'o') &&
+                      (dp == range_buf || !isalnum((unsigned char)dp[-1])) &&
+                      (!dp[2] || !isalnum((unsigned char)dp[2]))) {
+                      while (dp > range_buf && isspace((unsigned char)dp[-1])) dp--;
+                      *dp = '\0';
+                      break;
+                  }
+              }
+            }
+
+            int start_val = 0, end_val = 0;
+            char *dots = strstr(range_buf, "..");
+            if (dots) {
+                *dots = '\0';
+                start_val = atoi(range_buf);
+                end_val = atoi(dots + 2);
+            }
+
+            int vi = proc_find_or_create_var(varname, local_var_names,
+                                              local_var_values, &local_var_count, 32);
+            if (vi >= 0) {
+                if (local_var_values[vi][0] == '\0') {
+                    /* First entry: initialize to start */
+                    snprintf(local_var_values[vi], 256, "%d", start_val);
+                } else {
+                    /* Re-entry from END FOR: increment */
+                    int cur = atoi(local_var_values[vi]);
+                    snprintf(local_var_values[vi], 256, "%d", cur + 1);
+                }
+                int cur = atoi(local_var_values[vi]);
+                if (cur <= end_val) {
+                    i++;
+                } else {
+                    /* Reset for potential re-entry */
+                    local_var_values[vi][0] = '\0';
+                    i = bmap[i].end_idx + 1;
+                }
+            } else {
+                i = bmap[i].end_idx + 1;
+            }
+            continue;
+        }
+
+        /* Handle END FOR jump-back: increment counter */
+        /* (handled in END section above — jumps to FOR which re-evaluates) */
+
+        /* ---- FOREACH vars IN (query) DO ---- */
+        if (strncasecmp(raw, "FOREACH", 7) == 0 && isspace((unsigned char)raw[7]) &&
+            bmap[i].type == BLOCK_FOREACH) {
+            char *p = raw + 7;
+            while (*p && isspace((unsigned char)*p)) p++;
+
+            /* Parse variable names (comma-separated) before IN */
+            char varnames[16][128];
+            int vcount = 0;
+            memset(varnames, 0, sizeof(varnames));
+            while (*p && strncasecmp(p, "IN", 2) != 0 && vcount < 16) {
+                while (*p && isspace((unsigned char)*p)) p++;
+                int vni2 = 0;
+                while (*p && *p != ',' && !isspace((unsigned char)*p) && vni2 < 127)
+                    varnames[vcount][vni2++] = *p++;
+                varnames[vcount][vni2] = '\0';
+                if (vni2 > 0) vcount++;
+                while (*p && (*p == ',' || isspace((unsigned char)*p))) p++;
+                if (strncasecmp(p, "IN", 2) == 0 && isspace((unsigned char)p[2])) break;
+            }
+            if (strncasecmp(p, "IN", 2) == 0) p += 2;
+            while (*p && isspace((unsigned char)*p)) p++;
+
+            /* Extract query (may be in parentheses) */
+            char query[4096] = "";
+            if (*p == '(') {
+                p++;
+                int depth = 1;
+                int qi = 0;
+                while (*p && depth > 0 && qi < 4095) {
+                    if (*p == '(') depth++;
+                    else if (*p == ')') { depth--; if (depth == 0) break; }
+                    query[qi++] = *p++;
+                }
+                query[qi] = '\0';
+            }
+
+            /* Remove trailing DO */
+            /* Execute query */
+            char sub_query[4096];
+            substitute_params(query, sub_query, sizeof(sub_query), all_names, all_vals, all_count);
+            ResultSet frs;
+            memset(&frs, 0, sizeof(frs));
+            result_init(&frs);
+            query_execute(sub_query, &frs, ctx);
+
+            if (frs.has_error || frs.num_rows == 0) {
+                result_free(&frs);
+                i = bmap[i].end_idx + 1;
+                continue;
+            }
+
+            /* Execute body for each row */
+            int body_start = i + 1;
+            int body_end = bmap[i].end_idx;
+
+            for (int row = 0; row < frs.num_rows && !rs->has_error; row++) {
+                if (++total_iterations > max_iterations) {
+                    result_set_error(rs, "54001", "FOREACH exceeded maximum iterations");
+                    result_free(&frs);
+                    goto cleanup;
+                }
+                /* Bind row values to variables */
+                for (int v = 0; v < vcount && v < frs.num_cols; v++) {
+                    int vi2 = proc_find_or_create_var(varnames[v], local_var_names,
+                                                       local_var_values, &local_var_count, 32);
+                    if (vi2 >= 0 && frs.rows[row].fields[v])
+                        strncpy(local_var_values[vi2], frs.rows[row].fields[v], 255);
+                }
+                /* Execute body statements */
+                for (int bi = body_start; bi < body_end && !rs->has_error; bi++) {
+                    char *braw = stmts[bi];
+                    while (*braw && isspace((unsigned char)*braw)) braw++;
+                    if (!*braw) continue;
+                    REFRESH_ALL();
+                    ResultSet brs;
+                    if (proc_exec_sql(braw, ctx, all_names, all_vals, all_count, &brs) < 0) {
+                        rs->has_error = 1;
+                        strncpy(rs->error_message, brs.error_message, sizeof(rs->error_message)-1);
+                        strncpy(rs->error_sqlstate, brs.error_sqlstate, sizeof(rs->error_sqlstate)-1);
+                    }
+                    result_free(&brs);
+                }
+            }
+            result_free(&frs);
+            i = body_end + 1;
+            continue;
+        }
+
+        /* ---- CASE ---- */
+        if (strncasecmp(raw, "CASE", 4) == 0 && bmap[i].type == BLOCK_CASE) {
+            /* Extract expression after CASE (if any) */
+            char *p = raw + 4;
+            while (*p && isspace((unsigned char)*p)) p++;
+            char case_expr[512] = "";
+            if (*p) strncpy(case_expr, p, sizeof(case_expr) - 1);
+
+            /* Evaluate CASE expression if present */
+            char case_val[256] = "";
+            if (case_expr[0]) {
+                char sub_ce[512];
+                substitute_params(case_expr, sub_ce, sizeof(sub_ce), all_names, all_vals, all_count);
+                char eval_sql2[1024];
+                snprintf(eval_sql2, sizeof(eval_sql2), "SELECT %s", sub_ce);
+                ResultSet evr2;
+                memset(&evr2, 0, sizeof(evr2));
+                result_init(&evr2);
+                query_execute(eval_sql2, &evr2, ctx);
+                if (!evr2.has_error && evr2.num_rows > 0 && evr2.rows[0].fields[0])
+                    strncpy(case_val, evr2.rows[0].fields[0], 255);
+                result_free(&evr2);
+            }
+
+            /* Scan WHEN clauses via block map */
+            int found_branch = 0;
+            int j = i + 1;
+            while (j < stmt_count && j < bmap[i].end_idx) {
+                char *wraw = stmts[j];
+                while (*wraw && isspace((unsigned char)*wraw)) wraw++;
+
+                if (strncasecmp(wraw, "WHEN", 4) == 0 && isspace((unsigned char)wraw[4])) {
+                    char wcond[1024];
+                    if (proc_extract_condition(wraw, "WHEN", "THEN", wcond, sizeof(wcond)) == 0) {
+                        REFRESH_ALL();
+                        int match = 0;
+                        if (case_val[0]) {
+                            /* Simple CASE: compare values */
+                            char sub_wv[256];
+                            substitute_params(wcond, sub_wv, sizeof(sub_wv), all_names, all_vals, all_count);
+                            match = (strcmp(case_val, sub_wv) == 0);
+                        } else {
+                            /* Searched CASE: evaluate condition */
+                            match = proc_eval_condition(wcond, ctx, all_names, all_vals, all_count);
+                        }
+                        if (match > 0) {
+                            /* Push skip-to for CASE — skip other WHEN/ELSE branches */
+                            if (skip_depth < 16 && bmap[i].end_idx >= 0)
+                                skip_to_end[skip_depth++] = bmap[i].end_idx;
+                            i = j + 1; /* execute WHEN body */
+                            found_branch = 1;
+                            break;
+                        }
+                    }
+                    /* Skip to next WHEN */
+                    if (bmap[j].match_idx > 0) j = bmap[j].match_idx;
+                    else j++;
+                } else if (strncasecmp(wraw, "ELSE", 4) == 0 && bmap[j].type == BLOCK_ELSE) {
+                    if (skip_depth < 16 && bmap[i].end_idx >= 0)
+                        skip_to_end[skip_depth++] = bmap[i].end_idx;
+                    i = j + 1;
+                    found_branch = 1;
+                    break;
+                } else {
+                    j++;
+                }
+            }
+            if (!found_branch) i = bmap[i].end_idx + 1;
+            continue;
+        }
+
+        /* ---- WHEN (inside CASE) — if we reach here, we already executed the body.
+         *      Jump to END CASE ---- */
+        if (strncasecmp(raw, "WHEN", 4) == 0 && bmap[i].type == BLOCK_WHEN) {
+            i = bmap[i].end_idx + 1;
+            continue;
+        }
+
+        /* ---- OPEN cursor ---- */
+        if (strncasecmp(raw, "OPEN", 4) == 0 && isspace((unsigned char)raw[4])) {
+            char cname[128] = "";
+            const char *cp = raw + 4;
+            while (*cp && isspace((unsigned char)*cp)) cp++;
+            int cni = 0;
+            while (*cp && !isspace((unsigned char)*cp) && cni < 127) cname[cni++] = *cp++;
+            cname[cni] = '\0';
+            for (int c = 0; c < cursor_count; c++) {
+                if (strcasecmp(cursors[c].name, cname) == 0) {
+                    REFRESH_ALL();
+                    char sub_q[4096];
+                    substitute_params(cursors[c].query, sub_q, sizeof(sub_q), all_names, all_vals, all_count);
+                    if (cursors[c].is_open) result_free(&cursors[c].crs);
+                    memset(&cursors[c].crs, 0, sizeof(ResultSet));
+                    result_init(&cursors[c].crs);
+                    query_execute(sub_q, &cursors[c].crs, ctx);
+                    cursors[c].pos = 0;
+                    cursors[c].is_open = 1;
+                    break;
+                }
+            }
+            i++; continue;
+        }
+
+        /* ---- FETCH cursor INTO vars ---- */
+        if (strncasecmp(raw, "FETCH", 5) == 0 && isspace((unsigned char)raw[5])) {
+            char cname[128] = "";
+            const char *cp = raw + 5;
+            while (*cp && isspace((unsigned char)*cp)) cp++;
+            int cni = 0;
+            while (*cp && !isspace((unsigned char)*cp) && cni < 127) cname[cni++] = *cp++;
+            cname[cni] = '\0';
+            while (*cp && isspace((unsigned char)*cp)) cp++;
+            if (strncasecmp(cp, "INTO", 4) == 0) cp += 4;
+            while (*cp && isspace((unsigned char)*cp)) cp++;
+
+            /* Parse INTO variable list */
+            char fvars[16][128];
+            int fvc = 0;
+            memset(fvars, 0, sizeof(fvars));
+            while (*cp && fvc < 16) {
+                while (*cp && isspace((unsigned char)*cp)) cp++;
+                int fni = 0;
+                while (*cp && *cp != ',' && !isspace((unsigned char)*cp) && fni < 127)
+                    fvars[fvc][fni++] = *cp++;
+                fvars[fvc][fni] = '\0';
+                if (fni > 0) fvc++;
+                while (*cp && (*cp == ',' || isspace((unsigned char)*cp))) cp++;
+            }
+
+            not_found_flag = 0;
+            for (int c = 0; c < cursor_count; c++) {
+                if (strcasecmp(cursors[c].name, cname) == 0 && cursors[c].is_open) {
+                    if (cursors[c].pos < cursors[c].crs.num_rows) {
+                        for (int v = 0; v < fvc && v < cursors[c].crs.num_cols; v++) {
+                            int vi3 = proc_find_or_create_var(fvars[v], local_var_names,
+                                                               local_var_values, &local_var_count, 32);
+                            if (vi3 >= 0 && cursors[c].crs.rows[cursors[c].pos].fields[v])
+                                strncpy(local_var_values[vi3],
+                                        cursors[c].crs.rows[cursors[c].pos].fields[v], 255);
+                        }
+                        cursors[c].pos++;
+                    } else {
+                        not_found_flag = 1;
+                        /* Check NOT FOUND handler */
+                        for (int h = 0; h < handler_count; h++) {
+                            if (strcasecmp(handlers[h].cond, "NOT FOUND") == 0) {
+                                /* Execute handler action — if SET, update local variable */
+                                const char *act = handlers[h].action;
+                                while (*act && isspace((unsigned char)*act)) act++;
+                                if (strncasecmp(act, "SET", 3) == 0 && isspace((unsigned char)act[3])) {
+                                    char *hp = (char *)act + 3;
+                                    while (*hp && isspace((unsigned char)*hp)) hp++;
+                                    char hvar[128] = "";
+                                    int hvi = 0;
+                                    while (*hp && !isspace((unsigned char)*hp) && *hp != '=' && hvi < 127)
+                                        hvar[hvi++] = *hp++;
+                                    hvar[hvi] = '\0';
+                                    while (*hp && (isspace((unsigned char)*hp) || *hp == '=')) hp++;
+                                    REFRESH_ALL();
+                                    char hval[256];
+                                    substitute_params(hp, hval, sizeof(hval), all_names, all_vals, all_count);
+                                    int hvidx = proc_find_var(hvar, local_var_names, local_var_count);
+                                    if (hvidx >= 0) strncpy(local_var_values[hvidx], hval, 255);
+                                } else {
+                                    REFRESH_ALL();
+                                    ResultSet hrs;
+                                    proc_exec_sql(act, ctx, all_names, all_vals, all_count, &hrs);
+                                    result_free(&hrs);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+            i++; continue;
+        }
+
+        /* ---- CLOSE cursor ---- */
+        if (strncasecmp(raw, "CLOSE", 5) == 0 && isspace((unsigned char)raw[5])) {
+            char cname[128] = "";
+            const char *cp = raw + 5;
+            while (*cp && isspace((unsigned char)*cp)) cp++;
+            int cni = 0;
+            while (*cp && !isspace((unsigned char)*cp) && cni < 127) cname[cni++] = *cp++;
+            cname[cni] = '\0';
+            for (int c = 0; c < cursor_count; c++) {
+                if (strcasecmp(cursors[c].name, cname) == 0 && cursors[c].is_open) {
+                    result_free(&cursors[c].crs);
+                    cursors[c].is_open = 0;
+                    cursors[c].pos = -1;
+                    break;
+                }
+            }
+            i++; continue;
+        }
+
+        /* ---- RETURN expr ---- */
+        if (strncasecmp(raw, "RETURN", 6) == 0 &&
+            (raw[6] == '\0' || isspace((unsigned char)raw[6]))) {
+            char *p = raw + 6;
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (*p) {
+                char sub_expr[1024];
+                substitute_params(p, sub_expr, sizeof(sub_expr), all_names, all_vals, all_count);
+                char ret_sql[2048];
+                snprintf(ret_sql, sizeof(ret_sql), "SELECT %s", sub_expr);
+                ResultSet sub_rs;
+                memset(&sub_rs, 0, sizeof(sub_rs));
+                result_init(&sub_rs);
+                query_execute(ret_sql, &sub_rs, ctx);
+                if (sub_rs.has_error) {
+                    rs->has_error = 1;
+                    strncpy(rs->error_message, sub_rs.error_message, sizeof(rs->error_message)-1);
+                    strncpy(rs->error_sqlstate, sub_rs.error_sqlstate, sizeof(rs->error_sqlstate)-1);
+                } else {
+                    proc_transfer_result(rs, &sub_rs);
+                }
+                result_free(&sub_rs);
+            }
+            goto cleanup;
+        }
+
+        /* ---- SELECT...INTO var ---- */
+        if (strncasecmp(raw, "SELECT", 6) == 0 && isspace((unsigned char)raw[6])) {
+            /* Check for INTO keyword */
+            const char *into_pos = NULL;
+            const char *sq = raw + 6;
+            while (*sq) {
+                if (*sq == '\'') { sq++; while (*sq && *sq != '\'') sq++; if (*sq) sq++; continue; }
+                if (strncasecmp(sq, "INTO", 4) == 0 && (sq == raw+6 || !isalnum((unsigned char)sq[-1])) &&
+                    isspace((unsigned char)sq[4])) {
+                    into_pos = sq; break;
+                }
+                sq++;
+            }
+
+            if (into_pos) {
+                /* Parse INTO var list */
+                char into_vars[16][128];
+                int ivc = 0;
+                memset(into_vars, 0, sizeof(into_vars));
+                const char *ip = into_pos + 4;
+                while (*ip && isspace((unsigned char)*ip)) ip++;
+                while (*ip && strncasecmp(ip, "FROM", 4) != 0 && ivc < 16) {
+                    int ini = 0;
+                    while (*ip && *ip != ',' && !isspace((unsigned char)*ip) && ini < 127)
+                        into_vars[ivc][ini++] = *ip++;
+                    into_vars[ivc][ini] = '\0';
+                    if (ini > 0) ivc++;
+                    while (*ip && (*ip == ',' || isspace((unsigned char)*ip))) ip++;
+                }
+
+                /* Rewrite SQL: remove INTO...vars, keep SELECT cols FROM ... */
+                char rewritten[4096];
+                int rlen = (int)(into_pos - raw);
+                memcpy(rewritten, raw, rlen);
+                /* Skip to FROM */
+                const char *from_pos = ip;
+                while (*from_pos && isspace((unsigned char)*from_pos)) from_pos++;
+                int flen = (int)strlen(from_pos);
+                memcpy(rewritten + rlen, from_pos, flen);
+                rewritten[rlen + flen] = '\0';
+
+                ResultSet sub_rs;
+                if (proc_exec_sql(rewritten, ctx, all_names, all_vals, all_count, &sub_rs) == 0) {
+                    if (sub_rs.num_rows > 0) {
+                        for (int v = 0; v < ivc && v < sub_rs.num_cols; v++) {
+                            int vi4 = proc_find_or_create_var(into_vars[v], local_var_names,
+                                                               local_var_values, &local_var_count, 32);
+                            if (vi4 >= 0 && sub_rs.rows[0].fields[v])
+                                strncpy(local_var_values[vi4], sub_rs.rows[0].fields[v], 255);
+                        }
+                    }
+                } else {
+                    rs->has_error = 1;
+                    strncpy(rs->error_message, sub_rs.error_message, sizeof(rs->error_message)-1);
+                    strncpy(rs->error_sqlstate, sub_rs.error_sqlstate, sizeof(rs->error_sqlstate)-1);
+                    result_free(&sub_rs);
+                    goto cleanup;
+                }
+                result_free(&sub_rs);
+                i++; continue;
+            }
+            /* Fall through to normal SQL execution */
+        }
+
+        /* ---- EXECUTE dynamic SQL ---- */
+        if (strncasecmp(raw, "EXECUTE", 7) == 0 && isspace((unsigned char)raw[7])) {
+            char *ep = raw + 7;
+            while (*ep && isspace((unsigned char)*ep)) ep++;
+            char exec_var[128] = "";
+            int evi = 0;
+            while (*ep && !isspace((unsigned char)*ep) && evi < 127) exec_var[evi++] = *ep++;
+            exec_var[evi] = '\0';
+            /* Look up variable to get SQL string */
+            REFRESH_ALL();
+            char exec_sql[4096] = "";
+            int vidx = proc_find_var(exec_var, local_var_names, local_var_count);
+            if (vidx >= 0) {
+                strncpy(exec_sql, local_var_values[vidx], sizeof(exec_sql) - 1);
+            } else {
+                /* Try param names */
+                for (int pi2 = 0; pi2 < param_count; pi2++) {
+                    if (strcasecmp(param_names[pi2], exec_var) == 0) {
+                        strncpy(exec_sql, arg_copies[pi2], sizeof(exec_sql) - 1);
+                        break;
+                    }
+                }
+            }
+            if (exec_sql[0]) {
+                /* Strip surrounding quotes if present */
+                int elen = (int)strlen(exec_sql);
+                if (elen >= 2 && exec_sql[0] == '\'' && exec_sql[elen-1] == '\'') {
+                    memmove(exec_sql, exec_sql + 1, elen - 2);
+                    exec_sql[elen - 2] = '\0';
+                    /* Unescape '' → ' */
+                    char *rp = exec_sql, *wp = exec_sql;
+                    while (*rp) {
+                        if (*rp == '\'' && rp[1] == '\'') { *wp++ = '\''; rp += 2; }
+                        else *wp++ = *rp++;
+                    }
+                    *wp = '\0';
+                }
+                char sub_exec[4096];
+                substitute_params(exec_sql, sub_exec, sizeof(sub_exec), all_names, all_vals, all_count);
+                ResultSet ers;
+                memset(&ers, 0, sizeof(ers));
+                result_init(&ers);
+                query_execute(sub_exec, &ers, ctx);
+                if (ers.has_error) {
+                    rs->has_error = 1;
+                    strncpy(rs->error_message, ers.error_message, sizeof(rs->error_message)-1);
+                    strncpy(rs->error_sqlstate, ers.error_sqlstate, sizeof(rs->error_sqlstate)-1);
+                    result_free(&ers);
+                    goto cleanup;
+                }
+                result_free(&ers);
+            }
+            i++; continue;
+        }
+
+        /* ---- SIGNAL SQLSTATE 'xxxxx' SET MESSAGE_TEXT = 'msg' ---- */
+        if (strncasecmp(raw, "SIGNAL", 6) == 0 && isspace((unsigned char)raw[6])) {
+            char *sp2 = raw + 6;
+            while (*sp2 && isspace((unsigned char)*sp2)) sp2++;
+            char sqlstate[6] = "45000"; /* default */
+            char message[512] = "Unhandled user-defined exception";
+            if (strncasecmp(sp2, "SQLSTATE", 8) == 0) {
+                sp2 += 8;
+                while (*sp2 && isspace((unsigned char)*sp2)) sp2++;
+                if (*sp2 == '\'') {
+                    sp2++;
+                    int si = 0;
+                    while (*sp2 && *sp2 != '\'' && si < 5) sqlstate[si++] = *sp2++;
+                    sqlstate[si] = '\0';
+                    if (*sp2 == '\'') sp2++;
+                }
+            }
+            /* Parse SET MESSAGE_TEXT = '...' */
+            while (*sp2 && isspace((unsigned char)*sp2)) sp2++;
+            if (strncasecmp(sp2, "SET", 3) == 0) {
+                sp2 += 3;
+                while (*sp2 && isspace((unsigned char)*sp2)) sp2++;
+                if (strncasecmp(sp2, "MESSAGE_TEXT", 12) == 0) {
+                    sp2 += 12;
+                    while (*sp2 && (isspace((unsigned char)*sp2) || *sp2 == '=')) sp2++;
+                    if (*sp2 == '\'') {
+                        sp2++;
+                        int mi = 0;
+                        while (*sp2 && *sp2 != '\'' && mi < (int)sizeof(message) - 1)
+                            message[mi++] = *sp2++;
+                        message[mi] = '\0';
+                    }
+                }
+            }
+            /* Check for SQLEXCEPTION handler */
+            int sig_handled = 0;
+            for (int h = 0; h < handler_count; h++) {
+                if (strcasecmp(handlers[h].cond, "SQLEXCEPTION") == 0) {
+                    const char *act = handlers[h].action;
+                    while (*act && isspace((unsigned char)*act)) act++;
+                    if (strncasecmp(act, "SET", 3) == 0 && isspace((unsigned char)act[3])) {
+                        char *hp = (char *)act + 3;
+                        while (*hp && isspace((unsigned char)*hp)) hp++;
+                        char hvar[128] = "";
+                        int hvi3 = 0;
+                        while (*hp && !isspace((unsigned char)*hp) && *hp != '=' && hvi3 < 127)
+                            hvar[hvi3++] = *hp++;
+                        hvar[hvi3] = '\0';
+                        while (*hp && (isspace((unsigned char)*hp) || *hp == '=')) hp++;
+                        REFRESH_ALL();
+                        char hval2[256];
+                        substitute_params(hp, hval2, sizeof(hval2), all_names, all_vals, all_count);
+                        int hvidx3 = proc_find_var(hvar, local_var_names, local_var_count);
+                        if (hvidx3 >= 0) strncpy(local_var_values[hvidx3], hval2, 255);
+                    }
+                    sig_handled = 1;
+                    if (handlers[h].type == 1) goto cleanup; /* EXIT handler */
+                    break;
+                }
+            }
+            if (!sig_handled) {
+                result_set_error(rs, sqlstate, message);
+                goto cleanup;
+            }
+            i++; continue;
+        }
+
+        /* ---- Normal SQL statement ---- */
+        {
+            ResultSet sub_rs;
+            if (proc_exec_sql(raw, ctx, all_names, all_vals, all_count, &sub_rs) < 0) {
+                /* Check SQLEXCEPTION handler */
+                int handled = 0;
+                for (int h = 0; h < handler_count; h++) {
+                    if (strcasecmp(handlers[h].cond, "SQLEXCEPTION") == 0) {
+                        /* Execute handler action — if SET, update local variable */
+                        const char *act = handlers[h].action;
+                        while (*act && isspace((unsigned char)*act)) act++;
+                        if (strncasecmp(act, "SET", 3) == 0 && isspace((unsigned char)act[3])) {
+                            char *hp = (char *)act + 3;
+                            while (*hp && isspace((unsigned char)*hp)) hp++;
+                            char hvar[128] = "";
+                            int hvi2 = 0;
+                            while (*hp && !isspace((unsigned char)*hp) && *hp != '=' && hvi2 < 127)
+                                hvar[hvi2++] = *hp++;
+                            hvar[hvi2] = '\0';
+                            while (*hp && (isspace((unsigned char)*hp) || *hp == '=')) hp++;
+                            REFRESH_ALL();
+                            char hval[256];
+                            substitute_params(hp, hval, sizeof(hval), all_names, all_vals, all_count);
+                            int hvidx2 = proc_find_var(hvar, local_var_names, local_var_count);
+                            if (hvidx2 >= 0) strncpy(local_var_values[hvidx2], hval, 255);
+                        } else {
+                            REFRESH_ALL();
+                            ResultSet hrs;
+                            proc_exec_sql(act, ctx, all_names, all_vals, all_count, &hrs);
+                            result_free(&hrs);
+                        }
+                        handled = 1;
+                        if (handlers[h].type == 1) { /* EXIT */
+                            result_free(&sub_rs);
+                            goto cleanup;
+                        }
+                        break;
+                    }
+                }
+                if (!handled) {
+                    rs->has_error = 1;
+                    strncpy(rs->error_message, sub_rs.error_message, sizeof(rs->error_message)-1);
+                    strncpy(rs->error_sqlstate, sub_rs.error_sqlstate, sizeof(rs->error_sqlstate)-1);
+                    result_free(&sub_rs);
+                    goto cleanup;
+                }
+            }
+
+            /* If last statement is SELECT, transfer results */
+            if (i == stmt_count - 1 && sub_rs.num_cols > 0)
+                proc_transfer_result(rs, &sub_rs);
+            result_free(&sub_rs);
+        }
+        i++;
+    }
+
+    /* Handle END FOR increment: when END FOR jumps back to FOR,
+     * the FOR handler checks current value and increments */
+
+cleanup:
+    /* OUT/INOUT parameter writeback to caller's @variables */
+    for (int p = 0; p < param_count; p++) {
+        if (strcasecmp(param_modes[p], "OUT") == 0 ||
+            strcasecmp(param_modes[p], "INOUT") == 0) {
+            const char *caller_ref = arg_caller_refs[p];
+            if (caller_ref[0] == '@' && ctx) {
+                const char *vname = caller_ref + 1;
+                int found_uv = 0;
+                for (int uv = 0; uv < ctx->user_var_count; uv++) {
+                    if (strcasecmp(ctx->user_var_names[uv], vname) == 0) {
+                        strncpy(ctx->user_var_values[uv], pvals[p], 255);
+                        found_uv = 1;
+                        break;
+                    }
+                }
+                if (!found_uv && ctx->user_var_count < 64) {
+                    strncpy(ctx->user_var_names[ctx->user_var_count], vname, 127);
+                    strncpy(ctx->user_var_values[ctx->user_var_count], pvals[p], 255);
+                    ctx->user_var_count++;
+                }
+            }
+        }
+    }
+
+    /* Free open cursors */
+    for (int c = 0; c < cursor_count; c++)
+        if (cursors[c].is_open) result_free(&cursors[c].crs);
+
+    free(bmap);
+    free(stmts);
+    if (!rs->has_error && rs->command_tag[0] == '\0')
+        strcpy(rs->command_tag, "CALL");
+
+    #undef REFRESH_ALL
+}
+
 static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char *sqlCopy;
@@ -3693,6 +4952,9 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_create.columnCount = 0;
     /* NOTE: g_sel.columnCount is NOT reset here — it was set by
      * parse_select_columns() which runs before execute_via_parser() */
+
+    /* Reset procedure state */
+    memset(&g_proc, 0, sizeof(g_proc));
 
     /* Reset expression pool for parser AST */
     expr_pool_reset();
@@ -3814,6 +5076,12 @@ parser_done:
                     strcpy(rs->command_tag, "CREATE INDEX");
                 }
             }
+        }
+
+        /* CALL procedure — execute body after successful parse */
+        if (!rs->has_error && is_call_query(sql) && g_proc.callName[0]) {
+            execute_call_procedure(rs, ctx);
+            goto post_collect;
         }
 
         /* CTAS: intercept before normal SELECT collection */
@@ -4169,7 +5437,19 @@ parser_done:
                 while (*p && isspace((unsigned char)*p)) p++;
                 p += 6; /* skip "CREATE" */
                 while (*p && isspace((unsigned char)*p)) p++;
-                if (strncasecmp(p, "DATABASE", 8) == 0)
+                /* Check for OR REPLACE before PROCEDURE/FUNCTION */
+                const char *pp = p;
+                if (strncasecmp(pp, "OR", 2) == 0 && isspace((unsigned char)pp[2])) {
+                    pp += 2; while (*pp && isspace((unsigned char)*pp)) pp++;
+                    if (strncasecmp(pp, "REPLACE", 7) == 0) {
+                        pp += 7; while (*pp && isspace((unsigned char)*pp)) pp++;
+                    }
+                }
+                if (strncasecmp(pp, "PROCEDURE", 9) == 0)
+                    strcpy(rs->command_tag, "CREATE PROCEDURE");
+                else if (strncasecmp(pp, "FUNCTION", 8) == 0)
+                    strcpy(rs->command_tag, "CREATE FUNCTION");
+                else if (strncasecmp(p, "DATABASE", 8) == 0)
                     strcpy(rs->command_tag, "CREATE DATABASE");
                 else if (strncasecmp(p, "SCHEMA", 6) == 0)
                     strcpy(rs->command_tag, "CREATE SCHEMA");
@@ -4191,7 +5471,11 @@ parser_done:
                 while (*p && isspace((unsigned char)*p)) p++;
                 p += 4; /* skip "DROP" */
                 while (*p && isspace((unsigned char)*p)) p++;
-                if (strncasecmp(p, "INDEX", 5) == 0)
+                if (strncasecmp(p, "PROCEDURE", 9) == 0)
+                    strcpy(rs->command_tag, "DROP PROCEDURE");
+                else if (strncasecmp(p, "FUNCTION", 8) == 0)
+                    strcpy(rs->command_tag, "DROP FUNCTION");
+                else if (strncasecmp(p, "INDEX", 5) == 0)
                     strcpy(rs->command_tag, "DROP INDEX");
                 else
                     strcpy(rs->command_tag, "DROP TABLE");
@@ -4204,9 +5488,14 @@ parser_done:
                 strcpy(rs->command_tag, "USE");
             else if (is_set_query(sql))
                 strcpy(rs->command_tag, "SET");
+            else if (is_call_query(sql))
+                strcpy(rs->command_tag, "CALL");
             else
                 strcpy(rs->command_tag, "OK");
         }
+
+post_collect: ;
+
     } else {
         /* Error occurred via longjmp (err_sys/err_quit/err_dump).
          * Clean up Flex scanner and release parser mutex if held.
@@ -6052,8 +7341,9 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
 
     /* ── Pre-parse subquery materialization ── */
-    /* Scan for (SELECT ...) patterns, execute inner SELECT, replace with result */
-    {
+    /* Scan for (SELECT ...) patterns, execute inner SELECT, replace with result.
+     * Skip for CREATE PROCEDURE/FUNCTION — body subqueries must not be materialized. */
+    if (!is_create_procedure_query(sql)) {
         char mat[8192];
         strncpy(mat, sql, sizeof(mat) - 1);
         mat[sizeof(mat) - 1] = '\0';

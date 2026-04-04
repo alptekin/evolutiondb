@@ -35,7 +35,7 @@
 | # | Feature | MySQL | PG | EvoSQL | Notes |
 |---|---------|:-----:|:--:|:------:|-------|
 | 21 | Views (CREATE/DROP VIEW) | ✅ | ✅ | ❌ | |
-| 22 | Stored Procedures / Functions | ✅ | ✅ | ❌ | |
+| 22 | Stored Procedures / Functions | ✅ | ✅ | ✅ | MySQL-complete: IF/ELSEIF/ELSE, WHILE, LOOP/LEAVE/ITERATE, FOR, FOREACH, CASE/WHEN, SELECT INTO, SET expr, CURSOR/FETCH/CLOSE, DECLARE HANDLER, OUT/INOUT params, EXECUTE dynamic SQL, SIGNAL, RETURN, nested CALL |
 | 23 | Triggers | ✅ | ✅ | ❌ | |
 | 24 | Cursors | ✅ | ✅ | ❌ | |
 | 25 | Prepared Statements (server-side) | ✅ | ✅ | 🔧 | Extended query protocol stubs only |

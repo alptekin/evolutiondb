@@ -233,6 +233,29 @@ typedef struct {
     char pendingConstraintName[128];
 } ConstraintOpts;
 
+/* ---- Procedures ---- */
+#define MAX_PROC_PARAMS 16
+#define MAX_CALL_ARGS   16
+
+typedef struct {
+    char procName[256];
+    int  isFunction;        /* 0=PROCEDURE, 1=FUNCTION */
+    int  orReplace;         /* 1 if OR REPLACE */
+    char returnType[64];
+    /* Parameters */
+    int  paramCount;
+    char paramNames[MAX_PROC_PARAMS][128];
+    char paramTypes[MAX_PROC_PARAMS][64];
+    char paramModes[MAX_PROC_PARAMS][8]; /* "IN", "OUT", "INOUT" */
+    /* CALL arguments */
+    char callName[256];
+    int  argCount;
+    char args[MAX_CALL_ARGS][256];
+    /* DROP */
+    char dropName[256];
+    int  dropIfExists;
+} ProcedureOpts;
+
 /* ---- Error handling ---- */
 typedef struct {
     jmp_buf jmpbuf;
@@ -256,6 +279,7 @@ typedef struct QueryContext {
     IndexOpts      index;
     ExprOpts       expr;
     ConstraintOpts constraint;
+    ProcedureOpts  proc;
     ErrorState     err;
     char           temp[1024];
     void         (*tx_undo_callback)(int op_type, const char *table,
@@ -301,6 +325,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_idx         (g_qctx->index)
 #define g_expr        (g_qctx->expr)
 #define g_constr      (g_qctx->constraint)
+#define g_proc        (g_qctx->proc)
 #define g_err         (g_qctx->err)
 
 /* Shared fields */

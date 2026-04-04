@@ -2513,3 +2513,122 @@ int cat_list_views(uint32_t schema_id, ViewDesc *out, int max)
     }
     return count;
 }
+
+/* ================================================================
+ *  Procedure / Function catalog operations
+ * ================================================================ */
+
+static void make_procedure_key(uint32_t schema_id, const char *name,
+                               char *out, int size)
+{
+    snprintf(out, size, "%010u:%s", schema_id, name);
+}
+
+static void serialize_procedure(const ProcedureDesc *p, char *buf, int size)
+{
+    /* Fields: proc_id;db_id;schema_id;proc_name;param_list;return_type;is_function;body
+     * Body may contain semicolons, so it must be the LAST field (read to end). */
+    snprintf(buf, size, "%u;%u;%u;%s;%s;%s;%d;%s",
+             p->proc_id, p->db_id, p->schema_id, p->proc_name,
+             p->param_list, p->return_type, p->is_function, p->body);
+}
+
+static void deserialize_procedure(const char *buf, ProcedureDesc *p)
+{
+    char field[256];
+    const char *ptr = buf;
+    ptr = next_field(ptr, field, sizeof(field)); p->proc_id   = (uint32_t)atoi(field);
+    ptr = next_field(ptr, field, sizeof(field)); p->db_id     = (uint32_t)atoi(field);
+    ptr = next_field(ptr, field, sizeof(field)); p->schema_id = (uint32_t)atoi(field);
+    ptr = next_field(ptr, p->proc_name, CAT_MAX_NAME_LEN);
+    ptr = next_field(ptr, p->param_list, sizeof(p->param_list));
+    ptr = next_field(ptr, p->return_type, sizeof(p->return_type));
+    ptr = next_field(ptr, field, sizeof(field)); p->is_function = atoi(field);
+    /* Body is last field — may contain semicolons, read remainder */
+    if (ptr && *ptr) {
+        strncpy(p->body, ptr, sizeof(p->body) - 1);
+        p->body[sizeof(p->body) - 1] = '\0';
+    } else {
+        p->body[0] = '\0';
+    }
+}
+
+int cat_create_procedure(uint32_t db_id, uint32_t schema_id,
+                         const char *name, const char *param_list,
+                         const char *return_type, int is_function,
+                         const char *body)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_procedure_key(schema_id, name, key, sizeof(key));
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_PROCEDURES], key, &existing) == 0)
+        return -1; /* already exists */
+
+    ProcedureDesc p;
+    memset(&p, 0, sizeof(p));
+    p.proc_id   = pgm_next_id(0);
+    p.db_id     = db_id;
+    p.schema_id = schema_id;
+    strncpy(p.proc_name, name, CAT_MAX_NAME_LEN - 1);
+    if (param_list) strncpy(p.param_list, param_list, sizeof(p.param_list) - 1);
+    if (return_type) strncpy(p.return_type, return_type, sizeof(p.return_type) - 1);
+    p.is_function = is_function;
+    if (body) strncpy(p.body, body, sizeof(p.body) - 1);
+
+    char record[16384];
+    serialize_procedure(&p, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_PROCEDURES, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_PROCEDURES], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_procedure(uint32_t db_id, uint32_t schema_id,
+                       const char *name, ProcedureDesc *out)
+{
+    (void)db_id;
+    char key[CAT_MAX_KEY_LEN];
+    make_procedure_key(schema_id, name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_PROCEDURES], key, &rid) < 0)
+        return -1;
+    char record[16384];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+    deserialize_procedure(record, out);
+    return 0;
+}
+
+int cat_drop_procedure(uint32_t db_id, uint32_t schema_id, const char *name)
+{
+    (void)db_id;
+    char key[CAT_MAX_KEY_LEN];
+    make_procedure_key(schema_id, name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_PROCEDURES], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_PROCEDURES], key);
+    return 0;
+}
+
+int cat_list_procedures(uint32_t schema_id, ProcedureDesc *out, int max)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(schema_id, prefix, sizeof(prefix));
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_PROCEDURES], prefix, &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, strlen(prefix)) != 0) break;
+        char record[16384];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_procedure(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}

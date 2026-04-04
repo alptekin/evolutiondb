@@ -45,14 +45,17 @@ CHANGE					{ return CHANGE; }
 INT8|BIGINT				{ return BIGINT; }
 BINARY					{ return BINARY; }
 BIT						{ return BIT; }
+"BEGIN"					{ return BEGINWORK; }
 BLOB					{ return BLOB; }
 BOOL					{ return BOOLEAN; }
 BOOLEAN					{ return BOOLEAN; }
 BOTH					{ return BOTH; }
 BY						{ return BY; }
 
-
+CALL					{ return CALL; }
 CASCADE					{ return CASCADE; }
+CLOSE					{ return CLOSE; }
+CURSOR					{ return CURSOR; }
 CASE					{ return CASE; }
 CAST/"("				{ return FCAST; }
 COLUMN					{ return COLUMN; }
@@ -81,6 +84,7 @@ CURRENT_TIMESTAMP		{ return CURRENT_TIMESTAMP; }
 
 
 
+DECLARE					{ return DECLARE; }
 DATE					{ return DATE; }
 DATETIME				{ return DATETIME; }
 DAY_HOUR				{ return DAY_HOUR; }
@@ -103,37 +107,45 @@ DISABLE					{ return DISABLE; }
 DISTINCT				{ return DISTINCT; }
 DOMAIN					{ return DOMAIN; }
 DISTINCTROW				{ return DISTINCTROW; }
+DO						{ return DO; }
 
 FLOAT8|DOUBLE			{ return DOUBLE; }
 
 
 
 ELSE					{ return ELSE; }
+ELSEIF					{ return ELSEIF; }
 ENABLE					{ return ENABLE; }
+EXECUTE					{ return EXECUTE; }
 EXPLAIN					{ return EXPLAIN; }
 
 END						{ return END; }
 ENUM					{ return ENUM; }
 ESCAPED					{ return ESCAPED; }
 EXCEPT					{ return EXCEPT; }
+EXIT					{ return EXIT; }
 EXISTS					{ yylval->subtok = 0; return EXISTS; }
 NOT[ \t\n]+EXISTS		{ yylval->subtok = 1; return EXISTS; }
 
 
 
+FETCH					{ return FETCH; }
 FIRST					{ return FIRST; }
 FLOAT4?					{ return FLOAT; }
 FOR						{ return FOR; }
+FOREACH					{ return FOREACH; }
 FORCE					{ return FORCE; }
 FOREIGN					{ return FOREIGN; }
 
 FROM					{ return FROM; }
 FULL					{ return FULL; }
+FUNCTION				{ return FUNCTION; }
 GROUP_CONCAT/"("		{ return FGROUP_CONCAT; }
 FULLTEXT				{ return FULLTEXT; }
 
 GENERATED				{ return GENERATED; }
 GROUP					{ return GROUP; }
+HANDLER					{ return HANDLER; }
 HASH					{ return HASH; }
 HAVING					{ return HAVING; }
 HIGH_PRIORITY			{ return HIGH_PRIORITY; }
@@ -147,6 +159,7 @@ IGNORE					{ return IGNORE; }
 IMMEDIATE				{ return IMMEDIATE; }
 INITIALLY				{ return INITIALLY; }
 IN						{ return IN; }
+INOUT					{ return INOUT; }
 
 INNER					{ return INNER; }
 
@@ -157,6 +170,7 @@ INT4?|INTEGER			{ return INTEGER; }
 INTERVAL				{ return INTERVAL; }
 INTO					{ return INTO; }
 IS						{ return IS; }
+ITERATE					{ return ITERATE; }
 CONTINUE				{ return CONTINUE; }
 RESTART					{ return RESTART; }
 
@@ -167,12 +181,14 @@ KEY					{ return KEY; }
 
 
 LEADING					{ return LEADING; }
+LEAVE					{ return LEAVE; }
 
 LEFT					{ return LEFT; }
 LESS					{ return LESS; }
 LIKE					{ return LIKE; }
 LIMIT					{ return LIMIT; }
 LOCKED					{ return LOCKED; }
+LOOP					{ return LOOP; }
 OFFSET					{ return OFFSET; }
 
 
@@ -204,6 +220,8 @@ NOT						{ return NOT; }
 NULL					{ return NULLX; }
 
 ON						{ return ON; }
+OPEN					{ return OPEN; }
+OUT						{ return OUT; }
 OVER					{ return OVER; }
 PARTIAL					{ return PARTIAL; }
 PARTITION				{ return PARTITION; }
@@ -216,6 +234,7 @@ OUTER					{ return OUTER; }
 
 
 PRIMARY					{ return PRIMARY; }
+PROCEDURE				{ return PROCEDURE; }
 
 
 QUICK					{ return QUICK; }
@@ -232,7 +251,10 @@ RECLAIM					{ return RECLAIM; }
 REFERENCES				{ return REFERENCES; }
 RENAME					{ return RENAME; }
 REPLACE					{ int c = input(yyscanner); unput(c); if(c == '(') return FREPLACE; return REPLACE; }
+RESIGNAL				{ return RESIGNAL; }
 RESTRICT				{ return RESTRICT; }
+RETURN					{ return RETURN; }
+RETURNS					{ return RETURNS; }
 
 
 RIGHT					{ return RIGHT; }
@@ -241,6 +263,7 @@ SCHEMA					{ return SCHEMA; }
 SHARD					{ return SHARD; }
 SHARDS					{ return SHARDS; }
 SHARE					{ return SHARE; }
+SIGNAL					{ return SIGNAL; }
 SKIP					{ return SKIP; }
 
 SELECT					{ return SELECT; }
@@ -288,6 +311,7 @@ UNION					{ return UNION; }
 UNIQUE					{ return UNIQUE; }
 UNKNOWN					{ return UNKNOWN; }
 VIEW					{ return VIEW; }
+UNTIL					{ return UNTIL; }
 UNSIGNED				{ return UNSIGNED; }
 UPDATE					{ return UPDATE; }
 UUID					{ return UUID; }
@@ -305,6 +329,7 @@ VARCHAR(ACTER)?			{ return VARCHAR; }
 WHEN					{ return WHEN; }
 WHERE					{ return WHERE; }
 
+WHILE					{ return WHILE; }
 WITH					{ return WITH; }
 
 XOR						{ return XOR; }
