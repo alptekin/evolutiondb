@@ -1515,7 +1515,7 @@
 
 ---
 
-### Task 75: ⬜ Triggers (Feature #23)
+### Task 75: ✅ Triggers (Feature #23)
 
 **Goal:** Implement basic triggers: BEFORE/AFTER INSERT/UPDATE/DELETE.
 
