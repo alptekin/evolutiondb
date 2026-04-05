@@ -256,6 +256,17 @@ typedef struct {
     int  dropIfExists;
 } ProcedureOpts;
 
+/* ---- Triggers ---- */
+typedef struct {
+    char triggerName[256];
+    char tableName[256];
+    char timing;     /* 'B'=BEFORE, 'A'=AFTER */
+    char event;      /* 'I'=INSERT, 'U'=UPDATE, 'D'=DELETE */
+    /* DROP */
+    char dropName[256];
+    int  dropIfExists;
+} TriggerOpts;
+
 /* ---- Error handling ---- */
 typedef struct {
     jmp_buf jmpbuf;
@@ -280,6 +291,7 @@ typedef struct QueryContext {
     ExprOpts       expr;
     ConstraintOpts constraint;
     ProcedureOpts  proc;
+    TriggerOpts    trig;
     ErrorState     err;
     char           temp[1024];
     void         (*tx_undo_callback)(int op_type, const char *table,
@@ -296,6 +308,10 @@ typedef struct QueryContext {
     /* User variable lookup callback */
     int          (*uservar_fn)(const char *name, char *out, int out_size, void *ctx);
     void          *uservar_ctx;
+    /* Trigger body execution callback (set by adaptor, called from DML triggers) */
+    int          (*trigger_exec_fn)(const char *sql, char *err_msg, int err_size,
+                                    char *err_state, void *ctx);
+    void          *trigger_exec_ctx;
 } QueryContext;
 
 /* ================================================================
@@ -326,6 +342,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_expr        (g_qctx->expr)
 #define g_constr      (g_qctx->constraint)
 #define g_proc        (g_qctx->proc)
+#define g_trig        (g_qctx->trig)
 #define g_err         (g_qctx->err)
 
 /* Shared fields */

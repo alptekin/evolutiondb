@@ -913,6 +913,18 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
         }
     }
 
+    /* BEFORE INSERT trigger */
+    {
+        const char *trig_cols[64];
+        const char *trig_vals[64];
+        for (int tc = 0; tc < ncols && tc < 64; tc++) {
+            trig_cols[tc] = cols[tc].col_name;
+            trig_vals[tc] = (tc < nv) ? vals_ptrs[tc] : NULL;
+        }
+        if (evo_fire_triggers(tblName, 'B', 'I', trig_cols, NULL, trig_vals, ncols) < 0)
+            return -1;
+    }
+
     /* Log undo entry before modifying data */
     if (g_tx_undo_callback) {
         RowID zero_rid = {0, 0};
@@ -949,6 +961,17 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
         td->pk_root_page = pk_tree.root_page;
         cat_update_pk_root(td->table_id, td->table_name,
                            td->schema_id, pk_tree.root_page);
+    }
+
+    /* AFTER INSERT trigger */
+    {
+        const char *trig_cols[64];
+        const char *trig_vals[64];
+        for (int tc = 0; tc < ncols && tc < 64; tc++) {
+            trig_cols[tc] = cols[tc].col_name;
+            trig_vals[tc] = (tc < nv) ? vals_ptrs[tc] : NULL;
+        }
+        evo_fire_triggers(tblName, 'A', 'I', trig_cols, NULL, trig_vals, ncols);
     }
 
     return 0;
@@ -1217,16 +1240,19 @@ int InsertProcess(void)
 
         int rc = store_single_row(&td, cols, ncols, tblName, reorderedRows[i]);
         if (rc != 0) {
-            char valBuf2[RECORD_BUF_SIZE];
-            char *key;
-            strncpy(valBuf2, reorderedRows[i], sizeof(valBuf2) - 1);
-            valBuf2[sizeof(valBuf2) - 1] = '\0';
-            key = strtok(valBuf2, ";");
-            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                     "duplicate key value violates unique constraint (key=%s, row %d)",
-                     key ? key : "?", i + 1);
-            g_err.error = 1;
-            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+            /* If error already set (e.g., trigger SIGNAL), don't overwrite */
+            if (!g_err.error) {
+                char valBuf2[RECORD_BUF_SIZE];
+                char *key;
+                strncpy(valBuf2, reorderedRows[i], sizeof(valBuf2) - 1);
+                valBuf2[sizeof(valBuf2) - 1] = '\0';
+                key = strtok(valBuf2, ";");
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "duplicate key value violates unique constraint (key=%s, row %d)",
+                         key ? key : "?", i + 1);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+            }
             TruncateInsert();
             retval = -1; goto cleanup;
         }

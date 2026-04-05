@@ -19,9 +19,10 @@ jobs:
       - name: Get version and changelog
         id: info
         run: |
-          # Get latest tag (version)
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "untagged")
-          echo "version=$LATEST_TAG" >> $GITHUB_OUTPUT
+          # Get version from version.h (single source of truth)
+          VERSION=$(grep 'EVODB_VERSION ' evolution/db/version.h | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$VERSION" ]; then VERSION="untagged"; fi
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
 
           # Get PR title and body as changelog
           PR_TITLE="${{ github.event.pull_request.title }}"

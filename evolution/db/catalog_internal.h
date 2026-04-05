@@ -151,6 +151,18 @@ typedef struct {
     char     body[8192];         /* raw SQL between BEGIN...END */
 } ProcedureDesc;
 
+typedef struct {
+    uint32_t trigger_id;
+    uint32_t table_id;
+    uint32_t db_id;
+    uint32_t schema_id;
+    char     trigger_name[CAT_MAX_NAME_LEN];
+    char     table_name[CAT_MAX_NAME_LEN];
+    char     event;      /* 'I'=INSERT, 'U'=UPDATE, 'D'=DELETE */
+    char     timing;     /* 'B'=BEFORE, 'A'=AFTER */
+    char     body[8192]; /* raw SQL between BEGIN...END */
+} TriggerDesc;
+
 /* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
@@ -387,6 +399,18 @@ int cat_find_procedure(uint32_t db_id, uint32_t schema_id,
                        const char *name, ProcedureDesc *out);
 int cat_drop_procedure(uint32_t db_id, uint32_t schema_id, const char *name);
 int cat_list_procedures(uint32_t schema_id, ProcedureDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Trigger operations
+ * ---------------------------------------------------------------- */
+int cat_create_trigger(uint32_t db_id, uint32_t schema_id,
+                       uint32_t table_id, const char *table_name,
+                       const char *trigger_name, char event, char timing,
+                       const char *body);
+int cat_find_trigger(uint32_t table_id, const char *trigger_name,
+                     TriggerDesc *out);
+int cat_drop_trigger(uint32_t table_id, const char *trigger_name);
+int cat_list_triggers_for_table(uint32_t table_id, TriggerDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Convenience

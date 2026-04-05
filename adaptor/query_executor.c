@@ -160,6 +160,24 @@ static int is_drop_procedure_query(const char *sql)
     return (strncasecmp(sql, "PROCEDURE", 9) == 0 || strncasecmp(sql, "FUNCTION", 8) == 0);
 }
 
+static int is_create_trigger_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    if (strncasecmp(sql, "CREATE", 6) != 0) return 0;
+    sql += 6;
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "TRIGGER", 7) == 0);
+}
+
+static int is_drop_trigger_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    if (strncasecmp(sql, "DROP", 4) != 0) return 0;
+    sql += 4;
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "TRIGGER", 7) == 0);
+}
+
 /* Map EvoSQL type encoding to PostgreSQL type OID */
 int type_encoding_to_pg_oid(int typeEncoding)
 {
@@ -3606,6 +3624,29 @@ static int evo_subquery_exec(const char *sql, char out_values[][256],
     return err ? -1 : 0;
 }
 
+/* Trigger body execution callback — called from evo_fire_triggers in engine layer.
+ * Executes SQL (DML, CALL proc, etc.) via query_execute with mutex skip. */
+static int evo_trigger_exec(const char *sql, char *err_msg, int err_size,
+                            char *err_state, void *ctx)
+{
+    extern __thread int g_trigger_exec_active;
+    SessionCtx *session = (SessionCtx *)ctx;
+    int prev_active = g_trigger_exec_active;
+    g_trigger_exec_active = 1;
+    ResultSet trs;
+    memset(&trs, 0, sizeof(trs));
+    result_init(&trs);
+    query_execute(sql, &trs, session);
+    int terr = trs.has_error;
+    if (terr) {
+        if (err_msg) strncpy(err_msg, trs.error_message, err_size - 1);
+        if (err_state) strncpy(err_state, trs.error_sqlstate, 5);
+    }
+    result_free(&trs);
+    g_trigger_exec_active = prev_active;
+    return terr ? -1 : 0;
+}
+
 /* ================================================================
  *  CALL procedure execution — runs after yyparse() sets g_proc.callName
  *  Looks up procedure in catalog, binds args, executes body statements.
@@ -4852,6 +4893,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         g_qctx->subquery_ctx = ctx;
         g_qctx->uservar_fn = evo_uservar_lookup;
         g_qctx->uservar_ctx = ctx;
+        g_qctx->trigger_exec_fn = evo_trigger_exec;
+        g_qctx->trigger_exec_ctx = ctx;
     }
 
     /* Make a mutable copy, strip \r */
@@ -4955,6 +4998,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* Reset procedure state */
     memset(&g_proc, 0, sizeof(g_proc));
+    memset(&g_trig, 0, sizeof(g_trig));
 
     /* Reset expression pool for parser AST */
     expr_pool_reset();
@@ -4981,7 +5025,8 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         /* Reentrant parser: each call gets its own scanner instance.
          * DML uses g_dml_mutex for serialization (doesn't block readers).
          * SELECT doesn't need any lock for parsing (g_qctx is thread-local). */
-        int already_locked = (ctx && ctx->serializable_locked);
+        extern __thread int g_trigger_exec_active;
+        int already_locked = (ctx && ctx->serializable_locked) || g_trigger_exec_active;
         int is_readonly = is_select_query(sql);
 
         /* DML/DDL: global DML mutex serializes all writes.
@@ -5449,6 +5494,8 @@ parser_done:
                     strcpy(rs->command_tag, "CREATE PROCEDURE");
                 else if (strncasecmp(pp, "FUNCTION", 8) == 0)
                     strcpy(rs->command_tag, "CREATE FUNCTION");
+                else if (strncasecmp(p, "TRIGGER", 7) == 0)
+                    strcpy(rs->command_tag, "CREATE TRIGGER");
                 else if (strncasecmp(p, "DATABASE", 8) == 0)
                     strcpy(rs->command_tag, "CREATE DATABASE");
                 else if (strncasecmp(p, "SCHEMA", 6) == 0)
@@ -5475,6 +5522,8 @@ parser_done:
                     strcpy(rs->command_tag, "DROP PROCEDURE");
                 else if (strncasecmp(p, "FUNCTION", 8) == 0)
                     strcpy(rs->command_tag, "DROP FUNCTION");
+                else if (strncasecmp(p, "TRIGGER", 7) == 0)
+                    strcpy(rs->command_tag, "DROP TRIGGER");
                 else if (strncasecmp(p, "INDEX", 5) == 0)
                     strcpy(rs->command_tag, "DROP INDEX");
                 else
@@ -7343,7 +7392,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* ── Pre-parse subquery materialization ── */
     /* Scan for (SELECT ...) patterns, execute inner SELECT, replace with result.
      * Skip for CREATE PROCEDURE/FUNCTION — body subqueries must not be materialized. */
-    if (!is_create_procedure_query(sql)) {
+    if (!is_create_procedure_query(sql) && !is_create_trigger_query(sql)) {
         char mat[8192];
         strncpy(mat, sql, sizeof(mat) - 1);
         mat[sizeof(mat) - 1] = '\0';
@@ -7826,10 +7875,12 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return;
     }
 
-    /* Normalize SQL for DBeaver compatibility (quote removal, pg_catalog removal) */
+    /* Normalize SQL for DBeaver compatibility (quote removal, pg_catalog removal)
+     * Skip for CREATE TRIGGER/PROCEDURE — body contains OLD./NEW. refs and subqueries */
     strncpy(normalized, sql, sizeof(normalized) - 1);
     normalized[sizeof(normalized) - 1] = '\0';
-    normalize_sql(normalized);
+    if (!is_create_trigger_query(sql) && !is_create_procedure_query(sql))
+        normalize_sql(normalized);
 
     /* Resolve qualified table names AFTER normalization removes quotes
      * but the schema prefix is still intact because normalize_sql
