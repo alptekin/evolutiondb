@@ -1,0 +1,107 @@
+name: Tweet on Merge to Main
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  tweet-on-merge:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version and changelog
+        id: info
+        run: |
+          # Get version from version.h (single source of truth)
+          VERSION=$(grep 'EVODB_VERSION ' evolution/db/version.h | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$VERSION" ]; then VERSION="untagged"; fi
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+
+          # Get PR title and body as changelog
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
+
+          # Get merge commit messages (last 5 commits in the PR)
+          COMMITS=$(git log --oneline -5 --pretty=format:"%s" ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.merge_commit_sha }} 2>/dev/null | head -3)
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests-oauthlib
+
+      - name: Post to X (Twitter)
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          VERSION: ${{ steps.info.outputs.version }}
+          PR_TITLE: ${{ steps.info.outputs.pr_title }}
+          COMMITS: ${{ steps.info.outputs.commits }}
+        run: |
+          python3 << 'PYEOF'
+          import os
+          from requests_oauthlib import OAuth1Session
+
+          version = os.environ.get("VERSION", "untagged")
+          pr_title = os.environ.get("PR_TITLE", "")
+          commits = os.environ.get("COMMITS", "")
+
+          # Build changelog summary from commits
+          commit_lines = [line.strip() for line in commits.strip().split("\n") if line.strip()]
+          changelog = "\n".join(f"- {c}" for c in commit_lines[:3])
+
+          # Compose tweet
+          tweet = f"🚀 EvolutionDB {version} released!\n\n{pr_title}\n\n{changelog}\n\n#evolutiondb #database #opensource\ngithub.com/alptekin/evolutiondb"
+
+          # Truncate to 280 chars if needed
+          if len(tweet) > 280:
+              tweet = tweet[:277] + "..."
+
+          print(f"Tweet ({len(tweet)} chars):\n{tweet}\n")
+
+          # Post to X
+          api_key = os.environ.get("X_API_KEY")
+          api_secret = os.environ.get("X_API_SECRET")
+          access_token = os.environ.get("X_ACCESS_TOKEN")
+          access_secret = os.environ.get("X_ACCESS_TOKEN_SECRET")
+
+          if not all([api_key, api_secret, access_token, access_secret]):
+              print("ERROR: X API credentials are not configured!")
+              print("Add these secrets to your GitHub repo: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET")
+              exit(1)
+
+          twitter = OAuth1Session(
+              api_key,
+              client_secret=api_secret,
+              resource_owner_key=access_token,
+              resource_owner_secret=access_secret,
+          )
+
+          response = twitter.post(
+              "https://api.twitter.com/2/tweets",
+              json={"text": tweet},
+          )
+
+          print(f"Status: {response.status_code}")
+          print(response.json())
+
+          if response.status_code != 201:
+              print("ERROR: Tweet could not be posted!")
+              exit(1)
+
+          print("Tweet posted successfully!")
+          PYEOF

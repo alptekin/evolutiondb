@@ -464,6 +464,9 @@ int DeleteProcess(void)
         for (i = effectiveStart; i < effectiveEnd; i++) {
             if (matchKeys[i]) {
                 RowID rid;
+                char delFields[64][256];
+                int delIsNull[64];
+                memset(delFields, 0, sizeof(delFields));
                 if (bt2_search(&pk_tree, matchKeys[i], &rid) == 0) {
                     /* Read binary record for undo log and index cleanup */
                     char rec[RECORD_BUF_SIZE];
@@ -481,6 +484,25 @@ int DeleteProcess(void)
                             return -1;
                         }
 
+                        /* Extract fields for trigger + secondary index cleanup */
+                        tup_extract_fields(rec, rec_len, cols, ncols,
+                                           delFields, delIsNull, 64);
+
+                        /* BEFORE DELETE trigger */
+                        {
+                            const char *tcols[64];
+                            const char *tvals[64];
+                            for (int tc = 0; tc < ncols && tc < 64; tc++) {
+                                tcols[tc] = colNames[tc];
+                                tvals[tc] = delFields[tc];
+                            }
+                            if (evo_fire_triggers(g_del.tblName, 'B', 'D',
+                                                  tcols, tvals, NULL, ncols) < 0) {
+                                TruncateDelete();
+                                return -1;
+                            }
+                        }
+
                         /* Log undo entry with raw binary data + length */
                         if (g_tx_undo_callback) {
                             RowID zero_rid = {0, 0};
@@ -488,12 +510,6 @@ int DeleteProcess(void)
                                                g_del.tblName, matchKeys[i],
                                                rec, rec_len, zero_rid);
                         }
-
-                        /* Extract fields for secondary index cleanup */
-                        char delFields[64][256];
-                        int delIsNull[64];
-                        tup_extract_fields(rec, rec_len, cols, ncols,
-                                           delFields, delIsNull, 64);
 
                         /* Remove from secondary B-tree indexes */
                         delete_secondary_indexes(g_del.tblName, colNames, numCols,
@@ -548,6 +564,17 @@ int DeleteProcess(void)
                         tapi_heap_delete(rid);
                         bt2_delete(&pk_tree, matchKeys[i]);
                         td.pk_root_page = pk_tree.root_page;
+                    }
+                    /* AFTER DELETE trigger */
+                    {
+                        const char *tcols[64];
+                        const char *tvals[64];
+                        for (int tc = 0; tc < ncols && tc < 64; tc++) {
+                            tcols[tc] = colNames[tc];
+                            tvals[tc] = delFields[tc];
+                        }
+                        evo_fire_triggers(g_del.tblName, 'A', 'D',
+                                          tcols, tvals, NULL, ncols);
                     }
                     deleted++;
                 }

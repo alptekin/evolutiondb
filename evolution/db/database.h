@@ -259,6 +259,22 @@ int AlterTableModifyColumn(const char *tableName, const char *colName, int newTy
 int AlterTableChangeColumn(const char *tableName, const char *oldName,
                            const char *newName, int newTypeCode);
 
+/* Triggers (Trigger.c) */
+int CreateTriggerProcess(void);
+int DropTriggerProcess(void);
+int AlterTriggerProcess(void);
+
+/* Parser helpers for trigger grammar */
+void evo_set_trigger_info(const char *name, const char *table);
+void evo_set_trigger_timing(char timing);
+void evo_set_trigger_event(char event);
+void evo_set_trigger_drop(const char *name, int ifExists);
+
+/* Trigger execution — called from DML operations */
+int evo_fire_triggers(const char *table_name, char timing, char event,
+                      const char *col_names[], const char *old_vals[],
+                      const char *new_vals[], int ncols);
+
 /* Stored Procedures / Functions (Procedure.c) */
 int CreateProcedureProcess(void);
 int DropProcedureProcess(void);

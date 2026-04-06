@@ -450,6 +450,20 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
+    /* BEFORE UPDATE trigger */
+    {
+        const char *tcols[64];
+        const char *told[64];
+        const char *tnew[64];
+        for (int tc = 0; tc < numMetaCols && tc < 64; tc++) {
+            tcols[tc] = metaCols[tc];
+            told[tc] = oldFields[tc];
+            tnew[tc] = fields[tc];
+        }
+        if (evo_fire_triggers(tblName, 'B', 'U', tcols, told, tnew, numMetaCols) < 0)
+            return -1;
+    }
+
     /* Validate CHECK constraints against updated row */
     if (tblName && tblName[0]) {
         char checkConstraints[MAX_CHECK_CONSTRAINTS][1024];
@@ -973,6 +987,19 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                     if (newKey[0]) btree_insert(idxPath, newKey, pkKey);
                 }
         }
+    }
+
+    /* AFTER UPDATE trigger */
+    {
+        const char *tcols[64];
+        const char *told[64];
+        const char *tnew[64];
+        for (int tc = 0; tc < numMetaCols && tc < 64; tc++) {
+            tcols[tc] = metaCols[tc];
+            told[tc] = oldFields[tc];
+            tnew[tc] = fields[tc];
+        }
+        evo_fire_triggers(tblName, 'A', 'U', tcols, told, tnew, numMetaCols);
     }
 
     return 0;

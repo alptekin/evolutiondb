@@ -21,6 +21,7 @@
 #include "raft.h"
 #include "distributed.h"
 #include "tls.h"
+#include "../evolution/db/version.h"
 
 #define DEFAULT_PG_PORT   5433
 #define DEFAULT_EVO_PORT  9967
@@ -113,6 +114,9 @@ int main(int argc, char *argv[])
     signal(SIGTERM, shutdown_handler);
     signal(SIGINT,  shutdown_handler);
 #endif
+
+    printf("EvolutionDB v%s\n", EVODB_VERSION);
+    fflush(stdout);
 
     /* Initialise engine, locks, socket subsystem */
     server_init_ex(buffer_pool_pages);
