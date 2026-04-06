@@ -1536,7 +1536,7 @@
 
 ## Day 39 — Cursors & RETURNING
 
-### Task 76: ⬜ Cursors (Feature #24)
+### Task 76: ✅ Cursors (Feature #24)
 
 **Goal:** Implement server-side cursors: DECLARE, OPEN, FETCH, CLOSE.
 

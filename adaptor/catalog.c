@@ -16,6 +16,10 @@
 #include "xa_transaction.h"
 #include "server.h"       /* session_register/list/cancel */
 
+/* Forward declarations */
+static void close_all_session_cursors(SessionCtx *ctx);
+static int handle_cursor(const char *sql, ResultSet *rs, SessionCtx *ctx);
+
 /* From main.c — connection limit accessors */
 extern int  get_max_connections(void);
 extern void set_max_connections(int n);
@@ -1277,6 +1281,7 @@ static int handle_transaction(const char *sql, ResultSet *rs,
             ctx->in_transaction = 0;
             ctx->tx_aborted = 0;
             ctx->snapshot_valid = 0;
+            close_all_session_cursors(ctx);
             if (ctx->undo_log) {
                 undo_log_free(ctx->undo_log);
                 ctx->undo_log = NULL;
@@ -1465,6 +1470,7 @@ static int handle_transaction(const char *sql, ResultSet *rs,
         return 1;
     }
     if (starts_with_i(sql, "CLOSE")) {
+        if (ctx && handle_cursor(sql, rs, ctx)) return 1;
         strcpy(rs->command_tag, "CLOSE CURSOR");
         return 1;
     }
@@ -3395,6 +3401,297 @@ static int handle_distributed(const char *sql, ResultSet *rs, SessionCtx *ctx)
     return 0;
 }
 
+/* Close all session cursors — called on COMMIT/ROLLBACK/disconnect */
+static void close_all_session_cursors(SessionCtx *ctx)
+{
+    if (!ctx) return;
+    for (int i = 0; i < ctx->cursor_count; i++) {
+        if (ctx->cursors[i].is_open) result_free(&ctx->cursors[i].rs);
+        ctx->cursors[i].is_open = 0;
+    }
+    ctx->cursor_count = 0;
+}
+
+/* ================================================================
+ *  Standalone Cursor Handling
+ *  DECLARE cursor CURSOR FOR select; OPEN cursor; FETCH FROM cursor; CLOSE cursor
+ * ================================================================ */
+
+static int handle_cursor(const char *sql, ResultSet *rs, SessionCtx *ctx)
+{
+    if (!ctx) return 0;
+    const char *p = sql;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    /* DECLARE name CURSOR FOR select_stmt */
+    if (strncasecmp(p, "DECLARE", 7) == 0 && isspace((unsigned char)p[7])) {
+        const char *dp = p + 7;
+        while (*dp && isspace((unsigned char)*dp)) dp++;
+        /* Extract cursor name */
+        char cname[64] = "";
+        int ni = 0;
+        while (*dp && !isspace((unsigned char)*dp) && ni < 63) cname[ni++] = *dp++;
+        cname[ni] = '\0';
+        while (*dp && isspace((unsigned char)*dp)) dp++;
+        if (strncasecmp(dp, "CURSOR", 6) != 0) return 0; /* not a cursor declaration */
+        dp += 6;
+        while (*dp && isspace((unsigned char)*dp)) dp++;
+        if (strncasecmp(dp, "FOR", 3) != 0) return 0;
+        dp += 3;
+        while (*dp && isspace((unsigned char)*dp)) dp++;
+        /* dp now points to the SELECT query */
+        if (!*dp) {
+            result_set_error(rs, "42601", "DECLARE CURSOR requires a query");
+            return 1;
+        }
+        /* Check duplicate name (skip empty/closed slots) */
+        for (int i = 0; i < ctx->cursor_count; i++) {
+            if (ctx->cursors[i].name[0] && strcasecmp(ctx->cursors[i].name, cname) == 0) {
+                result_set_error(rs, "42P03", "cursor already exists");
+                return 1;
+            }
+        }
+        /* Find free slot (reuse closed cursors) */
+        int idx = -1;
+        for (int i = 0; i < ctx->cursor_count; i++) {
+            if (ctx->cursors[i].name[0] == '\0') { idx = i; break; }
+        }
+        if (idx < 0) {
+            if (ctx->cursor_count >= 16) {
+                result_set_error(rs, "54000", "too many cursors (max 16)");
+                return 1;
+            }
+            idx = ctx->cursor_count++;
+        }
+        strncpy(ctx->cursors[idx].name, cname, 63);
+        strncpy(ctx->cursors[idx].query, dp, 4095);
+        /* Strip trailing semicolons */
+        int qlen = (int)strlen(ctx->cursors[idx].query);
+        while (qlen > 0 && (ctx->cursors[idx].query[qlen-1] == ';' ||
+               isspace((unsigned char)ctx->cursors[idx].query[qlen-1])))
+            ctx->cursors[idx].query[--qlen] = '\0';
+        memset(&ctx->cursors[idx].rs, 0, sizeof(ResultSet));
+        ctx->cursors[idx].pos = -1;
+        ctx->cursors[idx].is_open = 0;
+        result_init(rs);
+        strcpy(rs->command_tag, "DECLARE CURSOR");
+        return 1;
+    }
+
+    /* OPEN name */
+    if (strncasecmp(p, "OPEN", 4) == 0 && isspace((unsigned char)p[4])) {
+        const char *op = p + 4;
+        while (*op && isspace((unsigned char)*op)) op++;
+        char cname[64] = "";
+        int ni = 0;
+        while (*op && !isspace((unsigned char)*op) && *op != ';' && ni < 63) cname[ni++] = *op++;
+        cname[ni] = '\0';
+        for (int i = 0; i < ctx->cursor_count; i++) {
+            if (strcasecmp(ctx->cursors[i].name, cname) == 0) {
+                if (ctx->cursors[i].is_open) result_free(&ctx->cursors[i].rs);
+                memset(&ctx->cursors[i].rs, 0, sizeof(ResultSet));
+                result_init(&ctx->cursors[i].rs);
+                query_execute(ctx->cursors[i].query, &ctx->cursors[i].rs, ctx);
+                if (ctx->cursors[i].rs.has_error) {
+                    rs->has_error = 1;
+                    strncpy(rs->error_message, ctx->cursors[i].rs.error_message, sizeof(rs->error_message)-1);
+                    strncpy(rs->error_sqlstate, ctx->cursors[i].rs.error_sqlstate, sizeof(rs->error_sqlstate)-1);
+                    return 1;
+                }
+                ctx->cursors[i].pos = 0;
+                ctx->cursors[i].is_open = 1;
+                result_init(rs);
+                strcpy(rs->command_tag, "OPEN CURSOR");
+                return 1;
+            }
+        }
+        char msg[256];
+        snprintf(msg, sizeof(msg), "cursor \"%s\" does not exist", cname);
+        result_set_error(rs, "34000", msg);
+        return 1;
+    }
+
+    /* FETCH [NEXT|FORWARD n|ALL] [FROM] name */
+    if (strncasecmp(p, "FETCH", 5) == 0 && isspace((unsigned char)p[5])) {
+        const char *fp = p + 5;
+        while (*fp && isspace((unsigned char)*fp)) fp++;
+        int fetch_count = 1; /* default: FETCH NEXT = 1 row */
+        int fetch_all = 0;
+        /* Parse direction */
+        if (strncasecmp(fp, "NEXT", 4) == 0 && (isspace((unsigned char)fp[4]) || fp[4] == '\0')) {
+            fp += 4; fetch_count = 1;
+        } else if (strncasecmp(fp, "ALL", 3) == 0 && (isspace((unsigned char)fp[3]) || fp[3] == '\0')) {
+            fp += 3; fetch_all = 1;
+        } else if (strncasecmp(fp, "FORWARD", 7) == 0 && isspace((unsigned char)fp[7])) {
+            fp += 7;
+            while (*fp && isspace((unsigned char)*fp)) fp++;
+            if (strncasecmp(fp, "ALL", 3) == 0 && (isspace((unsigned char)fp[3]) || fp[3] == '\0')) {
+                fp += 3; fetch_all = 1;
+            } else {
+                fetch_count = atoi(fp);
+                if (fetch_count <= 0) fetch_count = 1;
+                while (*fp && isdigit((unsigned char)*fp)) fp++;
+            }
+        } else if (strncasecmp(fp, "PRIOR", 5) == 0 && (isspace((unsigned char)fp[5]) || fp[5] == '\0')) {
+            fp += 5; fetch_count = -1; /* backward */
+        } else if (strncasecmp(fp, "FIRST", 5) == 0 && (isspace((unsigned char)fp[5]) || fp[5] == '\0')) {
+            fp += 5; fetch_count = -2; /* special: go to first */
+        } else if (strncasecmp(fp, "LAST", 4) == 0 && (isspace((unsigned char)fp[4]) || fp[4] == '\0')) {
+            fp += 4; fetch_count = -3; /* special: go to last */
+        }
+        while (*fp && isspace((unsigned char)*fp)) fp++;
+        /* Skip optional FROM keyword */
+        if (strncasecmp(fp, "FROM", 4) == 0 && isspace((unsigned char)fp[4])) {
+            fp += 4;
+            while (*fp && isspace((unsigned char)*fp)) fp++;
+        }
+        /* Extract cursor name */
+        char cname[64] = "";
+        int ni = 0;
+        while (*fp && !isspace((unsigned char)*fp) && *fp != ';' && ni < 63) cname[ni++] = *fp++;
+        cname[ni] = '\0';
+
+        for (int i = 0; i < ctx->cursor_count; i++) {
+            if (strcasecmp(ctx->cursors[i].name, cname) == 0) {
+                if (!ctx->cursors[i].is_open) {
+                    result_set_error(rs, "24000", "cursor is not open");
+                    return 1;
+                }
+                ResultSet *crs = &ctx->cursors[i].rs;
+                result_init(rs);
+                rs->is_select = 1;
+                /* Copy column metadata */
+                for (int c = 0; c < crs->num_cols; c++)
+                    result_add_column(rs, crs->columns[c].name, crs->columns[c].pg_type_oid);
+
+                /* Handle special directions */
+                if (fetch_count == -1) { /* PRIOR */
+                    ctx->cursors[i].pos--;
+                    if (ctx->cursors[i].pos >= 0 && ctx->cursors[i].pos < crs->num_rows) {
+                        int row = result_add_row(rs);
+                        for (int c = 0; c < crs->num_cols; c++) {
+                            if (crs->rows[ctx->cursors[i].pos].is_null[c])
+                                result_set_null(rs, row, c);
+                            else if (crs->rows[ctx->cursors[i].pos].fields[c])
+                                result_set_field(rs, row, c, crs->rows[ctx->cursors[i].pos].fields[c]);
+                        }
+                    }
+                } else if (fetch_count == -2) { /* FIRST */
+                    ctx->cursors[i].pos = 0;
+                    if (crs->num_rows > 0) {
+                        int row = result_add_row(rs);
+                        for (int c = 0; c < crs->num_cols; c++) {
+                            if (crs->rows[0].is_null[c]) result_set_null(rs, row, c);
+                            else if (crs->rows[0].fields[c]) result_set_field(rs, row, c, crs->rows[0].fields[c]);
+                        }
+                        ctx->cursors[i].pos = 1;
+                    }
+                } else if (fetch_count == -3) { /* LAST */
+                    if (crs->num_rows > 0) {
+                        ctx->cursors[i].pos = crs->num_rows - 1;
+                        int row = result_add_row(rs);
+                        for (int c = 0; c < crs->num_cols; c++) {
+                            if (crs->rows[ctx->cursors[i].pos].is_null[c]) result_set_null(rs, row, c);
+                            else if (crs->rows[ctx->cursors[i].pos].fields[c])
+                                result_set_field(rs, row, c, crs->rows[ctx->cursors[i].pos].fields[c]);
+                        }
+                        ctx->cursors[i].pos = crs->num_rows;
+                    }
+                } else {
+                    /* FORWARD n or NEXT or ALL */
+                    int n = fetch_all ? (crs->num_rows - ctx->cursors[i].pos) : fetch_count;
+                    for (int f = 0; f < n && ctx->cursors[i].pos < crs->num_rows; f++) {
+                        int row = result_add_row(rs);
+                        for (int c = 0; c < crs->num_cols; c++) {
+                            if (crs->rows[ctx->cursors[i].pos].is_null[c])
+                                result_set_null(rs, row, c);
+                            else if (crs->rows[ctx->cursors[i].pos].fields[c])
+                                result_set_field(rs, row, c, crs->rows[ctx->cursors[i].pos].fields[c]);
+                        }
+                        ctx->cursors[i].pos++;
+                    }
+                }
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "FETCH %d", rs->num_rows);
+                return 1;
+            }
+        }
+        char msg[256];
+        snprintf(msg, sizeof(msg), "cursor \"%s\" does not exist", cname);
+        result_set_error(rs, "34000", msg);
+        return 1;
+    }
+
+    /* CLOSE name */
+    if (strncasecmp(p, "CLOSE", 5) == 0 && isspace((unsigned char)p[5])) {
+        const char *cp = p + 5;
+        while (*cp && isspace((unsigned char)*cp)) cp++;
+        char cname[64] = "";
+        int ni = 0;
+        while (*cp && !isspace((unsigned char)*cp) && *cp != ';' && ni < 63) cname[ni++] = *cp++;
+        cname[ni] = '\0';
+        for (int i = 0; i < ctx->cursor_count; i++) {
+            if (strcasecmp(ctx->cursors[i].name, cname) == 0) {
+                if (ctx->cursors[i].is_open) result_free(&ctx->cursors[i].rs);
+                ctx->cursors[i].is_open = 0;
+                ctx->cursors[i].pos = -1;
+                ctx->cursors[i].name[0] = '\0'; /* mark as free slot */
+                result_init(rs);
+                strcpy(rs->command_tag, "CLOSE CURSOR");
+                return 1;
+            }
+        }
+        char msg[256];
+        snprintf(msg, sizeof(msg), "cursor \"%s\" does not exist", cname);
+        result_set_error(rs, "34000", msg);
+        return 1;
+    }
+
+    /* MOVE [NEXT|FORWARD n] FROM name — skip without returning rows */
+    if (strncasecmp(p, "MOVE", 4) == 0 && isspace((unsigned char)p[4])) {
+        const char *mp = p + 4;
+        while (*mp && isspace((unsigned char)*mp)) mp++;
+        int move_count = 1;
+        if (strncasecmp(mp, "NEXT", 4) == 0 && (isspace((unsigned char)mp[4]) || mp[4] == '\0')) {
+            mp += 4; move_count = 1;
+        } else if (strncasecmp(mp, "FORWARD", 7) == 0 && isspace((unsigned char)mp[7])) {
+            mp += 7;
+            while (*mp && isspace((unsigned char)*mp)) mp++;
+            move_count = atoi(mp);
+            if (move_count <= 0) move_count = 1;
+            while (*mp && isdigit((unsigned char)*mp)) mp++;
+        }
+        while (*mp && isspace((unsigned char)*mp)) mp++;
+        if (strncasecmp(mp, "FROM", 4) == 0 && isspace((unsigned char)mp[4])) {
+            mp += 4;
+            while (*mp && isspace((unsigned char)*mp)) mp++;
+        }
+        char cname[64] = "";
+        int ni = 0;
+        while (*mp && !isspace((unsigned char)*mp) && *mp != ';' && ni < 63) cname[ni++] = *mp++;
+        cname[ni] = '\0';
+        for (int i = 0; i < ctx->cursor_count; i++) {
+            if (strcasecmp(ctx->cursors[i].name, cname) == 0) {
+                if (!ctx->cursors[i].is_open) {
+                    result_set_error(rs, "24000", "cursor is not open");
+                    return 1;
+                }
+                ctx->cursors[i].pos += move_count;
+                if (ctx->cursors[i].pos > ctx->cursors[i].rs.num_rows)
+                    ctx->cursors[i].pos = ctx->cursors[i].rs.num_rows;
+                result_init(rs);
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "MOVE %d", move_count);
+                return 1;
+            }
+        }
+        char msg[256];
+        snprintf(msg, sizeof(msg), "cursor \"%s\" does not exist", cname);
+        result_set_error(rs, "34000", msg);
+        return 1;
+    }
+
+    return 0; /* not a cursor command */
+}
+
 /* Thread-local for CREATE TABLE ON NODE N */
 __thread uint32_t g_dist_create_node_id = 0;
 
@@ -3823,6 +4120,9 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* Transaction commands */
     if (handle_transaction(sql, rs, ctx)) return 1;
+
+    /* Standalone cursor commands */
+    if (handle_cursor(sql, rs, ctx)) return 1;
 
     /* Built-in functions: version(), current_database(), etc. */
     if (starts_with_i(sql, "SELECT") || starts_with_i(sql, "select")) {

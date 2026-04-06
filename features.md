@@ -37,7 +37,7 @@
 | 21 | Views (CREATE/DROP VIEW) | ✅ | ✅ | ❌ | |
 | 22 | Stored Procedures / Functions | ✅ | ✅ | ✅ | MySQL-complete: IF/ELSEIF/ELSE, WHILE, LOOP/LEAVE/ITERATE, FOR, FOREACH, CASE/WHEN, SELECT INTO, SET expr, CURSOR/FETCH/CLOSE, DECLARE HANDLER, OUT/INOUT params, EXECUTE dynamic SQL, SIGNAL, RETURN, nested CALL |
 | 23 | Triggers | ✅ | ✅ | ✅ | BEFORE/AFTER INSERT/UPDATE/DELETE, FOR EACH ROW, OLD/NEW refs, SIGNAL reject, IF/WHILE body |
-| 24 | Cursors | ✅ | ✅ | ❌ | |
+| 24 | Cursors | ✅ | ✅ | ✅ | Standalone DECLARE/OPEN/FETCH/CLOSE, FETCH NEXT/ALL/FORWARD N/PRIOR/FIRST/LAST, MOVE, procedure cursors |
 | 25 | Prepared Statements (server-side) | ✅ | ✅ | 🔧 | Extended query protocol stubs only |
 | 26 | Window Functions (ROW_NUMBER, RANK, OVER) | ✅ | ✅ | ❌ | |
 | 27 | CTEs (WITH ... AS) | ✅ | ✅ | ❌ | |
