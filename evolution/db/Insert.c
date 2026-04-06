@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <ctype.h>
+#include <unistd.h>
 #include "database.h"
 #include "expression.h"
 #include "catalog_internal.h"
@@ -14,6 +16,44 @@
 
 /* Row separator used between multiple value groups in g_ins.data. */
 #define ROW_SEP '\x02'
+
+/* ---- ON DUPLICATE KEY UPDATE ---- */
+void SetOnDupKeyUpdate(void)
+{
+    g_ins.onDupKeyUpdate = 1;
+}
+
+/* Extract ON DUPLICATE KEY UPDATE clause from g_lex_input.
+ * Returns pointer to the SET assignments text after "ON DUPLICATE KEY UPDATE". */
+static const char *extract_ondup_clause(void)
+{
+    extern __thread const char *g_lex_input;
+    if (!g_lex_input) return NULL;
+    /* Search for "ON DUPLICATE KEY UPDATE" (case-insensitive) */
+    const char *p = g_lex_input;
+    while (*p) {
+        if (*p == '\'') { p++; while (*p && *p != '\'') p++; if (*p) p++; continue; }
+        if (strncasecmp(p, "ON", 2) == 0 && isspace((unsigned char)p[2])) {
+            const char *q = p + 2;
+            while (*q && isspace((unsigned char)*q)) q++;
+            if (strncasecmp(q, "DUPLICATE", 9) == 0 && isspace((unsigned char)q[9])) {
+                q += 9;
+                while (*q && isspace((unsigned char)*q)) q++;
+                if (strncasecmp(q, "KEY", 3) == 0 && isspace((unsigned char)q[3])) {
+                    q += 3;
+                    while (*q && isspace((unsigned char)*q)) q++;
+                    if (strncasecmp(q, "UPDATE", 6) == 0 && isspace((unsigned char)q[6])) {
+                        q += 6;
+                        while (*q && isspace((unsigned char)*q)) q++;
+                        return q; /* points to "col1 = val1, col2 = val2" */
+                    }
+                }
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
 
 /* ---- RETURNING clause parser helpers ---- */
 void SetReturningAll(void)
@@ -1321,6 +1361,102 @@ int InsertProcess(void)
         }
 
         int rc = store_single_row(&td, cols, ncols, tblName, reorderedRows[i]);
+        if (rc == 1 && g_ins.onDupKeyUpdate) {
+            /* ON DUPLICATE KEY UPDATE: construct UPDATE and execute via yyparse */
+            const char *ondup_clause = extract_ondup_clause();
+            if (ondup_clause) {
+                /* Extract PK value from this row */
+                char valBuf2[RECORD_BUF_SIZE];
+                strncpy(valBuf2, reorderedRows[i], sizeof(valBuf2) - 1);
+                valBuf2[sizeof(valBuf2) - 1] = '\0';
+                char *pk_val = strtok(valBuf2, ";");
+
+                /* PK is always the first column (index 0) in EvoSQL */
+                const char *pk_col = cols[0].col_name;
+
+                if (pk_col && pk_val) {
+                    /* Build UPDATE sql: UPDATE table SET ondup_clause WHERE pk = pk_val */
+                    char update_sql[4096];
+                    /* Trim ondup_clause: remove trailing RETURNING, semicolons */
+                    char ondup_trimmed[2048];
+                    strncpy(ondup_trimmed, ondup_clause, sizeof(ondup_trimmed) - 1);
+                    ondup_trimmed[sizeof(ondup_trimmed) - 1] = '\0';
+                    /* Remove RETURNING clause if present */
+                    char *ret_pos = strcasestr(ondup_trimmed, "RETURNING");
+                    if (ret_pos) {
+                        while (ret_pos > ondup_trimmed && isspace((unsigned char)ret_pos[-1])) ret_pos--;
+                        *ret_pos = '\0';
+                    }
+                    /* Remove trailing semicolons/whitespace */
+                    int tlen = (int)strlen(ondup_trimmed);
+                    while (tlen > 0 && (ondup_trimmed[tlen-1] == ';' || isspace((unsigned char)ondup_trimmed[tlen-1])))
+                        ondup_trimmed[--tlen] = '\0';
+
+                    /* Check if pk_val needs quoting */
+                    int is_numeric = 1;
+                    const char *vp = pk_val;
+                    if (*vp == '-') vp++;
+                    while (*vp) { if (!isdigit((unsigned char)*vp) && *vp != '.') { is_numeric = 0; break; } vp++; }
+
+                    if (is_numeric)
+                        snprintf(update_sql, sizeof(update_sql),
+                                 "UPDATE %s SET %s WHERE %s = %s",
+                                 tblName, ondup_trimmed, pk_col, pk_val);
+                    else
+                        snprintf(update_sql, sizeof(update_sql),
+                                 "UPDATE %s SET %s WHERE %s = '%s'",
+                                 tblName, ondup_trimmed, pk_col, pk_val);
+
+                    /* Execute UPDATE via yyparse (reentrant) */
+                    void *local_scanner = NULL;
+                    void *scan_buf = NULL;
+                    extern int yylex_init(void **);
+                    extern void *yy_scan_string(const char *, void *);
+                    extern void yy_delete_buffer(void *, void *);
+                    extern void yylex_destroy(void *);
+                    extern int yyparse(void *);
+                    extern __thread const char *g_lex_input;
+                    extern __thread int g_lex_pos;
+
+                    /* Save and create temp QueryContext */
+                    QueryContext *saved_qctx = g_qctx;
+                    QueryContext *upd_qctx = qctx_alloc();
+                    strncpy(upd_qctx->currentDatabase, saved_qctx->currentDatabase, 255);
+                    strncpy(upd_qctx->currentSchema, saved_qctx->currentSchema, 255);
+                    upd_qctx->mvcc_xid = saved_qctx->mvcc_xid;
+                    upd_qctx->tx_undo_callback = saved_qctx->tx_undo_callback;
+                    upd_qctx->subquery_fn = saved_qctx->subquery_fn;
+                    upd_qctx->subquery_ctx = saved_qctx->subquery_ctx;
+                    g_qctx = upd_qctx;
+
+                    FILE *fnul = fopen("/dev/null", "w");
+                    int so = -1, se = -1;
+                    if (fnul) { so = dup(1); se = dup(2); dup2(fileno(fnul), 1); dup2(fileno(fnul), 2); fclose(fnul); }
+
+                    yylex_init(&local_scanner);
+                    scan_buf = yy_scan_string(update_sql, local_scanner);
+                    g_lex_pos = 0;
+                    g_lex_input = update_sql;
+                    yyparse(local_scanner);
+                    yy_delete_buffer(scan_buf, local_scanner);
+                    yylex_destroy(local_scanner);
+
+                    if (so >= 0) { dup2(so, 1); close(so); }
+                    if (se >= 0) { dup2(se, 2); close(se); }
+
+                    int upd_err = g_err.error;
+                    g_qctx = saved_qctx;
+                    qctx_free(upd_qctx);
+
+                    if (upd_err) {
+                        TruncateInsert();
+                        retval = -1; goto cleanup;
+                    }
+                    g_ins.rowCount++;
+                    continue; /* skip normal post-insert processing */
+                }
+            }
+        }
         if (rc != 0) {
             /* If error already set (e.g., trigger SIGNAL), don't overwrite */
             if (!g_err.error) {
