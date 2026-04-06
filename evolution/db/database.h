@@ -259,6 +259,9 @@ int AlterTableModifyColumn(const char *tableName, const char *colName, int newTy
 int AlterTableChangeColumn(const char *tableName, const char *oldName,
                            const char *newName, int newTypeCode);
 
+/* ON DUPLICATE KEY UPDATE */
+void SetOnDupKeyUpdate(void);
+
 /* RETURNING clause helpers */
 void SetReturningAll(void);
 void AddReturningCol(const char *name);

@@ -107,6 +107,7 @@ DEFERRED				{ return DEFERRED; }
 DISABLE					{ return DISABLE; }
 DISTINCT				{ return DISTINCT; }
 DOMAIN					{ return DOMAIN; }
+ON[ \t\n]+DUPLICATE			{ return ONDUPLICATE; }
 DISTINCTROW				{ return DISTINCTROW; }
 DO						{ return DO; }
 
