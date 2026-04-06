@@ -210,131 +210,132 @@
      RESIGNAL = 426,
      RESTRICT = 427,
      RETURN = 428,
-     RETURNS = 429,
-     ROLLUP = 430,
-     RIGHT = 431,
-     REPLACE = 432,
-     ROW = 433,
-     SIGNAL = 434,
-     TRIGGER = 435,
-     UNTIL = 436,
-     SQL_SMALL_RESULT = 437,
-     SCHEMA = 438,
-     SHARD = 439,
-     SHARDS = 440,
-     SHARE = 441,
-     SKIP = 442,
-     SOME = 443,
-     SQL_CALC_FOUND_ROWS = 444,
-     SQL_BIG_RESULT = 445,
-     SIMPLE = 446,
-     STRAIGHT_JOIN = 447,
-     SMALLINT = 448,
-     SET = 449,
-     SELECT = 450,
-     TINYTEXT = 451,
-     TINYINT = 452,
-     TO = 453,
-     TEMPORARY = 454,
-     GLOBAL = 455,
-     PRESERVE = 456,
-     TEXT = 457,
-     THAN = 458,
-     TIMESTAMP = 459,
-     TABLE = 460,
-     THEN = 461,
-     TRAILING = 462,
-     TRUNCATE = 463,
-     TINYBLOB = 464,
-     TIME = 465,
-     UPDATE = 466,
-     UNSIGNED = 467,
-     UNION = 468,
-     UNIQUE = 469,
-     UUID = 470,
-     VIEW = 471,
-     USING = 472,
-     USE = 473,
-     HASH = 474,
-     VALIDATE = 475,
-     VARCHAR = 476,
-     VALUES = 477,
-     VARBINARY = 478,
-     WHERE = 479,
-     WHEN = 480,
-     WHILE = 481,
-     WITH = 482,
-     YEAR = 483,
-     YEAR_MONTH = 484,
-     ZEROFILL = 485,
-     EXISTS = 486,
-     FSUBSTRING = 487,
-     FTRIM = 488,
-     FDATE_ADD = 489,
-     FDATE_SUB = 490,
-     FDATEDIFF = 491,
-     FYEAR = 492,
-     FMONTH = 493,
-     FDAY = 494,
-     FHOUR = 495,
-     FMINUTE = 496,
-     FSECOND = 497,
-     FNOW = 498,
-     FLEFT = 499,
-     FRIGHT = 500,
-     FLPAD = 501,
-     FRPAD = 502,
-     FREVERSE = 503,
-     FREPEAT = 504,
-     FINSTR = 505,
-     FLOCATE = 506,
-     FABS = 507,
-     FCEIL = 508,
-     FFLOOR = 509,
-     FROUND = 510,
-     FPOWER = 511,
-     FSQRT = 512,
-     FMOD = 513,
-     FRAND = 514,
-     FLOG = 515,
-     FLOG10 = 516,
-     FSIGN = 517,
-     FPI = 518,
-     FCAST = 519,
-     FCONVERT = 520,
-     FNULLIF = 521,
-     FIFNULL = 522,
-     FIF = 523,
-     UNKNOWN = 524,
-     FGROUP_CONCAT = 525,
-     SEPARATOR = 526,
-     FCOUNT = 527,
-     FSUM = 528,
-     FAVG = 529,
-     FMIN = 530,
-     FMAX = 531,
-     FUPPER = 532,
-     FLOWER = 533,
-     FLENGTH = 534,
-     FCONCAT = 535,
-     FREPLACE = 536,
-     FCOALESCE = 537,
-     FGEN_RANDOM_UUID = 538,
-     FGEN_RANDOM_UUID_V7 = 539,
-     FSNOWFLAKE_ID = 540,
-     FLAST_INSERT_ID = 541,
-     FEVO_SLEEP = 542,
-     FEVO_JITTER = 543,
-     FROW_NUMBER = 544,
-     FRANK = 545,
-     FDENSE_RANK = 546,
-     FLEAD = 547,
-     FLAG = 548,
-     FNTILE = 549,
-     FPERCENT_RANK = 550,
-     FCUME_DIST = 551,
-     OVER = 552,
-     PARTITION = 553
+     RETURNING = 429,
+     RETURNS = 430,
+     ROLLUP = 431,
+     RIGHT = 432,
+     REPLACE = 433,
+     ROW = 434,
+     SIGNAL = 435,
+     TRIGGER = 436,
+     UNTIL = 437,
+     SQL_SMALL_RESULT = 438,
+     SCHEMA = 439,
+     SHARD = 440,
+     SHARDS = 441,
+     SHARE = 442,
+     SKIP = 443,
+     SOME = 444,
+     SQL_CALC_FOUND_ROWS = 445,
+     SQL_BIG_RESULT = 446,
+     SIMPLE = 447,
+     STRAIGHT_JOIN = 448,
+     SMALLINT = 449,
+     SET = 450,
+     SELECT = 451,
+     TINYTEXT = 452,
+     TINYINT = 453,
+     TO = 454,
+     TEMPORARY = 455,
+     GLOBAL = 456,
+     PRESERVE = 457,
+     TEXT = 458,
+     THAN = 459,
+     TIMESTAMP = 460,
+     TABLE = 461,
+     THEN = 462,
+     TRAILING = 463,
+     TRUNCATE = 464,
+     TINYBLOB = 465,
+     TIME = 466,
+     UPDATE = 467,
+     UNSIGNED = 468,
+     UNION = 469,
+     UNIQUE = 470,
+     UUID = 471,
+     VIEW = 472,
+     USING = 473,
+     USE = 474,
+     HASH = 475,
+     VALIDATE = 476,
+     VARCHAR = 477,
+     VALUES = 478,
+     VARBINARY = 479,
+     WHERE = 480,
+     WHEN = 481,
+     WHILE = 482,
+     WITH = 483,
+     YEAR = 484,
+     YEAR_MONTH = 485,
+     ZEROFILL = 486,
+     EXISTS = 487,
+     FSUBSTRING = 488,
+     FTRIM = 489,
+     FDATE_ADD = 490,
+     FDATE_SUB = 491,
+     FDATEDIFF = 492,
+     FYEAR = 493,
+     FMONTH = 494,
+     FDAY = 495,
+     FHOUR = 496,
+     FMINUTE = 497,
+     FSECOND = 498,
+     FNOW = 499,
+     FLEFT = 500,
+     FRIGHT = 501,
+     FLPAD = 502,
+     FRPAD = 503,
+     FREVERSE = 504,
+     FREPEAT = 505,
+     FINSTR = 506,
+     FLOCATE = 507,
+     FABS = 508,
+     FCEIL = 509,
+     FFLOOR = 510,
+     FROUND = 511,
+     FPOWER = 512,
+     FSQRT = 513,
+     FMOD = 514,
+     FRAND = 515,
+     FLOG = 516,
+     FLOG10 = 517,
+     FSIGN = 518,
+     FPI = 519,
+     FCAST = 520,
+     FCONVERT = 521,
+     FNULLIF = 522,
+     FIFNULL = 523,
+     FIF = 524,
+     UNKNOWN = 525,
+     FGROUP_CONCAT = 526,
+     SEPARATOR = 527,
+     FCOUNT = 528,
+     FSUM = 529,
+     FAVG = 530,
+     FMIN = 531,
+     FMAX = 532,
+     FUPPER = 533,
+     FLOWER = 534,
+     FLENGTH = 535,
+     FCONCAT = 536,
+     FREPLACE = 537,
+     FCOALESCE = 538,
+     FGEN_RANDOM_UUID = 539,
+     FGEN_RANDOM_UUID_V7 = 540,
+     FSNOWFLAKE_ID = 541,
+     FLAST_INSERT_ID = 542,
+     FEVO_SLEEP = 543,
+     FEVO_JITTER = 544,
+     FROW_NUMBER = 545,
+     FRANK = 546,
+     FDENSE_RANK = 547,
+     FLEAD = 548,
+     FLAG = 549,
+     FNTILE = 550,
+     FPERCENT_RANK = 551,
+     FCUME_DIST = 552,
+     OVER = 553,
+     PARTITION = 554
    };
 #endif
 /* Tokens.  */
@@ -509,131 +510,132 @@
 #define RESIGNAL 426
 #define RESTRICT 427
 #define RETURN 428
-#define RETURNS 429
-#define ROLLUP 430
-#define RIGHT 431
-#define REPLACE 432
-#define ROW 433
-#define SIGNAL 434
-#define TRIGGER 435
-#define UNTIL 436
-#define SQL_SMALL_RESULT 437
-#define SCHEMA 438
-#define SHARD 439
-#define SHARDS 440
-#define SHARE 441
-#define SKIP 442
-#define SOME 443
-#define SQL_CALC_FOUND_ROWS 444
-#define SQL_BIG_RESULT 445
-#define SIMPLE 446
-#define STRAIGHT_JOIN 447
-#define SMALLINT 448
-#define SET 449
-#define SELECT 450
-#define TINYTEXT 451
-#define TINYINT 452
-#define TO 453
-#define TEMPORARY 454
-#define GLOBAL 455
-#define PRESERVE 456
-#define TEXT 457
-#define THAN 458
-#define TIMESTAMP 459
-#define TABLE 460
-#define THEN 461
-#define TRAILING 462
-#define TRUNCATE 463
-#define TINYBLOB 464
-#define TIME 465
-#define UPDATE 466
-#define UNSIGNED 467
-#define UNION 468
-#define UNIQUE 469
-#define UUID 470
-#define VIEW 471
-#define USING 472
-#define USE 473
-#define HASH 474
-#define VALIDATE 475
-#define VARCHAR 476
-#define VALUES 477
-#define VARBINARY 478
-#define WHERE 479
-#define WHEN 480
-#define WHILE 481
-#define WITH 482
-#define YEAR 483
-#define YEAR_MONTH 484
-#define ZEROFILL 485
-#define EXISTS 486
-#define FSUBSTRING 487
-#define FTRIM 488
-#define FDATE_ADD 489
-#define FDATE_SUB 490
-#define FDATEDIFF 491
-#define FYEAR 492
-#define FMONTH 493
-#define FDAY 494
-#define FHOUR 495
-#define FMINUTE 496
-#define FSECOND 497
-#define FNOW 498
-#define FLEFT 499
-#define FRIGHT 500
-#define FLPAD 501
-#define FRPAD 502
-#define FREVERSE 503
-#define FREPEAT 504
-#define FINSTR 505
-#define FLOCATE 506
-#define FABS 507
-#define FCEIL 508
-#define FFLOOR 509
-#define FROUND 510
-#define FPOWER 511
-#define FSQRT 512
-#define FMOD 513
-#define FRAND 514
-#define FLOG 515
-#define FLOG10 516
-#define FSIGN 517
-#define FPI 518
-#define FCAST 519
-#define FCONVERT 520
-#define FNULLIF 521
-#define FIFNULL 522
-#define FIF 523
-#define UNKNOWN 524
-#define FGROUP_CONCAT 525
-#define SEPARATOR 526
-#define FCOUNT 527
-#define FSUM 528
-#define FAVG 529
-#define FMIN 530
-#define FMAX 531
-#define FUPPER 532
-#define FLOWER 533
-#define FLENGTH 534
-#define FCONCAT 535
-#define FREPLACE 536
-#define FCOALESCE 537
-#define FGEN_RANDOM_UUID 538
-#define FGEN_RANDOM_UUID_V7 539
-#define FSNOWFLAKE_ID 540
-#define FLAST_INSERT_ID 541
-#define FEVO_SLEEP 542
-#define FEVO_JITTER 543
-#define FROW_NUMBER 544
-#define FRANK 545
-#define FDENSE_RANK 546
-#define FLEAD 547
-#define FLAG 548
-#define FNTILE 549
-#define FPERCENT_RANK 550
-#define FCUME_DIST 551
-#define OVER 552
-#define PARTITION 553
+#define RETURNING 429
+#define RETURNS 430
+#define ROLLUP 431
+#define RIGHT 432
+#define REPLACE 433
+#define ROW 434
+#define SIGNAL 435
+#define TRIGGER 436
+#define UNTIL 437
+#define SQL_SMALL_RESULT 438
+#define SCHEMA 439
+#define SHARD 440
+#define SHARDS 441
+#define SHARE 442
+#define SKIP 443
+#define SOME 444
+#define SQL_CALC_FOUND_ROWS 445
+#define SQL_BIG_RESULT 446
+#define SIMPLE 447
+#define STRAIGHT_JOIN 448
+#define SMALLINT 449
+#define SET 450
+#define SELECT 451
+#define TINYTEXT 452
+#define TINYINT 453
+#define TO 454
+#define TEMPORARY 455
+#define GLOBAL 456
+#define PRESERVE 457
+#define TEXT 458
+#define THAN 459
+#define TIMESTAMP 460
+#define TABLE 461
+#define THEN 462
+#define TRAILING 463
+#define TRUNCATE 464
+#define TINYBLOB 465
+#define TIME 466
+#define UPDATE 467
+#define UNSIGNED 468
+#define UNION 469
+#define UNIQUE 470
+#define UUID 471
+#define VIEW 472
+#define USING 473
+#define USE 474
+#define HASH 475
+#define VALIDATE 476
+#define VARCHAR 477
+#define VALUES 478
+#define VARBINARY 479
+#define WHERE 480
+#define WHEN 481
+#define WHILE 482
+#define WITH 483
+#define YEAR 484
+#define YEAR_MONTH 485
+#define ZEROFILL 486
+#define EXISTS 487
+#define FSUBSTRING 488
+#define FTRIM 489
+#define FDATE_ADD 490
+#define FDATE_SUB 491
+#define FDATEDIFF 492
+#define FYEAR 493
+#define FMONTH 494
+#define FDAY 495
+#define FHOUR 496
+#define FMINUTE 497
+#define FSECOND 498
+#define FNOW 499
+#define FLEFT 500
+#define FRIGHT 501
+#define FLPAD 502
+#define FRPAD 503
+#define FREVERSE 504
+#define FREPEAT 505
+#define FINSTR 506
+#define FLOCATE 507
+#define FABS 508
+#define FCEIL 509
+#define FFLOOR 510
+#define FROUND 511
+#define FPOWER 512
+#define FSQRT 513
+#define FMOD 514
+#define FRAND 515
+#define FLOG 516
+#define FLOG10 517
+#define FSIGN 518
+#define FPI 519
+#define FCAST 520
+#define FCONVERT 521
+#define FNULLIF 522
+#define FIFNULL 523
+#define FIF 524
+#define UNKNOWN 525
+#define FGROUP_CONCAT 526
+#define SEPARATOR 527
+#define FCOUNT 528
+#define FSUM 529
+#define FAVG 530
+#define FMIN 531
+#define FMAX 532
+#define FUPPER 533
+#define FLOWER 534
+#define FLENGTH 535
+#define FCONCAT 536
+#define FREPLACE 537
+#define FCOALESCE 538
+#define FGEN_RANDOM_UUID 539
+#define FGEN_RANDOM_UUID_V7 540
+#define FSNOWFLAKE_ID 541
+#define FLAST_INSERT_ID 542
+#define FEVO_SLEEP 543
+#define FEVO_JITTER 544
+#define FROW_NUMBER 545
+#define FRANK 546
+#define FDENSE_RANK 547
+#define FLEAD 548
+#define FLAG 549
+#define FNTILE 550
+#define FPERCENT_RANK 551
+#define FCUME_DIST 552
+#define OVER 553
+#define PARTITION 554
 
 
 
@@ -649,7 +651,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 653 "parser/evoparser.tab.h"
+#line 655 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

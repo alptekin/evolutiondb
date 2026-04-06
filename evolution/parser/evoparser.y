@@ -252,6 +252,7 @@
 %token RESIGNAL
 %token RESTRICT
 %token RETURN
+%token RETURNING
 %token RETURNS
 %token ROLLUP
 %token RIGHT
@@ -1046,7 +1047,7 @@ stmt: delete_stmt
 ;
 
 /* single table delete */
-delete_stmt: DELETE delete_opts FROM NAME opt_where opt_orderby opt_limit	
+delete_stmt: DELETE delete_opts FROM NAME opt_where opt_orderby opt_limit opt_returning
     {
         emit("DELETEONE %d %s", $2, $4);
         GetDelTableName($4);
@@ -1523,7 +1524,7 @@ stmt: insert_stmt
     }
 ;
 
-insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_list opt_ondupupdate
+insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_list opt_ondupupdate opt_returning
     {
         emit("INSERTVALS %d %d %s", $2, $7, $4);
         GetInsertionTableName($4);
@@ -1635,7 +1636,7 @@ stmt: update_stmt
     }
 ;
 update_stmt: UPDATE update_opts table_references
-SET update_asgn_list opt_where opt_orderby opt_limit
+SET update_asgn_list opt_where opt_orderby opt_limit opt_returning
     {
         emit("UPDATE %d %d %d", $2, $3, $5);
         if (g_qctx && g_sel.joinTableCount > 1 && !g_upd.multiUpdate)
@@ -2332,6 +2333,16 @@ stmt: ALTER TRIGGER NAME ENABLE
         AlterTriggerProcess();
         free($3);
     }
+;
+
+/* RETURNING clause for INSERT/UPDATE/DELETE */
+opt_returning: /* empty */
+| RETURNING '*'                                     { SetReturningAll(); }
+| RETURNING returning_col_list
+;
+
+returning_col_list: NAME                            { AddReturningCol($1); free($1); }
+| returning_col_list ',' NAME                       { AddReturningCol($3); free($3); }
 ;
 
 %%
