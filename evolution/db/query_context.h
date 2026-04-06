@@ -85,6 +85,8 @@ typedef struct {
     int  columnCount;               /* was insertColumnCount */
     int  rowCount;                  /* was insertCount */
     int  insertFromSelect;          /* 1 = INSERT...SELECT mode */
+    /* ON DUPLICATE KEY UPDATE */
+    int  onDupKeyUpdate;            /* 1 = ON DUPLICATE KEY UPDATE present */
 } InsertOpts;
 
 /* ---- SELECT ---- */
