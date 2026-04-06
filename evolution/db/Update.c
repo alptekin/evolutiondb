@@ -1002,6 +1002,18 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         evo_fire_triggers(tblName, 'A', 'U', tcols, told, tnew, numMetaCols);
     }
 
+    /* RETURNING capture — returns NEW values */
+    if (g_returning.active && g_returning_row_count < 256) {
+        const char *ret_vals[64];
+        int ret_null[64];
+        for (int c = 0; c < allNCols && c < 64; c++) {
+            ret_vals[c] = fields[c];
+            ret_null[c] = is_null_arr[c];
+        }
+        extern void returning_capture_row(const ColumnDesc *, int, const char *[], const int[], int);
+        returning_capture_row(allCols, allNCols, ret_vals, ret_null, numFields);
+    }
+
     return 0;
 }
 

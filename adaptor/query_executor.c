@@ -4999,6 +4999,9 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* Reset procedure state */
     memset(&g_proc, 0, sizeof(g_proc));
     memset(&g_trig, 0, sizeof(g_trig));
+    memset(&g_returning, 0, sizeof(g_returning));
+    g_returning_row_count = 0;
+    g_returning_col_count = 0;
 
     /* Reset expression pool for parser AST */
     expr_pool_reset();
@@ -5544,6 +5547,24 @@ parser_done:
         }
 
 post_collect: ;
+
+        /* RETURNING clause — transfer captured rows to ResultSet */
+        if (!rs->has_error && g_returning.active && g_returning_row_count > 0) {
+            rs->is_select = 1;
+            for (int c = 0; c < g_returning_col_count; c++) {
+                int oid = type_encoding_to_pg_oid(g_returning_col_types[c]);
+                result_add_column(rs, g_returning_col_names[c], oid);
+            }
+            for (int r = 0; r < g_returning_row_count; r++) {
+                int row = result_add_row(rs);
+                for (int c = 0; c < g_returning_col_count; c++) {
+                    if (g_returning_null[r][c])
+                        result_set_null(rs, row, c);
+                    else
+                        result_set_field(rs, row, c, g_returning_buf[r][c]);
+                }
+            }
+        }
 
     } else {
         /* Error occurred via longjmp (err_sys/err_quit/err_dump).

@@ -15,6 +15,85 @@
 /* Row separator used between multiple value groups in g_ins.data. */
 #define ROW_SEP '\x02'
 
+/* ---- RETURNING clause parser helpers ---- */
+void SetReturningAll(void)
+{
+    g_returning.active = 1;
+    g_returning.returnAll = 1;
+}
+
+void AddReturningCol(const char *name)
+{
+    g_returning.active = 1;
+    if (g_returning.colCount < 64)
+        strncpy(g_returning.cols[g_returning.colCount++], name, 127);
+}
+
+/* Thread-local RETURNING result buffer — populated by DML, read by query_executor */
+__thread char g_returning_buf[256][64][256]; /* max 256 rows × 64 cols × 256 chars */
+__thread int  g_returning_null[256][64];
+__thread int  g_returning_row_count = 0;
+__thread int  g_returning_col_count = 0;
+__thread char g_returning_col_names[64][128];
+__thread int  g_returning_col_types[64];
+
+void returning_capture_row(const ColumnDesc *cols, int ncols,
+                                  const char *vals[], const int is_null[], int nv)
+{
+    if (!g_returning.active || g_returning_row_count >= 256) return;
+
+    int r = g_returning_row_count;
+
+    /* First row: set up column metadata */
+    if (r == 0) {
+        if (g_returning.returnAll) {
+            g_returning_col_count = ncols;
+            for (int c = 0; c < ncols; c++) {
+                strncpy(g_returning_col_names[c], cols[c].col_name, 127);
+                g_returning_col_types[c] = cols[c].type_code;
+            }
+        } else {
+            g_returning_col_count = g_returning.colCount;
+            for (int c = 0; c < g_returning.colCount; c++) {
+                strncpy(g_returning_col_names[c], g_returning.cols[c], 127);
+                /* Find type from column metadata */
+                for (int j = 0; j < ncols; j++) {
+                    if (strcasecmp(cols[j].col_name, g_returning.cols[c]) == 0) {
+                        g_returning_col_types[c] = cols[j].type_code;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Capture row values */
+    if (g_returning.returnAll) {
+        for (int c = 0; c < ncols && c < 64; c++) {
+            if (c < nv && vals[c] && !is_null[c])
+                strncpy(g_returning_buf[r][c], vals[c], 255);
+            else
+                g_returning_null[r][c] = 1;
+        }
+    } else {
+        for (int c = 0; c < g_returning.colCount; c++) {
+            int found = 0;
+            for (int j = 0; j < ncols; j++) {
+                if (strcasecmp(cols[j].col_name, g_returning.cols[c]) == 0) {
+                    if (j < nv && vals[j] && !is_null[j])
+                        strncpy(g_returning_buf[r][c], vals[j], 255);
+                    else
+                        g_returning_null[r][c] = 1;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) g_returning_null[r][c] = 1;
+        }
+    }
+    g_returning_row_count++;
+}
+
 /* Capture first auto-generated value for LAST_INSERT_ID() */
 static void capture_generated_id(const char *val)
 {
@@ -973,6 +1052,9 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
         }
         evo_fire_triggers(tblName, 'A', 'I', trig_cols, NULL, trig_vals, ncols);
     }
+
+    /* RETURNING capture */
+    returning_capture_row(cols, ncols, vals_ptrs, is_null, nv);
 
     return 0;
 }

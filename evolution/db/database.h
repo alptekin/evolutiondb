@@ -259,6 +259,18 @@ int AlterTableModifyColumn(const char *tableName, const char *colName, int newTy
 int AlterTableChangeColumn(const char *tableName, const char *oldName,
                            const char *newName, int newTypeCode);
 
+/* RETURNING clause helpers */
+void SetReturningAll(void);
+void AddReturningCol(const char *name);
+
+/* RETURNING result buffer — populated by DML, read by query_executor */
+extern __thread char g_returning_buf[256][64][256];
+extern __thread int  g_returning_null[256][64];
+extern __thread int  g_returning_row_count;
+extern __thread int  g_returning_col_count;
+extern __thread char g_returning_col_names[64][128];
+extern __thread int  g_returning_col_types[64];
+
 /* Triggers (Trigger.c) */
 int CreateTriggerProcess(void);
 int DropTriggerProcess(void);
