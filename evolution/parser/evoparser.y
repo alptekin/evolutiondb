@@ -2315,6 +2315,25 @@ drop_trigger_stmt:
     }
 ;
 
+/* ALTER TRIGGER ENABLE / DISABLE */
+stmt: ALTER TRIGGER NAME ENABLE
+    {
+        emit("ALTERTRIGGER %s ENABLE", $3);
+        evo_set_trigger_drop($3, 0);  /* reuse dropName for trigger name */
+        g_trig.event = 'E';  /* E=ENABLE */
+        AlterTriggerProcess();
+        free($3);
+    }
+| ALTER TRIGGER NAME DISABLE
+    {
+        emit("ALTERTRIGGER %s DISABLE", $3);
+        evo_set_trigger_drop($3, 0);
+        g_trig.event = 'D';  /* D=DISABLE (overloaded) */
+        AlterTriggerProcess();
+        free($3);
+    }
+;
+
 %%
 void emit(const char *s, ...)
 {

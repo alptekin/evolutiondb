@@ -262,6 +262,7 @@ int AlterTableChangeColumn(const char *tableName, const char *oldName,
 /* Triggers (Trigger.c) */
 int CreateTriggerProcess(void);
 int DropTriggerProcess(void);
+int AlterTriggerProcess(void);
 
 /* Parser helpers for trigger grammar */
 void evo_set_trigger_info(const char *name, const char *table);
