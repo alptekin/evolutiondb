@@ -1,0 +1,141 @@
+name: Stable Release
+
+on:
+  workflow_dispatch:  # Manuel tetikleme — GitHub Actions UI'dan "Run workflow"
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/evolutiondb
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from version.h
+        id: version
+        run: |
+          VERSION=$(grep 'EVODB_VERSION ' evolution/db/version.h | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: Could not read version from version.h"
+            exit 1
+          fi
+          echo "version=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version_raw=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Stable Release: v${VERSION}"
+
+      - name: Check tag doesn't already exist
+        run: |
+          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "ERROR: Tag ${{ steps.version.outputs.version }} already exists!"
+            echo "Bump version in evolution/db/version.h before releasing."
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:stable
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create git tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: "EvolutionDB ${{ steps.version.outputs.version }}"
+          body: |
+            ## EvolutionDB ${{ steps.version.outputs.version }}
+
+            ### Docker
+            ```bash
+            docker pull ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            docker pull ${{ env.IMAGE_NAME }}:stable
+            ```
+
+            ### Changes
+            See [CHANGELOG](https://github.com/${{ github.repository }}/commits/main) for details.
+          draft: false
+          prerelease: false
+
+      - name: Get recent changes
+        id: changes
+        run: |
+          COMMITS=$(git log --oneline -5 --pretty=format:"%s" 2>/dev/null | head -3)
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post to X (Twitter)
+        continue-on-error: true
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMITS: ${{ steps.changes.outputs.commits }}
+          DOCKER_IMAGE: ${{ env.IMAGE_NAME }}
+        run: |
+          pip install requests-oauthlib -q
+          python3 << 'PYEOF'
+          import os
+          from requests_oauthlib import OAuth1Session
+
+          version = os.environ.get("VERSION", "")
+          commits = os.environ.get("COMMITS", "")
+          commit_lines = [line.strip() for line in commits.strip().split("\n") if line.strip()]
+          changelog = "\n".join(f"- {c}" for c in commit_lines[:3])
+
+          docker_image = os.environ.get("DOCKER_IMAGE", "")
+          tweet = f"🚀 EvolutionDB {version} released!\n\n{changelog}\n\n🐳 docker pull {docker_image}:{version}\n\n#evolutiondb #database #opensource\ngithub.com/alptekin/evolutiondb"
+          if len(tweet) > 280:
+              tweet = tweet[:277] + "..."
+
+          print(f"Tweet ({len(tweet)} chars):\n{tweet}\n")
+
+          api_key = os.environ.get("X_API_KEY")
+          api_secret = os.environ.get("X_API_SECRET")
+          access_token = os.environ.get("X_ACCESS_TOKEN")
+          access_secret = os.environ.get("X_ACCESS_TOKEN_SECRET")
+
+          if not all([api_key, api_secret, access_token, access_secret]):
+              print("X API credentials not configured — skipping tweet")
+              exit(0)
+
+          twitter = OAuth1Session(api_key, client_secret=api_secret,
+                                  resource_owner_key=access_token,
+                                  resource_owner_secret=access_secret)
+          response = twitter.post("https://api.twitter.com/2/tweets", json={"text": tweet})
+          print(f"Status: {response.status_code}")
+          if response.status_code == 201:
+              print("Tweet posted!")
+          else:
+              print(f"Tweet failed: {response.json()}")
+          PYEOF

@@ -74,6 +74,16 @@ typedef struct {
     char      user_var_names[64][128];
     char      user_var_values[64][256];
     int       user_var_count;
+
+    /* Standalone cursors — session-level, persist across queries */
+    struct {
+        char      name[64];
+        char      query[4096];
+        ResultSet rs;
+        int       pos;       /* current FETCH position, -1 = not opened */
+        int       is_open;
+    } cursors[16];
+    int cursor_count;
 } SessionCtx;
 
 /*
