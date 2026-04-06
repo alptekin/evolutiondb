@@ -102,6 +102,7 @@
 %token STORED
 %token VIRTUAL
 
+%token BEFORE
 %token BEGINWORK
 %token BLOB
 %token BOOLEAN
@@ -154,6 +155,7 @@
 %token DECIMAL
 %token DATE
 
+%token EACH
 %token ELSEIF
 %token ENABLE
 %token ESCAPED
@@ -255,7 +257,9 @@
 %token RIGHT
 %token REPLACE
 
+%token ROW
 %token SIGNAL
+%token TRIGGER
 %token UNTIL
 
 %token SQL_SMALL_RESULT
@@ -2185,7 +2189,7 @@ proc_body_any: NAME         { free($1); }
 | CREATE | DROP | TABLE | INDEX | THEN | ELSE | ELSEIF
 | DECLARE | DO | CALL | RETURN
 | LEAVE | ITERATE | CURSOR | OPEN | FETCH | CLOSE | HANDLER | EXIT | OUT | INOUT | FOR | CONTINUE
-| SIGNAL | RESIGNAL | EXECUTE | UNTIL
+| SIGNAL | RESIGNAL | EXECUTE | UNTIL | BEFORE | EACH | ROW | TRIGGER
 | AS | ON | ORDER | BY | GROUP | HAVING | LIMIT | OFFSET
 | JOIN | LEFT | RIGHT | INNER | OUTER | FULL | CROSS | NATURAL | USING
 | NULLX | DEFAULT | PRIMARY | KEY | UNIQUE | CHECK | FOREIGN | REFERENCES
@@ -2266,6 +2270,68 @@ call_arg: INTNUM                                    { char buf[32]; snprintf(buf
 | BOOL                                              { evo_add_call_arg($1 ? "TRUE" : "FALSE"); }
 | NAME                                              { evo_add_call_arg($1); free($1); }
 | USERVAR                                           { char buf[256]; snprintf(buf,sizeof(buf),"@%s",$1); evo_add_call_arg(buf); free($1); }
+;
+
+/* ================================================================
+ *  CREATE TRIGGER / DROP TRIGGER
+ * ================================================================ */
+
+stmt: create_trigger_stmt                            { emit("STMT"); CreateTriggerProcess(); }
+;
+
+create_trigger_stmt:
+  CREATE TRIGGER NAME trigger_timing trigger_event ON NAME FOR EACH ROW BEGINWORK proc_body_skip END
+    {
+        emit("CREATETRIGGER %s ON %s", $3, $7);
+        evo_set_trigger_info($3, $7);
+        free($3); free($7);
+    }
+;
+
+trigger_timing: BEFORE                               { evo_set_trigger_timing('B'); }
+| AFTER                                              { evo_set_trigger_timing('A'); }
+;
+
+trigger_event: INSERT                                { evo_set_trigger_event('I'); }
+| UPDATE                                             { evo_set_trigger_event('U'); }
+| DELETE                                             { evo_set_trigger_event('D'); }
+;
+
+stmt: drop_trigger_stmt                              { emit("STMT"); DropTriggerProcess(); }
+;
+
+drop_trigger_stmt:
+  DROP TRIGGER NAME
+    {
+        emit("DROPTRIGGER %s", $3);
+        evo_set_trigger_drop($3, 0);
+        free($3);
+    }
+| DROP TRIGGER IF EXISTS NAME
+    {
+        emit("DROPTRIGGER IF EXISTS %s", $5);
+        evo_set_trigger_drop($5, 1);
+        free($5);
+    }
+;
+
+/* ALTER TRIGGER ENABLE / DISABLE */
+stmt: ALTER TRIGGER NAME ENABLE
+    {
+        emit("ALTERTRIGGER %s ENABLE", $3);
+        evo_set_trigger_drop($3, 0);  /* reuse dropName for trigger name */
+        g_trig.event = 'E';  /* E=ENABLE */
+        AlterTriggerProcess();
+        free($3);
+    }
+| ALTER TRIGGER NAME DISABLE
+    {
+        emit("ALTERTRIGGER %s DISABLE", $3);
+        evo_set_trigger_drop($3, 0);
+        g_trig.event = 'D';  /* D=DISABLE (overloaded) */
+        AlterTriggerProcess();
+        free($3);
+    }
 ;
 
 %%

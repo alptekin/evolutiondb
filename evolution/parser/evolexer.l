@@ -45,6 +45,7 @@ CHANGE					{ return CHANGE; }
 INT8|BIGINT				{ return BIGINT; }
 BINARY					{ return BINARY; }
 BIT						{ return BIT; }
+BEFORE					{ return BEFORE; }
 "BEGIN"					{ return BEGINWORK; }
 BLOB					{ return BLOB; }
 BOOL					{ return BOOLEAN; }
@@ -115,6 +116,7 @@ FLOAT8|DOUBLE			{ return DOUBLE; }
 
 ELSE					{ return ELSE; }
 ELSEIF					{ return ELSEIF; }
+EACH					{ return EACH; }
 ENABLE					{ return ENABLE; }
 EXECUTE					{ return EXECUTE; }
 EXPLAIN					{ return EXPLAIN; }
@@ -252,6 +254,7 @@ REFERENCES				{ return REFERENCES; }
 RENAME					{ return RENAME; }
 REPLACE					{ int c = input(yyscanner); unput(c); if(c == '(') return FREPLACE; return REPLACE; }
 RESIGNAL				{ return RESIGNAL; }
+ROW					{ return ROW; }
 RESTRICT				{ return RESTRICT; }
 RETURN					{ return RETURN; }
 RETURNS					{ return RETURNS; }
@@ -302,6 +305,7 @@ INT1|TINYINT			{ return TINYINT; }
 TINYTEXT				{ return TINYTEXT; }
 
 TO						{ return TO; }
+TRIGGER					{ return TRIGGER; }
 TRAILING				{ return TRAILING; }
 TRUNCATE				{ return TRUNCATE; }
 

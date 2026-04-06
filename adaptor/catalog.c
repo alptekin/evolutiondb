@@ -2619,6 +2619,44 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* pg_trigger — real implementation */
+    if (stristr_found(sql, "pg_trigger")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "tgname", PG_OID_TEXT);
+        result_add_column(rs, "tgrelid", PG_OID_INT4);
+        result_add_column(rs, "tgtype", PG_OID_INT2);
+        result_add_column(rs, "tgenabled", PG_OID_BPCHAR);
+
+        DatabaseDesc dbDesc;
+        if (cat_find_database(db_get_current_database(), &dbDesc) == 0) {
+            SchemaDesc schemas[32];
+            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            for (int si = 0; si < ns; si++) {
+                TableDesc tables[256];
+                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                for (int ti = 0; ti < nt; ti++) {
+                    TriggerDesc trigs[16];
+                    int ntr = cat_list_triggers_for_table(tables[ti].table_id, trigs, 16);
+                    for (int tri = 0; tri < ntr; tri++) {
+                        int row = result_add_row(rs);
+                        result_set_field(rs, row, 0, trigs[tri].trigger_name);
+                        char tid[16]; snprintf(tid, sizeof(tid), "%u", trigs[tri].table_id);
+                        result_set_field(rs, row, 1, tid);
+                        /* tgtype: bitmask (PG convention) */
+                        int tgtype = (trigs[tri].timing == 'B' ? 2 : 0) |
+                                     (trigs[tri].event == 'I' ? 4 : trigs[tri].event == 'D' ? 8 : 16) | 1;
+                        char tt[8]; snprintf(tt, sizeof(tt), "%d", tgtype);
+                        result_set_field(rs, row, 2, tt);
+                        result_set_field(rs, row, 3, trigs[tri].enabled ? "O" : "D");
+                    }
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
+        return 1;
+    }
+
     /* pg_am, pg_roles, etc. — return empty */
     if (stristr_found(sql, "pg_am") || stristr_found(sql, "pg_roles") ||
         stristr_found(sql, "pg_user") || stristr_found(sql, "pg_stat") ||
@@ -2626,7 +2664,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         stristr_found(sql, "pg_description") ||
         stristr_found(sql, "pg_extension") || stristr_found(sql, "pg_tablespace") ||
         stristr_found(sql, "pg_shdescription") || stristr_found(sql, "pg_inherits") ||
-        stristr_found(sql, "pg_trigger") || stristr_found(sql, "pg_rewrite") ||
+        stristr_found(sql, "pg_rewrite") ||
         stristr_found(sql, "pg_enum") || stristr_found(sql, "pg_collation") ||
         stristr_found(sql, "pg_available_extensions") ||
         stristr_found(sql, "pg_matviews") || stristr_found(sql, "pg_sequences") ||
@@ -2691,6 +2729,43 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
     if (stristr_found(sql, "information_schema.columns") ||
         stristr_found(sql, "information_schema.\"columns\"")) {
         return catalog_list_all_columns(rs);
+    }
+
+    if (stristr_found(sql, "information_schema.triggers")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "trigger_name", PG_OID_TEXT);
+        result_add_column(rs, "event_manipulation", PG_OID_TEXT);
+        result_add_column(rs, "event_object_table", PG_OID_TEXT);
+        result_add_column(rs, "action_timing", PG_OID_TEXT);
+        result_add_column(rs, "is_enabled", PG_OID_TEXT);
+
+        DatabaseDesc dbDesc;
+        if (cat_find_database(db_get_current_database(), &dbDesc) == 0) {
+            SchemaDesc schemas[32];
+            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            for (int si = 0; si < ns; si++) {
+                TableDesc tables[256];
+                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                for (int ti = 0; ti < nt; ti++) {
+                    TriggerDesc trigs[16];
+                    int ntr = cat_list_triggers_for_table(tables[ti].table_id, trigs, 16);
+                    for (int tri = 0; tri < ntr; tri++) {
+                        int row = result_add_row(rs);
+                        result_set_field(rs, row, 0, trigs[tri].trigger_name);
+                        const char *evt = trigs[tri].event == 'I' ? "INSERT" :
+                                          trigs[tri].event == 'U' ? "UPDATE" : "DELETE";
+                        result_set_field(rs, row, 1, evt);
+                        result_set_field(rs, row, 2, trigs[tri].table_name);
+                        const char *timing = trigs[tri].timing == 'B' ? "BEFORE" : "AFTER";
+                        result_set_field(rs, row, 3, timing);
+                        result_set_field(rs, row, 4, trigs[tri].enabled ? "YES" : "NO");
+                    }
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
+        return 1;
     }
 
     if (stristr_found(sql, "information_schema.schemata")) {
