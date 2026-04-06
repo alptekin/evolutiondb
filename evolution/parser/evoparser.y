@@ -1544,7 +1544,7 @@ insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_l
 ;
 
 opt_ondupupdate: /* nil */
-| ONDUPLICATE KEY UPDATE insert_asgn_list { emit("DUPUPDATE %d", $4); }
+| ONDUPLICATE KEY UPDATE insert_asgn_list { emit("DUPUPDATE %d", $4); SetOnDupKeyUpdate(); }
 ;
 
 insert_opts: /* nil */								{ $$ = 0; }

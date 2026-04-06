@@ -7342,7 +7342,7 @@ yyreduce:
 
   case 371:
 #line 1547 "parser/evoparser.y"
-    { emit("DUPUPDATE %d", (yyvsp[(4) - (4)].intval)); ;}
+    { emit("DUPUPDATE %d", (yyvsp[(4) - (4)].intval)); SetOnDupKeyUpdate(); ;}
     break;
 
   case 372:
