@@ -257,6 +257,7 @@ RESIGNAL				{ return RESIGNAL; }
 ROW					{ return ROW; }
 RESTRICT				{ return RESTRICT; }
 RETURN					{ return RETURN; }
+RETURNING				{ return RETURNING; }
 RETURNS					{ return RETURNS; }
 
 

@@ -576,6 +576,17 @@ int DeleteProcess(void)
                         evo_fire_triggers(g_del.tblName, 'A', 'D',
                                           tcols, tvals, NULL, ncols);
                     }
+                    /* RETURNING capture — returns deleted row values */
+                    if (g_returning.active && g_returning_row_count < 256) {
+                        const char *ret_vals[64];
+                        int ret_null[64];
+                        for (int c = 0; c < ncols && c < 64; c++) {
+                            ret_vals[c] = delFields[c];
+                            ret_null[c] = delIsNull[c];
+                        }
+                        extern void returning_capture_row(const ColumnDesc *, int, const char *[], const int[], int);
+                        returning_capture_row(cols, ncols, ret_vals, ret_null, ncols);
+                    }
                     deleted++;
                 }
                 free(matchKeys[i]);

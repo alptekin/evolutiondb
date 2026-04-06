@@ -79,7 +79,7 @@
 | 53 | Table partitioning | ✅ | ✅ | ❌ | Sharding (hash/range) implemented instead |
 | 54 | Replication | ✅ | ✅ | ✅ | Logical replication, Raft consensus, read replicas |
 | 55 | Sequences (CREATE SEQUENCE, NEXTVAL) | ❌ | ✅ | ❌ | |
-| 56 | RETURNING clause | ❌ | ✅ | ❌ | |
+| 56 | RETURNING clause | ❌ | ✅ | ✅ | INSERT/UPDATE/DELETE RETURNING *, col1, col2 |
 | 57 | UPSERT (INSERT ... ON CONFLICT) | ❌ | ✅ | ❌ | |
 | 58 | Materialized Views | ❌ | ✅ | ❌ | |
 | 59 | Lateral Joins | ❌ | ✅ | ❌ | |

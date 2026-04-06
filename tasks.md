@@ -1555,7 +1555,7 @@
 
 ---
 
-### Task 77: ⬜ RETURNING Clause (Feature #56)
+### Task 77: ✅ RETURNING Clause (Feature #56)
 
 **Goal:** Implement `INSERT/UPDATE/DELETE ... RETURNING *` / `RETURNING col1, col2`.
 
