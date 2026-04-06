@@ -101,6 +101,7 @@ jobs:
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
           VERSION: ${{ steps.version.outputs.version }}
           COMMITS: ${{ steps.changes.outputs.commits }}
+          DOCKER_IMAGE: ${{ env.IMAGE_NAME }}
         run: |
           pip install requests-oauthlib -q
           python3 << 'PYEOF'
@@ -112,7 +113,8 @@ jobs:
           commit_lines = [line.strip() for line in commits.strip().split("\n") if line.strip()]
           changelog = "\n".join(f"- {c}" for c in commit_lines[:3])
 
-          tweet = f"🚀 EvolutionDB {version} released!\n\n{changelog}\n\n#evolutiondb #database #opensource\ngithub.com/alptekin/evolutiondb"
+          docker_image = os.environ.get("DOCKER_IMAGE", "")
+          tweet = f"🚀 EvolutionDB {version} released!\n\n{changelog}\n\n🐳 docker pull {docker_image}:{version}\n\n#evolutiondb #database #opensource\ngithub.com/alptekin/evolutiondb"
           if len(tweet) > 280:
               tweet = tweet[:277] + "..."
 
