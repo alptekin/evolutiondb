@@ -267,6 +267,14 @@ typedef struct {
     int  dropIfExists;
 } TriggerOpts;
 
+/* ---- RETURNING ---- */
+typedef struct {
+    int active;          /* 1 if RETURNING clause present */
+    int returnAll;       /* 1 if RETURNING * */
+    int colCount;
+    char cols[64][128];
+} ReturningOpts;
+
 /* ---- Error handling ---- */
 typedef struct {
     jmp_buf jmpbuf;
@@ -292,6 +300,7 @@ typedef struct QueryContext {
     ConstraintOpts constraint;
     ProcedureOpts  proc;
     TriggerOpts    trig;
+    ReturningOpts  returning;
     ErrorState     err;
     char           temp[1024];
     void         (*tx_undo_callback)(int op_type, const char *table,
@@ -343,6 +352,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_constr      (g_qctx->constraint)
 #define g_proc        (g_qctx->proc)
 #define g_trig        (g_qctx->trig)
+#define g_returning   (g_qctx->returning)
 #define g_err         (g_qctx->err)
 
 /* Shared fields */
