@@ -207,6 +207,45 @@ int DropTriggerProcess(void)
 }
 
 /* ----------------------------------------------------------------
+ *  ALTER TRIGGER ENABLE / DISABLE
+ * ---------------------------------------------------------------- */
+int AlterTriggerProcess(void)
+{
+    int enable = (g_trig.event == 'E') ? 1 : 0;
+
+    DatabaseDesc dbDesc;
+    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg), "current database not found");
+        g_err.error = 1;
+        return -1;
+    }
+    SchemaDesc schDesc;
+    const char *schema = db_get_current_schema();
+    if (cat_find_schema(dbDesc.db_id, schema, &schDesc) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg), "current schema not found");
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Find trigger across tables */
+    TableDesc tables[256];
+    int ntables = cat_list_tables(schDesc.schema_id, tables, 256);
+    for (int i = 0; i < ntables; i++) {
+        TriggerDesc td;
+        if (cat_find_trigger(tables[i].table_id, g_trig.dropName, &td) == 0) {
+            cat_update_trigger_enabled(tables[i].table_id, g_trig.dropName, enable);
+            printf("ALTER TRIGGER\n");
+            return 0;
+        }
+    }
+
+    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+             "trigger \"%s\" does not exist", g_trig.dropName);
+    g_err.error = 1;
+    return -1;
+}
+
+/* ----------------------------------------------------------------
  *  Trigger Execution Engine
  *
  *  Called from Insert.c, Update.c, Delete.c at hook points.
@@ -342,10 +381,73 @@ int evo_fire_triggers(const char *table_name, char timing, char event,
     for (int t = 0; t < ntrig; t++) {
         if (triggers[t].timing != timing || triggers[t].event != event)
             continue;
+        if (!triggers[t].enabled)
+            continue;
+
+        /* For BEFORE triggers: detect SET NEW.col = expr patterns.
+         * Remove them from body, evaluate after substitution, write back. */
+        char modified_body[8192];
+        char set_new_cols[16][128];
+        char set_new_exprs[16][512];
+        int set_new_count = 0;
+        memset(set_new_cols, 0, sizeof(set_new_cols));
+        memset(set_new_exprs, 0, sizeof(set_new_exprs));
+
+        strncpy(modified_body, triggers[t].body, sizeof(modified_body) - 1);
+        modified_body[sizeof(modified_body) - 1] = '\0';
+
+        if (timing == 'B') {
+            /* Scan for SET NEW.col = expr; remove them from body */
+            char *mp = modified_body;
+            char cleaned[8192];
+            char *cp = cleaned;
+            char *cend = cleaned + sizeof(cleaned) - 1;
+            while (*mp && cp < cend) {
+                /* Find SET NEW. pattern */
+                if (strncasecmp(mp, "SET", 3) == 0 && isspace((unsigned char)mp[3])) {
+                    char *sp = mp + 3;
+                    while (*sp && isspace((unsigned char)*sp)) sp++;
+                    if (strncasecmp(sp, "NEW.", 4) == 0 && set_new_count < 16) {
+                        sp += 4;
+                        /* Extract column name */
+                        int ci = 0;
+                        while (*sp && (isalnum((unsigned char)*sp) || *sp == '_') && ci < 127)
+                            set_new_cols[set_new_count][ci++] = *sp++;
+                        set_new_cols[set_new_count][ci] = '\0';
+                        /* Skip = */
+                        while (*sp && (isspace((unsigned char)*sp) || *sp == '=')) sp++;
+                        /* Extract expression until ; or end */
+                        int ei = 0;
+                        while (*sp && *sp != ';' && ei < 511) {
+                            if (*sp == '\'') {
+                                set_new_exprs[set_new_count][ei++] = *sp++;
+                                while (*sp && ei < 511) {
+                                    set_new_exprs[set_new_count][ei++] = *sp;
+                                    if (*sp == '\'') { sp++; break; }
+                                    sp++;
+                                }
+                                continue;
+                            }
+                            set_new_exprs[set_new_count][ei++] = *sp++;
+                        }
+                        /* Trim trailing whitespace */
+                        while (ei > 0 && isspace((unsigned char)set_new_exprs[set_new_count][ei-1])) ei--;
+                        set_new_exprs[set_new_count][ei] = '\0';
+                        set_new_count++;
+                        if (*sp == ';') sp++;
+                        mp = sp;
+                        continue;
+                    }
+                }
+                *cp++ = *mp++;
+            }
+            *cp = '\0';
+            strncpy(modified_body, cleaned, sizeof(modified_body) - 1);
+        }
 
         /* Substitute OLD.col / NEW.col in body */
         char substituted_body[8192];
-        substitute_old_new(triggers[t].body, substituted_body, sizeof(substituted_body),
+        substitute_old_new(modified_body, substituted_body, sizeof(substituted_body),
                            col_names, old_vals, new_vals, ncols);
 
         /* Split into statements */
@@ -387,6 +489,42 @@ int evo_fire_triggers(const char *table_name, char timing, char event,
                 snprintf(drop_sql, sizeof(drop_sql),
                          "DROP PROCEDURE IF EXISTS __trig_%u__", triggers[t].trigger_id);
                 g_qctx->trigger_exec_fn(drop_sql, NULL, 0, NULL, g_qctx->trigger_exec_ctx);
+            }
+
+            /* Step 4: BEFORE trigger SET NEW.col writeback */
+            if (!had_error && timing == 'B' && set_new_count > 0 && new_vals) {
+                for (int sn = 0; sn < set_new_count; sn++) {
+                    /* Substitute OLD/NEW refs in the expression */
+                    char sub_expr[512];
+                    substitute_old_new(set_new_exprs[sn], sub_expr, sizeof(sub_expr),
+                                       col_names, old_vals, new_vals, ncols);
+                    /* Evaluate expression via SELECT */
+                    char eval_sql[1024];
+                    snprintf(eval_sql, sizeof(eval_sql), "SELECT %s", sub_expr);
+                    char eval_result[256] = "";
+                    char eval_err[256] = "";
+                    /* Use trigger_exec_fn to evaluate */
+                    /* Actually, for a SELECT we need to get the result back.
+                     * trigger_exec_fn doesn't return values. Use subquery_fn instead. */
+                    if (g_qctx && g_qctx->subquery_fn) {
+                        char vals[1][256];
+                        int cnt = 0;
+                        g_qctx->subquery_fn(eval_sql, vals, &cnt, 1, g_qctx->subquery_ctx);
+                        if (cnt > 0) strncpy(eval_result, vals[0], 255);
+                    }
+                    /* Write back to new_vals (mutable cast) */
+                    if (eval_result[0]) {
+                        for (int c = 0; c < ncols; c++) {
+                            if (col_names[c] && strcasecmp(col_names[c], set_new_cols[sn]) == 0) {
+                                /* Cast away const — caller passes mutable array for BEFORE triggers */
+                                char *mutable = (char *)new_vals[c];
+                                strncpy(mutable, eval_result, 255);
+                                mutable[255] = '\0';
+                                break;
+                            }
+                        }
+                    }
+                }
             }
 
             if (had_error) {

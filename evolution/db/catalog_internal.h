@@ -160,6 +160,7 @@ typedef struct {
     char     table_name[CAT_MAX_NAME_LEN];
     char     event;      /* 'I'=INSERT, 'U'=UPDATE, 'D'=DELETE */
     char     timing;     /* 'B'=BEFORE, 'A'=AFTER */
+    int      enabled;    /* 1=enabled (default), 0=disabled */
     char     body[8192]; /* raw SQL between BEGIN...END */
 } TriggerDesc;
 
@@ -411,6 +412,7 @@ int cat_find_trigger(uint32_t table_id, const char *trigger_name,
                      TriggerDesc *out);
 int cat_drop_trigger(uint32_t table_id, const char *trigger_name);
 int cat_list_triggers_for_table(uint32_t table_id, TriggerDesc *out, int max);
+int cat_update_trigger_enabled(uint32_t table_id, const char *trigger_name, int enabled);
 
 /* ----------------------------------------------------------------
  *  Convenience

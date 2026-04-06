@@ -883,6 +883,14 @@ int cat_drop_table(uint32_t table_id)
         bt2_delete(&g_cat_trees[CAT_SYS_CONSTRAINTS], con_keys[i]);
     }
 
+    /* Delete triggers for this table */
+    {
+        TriggerDesc trigs[32];
+        int ntrigs = cat_list_triggers_for_table(table_id, trigs, 32);
+        for (int i = 0; i < ntrigs; i++)
+            cat_drop_trigger(table_id, trigs[i].trigger_name);
+    }
+
     return 0;
 }
 
@@ -2647,9 +2655,10 @@ static void serialize_trigger(const TriggerDesc *t, char *buf, int size)
 {
     /* Fields: trigger_id;table_id;db_id;schema_id;trigger_name;table_name;event;timing;body
      * Body is last field (may contain semicolons). */
-    snprintf(buf, size, "%u;%u;%u;%u;%s;%s;%c;%c;%s",
+    snprintf(buf, size, "%u;%u;%u;%u;%s;%s;%c;%c;%d;%s",
              t->trigger_id, t->table_id, t->db_id, t->schema_id,
-             t->trigger_name, t->table_name, t->event, t->timing, t->body);
+             t->trigger_name, t->table_name, t->event, t->timing,
+             t->enabled, t->body);
 }
 
 static void deserialize_trigger(const char *buf, TriggerDesc *t)
@@ -2664,6 +2673,8 @@ static void deserialize_trigger(const char *buf, TriggerDesc *t)
     ptr = next_field(ptr, t->table_name, CAT_MAX_NAME_LEN);
     ptr = next_field(ptr, field, sizeof(field)); t->event  = field[0];
     ptr = next_field(ptr, field, sizeof(field)); t->timing = field[0];
+    ptr = next_field(ptr, field, sizeof(field)); t->enabled = atoi(field);
+    if (t->enabled == 0 && field[0] != '0') t->enabled = 1; /* backward compat */
     /* Body is last field — may contain semicolons */
     if (ptr && *ptr) {
         strncpy(t->body, ptr, sizeof(t->body) - 1);
@@ -2694,6 +2705,7 @@ int cat_create_trigger(uint32_t db_id, uint32_t schema_id,
     strncpy(t.table_name, table_name, CAT_MAX_NAME_LEN - 1);
     t.event  = event;
     t.timing = timing;
+    t.enabled = 1;
     if (body) strncpy(t.body, body, sizeof(t.body) - 1);
 
     char record[16384];
@@ -2750,4 +2762,27 @@ int cat_list_triggers_for_table(uint32_t table_id, TriggerDesc *out, int max)
         }
     }
     return count;
+}
+
+int cat_update_trigger_enabled(uint32_t table_id, const char *trigger_name, int enabled)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_trigger_key(table_id, trigger_name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TRIGGERS], key, &rid) < 0)
+        return -1;
+    char record[16384];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+    TriggerDesc t;
+    deserialize_trigger(record, &t);
+    t.enabled = enabled;
+    char new_record[16384];
+    serialize_trigger(&t, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_TRIGGERS], key);
+    RowID new_rid = cat_store_record(CAT_SYS_TRIGGERS, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_TRIGGERS], key, new_rid) == 0 ? 0 : -1;
 }
