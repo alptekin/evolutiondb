@@ -3,8 +3,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
-#include <ctype.h>
-#include <unistd.h>
 #include "database.h"
 #include "expression.h"
 #include "catalog_internal.h"
@@ -18,41 +16,30 @@
 #define ROW_SEP '\x02'
 
 /* ---- ON DUPLICATE KEY UPDATE ---- */
+
+/* Suppression flag: when set, GetInsertions() skips appending to g_ins.data.
+ * Used during ON DUPLICATE KEY UPDATE parsing to prevent SET value side effects. */
+__thread int g_ins_upsert_mode = 0;
+
 void SetOnDupKeyUpdate(void)
 {
     g_ins.onDupKeyUpdate = 1;
+    g_ins_upsert_mode = 0; /* clear suppression */
 }
 
-/* Extract ON DUPLICATE KEY UPDATE clause from g_lex_input.
- * Returns pointer to the SET assignments text after "ON DUPLICATE KEY UPDATE". */
-static const char *extract_ondup_clause(void)
+void SetUpsertMode(void)
 {
-    extern __thread const char *g_lex_input;
-    if (!g_lex_input) return NULL;
-    /* Search for "ON DUPLICATE KEY UPDATE" (case-insensitive) */
-    const char *p = g_lex_input;
-    while (*p) {
-        if (*p == '\'') { p++; while (*p && *p != '\'') p++; if (*p) p++; continue; }
-        if (strncasecmp(p, "ON", 2) == 0 && isspace((unsigned char)p[2])) {
-            const char *q = p + 2;
-            while (*q && isspace((unsigned char)*q)) q++;
-            if (strncasecmp(q, "DUPLICATE", 9) == 0 && isspace((unsigned char)q[9])) {
-                q += 9;
-                while (*q && isspace((unsigned char)*q)) q++;
-                if (strncasecmp(q, "KEY", 3) == 0 && isspace((unsigned char)q[3])) {
-                    q += 3;
-                    while (*q && isspace((unsigned char)*q)) q++;
-                    if (strncasecmp(q, "UPDATE", 6) == 0 && isspace((unsigned char)q[6])) {
-                        q += 6;
-                        while (*q && isspace((unsigned char)*q)) q++;
-                        return q; /* points to "col1 = val1, col2 = val2" */
-                    }
-                }
-            }
-        }
-        p++;
-    }
-    return NULL;
+    g_ins_upsert_mode = 1;
+}
+
+void AddUpsertSet(const char *col, ExprNode *expr)
+{
+    int idx = g_ins.onDupSetCount;
+    if (idx >= 32) return;
+    strncpy(g_ins.onDupSetCols[idx], col, 127);
+    g_ins.onDupSetCols[idx][127] = '\0';
+    g_ins.onDupSetExprs[idx] = expr;
+    g_ins.onDupSetCount++;
 }
 
 /* ---- RETURNING clause parser helpers ---- */
@@ -145,6 +132,7 @@ static void capture_generated_id(const char *val)
 
 int GetInsertions(char *name)
 {
+    if (g_ins_upsert_mode) return 1; /* suppress during ON DUPLICATE KEY UPDATE */
     strcat(g_ins.data, name);
     strcat(g_ins.data, ";");
 
@@ -1310,6 +1298,7 @@ int InsertProcess(void)
         char preIdxKeys[16][512];
         char prePkBuf[256] = "";
         char preIdxPaths[16][1024];
+        int upsert_unique_conflict = 0; /* set if UNIQUE index dup + onDupKeyUpdate */
         if (nIdx > 0) {
             char tmpPre[RECORD_BUF_SIZE];
             char *valsPre[64];
@@ -1348,6 +1337,11 @@ int InsertProcess(void)
                 if (preIdxKeys[ix][0] && (secIdx[ix].index_type == 'U' || secIdx[ix].index_type == 'V')) {
                     char dupCheck[1][256];
                     if (btree_search(preIdxPaths[ix], preIdxKeys[ix], dupCheck, 1) > 0) {
+                        if (g_ins.onDupKeyUpdate) {
+                            /* ON DUPLICATE KEY UPDATE: skip store, handle as conflict */
+                            upsert_unique_conflict = 1;
+                            break;
+                        }
                         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                  "duplicate key value violates unique index \"%s\" (key=%s)",
                                  secIdx[ix].index_name, preIdxKeys[ix]);
@@ -1360,102 +1354,98 @@ int InsertProcess(void)
             }
         }
 
-        int rc = store_single_row(&td, cols, ncols, tblName, reorderedRows[i]);
-        if (rc == 1 && g_ins.onDupKeyUpdate) {
-            /* ON DUPLICATE KEY UPDATE: construct UPDATE and execute via yyparse */
-            const char *ondup_clause = extract_ondup_clause();
-            if (ondup_clause) {
-                /* Extract PK value from this row */
-                char valBuf2[RECORD_BUF_SIZE];
-                strncpy(valBuf2, reorderedRows[i], sizeof(valBuf2) - 1);
-                valBuf2[sizeof(valBuf2) - 1] = '\0';
-                char *pk_val = strtok(valBuf2, ";");
+        /* If UNIQUE index conflict + ON DUPLICATE KEY UPDATE, treat as duplicate (rc=1) */
+        int rc = upsert_unique_conflict ? 1 :
+                 store_single_row(&td, cols, ncols, tblName, reorderedRows[i]);
+        if (rc == 1 && g_ins.onDupKeyUpdate && g_ins.onDupSetCount > 0) {
+            /* ON DUPLICATE KEY UPDATE: evaluate SET exprs and call evo_update_row */
 
-                /* PK is always the first column (index 0) in EvoSQL */
-                const char *pk_col = cols[0].col_name;
-
-                if (pk_col && pk_val) {
-                    /* Build UPDATE sql: UPDATE table SET ondup_clause WHERE pk = pk_val */
-                    char update_sql[4096];
-                    /* Trim ondup_clause: remove trailing RETURNING, semicolons */
-                    char ondup_trimmed[2048];
-                    strncpy(ondup_trimmed, ondup_clause, sizeof(ondup_trimmed) - 1);
-                    ondup_trimmed[sizeof(ondup_trimmed) - 1] = '\0';
-                    /* Remove RETURNING clause if present */
-                    char *ret_pos = strcasestr(ondup_trimmed, "RETURNING");
-                    if (ret_pos) {
-                        while (ret_pos > ondup_trimmed && isspace((unsigned char)ret_pos[-1])) ret_pos--;
-                        *ret_pos = '\0';
-                    }
-                    /* Remove trailing semicolons/whitespace */
-                    int tlen = (int)strlen(ondup_trimmed);
-                    while (tlen > 0 && (ondup_trimmed[tlen-1] == ';' || isspace((unsigned char)ondup_trimmed[tlen-1])))
-                        ondup_trimmed[--tlen] = '\0';
-
-                    /* Check if pk_val needs quoting */
-                    int is_numeric = 1;
-                    const char *vp = pk_val;
-                    if (*vp == '-') vp++;
-                    while (*vp) { if (!isdigit((unsigned char)*vp) && *vp != '.') { is_numeric = 0; break; } vp++; }
-
-                    if (is_numeric)
-                        snprintf(update_sql, sizeof(update_sql),
-                                 "UPDATE %s SET %s WHERE %s = %s",
-                                 tblName, ondup_trimmed, pk_col, pk_val);
-                    else
-                        snprintf(update_sql, sizeof(update_sql),
-                                 "UPDATE %s SET %s WHERE %s = '%s'",
-                                 tblName, ondup_trimmed, pk_col, pk_val);
-
-                    /* Execute UPDATE via yyparse (reentrant) */
-                    void *local_scanner = NULL;
-                    void *scan_buf = NULL;
-                    extern int yylex_init(void **);
-                    extern void *yy_scan_string(const char *, void *);
-                    extern void yy_delete_buffer(void *, void *);
-                    extern void yylex_destroy(void *);
-                    extern int yyparse(void *);
-                    extern __thread const char *g_lex_input;
-                    extern __thread int g_lex_pos;
-
-                    /* Save and create temp QueryContext */
-                    QueryContext *saved_qctx = g_qctx;
-                    QueryContext *upd_qctx = qctx_alloc();
-                    strncpy(upd_qctx->currentDatabase, saved_qctx->currentDatabase, 255);
-                    strncpy(upd_qctx->currentSchema, saved_qctx->currentSchema, 255);
-                    upd_qctx->mvcc_xid = saved_qctx->mvcc_xid;
-                    upd_qctx->tx_undo_callback = saved_qctx->tx_undo_callback;
-                    upd_qctx->subquery_fn = saved_qctx->subquery_fn;
-                    upd_qctx->subquery_ctx = saved_qctx->subquery_ctx;
-                    g_qctx = upd_qctx;
-
-                    FILE *fnul = fopen("/dev/null", "w");
-                    int so = -1, se = -1;
-                    if (fnul) { so = dup(1); se = dup(2); dup2(fileno(fnul), 1); dup2(fileno(fnul), 2); fclose(fnul); }
-
-                    yylex_init(&local_scanner);
-                    scan_buf = yy_scan_string(update_sql, local_scanner);
-                    g_lex_pos = 0;
-                    g_lex_input = update_sql;
-                    yyparse(local_scanner);
-                    yy_delete_buffer(scan_buf, local_scanner);
-                    yylex_destroy(local_scanner);
-
-                    if (so >= 0) { dup2(so, 1); close(so); }
-                    if (se >= 0) { dup2(se, 2); close(se); }
-
-                    int upd_err = g_err.error;
-                    g_qctx = saved_qctx;
-                    qctx_free(upd_qctx);
-
-                    if (upd_err) {
-                        TruncateInsert();
-                        retval = -1; goto cleanup;
-                    }
-                    g_ins.rowCount++;
-                    continue; /* skip normal post-insert processing */
+            /* Build PK key from this row's values */
+            char pkKey[1024];
+            {
+                char tmpR[RECORD_BUF_SIZE];
+                strncpy(tmpR, reorderedRows[i], sizeof(tmpR) - 1);
+                tmpR[sizeof(tmpR) - 1] = '\0';
+                char *rv[64];
+                int rnv = 0;
+                char *rp = strtok(tmpR, ";");
+                while (rp && rnv < 64) { rv[rnv++] = rp; rp = strtok(NULL, ";"); }
+                char rFields[64][256];
+                for (int fi = 0; fi < rnv && fi < 64; fi++) {
+                    strncpy(rFields[fi], rv[fi], 255);
+                    rFields[fi][255] = '\0';
+                }
+                if (tapi_build_pk_key_from_fields(cols, ncols,
+                        (const char (*)[256])rFields, rnv,
+                        pkKey, sizeof(pkKey)) < 0 || pkKey[0] == '\0') {
+                    TruncateInsert();
+                    retval = -1; goto cleanup;
                 }
             }
+
+            /* Read existing row for expression eval context.
+             * Column refs like "val" in "val = val + 1" resolve to existing values. */
+            char evalCols[64][128];
+            char evalVals[64][256];
+            int evalCount = 0;
+            {
+                BTree2 pk_tree2 = tapi_pk_tree(&td);
+                RowID existing_rid;
+                if (bt2_search(&pk_tree2, pkKey, &existing_rid) == 0) {
+                    char existBuf[RECORD_BUF_SIZE];
+                    int existLen = tapi_heap_read(existing_rid, existBuf, sizeof(existBuf));
+                    if (existLen > 0) {
+                        char fields[64][256];
+                        int is_null[64];
+                        int nf = tup_extract_fields_nm(existBuf, existLen,
+                                                        cols, ncols,
+                                                        fields, is_null, 64);
+                        for (int ci = 0; ci < nf && ci < 64; ci++) {
+                            strncpy(evalCols[ci], cols[ci].col_name, 127);
+                            evalCols[ci][127] = '\0';
+                            strncpy(evalVals[ci], fields[ci], 255);
+                            evalVals[ci][255] = '\0';
+                            evalCount++;
+                        }
+                    }
+                }
+            }
+
+            /* Evaluate each SET expression */
+            char setCols[32][128];
+            char setVals[32][256];
+            int nSets = g_ins.onDupSetCount < 32 ? g_ins.onDupSetCount : 32;
+            for (int s = 0; s < nSets; s++) {
+                strncpy(setCols[s], g_ins.onDupSetCols[s], 127);
+                setCols[s][127] = '\0';
+                if (g_ins.onDupSetExprs[s]) {
+                    int ok = expr_evaluate(g_ins.onDupSetExprs[s],
+                                           (const char (*)[128])evalCols,
+                                           (const char (*)[256])evalVals,
+                                           evalCount,
+                                           setVals[s], sizeof(setVals[s]));
+                    if (!ok) strcpy(setVals[s], "\x01NULL\x01");
+                } else {
+                    strcpy(setVals[s], "\x01NULL\x01");
+                }
+            }
+
+            /* Execute update via evo_update_row */
+            int ur = evo_update_row(tblName, pkKey,
+                                    (const char (*)[128])setCols,
+                                    (const char (*)[256])setVals,
+                                    nSets, g_qctx->mvcc_xid);
+            if (ur < 0) {
+                TruncateInsert();
+                retval = -1; goto cleanup;
+            }
+            g_ins.rowCount++;
+            continue; /* skip normal post-insert processing */
+        }
+        if (rc == 1 && g_ins.onDupKeyUpdate) {
+            /* onDupKeyUpdate set but no SET assignments — treat as skip */
+            g_ins.rowCount++;
+            continue;
         }
         if (rc != 0) {
             /* If error already set (e.g., trigger SIGNAL), don't overwrite */
