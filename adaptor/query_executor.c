@@ -4973,6 +4973,10 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_ins.rowCount = 0;
     g_ins.columnCount = 0;
     g_ins.insertFromSelect = 0;
+    g_ins.onDupKeyUpdate = 0;
+    g_ins.onDupSetCount = 0;
+    memset(g_ins.onDupSetExprs, 0, sizeof(g_ins.onDupSetExprs));
+    { extern __thread int g_ins_upsert_mode; g_ins_upsert_mode = 0; }
     g_expr.whereSel[0] = '\0';
     g_create.columnDefs[0] = '\0';
     g_ins.columnNames[0] = '\0';
@@ -7154,6 +7158,15 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 result_set_error(rs, "42501",
                     "Permission denied: insufficient privileges");
                 return;
+            }
+
+            /* ON DUPLICATE KEY UPDATE also requires UPDATE privilege */
+            if (is_insert_query(sql) && strcasestr(sql, "ON DUPLICATE")) {
+                if (!CheckPrivilege(ctx->username, db, sch, NULL, "UPDATE")) {
+                    result_set_error(rs, "42501",
+                        "Permission denied: ON DUPLICATE KEY UPDATE requires UPDATE privilege");
+                    return;
+                }
             }
         }
     }

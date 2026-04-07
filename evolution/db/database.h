@@ -261,6 +261,8 @@ int AlterTableChangeColumn(const char *tableName, const char *oldName,
 
 /* ON DUPLICATE KEY UPDATE */
 void SetOnDupKeyUpdate(void);
+void SetUpsertMode(void);
+void AddUpsertSet(const char *col, struct ExprNode *expr);
 
 /* RETURNING clause helpers */
 void SetReturningAll(void);
