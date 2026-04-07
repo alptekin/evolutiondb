@@ -86,7 +86,10 @@ typedef struct {
     int  rowCount;                  /* was insertCount */
     int  insertFromSelect;          /* 1 = INSERT...SELECT mode */
     /* ON DUPLICATE KEY UPDATE */
-    int  onDupKeyUpdate;            /* 1 = ON DUPLICATE KEY UPDATE present */
+    int       onDupKeyUpdate;           /* 1 = ON DUPLICATE KEY UPDATE present */
+    int       onDupSetCount;            /* number of SET assignments */
+    char      onDupSetCols[32][128];    /* column names */
+    ExprNode *onDupSetExprs[32];        /* value expressions (evaluated at conflict) */
 } InsertOpts;
 
 /* ---- SELECT ---- */
