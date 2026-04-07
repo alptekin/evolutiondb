@@ -376,6 +376,7 @@
 %type <intval> insert_vals_list
 %type <intval> insert_col_list
 %type <intval> insert_asgn_list
+%type <intval> upsert_asgn_list
 %type <intval> opt_if_not_exists
 %type <intval> update_opts
 %type <intval> update_asgn_list
@@ -1544,7 +1545,25 @@ insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_l
 ;
 
 opt_ondupupdate: /* nil */
-| ONDUPLICATE KEY UPDATE insert_asgn_list { emit("DUPUPDATE %d", $4); SetOnDupKeyUpdate(); }
+| ONDUPLICATE KEY UPDATE { SetUpsertMode(); } upsert_asgn_list { emit("DUPUPDATE %d", $5); SetOnDupKeyUpdate(); }
+;
+
+upsert_asgn_list: NAME COMPARISON expr
+    {
+        if ($2 != 4) { yyerror(scanner, "bad upsert assignment to %s", $1); YYERROR; }
+        emit("UPSERTSET %s", $1);
+        AddUpsertSet($1, $3);
+        free($1);
+        $$ = 1;
+    }
+| upsert_asgn_list ',' NAME COMPARISON expr
+    {
+        if ($4 != 4) { yyerror(scanner, "bad upsert assignment to %s", $3); YYERROR; }
+        emit("UPSERTSET %s", $3);
+        AddUpsertSet($3, $5);
+        free($3);
+        $$ = $1 + 1;
+    }
 ;
 
 insert_opts: /* nil */								{ $$ = 0; }
