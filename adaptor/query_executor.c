@@ -557,10 +557,10 @@ static int parse_record_fields(const char *recBuf, int recLen,
                                const char *field_ptrs[], int is_null[], int maxCols,
                                const ColumnInfo columns[])
 {
-    static __thread char s_fields[64][256]; /* thread-local storage for field strings */
-    int nullArr[64];
+    static __thread char s_fields[CAT_MAX_COLUMNS][256]; /* thread-local storage for field strings */
+    int nullArr[CAT_MAX_COLUMNS];
     int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
-                                s_fields, nullArr, maxCols < 64 ? maxCols : 64);
+                                s_fields, nullArr, maxCols < CAT_MAX_COLUMNS ? maxCols : CAT_MAX_COLUMNS);
     for (int col = 0; col < nf && col < maxCols; col++) {
         if (nullArr[col]) {
             field_ptrs[col] = NULL;
@@ -587,8 +587,8 @@ static void populate_result_row(ResultSet *rs, int row,
                                 const char *recBuf, int recLen,
                                 const ColumnDesc *cols, int ncols)
 {
-    char fields[64][256];
-    int nullArr[64];
+    char fields[CAT_MAX_COLUMNS][256];
+    int nullArr[CAT_MAX_COLUMNS];
     int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
                                 fields, nullArr, 64);
     int logical = 0;  /* result column index (skips dropped) */
@@ -622,8 +622,8 @@ static void populate_result_row(ResultSet *rs, int row,
 
 /* Pre-deserialized virtual column expressions (cached once per SELECT). */
 typedef struct {
-    ExprNode *exprs[64];   /* NULL for non-virtual columns */
-    char      colNames[64][128]; /* column names for expr_evaluate */
+    ExprNode *exprs[CAT_MAX_COLUMNS];   /* NULL for non-virtual columns */
+    char      colNames[CAT_MAX_COLUMNS][128]; /* column names for expr_evaluate */
     int       ncols;
     int       has_virtual;
 } VirtualColCache;
@@ -654,7 +654,7 @@ static int eval_virtual_columns(char *recBuf, int recBufSize,
     int recLen = tup_record_len(recBuf, recBufSize);
     if (recLen <= 0) return recLen;
 
-    char colVals[64][256];
+    char colVals[CAT_MAX_COLUMNS][256];
     int nf = tup_extract_fields_nm(recBuf, recLen, cols, ncols,
                                     colVals, NULL, 64);
     if (nf <= 0) return recLen;
@@ -959,8 +959,8 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         populate_result_row(rs, row, recBuf, recLen, cols, ncols);
                     } else {
                         /* Column-filtered: extract all then map to selected */
-                        char fields[64][256];
-                        int nullArr[64];
+                        char fields[CAT_MAX_COLUMNS][256];
+                        int nullArr[CAT_MAX_COLUMNS];
                         int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
                                                      fields, nullArr, 64);
                         for (int fi = 0; fi < fast_ncols && fi < rs->num_cols; fi++) {
@@ -1306,7 +1306,7 @@ static void apply_window_functions(ResultSet *rs)
 
         /* Add synthetic column to ResultSet */
         int new_col = rs->num_cols;
-        if (new_col < MAX_COLUMNS) {
+        if (new_col < CAT_MAX_COLUMNS) {
             const char *col_name = "?window?";
             int idx = ws->expr_idx;
             if (idx >= 0 && idx < g_expr.selectExprCount && g_expr.selectExprs[idx])
@@ -1545,11 +1545,11 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
         int streaming = (rs->stream_conn != NULL && can_stream_results());
 
         /* Precompute WHERE / LIMIT / OFFSET for inline evaluation during streaming */
-        char streamColNames[MAX_COLUMNS][128];
+        char streamColNames[CAT_MAX_COLUMNS][128];
         int limitVal = -1, offsetVal = 0, skipped = 0;
         if (streaming) {
             int c;
-            for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+            for (c = 0; c < rs->num_cols && c < CAT_MAX_COLUMNS; c++) {
                 strncpy(streamColNames[c], rs->columns[c].name, 127);
                 streamColNames[c][127] = '\0';
             }
@@ -1609,8 +1609,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                 if (vcc.has_virtual) recLen = eval_virtual_columns(recBuf, sizeof(recBuf), td.table_id, allCols, ncols, &vcc);
                 if (streaming) {
                     /* --- Streaming path: parse, filter, send directly --- */
-                    const char *fieldPtrs[MAX_COLUMNS];
-                    int  fieldNulls[MAX_COLUMNS];
+                    const char *fieldPtrs[CAT_MAX_COLUMNS];
+                    int  fieldNulls[CAT_MAX_COLUMNS];
                     memset(fieldPtrs, 0, sizeof(fieldPtrs));
                     memset(fieldNulls, 0, sizeof(fieldNulls));
                     parse_record_fields(recBuf, recLen, allCols, ncols,
@@ -1619,9 +1619,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
 
                     /* Apply WHERE inline */
                     if (g_expr.whereExpr) {
-                        char colValues[MAX_COLUMNS][256];
+                        char colValues[CAT_MAX_COLUMNS][256];
                         int c;
-                        for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+                        for (c = 0; c < rs->num_cols && c < CAT_MAX_COLUMNS; c++) {
                             if (fieldNulls[c])
                                 strcpy(colValues[c], "\x01NULL\x01");
                             else {
@@ -1702,7 +1702,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                                       sizeof(serialized_buf));
         if (ser_len > 0) {
             char *serialized = serialized_buf;
-            char predColNames[64][128];
+            char predColNames[CAT_MAX_COLUMNS][128];
             int predNCols = 0;
             for (int i = 0; i < ncols && i < 64; i++) {
                 strncpy(predColNames[i], allCols[i].col_name, 127);
@@ -1719,9 +1719,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
 
     /* --- WHERE filtering using g_expr.whereExpr --- */
     if (g_expr.whereExpr && rs->num_rows > 0 && !used_index) {
-        char colNames[MAX_COLUMNS][128];
+        char colNames[CAT_MAX_COLUMNS][128];
         int c;
-        for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+        for (c = 0; c < rs->num_cols && c < CAT_MAX_COLUMNS; c++) {
             strncpy(colNames[c], rs->columns[c].name, 127);
             colNames[c][127] = '\0';
         }
@@ -1729,8 +1729,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
         int dst = 0;
         int r;
         for (r = 0; r < rs->num_rows; r++) {
-            char colValues[MAX_COLUMNS][256];
-            for (c = 0; c < rs->num_cols && c < MAX_COLUMNS; c++) {
+            char colValues[CAT_MAX_COLUMNS][256];
+            for (c = 0; c < rs->num_cols && c < CAT_MAX_COLUMNS; c++) {
                 if (rs->rows[r].is_null[c]) {
                     strcpy(colValues[c], "\x01NULL\x01");
                 } else {
@@ -1784,12 +1784,12 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
         }
         if ((has_aggregate || g_expr.groupByCount > 0) && rs->num_cols > 0) {
             /* Build column name arrays for evaluation */
-            char colNames[MAX_COLUMNS][128];
+            char colNames[CAT_MAX_COLUMNS][128];
             int origNumCols = rs->num_cols;
             int origNumRows = rs->num_rows;
             {
                 int c;
-                for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                for (c = 0; c < origNumCols && c < CAT_MAX_COLUMNS; c++) {
                     strncpy(colNames[c], rs->columns[c].name, 127);
                     colNames[c][127] = '\0';
                 }
@@ -1798,7 +1798,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
             /* --- Helper: build colValues for a given row index --- */
             #define BUILD_COL_VALUES(rowIdx, colVals) do { \
                 int _c; \
-                for (_c = 0; _c < origNumCols && _c < MAX_COLUMNS; _c++) { \
+                for (_c = 0; _c < origNumCols && _c < CAT_MAX_COLUMNS; _c++) { \
                     if (rs->rows[rowIdx].is_null[_c]) \
                         strcpy((colVals)[_c], NULL_MARKER); \
                     else { \
@@ -1826,7 +1826,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                 char (*groupKeys)[1024] = (char (*)[1024])calloc(gkCap, 1024);
                 int r;
                 for (r = 0; r < origNumRows; r++) {
-                    char colValues[MAX_COLUMNS][256];
+                    char colValues[CAT_MAX_COLUMNS][256];
                     BUILD_COL_VALUES(r, colValues);
 
                     /* Build key from GROUP BY expressions */
@@ -1919,7 +1919,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                         int cnt = 0, r;
                         for (r = 0; r < origNumRows; r++) {
                             if (groups[r] != gi) continue;
-                            char colValues[MAX_COLUMNS][256];
+                            char colValues[CAT_MAX_COLUMNS][256];
                             BUILD_COL_VALUES(r, colValues);
                             char result[MAX_FIELD_LEN];
                             if (expr_evaluate(g_expr.selectExprs[s]->left,
@@ -1937,7 +1937,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                         int cnt = 0, r;
                         for (r = 0; r < origNumRows; r++) {
                             if (groups[r] != gi) continue;
-                            char colValues[MAX_COLUMNS][256];
+                            char colValues[CAT_MAX_COLUMNS][256];
                             BUILD_COL_VALUES(r, colValues);
                             char result[MAX_FIELD_LEN];
                             if (expr_evaluate(g_expr.selectExprs[s]->left,
@@ -1976,7 +1976,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                         best_str[0] = '\0';
                         for (r = 0; r < origNumRows; r++) {
                             if (groups[r] != gi) continue;
-                            char colValues[MAX_COLUMNS][256];
+                            char colValues[CAT_MAX_COLUMNS][256];
                             BUILD_COL_VALUES(r, colValues);
                             char result[MAX_FIELD_LEN];
                             if (expr_evaluate(g_expr.selectExprs[s]->left,
@@ -2025,7 +2025,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                         int first = 1, r;
                         for (r = 0; r < origNumRows; r++) {
                             if (groups[r] != gi) continue;
-                            char colValues[MAX_COLUMNS][256];
+                            char colValues[CAT_MAX_COLUMNS][256];
                             BUILD_COL_VALUES(r, colValues);
                             char result[MAX_FIELD_LEN];
                             if (expr_evaluate(g_expr.selectExprs[s]->left,
@@ -2048,7 +2048,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                         /* Non-aggregate expression — evaluate against first row of group */
                         int firstRow = groupFirstRow[gi];
                         if (origNumRows > 0) {
-                            char colValues[MAX_COLUMNS][256];
+                            char colValues[CAT_MAX_COLUMNS][256];
                             BUILD_COL_VALUES(firstRow, colValues);
                             char result[MAX_FIELD_LEN];
                             if (expr_evaluate(g_expr.selectExprs[s],
@@ -2083,13 +2083,13 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                 if (g_expr.havingExpr) {
                     /* Build combined context: select columns first, then original cols,
                      * then any HAVING aggregates not already in SELECT */
-                    char havCols[MAX_COLUMNS][128];
-                    char havVals[MAX_COLUMNS][256];
+                    char havCols[CAT_MAX_COLUMNS][128];
+                    char havVals[CAT_MAX_COLUMNS][256];
                     int havColCount = 0;
                     int hc;
 
                     /* First: add SELECT expression results (aggregates + group cols) */
-                    for (hc = 0; hc < g_expr.selectExprCount && havColCount < MAX_COLUMNS; hc++) {
+                    for (hc = 0; hc < g_expr.selectExprCount && havColCount < CAT_MAX_COLUMNS; hc++) {
                         strncpy(havCols[havColCount], rs->columns[hc].name, 127);
                         havCols[havColCount][127] = '\0';
                         if (aggRow.is_null[hc] || !aggRow.fields[hc])
@@ -2131,7 +2131,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                                 int cnt = 0, r;
                                 for (r = 0; r < origNumRows; r++) {
                                     if (groups[r] != gi) continue;
-                                    char cv[MAX_COLUMNS][256];
+                                    char cv[CAT_MAX_COLUMNS][256];
                                     BUILD_COL_VALUES(r, cv);
                                     char res[MAX_FIELD_LEN];
                                     if (expr_evaluate(havAggs[ha]->left,
@@ -2147,7 +2147,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                                 int cnt = 0, r;
                                 for (r = 0; r < origNumRows; r++) {
                                     if (groups[r] != gi) continue;
-                                    char cv[MAX_COLUMNS][256];
+                                    char cv[CAT_MAX_COLUMNS][256];
                                     BUILD_COL_VALUES(r, cv);
                                     char res[MAX_FIELD_LEN];
                                     if (expr_evaluate(havAggs[ha]->left,
@@ -2180,7 +2180,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                                 best_str[0] = '\0';
                                 for (r = 0; r < origNumRows; r++) {
                                     if (groups[r] != gi) continue;
-                                    char cv[MAX_COLUMNS][256];
+                                    char cv[CAT_MAX_COLUMNS][256];
                                     BUILD_COL_VALUES(r, cv);
                                     char res[MAX_FIELD_LEN];
                                     if (expr_evaluate(havAggs[ha]->left,
@@ -2217,7 +2217,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
 
                     /* Third: add original table columns from first row of group */
                     int firstRow = groupFirstRow[gi];
-                    for (hc = 0; hc < origNumCols && havColCount < MAX_COLUMNS; hc++) {
+                    for (hc = 0; hc < origNumCols && havColCount < CAT_MAX_COLUMNS; hc++) {
                         /* Avoid duplicate column names */
                         int dup = 0, dc;
                         for (dc = 0; dc < havColCount; dc++) {
@@ -2399,11 +2399,11 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
             }
 
             /* Build column name/value arrays for expr_evaluate */
-            char colNames[MAX_COLUMNS][128];
+            char colNames[CAT_MAX_COLUMNS][128];
             int origNumCols = rs->num_cols;
             {
                 int c;
-                for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                for (c = 0; c < origNumCols && c < CAT_MAX_COLUMNS; c++) {
                     strncpy(colNames[c], rs->columns[c].name, 127);
                     colNames[c][127] = '\0';
                 }
@@ -2411,8 +2411,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
 
             if (has_arithmetic) {
                 /* Build new column definitions for the result */
-                ColumnInfo origCols[MAX_COLUMNS];
-                memcpy(origCols, rs->columns, sizeof(ColumnInfo) * origNumCols);
+                ColumnInfo *origCols = (ColumnInfo *)malloc(sizeof(ColumnInfo) * (origNumCols > 0 ? origNumCols : 1));
+                if (origCols)
+                    memcpy(origCols, rs->columns, sizeof(ColumnInfo) * origNumCols);
 
                 /* Set up new columns */
                 rs->num_cols = g_expr.selectExprCount;
@@ -2458,8 +2459,8 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                     int r, c;
                     for (r = 0; r < rs->num_rows; r++) {
                         /* Save field values before clearing the row */
-                        char colValues[MAX_COLUMNS][256];
-                        for (c = 0; c < origNumCols && c < MAX_COLUMNS; c++) {
+                        char colValues[CAT_MAX_COLUMNS][256];
+                        for (c = 0; c < origNumCols && c < CAT_MAX_COLUMNS; c++) {
                             if (rs->rows[r].is_null[c]) {
                                 strcpy(colValues[c], "\x01NULL\x01");
                             } else {
@@ -2472,11 +2473,11 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                         /* Clear old row (frees heap strings) and prepare for new values */
                         row_clear(&rs->rows[r]);
                         memset(&rs->rows[r], 0, sizeof(Row));
-                        rs->rows[r].num_fields = g_expr.selectExprCount;
+                        row_init(&rs->rows[r], g_expr.selectExprCount);
 
                         for (c = 0; c < g_expr.selectExprCount; c++) {
                             if (!g_expr.selectExprs[c]) {
-                                rs->rows[r].is_null[c] = 1;
+                                row_set_null(&rs->rows[r], c);
                                 continue;
                             }
 
@@ -2503,13 +2504,14 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                         }
                     }
                 }
+                free(origCols);
             } else {
                 /* All expressions are plain columns — use simple column filtering */
-                int colMap[64];
+                int colMap[CAT_MAX_COLUMNS];
                 int mapCount = 0;
                 int s, c, r;
 
-                for (s = 0; s < g_expr.selectExprCount && mapCount < 64; s++) {
+                for (s = 0; s < g_expr.selectExprCount && mapCount < CAT_MAX_COLUMNS; s++) {
                     if (!g_expr.selectExprs[s] || !expr_is_column(g_expr.selectExprs[s]))
                         continue;
                     for (c = 0; c < rs->num_cols; c++) {
@@ -2522,34 +2524,36 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                 }
 
                 if (mapCount > 0 && mapCount < rs->num_cols) {
-                    ColumnInfo newCols[MAX_COLUMNS];
-                    for (s = 0; s < mapCount; s++) {
-                        newCols[s] = rs->columns[colMap[s]];
-                        newCols[s].attnum = s + 1;
-                        /* Apply column alias if set */
-                        if (g_expr.selectExprs[s] && g_expr.selectExprs[s]->display[0] &&
-                            strcasecmp(g_expr.selectExprs[s]->display,
-                                       g_expr.selectExprs[s]->val.col_name) != 0) {
-                            strncpy(newCols[s].name, g_expr.selectExprs[s]->display,
-                                    sizeof(newCols[s].name) - 1);
-                        }
-                    }
-                    memcpy(rs->columns, newCols, sizeof(ColumnInfo) * mapCount);
-                    rs->num_cols = mapCount;
-
-                    for (r = 0; r < rs->num_rows; r++) {
-                        Row newRow;
-                        memset(&newRow, 0, sizeof(Row));
-                        newRow.num_fields = mapCount;
+                    ColumnInfo *newCols = (ColumnInfo *)malloc(sizeof(ColumnInfo) * mapCount);
+                    if (newCols) {
                         for (s = 0; s < mapCount; s++) {
-                            if (rs->rows[r].is_null[colMap[s]]) {
-                                row_set_null(&newRow, s);
-                            } else {
-                                row_set(&newRow, s, rs->rows[r].fields[colMap[s]]);
+                            newCols[s] = rs->columns[colMap[s]];
+                            newCols[s].attnum = s + 1;
+                            if (g_expr.selectExprs[s] && g_expr.selectExprs[s]->display[0] &&
+                                strcasecmp(g_expr.selectExprs[s]->display,
+                                           g_expr.selectExprs[s]->val.col_name) != 0) {
+                                strncpy(newCols[s].name, g_expr.selectExprs[s]->display,
+                                        sizeof(newCols[s].name) - 1);
                             }
                         }
-                        row_clear(&rs->rows[r]);
-                        rs->rows[r] = newRow;
+                        memcpy(rs->columns, newCols, sizeof(ColumnInfo) * mapCount);
+                        free(newCols);
+                        rs->num_cols = mapCount;
+
+                        for (r = 0; r < rs->num_rows; r++) {
+                            Row newRow;
+                            memset(&newRow, 0, sizeof(Row));
+                            row_init(&newRow, mapCount);
+                            for (s = 0; s < mapCount; s++) {
+                                if (rs->rows[r].is_null[colMap[s]]) {
+                                    row_set_null(&newRow, s);
+                                } else {
+                                    row_set(&newRow, s, rs->rows[r].fields[colMap[s]]);
+                                }
+                            }
+                            row_clear(&rs->rows[r]);
+                            rs->rows[r] = newRow;
+                        }
                     }
                 } else if (mapCount > 0) {
                     /* All columns selected — still apply aliases */
@@ -3073,7 +3077,7 @@ static void execute_multi_update(ResultSet *rs, SessionCtx *ctx)
         }
 
         /* Collect SET assignments for this target table */
-        int myCols[64];
+        int myCols[CAT_MAX_COLUMNS];
         int mySetCount = 0;
         for (int s = 0; s < g_upd.setCount; s++) {
             if (strcasecmp(g_upd.setTargetTable[s], targetName) == 0 ||
@@ -3108,8 +3112,8 @@ static void execute_multi_update(ResultSet *rs, SessionCtx *ctx)
             if (!pk || joinRs.rows[r].is_null[pkColIdx]) continue;
 
             /* Resolve SET values from this join row */
-            char resolvedCols[64][128];
-            char resolvedVals[64][256];
+            char resolvedCols[CAT_MAX_COLUMNS][128];
+            char resolvedVals[CAT_MAX_COLUMNS][256];
             int nResolved = 0;
             for (int m = 0; m < mySetCount; m++) {
                 int si = myCols[m];
@@ -3283,7 +3287,7 @@ static void execute_insert_select(const char *srcTable, ResultSet *rs, SessionCt
         /* Column projection for JOIN results: join_execute returns all
          * columns from all tables, so we need to project down. */
         if (!selectRs.has_error && g_sel.columnCount > 0) {
-            int col_map[64];
+            int col_map[CAT_MAX_COLUMNS];
             int map_count = 0;
             for (int ci = 0; ci < g_sel.columnCount && ci < 64; ci++) {
                 col_map[ci] = -1;
@@ -3515,7 +3519,7 @@ static void execute_ctas(const char *srcTable, ResultSet *rs, SessionCtx *ctx)
 
     /* B) For CTAS_INFER: create table with columns inferred from SELECT */
     if (g_create.ctasMode == CTAS_INFER) {
-        ColumnDesc cols[64];
+        ColumnDesc cols[CAT_MAX_COLUMNS];
         int ncols = selectRs.num_cols < 64 ? selectRs.num_cols : 64;
 
         for (int i = 0; i < ncols; i++) {
@@ -5253,7 +5257,7 @@ parser_done:
             }
             if (!rs->has_error && g_sel.columnCount > 0 && !has_join_expr) {
                 /* Map requested columns to join result positions */
-                int col_map[64];
+                int col_map[CAT_MAX_COLUMNS];
                 int map_count = 0;
                 for (int ci = 0; ci < g_sel.columnCount && ci < 64; ci++) {
                     col_map[ci] = -1;
@@ -5322,17 +5326,18 @@ parser_done:
                 }
                 if (has_expr) {
                     /* Build column context from JOIN result */
-                    char cn[MAX_COLUMNS][128];
+                    char cn[CAT_MAX_COLUMNS][128];
                     int nc = rs->num_cols;
-                    for (int c = 0; c < nc && c < MAX_COLUMNS; c++) {
+                    for (int c = 0; c < nc && c < CAT_MAX_COLUMNS; c++) {
                         strncpy(cn[c], rs->columns[c].name, 127);
                         cn[c][127] = '\0';
                     }
 
                     /* Set up new column headers from selectExprs */
                     int new_nc = g_expr.selectExprCount;
-                    ColumnInfo origCols[MAX_COLUMNS];
-                    memcpy(origCols, rs->columns, sizeof(ColumnInfo) * nc);
+                    ColumnInfo *origCols = (ColumnInfo *)malloc(sizeof(ColumnInfo) * (nc > 0 ? nc : 1));
+                    if (origCols)
+                        memcpy(origCols, rs->columns, sizeof(ColumnInfo) * nc);
                     rs->num_cols = new_nc;
                     for (int c = 0; c < new_nc; c++) {
                         memset(&rs->columns[c], 0, sizeof(ColumnInfo));
@@ -5355,8 +5360,8 @@ parser_done:
 
                     /* Evaluate expressions for each row */
                     for (int r = 0; r < rs->num_rows; r++) {
-                        char cv[MAX_COLUMNS][256];
-                        for (int c = 0; c < nc && c < MAX_COLUMNS; c++) {
+                        char cv[CAT_MAX_COLUMNS][256];
+                        for (int c = 0; c < nc && c < CAT_MAX_COLUMNS; c++) {
                             if (rs->rows[r].is_null[c])
                                 strcpy(cv[c], "\x01NULL\x01");
                             else {
@@ -5372,7 +5377,7 @@ parser_done:
 
                         for (int c = 0; c < new_nc; c++) {
                             if (!g_expr.selectExprs[c]) {
-                                rs->rows[r].is_null[c] = 1; continue;
+                                row_set_null(&rs->rows[r], c); continue;
                             }
                             char result[4096];
                             if (expr_evaluate(g_expr.selectExprs[c],
@@ -5386,6 +5391,7 @@ parser_done:
                             }
                         }
                     }
+                    free(origCols);
                 }
             }
 

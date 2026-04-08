@@ -20,7 +20,7 @@
 /* ----------------------------------------------------------------
  *  Constants
  * ---------------------------------------------------------------- */
-#define CAT_MAX_COLUMNS     64
+#define CAT_MAX_COLUMNS     256
 #define CAT_MAX_NAME_LEN    128
 #define CAT_MAX_DEFAULT_LEN 256
 #define CAT_MAX_HASH_LEN    512

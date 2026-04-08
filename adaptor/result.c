@@ -12,18 +12,33 @@ void result_init(ResultSet *rs)
             row_clear(&rs->rows[i]);
     }
     Row *saved_rows = rs->rows;
-    int  saved_cap  = rs->row_capacity;
+    int  saved_row_cap = rs->row_capacity;
+    ColumnInfo *saved_cols = rs->columns;
+    int  saved_col_cap = rs->col_capacity;
     void *saved_stream_conn = rs->stream_conn;
+
     memset(rs, 0, sizeof(ResultSet));
     rs->stream_conn = saved_stream_conn;
     strcpy(rs->error_sqlstate, "00000");
-    if (saved_rows && saved_cap > 0) {
+
+    /* Restore or allocate rows buffer */
+    if (saved_rows && saved_row_cap > 0) {
         rs->rows = saved_rows;
-        rs->row_capacity = saved_cap;
-        memset(rs->rows, 0, (size_t)saved_cap * sizeof(Row));
+        rs->row_capacity = saved_row_cap;
+        memset(rs->rows, 0, (size_t)saved_row_cap * sizeof(Row));
     } else {
         rs->rows = (Row *)calloc(MAX_ROWS_INIT, sizeof(Row));
         rs->row_capacity = rs->rows ? MAX_ROWS_INIT : 0;
+    }
+
+    /* Restore or allocate columns buffer */
+    if (saved_cols && saved_col_cap > 0) {
+        rs->columns = saved_cols;
+        rs->col_capacity = saved_col_cap;
+        memset(rs->columns, 0, (size_t)saved_col_cap * sizeof(ColumnInfo));
+    } else {
+        rs->columns = (ColumnInfo *)calloc(DEFAULT_COL_CAPACITY, sizeof(ColumnInfo));
+        rs->col_capacity = rs->columns ? DEFAULT_COL_CAPACITY : 0;
     }
 }
 
@@ -38,11 +53,31 @@ void result_free(ResultSet *rs)
     }
     rs->num_rows = 0;
     rs->row_capacity = 0;
+
+    if (rs->columns) {
+        free(rs->columns);
+        rs->columns = NULL;
+    }
+    rs->num_cols = 0;
+    rs->col_capacity = 0;
 }
 
 void result_add_column(ResultSet *rs, const char *name, int pg_oid)
 {
-    if (rs->num_cols >= MAX_COLUMNS) return;
+    /* Grow columns array if needed */
+    if (rs->num_cols >= rs->col_capacity) {
+        int new_cap = rs->col_capacity ? rs->col_capacity * 2 : DEFAULT_COL_CAPACITY;
+        if (new_cap > MAX_COLUMNS) new_cap = MAX_COLUMNS;
+        if (rs->num_cols >= new_cap) return; /* at ceiling */
+        ColumnInfo *nc = (ColumnInfo *)realloc(rs->columns,
+                                               (size_t)new_cap * sizeof(ColumnInfo));
+        if (!nc) return;
+        memset(nc + rs->col_capacity, 0,
+               (size_t)(new_cap - rs->col_capacity) * sizeof(ColumnInfo));
+        rs->columns = nc;
+        rs->col_capacity = new_cap;
+    }
+
     strncpy(rs->columns[rs->num_cols].name, name, MAX_COL_NAME - 1);
     rs->columns[rs->num_cols].pg_type_oid = pg_oid;
 
@@ -75,6 +110,7 @@ int result_add_row(ResultSet *rs)
         rs->row_capacity = new_cap;
     }
     memset(&rs->rows[rs->num_rows], 0, sizeof(Row));
+    row_init(&rs->rows[rs->num_rows], rs->num_cols > 0 ? rs->num_cols : 1);
     rs->rows[rs->num_rows].num_fields = rs->num_cols;
     return rs->num_rows++;
 }
@@ -82,14 +118,14 @@ int result_add_row(ResultSet *rs)
 void result_set_field(ResultSet *rs, int row, int col, const char *value)
 {
     if (row < 0 || row >= rs->num_rows) return;
-    if (col < 0 || col >= MAX_COLUMNS) return;
+    if (col < 0) return;
     row_set(&rs->rows[row], col, value);
 }
 
 void result_set_null(ResultSet *rs, int row, int col)
 {
     if (row < 0 || row >= rs->num_rows) return;
-    if (col < 0 || col >= MAX_COLUMNS) return;
+    if (col < 0) return;
     row_set_null(&rs->rows[row], col);
 }
 

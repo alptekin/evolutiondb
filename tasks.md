@@ -1616,7 +1616,7 @@
 
 ## Day 41 — Dynamic Allocation & Semicolon Safety
 
-### Task 80: ⬜ Dynamic Array Allocation (Storage Engine Fix)
+### Task 80: ✅ Dynamic Array Allocation (Storage Engine Fix)
 
 **Goal:** Remove all static array caps. Use dynamic allocation throughout.
 
