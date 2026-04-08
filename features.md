@@ -92,7 +92,7 @@
 | 66 | WAL / crash recovery | ✅ | ✅ | ✅ | FPI-based WAL, checkpoint, crash recovery replay |
 | 67 | MVCC (Multi-Version Concurrency Control) | ✅ | ✅ | ✅ | 7 layers: Snapshots, CLOG, RECLAIM, HOT, VMAP, CSN, Auto-RECLAIM |
 | 68 | Connection pooling | ✅ | ✅ | ❌ | Thread-per-connection model |
-| 69 | SELECT INTO | ✅ | ✅ | ❌ | CTAS available as alternative |
+| 69 | SELECT INTO | ✅ | ✅ | ✅ | PostgreSQL-style: SELECT ... INTO table FROM ... (reuses CTAS engine) |
 
 ## 🏗️ Architecture & Operations
 
