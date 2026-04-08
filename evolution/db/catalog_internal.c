@@ -314,15 +314,26 @@ static void deserialize_constraint(const char *buf, ConstraintDesc *c)
 /* --- User --- */
 static void serialize_user(const UserDesc *u, char *buf, int size)
 {
-    snprintf(buf, size, "%s", u->password_hash);
+    snprintf(buf, size, "%s;%d", u->password_hash, u->is_role);
 }
 
 static void deserialize_user(const char *buf, const char *key, UserDesc *u)
 {
     strncpy(u->username, key, CAT_MAX_NAME_LEN - 1);
     u->username[CAT_MAX_NAME_LEN - 1] = '\0';
-    strncpy(u->password_hash, buf, CAT_MAX_HASH_LEN - 1);
-    u->password_hash[CAT_MAX_HASH_LEN - 1] = '\0';
+    /* Backward-compatible: old format has no semicolon, default is_role=0 */
+    const char *semi = strrchr(buf, ';');
+    if (semi) {
+        int hash_len = (int)(semi - buf);
+        if (hash_len >= CAT_MAX_HASH_LEN) hash_len = CAT_MAX_HASH_LEN - 1;
+        memcpy(u->password_hash, buf, hash_len);
+        u->password_hash[hash_len] = '\0';
+        u->is_role = atoi(semi + 1);
+    } else {
+        strncpy(u->password_hash, buf, CAT_MAX_HASH_LEN - 1);
+        u->password_hash[CAT_MAX_HASH_LEN - 1] = '\0';
+        u->is_role = 0;
+    }
 }
 
 /* --- Grant --- */
@@ -1706,10 +1717,12 @@ int cat_create_user(const char *username, const char *password_hash)
         return -1;
 
     UserDesc u;
+    memset(&u, 0, sizeof(u));
     strncpy(u.username, username, CAT_MAX_NAME_LEN - 1);
     u.username[CAT_MAX_NAME_LEN - 1] = '\0';
     strncpy(u.password_hash, password_hash, CAT_MAX_HASH_LEN - 1);
     u.password_hash[CAT_MAX_HASH_LEN - 1] = '\0';
+    u.is_role = 0;
 
     char record[CAT_MAX_RECORD_LEN];
     serialize_user(&u, record, sizeof(record));
@@ -1796,6 +1809,52 @@ int cat_list_users(UserDesc *out, int max)
         }
     }
     return count;
+}
+
+/* ----------------------------------------------------------------
+ *  Role operations (roles stored in CAT_SYS_USERS with is_role=1)
+ * ---------------------------------------------------------------- */
+
+int cat_create_role(const char *rolename)
+{
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_USERS], rolename, &rid) == 0)
+        return -1; /* already exists (user or role) */
+
+    UserDesc u;
+    memset(&u, 0, sizeof(u));
+    strncpy(u.username, rolename, CAT_MAX_NAME_LEN - 1);
+    u.password_hash[0] = '\0'; /* roles have no password */
+    u.is_role = 1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    serialize_user(&u, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+
+    rid = cat_store_record(CAT_SYS_USERS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+
+    return bt2_insert(&g_cat_trees[CAT_SYS_USERS], rolename, rid) == 0 ? 0 : -1;
+}
+
+int cat_list_roles(UserDesc *out, int max)
+{
+    UserDesc all[64];
+    int total = cat_list_users(all, 64);
+    int count = 0;
+    for (int i = 0; i < total && count < max; i++) {
+        if (all[i].is_role) {
+            out[count++] = all[i];
+        }
+    }
+    return count;
+}
+
+int cat_is_role(const char *name)
+{
+    UserDesc ud;
+    if (cat_find_user(name, &ud) < 0) return 0;
+    return ud.is_role ? 1 : 0;
 }
 
 /* ----------------------------------------------------------------

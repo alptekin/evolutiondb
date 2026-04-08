@@ -122,6 +122,9 @@ int AuthenticateUser(const char *username, const char *password)
             return 0;
     }
 
+    /* Roles cannot log in */
+    if (ud.is_role) return 0;
+
     return crypto_verify_password(password, ud.password_hash) == 1 ? 1 : 0;
 }
 
@@ -258,12 +261,92 @@ int AlterUserPasswordProcess(const char *username, const char *new_password)
 int ListUsers(char names[][256], int max_users)
 {
     UserDesc users[64];
-    int limit = max_users < 64 ? max_users : 64;
-    int count = cat_list_users(users, limit);
+    int count = cat_list_users(users, 64);
+    int out = 0;
 
-    for (int i = 0; i < count; i++) {
-        strncpy(names[i], users[i].username, 255);
-        names[i][255] = '\0';
+    for (int i = 0; i < count && out < max_users; i++) {
+        if (users[i].is_role) continue; /* skip roles */
+        strncpy(names[out], users[i].username, 255);
+        names[out][255] = '\0';
+        out++;
     }
-    return count;
+    return out;
+}
+
+/* ----------------------------------------------------------------
+ *  Role management
+ * ---------------------------------------------------------------- */
+
+int CreateRoleProcess(const char *rolename)
+{
+    if (!rolename || !rolename[0]) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "Role name cannot be empty");
+        g_err.error = 1;
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_metadata_lock);
+
+    /* Check no existing user or role with same name */
+    if (cat_find_user(rolename, NULL) == 0) {
+        pthread_mutex_unlock(&g_metadata_lock);
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "User or role '%s' already exists", rolename);
+        g_err.error = 1;
+        return -1;
+    }
+
+    int rc = cat_create_role(rolename);
+    pthread_mutex_unlock(&g_metadata_lock);
+
+    if (rc < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "Failed to create role '%s'", rolename);
+        g_err.error = 1;
+        return -1;
+    }
+    return 0;
+}
+
+int DropRoleProcess(const char *rolename)
+{
+    if (!rolename || !rolename[0]) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "Role name cannot be empty");
+        g_err.error = 1;
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_metadata_lock);
+
+    UserDesc ud;
+    if (cat_find_user(rolename, &ud) < 0 || !ud.is_role) {
+        pthread_mutex_unlock(&g_metadata_lock);
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "Role '%s' does not exist", rolename);
+        g_err.error = 1;
+        return -1;
+    }
+
+    cat_drop_user(rolename);
+    cat_drop_all_grants_for_user(rolename);
+    DropRoleAllMemberships(rolename);
+
+    pthread_mutex_unlock(&g_metadata_lock);
+    return 0;
+}
+
+int ListRoles(char names[][256], int max_roles)
+{
+    UserDesc roles[64];
+    int count = cat_list_roles(roles, 64);
+    int out = 0;
+
+    for (int i = 0; i < count && out < max_roles; i++) {
+        strncpy(names[out], roles[i].username, 255);
+        names[out][255] = '\0';
+        out++;
+    }
+    return out;
 }

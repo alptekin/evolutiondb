@@ -88,7 +88,7 @@
 | 62 | LISTEN / NOTIFY | ❌ | ✅ | ❌ | |
 | 63 | Table inheritance | ❌ | ✅ | ❌ | |
 | 64 | Row-level security | ❌ | ✅ | ❌ | |
-| 65 | Roles (vs individual users) | ✅ | ✅ | ❌ | Users + GRANT/REVOKE, no role hierarchy |
+| 65 | Roles (vs individual users) | ✅ | ✅ | ✅ | CREATE/DROP ROLE, GRANT/REVOKE role TO/FROM user, privilege inheritance, SHOW ROLES |
 | 66 | WAL / crash recovery | ✅ | ✅ | ✅ | FPI-based WAL, checkpoint, crash recovery replay |
 | 67 | MVCC (Multi-Version Concurrency Control) | ✅ | ✅ | ✅ | 7 layers: Snapshots, CLOG, RECLAIM, HOT, VMAP, CSN, Auto-RECLAIM |
 | 68 | Connection pooling | ✅ | ✅ | ❌ | Thread-per-connection model |

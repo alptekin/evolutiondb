@@ -1576,7 +1576,7 @@
 
 ## Day 40 — SELECT INTO & Roles
 
-### Task 78: ⬜ SELECT INTO (Feature #69)
+### Task 78: ✅ SELECT INTO (Feature #69)
 
 **Goal:** Implement `SELECT col1, col2 INTO new_table FROM old_table WHERE ...`.
 
@@ -1595,7 +1595,7 @@
 
 ---
 
-### Task 79: ⬜ Roles (Feature #65)
+### Task 79: ✅ Roles (Feature #65)
 
 **Goal:** Implement role-based access control. Users can be assigned to roles, roles can have privileges.
 
