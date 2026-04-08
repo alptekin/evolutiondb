@@ -121,6 +121,7 @@ typedef struct {
 typedef struct {
     char username[CAT_MAX_NAME_LEN];
     char password_hash[CAT_MAX_HASH_LEN];
+    int  is_role;    /* 0=user (login), 1=role (no login) */
 } UserDesc;
 
 typedef struct {
@@ -295,6 +296,11 @@ int cat_find_user(const char *username, UserDesc *out);
 int cat_update_user(const char *username, const char *new_hash);
 int cat_drop_user(const char *username);
 int cat_list_users(UserDesc *out, int max);
+
+/* Role operations (roles stored in CAT_SYS_USERS with is_role=1) */
+int cat_create_role(const char *rolename);
+int cat_list_roles(UserDesc *out, int max);
+int cat_is_role(const char *name);
 
 /* ----------------------------------------------------------------
  *  Grant operations
