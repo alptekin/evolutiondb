@@ -398,7 +398,7 @@ int tup_extract_fields_nm(const char *bin_rec, int bin_len,
                           const ColumnDesc *cols, int ncols,
                           char fields[][256], int *is_null_out, int max_fields)
 {
-    int nullArr[64];
+    int nullArr[CAT_MAX_COLUMNS];
     int nf = tup_extract_fields(bin_rec, bin_len, cols, ncols,
                                 fields, nullArr, max_fields);
     if (nf < 0) return nf;
@@ -419,9 +419,9 @@ int tup_build_from_fields(const char fields[][256], int nfields,
                           const ColumnDesc *cols, int ncols,
                           char *out, int buf_size)
 {
-    const char *valPtrs[64];
-    int nullFlags[64];
-    int n = nfields < 64 ? nfields : 64;
+    const char *valPtrs[CAT_MAX_COLUMNS];
+    int nullFlags[CAT_MAX_COLUMNS];
+    int n = nfields < CAT_MAX_COLUMNS ? nfields : CAT_MAX_COLUMNS;
     for (int i = 0; i < n; i++) {
         if (strcmp(fields[i], NULL_MARKER) == 0) {
             valPtrs[i] = NULL;

@@ -131,9 +131,9 @@ static void pipeline_recurse(
     /* ── End of pipeline: evaluate WHERE and emit ── */
     if (depth >= num_tables) {
         if (where_expr) {
-            static __thread char en[MAX_COLUMNS][128];
-            static __thread char ev[MAX_COLUMNS][256];
-            for (int c = 0; c < merged_ncols && c < MAX_COLUMNS; c++) {
+            static __thread char en[CAT_MAX_COLUMNS][128];
+            static __thread char ev[CAT_MAX_COLUMNS][256];
+            for (int c = 0; c < merged_ncols && c < CAT_MAX_COLUMNS; c++) {
                 strncpy(en[c], col_names[c], 127); en[c][127] = '\0';
                 if (merged_null[c]) strcpy(ev[c], "\x01NULL\x01");
                 else { strncpy(ev[c], merged_fields[c], 255); ev[c][255] = '\0'; }
@@ -157,8 +157,8 @@ static void pipeline_recurse(
 
     /* Helper: extract record fields and append to merged row */
     #define APPEND_FIELDS(record, recLen) do { \
-        char _f[64][256]; int _n[64]; \
-        int _nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, _f, _n, 64); \
+        char _f[CAT_MAX_COLUMNS][256]; int _n[CAT_MAX_COLUMNS]; \
+        int _nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, _f, _n, CAT_MAX_COLUMNS); \
         for (int _c = 0; _c < _nf && (base+_c) < total_cols; _c++) { \
             if (_n[_c]) { merged_fields[base+_c][0]='\0'; merged_null[base+_c]=1; } \
             else { strncpy(merged_fields[base+_c], _f[_c], 255); \
@@ -201,8 +201,8 @@ static void pipeline_recurse(
 
                 /* Non-PK WHERE push-down filter */
                 if (ti->where_push_col_idx >= 0) {
-                    char fields[64][256]; int is_n[64];
-                    int nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, fields, is_n, 64);
+                    char fields[CAT_MAX_COLUMNS][256]; int is_n[CAT_MAX_COLUMNS];
+                    int nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, fields, is_n, CAT_MAX_COLUMNS);
                     if (ti->where_push_col_idx < nf &&
                         !is_n[ti->where_push_col_idx] &&
                         strcmp(fields[ti->where_push_col_idx], ti->where_push_val) != 0)
@@ -246,8 +246,8 @@ static void pipeline_recurse(
                 while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
                     int recLen = tup_record_len(record, sizeof(record));
                     if (snap && !mvcc_is_visible(record, recLen, snap)) continue;
-                    char fields[64][256]; int is_n[64];
-                    int nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, fields, is_n, 64);
+                    char fields[CAT_MAX_COLUMNS][256]; int is_n[CAT_MAX_COLUMNS];
+                    int nf = tup_extract_fields(record, recLen, ti->cols, ti->ncols, fields, is_n, CAT_MAX_COLUMNS);
                     if (ti->right_key_col_idx >= nf) continue;
                     if (is_n[ti->right_key_col_idx]) continue;
                     if (strcmp(fields[ti->right_key_col_idx], key_val) != 0) continue;
@@ -316,8 +316,8 @@ void collect_single_table(const char *name, ResultSet *rs, const void *snap)
     while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
         int recLen = tup_record_len(record, sizeof(record));
         if (mvcc_snap && !mvcc_is_visible(record, recLen, mvcc_snap)) continue;
-        char fields[64][256]; int is_null[64];
-        int nf = tup_extract_fields(record, recLen, allCols, ncols, fields, is_null, 64);
+        char fields[CAT_MAX_COLUMNS][256]; int is_null[CAT_MAX_COLUMNS];
+        int nf = tup_extract_fields(record, recLen, allCols, ncols, fields, is_null, CAT_MAX_COLUMNS);
         int row = result_add_row(rs);
         if (row < 0) break;
         for (int i = 0; i < nf; i++) {
