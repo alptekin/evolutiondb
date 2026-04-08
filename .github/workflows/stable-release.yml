@@ -92,6 +92,14 @@ jobs:
           echo "$COMMITS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tweet dependencies
+        run: pip install requests-oauthlib
+
       - name: Post to X (Twitter)
         continue-on-error: true
         env:
@@ -103,7 +111,6 @@ jobs:
           COMMITS: ${{ steps.changes.outputs.commits }}
           DOCKER_IMAGE: ${{ env.IMAGE_NAME }}
         run: |
-          pip install requests-oauthlib -q
           python3 << 'PYEOF'
           import os
           from requests_oauthlib import OAuth1Session
