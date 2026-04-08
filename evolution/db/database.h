@@ -5,6 +5,11 @@
 #include <stdint.h>
 #include "evosql_errcodes.h"
 
+/* Max columns per table — must match catalog_internal.h */
+#ifndef CAT_MAX_COLUMNS
+#define CAT_MAX_COLUMNS 256
+#endif
+
 /* Forward declaration — full definition in slotted.h */
 #ifndef ROWID_DEFINED
 #define ROWID_DEFINED
@@ -269,12 +274,12 @@ void SetReturningAll(void);
 void AddReturningCol(const char *name);
 
 /* RETURNING result buffer — populated by DML, read by query_executor */
-extern __thread char g_returning_buf[256][64][256];
-extern __thread int  g_returning_null[256][64];
+extern __thread char g_returning_buf[256][CAT_MAX_COLUMNS][256];
+extern __thread int  g_returning_null[256][CAT_MAX_COLUMNS];
 extern __thread int  g_returning_row_count;
 extern __thread int  g_returning_col_count;
-extern __thread char g_returning_col_names[64][128];
-extern __thread int  g_returning_col_types[64];
+extern __thread char g_returning_col_names[CAT_MAX_COLUMNS][128];
+extern __thread int  g_returning_col_types[CAT_MAX_COLUMNS];
 
 /* Triggers (Trigger.c) */
 int CreateTriggerProcess(void);

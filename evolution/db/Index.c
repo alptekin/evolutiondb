@@ -594,9 +594,9 @@ static int build_composite_key_from_record(const char *colSpec,
                                             const char *record, int recLen,
                                             char *keyBuf, int keyBufSize)
 {
-    char fields[64][256];
-    int is_null[64];
-    int nf = tup_extract_fields(record, recLen, cols, ncols, fields, is_null, 64);
+    char fields[CAT_MAX_COLUMNS][256];
+    int is_null[CAT_MAX_COLUMNS];
+    int nf = tup_extract_fields(record, recLen, cols, ncols, fields, is_null, CAT_MAX_COLUMNS);
     if (nf <= 0) return 0;
 
     /* Parse colSpec with strtok(",") — column name list, not record data */
@@ -643,7 +643,7 @@ int idx_build_key_ex(const IndexDesc *idx,
 
     if (idx->expr_def[0]) {
         /* Expression index: need 128/256 arrays for expr_evaluate */
-        char cn[64][128], cv[64][256];
+        char cn[CAT_MAX_COLUMNS][128], cv[CAT_MAX_COLUMNS][256];
         int n = numCols < 64 ? numCols : 64;
         for (int i = 0; i < n; i++) {
             strncpy(cn[i], COLNAME(i), 127); cn[i][127] = '\0';
@@ -814,7 +814,7 @@ int CreateIndexProcess(void)
 
     /* Populate index from existing rows */
     {
-        char colNames[64][128];
+        char colNames[CAT_MAX_COLUMNS][128];
         int numCols = 0;
         for (int ci = 0; ci < indexNCols && ci < 64; ci++) {
             strncpy(colNames[ci], indexCols[ci].col_name, 127);
@@ -838,8 +838,8 @@ int CreateIndexProcess(void)
                 char idxKey[512] = "";
 
                 int recLen = tup_record_len(recBuf, sizeof(recBuf));
-                char colValues[64][256];
-                int nullArr[64];
+                char colValues[CAT_MAX_COLUMNS][256];
+                int nullArr[CAT_MAX_COLUMNS];
                 int nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
                                              colValues, nullArr, 64);
 
@@ -949,7 +949,7 @@ int CreateIndexConcurrentlyPhase2(void *mutex_ptr)
     BTree2 idx_tree = { .root_page = g_idx.concRootPage };
     int isUnique = g_idx.unique;
 
-    char colNames[64][128];
+    char colNames[CAT_MAX_COLUMNS][128];
     int numCols = 0;
     for (int ci = 0; ci < indexNCols && ci < 64; ci++) {
         strncpy(colNames[ci], indexCols[ci].col_name, 127);
@@ -972,8 +972,8 @@ int CreateIndexConcurrentlyPhase2(void *mutex_ptr)
             char idxKey[512] = "";
 
             int recLen = tup_record_len(recBuf, sizeof(recBuf));
-            char colValues[64][256];
-            int nullArr[64];
+            char colValues[CAT_MAX_COLUMNS][256];
+            int nullArr[CAT_MAX_COLUMNS];
             int nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
                                          colValues, nullArr, 64);
 
@@ -1095,7 +1095,7 @@ int CreateIndexConcurrentlyPhase3(void *mutex_ptr)
     BTree2 idx_tree = { .root_page = g_idx.concRootPage };
     BTree2 pk_tree = tapi_pk_tree(&td);
 
-    char colNames[64][128];
+    char colNames[CAT_MAX_COLUMNS][128];
     int numCols = 0;
     for (int ci = 0; ci < indexNCols && ci < 64; ci++) {
         strncpy(colNames[ci], indexCols[ci].col_name, 127);
@@ -1127,8 +1127,8 @@ int CreateIndexConcurrentlyPhase3(void *mutex_ptr)
                 continue;
 
             int recLen = tup_record_len(recBuf, sizeof(recBuf));
-            char colValues[64][256];
-            int nullArr[64];
+            char colValues[CAT_MAX_COLUMNS][256];
+            int nullArr[CAT_MAX_COLUMNS];
             int nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
                                          colValues, nullArr, 64);
 

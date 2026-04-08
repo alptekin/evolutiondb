@@ -133,7 +133,7 @@ int ReclaimTableProcess(void)
         uint32_t xmin_horizon = mvcc_get_oldest_active();
 
         /* Prepare column name array for secondary index key building */
-        char colNames[64][128];
+        char colNames[CAT_MAX_COLUMNS][128];
         for (int i = 0; i < ncols && i < 64; i++) {
             strncpy(colNames[i], cols[i].col_name, 127);
             colNames[i][127] = '\0';
@@ -223,10 +223,10 @@ int ReclaimTableProcess(void)
                 }
 
                 /* Extract fields for PK key and secondary index cleanup */
-                char fields[64][256];
-                int isNull[64];
+                char fields[CAT_MAX_COLUMNS][256];
+                int isNull[CAT_MAX_COLUMNS];
                 int nf = tup_extract_fields(rec, rec_len, cols, ncols,
-                                            fields, isNull, 64);
+                                            fields, isNull, CAT_MAX_COLUMNS);
                 if (nf < 0) continue;
 
                 /* Build PK key */
@@ -432,15 +432,15 @@ int ReclaimTableProcess(void)
                     if (rwLen <= 0) continue;
 
                     /* Extract all physical fields */
-                    char allFields[64][256];
-                    int allNull[64];
+                    char allFields[CAT_MAX_COLUMNS][256];
+                    int allNull[CAT_MAX_COLUMNS];
                     int nf = tup_extract_fields(rwRec, rwLen, cols, ncols,
-                                                allFields, allNull, 64);
+                                                allFields, allNull, CAT_MAX_COLUMNS);
                     if (nf < 0) continue;
 
                     /* Build new tuple with only active columns */
-                    const char *newVals[64];
-                    int newNull[64];
+                    const char *newVals[CAT_MAX_COLUMNS];
+                    int newNull[CAT_MAX_COLUMNS];
                     int nv = 0;
                     for (int ci = 0; ci < nf && ci < ncols; ci++) {
                         if (cols[ci].is_dropped) continue;

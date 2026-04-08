@@ -436,7 +436,7 @@ int CreateTableProcess(void)
 
     /* Count columns from g_create.columnDefs (format: "col1;col2;col3") */
     int numCols = 0;
-    char colNameArr[64][128];
+    char colNameArr[CAT_MAX_COLUMNS][128];
     {
         char tmp[1024];
         char *tok;
@@ -464,7 +464,7 @@ int CreateTableProcess(void)
         padSize = RECORD_PAD_SIZE;
 
     /* Parse type encodings from g_create.columnTypeDefs */
-    int typeVals[64];
+    int typeVals[CAT_MAX_COLUMNS];
     int numTypes = 0;
     {
         char tmp[1024];
@@ -478,7 +478,7 @@ int CreateTableProcess(void)
     }
 
     /* Parse NOT NULL flags */
-    int nullFlags[64];
+    int nullFlags[CAT_MAX_COLUMNS];
     int numNulls = 0;
     {
         char tmp[1024];
@@ -492,7 +492,7 @@ int CreateTableProcess(void)
     }
 
     /* Parse UNIQUE flags */
-    int uniqueFlags[64];
+    int uniqueFlags[CAT_MAX_COLUMNS];
     int numUniques = 0;
     {
         char tmp[1024];
@@ -506,7 +506,7 @@ int CreateTableProcess(void)
     }
 
     /* Parse DEFAULT values */
-    char defaultVals[64][256];
+    char defaultVals[CAT_MAX_COLUMNS][256];
     int numDefaults = 0;
     {
         char tmp[4096];
@@ -541,7 +541,7 @@ int CreateTableProcess(void)
     }
 
     /* Build ColumnDesc array for catalog */
-    ColumnDesc cols[64];
+    ColumnDesc cols[CAT_MAX_COLUMNS];
     for (int i = 0; i < numCols; i++) {
         memset(&cols[i], 0, sizeof(ColumnDesc));
         strncpy(cols[i].col_name, colNameArr[i], CAT_MAX_NAME_LEN - 1);
@@ -968,7 +968,7 @@ int AlterTableAddCheckConstraint(const char *tableName, const char *constraintNa
 
     /* Validate existing rows against the new CHECK constraint */
     {
-        char colNames[64][128];
+        char colNames[CAT_MAX_COLUMNS][128];
         for (int c = 0; c < ncols && c < 64; c++)
             strncpy(colNames[c], cols[c].col_name, 127);
 
@@ -979,10 +979,10 @@ int AlterTableAddCheckConstraint(const char *tableName, const char *constraintNa
             while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
                 rowNum++;
                 /* Parse record into column values */
-                char colValues[64][256];
+                char colValues[CAT_MAX_COLUMNS][256];
                 int recLen = tup_record_len(scanRec, sizeof(scanRec));
                 tup_extract_fields_nm(scanRec, recLen, cols, ncols,
-                                      colValues, NULL, 64);
+                                      colValues, NULL, CAT_MAX_COLUMNS);
 
                 char result[512];
                 int ok = expr_evaluate(expr,
@@ -1084,11 +1084,11 @@ int AlterTableAddUniqueConstraint(const char *tableName, const char *constraintN
                 }
                 /* Build composite unique value */
                 char composite[1024] = "";
-                char fieldArr[64][256];
-                int nullArr[64];
+                char fieldArr[CAT_MAX_COLUMNS][256];
+                int nullArr[CAT_MAX_COLUMNS];
                 int recLen = tup_record_len(scanRec, sizeof(scanRec));
                 int nf = tup_extract_fields(scanRec, recLen, cols, ncols,
-                                            fieldArr, nullArr, 64);
+                                            fieldArr, nullArr, CAT_MAX_COLUMNS);
 
                 for (int u = 0; u < numUqCols; u++) {
                     if (u > 0) strcat(composite, "|");
@@ -1193,10 +1193,10 @@ int AlterTableAddForeignKeyConstraint(const char *tableName, const char *refTabl
             int rowNum = 0;
             while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
                 rowNum++;
-                char fieldArr[64][256];
+                char fieldArr[CAT_MAX_COLUMNS][256];
                 int recLen = tup_record_len(scanRec, sizeof(scanRec));
                 int nf = tup_extract_fields_nm(scanRec, recLen, cols, ncols,
-                                               fieldArr, NULL, 64);
+                                               fieldArr, NULL, CAT_MAX_COLUMNS);
 
                 /* Build composite FK value */
                 char fkValue[1024] = "";
@@ -1465,7 +1465,7 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
             return -1;
         }
 
-        char colNames[64][128];
+        char colNames[CAT_MAX_COLUMNS][128];
         for (int c = 0; c < ncols && c < 64; c++)
             strncpy(colNames[c], cols[c].col_name, 127);
 
@@ -1475,10 +1475,10 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
             int rowNum = 0;
             while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
                 rowNum++;
-                char colValues[64][256];
+                char colValues[CAT_MAX_COLUMNS][256];
                 int recLen = tup_record_len(scanRec, sizeof(scanRec));
                 tup_extract_fields_nm(scanRec, recLen, cols, ncols,
-                                      colValues, NULL, 64);
+                                      colValues, NULL, CAT_MAX_COLUMNS);
                 char result[512];
                 int ok = expr_evaluate(expr, (const char (*)[128])colNames,
                                        (const char (*)[256])colValues,
@@ -1542,10 +1542,10 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
         if (tapi_scan_begin(&td, &scanCur) == 0) {
             char scanKey[256], scanRec[RECORD_BUF_SIZE];
             while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
-                char fieldArr[64][256];
+                char fieldArr[CAT_MAX_COLUMNS][256];
                 int recLen = tup_record_len(scanRec, sizeof(scanRec));
                 int nf = tup_extract_fields_nm(scanRec, recLen, cols, ncols,
-                                               fieldArr, NULL, 64);
+                                               fieldArr, NULL, CAT_MAX_COLUMNS);
 
                 char fkValue[1024] = "";
                 int allNull = 1;
@@ -1646,10 +1646,10 @@ int AlterTableAddPrimaryKey(const char *tableName, const char *constraintName)
                     rowCap *= 2;
                     allKeys = realloc(allKeys, rowCap * sizeof(*allKeys));
                 }
-                char fieldArr[64][256];
+                char fieldArr[CAT_MAX_COLUMNS][256];
                 int recLen = tup_record_len(scanRec, sizeof(scanRec));
                 int nf = tup_extract_fields_nm(scanRec, recLen, cols, ncols,
-                                               fieldArr, NULL, 64);
+                                               fieldArr, NULL, CAT_MAX_COLUMNS);
 
                 char composite[1024] = "";
                 for (int p = 0; p < numPkCols; p++) {
@@ -1823,15 +1823,15 @@ int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode
                 if (rlen <= 0) continue;
 
                 /* Extract with OLD layout (ncols columns, before add) */
-                char oldFields[64][256];
-                int oldNull[64];
+                char oldFields[CAT_MAX_COLUMNS][256];
+                int oldNull[CAT_MAX_COLUMNS];
                 int nf = tup_extract_fields(recBuf, rlen, cols, ncols,
-                                            oldFields, oldNull, 64);
+                                            oldFields, oldNull, CAT_MAX_COLUMNS);
                 if (nf <= 0) continue;
 
                 /* Build new tuple with reordered columns */
-                const char *newVals[64];
-                int newNull2[64];
+                const char *newVals[CAT_MAX_COLUMNS];
+                int newNull2[CAT_MAX_COLUMNS];
                 for (int ni = 0; ni < newNcols && ni < 64; ni++) {
                     /* Find this column in old layout by name */
                     int found = 0;
@@ -2185,9 +2185,9 @@ int AlterTableModifyColumn(const char *tableName, const char *colName, int newTy
             while (tapi_scan_next(&cursor, pk, rec, sizeof(rec)) == 0) {
                 int rlen = tup_record_len(rec, sizeof(rec));
                 if (rlen <= 0) continue;
-                char flds[64][256];
-                int nulls[64];
-                tup_extract_fields(rec, rlen, cols, ncols, flds, nulls, 64);
+                char flds[CAT_MAX_COLUMNS][256];
+                int nulls[CAT_MAX_COLUMNS];
+                tup_extract_fields(rec, rlen, cols, ncols, flds, nulls, CAT_MAX_COLUMNS);
                 if (target < ncols && nulls[target]) {
                     tapi_scan_end(&cursor);
                     snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
@@ -2264,15 +2264,15 @@ int AlterTableModifyColumn(const char *tableName, const char *colName, int newTy
                 if (rlen <= 0) continue;
 
                 /* Extract fields in OLD order */
-                char oldFields[64][256];
-                int oldNull[64];
+                char oldFields[CAT_MAX_COLUMNS][256];
+                int oldNull[CAT_MAX_COLUMNS];
                 int nf = tup_extract_fields(recBuf, rlen, oldCols, ncols,
-                                            oldFields, oldNull, 64);
+                                            oldFields, oldNull, CAT_MAX_COLUMNS);
                 if (nf <= 0) continue;
 
                 /* Remap to NEW order */
-                const char *newVals[64];
-                int newNull2[64];
+                const char *newVals[CAT_MAX_COLUMNS];
+                int newNull2[CAT_MAX_COLUMNS];
                 for (int ni = 0; ni < newNcols && ni < 64; ni++) {
                     int oi = mapping[ni];
                     if (oi < nf) {
