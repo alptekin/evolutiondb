@@ -52,17 +52,17 @@ void SetReturningAll(void)
 void AddReturningCol(const char *name)
 {
     g_returning.active = 1;
-    if (g_returning.colCount < 64)
+    if (g_returning.colCount < CAT_MAX_COLUMNS)
         strncpy(g_returning.cols[g_returning.colCount++], name, 127);
 }
 
 /* Thread-local RETURNING result buffer — populated by DML, read by query_executor */
-__thread char g_returning_buf[256][64][256]; /* max 256 rows × 64 cols × 256 chars */
-__thread int  g_returning_null[256][64];
+__thread char g_returning_buf[256][CAT_MAX_COLUMNS][256];
+__thread int  g_returning_null[256][CAT_MAX_COLUMNS];
 __thread int  g_returning_row_count = 0;
 __thread int  g_returning_col_count = 0;
-__thread char g_returning_col_names[64][128];
-__thread int  g_returning_col_types[64];
+__thread char g_returning_col_names[CAT_MAX_COLUMNS][128];
+__thread int  g_returning_col_types[CAT_MAX_COLUMNS];
 
 void returning_capture_row(const ColumnDesc *cols, int ncols,
                                   const char *vals[], const int is_null[], int nv)
@@ -96,7 +96,7 @@ void returning_capture_row(const ColumnDesc *cols, int ncols,
 
     /* Capture row values */
     if (g_returning.returnAll) {
-        for (int c = 0; c < ncols && c < 64; c++) {
+        for (int c = 0; c < ncols && c < CAT_MAX_COLUMNS; c++) {
             if (c < nv && vals[c] && !is_null[c])
                 strncpy(g_returning_buf[r][c], vals[c], 255);
             else
@@ -196,21 +196,21 @@ static int InsertReadColumnNames(const char *tblName,
  * table schema order. */
 static int reorder_row_for_column_map(const char *tblName, char *rowData)
 {
-    char tableColNames[64][128];
+    char tableColNames[CAT_MAX_COLUMNS][128];
     int numTableCols;
-    char *userVals[64];
+    char *userVals[CAT_MAX_COLUMNS];
     int numUserVals, i, j;
     char buf[RECORD_BUF_SIZE];
     char valBuf[RECORD_BUF_SIZE];
 
     if (g_ins.columnCount <= 0) return 0;
 
-    numTableCols = InsertReadColumnNames(tblName, tableColNames, 64);
+    numTableCols = InsertReadColumnNames(tblName, tableColNames, CAT_MAX_COLUMNS);
     if (numTableCols <= 0) return 0;
 
     strncpy(valBuf, rowData, sizeof(valBuf) - 1);
     valBuf[sizeof(valBuf) - 1] = '\0';
-    numUserVals = split_row_values(valBuf, userVals, 64);
+    numUserVals = split_row_values(valBuf, userVals, CAT_MAX_COLUMNS);
 
     if (numUserVals != g_ins.columnCount) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
@@ -253,12 +253,12 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         }
     }
 
-    char defaultVals[64][256];
-    int numDefaults = ReadDefaults(tblName, defaultVals, 64);
+    char defaultVals[CAT_MAX_COLUMNS][256];
+    int numDefaults = ReadDefaults(tblName, defaultVals, CAT_MAX_COLUMNS);
 
     /* Expression default tracking for pass 2 */
-    int exprDefCols[64];
-    char exprDefStrs[64][512];
+    int exprDefCols[CAT_MAX_COLUMNS];
+    char exprDefStrs[CAT_MAX_COLUMNS][512];
     int numExprDefs = 0;
 
     /* Pass 1: fill user values, literal defaults, function defaults.
@@ -277,7 +277,7 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
             strcat(buf, userVals[userIdx]);
         } else if (i < numDefaults && strcmp(defaultVals[i], "\x01NONE\x01") != 0) {
             /* Expression-based default — defer to pass 2 */
-            if (strncmp(defaultVals[i], "EXPR:", 5) == 0 && numExprDefs < 64) {
+            if (strncmp(defaultVals[i], "EXPR:", 5) == 0 && numExprDefs < CAT_MAX_COLUMNS) {
                 strcat(buf, "\x01NULL\x01");
                 exprDefCols[numExprDefs] = i;
                 strncpy(exprDefStrs[numExprDefs], defaultVals[i] + 5, 511);
@@ -320,13 +320,13 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
     /* Pass 2: evaluate expression defaults with row context */
     if (numExprDefs > 0) {
         /* Parse buf into column values */
-        char colValues[64][256];
+        char colValues[CAT_MAX_COLUMNS][256];
         char tmpBuf[RECORD_BUF_SIZE];
         strncpy(tmpBuf, buf, sizeof(tmpBuf) - 1);
         tmpBuf[sizeof(tmpBuf) - 1] = '\0';
         int ci = 0;
         char *tok = strtok(tmpBuf, ";");
-        while (tok && ci < 64) {
+        while (tok && ci < CAT_MAX_COLUMNS) {
             strncpy(colValues[ci], tok, 255);
             colValues[ci][255] = '\0';
             ci++;
@@ -364,13 +364,13 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
             if (reorderCols[i].generated_mode != GENMODE_NONE) { hasGenerated = 1; break; }
         }
         if (hasGenerated) {
-            char colValues[64][256];
+            char colValues[CAT_MAX_COLUMNS][256];
             char tmpBuf[RECORD_BUF_SIZE];
             strncpy(tmpBuf, buf, sizeof(tmpBuf) - 1);
             tmpBuf[sizeof(tmpBuf) - 1] = '\0';
             int ci = 0;
             char *tok = strtok(tmpBuf, ";");
-            while (tok && ci < 64) {
+            while (tok && ci < CAT_MAX_COLUMNS) {
                 strncpy(colValues[ci], tok, 255);
                 colValues[ci][255] = '\0';
                 ci++;
@@ -413,8 +413,8 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
 
 static int validate_types(const char *tblName, char **vals, int numValues)
 {
-    int colTypes[64];
-    int numTypes = ReadColumnTypes(tblName, colTypes, 64);
+    int colTypes[CAT_MAX_COLUMNS];
+    int numTypes = ReadColumnTypes(tblName, colTypes, CAT_MAX_COLUMNS);
     int i;
 
     if (numTypes <= 0) return 0;
@@ -443,18 +443,18 @@ static int validate_types(const char *tblName, char **vals, int numValues)
     }
     /* Validate values against active (non-dropped) column types */
     {
-        int activeTypes[64];
+        int activeTypes[CAT_MAX_COLUMNS];
         int na = 0;
         TableDesc vtd;
         ColumnDesc vcols[CAT_MAX_COLUMNS];
         int vncols;
         if (tapi_resolve(tblName, &vtd, vcols, &vncols) == 0) {
-            for (int ac = 0; ac < vncols && na < 64; ac++) {
+            for (int ac = 0; ac < vncols && na < CAT_MAX_COLUMNS; ac++) {
                 if (!vcols[ac].is_dropped)
                     activeTypes[na++] = colTypes[ac];
             }
         } else {
-            for (i = 0; i < numTypes && i < 64; i++)
+            for (i = 0; i < numTypes && i < CAT_MAX_COLUMNS; i++)
                 activeTypes[i] = colTypes[i];
             na = numTypes;
         }
@@ -468,8 +468,8 @@ static int validate_types(const char *tblName, char **vals, int numValues)
 
 static int validate_not_null(const char *tblName, char **vals, int numValues)
 {
-    int nullFlags[64];
-    int numFlags = ReadNullFlags(tblName, nullFlags, 64);
+    int nullFlags[CAT_MAX_COLUMNS];
+    int numFlags = ReadNullFlags(tblName, nullFlags, CAT_MAX_COLUMNS);
     int i;
 
     if (numFlags <= 0) return 0;
@@ -478,8 +478,8 @@ static int validate_not_null(const char *tblName, char **vals, int numValues)
         if (nullFlags[i] && (vals[i][0] == '\0' ||
             strcmp(vals[i], "\x01NULL\x01") == 0)) {
             /* Read column names for error message */
-            char colNames[64][128];
-            int nc = InsertReadColumnNames(tblName, colNames, 64);
+            char colNames[CAT_MAX_COLUMNS][128];
+            int nc = InsertReadColumnNames(tblName, colNames, CAT_MAX_COLUMNS);
 
             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "null value in column \"%s\" violates not-null constraint",
@@ -496,11 +496,11 @@ static int validate_not_null(const char *tblName, char **vals, int numValues)
 static int validate_unique(const char *tblName,
                            char **vals, int numValues)
 {
-    int uniqueFlags[64];
-    int numFlags = ReadUniqueFlags(tblName, uniqueFlags, 64);
+    int uniqueFlags[CAT_MAX_COLUMNS];
+    int numFlags = ReadUniqueFlags(tblName, uniqueFlags, CAT_MAX_COLUMNS);
 
-    char colNames[64][128];
-    int numColNames = InsertReadColumnNames(tblName, colNames, 64);
+    char colNames[CAT_MAX_COLUMNS][128];
+    int numColNames = InsertReadColumnNames(tblName, colNames, CAT_MAX_COLUMNS);
 
     /* Resolve table for scan */
     TableDesc td;
@@ -567,14 +567,14 @@ static int validate_unique(const char *tblName,
     char pkBuf[256];
     char recBuf[RECORD_BUF_SIZE];
     while (tapi_scan_next(&cursor, pkBuf, recBuf, sizeof(recBuf)) == 0) {
-        char fields[64][256];
-        int field_nulls[64];
+        char fields[CAT_MAX_COLUMNS][256];
+        int field_nulls[CAT_MAX_COLUMNS];
         int nf;
 
         int rec_len = tup_record_len(recBuf, sizeof(recBuf));
         if (rec_len <= 0) continue;
         nf = tup_extract_fields(recBuf, rec_len, colDescs, ncols,
-                                fields, field_nulls, 64);
+                                fields, field_nulls, CAT_MAX_COLUMNS);
         if (nf < 0) continue;
 
         /* Check single-column UNIQUE flags */
@@ -632,13 +632,13 @@ static int validate_check(const char *tblName, char **vals, int numValues)
 
     if (numChecks <= 0) return 0;
 
-    char colNames[64][128];
-    int numCols = InsertReadColumnNames(tblName, colNames, 64);
+    char colNames[CAT_MAX_COLUMNS][128];
+    int numCols = InsertReadColumnNames(tblName, colNames, CAT_MAX_COLUMNS);
     if (numCols <= 0) return 0;
 
-    char colValues[64][256];
+    char colValues[CAT_MAX_COLUMNS][256];
     int c;
-    for (c = 0; c < numCols && c < numValues && c < 64; c++) {
+    for (c = 0; c < numCols && c < numValues && c < CAT_MAX_COLUMNS; c++) {
         if (strcmp(vals[c], "\x01NULL\x01") == 0)
             colValues[c][0] = '\0';
         else {
@@ -698,8 +698,8 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
     int numCon = cat_list_constraints(td.table_id, constraints, 32);
     if (numCon <= 0) return 0;
 
-    char colNames[64][128];
-    int numColNames = InsertReadColumnNames(tblName, colNames, 64);
+    char colNames[CAT_MAX_COLUMNS][128];
+    int numColNames = InsertReadColumnNames(tblName, colNames, CAT_MAX_COLUMNS);
 
     for (int ci = 0; ci < numCon; ci++) {
         if (constraints[ci].constraint_type != 'F') continue;
@@ -794,7 +794,7 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
             int foundRef = 0;
             for (int si = 0; si < numSchemas; si++) {
                 TableDesc tables[64];
-                int numTables = cat_list_tables(schemas[si].schema_id, tables, 64);
+                int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
                 for (int ti = 0; ti < numTables; ti++) {
                     if (tables[ti].table_id == constraints[ci].ref_table_id) {
                         refTd = tables[ti];
@@ -850,13 +850,13 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                 char scanKey[256], scanRec[RECORD_BUF_SIZE];
                 while (tapi_scan_next(&scanCur, scanKey, scanRec, sizeof(scanRec)) == 0) {
                     /* Extract fields from scanned record */
-                    char scanFields[64][256];
-                    int scanNulls[64];
+                    char scanFields[CAT_MAX_COLUMNS][256];
+                    int scanNulls[CAT_MAX_COLUMNS];
                     int snf;
                     int sRecLen = tup_record_len(scanRec, sizeof(scanRec));
                     if (sRecLen <= 0) continue;
                     snf = tup_extract_fields(scanRec, sRecLen, refCols, refColCount,
-                                             scanFields, scanNulls, 64);
+                                             scanFields, scanNulls, CAT_MAX_COLUMNS);
                     if (snf < 0) continue;
 
                     /* Build composite value from referenced columns */
@@ -932,12 +932,12 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     char tmpRow[RECORD_BUF_SIZE];
     strncpy(tmpRow, rowData, sizeof(tmpRow) - 1);
     tmpRow[sizeof(tmpRow) - 1] = '\0';
-    char *vals[64];
-    int nv = split_row_values(tmpRow, vals, 64);
+    char *vals[CAT_MAX_COLUMNS];
+    int nv = split_row_values(tmpRow, vals, CAT_MAX_COLUMNS);
 
     /* Build is_null array from NULL_MARKER */
-    int is_null[64];
-    const char *vals_ptrs[64];
+    int is_null[CAT_MAX_COLUMNS];
+    const char *vals_ptrs[CAT_MAX_COLUMNS];
     for (int i = 0; i < nv; i++) {
         is_null[i] = (strcmp(vals[i], "\x01NULL\x01") == 0) ? 1 : 0;
         vals_ptrs[i] = vals[i];
@@ -952,16 +952,16 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
             if (cols[i].is_dropped) { has_dropped = 1; break; }
         }
         if (has_dropped) {
-            const char *orig_vals[64];
-            int orig_null[64];
+            const char *orig_vals[CAT_MAX_COLUMNS];
+            int orig_null[CAT_MAX_COLUMNS];
             int orig_nv = nv;
-            for (int i = 0; i < orig_nv && i < 64; i++) {
+            for (int i = 0; i < orig_nv && i < CAT_MAX_COLUMNS; i++) {
                 orig_vals[i] = vals_ptrs[i];
                 orig_null[i] = is_null[i];
             }
             int vi = 0;
             nv = ncols;
-            for (int i = 0; i < ncols && i < 64; i++) {
+            for (int i = 0; i < ncols && i < CAT_MAX_COLUMNS; i++) {
                 if (cols[i].is_dropped) {
                     vals_ptrs[i] = "\x01NULL\x01";
                     is_null[i] = 1;
@@ -978,8 +978,8 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     }
 
     /* Build PK key from parsed fields (use vals_ptrs which includes dropped col NULLs) */
-    char fields[64][256];
-    for (int i = 0; i < nv && i < 64; i++) {
+    char fields[CAT_MAX_COLUMNS][256];
+    for (int i = 0; i < nv && i < CAT_MAX_COLUMNS; i++) {
         strncpy(fields[i], vals_ptrs[i], 255);
         fields[i][255] = '\0';
     }
@@ -1022,9 +1022,9 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
 
     /* BEFORE INSERT trigger */
     {
-        const char *trig_cols[64];
-        const char *trig_vals[64];
-        for (int tc = 0; tc < ncols && tc < 64; tc++) {
+        const char *trig_cols[CAT_MAX_COLUMNS];
+        const char *trig_vals[CAT_MAX_COLUMNS];
+        for (int tc = 0; tc < ncols && tc < CAT_MAX_COLUMNS; tc++) {
             trig_cols[tc] = cols[tc].col_name;
             trig_vals[tc] = (tc < nv) ? vals_ptrs[tc] : NULL;
         }
@@ -1072,9 +1072,9 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
 
     /* AFTER INSERT trigger */
     {
-        const char *trig_cols[64];
-        const char *trig_vals[64];
-        for (int tc = 0; tc < ncols && tc < 64; tc++) {
+        const char *trig_cols[CAT_MAX_COLUMNS];
+        const char *trig_vals[CAT_MAX_COLUMNS];
+        for (int tc = 0; tc < ncols && tc < CAT_MAX_COLUMNS; tc++) {
             trig_cols[tc] = cols[tc].col_name;
             trig_vals[tc] = (tc < nv) ? vals_ptrs[tc] : NULL;
         }
@@ -1173,7 +1173,7 @@ int InsertProcess(void)
 
     for (i = 0; i < numRows; i++) {
         char valBuf[RECORD_BUF_SIZE];
-        char *vals[64];
+        char *vals[CAT_MAX_COLUMNS];
         int nv;
 
         strncpy(reorderedRows[i], rowPtrs[i], RECORD_BUF_SIZE - 1);
@@ -1191,7 +1191,7 @@ int InsertProcess(void)
             char genBuf[32];
             strncpy(valBuf, reorderedRows[i], sizeof(valBuf) - 1);
             valBuf[sizeof(valBuf) - 1] = '\0';
-            nv = split_row_values(valBuf, vals, 64);
+            nv = split_row_values(valBuf, vals, CAT_MAX_COLUMNS);
             int generated = apply_auto_increment(tblName, vals, nv, autoIncCol,
                                      &autoIncCounter, autoIncStep,
                                      genBuf, sizeof(genBuf));
@@ -1216,15 +1216,15 @@ int InsertProcess(void)
                 if (cols[gc].generated_mode != GENMODE_NONE) { hasGen = 1; break; }
             }
             if (hasGen) {
-                char colNames[64][128];
-                int numCN = InsertReadColumnNames(tblName, colNames, 64);
-                char colVals[64][256];
+                char colNames[CAT_MAX_COLUMNS][128];
+                int numCN = InsertReadColumnNames(tblName, colNames, CAT_MAX_COLUMNS);
+                char colVals[CAT_MAX_COLUMNS][256];
                 char tmpRow[RECORD_BUF_SIZE];
                 strncpy(tmpRow, reorderedRows[i], sizeof(tmpRow) - 1);
                 tmpRow[sizeof(tmpRow) - 1] = '\0';
                 int ci = 0;
                 char *tp = strtok(tmpRow, ";");
-                while (tp && ci < 64) {
+                while (tp && ci < CAT_MAX_COLUMNS) {
                     strncpy(colVals[ci], tp, 255);
                     colVals[ci][255] = '\0';
                     ci++;
@@ -1259,7 +1259,7 @@ int InsertProcess(void)
         /* Validate */
         strncpy(valBuf, reorderedRows[i], sizeof(valBuf) - 1);
         valBuf[sizeof(valBuf) - 1] = '\0';
-        nv = split_row_values(valBuf, vals, 64);
+        nv = split_row_values(valBuf, vals, CAT_MAX_COLUMNS);
 
         if (validate_types(tblName, vals, nv) != 0) {
             TruncateInsert();
@@ -1286,10 +1286,10 @@ int InsertProcess(void)
     /* Read index metadata for secondary indexes */
     IndexDesc secIdx[16];
     int nIdx = idx_load_secondary(tblName, secIdx, 16);
-    char colNames2[64][128];
+    char colNames2[CAT_MAX_COLUMNS][128];
     int numCols2 = 0;
     if (nIdx > 0)
-        numCols2 = InsertReadColumnNames(tblName, colNames2, 64);
+        numCols2 = InsertReadColumnNames(tblName, colNames2, CAT_MAX_COLUMNS);
 
     /* Insert each row */
     g_ins.rowCount = 0;
@@ -1301,7 +1301,7 @@ int InsertProcess(void)
         int upsert_unique_conflict = 0; /* set if UNIQUE index dup + onDupKeyUpdate */
         if (nIdx > 0) {
             char tmpPre[RECORD_BUF_SIZE];
-            char *valsPre[64];
+            char *valsPre[CAT_MAX_COLUMNS];
             int nvPre = 0;
             strncpy(tmpPre, reorderedRows[i], sizeof(tmpPre) - 1);
             tmpPre[sizeof(tmpPre) - 1] = '\0';
@@ -1313,8 +1313,8 @@ int InsertProcess(void)
                                         prePkBuf, sizeof(prePkBuf));
 
             /* Build field array for index key building */
-            char preFields[64][256];
-            for (int fi = 0; fi < nvPre && fi < 64; fi++) {
+            char preFields[CAT_MAX_COLUMNS][256];
+            for (int fi = 0; fi < nvPre && fi < CAT_MAX_COLUMNS; fi++) {
                 strncpy(preFields[fi], valsPre[fi], 255);
                 preFields[fi][255] = '\0';
             }
@@ -1366,12 +1366,12 @@ int InsertProcess(void)
                 char tmpR[RECORD_BUF_SIZE];
                 strncpy(tmpR, reorderedRows[i], sizeof(tmpR) - 1);
                 tmpR[sizeof(tmpR) - 1] = '\0';
-                char *rv[64];
+                char *rv[CAT_MAX_COLUMNS];
                 int rnv = 0;
                 char *rp = strtok(tmpR, ";");
                 while (rp && rnv < 64) { rv[rnv++] = rp; rp = strtok(NULL, ";"); }
-                char rFields[64][256];
-                for (int fi = 0; fi < rnv && fi < 64; fi++) {
+                char rFields[CAT_MAX_COLUMNS][256];
+                for (int fi = 0; fi < rnv && fi < CAT_MAX_COLUMNS; fi++) {
                     strncpy(rFields[fi], rv[fi], 255);
                     rFields[fi][255] = '\0';
                 }
@@ -1385,8 +1385,8 @@ int InsertProcess(void)
 
             /* Read existing row for expression eval context.
              * Column refs like "val" in "val = val + 1" resolve to existing values. */
-            char evalCols[64][128];
-            char evalVals[64][256];
+            char evalCols[CAT_MAX_COLUMNS][128];
+            char evalVals[CAT_MAX_COLUMNS][256];
             int evalCount = 0;
             {
                 BTree2 pk_tree2 = tapi_pk_tree(&td);
@@ -1395,12 +1395,12 @@ int InsertProcess(void)
                     char existBuf[RECORD_BUF_SIZE];
                     int existLen = tapi_heap_read(existing_rid, existBuf, sizeof(existBuf));
                     if (existLen > 0) {
-                        char fields[64][256];
-                        int is_null[64];
+                        char fields[CAT_MAX_COLUMNS][256];
+                        int is_null[CAT_MAX_COLUMNS];
                         int nf = tup_extract_fields_nm(existBuf, existLen,
                                                         cols, ncols,
-                                                        fields, is_null, 64);
-                        for (int ci = 0; ci < nf && ci < 64; ci++) {
+                                                        fields, is_null, CAT_MAX_COLUMNS);
+                        for (int ci = 0; ci < nf && ci < CAT_MAX_COLUMNS; ci++) {
                             strncpy(evalCols[ci], cols[ci].col_name, 127);
                             evalCols[ci][127] = '\0';
                             strncpy(evalVals[ci], fields[ci], 255);

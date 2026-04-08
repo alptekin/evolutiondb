@@ -31,9 +31,9 @@ static void PrintColumnHeaders(const char *tableName)
 static void PrintRecord(const char *data, int dataLen,
                         const ColumnDesc *cols, int ncols)
 {
-    char fields[64][256];
-    int is_null[64];
-    int nf = tup_extract_fields(data, dataLen, cols, ncols, fields, is_null, 64);
+    char fields[CAT_MAX_COLUMNS][256];
+    int is_null[CAT_MAX_COLUMNS];
+    int nf = tup_extract_fields(data, dataLen, cols, ncols, fields, is_null, CAT_MAX_COLUMNS);
     for (int i = 0; i < nf; i++) {
         if (is_null[i])
             printf("%-20s", "NULL");
@@ -65,9 +65,9 @@ static void GetFieldValue(const char *data, int dataLen,
                           const ColumnDesc *cols, int ncols,
                           int colIndex, char *buf, int bufSize)
 {
-    char fields[64][256];
-    int is_null[64];
-    int nf = tup_extract_fields(data, dataLen, cols, ncols, fields, is_null, 64);
+    char fields[CAT_MAX_COLUMNS][256];
+    int is_null[CAT_MAX_COLUMNS];
+    int nf = tup_extract_fields(data, dataLen, cols, ncols, fields, is_null, CAT_MAX_COLUMNS);
     if (colIndex < nf && !is_null[colIndex]) {
         strncpy(buf, fields[colIndex], bufSize - 1);
         buf[bufSize - 1] = '\0';

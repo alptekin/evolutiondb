@@ -226,8 +226,8 @@ int tapi_build_pk_key(const ColumnDesc *cols, int ncols,
                       const char *record, int record_len,
                       char *key_out, int key_size)
 {
-    char fields[64][256];
-    int is_null[64];
+    char fields[CAT_MAX_COLUMNS][256];
+    int is_null[CAT_MAX_COLUMNS];
     int nf = tup_extract_fields(record, record_len, cols, ncols,
                                 fields, is_null, 64);
     if (nf <= 0) return -1;

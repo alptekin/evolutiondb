@@ -27,8 +27,8 @@ static int update_build_mvcc_record(const char fields[][256], int nfields,
                                      const ColumnDesc *cols, int ncols,
                                      char *out, int buf_size)
 {
-    const char *valPtrs[64];
-    int nullFlags[64];
+    const char *valPtrs[CAT_MAX_COLUMNS];
+    int nullFlags[CAT_MAX_COLUMNS];
     int n = nfields < 64 ? nfields : 64;
     for (int i = 0; i < n; i++) {
         if (strcmp(fields[i], "\x01NULL\x01") == 0) {
@@ -93,7 +93,7 @@ static int update_resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
     int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
     for (int si = 0; si < numSchemas; si++) {
         TableDesc tables[64];
-        int numTables = cat_list_tables(schemas[si].schema_id, tables, 64);
+        int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
         for (int ti = 0; ti < numTables; ti++) {
             if (tables[ti].table_id == table_id) {
                 *outTd = tables[ti];
@@ -186,11 +186,11 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
             char childPk[256], childRec[RECORD_BUF_SIZE];
             while (tapi_scan_next(&childCursor, childPk, childRec, sizeof(childRec)) == 0) {
                 int childRecLen = tup_record_len(childRec, sizeof(childRec));
-                char scanFields[64][256];
+                char scanFields[CAT_MAX_COLUMNS][256];
                 int scanNf = UpdateExtractAllFields(childRec, childRecLen,
                                                      childTd.table_id,
                                                      childCols, childNCols,
-                                                     scanFields, NULL, 64);
+                                                     scanFields, NULL, CAT_MAX_COLUMNS);
                 char childFkValue[1024] = "";
                 int first = 1;
                 for (int fc = 0; fc < fkColCount; fc++) {
@@ -235,13 +235,13 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
         BTree2 childPkTree = tapi_pk_tree(&childTd);
 
         /* Read defaults for SET DEFAULT */
-        char childDefaults[64][256];
+        char childDefaults[CAT_MAX_COLUMNS][256];
         int numDefaults = 0;
         if (onUpdateAction == 4) {
             char childPath[1024];
             snprintf(childPath, sizeof(childPath), "root/%s/%s/%s",
                      g_currentDatabase, g_currentSchema, childTd.table_name);
-            numDefaults = ReadDefaults(childPath, childDefaults, 64);
+            numDefaults = ReadDefaults(childPath, childDefaults, CAT_MAX_COLUMNS);
         }
 
         /* Parse new PK value components for CASCADE */
@@ -267,11 +267,11 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
                 char childRec[RECORD_BUF_SIZE];
                 int childRecLen = tapi_heap_read(childRid, childRec, sizeof(childRec));
                 if (childRecLen > 0) {
-                    char fields[64][256];
+                    char fields[CAT_MAX_COLUMNS][256];
                     int numFields = UpdateExtractAllFields(childRec, childRecLen,
                                                            childTd.table_id,
                                                            childCols, childNCols,
-                                                           fields, NULL, 64);
+                                                           fields, NULL, CAT_MAX_COLUMNS);
 
                     for (int fc = 0; fc < fkColCount; fc++) {
                         if (fkColIndices[fc] >= 0 && fkColIndices[fc] < numFields) {
@@ -388,12 +388,12 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                            pkKey, existingData, existingDataLen, rid);
 
     /* Parse existing record into fields */
-    char fields[64][256];
-    char oldFields[64][256]; /* saved copy before SET modification */
-    int is_null_arr[64];
+    char fields[CAT_MAX_COLUMNS][256];
+    char oldFields[CAT_MAX_COLUMNS][256]; /* saved copy before SET modification */
+    int is_null_arr[CAT_MAX_COLUMNS];
     int numFields = UpdateExtractAllFields(existingData, existingDataLen,
                                             td->table_id, allCols, allNCols,
-                                            fields, is_null_arr, 64);
+                                            fields, is_null_arr, CAT_MAX_COLUMNS);
     memcpy(oldFields, fields, sizeof(oldFields));
 
     /* Replace only the SET columns with new values */
@@ -429,8 +429,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             }
         }
         if (hasGen) {
-            char genColNames[64][128];
-            int numGCN = UpdateReadColumnNames(tblName, genColNames, 64);
+            char genColNames[CAT_MAX_COLUMNS][128];
+            int numGCN = UpdateReadColumnNames(tblName, genColNames, CAT_MAX_COLUMNS);
             for (i = 0; i < allNCols && i < numFields; i++) {
                 if (allCols[i].generated_mode == GENMODE_STORED && allCols[i].generated_expr[0]) {
                     ExprNode *genExpr = expr_deserialize(allCols[i].generated_expr);
@@ -452,9 +452,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
     /* BEFORE UPDATE trigger */
     {
-        const char *tcols[64];
-        const char *told[64];
-        const char *tnew[64];
+        const char *tcols[CAT_MAX_COLUMNS];
+        const char *told[CAT_MAX_COLUMNS];
+        const char *tnew[CAT_MAX_COLUMNS];
         for (int tc = 0; tc < numMetaCols && tc < 64; tc++) {
             tcols[tc] = metaCols[tc];
             told[tc] = oldFields[tc];
@@ -471,9 +471,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         int numChecks = ReadCheckConstraintsWithNames(tblName, checkConstraints,
                                                        checkNames, MAX_CHECK_CONSTRAINTS);
         if (numChecks > 0) {
-            char chkColNames[64][128];
-            int numChkCols = UpdateReadColumnNames(tblName, chkColNames, 64);
-            char colValues[64][256];
+            char chkColNames[CAT_MAX_COLUMNS][128];
+            int numChkCols = UpdateReadColumnNames(tblName, chkColNames, CAT_MAX_COLUMNS);
+            char colValues[CAT_MAX_COLUMNS][256];
             int cv;
             for (cv = 0; cv < numFields && cv < 64; cv++) {
                 strncpy(colValues[cv], fields[cv], 255);
@@ -612,7 +612,7 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                 int foundRef = 0;
                 for (int si = 0; si < numSchemas; si++) {
                     TableDesc tables[64];
-                    int numTables = cat_list_tables(schemas[si].schema_id, tables, 64);
+                    int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
                     for (int ti = 0; ti < numTables; ti++) {
                         if (tables[ti].table_id == fkConstraints[fi].ref_table_id) {
                             refTd = tables[ti];
@@ -706,10 +706,10 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                 while (tapi_scan_next(&uqCursor, uqPkBuf, uqRecBuf, sizeof(uqRecBuf)) == 0) {
                     if (strcmp(uqPkBuf, pkKey) == 0) continue; /* skip self */
                     int uqRecLen = tup_record_len(uqRecBuf, sizeof(uqRecBuf));
-                    char uqFieldsArr[64][256];
+                    char uqFieldsArr[CAT_MAX_COLUMNS][256];
                     int uqNf = UpdateExtractAllFields(uqRecBuf, uqRecLen,
                                                        td->table_id, allCols, allNCols,
-                                                       uqFieldsArr, NULL, 64);
+                                                       uqFieldsArr, NULL, CAT_MAX_COLUMNS);
 
                     char existComposite[1024] = "";
                     for (int uc = 0; uc < numUqCols; uc++) {
@@ -991,9 +991,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
     /* AFTER UPDATE trigger */
     {
-        const char *tcols[64];
-        const char *told[64];
-        const char *tnew[64];
+        const char *tcols[CAT_MAX_COLUMNS];
+        const char *told[CAT_MAX_COLUMNS];
+        const char *tnew[CAT_MAX_COLUMNS];
         for (int tc = 0; tc < numMetaCols && tc < 64; tc++) {
             tcols[tc] = metaCols[tc];
             told[tc] = oldFields[tc];
@@ -1004,8 +1004,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
     /* RETURNING capture — returns NEW values */
     if (g_returning.active && g_returning_row_count < 256) {
-        const char *ret_vals[64];
-        int ret_null[64];
+        const char *ret_vals[CAT_MAX_COLUMNS];
+        int ret_null[CAT_MAX_COLUMNS];
         for (int c = 0; c < allNCols && c < 64; c++) {
             ret_vals[c] = fields[c];
             ret_null[c] = is_null_arr[c];
@@ -1038,7 +1038,7 @@ int evo_update_row(const char *tableName, const char *pkKey,
     }
 
     /* Build column name arrays for ApplyUpdateToRow */
-    char metaCols[64][256];
+    char metaCols[CAT_MAX_COLUMNS][256];
     int numMetaCols = 0;
     for (int i = 0; i < ncols && i < 64; i++) {
         strncpy(metaCols[i], cols[i].col_name, 255);
@@ -1047,8 +1047,8 @@ int evo_update_row(const char *tableName, const char *pkKey,
     }
 
     /* Convert setCols from char[][128] to char[][256] for ApplyUpdateToRow */
-    char setColsBuf[64][256];
-    char setValsBuf[64][256];
+    char setColsBuf[CAT_MAX_COLUMNS][256];
+    char setValsBuf[CAT_MAX_COLUMNS][256];
     int n = numSets < 64 ? numSets : 64;
     for (int i = 0; i < n; i++) {
         strncpy(setColsBuf[i], setCols[i], 255);
@@ -1076,7 +1076,7 @@ int UpdateProcess(void)
     int s, c;
 
     /* Parse g_ins.data tokens: SET values followed by WHERE data */
-    char allTokens[64][256];
+    char allTokens[CAT_MAX_COLUMNS][256];
     int numTokens = 0;
 
     strcpy(temp, g_ins.data);
@@ -1088,7 +1088,7 @@ int UpdateProcess(void)
     }
 
     /* Parse SET column names from g_ins.columnNames */
-    char setCols[64][256];
+    char setCols[CAT_MAX_COLUMNS][256];
     int numSetCols = 0;
 
     strcpy(temp, g_ins.columnNames);
@@ -1133,7 +1133,7 @@ int UpdateProcess(void)
     }
 
     /* Read column names from catalog */
-    char metaCols[64][256];
+    char metaCols[CAT_MAX_COLUMNS][256];
     int numMetaCols = 0;
     for (int i = 0; i < allNCols && i < 64; i++) {
         strncpy(metaCols[i], allCols[i].col_name, 255);
@@ -1143,7 +1143,7 @@ int UpdateProcess(void)
 
     /* Validate SET values against column types */
     {
-        int colTypes[64];
+        int colTypes[CAT_MAX_COLUMNS];
         int numTypes = 0;
         for (int i = 0; i < allNCols && i < 64; i++)
             colTypes[numTypes++] = allCols[i].type_code;
@@ -1205,10 +1205,10 @@ int UpdateProcess(void)
                             char uPk[256], uRec[RECORD_BUF_SIZE];
                             while (tapi_scan_next(&scanCur, uPk, uRec, sizeof(uRec)) == 0) {
                                 int uRecLen = tup_record_len(uRec, sizeof(uRec));
-                                char uFields[64][256];
+                                char uFields[CAT_MAX_COLUMNS][256];
                                 int uNf = UpdateExtractAllFields(uRec, uRecLen,
                                                                   td.table_id, allCols, allNCols,
-                                                                  uFields, NULL, 64);
+                                                                  uFields, NULL, CAT_MAX_COLUMNS);
                                 char existVal[256];
                                 if (c < uNf)
                                     strcpy(existVal, uFields[c]);
@@ -1235,7 +1235,7 @@ int UpdateProcess(void)
 
     if (g_expr.whereExpr != NULL) {
         /* ---------- Expression-based WHERE update ---------- */
-        char colNames[64][128];
+        char colNames[CAT_MAX_COLUMNS][128];
         int numCols = numMetaCols;
         for (int i = 0; i < numMetaCols; i++) {
             strncpy(colNames[i], metaCols[i], 127);
@@ -1259,10 +1259,10 @@ int UpdateProcess(void)
         if (tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
                 int recLen = tup_record_len(recBuf, sizeof(recBuf));
-                char colValues[64][256];
+                char colValues[CAT_MAX_COLUMNS][256];
                 int numExtracted = UpdateExtractAllFields(recBuf, recLen,
                                                           td.table_id, allCols, allNCols,
-                                                          colValues, NULL, 64);
+                                                          colValues, NULL, CAT_MAX_COLUMNS);
                 (void)numExtracted;
 
                 char result[512];
@@ -1314,7 +1314,7 @@ int UpdateProcess(void)
             if (matchKeys[i]) {
                 /* Capture old field values for concurrent index log
                  * BEFORE ApplyUpdateToRow modifies the record */
-                char updOldFields[64][256];
+                char updOldFields[CAT_MAX_COLUMNS][256];
                 int updOldNCols = 0;
                 if (g_conc_mod_log.active &&
                     td.table_id == g_conc_mod_log.table_id) {
@@ -1326,7 +1326,7 @@ int UpdateProcess(void)
                         if (ulen > 0) {
                             int urecLen = tup_record_len(urec, sizeof(urec));
                             updOldNCols = tup_extract_fields(urec, urecLen,
-                                allCols, allNCols, updOldFields, NULL, 64);
+                                allCols, allNCols, updOldFields, NULL, CAT_MAX_COLUMNS);
                         }
                     }
                 }
@@ -1363,7 +1363,7 @@ int UpdateProcess(void)
         strcpy(key, allTokens[numTokens - 1]);
 
         /* Capture old fields before update for concurrent index log */
-        char updOldFields2[64][256];
+        char updOldFields2[CAT_MAX_COLUMNS][256];
         int updOldNCols2 = 0;
         if (g_conc_mod_log.active &&
             td.table_id == g_conc_mod_log.table_id) {
@@ -1375,7 +1375,7 @@ int UpdateProcess(void)
                 if (ulen > 0) {
                     int urecLen = tup_record_len(urec, sizeof(urec));
                     updOldNCols2 = tup_extract_fields(urec, urecLen,
-                        allCols, allNCols, updOldFields2, NULL, 64);
+                        allCols, allNCols, updOldFields2, NULL, CAT_MAX_COLUMNS);
                 }
             }
         }
