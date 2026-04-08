@@ -366,6 +366,17 @@ int  ListGrantsForUser(const char *username,
                        int  max_entries);
 int  DropUserGrants(const char *username);
 
+/* Role management (UserMgmt.c) */
+int  CreateRoleProcess(const char *rolename);
+int  DropRoleProcess(const char *rolename);
+int  ListRoles(char names[][256], int max_roles);
+
+/* Role membership (GrantMgmt.c) */
+int  GrantRoleToUser(const char *rolename, const char *username);
+int  RevokeRoleFromUser(const char *rolename, const char *username);
+int  ListRolesForUser(const char *username, char roles[][256], int max);
+int  DropRoleAllMemberships(const char *rolename);
+
 /* Server-wide globals (NOT per-query, remain as true globals) */
 extern int  g_gui_mode;
 extern char g_dbRoot[1024];

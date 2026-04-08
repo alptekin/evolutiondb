@@ -41,6 +41,10 @@
 #define SCOPE_DATABASE 1
 #define SCOPE_SCHEMA   2
 #define SCOPE_TABLE    3
+#define SCOPE_ROLE     4   /* role membership: "user:4:rolename" */
+
+/* Forward declaration — defined below DropUserGrants */
+int ListRolesForUser(const char *username, char roles[][256], int max);
 
 /* ----------------------------------------------------------------
  *  Helpers
@@ -103,6 +107,7 @@ static const char *scope_type_str(int scope)
         case SCOPE_DATABASE: return "DATABASE";
         case SCOPE_SCHEMA:   return "SCHEMA";
         case SCOPE_TABLE:    return "TABLE";
+        case SCOPE_ROLE:     return "ROLE";
         default:             return "?";
     }
 }
@@ -207,6 +212,32 @@ int CheckPrivilege(const char *username,
         if (found & priv_bit) return 1;
         found = check_user_scope("PUBLIC", SCOPE_DATABASE, "*");
         if (found & priv_bit) return 1;
+    }
+
+    /* --- Check role-inherited grants --- */
+    {
+        char user_roles[16][256];
+        int nroles = ListRolesForUser(username, user_roles, 16);
+        for (int r = 0; r < nroles; r++) {
+            if (table && table[0] && schema && schema[0] && database && database[0]) {
+                snprintf(scope_name, sizeof(scope_name), "%s.%s.%s",
+                         database, schema, table);
+                found = check_user_scope(user_roles[r], SCOPE_TABLE, scope_name);
+                if (found & priv_bit) return 1;
+            }
+            if (schema && schema[0] && database && database[0]) {
+                snprintf(scope_name, sizeof(scope_name), "%s.%s",
+                         database, schema);
+                found = check_user_scope(user_roles[r], SCOPE_SCHEMA, scope_name);
+                if (found & priv_bit) return 1;
+            }
+            if (database && database[0]) {
+                found = check_user_scope(user_roles[r], SCOPE_DATABASE, database);
+                if (found & priv_bit) return 1;
+                found = check_user_scope(user_roles[r], SCOPE_DATABASE, "*");
+                if (found & priv_bit) return 1;
+            }
+        }
     }
 
     return 0; /* denied */
@@ -436,5 +467,92 @@ int DropUserGrants(const char *username)
     pthread_mutex_lock(&g_metadata_lock);
     cat_drop_all_grants_for_user(username);
     pthread_mutex_unlock(&g_metadata_lock);
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ *  Role membership functions
+ * ---------------------------------------------------------------- */
+
+int ListRolesForUser(const char *username, char roles[][256], int max)
+{
+    GrantDesc grants[64];
+    int ngrants = cat_list_grants_for_user(username, grants, 64);
+    int count = 0;
+    for (int i = 0; i < ngrants && count < max; i++) {
+        if (grants[i].scope_type == SCOPE_ROLE) {
+            strncpy(roles[count], grants[i].scope_name, 255);
+            roles[count][255] = '\0';
+            count++;
+        }
+    }
+    return count;
+}
+
+int GrantRoleToUser(const char *rolename, const char *username)
+{
+    /* Verify role exists */
+    if (!cat_is_role(rolename)) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "Role '%s' does not exist", rolename);
+        g_err.error = 1;
+        return -1;
+    }
+    /* Verify target is a user, not a role */
+    UserDesc ud;
+    if (cat_find_user(username, &ud) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "User '%s' does not exist", username);
+        g_err.error = 1;
+        return -1;
+    }
+    if (ud.is_role) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "'%s' is a role, not a user", username);
+        g_err.error = 1;
+        return -1;
+    }
+    /* Check if already a member */
+    GrantDesc gd;
+    if (cat_find_grant(username, SCOPE_ROLE, rolename, &gd) == 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "User '%s' is already a member of role '%s'", username, rolename);
+        g_err.error = 1;
+        return -1;
+    }
+    pthread_mutex_lock(&g_metadata_lock);
+    int rc = cat_create_grant(username, SCOPE_ROLE, rolename, "MEMBER", 0);
+    pthread_mutex_unlock(&g_metadata_lock);
+    if (rc < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "Failed to grant role '%s' to user '%s'", rolename, username);
+        g_err.error = 1;
+        return -1;
+    }
+    return 0;
+}
+
+int RevokeRoleFromUser(const char *rolename, const char *username)
+{
+    pthread_mutex_lock(&g_metadata_lock);
+    int rc = cat_drop_grant(username, SCOPE_ROLE, rolename);
+    pthread_mutex_unlock(&g_metadata_lock);
+    if (rc < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "User '%s' is not a member of role '%s'", username, rolename);
+        g_err.error = 1;
+        return -1;
+    }
+    return 0;
+}
+
+int DropRoleAllMemberships(const char *rolename)
+{
+    /* Scan all users, drop their SCOPE_ROLE grants for this role */
+    UserDesc users[64];
+    int nusers = cat_list_users(users, 64);
+    for (int i = 0; i < nusers; i++) {
+        cat_drop_grant(users[i].username, SCOPE_ROLE, rolename);
+    }
     return 0;
 }

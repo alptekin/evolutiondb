@@ -619,6 +619,22 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* ── SHOW ROLES ── */
+    if (stristr_found(sql, "roles")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "role_name", PG_OID_TEXT);
+
+        char rolenames[64][256];
+        int count = ListRoles(rolenames, 64);
+        for (int i = 0; i < count; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, rolenames[i]);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* ── SHOW GRANTS [FOR <user>] ── */
     if (stristr_found(sql, "grants")) {
         result_init(rs);
@@ -2917,6 +2933,86 @@ static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
     p += is_grant ? 5 : 6;
     while (*p && isspace((unsigned char)*p)) p++;
 
+    /* Detect role GRANT/REVOKE: no ON keyword before TO/FROM.
+     * GRANT rolename TO username  (no ON)
+     * REVOKE rolename FROM username  (no ON)
+     * vs. GRANT SELECT ON TABLE t TO user  (has ON) */
+    {
+        const char *scan = p;
+        int found_on = 0, found_to_from = 0;
+        const char *to_from_pos = NULL;
+        while (*scan && *scan != ';') {
+            if (!found_on &&
+                strncasecmp(scan, "ON", 2) == 0 &&
+                (scan == p || isspace((unsigned char)scan[-1])) &&
+                (isspace((unsigned char)scan[2]) || scan[2] == '\0')) {
+                found_on = 1;
+            }
+            if (!found_to_from && is_grant &&
+                strncasecmp(scan, "TO", 2) == 0 &&
+                (scan == p || isspace((unsigned char)scan[-1])) &&
+                (isspace((unsigned char)scan[2]) || scan[2] == '\0' || scan[2] == ';')) {
+                found_to_from = 1;
+                to_from_pos = scan;
+            }
+            if (!found_to_from && is_revoke &&
+                strncasecmp(scan, "FROM", 4) == 0 &&
+                (scan == p || isspace((unsigned char)scan[-1])) &&
+                (isspace((unsigned char)scan[4]) || scan[4] == '\0' || scan[4] == ';')) {
+                found_to_from = 1;
+                to_from_pos = scan;
+            }
+            scan++;
+        }
+
+        if (!found_on && found_to_from && to_from_pos) {
+            /* Role GRANT/REVOKE — extract rolename and username */
+            char rolename[256] = "";
+            int ri = 0;
+            while (*p && !isspace((unsigned char)*p) && *p != ';' && ri < 255)
+                rolename[ri++] = *p++;
+            rolename[ri] = '\0';
+
+            /* Skip to after TO or FROM */
+            p = to_from_pos + (is_grant ? 2 : 4);
+            while (*p && isspace((unsigned char)*p)) p++;
+
+            char username[256] = "";
+            int ui = 0;
+            while (*p && !isspace((unsigned char)*p) && *p != ';' && ui < 255)
+                username[ui++] = *p++;
+            username[ui] = '\0';
+
+            /* Auth: only admin can manage role membership */
+            if (strcasecmp(caller, "admin") != 0) {
+                result_init(rs);
+                result_set_error(rs, "42501",
+                    "Permission denied: only admin can manage role membership");
+                return 1;
+            }
+
+            result_init(rs);
+            if (is_grant) {
+                if (GrantRoleToUser(rolename, username) == 0) {
+                    snprintf(rs->command_tag, sizeof(rs->command_tag),
+                             "GRANT ROLE");
+                } else {
+                    result_set_error(rs, "42704", g_err.errorMsg);
+                    g_err.error = 0;
+                }
+            } else {
+                if (RevokeRoleFromUser(rolename, username) == 0) {
+                    snprintf(rs->command_tag, sizeof(rs->command_tag),
+                             "REVOKE ROLE");
+                } else {
+                    result_set_error(rs, "42704", g_err.errorMsg);
+                    g_err.error = 0;
+                }
+            }
+            return 1;
+        }
+    }
+
     /* Parse privilege list (everything before ON keyword) */
     char priv_buf[512] = "";
     {
@@ -3183,6 +3279,50 @@ static int handle_user_mgmt(const char *sql, ResultSet *rs)
             g_err.error = 0;
         }
         evo_secure_wipe(password, sizeof(password));
+        return 1;
+    }
+
+    /* CREATE ROLE <name> */
+    if (strncasecmp(p, "CREATE ROLE", 11) == 0 &&
+        isspace((unsigned char)p[11])) {
+        p += 11;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        char rolename[256];
+        int ri = 0;
+        while (*p && !isspace((unsigned char)*p) && *p != ';' && ri < 255)
+            rolename[ri++] = *p++;
+        rolename[ri] = '\0';
+
+        result_init(rs);
+        if (CreateRoleProcess(rolename) == 0) {
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "CREATE ROLE");
+        } else {
+            result_set_error(rs, "42710", g_err.errorMsg);
+            g_err.error = 0;
+        }
+        return 1;
+    }
+
+    /* DROP ROLE <name> */
+    if (strncasecmp(p, "DROP ROLE", 9) == 0 &&
+        isspace((unsigned char)p[9])) {
+        p += 9;
+        while (*p && isspace((unsigned char)*p)) p++;
+
+        char rolename[256];
+        int ri = 0;
+        while (*p && !isspace((unsigned char)*p) && *p != ';' && ri < 255)
+            rolename[ri++] = *p++;
+        rolename[ri] = '\0';
+
+        result_init(rs);
+        if (DropRoleProcess(rolename) == 0) {
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "DROP ROLE");
+        } else {
+            result_set_error(rs, "42704", g_err.errorMsg);
+            g_err.error = 0;
+        }
         return 1;
     }
 
