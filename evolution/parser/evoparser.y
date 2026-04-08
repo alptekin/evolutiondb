@@ -812,6 +812,21 @@ opt_for_update opt_into_list
         else
             ;
     }
+/* SELECT ... INTO table_name FROM ... — PostgreSQL-style SELECT INTO */
+| SELECT select_opts select_expr_list
+INTO NAME
+FROM table_references
+opt_where opt_groupby opt_having opt_orderby opt_limit
+    {
+        emit("SELECTINTO %d %d %s %d", $2, $3, $5, $7);
+        g_sel.distinct = ($2 & 02) ? 1 : 0;
+        g_create.ctasMode = CTAS_INFER;
+        strncpy(g_create.ctasTableName, $5, 255);
+        g_create.ctasTableName[255] = '\0';
+        g_create.ctasIfNotExists = 0;
+        g_create.ctasTemporary = 0;
+        free($5);
+    }
 ;
 
 opt_where: /* nil */
