@@ -133,8 +133,44 @@ static void capture_generated_id(const char *val)
 int GetInsertions(char *name)
 {
     if (g_ins_upsert_mode) return 1; /* suppress during ON DUPLICATE KEY UPDATE */
-    strcat(g_ins.data, name);
-    strcat(g_ins.data, ";");
+    if (!name) return -1;
+
+    /* Strip internal delimiter/separator bytes from user values to prevent
+     * field boundary corruption (FIELD_SEP=0x1F, ROW_SEP=0x02). */
+    size_t nlen = strlen(name);
+    char *safe = name;
+    char cleaned[RECORD_BUF_SIZE];
+    int has_ctl = 0;
+    for (size_t i = 0; i < nlen; i++) {
+        if (name[i] == FIELD_SEP_CHAR || name[i] == ROW_SEP) {
+            has_ctl = 1;
+            break;
+        }
+    }
+    if (has_ctl) {
+        size_t j = 0;
+        for (size_t i = 0; i < nlen && j < sizeof(cleaned) - 1; i++) {
+            if (name[i] != FIELD_SEP_CHAR && name[i] != ROW_SEP)
+                cleaned[j++] = name[i];
+        }
+        cleaned[j] = '\0';
+        safe = cleaned;
+        nlen = j;
+    }
+
+    /* Bounds check before appending */
+    size_t cur = strlen(g_ins.data);
+    if (cur + nlen + 1 >= RECORD_BUF_SIZE) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "INSERT data exceeds maximum record size (%d bytes)",
+                 RECORD_BUF_SIZE);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
+        return -1;
+    }
+
+    strcat(g_ins.data, safe);
+    strcat(g_ins.data, FIELD_SEP);
 
     return 1;
 }
@@ -142,7 +178,7 @@ int GetInsertions(char *name)
 int InsertRowSeparator(void)
 {
     int len = (int)strlen(g_ins.data);
-    if (len > 0 && g_ins.data[len - 1] == ';') {
+    if (len > 0 && g_ins.data[len - 1] == FIELD_SEP_CHAR) {
         g_ins.data[len - 1] = ROW_SEP;
     } else {
         g_ins.data[len] = ROW_SEP;
@@ -164,10 +200,10 @@ int TruncateInsert(void)
 static int split_row_values(char *row, char **vals, int maxVals)
 {
     int n = 0;
-    char *t = strtok(row, ";");
+    char *t = strtok(row, FIELD_SEP);
     while (t && n < maxVals) {
         vals[n++] = t;
-        t = strtok(NULL, ";");
+        t = strtok(NULL, FIELD_SEP);
     }
     return n;
 }
@@ -272,7 +308,7 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
                 break;
             }
         }
-        if (i > 0) strcat(buf, ";");
+        if (i > 0) strcat(buf, FIELD_SEP);
         if (userIdx >= 0) {
             strcat(buf, userVals[userIdx]);
         } else if (i < numDefaults && strcmp(defaultVals[i], "\x01NONE\x01") != 0) {
@@ -315,7 +351,7 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
             strcat(buf, "\x01NULL\x01");
         }
     }
-    strcat(buf, ";");
+    strcat(buf, FIELD_SEP);
 
     /* Pass 2: evaluate expression defaults with row context */
     if (numExprDefs > 0) {
@@ -325,12 +361,12 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         strncpy(tmpBuf, buf, sizeof(tmpBuf) - 1);
         tmpBuf[sizeof(tmpBuf) - 1] = '\0';
         int ci = 0;
-        char *tok = strtok(tmpBuf, ";");
+        char *tok = strtok(tmpBuf, FIELD_SEP);
         while (tok && ci < CAT_MAX_COLUMNS) {
             strncpy(colValues[ci], tok, 255);
             colValues[ci][255] = '\0';
             ci++;
-            tok = strtok(NULL, ";");
+            tok = strtok(NULL, FIELD_SEP);
         }
 
         /* Evaluate each expression default */
@@ -351,10 +387,10 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
         /* Rebuild buf from colValues */
         buf[0] = '\0';
         for (i = 0; i < numTableCols; i++) {
-            if (i > 0) strcat(buf, ";");
+            if (i > 0) strcat(buf, FIELD_SEP);
             strcat(buf, colValues[i]);
         }
-        strcat(buf, ";");
+        strcat(buf, FIELD_SEP);
     }
 
     /* Pass 3: evaluate STORED generated columns, set VIRTUAL to NULL */
@@ -369,12 +405,12 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
             strncpy(tmpBuf, buf, sizeof(tmpBuf) - 1);
             tmpBuf[sizeof(tmpBuf) - 1] = '\0';
             int ci = 0;
-            char *tok = strtok(tmpBuf, ";");
+            char *tok = strtok(tmpBuf, FIELD_SEP);
             while (tok && ci < CAT_MAX_COLUMNS) {
                 strncpy(colValues[ci], tok, 255);
                 colValues[ci][255] = '\0';
                 ci++;
-                tok = strtok(NULL, ";");
+                tok = strtok(NULL, FIELD_SEP);
             }
 
             for (i = 0; i < reorderNcols && i < numTableCols; i++) {
@@ -399,10 +435,10 @@ static int reorder_row_for_column_map(const char *tblName, char *rowData)
 
             buf[0] = '\0';
             for (i = 0; i < numTableCols; i++) {
-                if (i > 0) strcat(buf, ";");
+                if (i > 0) strcat(buf, FIELD_SEP);
                 strcat(buf, colValues[i]);
             }
-            strcat(buf, ";");
+            strcat(buf, FIELD_SEP);
         }
     }
 
@@ -921,14 +957,14 @@ static int apply_auto_increment(const char *tblName, char **vals, int numValues,
 }
 
 /* Store a single row into heap + PK B+ tree.
- * Converts semicolon-delimited rowData to binary tuple before storing.
+ * Converts FIELD_SEP-delimited rowData to binary tuple before storing.
  * Returns 0 on success, 1 on duplicate key, -1 on error. */
 static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
                             const char *tblName, char *rowData)
 {
     char pkKey[1024];
 
-    /* Parse semicolon-delimited rowData into fields */
+    /* Parse FIELD_SEP-delimited rowData into fields */
     char tmpRow[RECORD_BUF_SIZE];
     strncpy(tmpRow, rowData, sizeof(tmpRow) - 1);
     tmpRow[sizeof(tmpRow) - 1] = '\0';
@@ -1199,10 +1235,10 @@ int InsertProcess(void)
                 int k;
                 reorderedRows[i][0] = '\0';
                 for (k = 0; k < nv; k++) {
-                    if (k > 0) strcat(reorderedRows[i], ";");
+                    if (k > 0) strcat(reorderedRows[i], FIELD_SEP);
                     strcat(reorderedRows[i], vals[k]);
                 }
-                strcat(reorderedRows[i], ";");
+                strcat(reorderedRows[i], FIELD_SEP);
                 /* Capture first auto-generated value for LAST_INSERT_ID() */
                 if (generated == 1)
                     capture_generated_id(genBuf);
@@ -1223,12 +1259,12 @@ int InsertProcess(void)
                 strncpy(tmpRow, reorderedRows[i], sizeof(tmpRow) - 1);
                 tmpRow[sizeof(tmpRow) - 1] = '\0';
                 int ci = 0;
-                char *tp = strtok(tmpRow, ";");
+                char *tp = strtok(tmpRow, FIELD_SEP);
                 while (tp && ci < CAT_MAX_COLUMNS) {
                     strncpy(colVals[ci], tp, 255);
                     colVals[ci][255] = '\0';
                     ci++;
-                    tp = strtok(NULL, ";");
+                    tp = strtok(NULL, FIELD_SEP);
                 }
                 for (int gc = 0; gc < ncols && gc < ci; gc++) {
                     if (cols[gc].generated_mode == GENMODE_STORED && cols[gc].generated_expr[0]) {
@@ -1249,10 +1285,10 @@ int InsertProcess(void)
                 }
                 reorderedRows[i][0] = '\0';
                 for (int gc = 0; gc < ci; gc++) {
-                    if (gc > 0) strcat(reorderedRows[i], ";");
+                    if (gc > 0) strcat(reorderedRows[i], FIELD_SEP);
                     strcat(reorderedRows[i], colVals[gc]);
                 }
-                strcat(reorderedRows[i], ";");
+                strcat(reorderedRows[i], FIELD_SEP);
             }
         }
 
@@ -1305,8 +1341,8 @@ int InsertProcess(void)
             int nvPre = 0;
             strncpy(tmpPre, reorderedRows[i], sizeof(tmpPre) - 1);
             tmpPre[sizeof(tmpPre) - 1] = '\0';
-            char *tp = strtok(tmpPre, ";");
-            while (tp && nvPre < 64) { valsPre[nvPre++] = tp; tp = strtok(NULL, ";"); }
+            char *tp = strtok(tmpPre, FIELD_SEP);
+            while (tp && nvPre < 64) { valsPre[nvPre++] = tp; tp = strtok(NULL, FIELD_SEP); }
 
             /* Extract PK for secondary index values */
             tapi_build_pk_key_from_vals(cols, ncols, valsPre, nvPre,
@@ -1368,8 +1404,8 @@ int InsertProcess(void)
                 tmpR[sizeof(tmpR) - 1] = '\0';
                 char *rv[CAT_MAX_COLUMNS];
                 int rnv = 0;
-                char *rp = strtok(tmpR, ";");
-                while (rp && rnv < 64) { rv[rnv++] = rp; rp = strtok(NULL, ";"); }
+                char *rp = strtok(tmpR, FIELD_SEP);
+                while (rp && rnv < 64) { rv[rnv++] = rp; rp = strtok(NULL, FIELD_SEP); }
                 char rFields[CAT_MAX_COLUMNS][256];
                 for (int fi = 0; fi < rnv && fi < CAT_MAX_COLUMNS; fi++) {
                     strncpy(rFields[fi], rv[fi], 255);
@@ -1454,7 +1490,7 @@ int InsertProcess(void)
                 char *key;
                 strncpy(valBuf2, reorderedRows[i], sizeof(valBuf2) - 1);
                 valBuf2[sizeof(valBuf2) - 1] = '\0';
-                key = strtok(valBuf2, ";");
+                key = strtok(valBuf2, FIELD_SEP);
                 snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "duplicate key value violates unique constraint (key=%s, row %d)",
                          key ? key : "?", i + 1);
@@ -1508,9 +1544,9 @@ cleanup:
 
 char *ParseInsertion(char *arr)
 {
-    static char *str;
+    char *str;
 
-    str = strtok(arr, ";");
+    str = strtok(arr, FIELD_SEP);
 
     return str;
 }

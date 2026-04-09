@@ -595,14 +595,14 @@ int dist_move_table(const char *table_name, int dest_node_id,
                 char record[RECORD_BUF_SIZE];
 
                 while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
-                    /* Parse record fields (semicolon-delimited) */
+                    /* Parse record fields (FIELD_SEP-delimited) */
                     char *fields[64];
                     int nf = 0;
                     char *saveptr = NULL;
-                    char *tok = strtok_r(record, ";", &saveptr);
+                    char *tok = strtok_r(record, FIELD_SEP, &saveptr);
                     while (tok && nf < 64) {
                         fields[nf++] = tok;
-                        tok = strtok_r(NULL, ";", &saveptr);
+                        tok = strtok_r(NULL, FIELD_SEP, &saveptr);
                     }
 
                     /* Build INSERT statement */

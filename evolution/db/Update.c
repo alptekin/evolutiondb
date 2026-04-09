@@ -1080,11 +1080,11 @@ int UpdateProcess(void)
     int numTokens = 0;
 
     strcpy(temp, g_ins.data);
-    tok = strtok(temp, ";");
+    tok = strtok(temp, FIELD_SEP);
     while (tok && numTokens < 64) {
         strcpy(allTokens[numTokens], tok);
         numTokens++;
-        tok = strtok(NULL, ";");
+        tok = strtok(NULL, FIELD_SEP);
     }
 
     /* Parse SET column names from g_ins.columnNames */
@@ -1092,11 +1092,11 @@ int UpdateProcess(void)
     int numSetCols = 0;
 
     strcpy(temp, g_ins.columnNames);
-    tok = strtok(temp, ";");
+    tok = strtok(temp, FIELD_SEP);
     while (tok && numSetCols < 64) {
         strcpy(setCols[numSetCols], tok);
         numSetCols++;
-        tok = strtok(NULL, ";");
+        tok = strtok(NULL, FIELD_SEP);
     }
 
     int numSetVals;
@@ -1415,8 +1415,12 @@ int GetUpdateTableName(char *pname)
 
 int GetUpdateColumnName(char *pname)
 {
+    if (!pname) return -1;
+    size_t cur = strlen(g_ins.columnNames);
+    size_t add = strlen(pname) + 1;
+    if (cur + add >= 1024) return -1;
     strcat(g_ins.columnNames, pname);
-    strcat(g_ins.columnNames, ";");
+    strcat(g_ins.columnNames, FIELD_SEP);
     return 0;
 }
 
@@ -1434,7 +1438,7 @@ char *ParseUpdate(char *arr)
     char *str = NULL;
 
     g_temp[0] = '\0';
-    for (str = strtok(arr, ";"); str != NULL; str = strtok(NULL, ";"))
+    for (str = strtok(arr, FIELD_SEP); str != NULL; str = strtok(NULL, FIELD_SEP))
         strncpy(g_temp, str, sizeof(g_temp) - 1);
 
     return g_temp;
