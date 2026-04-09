@@ -1635,7 +1635,7 @@
 
 ---
 
-### Task 81: ⬜ Semicolon-Safe Storage (Storage Engine Fix)
+### Task 81: ✅ Semicolon-Safe Storage (Storage Engine Fix)
 
 **Goal:** Semicolons in data corrupt records. Fix with proper escaping.
 
