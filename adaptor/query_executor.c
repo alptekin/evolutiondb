@@ -198,6 +198,7 @@ int type_encoding_to_pg_oid(int typeEncoding)
     case 13: return PG_OID_VARCHAR; /* VARCHAR */
     case 18: return PG_OID_UUID;    /* UUID */
     case 22: return PG_OID_VARCHAR; /* BOOLEAN — send as VARCHAR to avoid DBeaver JDBC getByte() error */
+    case 23: return PG_OID_JSON;    /* JSON */
     default: return PG_OID_TEXT;    /* BLOB, TEXT, ENUM, SET, etc. */
     }
 }
@@ -217,6 +218,7 @@ static int pg_oid_to_type_encoding(int oid, int type_modifier)
     case PG_OID_TEXT:    return 140000;    /* TEXT */
     case PG_OID_DATE:    return 100010;    /* DATE */
     case PG_OID_UUID:    return 180036;    /* UUID */
+    case PG_OID_JSON:    return 230000;    /* JSON */
     default:             return 130255;    /* VARCHAR(255) fallback */
     }
 }
@@ -5628,16 +5630,28 @@ static void normalize_sql(char *sql)
     char *src, *dst;
     int len;
 
-    /* Pass 1: Remove double quotes around identifiers */
+    /* Pass 1: Remove double quotes around identifiers (skip single-quoted strings) */
     src = sql;
     dst = buf;
     while (*src) {
-        if (*src == '"') {
-            src++;  /* skip opening quote */
+        if (*src == '\'') {
+            /* Inside single-quoted string — copy verbatim */
+            *dst++ = *src++;
+            while (*src) {
+                if (*src == '\'' && *(src + 1) == '\'') {
+                    *dst++ = *src++; *dst++ = *src++;
+                } else if (*src == '\'') {
+                    *dst++ = *src++; break;
+                } else {
+                    *dst++ = *src++;
+                }
+            }
+        } else if (*src == '"') {
+            src++;  /* skip opening double quote */
             while (*src && *src != '"') {
                 *dst++ = *src++;
             }
-            if (*src == '"') src++;  /* skip closing quote */
+            if (*src == '"') src++;  /* skip closing double quote */
         } else {
             *dst++ = *src++;
         }
@@ -5645,14 +5659,25 @@ static void normalize_sql(char *sql)
     *dst = '\0';
     strcpy(sql, buf);
 
-    /* Pass 2: Remove "public." and "pg_catalog." prefixes (case-insensitive) */
+    /* Pass 2: Remove "public." and "pg_catalog." prefixes (skip single-quoted strings) */
     src = sql;
     dst = buf;
     while (*src) {
-        if (strncasecmp(src, "public.", 7) == 0) {
-            src += 7;  /* skip "public." */
+        if (*src == '\'') {
+            *dst++ = *src++;
+            while (*src) {
+                if (*src == '\'' && *(src + 1) == '\'') {
+                    *dst++ = *src++; *dst++ = *src++;
+                } else if (*src == '\'') {
+                    *dst++ = *src++; break;
+                } else {
+                    *dst++ = *src++;
+                }
+            }
+        } else if (strncasecmp(src, "public.", 7) == 0) {
+            src += 7;
         } else if (strncasecmp(src, "pg_catalog.", 11) == 0) {
-            src += 11;  /* skip "pg_catalog." */
+            src += 11;
         } else {
             *dst++ = *src++;
         }
@@ -5711,13 +5736,21 @@ static void normalize_sql(char *sql)
     }
 
     /* Pass 3: Remove "alias." prefix from qualified references.
-     * SKIP for JOIN queries — qualified names needed for ON conditions. */
+     * SKIP for JOIN queries — qualified names needed for ON conditions.
+     * SKIP content inside single-quoted strings (JSON paths etc.). */
     {
         if (!has_join) {
             src = sql;
             dst = buf;
+            int in_sq = 0;
             while (*src) {
-                if (*src == '.' && dst > buf &&
+                if (*src == '\'') {
+                    in_sq = !in_sq;
+                    *dst++ = *src++;
+                } else if (in_sq) {
+                    if (*src == '\\' && *(src + 1)) { *dst++ = *src++; }
+                    *dst++ = *src++;
+                } else if (*src == '.' && dst > buf &&
                     (isalpha((unsigned char)*(src - 1)) || *(src - 1) == '_') &&
                     (src[1] == '*' || isalpha((unsigned char)src[1]) || src[1] == '_')) {
                     char *alias_start = dst - 1;

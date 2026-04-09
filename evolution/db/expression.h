@@ -138,7 +138,30 @@ typedef enum {
     EXPR_WIN_LAG,         /* LAG(expr [, offset [, default]]) OVER (...) */
     EXPR_WIN_NTILE,       /* NTILE(n) OVER (...) */
     EXPR_WIN_PERCENT_RANK,/* PERCENT_RANK() OVER (...) */
-    EXPR_WIN_CUME_DIST    /* CUME_DIST() OVER (...) */
+    EXPR_WIN_CUME_DIST,   /* CUME_DIST() OVER (...) */
+
+    /* JSON operators and functions (MySQL-compatible) */
+    EXPR_JSON_ARROW,        /* col->'key' — returns JSON value */
+    EXPR_JSON_ARROW_TEXT,   /* col->>'key' — returns text value */
+    EXPR_JSON_EXTRACT,      /* JSON_EXTRACT(col, '$.path') */
+    EXPR_JSON_UNQUOTE,      /* JSON_UNQUOTE(expr) */
+    EXPR_JSON_TYPE,         /* JSON_TYPE(expr) */
+    EXPR_JSON_LENGTH,       /* JSON_LENGTH(expr) */
+    EXPR_JSON_DEPTH,        /* JSON_DEPTH(expr) */
+    EXPR_JSON_VALID,        /* JSON_VALID(expr) */
+    EXPR_JSON_KEYS,         /* JSON_KEYS(expr) */
+    EXPR_JSON_PRETTY,       /* JSON_PRETTY(expr) */
+    EXPR_JSON_QUOTE,        /* JSON_QUOTE(expr) */
+    EXPR_JSON_SET,          /* JSON_SET(doc, path, val) */
+    EXPR_JSON_INSERT,       /* JSON_INSERT(doc, path, val) */
+    EXPR_JSON_REPLACE,      /* JSON_REPLACE(doc, path, val) */
+    EXPR_JSON_REMOVE,       /* JSON_REMOVE(doc, path) */
+    EXPR_JSON_CONTAINS,     /* JSON_CONTAINS(target, candidate) */
+    EXPR_JSON_CONTAINS_PATH,/* JSON_CONTAINS_PATH(doc, mode, path) */
+    EXPR_JSON_SEARCH,       /* JSON_SEARCH(doc, mode, search_str) */
+    EXPR_JSON_OBJECT,       /* JSON_OBJECT(k1, v1, k2, v2, ...) */
+    EXPR_JSON_ARRAY,        /* JSON_ARRAY(v1, v2, ...) */
+    EXPR_JSON_ARRAYAGG      /* JSON_ARRAYAGG(expr) — aggregate */
 } ExprNodeType;
 
 typedef struct ExprNode {
@@ -199,6 +222,8 @@ ExprNode *expr_make_upper(ExprNode *arg);
 ExprNode *expr_make_lower(ExprNode *arg);
 ExprNode *expr_make_length(ExprNode *arg);
 ExprNode *expr_make_concat(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_json_arrow(ExprNode *left, ExprNode *right);
+ExprNode *expr_make_json_arrow_text(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_replace(ExprNode *str, ExprNode *from, ExprNode *to);
 ExprNode *expr_make_coalesce(ExprNode *left, ExprNode *right);
 ExprNode *expr_make_gen_random_uuid(void);

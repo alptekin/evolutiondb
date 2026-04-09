@@ -236,6 +236,16 @@ int ValidateValue(const char *value, int typeEncoding)
         }
         break;
 
+    case 23: /* JSON */
+        if (evo_json_validate(value) != 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "invalid JSON: '%.200s'", value);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DATA_EXCEPTION);
+            return -1;
+        }
+        break;
+
     default:
         break; /* DATE/TIME, BINARY, BLOB, TEXT, ENUM, SET — no validation */
     }

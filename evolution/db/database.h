@@ -204,6 +204,29 @@ void SelectAll(void);
 
 int ReadColumnTypes(const char *tblName, int *types, int maxCols);
 int ValidateValue(const char *value, int typeEncoding);
+
+/* JSON support (Json.c) — MySQL-compatible functions */
+int evo_json_validate(const char *json_str);
+int evo_json_extract(const char *json_str, const char *path,
+                     char *out, int out_size, int as_text);
+int evo_json_type(const char *json_str, char *out, int out_size);
+int evo_json_length(const char *json_str);
+int evo_json_depth(const char *json_str);
+int evo_json_keys(const char *json_str, char *out, int out_size);
+int evo_json_pretty(const char *json_str, char *out, int out_size);
+int evo_json_quote(const char *str, char *out, int out_size);
+int evo_json_unquote(const char *json_str, char *out, int out_size);
+int evo_json_contains(const char *target, const char *candidate);
+int evo_json_contains_path(const char *json_str, int mode_all,
+                           const char **paths, int npaths);
+int evo_json_search(const char *json_str, int find_all,
+                    const char *search_str, char *out, int out_size);
+int evo_json_set(const char *json_str, const char *path,
+                 const char *new_val, char *out, int out_size, int mode);
+int evo_json_object(const char **keys, const char **values, int n,
+                    char *out, int out_size);
+int evo_json_array(const char **values, int n, char *out, int out_size);
+
 void SetColumnNotNull(void);
 void SetColumnPrimaryKey(void);
 void SetColumnUnique(void);

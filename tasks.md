@@ -1656,7 +1656,7 @@
 
 ## Day 42 — JSON & Sequences
 
-### Task 82: ⬜ JSON / JSONB Support (Feature #51)
+### Task 82: ✅ JSON / JSONB Support (Feature #51)
 
 **Goal:** Basic JSON storage and query functions.
 
