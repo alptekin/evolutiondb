@@ -602,7 +602,7 @@ int DeleteProcess(void)
         printf("%d record(s) deleted.\n", deleted);
     } else {
         /* ---------- Legacy PK-based delete ---------- */
-        char *str = strtok(g_ins.data, ";");
+        char *str = strtok(g_ins.data, FIELD_SEP);
         if (!str) {
             g_del.rowCount = 0;
             TruncateDelete();

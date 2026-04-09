@@ -36,6 +36,11 @@ extern __thread int g_lock_timeout_ms;
 /* Safe path buffer size — all file-path buffers should use this */
 #define SAFE_PATH_MAX 2048
 
+/* Field separator for in-memory intermediate representation.
+ * ASCII Unit Separator (0x1F) — cannot appear in SQL string literals. */
+#define FIELD_SEP      "\x1F"
+#define FIELD_SEP_CHAR '\x1F'
+
 /* Function Prototypes */
 int GetInsertions(char *name);
 int InsertRowSeparator(void);
