@@ -177,6 +177,8 @@ ITERATE					{ return ITERATE; }
 CONTINUE				{ return CONTINUE; }
 RESTART					{ return RESTART; }
 
+JSONB					{ return JSON; }
+JSON					{ return JSON; }
 JOIN					{ return JOIN; }
 IDENTITY				{ return IDENTITY; }
 INDEX					{ return INDEX; }
@@ -371,6 +373,8 @@ X'[0-9A-F]+' |																		/* hex strings */
 B'[01]+'				{ yylval->strval = strdup(yytext); return STRING; }
 
 
+"->>"					{ return JSON_ARROW_TEXT; }									/* JSON ->> */
+"->"					{ return JSON_ARROW; }										/* JSON -> */
 [-+&~|^/%*(),.;!]		{ return yytext[0]; }										/* operators */
 "&&"					{ return ANDOP; }
 "||"					{ return OR; }
@@ -426,6 +430,26 @@ LOG/"("					{ return FLOG; }
 LOG10/"("				{ return FLOG10; }
 SIGN/"("				{ return FSIGN; }
 PI/"("					{ return FPI; }
+
+JSON_EXTRACT/"("		{ return FJSON_EXTRACT; }
+JSON_UNQUOTE/"("		{ return FJSON_UNQUOTE; }
+JSON_TYPE/"("			{ return FJSON_TYPE; }
+JSON_LENGTH/"("			{ return FJSON_LENGTH; }
+JSON_DEPTH/"("			{ return FJSON_DEPTH; }
+JSON_VALID/"("			{ return FJSON_VALID; }
+JSON_KEYS/"("			{ return FJSON_KEYS; }
+JSON_PRETTY/"("			{ return FJSON_PRETTY; }
+JSON_QUOTE/"("			{ return FJSON_QUOTE; }
+JSON_SET/"("			{ return FJSON_SET; }
+JSON_INSERT/"("			{ return FJSON_INSERT; }
+JSON_REPLACE/"("		{ return FJSON_REPLACE; }
+JSON_REMOVE/"("			{ return FJSON_REMOVE; }
+JSON_CONTAINS/"("		{ return FJSON_CONTAINS; }
+JSON_CONTAINS_PATH/"("	{ return FJSON_CONTAINS_PATH; }
+JSON_SEARCH/"("			{ return FJSON_SEARCH; }
+JSON_OBJECT/"("			{ return FJSON_OBJECT; }
+JSON_ARRAY/"("			{ return FJSON_ARRAY; }
+JSON_ARRAYAGG/"("		{ return FJSON_ARRAYAGG; }
 
 ROW_NUMBER/"("			{ return FROW_NUMBER; }
 RANK					{ int c = input(yyscanner); unput(c); if(c == '(') return FRANK; yylval->strval = strdup(yytext); return NAME; }

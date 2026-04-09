@@ -123,6 +123,8 @@ ExprNode *expr_make_binop(ExprNodeType op, ExprNode *left, ExprNode *right)
         case EXPR_BITAND: ops = "&"; break;
         case EXPR_BITOR:  ops = "|"; break;
         case EXPR_BITXOR: ops = "^"; break;
+        case EXPR_JSON_ARROW:      ops = "->"; break;
+        case EXPR_JSON_ARROW_TEXT: ops = "->>"; break;
         default: break;
         }
         snprintf(e->display, sizeof(e->display), "%s %s %s",
@@ -741,6 +743,32 @@ ExprNode *expr_make_concat(ExprNode *a, ExprNode *b)
     return e;
 }
 
+ExprNode *expr_make_json_arrow(ExprNode *left, ExprNode *right)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_JSON_ARROW;
+    e->left  = left;
+    e->right = right;
+    snprintf(e->display, sizeof(e->display), "%s->'%s'",
+             left ? left->display : "?",
+             right ? right->display : "?");
+    return e;
+}
+
+ExprNode *expr_make_json_arrow_text(ExprNode *left, ExprNode *right)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_JSON_ARROW_TEXT;
+    e->left  = left;
+    e->right = right;
+    snprintf(e->display, sizeof(e->display), "%s->>'%s'",
+             left ? left->display : "?",
+             right ? right->display : "?");
+    return e;
+}
+
 ExprNode *expr_make_replace(ExprNode *str, ExprNode *from, ExprNode *to)
 {
     ExprNode *e = expr_alloc();
@@ -1345,6 +1373,196 @@ int expr_evaluate(const ExprNode *e,
             return 1;
         }
         snprintf(out_buf, buf_size, "%s%s", buf_a, buf_b);
+        return 1;
+    }
+
+    if (e->type == EXPR_JSON_ARROW || e->type == EXPR_JSON_ARROW_TEXT) {
+        char json_buf[4096], key_buf[256];
+        int ok_j = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                           num_cols, json_buf, sizeof(json_buf)) : 0;
+        int ok_k = e->right ? expr_evaluate(e->right, col_names, col_values,
+                                            num_cols, key_buf, sizeof(key_buf)) : 0;
+        if (!ok_j || strcmp(json_buf, NULL_MARKER) == 0 ||
+            !ok_k || strcmp(key_buf, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        int as_text = (e->type == EXPR_JSON_ARROW_TEXT) ? 1 : 0;
+        int rc = evo_json_extract(json_buf, key_buf, out_buf, buf_size, as_text);
+        if (rc <= 0)
+            strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+
+    /* ── JSON functions (MySQL-compatible) ── */
+    if (e->type == EXPR_JSON_EXTRACT) {
+        char jbuf[4096], pbuf[256];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, pbuf, sizeof(pbuf)) : 0;
+        if (!ok1 || !ok2 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int rc = evo_json_extract(jbuf, pbuf, out_buf, buf_size, 0);
+        if (rc <= 0) strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_UNQUOTE) {
+        char jbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        evo_json_unquote(jbuf, out_buf, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_TYPE) {
+        char jbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        if (evo_json_type(jbuf, out_buf, buf_size) != 0) strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_LENGTH) {
+        char jbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int n = evo_json_length(jbuf);
+        if (n < 0) strncpy(out_buf, NULL_MARKER, buf_size);
+        else snprintf(out_buf, buf_size, "%d", n);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_DEPTH) {
+        char jbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int d = evo_json_depth(jbuf);
+        if (d < 0) strncpy(out_buf, NULL_MARKER, buf_size);
+        else snprintf(out_buf, buf_size, "%d", d);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_VALID) {
+        char jbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { snprintf(out_buf, buf_size, "0"); return 1; }
+        snprintf(out_buf, buf_size, "%d", evo_json_validate(jbuf) == 0 ? 1 : 0);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_KEYS) {
+        char jbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        if (evo_json_keys(jbuf, out_buf, buf_size) != 0) strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_PRETTY) {
+        char jbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        if (evo_json_pretty(jbuf, out_buf, buf_size) != 0) strncpy(out_buf, jbuf, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_QUOTE) {
+        char sbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, sbuf, sizeof(sbuf)) : 0;
+        if (!ok1 || strcmp(sbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        evo_json_quote(sbuf, out_buf, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_SET || e->type == EXPR_JSON_INSERT ||
+        e->type == EXPR_JSON_REPLACE) {
+        char jbuf[4096], pbuf[256], vbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, pbuf, sizeof(pbuf)) : 0;
+        int ok3 = e->extra ? expr_evaluate(e->extra, col_names, col_values, num_cols, vbuf, sizeof(vbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int mode = (e->type == EXPR_JSON_SET) ? 0 :
+                   (e->type == EXPR_JSON_INSERT) ? 1 : 2;
+        evo_json_set(jbuf, pbuf, vbuf, out_buf, buf_size, mode);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_REMOVE) {
+        char jbuf[4096], pbuf[256];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, pbuf, sizeof(pbuf)) : 0;
+        if (!ok1 || strcmp(jbuf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        evo_json_set(jbuf, pbuf, NULL, out_buf, buf_size, 3); /* mode 3 = REMOVE */
+        return 1;
+    }
+    if (e->type == EXPR_JSON_CONTAINS) {
+        char tbuf[4096], cbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, tbuf, sizeof(tbuf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, cbuf, sizeof(cbuf)) : 0;
+        if (!ok1 || !ok2) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%d", evo_json_contains(tbuf, cbuf));
+        return 1;
+    }
+    if (e->type == EXPR_JSON_CONTAINS_PATH) {
+        char jbuf[4096], mbuf[32], pbuf[256];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, mbuf, sizeof(mbuf)) : 0;
+        int ok3 = e->extra ? expr_evaluate(e->extra, col_names, col_values, num_cols, pbuf, sizeof(pbuf)) : 0;
+        if (!ok1 || !ok2 || !ok3) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int mode_all = (strcasecmp(mbuf, "all") == 0) ? 1 : 0;
+        const char *paths[1] = { pbuf };
+        snprintf(out_buf, buf_size, "%d", evo_json_contains_path(jbuf, mode_all, paths, 1));
+        return 1;
+    }
+    if (e->type == EXPR_JSON_SEARCH) {
+        char jbuf[4096], mbuf[32], sbuf[256];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, jbuf, sizeof(jbuf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, mbuf, sizeof(mbuf)) : 0;
+        int ok3 = e->extra ? expr_evaluate(e->extra, col_names, col_values, num_cols, sbuf, sizeof(sbuf)) : 0;
+        if (!ok1 || !ok2 || !ok3) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int find_all = (strcasecmp(mbuf, "all") == 0) ? 1 : 0;
+        if (evo_json_search(jbuf, find_all, sbuf, out_buf, buf_size) <= 0)
+            strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_OBJECT) {
+        char kbuf[256], vbuf[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, kbuf, sizeof(kbuf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, vbuf, sizeof(vbuf)) : 0;
+        if (!ok1 || !ok2) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        /* Check if value is numeric/boolean/null — use as-is; otherwise quote */
+        char qval[4096];
+        if (evo_json_validate(vbuf) == 0) {
+            strncpy(qval, vbuf, sizeof(qval) - 1);
+        } else {
+            evo_json_quote(vbuf, qval, sizeof(qval));
+        }
+        const char *keys[1] = { kbuf };
+        const char *vals[1] = { qval };
+        evo_json_object(keys, vals, 1, out_buf, buf_size);
+        return 1;
+    }
+    if (e->type == EXPR_JSON_ARRAY) {
+        char v1[4096];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, v1, sizeof(v1)) : 0;
+        if (!ok1) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        char qv1[4096];
+        if (evo_json_validate(v1) == 0) strncpy(qv1, v1, sizeof(qv1) - 1);
+        else evo_json_quote(v1, qv1, sizeof(qv1));
+        if (e->right) {
+            char v2[4096], qv2[4096];
+            expr_evaluate(e->right, col_names, col_values, num_cols, v2, sizeof(v2));
+            if (evo_json_validate(v2) == 0) strncpy(qv2, v2, sizeof(qv2) - 1);
+            else evo_json_quote(v2, qv2, sizeof(qv2));
+            if (e->extra) {
+                char v3[4096], qv3[4096];
+                expr_evaluate(e->extra, col_names, col_values, num_cols, v3, sizeof(v3));
+                if (evo_json_validate(v3) == 0) strncpy(qv3, v3, sizeof(qv3) - 1);
+                else evo_json_quote(v3, qv3, sizeof(qv3));
+                const char *arr[3] = { qv1, qv2, qv3 };
+                evo_json_array(arr, 3, out_buf, buf_size);
+            } else {
+                const char *arr[2] = { qv1, qv2 };
+                evo_json_array(arr, 2, out_buf, buf_size);
+            }
+        } else {
+            const char *arr[1] = { qv1 };
+            evo_json_array(arr, 1, out_buf, buf_size);
+        }
+        return 1;
+    }
+    if (e->type == EXPR_JSON_ARRAYAGG) {
+        /* Aggregate — handled by collect_select_results, not here */
+        strncpy(out_buf, NULL_MARKER, buf_size);
         return 1;
     }
 
@@ -2158,6 +2376,12 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
     case EXPR_COALESCE:   pos = expr_serialize_r(e->left, buf, pos, bufSize);
                           pos = expr_serialize_r(e->right, buf, pos, bufSize);
                           return ser_append(buf, pos, bufSize, "COA");
+    case EXPR_JSON_ARROW: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "JA");
+    case EXPR_JSON_ARROW_TEXT: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                               pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                               return ser_append(buf, pos, bufSize, "JAT");
     default:
         return pos; /* unsupported node type — skip */
     }
@@ -2236,6 +2460,8 @@ ExprNode *expr_deserialize(const char *buf)
             else if (strcmp(tok, "NLIKE") == 0) node = expr_make_not_like(left, right);
             else if (strcmp(tok, "CAT") == 0)   node = expr_make_concat(left, right);
             else if (strcmp(tok, "COA") == 0)   node = expr_make_coalesce(left, right);
+            else if (strcmp(tok, "JA") == 0)    node = expr_make_json_arrow(left, right);
+            else if (strcmp(tok, "JAT") == 0)   node = expr_make_json_arrow_text(left, right);
             else {
                 /* Unknown op — push operands back and skip */
                 stack[sp++] = left;

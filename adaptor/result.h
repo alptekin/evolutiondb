@@ -22,6 +22,7 @@
 #define PG_OID_DATE    1082
 #define PG_OID_BOOL    16
 #define PG_OID_UUID    2950
+#define PG_OID_JSON    114
 
 typedef struct {
     char   name[MAX_COL_NAME];
