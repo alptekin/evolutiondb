@@ -82,6 +82,7 @@
 %left '+' '-'
 %left '*' '/' '%' MOD
 %left '^'
+%left JSON_ARROW JSON_ARROW_TEXT
 %nonassoc UMINUS
 %token ALTER
 %token ADD
@@ -299,6 +300,9 @@
 %token UNION
 %token UNIQUE
 %token UUID
+%token JSON
+%token JSON_ARROW
+%token JSON_ARROW_TEXT
 %token VIEW
 %token USING
 %token USE
@@ -350,6 +354,11 @@
 %token FROW_NUMBER FRANK FDENSE_RANK
 %token FLEAD FLAG FNTILE FPERCENT_RANK FCUME_DIST
 %token OVER PARTITION
+%token FJSON_EXTRACT FJSON_UNQUOTE FJSON_TYPE FJSON_LENGTH FJSON_DEPTH
+%token FJSON_VALID FJSON_KEYS FJSON_PRETTY FJSON_QUOTE
+%token FJSON_SET FJSON_INSERT FJSON_REPLACE FJSON_REMOVE
+%token FJSON_CONTAINS FJSON_CONTAINS_PATH FJSON_SEARCH
+%token FJSON_OBJECT FJSON_ARRAY FJSON_ARRAYAGG
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -474,6 +483,8 @@ expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3)
 | expr '&' expr									{ emit("BITAND"); $$ = expr_make_binop(EXPR_BITAND, $1, $3); }
 | expr '^' expr									{ emit("BITXOR"); $$ = expr_make_binop(EXPR_BITXOR, $1, $3); }
 | expr SHIFT expr								{ emit("SHIFT %s", $2==1?"left":"right"); $$ = expr_make_binop($2==1 ? EXPR_SHIFT_LEFT : EXPR_SHIFT_RIGHT, $1, $3); }
+| expr JSON_ARROW expr							{ emit("JSON_ARROW"); $$ = expr_make_json_arrow($1, $3); }
+| expr JSON_ARROW_TEXT expr						{ emit("JSON_ARROW_TEXT"); $$ = expr_make_json_arrow_text($1, $3); }
 | NOT expr									{ emit("NOT"); $$ = expr_make_not($2); }
 | '!' expr									{ emit("NOT"); $$ = expr_make_not($2); }
 | expr COMPARISON expr
@@ -650,6 +661,29 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FHOUR '(' expr ')'                               { emit("CALL 1 HOUR"); $$ = expr_make_func1(EXPR_HOUR, $3, "HOUR"); }
 | FMINUTE '(' expr ')'                             { emit("CALL 1 MINUTE"); $$ = expr_make_func1(EXPR_MINUTE, $3, "MINUTE"); }
 | FSECOND '(' expr ')'                             { emit("CALL 1 SECOND"); $$ = expr_make_func1(EXPR_SECOND, $3, "SECOND"); }
+/* JSON functions (MySQL-compatible) */
+| FJSON_EXTRACT '(' expr ',' expr ')'              { emit("CALL 2 JSON_EXTRACT"); $$ = expr_make_func2(EXPR_JSON_EXTRACT, $3, $5, "JSON_EXTRACT"); }
+| FJSON_UNQUOTE '(' expr ')'                       { emit("CALL 1 JSON_UNQUOTE"); $$ = expr_make_func1(EXPR_JSON_UNQUOTE, $3, "JSON_UNQUOTE"); }
+| FJSON_TYPE '(' expr ')'                           { emit("CALL 1 JSON_TYPE"); $$ = expr_make_func1(EXPR_JSON_TYPE, $3, "JSON_TYPE"); }
+| FJSON_LENGTH '(' expr ')'                         { emit("CALL 1 JSON_LENGTH"); $$ = expr_make_func1(EXPR_JSON_LENGTH, $3, "JSON_LENGTH"); }
+| FJSON_DEPTH '(' expr ')'                          { emit("CALL 1 JSON_DEPTH"); $$ = expr_make_func1(EXPR_JSON_DEPTH, $3, "JSON_DEPTH"); }
+| FJSON_VALID '(' expr ')'                          { emit("CALL 1 JSON_VALID"); $$ = expr_make_func1(EXPR_JSON_VALID, $3, "JSON_VALID"); }
+| FJSON_KEYS '(' expr ')'                           { emit("CALL 1 JSON_KEYS"); $$ = expr_make_func1(EXPR_JSON_KEYS, $3, "JSON_KEYS"); }
+| FJSON_PRETTY '(' expr ')'                         { emit("CALL 1 JSON_PRETTY"); $$ = expr_make_func1(EXPR_JSON_PRETTY, $3, "JSON_PRETTY"); }
+| FJSON_QUOTE '(' expr ')'                          { emit("CALL 1 JSON_QUOTE"); $$ = expr_make_func1(EXPR_JSON_QUOTE, $3, "JSON_QUOTE"); }
+| FJSON_SET '(' expr ',' expr ',' expr ')'          { emit("CALL 3 JSON_SET"); $$ = expr_make_func3(EXPR_JSON_SET, $3, $5, $7, "JSON_SET"); }
+| FJSON_INSERT '(' expr ',' expr ',' expr ')'       { emit("CALL 3 JSON_INSERT"); $$ = expr_make_func3(EXPR_JSON_INSERT, $3, $5, $7, "JSON_INSERT"); }
+| FJSON_REPLACE '(' expr ',' expr ',' expr ')'      { emit("CALL 3 JSON_REPLACE"); $$ = expr_make_func3(EXPR_JSON_REPLACE, $3, $5, $7, "JSON_REPLACE"); }
+| FJSON_REMOVE '(' expr ',' expr ')'                { emit("CALL 2 JSON_REMOVE"); $$ = expr_make_func2(EXPR_JSON_REMOVE, $3, $5, "JSON_REMOVE"); }
+| FJSON_CONTAINS '(' expr ',' expr ')'              { emit("CALL 2 JSON_CONTAINS"); $$ = expr_make_func2(EXPR_JSON_CONTAINS, $3, $5, "JSON_CONTAINS"); }
+| FJSON_CONTAINS_PATH '(' expr ',' expr ',' expr ')' { emit("CALL 3 JSON_CONTAINS_PATH"); $$ = expr_make_func3(EXPR_JSON_CONTAINS_PATH, $3, $5, $7, "JSON_CONTAINS_PATH"); }
+| FJSON_SEARCH '(' expr ',' expr ',' expr ')'       { emit("CALL 3 JSON_SEARCH"); $$ = expr_make_func3(EXPR_JSON_SEARCH, $3, $5, $7, "JSON_SEARCH"); }
+| FJSON_OBJECT '(' expr ',' expr ')'                { emit("CALL 2 JSON_OBJECT"); $$ = expr_make_func2(EXPR_JSON_OBJECT, $3, $5, "JSON_OBJECT"); }
+| FJSON_OBJECT '(' expr ',' expr ',' expr ',' expr ')' { emit("CALL 4 JSON_OBJECT"); ExprNode *p1 = expr_make_func2(EXPR_JSON_OBJECT, $3, $5, "JSON_OBJECT"); ExprNode *p2 = expr_make_func2(EXPR_JSON_OBJECT, $7, $9, "JSON_OBJECT"); $$ = expr_make_func2(EXPR_JSON_OBJECT, p1, p2, "JSON_OBJECT_MERGE"); }
+| FJSON_ARRAY '(' expr ')'                          { emit("CALL 1 JSON_ARRAY"); $$ = expr_make_func1(EXPR_JSON_ARRAY, $3, "JSON_ARRAY"); }
+| FJSON_ARRAY '(' expr ',' expr ')'                 { emit("CALL 2 JSON_ARRAY"); $$ = expr_make_func2(EXPR_JSON_ARRAY, $3, $5, "JSON_ARRAY"); }
+| FJSON_ARRAY '(' expr ',' expr ',' expr ')'        { emit("CALL 3 JSON_ARRAY"); $$ = expr_make_func3(EXPR_JSON_ARRAY, $3, $5, $7, "JSON_ARRAY"); }
+| FJSON_ARRAYAGG '(' expr ')'                       { emit("CALL 1 JSON_ARRAYAGG"); $$ = expr_make_func1(EXPR_JSON_ARRAYAGG, $3, "JSON_ARRAYAGG"); }
 /* CAST / CONVERT */
 | FCAST '(' expr AS data_type ')'                  { emit("CAST %d", $5); ExprNode *e = expr_make_func1(EXPR_CAST, $3, "CAST"); if(e) e->val.intval = $5; $$ = e; }
 | FCONVERT '(' expr ',' data_type ')'              { emit("CONVERT %d", $5); ExprNode *e = expr_make_func1(EXPR_CAST, $3, "CONVERT"); if(e) e->val.intval = $5; $$ = e; }
@@ -2076,6 +2110,7 @@ BIT opt_length									{ $$ = 10000 + $2; }
 | SET '(' enum_list ')' opt_csc                                                 { $$ = 210000 + $3; }
 | BOOLEAN                                                                        { $$ = 220001; }
 | UUID                                                                           { $$ = 180036; }
+| JSON                                                                           { $$ = 230000; }
 ;
 
 enum_list: STRING								{ emit("ENUMVAL %s", $1); free($1); $$ = 1; }
