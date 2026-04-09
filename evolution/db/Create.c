@@ -442,12 +442,12 @@ int CreateTableProcess(void)
         char *tok;
         if (g_create.columnDefs[0] != '\0') {
             strcpy(tmp, g_create.columnDefs);
-            tok = strtok(tmp, ";");
+            tok = strtok(tmp, FIELD_SEP);
             while (tok && numCols < 64) {
                 strncpy(colNameArr[numCols], tok, 127);
                 colNameArr[numCols][127] = '\0';
                 numCols++;
-                tok = strtok(NULL, ";");
+                tok = strtok(NULL, FIELD_SEP);
             }
         }
     }
@@ -470,10 +470,10 @@ int CreateTableProcess(void)
         char tmp[1024];
         char *tok;
         strcpy(tmp, g_create.columnTypeDefs);
-        tok = strtok(tmp, ";");
+        tok = strtok(tmp, FIELD_SEP);
         while (tok && numTypes < 64) {
             typeVals[numTypes++] = atoi(tok);
-            tok = strtok(NULL, ";");
+            tok = strtok(NULL, FIELD_SEP);
         }
     }
 
@@ -484,10 +484,10 @@ int CreateTableProcess(void)
         char tmp[1024];
         char *tok;
         strcpy(tmp, g_create.columnNullFlags);
-        tok = strtok(tmp, ";");
+        tok = strtok(tmp, FIELD_SEP);
         while (tok && numNulls < 64) {
             nullFlags[numNulls++] = atoi(tok);
-            tok = strtok(NULL, ";");
+            tok = strtok(NULL, FIELD_SEP);
         }
     }
 
@@ -498,10 +498,10 @@ int CreateTableProcess(void)
         char tmp[1024];
         char *tok;
         strcpy(tmp, g_create.columnUniqueFlags);
-        tok = strtok(tmp, ";");
+        tok = strtok(tmp, FIELD_SEP);
         while (tok && numUniques < 64) {
             uniqueFlags[numUniques++] = atoi(tok);
-            tok = strtok(NULL, ";");
+            tok = strtok(NULL, FIELD_SEP);
         }
     }
 
@@ -512,12 +512,12 @@ int CreateTableProcess(void)
         char tmp[4096];
         char *tok;
         strcpy(tmp, g_create.columnDefaults);
-        tok = strtok(tmp, ";");
+        tok = strtok(tmp, FIELD_SEP);
         while (tok && numDefaults < 64) {
             strncpy(defaultVals[numDefaults], tok, 255);
             defaultVals[numDefaults][255] = '\0';
             numDefaults++;
-            tok = strtok(NULL, ";");
+            tok = strtok(NULL, FIELD_SEP);
         }
     }
 
@@ -843,14 +843,14 @@ int GetTableName(char *name)
 int GetColumnNames(char *name)
 {
     if (g_create.columnDefs[0] != '\0')
-        strcat(g_create.columnDefs, ";");
+        strcat(g_create.columnDefs, FIELD_SEP);
     strcat(g_create.columnDefs, name);
 
     /* Accumulate NOT NULL flags (e.g. "1;0;1") */
     {
         char buf[4];
         if (g_create.columnNullFlags[0] != '\0')
-            strcat(g_create.columnNullFlags, ";");
+            strcat(g_create.columnNullFlags, FIELD_SEP);
         snprintf(buf, sizeof(buf), "%d", g_create.currentColNotNull ? 1 : 0);
         strcat(g_create.columnNullFlags, buf);
     }
@@ -859,7 +859,7 @@ int GetColumnNames(char *name)
     {
         char buf[4];
         if (g_create.columnUniqueFlags[0] != '\0')
-            strcat(g_create.columnUniqueFlags, ";");
+            strcat(g_create.columnUniqueFlags, FIELD_SEP);
         snprintf(buf, sizeof(buf), "%d", g_create.currentColUnique ? 1 : 0);
         strcat(g_create.columnUniqueFlags, buf);
     }
@@ -867,7 +867,7 @@ int GetColumnNames(char *name)
     /* Accumulate DEFAULT values */
     {
         if (g_create.columnDefaults[0] != '\0')
-            strcat(g_create.columnDefaults, ";");
+            strcat(g_create.columnDefaults, FIELD_SEP);
         if (g_create.currentColDefault[0] != '\0')
             strcat(g_create.columnDefaults, g_create.currentColDefault);
         else
@@ -915,7 +915,7 @@ int GetColumnSize(int typeVal)
 
     /* Accumulate type encoding in g_create.columnTypeDefs (e.g. "40000;130050") */
     if (g_create.columnTypeDefs[0] != '\0')
-        strcat(g_create.columnTypeDefs, ";");
+        strcat(g_create.columnTypeDefs, FIELD_SEP);
     snprintf(buf, sizeof(buf), "%d", typeVal);
     strcat(g_create.columnTypeDefs, buf);
 

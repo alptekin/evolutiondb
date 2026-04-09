@@ -281,7 +281,7 @@ int SelectProcess(void)
         return 0;
     }
 
-    str2 = strtok(g_ins.data, ";");
+    str2 = strtok(g_ins.data, FIELD_SEP);
 
     /* Resolve table with column metadata */
     TableDesc td;
