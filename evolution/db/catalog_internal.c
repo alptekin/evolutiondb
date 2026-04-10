@@ -2845,3 +2845,113 @@ int cat_update_trigger_enabled(uint32_t table_id, const char *trigger_name, int 
     if (new_rid.page_no == 0) return -1;
     return bt2_insert(&g_cat_trees[CAT_SYS_TRIGGERS], key, new_rid) == 0 ? 0 : -1;
 }
+
+/* ================================================================
+ *  Sequence Catalog Operations
+ * ================================================================ */
+
+static int serialize_sequence(const SequenceDesc *s, char *buf, int size)
+{
+    return snprintf(buf, size,
+        "%u;%u;%s;%lld;%lld;%lld;%lld;%lld;%d;%d",
+        s->seq_id, s->schema_id, s->seq_name,
+        (long long)s->current_value, (long long)s->increment,
+        (long long)s->min_value, (long long)s->max_value,
+        (long long)s->start_value, s->cycle, s->is_called);
+}
+
+static int deserialize_sequence(const char *rec, SequenceDesc *s)
+{
+    char f[256];
+    const char *p = rec;
+    p = next_field(p, f, sizeof(f)); s->seq_id = (uint32_t)atoi(f);
+    p = next_field(p, f, sizeof(f)); s->schema_id = (uint32_t)atoi(f);
+    p = next_field(p, s->seq_name, CAT_MAX_NAME_LEN);
+    p = next_field(p, f, sizeof(f)); s->current_value = strtoll(f, NULL, 10);
+    p = next_field(p, f, sizeof(f)); s->increment = strtoll(f, NULL, 10);
+    p = next_field(p, f, sizeof(f)); s->min_value = strtoll(f, NULL, 10);
+    p = next_field(p, f, sizeof(f)); s->max_value = strtoll(f, NULL, 10);
+    p = next_field(p, f, sizeof(f)); s->start_value = strtoll(f, NULL, 10);
+    p = next_field(p, f, sizeof(f)); s->cycle = atoi(f);
+    p = next_field(p, f, sizeof(f)); s->is_called = atoi(f);
+    return 0;
+}
+
+static void make_seq_key(uint32_t schema_id, const char *name,
+                         char *key, int size)
+{
+    snprintf(key, size, "%010u:%s", schema_id, name);
+}
+
+int cat_create_sequence(const SequenceDesc *seq)
+{
+    char key[300], record[512];
+    make_seq_key(seq->schema_id, seq->seq_name, key, sizeof(key));
+    serialize_sequence(seq, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_SEQUENCES, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_SEQUENCES], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_sequence(uint32_t schema_id, const char *seq_name, SequenceDesc *out)
+{
+    char key[300];
+    make_seq_key(schema_id, seq_name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SEQUENCES], key, &rid) < 0)
+        return -1;
+    char record[512];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+    return deserialize_sequence(record, out);
+}
+
+int cat_update_sequence(const SequenceDesc *seq)
+{
+    char key[300], record[512];
+    make_seq_key(seq->schema_id, seq->seq_name, key, sizeof(key));
+    RowID old_rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SEQUENCES], key, &old_rid) < 0)
+        return -1;
+    cat_delete_record(old_rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_SEQUENCES], key);
+    serialize_sequence(seq, record, sizeof(record));
+    int rec_len = (int)strlen(record) + 1;
+    RowID new_rid = cat_store_record(CAT_SYS_SEQUENCES, record, rec_len);
+    if (new_rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_SEQUENCES], key, new_rid) == 0 ? 0 : -1;
+}
+
+int cat_drop_sequence(uint32_t schema_id, const char *seq_name)
+{
+    char key[300];
+    make_seq_key(schema_id, seq_name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SEQUENCES], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_SEQUENCES], key);
+    return 0;
+}
+
+int cat_list_sequences(uint32_t schema_id, SequenceDesc *out, int max)
+{
+    char prefix[32];
+    snprintf(prefix, sizeof(prefix), "%010u:", schema_id);
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_SEQUENCES], prefix, &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, strlen(prefix)) != 0) break;
+        char record[512];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_sequence(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}

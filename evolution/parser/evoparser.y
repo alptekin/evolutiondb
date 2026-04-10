@@ -359,6 +359,8 @@
 %token FJSON_SET FJSON_INSERT FJSON_REPLACE FJSON_REMOVE
 %token FJSON_CONTAINS FJSON_CONTAINS_PATH FJSON_SEARCH
 %token FJSON_OBJECT FJSON_ARRAY FJSON_ARRAYAGG
+%token SEQUENCE FNEXTVAL FCURRVAL FSETVAL FLASTVAL
+%token START INCREMENT MINVALUE CYCLE
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -684,6 +686,12 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FJSON_ARRAY '(' expr ',' expr ')'                 { emit("CALL 2 JSON_ARRAY"); $$ = expr_make_func2(EXPR_JSON_ARRAY, $3, $5, "JSON_ARRAY"); }
 | FJSON_ARRAY '(' expr ',' expr ',' expr ')'        { emit("CALL 3 JSON_ARRAY"); $$ = expr_make_func3(EXPR_JSON_ARRAY, $3, $5, $7, "JSON_ARRAY"); }
 | FJSON_ARRAYAGG '(' expr ')'                       { emit("CALL 1 JSON_ARRAYAGG"); $$ = expr_make_func1(EXPR_JSON_ARRAYAGG, $3, "JSON_ARRAYAGG"); }
+/* Sequence functions */
+| FNEXTVAL '(' expr ')'                            { emit("CALL 1 NEXTVAL"); $$ = expr_make_func1(EXPR_NEXTVAL, $3, "NEXTVAL"); }
+| FCURRVAL '(' expr ')'                            { emit("CALL 1 CURRVAL"); $$ = expr_make_func1(EXPR_CURRVAL, $3, "CURRVAL"); }
+| FSETVAL '(' expr ',' expr ')'                    { emit("CALL 2 SETVAL"); $$ = expr_make_func2(EXPR_SETVAL, $3, $5, "SETVAL"); }
+| FSETVAL '(' expr ',' expr ',' expr ')'           { emit("CALL 3 SETVAL"); $$ = expr_make_func3(EXPR_SETVAL, $3, $5, $7, "SETVAL"); }
+| FLASTVAL '(' ')'                                 { emit("CALL 0 LASTVAL"); $$ = expr_make_func0(EXPR_LASTVAL, "LASTVAL"); }
 /* CAST / CONVERT */
 | FCAST '(' expr AS data_type ')'                  { emit("CAST %d", $5); ExprNode *e = expr_make_func1(EXPR_CAST, $3, "CAST"); if(e) e->val.intval = $5; $$ = e; }
 | FCONVERT '(' expr ',' data_type ')'              { emit("CONVERT %d", $5); ExprNode *e = expr_make_func1(EXPR_CAST, $3, "CONVERT"); if(e) e->val.intval = $5; $$ = e; }
@@ -2401,6 +2409,86 @@ stmt: ALTER TRIGGER NAME ENABLE
         g_trig.event = 'D';  /* D=DISABLE (overloaded) */
         AlterTriggerProcess();
         free($3);
+    }
+;
+
+/* ── CREATE SEQUENCE / DROP SEQUENCE ── */
+stmt: create_sequence_stmt                           { emit("STMT"); evo_create_sequence_process(); }
+;
+
+create_sequence_stmt:
+  CREATE SEQUENCE opt_if_not_exists NAME seq_options
+    {
+        emit("CREATESEQUENCE %d %s", $3, $4);
+        evo_seq_set_name($4);
+        if ($3) evo_seq_set_if_not_exists();
+        free($4);
+    }
+;
+
+seq_options: /* empty */
+| seq_options seq_option
+;
+
+seq_option:
+  START WITH INTNUM                                  { evo_seq_set_start($3); }
+| START INTNUM                                       { evo_seq_set_start($2); }
+| INCREMENT BY INTNUM                                { evo_seq_set_increment($3); }
+| INCREMENT INTNUM                                   { evo_seq_set_increment($2); }
+| MINVALUE INTNUM                                    { evo_seq_set_minvalue($2); }
+| MAXVALUE INTNUM                                    { evo_seq_set_maxvalue($2); }
+| CYCLE                                              { evo_seq_set_cycle(1); }
+| NOT CYCLE                                          { evo_seq_set_cycle(0); }
+;
+
+stmt: drop_sequence_stmt                             { emit("STMT"); evo_drop_sequence_process(); }
+;
+
+drop_sequence_stmt:
+  DROP SEQUENCE NAME
+    {
+        emit("DROPSEQUENCE %s", $3);
+        evo_seq_set_name($3);
+        free($3);
+    }
+| DROP SEQUENCE IF EXISTS NAME
+    {
+        emit("DROPSEQUENCE IF EXISTS %s", $5);
+        evo_seq_set_name($5);
+        evo_seq_set_if_exists();
+        free($5);
+    }
+;
+
+/* ALTER SEQUENCE */
+stmt: ALTER SEQUENCE NAME seq_options
+    {
+        emit("ALTERSEQUENCE %s", $3);
+        evo_seq_set_name($3);
+        free($3);
+        evo_alter_sequence_process();
+    }
+| ALTER SEQUENCE NAME RESTART
+    {
+        emit("ALTERSEQUENCE RESTART %s", $3);
+        evo_seq_set_name($3);
+        free($3);
+        evo_restart_sequence_process();
+    }
+| ALTER SEQUENCE NAME RESTART WITH INTNUM
+    {
+        emit("ALTERSEQUENCE RESTART WITH %d %s", $6, $3);
+        evo_seq_set_name($3);
+        evo_seq_set_start($6);
+        free($3);
+        evo_restart_sequence_process();
+    }
+| ALTER SEQUENCE NAME RENAME TO NAME
+    {
+        emit("ALTERSEQUENCE RENAME %s TO %s", $3, $6);
+        evo_seq_set_name($3);
+        evo_rename_sequence_process($6);
+        free($3); free($6);
     }
 ;
 

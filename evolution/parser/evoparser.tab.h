@@ -357,7 +357,16 @@
      FJSON_SEARCH = 573,
      FJSON_OBJECT = 574,
      FJSON_ARRAY = 575,
-     FJSON_ARRAYAGG = 576
+     FJSON_ARRAYAGG = 576,
+     SEQUENCE = 577,
+     FNEXTVAL = 578,
+     FCURRVAL = 579,
+     FSETVAL = 580,
+     FLASTVAL = 581,
+     START = 582,
+     INCREMENT = 583,
+     MINVALUE = 584,
+     CYCLE = 585
    };
 #endif
 /* Tokens.  */
@@ -680,6 +689,15 @@
 #define FJSON_OBJECT 574
 #define FJSON_ARRAY 575
 #define FJSON_ARRAYAGG 576
+#define SEQUENCE 577
+#define FNEXTVAL 578
+#define FCURRVAL 579
+#define FSETVAL 580
+#define FLASTVAL 581
+#define START 582
+#define INCREMENT 583
+#define MINVALUE 584
+#define CYCLE 585
 
 
 
@@ -695,7 +713,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 699 "parser/evoparser.tab.h"
+#line 717 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

@@ -1517,7 +1517,8 @@ static int has_pg_table_ref(const char *sql)
            stristr_found(sql, "pg_database") ||
            stristr_found(sql, "pg_proc") ||
            stristr_found(sql, "pg_constraint") ||
-           stristr_found(sql, "pg_depend");
+           stristr_found(sql, "pg_depend") ||
+           stristr_found(sql, "pg_sequences");
 }
 
 /* ----------------------------------------------------------------
@@ -2698,6 +2699,48 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         stristr_found(sql, "pg_cast") || stristr_found(sql, "pg_auth")) {
         result_add_column(rs, "oid", PG_OID_INT4);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
+        return 1;
+    }
+
+    /* pg_sequences — real sequence metadata */
+    if (stristr_found(sql, "pg_sequences")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "schemaname", PG_OID_TEXT);
+        result_add_column(rs, "sequencename", PG_OID_TEXT);
+        result_add_column(rs, "start_value", PG_OID_INT8);
+        result_add_column(rs, "min_value", PG_OID_INT8);
+        result_add_column(rs, "max_value", PG_OID_INT8);
+        result_add_column(rs, "increment_by", PG_OID_INT8);
+        result_add_column(rs, "cycle", PG_OID_BOOL);
+        result_add_column(rs, "last_value", PG_OID_INT8);
+
+        DatabaseDesc dbDescSeq;
+        SchemaDesc schDescSeq;
+        if (cat_find_database(db_get_current_database(), &dbDescSeq) == 0 &&
+            cat_find_schema(dbDescSeq.db_id, db_get_current_schema(), &schDescSeq) == 0) {
+            SequenceDesc seqs[64];
+            int nseqs = cat_list_sequences(schDescSeq.schema_id, seqs, 64);
+            for (int i = 0; i < nseqs; i++) {
+                char sv[32], mn[32], mx[32], inc[32], cv[32];
+                snprintf(sv, sizeof(sv), "%lld", (long long)seqs[i].start_value);
+                snprintf(mn, sizeof(mn), "%lld", (long long)seqs[i].min_value);
+                snprintf(mx, sizeof(mx), "%lld", (long long)seqs[i].max_value);
+                snprintf(inc, sizeof(inc), "%lld", (long long)seqs[i].increment);
+                snprintf(cv, sizeof(cv), "%lld", (long long)seqs[i].current_value);
+                int row = rs->num_rows;
+                result_add_row(rs);
+                result_set_field(rs, row, 0, db_get_current_schema());
+                result_set_field(rs, row, 1, seqs[i].seq_name);
+                result_set_field(rs, row, 2, sv);
+                result_set_field(rs, row, 3, mn);
+                result_set_field(rs, row, 4, mx);
+                result_set_field(rs, row, 5, inc);
+                result_set_field(rs, row, 6, seqs[i].cycle ? "true" : "false");
+                result_set_field(rs, row, 7, cv);
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
         return 1;
     }
 
