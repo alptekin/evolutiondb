@@ -4973,6 +4973,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_create.ctasTableName[0] = '\0';
     g_create.ctasIfNotExists = 0;
     g_create.ctasTemporary = 0;
+    evo_seq_reset_params();
     g_ins.data[0] = '\0';
     g_del.rowCount = 0;
     g_upd.rowCount = 0;

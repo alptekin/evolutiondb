@@ -1675,7 +1675,7 @@
 
 ---
 
-### Task 83: ⬜ Sequences (Feature #55)
+### Task 83: ✅ Sequences (Feature #55)
 
 **Goal:** Implement PostgreSQL-style CREATE SEQUENCE / NEXTVAL / CURRVAL.
 

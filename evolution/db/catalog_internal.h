@@ -165,6 +165,19 @@ typedef struct {
     char     body[8192]; /* raw SQL between BEGIN...END */
 } TriggerDesc;
 
+typedef struct {
+    uint32_t seq_id;
+    uint32_t schema_id;
+    char     seq_name[CAT_MAX_NAME_LEN];
+    int64_t  current_value;
+    int64_t  increment;
+    int64_t  min_value;
+    int64_t  max_value;
+    int64_t  start_value;
+    int      cycle;      /* 0=NO CYCLE, 1=CYCLE */
+    int      is_called;  /* 0=start not yet consumed, 1=NEXTVAL called */
+} SequenceDesc;
+
 /* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
@@ -419,6 +432,13 @@ int cat_find_trigger(uint32_t table_id, const char *trigger_name,
 int cat_drop_trigger(uint32_t table_id, const char *trigger_name);
 int cat_list_triggers_for_table(uint32_t table_id, TriggerDesc *out, int max);
 int cat_update_trigger_enabled(uint32_t table_id, const char *trigger_name, int enabled);
+
+/* ── Sequences ── */
+int cat_create_sequence(const SequenceDesc *seq);
+int cat_find_sequence(uint32_t schema_id, const char *seq_name, SequenceDesc *out);
+int cat_update_sequence(const SequenceDesc *seq);
+int cat_drop_sequence(uint32_t schema_id, const char *seq_name);
+int cat_list_sequences(uint32_t schema_id, SequenceDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Convenience

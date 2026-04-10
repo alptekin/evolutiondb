@@ -10,7 +10,9 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <inttypes.h>
 #include "expression.h"
+#include "catalog_internal.h"
 #include "database.h"   /* query_context.h macros for g_expr.nodePool etc. */
 #include "crypto.h"
 
@@ -1561,8 +1563,84 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
     if (e->type == EXPR_JSON_ARRAYAGG) {
-        /* Aggregate — handled by collect_select_results, not here */
         strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+
+    /* ── Sequence functions ── */
+    if (e->type == EXPR_NEXTVAL) {
+        extern __thread uint32_t g_current_schema_id;
+        char name_buf[256];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, name_buf, sizeof(name_buf)) : 0;
+        if (!ok || strcmp(name_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int64_t val = evo_sequence_nextval(name_buf, g_current_schema_id);
+        if (g_err.error) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        /* Update LASTVAL tracking */
+        {
+            extern __thread int64_t g_last_seq_value;
+            extern __thread int g_last_seq_valid;
+            g_last_seq_value = val;
+            g_last_seq_valid = 1;
+        }
+        snprintf(out_buf, buf_size, "%" PRId64, val);
+        return 1;
+    }
+    if (e->type == EXPR_CURRVAL) {
+        extern __thread uint32_t g_current_schema_id;
+        extern __thread int64_t g_last_seq_value;
+        extern __thread char g_last_seq_name[256];
+        char name_buf[256];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, name_buf, sizeof(name_buf)) : 0;
+        if (!ok || strcmp(name_buf, NULL_MARKER) == 0) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        /* CURRVAL: just read current value from catalog without incrementing */
+        SequenceDesc sd;
+        if (cat_find_sequence(g_current_schema_id, name_buf, &sd) != 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "sequence \"%s\" does not exist", name_buf);
+            g_err.error = 1;
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        if (!sd.is_called) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "currval of sequence \"%s\" is not yet defined in this session", name_buf);
+            g_err.error = 1;
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        snprintf(out_buf, buf_size, "%" PRId64, sd.current_value);
+        return 1;
+    }
+    if (e->type == EXPR_SETVAL) {
+        extern __thread uint32_t g_current_schema_id;
+        char name_buf[256], val_buf[64];
+        int ok1 = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, name_buf, sizeof(name_buf)) : 0;
+        int ok2 = e->right ? expr_evaluate(e->right, col_names, col_values, num_cols, val_buf, sizeof(val_buf)) : 0;
+        if (!ok1 || !ok2) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        int64_t val = strtoll(val_buf, NULL, 10);
+        int is_called = 1;
+        if (e->extra) {
+            char ic_buf[32];
+            expr_evaluate(e->extra, col_names, col_values, num_cols, ic_buf, sizeof(ic_buf));
+            if (strcasecmp(ic_buf, "false") == 0 || strcmp(ic_buf, "0") == 0)
+                is_called = 0;
+        }
+        int64_t result = evo_sequence_setval(name_buf, g_current_schema_id, val, is_called);
+        if (g_err.error) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+        snprintf(out_buf, buf_size, "%" PRId64, result);
+        return 1;
+    }
+    if (e->type == EXPR_LASTVAL) {
+        extern __thread int64_t g_last_seq_value;
+        extern __thread int g_last_seq_valid;
+        if (!g_last_seq_valid) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "lastval is not yet defined in this session");
+            g_err.error = 1;
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        snprintf(out_buf, buf_size, "%" PRId64, g_last_seq_value);
         return 1;
     }
 

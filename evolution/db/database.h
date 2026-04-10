@@ -227,6 +227,25 @@ int evo_json_object(const char **keys, const char **values, int n,
                     char *out, int out_size);
 int evo_json_array(const char **values, int n, char *out, int out_size);
 
+/* Sequence support (Sequence.c) */
+void evo_seq_reset_params(void);
+void evo_seq_set_name(const char *name);
+void evo_seq_set_start(int64_t v);
+void evo_seq_set_increment(int64_t v);
+void evo_seq_set_minvalue(int64_t v);
+void evo_seq_set_maxvalue(int64_t v);
+void evo_seq_set_cycle(int v);
+void evo_seq_set_if_not_exists(void);
+void evo_seq_set_if_exists(void);
+int evo_create_sequence_process(void);
+int evo_drop_sequence_process(void);
+int evo_alter_sequence_process(void);
+int evo_restart_sequence_process(void);
+int evo_rename_sequence_process(const char *new_name);
+int64_t evo_sequence_nextval(const char *seq_name, uint32_t schema_id);
+int64_t evo_sequence_setval(const char *seq_name, uint32_t schema_id,
+                            int64_t value, int is_called);
+
 void SetColumnNotNull(void);
 void SetColumnPrimaryKey(void);
 void SetColumnUnique(void);
