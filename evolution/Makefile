@@ -50,7 +50,8 @@ SRCS = main.c \
        db/vmap.c \
        db/Procedure.c \
        db/Trigger.c \
-       db/Json.c
+       db/Json.c \
+       db/Sequence.c
 
 OBJS = $(SRCS:.c=.o)
 
