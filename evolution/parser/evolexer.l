@@ -62,6 +62,7 @@ CAST/"("				{ return FCAST; }
 COLUMN					{ return COLUMN; }
 CONCURRENTLY			{ return CONCURRENTLY; }
 CONVERT/"("				{ return FCONVERT; }
+CYCLE					{ return CYCLE; }
 
 CHAR(ACTER)?			{ return CHAR; }
 
@@ -160,6 +161,7 @@ IFNULL/"("				{ return FIFNULL; }
 NULLIF/"("				{ return FNULLIF; }
 IGNORE					{ return IGNORE; }
 IMMEDIATE				{ return IMMEDIATE; }
+INCREMENT				{ return INCREMENT; }
 INITIALLY				{ return INITIALLY; }
 IN						{ return IN; }
 INOUT					{ return INOUT; }
@@ -215,6 +217,7 @@ MODIFY					{ return MODIFY; }
 MEDIUMTEXT				{ return MEDIUMTEXT; }
 
 
+MINVALUE				{ return MINVALUE; }
 MOD						{ int c = input(yyscanner); unput(c); if(c == '(') return FMOD; return MOD; }
 
 NATURAL					{ return NATURAL; }
@@ -267,6 +270,8 @@ RETURNS					{ return RETURNS; }
 RIGHT					{ return RIGHT; }
 ROLLUP					{ return ROLLUP; }
 SCHEMA					{ return SCHEMA; }
+SEQUENCE				{ return SEQUENCE; }
+START					{ return START; }
 SHARD					{ return SHARD; }
 SHARDS					{ return SHARDS; }
 SHARE					{ return SHARE; }
@@ -450,6 +455,11 @@ JSON_SEARCH/"("			{ return FJSON_SEARCH; }
 JSON_OBJECT/"("			{ return FJSON_OBJECT; }
 JSON_ARRAY/"("			{ return FJSON_ARRAY; }
 JSON_ARRAYAGG/"("		{ return FJSON_ARRAYAGG; }
+
+NEXTVAL/"("				{ return FNEXTVAL; }
+CURRVAL/"("				{ return FCURRVAL; }
+SETVAL/"("				{ return FSETVAL; }
+LASTVAL/"("				{ return FLASTVAL; }
 
 ROW_NUMBER/"("			{ return FROW_NUMBER; }
 RANK					{ int c = input(yyscanner); unput(c); if(c == '(') return FRANK; yylval->strval = strdup(yytext); return NAME; }

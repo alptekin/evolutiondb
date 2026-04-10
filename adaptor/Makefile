@@ -91,7 +91,8 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/table_lock.c \
               $(EVO_DB)/Procedure.c \
               $(EVO_DB)/Trigger.c \
-              $(EVO_DB)/Json.c
+              $(EVO_DB)/Json.c \
+              $(EVO_DB)/Sequence.c
 
 # Evolution parser source files
 EVO_PARSER_SRCS = $(EVO_PARSER)/evoparser.tab.c \

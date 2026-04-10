@@ -54,7 +54,7 @@ typedef struct {
 /* ----------------------------------------------------------------
  *  File Header — stored in Page 0
  * ---------------------------------------------------------------- */
-#define CATALOG_ROOT_SLOTS 16   /* max system catalog B+ trees */
+#define CATALOG_ROOT_SLOTS 17   /* max system catalog B+ trees */
 
 typedef enum {
     CAT_SYS_DATABASES  = 0,
@@ -72,7 +72,8 @@ typedef enum {
     CAT_SYS_VIEWS        = 12,
     CAT_SYS_PROCEDURES   = 13,
     CAT_SYS_TRIGGERS     = 14,
-    CAT_MAX              = 15
+    CAT_SYS_SEQUENCES    = 15,
+    CAT_MAX              = 16
 } CatalogID;
 
 typedef struct {

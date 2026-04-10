@@ -161,7 +161,13 @@ typedef enum {
     EXPR_JSON_SEARCH,       /* JSON_SEARCH(doc, mode, search_str) */
     EXPR_JSON_OBJECT,       /* JSON_OBJECT(k1, v1, k2, v2, ...) */
     EXPR_JSON_ARRAY,        /* JSON_ARRAY(v1, v2, ...) */
-    EXPR_JSON_ARRAYAGG      /* JSON_ARRAYAGG(expr) — aggregate */
+    EXPR_JSON_ARRAYAGG,     /* JSON_ARRAYAGG(expr) — aggregate */
+
+    /* Sequence functions */
+    EXPR_NEXTVAL,           /* NEXTVAL('seq_name') */
+    EXPR_CURRVAL,           /* CURRVAL('seq_name') */
+    EXPR_SETVAL,            /* SETVAL('seq_name', value) */
+    EXPR_LASTVAL            /* LASTVAL() */
 } ExprNodeType;
 
 typedef struct ExprNode {
