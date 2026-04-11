@@ -1,0 +1,53 @@
+name: Helm Chart Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/helm/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package chart
+        run: |
+          mkdir -p .helm-repo
+          helm package deploy/helm/evolutiondb -d .helm-repo
+
+      - name: Checkout gh-pages
+        run: |
+          git fetch origin gh-pages || true
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            git checkout gh-pages -- index.yaml 2>/dev/null || true
+            mv index.yaml .helm-repo/old-index.yaml 2>/dev/null || true
+          fi
+
+      - name: Build index
+        run: |
+          if [ -f .helm-repo/old-index.yaml ]; then
+            helm repo index .helm-repo --url https://alptekin.github.io/evolutiondb --merge .helm-repo/old-index.yaml
+          else
+            helm repo index .helm-repo --url https://alptekin.github.io/evolutiondb
+          fi
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .helm-repo
+          publish_branch: gh-pages
+          keep_files: true

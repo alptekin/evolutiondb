@@ -1,0 +1,59 @@
+replicaCount: 1
+
+image:
+  repository: evolutiondb/evolutiondb
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+auth:
+  username: admin
+  password: ""          # If empty, random password generated (check pod logs)
+  existingSecret: ""    # Use existing K8s secret instead of creating one
+
+encryption:
+  enabled: false
+  key: ""               # Passphrase for TDE (AES-256)
+  existingSecret: ""    # Use existing K8s secret for encryption key
+
+machineId: ""           # Machine ID (0-1023) for snowflake_id(). Empty = from hostname
+
+service:
+  type: ClusterIP
+  pgPort: 5433          # PostgreSQL wire protocol
+  evoPort: 9967         # Native EVO protocol
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: evolutiondb.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+persistence:
+  enabled: true
+  storageClass: ""      # Empty = default storage class
+  accessMode: ReadWriteOnce
+  size: 10Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
