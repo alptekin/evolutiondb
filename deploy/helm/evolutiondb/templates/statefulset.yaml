@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "evolutiondb.fullname" . }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "evolutiondb.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "evolutiondb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "evolutiondb.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: evolutiondb
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: pg
+              containerPort: 5433
+              protocol: TCP
+            - name: evo
+              containerPort: 9967
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "evolutiondb.fullname" . }}
+          env:
+            {{- if or .Values.auth.password .Values.auth.existingSecret }}
+            - name: EVOSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "evolutiondb.secretName" . }}
+                  key: password
+            {{- end }}
+            {{- if .Values.encryption.enabled }}
+            - name: EVOSQL_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "evolutiondb.encryptionSecretName" . }}
+                  key: encryption-key
+            {{- end }}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: pg
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: pg
+            initialDelaySeconds: 15
+            periodSeconds: 20
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}
