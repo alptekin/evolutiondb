@@ -1,0 +1,18 @@
+EvolutionDB has been deployed!
+
+Connect via PostgreSQL wire protocol (port {{ .Values.service.pgPort }}):
+  # Native EVO protocol is also available on port {{ .Values.service.evoPort }}
+
+  # From inside the cluster
+  psql -h {{ include "evolutiondb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local -p {{ .Values.service.pgPort }} -U {{ .Values.auth.username }} -d testdb
+
+  # Port-forward to localhost
+  kubectl port-forward svc/{{ include "evolutiondb.fullname" . }} {{ .Values.service.pgPort }}:{{ .Values.service.pgPort }} {{ .Values.service.evoPort }}:{{ .Values.service.evoPort }} -n {{ .Release.Namespace }}
+  psql -h localhost -p {{ .Values.service.pgPort }} -U {{ .Values.auth.username }} -d testdb
+
+{{- if .Values.auth.password }}
+Password: stored in secret "{{ include "evolutiondb.secretName" . }}"
+{{- else }}
+Password: auto-generated — check pod logs:
+  kubectl logs {{ include "evolutiondb.fullname" . }}-0 -n {{ .Release.Namespace }} | grep Password
+{{- end }}
