@@ -24,6 +24,16 @@
 /* From server.c — parser rwlock for SERIALIZABLE cleanup */
 extern rwlock_t g_parse_lock;
 
+/* Return PG transaction status byte for ReadyForQuery:
+ *   'I' = idle (no transaction)
+ *   'T' = in transaction block
+ *   'E' = failed transaction (error occurred, awaiting ROLLBACK) */
+static char get_tx_status(SessionCtx *sess) {
+    if (!sess->in_transaction) return 'I';
+    if (sess->tx_aborted)      return 'E';
+    return 'T';
+}
+
 /* ----------------------------------------------------------------
  *  pg_handle_client — full PG v3 session for one connection
  *
@@ -96,7 +106,7 @@ void pg_handle_client(socket_t client_sock)
      * pg_handle_startup no longer sends these — we do it here so BackendKeyData
      * includes the session registry ID and random cancel secret. */
     pg_send_backend_key_data(&conn, session.session_id, session.cancel_key);
-    pg_send_ready_for_query(&conn, 'I');
+    pg_send_ready_for_query(&conn, get_tx_status(&session));
 
     /* Step 2: Query loop */
     while (1) {
@@ -233,7 +243,7 @@ void pg_handle_client(socket_t client_sock)
                 pg_send_empty_query(&conn);
             }
 
-            pg_send_ready_for_query(&conn, 'I');
+            pg_send_ready_for_query(&conn, get_tx_status(&session));
             free(sql_copy);
             break;
         }
@@ -506,7 +516,7 @@ void pg_handle_client(socket_t client_sock)
 
         case PG_MSG_SYNC: {
             pending_described = 0;
-            pg_send_ready_for_query(&conn, 'I');
+            pg_send_ready_for_query(&conn, get_tx_status(&session));
             break;
         }
 
