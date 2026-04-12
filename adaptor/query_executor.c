@@ -203,6 +203,52 @@ int type_encoding_to_pg_oid(int typeEncoding)
     }
 }
 
+/* Infer PG type OID from expression AST node type.
+ * Used for tableless SELECT (e.g. SELECT 1, SELECT 'abc') where there is
+ * no table column to derive the type from. */
+static int expr_infer_pg_oid(const ExprNode *e)
+{
+    if (!e) return PG_OID_TEXT;
+    switch (e->type) {
+    case EXPR_LITERAL_INT:
+    case EXPR_COUNT_STAR:
+    case EXPR_COUNT:
+        return PG_OID_INT4;
+    case EXPR_LITERAL_FLOAT:
+    case EXPR_SUM:
+    case EXPR_AVG:
+        return PG_OID_FLOAT8;
+    case EXPR_LITERAL_BOOL:
+        return PG_OID_BOOL;
+    case EXPR_LITERAL_STR:
+        return PG_OID_TEXT;
+    case EXPR_ADD:
+    case EXPR_SUB:
+    case EXPR_MUL:
+    case EXPR_DIV:
+    case EXPR_MOD:
+    case EXPR_NEG:
+        /* Arithmetic: int if both children are int, else float */
+        if (e->left && e->left->type == EXPR_LITERAL_INT &&
+            (!e->right || e->right->type == EXPR_LITERAL_INT))
+            return PG_OID_INT4;
+        return PG_OID_FLOAT8;
+    case EXPR_CMP_EQ: case EXPR_CMP_NE:
+    case EXPR_CMP_LT: case EXPR_CMP_GT:
+    case EXPR_CMP_LE: case EXPR_CMP_GE:
+    case EXPR_AND: case EXPR_OR: case EXPR_NOT: case EXPR_XOR:
+    case EXPR_IS_NULL: case EXPR_IS_NOT_NULL:
+    case EXPR_LIKE: case EXPR_NOT_LIKE:
+        return PG_OID_BOOL;
+    case EXPR_CURRENT_TIMESTAMP:
+    case EXPR_CURRENT_DATE:
+    case EXPR_CURRENT_TIME:
+        return PG_OID_TEXT;  /* timestamp as text */
+    default:
+        return PG_OID_TEXT;
+    }
+}
+
 /* Reverse mapping: PG type OID → EvoSQL internal type encoding */
 static int pg_oid_to_type_encoding(int oid, int type_modifier)
 {
@@ -5457,7 +5503,7 @@ parser_done:
                     strcpy(rs->columns[s].name, "?column?");
                 }
                 rs->columns[s].attnum = s + 1;
-                rs->columns[s].pg_type_oid = PG_OID_VARCHAR;
+                rs->columns[s].pg_type_oid = expr_infer_pg_oid(g_expr.selectExprs[s]);
                 rs->columns[s].type_len = -1;
                 rs->columns[s].type_modifier = -1;
             }
