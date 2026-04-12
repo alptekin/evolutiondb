@@ -164,6 +164,15 @@ void pg_handle_client(socket_t client_sock)
                 int begin_depth = 0;
                 char *p;
                 for (p = remaining; *p; p++) {
+                    /* Skip SQL line comments (-- ...\n).
+                     * Must be checked BEFORE quote handling so that
+                     * apostrophes inside comments (e.g. "Don't") do
+                     * not toggle the in_single flag. */
+                    if (*p == '-' && *(p+1) == '-' && !in_single && !in_double) {
+                        while (*p && *p != '\n') p++;
+                        if (!*p) break;          /* end of string */
+                        continue;                /* p now points to '\n' */
+                    }
                     if (*p == '\'' && !in_double) in_single = !in_single;
                     else if (*p == '"' && !in_single) in_double = !in_double;
                     else if (!in_single && !in_double) {
