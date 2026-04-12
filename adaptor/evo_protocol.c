@@ -49,7 +49,11 @@ static int evo_send_result(conn_t *conn, const ResultSet *rs)
     if (evo_sendf(conn, "COLS %d\n", rs->num_cols) < 0) return -1;
 
     for (c = 0; c < rs->num_cols; c++) {
-        if (evo_sendf(conn, "COL %s\n", rs->columns[c].name) < 0) return -1;
+        if (evo_sendf(conn, "COL %s %d %d\n",
+                rs->columns[c].name,
+                rs->columns[c].pg_type_oid,
+                rs->columns[c].type_modifier) < 0)
+            return -1;
     }
 
     for (r = 0; r < rs->num_rows; r++) {
