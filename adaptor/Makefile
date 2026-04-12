@@ -42,6 +42,7 @@ ADAPTOR_SRCS = main.c \
                pg_protocol.c \
                pg_handler.c \
                evo_protocol.c \
+               scram.c \
                result.c \
                catalog.c \
                query_executor.c \

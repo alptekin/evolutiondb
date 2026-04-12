@@ -42,19 +42,23 @@ class EvoConnection:
         return line
 
     def handshake(self, user="admin", password="admin"):
-        """Send EVO greeting, handle AUTH, expect HELLO."""
+        """Send EVO greeting, handle AUTH, expect HELLO.
+
+        Supports both AUTH_SCRAM and legacy AUTH_REQUIRED responses.
+        When the server sends AUTH_SCRAM, the client falls back to
+        cleartext AUTH (which the server accepts for backward compat).
+        """
         self.sock.sendall(b"EVO\n")
         hello = self._recv_line()
         assert hello.startswith("HELLO"), f"Expected HELLO, got: {hello}"
 
-        # Handle auth flow
+        # Handle auth flow — server may send AUTH_SCRAM or AUTH_REQUIRED
         auth_line = self._recv_line()
-        if auth_line == "AUTH_REQUIRED":
+        if auth_line in ("AUTH_REQUIRED", "AUTH_SCRAM"):
             self.sock.sendall(f"AUTH {user} {password}\n".encode("utf-8"))
             auth_result = self._recv_line()
             if auth_result != "AUTH_OK":
                 raise RuntimeError(f"Authentication failed: {auth_result}")
-        # If no AUTH_REQUIRED, push back (shouldn't happen with current server)
 
         return hello
 
@@ -96,7 +100,7 @@ class EvoConnection:
             col_names = []
             for _ in range(num_cols):
                 col_line = self._recv_line()
-                col_names.append(col_line[4:])  # strip "COL "
+                col_names.append(col_line[4:].split()[0])  # strip "COL " and take only name
 
             rows = []
             while True:
