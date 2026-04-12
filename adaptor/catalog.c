@@ -2021,13 +2021,128 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
-    /* pg_type — basic PostgreSQL types for DBeaver column type display */
-    /* DBeaver queries:
-     *   SELECT t.oid,t.*,c.relkind,format_type(nullif(t.typbasetype,0),t.typtypmod) as base_type_name
-     *     FROM pg_type t LEFT JOIN pg_class c ...
-     *   SELECT t.oid,t.*,format_type(nullif(t.typbasetype,0),t.typtypmod) as base_type_name
-     *     FROM pg_catalog.pg_type t ...
+    /* Npgsql composite-type fields query
+     *   SELECT typ.oid, att.attname, att.atttypid FROM pg_type ... JOIN pg_attribute ...
+     * Must be checked BEFORE pg_type handlers because the query references both tables.
+     * EvoSQL has no composite types — return an empty 3-column result. */
+    if (stristr_found(sql, "pg_type") && stristr_found(sql, "pg_attribute") &&
+        stristr_found(sql, "attname")) {
+        result_add_column(rs, "oid",       PG_OID_INT4);
+        result_add_column(rs, "attname",   PG_OID_TEXT);
+        result_add_column(rs, "atttypid",  PG_OID_INT4);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
+        return 1;
+    }
+
+    /* Npgsql enum labels query
+     *   SELECT pg_type.oid, enumlabel FROM pg_enum JOIN pg_type ...
+     * Must be checked BEFORE pg_type handlers because the query references both tables.
+     * EvoSQL has no enum types — return an empty 2-column result. */
+    if (stristr_found(sql, "pg_enum") && stristr_found(sql, "enumlabel")) {
+        result_add_column(rs, "oid",        PG_OID_INT4);
+        result_add_column(rs, "enumlabel",  PG_OID_TEXT);
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
+        return 1;
+    }
+
+    /* pg_type — PostgreSQL type catalog
+     *
+     * Npgsql sends: SELECT ns.nspname, t.oid, t.typname, t.typtype, t.typnotnull, t.elemtypoid
+     *   → 6 columns: nspname, oid, typname, typtype, typnotnull, elemtypoid
+     *   Detected by "elemtypoid" in query (avoid matching pg_namespace substring)
+     *
+     * DBeaver sends: SELECT t.oid,t.*,c.relkind,format_type(...)
+     *   → 30 columns (full pg_type layout)
      */
+    if (stristr_found(sql, "pg_type") &&
+        stristr_found(sql, "elemtypoid")) {
+        /* Npgsql type-loading format: exactly 6 columns
+         *
+         * Npgsql 8.0 requires BOTH base types (typtype='b') and their
+         * corresponding array types (typtype='a') to fully activate
+         * type handlers.  Each array row has elemtypoid pointing to
+         * its base type OID. */
+        result_add_column(rs, "nspname",     PG_OID_TEXT);
+        result_add_column(rs, "oid",         PG_OID_INT4);
+        result_add_column(rs, "typname",     PG_OID_TEXT);
+        result_add_column(rs, "typtype",     PG_OID_BPCHAR);
+        result_add_column(rs, "typnotnull",  PG_OID_BOOL);
+        result_add_column(rs, "elemtypoid",  PG_OID_INT4);
+
+        /* base_oid, name, array_oid, array_name — from pg_type catalog */
+        struct { const char *oid; const char *name;
+                 const char *arr_oid; const char *arr_name; } types[] = {
+            {"16",   "bool",      "1000", "_bool"},
+            {"17",   "bytea",     "1001", "_bytea"},
+            {"20",   "int8",      "1016", "_int8"},
+            {"21",   "int2",      "1005", "_int2"},
+            {"23",   "int4",      "1007", "_int4"},
+            {"25",   "text",      "1009", "_text"},
+            {"26",   "oid",       "1028", "_oid"},
+            {"114",  "json",      "199",  "_json"},
+            {"700",  "float4",    "1021", "_float4"},
+            {"701",  "float8",    "1022", "_float8"},
+            {"1042", "bpchar",    "1014", "_bpchar"},
+            {"1043", "varchar",   "1015", "_varchar"},
+            {"1082", "date",      "1182", "_date"},
+            {"1114", "timestamp", "1115", "_timestamp"},
+            {"1184", "timestamptz","1185","_timestamptz"},
+            {"1700", "numeric",   "1231", "_numeric"},
+            {"2950", "uuid",      "2951", "_uuid"},
+            {"3802", "jsonb",     "3807", "_jsonb"},
+            {NULL, NULL, NULL, NULL}
+        };
+
+        int count = 0, i, row;
+        /* Emit base types first (typtype='b', elemtypoid=0) */
+        for (i = 0; types[i].oid != NULL; i++) {
+            row = result_add_row(rs);
+            if (row < 0) break;
+            result_set_field(rs, row, 0, "pg_catalog");
+            result_set_field(rs, row, 1, types[i].oid);
+            result_set_field(rs, row, 2, types[i].name);
+            result_set_field(rs, row, 3, "b");
+            result_set_field(rs, row, 4, "f");
+            result_set_field(rs, row, 5, "0");
+            count++;
+        }
+        /* Emit array types (typtype='a', elemtypoid=base OID) */
+        for (i = 0; types[i].oid != NULL; i++) {
+            row = result_add_row(rs);
+            if (row < 0) break;
+            result_set_field(rs, row, 0, "pg_catalog");
+            result_set_field(rs, row, 1, types[i].arr_oid);
+            result_set_field(rs, row, 2, types[i].arr_name);
+            result_set_field(rs, row, 3, "a");
+            result_set_field(rs, row, 4, "f");
+            result_set_field(rs, row, 5, types[i].oid);  /* element type OID */
+            count++;
+        }
+        /* Pseudo-types required by Npgsql: record, void, unknown */
+        {
+            struct { const char *oid; const char *name; } pseudos[] = {
+                {"2249", "record"},
+                {"2278", "void"},
+                {"705",  "unknown"},
+                {NULL, NULL}
+            };
+            for (i = 0; pseudos[i].oid != NULL; i++) {
+                row = result_add_row(rs);
+                if (row < 0) break;
+                result_set_field(rs, row, 0, "pg_catalog");
+                result_set_field(rs, row, 1, pseudos[i].oid);
+                result_set_field(rs, row, 2, pseudos[i].name);
+                result_set_field(rs, row, 3, "p");     /* pseudo-type */
+                result_set_field(rs, row, 4, "f");
+                result_set_field(rs, row, 5, "0");
+                count++;
+            }
+        }
+
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
+        return 1;
+    }
+
     if (stristr_found(sql, "pg_type")) {
         /* t.oid + t.* columns (PostgreSQL pg_type real columns) */
         result_add_column(rs, "oid", PG_OID_INT4);
