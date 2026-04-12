@@ -698,8 +698,11 @@ static int evo_connect(const char *host, int port, const char *username,
 #endif
     }
 
-    /* Authentication flow (encrypted if TLS succeeded) */
-    if (strcmp(line, "AUTH_REQUIRED") == 0) {
+    /* Authentication flow (encrypted if TLS succeeded)
+     * Server may send AUTH_SCRAM (SCRAM-SHA-256) or AUTH_REQUIRED.
+     * CLI currently uses cleartext fallback; the server accepts both. */
+    if (strcmp(line, "AUTH_REQUIRED") == 0 ||
+        strcmp(line, "AUTH_SCRAM") == 0) {
         char password[256];
         if (given_password && given_password[0]) {
             strncpy(password, given_password, sizeof(password) - 1);
