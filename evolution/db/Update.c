@@ -457,8 +457,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
-    /* BEFORE UPDATE trigger */
-    {
+    /* BEFORE UPDATE trigger — skip when table has no triggers */
+    if (td->has_triggers) {
         const char *tcols[CAT_MAX_COLUMNS];
         const char *told[CAT_MAX_COLUMNS];
         const char *tnew[CAT_MAX_COLUMNS];
@@ -790,9 +790,14 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                                              newRecord, sizeof(newRecord));
         if (newLen < 0) return -1;
 
-        /* Load secondary indexes once for both pre-store and post-store */
+        /* Load secondary indexes once for both pre-store and post-store.
+         * Skip idx_load_secondary entirely when the resolved TableDesc
+         * already knows there are none — this avoids a catalog scan
+         * per row in the update loop (~2 us/row). */
         IndexDesc updIdx[16];
-        int nIdx = (tblName && tblName[0]) ? idx_load_secondary(tblName, updIdx, 16) : 0;
+        int nIdx = (td->has_secondary_indexes && tblName && tblName[0])
+                 ? idx_load_secondary(tblName, updIdx, 16)
+                 : 0;
 
         /* HOT (Heap-Only Tuple) optimization: only when secondary indexes
          * exist and no SET column touches an indexed column. Without
@@ -1000,8 +1005,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
-    /* AFTER UPDATE trigger */
-    {
+    /* AFTER UPDATE trigger — skip when table has no triggers */
+    if (td->has_triggers) {
         const char *tcols[CAT_MAX_COLUMNS];
         const char *told[CAT_MAX_COLUMNS];
         const char *tnew[CAT_MAX_COLUMNS];

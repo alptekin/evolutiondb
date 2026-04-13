@@ -1056,8 +1056,8 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
         }
     }
 
-    /* BEFORE INSERT trigger */
-    {
+    /* BEFORE INSERT trigger — skip when table has no triggers */
+    if (td->has_triggers) {
         const char *trig_cols[CAT_MAX_COLUMNS];
         const char *trig_vals[CAT_MAX_COLUMNS];
         for (int tc = 0; tc < ncols && tc < CAT_MAX_COLUMNS; tc++) {
@@ -1106,8 +1106,8 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
                            td->schema_id, pk_tree.root_page);
     }
 
-    /* AFTER INSERT trigger */
-    {
+    /* AFTER INSERT trigger — skip when table has no triggers */
+    if (td->has_triggers) {
         const char *trig_cols[CAT_MAX_COLUMNS];
         const char *trig_vals[CAT_MAX_COLUMNS];
         for (int tc = 0; tc < ncols && tc < CAT_MAX_COLUMNS; tc++) {
@@ -1319,9 +1319,13 @@ int InsertProcess(void)
         }
     }
 
-    /* Read index metadata for secondary indexes */
+    /* Read index metadata for secondary indexes — skip the catalog
+     * scan entirely when the resolved TableDesc already says there
+     * are none */
     IndexDesc secIdx[16];
-    int nIdx = idx_load_secondary(tblName, secIdx, 16);
+    int nIdx = td.has_secondary_indexes
+             ? idx_load_secondary(tblName, secIdx, 16)
+             : 0;
     char colNames2[CAT_MAX_COLUMNS][128];
     int numCols2 = 0;
     if (nIdx > 0)
