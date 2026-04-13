@@ -2,8 +2,8 @@ apiVersion: v2
 name: evolutiondb
 description: EvolutionDB (EvoSQL) is a high-performance SQL database engine written in C that implements a comprehensive subset of the SQL standard. It features a unified page-based storage architecture with binary tuple format, B+ tree indexing for efficient query execution, and Clock Sweep buffer pool management for optimized memory utilization. EvolutionDB supports full ACID transactions through its undo-log mechanism and includes a Flex/Bison-based SQL parser for robust query processing. The server provides dual-protocol connectivity, supporting both the PostgreSQL wire protocol for broad client compatibility and a native text protocol for lightweight integration.
 type: application
-version: 2.0.4      # synced from evolution/db/version.h by CI
-appVersion: "2.0.4"  # synced from evolution/db/version.h by CI
+version: 2.0.5      # synced from evolution/db/version.h by CI
+appVersion: "2.0.5"  # synced from evolution/db/version.h by CI
 keywords:
   - database
   - sql
