@@ -1252,11 +1252,95 @@ int UpdateProcess(void)
             return -1;
         }
 
+        /* Fast path: simple PK range pattern (e.g. WHERE id <= 5000)
+         * Uses B+ tree cursor to walk only matching keys, skipping the
+         * full heap scan + per-row WHERE evaluation. Skipped when any
+         * SET column is part of a composite/primary key to avoid
+         * interaction with PK updates in the inner loop. */
+        int fast_path_used = 0;
+        {
+            const char *pk_col = NULL;
+            int pk_count = 0;
+            for (int ci = 0; ci < allNCols; ci++) {
+                if (allCols[ci].is_pk) {
+                    pk_count++;
+                    if (!pk_col) pk_col = allCols[ci].col_name;
+                }
+            }
+            /* Skip fast path if SET touches the PK column */
+            int set_touches_pk = 0;
+            if (pk_col) {
+                for (int si = 0; si < numSetCols; si++) {
+                    if (strcmp(setCols[si], pk_col) == 0) {
+                        set_touches_pk = 1;
+                        break;
+                    }
+                }
+            }
+            PkRangePattern pat;
+            BTree2 upk_tree = tapi_pk_tree(&td);
+            if (pk_count == 1 && pk_col && !set_touches_pk &&
+                expr_is_simple_pk_range(g_expr.whereExpr, pk_col, &pat)) {
+                BTree2Cursor bcur;
+                char bkeyBuf[BT2_MAX_KEY_LEN + 2];
+                RowID brid;
+
+                if (pat.op == EXPR_CMP_EQ) {
+                    if (bt2_search(&upk_tree, pat.value, &brid) == 0) {
+                        matchKeys[matchCount++] = strdup(pat.value);
+                    }
+                } else if (pat.op == EXPR_CMP_GT || pat.op == EXPR_CMP_GE) {
+                    if (bt2_cursor_seek(&upk_tree, pat.value, &bcur) == 0) {
+                        while (bt2_cursor_next(&bcur, bkeyBuf, &brid) == 0) {
+                            if (pat.op == EXPR_CMP_GT) {
+                                long long ka = strtoll(bkeyBuf, NULL, 10);
+                                long long kb = strtoll(pat.value, NULL, 10);
+                                if (ka == kb && strcmp(bkeyBuf, pat.value) == 0)
+                                    continue;
+                            }
+                            if (matchCount >= capacity) {
+                                capacity *= 2;
+                                char **tmp2 = (char **)realloc(matchKeys,
+                                                               capacity * sizeof(char *));
+                                if (!tmp2) break;
+                                matchKeys = tmp2;
+                            }
+                            matchKeys[matchCount++] = strdup(bkeyBuf);
+                        }
+                    }
+                } else { /* LT / LE */
+                    if (bt2_cursor_first(&upk_tree, &bcur) == 0) {
+                        while (bt2_cursor_next(&bcur, bkeyBuf, &brid) == 0) {
+                            long long ka = strtoll(bkeyBuf, NULL, 10);
+                            long long kb = strtoll(pat.value, NULL, 10);
+                            int cmp;
+                            if (ka < kb) cmp = -1;
+                            else if (ka > kb) cmp = 1;
+                            else cmp = strcmp(bkeyBuf, pat.value);
+
+                            if (pat.op == EXPR_CMP_LT && cmp >= 0) break;
+                            if (pat.op == EXPR_CMP_LE && cmp >  0) break;
+
+                            if (matchCount >= capacity) {
+                                capacity *= 2;
+                                char **tmp2 = (char **)realloc(matchKeys,
+                                                               capacity * sizeof(char *));
+                                if (!tmp2) break;
+                                matchKeys = tmp2;
+                            }
+                            matchKeys[matchCount++] = strdup(bkeyBuf);
+                        }
+                    }
+                }
+                fast_path_used = 1;
+            }
+        }
+
         TableScanCursor cursor;
         char keyBuf[256];
         char recBuf[RECORD_BUF_SIZE];
 
-        if (tapi_scan_begin(&td, &cursor) == 0) {
+        if (!fast_path_used && tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
                 int recLen = tup_record_len(recBuf, sizeof(recBuf));
                 char colValues[CAT_MAX_COLUMNS][256];
