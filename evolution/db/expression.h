@@ -185,6 +185,22 @@ typedef struct ExprNode {
     char display[256];          /* display label / alias */
 } ExprNode;
 
+/* ----------------------------------------------------------------
+ *  Simple PK range pattern detection (used by Delete/Update fast path)
+ * ---------------------------------------------------------------- */
+typedef struct {
+    int  op;             /* EXPR_CMP_LT/LE/GT/GE/EQ */
+    char value[256];     /* literal as text */
+    int  value_type;     /* EXPR_LITERAL_INT/FLOAT/STR */
+} PkRangePattern;
+
+/* Returns 1 if `node` is a single comparison `pk_col_name <op> literal`
+ * (or symmetrically `literal <op> pk_col_name`) where op is one of
+ * <, <=, >, >=, =. Otherwise 0. On success, fills *out. */
+int expr_is_simple_pk_range(const struct ExprNode *node,
+                            const char *pk_col_name,
+                            PkRangePattern *out);
+
 /* Node allocation */
 ExprNode *expr_alloc(void);
 
