@@ -2740,7 +2740,57 @@
 
 ---
 
-## Day 70 — Final Task
+## Day 69 — Performance Optimizations (Continued)
+
+### Task 140: ⬜ DELETE/UPDATE PK Range Fast Path
+
+**Goal:** Currently `DELETE FROM t WHERE pk_col <= N` does full heap scan + per-row expression evaluation (~100 ms for 5K rows). PostgreSQL does B+ tree range scan in ~2 ms. Add fast-path detection for simple PK range patterns.
+
+**Context:** Benchmark shows EvolutionDB DELETE = 103 ms vs PostgreSQL = 2 ms (50x slower). Same for UPDATE: 73 ms vs 5 ms. Total benchmark gap with PG: ~150 ms.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `expr_is_simple_pk_range(node, pk_col_name, op_out, value_out)` helper that detects `pk_col <op> literal` patterns where op is `<`, `<=`, `>`, `>=`, `=`. Returns 1 if matched, 0 otherwise. | `evolution/db/expression.c`, `expression.h` |
+| 2 | Add `bt2_range_iterate(tree, op, key_value, callback)` function — walks B+ tree leaves in PK order, calls callback for each matching key. Reuses existing leaf sibling pointers. | `evolution/db/btree2.c`, `btree2.h` |
+| 3 | In `DeleteProcess()`, before falling through to expression-based path, check `expr_is_simple_pk_range()` against PK column. If matched, use `bt2_range_iterate()` to collect keys, then delete in batch. | `evolution/db/Delete.c` |
+| 4 | Same fast path in `UpdateProcess()` — detect PK range, use range iterate, then per-row UPDATE via tapi_heap_update. | `evolution/db/Update.c` |
+| 5 | Handle MVCC visibility: for prepared range delete, ensure xmax is set correctly for all matched rows in one transaction. | `evolution/db/Delete.c` |
+| 6 | Update Delete.c FK cascade path: when range delete triggers FK cascade, recurse into child tables with the affected PK list. | `evolution/db/Delete.c` |
+| 7 | Add `tests/test_pk_range_fastpath.py` — verify correctness: range delete with various ops (`<`, `<=`, `>`, `>=`, `=`), edge cases (empty range, full range, single row). | `tests/` |
+| 8 | Benchmark: re-run evolutiondb-benchmarks. Target: DELETE 103 ms → ~10 ms, UPDATE 73 ms → ~10 ms. | `evolutiondb-benchmarks` |
+| 9 | Profile with `EVOSQL_PROFILE=1` to confirm full table scan eliminated. | Server log |
+| 10 | Regression: run all tests including test_delete.py, test_update.py, test_foreign_key.py, test_mvcc.py. | `tests/` |
+
+**Expected impact:** 176 ms → ~20 ms (saves ~155 ms total benchmark time). EvolutionDB matches PostgreSQL on all CRUD operations.
+
+---
+
+## Day 70 — Performance Optimizations (Optional)
+
+### Task 141: ⬜ Binary Parameter Encoding Mode (Optional)
+
+**Goal:** Optional binary mode for parameters in EXECUTE / EXECUTE_BATCH. Currently all parameters are sent as text strings — `1234567` = 7 bytes vs 4 bytes binary, plus parser overhead on server side.
+
+**Context:** Phase 4 of the optimization plan. Estimated 5-10% throughput improvement for numeric-heavy workloads.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `BINARY ON\n` / `BINARY OFF\n` protocol command — toggles binary mode for the session. | `adaptor/evo_protocol.c` |
+| 2 | Add binary parameter format to PREPARE: `PREPARE_BINARY <name> <len>\n<sql>\n<param_type1><param_type2>...` where each type is one byte: 'i'=int4, 'l'=int8, 'f'=float4, 'd'=float8, 's'=string, 'b'=bool. | `adaptor/evo_protocol.c` |
+| 3 | Add `EXECUTE_BINARY <name>\n` reading parameters as raw bytes per declared type (network byte order for integers). | `adaptor/evo_protocol.c` |
+| 4 | Same for EXECUTE_BATCH_BINARY — flat parameter buffer with type-aware decoding. | `adaptor/evo_protocol.c` |
+| 5 | Server-side parameter substitution: format binary value to text (sprintf) only when building SQL — saves nothing in current substitution path, but enables future direct value binding. | `adaptor/evo_protocol.c` |
+| 6 | Client-side: `EvoProtocolClient.PrepareBinary()`, `ExecuteBatchBinary()` methods that pack parameters into byte buffer. | `evolutiondb-efcore/src/evosql/Internal/EvoProtocolClient.cs` |
+| 7 | `EvosqlBatch` API: detect parameter types from `EvosqlParameter.DbType`, use binary path automatically when all params are numeric/bool. | `evolutiondb-efcore/src/evosql/EvosqlBatch.cs` |
+| 8 | Add `tests/test_binary_params.py` — verify INT4, INT8, FLOAT4, FLOAT8, BOOL round-trip correctly. | `tests/` |
+| 9 | Benchmark: compare text vs binary modes for 10K row INSERT with mixed numeric data. | `evolutiondb-benchmarks` |
+| 10 | Document in protocol spec: when to use binary mode, type byte encoding, byte order. | `docs/evo_protocol.md` |
+
+**Expected impact:** ~5-10% throughput improvement (~100 ms savings on 10K row benchmark).
+
+---
+
+## Day 71 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
 
