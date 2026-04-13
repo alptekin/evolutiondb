@@ -327,13 +327,18 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
 
 /* Apply a single-row update: fetch record by PK, apply SET columns,
  * store back into heap.
- * Returns 0 on success, -1 on failure. */
+ * Returns 0 on success, -1 on failure.
+ *
+ * hint_rid: if non-zero, skip the PK lookup — the caller already has
+ * the RowID (e.g. from the Phase 6.2 fast-path cursor walk). Pass
+ * {0, 0} to force a bt2_search as before. */
 static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCols,
                             const char *pkKey,
                             const char setCols[][256], const char setVals[][256],
                             int numSetCols, int numSetVals,
                             const char metaCols[][256], int numMetaCols,
-                            const char *tblName)
+                            const char *tblName,
+                            RowID hint_rid)
 {
     char existingData[RECORD_BUF_SIZE];
     int s, c, i;
@@ -341,9 +346,13 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     /* Fetch record by PK from B+ tree + heap */
     BTree2 pk_tree = tapi_pk_tree(td);
     RowID rid;
-    if (DML_PROF_EXPR("bt2_search",
-                      bt2_search(&pk_tree, pkKey, &rid)) < 0)
-        return -1;
+    if (hint_rid.page_no != 0) {
+        rid = hint_rid;
+    } else {
+        if (DML_PROF_EXPR("bt2_search",
+                          bt2_search(&pk_tree, pkKey, &rid)) < 0)
+            return -1;
+    }
     int existingDataLen = DML_PROF_EXPR("tapi_heap_read",
                                         tapi_heap_read(rid, existingData, sizeof(existingData)));
     if (existingDataLen < 0)
@@ -1077,12 +1086,15 @@ int evo_update_row(const char *tableName, const char *pkKey,
     /* Ensure XID for MVCC */
     mvcc_ensure_xid(&g_qctx->mvcc_xid);
 
-    return ApplyUpdateToRow(&td, cols, ncols, pkKey,
-                            (const char (*)[256])setColsBuf,
-                            (const char (*)[256])setValsBuf,
-                            n, n,
-                            (const char (*)[256])metaCols, numMetaCols,
-                            tableName);
+    {
+        RowID no_hint = {0, 0};
+        return ApplyUpdateToRow(&td, cols, ncols, pkKey,
+                                (const char (*)[256])setColsBuf,
+                                (const char (*)[256])setValsBuf,
+                                n, n,
+                                (const char (*)[256])metaCols, numMetaCols,
+                                tableName, no_hint);
+    }
 }
 
 int UpdateProcess(void)
@@ -1260,11 +1272,19 @@ int UpdateProcess(void)
             colNames[i][127] = '\0';
         }
 
-        /* Phase 1: iterate all records, evaluate WHERE, collect matching keys */
+        /* Phase 1: iterate all records, evaluate WHERE, collect
+         * matching keys + rid. Fast path saves rid from the cursor
+         * so ApplyUpdateToRow can skip its internal bt2_search
+         * (Phase 6.2). Scan fallback leaves rid = {0,0}. */
+        typedef struct {
+            char *key;
+            RowID rid;
+        } UpdMatch;
+
         int capacity = 64;
         int matchCount = 0;
-        char **matchKeys = (char **)malloc(capacity * sizeof(char *));
-        if (!matchKeys) {
+        UpdMatch *matches = (UpdMatch *)malloc(capacity * sizeof(UpdMatch));
+        if (!matches) {
             g_upd.rowCount = 0;
             TruncateUpdate();
             return -1;
@@ -1316,11 +1336,22 @@ int UpdateProcess(void)
                     } \
                     _fpok; \
                 })
+                #define FPU_GROW_IF_NEEDED() do { \
+                    if (matchCount >= capacity) { \
+                        capacity *= 2; \
+                        UpdMatch *_tmp = (UpdMatch *)realloc(matches, \
+                                                             capacity * sizeof(UpdMatch)); \
+                        if (!_tmp) { break; } \
+                        matches = _tmp; \
+                    } \
+                } while (0)
 
                 if (pat.op == EXPR_CMP_EQ) {
                     if (bt2_search(&upk_tree, pat.value, &brid) == 0 &&
                         FP_VISIBLE_U(brid)) {
-                        matchKeys[matchCount++] = strdup(pat.value);
+                        matches[matchCount].key = strdup(pat.value);
+                        matches[matchCount].rid = brid;
+                        matchCount++;
                     }
                 } else if (pat.op == EXPR_CMP_GT || pat.op == EXPR_CMP_GE) {
                     if (bt2_cursor_seek(&upk_tree, pat.value, &bcur) == 0) {
@@ -1332,14 +1363,10 @@ int UpdateProcess(void)
                                     continue;
                             }
                             if (!FP_VISIBLE_U(brid)) continue;
-                            if (matchCount >= capacity) {
-                                capacity *= 2;
-                                char **tmp2 = (char **)realloc(matchKeys,
-                                                               capacity * sizeof(char *));
-                                if (!tmp2) break;
-                                matchKeys = tmp2;
-                            }
-                            matchKeys[matchCount++] = strdup(bkeyBuf);
+                            FPU_GROW_IF_NEEDED();
+                            matches[matchCount].key = strdup(bkeyBuf);
+                            matches[matchCount].rid = brid;
+                            matchCount++;
                         }
                     }
                 } else { /* LT / LE */
@@ -1356,18 +1383,15 @@ int UpdateProcess(void)
                             if (pat.op == EXPR_CMP_LE && cmp >  0) break;
 
                             if (!FP_VISIBLE_U(brid)) continue;
-                            if (matchCount >= capacity) {
-                                capacity *= 2;
-                                char **tmp2 = (char **)realloc(matchKeys,
-                                                               capacity * sizeof(char *));
-                                if (!tmp2) break;
-                                matchKeys = tmp2;
-                            }
-                            matchKeys[matchCount++] = strdup(bkeyBuf);
+                            FPU_GROW_IF_NEEDED();
+                            matches[matchCount].key = strdup(bkeyBuf);
+                            matches[matchCount].rid = brid;
+                            matchCount++;
                         }
                     }
                 }
                 #undef FP_VISIBLE_U
+                #undef FPU_GROW_IF_NEEDED
                 fast_path_used = 1;
             }
         }
@@ -1406,12 +1430,15 @@ int UpdateProcess(void)
                 if (match) {
                     if (matchCount >= capacity) {
                         capacity *= 2;
-                        char **tmp2 = (char **)realloc(matchKeys,
-                                                       capacity * sizeof(char *));
+                        UpdMatch *tmp2 = (UpdMatch *)realloc(matches,
+                                                             capacity * sizeof(UpdMatch));
                         if (!tmp2) break;
-                        matchKeys = tmp2;
+                        matches = tmp2;
                     }
-                    matchKeys[matchCount] = strdup(keyBuf);
+                    matches[matchCount].key = strdup(keyBuf);
+                    /* rid unknown on scan path — ApplyUpdateToRow will bt2_search */
+                    matches[matchCount].rid.page_no = 0;
+                    matches[matchCount].rid.slot_idx = 0;
                     matchCount++;
                 }
             }
@@ -1422,9 +1449,9 @@ int UpdateProcess(void)
         int effectiveEnd = matchCount;
         if (expr_eval_limit_range(matchCount, &effectiveStart, &effectiveEnd)) {
             for (int si = 0; si < effectiveStart; si++)
-                free(matchKeys[si]);
+                free(matches[si].key);
             for (int si = effectiveEnd; si < matchCount; si++)
-                free(matchKeys[si]);
+                free(matches[si].key);
         }
 
         /* Phase 2: apply update to matched records (within limit) */
@@ -1432,7 +1459,10 @@ int UpdateProcess(void)
         int i;
         uint64_t _dml_loop_t0 = g_dml_prof.enabled ? dml_prof_now_ns() : 0;
         for (i = effectiveStart; i < effectiveEnd; i++) {
-            if (matchKeys[i]) {
+            if (matches[i].key) {
+                const char *mkey = matches[i].key;
+                RowID mrid = matches[i].rid;
+
                 /* Capture old field values for concurrent index log
                  * BEFORE ApplyUpdateToRow modifies the record */
                 char updOldFields[CAT_MAX_COLUMNS][256];
@@ -1441,7 +1471,7 @@ int UpdateProcess(void)
                     td.table_id == g_conc_mod_log.table_id) {
                     BTree2 upk = tapi_pk_tree(&td);
                     RowID urid;
-                    if (bt2_search(&upk, matchKeys[i], &urid) == 0) {
+                    if (bt2_search(&upk, mkey, &urid) == 0) {
                         char urec[RECORD_BUF_SIZE];
                         int ulen = tapi_heap_read(urid, urec, sizeof(urec));
                         if (ulen > 0) {
@@ -1453,22 +1483,22 @@ int UpdateProcess(void)
                 }
 
                 if (DML_PROF_EXPR("apply_update_total",
-                                  ApplyUpdateToRow(&td, allCols, allNCols, matchKeys[i],
+                                  ApplyUpdateToRow(&td, allCols, allNCols, mkey,
                                                    (const char (*)[256])setCols,
                                                    (const char (*)[256])allTokens,
                                                    numSetCols, numSetVals,
                                                    (const char (*)[256])metaCols, numMetaCols,
-                                                   tblName)) == 0) {
+                                                   tblName, mrid)) == 0) {
                     updated++;
                     if (updOldNCols > 0)
-                        conc_mod_log_record(td.table_id, matchKeys[i],
+                        conc_mod_log_record(td.table_id, mkey,
                                             (const char *)metaCols, 256,
                                             (const char *)updOldFields, 256,
                                             numMetaCols);
                     else
-                        conc_mod_log_append(td.table_id, matchKeys[i]);
+                        conc_mod_log_append(td.table_id, mkey);
                 }
-                free(matchKeys[i]);
+                free(matches[i].key);
             }
         }
         if (g_dml_prof.enabled) {
@@ -1478,7 +1508,7 @@ int UpdateProcess(void)
                 _e->total_ns = dml_prof_now_ns() - _dml_loop_t0;
             }
         }
-        free(matchKeys);
+        free(matches);
 
         g_upd.rowCount = updated;
         if (updated > 0) {
@@ -1509,12 +1539,14 @@ int UpdateProcess(void)
             }
         }
 
+        {
+        RowID no_hint = {0, 0};
         if (ApplyUpdateToRow(&td, allCols, allNCols, key,
                              (const char (*)[256])setCols,
                              (const char (*)[256])allTokens,
                              numSetCols, numSetVals,
                              (const char (*)[256])metaCols, numMetaCols,
-                             tblName) == 0) {
+                             tblName, no_hint) == 0) {
             g_upd.rowCount = 1;
             cat_increment_dml_counter(td.table_id);
             cat_increment_dead_tuples(td.table_id, 1);
@@ -1528,6 +1560,7 @@ int UpdateProcess(void)
         } else {
             printf("Record not found for key: %s\n", key);
             g_upd.rowCount = 0;
+        }
         }
     }
 
