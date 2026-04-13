@@ -93,8 +93,21 @@ typedef struct {
     uint8_t  encryption_salt[16];              /* PBKDF2 salt for MEK derivation */
     uint8_t  wrapped_dek[48];                  /* DEK encrypted with MEK (32 ct + 16 GCM tag) */
     uint8_t  page_iv_prefix[8];               /* fixed CTR IV prefix (never changes on rekey) */
-    uint8_t  reserved[EVO_PAGE_SIZE - 173];    /* pad to full page (92 + 4 + 4 + 73 = 173) */
+    /* Size breakdown (must total exactly EVO_PAGE_SIZE = 4096):
+     *   magic(4) + version(2) + page_size(2) + total_pages(4) + free_list_head(4) = 16
+     *   catalog_roots[17] = 68
+     *   next_table_id(4) + next_schema_id(4) + next_db_id(4) = 12
+     *   next_xid(4) + next_csn(4) = 8
+     *   encryption: enabled(1) + salt(16) + wrapped_dek(48) + iv_prefix(8) = 73
+     *   TOTAL non-reserved = 16 + 68 + 12 + 8 + 73 = 177
+     * reserved = 4096 - 177 = 3919 */
+    uint8_t  reserved[EVO_PAGE_SIZE - 177];
 } FileHeader;
+
+/* Compile-time check: FileHeader must fit exactly in one page.
+ * If this fails, the reserved[] size is wrong. */
+_Static_assert(sizeof(FileHeader) == EVO_PAGE_SIZE,
+               "FileHeader size must equal EVO_PAGE_SIZE (4096 bytes)");
 
 /* ----------------------------------------------------------------
  *  Page Manager API
