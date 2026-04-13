@@ -562,6 +562,174 @@ void evo_handle_client(socket_t sock)
             continue;
         }
 
+        /* EXECUTE_BATCH <stmt_name> <row_count> <param_count>\n
+         *   <row1_param1>\n
+         *   <row1_param2>\n
+         *   ...
+         *   <rowN_paramM>\n
+         * Response:
+         *   BATCH_OK <total_affected>\n
+         *   READY\n
+         *  or on error:
+         *   BATCH_ERR <row_index> <sqlstate> <msg>\n
+         *   READY\n
+         */
+        if (strncasecmp(line, "EXECUTE_BATCH ", 14) == 0) {
+            char stmt_name[64] = "";
+            int  row_count = 0;
+            int  param_count = 0;
+            {
+                char *p = line + 14;
+                int ni = 0;
+                while (*p && !isspace((unsigned char)*p) && ni < 63)
+                    stmt_name[ni++] = *p++;
+                stmt_name[ni] = '\0';
+                while (*p && isspace((unsigned char)*p)) p++;
+                row_count = atoi(p);
+                while (*p && !isspace((unsigned char)*p)) p++;
+                while (*p && isspace((unsigned char)*p)) p++;
+                param_count = atoi(p);
+            }
+
+            if (stmt_name[0] == '\0' || row_count <= 0 || param_count < 0) {
+                evo_sendf(&conn, "ERR 42000 EXECUTE_BATCH: invalid arguments\n");
+                evo_sendf(&conn, "READY\n");
+                continue;
+            }
+
+            /* Find the prepared statement */
+            int slot = -1;
+            for (int i = 0; i < session.prepared_stmt_count; i++) {
+                if (strcasecmp(session.prepared_stmts[i].name, stmt_name) == 0) {
+                    slot = i;
+                    break;
+                }
+            }
+            if (slot < 0) {
+                /* Drain param lines so protocol stays in sync */
+                int total = row_count * param_count;
+                for (int i = 0; i < total; i++) {
+                    char drain[65536];
+                    if (conn_recv_line(&conn, drain, sizeof(drain)) < 0) break;
+                }
+                evo_sendf(&conn, "ERR 26000 Prepared statement '%s' not found\n", stmt_name);
+                evo_sendf(&conn, "READY\n");
+                continue;
+            }
+
+            const char *tmpl = session.prepared_stmts[slot].query;
+            long total_affected = 0;
+            int  batch_error = 0;
+            int  err_row = -1;
+            char err_state[16] = "";
+            char err_msg[256] = "";
+
+            for (int r = 0; r < row_count && !batch_error; r++) {
+                /* Read param_count lines for this row */
+                char *params[32];
+                memset(params, 0, sizeof(params));
+                int read_ok = 1;
+                for (int i = 0; i < param_count && i < 32; i++) {
+                    char pbuf[65536];
+                    if (conn_recv_line(&conn, pbuf, sizeof(pbuf)) < 0) {
+                        read_ok = 0;
+                        break;
+                    }
+                    params[i] = strdup(pbuf);
+                }
+                if (!read_ok) {
+                    for (int i = 0; i < 32; i++) if (params[i]) free(params[i]);
+                    batch_error = 1;
+                    err_row = r;
+                    strcpy(err_state, "08006");
+                    strcpy(err_msg, "connection lost during batch");
+                    break;
+                }
+
+                /* Build substituted SQL */
+                char sql[65536];
+                int  out = 0;
+                const char *t = tmpl;
+                while (*t && out < (int)sizeof(sql) - 2) {
+                    if (*t == '$' && t[1] >= '1' && t[1] <= '9') {
+                        int pn = 0;
+                        const char *d = t + 1;
+                        while (*d >= '0' && *d <= '9') {
+                            pn = pn * 10 + (*d - '0');
+                            d++;
+                        }
+                        int pidx = pn - 1;
+                        if (pidx >= 0 && pidx < param_count && params[pidx]) {
+                            if (strcmp(params[pidx], "\\N") == 0) {
+                                const char *nul = "NULL";
+                                while (*nul && out < (int)sizeof(sql) - 2)
+                                    sql[out++] = *nul++;
+                            } else {
+                                sql[out++] = '\'';
+                                const char *v = params[pidx];
+                                while (*v && out < (int)sizeof(sql) - 4) {
+                                    if (*v == '\'') {
+                                        sql[out++] = '\'';
+                                        sql[out++] = '\'';
+                                    } else {
+                                        sql[out++] = *v;
+                                    }
+                                    v++;
+                                }
+                                sql[out++] = '\'';
+                            }
+                        }
+                        t = d;
+                    } else {
+                        sql[out++] = *t++;
+                    }
+                }
+                sql[out] = '\0';
+
+                for (int i = 0; i < 32; i++) if (params[i]) free(params[i]);
+
+                /* Execute — reuses existing safe_query_execute() */
+                session_set_query(session.session_id, sql);
+                safe_query_execute(sql, rs, &session);
+                session_clear_query(session.session_id);
+
+                if (rs->has_error) {
+                    batch_error = 1;
+                    err_row = r;
+                    strncpy(err_state, rs->error_sqlstate, sizeof(err_state) - 1);
+                    strncpy(err_msg, rs->error_message, sizeof(err_msg) - 1);
+                    /* Drain remaining param lines */
+                    int remaining = (row_count - r - 1) * param_count;
+                    for (int i = 0; i < remaining; i++) {
+                        char drain[65536];
+                        if (conn_recv_line(&conn, drain, sizeof(drain)) < 0) break;
+                    }
+                    break;
+                }
+
+                /* Extract affected rows from command_tag */
+                const char *tag = rs->command_tag;
+                if (strncmp(tag, "INSERT ", 7) == 0) {
+                    /* INSERT 0 N */
+                    const char *sp = strchr(tag + 7, ' ');
+                    if (sp) total_affected += atol(sp + 1);
+                    else total_affected += 1;
+                } else if (strncmp(tag, "UPDATE ", 7) == 0) {
+                    total_affected += atol(tag + 7);
+                } else if (strncmp(tag, "DELETE ", 7) == 0) {
+                    total_affected += atol(tag + 7);
+                }
+            }
+
+            if (batch_error) {
+                evo_sendf(&conn, "BATCH_ERR %d %s %s\n", err_row, err_state, err_msg);
+            } else {
+                evo_sendf(&conn, "BATCH_OK %ld\n", total_affected);
+            }
+            evo_sendf(&conn, "READY\n");
+            continue;
+        }
+
         /* DEALLOCATE <stmt_name>\n */
         if (strncasecmp(line, "DEALLOCATE ", 11) == 0) {
             char stmt_name[64] = "";

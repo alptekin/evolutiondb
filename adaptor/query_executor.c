@@ -7143,6 +7143,10 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     char saved_schema[256] = "";
     int qualified = 0;
 
+    /* PROFILE: timing */
+    struct timespec __prof_start;
+    clock_gettime(CLOCK_MONOTONIC, &__prof_start);
+
     result_init(rs);
 
     /* Reject queries exceeding internal buffer size (prevents stack overflow) */
@@ -8136,5 +8140,20 @@ writeback_session:
         ctx->gtt_count = g_gtt_override_count;
         g_gtt_overrides = NULL;
         g_gtt_override_count = 0;
+    }
+
+    /* PROFILE: log slow queries (>0.5 ms) */
+    {
+        struct timespec __prof_end;
+        clock_gettime(CLOCK_MONOTONIC, &__prof_end);
+        long __prof_us = (__prof_end.tv_sec - __prof_start.tv_sec) * 1000000L
+                       + (__prof_end.tv_nsec - __prof_start.tv_nsec) / 1000L;
+        if (getenv("EVOSQL_PROFILE")) {
+            char __prof_sql[80];
+            strncpy(__prof_sql, sql, 79);
+            __prof_sql[79] = '\0';
+            for (char *p = __prof_sql; *p; p++) if (*p == '\n') *p = ' ';
+            fprintf(stderr, "[PROF] %ld us : %s\n", __prof_us, __prof_sql);
+        }
     }
 }
