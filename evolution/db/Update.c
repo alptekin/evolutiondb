@@ -1284,9 +1284,24 @@ int UpdateProcess(void)
                 BTree2Cursor bcur;
                 char bkeyBuf[BT2_MAX_KEY_LEN + 2];
                 RowID brid;
+                /* Visibility helper: skip soft-deleted tuples so the fast
+                 * path doesn't waste work on dead rows after a previous
+                 * DELETE (matches tapi_scan_next's filter). */
+                #define FP_VISIBLE_U(rid_var) ({ \
+                    char _fprec[RECORD_BUF_SIZE]; \
+                    int  _fplen = tapi_heap_read((rid_var), _fprec, sizeof(_fprec)); \
+                    int  _fpok = 1; \
+                    if (_fplen < 0) _fpok = 0; \
+                    else if (tup_has_mvcc(_fprec, _fplen)) { \
+                        uint32_t _xmax = tup_get_xmax(_fprec, _fplen); \
+                        if (_xmax != 0 && clog_is_committed(_xmax)) _fpok = 0; \
+                    } \
+                    _fpok; \
+                })
 
                 if (pat.op == EXPR_CMP_EQ) {
-                    if (bt2_search(&upk_tree, pat.value, &brid) == 0) {
+                    if (bt2_search(&upk_tree, pat.value, &brid) == 0 &&
+                        FP_VISIBLE_U(brid)) {
                         matchKeys[matchCount++] = strdup(pat.value);
                     }
                 } else if (pat.op == EXPR_CMP_GT || pat.op == EXPR_CMP_GE) {
@@ -1298,6 +1313,7 @@ int UpdateProcess(void)
                                 if (ka == kb && strcmp(bkeyBuf, pat.value) == 0)
                                     continue;
                             }
+                            if (!FP_VISIBLE_U(brid)) continue;
                             if (matchCount >= capacity) {
                                 capacity *= 2;
                                 char **tmp2 = (char **)realloc(matchKeys,
@@ -1321,6 +1337,7 @@ int UpdateProcess(void)
                             if (pat.op == EXPR_CMP_LT && cmp >= 0) break;
                             if (pat.op == EXPR_CMP_LE && cmp >  0) break;
 
+                            if (!FP_VISIBLE_U(brid)) continue;
                             if (matchCount >= capacity) {
                                 capacity *= 2;
                                 char **tmp2 = (char **)realloc(matchKeys,
@@ -1332,6 +1349,7 @@ int UpdateProcess(void)
                         }
                     }
                 }
+                #undef FP_VISIBLE_U
                 fast_path_used = 1;
             }
         }

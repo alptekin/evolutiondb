@@ -421,10 +421,25 @@ int DeleteProcess(void)
                 BTree2Cursor cursor;
                 char keyBuf[BT2_MAX_KEY_LEN + 2];
                 RowID rid;
+                /* Visibility helper: skip soft-deleted tuples so the fast
+                 * path doesn't waste work on dead rows after a previous
+                 * DELETE (matches tapi_scan_next's filter). */
+                #define FP_VISIBLE(rid_var) ({ \
+                    char _fprec[RECORD_BUF_SIZE]; \
+                    int  _fplen = tapi_heap_read((rid_var), _fprec, sizeof(_fprec)); \
+                    int  _fpok = 1; \
+                    if (_fplen < 0) _fpok = 0; \
+                    else if (tup_has_mvcc(_fprec, _fplen)) { \
+                        uint32_t _xmax = tup_get_xmax(_fprec, _fplen); \
+                        if (_xmax != 0 && clog_is_committed(_xmax)) _fpok = 0; \
+                    } \
+                    _fpok; \
+                })
 
                 if (pat.op == EXPR_CMP_EQ) {
                     /* Single key lookup */
-                    if (bt2_search(&pk_tree, pat.value, &rid) == 0) {
+                    if (bt2_search(&pk_tree, pat.value, &rid) == 0 &&
+                        FP_VISIBLE(rid)) {
                         matchKeys[matchCount++] = strdup(pat.value);
                     }
                 } else if (pat.op == EXPR_CMP_GT || pat.op == EXPR_CMP_GE) {
@@ -433,12 +448,12 @@ int DeleteProcess(void)
                         while (bt2_cursor_next(&cursor, keyBuf, &rid) == 0) {
                             /* For GT, skip keys equal to limit */
                             if (pat.op == EXPR_CMP_GT) {
-                                /* Compare numerically if possible */
                                 long long ka = strtoll(keyBuf, NULL, 10);
                                 long long kb = strtoll(pat.value, NULL, 10);
                                 if (ka == kb && strcmp(keyBuf, pat.value) == 0)
                                     continue;
                             }
+                            if (!FP_VISIBLE(rid)) continue;
                             if (matchCount >= capacity) {
                                 capacity *= 2;
                                 char **tmp = (char **)realloc(matchKeys,
@@ -463,6 +478,7 @@ int DeleteProcess(void)
                             if (pat.op == EXPR_CMP_LT && cmp >= 0) break;
                             if (pat.op == EXPR_CMP_LE && cmp >  0) break;
 
+                            if (!FP_VISIBLE(rid)) continue;
                             if (matchCount >= capacity) {
                                 capacity *= 2;
                                 char **tmp = (char **)realloc(matchKeys,
@@ -474,6 +490,7 @@ int DeleteProcess(void)
                         }
                     }
                 }
+                #undef FP_VISIBLE
                 fast_path_used = 1;
             }
         }
