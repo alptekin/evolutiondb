@@ -22,6 +22,12 @@
 int tapi_resolve(const char *name_or_path, TableDesc *td,
                  ColumnDesc *cols, int *ncols);
 
+/* Populate has_check_constraints / has_fk_constraints_local /
+ * has_unique_constraints on a resolved TableDesc via one
+ * cat_list_constraints scan. Call once per DML statement.
+ * Phase 6.3. */
+void tapi_probe_constraints(TableDesc *td);
+
 /* Extract base table name from a path, stripping directory and .dat */
 void tapi_basename(const char *path, char *out, int out_size);
 
