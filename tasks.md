@@ -2790,6 +2790,74 @@
 
 ---
 
+### Task 142: ⬜ DML Inner-Loop Profiling Harness (Phase 6.0)
+
+**Goal:** Build a minimal, zero-overhead-when-off profiling harness for the DELETE/UPDATE inner loop so Phase 6.1 is driven by real per-helper numbers instead of code-reading estimates.
+
+**Context:** Phase 5 (PK range fast path) brought DELETE 5K to 85 ms and UPDATE 2K to 65 ms. Remaining gap to PG (2 ms / 5 ms) is per-row DML overhead (~17 µs/row for DELETE). Phase 1 exploration produced rough estimates but they were tuned to the wrong helpers — `lock_row_acquire` at 3-5 µs/row vs real 0.29 µs/row, `tapi_heap_read` at 5-8 µs/row vs real 0.18 µs/row. Measure before optimizing.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | New minimal harness: thread-local `DMLProfile` with fixed slot table, `DML_PROF(name, call)` statement macro and `DML_PROF_EXPR(name, expr)` expression macro (GCC `__typeof__` + statement expression). Env var `EVOSQL_DML_PROFILE=1` gates; off-mode cost is a single branch. | `evolution/db/dml_profile.h/c` |
+| 2 | Output to `/tmp/evosql_dml_profile.log` (path configurable via `EVOSQL_DML_PROFILE_LOG`). Bypasses the stdout/stderr redirect that query_executor.c applies around `yyparse`. Line-buffered, mutex-protected writes. | `evolution/db/dml_profile.c` |
+| 3 | Instrument `Delete.c` `DeleteProcess()` Phase 2 loop: bt2_search, tapi_heap_read, fk_check, tup_extract, trigger_before/after, undo_log, sec_idx_delete, conc_mod_log, mvcc_ensure_xid, cg_check_write, lock_row_acquire, vmap_clear, heap_set_xmax, returning_capture. `loop_body_total` sentinel wraps the entire for-loop. | `evolution/db/Delete.c` |
+| 4 | Instrument `Update.c` `UpdateProcess()` loop + `ApplyUpdateToRow()`: `apply_update_total`, bt2_search, tapi_heap_read, mvcc_ensure_xid, cg_check_write, lock_row_acquire, undo_log, trigger_before/after, vmap_clear (called twice per row), heap_set_xmax, heap_insert, bt2_update. | `evolution/db/Update.c` |
+| 5 | Add `dml_profile.c` to both Makefiles (`adaptor/Makefile`, `evolution/Makefile`). | `adaptor/Makefile`, `evolution/Makefile` |
+| 6 | Benchmark harness: `tests/bench_dml_profile.py` runs 6 iterations of the plan scenario (INSERT 10K → DELETE 5K → UPDATE 2K), discards first 2 as warmup, parses the profile log, averages the last 4 per-helper. | `tests/bench_dml_profile.py` |
+| 7 | Baseline document: `docs/dml-profile-baseline.md` with the 4-run average table, estimate-vs-reality comparison, and top-N ranked recommendations. | `docs/dml-profile-baseline.md` |
+| 8 | Off-mode regression: all existing test suites pass with the harness installed but EVOSQL_DML_PROFILE unset. | existing tests |
+
+**Baseline findings (from completed measurement):**
+- DELETE 5K top-4 helpers = **84.5% of loop_total**
+  - `bt2_search` 5.55 µs/row (25.4%) — redundant, cursor already had rid
+  - `trigger_before/after` 10.04 µs/row combined (46%) — **no triggers exist**, pure catalog scan waste
+  - `sec_idx_delete` 2.86 µs/row (13.1%) — **no secondary indexes**, pure catalog scan waste
+- UPDATE 2K: `bt2_search` + `bt2_update` + triggers = 70.7%
+- `lock_row_acquire`, `tapi_heap_read`, `cg_check_write`, `fk_check` — all under 1% each; skipping them buys almost nothing
+
+**Unblocks:** Task 143 (Phase 6.1) — cache table schema presence flags.
+
+### Task 143: ⬜ DML Phase 6.1 — Schema Presence Flag Cache
+
+**Goal:** Cache per-table "has triggers / has secondary indexes / has referencing FKs" flags on `TableDesc` so the DML inner loop can `if (td->has_triggers) evo_fire_triggers(...)` instead of entering the catalog-scanning helper every row.
+
+**Depends on:** Task 142 baseline data showing that no-trigger / no-index catalog scans dominate the inner loop (>59% of DELETE 5K).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `uint8_t has_triggers, has_secondary_indexes, has_referencing_fks` to `TableDesc`. Populate from catalog at `tapi_resolve()` time. | `evolution/db/catalog_internal.h`, `table_api.c` |
+| 2 | Invalidate / refresh flags on `CREATE TRIGGER`, `DROP TRIGGER`, `CREATE INDEX`, `DROP INDEX`, `CREATE TABLE ... REFERENCES ...`, `ALTER TABLE DROP CONSTRAINT`. Simplest: recompute on next resolve (flags are cheap). | `Trigger.c`, `Index.c`, `Create.c`, `Drop.c` |
+| 3 | Guard `evo_fire_triggers` calls in `Delete.c` / `Update.c` / `Insert.c` with `if (td->has_triggers)`. | `Delete.c`, `Update.c`, `Insert.c` |
+| 4 | Guard `delete_secondary_indexes`, `idx_load_secondary`, and update-path secondary-index loops with `if (td->has_secondary_indexes)`. | `Delete.c`, `Update.c`, `Insert.c` |
+| 5 | Guard `enforce_fk_on_delete` with `if (td->has_referencing_fks)`. | `Delete.c` |
+| 6 | Re-run `tests/bench_dml_profile.py`; DELETE 5K should drop from ~85 ms to ~25 ms (trigger + index saves). Confirm via updated baseline doc. | `docs/dml-profile-after-6.1.md` |
+| 7 | Regression: full test suite green, especially trigger / index / FK tests. | existing tests |
+
+**Expected impact:** DELETE 5K 85 → ~25 ms (~60 ms save), UPDATE 2K 65 → ~40 ms.
+
+### Task 144: ⬜ DML Phase 6.2 — Fast Path RowID Carry-Through
+
+**Goal:** Eliminate the redundant `bt2_search` per row in the fast path by saving `(key, rid)` pairs when the cursor walk collects them. Currently the fast path drops the rid from `bt2_cursor_next` and re-looks it up inside the delete/update loop.
+
+**Depends on:** Task 143 (to confirm `bt2_search` is the remaining top after trigger/index caching).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Change `matchKeys` in `Delete.c` / `Update.c` fast path from `char **` to a typed array of `{char *key; RowID rid;}` struct. | `evolution/db/Delete.c`, `Update.c` |
+| 2 | During the cursor walk (`bt2_cursor_first` / `bt2_cursor_seek` / `bt2_cursor_next`), copy both key and rid into the collection array. | same |
+| 3 | In the inner loop, replace `bt2_search(&pk_tree, matchKeys[i], &rid)` with direct `rid = matches[i].rid`. The fallback scan path still needs the search (no rid cached there) — gate by `fast_path_used`. | same |
+| 4 | Re-measure: DELETE 5K should drop another ~28 ms. | `docs/dml-profile-after-6.2.md` |
+
+**Expected impact:** DELETE 5K → ~10-15 ms, hitting the <10 ms target range.
+
+### Task 145: ⬜ DML Phase 6.3 — Per-Page Batching (optional)
+
+**Goal:** Group same-page soft-deletes so `pgm_read_page` / `pgm_write_page` / `vmap_clear` run once per page instead of once per row. Low priority — per Task 142 data these helpers already sum to <5% of loop_total once 6.1 + 6.2 land, so savings are in the 1-2 ms range.
+
+Deferred until after 6.1 + 6.2 results are verified.
+
+---
+
 ## Day 71 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
