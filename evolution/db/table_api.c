@@ -81,8 +81,51 @@ int tapi_resolve(const char *name_or_path, TableDesc *td,
                                                   &trig_probe, 1) > 0);
         td->has_secondary_indexes =
             (uint8_t)(cat_list_indexes(td->table_id, &idx_probe, 1) > 0);
+
+        /* Classify constraints with a single prefix scan. We allocate
+         * on the heap rather than the stack — ConstraintDesc is ~1300
+         * bytes and this function is called from already-deep call
+         * trees inside DML loops, so a 32-entry stack array (~42 KB)
+         * amplified across multiple frames is the wrong place to be
+         * cheap with heap. */
+        /* Constraint flags are populated by an explicit probe
+         * (tapi_probe_constraints) called from DML code paths that
+         * actually need them. Default to "1" (pessimistic) so
+         * callers that haven't probed still exercise the existing
+         * validation paths and can't miss a constraint. */
+        td->has_check_constraints     = 1;
+        td->has_fk_constraints_local  = 1;
+        td->has_unique_constraints    = 1;
     }
     return 0;
+}
+
+/* Populate has_check_constraints / has_fk_constraints_local /
+ * has_unique_constraints on a resolved TableDesc. Caller should
+ * invoke this once per statement, not per row — Phase 6.3 moves
+ * per-row catalog scans to statement time. */
+void tapi_probe_constraints(TableDesc *td)
+{
+    if (!td) return;
+    uint8_t hc = 0, hf = 0, hu = 0;
+    ConstraintDesc *buf =
+        (ConstraintDesc *)malloc(sizeof(ConstraintDesc) * 32);
+    if (buf) {
+        int n = cat_list_constraints(td->table_id, buf, 32);
+        for (int i = 0; i < n; i++) {
+            if (!buf[i].is_enabled) continue;
+            switch (buf[i].constraint_type) {
+                case 'C': hc = 1; break;
+                case 'F': hf = 1; break;
+                case 'U': hu = 1; break;
+                default: break;
+            }
+        }
+        free(buf);
+    }
+    td->has_check_constraints    = hc;
+    td->has_fk_constraints_local = hf;
+    td->has_unique_constraints   = hu;
 }
 
 /* ----------------------------------------------------------------
