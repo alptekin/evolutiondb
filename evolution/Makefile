@@ -51,7 +51,8 @@ SRCS = main.c \
        db/Procedure.c \
        db/Trigger.c \
        db/Json.c \
-       db/Sequence.c
+       db/Sequence.c \
+       db/dml_profile.c
 
 OBJS = $(SRCS:.c=.o)
 
