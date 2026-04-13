@@ -64,6 +64,20 @@ typedef struct {
     int      shard_type;       /* SHARD_NONE / SHARD_HASH / SHARD_RANGE */
     char     shard_key[CAT_MAX_NAME_LEN]; /* column name used for sharding */
     int      shard_count;      /* HASH: number of shards */
+
+    /* Transient schema-presence flags — populated by tapi_resolve(),
+     * NOT serialized. Used by DML inner loops to skip catalog lookups
+     * for features the table doesn't have. Refreshed on every resolve
+     * so DDL while the current statement executes is not a concern
+     * (DDL is serialized behind g_dml_mutex anyway).
+     *
+     * has_referencing_fks is intentionally omitted: the measured cost
+     * of fk_check on a table with no referencing FKs is already
+     * 0.36 us/row (1.6% of DELETE loop), and checking it at resolve
+     * time would require a full scan of the constraint catalog since
+     * there's no reverse index. Not worth it for 1.6%. */
+    uint8_t  has_triggers;
+    uint8_t  has_secondary_indexes;
 } TableDesc;
 
 typedef struct {
