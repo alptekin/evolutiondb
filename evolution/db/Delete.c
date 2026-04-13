@@ -12,6 +12,7 @@
 #include "mvcc.h"
 #include "lock_mgr.h"
 #include "table_lock.h"
+#include "dml_profile.h"
 
 /* Remove secondary index entries for a deleted record.
  * Takes pre-extracted fields instead of raw record. */
@@ -366,6 +367,7 @@ static int enforce_fk_on_delete(const TableDesc *parentTd,
 int DeleteProcess(void)
 {
     /* Per-table lock */
+    dml_prof_begin_stmt("DELETE");
 
     /* Resolve table via catalog */
     TableDesc td;
@@ -554,20 +556,24 @@ int DeleteProcess(void)
         /* Phase 2: delete matched records (within limit) */
         int deleted = 0;
         int i;
+        uint64_t _dml_loop_t0 = g_dml_prof.enabled ? dml_prof_now_ns() : 0;
         for (i = effectiveStart; i < effectiveEnd; i++) {
             if (matchKeys[i]) {
                 RowID rid;
                 char delFields[CAT_MAX_COLUMNS][256];
                 int delIsNull[CAT_MAX_COLUMNS];
                 memset(delFields, 0, sizeof(delFields));
-                if (bt2_search(&pk_tree, matchKeys[i], &rid) == 0) {
+                if (DML_PROF_EXPR("bt2_search",
+                                  bt2_search(&pk_tree, matchKeys[i], &rid)) == 0) {
                     /* Read binary record for undo log and index cleanup */
                     char rec[RECORD_BUF_SIZE];
-                    int rec_len = tapi_heap_read(rid, rec, sizeof(rec));
+                    int rec_len = DML_PROF_EXPR("tapi_heap_read",
+                                                tapi_heap_read(rid, rec, sizeof(rec)));
                     if (rec_len > 0) {
                         /* Enforce FK referential integrity before delete */
-                        if (enforce_fk_on_delete(&td, cols, ncols,
-                                                 rec, rec_len, matchKeys[i]) < 0) {
+                        if (DML_PROF_EXPR("fk_check",
+                                          enforce_fk_on_delete(&td, cols, ncols,
+                                                               rec, rec_len, matchKeys[i])) < 0) {
                             /* RESTRICT: abort entire delete */
                             for (int mi = i; mi < matchCount; mi++)
                                 free(matchKeys[mi]);
@@ -578,8 +584,9 @@ int DeleteProcess(void)
                         }
 
                         /* Extract fields for trigger + secondary index cleanup */
-                        tup_extract_fields(rec, rec_len, cols, ncols,
-                                           delFields, delIsNull, CAT_MAX_COLUMNS);
+                        DML_PROF("tup_extract",
+                                 tup_extract_fields(rec, rec_len, cols, ncols,
+                                                    delFields, delIsNull, CAT_MAX_COLUMNS));
 
                         /* BEFORE DELETE trigger */
                         {
@@ -589,8 +596,9 @@ int DeleteProcess(void)
                                 tcols[tc] = colNames[tc];
                                 tvals[tc] = delFields[tc];
                             }
-                            if (evo_fire_triggers(g_del.tblName, 'B', 'D',
-                                                  tcols, tvals, NULL, ncols) < 0) {
+                            if (DML_PROF_EXPR("trigger_before",
+                                              evo_fire_triggers(g_del.tblName, 'B', 'D',
+                                                                tcols, tvals, NULL, ncols)) < 0) {
                                 TruncateDelete();
                                 return -1;
                             }
@@ -599,31 +607,37 @@ int DeleteProcess(void)
                         /* Log undo entry with raw binary data + length */
                         if (g_tx_undo_callback) {
                             RowID zero_rid = {0, 0};
-                            g_tx_undo_callback(3 /*TX_OP_DELETE*/,
-                                               g_del.tblName, matchKeys[i],
-                                               rec, rec_len, zero_rid);
+                            DML_PROF("undo_log",
+                                     g_tx_undo_callback(3 /*TX_OP_DELETE*/,
+                                                        g_del.tblName, matchKeys[i],
+                                                        rec, rec_len, zero_rid));
                         }
 
                         /* Remove from secondary B-tree indexes */
-                        delete_secondary_indexes(g_del.tblName, colNames, numCols,
-                                                 (const char (*)[256])delFields,
-                                                 matchKeys[i]);
+                        DML_PROF("sec_idx_delete",
+                                 delete_secondary_indexes(g_del.tblName, colNames, numCols,
+                                                          (const char (*)[256])delFields,
+                                                          matchKeys[i]));
 
                         /* Log for concurrent index build (Phase 3) */
-                        conc_mod_log_record(td.table_id, matchKeys[i],
-                                            (const char *)colNames, 128,
-                                            (const char *)delFields, 256, numCols);
+                        DML_PROF("conc_mod_log",
+                                 conc_mod_log_record(td.table_id, matchKeys[i],
+                                                     (const char *)colNames, 128,
+                                                     (const char *)delFields, 256, numCols));
                     }
 
                     /* Acquire exclusive row lock for this DELETE */
-                    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+                    DML_PROF("mvcc_ensure_xid",
+                             mvcc_ensure_xid(&g_qctx->mvcc_xid));
                     /* Conflict Guard: notify write */
                     { extern void cg_check_write(uint32_t, uint32_t, const char *);
-                      cg_check_write(g_qctx->mvcc_xid, td.table_id, matchKeys[i]); }
+                      DML_PROF("cg_check_write",
+                               cg_check_write(g_qctx->mvcc_xid, td.table_id, matchKeys[i])); }
                     {
-                        int lr = lock_row_acquire(td.table_id, matchKeys[i],
-                                                  g_qctx->mvcc_xid,
-                                                  LOCK_EXCLUSIVE);
+                        int lr = DML_PROF_EXPR("lock_row_acquire",
+                                               lock_row_acquire(td.table_id, matchKeys[i],
+                                                                g_qctx->mvcc_xid,
+                                                                LOCK_EXCLUSIVE));
                         if (lr == LOCK_DEADLOCK) {
                             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "deadlock detected while waiting for lock on row (key=%s)",
@@ -651,8 +665,9 @@ int DeleteProcess(void)
                      * The PK tree entry stays so concurrent readers can find
                      * the record and check visibility. RECLAIM will physically
                      * remove tuples whose xmax is committed + expired. */
-                    vmap_clear(rid.page_no);
-                    if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
+                    DML_PROF("vmap_clear", vmap_clear(rid.page_no));
+                    if (DML_PROF_EXPR("heap_set_xmax",
+                                      tapi_heap_set_xmax(rid, g_qctx->mvcc_xid)) < 0) {
                         /* Pre-MVCC tuple — fall back to physical delete */
                         tapi_heap_delete(rid);
                         bt2_delete(&pk_tree, matchKeys[i]);
@@ -666,8 +681,9 @@ int DeleteProcess(void)
                             tcols[tc] = colNames[tc];
                             tvals[tc] = delFields[tc];
                         }
-                        evo_fire_triggers(g_del.tblName, 'A', 'D',
-                                          tcols, tvals, NULL, ncols);
+                        DML_PROF("trigger_after",
+                                 evo_fire_triggers(g_del.tblName, 'A', 'D',
+                                                   tcols, tvals, NULL, ncols));
                     }
                     /* RETURNING capture — returns deleted row values */
                     if (g_returning.active && g_returning_row_count < 256) {
@@ -678,11 +694,19 @@ int DeleteProcess(void)
                             ret_null[c] = delIsNull[c];
                         }
                         extern void returning_capture_row(const ColumnDesc *, int, const char *[], const int[], int);
-                        returning_capture_row(cols, ncols, ret_vals, ret_null, ncols);
+                        DML_PROF("returning_capture",
+                                 returning_capture_row(cols, ncols, ret_vals, ret_null, ncols));
                     }
                     deleted++;
                 }
                 free(matchKeys[i]);
+            }
+        }
+        if (g_dml_prof.enabled) {
+            DMLProfEntry *_e = dml_prof_slot("loop_body_total");
+            if (_e) {
+                _e->calls = (uint64_t)(effectiveEnd - effectiveStart);
+                _e->total_ns = dml_prof_now_ns() - _dml_loop_t0;
             }
         }
         free(matchKeys);
@@ -758,6 +782,7 @@ int DeleteProcess(void)
         }
     }
 
+    dml_prof_end_stmt((uint64_t)g_del.rowCount);
     TruncateDelete();
     return 0;
 }

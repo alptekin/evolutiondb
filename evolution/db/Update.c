@@ -13,6 +13,7 @@
 #include "lock_mgr.h"
 #include "page_mgr.h"
 #include "table_lock.h"
+#include "dml_profile.h"
 
 /* Thin wrappers around shared tuple_format functions */
 #define UpdateExtractAllFields(data, dataLen, table_id, cols, ncols, fields, is_null_out, maxFields) \
@@ -340,9 +341,11 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     /* Fetch record by PK from B+ tree + heap */
     BTree2 pk_tree = tapi_pk_tree(td);
     RowID rid;
-    if (bt2_search(&pk_tree, pkKey, &rid) < 0)
+    if (DML_PROF_EXPR("bt2_search",
+                      bt2_search(&pk_tree, pkKey, &rid)) < 0)
         return -1;
-    int existingDataLen = tapi_heap_read(rid, existingData, sizeof(existingData));
+    int existingDataLen = DML_PROF_EXPR("tapi_heap_read",
+                                        tapi_heap_read(rid, existingData, sizeof(existingData)));
     if (existingDataLen < 0)
         return -1;
 
@@ -359,13 +362,16 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     }
 
     /* Acquire exclusive row lock for this UPDATE */
-    mvcc_ensure_xid(&g_qctx->mvcc_xid);
+    DML_PROF("mvcc_ensure_xid",
+             mvcc_ensure_xid(&g_qctx->mvcc_xid));
     /* Conflict Guard: notify that we're writing this row */
     { extern void cg_check_write(uint32_t, uint32_t, const char *);
-      cg_check_write(g_qctx->mvcc_xid, td->table_id, pkKey); }
+      DML_PROF("cg_check_write",
+               cg_check_write(g_qctx->mvcc_xid, td->table_id, pkKey)); }
     {
-        int lr = lock_row_acquire(td->table_id, pkKey, g_qctx->mvcc_xid,
-                                  LOCK_EXCLUSIVE);
+        int lr = DML_PROF_EXPR("lock_row_acquire",
+                               lock_row_acquire(td->table_id, pkKey, g_qctx->mvcc_xid,
+                                                LOCK_EXCLUSIVE));
         if (lr == LOCK_DEADLOCK) {
             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "deadlock detected while waiting for lock on row (key=%s)", pkKey);
@@ -384,8 +390,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     /* Log undo entry before modifying data.
      * Pass old RowID so rollback can restore the soft-deleted old version. */
     if (g_tx_undo_callback)
-        g_tx_undo_callback(2 /*TX_OP_UPDATE*/, tblName,
-                           pkKey, existingData, existingDataLen, rid);
+        DML_PROF("undo_log",
+                 g_tx_undo_callback(2 /*TX_OP_UPDATE*/, tblName,
+                                    pkKey, existingData, existingDataLen, rid));
 
     /* Parse existing record into fields */
     char fields[CAT_MAX_COLUMNS][256];
@@ -460,7 +467,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             told[tc] = oldFields[tc];
             tnew[tc] = fields[tc];
         }
-        if (evo_fire_triggers(tblName, 'B', 'U', tcols, told, tnew, numMetaCols) < 0)
+        if (DML_PROF_EXPR("trigger_before",
+                          evo_fire_triggers(tblName, 'B', 'U', tcols, told, tnew, numMetaCols)) < 0)
             return -1;
     }
 
@@ -884,8 +892,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
          * PK tree update entirely (persistent HOT chain). */
 
         /* Soft-delete old tuple */
-        vmap_clear(rid.page_no);
-        if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
+        DML_PROF("vmap_clear", vmap_clear(rid.page_no));
+        if (DML_PROF_EXPR("heap_set_xmax",
+                          tapi_heap_set_xmax(rid, g_qctx->mvcc_xid)) < 0) {
             /* Pre-MVCC tuple: physically delete old record */
             tapi_heap_delete(rid);
             hot_eligible = 0;  /* can't HOT without MVCC old version */
@@ -929,14 +938,16 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
         /* Fall back to normal non-destructive update */
         if (!hot_applied) {
-            newRid = tapi_heap_insert(td, newRecord, (uint16_t)newLen);
+            newRid = DML_PROF_EXPR("heap_insert",
+                                   tapi_heap_insert(td, newRecord, (uint16_t)newLen));
             if (newRid.page_no == 0)
                 return -1;
             /* Update PK B+ tree to point to new version */
-            bt2_update(&pk_tree, pkKey, newRid);
+            DML_PROF("bt2_update",
+                     bt2_update(&pk_tree, pkKey, newRid));
             td->pk_root_page = pk_tree.root_page;
         }
-        vmap_clear(newRid.page_no);
+        DML_PROF("vmap_clear", vmap_clear(newRid.page_no));
 
         /* HOT path: no secondary index updates needed */
         if (hot_eligible && nIdx > 0) {
@@ -999,7 +1010,8 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             told[tc] = oldFields[tc];
             tnew[tc] = fields[tc];
         }
-        evo_fire_triggers(tblName, 'A', 'U', tcols, told, tnew, numMetaCols);
+        DML_PROF("trigger_after",
+                 evo_fire_triggers(tblName, 'A', 'U', tcols, told, tnew, numMetaCols));
     }
 
     /* RETURNING capture — returns NEW values */
@@ -1070,6 +1082,7 @@ int evo_update_row(const char *tableName, const char *pkKey,
 
 int UpdateProcess(void)
 {
+    dml_prof_begin_stmt("UPDATE");
     char temp[RECORD_BUF_SIZE];
     char tblName[1024];
     char *tok;
@@ -1412,6 +1425,7 @@ int UpdateProcess(void)
         /* Phase 2: apply update to matched records (within limit) */
         int updated = 0;
         int i;
+        uint64_t _dml_loop_t0 = g_dml_prof.enabled ? dml_prof_now_ns() : 0;
         for (i = effectiveStart; i < effectiveEnd; i++) {
             if (matchKeys[i]) {
                 /* Capture old field values for concurrent index log
@@ -1433,12 +1447,13 @@ int UpdateProcess(void)
                     }
                 }
 
-                if (ApplyUpdateToRow(&td, allCols, allNCols, matchKeys[i],
-                                     (const char (*)[256])setCols,
-                                     (const char (*)[256])allTokens,
-                                     numSetCols, numSetVals,
-                                     (const char (*)[256])metaCols, numMetaCols,
-                                     tblName) == 0) {
+                if (DML_PROF_EXPR("apply_update_total",
+                                  ApplyUpdateToRow(&td, allCols, allNCols, matchKeys[i],
+                                                   (const char (*)[256])setCols,
+                                                   (const char (*)[256])allTokens,
+                                                   numSetCols, numSetVals,
+                                                   (const char (*)[256])metaCols, numMetaCols,
+                                                   tblName)) == 0) {
                     updated++;
                     if (updOldNCols > 0)
                         conc_mod_log_record(td.table_id, matchKeys[i],
@@ -1449,6 +1464,13 @@ int UpdateProcess(void)
                         conc_mod_log_append(td.table_id, matchKeys[i]);
                 }
                 free(matchKeys[i]);
+            }
+        }
+        if (g_dml_prof.enabled) {
+            DMLProfEntry *_e = dml_prof_slot("loop_body_total");
+            if (_e) {
+                _e->calls = (uint64_t)(effectiveEnd - effectiveStart);
+                _e->total_ns = dml_prof_now_ns() - _dml_loop_t0;
             }
         }
         free(matchKeys);
@@ -1505,6 +1527,7 @@ int UpdateProcess(void)
     }
 
     printf("command(s) completed successfully!..\n");
+    dml_prof_end_stmt((uint64_t)g_upd.rowCount);
     TruncateUpdate();
     return 0;
 }
