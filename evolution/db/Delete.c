@@ -394,11 +394,23 @@ int DeleteProcess(void)
     if (g_expr.whereExpr != NULL) {
         /* ---------- Expression-based WHERE delete ---------- */
 
-        /* Phase 1: iterate records, evaluate WHERE, collect matching keys */
+        /* Phase 1: iterate records, evaluate WHERE, collect matching
+         * keys. Each match is (key, rid): the fast path already gets
+         * rid from the B+ tree cursor, so saving it here lets the
+         * inner loop skip a redundant bt2_search per row (~5 us/row,
+         * 67% of DELETE loop_total per Phase 6.1 profile).
+         *
+         * For the full-scan fallback we leave rid = {0, 0} as a
+         * "not cached, do bt2_search" sentinel. */
+        typedef struct {
+            char *key;
+            RowID rid;
+        } DelMatch;
+
         int capacity = 64;
         int matchCount = 0;
-        char **matchKeys = (char **)malloc(capacity * sizeof(char *));
-        if (!matchKeys) {
+        DelMatch *matches = (DelMatch *)malloc(capacity * sizeof(DelMatch));
+        if (!matches) {
             g_del.rowCount = 0;
             TruncateDelete();
             return -1;
@@ -437,12 +449,23 @@ int DeleteProcess(void)
                     } \
                     _fpok; \
                 })
+                #define FP_GROW_IF_NEEDED() do { \
+                    if (matchCount >= capacity) { \
+                        capacity *= 2; \
+                        DelMatch *_tmp = (DelMatch *)realloc(matches, \
+                                                             capacity * sizeof(DelMatch)); \
+                        if (!_tmp) { break; } \
+                        matches = _tmp; \
+                    } \
+                } while (0)
 
                 if (pat.op == EXPR_CMP_EQ) {
                     /* Single key lookup */
                     if (bt2_search(&pk_tree, pat.value, &rid) == 0 &&
                         FP_VISIBLE(rid)) {
-                        matchKeys[matchCount++] = strdup(pat.value);
+                        matches[matchCount].key = strdup(pat.value);
+                        matches[matchCount].rid = rid;
+                        matchCount++;
                     }
                 } else if (pat.op == EXPR_CMP_GT || pat.op == EXPR_CMP_GE) {
                     /* Seek to first key >= pat.value, then walk forward */
@@ -456,14 +479,10 @@ int DeleteProcess(void)
                                     continue;
                             }
                             if (!FP_VISIBLE(rid)) continue;
-                            if (matchCount >= capacity) {
-                                capacity *= 2;
-                                char **tmp = (char **)realloc(matchKeys,
-                                                              capacity * sizeof(char *));
-                                if (!tmp) break;
-                                matchKeys = tmp;
-                            }
-                            matchKeys[matchCount++] = strdup(keyBuf);
+                            FP_GROW_IF_NEEDED();
+                            matches[matchCount].key = strdup(keyBuf);
+                            matches[matchCount].rid = rid;
+                            matchCount++;
                         }
                     }
                 } else { /* EXPR_CMP_LT or EXPR_CMP_LE */
@@ -481,18 +500,15 @@ int DeleteProcess(void)
                             if (pat.op == EXPR_CMP_LE && cmp >  0) break;
 
                             if (!FP_VISIBLE(rid)) continue;
-                            if (matchCount >= capacity) {
-                                capacity *= 2;
-                                char **tmp = (char **)realloc(matchKeys,
-                                                              capacity * sizeof(char *));
-                                if (!tmp) break;
-                                matchKeys = tmp;
-                            }
-                            matchKeys[matchCount++] = strdup(keyBuf);
+                            FP_GROW_IF_NEEDED();
+                            matches[matchCount].key = strdup(keyBuf);
+                            matches[matchCount].rid = rid;
+                            matchCount++;
                         }
                     }
                 }
                 #undef FP_VISIBLE
+                #undef FP_GROW_IF_NEEDED
                 fast_path_used = 1;
             }
         }
@@ -532,12 +548,15 @@ int DeleteProcess(void)
                 if (keep) {
                     if (matchCount >= capacity) {
                         capacity *= 2;
-                        char **tmp = (char **)realloc(matchKeys,
-                                                      capacity * sizeof(char *));
+                        DelMatch *tmp = (DelMatch *)realloc(matches,
+                                                            capacity * sizeof(DelMatch));
                         if (!tmp) break;
-                        matchKeys = tmp;
+                        matches = tmp;
                     }
-                    matchKeys[matchCount] = strdup(keyBuf);
+                    matches[matchCount].key = strdup(keyBuf);
+                    /* rid unknown on scan path — inner loop will bt2_search */
+                    matches[matchCount].rid.page_no = 0;
+                    matches[matchCount].rid.slot_idx = 0;
                     matchCount++;
                 }
             }
@@ -548,9 +567,9 @@ int DeleteProcess(void)
         int effectiveEnd = matchCount;
         if (expr_eval_limit_range(matchCount, &effectiveStart, &effectiveEnd)) {
             for (int si = 0; si < effectiveStart; si++)
-                free(matchKeys[si]);
+                free(matches[si].key);
             for (int si = effectiveEnd; si < matchCount; si++)
-                free(matchKeys[si]);
+                free(matches[si].key);
         }
 
         /* Phase 2: delete matched records (within limit) */
@@ -558,13 +577,25 @@ int DeleteProcess(void)
         int i;
         uint64_t _dml_loop_t0 = g_dml_prof.enabled ? dml_prof_now_ns() : 0;
         for (i = effectiveStart; i < effectiveEnd; i++) {
-            if (matchKeys[i]) {
-                RowID rid;
+            if (matches[i].key) {
+                const char *mkey = matches[i].key;
+                RowID rid = matches[i].rid;
                 char delFields[CAT_MAX_COLUMNS][256];
                 int delIsNull[CAT_MAX_COLUMNS];
                 memset(delFields, 0, sizeof(delFields));
-                if (DML_PROF_EXPR("bt2_search",
-                                  bt2_search(&pk_tree, matchKeys[i], &rid)) == 0) {
+
+                /* If the rid was already captured during the fast-path
+                 * cursor walk (Phase 6.2), skip the redundant bt2_search.
+                 * Fallback: the scan path leaves rid = {0,0} so we do a
+                 * single lookup here. */
+                int rid_ok;
+                if (rid.page_no != 0) {
+                    rid_ok = 1;
+                } else {
+                    rid_ok = (DML_PROF_EXPR("bt2_search",
+                                            bt2_search(&pk_tree, mkey, &rid)) == 0);
+                }
+                if (rid_ok) {
                     /* Read binary record for undo log and index cleanup */
                     char rec[RECORD_BUF_SIZE];
                     int rec_len = DML_PROF_EXPR("tapi_heap_read",
@@ -573,11 +604,11 @@ int DeleteProcess(void)
                         /* Enforce FK referential integrity before delete */
                         if (DML_PROF_EXPR("fk_check",
                                           enforce_fk_on_delete(&td, cols, ncols,
-                                                               rec, rec_len, matchKeys[i])) < 0) {
+                                                               rec, rec_len, mkey)) < 0) {
                             /* RESTRICT: abort entire delete */
                             for (int mi = i; mi < matchCount; mi++)
-                                free(matchKeys[mi]);
-                            free(matchKeys);
+                                free(matches[mi].key);
+                            free(matches);
                             g_del.rowCount = deleted;
                             TruncateDelete();
                             return -1;
@@ -612,7 +643,7 @@ int DeleteProcess(void)
                             RowID zero_rid = {0, 0};
                             DML_PROF("undo_log",
                                      g_tx_undo_callback(3 /*TX_OP_DELETE*/,
-                                                        g_del.tblName, matchKeys[i],
+                                                        g_del.tblName, mkey,
                                                         rec, rec_len, zero_rid));
                         }
 
@@ -623,12 +654,12 @@ int DeleteProcess(void)
                             DML_PROF("sec_idx_delete",
                                      delete_secondary_indexes(g_del.tblName, colNames, numCols,
                                                               (const char (*)[256])delFields,
-                                                              matchKeys[i]));
+                                                              mkey));
                         }
 
                         /* Log for concurrent index build (Phase 3) */
                         DML_PROF("conc_mod_log",
-                                 conc_mod_log_record(td.table_id, matchKeys[i],
+                                 conc_mod_log_record(td.table_id, mkey,
                                                      (const char *)colNames, 128,
                                                      (const char *)delFields, 256, numCols));
                     }
@@ -639,30 +670,30 @@ int DeleteProcess(void)
                     /* Conflict Guard: notify write */
                     { extern void cg_check_write(uint32_t, uint32_t, const char *);
                       DML_PROF("cg_check_write",
-                               cg_check_write(g_qctx->mvcc_xid, td.table_id, matchKeys[i])); }
+                               cg_check_write(g_qctx->mvcc_xid, td.table_id, mkey)); }
                     {
                         int lr = DML_PROF_EXPR("lock_row_acquire",
-                                               lock_row_acquire(td.table_id, matchKeys[i],
+                                               lock_row_acquire(td.table_id, mkey,
                                                                 g_qctx->mvcc_xid,
                                                                 LOCK_EXCLUSIVE));
                         if (lr == LOCK_DEADLOCK) {
                             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "deadlock detected while waiting for lock on row (key=%s)",
-                                     matchKeys[i]);
+                                     mkey);
                             g_err.error = 1;
                             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DEADLOCK_DETECTED);
                         } else if (lr != LOCK_OK) {
                             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "could not obtain lock on row (key=%s)",
-                                     matchKeys[i]);
+                                     mkey);
                             g_err.error = 1;
                             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_LOCK_NOT_AVAILABLE);
                         }
                     }
                     if (g_err.error) {
                         for (int mi = i; mi < matchCount; mi++)
-                            free(matchKeys[mi]);
-                        free(matchKeys);
+                            free(matches[mi].key);
+                        free(matches);
                         g_del.rowCount = deleted;
                         TruncateDelete();
                         return -1;
@@ -677,7 +708,7 @@ int DeleteProcess(void)
                                       tapi_heap_set_xmax(rid, g_qctx->mvcc_xid)) < 0) {
                         /* Pre-MVCC tuple — fall back to physical delete */
                         tapi_heap_delete(rid);
-                        bt2_delete(&pk_tree, matchKeys[i]);
+                        bt2_delete(&pk_tree, mkey);
                         td.pk_root_page = pk_tree.root_page;
                     }
                     /* AFTER DELETE trigger — same guard as BEFORE */
@@ -706,7 +737,7 @@ int DeleteProcess(void)
                     }
                     deleted++;
                 }
-                free(matchKeys[i]);
+                free(matches[i].key);
             }
         }
         if (g_dml_prof.enabled) {
@@ -716,7 +747,7 @@ int DeleteProcess(void)
                 _e->total_ns = dml_prof_now_ns() - _dml_loop_t0;
             }
         }
-        free(matchKeys);
+        free(matches);
 
         g_del.rowCount = deleted;
         if (deleted > 0) {
