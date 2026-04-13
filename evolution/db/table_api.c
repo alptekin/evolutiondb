@@ -62,6 +62,26 @@ int tapi_resolve(const char *name_or_path, TableDesc *td,
         *ncols = cat_find_columns(td->table_id, cols, CAT_MAX_COLUMNS);
         if (*ncols < 0) return -1;
     }
+
+    /* Populate schema-presence flags so the DML inner loop can skip
+     * trigger / secondary-index helpers entirely when the table has
+     * none. Both list helpers are prefix seeks against catalog B+
+     * trees; with max=1 they stop as soon as the first entry is
+     * found (or bail immediately on prefix mismatch when empty) —
+     * typically a single page read. Profiling (see
+     * docs/dml-profile-baseline.md) showed that calling
+     * evo_fire_triggers / delete_secondary_indexes per row was
+     * costing 5+ us/row on a table with no triggers/indexes; one
+     * lookup per statement replaces N lookups per row. */
+    {
+        TriggerDesc trig_probe;
+        IndexDesc   idx_probe;
+        td->has_triggers =
+            (uint8_t)(cat_list_triggers_for_table(td->table_id,
+                                                  &trig_probe, 1) > 0);
+        td->has_secondary_indexes =
+            (uint8_t)(cat_list_indexes(td->table_id, &idx_probe, 1) > 0);
+    }
     return 0;
 }
 
