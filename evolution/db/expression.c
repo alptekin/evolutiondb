@@ -866,6 +866,75 @@ int expr_is_column(const ExprNode *e)
     return (e && e->type == EXPR_COLUMN);
 }
 
+/* Detect a simple `pk_col <op> literal` (or `literal <op> pk_col`) pattern.
+ * Used by Delete/Update fast path to skip full heap scan when the WHERE
+ * clause is a single comparison against the primary key column. */
+int expr_is_simple_pk_range(const ExprNode *node,
+                            const char *pk_col_name,
+                            PkRangePattern *out)
+{
+    if (!node || !pk_col_name || !out) return 0;
+
+    int op = node->type;
+    if (op != EXPR_CMP_EQ && op != EXPR_CMP_LT && op != EXPR_CMP_LE &&
+        op != EXPR_CMP_GT && op != EXPR_CMP_GE)
+        return 0;
+
+    if (!node->left || !node->right) return 0;
+
+    const ExprNode *col = NULL;
+    const ExprNode *lit = NULL;
+    int swapped = 0;
+
+    if (node->left->type == EXPR_COLUMN &&
+        (node->right->type == EXPR_LITERAL_INT ||
+         node->right->type == EXPR_LITERAL_FLOAT ||
+         node->right->type == EXPR_LITERAL_STR)) {
+        col = node->left;
+        lit = node->right;
+    } else if (node->right->type == EXPR_COLUMN &&
+               (node->left->type == EXPR_LITERAL_INT ||
+                node->left->type == EXPR_LITERAL_FLOAT ||
+                node->left->type == EXPR_LITERAL_STR)) {
+        col = node->right;
+        lit = node->left;
+        swapped = 1;
+    } else {
+        return 0;
+    }
+
+    if (strcasecmp(col->val.col_name, pk_col_name) != 0) return 0;
+
+    /* If swapped (literal <op> col), we need to flip the comparison:
+     *   5 < col   ⇒  col > 5
+     *   5 <= col  ⇒  col >= 5
+     *   5 > col   ⇒  col < 5
+     *   5 >= col  ⇒  col <= 5
+     *   5 = col   ⇒  col = 5 */
+    int eff_op = op;
+    if (swapped) {
+        switch (op) {
+            case EXPR_CMP_LT: eff_op = EXPR_CMP_GT; break;
+            case EXPR_CMP_LE: eff_op = EXPR_CMP_GE; break;
+            case EXPR_CMP_GT: eff_op = EXPR_CMP_LT; break;
+            case EXPR_CMP_GE: eff_op = EXPR_CMP_LE; break;
+            default: /* EQ stays */ break;
+        }
+    }
+
+    out->op = eff_op;
+    out->value_type = lit->type;
+    if (lit->type == EXPR_LITERAL_INT) {
+        snprintf(out->value, sizeof(out->value), "%d", lit->val.intval);
+    } else if (lit->type == EXPR_LITERAL_FLOAT) {
+        snprintf(out->value, sizeof(out->value), "%g", lit->val.floatval);
+    } else {
+        strncpy(out->value, lit->val.strval, sizeof(out->value) - 1);
+        out->value[sizeof(out->value) - 1] = '\0';
+    }
+    return 1;
+}
+
 int expr_is_boolean(const ExprNode *e)
 {
     if (!e) return 0;

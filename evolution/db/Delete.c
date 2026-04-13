@@ -392,7 +392,7 @@ int DeleteProcess(void)
     if (g_expr.whereExpr != NULL) {
         /* ---------- Expression-based WHERE delete ---------- */
 
-        /* Phase 1: iterate all records, evaluate WHERE, collect matching keys */
+        /* Phase 1: iterate records, evaluate WHERE, collect matching keys */
         int capacity = 64;
         int matchCount = 0;
         char **matchKeys = (char **)malloc(capacity * sizeof(char *));
@@ -402,11 +402,104 @@ int DeleteProcess(void)
             return -1;
         }
 
+        /* Fast path: simple PK range pattern (e.g. WHERE id <= 5000)
+         * Uses B+ tree cursor to walk only matching keys, skipping the
+         * full heap scan + per-row WHERE evaluation. */
+        int fast_path_used = 0;
+        {
+            const char *pk_col = NULL;
+            int pk_count = 0;
+            for (int ci = 0; ci < ncols; ci++) {
+                if (cols[ci].is_pk) {
+                    pk_count++;
+                    if (!pk_col) pk_col = cols[ci].col_name;
+                }
+            }
+            PkRangePattern pat;
+            if (pk_count == 1 && pk_col &&
+                expr_is_simple_pk_range(g_expr.whereExpr, pk_col, &pat)) {
+                BTree2Cursor cursor;
+                char keyBuf[BT2_MAX_KEY_LEN + 2];
+                RowID rid;
+                /* Visibility helper: skip soft-deleted tuples so the fast
+                 * path doesn't waste work on dead rows after a previous
+                 * DELETE (matches tapi_scan_next's filter). */
+                #define FP_VISIBLE(rid_var) ({ \
+                    char _fprec[RECORD_BUF_SIZE]; \
+                    int  _fplen = tapi_heap_read((rid_var), _fprec, sizeof(_fprec)); \
+                    int  _fpok = 1; \
+                    if (_fplen < 0) _fpok = 0; \
+                    else if (tup_has_mvcc(_fprec, _fplen)) { \
+                        uint32_t _xmax = tup_get_xmax(_fprec, _fplen); \
+                        if (_xmax != 0 && clog_is_committed(_xmax)) _fpok = 0; \
+                    } \
+                    _fpok; \
+                })
+
+                if (pat.op == EXPR_CMP_EQ) {
+                    /* Single key lookup */
+                    if (bt2_search(&pk_tree, pat.value, &rid) == 0 &&
+                        FP_VISIBLE(rid)) {
+                        matchKeys[matchCount++] = strdup(pat.value);
+                    }
+                } else if (pat.op == EXPR_CMP_GT || pat.op == EXPR_CMP_GE) {
+                    /* Seek to first key >= pat.value, then walk forward */
+                    if (bt2_cursor_seek(&pk_tree, pat.value, &cursor) == 0) {
+                        while (bt2_cursor_next(&cursor, keyBuf, &rid) == 0) {
+                            /* For GT, skip keys equal to limit */
+                            if (pat.op == EXPR_CMP_GT) {
+                                long long ka = strtoll(keyBuf, NULL, 10);
+                                long long kb = strtoll(pat.value, NULL, 10);
+                                if (ka == kb && strcmp(keyBuf, pat.value) == 0)
+                                    continue;
+                            }
+                            if (!FP_VISIBLE(rid)) continue;
+                            if (matchCount >= capacity) {
+                                capacity *= 2;
+                                char **tmp = (char **)realloc(matchKeys,
+                                                              capacity * sizeof(char *));
+                                if (!tmp) break;
+                                matchKeys = tmp;
+                            }
+                            matchKeys[matchCount++] = strdup(keyBuf);
+                        }
+                    }
+                } else { /* EXPR_CMP_LT or EXPR_CMP_LE */
+                    /* Walk from the smallest key, stop when limit exceeded */
+                    if (bt2_cursor_first(&pk_tree, &cursor) == 0) {
+                        while (bt2_cursor_next(&cursor, keyBuf, &rid) == 0) {
+                            long long ka = strtoll(keyBuf, NULL, 10);
+                            long long kb = strtoll(pat.value, NULL, 10);
+                            int cmp;
+                            if (ka < kb) cmp = -1;
+                            else if (ka > kb) cmp = 1;
+                            else cmp = strcmp(keyBuf, pat.value);
+
+                            if (pat.op == EXPR_CMP_LT && cmp >= 0) break;
+                            if (pat.op == EXPR_CMP_LE && cmp >  0) break;
+
+                            if (!FP_VISIBLE(rid)) continue;
+                            if (matchCount >= capacity) {
+                                capacity *= 2;
+                                char **tmp = (char **)realloc(matchKeys,
+                                                              capacity * sizeof(char *));
+                                if (!tmp) break;
+                                matchKeys = tmp;
+                            }
+                            matchKeys[matchCount++] = strdup(keyBuf);
+                        }
+                    }
+                }
+                #undef FP_VISIBLE
+                fast_path_used = 1;
+            }
+        }
+
         TableScanCursor cursor;
         char keyBuf[256];
         char recBuf[RECORD_BUF_SIZE];
 
-        if (tapi_scan_begin(&td, &cursor) == 0) {
+        if (!fast_path_used && tapi_scan_begin(&td, &cursor) == 0) {
             while (tapi_scan_next(&cursor, keyBuf, recBuf, sizeof(recBuf)) == 0) {
                 /* Extract fields from binary record */
                 int recLen = tup_record_len(recBuf, sizeof(recBuf));
