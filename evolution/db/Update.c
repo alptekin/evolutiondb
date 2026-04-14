@@ -481,8 +481,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             return -1;
     }
 
-    /* Validate CHECK constraints against updated row */
-    if (tblName && tblName[0]) {
+    /* Validate CHECK constraints against updated row — skip the
+     * catalog scan when the table has no CHECK constraints. */
+    if (td->has_check_constraints && tblName && tblName[0]) {
         char checkConstraints[MAX_CHECK_CONSTRAINTS][1024];
         char checkNames[MAX_CHECK_CONSTRAINTS][128];
         int numChecks = ReadCheckConstraintsWithNames(tblName, checkConstraints,
@@ -530,8 +531,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
-    /* Validate FOREIGN KEY constraints against updated row */
-    if (tblName && tblName[0]) {
+    /* Validate FOREIGN KEY constraints against updated row — skip
+     * when the table has no local FK constraints. */
+    if (td->has_fk_constraints_local && tblName && tblName[0]) {
         ConstraintDesc fkConstraints[32];
         int numFkCon = cat_list_constraints(td->table_id, fkConstraints, 32);
         for (int fi = 0; fi < numFkCon; fi++) {
@@ -657,8 +659,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         }
     }
 
-    /* Validate UNIQUE constraints (catalog 'U' type) against updated row */
-    if (tblName && tblName[0]) {
+    /* Validate UNIQUE constraints (catalog 'U' type) against updated
+     * row — skip catalog scan when the table has none. */
+    if (td->has_unique_constraints && tblName && tblName[0]) {
         ConstraintDesc uqCons[32];
         int numUqCon = cat_list_constraints(td->table_id, uqCons, 32);
         for (int ui = 0; ui < numUqCon; ui++) {
@@ -1160,6 +1163,14 @@ int UpdateProcess(void)
         g_upd.rowCount = 0;
         TruncateUpdate();
         return -1;
+    }
+    /* Phase 6.3: probe constraint presence once per statement so
+     * ApplyUpdateToRow can skip CHECK / FK / UNIQUE catalog scans
+     * on each row. Column-level inline UNIQUE is not tracked here
+     * — we OR it in below. */
+    tapi_probe_constraints(&td);
+    for (int _ci = 0; _ci < allNCols; _ci++) {
+        if (allCols[_ci].is_unique) { td.has_unique_constraints = 1; break; }
     }
 
     /* Read column names from catalog */

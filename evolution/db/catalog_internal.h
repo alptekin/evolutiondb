@@ -67,17 +67,13 @@ typedef struct {
 
     /* Transient schema-presence flags — populated by tapi_resolve(),
      * NOT serialized. Used by DML inner loops to skip catalog lookups
-     * for features the table doesn't have. Refreshed on every resolve
-     * so DDL while the current statement executes is not a concern
-     * (DDL is serialized behind g_dml_mutex anyway).
-     *
-     * has_referencing_fks is intentionally omitted: the measured cost
-     * of fk_check on a table with no referencing FKs is already
-     * 0.36 us/row (1.6% of DELETE loop), and checking it at resolve
-     * time would require a full scan of the constraint catalog since
-     * there's no reverse index. Not worth it for 1.6%. */
+     * for features the table doesn't have. */
     uint8_t  has_triggers;
     uint8_t  has_secondary_indexes;
+    /* Populated by tapi_probe_constraints (Phase 6.3). */
+    uint8_t  has_check_constraints;
+    uint8_t  has_fk_constraints_local;
+    uint8_t  has_unique_constraints;
 } TableDesc;
 
 typedef struct {
