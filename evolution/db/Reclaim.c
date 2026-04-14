@@ -37,21 +37,45 @@ int should_auto_reclaim(uint32_t table_id)
     return ts.dead_tuple_count > 50;
 }
 
-/* Collect all heap page numbers into an array.
- * Returns count of pages found. */
-static int collect_heap_pages(const TableDesc *td,
-                              uint32_t *pages, int maxPages)
+/* Collect all heap page numbers into a dynamically grown array.
+ * Returns count on success, -1 on OOM. Caller must free(*out_pages).
+ *
+ * The previous version took a fixed-size buffer (typically 1024) and
+ * silently truncated. That was a latent data-loss bug for tables
+ * with more than 1024 heap pages: after RECLAIM rebuilt the heap
+ * chain from the truncated array, every page past 1024 became
+ * orphaned — still referenced by the PK tree but unreachable from
+ * the heap chain, so full table scans missed them. Large tables
+ * (e.g. 1M rows ≈ 33K pages) lost ~97% of their pages on the first
+ * auto-RECLAIM tick. */
+static int collect_heap_pages(const TableDesc *td, uint32_t **out_pages)
 {
     int count = 0;
+    int capacity = 64;
+    uint32_t *pages = (uint32_t *)malloc(capacity * sizeof(uint32_t));
+    if (!pages) return -1;
+
     uint32_t page = td->heap_page;
     char page_buf[EVO_PAGE_SIZE];
 
-    while (page != 0 && count < maxPages) {
+    while (page != 0) {
+        if (count >= capacity) {
+            int new_cap = capacity * 2;
+            uint32_t *tmp =
+                (uint32_t *)realloc(pages, new_cap * sizeof(uint32_t));
+            if (!tmp) {
+                free(pages);
+                return -1;
+            }
+            pages = tmp;
+            capacity = new_cap;
+        }
         pages[count++] = page;
         pgm_read_page(page, page_buf);
         PageHeader *hdr = (PageHeader *)page_buf;
         page = hdr->next_page;
     }
+    *out_pages = pages;
     return count;
 }
 
@@ -280,17 +304,23 @@ int ReclaimTableProcess(void)
                            td.schema_id, td.pk_root_page);
     }
 
-    /* Phase 1: Collect all heap pages */
-    uint32_t pages[1024];
-    int numPages = collect_heap_pages(&td, pages, 1024);
+    /* Phase 1: Collect all heap pages — dynamic, no cap */
+    uint32_t *pages = NULL;
+    int numPages = collect_heap_pages(&td, &pages);
 
-    if (numPages <= 0) {
+    if (numPages < 0) {
+        printf("RECLAIM: out of memory collecting heap pages\n");
+        TruncateDrop();
+        return -1;
+    }
+    if (numPages == 0) {
         if (dead_count > 0) {
             printf("RECLAIM: removed %d dead tuples, no heap pages remain\n",
                    dead_count);
         } else {
             printf("RECLAIM: no heap pages found\n");
         }
+        free(pages);
         TruncateDrop();
         return 0;
     }
@@ -309,16 +339,20 @@ int ReclaimTableProcess(void)
     }
 
     /* Phase 3: Merge sparse pages — move records from later pages
-     * into earlier pages that have space */
+     * into earlier pages that have space. pageBufs is heap-allocated
+     * per run; for a 1M row table this is ~33K × 4KB ≈ 130 MB.
+     * That's a lot but bounded by the table size, and anything smaller
+     * would silently truncate the merge pass. */
     BTree2 pk_tree = tapi_pk_tree(&td);
     int totalMoved = 0;
     int pagesFreed = 0;
 
-    /* Read all page buffers */
     char (*pageBufs)[EVO_PAGE_SIZE] = (char (*)[EVO_PAGE_SIZE])
-        malloc(numPages * EVO_PAGE_SIZE);
+        malloc((size_t)numPages * EVO_PAGE_SIZE);
     if (!pageBufs) {
-        printf("RECLAIM: out of memory\n");
+        printf("RECLAIM: out of memory (pageBufs alloc, numPages=%d)\n",
+               numPages);
+        free(pages);
         TruncateDrop();
         return -1;
     }
@@ -348,8 +382,15 @@ int ReclaimTableProcess(void)
         pgm_write_page(pages[i], pageBufs[i]);
 
     /* Phase 4: Free empty pages and rebuild chain */
-    /* Collect non-empty pages in order */
-    uint32_t livePages[1024];
+    /* Collect non-empty pages in order — dynamic sized, no cap */
+    uint32_t *livePages = (uint32_t *)malloc(numPages * sizeof(uint32_t));
+    if (!livePages) {
+        printf("RECLAIM: out of memory (livePages alloc)\n");
+        free(pageBufs);
+        free(pages);
+        TruncateDrop();
+        return -1;
+    }
     int numLive = 0;
     for (int i = 0; i < numPages; i++) {
         if (slot_active_count(pageBufs[i]) > 0) {
@@ -385,6 +426,9 @@ int ReclaimTableProcess(void)
     /* VMAP: mark all surviving pages as all-visible (they were just cleaned) */
     for (int i = 0; i < numLive; i++)
         vmap_set_visible(livePages[i]);
+
+    free(pages);
+    free(livePages);
 
     /* Update catalog with new heap_page and pk_root */
     cat_update_heap_page(td.table_id, td.table_name,
