@@ -112,8 +112,27 @@ void auto_reclaim_start(void)
 {
     if (g_reclaim_running) return;
     g_reclaim_running = 1;
-    pthread_create(&g_reclaim_thread, NULL, auto_reclaim_worker, NULL);
-    fprintf(stderr, "[auto-RECLAIM] Background thread started (interval=%ds, threshold=20%%)\n",
+
+    /* The auto-RECLAIM worker calls into ReclaimTableProcess, which
+     * allocates ~250 KB of locals on entry (`ColumnDesc cols[256]`
+     * ≈ 237 KB) and more in its inner phases. macOS pthread default
+     * stack is 512 KB — not enough. Without explicit attr, an
+     * auto-RECLAIM tick on a real table SIGBUS'd here at the function
+     * prologue's stack probe. Use the same 16 MB stack the rest of
+     * the server's worker threads get via platform.h's thread_create
+     * macro. */
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 16 * 1024 * 1024);
+    int rc = pthread_create(&g_reclaim_thread, &attr,
+                            auto_reclaim_worker, NULL);
+    pthread_attr_destroy(&attr);
+    if (rc != 0) {
+        fprintf(stderr, "[auto-RECLAIM] pthread_create failed: rc=%d\n", rc);
+        g_reclaim_running = 0;
+        return;
+    }
+    fprintf(stderr, "[auto-RECLAIM] Background thread started (interval=%ds, threshold=20%%, stack=16MB)\n",
             AUTO_RECLAIM_INTERVAL_SEC);
 }
 
