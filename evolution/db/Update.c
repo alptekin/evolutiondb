@@ -331,14 +331,20 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
  *
  * hint_rid: if non-zero, skip the PK lookup — the caller already has
  * the RowID (e.g. from the Phase 6.2 fast-path cursor walk). Pass
- * {0, 0} to force a bt2_search as before. */
+ * {0, 0} to force a bt2_search as before.
+ *
+ * hint_leaf_pno: if non-zero, pass to bt2_update_at_leaf() so the
+ * PK tree entry update skips its own find_leaf() descent (Phase 6.4).
+ * Only valid when the hint leaf was captured in the same DML
+ * statement — g_dml_mutex guarantees the tree shape is stable until
+ * the inner loop finishes. Pass 0 to force a full find_leaf. */
 static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCols,
                             const char *pkKey,
                             const char setCols[][256], const char setVals[][256],
                             int numSetCols, int numSetVals,
                             const char metaCols[][256], int numMetaCols,
                             const char *tblName,
-                            RowID hint_rid)
+                            RowID hint_rid, uint32_t hint_leaf_pno)
 {
     char existingData[RECORD_BUF_SIZE];
     int s, c, i;
@@ -959,9 +965,12 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                                    tapi_heap_insert(td, newRecord, (uint16_t)newLen));
             if (newRid.page_no == 0)
                 return -1;
-            /* Update PK B+ tree to point to new version */
+            /* Update PK B+ tree to point to new version. Use the
+             * Phase 6.4 leaf hint when the caller captured one during
+             * the fast-path cursor walk — skips the find_leaf descent.
+             * Falls back to a full find_leaf if the hint misses. */
             DML_PROF("bt2_update",
-                     bt2_update(&pk_tree, pkKey, newRid));
+                     bt2_update_at_leaf(&pk_tree, hint_leaf_pno, pkKey, newRid));
             td->pk_root_page = pk_tree.root_page;
         }
         DML_PROF("vmap_clear", vmap_clear(newRid.page_no));
@@ -1096,7 +1105,7 @@ int evo_update_row(const char *tableName, const char *pkKey,
                                 (const char (*)[256])setValsBuf,
                                 n, n,
                                 (const char (*)[256])metaCols, numMetaCols,
-                                tableName, no_hint);
+                                tableName, no_hint, 0);
     }
 }
 
@@ -1286,10 +1295,13 @@ int UpdateProcess(void)
         /* Phase 1: iterate all records, evaluate WHERE, collect
          * matching keys + rid. Fast path saves rid from the cursor
          * so ApplyUpdateToRow can skip its internal bt2_search
-         * (Phase 6.2). Scan fallback leaves rid = {0,0}. */
+         * (Phase 6.2). Also saves the leaf_pno so bt2_update inside
+         * ApplyUpdateToRow can skip its find_leaf() descent
+         * (Phase 6.4). Scan fallback leaves rid = {0,0} / leaf = 0. */
         typedef struct {
             char *key;
             RowID rid;
+            uint32_t leaf_pno;
         } UpdMatch;
 
         int capacity = 64;
@@ -1358,15 +1370,24 @@ int UpdateProcess(void)
                 } while (0)
 
                 if (pat.op == EXPR_CMP_EQ) {
+                    /* EQ uses bt2_search which doesn't expose its
+                     * leaf_pno — leave leaf_pno=0 so bt2_update_at_leaf
+                     * falls back to a full find_leaf. Single row, the
+                     * cost is negligible. */
                     if (bt2_search(&upk_tree, pat.value, &brid) == 0 &&
                         FP_VISIBLE_U(brid)) {
                         matches[matchCount].key = strdup(pat.value);
                         matches[matchCount].rid = brid;
+                        matches[matchCount].leaf_pno = 0;
                         matchCount++;
                     }
                 } else if (pat.op == EXPR_CMP_GT || pat.op == EXPR_CMP_GE) {
                     if (bt2_cursor_seek(&upk_tree, pat.value, &bcur) == 0) {
                         while (bt2_cursor_next(&bcur, bkeyBuf, &brid) == 0) {
+                            /* bcur.cur_page is the leaf page we just
+                             * read this entry from — capture it as the
+                             * Phase 6.4 bt2_update hint. */
+                            uint32_t mleaf_fp = bcur.cur_page;
                             if (pat.op == EXPR_CMP_GT) {
                                 long long ka = strtoll(bkeyBuf, NULL, 10);
                                 long long kb = strtoll(pat.value, NULL, 10);
@@ -1377,12 +1398,14 @@ int UpdateProcess(void)
                             FPU_GROW_IF_NEEDED();
                             matches[matchCount].key = strdup(bkeyBuf);
                             matches[matchCount].rid = brid;
+                            matches[matchCount].leaf_pno = mleaf_fp;
                             matchCount++;
                         }
                     }
                 } else { /* LT / LE */
                     if (bt2_cursor_first(&upk_tree, &bcur) == 0) {
                         while (bt2_cursor_next(&bcur, bkeyBuf, &brid) == 0) {
+                            uint32_t mleaf_fp = bcur.cur_page;
                             long long ka = strtoll(bkeyBuf, NULL, 10);
                             long long kb = strtoll(pat.value, NULL, 10);
                             int cmp;
@@ -1397,6 +1420,7 @@ int UpdateProcess(void)
                             FPU_GROW_IF_NEEDED();
                             matches[matchCount].key = strdup(bkeyBuf);
                             matches[matchCount].rid = brid;
+                            matches[matchCount].leaf_pno = mleaf_fp;
                             matchCount++;
                         }
                     }
@@ -1450,6 +1474,7 @@ int UpdateProcess(void)
                     /* rid unknown on scan path — ApplyUpdateToRow will bt2_search */
                     matches[matchCount].rid.page_no = 0;
                     matches[matchCount].rid.slot_idx = 0;
+                    matches[matchCount].leaf_pno = 0;
                     matchCount++;
                 }
             }
@@ -1473,6 +1498,7 @@ int UpdateProcess(void)
             if (matches[i].key) {
                 const char *mkey = matches[i].key;
                 RowID mrid = matches[i].rid;
+                uint32_t mleaf = matches[i].leaf_pno;
 
                 /* Capture old field values for concurrent index log
                  * BEFORE ApplyUpdateToRow modifies the record */
@@ -1499,7 +1525,7 @@ int UpdateProcess(void)
                                                    (const char (*)[256])allTokens,
                                                    numSetCols, numSetVals,
                                                    (const char (*)[256])metaCols, numMetaCols,
-                                                   tblName, mrid)) == 0) {
+                                                   tblName, mrid, mleaf)) == 0) {
                     updated++;
                     if (updOldNCols > 0)
                         conc_mod_log_record(td.table_id, mkey,
@@ -1557,7 +1583,7 @@ int UpdateProcess(void)
                              (const char (*)[256])allTokens,
                              numSetCols, numSetVals,
                              (const char (*)[256])metaCols, numMetaCols,
-                             tblName, no_hint) == 0) {
+                             tblName, no_hint, 0) == 0) {
             g_upd.rowCount = 1;
             cat_increment_dml_counter(td.table_id);
             cat_increment_dead_tuples(td.table_id, 1);

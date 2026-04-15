@@ -799,14 +799,13 @@ int bt2_delete(BTree2 *tree, const char *key)
     return -1;
 }
 
-int bt2_update(BTree2 *tree, const char *key, RowID new_rid)
+/* Shared helper: scan the entries of `leaf_pno` for `key` and
+ * overwrite its rid with `new_rid`. Returns 0 on success, -1 if
+ * the key is not on that page. */
+static int bt2_update_entry_on_leaf(uint32_t leaf_pno,
+                                    const char *key, int klen,
+                                    RowID new_rid)
 {
-    if (tree->root_page == 0) return -1;
-
-    int klen = (int)strlen(key);
-    uint32_t leaf_pno = find_leaf(tree, key, klen);
-    if (leaf_pno == 0) return -1;
-
     char page[EVO_PAGE_SIZE];
     pgm_read_page(leaf_pno, page);
 
@@ -825,6 +824,31 @@ int bt2_update(BTree2 *tree, const char *key, RowID new_rid)
         pos += consumed;
     }
     return -1;
+}
+
+int bt2_update(BTree2 *tree, const char *key, RowID new_rid)
+{
+    if (tree->root_page == 0) return -1;
+
+    int klen = (int)strlen(key);
+    uint32_t leaf_pno = find_leaf(tree, key, klen);
+    if (leaf_pno == 0) return -1;
+
+    return bt2_update_entry_on_leaf(leaf_pno, key, klen, new_rid);
+}
+
+int bt2_update_at_leaf(BTree2 *tree, uint32_t leaf_pno,
+                       const char *key, RowID new_rid)
+{
+    if (tree->root_page == 0) return -1;
+    if (leaf_pno == 0) return bt2_update(tree, key, new_rid);
+
+    int klen = (int)strlen(key);
+    /* Try the hinted leaf first — if the key moved due to a split
+     * since the hint was captured, fall back to a full find_leaf. */
+    if (bt2_update_entry_on_leaf(leaf_pno, key, klen, new_rid) == 0)
+        return 0;
+    return bt2_update(tree, key, new_rid);
 }
 
 /* ----------------------------------------------------------------
