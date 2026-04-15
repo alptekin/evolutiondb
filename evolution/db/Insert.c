@@ -11,6 +11,7 @@
 #include "vmap.h"
 #include "mvcc.h"
 #include "table_lock.h"
+#include "dml_profile.h"
 
 /* Row separator used between multiple value groups in g_ins.data. */
 #define ROW_SEP '\x02'
@@ -1019,9 +1020,12 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
         strncpy(fields[i], vals_ptrs[i], 255);
         fields[i][255] = '\0';
     }
-    if (tapi_build_pk_key_from_fields(cols, ncols,
-                                       (const char (*)[256])fields, nv,
-                                       pkKey, sizeof(pkKey)) < 0)
+    int _pk_rc;
+    _pk_rc = DML_PROF_EXPR("build_pk_key",
+                           tapi_build_pk_key_from_fields(cols, ncols,
+                                                          (const char (*)[256])fields, nv,
+                                                          pkKey, sizeof(pkKey)));
+    if (_pk_rc < 0)
         return -1;
 
     if (pkKey[0] == '\0') return -1;
@@ -1029,7 +1033,9 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     /* Check for duplicate PK */
     BTree2 pk_tree = tapi_pk_tree(td);
     RowID existing;
-    if (bt2_search(&pk_tree, pkKey, &existing) == 0) {
+    int _dup = DML_PROF_EXPR("bt2_search_dup",
+                             bt2_search(&pk_tree, pkKey, &existing));
+    if (_dup == 0) {
         if (g_ins.rowCount == -2) {
             /* REPLACE mode: delete existing, then insert new */
             extern int evo_delete_row(const char *, const char *, uint32_t);
@@ -1079,21 +1085,25 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
 
     /* Build binary tuple from string values */
     char bin_buf[RECORD_BUF_SIZE];
-    int bin_len = tup_build(vals_ptrs, is_null, nv, td->table_id,
-                            cols, ncols, bin_buf, sizeof(bin_buf),
-                            g_qctx->mvcc_xid);
+    int bin_len = DML_PROF_EXPR("tup_build",
+                                tup_build(vals_ptrs, is_null, nv, td->table_id,
+                                          cols, ncols, bin_buf, sizeof(bin_buf),
+                                          g_qctx->mvcc_xid));
     if (bin_len < 0) return -1;
 
     /* Insert binary tuple into heap page */
     uint16_t rec_len = (uint16_t)bin_len;
-    RowID rid = tapi_heap_insert(td, bin_buf, rec_len);
+    RowID rid = DML_PROF_EXPR("heap_insert",
+                              tapi_heap_insert(td, bin_buf, rec_len));
     if (rid.page_no == 0) return -1;
 
     /* VMAP: clear all-visible flag for the affected heap page */
-    vmap_clear(rid.page_no);
+    DML_PROF("vmap_clear", vmap_clear(rid.page_no));
 
     /* Insert into PK B+ tree */
-    if (bt2_insert(&pk_tree, pkKey, rid) != 0) {
+    int _bti = DML_PROF_EXPR("bt2_insert",
+                             bt2_insert(&pk_tree, pkKey, rid));
+    if (_bti != 0) {
         /* Shouldn't happen since we checked, but clean up */
         tapi_heap_delete(rid);
         return 1;
@@ -1127,6 +1137,7 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
 
 int InsertProcess(void)
 {
+    dml_prof_begin_stmt("INSERT");
     char tblName[1024];
     char allRows[RECORD_BUF_SIZE];
     char *rowPtrs[256];
@@ -1155,6 +1166,21 @@ int InsertProcess(void)
         TruncateInsert();
         retval = -1; goto cleanup;
     }
+
+    /* Phase (INSERT opt): probe constraint presence ONCE per stmt
+     * so validate_check / validate_unique / validate_fk can be
+     * skipped entirely when the table has no such constraints.
+     * Also compute column-level inline-unique / not-null presence
+     * by scanning `cols` directly — cheap, no extra catalog work. */
+    tapi_probe_constraints(&td);
+    int _has_inline_unique = 0;
+    int _has_not_null = 0;
+    for (int ci = 0; ci < ncols; ci++) {
+        if (cols[ci].is_unique) _has_inline_unique = 1;
+        if (cols[ci].is_not_null) _has_not_null = 1;
+        if (_has_inline_unique && _has_not_null) break;
+    }
+    if (_has_inline_unique) td.has_unique_constraints = 1;
 
     /* GTT: ensure session-private PK tree exists */
     if (td.is_temporary == TEMP_GLOBAL && gtt_ensure_storage(&td) < 0) {
@@ -1207,6 +1233,7 @@ int InsertProcess(void)
     saved_last_id[sizeof(saved_last_id) - 1] = '\0';
     g_last_insert_id[0] = '\0';
 
+    uint64_t _dml_top_loop_t0 = g_dml_prof.enabled ? dml_prof_now_ns() : 0;
     for (i = 0; i < numRows; i++) {
         char valBuf[RECORD_BUF_SIZE];
         char *vals[CAT_MAX_COLUMNS];
@@ -1297,25 +1324,34 @@ int InsertProcess(void)
         valBuf[sizeof(valBuf) - 1] = '\0';
         nv = split_row_values(valBuf, vals, CAT_MAX_COLUMNS);
 
-        if (validate_types(tblName, vals, nv) != 0) {
-            TruncateInsert();
-            retval = -1; goto cleanup;
+        int _vr;
+        _vr = DML_PROF_EXPR("validate_types",
+                            validate_types(tblName, vals, nv));
+        if (_vr != 0) { TruncateInsert(); retval = -1; goto cleanup; }
+        /* Skip validate_not_null when the table has no NOT NULL
+         * columns — no point in scanning its (potentially empty)
+         * null-flag list per row. */
+        if (_has_not_null) {
+            _vr = DML_PROF_EXPR("validate_not_null",
+                                validate_not_null(tblName, vals, nv));
+            if (_vr != 0) { TruncateInsert(); retval = -1; goto cleanup; }
         }
-        if (validate_not_null(tblName, vals, nv) != 0) {
-            TruncateInsert();
-            retval = -1; goto cleanup;
+        /* Skip validate_unique when the table has no UNIQUE
+         * constraints (catalog 'U' or column-level is_unique). */
+        if (td.has_unique_constraints) {
+            _vr = DML_PROF_EXPR("validate_unique",
+                                validate_unique(tblName, vals, nv));
+            if (_vr != 0) { TruncateInsert(); retval = -1; goto cleanup; }
         }
-        if (validate_unique(tblName, vals, nv) != 0) {
-            TruncateInsert();
-            retval = -1; goto cleanup;
+        if (td.has_check_constraints) {
+            _vr = DML_PROF_EXPR("validate_check",
+                                validate_check(tblName, vals, nv));
+            if (_vr != 0) { TruncateInsert(); retval = -1; goto cleanup; }
         }
-        if (validate_check(tblName, vals, nv) != 0) {
-            TruncateInsert();
-            retval = -1; goto cleanup;
-        }
-        if (validate_foreign_keys(tblName, vals, nv) != 0) {
-            TruncateInsert();
-            retval = -1; goto cleanup;
+        if (td.has_fk_constraints_local) {
+            _vr = DML_PROF_EXPR("validate_fk",
+                                validate_foreign_keys(tblName, vals, nv));
+            if (_vr != 0) { TruncateInsert(); retval = -1; goto cleanup; }
         }
     }
 
@@ -1396,7 +1432,8 @@ int InsertProcess(void)
 
         /* If UNIQUE index conflict + ON DUPLICATE KEY UPDATE, treat as duplicate (rc=1) */
         int rc = upsert_unique_conflict ? 1 :
-                 store_single_row(&td, cols, ncols, tblName, reorderedRows[i]);
+                 DML_PROF_EXPR("store_single_row_total",
+                               store_single_row(&td, cols, ncols, tblName, reorderedRows[i]));
         if (rc == 1 && g_ins.onDupKeyUpdate && g_ins.onDupSetCount > 0) {
             /* ON DUPLICATE KEY UPDATE: evaluate SET exprs and call evo_update_row */
 
@@ -1519,6 +1556,14 @@ int InsertProcess(void)
         }
     }
 
+    if (g_dml_prof.enabled) {
+        DMLProfEntry *_e = dml_prof_slot("loop_body_total");
+        if (_e) {
+            _e->calls = (uint64_t)numRows;
+            _e->total_ns = dml_prof_now_ns() - _dml_top_loop_t0;
+        }
+    }
+
     printf("command(s) completed successfully!..\n");
 
     if (g_ins.rowCount > 0)
@@ -1543,6 +1588,7 @@ cleanup:
     if (g_last_insert_id[0] == '\0')
         strncpy(g_last_insert_id, saved_last_id, sizeof(g_last_insert_id) - 1);
     free(reorderedRows);
+    dml_prof_end_stmt((uint64_t)g_ins.rowCount);
     return retval;
 }
 
