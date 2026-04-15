@@ -327,46 +327,49 @@
      FGEN_RANDOM_UUID_V7 = 543,
      FSNOWFLAKE_ID = 544,
      FLAST_INSERT_ID = 545,
-     FEVO_SLEEP = 546,
-     FEVO_JITTER = 547,
-     FROW_NUMBER = 548,
-     FRANK = 549,
-     FDENSE_RANK = 550,
-     FLEAD = 551,
-     FLAG = 552,
-     FNTILE = 553,
-     FPERCENT_RANK = 554,
-     FCUME_DIST = 555,
-     OVER = 556,
-     PARTITION = 557,
-     FJSON_EXTRACT = 558,
-     FJSON_UNQUOTE = 559,
-     FJSON_TYPE = 560,
-     FJSON_LENGTH = 561,
-     FJSON_DEPTH = 562,
-     FJSON_VALID = 563,
-     FJSON_KEYS = 564,
-     FJSON_PRETTY = 565,
-     FJSON_QUOTE = 566,
-     FJSON_SET = 567,
-     FJSON_INSERT = 568,
-     FJSON_REPLACE = 569,
-     FJSON_REMOVE = 570,
-     FJSON_CONTAINS = 571,
-     FJSON_CONTAINS_PATH = 572,
-     FJSON_SEARCH = 573,
-     FJSON_OBJECT = 574,
-     FJSON_ARRAY = 575,
-     FJSON_ARRAYAGG = 576,
-     SEQUENCE = 577,
-     FNEXTVAL = 578,
-     FCURRVAL = 579,
-     FSETVAL = 580,
-     FLASTVAL = 581,
-     START = 582,
-     INCREMENT = 583,
-     MINVALUE = 584,
-     CYCLE = 585
+     FSCOPE_IDENTITY = 546,
+     FAT_IDENTITY = 547,
+     FAT_LAST_INSERT_ID = 548,
+     FEVO_SLEEP = 549,
+     FEVO_JITTER = 550,
+     FROW_NUMBER = 551,
+     FRANK = 552,
+     FDENSE_RANK = 553,
+     FLEAD = 554,
+     FLAG = 555,
+     FNTILE = 556,
+     FPERCENT_RANK = 557,
+     FCUME_DIST = 558,
+     OVER = 559,
+     PARTITION = 560,
+     FJSON_EXTRACT = 561,
+     FJSON_UNQUOTE = 562,
+     FJSON_TYPE = 563,
+     FJSON_LENGTH = 564,
+     FJSON_DEPTH = 565,
+     FJSON_VALID = 566,
+     FJSON_KEYS = 567,
+     FJSON_PRETTY = 568,
+     FJSON_QUOTE = 569,
+     FJSON_SET = 570,
+     FJSON_INSERT = 571,
+     FJSON_REPLACE = 572,
+     FJSON_REMOVE = 573,
+     FJSON_CONTAINS = 574,
+     FJSON_CONTAINS_PATH = 575,
+     FJSON_SEARCH = 576,
+     FJSON_OBJECT = 577,
+     FJSON_ARRAY = 578,
+     FJSON_ARRAYAGG = 579,
+     SEQUENCE = 580,
+     FNEXTVAL = 581,
+     FCURRVAL = 582,
+     FSETVAL = 583,
+     FLASTVAL = 584,
+     START = 585,
+     INCREMENT = 586,
+     MINVALUE = 587,
+     CYCLE = 588
    };
 #endif
 /* Tokens.  */
@@ -658,46 +661,49 @@
 #define FGEN_RANDOM_UUID_V7 543
 #define FSNOWFLAKE_ID 544
 #define FLAST_INSERT_ID 545
-#define FEVO_SLEEP 546
-#define FEVO_JITTER 547
-#define FROW_NUMBER 548
-#define FRANK 549
-#define FDENSE_RANK 550
-#define FLEAD 551
-#define FLAG 552
-#define FNTILE 553
-#define FPERCENT_RANK 554
-#define FCUME_DIST 555
-#define OVER 556
-#define PARTITION 557
-#define FJSON_EXTRACT 558
-#define FJSON_UNQUOTE 559
-#define FJSON_TYPE 560
-#define FJSON_LENGTH 561
-#define FJSON_DEPTH 562
-#define FJSON_VALID 563
-#define FJSON_KEYS 564
-#define FJSON_PRETTY 565
-#define FJSON_QUOTE 566
-#define FJSON_SET 567
-#define FJSON_INSERT 568
-#define FJSON_REPLACE 569
-#define FJSON_REMOVE 570
-#define FJSON_CONTAINS 571
-#define FJSON_CONTAINS_PATH 572
-#define FJSON_SEARCH 573
-#define FJSON_OBJECT 574
-#define FJSON_ARRAY 575
-#define FJSON_ARRAYAGG 576
-#define SEQUENCE 577
-#define FNEXTVAL 578
-#define FCURRVAL 579
-#define FSETVAL 580
-#define FLASTVAL 581
-#define START 582
-#define INCREMENT 583
-#define MINVALUE 584
-#define CYCLE 585
+#define FSCOPE_IDENTITY 546
+#define FAT_IDENTITY 547
+#define FAT_LAST_INSERT_ID 548
+#define FEVO_SLEEP 549
+#define FEVO_JITTER 550
+#define FROW_NUMBER 551
+#define FRANK 552
+#define FDENSE_RANK 553
+#define FLEAD 554
+#define FLAG 555
+#define FNTILE 556
+#define FPERCENT_RANK 557
+#define FCUME_DIST 558
+#define OVER 559
+#define PARTITION 560
+#define FJSON_EXTRACT 561
+#define FJSON_UNQUOTE 562
+#define FJSON_TYPE 563
+#define FJSON_LENGTH 564
+#define FJSON_DEPTH 565
+#define FJSON_VALID 566
+#define FJSON_KEYS 567
+#define FJSON_PRETTY 568
+#define FJSON_QUOTE 569
+#define FJSON_SET 570
+#define FJSON_INSERT 571
+#define FJSON_REPLACE 572
+#define FJSON_REMOVE 573
+#define FJSON_CONTAINS 574
+#define FJSON_CONTAINS_PATH 575
+#define FJSON_SEARCH 576
+#define FJSON_OBJECT 577
+#define FJSON_ARRAY 578
+#define FJSON_ARRAYAGG 579
+#define SEQUENCE 580
+#define FNEXTVAL 581
+#define FCURRVAL 582
+#define FSETVAL 583
+#define FLASTVAL 584
+#define START 585
+#define INCREMENT 586
+#define MINVALUE 587
+#define CYCLE 588
 
 
 
@@ -713,7 +719,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 717 "parser/evoparser.tab.h"
+#line 723 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
