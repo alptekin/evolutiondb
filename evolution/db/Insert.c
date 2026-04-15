@@ -57,20 +57,40 @@ void AddReturningCol(const char *name)
         strncpy(g_returning.cols[g_returning.colCount++], name, 127);
 }
 
-/* Thread-local RETURNING result buffer — populated by DML, read by query_executor */
-__thread char g_returning_buf[256][CAT_MAX_COLUMNS][256];
-__thread int  g_returning_null[256][CAT_MAX_COLUMNS];
+/* Thread-local RETURNING result buffer — populated by DML, read by query_executor.
+ * The two large arrays (16 MiB + 256 KiB) are heap-allocated lazily so the
+ * per-thread .tbss section stays small enough for AArch64 TLS LE and for
+ * pthread_create's per-thread TLS allocation. */
+__thread char (*g_returning_buf)[CAT_MAX_COLUMNS][256] = NULL;
+__thread int  (*g_returning_null)[CAT_MAX_COLUMNS] = NULL;
 __thread int  g_returning_row_count = 0;
 __thread int  g_returning_col_count = 0;
 __thread char g_returning_col_names[CAT_MAX_COLUMNS][128];
 __thread int  g_returning_col_types[CAT_MAX_COLUMNS];
 
+static int returning_buf_ensure(void)
+{
+    if (!g_returning_buf) {
+        g_returning_buf = malloc(256 * sizeof(*g_returning_buf));
+        if (!g_returning_buf) return 0;
+    }
+    if (!g_returning_null) {
+        g_returning_null = malloc(256 * sizeof(*g_returning_null));
+        if (!g_returning_null) return 0;
+    }
+    return 1;
+}
+
 void returning_capture_row(const ColumnDesc *cols, int ncols,
                                   const char *vals[], const int is_null[], int nv)
 {
     if (!g_returning.active || g_returning_row_count >= 256) return;
+    if (!returning_buf_ensure()) return;
 
     int r = g_returning_row_count;
+    /* Clear the null bitmap row before capture so a stale "1" from a
+     * previous query cannot mask this row's valid values. */
+    memset(g_returning_null[r], 0, sizeof(g_returning_null[r]));
 
     /* First row: set up column metadata */
     if (r == 0) {
