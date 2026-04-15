@@ -349,6 +349,9 @@
 %token FGEN_RANDOM_UUID_V7
 %token FSNOWFLAKE_ID
 %token FLAST_INSERT_ID
+%token FSCOPE_IDENTITY
+%token FAT_IDENTITY
+%token FAT_LAST_INSERT_ID
 %token FEVO_SLEEP
 %token FEVO_JITTER
 %token FROW_NUMBER FRANK FDENSE_RANK
@@ -726,6 +729,18 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
                                                     }
 | FLAST_INSERT_ID '(' ')'                          {
                                                         emit("CALL 0 LAST_INSERT_ID");
+                                                        $$ = expr_make_last_insert_id();
+                                                    }
+| FSCOPE_IDENTITY '(' ')'                          {
+                                                        emit("CALL 0 SCOPE_IDENTITY");
+                                                        $$ = expr_make_last_insert_id();
+                                                    }
+| FAT_IDENTITY                                     {
+                                                        emit("CALL 0 AT_IDENTITY");
+                                                        $$ = expr_make_last_insert_id();
+                                                    }
+| FAT_LAST_INSERT_ID                               {
+                                                        emit("CALL 0 AT_LAST_INSERT_ID");
                                                         $$ = expr_make_last_insert_id();
                                                     }
 | FEVO_SLEEP '(' expr ')'                          {

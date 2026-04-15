@@ -593,7 +593,7 @@
 
 ---
 
-### Task 130: ⬜ @@IDENTITY / SCOPE_IDENTITY() / @@last_insert_id — Session Variable Aliases (Feature #132)
+### Task 130: ✅ @@IDENTITY / SCOPE_IDENTITY() / @@last_insert_id — Session Variable Aliases (Feature #132)
 
 **Goal:** MSSQL `@@IDENTITY`, `SCOPE_IDENTITY()` ve MySQL `@@last_insert_id` session variable'larını destekle. Hepsi mevcut `g_last_insert_id` altyapısına alias olarak bağlanır.
 
