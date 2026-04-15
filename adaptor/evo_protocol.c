@@ -730,6 +730,277 @@ void evo_handle_client(socket_t sock)
             continue;
         }
 
+        /* EXECUTE_BATCH_BINARY <stmt_name> <row_count> <param_count>\n
+         *   <binary payload>
+         *
+         * Binary payload — per row, per param, in order:
+         *   1 byte type code:
+         *     'N' NULL      — no payload
+         *     'i' int4      — 4 bytes, big-endian
+         *     'l' int8      — 8 bytes, big-endian
+         *     'd' float8    — 8 bytes, big-endian IEEE 754
+         *     'b' bool      — 1 byte (0 = false, non-zero = true)
+         *     's' string    — 4-byte length big-endian + UTF-8 bytes (no NUL)
+         *
+         * Server decodes each binary param into a text buffer and
+         * reuses the existing EXECUTE_BATCH substitution + execution
+         * path (text mode). Phase 4.
+         *
+         * Response (same as EXECUTE_BATCH):
+         *   BATCH_OK <total_affected>\n  READY\n
+         * or
+         *   BATCH_ERR <row_index> <sqlstate> <msg>\n  READY\n
+         */
+        if (strncasecmp(line, "EXECUTE_BATCH_BINARY ", 21) == 0) {
+            char stmt_name[64] = "";
+            int  row_count = 0;
+            int  param_count = 0;
+            {
+                char *p = line + 21;
+                int ni = 0;
+                while (*p && !isspace((unsigned char)*p) && ni < 63)
+                    stmt_name[ni++] = *p++;
+                stmt_name[ni] = '\0';
+                while (*p && isspace((unsigned char)*p)) p++;
+                row_count = atoi(p);
+                while (*p && !isspace((unsigned char)*p)) p++;
+                while (*p && isspace((unsigned char)*p)) p++;
+                param_count = atoi(p);
+            }
+
+            if (stmt_name[0] == '\0' || row_count <= 0 || param_count < 0 ||
+                param_count > 32) {
+                evo_sendf(&conn, "ERR 42000 EXECUTE_BATCH_BINARY: invalid arguments\n");
+                evo_sendf(&conn, "READY\n");
+                continue;
+            }
+
+            /* Find the prepared statement */
+            int slot = -1;
+            for (int i = 0; i < session.prepared_stmt_count; i++) {
+                if (strcasecmp(session.prepared_stmts[i].name, stmt_name) == 0) {
+                    slot = i;
+                    break;
+                }
+            }
+            /* On statement-not-found we still need to drain the binary
+             * payload so the protocol stays in sync. We do that by
+             * draining byte-by-byte using the type header of each
+             * field — same decoder as the hot path. */
+            int drain_mode = (slot < 0);
+            const char *tmpl = drain_mode ? "" : session.prepared_stmts[slot].query;
+
+            long total_affected = 0;
+            int  batch_error = 0;
+            int  err_row = -1;
+            char err_state[16] = "";
+            char err_msg[256] = "";
+
+            for (int r = 0; r < row_count && !batch_error; r++) {
+                /* params[i] holds the text representation of each
+                 * binary-decoded value. Buffers sized to hold a
+                 * reasonable string (16K); larger strings are
+                 * truncated and reported as an error. */
+                char *params[32];
+                int   param_is_null[32];
+                memset(params, 0, sizeof(params));
+                memset(param_is_null, 0, sizeof(param_is_null));
+
+                int read_ok = 1;
+                for (int i = 0; i < param_count && read_ok; i++) {
+                    char type_byte;
+                    if (conn_recv_exact(&conn, &type_byte, 1) < 0) {
+                        read_ok = 0;
+                        break;
+                    }
+                    switch (type_byte) {
+                        case 'N':
+                            param_is_null[i] = 1;
+                            params[i] = strdup("");
+                            break;
+                        case 'i': {
+                            unsigned char b[4];
+                            if (conn_recv_exact(&conn, (char *)b, 4) < 0) {
+                                read_ok = 0; break;
+                            }
+                            int32_t v = (int32_t)(((uint32_t)b[0] << 24) |
+                                                   ((uint32_t)b[1] << 16) |
+                                                   ((uint32_t)b[2] << 8)  |
+                                                    (uint32_t)b[3]);
+                            char buf[32];
+                            snprintf(buf, sizeof(buf), "%d", v);
+                            params[i] = strdup(buf);
+                            break;
+                        }
+                        case 'l': {
+                            unsigned char b[8];
+                            if (conn_recv_exact(&conn, (char *)b, 8) < 0) {
+                                read_ok = 0; break;
+                            }
+                            int64_t v = 0;
+                            for (int k = 0; k < 8; k++)
+                                v = (v << 8) | b[k];
+                            char buf[32];
+                            snprintf(buf, sizeof(buf), "%lld", (long long)v);
+                            params[i] = strdup(buf);
+                            break;
+                        }
+                        case 'd': {
+                            unsigned char b[8];
+                            if (conn_recv_exact(&conn, (char *)b, 8) < 0) {
+                                read_ok = 0; break;
+                            }
+                            uint64_t bits = 0;
+                            for (int k = 0; k < 8; k++)
+                                bits = (bits << 8) | b[k];
+                            double v;
+                            memcpy(&v, &bits, 8);
+                            char buf[64];
+                            snprintf(buf, sizeof(buf), "%.17g", v);
+                            params[i] = strdup(buf);
+                            break;
+                        }
+                        case 'b': {
+                            char b;
+                            if (conn_recv_exact(&conn, &b, 1) < 0) {
+                                read_ok = 0; break;
+                            }
+                            params[i] = strdup(b ? "1" : "0");
+                            break;
+                        }
+                        case 's': {
+                            unsigned char lb[4];
+                            if (conn_recv_exact(&conn, (char *)lb, 4) < 0) {
+                                read_ok = 0; break;
+                            }
+                            uint32_t slen = ((uint32_t)lb[0] << 24) |
+                                            ((uint32_t)lb[1] << 16) |
+                                            ((uint32_t)lb[2] << 8)  |
+                                             (uint32_t)lb[3];
+                            /* Sanity bound — 16 MB max per string */
+                            if (slen > 16 * 1024 * 1024) {
+                                read_ok = 0; break;
+                            }
+                            char *sbuf = (char *)malloc(slen + 1);
+                            if (!sbuf) { read_ok = 0; break; }
+                            if (slen > 0 &&
+                                conn_recv_exact(&conn, sbuf, (int)slen) < 0) {
+                                free(sbuf);
+                                read_ok = 0; break;
+                            }
+                            sbuf[slen] = '\0';
+                            params[i] = sbuf;
+                            break;
+                        }
+                        default:
+                            /* Unknown type — abort the batch */
+                            read_ok = 0;
+                            break;
+                    }
+                }
+
+                if (!read_ok) {
+                    for (int i = 0; i < 32; i++) if (params[i]) free(params[i]);
+                    batch_error = 1;
+                    err_row = r;
+                    strcpy(err_state, "08006");
+                    strcpy(err_msg, "connection lost or malformed binary param during batch");
+                    break;
+                }
+
+                if (drain_mode) {
+                    for (int i = 0; i < 32; i++) if (params[i]) free(params[i]);
+                    continue;
+                }
+
+                /* Build substituted SQL — same logic as EXECUTE_BATCH.
+                 * NULL binary params emit the SQL literal NULL; all
+                 * other decoded values get single-quoted so the
+                 * existing parser accepts them unchanged. */
+                char sql[65536];
+                int  out = 0;
+                const char *t = tmpl;
+                while (*t && out < (int)sizeof(sql) - 2) {
+                    if (*t == '$' && t[1] >= '1' && t[1] <= '9') {
+                        int pn = 0;
+                        const char *d = t + 1;
+                        while (*d >= '0' && *d <= '9') {
+                            pn = pn * 10 + (*d - '0');
+                            d++;
+                        }
+                        int pidx = pn - 1;
+                        if (pidx >= 0 && pidx < param_count && params[pidx]) {
+                            if (param_is_null[pidx]) {
+                                const char *nul = "NULL";
+                                while (*nul && out < (int)sizeof(sql) - 2)
+                                    sql[out++] = *nul++;
+                            } else {
+                                sql[out++] = '\'';
+                                const char *v = params[pidx];
+                                while (*v && out < (int)sizeof(sql) - 4) {
+                                    if (*v == '\'') {
+                                        sql[out++] = '\'';
+                                        sql[out++] = '\'';
+                                    } else {
+                                        sql[out++] = *v;
+                                    }
+                                    v++;
+                                }
+                                sql[out++] = '\'';
+                            }
+                        }
+                        t = d;
+                    } else {
+                        sql[out++] = *t++;
+                    }
+                }
+                sql[out] = '\0';
+
+                for (int i = 0; i < 32; i++) if (params[i]) free(params[i]);
+
+                /* Execute */
+                session_set_query(session.session_id, sql);
+                safe_query_execute(sql, rs, &session);
+                session_clear_query(session.session_id);
+
+                if (rs->has_error) {
+                    batch_error = 1;
+                    err_row = r;
+                    strncpy(err_state, rs->error_sqlstate, sizeof(err_state) - 1);
+                    strncpy(err_msg, rs->error_message, sizeof(err_msg) - 1);
+                    /* No more rows to drain — binary batch protocol
+                     * doesn't have a fixed-size tail after an error;
+                     * the client MUST stop sending after BATCH_ERR.
+                     * We simply return here so the next read starts
+                     * with a fresh command. */
+                    break;
+                }
+
+                const char *tag = rs->command_tag;
+                if (strncmp(tag, "INSERT ", 7) == 0) {
+                    const char *sp = strchr(tag + 7, ' ');
+                    if (sp) total_affected += atol(sp + 1);
+                    else total_affected += 1;
+                } else if (strncmp(tag, "UPDATE ", 7) == 0) {
+                    total_affected += atol(tag + 7);
+                } else if (strncmp(tag, "DELETE ", 7) == 0) {
+                    total_affected += atol(tag + 7);
+                }
+            }
+
+            if (drain_mode) {
+                evo_sendf(&conn, "ERR 26000 Prepared statement '%s' not found\n",
+                          stmt_name);
+            } else if (batch_error) {
+                evo_sendf(&conn, "BATCH_ERR %d %s %s\n",
+                          err_row, err_state, err_msg);
+            } else {
+                evo_sendf(&conn, "BATCH_OK %ld\n", total_affected);
+            }
+            evo_sendf(&conn, "READY\n");
+            continue;
+        }
+
         /* DEALLOCATE <stmt_name>\n */
         if (strncasecmp(line, "DEALLOCATE ", 11) == 0) {
             char stmt_name[64] = "";
