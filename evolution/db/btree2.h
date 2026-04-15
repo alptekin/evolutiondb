@@ -69,6 +69,19 @@ int bt2_delete(BTree2 *tree, const char *key);
  * Returns 0 on success, -1 if not found. */
 int bt2_update(BTree2 *tree, const char *key, RowID new_rid);
 
+/* Fast-path variant: caller supplies the leaf page number the key
+ * is known to live on (from an earlier cursor walk). Skips the
+ * find_leaf() descent. Falls back to a full find_leaf() if the
+ * hint misses (key not found on that leaf — e.g. because a split
+ * moved it).
+ *
+ * Safe to use when no DML that could split/merge the tree ran
+ * between when leaf_pno was captured and this call. EvoSQL's
+ * g_dml_mutex guarantees that for single-statement DML fast paths.
+ * Returns 0 on success, -1 if not found anywhere. */
+int bt2_update_at_leaf(BTree2 *tree, uint32_t leaf_pno,
+                       const char *key, RowID new_rid);
+
 /* ----------------------------------------------------------------
  *  Cursor operations (sequential scan via leaf chain)
  * ---------------------------------------------------------------- */
