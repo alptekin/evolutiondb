@@ -320,9 +320,13 @@ void AddUpsertSet(const char *col, struct ExprNode *expr);
 void SetReturningAll(void);
 void AddReturningCol(const char *name);
 
-/* RETURNING result buffer — populated by DML, read by query_executor */
-extern __thread char g_returning_buf[256][CAT_MAX_COLUMNS][256];
-extern __thread int  g_returning_null[256][CAT_MAX_COLUMNS];
+/* RETURNING result buffer — populated by DML, read by query_executor.
+ * Heap-allocated to keep the per-thread TLS footprint tiny (two pointers
+ * instead of 16 MiB + 256 KiB). Lazily initialized by returning_capture_row;
+ * readers in query_executor must gate on g_returning_row_count > 0 before
+ * dereferencing (same discipline as before). */
+extern __thread char (*g_returning_buf)[CAT_MAX_COLUMNS][256];
+extern __thread int  (*g_returning_null)[CAT_MAX_COLUMNS];
 extern __thread int  g_returning_row_count;
 extern __thread int  g_returning_col_count;
 extern __thread char g_returning_col_names[CAT_MAX_COLUMNS][128];
