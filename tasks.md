@@ -2858,7 +2858,259 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
-## Day 71 — Final Task
+## Day 72 — Cloud Native Deployment: Environment
+
+### Task 146: ⬜ Local K8s Dev Environment — Azure AKS & kind (Feature #142)
+
+**Goal:** Provide free/cheap Kubernetes cluster provisioning for testing the Ceph integration. Azure AKS ($200 free trial; control plane always free) as primary path, `kind` + loop devices as zero-cost local fallback.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `scripts/aks-setup.sh` — provision AKS (3x `Standard_B2s`, managed identity, basic load balancer). | `scripts/aks-setup.sh` (new) |
+| 2 | `scripts/aks-attach-disks.sh` — attach 32GB Premium SSD per node for Rook OSDs; verify `lsblk` shows `/dev/sdb`. | `scripts/aks-attach-disks.sh` (new) |
+| 3 | `scripts/aks-stop.sh` + `aks-start.sh` — `az aks stop/start` to deallocate worker VMs when idle (zero-cost pause). | `scripts/aks-stop.sh`, `aks-start.sh` (new) |
+| 4 | `scripts/aks-destroy.sh` — full `az group delete` for hard reset. | `scripts/aks-destroy.sh` (new) |
+| 5 | `scripts/kind-ceph-setup.sh` — kind cluster with 3 workers + loop devices mounted. | `scripts/kind-ceph-setup.sh` (new) |
+| 6 | `deploy/kind/cluster-config.yaml` — kind config with `extraMounts` for `/dev/loop-ceph1..3`. | `deploy/kind/cluster-config.yaml` (new) |
+| 7 | `scripts/kind-create-loop-devices.sh` — host-side `dd` + `losetup` for 3×20GB sparse files (Linux; macOS note: use Colima). | `scripts/kind-create-loop-devices.sh` (new) |
+| 8 | Verify AKS: `kubectl get nodes` → 3 Ready; verify kind: `kind get clusters && kubectl get nodes` → 4 Ready. | Manual |
+| 9 | `tests/test_k8s_env.sh` — smoke test: pull `evolutiondb/evolutiondb:latest`, run pod, execute `SELECT 1` via `kubectl exec`. | `tests/test_k8s_env.sh` (new) |
+| 10 | Document prerequisite versions (azure-cli ≥ 2.50, kubectl ≥ 1.28, helm ≥ 3.12, kind ≥ 0.20) as comments in scripts. | Scripts |
+
+---
+
+## Day 73 — Cloud Native Deployment: Prerequisites
+
+### Task 147: ⬜ WAL Durability Hardening & Connection Pooling (Feature #143)
+
+**Goal:** Close remaining single-node correctness gaps before layering K8s/Ceph/replication on top — SIGKILL/TDE recovery, commit latency bench, server-side connection pool, graceful shutdown.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Fix TDE + WAL init ordering so SIGKILL-after-write recovery replays encrypted pages correctly. | `evolution/main.c`, `evolution/db/wal.c`, `evolution/db/page_crypt.c` |
+| 2 | `tests/test_wal_recovery.py` — partial-write, mid-commit SIGKILL, TDE-enabled replay, 6+ scenarios. | `tests/test_wal_recovery.py` (new) |
+| 3 | `tests/test_checkpoint.py` — verify `wal_checkpoint` truncates WAL and preserves all committed state across restart. | `tests/test_checkpoint.py` (new) |
+| 4 | `bench/commit_latency.py` — measure p50/p99 commit latency at 1/10/100 concurrent writers. | `bench/commit_latency.py` (new) |
+| 5 | Design connection-pool architecture (worker pool + backpressure queue). | `.claude/plans/connection-pool.md` (new) |
+| 6 | Implement `adaptor/conn_pool.c/h` — bounded worker thread pool, accept queue, per-conn context. | `adaptor/conn_pool.c/h` (new), `adaptor/server.c` |
+| 7 | Replace 1-thread-per-conn accept loop with pool dispatch in `adaptor/server.c`. | `adaptor/server.c` |
+| 8 | `tests/test_connection_pool.py` — 1000 concurrent clients, queue saturation, graceful reject. | `tests/test_connection_pool.py` (new) |
+| 9 | `tests/test_graceful_shutdown.py` — SIGTERM during DML; dirty-page flush within grace; no data loss. | `tests/test_graceful_shutdown.py` (new) |
+| 10 | Helm `values.yaml`: `terminationGracePeriodSeconds: 60`; verify via `kubectl delete pod` smoke test. | `deploy/helm/evolutiondb/values.yaml` |
+
+---
+
+## Day 74 — Cloud Native Deployment: Storage
+
+### Task 148: ⬜ Rook-Ceph Cluster Manifests — Tiered Pools (Feature #144)
+
+**Goal:** Provision a Rook-Ceph cluster with two device-class pools (NVMe for WAL, SSD for data), each exposed via a StorageClass tuned to the 4 KB page size of EvosSQL.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `deploy/rook/operator.yaml` — Rook ≥ 1.15 operator, `CSI_ENABLE_HOST_NETWORK=true`. | `deploy/rook/operator.yaml` (new) |
+| 2 | `deploy/rook/cluster.yaml` — `CephCluster` with `deviceClassSets: [nvme, ssd]`, `bluestore_min_alloc_size_ssd=4096`, OSD memory target 8 GiB. | `deploy/rook/cluster.yaml` (new) |
+| 3 | `deploy/rook/pool-wal-nvme.yaml` — `CephBlockPool wal-nvme`, `replicated.size=3`, `deviceClass: nvme`, `failureDomain: host`. | `deploy/rook/pool-wal-nvme.yaml` (new) |
+| 4 | `deploy/rook/pool-data-ssd.yaml` — `CephBlockPool data-ssd`, `replicated.size=3`, `deviceClass: ssd`. | `deploy/rook/pool-data-ssd.yaml` (new) |
+| 5 | `deploy/rook/storageclass-wal.yaml` — `evo-wal-nvme` SC, `stripeUnit: 4096`, `stripeCount: 16`, imageFeatures, XFS fstype fallback. | `deploy/rook/storageclass-wal.yaml` (new) |
+| 6 | `deploy/rook/storageclass-data.yaml` — `evo-data-ssd` SC, same stripe params. | `deploy/rook/storageclass-data.yaml` (new) |
+| 7 | `scripts/rook-install.sh` — apply operator → wait → apply cluster → wait → apply pools+SCs. | `scripts/rook-install.sh` (new) |
+| 8 | Verify: `kubectl -n rook-ceph exec deploy/rook-ceph-tools -- ceph status` → HEALTH_OK; `ceph osd tree` shows nvme+ssd classes. | Manual |
+| 9 | `deploy/bench/fio-smoke.yaml` — fio PVC for each SC, write+read pass. | `deploy/bench/fio-smoke.yaml` (new) |
+| 10 | `tests/test_rook_storage.sh` — create PVC on each SC, bind, write/read, delete. | `tests/test_rook_storage.sh` (new) |
+
+---
+
+## Day 75 — Cloud Native Deployment: Engine Refactor
+
+### Task 149: ⬜ Configurable WAL & Data Paths (Feature #145)
+
+**Goal:** Eliminate hardcoded `"evosql.wal"` / `root/` paths so WAL and data can live on separate volumes.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `evolution/db/evo_paths.h/c` — central getters: `evo_paths_data_dir()`, `evo_paths_wal_dir()`, init from env + CLI. | `evolution/db/evo_paths.h`, `evo_paths.c` (new) |
+| 2 | Replace hardcoded WAL path with getter — `wal.c:224,227`. | `evolution/db/wal.c` |
+| 3 | Replace archive path hardcodes — `wal.c:389,460,534`. | `evolution/db/wal.c` |
+| 4 | Add `wal_init_with_path(int fd, const char *path)`; keep `wal_init` as wrapper. | `evolution/db/wal.h`, `wal.c` |
+| 5 | `EVO_DATA_DIR` env support in `DatabaseMgmt.c` — replaces CWD-relative `root/`. | `evolution/db/DatabaseMgmt.c` |
+| 6 | Add `--wal-dir` and `--data-dir` CLI flags. | `adaptor/main.c` |
+| 7 | Fix replication hardcodes at `adaptor/replication.c:70,73,136,137,284`. | `adaptor/replication.c` |
+| 8 | `tests/test_wal.py` + `tests/test_crash_recovery.py` pass with custom paths. | `tests/` |
+| 9 | Regression: run all 84 test suites, 0 failures. | `tests/` |
+| 10 | Docker rebuild + manual smoke test with mounted `/wal` and `/data`. | `Dockerfile` |
+
+---
+
+## Day 76 — Cloud Native Deployment: Dual PVC + Block Mode
+
+### Task 150: ⬜ Dual PVC StatefulSet + Raw Block Mode (Feature #146)
+
+**Goal:** Two PVCs per pod (WAL on NVMe pool, data on SSD pool) with optional `volumeMode: Block` (raw RBD) to skip kernel page cache double-buffering.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Add `EVO_RAW_DEVICE` handling — skip `mkdir`+`ftruncate` when set, open device directly. | `evolution/db/DatabaseMgmt.c` |
+| 2 | Gate `O_DIRECT` in page_mgr behind raw-mode flag; add alignment checks. | `evolution/db/page_mgr.c:119,200` |
+| 3 | WAL raw-mode: `O_DIRECT | O_DSYNC` + `posix_memalign(buffer, 4096, len)`. | `evolution/db/wal.c` |
+| 4 | Helm `statefulset.yaml` — two `volumeClaimTemplates` (`wal`, `data`), `volumeMode: Block`, `volumeDevices` mount at `/dev/evo-wal`, `/dev/evo-data`. | `deploy/helm/evolutiondb/templates/statefulset.yaml` |
+| 5 | `values.yaml` — `persistence.wal.{storageClass,size}`, `persistence.data.{storageClass,size}`, `persistence.rawDevice: true`. | `deploy/helm/evolutiondb/values.yaml` |
+| 6 | entrypoint.sh — pass `--wal-dir` / `--data-dir` args based on `rawDevice` flag. | `entrypoint.sh` |
+| 7 | Filesystem fallback: when `rawDevice=false`, mount PVCs as `/wal` and `/data` (XFS). | Helm templates |
+| 8 | `helm install --set persistence.rawDevice=true` + verify `kubectl exec evosql-0 -- ls -l /dev/evo-wal /dev/evo-data`. | Manual |
+| 9 | Filesystem E2E: install with `rawDevice=false`, same smoke test. | Manual |
+| 10 | Regression under both modes (raw + FS) — all test suites green. | `tests/` |
+
+---
+
+## Day 77 — Cloud Native Deployment: Performance Tuning
+
+### Task 151: ⬜ K8s Performance Tuning — Huge Pages, RBD Cache, Topology (Feature #147)
+
+**Goal:** Squeeze max throughput from Ceph RBD via huge-page buffer pool, asymmetric RBD cache (writeback for data, none for WAL), and topology co-location.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Buffer pool huge-page allocation — `mmap(MAP_HUGETLB)` when `EVO_USE_HUGEPAGES=1`. | `evolution/db/buffer_pool.c:294` |
+| 2 | Helm `resources.limits.hugepages-2Mi: 1Gi` + `/dev/hugepages` mount. | `statefulset.yaml`, `values.yaml` |
+| 3 | Data SC writeback cache: `rbd_cache=true,rbd_cache_policy=writeback,rbd_cache_size=268435456`. | `deploy/rook/storageclass-data.yaml` |
+| 4 | WAL SC writethrough (cache off): `rbd_cache=false`. | `deploy/rook/storageclass-wal.yaml` |
+| 5 | `topologySpreadConstraints` + `nodeAffinity` — DB pod co-located with one Ceph OSD replica rack. | `statefulset.yaml` |
+| 6 | `deploy/bench/fio-4k-sync.yaml` — 4K sync write (iodepth=1, fsync/64), hit ≥30K IOPS, p99 <500µs. | `deploy/bench/fio-4k-sync.yaml` (new) |
+| 7 | `deploy/bench/fio-4k-rand-read.yaml` — 4K random read (iodepth=32), hit ≥80K IOPS. | `deploy/bench/fio-4k-rand-read.yaml` (new) |
+| 8 | Run `/benchmark` skill against Ceph-backed pod — compare baseline vs Ceph throughput. | `tests/bench` |
+| 9 | `kubectl exec evosql-0 -- cat /proc/meminfo \| grep Huge` → HugePages_Total > 0. | Manual |
+| 10 | Document tuning decisions and bench results. | `docs/ceph-perf.md` (new) |
+
+---
+
+## Day 78 — Cloud Native Deployment: High Availability
+
+### Task 152: ⬜ Multi-Replica HA StatefulSet (Feature #148)
+
+**Goal:** Drive the existing raft/replication code (`adaptor/raft.c`, `adaptor/replication.c`) from a 3-replica StatefulSet with stable DNS and a PodDisruptionBudget.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `templates/configmap-cluster.yaml` — render `node-0.svc:9968,node-1.svc:9968,node-2.svc:9968` from `replicaCount`. | `templates/configmap-cluster.yaml` (new) |
+| 2 | `templates/service-headless.yaml` — `clusterIP: None` for stable `<ordinal>.svc` DNS. | `templates/service-headless.yaml` (new) |
+| 3 | `templates/poddisruptionbudget.yaml` — `minAvailable: 2` (quorum protection). | `templates/poddisruptionbudget.yaml` (new) |
+| 4 | `statefulset.yaml` initContainer — parse ordinal from `${HOSTNAME##*-}`, write to `/etc/evo/node-id`. | `statefulset.yaml` |
+| 5 | Main container args: `--node-id $(cat /etc/evo/node-id) --cluster $(CLUSTER_NODES) --replication-port 9968`. | `statefulset.yaml` |
+| 6 | `values.yaml` — `replicaCount: 3`, `replication.enabled: true`. | `values.yaml` |
+| 7 | `tests/test_ha_failover.py` — `kubectl delete pod evosql-0`, wait for new leader, continue queries. | `tests/test_ha_failover.py` (new) |
+| 8 | `tests/test_replication.py` pass against 3-replica cluster. | `tests/` |
+| 9 | Quorum tests: scale to 5, kill 2, verify writes still succeed; kill 3, verify writes halt. | `tests/test_quorum.py` (new) |
+| 10 | Rolling restart via `kubectl rollout restart statefulset` — no data loss, no split-brain. | Manual |
+
+---
+
+## Day 79 — Cloud Native Deployment: Backup
+
+### Task 153: ⬜ CSI VolumeSnapshot Backup + Restore (Feature #149)
+
+**Goal:** Crash-consistent snapshots of both WAL and data PVCs using Rook's toolbox to ensure Ceph-level atomicity (K8s VolumeSnapshot alone does not guarantee cross-PVC atomicity).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `deploy/rook/volumesnapshotclass.yaml` — two `VolumeSnapshotClass` (WAL + data), `deletionPolicy: Retain`. | `deploy/rook/volumesnapshotclass.yaml` (new) |
+| 2 | `templates/cronjob-snapshot.yaml` — CronJob invokes Rook toolbox `rbd snap create` across both pools in one call. | `templates/cronjob-snapshot.yaml` (new) |
+| 3 | `templates/restore-job.yaml` — restore Job creates fresh PVCs from snapshots, new StatefulSet. | `templates/restore-job.yaml` (new) |
+| 4 | `values.yaml` — `backup.enabled`, `backup.schedule`, `backup.retention`. | `values.yaml` |
+| 5 | `scripts/evo-snapshot.sh` — manual snapshot invocation wrapper. | `scripts/evo-snapshot.sh` (new) |
+| 6 | `scripts/evo-restore.sh` — manual restore wrapper; takes snapshot name + target namespace. | `scripts/evo-restore.sh` (new) |
+| 7 | `tests/test_snapshot_restore.py` — write 10K rows, snapshot, write more, restore, verify original 10K. | `tests/test_snapshot_restore.py` (new) |
+| 8 | Atomicity test: kill pod mid-snapshot, verify restored state is crash-consistent. | `tests/test_snapshot_atomicity.py` (new) |
+| 9 | Document RTO/RPO expectations from snapshot-only backups. | `docs/ceph-perf.md` |
+| 10 | Retention policy: keep last N snapshots, oldest evicted by CronJob. | `templates/cronjob-snapshot.yaml` |
+
+---
+
+## Day 80 — Cloud Native Deployment: PITR
+
+### Task 154: ⬜ Ceph RGW WAL Archive + PITR (Feature #150)
+
+**Goal:** Continuous WAL archiving to Ceph RGW (S3-compatible) + Point-In-Time Recovery by replaying WAL up to a target timestamp.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `deploy/rook/object-store.yaml` — `CephObjectStore evosql-archive`, RGW pods, S3 endpoint. | `deploy/rook/object-store.yaml` (new) |
+| 2 | `deploy/rook/objectbucketclaim.yaml` — `ObjectBucketClaim wal-archive` (bucket + secret). | `deploy/rook/objectbucketclaim.yaml` (new) |
+| 3 | `s5cmd` sidecar container in StatefulSet — sync `/wal/*.archive` → S3 bucket on checkpoint. | `statefulset.yaml` |
+| 4 | `adaptor/main.c` — `--recover-to-time <ISO8601>` flag. | `adaptor/main.c` |
+| 5 | Restore path: download WAL archives from S3 before `wal_init`, replay in order. | `evolution/db/wal.c:250-254`, `wal_archiver.c/h` (new) |
+| 6 | WAL replay-to-timestamp — stop at first record past target time. | `evolution/db/wal.c` |
+| 7 | `scripts/evo-pitr.sh` — wrapper: `evo-pitr.sh --from-snapshot X --to-time 2026-04-16T12:34:00Z`. | `scripts/evo-pitr.sh` (new) |
+| 8 | `tests/test_pitr.py` — traffic at T0 → snap → traffic at T1 → snap → restore to T0.5 → verify state. | `tests/test_pitr.py` (new) |
+| 9 | Failure mode tests: missing WAL segment, corrupted segment (CRC fail), target time before base snapshot. | `tests/test_pitr.py` |
+| 10 | Document PITR window, retention, storage cost trade-offs. | `docs/pitr.md` (new) |
+
+---
+
+## Day 81 — Cloud Native Deployment: Observability
+
+### Task 155: ⬜ Prometheus + OpenTelemetry Observability (Feature #151)
+
+**Goal:** Three observability axes — metrics (Prometheus), traces (OTel), structured logs (JSON) — with unified Grafana dashboard covering EvosSQL + Ceph.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `evolution/db/metrics.c/h` — Prometheus text-format metrics emitter. | `evolution/db/metrics.c/h` (new) |
+| 2 | `adaptor/metrics_server.c/h` — embedded HTTP server on separate port (default 9968 → /metrics). | `adaptor/metrics_server.c/h` (new) |
+| 3 | Metrics set: QPS per DML, p50/p99 latency, buffer hit ratio, WAL bytes/sec, active TX, lock waits. | Same |
+| 4 | `templates/servicemonitor.yaml` — Prometheus Operator scrape config. | `templates/servicemonitor.yaml` (new) |
+| 5 | `evolution/db/otel.c/h` — OTLP/gRPC span emitter. | `evolution/db/otel.c/h` (new) |
+| 6 | Instrument query path: parse → plan → execute → I/O spans at `query_executor.c`, `buffer_pool.c`, `wal.c`. | Multiple |
+| 7 | Structured JSON logging — replace `fprintf(stderr, ...)` with log helper emitting `{ts, level, xid, query, msg}`. | `evolution/db/error.c`, all call sites |
+| 8 | OTel Collector sidecar config + `templates/otel-collector.yaml`. | `templates/otel-collector.yaml` (new) |
+| 9 | `deploy/grafana/evosql-ceph-dashboard.json` — unified dashboard (EvosSQL + Ceph OSD/RBD metrics). | `deploy/grafana/evosql-ceph-dashboard.json` (new) |
+| 10 | `tests/test_metrics.py` — scrape `/metrics`, assert expected series; OTel span emission E2E. | `tests/test_metrics.py` (new) |
+
+---
+
+## Day 82 — Cloud Native Deployment: Operator
+
+### Task 156: ⬜ EvosSQL Kubernetes Operator (Feature #152)
+
+**Goal:** Declarative cluster management via CRDs — `EvosqlCluster`, `EvosqlBackup`, `EvosqlRestore` — implemented with kubebuilder (Go).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `kubebuilder init` project skeleton. | `deploy/operator/` (new) |
+| 2 | `EvosqlCluster` CRD — `replicas`, `cephStorageClass`, `version`, `tde.enabled`, `backupSchedule`. | `deploy/operator/api/v1/cluster_types.go` (new) |
+| 3 | `EvosqlBackup` CRD — snapshot + WAL archive reference, retention. | `deploy/operator/api/v1/backup_types.go` (new) |
+| 4 | `EvosqlRestore` CRD — `sourceBackup`, `recoverToTime` (PITR). | `deploy/operator/api/v1/restore_types.go` (new) |
+| 5 | Cluster reconcile: StatefulSet, Service, ConfigMap, Secret, PVCs. | `controllers/cluster_controller.go` (new) |
+| 6 | Backup controller — snapshot CronJob + WAL archive bucket lifecycle. | `controllers/backup_controller.go` (new) |
+| 7 | Failover controller — detect unreachable leader, trigger replica promote. | `controllers/failover_controller.go` (new) |
+| 8 | Rolling upgrade controller — version bump → pod-by-pod upgrade with readiness gate. | `controllers/upgrade_controller.go` (new) |
+| 9 | `deploy/helm/evolutiondb-operator/` — Helm chart to install operator. | `deploy/helm/evolutiondb-operator/` (new) |
+| 10 | E2E: `kubectl apply -f evosqlcluster.yaml` → 3-pod cluster up, `SELECT 1` works. | `tests/operator_e2e.sh` (new) |
+
+---
+
+## Day 83 — Cloud Native Deployment: Horizontal Scale
+
+### Task 157: ⬜ Horizontal Sharding Infrastructure (Feature #153)
+
+**Goal:** Shard EvosSQL across multiple Ceph-backed clusters — partition by key, routing metadata in Ceph RGW, cross-shard 2PC. Depends on Task 88 (Partitioning) + Task 39 (XA).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Prerequisite: Task 88 (Table Partitioning) completed. | — |
+| 2 | Shard-key design doc — hash vs range, resharding strategy. | `.claude/plans/sharding.md` (new) |
+| 3 | Shard routing metadata schema — stored in Ceph RGW or etcd. | `adaptor/shard_router.c/h` (extend) |
+| 4 | Coordinator node — parses query, routes to shard(s), aggregates results. | `adaptor/coordinator.c/h` (new) |
+| 5 | Shard-aware driver path (optional) — client library hash → shard. | CLI update |
+| 6 | Cross-shard 2PC on top of Task 39 XA — coordinator plays TM role. | `adaptor/xa_transaction.c` |
+| 7 | Helm chart — `shards × replicasPerShard` (e.g. `4 × 3 = 12 pods`), per-shard headless Services. | `values.yaml`, `statefulset.yaml` (sharded template) |
+| 8 | Each shard backed by separate Ceph pool (or shared pool + image-per-shard). | `deploy/rook/pool-shard-*.yaml` |
+| 9 | `tests/test_sharded_query.py` — insert across shards, JOIN across shards, aggregate. | `tests/test_sharded_query.py` (new) |
+| 10 | `deploy/bench/shard-bench.yaml` — scaling test: 2, 4, 8 shards; measure throughput scaling. | `deploy/bench/shard-bench.yaml` (new) |
+
+---
+
+## Day 84 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
 
@@ -3006,6 +3258,18 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 139 | CREATE TABLE LIKE (Structure Copy) | 137 |
 | 140 | CREATE UNLOGGED TABLE AS SELECT | 138 |
 | 141 | CTAS Field Truncation Fix | 139 |
+| 142 | Local K8s Dev Env (Azure AKS + kind) | 146 |
+| 143 | WAL Durability Hardening & Connection Pooling | 147 |
+| 144 | Rook-Ceph Cluster Manifests (Tiered Pools) | 148 |
+| 145 | Configurable WAL & Data Paths | 149 |
+| 146 | Dual PVC StatefulSet + Raw Block Mode | 150 |
+| 147 | K8s Performance Tuning (Huge Pages, RBD Cache) | 151 |
+| 148 | Multi-Replica HA StatefulSet | 152 |
+| 149 | CSI VolumeSnapshot Backup + Restore | 153 |
+| 150 | Ceph RGW WAL Archive + PITR | 154 |
+| 151 | Prometheus + OpenTelemetry Observability | 155 |
+| 152 | EvosSQL Kubernetes Operator | 156 |
+| 153 | Horizontal Sharding Infrastructure | 157 |
 
 ---
 
@@ -3051,8 +3315,20 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 36 | 94–95 | WAL & File locking (#66, #67) | 🔵 Advanced |
 | 37 | 96–97 | Connection pooling & Replication (#54, #68) | 🔵 Advanced |
 | 38 | 98 | Integration, hardening & release | 🏁 Final |
+| 72 | 146 | Local K8s Dev Env — Azure AKS + kind (#142) | ☁️ Cloud Native |
+| 73 | 147 | WAL Durability & Connection Pooling (#143) | ☁️ Cloud Native |
+| 74 | 148 | Rook-Ceph Cluster Manifests (#144) | ☁️ Cloud Native |
+| 75 | 149 | Configurable WAL & Data Paths (#145) | ☁️ Cloud Native |
+| 76 | 150 | Dual PVC + Raw Block Mode (#146) | ☁️ Cloud Native |
+| 77 | 151 | Performance Tuning — Huge Pages, RBD Cache (#147) | ☁️ Cloud Native |
+| 78 | 152 | Multi-Replica HA StatefulSet (#148) | ☁️ Cloud Native |
+| 79 | 153 | CSI VolumeSnapshot Backup (#149) | ☁️ Cloud Native |
+| 80 | 154 | Ceph RGW WAL Archive + PITR (#150) | ☁️ Cloud Native |
+| 81 | 155 | Prometheus + OpenTelemetry Observability (#151) | ☁️ Cloud Native |
+| 82 | 156 | EvosSQL Kubernetes Operator (#152) | ☁️ Cloud Native |
+| 83 | 157 | Horizontal Sharding Infrastructure (#153) | ☁️ Cloud Native |
 
-**Total:** 98 tasks × 10 steps = **980 steps** over **49 working days** (100 features).
+**Total:** 110 tasks × 10 steps = **1100 steps** over **61 working days** (112 features).
 
 ---
 
