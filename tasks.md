@@ -1715,7 +1715,7 @@
 
 ---
 
-### Task 85: ⬜ COPY Command (Feature #61)
+### Task 85: ✅ COPY Command (Feature #61)
 
 **Goal:** Implement PostgreSQL-compatible COPY for bulk import/export.
 

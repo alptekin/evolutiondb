@@ -280,6 +280,25 @@ typedef struct {
     char cols[64][128];
 } ReturningOpts;
 
+/* ---- COPY (Task 85 — Feature #61) ---- */
+typedef struct {
+    int  active;                /* 1 if COPY statement */
+    int  isSelect;              /* 1 = COPY (SELECT...) TO, 0 = COPY tbl */
+    char tblName[256];
+    char selectSQL[RECORD_BUF_SIZE];
+    int  direction;             /* EVO_COPY_DIR_FROM / _TO */
+    int  source;                /* EVO_COPY_SRC_FILE / _STDIN / _STDOUT */
+    char path[1024];            /* when source == FILE */
+    int  format;                /* EVO_COPY_FMT_TEXT / _CSV */
+    char delimiter;             /* ',' CSV, '\t' TEXT — default set at begin */
+    char quote;                 /* '"' default */
+    char nullStr[32];           /* CSV: "", TEXT: "\\N" */
+    int  header;                /* 1 = emit/skip header line */
+    int  columnCount;           /* optional column list length (0 = all) */
+    char columns[64][128];
+    int  rowCount;              /* populated during COPY execution */
+} CopyOpts;
+
 /* ---- Error handling ---- */
 typedef struct {
     jmp_buf jmpbuf;
@@ -306,6 +325,7 @@ typedef struct QueryContext {
     ProcedureOpts  proc;
     TriggerOpts    trig;
     ReturningOpts  returning;
+    CopyOpts       copy;
     ErrorState     err;
     char           temp[1024];
     void         (*tx_undo_callback)(int op_type, const char *table,
@@ -358,6 +378,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_proc        (g_qctx->proc)
 #define g_trig        (g_qctx->trig)
 #define g_returning   (g_qctx->returning)
+#define g_copy        (g_qctx->copy)
 #define g_err         (g_qctx->err)
 
 /* Shared fields */

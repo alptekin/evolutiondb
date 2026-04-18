@@ -18,6 +18,7 @@
 #include "scram.h"           /* SCRAM-SHA-256 authentication */
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
+#include "../evolution/db/Copy.h"
 
 /* From server.c — parser rwlock for SERIALIZABLE cleanup */
 extern rwlock_t g_parse_lock;
@@ -72,6 +73,103 @@ static int evo_send_result(conn_t *conn, const ResultSet *rs)
     if (evo_sendf(conn, "END\n") < 0) return -1;
     if (evo_sendf(conn, "TAG %s\n", rs->command_tag) < 0) return -1;
     return 0;
+}
+
+/* ----------------------------------------------------------------
+ *  COPY stream handlers for EVO text protocol (Task 85 Faz 5)
+ *
+ *  Wire format:
+ *    - Client sends SQL "COPY t FROM STDIN ..." via Q command
+ *    - Server replies: "COPY_READY\n"
+ *    - Client sends one CSV-formatted line per row, \n-terminated
+ *    - Client sends "\\.\n" to signal end-of-data (PostgreSQL convention)
+ *    - Server replies: "OK\nTAG COPY <n>\n"  or  "ERR <sqlstate> <msg>\n"
+ *
+ *  For COPY TO STDOUT:
+ *    - Server replies: "COPY_READY\n"
+ *    - Server sends one line per row: "D:<csv-line>\n"
+ *    - Server sends terminator: "\\.\n"
+ *    - Server sends: "OK\nTAG COPY <n>\n"
+ * ---------------------------------------------------------------- */
+
+/* Reader context: line-based EVO wire with "\\." end-of-data sentinel. */
+typedef struct { conn_t *conn; } EvoCopyInCtx;
+
+static int evo_line_reader(char *buf, int max_len,
+                           char *sqlstate, size_t sqlstate_size,
+                           char *err_out, size_t err_size, void *ctx)
+{
+    EvoCopyInCtx *ec = (EvoCopyInCtx *)ctx;
+    for (;;) {
+        if (conn_recv_line(ec->conn, buf, max_len) < 0) {
+            snprintf(err_out, err_size, "COPY IN transport read error");
+            strncpy(sqlstate, "08006", sqlstate_size - 1);
+            return -1;
+        }
+        size_t n = strlen(buf);
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+            buf[--n] = '\0';
+        if (strcmp(buf, "\\.") == 0) return 0;   /* end-of-data */
+        if (n > 0) return (int)n;
+        /* empty line — keep reading */
+    }
+}
+
+static int evo_line_writer(const char *line, int len, void *ctx)
+{
+    conn_t *conn = (conn_t *)ctx;
+    return evo_sendf(conn, "D:%.*s\n", len, line) < 0 ? -1 : 0;
+}
+
+static void evo_rs_to_spec(const ResultSet *rs, CopyStreamSpec *spec)
+{
+    memset(spec, 0, sizeof(*spec));
+    strncpy(spec->tblName, rs->copy_table, sizeof(spec->tblName) - 1);
+    spec->format    = rs->copy_format;
+    spec->delimiter = rs->copy_delimiter;
+    spec->quote     = rs->copy_quote;
+    strncpy(spec->nullStr, rs->copy_null_str, sizeof(spec->nullStr) - 1);
+    spec->header    = rs->copy_header;
+    spec->columnCount = rs->copy_column_count;
+    for (int c = 0; c < rs->copy_column_count && c < 64; c++) {
+        strncpy(spec->columns[c], rs->copy_columns[c],
+                sizeof(spec->columns[c]) - 1);
+    }
+}
+
+static void evo_session_to_stream(const SessionCtx *session, CopyStreamSession *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->in_transaction = session->in_transaction;
+    out->tx_xid         = session->tx_xid;
+    strncpy(out->database, session->database, sizeof(out->database) - 1);
+    strncpy(out->schema,   session->schema,   sizeof(out->schema)   - 1);
+}
+
+static int evo_copy_in_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
+                              char *err_out, size_t err_size)
+{
+    CopyStreamSpec spec;     evo_rs_to_spec(rs, &spec);
+    CopyStreamSession sess;  evo_session_to_stream(session, &sess);
+    EvoCopyInCtx ec = { .conn = conn };
+    char sqlstate[6] = "00000";
+    return copy_stream_in_process(&spec, &sess,
+                                  evo_line_reader, &ec,
+                                  err_out, err_size,
+                                  sqlstate, sizeof(sqlstate));
+}
+
+static int evo_copy_out_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
+                               char *err_out, size_t err_size)
+{
+    CopyStreamSpec spec;     evo_rs_to_spec(rs, &spec);
+    CopyStreamSession sess;  evo_session_to_stream(session, &sess);
+    int rc = copy_stream_out_process(&spec, &sess,
+                                     evo_line_writer, conn,
+                                     err_out, err_size);
+    /* Terminator marker even on error so the client knows the stream ended. */
+    evo_sendf(conn, "\\.\n");
+    return rc;
 }
 
 /* ----------------------------------------------------------------
@@ -335,6 +433,32 @@ void evo_handle_client(socket_t sock)
             if (rs->has_error) {
                 evo_sendf(&conn, "ERR %s %s\n",
                           rs->error_sqlstate, rs->error_message);
+            } else if (rs->copy_stream_mode == 1) {
+                /* COPY FROM STDIN via EVO protocol */
+                evo_sendf(&conn, "COPY_READY\n");
+                char serr[512] = {0};
+                int nrows = evo_copy_in_stream(&conn, rs, &session,
+                                               serr, sizeof(serr));
+                if (nrows < 0)
+                    evo_sendf(&conn, "ERR 22000 %s\n",
+                              serr[0] ? serr : "COPY IN failed");
+                else {
+                    evo_sendf(&conn, "OK\n");
+                    evo_sendf(&conn, "TAG COPY %d\n", nrows);
+                }
+            } else if (rs->copy_stream_mode == 2) {
+                /* COPY TO STDOUT via EVO protocol */
+                evo_sendf(&conn, "COPY_READY\n");
+                char serr[512] = {0};
+                int nrows = evo_copy_out_stream(&conn, rs, &session,
+                                                serr, sizeof(serr));
+                if (nrows < 0)
+                    evo_sendf(&conn, "ERR 22000 %s\n",
+                              serr[0] ? serr : "COPY OUT failed");
+                else {
+                    evo_sendf(&conn, "OK\n");
+                    evo_sendf(&conn, "TAG COPY %d\n", nrows);
+                }
             } else if (rs->is_select) {
                 evo_send_result(&conn, rs);
             } else {

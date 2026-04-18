@@ -129,6 +129,23 @@ typedef struct {
     /* Streaming mode: rows sent directly to wire during scan */
     void       *stream_conn;      /* conn_t*, NULL = buffered mode */
     int         streamed_rows;    /* rows sent so far (streaming only) */
+
+    /* COPY ... STDIN/STDOUT pending signal.
+     *   0 = no COPY stream, 1 = COPY FROM STDIN pending, 2 = COPY TO STDOUT pending.
+     * Set by the query executor when it recognizes a COPY that needs the
+     * PG wire COPY subprotocol; consumed by pg_handler to drive the
+     * CopyInResponse/CopyOutResponse state machine. */
+    int         copy_stream_mode;
+    /* Parameters needed to drive the stream machine — filled by query_executor
+     * before query context is freed. */
+    char        copy_table[256];
+    int         copy_format;          /* 0=TEXT, 1=CSV */
+    char        copy_delimiter;
+    char        copy_quote;
+    char        copy_null_str[32];
+    int         copy_header;
+    int         copy_column_count;    /* 0 = all columns (default) */
+    char        copy_columns[64][128];
 } ResultSet;
 
 void result_init(ResultSet *rs);

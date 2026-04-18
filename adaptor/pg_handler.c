@@ -19,6 +19,9 @@
 #include "tls.h"
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
+#include "../evolution/db/Copy.h"
+#include "../evolution/db/table_api.h"
+#include "../evolution/db/catalog_internal.h"
 #include "util.h"
 
 /* From server.c — parser rwlock for SERIALIZABLE cleanup */
@@ -32,6 +35,224 @@ static char get_tx_status(SessionCtx *sess) {
     if (!sess->in_transaction) return 'I';
     if (sess->tx_aborted)      return 'E';
     return 'T';
+}
+
+/* ----------------------------------------------------------------
+ *  COPY subprotocol stream handlers (Task 85 Faz 4)
+ *
+ *  Protocol-specific reader/writer callbacks wired to the shared
+ *  copy_stream_in_process / copy_stream_out_process core in Copy.c.
+ * ---------------------------------------------------------------- */
+
+/* Per-call context for the PG wire reader — retains partial lines between
+ * CopyData messages. */
+typedef struct {
+    conn_t *conn;
+    char    partial[65536];
+    int     partial_len;
+    int     end_of_data;      /* 1 after CopyDone/CopyFail */
+    int     aborted;          /* 1 on CopyFail */
+    char    fail_msg[256];
+} PgCopyInCtx;
+
+static int pg_wire_line_reader(char *buf, int max_len,
+                               char *sqlstate, size_t sqlstate_size,
+                               char *err_out, size_t err_size, void *ctx)
+{
+    PgCopyInCtx *pc = (PgCopyInCtx *)ctx;
+
+    for (;;) {
+        /* Emit a complete line from the partial buffer if present. */
+        for (int i = 0; i < pc->partial_len; i++) {
+            if (pc->partial[i] == '\n') {
+                int line_end = i;
+                if (line_end > 0 && pc->partial[line_end - 1] == '\r')
+                    line_end--;
+                int n = line_end;
+                if (n >= max_len) n = max_len - 1;
+                memcpy(buf, pc->partial, (size_t)n);
+                buf[n] = '\0';
+                int rest = pc->partial_len - (i + 1);
+                if (rest > 0)
+                    memmove(pc->partial, pc->partial + i + 1, (size_t)rest);
+                pc->partial_len = rest;
+                if (n > 0) return n;
+                /* Empty line — continue scanning. */
+                goto next_iter;
+            }
+        }
+
+        if (pc->end_of_data) {
+            if (pc->aborted) {
+                snprintf(err_out, err_size, "COPY from stdin failed: %s",
+                         pc->fail_msg);
+                strncpy(sqlstate, "57014", sqlstate_size - 1);
+                return -2;
+            }
+            if (pc->partial_len > 0) {
+                int n = pc->partial_len;
+                if (n >= max_len) n = max_len - 1;
+                memcpy(buf, pc->partial, (size_t)n);
+                buf[n] = '\0';
+                pc->partial_len = 0;
+                if (n > 0) return n;
+            }
+            return 0;
+        }
+
+        /* Need more bytes — pull next protocol message. */
+        char tag = 0;
+        char msg_buf[65536];
+        int  msg_len = 0;
+        if (pg_read_message(pc->conn, &tag, msg_buf, &msg_len) < 0) {
+            snprintf(err_out, err_size, "COPY IN transport read error");
+            strncpy(sqlstate, "08006", sqlstate_size - 1);
+            return -1;
+        }
+
+        if (tag == PG_MSG_COPY_FAIL) {
+            pc->aborted = 1;
+            pc->end_of_data = 1;
+            int m = msg_len > 0 ? msg_len - 1 : 0;
+            if (m > (int)sizeof(pc->fail_msg) - 1) m = sizeof(pc->fail_msg) - 1;
+            memcpy(pc->fail_msg, msg_buf, (size_t)m);
+            pc->fail_msg[m] = '\0';
+            continue;
+        }
+        if (tag == PG_MSG_COPY_DONE) {
+            pc->end_of_data = 1;
+            continue;
+        }
+        if (tag != PG_MSG_COPY_DATA) {
+            snprintf(err_out, err_size,
+                     "unexpected message (0x%02X) during COPY IN",
+                     (unsigned char)tag);
+            strncpy(sqlstate, "08P01", sqlstate_size - 1);
+            return -1;
+        }
+
+        int space = (int)sizeof(pc->partial) - pc->partial_len;
+        int to_copy = msg_len < space ? msg_len : space;
+        memcpy(pc->partial + pc->partial_len, msg_buf, (size_t)to_copy);
+        pc->partial_len += to_copy;
+        next_iter: ;
+    }
+}
+
+static int pg_wire_line_writer(const char *line, int len, void *ctx)
+{
+    conn_t *conn = (conn_t *)ctx;
+    /* Append newline — PG wire CopyData payload carries it for text format. */
+    char *buf = malloc((size_t)len + 2);
+    if (!buf) return -1;
+    memcpy(buf, line, (size_t)len);
+    buf[len] = '\n';
+    pg_send_copy_data(conn, buf, len + 1);
+    free(buf);
+    return 0;
+}
+
+static void rs_to_spec(const ResultSet *rs, CopyStreamSpec *spec)
+{
+    memset(spec, 0, sizeof(*spec));
+    strncpy(spec->tblName, rs->copy_table, sizeof(spec->tblName) - 1);
+    spec->format    = rs->copy_format;
+    spec->delimiter = rs->copy_delimiter;
+    spec->quote     = rs->copy_quote;
+    strncpy(spec->nullStr, rs->copy_null_str, sizeof(spec->nullStr) - 1);
+    spec->header    = rs->copy_header;
+    spec->columnCount = rs->copy_column_count;
+    for (int c = 0; c < rs->copy_column_count && c < 64; c++) {
+        strncpy(spec->columns[c], rs->copy_columns[c],
+                sizeof(spec->columns[c]) - 1);
+    }
+}
+
+static void session_to_stream(const SessionCtx *session, CopyStreamSession *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->in_transaction = session->in_transaction;
+    out->tx_xid         = session->tx_xid;
+    strncpy(out->database, session->database, sizeof(out->database) - 1);
+    strncpy(out->schema,   session->schema,   sizeof(out->schema)   - 1);
+}
+
+static int pg_copy_in_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
+                             char *err_out, size_t err_size,
+                             char *err_sqlstate, size_t err_sqlstate_size)
+{
+    /* Resolve first so we can include ncols in CopyInResponse. Requires
+     * a temporary QueryContext for g_currentDatabase / g_currentSchema. */
+    CopyStreamSpec spec;     rs_to_spec(rs, &spec);
+    CopyStreamSession sess;  session_to_stream(session, &sess);
+
+    QueryContext *prev = g_qctx;
+    QueryContext *probe = qctx_alloc();
+    if (!probe) {
+        snprintf(err_out, err_size, "out of memory");
+        return -1;
+    }
+    g_qctx = probe;
+    strncpy(g_qctx->currentDatabase, sess.database,
+            sizeof(g_qctx->currentDatabase) - 1);
+    strncpy(g_qctx->currentSchema, sess.schema,
+            sizeof(g_qctx->currentSchema) - 1);
+
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    if (tapi_resolve(spec.tblName, &td, cols, &ncols) < 0) {
+        snprintf(err_out, err_size, "could not open table \"%s\"", spec.tblName);
+        strncpy(err_sqlstate, "42P01", err_sqlstate_size - 1);
+        g_qctx = prev;
+        qctx_free(probe);
+        return -1;
+    }
+    g_qctx = prev;
+    qctx_free(probe);
+
+    pg_send_copy_in_response(conn, 0, ncols);
+
+    PgCopyInCtx pc = { .conn = conn };
+    return copy_stream_in_process(&spec, &sess,
+                                  pg_wire_line_reader, &pc,
+                                  err_out, err_size,
+                                  err_sqlstate, err_sqlstate_size);
+}
+
+static int pg_copy_out_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
+                              char *err_out, size_t err_size)
+{
+    CopyStreamSpec spec;     rs_to_spec(rs, &spec);
+    CopyStreamSession sess;  session_to_stream(session, &sess);
+
+    /* Resolve to learn ncols for CopyOutResponse. */
+    QueryContext *prev = g_qctx;
+    QueryContext *probe = qctx_alloc();
+    if (!probe) { snprintf(err_out, err_size, "out of memory"); return -1; }
+    g_qctx = probe;
+    strncpy(g_qctx->currentDatabase, sess.database,
+            sizeof(g_qctx->currentDatabase) - 1);
+    strncpy(g_qctx->currentSchema, sess.schema,
+            sizeof(g_qctx->currentSchema) - 1);
+
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    if (tapi_resolve(spec.tblName, &td, cols, &ncols) < 0) {
+        snprintf(err_out, err_size, "could not open table \"%s\"", spec.tblName);
+        g_qctx = prev;
+        qctx_free(probe);
+        return -1;
+    }
+    g_qctx = prev;
+    qctx_free(probe);
+
+    pg_send_copy_out_response(conn, 0, ncols);
+
+    return copy_stream_out_process(&spec, &sess,
+                                   pg_wire_line_writer, conn,
+                                   err_out, err_size);
 }
 
 /* ----------------------------------------------------------------
@@ -239,6 +460,35 @@ void pg_handle_client(socket_t client_sock)
                 } else if (rs->has_error) {
                     pg_send_error(&conn, "ERROR",
                                   rs->error_sqlstate, rs->error_message);
+                } else if (rs->copy_stream_mode == 1) {
+                    /* COPY FROM STDIN — CopyInResponse sent inside stream */
+                    char serr[512] = {0};
+                    char sstate[6] = "00000";
+                    int nrows = pg_copy_in_stream(&conn, rs, &session,
+                                                  serr, sizeof(serr),
+                                                  sstate, sizeof(sstate));
+                    if (nrows < 0) {
+                        pg_send_error(&conn, "ERROR", sstate,
+                                      serr[0] ? serr : "COPY IN failed");
+                    } else {
+                        char tag[64];
+                        snprintf(tag, sizeof(tag), "COPY %d", nrows);
+                        pg_send_command_complete(&conn, tag);
+                    }
+                } else if (rs->copy_stream_mode == 2) {
+                    /* COPY TO STDOUT — CopyOutResponse + CopyData stream */
+                    char serr[512] = {0};
+                    int nrows = pg_copy_out_stream(&conn, rs, &session,
+                                                   serr, sizeof(serr));
+                    if (nrows < 0) {
+                        pg_send_error(&conn, "ERROR", "22000",
+                                      serr[0] ? serr : "COPY OUT failed");
+                    } else {
+                        pg_send_copy_done(&conn);
+                        char tag[64];
+                        snprintf(tag, sizeof(tag), "COPY %d", nrows);
+                        pg_send_command_complete(&conn, tag);
+                    }
                 } else if (rs->command_tag[0] == '\0') {
                     pg_send_empty_query(&conn);
                 } else if (rs->is_select) {
