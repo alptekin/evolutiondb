@@ -220,3 +220,29 @@ def test_copy_large_file(db):
         assert int(result[0][0]) == n
     finally:
         os.unlink(host_path)
+
+
+def test_copy_from_rolls_back_whole_stream_on_error(db):
+    """PG/MySQL semantics: a COPY FROM that errors mid-stream must leave
+    the table unchanged — no partial rows survive the failed statement.
+
+    Triggered here by a PRIMARY KEY collision on the 3rd row; the first two
+    rows succeed under the same auto-committed xid, then InsertProcess
+    aborts. The abort path must clog_set_aborted the xid so MVCC hides all
+    of that xid's inserts."""
+    _reset(db, "copy_rb")
+    db.query("CREATE TABLE copy_rb (id INT PRIMARY KEY, v VARCHAR(50))")
+    host_path, path = _tmp("copy_rb_")
+    with open(host_path, "w") as f:
+        f.write("1,a\n2,b\n1,duplicate\n3,c\n")   # row 3 collides with row 1
+    try:
+        cols, rows, err, tag = simple_query(
+            db._sock, f"COPY copy_rb FROM '{path}' (FORMAT CSV)"
+        )
+        assert err is not None, "expected PK conflict error"
+        result = db.query("SELECT COUNT(*) FROM copy_rb")
+        assert int(result[0][0]) == 0, (
+            f"COPY must roll back partial inserts, found {result[0][0]} rows"
+        )
+    finally:
+        os.unlink(host_path)
