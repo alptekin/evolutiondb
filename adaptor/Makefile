@@ -73,6 +73,8 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/Index.c \
               $(EVO_DB)/Reclaim.c \
               $(EVO_DB)/Analyze.c \
+              $(EVO_DB)/Copy.c \
+              $(EVO_DB)/csv.c \
               $(EVO_DB)/buffer_pool.c \
               $(EVO_DB)/query_context.c \
               $(EVO_DB)/page_mgr.c \

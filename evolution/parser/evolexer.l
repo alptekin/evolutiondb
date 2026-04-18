@@ -99,8 +99,11 @@ DATABASE				{ return DATABASE; }
 DEFAULT					{ return DEFAULT; }
 DELAYED					{ return DELAYED; }
 DELETE					{ return DELETE; }
+DELIMITER				{ return DELIMITER; }
 DESC					{ return DESC; }
 DROP					{ return DROP; }
+COPY					{ return COPY; }
+CSV						{ return CSV; }
 
 
 DEFERRABLE				{ return DEFERRABLE; }
@@ -142,6 +145,7 @@ FORCE					{ return FORCE; }
 FOREIGN					{ return FOREIGN; }
 
 FROM					{ return FROM; }
+FORMAT					{ return FORMAT; }
 FULL					{ return FULL; }
 FUNCTION				{ return FUNCTION; }
 GROUP_CONCAT/"("		{ return FGROUP_CONCAT; }
@@ -152,6 +156,7 @@ GROUP					{ return GROUP; }
 HANDLER					{ return HANDLER; }
 HASH					{ return HASH; }
 HAVING					{ return HAVING; }
+HEADER					{ return HEADER; }
 HIGH_PRIORITY			{ return HIGH_PRIORITY; }
 HOUR_MICROSECOND		{ return HOUR_MICROSECOND; }
 HOUR_MINUTE				{ return HOUR_MINUTE; }
@@ -283,6 +288,9 @@ SELECT					{ return SELECT; }
 
 SEPARATOR				{ return SEPARATOR; }
 SET						{ return SET; }
+STDIN					{ return STDIN; }
+STDOUT					{ return STDOUT; }
+QUOTE					{ return QUOTE; }
 
 SIMPLE					{ return SIMPLE; }
 INT2|SMALLINT			{ return SMALLINT; }

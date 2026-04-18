@@ -6,6 +6,7 @@ services:
       - "9967:9967"
     volumes:
       - evosql-data:/data
+      - /tmp:/host-tmp
     environment:
       EVOSQL_USER_NAME: admin
       EVOSQL_PASSWORD: admin

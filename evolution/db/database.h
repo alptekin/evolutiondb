@@ -320,6 +320,28 @@ void AddUpsertSet(const char *col, struct ExprNode *expr);
 void SetReturningAll(void);
 void AddReturningCol(const char *name);
 
+/* COPY command (Task 85 — Feature #61) */
+#define EVO_COPY_DIR_FROM    0
+#define EVO_COPY_DIR_TO      1
+#define EVO_COPY_SRC_FILE    0
+#define EVO_COPY_SRC_STDIN   1
+#define EVO_COPY_SRC_STDOUT  2
+#define EVO_COPY_FMT_TEXT    0
+#define EVO_COPY_FMT_CSV     1
+
+void CopyBegin(const char *tbl);
+void CopySelectBegin(const char *select_sql);
+void CopyAddColumn(const char *col);
+void CopySetDirection(int dir);
+void CopySetSourcePath(const char *path);
+void CopySetSourceStream(int src);   /* STDIN / STDOUT */
+void CopySetFormat(int fmt);          /* CSV / TEXT */
+void CopySetDelimiter(const char *d);
+void CopySetHeader(int v);
+void CopySetNullStr(const char *s);
+void CopySetQuote(const char *q);
+int  CopyProcess(void);
+
 /* RETURNING result buffer — populated by DML, read by query_executor.
  * Heap-allocated to keep the per-thread TLS footprint tiny (two pointers
  * instead of 16 MiB + 256 KiB). Lazily initialized by returning_capture_row;

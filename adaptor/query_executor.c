@@ -79,6 +79,13 @@ static int is_update_query(const char *sql)
     return (strncasecmp(sql, "UPDATE", 6) == 0);
 }
 
+static int is_copy_query(const char *sql)
+{
+    while (*sql && isspace((unsigned char)*sql)) sql++;
+    return (strncasecmp(sql, "COPY", 4) == 0 &&
+            (sql[4] == '\0' || isspace((unsigned char)sql[4]) || sql[4] == '('));
+}
+
 static int is_delete_query(const char *sql)
 {
     while (*sql && isspace((unsigned char)*sql)) sql++;
@@ -5575,6 +5582,8 @@ parser_done:
                 snprintf(rs->command_tag, sizeof(rs->command_tag), "UPDATE %d", g_upd.rowCount);
             else if (is_delete_query(sql))
                 snprintf(rs->command_tag, sizeof(rs->command_tag), "DELETE %d", g_del.rowCount);
+            else if (is_copy_query(sql))
+                snprintf(rs->command_tag, sizeof(rs->command_tag), "COPY %d", g_copy.rowCount);
             else if (is_drop_query(sql)) {
                 const char *p = sql;
                 while (*p && isspace((unsigned char)*p)) p++;
@@ -7236,6 +7245,9 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         else if (is_drop_query(sql))     needed_priv = "DROP";
         else if (is_truncate_query(sql)) needed_priv = "DELETE";
         else if (is_alter_query(sql))    needed_priv = "CREATE";
+        else if (is_copy_query(sql))     needed_priv =
+            (strcasestr(sql, " FROM ") && !strcasestr(sql, " FROM STDOUT "))
+                ? "INSERT" : "SELECT";
 
         if (needed_priv) {
             /* Extract table name from query for TABLE-level check.
