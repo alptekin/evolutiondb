@@ -161,6 +161,45 @@ void pg_send_empty_query(conn_t *conn)
     pg_buf_send(&b, conn);
 }
 
+/* ---- COPY subprotocol senders (Task 85 Faz 4) ---- */
+
+static void pg_send_copy_response(conn_t *conn, char tag, int format, int num_cols)
+{
+    PgBuf b;
+    pg_buf_init(&b, tag);
+    pg_buf_add_byte(&b, (char)(format ? 1 : 0));          /* overall format */
+    pg_buf_add_int16(&b, (short)num_cols);
+    for (int c = 0; c < num_cols; c++) {
+        pg_buf_add_int16(&b, (short)(format ? 1 : 0));    /* per-column format */
+    }
+    pg_buf_send(&b, conn);
+}
+
+void pg_send_copy_in_response(conn_t *conn, int format, int num_cols)
+{
+    pg_send_copy_response(conn, PG_RESP_COPY_IN, format, num_cols);
+}
+
+void pg_send_copy_out_response(conn_t *conn, int format, int num_cols)
+{
+    pg_send_copy_response(conn, PG_RESP_COPY_OUT, format, num_cols);
+}
+
+void pg_send_copy_data(conn_t *conn, const char *data, int len)
+{
+    PgBuf b;
+    pg_buf_init(&b, PG_MSG_COPY_DATA);
+    pg_buf_add_bytes(&b, data, len);
+    pg_buf_send(&b, conn);
+}
+
+void pg_send_copy_done(conn_t *conn)
+{
+    PgBuf b;
+    pg_buf_init(&b, PG_RESP_COPY_DONE);
+    pg_buf_send(&b, conn);
+}
+
 void pg_send_backend_key_data(conn_t *conn, int pid, int secret)
 {
     PgBuf b;

@@ -5582,8 +5582,33 @@ parser_done:
                 snprintf(rs->command_tag, sizeof(rs->command_tag), "UPDATE %d", g_upd.rowCount);
             else if (is_delete_query(sql))
                 snprintf(rs->command_tag, sizeof(rs->command_tag), "DELETE %d", g_del.rowCount);
-            else if (is_copy_query(sql))
-                snprintf(rs->command_tag, sizeof(rs->command_tag), "COPY %d", g_copy.rowCount);
+            else if (is_copy_query(sql)) {
+                /* If the COPY targets STDIN/STDOUT, hand off to pg_handler via
+                 * rs->copy_stream_mode; the final COPY N tag is written after
+                 * the stream completes. */
+                if (g_copy.active && (g_copy.source == EVO_COPY_SRC_STDIN ||
+                                      g_copy.source == EVO_COPY_SRC_STDOUT)) {
+                    rs->copy_stream_mode = (g_copy.source == EVO_COPY_SRC_STDIN) ? 1 : 2;
+                    strncpy(rs->copy_table, g_copy.tblName, sizeof(rs->copy_table) - 1);
+                    rs->copy_format    = g_copy.format;
+                    rs->copy_delimiter = g_copy.delimiter ? g_copy.delimiter :
+                                         (g_copy.format == EVO_COPY_FMT_CSV ? ',' : '\t');
+                    rs->copy_quote     = g_copy.quote ? g_copy.quote : '"';
+                    strncpy(rs->copy_null_str, g_copy.nullStr,
+                            sizeof(rs->copy_null_str) - 1);
+                    rs->copy_header    = g_copy.header;
+                    rs->copy_column_count = g_copy.columnCount;
+                    for (int cc = 0; cc < g_copy.columnCount && cc < 64; cc++) {
+                        strncpy(rs->copy_columns[cc], g_copy.columns[cc],
+                                sizeof(rs->copy_columns[cc]) - 1);
+                    }
+                    /* Tag finalized by pg_handler after stream ends. */
+                    rs->command_tag[0] = '\0';
+                } else {
+                    snprintf(rs->command_tag, sizeof(rs->command_tag),
+                             "COPY %d", g_copy.rowCount);
+                }
+            }
             else if (is_drop_query(sql)) {
                 const char *p = sql;
                 while (*p && isspace((unsigned char)*p)) p++;

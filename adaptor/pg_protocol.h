@@ -16,6 +16,9 @@
 #define PG_MSG_CLOSE       'C'
 #define PG_MSG_FLUSH       'H'
 #define PG_MSG_PASSWORD    'p'   /* PasswordMessage from client */
+#define PG_MSG_COPY_DATA   'd'   /* CopyData — client → server (FROM) or server → client (TO) */
+#define PG_MSG_COPY_DONE   'c'   /* CopyDone — either direction */
+#define PG_MSG_COPY_FAIL   'f'   /* CopyFail — client aborts COPY IN */
 
 /* Backend message types (server → client) */
 #define PG_RESP_AUTH            'R'
@@ -32,6 +35,9 @@
 #define PG_RESP_CLOSE_COMPLETE  '3'
 #define PG_RESP_NO_DATA        'n'
 #define PG_RESP_PARAM_DESC     't'
+#define PG_RESP_COPY_IN        'G'   /* CopyInResponse — server accepts COPY FROM STDIN */
+#define PG_RESP_COPY_OUT       'H'   /* CopyOutResponse — server emits COPY TO STDOUT */
+#define PG_RESP_COPY_DONE      'c'   /* CopyDone (same tag as frontend) */
 
 /* Protocol version */
 #define PG_PROTOCOL_V3  196608   /* 3.0 */
@@ -83,6 +89,13 @@ void pg_send_row_description(conn_t *conn, const ResultSet *rs);
 /* Streaming: send a single DataRow from raw field values */
 void pg_send_data_row(conn_t *conn, const char *fields[], const int is_null[],
                       int num_cols);
+
+/* COPY subprotocol senders (Task 85 Faz 4).
+ * `format` is 0=text, 1=binary. `num_cols` is per-column format array length. */
+void pg_send_copy_in_response(conn_t *conn, int format, int num_cols);
+void pg_send_copy_out_response(conn_t *conn, int format, int num_cols);
+void pg_send_copy_data(conn_t *conn, const char *data, int len);
+void pg_send_copy_done(conn_t *conn);
 
 /* Read a frontend message. Returns message type, fills buf and len.
    For startup messages, type is set to 0. */
