@@ -24,9 +24,14 @@
 #include "database.h"
 #include "query_context.h"
 #include "csv.h"
+#include "Copy.h"
 #include "table_api.h"
 #include "tuple_format.h"
 #include "catalog_internal.h"
+#include "mvcc.h"
+#include "lock_mgr.h"
+#include "buffer_pool.h"
+#include "page_mgr.h"
 
 /* ---- Parser helpers — called from evoparser.y semantic actions ---- */
 
@@ -180,25 +185,51 @@ static int copy_path_is_safe(const char *path)
     return 1;
 }
 
-/* ---- Dialect builder from g_copy ---- */
+/* ---- File-mode adapters over the shared stream API ---- */
 
-static void copy_build_dialect(CsvDialect *d)
+static void spec_from_g_copy(CopyStreamSpec *spec)
 {
-    memset(d, 0, sizeof(*d));
-    d->format    = g_copy.format;
-    d->delimiter = g_copy.delimiter ? g_copy.delimiter :
-                   (g_copy.format == EVO_COPY_FMT_CSV ? ',' : '\t');
-    d->quote     = g_copy.quote ? g_copy.quote : '"';
-    strncpy(d->null_str, g_copy.nullStr, sizeof(d->null_str) - 1);
+    memset(spec, 0, sizeof(*spec));
+    strncpy(spec->tblName, g_copy.tblName, sizeof(spec->tblName) - 1);
+    spec->format    = g_copy.format;
+    spec->delimiter = g_copy.delimiter;
+    spec->quote     = g_copy.quote;
+    strncpy(spec->nullStr, g_copy.nullStr, sizeof(spec->nullStr) - 1);
+    spec->header    = g_copy.header;
+    spec->columnCount = g_copy.columnCount;
+    for (int c = 0; c < g_copy.columnCount && c < 64; c++) {
+        strncpy(spec->columns[c], g_copy.columns[c],
+                sizeof(spec->columns[c]) - 1);
+    }
 }
 
-/* ---- COPY FROM file — feed each CSV row through InsertProcess ---- */
+/* File reader: yields one non-empty line (CR/LF stripped) per call. */
+static int file_line_reader(char *buf, int max_len,
+                            char *sqlstate, size_t sqlstate_size,
+                            char *err_out, size_t err_size, void *ctx)
+{
+    (void)sqlstate; (void)sqlstate_size; (void)err_out; (void)err_size;
+    FILE *fp = (FILE *)ctx;
+    while (fgets(buf, max_len, fp) != NULL) {
+        size_t n = strlen(buf);
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+            buf[--n] = '\0';
+        if (n > 0) return (int)n;          /* skip blank lines */
+    }
+    return 0;   /* EOF */
+}
+
+/* File writer: writes line + '\n' to FILE*. */
+static int file_line_writer(const char *line, int len, void *ctx)
+{
+    FILE *fp = (FILE *)ctx;
+    if (fwrite(line, 1, (size_t)len, fp) != (size_t)len) return -1;
+    if (fputc('\n', fp) == EOF) return -1;
+    return 0;
+}
 
 static int copy_from_file(void)
 {
-    CsvDialect dia;
-    copy_build_dialect(&dia);
-
     FILE *fp = fopen(g_copy.path, "r");
     if (!fp) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
@@ -208,95 +239,26 @@ static int copy_from_file(void)
         return -1;
     }
 
-    /* Read line-by-line. A 64 KB line buffer is generous for typical CSVs. */
-    char *line = malloc(65536);
-    if (!line) {
-        fclose(fp);
-        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg), "out of memory in COPY");
-        g_err.error = 1;
-        return -1;
-    }
+    CopyStreamSpec spec;     spec_from_g_copy(&spec);
+    CopyStreamSession sess = {0};
+    sess.in_transaction = 0;    /* file mode is always auto-commit */
+    sess.tx_xid         = 0;
+    strncpy(sess.database, g_currentDatabase, sizeof(sess.database) - 1);
+    strncpy(sess.schema,   g_currentSchema,   sizeof(sess.schema)   - 1);
 
-    int skipped_header = 0;
-    int inserted = 0;
-
-    while (fgets(line, 65536, fp) != NULL) {
-        /* Strip trailing CR/LF */
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-        if (len == 0) continue;
-
-        if (g_copy.header && !skipped_header) {
-            skipped_header = 1;
-            continue;
-        }
-
-        char fields[CSV_MAX_FIELDS][CSV_MAX_FIELD_LEN];
-        int  is_null[CSV_MAX_FIELDS];
-        int  nf = 0;
-        if (csv_parse_line(line, &dia, fields, is_null, CSV_MAX_FIELDS, &nf) < 0) {
-            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                     "COPY parse error at row %d", inserted + 1);
-            g_err.error = 1;
-            free(line);
-            fclose(fp);
-            return -1;
-        }
-
-        /* Build g_ins for a single row, then call InsertProcess. */
-        TruncateInsert();
-        strncpy(g_ins.tblName, g_copy.tblName, sizeof(g_ins.tblName) - 1);
-        g_ins.columnCount = g_copy.columnCount;
-        for (int c = 0; c < g_copy.columnCount; c++) {
-            strncpy(g_ins.columns[c], g_copy.columns[c],
-                    sizeof(g_ins.columns[c]) - 1);
-        }
-        g_ins.rowCount = 0;
-
-        for (int c = 0; c < nf; c++) {
-            if (is_null[c]) {
-                /* Insert.c recognises literal "\x01NULL\x01" as NULL marker */
-                GetInsertions("\x01NULL\x01");
-            } else {
-                GetInsertions(fields[c]);
-            }
-        }
-        InsertRowSeparator();
-
-        int ip_rc = InsertProcess();
-        if (ip_rc != 0 || g_err.error) {
-            free(line);
-            fclose(fp);
-            return -1;
-        }
-        inserted += (g_ins.rowCount > 0) ? g_ins.rowCount : 1;
-    }
-
-    free(line);
+    char sstate[6] = "00000";
+    int n = copy_stream_in_process(&spec, &sess,
+                                   file_line_reader, fp,
+                                   g_err.errorMsg, sizeof(g_err.errorMsg),
+                                   sstate, sizeof(sstate));
     fclose(fp);
-    g_copy.rowCount = inserted;
+    if (n < 0) { g_err.error = 1; return -1; }
+    g_copy.rowCount = n;
     return 0;
 }
 
-/* ---- COPY TO file — scan table and write CSV lines ---- */
-
 static int copy_to_file(void)
 {
-    TableDesc td;
-    ColumnDesc cols[CAT_MAX_COLUMNS];
-    int ncols = 0;
-    if (tapi_resolve(g_copy.tblName, &td, cols, &ncols) < 0) {
-        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                 "could not open table \"%s\"", g_copy.tblName);
-        g_err.error = 1;
-        return -1;
-    }
-
-    CsvDialect dia;
-    copy_build_dialect(&dia);
-
     FILE *fp = fopen(g_copy.path, "w");
     if (!fp) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
@@ -306,79 +268,250 @@ static int copy_to_file(void)
         return -1;
     }
 
-    /* Header row if requested */
-    if (g_copy.header) {
+    CopyStreamSpec spec;     spec_from_g_copy(&spec);
+    CopyStreamSession sess = {0};
+    strncpy(sess.database, g_currentDatabase, sizeof(sess.database) - 1);
+    strncpy(sess.schema,   g_currentSchema,   sizeof(sess.schema)   - 1);
+
+    int n = copy_stream_out_process(&spec, &sess,
+                                    file_line_writer, fp,
+                                    g_err.errorMsg, sizeof(g_err.errorMsg));
+    fclose(fp);
+    if (n < 0) { g_err.error = 1; return -1; }
+    g_copy.rowCount = n;
+    return 0;
+}
+
+/* ================================================================
+ *  Shared stream API (PG wire + EVO + file-mode all funnel through here)
+ * ================================================================ */
+
+static void stream_dialect(const CopyStreamSpec *spec, CsvDialect *d)
+{
+    memset(d, 0, sizeof(*d));
+    d->format    = spec->format;
+    d->delimiter = spec->delimiter ? spec->delimiter :
+                   (spec->format == EVO_COPY_FMT_CSV ? ',' : '\t');
+    d->quote     = spec->quote ? spec->quote : '"';
+    strncpy(d->null_str, spec->nullStr, sizeof(d->null_str) - 1);
+}
+
+/* Single-row CSV-parse + InsertProcess. Caller has bound g_qctx.
+ * Returns 0 on success, -1 on error (err_out filled). */
+static int stream_insert_one(const CopyStreamSpec *spec, const char *line,
+                             const CsvDialect *dia,
+                             char *err_out, size_t err_size)
+{
+    char fields[CSV_MAX_FIELDS][CSV_MAX_FIELD_LEN];
+    int  is_null[CSV_MAX_FIELDS];
+    int  nf = 0;
+    if (csv_parse_line(line, dia, fields, is_null, CSV_MAX_FIELDS, &nf) < 0) {
+        snprintf(err_out, err_size, "COPY parse error");
+        return -1;
+    }
+
+    TruncateInsert();
+    strncpy(g_ins.tblName, spec->tblName, sizeof(g_ins.tblName) - 1);
+    g_ins.columnCount = spec->columnCount;
+    for (int c = 0; c < spec->columnCount; c++) {
+        strncpy(g_ins.columns[c], spec->columns[c],
+                sizeof(g_ins.columns[c]) - 1);
+    }
+    g_ins.rowCount = 0;
+
+    for (int c = 0; c < nf; c++) {
+        if (is_null[c]) GetInsertions("\x01NULL\x01");
+        else            GetInsertions(fields[c]);
+    }
+    InsertRowSeparator();
+
+    int rc = InsertProcess();
+    if (rc != 0 || g_err.error) {
+        snprintf(err_out, err_size, "%s",
+                 g_err.errorMsg[0] ? g_err.errorMsg : "COPY row insert failed");
+        return -1;
+    }
+    return 0;
+}
+
+/* Allocate + bind a QueryContext for the stream. Returns NULL on OOM. */
+static QueryContext *stream_qctx_begin(const CopyStreamSession *sess)
+{
+    QueryContext *qctx = qctx_alloc();
+    if (!qctx) return NULL;
+    g_qctx = qctx;
+    if (sess->database[0])
+        strncpy(g_qctx->currentDatabase, sess->database,
+                sizeof(g_qctx->currentDatabase) - 1);
+    if (sess->schema[0])
+        strncpy(g_qctx->currentSchema, sess->schema,
+                sizeof(g_qctx->currentSchema) - 1);
+    if (sess->tx_xid > 0) qctx->mvcc_xid = sess->tx_xid;
+    return qctx;
+}
+
+/* Commit (or abort) the auto-commit xid and release the context. */
+static void stream_qctx_end(QueryContext *qctx, QueryContext *prev,
+                            const CopyStreamSession *sess, int failed)
+{
+    if (!sess->in_transaction && qctx->mvcc_xid > 0) {
+        if (failed) {
+            clog_set_aborted(qctx->mvcc_xid);
+        } else {
+            bp_wal_flush_dirty(pgm_get_fd());
+            clog_set_committed_csn(qctx->mvcc_xid, pgm_next_csn());
+        }
+        lock_release_all(qctx->mvcc_xid);
+        lock_gap_release_all(qctx->mvcc_xid);
+        mvcc_unregister_tx(qctx->mvcc_xid);
+    }
+    g_qctx = prev;
+    qctx_free(qctx);
+}
+
+int copy_stream_in_process(const CopyStreamSpec *spec,
+                           const CopyStreamSession *sess,
+                           copy_read_line_fn reader, void *rctx,
+                           char *err_out, size_t err_size,
+                           char *sqlstate, size_t sqlstate_size)
+{
+    CsvDialect dia;
+    stream_dialect(spec, &dia);
+
+    QueryContext *prev = g_qctx;
+    QueryContext *qctx = stream_qctx_begin(sess);
+    if (!qctx) {
+        snprintf(err_out, err_size, "out of memory for COPY stream");
+        strncpy(sqlstate, "53200", sqlstate_size - 1);
+        return -1;
+    }
+
+    int header_skipped = 0;
+    int inserted = 0;
+    int failed = 0;
+
+    char *line = malloc(65536);
+    if (!line) {
+        snprintf(err_out, err_size, "out of memory for COPY line buffer");
+        strncpy(sqlstate, "53200", sqlstate_size - 1);
+        stream_qctx_end(qctx, prev, sess, 1);
+        return -1;
+    }
+
+    for (;;) {
+        int n = reader(line, 65536, sqlstate, sqlstate_size,
+                       err_out, err_size, rctx);
+        if (n == 0) break;                 /* orderly end-of-data */
+        if (n == -2) { failed = 1; break; } /* CopyFail */
+        if (n < 0)   { failed = 1; break; } /* transport error */
+
+        if (spec->header && !header_skipped) { header_skipped = 1; continue; }
+
+        if (stream_insert_one(spec, line, &dia, err_out, err_size) < 0) {
+            strncpy(sqlstate,
+                    g_err.sqlstate[0] ? g_err.sqlstate : "22000",
+                    sqlstate_size - 1);
+            failed = 1;
+            break;
+        }
+        inserted++;
+    }
+
+    free(line);
+    stream_qctx_end(qctx, prev, sess, failed);
+    return failed ? -1 : inserted;
+}
+
+int copy_stream_out_process(const CopyStreamSpec *spec,
+                            const CopyStreamSession *sess,
+                            copy_write_line_fn writer, void *wctx,
+                            char *err_out, size_t err_size)
+{
+    CsvDialect dia;
+    stream_dialect(spec, &dia);
+
+    QueryContext *prev = g_qctx;
+    QueryContext *qctx = stream_qctx_begin(sess);
+    if (!qctx) {
+        snprintf(err_out, err_size, "out of memory for COPY stream");
+        return -1;
+    }
+
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    int exported = 0;
+    int rc = 0;
+
+    if (tapi_resolve(spec->tblName, &td, cols, &ncols) < 0) {
+        snprintf(err_out, err_size, "could not open table \"%s\"", spec->tblName);
+        rc = -1;
+        goto done;
+    }
+
+    char *outline = malloc(8192);
+    if (!outline) { snprintf(err_out, err_size, "out of memory"); rc = -1; goto done; }
+
+    if (spec->header) {
         const char *cnames[CAT_MAX_COLUMNS];
         int is_null_hdr[CAT_MAX_COLUMNS];
         for (int i = 0; i < ncols; i++) {
             cnames[i] = cols[i].col_name;
             is_null_hdr[i] = 0;
         }
-        char out[8192];
         size_t nw = 0;
         if (csv_format_line(cnames, is_null_hdr, ncols, &dia,
-                            out, sizeof(out), &nw) < 0) {
-            fclose(fp);
-            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                     "COPY header serialization failed");
-            g_err.error = 1;
-            return -1;
+                            outline, 8192, &nw) == 0) {
+            if (writer(outline, (int)nw, wctx) < 0) {
+                rc = -1; free(outline); goto done;
+            }
         }
-        fwrite(out, 1, nw, fp);
-        fputc('\n', fp);
     }
 
     TableScanCursor cur;
-    if (tapi_scan_begin(&td, &cur) < 0) {
-        /* Empty table is fine */
-        fclose(fp);
-        g_copy.rowCount = 0;
-        return 0;
-    }
-
-    char pk_key[256];
-    char record[RECORD_BUF_SIZE];
-    int exported = 0;
-
-    while (tapi_scan_next(&cur, pk_key, record, sizeof(record)) == 0) {
-        char fields[CAT_MAX_COLUMNS][256];
-        int  is_null[CAT_MAX_COLUMNS];
-        int  rec_len = tup_record_len(record, sizeof(record));
-        if (rec_len < 0) rec_len = (int)strlen(record);
-        int nout = tup_extract_fields(record, rec_len, cols, ncols,
-                                      fields, is_null, CAT_MAX_COLUMNS);
-        if (nout < 0) {
-            tapi_scan_end(&cur);
-            fclose(fp);
-            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                     "COPY could not decode row %d", exported + 1);
-            g_err.error = 1;
-            return -1;
+    if (tapi_scan_begin(&td, &cur) == 0) {
+        char pk_key[256];
+        char record[RECORD_BUF_SIZE];
+        while (tapi_scan_next(&cur, pk_key, record, sizeof(record)) == 0) {
+            char fields[CAT_MAX_COLUMNS][256];
+            int  is_null[CAT_MAX_COLUMNS];
+            int  rec_len = tup_record_len(record, sizeof(record));
+            if (rec_len < 0) rec_len = (int)strlen(record);
+            int nout = tup_extract_fields(record, rec_len, cols, ncols,
+                                          fields, is_null, CAT_MAX_COLUMNS);
+            if (nout < 0) {
+                tapi_scan_end(&cur);
+                snprintf(err_out, err_size, "COPY could not decode row %d", exported + 1);
+                rc = -1;
+                free(outline);
+                goto done;
+            }
+            const char *ptrs[CAT_MAX_COLUMNS];
+            for (int i = 0; i < nout; i++) ptrs[i] = fields[i];
+            size_t nw = 0;
+            if (csv_format_line(ptrs, is_null, nout, &dia,
+                                outline, 8192, &nw) < 0) {
+                tapi_scan_end(&cur);
+                snprintf(err_out, err_size,
+                         "COPY row serialization overflow at row %d", exported + 1);
+                rc = -1;
+                free(outline);
+                goto done;
+            }
+            if (writer(outline, (int)nw, wctx) < 0) {
+                tapi_scan_end(&cur);
+                rc = -1; free(outline); goto done;
+            }
+            exported++;
         }
-
-        const char *ptrs[CAT_MAX_COLUMNS];
-        for (int i = 0; i < nout; i++) ptrs[i] = fields[i];
-
-        char out[8192];
-        size_t nw = 0;
-        if (csv_format_line(ptrs, is_null, nout, &dia,
-                            out, sizeof(out), &nw) < 0) {
-            tapi_scan_end(&cur);
-            fclose(fp);
-            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                     "COPY row serialization overflow at row %d", exported + 1);
-            g_err.error = 1;
-            return -1;
-        }
-        fwrite(out, 1, nw, fp);
-        fputc('\n', fp);
-        exported++;
+        tapi_scan_end(&cur);
     }
+    free(outline);
 
-    tapi_scan_end(&cur);
-    fclose(fp);
-    g_copy.rowCount = exported;
-    return 0;
+done:
+    /* COPY TO is read-only; no abort needed. Treat as never-failed from MVCC POV. */
+    stream_qctx_end(qctx, prev, sess, 0);
+    return (rc == 0) ? exported : -1;
 }
 
 /* ---- Execution entry ---- */
@@ -402,6 +535,16 @@ int CopyProcess(void)
         g_err.error = 1;
         return -1;
     }
+
+    /*
+     * FIXME(security, Task 85 Faz 6): server-side file COPY should require
+     * superuser (ADMIN role). The textual ".." guard does not defeat
+     * symlinks — today any user holding INSERT/SELECT on a table can
+     * read or write arbitrary server-accessible files via COPY FROM/TO
+     * '/path'. Either gate file mode behind a superuser check here or
+     * resolve `g_copy.path` with realpath() and verify it sits under a
+     * configured allow-prefix before proceeding.
+     */
 
     int rc;
     if (g_copy.direction == EVO_COPY_DIR_FROM) {

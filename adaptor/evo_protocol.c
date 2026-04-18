@@ -18,10 +18,7 @@
 #include "scram.h"           /* SCRAM-SHA-256 authentication */
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
-#include "../evolution/db/csv.h"
-#include "../evolution/db/table_api.h"
-#include "../evolution/db/catalog_internal.h"
-#include "../evolution/db/tuple_format.h"
+#include "../evolution/db/Copy.h"
 
 /* From server.c — parser rwlock for SERIALIZABLE cleanup */
 extern rwlock_t g_parse_lock;
@@ -95,204 +92,84 @@ static int evo_send_result(conn_t *conn, const ResultSet *rs)
  *    - Server sends: "OK\nTAG COPY <n>\n"
  * ---------------------------------------------------------------- */
 
-static void evo_dialect_from_rs(const ResultSet *rs, CsvDialect *d)
+/* Reader context: line-based EVO wire with "\\." end-of-data sentinel. */
+typedef struct { conn_t *conn; } EvoCopyInCtx;
+
+static int evo_line_reader(char *buf, int max_len,
+                           char *sqlstate, size_t sqlstate_size,
+                           char *err_out, size_t err_size, void *ctx)
 {
-    memset(d, 0, sizeof(*d));
-    d->format    = rs->copy_format;
-    d->delimiter = rs->copy_delimiter ? rs->copy_delimiter :
-                   (rs->copy_format == 1 ? ',' : '\t');
-    d->quote     = rs->copy_quote ? rs->copy_quote : '"';
-    strncpy(d->null_str, rs->copy_null_str, sizeof(d->null_str) - 1);
+    EvoCopyInCtx *ec = (EvoCopyInCtx *)ctx;
+    for (;;) {
+        if (conn_recv_line(ec->conn, buf, max_len) < 0) {
+            snprintf(err_out, err_size, "COPY IN transport read error");
+            strncpy(sqlstate, "08006", sqlstate_size - 1);
+            return -1;
+        }
+        size_t n = strlen(buf);
+        while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+            buf[--n] = '\0';
+        if (strcmp(buf, "\\.") == 0) return 0;   /* end-of-data */
+        if (n > 0) return (int)n;
+        /* empty line — keep reading */
+    }
 }
 
-static int evo_copy_insert_one_line(const ResultSet *rs, const char *line,
-                                    const CsvDialect *dia,
-                                    char *err_out, size_t err_size)
+static int evo_line_writer(const char *line, int len, void *ctx)
 {
-    char fields[CSV_MAX_FIELDS][CSV_MAX_FIELD_LEN];
-    int  is_null[CSV_MAX_FIELDS];
-    int  nf = 0;
-    if (csv_parse_line(line, dia, fields, is_null, CSV_MAX_FIELDS, &nf) < 0) {
-        snprintf(err_out, err_size, "COPY parse error");
-        return -1;
-    }
+    conn_t *conn = (conn_t *)ctx;
+    return evo_sendf(conn, "D:%.*s\n", len, line) < 0 ? -1 : 0;
+}
 
-    extern int TruncateInsert(void);
-    extern int GetInsertions(char *name);
-    extern int InsertRowSeparator(void);
-    extern int InsertProcess(void);
+static void evo_rs_to_spec(const ResultSet *rs, CopyStreamSpec *spec)
+{
+    memset(spec, 0, sizeof(*spec));
+    strncpy(spec->tblName, rs->copy_table, sizeof(spec->tblName) - 1);
+    spec->format    = rs->copy_format;
+    spec->delimiter = rs->copy_delimiter;
+    spec->quote     = rs->copy_quote;
+    strncpy(spec->nullStr, rs->copy_null_str, sizeof(spec->nullStr) - 1);
+    spec->header    = rs->copy_header;
+    spec->columnCount = rs->copy_column_count;
+    for (int c = 0; c < rs->copy_column_count && c < 64; c++) {
+        strncpy(spec->columns[c], rs->copy_columns[c],
+                sizeof(spec->columns[c]) - 1);
+    }
+}
 
-    TruncateInsert();
-    strncpy(g_ins.tblName, rs->copy_table, sizeof(g_ins.tblName) - 1);
-    g_ins.columnCount = rs->copy_column_count;
-    for (int c = 0; c < rs->copy_column_count; c++) {
-        strncpy(g_ins.columns[c], rs->copy_columns[c],
-                sizeof(g_ins.columns[c]) - 1);
-    }
-    g_ins.rowCount = 0;
-    for (int c = 0; c < nf; c++) {
-        if (is_null[c]) GetInsertions("\x01NULL\x01");
-        else            GetInsertions(fields[c]);
-    }
-    InsertRowSeparator();
-
-    int rc = InsertProcess();
-    if (rc != 0 || g_err.error) {
-        snprintf(err_out, err_size, "%s",
-                 g_err.errorMsg[0] ? g_err.errorMsg : "COPY row insert failed");
-        return -1;
-    }
-    return 0;
+static void evo_session_to_stream(const SessionCtx *session, CopyStreamSession *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->in_transaction = session->in_transaction;
+    out->tx_xid         = session->tx_xid;
+    strncpy(out->database, session->database, sizeof(out->database) - 1);
+    strncpy(out->schema,   session->schema,   sizeof(out->schema)   - 1);
 }
 
 static int evo_copy_in_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
                               char *err_out, size_t err_size)
 {
-    CsvDialect dia;
-    evo_dialect_from_rs(rs, &dia);
-
-    QueryContext *qctx = qctx_alloc();
-    if (!qctx) { snprintf(err_out, err_size, "out of memory"); return -1; }
-    QueryContext *prev = g_qctx;
-    g_qctx = qctx;
-    if (session->database[0])
-        strncpy(g_qctx->currentDatabase, session->database,
-                sizeof(g_qctx->currentDatabase) - 1);
-    if (session->schema[0])
-        strncpy(g_qctx->currentSchema, session->schema,
-                sizeof(g_qctx->currentSchema) - 1);
-    if (session->tx_xid > 0) qctx->mvcc_xid = session->tx_xid;
-
-    int header_skipped = 0;
-    int inserted = 0;
-    int failed = 0;
-    char line[65536];
-
-    for (;;) {
-        if (conn_recv_line(conn, line, sizeof(line)) < 0) {
-            snprintf(err_out, err_size, "COPY IN read error");
-            failed = 1;
-            break;
-        }
-        /* Strip trailing CR/LF */
-        size_t n = strlen(line);
-        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
-            line[--n] = '\0';
-        /* End-of-data sentinel */
-        if (strcmp(line, "\\.") == 0) break;
-
-        if (rs->copy_header && !header_skipped) {
-            header_skipped = 1;
-            continue;
-        }
-        if (n == 0) continue;
-
-        if (evo_copy_insert_one_line(rs, line, &dia,
-                                     err_out, err_size) < 0) {
-            failed = 1;
-            break;
-        }
-        inserted++;
-    }
-
-    if (!session->in_transaction && qctx->mvcc_xid > 0) {
-        extern void bp_wal_flush_dirty(int fd);
-        extern int  pgm_get_fd(void);
-        extern uint32_t pgm_next_csn(void);
-        extern void clog_set_committed_csn(uint32_t, uint32_t);
-        extern void clog_set_aborted(uint32_t);
-        extern void lock_release_all(uint32_t);
-        extern void lock_gap_release_all(uint32_t);
-        extern void mvcc_unregister_tx(uint32_t);
-
-        if (failed) {
-            clog_set_aborted(qctx->mvcc_xid);
-        } else {
-            bp_wal_flush_dirty(pgm_get_fd());
-            clog_set_committed_csn(qctx->mvcc_xid, pgm_next_csn());
-        }
-        lock_release_all(qctx->mvcc_xid);
-        lock_gap_release_all(qctx->mvcc_xid);
-        mvcc_unregister_tx(qctx->mvcc_xid);
-    }
-
-    g_qctx = prev;
-    qctx_free(qctx);
-    return failed ? -1 : inserted;
+    CopyStreamSpec spec;     evo_rs_to_spec(rs, &spec);
+    CopyStreamSession sess;  evo_session_to_stream(session, &sess);
+    EvoCopyInCtx ec = { .conn = conn };
+    char sqlstate[6] = "00000";
+    return copy_stream_in_process(&spec, &sess,
+                                  evo_line_reader, &ec,
+                                  err_out, err_size,
+                                  sqlstate, sizeof(sqlstate));
 }
 
 static int evo_copy_out_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
                                char *err_out, size_t err_size)
 {
-    CsvDialect dia;
-    evo_dialect_from_rs(rs, &dia);
-
-    QueryContext *qctx = qctx_alloc();
-    if (!qctx) { snprintf(err_out, err_size, "out of memory"); return -1; }
-    QueryContext *prev = g_qctx;
-    g_qctx = qctx;
-    if (session->database[0])
-        strncpy(g_qctx->currentDatabase, session->database,
-                sizeof(g_qctx->currentDatabase) - 1);
-    if (session->schema[0])
-        strncpy(g_qctx->currentSchema, session->schema,
-                sizeof(g_qctx->currentSchema) - 1);
-
-    TableDesc td;
-    ColumnDesc cols[CAT_MAX_COLUMNS];
-    int ncols = 0;
-    int exported = 0;
-    int rc = 0;
-
-    if (tapi_resolve(rs->copy_table, &td, cols, &ncols) < 0) {
-        snprintf(err_out, err_size, "could not open table \"%s\"", rs->copy_table);
-        rc = -1;
-        goto cleanup;
-    }
-
-    if (rs->copy_header) {
-        const char *cnames[CAT_MAX_COLUMNS];
-        int is_null_hdr[CAT_MAX_COLUMNS];
-        for (int i = 0; i < ncols; i++) { cnames[i] = cols[i].col_name; is_null_hdr[i] = 0; }
-        char outline[8192];
-        size_t nw = 0;
-        if (csv_format_line(cnames, is_null_hdr, ncols, &dia,
-                            outline, sizeof(outline), &nw) == 0) {
-            evo_sendf(conn, "D:%.*s\n", (int)nw, outline);
-        }
-    }
-
-    TableScanCursor cur;
-    if (tapi_scan_begin(&td, &cur) == 0) {
-        char pk_key[256];
-        char record[RECORD_BUF_SIZE];
-        while (tapi_scan_next(&cur, pk_key, record, sizeof(record)) == 0) {
-            char fields[CAT_MAX_COLUMNS][256];
-            int  is_null[CAT_MAX_COLUMNS];
-            int  rec_len = tup_record_len(record, sizeof(record));
-            if (rec_len < 0) rec_len = (int)strlen(record);
-            int nout = tup_extract_fields(record, rec_len, cols, ncols,
-                                          fields, is_null, CAT_MAX_COLUMNS);
-            if (nout < 0) { tapi_scan_end(&cur); rc = -1; goto cleanup; }
-            const char *ptrs[CAT_MAX_COLUMNS];
-            for (int i = 0; i < nout; i++) ptrs[i] = fields[i];
-            char outline[8192];
-            size_t nw = 0;
-            if (csv_format_line(ptrs, is_null, nout, &dia,
-                                outline, sizeof(outline), &nw) < 0) {
-                tapi_scan_end(&cur); rc = -1; goto cleanup;
-            }
-            evo_sendf(conn, "D:%.*s\n", (int)nw, outline);
-            exported++;
-        }
-        tapi_scan_end(&cur);
-    }
+    CopyStreamSpec spec;     evo_rs_to_spec(rs, &spec);
+    CopyStreamSession sess;  evo_session_to_stream(session, &sess);
+    int rc = copy_stream_out_process(&spec, &sess,
+                                     evo_line_writer, conn,
+                                     err_out, err_size);
+    /* Terminator marker even on error so the client knows the stream ended. */
     evo_sendf(conn, "\\.\n");
-
-cleanup:
-    g_qctx = prev;
-    qctx_free(qctx);
-    return (rc == 0) ? exported : -1;
+    return rc;
 }
 
 /* ----------------------------------------------------------------
