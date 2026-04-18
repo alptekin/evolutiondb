@@ -132,11 +132,14 @@
 %token COLLATE
 %token COLUMN
 %token CONCURRENTLY
+%token COPY
+%token CSV
 
 %token DATABASE
 %token DECLARE
 %token DEFERRABLE
 %token DEFERRED
+%token DELIMITER
 %token DISABLE
 %token DO
 %token DOMAIN
@@ -174,6 +177,7 @@
 %token FLOAT
 %token FORCE
 %token FOREIGN
+%token FORMAT
 %token FROM
 %token FULL
 %token FULLTEXT
@@ -183,6 +187,7 @@
 %token GROUP
 
 %token HANDLER
+%token HEADER
 %token HOUR_MINUTE
 %token HOUR_MICROSECOND
 %token HIGH_PRIORITY
@@ -274,10 +279,13 @@
 %token SQL_CALC_FOUND_ROWS
 %token SQL_BIG_RESULT
 %token SIMPLE
+%token STDIN
+%token STDOUT
 %token STRAIGHT_JOIN
 %token SMALLINT
 %token SET
 %token SELECT
+%token QUOTE
 
 %token TINYTEXT
 %token <intval> TINYINT
@@ -1716,6 +1724,56 @@ replace_stmt: REPLACE insert_opts opt_into NAME opt_col_names
 select_stmt
 opt_ondupupdate									{ emit("REPLACESELECT %d %s", $2, $4); free($4); }
 ;
+
+/** COPY — Task 85, Feature #61 **/
+stmt: copy_stmt                                                                 { emit("STMT"); CopyProcess(); }
+;
+
+copy_stmt:
+    COPY NAME                                   { CopyBegin($2); free($2); }
+    opt_copy_cols copy_direction copy_target opt_copy_options
+        { emit("COPY"); }
+  ;
+
+opt_copy_cols: /* empty */
+  | '(' copy_col_list ')'
+  ;
+copy_col_list: NAME                             { CopyAddColumn($1); free($1); }
+  | copy_col_list ',' NAME                      { CopyAddColumn($3); free($3); }
+  ;
+
+copy_direction:
+    FROM                                        { CopySetDirection(EVO_COPY_DIR_FROM); }
+  | TO                                          { CopySetDirection(EVO_COPY_DIR_TO); }
+  ;
+
+copy_target:
+    STRING                                      { CopySetSourcePath($1); free($1); }
+  | STDIN                                       { CopySetSourceStream(EVO_COPY_SRC_STDIN); }
+  | STDOUT                                      { CopySetSourceStream(EVO_COPY_SRC_STDOUT); }
+  ;
+
+opt_copy_options: /* empty */
+  | copy_option_list
+  | WITH '(' copy_option_list ')'
+  | '(' copy_option_list ')'
+  ;
+
+copy_option_list:
+    copy_option
+  | copy_option_list ',' copy_option
+  ;
+
+copy_option:
+    FORMAT CSV                                  { CopySetFormat(EVO_COPY_FMT_CSV); }
+  | FORMAT TEXT                                 { CopySetFormat(EVO_COPY_FMT_TEXT); }
+  | DELIMITER STRING                            { CopySetDelimiter($2); free($2); }
+  | HEADER                                      { CopySetHeader(1); }
+  | HEADER BOOL                                 { CopySetHeader($2); }
+  | NULLX STRING                                { CopySetNullStr($2); free($2); }
+  | QUOTE STRING                                { CopySetQuote($2); free($2); }
+  | CSV                                         { CopySetFormat(EVO_COPY_FMT_CSV); }
+  ;
 
 /** update **/
 stmt: update_stmt

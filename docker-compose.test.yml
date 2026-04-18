@@ -1,0 +1,10 @@
+# Test-only override: binds the host /tmp into the container as /host-tmp so
+# Python tests in tests/test_copy*.py can hand fixture file paths to the
+# server-side COPY FROM/TO handlers.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+services:
+  evosql:
+    volumes:
+      - /tmp:/host-tmp
