@@ -19,6 +19,10 @@
 #include "tls.h"
 #include "../evolution/db/database.h"
 #include "../evolution/db/query_context.h"
+#include "../evolution/db/csv.h"
+#include "../evolution/db/table_api.h"
+#include "../evolution/db/catalog_internal.h"
+#include "../evolution/db/tuple_format.h"
 #include "util.h"
 
 /* From server.c — parser rwlock for SERIALIZABLE cleanup */
@@ -32,6 +36,303 @@ static char get_tx_status(SessionCtx *sess) {
     if (!sess->in_transaction) return 'I';
     if (sess->tx_aborted)      return 'E';
     return 'T';
+}
+
+/* ----------------------------------------------------------------
+ *  COPY subprotocol stream handlers (Task 85 Faz 4)
+ * ---------------------------------------------------------------- */
+
+static void rs_dialect_from_rs(const ResultSet *rs, CsvDialect *d)
+{
+    memset(d, 0, sizeof(*d));
+    d->format    = rs->copy_format;
+    d->delimiter = rs->copy_delimiter ? rs->copy_delimiter :
+                   (rs->copy_format == 1 ? ',' : '\t');
+    d->quote     = rs->copy_quote ? rs->copy_quote : '"';
+    strncpy(d->null_str, rs->copy_null_str, sizeof(d->null_str) - 1);
+}
+
+/* Insert a single CSV-parsed row into rs->copy_table. Returns 0 on success. */
+static int copy_insert_one_line(const ResultSet *rs, const char *line,
+                                const CsvDialect *dia, char *err_out, size_t err_size)
+{
+    char fields[CSV_MAX_FIELDS][CSV_MAX_FIELD_LEN];
+    int  is_null[CSV_MAX_FIELDS];
+    int  nf = 0;
+    if (csv_parse_line(line, dia, fields, is_null, CSV_MAX_FIELDS, &nf) < 0) {
+        snprintf(err_out, err_size, "COPY parse error");
+        return -1;
+    }
+
+    /* Build g_ins for a single row via existing helpers. g_qctx has been
+     * allocated fresh by safe_query_execute_for_stream below. */
+    extern int TruncateInsert(void);
+    extern int GetInsertions(char *name);
+    extern int InsertRowSeparator(void);
+    extern int InsertProcess(void);
+
+    TruncateInsert();
+    strncpy(g_ins.tblName, rs->copy_table, sizeof(g_ins.tblName) - 1);
+    g_ins.columnCount = rs->copy_column_count;
+    for (int c = 0; c < rs->copy_column_count; c++) {
+        strncpy(g_ins.columns[c], rs->copy_columns[c],
+                sizeof(g_ins.columns[c]) - 1);
+    }
+    g_ins.rowCount = 0;
+
+    for (int c = 0; c < nf; c++) {
+        if (is_null[c]) GetInsertions("\x01NULL\x01");
+        else            GetInsertions(fields[c]);
+    }
+    InsertRowSeparator();
+
+    int rc = InsertProcess();
+    if (rc != 0 || g_err.error) {
+        snprintf(err_out, err_size, "%s",
+                 g_err.errorMsg[0] ? g_err.errorMsg : "COPY row insert failed");
+        return -1;
+    }
+    return 0;
+}
+
+/* Handles COPY FROM STDIN stream after CopyInResponse is sent.
+ * Reads CopyData messages, buffers lines, inserts via InsertProcess.
+ * Returns inserted row count, or -1 on error. */
+static int pg_copy_in_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
+                             char *err_out, size_t err_size,
+                             char *err_sqlstate, size_t err_sqlstate_size)
+{
+    CsvDialect dia;
+    rs_dialect_from_rs(rs, &dia);
+
+    /* We need a QueryContext for InsertProcess. Allocate one, bind. */
+    QueryContext *qctx = qctx_alloc();
+    if (!qctx) {
+        snprintf(err_out, err_size, "out of memory for COPY stream");
+        return -1;
+    }
+    QueryContext *prev = g_qctx;
+    g_qctx = qctx;
+    /* Inherit session/database info from result set context by copying the
+     * session's current DB/schema (set during prior SET DATABASE / SET SCHEMA). */
+    if (session->database[0])
+        strncpy(g_qctx->currentDatabase, session->database,
+                sizeof(g_qctx->currentDatabase) - 1);
+    if (session->schema[0])
+        strncpy(g_qctx->currentSchema, session->schema,
+                sizeof(g_qctx->currentSchema) - 1);
+
+    if (session->tx_xid > 0) qctx->mvcc_xid = session->tx_xid;
+
+    /* Resolve table to learn column count for CopyInResponse */
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    if (tapi_resolve(rs->copy_table, &td, cols, &ncols) < 0) {
+        snprintf(err_out, err_size, "could not open table \"%s\"", rs->copy_table);
+        strncpy(err_sqlstate, "42P01", err_sqlstate_size - 1);
+        g_qctx = prev;
+        qctx_free(qctx);
+        return -1;
+    }
+    pg_send_copy_in_response(conn, 0, ncols);
+
+    char  line_buf[65536];
+    int   line_len = 0;
+    int   header_skipped = 0;
+    int   inserted = 0;
+    int   failed = 0;
+
+    for (;;) {
+        char tag = 0;
+        char msg_buf[65536];
+        int  msg_len = 0;
+        int  t = pg_read_message(conn, &tag, msg_buf, &msg_len);
+        if (t < 0) {
+            snprintf(err_out, err_size, "COPY IN read error");
+            failed = 1;
+            break;
+        }
+
+        if (tag == PG_MSG_COPY_FAIL) {
+            snprintf(err_out, err_size, "COPY from stdin failed: %.*s",
+                     (msg_len > 0 ? msg_len - 1 : 0), msg_buf);
+            strncpy(err_sqlstate, "57014", err_sqlstate_size - 1);
+            failed = 1;
+            break;
+        }
+
+        if (tag == PG_MSG_COPY_DONE) {
+            /* Flush any trailing partial line (no newline terminator) */
+            if (line_len > 0) {
+                line_buf[line_len] = '\0';
+                if (rs->copy_header && !header_skipped) {
+                    header_skipped = 1;
+                } else {
+                    if (copy_insert_one_line(rs, line_buf, &dia,
+                                             err_out, err_size) < 0) {
+                        strncpy(err_sqlstate,
+                                g_err.sqlstate[0] ? g_err.sqlstate : "22000",
+                                err_sqlstate_size - 1);
+                        failed = 1;
+                        break;
+                    }
+                    inserted++;
+                }
+                line_len = 0;
+            }
+            break;
+        }
+
+        if (tag != PG_MSG_COPY_DATA) {
+            snprintf(err_out, err_size,
+                     "unexpected message (0x%02X) during COPY IN", (unsigned char)tag);
+            strncpy(err_sqlstate, "08P01", err_sqlstate_size - 1);
+            failed = 1;
+            break;
+        }
+
+        /* Append msg_buf to line_buf; emit on newline. */
+        for (int i = 0; i < msg_len && !failed; i++) {
+            char c = msg_buf[i];
+            if (c == '\n') {
+                if (line_len > 0 && line_buf[line_len - 1] == '\r')
+                    line_len--;
+                line_buf[line_len] = '\0';
+                if (rs->copy_header && !header_skipped) {
+                    header_skipped = 1;
+                } else if (line_len > 0) {
+                    if (copy_insert_one_line(rs, line_buf, &dia,
+                                             err_out, err_size) < 0) {
+                        strncpy(err_sqlstate,
+                                g_err.sqlstate[0] ? g_err.sqlstate : "22000",
+                                err_sqlstate_size - 1);
+                        failed = 1;
+                        break;
+                    }
+                    inserted++;
+                }
+                line_len = 0;
+            } else if (line_len < (int)sizeof(line_buf) - 1) {
+                line_buf[line_len++] = c;
+            }
+        }
+    }
+
+    /* Auto-commit or abort */
+    if (!session->in_transaction && qctx->mvcc_xid > 0) {
+        extern void bp_wal_flush_dirty(int fd);
+        extern int  pgm_get_fd(void);
+        extern uint32_t pgm_next_csn(void);
+        extern void clog_set_committed_csn(uint32_t, uint32_t);
+        extern void clog_set_aborted(uint32_t);
+        extern void lock_release_all(uint32_t);
+        extern void lock_gap_release_all(uint32_t);
+        extern void mvcc_unregister_tx(uint32_t);
+
+        if (failed) {
+            clog_set_aborted(qctx->mvcc_xid);
+        } else {
+            bp_wal_flush_dirty(pgm_get_fd());
+            clog_set_committed_csn(qctx->mvcc_xid, pgm_next_csn());
+        }
+        lock_release_all(qctx->mvcc_xid);
+        lock_gap_release_all(qctx->mvcc_xid);
+        mvcc_unregister_tx(qctx->mvcc_xid);
+    }
+
+    g_qctx = prev;
+    qctx_free(qctx);
+    return failed ? -1 : inserted;
+}
+
+/* Handles COPY TO STDOUT stream after CopyOutResponse is sent.
+ * Scans rs->copy_table and sends CSV-formatted rows via CopyData.
+ * Returns exported row count, or -1 on error. */
+static int pg_copy_out_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
+                              char *err_out, size_t err_size)
+{
+    CsvDialect dia;
+    rs_dialect_from_rs(rs, &dia);
+
+    QueryContext *qctx = qctx_alloc();
+    if (!qctx) { snprintf(err_out, err_size, "out of memory"); return -1; }
+    QueryContext *prev = g_qctx;
+    g_qctx = qctx;
+    if (session->database[0])
+        strncpy(g_qctx->currentDatabase, session->database,
+                sizeof(g_qctx->currentDatabase) - 1);
+    if (session->schema[0])
+        strncpy(g_qctx->currentSchema, session->schema,
+                sizeof(g_qctx->currentSchema) - 1);
+
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    int exported = 0;
+    int rc = 0;
+
+    if (tapi_resolve(rs->copy_table, &td, cols, &ncols) < 0) {
+        snprintf(err_out, err_size, "could not open table \"%s\"", rs->copy_table);
+        rc = -1;
+        goto cleanup;
+    }
+
+    /* Send CopyOutResponse now that we know the column count */
+    pg_send_copy_out_response(conn, 0, ncols);
+
+    if (rs->copy_header) {
+        const char *cnames[CAT_MAX_COLUMNS];
+        int is_null_hdr[CAT_MAX_COLUMNS];
+        for (int i = 0; i < ncols; i++) { cnames[i] = cols[i].col_name; is_null_hdr[i] = 0; }
+        char outline[8192];
+        size_t nw = 0;
+        if (csv_format_line(cnames, is_null_hdr, ncols, &dia,
+                            outline, sizeof(outline) - 1, &nw) == 0) {
+            outline[nw++] = '\n';
+            pg_send_copy_data(conn, outline, (int)nw);
+        }
+    }
+
+    TableScanCursor cur;
+    if (tapi_scan_begin(&td, &cur) == 0) {
+        char pk_key[256];
+        char record[RECORD_BUF_SIZE];
+        while (tapi_scan_next(&cur, pk_key, record, sizeof(record)) == 0) {
+            char fields[CAT_MAX_COLUMNS][256];
+            int  is_null[CAT_MAX_COLUMNS];
+            int  rec_len = tup_record_len(record, sizeof(record));
+            if (rec_len < 0) rec_len = (int)strlen(record);
+            int nout = tup_extract_fields(record, rec_len, cols, ncols,
+                                          fields, is_null, CAT_MAX_COLUMNS);
+            if (nout < 0) {
+                tapi_scan_end(&cur);
+                snprintf(err_out, err_size, "COPY could not decode row");
+                rc = -1;
+                goto cleanup;
+            }
+            const char *ptrs[CAT_MAX_COLUMNS];
+            for (int i = 0; i < nout; i++) ptrs[i] = fields[i];
+            char outline[8192];
+            size_t nw = 0;
+            if (csv_format_line(ptrs, is_null, nout, &dia,
+                                outline, sizeof(outline) - 1, &nw) < 0) {
+                tapi_scan_end(&cur);
+                snprintf(err_out, err_size, "COPY row serialization overflow");
+                rc = -1;
+                goto cleanup;
+            }
+            outline[nw++] = '\n';
+            pg_send_copy_data(conn, outline, (int)nw);
+            exported++;
+        }
+        tapi_scan_end(&cur);
+    }
+
+cleanup:
+    g_qctx = prev;
+    qctx_free(qctx);
+    return (rc == 0) ? exported : -1;
 }
 
 /* ----------------------------------------------------------------
@@ -239,6 +540,35 @@ void pg_handle_client(socket_t client_sock)
                 } else if (rs->has_error) {
                     pg_send_error(&conn, "ERROR",
                                   rs->error_sqlstate, rs->error_message);
+                } else if (rs->copy_stream_mode == 1) {
+                    /* COPY FROM STDIN — CopyInResponse sent inside stream */
+                    char serr[512] = {0};
+                    char sstate[6] = "00000";
+                    int nrows = pg_copy_in_stream(&conn, rs, &session,
+                                                  serr, sizeof(serr),
+                                                  sstate, sizeof(sstate));
+                    if (nrows < 0) {
+                        pg_send_error(&conn, "ERROR", sstate,
+                                      serr[0] ? serr : "COPY IN failed");
+                    } else {
+                        char tag[64];
+                        snprintf(tag, sizeof(tag), "COPY %d", nrows);
+                        pg_send_command_complete(&conn, tag);
+                    }
+                } else if (rs->copy_stream_mode == 2) {
+                    /* COPY TO STDOUT — CopyOutResponse + CopyData stream */
+                    char serr[512] = {0};
+                    int nrows = pg_copy_out_stream(&conn, rs, &session,
+                                                   serr, sizeof(serr));
+                    if (nrows < 0) {
+                        pg_send_error(&conn, "ERROR", "22000",
+                                      serr[0] ? serr : "COPY OUT failed");
+                    } else {
+                        pg_send_copy_done(&conn);
+                        char tag[64];
+                        snprintf(tag, sizeof(tag), "COPY %d", nrows);
+                        pg_send_command_complete(&conn, tag);
+                    }
                 } else if (rs->command_tag[0] == '\0') {
                     pg_send_empty_query(&conn);
                 } else if (rs->is_select) {

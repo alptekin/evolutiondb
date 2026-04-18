@@ -387,13 +387,13 @@ int CopyProcess(void)
 {
     if (!g_copy.active) return 0;
 
-    /* Stream mode not wired yet — PG wire subprotocol is Faz 4. */
+    /* Stream mode — the PG wire COPY subprotocol is driven by the adaptor
+     * (pg_handler.c) after query_execute returns. Copy.c does nothing here;
+     * query_executor harvests g_copy state into the ResultSet so that the
+     * stream handler can run after the query context is freed. */
     if (g_copy.source == EVO_COPY_SRC_STDIN ||
         g_copy.source == EVO_COPY_SRC_STDOUT) {
-        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                 "COPY ... STDIN/STDOUT not yet supported (use file path)");
-        g_err.error = 1;
-        return -1;
+        return 0;
     }
 
     if (!copy_path_is_safe(g_copy.path)) {
