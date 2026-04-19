@@ -658,7 +658,7 @@ static int validate_unique(const char *tblName,
                 if (g_ins.onConflictAction == EVO_CONFLICT_NOTHING ||
                     g_ins.onConflictAction == EVO_CONFLICT_UPDATE ||
                     g_ins.onDupKeyUpdate) {
-                    g_ins.pending_unique_conflict = 1;
+                    g_ins.pendingUniqueConflict = 1;
                     return 0;
                 }
                 snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
@@ -1475,10 +1475,10 @@ int InsertProcess(void)
         }
 
         /* If UNIQUE index conflict + ON DUPLICATE KEY UPDATE, treat as duplicate (rc=1) */
-        int rc = (upsert_unique_conflict || g_ins.pending_unique_conflict) ? 1 :
+        int rc = (upsert_unique_conflict || g_ins.pendingUniqueConflict) ? 1 :
                  DML_PROF_EXPR("store_single_row_total",
                                store_single_row(&td, cols, ncols, tblName, reorderedRows[i]));
-        g_ins.pending_unique_conflict = 0;   /* consumed */
+        g_ins.pendingUniqueConflict = 0;   /* consumed */
         if (rc == 1 && g_ins.onDupKeyUpdate && g_ins.onDupSetCount > 0) {
             /* ON DUPLICATE KEY UPDATE: evaluate SET exprs and call evo_update_row */
 
@@ -1520,7 +1520,12 @@ int InsertProcess(void)
                     }
                 }
                 g_ins.excludedCount = ec;
-                if (g_ins.columnCount == 0) {
+                /* Overwrite g_ins.columns with the table's column order so
+                 * EXCLUDED.<col> resolves correctly even when the user
+                 * supplied an out-of-order column list
+                 * (`INSERT INTO t(b,a) VALUES ...`) — rFields is in table
+                 * order, so the name lookup must be too. */
+                {
                     int cc = ncols < 64 ? ncols : 64;
                     for (int ci = 0; ci < cc; ci++) {
                         strncpy(g_ins.columns[ci], cols[ci].col_name,

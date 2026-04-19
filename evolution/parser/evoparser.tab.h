@@ -732,7 +732,7 @@
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 54 "evolution/parser/evoparser.y"
+#line 54 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -741,7 +741,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 745 "evolution/parser/evoparser.tab.h"
+#line 745 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

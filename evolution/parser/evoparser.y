@@ -1639,6 +1639,7 @@ opt_on_conflict: /* nil */
 
 opt_conflict_target: /* nil */                  { emit("CONFTARGET *"); }
 | '(' NAME ')'                                  { emit("CONFTARGET %s", $2); SetOnConflictCol($2); free($2); }
+| '(' NAME ',' NAME                             { yyerror(scanner, "composite ON CONFLICT target (a, b, ...) is not yet supported"); free($2); free($4); YYERROR; }
 ;
 
 conflict_action:
