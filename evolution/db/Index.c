@@ -840,24 +840,29 @@ int CreateIndexProcess(void)
             return -1;
         }
 
-        TableScanCursor scanCur;
-        char pkBuf[256];
-        char recBuf[RECORD_BUF_SIZE];
-        if (tapi_scan_begin(&td, &scanCur) == 0) {
-            while (tapi_scan_next(&scanCur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
-                int recLen = tup_record_len(recBuf, sizeof(recBuf));
+        /* CREATE INDEX runs under the DML mutex, so the table is quiesced:
+         * no MVCC filtering is needed here. Use bt2_cursor directly so
+         * each row's heap RowID comes back with the PK key — avoids a
+         * second bt2_search(&pk_tree, ...) per row. */
+        BTree2 pk_tree = tapi_pk_tree(&td);
+        BTree2Cursor cur;
+        if (bt2_cursor_first(&pk_tree, &cur) == 0) {
+            char pkBuf[BT2_MAX_KEY_LEN + 1];
+            RowID heap_rid;
+            char recBuf[RECORD_BUF_SIZE];
+            while (bt2_cursor_next(&cur, pkBuf, &heap_rid) == 0) {
+                int rec_len = tapi_heap_read(heap_rid, recBuf, sizeof(recBuf));
+                if (rec_len < 0) continue;
+
                 char colValues[CAT_MAX_COLUMNS][256];
                 int  nullArr[CAT_MAX_COLUMNS];
-                int  nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
+                int  nv = tup_extract_fields(recBuf, rec_len,
+                                             indexCols, indexNCols,
                                              colValues, nullArr, 64);
                 if (colIdx >= nv || nullArr[colIdx]) continue;
 
                 char tokens[FT_MAX_TOKENS][FT_MAX_TOKEN_LEN];
                 int n_tok = ft_tokenize(colValues[colIdx], tokens, FT_MAX_TOKENS);
-
-                BTree2 pk_tree = tapi_pk_tree(&td);
-                RowID heap_rid;
-                if (bt2_search(&pk_tree, pkBuf, &heap_rid) != 0) continue;
 
                 for (int t = 0; t < n_tok; t++) {
                     char key[BT2_MAX_KEY_LEN + 1];
@@ -872,7 +877,15 @@ int CreateIndexProcess(void)
         cat_create_index_ex(td.table_id, g_idx.name, idx_root,
                             g_idx.columnName, idx_type,
                             NULL);
-        printf("Index '%s' created on %s(%s) [FULLTEXT].\n",
+        /* FIXME(Task 86 v2): incremental INSERT/UPDATE/DELETE maintenance
+         * for 'F'-type indexes is not implemented. The MATCH evaluator
+         * currently scans the heap + tokenizes per row rather than using
+         * the index, so results remain correct as long as no caller
+         * starts issuing index-backed lookups. Rebuild the index with
+         * CREATE FULLTEXT INDEX after bulk DML. */
+        printf("Index '%s' created on %s(%s) [FULLTEXT — NOTE: index is "
+               "not auto-maintained on INSERT/UPDATE/DELETE; rebuild "
+               "after bulk DML].\n",
                g_idx.name, g_idx.tableName, g_idx.columnName);
         idx_reset_flags();
         return 0;

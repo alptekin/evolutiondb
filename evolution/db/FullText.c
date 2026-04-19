@@ -41,9 +41,16 @@ int ft_tokenize(const char *text,
 
     while (*p && n < max) {
         unsigned char c = (unsigned char)*p;
-        if (isalnum(c)) {
+        /* ASCII alphanumeric OR any byte >= 0x80 (UTF-8 continuation /
+         * non-ASCII lead byte) — keeps Turkish / multi-byte letters
+         * attached to their words. Lowercasing is ASCII-only in v1:
+         * toupper/tolower on UTF-8 bytes is undefined, so non-ASCII
+         * bytes pass through unchanged. As a result, queries against
+         * Turkish text should match case-sensitively for v1; a proper
+         * ICU-backed case fold is future work. */
+        if (isalnum(c) || c >= 0x80) {
             if (bp < FT_MAX_TOKEN_LEN - 1) {
-                buf[bp++] = (char)tolower(c);
+                buf[bp++] = (c < 0x80) ? (char)tolower(c) : (char)c;
             }
             /* Else: truncate silently — matches how most FT engines behave on
              * overlong tokens. */

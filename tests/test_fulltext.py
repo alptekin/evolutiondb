@@ -158,3 +158,59 @@ def test_match_short_tokens_filtered(db):
     # 'hello' reaches 5 chars — match
     rows = db.query("SELECT id FROM ft_t10 WHERE MATCH (body) AGAINST ('hello')")
     assert [int(r[0]) for r in rows] == [1]
+
+
+def test_fulltext_index_on_empty_table(db):
+    """Building an FT index on an empty table must not fail, and a
+    subsequent MATCH against that table must return no rows."""
+    _reset(db, "ft_t11")
+    db.query("CREATE TABLE ft_t11 (id INT PRIMARY KEY, body VARCHAR(500))")
+    cols, rows, err, tag = simple_query(
+        db._sock, "CREATE FULLTEXT INDEX ft_body ON ft_t11 (body)"
+    )
+    assert err is None, err
+
+    rows = db.query("SELECT id FROM ft_t11 WHERE MATCH (body) AGAINST ('anything')")
+    assert rows == []
+
+
+def test_drop_table_cleans_up_fulltext_index(db):
+    """DROP TABLE must destroy the FT index's B+ tree pages without
+    leaving dangling catalog entries."""
+    _reset(db, "ft_t12")
+    db.query("CREATE TABLE ft_t12 (id INT PRIMARY KEY, body VARCHAR(500))")
+    db.query("INSERT INTO ft_t12 VALUES (1, 'hello world')")
+    db.query("CREATE FULLTEXT INDEX ft_body12 ON ft_t12 (body)")
+
+    # DROP must succeed cleanly
+    cols, rows, err, tag = simple_query(db._sock, "DROP TABLE ft_t12")
+    assert err is None, err
+
+    # Re-create fresh — any leaked catalog entry would collide here
+    db.query("CREATE TABLE ft_t12 (id INT PRIMARY KEY, body VARCHAR(500))")
+    db.query("INSERT INTO ft_t12 VALUES (1, 'again')")
+    cols, rows, err, tag = simple_query(
+        db._sock, "CREATE FULLTEXT INDEX ft_body12 ON ft_t12 (body)"
+    )
+    assert err is None, f"FT index name should be reusable after DROP: {err}"
+
+
+def test_match_utf8_turkish(db):
+    """v1 tokenizer preserves bytes >= 0x80 (UTF-8 continuation and lead)
+    so Turkish words stay attached instead of being chopped at accents.
+    Case folding is ASCII-only in v1, so queries are byte-exact on
+    non-ASCII letters."""
+    _reset(db, "ft_t13")
+    db.query("CREATE TABLE ft_t13 (id INT PRIMARY KEY, body VARCHAR(500))")
+    db.query(
+        "INSERT INTO ft_t13 VALUES "
+        "(1, 'şehir büyük ve güzel'), "
+        "(2, 'deniz mavidir')"
+    )
+    db.query("CREATE FULLTEXT INDEX ft_body ON ft_t13 (body)")
+
+    rows = db.query("SELECT id FROM ft_t13 WHERE MATCH (body) AGAINST ('şehir')")
+    assert [int(r[0]) for r in rows] == [1]
+
+    rows = db.query("SELECT id FROM ft_t13 WHERE MATCH (body) AGAINST ('deniz')")
+    assert [int(r[0]) for r in rows] == [2]
