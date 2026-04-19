@@ -90,12 +90,16 @@ typedef struct {
     int       onDupSetCount;            /* number of SET assignments */
     char      onDupSetCols[32][128];    /* column names */
     ExprNode *onDupSetExprs[32];        /* value expressions (evaluated at conflict) */
-    /* PostgreSQL ON CONFLICT (Task 84 Feature #57) */
+    /* PostgreSQL ON CONFLICT (Task 84 Feature #57).
+     * These fields live inside the thread-local QueryContext (g_qctx is
+     * __thread), so they are inherently per-session / per-statement —
+     * no additional locking needed even under concurrent DML. */
     int       onConflictAction;         /* EVO_CONFLICT_NONE/_NOTHING/_UPDATE */
     char      onConflictCol[128];       /* target column, "" = any unique */
-    int       pending_unique_conflict;  /* set by validate_unique when ON CONFLICT active */
+    int       pendingUniqueConflict;    /* set by validate_unique when ON CONFLICT active */
     /* EXCLUDED pseudo-row — repopulated per-row inside InsertProcess so
-     * DO UPDATE SET expressions can reference the would-be-inserted values. */
+     * DO UPDATE SET expressions can reference the would-be-inserted values.
+     * Indexed by table column order (matches `columns[]` below). */
     char      excludedValues[64][256];
     int       excludedNull[64];
     int       excludedCount;

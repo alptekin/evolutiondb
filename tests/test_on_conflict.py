@@ -181,3 +181,87 @@ def test_rollback_on_explicit_transaction(db):
 
     result = db.query("SELECT n FROM oc_t10 WHERE id = 1")
     assert int(result[0][0]) == 10, "ROLLBACK must restore original value"
+
+
+def test_out_of_order_column_list_with_excluded(db):
+    """User-supplied column list is not in table order; EXCLUDED.<col>
+    must still resolve by column name, not by positional alignment with
+    the user list."""
+    _reset(db, "oc_t11")
+    db.query("CREATE TABLE oc_t11 (a INT PRIMARY KEY, b VARCHAR(50), c VARCHAR(50))")
+    db.query("INSERT INTO oc_t11 VALUES (1, 'old_b', 'old_c')")
+
+    cols, rows, err, tag = simple_query(
+        db._sock,
+        "INSERT INTO oc_t11 (c, a, b) VALUES ('new_c', 1, 'new_b') "
+        "ON CONFLICT (a) DO UPDATE SET b = EXCLUDED.b, c = EXCLUDED.c"
+    )
+    assert err is None, err
+
+    result = db.query("SELECT b, c FROM oc_t11 WHERE a = 1")
+    assert result[0][0] == "new_b", f"EXCLUDED.b should equal 'new_b', got {result[0][0]!r}"
+    assert result[0][1] == "new_c", f"EXCLUDED.c should equal 'new_c', got {result[0][1]!r}"
+
+
+def test_returning_with_upsert(db):
+    _reset(db, "oc_t12")
+    db.query("CREATE TABLE oc_t12 (id INT PRIMARY KEY, v VARCHAR(50))")
+    db.query("INSERT INTO oc_t12 VALUES (1, 'existing')")
+
+    # Conflict → DO UPDATE; RETURNING must emit the updated row
+    cols, rows, err, tag = simple_query(
+        db._sock,
+        "INSERT INTO oc_t12 VALUES (1, 'new') "
+        "ON CONFLICT (id) DO UPDATE SET v = EXCLUDED.v RETURNING id, v"
+    )
+    assert err is None, err
+    assert rows and rows[0][1] == "new", f"RETURNING after DO UPDATE: {rows}"
+
+
+def test_all_rows_conflict_multi_row(db):
+    """Every row in a multi-row INSERT conflicts; DO NOTHING absorbs
+    them all without error."""
+    _reset(db, "oc_t13")
+    db.query("CREATE TABLE oc_t13 (id INT PRIMARY KEY, v VARCHAR(50))")
+    db.query("INSERT INTO oc_t13 VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+
+    cols, rows, err, tag = simple_query(
+        db._sock,
+        "INSERT INTO oc_t13 VALUES (1, 'x'), (2, 'y'), (3, 'z') "
+        "ON CONFLICT (id) DO NOTHING"
+    )
+    assert err is None, err
+
+    result = db.query("SELECT v FROM oc_t13 ORDER BY id")
+    assert [r[0] for r in result] == ["a", "b", "c"], "no rows should be modified"
+
+
+def test_self_referencing_do_update(db):
+    """SET counter = counter + 1 (no EXCLUDED) — uses the existing row's
+    value, not the would-be-inserted one."""
+    _reset(db, "oc_t14")
+    db.query("CREATE TABLE oc_t14 (id INT PRIMARY KEY, counter INT)")
+    db.query("INSERT INTO oc_t14 VALUES (1, 100)")
+
+    cols, rows, err, tag = simple_query(
+        db._sock,
+        "INSERT INTO oc_t14 VALUES (1, 42) "
+        "ON CONFLICT (id) DO UPDATE SET counter = counter + 1"
+    )
+    assert err is None, err
+
+    result = db.query("SELECT counter FROM oc_t14 WHERE id = 1")
+    assert int(result[0][0]) == 101
+
+
+def test_composite_conflict_target_rejected(db):
+    """Parser should reject `ON CONFLICT (a, b)` rather than silently
+    accepting it — composite targets are not yet supported, and letting
+    them fall through would produce wrong behavior."""
+    _reset(db, "oc_t15")
+    db.query("CREATE TABLE oc_t15 (a INT, b INT, v VARCHAR(50), PRIMARY KEY (a, b))")
+    cols, rows, err, tag = simple_query(
+        db._sock,
+        "INSERT INTO oc_t15 VALUES (1, 2, 'x') ON CONFLICT (a, b) DO NOTHING"
+    )
+    assert err is not None, "composite target should be rejected until supported"
