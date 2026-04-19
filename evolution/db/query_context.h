@@ -178,6 +178,7 @@ typedef struct {
     int  ifNotExists;
     char exprDef[1024];
     int  usingHash;
+    int  fulltext;            /* 1 = CREATE FULLTEXT INDEX (Task 86) */
     int  concurrent;          /* CREATE INDEX CONCURRENTLY */
     uint32_t concTableId;     /* saved by Phase1 for Phase2 */
     uint32_t concRootPage;    /* saved by Phase1 for Phase2 */

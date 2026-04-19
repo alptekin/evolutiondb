@@ -15,6 +15,7 @@
 typedef enum {
     EXPR_COLUMN,          /* column reference: col_name */
     EXPR_EXCLUDED_COL,    /* EXCLUDED.col — pseudo-row in ON CONFLICT DO UPDATE */
+    EXPR_MATCH,           /* MATCH(col) AGAINST('text') — full-text search */
     EXPR_LITERAL_INT,     /* integer literal: intval */
     EXPR_LITERAL_FLOAT,   /* floating-point literal: floatval */
     EXPR_LITERAL_STR,     /* string literal: strval */
@@ -208,6 +209,7 @@ ExprNode *expr_alloc(void);
 /* Node constructors */
 ExprNode *expr_make_column(const char *name);
 ExprNode *expr_make_excluded(const char *name);
+ExprNode *expr_make_match(const char *col_name, const char *query_text);
 ExprNode *expr_make_int(int val);
 ExprNode *expr_make_float(double val);
 ExprNode *expr_make_string(const char *val);

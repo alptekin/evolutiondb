@@ -137,6 +137,7 @@
 %token CONFLICT
 %token EXCLUDED
 %token NOTHING
+%token AGAINST
 
 %token DATABASE
 %token DECLARE
@@ -436,6 +437,20 @@ expr: NAME
     }
 | NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
 | EXCLUDED '.' NAME                             { emit("EXCLUDEDCOL %s", $3); $$ = expr_make_excluded($3); free($3); }
+| MATCH '(' NAME ')' AGAINST '(' STRING ')'
+    {
+        /* Strip surrounding quotes from the lexer STRING token. */
+        char *q = $7;
+        size_t qlen = strlen(q);
+        if (qlen >= 2 && ((q[0] == '\'' && q[qlen-1] == '\'') ||
+                          (q[0] == '"'  && q[qlen-1] == '"'))) {
+            q[qlen - 1] = '\0';
+            q++;
+        }
+        emit("MATCH %s AGAINST %s", $3, q);
+        $$ = expr_make_match($3, q);
+        free($3); free($7);
+    }
 | USERVAR									{ emit("USERVAR %s", $1); ExprNode *uv = expr_make_func0(EXPR_USERVAR, $1); if(uv) strncpy(uv->val.strval, $1, 255); free($1); $$ = uv; }
 | STRING
     {
@@ -1201,6 +1216,14 @@ create_index_stmt: CREATE INDEX NAME ON NAME '(' index_col_list ')'
         SetIndexInfo($3, $5, "");
         free($3);
         free($5);
+    }
+| CREATE FULLTEXT INDEX NAME ON NAME '(' index_col_list ')'
+    {
+        emit("CREATEINDEX FT %s ON %s", $4, $6);
+        SetIndexInfo($4, $6, "");
+        SetIndexFulltext();
+        free($4);
+        free($6);
     }
 | CREATE INDEX IF EXISTS NAME ON NAME '(' index_col_list ')'
     {

@@ -23,6 +23,7 @@
 #endif
 #include "database.h"
 #include "expression.h"
+#include "FullText.h"
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "hash_idx.h"
@@ -47,6 +48,7 @@ static void idx_reset_flags(void)
     g_idx.ifNotExists = 0;
     g_idx.exprDef[0] = '\0';
     g_idx.usingHash = 0;
+    g_idx.fulltext = 0;
 }
 
 /* ── Concurrent index build modification log ── */
@@ -576,6 +578,11 @@ void SetIndexUsingHash(void)
     g_idx.usingHash = 1;
 }
 
+void SetIndexFulltext(void)
+{
+    g_idx.fulltext = 1;
+}
+
 void SetIndexConcurrent(void)
 {
     g_idx.concurrent = 1;
@@ -794,7 +801,9 @@ int CreateIndexProcess(void)
 
     /* Determine index type */
     char idx_type;
-    if (useHash)
+    if (g_idx.fulltext)
+        idx_type = 'F';          /* Task 86: full-text inverted index */
+    else if (useHash)
         idx_type = g_idx.unique ? 'V' : 'H';
     else
         idx_type = g_idx.unique ? 'U' : 'N';
@@ -809,6 +818,63 @@ int CreateIndexProcess(void)
         g_idx.concTableId = td.table_id;
         g_idx.concRootPage = idx_root;
         /* Don't reset flags — Phase2 needs them */
+        return 0;
+    }
+
+    /* Fulltext population path: tokenize text column, insert one (word, pk)
+     * pair per token into the B+ tree. Bypasses the generic key-builder since
+     * FT is a one-column-text-only index. */
+    if (g_idx.fulltext) {
+        int colIdx = -1;
+        for (int ci = 0; ci < indexNCols; ci++) {
+            if (strcasecmp(indexCols[ci].col_name, g_idx.columnName) == 0) {
+                colIdx = ci; break;
+            }
+        }
+        if (colIdx < 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "FULLTEXT: column '%s' not found", g_idx.columnName);
+            g_err.error = 1;
+            bt2_destroy(&idx_tree);
+            idx_reset_flags();
+            return -1;
+        }
+
+        TableScanCursor scanCur;
+        char pkBuf[256];
+        char recBuf[RECORD_BUF_SIZE];
+        if (tapi_scan_begin(&td, &scanCur) == 0) {
+            while (tapi_scan_next(&scanCur, pkBuf, recBuf, sizeof(recBuf)) == 0) {
+                int recLen = tup_record_len(recBuf, sizeof(recBuf));
+                char colValues[CAT_MAX_COLUMNS][256];
+                int  nullArr[CAT_MAX_COLUMNS];
+                int  nv = tup_extract_fields(recBuf, recLen, indexCols, indexNCols,
+                                             colValues, nullArr, 64);
+                if (colIdx >= nv || nullArr[colIdx]) continue;
+
+                char tokens[FT_MAX_TOKENS][FT_MAX_TOKEN_LEN];
+                int n_tok = ft_tokenize(colValues[colIdx], tokens, FT_MAX_TOKENS);
+
+                BTree2 pk_tree = tapi_pk_tree(&td);
+                RowID heap_rid;
+                if (bt2_search(&pk_tree, pkBuf, &heap_rid) != 0) continue;
+
+                for (int t = 0; t < n_tok; t++) {
+                    char key[BT2_MAX_KEY_LEN + 1];
+                    if (ft_build_key(tokens[t], pkBuf, key, sizeof(key)) < 0)
+                        continue;
+                    bt2_insert(&idx_tree, key, heap_rid);
+                }
+            }
+        }
+
+        idx_root = idx_tree.root_page;
+        cat_create_index_ex(td.table_id, g_idx.name, idx_root,
+                            g_idx.columnName, idx_type,
+                            NULL);
+        printf("Index '%s' created on %s(%s) [FULLTEXT].\n",
+               g_idx.name, g_idx.tableName, g_idx.columnName);
+        idx_reset_flags();
         return 0;
     }
 
