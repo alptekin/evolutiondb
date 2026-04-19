@@ -107,6 +107,7 @@ CSV						{ return CSV; }
 CONFLICT				{ return CONFLICT; }
 EXCLUDED				{ return EXCLUDED; }
 NOTHING					{ return NOTHING; }
+AGAINST					{ return AGAINST; }
 
 
 DEFERRABLE				{ return DEFERRABLE; }

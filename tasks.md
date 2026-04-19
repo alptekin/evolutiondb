@@ -1736,7 +1736,7 @@
 
 ## Day 44 — Full-Text Search & Materialized Views
 
-### Task 86: ⬜ Full-Text Search (Feature #52)
+### Task 86: ✅ Full-Text Search (Feature #52)
 
 **Goal:** Basic full-text search: text indexing and MATCH AGAINST / @@ syntax.
 

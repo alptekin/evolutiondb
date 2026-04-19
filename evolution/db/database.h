@@ -324,6 +324,9 @@ void AddUpsertSet(const char *col, struct ExprNode *expr);
 void SetOnConflictCol(const char *col);
 void SetOnConflictAction(int action);
 
+/* FULLTEXT — Task 86 Feature #52 */
+void SetIndexFulltext(void);
+
 /* RETURNING clause helpers */
 void SetReturningAll(void);
 void AddReturningCol(const char *name);
