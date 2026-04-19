@@ -85,11 +85,20 @@ typedef struct {
     int  columnCount;               /* was insertColumnCount */
     int  rowCount;                  /* was insertCount */
     int  insertFromSelect;          /* 1 = INSERT...SELECT mode */
-    /* ON DUPLICATE KEY UPDATE */
-    int       onDupKeyUpdate;           /* 1 = ON DUPLICATE KEY UPDATE present */
+    /* ON DUPLICATE KEY UPDATE (MySQL) / ON CONFLICT DO UPDATE (PG) share storage */
+    int       onDupKeyUpdate;           /* 1 = upsert SET list present */
     int       onDupSetCount;            /* number of SET assignments */
     char      onDupSetCols[32][128];    /* column names */
     ExprNode *onDupSetExprs[32];        /* value expressions (evaluated at conflict) */
+    /* PostgreSQL ON CONFLICT (Task 84 Feature #57) */
+    int       onConflictAction;         /* EVO_CONFLICT_NONE/_NOTHING/_UPDATE */
+    char      onConflictCol[128];       /* target column, "" = any unique */
+    int       pending_unique_conflict;  /* set by validate_unique when ON CONFLICT active */
+    /* EXCLUDED pseudo-row — repopulated per-row inside InsertProcess so
+     * DO UPDATE SET expressions can reference the would-be-inserted values. */
+    char      excludedValues[64][256];
+    int       excludedNull[64];
+    int       excludedCount;
 } InsertOpts;
 
 /* ---- SELECT ---- */

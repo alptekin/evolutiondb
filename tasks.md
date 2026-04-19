@@ -1696,7 +1696,7 @@
 
 ## Day 43 — UPSERT & COPY
 
-### Task 84: ⬜ UPSERT — INSERT ... ON CONFLICT (Feature #57)
+### Task 84: ✅ UPSERT — INSERT ... ON CONFLICT (Feature #57)
 
 **Goal:** Implement PostgreSQL-style upsert: `INSERT ... ON CONFLICT (col) DO UPDATE SET ...` / `DO NOTHING`.
 

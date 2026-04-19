@@ -104,6 +104,9 @@ DESC					{ return DESC; }
 DROP					{ return DROP; }
 COPY					{ return COPY; }
 CSV						{ return CSV; }
+CONFLICT				{ return CONFLICT; }
+EXCLUDED				{ return EXCLUDED; }
+NOTHING					{ return NOTHING; }
 
 
 DEFERRABLE				{ return DEFERRABLE; }
