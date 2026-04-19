@@ -134,6 +134,9 @@
 %token CONCURRENTLY
 %token COPY
 %token CSV
+%token CONFLICT
+%token EXCLUDED
+%token NOTHING
 
 %token DATABASE
 %token DECLARE
@@ -432,6 +435,7 @@ expr: NAME
         free($1);
     }
 | NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
+| EXCLUDED '.' NAME                             { emit("EXCLUDEDCOL %s", $3); $$ = expr_make_excluded($3); free($3); }
 | USERVAR									{ emit("USERVAR %s", $1); ExprNode *uv = expr_make_func0(EXPR_USERVAR, $1); if(uv) strncpy(uv->val.strval, $1, 255); free($1); $$ = uv; }
 | STRING
     {
@@ -1605,7 +1609,7 @@ stmt: insert_stmt
     }
 ;
 
-insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_list opt_ondupupdate opt_returning
+insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_list opt_ondupupdate opt_on_conflict opt_returning
     {
         emit("INSERTVALS %d %d %s", $2, $7, $4);
         GetInsertionTableName($4);
@@ -1626,6 +1630,22 @@ insert_stmt: INSERT insert_opts opt_into NAME opt_col_names VALUES insert_vals_l
 
 opt_ondupupdate: /* nil */
 | ONDUPLICATE KEY UPDATE { SetUpsertMode(); } upsert_asgn_list { emit("DUPUPDATE %d", $5); SetOnDupKeyUpdate(); }
+;
+
+/* PostgreSQL ON CONFLICT (Task 84 Feature #57) */
+opt_on_conflict: /* nil */
+| ON CONFLICT opt_conflict_target conflict_action
+;
+
+opt_conflict_target: /* nil */                  { emit("CONFTARGET *"); }
+| '(' NAME ')'                                  { emit("CONFTARGET %s", $2); SetOnConflictCol($2); free($2); }
+| '(' NAME ',' NAME                             { yyerror(scanner, "composite ON CONFLICT target (a, b, ...) is not yet supported"); free($2); free($4); YYERROR; }
+;
+
+conflict_action:
+    DO NOTHING                                  { emit("CONFACTION NOTHING"); SetOnConflictAction(EVO_CONFLICT_NOTHING); }
+| DO UPDATE { SetUpsertMode(); SetOnConflictAction(EVO_CONFLICT_UPDATE); }
+  SET upsert_asgn_list                          { emit("CONFACTION UPDATE %d", $5); SetOnDupKeyUpdate(); }
 ;
 
 upsert_asgn_list: NAME COMPARISON expr

@@ -107,277 +107,280 @@
      CONCURRENTLY = 323,
      COPY = 324,
      CSV = 325,
-     DATABASE = 326,
-     DECLARE = 327,
-     DEFERRABLE = 328,
-     DEFERRED = 329,
-     DELIMITER = 330,
-     DISABLE = 331,
-     DO = 332,
-     DOMAIN = 333,
-     DELAYED = 334,
-     DAY_HOUR = 335,
-     DAY_MICROSECOND = 336,
-     DISTINCT = 337,
-     DELETE = 338,
-     DROP = 339,
-     DAY_MINUTE = 340,
-     DISTINCTROW = 341,
-     DAY_SECOND = 342,
-     DESC = 343,
-     DEFAULT = 344,
-     DOUBLE = 345,
-     DATETIME = 346,
-     DECIMAL = 347,
-     DATE = 348,
-     EACH = 349,
-     ELSEIF = 350,
-     ENABLE = 351,
-     ESCAPED = 352,
-     EXCEPT = 353,
-     ENUM = 354,
-     END = 355,
-     ELSE = 356,
-     EXECUTE = 357,
-     EXIT = 358,
-     EXPLAIN = 359,
-     FETCH = 360,
-     FIRST = 361,
-     FOREACH = 362,
-     FLOAT = 363,
-     FORCE = 364,
-     FOREIGN = 365,
-     FORMAT = 366,
-     FROM = 367,
-     FULL = 368,
-     FULLTEXT = 369,
-     FUNCTION = 370,
-     FOR = 371,
-     GROUP = 372,
-     HANDLER = 373,
-     HEADER = 374,
-     HOUR_MINUTE = 375,
-     HOUR_MICROSECOND = 376,
-     HIGH_PRIORITY = 377,
-     HOUR_SECOND = 378,
-     HAVING = 379,
-     IMMEDIATE = 380,
-     INOUT = 381,
-     INITIALLY = 382,
-     INTEGER = 383,
-     INNER = 384,
-     IGNORE = 385,
-     INDEX = 386,
-     IF = 387,
-     INSERT = 388,
-     INTERSECT = 389,
-     INTO = 390,
-     INT = 391,
-     INTERVAL = 392,
-     ITERATE = 393,
-     JOIN = 394,
-     KEY = 395,
-     LEAVE = 396,
-     LOOP = 397,
-     LESS = 398,
-     LONGTEXT = 399,
-     LOW_PRIORITY = 400,
-     LEFT = 401,
-     LEADING = 402,
-     LIMIT = 403,
-     LOCKED = 404,
-     OFFSET = 405,
-     LONGBLOB = 406,
-     MATCH = 407,
-     MAXVALUE = 408,
-     MEDIUMTEXT = 409,
-     MINUS = 410,
-     MODIFY = 411,
-     MEDIUMBLOB = 412,
-     MEDIUMINT = 413,
-     NATURAL = 414,
-     NODE = 415,
-     NO_ACTION = 416,
-     NULLX = 417,
-     OPEN = 418,
-     OUT = 419,
-     OUTER = 420,
-     ON = 421,
-     ORDER = 422,
-     ONDUPLICATE = 423,
-     PARTIAL = 424,
-     PRIMARY = 425,
-     PROCEDURE = 426,
-     QUICK = 427,
-     RANGE = 428,
-     REAL = 429,
-     RECLAIM = 430,
-     REFERENCES = 431,
-     RENAME = 432,
-     RESIGNAL = 433,
-     RESTRICT = 434,
-     RETURN = 435,
-     RETURNING = 436,
-     RETURNS = 437,
-     ROLLUP = 438,
-     RIGHT = 439,
-     REPLACE = 440,
-     ROW = 441,
-     SIGNAL = 442,
-     TRIGGER = 443,
-     UNTIL = 444,
-     SQL_SMALL_RESULT = 445,
-     SCHEMA = 446,
-     SHARD = 447,
-     SHARDS = 448,
-     SHARE = 449,
-     SKIP = 450,
-     SOME = 451,
-     SQL_CALC_FOUND_ROWS = 452,
-     SQL_BIG_RESULT = 453,
-     SIMPLE = 454,
-     STDIN = 455,
-     STDOUT = 456,
-     STRAIGHT_JOIN = 457,
-     SMALLINT = 458,
-     SET = 459,
-     SELECT = 460,
-     QUOTE = 461,
-     TINYTEXT = 462,
-     TINYINT = 463,
-     TO = 464,
-     TEMPORARY = 465,
-     GLOBAL = 466,
-     PRESERVE = 467,
-     TEXT = 468,
-     THAN = 469,
-     TIMESTAMP = 470,
-     TABLE = 471,
-     THEN = 472,
-     TRAILING = 473,
-     TRUNCATE = 474,
-     TINYBLOB = 475,
-     TIME = 476,
-     UPDATE = 477,
-     UNSIGNED = 478,
-     UNION = 479,
-     UNIQUE = 480,
-     UUID = 481,
-     JSON = 482,
-     VIEW = 483,
-     USING = 484,
-     USE = 485,
-     HASH = 486,
-     VALIDATE = 487,
-     VARCHAR = 488,
-     VALUES = 489,
-     VARBINARY = 490,
-     WHERE = 491,
-     WHEN = 492,
-     WHILE = 493,
-     WITH = 494,
-     YEAR = 495,
-     YEAR_MONTH = 496,
-     ZEROFILL = 497,
-     EXISTS = 498,
-     FSUBSTRING = 499,
-     FTRIM = 500,
-     FDATE_ADD = 501,
-     FDATE_SUB = 502,
-     FDATEDIFF = 503,
-     FYEAR = 504,
-     FMONTH = 505,
-     FDAY = 506,
-     FHOUR = 507,
-     FMINUTE = 508,
-     FSECOND = 509,
-     FNOW = 510,
-     FLEFT = 511,
-     FRIGHT = 512,
-     FLPAD = 513,
-     FRPAD = 514,
-     FREVERSE = 515,
-     FREPEAT = 516,
-     FINSTR = 517,
-     FLOCATE = 518,
-     FABS = 519,
-     FCEIL = 520,
-     FFLOOR = 521,
-     FROUND = 522,
-     FPOWER = 523,
-     FSQRT = 524,
-     FMOD = 525,
-     FRAND = 526,
-     FLOG = 527,
-     FLOG10 = 528,
-     FSIGN = 529,
-     FPI = 530,
-     FCAST = 531,
-     FCONVERT = 532,
-     FNULLIF = 533,
-     FIFNULL = 534,
-     FIF = 535,
-     UNKNOWN = 536,
-     FGROUP_CONCAT = 537,
-     SEPARATOR = 538,
-     FCOUNT = 539,
-     FSUM = 540,
-     FAVG = 541,
-     FMIN = 542,
-     FMAX = 543,
-     FUPPER = 544,
-     FLOWER = 545,
-     FLENGTH = 546,
-     FCONCAT = 547,
-     FREPLACE = 548,
-     FCOALESCE = 549,
-     FGEN_RANDOM_UUID = 550,
-     FGEN_RANDOM_UUID_V7 = 551,
-     FSNOWFLAKE_ID = 552,
-     FLAST_INSERT_ID = 553,
-     FSCOPE_IDENTITY = 554,
-     FAT_IDENTITY = 555,
-     FAT_LAST_INSERT_ID = 556,
-     FEVO_SLEEP = 557,
-     FEVO_JITTER = 558,
-     FROW_NUMBER = 559,
-     FRANK = 560,
-     FDENSE_RANK = 561,
-     FLEAD = 562,
-     FLAG = 563,
-     FNTILE = 564,
-     FPERCENT_RANK = 565,
-     FCUME_DIST = 566,
-     OVER = 567,
-     PARTITION = 568,
-     FJSON_EXTRACT = 569,
-     FJSON_UNQUOTE = 570,
-     FJSON_TYPE = 571,
-     FJSON_LENGTH = 572,
-     FJSON_DEPTH = 573,
-     FJSON_VALID = 574,
-     FJSON_KEYS = 575,
-     FJSON_PRETTY = 576,
-     FJSON_QUOTE = 577,
-     FJSON_SET = 578,
-     FJSON_INSERT = 579,
-     FJSON_REPLACE = 580,
-     FJSON_REMOVE = 581,
-     FJSON_CONTAINS = 582,
-     FJSON_CONTAINS_PATH = 583,
-     FJSON_SEARCH = 584,
-     FJSON_OBJECT = 585,
-     FJSON_ARRAY = 586,
-     FJSON_ARRAYAGG = 587,
-     SEQUENCE = 588,
-     FNEXTVAL = 589,
-     FCURRVAL = 590,
-     FSETVAL = 591,
-     FLASTVAL = 592,
-     START = 593,
-     INCREMENT = 594,
-     MINVALUE = 595,
-     CYCLE = 596
+     CONFLICT = 326,
+     EXCLUDED = 327,
+     NOTHING = 328,
+     DATABASE = 329,
+     DECLARE = 330,
+     DEFERRABLE = 331,
+     DEFERRED = 332,
+     DELIMITER = 333,
+     DISABLE = 334,
+     DO = 335,
+     DOMAIN = 336,
+     DELAYED = 337,
+     DAY_HOUR = 338,
+     DAY_MICROSECOND = 339,
+     DISTINCT = 340,
+     DELETE = 341,
+     DROP = 342,
+     DAY_MINUTE = 343,
+     DISTINCTROW = 344,
+     DAY_SECOND = 345,
+     DESC = 346,
+     DEFAULT = 347,
+     DOUBLE = 348,
+     DATETIME = 349,
+     DECIMAL = 350,
+     DATE = 351,
+     EACH = 352,
+     ELSEIF = 353,
+     ENABLE = 354,
+     ESCAPED = 355,
+     EXCEPT = 356,
+     ENUM = 357,
+     END = 358,
+     ELSE = 359,
+     EXECUTE = 360,
+     EXIT = 361,
+     EXPLAIN = 362,
+     FETCH = 363,
+     FIRST = 364,
+     FOREACH = 365,
+     FLOAT = 366,
+     FORCE = 367,
+     FOREIGN = 368,
+     FORMAT = 369,
+     FROM = 370,
+     FULL = 371,
+     FULLTEXT = 372,
+     FUNCTION = 373,
+     FOR = 374,
+     GROUP = 375,
+     HANDLER = 376,
+     HEADER = 377,
+     HOUR_MINUTE = 378,
+     HOUR_MICROSECOND = 379,
+     HIGH_PRIORITY = 380,
+     HOUR_SECOND = 381,
+     HAVING = 382,
+     IMMEDIATE = 383,
+     INOUT = 384,
+     INITIALLY = 385,
+     INTEGER = 386,
+     INNER = 387,
+     IGNORE = 388,
+     INDEX = 389,
+     IF = 390,
+     INSERT = 391,
+     INTERSECT = 392,
+     INTO = 393,
+     INT = 394,
+     INTERVAL = 395,
+     ITERATE = 396,
+     JOIN = 397,
+     KEY = 398,
+     LEAVE = 399,
+     LOOP = 400,
+     LESS = 401,
+     LONGTEXT = 402,
+     LOW_PRIORITY = 403,
+     LEFT = 404,
+     LEADING = 405,
+     LIMIT = 406,
+     LOCKED = 407,
+     OFFSET = 408,
+     LONGBLOB = 409,
+     MATCH = 410,
+     MAXVALUE = 411,
+     MEDIUMTEXT = 412,
+     MINUS = 413,
+     MODIFY = 414,
+     MEDIUMBLOB = 415,
+     MEDIUMINT = 416,
+     NATURAL = 417,
+     NODE = 418,
+     NO_ACTION = 419,
+     NULLX = 420,
+     OPEN = 421,
+     OUT = 422,
+     OUTER = 423,
+     ON = 424,
+     ORDER = 425,
+     ONDUPLICATE = 426,
+     PARTIAL = 427,
+     PRIMARY = 428,
+     PROCEDURE = 429,
+     QUICK = 430,
+     RANGE = 431,
+     REAL = 432,
+     RECLAIM = 433,
+     REFERENCES = 434,
+     RENAME = 435,
+     RESIGNAL = 436,
+     RESTRICT = 437,
+     RETURN = 438,
+     RETURNING = 439,
+     RETURNS = 440,
+     ROLLUP = 441,
+     RIGHT = 442,
+     REPLACE = 443,
+     ROW = 444,
+     SIGNAL = 445,
+     TRIGGER = 446,
+     UNTIL = 447,
+     SQL_SMALL_RESULT = 448,
+     SCHEMA = 449,
+     SHARD = 450,
+     SHARDS = 451,
+     SHARE = 452,
+     SKIP = 453,
+     SOME = 454,
+     SQL_CALC_FOUND_ROWS = 455,
+     SQL_BIG_RESULT = 456,
+     SIMPLE = 457,
+     STDIN = 458,
+     STDOUT = 459,
+     STRAIGHT_JOIN = 460,
+     SMALLINT = 461,
+     SET = 462,
+     SELECT = 463,
+     QUOTE = 464,
+     TINYTEXT = 465,
+     TINYINT = 466,
+     TO = 467,
+     TEMPORARY = 468,
+     GLOBAL = 469,
+     PRESERVE = 470,
+     TEXT = 471,
+     THAN = 472,
+     TIMESTAMP = 473,
+     TABLE = 474,
+     THEN = 475,
+     TRAILING = 476,
+     TRUNCATE = 477,
+     TINYBLOB = 478,
+     TIME = 479,
+     UPDATE = 480,
+     UNSIGNED = 481,
+     UNION = 482,
+     UNIQUE = 483,
+     UUID = 484,
+     JSON = 485,
+     VIEW = 486,
+     USING = 487,
+     USE = 488,
+     HASH = 489,
+     VALIDATE = 490,
+     VARCHAR = 491,
+     VALUES = 492,
+     VARBINARY = 493,
+     WHERE = 494,
+     WHEN = 495,
+     WHILE = 496,
+     WITH = 497,
+     YEAR = 498,
+     YEAR_MONTH = 499,
+     ZEROFILL = 500,
+     EXISTS = 501,
+     FSUBSTRING = 502,
+     FTRIM = 503,
+     FDATE_ADD = 504,
+     FDATE_SUB = 505,
+     FDATEDIFF = 506,
+     FYEAR = 507,
+     FMONTH = 508,
+     FDAY = 509,
+     FHOUR = 510,
+     FMINUTE = 511,
+     FSECOND = 512,
+     FNOW = 513,
+     FLEFT = 514,
+     FRIGHT = 515,
+     FLPAD = 516,
+     FRPAD = 517,
+     FREVERSE = 518,
+     FREPEAT = 519,
+     FINSTR = 520,
+     FLOCATE = 521,
+     FABS = 522,
+     FCEIL = 523,
+     FFLOOR = 524,
+     FROUND = 525,
+     FPOWER = 526,
+     FSQRT = 527,
+     FMOD = 528,
+     FRAND = 529,
+     FLOG = 530,
+     FLOG10 = 531,
+     FSIGN = 532,
+     FPI = 533,
+     FCAST = 534,
+     FCONVERT = 535,
+     FNULLIF = 536,
+     FIFNULL = 537,
+     FIF = 538,
+     UNKNOWN = 539,
+     FGROUP_CONCAT = 540,
+     SEPARATOR = 541,
+     FCOUNT = 542,
+     FSUM = 543,
+     FAVG = 544,
+     FMIN = 545,
+     FMAX = 546,
+     FUPPER = 547,
+     FLOWER = 548,
+     FLENGTH = 549,
+     FCONCAT = 550,
+     FREPLACE = 551,
+     FCOALESCE = 552,
+     FGEN_RANDOM_UUID = 553,
+     FGEN_RANDOM_UUID_V7 = 554,
+     FSNOWFLAKE_ID = 555,
+     FLAST_INSERT_ID = 556,
+     FSCOPE_IDENTITY = 557,
+     FAT_IDENTITY = 558,
+     FAT_LAST_INSERT_ID = 559,
+     FEVO_SLEEP = 560,
+     FEVO_JITTER = 561,
+     FROW_NUMBER = 562,
+     FRANK = 563,
+     FDENSE_RANK = 564,
+     FLEAD = 565,
+     FLAG = 566,
+     FNTILE = 567,
+     FPERCENT_RANK = 568,
+     FCUME_DIST = 569,
+     OVER = 570,
+     PARTITION = 571,
+     FJSON_EXTRACT = 572,
+     FJSON_UNQUOTE = 573,
+     FJSON_TYPE = 574,
+     FJSON_LENGTH = 575,
+     FJSON_DEPTH = 576,
+     FJSON_VALID = 577,
+     FJSON_KEYS = 578,
+     FJSON_PRETTY = 579,
+     FJSON_QUOTE = 580,
+     FJSON_SET = 581,
+     FJSON_INSERT = 582,
+     FJSON_REPLACE = 583,
+     FJSON_REMOVE = 584,
+     FJSON_CONTAINS = 585,
+     FJSON_CONTAINS_PATH = 586,
+     FJSON_SEARCH = 587,
+     FJSON_OBJECT = 588,
+     FJSON_ARRAY = 589,
+     FJSON_ARRAYAGG = 590,
+     SEQUENCE = 591,
+     FNEXTVAL = 592,
+     FCURRVAL = 593,
+     FSETVAL = 594,
+     FLASTVAL = 595,
+     START = 596,
+     INCREMENT = 597,
+     MINVALUE = 598,
+     CYCLE = 599
    };
 #endif
 /* Tokens.  */
@@ -449,277 +452,280 @@
 #define CONCURRENTLY 323
 #define COPY 324
 #define CSV 325
-#define DATABASE 326
-#define DECLARE 327
-#define DEFERRABLE 328
-#define DEFERRED 329
-#define DELIMITER 330
-#define DISABLE 331
-#define DO 332
-#define DOMAIN 333
-#define DELAYED 334
-#define DAY_HOUR 335
-#define DAY_MICROSECOND 336
-#define DISTINCT 337
-#define DELETE 338
-#define DROP 339
-#define DAY_MINUTE 340
-#define DISTINCTROW 341
-#define DAY_SECOND 342
-#define DESC 343
-#define DEFAULT 344
-#define DOUBLE 345
-#define DATETIME 346
-#define DECIMAL 347
-#define DATE 348
-#define EACH 349
-#define ELSEIF 350
-#define ENABLE 351
-#define ESCAPED 352
-#define EXCEPT 353
-#define ENUM 354
-#define END 355
-#define ELSE 356
-#define EXECUTE 357
-#define EXIT 358
-#define EXPLAIN 359
-#define FETCH 360
-#define FIRST 361
-#define FOREACH 362
-#define FLOAT 363
-#define FORCE 364
-#define FOREIGN 365
-#define FORMAT 366
-#define FROM 367
-#define FULL 368
-#define FULLTEXT 369
-#define FUNCTION 370
-#define FOR 371
-#define GROUP 372
-#define HANDLER 373
-#define HEADER 374
-#define HOUR_MINUTE 375
-#define HOUR_MICROSECOND 376
-#define HIGH_PRIORITY 377
-#define HOUR_SECOND 378
-#define HAVING 379
-#define IMMEDIATE 380
-#define INOUT 381
-#define INITIALLY 382
-#define INTEGER 383
-#define INNER 384
-#define IGNORE 385
-#define INDEX 386
-#define IF 387
-#define INSERT 388
-#define INTERSECT 389
-#define INTO 390
-#define INT 391
-#define INTERVAL 392
-#define ITERATE 393
-#define JOIN 394
-#define KEY 395
-#define LEAVE 396
-#define LOOP 397
-#define LESS 398
-#define LONGTEXT 399
-#define LOW_PRIORITY 400
-#define LEFT 401
-#define LEADING 402
-#define LIMIT 403
-#define LOCKED 404
-#define OFFSET 405
-#define LONGBLOB 406
-#define MATCH 407
-#define MAXVALUE 408
-#define MEDIUMTEXT 409
-#define MINUS 410
-#define MODIFY 411
-#define MEDIUMBLOB 412
-#define MEDIUMINT 413
-#define NATURAL 414
-#define NODE 415
-#define NO_ACTION 416
-#define NULLX 417
-#define OPEN 418
-#define OUT 419
-#define OUTER 420
-#define ON 421
-#define ORDER 422
-#define ONDUPLICATE 423
-#define PARTIAL 424
-#define PRIMARY 425
-#define PROCEDURE 426
-#define QUICK 427
-#define RANGE 428
-#define REAL 429
-#define RECLAIM 430
-#define REFERENCES 431
-#define RENAME 432
-#define RESIGNAL 433
-#define RESTRICT 434
-#define RETURN 435
-#define RETURNING 436
-#define RETURNS 437
-#define ROLLUP 438
-#define RIGHT 439
-#define REPLACE 440
-#define ROW 441
-#define SIGNAL 442
-#define TRIGGER 443
-#define UNTIL 444
-#define SQL_SMALL_RESULT 445
-#define SCHEMA 446
-#define SHARD 447
-#define SHARDS 448
-#define SHARE 449
-#define SKIP 450
-#define SOME 451
-#define SQL_CALC_FOUND_ROWS 452
-#define SQL_BIG_RESULT 453
-#define SIMPLE 454
-#define STDIN 455
-#define STDOUT 456
-#define STRAIGHT_JOIN 457
-#define SMALLINT 458
-#define SET 459
-#define SELECT 460
-#define QUOTE 461
-#define TINYTEXT 462
-#define TINYINT 463
-#define TO 464
-#define TEMPORARY 465
-#define GLOBAL 466
-#define PRESERVE 467
-#define TEXT 468
-#define THAN 469
-#define TIMESTAMP 470
-#define TABLE 471
-#define THEN 472
-#define TRAILING 473
-#define TRUNCATE 474
-#define TINYBLOB 475
-#define TIME 476
-#define UPDATE 477
-#define UNSIGNED 478
-#define UNION 479
-#define UNIQUE 480
-#define UUID 481
-#define JSON 482
-#define VIEW 483
-#define USING 484
-#define USE 485
-#define HASH 486
-#define VALIDATE 487
-#define VARCHAR 488
-#define VALUES 489
-#define VARBINARY 490
-#define WHERE 491
-#define WHEN 492
-#define WHILE 493
-#define WITH 494
-#define YEAR 495
-#define YEAR_MONTH 496
-#define ZEROFILL 497
-#define EXISTS 498
-#define FSUBSTRING 499
-#define FTRIM 500
-#define FDATE_ADD 501
-#define FDATE_SUB 502
-#define FDATEDIFF 503
-#define FYEAR 504
-#define FMONTH 505
-#define FDAY 506
-#define FHOUR 507
-#define FMINUTE 508
-#define FSECOND 509
-#define FNOW 510
-#define FLEFT 511
-#define FRIGHT 512
-#define FLPAD 513
-#define FRPAD 514
-#define FREVERSE 515
-#define FREPEAT 516
-#define FINSTR 517
-#define FLOCATE 518
-#define FABS 519
-#define FCEIL 520
-#define FFLOOR 521
-#define FROUND 522
-#define FPOWER 523
-#define FSQRT 524
-#define FMOD 525
-#define FRAND 526
-#define FLOG 527
-#define FLOG10 528
-#define FSIGN 529
-#define FPI 530
-#define FCAST 531
-#define FCONVERT 532
-#define FNULLIF 533
-#define FIFNULL 534
-#define FIF 535
-#define UNKNOWN 536
-#define FGROUP_CONCAT 537
-#define SEPARATOR 538
-#define FCOUNT 539
-#define FSUM 540
-#define FAVG 541
-#define FMIN 542
-#define FMAX 543
-#define FUPPER 544
-#define FLOWER 545
-#define FLENGTH 546
-#define FCONCAT 547
-#define FREPLACE 548
-#define FCOALESCE 549
-#define FGEN_RANDOM_UUID 550
-#define FGEN_RANDOM_UUID_V7 551
-#define FSNOWFLAKE_ID 552
-#define FLAST_INSERT_ID 553
-#define FSCOPE_IDENTITY 554
-#define FAT_IDENTITY 555
-#define FAT_LAST_INSERT_ID 556
-#define FEVO_SLEEP 557
-#define FEVO_JITTER 558
-#define FROW_NUMBER 559
-#define FRANK 560
-#define FDENSE_RANK 561
-#define FLEAD 562
-#define FLAG 563
-#define FNTILE 564
-#define FPERCENT_RANK 565
-#define FCUME_DIST 566
-#define OVER 567
-#define PARTITION 568
-#define FJSON_EXTRACT 569
-#define FJSON_UNQUOTE 570
-#define FJSON_TYPE 571
-#define FJSON_LENGTH 572
-#define FJSON_DEPTH 573
-#define FJSON_VALID 574
-#define FJSON_KEYS 575
-#define FJSON_PRETTY 576
-#define FJSON_QUOTE 577
-#define FJSON_SET 578
-#define FJSON_INSERT 579
-#define FJSON_REPLACE 580
-#define FJSON_REMOVE 581
-#define FJSON_CONTAINS 582
-#define FJSON_CONTAINS_PATH 583
-#define FJSON_SEARCH 584
-#define FJSON_OBJECT 585
-#define FJSON_ARRAY 586
-#define FJSON_ARRAYAGG 587
-#define SEQUENCE 588
-#define FNEXTVAL 589
-#define FCURRVAL 590
-#define FSETVAL 591
-#define FLASTVAL 592
-#define START 593
-#define INCREMENT 594
-#define MINVALUE 595
-#define CYCLE 596
+#define CONFLICT 326
+#define EXCLUDED 327
+#define NOTHING 328
+#define DATABASE 329
+#define DECLARE 330
+#define DEFERRABLE 331
+#define DEFERRED 332
+#define DELIMITER 333
+#define DISABLE 334
+#define DO 335
+#define DOMAIN 336
+#define DELAYED 337
+#define DAY_HOUR 338
+#define DAY_MICROSECOND 339
+#define DISTINCT 340
+#define DELETE 341
+#define DROP 342
+#define DAY_MINUTE 343
+#define DISTINCTROW 344
+#define DAY_SECOND 345
+#define DESC 346
+#define DEFAULT 347
+#define DOUBLE 348
+#define DATETIME 349
+#define DECIMAL 350
+#define DATE 351
+#define EACH 352
+#define ELSEIF 353
+#define ENABLE 354
+#define ESCAPED 355
+#define EXCEPT 356
+#define ENUM 357
+#define END 358
+#define ELSE 359
+#define EXECUTE 360
+#define EXIT 361
+#define EXPLAIN 362
+#define FETCH 363
+#define FIRST 364
+#define FOREACH 365
+#define FLOAT 366
+#define FORCE 367
+#define FOREIGN 368
+#define FORMAT 369
+#define FROM 370
+#define FULL 371
+#define FULLTEXT 372
+#define FUNCTION 373
+#define FOR 374
+#define GROUP 375
+#define HANDLER 376
+#define HEADER 377
+#define HOUR_MINUTE 378
+#define HOUR_MICROSECOND 379
+#define HIGH_PRIORITY 380
+#define HOUR_SECOND 381
+#define HAVING 382
+#define IMMEDIATE 383
+#define INOUT 384
+#define INITIALLY 385
+#define INTEGER 386
+#define INNER 387
+#define IGNORE 388
+#define INDEX 389
+#define IF 390
+#define INSERT 391
+#define INTERSECT 392
+#define INTO 393
+#define INT 394
+#define INTERVAL 395
+#define ITERATE 396
+#define JOIN 397
+#define KEY 398
+#define LEAVE 399
+#define LOOP 400
+#define LESS 401
+#define LONGTEXT 402
+#define LOW_PRIORITY 403
+#define LEFT 404
+#define LEADING 405
+#define LIMIT 406
+#define LOCKED 407
+#define OFFSET 408
+#define LONGBLOB 409
+#define MATCH 410
+#define MAXVALUE 411
+#define MEDIUMTEXT 412
+#define MINUS 413
+#define MODIFY 414
+#define MEDIUMBLOB 415
+#define MEDIUMINT 416
+#define NATURAL 417
+#define NODE 418
+#define NO_ACTION 419
+#define NULLX 420
+#define OPEN 421
+#define OUT 422
+#define OUTER 423
+#define ON 424
+#define ORDER 425
+#define ONDUPLICATE 426
+#define PARTIAL 427
+#define PRIMARY 428
+#define PROCEDURE 429
+#define QUICK 430
+#define RANGE 431
+#define REAL 432
+#define RECLAIM 433
+#define REFERENCES 434
+#define RENAME 435
+#define RESIGNAL 436
+#define RESTRICT 437
+#define RETURN 438
+#define RETURNING 439
+#define RETURNS 440
+#define ROLLUP 441
+#define RIGHT 442
+#define REPLACE 443
+#define ROW 444
+#define SIGNAL 445
+#define TRIGGER 446
+#define UNTIL 447
+#define SQL_SMALL_RESULT 448
+#define SCHEMA 449
+#define SHARD 450
+#define SHARDS 451
+#define SHARE 452
+#define SKIP 453
+#define SOME 454
+#define SQL_CALC_FOUND_ROWS 455
+#define SQL_BIG_RESULT 456
+#define SIMPLE 457
+#define STDIN 458
+#define STDOUT 459
+#define STRAIGHT_JOIN 460
+#define SMALLINT 461
+#define SET 462
+#define SELECT 463
+#define QUOTE 464
+#define TINYTEXT 465
+#define TINYINT 466
+#define TO 467
+#define TEMPORARY 468
+#define GLOBAL 469
+#define PRESERVE 470
+#define TEXT 471
+#define THAN 472
+#define TIMESTAMP 473
+#define TABLE 474
+#define THEN 475
+#define TRAILING 476
+#define TRUNCATE 477
+#define TINYBLOB 478
+#define TIME 479
+#define UPDATE 480
+#define UNSIGNED 481
+#define UNION 482
+#define UNIQUE 483
+#define UUID 484
+#define JSON 485
+#define VIEW 486
+#define USING 487
+#define USE 488
+#define HASH 489
+#define VALIDATE 490
+#define VARCHAR 491
+#define VALUES 492
+#define VARBINARY 493
+#define WHERE 494
+#define WHEN 495
+#define WHILE 496
+#define WITH 497
+#define YEAR 498
+#define YEAR_MONTH 499
+#define ZEROFILL 500
+#define EXISTS 501
+#define FSUBSTRING 502
+#define FTRIM 503
+#define FDATE_ADD 504
+#define FDATE_SUB 505
+#define FDATEDIFF 506
+#define FYEAR 507
+#define FMONTH 508
+#define FDAY 509
+#define FHOUR 510
+#define FMINUTE 511
+#define FSECOND 512
+#define FNOW 513
+#define FLEFT 514
+#define FRIGHT 515
+#define FLPAD 516
+#define FRPAD 517
+#define FREVERSE 518
+#define FREPEAT 519
+#define FINSTR 520
+#define FLOCATE 521
+#define FABS 522
+#define FCEIL 523
+#define FFLOOR 524
+#define FROUND 525
+#define FPOWER 526
+#define FSQRT 527
+#define FMOD 528
+#define FRAND 529
+#define FLOG 530
+#define FLOG10 531
+#define FSIGN 532
+#define FPI 533
+#define FCAST 534
+#define FCONVERT 535
+#define FNULLIF 536
+#define FIFNULL 537
+#define FIF 538
+#define UNKNOWN 539
+#define FGROUP_CONCAT 540
+#define SEPARATOR 541
+#define FCOUNT 542
+#define FSUM 543
+#define FAVG 544
+#define FMIN 545
+#define FMAX 546
+#define FUPPER 547
+#define FLOWER 548
+#define FLENGTH 549
+#define FCONCAT 550
+#define FREPLACE 551
+#define FCOALESCE 552
+#define FGEN_RANDOM_UUID 553
+#define FGEN_RANDOM_UUID_V7 554
+#define FSNOWFLAKE_ID 555
+#define FLAST_INSERT_ID 556
+#define FSCOPE_IDENTITY 557
+#define FAT_IDENTITY 558
+#define FAT_LAST_INSERT_ID 559
+#define FEVO_SLEEP 560
+#define FEVO_JITTER 561
+#define FROW_NUMBER 562
+#define FRANK 563
+#define FDENSE_RANK 564
+#define FLEAD 565
+#define FLAG 566
+#define FNTILE 567
+#define FPERCENT_RANK 568
+#define FCUME_DIST 569
+#define OVER 570
+#define PARTITION 571
+#define FJSON_EXTRACT 572
+#define FJSON_UNQUOTE 573
+#define FJSON_TYPE 574
+#define FJSON_LENGTH 575
+#define FJSON_DEPTH 576
+#define FJSON_VALID 577
+#define FJSON_KEYS 578
+#define FJSON_PRETTY 579
+#define FJSON_QUOTE 580
+#define FJSON_SET 581
+#define FJSON_INSERT 582
+#define FJSON_REPLACE 583
+#define FJSON_REMOVE 584
+#define FJSON_CONTAINS 585
+#define FJSON_CONTAINS_PATH 586
+#define FJSON_SEARCH 587
+#define FJSON_OBJECT 588
+#define FJSON_ARRAY 589
+#define FJSON_ARRAYAGG 590
+#define SEQUENCE 591
+#define FNEXTVAL 592
+#define FCURRVAL 593
+#define FSETVAL 594
+#define FLASTVAL 595
+#define START 596
+#define INCREMENT 597
+#define MINVALUE 598
+#define CYCLE 599
 
 
 
@@ -735,7 +741,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 739 "parser/evoparser.tab.h"
+#line 745 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

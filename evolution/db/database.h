@@ -316,6 +316,14 @@ void SetOnDupKeyUpdate(void);
 void SetUpsertMode(void);
 void AddUpsertSet(const char *col, struct ExprNode *expr);
 
+/* PostgreSQL ON CONFLICT — Task 84 Feature #57 */
+#define EVO_CONFLICT_NONE    0
+#define EVO_CONFLICT_NOTHING 1
+#define EVO_CONFLICT_UPDATE  2
+
+void SetOnConflictCol(const char *col);
+void SetOnConflictAction(int action);
+
 /* RETURNING clause helpers */
 void SetReturningAll(void);
 void AddReturningCol(const char *name);
