@@ -38,6 +38,7 @@ SRCS = main.c \
        db/Analyze.c \
        db/Copy.c \
        db/csv.c \
+       db/FullText.c \
        db/buffer_pool.c \
        db/query_context.c \
        db/page_mgr.c \
