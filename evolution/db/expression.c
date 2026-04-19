@@ -1051,9 +1051,12 @@ double expr_evaluate_num(const ExprNode *e,
         }
         if (!col_val || !col_val[0]) return 0.0;
 
-        char row_tokens[64][64];
-        int  n_row = ft_tokenize(col_val, row_tokens, 64);
-        char q_tokens[32][64];
+        /* Stack buffers sized from the FT tokenizer limits. A 500-word row
+         * against a 32-term query uses 500*64 + 32*64 = 34 KB stack — OK on
+         * glibc default 8 MB, documented for small-stack builds. */
+        char row_tokens[FT_MAX_TOKENS][FT_MAX_TOKEN_LEN];
+        int  n_row = ft_tokenize(col_val, row_tokens, FT_MAX_TOKENS);
+        char q_tokens[32][FT_MAX_TOKEN_LEN];
         int  n_q = ft_tokenize(e->left->val.strval, q_tokens, 32);
         int hits = 0;
         for (int qi = 0; qi < n_q; qi++) {
