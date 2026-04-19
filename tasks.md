@@ -1755,7 +1755,7 @@
 
 ---
 
-### Task 87: ⬜ Materialized Views (Feature #58)
+### Task 87: ✅ Materialized Views (Feature #58)
 
 **Goal:** Implement materialized views: CREATE MATERIALIZED VIEW, REFRESH, DROP.
 

@@ -4129,6 +4129,66 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
     {
         const char *p = sql;
         while (*p && isspace((unsigned char)*p)) p++;
+
+        /* REFRESH MATERIALIZED VIEW name — re-executes stored SELECT, swaps
+         * the underlying table in place. */
+        if (strncasecmp(p, "REFRESH", 7) == 0 && isspace((unsigned char)p[7])) {
+            const char *rq = p + 8;
+            while (*rq && isspace((unsigned char)*rq)) rq++;
+            if (strncasecmp(rq, "MATERIALIZED", 12) == 0 && isspace((unsigned char)rq[12])) {
+                rq += 13;
+                while (*rq && isspace((unsigned char)*rq)) rq++;
+                if (strncasecmp(rq, "VIEW", 4) == 0 && isspace((unsigned char)rq[4])) {
+                    rq += 5;
+                    while (*rq && isspace((unsigned char)*rq)) rq++;
+                    char vname[128] = "";
+                    int vi = 0;
+                    while (*rq && (isalnum((unsigned char)*rq) || *rq == '_') && vi < 127)
+                        vname[vi++] = *rq++;
+                    vname[vi] = '\0';
+
+                    if (!ctx) return 0;
+                    DatabaseDesc dbd; SchemaDesc sd;
+                    if (cat_find_database(ctx->database, &dbd) < 0 ||
+                        cat_find_schema(dbd.db_id, ctx->schema, &sd) < 0) return 0;
+                    ViewDesc vd;
+                    if (cat_find_view(dbd.db_id, sd.schema_id, vname, &vd) < 0) {
+                        result_set_error(rs, "42P01", "materialized view does not exist");
+                        return 1;
+                    }
+                    if (!vd.is_materialized) {
+                        result_set_error(rs, "42809",
+                            "REFRESH can only be applied to materialized views");
+                        return 1;
+                    }
+
+                    /* Drop underlying table, then re-run CTAS. Wrapped in a
+                     * single catalog-handler call — not atomic. A future
+                     * enhancement could swap via rename. */
+                    char step_sql[8192];
+                    snprintf(step_sql, sizeof(step_sql), "DROP TABLE %s", vname);
+                    ResultSet ir; memset(&ir, 0, sizeof(ir)); result_init(&ir);
+                    query_execute(step_sql, &ir, ctx);
+                    result_free(&ir);
+
+                    snprintf(step_sql, sizeof(step_sql),
+                             "CREATE TABLE %s AS %s", vname, vd.view_sql);
+                    memset(&ir, 0, sizeof(ir)); result_init(&ir);
+                    query_execute(step_sql, &ir, ctx);
+                    if (ir.has_error) {
+                        result_set_error(rs, ir.error_sqlstate[0] ?
+                                         ir.error_sqlstate : "XX000",
+                                         ir.error_message);
+                        result_free(&ir);
+                        return 1;
+                    }
+                    result_free(&ir);
+                    strcpy(rs->command_tag, "REFRESH MATERIALIZED VIEW");
+                    return 1;
+                }
+            }
+        }
+
         if (strncasecmp(p, "CREATE", 6) == 0 && isspace((unsigned char)p[6])) {
             const char *q = p + 7;
             while (*q && isspace((unsigned char)*q)) q++;
@@ -4139,6 +4199,84 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 if (strncasecmp(q, "REPLACE", 7) == 0) { is_replace = 1; q += 7; }
                 while (*q && isspace((unsigned char)*q)) q++;
             }
+            /* CREATE MATERIALIZED VIEW name AS <select>
+             * Materialize via CTAS: CREATE TABLE name AS <select>, then
+             * store the SQL under cat_create_matview so REFRESH/DROP work. */
+            if (strncasecmp(q, "MATERIALIZED", 12) == 0 && isspace((unsigned char)q[12])) {
+                const char *mq = q + 13;
+                while (*mq && isspace((unsigned char)*mq)) mq++;
+                if (strncasecmp(mq, "VIEW", 4) == 0 && isspace((unsigned char)mq[4])) {
+                    mq += 5;
+                    while (*mq && isspace((unsigned char)*mq)) mq++;
+                    char vname[128] = "";
+                    int vi = 0;
+                    while (*mq && (isalnum((unsigned char)*mq) || *mq == '_') && vi < 127)
+                        vname[vi++] = *mq++;
+                    vname[vi] = '\0';
+                    while (*mq && isspace((unsigned char)*mq)) mq++;
+                    if (strncasecmp(mq, "AS", 2) != 0 ||
+                        !isspace((unsigned char)mq[2])) {
+                        result_set_error(rs, "42601",
+                            "expected AS after CREATE MATERIALIZED VIEW <name>");
+                        return 1;
+                    }
+                    mq += 3;
+                    while (*mq && isspace((unsigned char)*mq)) mq++;
+
+                    char vsql[4096];
+                    strncpy(vsql, mq, sizeof(vsql) - 1);
+                    vsql[sizeof(vsql) - 1] = '\0';
+                    int vl = (int)strlen(vsql);
+                    while (vl > 0 && (vsql[vl-1] == ';' || isspace((unsigned char)vsql[vl-1])))
+                        vsql[--vl] = '\0';
+
+                    if (!ctx) {
+                        result_set_error(rs, "XX000", "no session context");
+                        return 1;
+                    }
+                    DatabaseDesc dbd;
+                    SchemaDesc   sd;
+                    if (cat_find_database(ctx->database, &dbd) < 0 ||
+                        cat_find_schema(dbd.db_id, ctx->schema, &sd) < 0) {
+                        result_set_error(rs, "XX000", "no database/schema");
+                        return 1;
+                    }
+                    ViewDesc existing;
+                    if (cat_find_view(dbd.db_id, sd.schema_id, vname, &existing) == 0) {
+                        if (is_replace) cat_drop_view(dbd.db_id, sd.schema_id, vname);
+                        else {
+                            result_set_error(rs, "42P07",
+                                "materialized view already exists");
+                            return 1;
+                        }
+                    }
+
+                    /* Materialize: CREATE TABLE <vname> AS <select> */
+                    char ctas[8192];
+                    snprintf(ctas, sizeof(ctas),
+                             "CREATE TABLE %s AS %s", vname, vsql);
+                    ResultSet ir; memset(&ir, 0, sizeof(ir)); result_init(&ir);
+                    query_execute(ctas, &ir, ctx);
+                    if (ir.has_error) {
+                        result_set_error(rs, ir.error_sqlstate[0] ?
+                                         ir.error_sqlstate : "XX000",
+                                         ir.error_message);
+                        result_free(&ir);
+                        return 1;
+                    }
+                    result_free(&ir);
+
+                    if (cat_create_matview(dbd.db_id, sd.schema_id,
+                                           vname, vsql) < 0) {
+                        result_set_error(rs, "XX000",
+                            "could not register materialized view");
+                        return 1;
+                    }
+                    strcpy(rs->command_tag, "CREATE MATERIALIZED VIEW");
+                    return 1;
+                }
+            }
+
             if (strncasecmp(q, "VIEW", 4) == 0 && isspace((unsigned char)q[4])) {
                 q += 5;
                 while (*q && isspace((unsigned char)*q)) q++;
@@ -4203,6 +4341,56 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (strncasecmp(p, "DROP", 4) == 0 && isspace((unsigned char)p[4])) {
             const char *q = p + 5;
             while (*q && isspace((unsigned char)*q)) q++;
+            /* DROP MATERIALIZED VIEW [IF EXISTS] name */
+            if (strncasecmp(q, "MATERIALIZED", 12) == 0 && isspace((unsigned char)q[12])) {
+                const char *mq = q + 13;
+                while (*mq && isspace((unsigned char)*mq)) mq++;
+                if (strncasecmp(mq, "VIEW", 4) == 0 && isspace((unsigned char)mq[4])) {
+                    mq += 5;
+                    while (*mq && isspace((unsigned char)*mq)) mq++;
+                    int if_exists = 0;
+                    if (strncasecmp(mq, "IF", 2) == 0 && isspace((unsigned char)mq[2])) {
+                        mq += 3;
+                        while (*mq && isspace((unsigned char)*mq)) mq++;
+                        if (strncasecmp(mq, "EXISTS", 6) == 0) { if_exists = 1; mq += 6; }
+                        while (*mq && isspace((unsigned char)*mq)) mq++;
+                    }
+                    char vname[128] = "";
+                    int vi = 0;
+                    while (*mq && (isalnum((unsigned char)*mq) || *mq == '_') && vi < 127)
+                        vname[vi++] = *mq++;
+                    vname[vi] = '\0';
+
+                    if (!ctx) return 0;
+                    DatabaseDesc dbd; SchemaDesc sd;
+                    if (cat_find_database(ctx->database, &dbd) < 0 ||
+                        cat_find_schema(dbd.db_id, ctx->schema, &sd) < 0) return 0;
+                    ViewDesc vd;
+                    if (cat_find_view(dbd.db_id, sd.schema_id, vname, &vd) < 0) {
+                        if (if_exists) {
+                            strcpy(rs->command_tag, "DROP MATERIALIZED VIEW");
+                            return 1;
+                        }
+                        result_set_error(rs, "42P01", "materialized view does not exist");
+                        return 1;
+                    }
+                    if (!vd.is_materialized) {
+                        result_set_error(rs, "42809",
+                            "DROP MATERIALIZED VIEW cannot be used on a regular view; use DROP VIEW instead");
+                        return 1;
+                    }
+
+                    /* Drop the materialized underlying table, then the view entry. */
+                    char drop_sql[256];
+                    snprintf(drop_sql, sizeof(drop_sql), "DROP TABLE %s", vname);
+                    ResultSet ir; memset(&ir, 0, sizeof(ir)); result_init(&ir);
+                    query_execute(drop_sql, &ir, ctx);
+                    result_free(&ir);
+                    cat_drop_view(dbd.db_id, sd.schema_id, vname);
+                    strcpy(rs->command_tag, "DROP MATERIALIZED VIEW");
+                    return 1;
+                }
+            }
             if (strncasecmp(q, "VIEW", 4) == 0 && isspace((unsigned char)q[4])) {
                 q += 5;
                 while (*q && isspace((unsigned char)*q)) q++;

@@ -108,6 +108,8 @@ CONFLICT				{ return CONFLICT; }
 EXCLUDED				{ return EXCLUDED; }
 NOTHING					{ return NOTHING; }
 AGAINST					{ return AGAINST; }
+MATERIALIZED			{ return MATERIALIZED; }
+REFRESH					{ return REFRESH; }
 
 
 DEFERRABLE				{ return DEFERRABLE; }

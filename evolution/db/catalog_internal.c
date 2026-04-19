@@ -2489,8 +2489,14 @@ static void make_view_key(uint32_t schema_id, const char *name,
 
 static void serialize_view(const ViewDesc *v, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%u;%s;%s",
-             v->view_id, v->db_id, v->schema_id, v->view_name, v->view_sql);
+    /* Format: "view_id;db_id;schema_id;view_name;is_materialized;view_sql".
+     * is_materialized sits between view_name and view_sql so the SQL — which
+     * may contain ';' — remains the trailing "rest of buffer" field.
+     * Legacy records without the flag decode cleanly via the fall-through
+     * branch in deserialize_view. */
+    snprintf(buf, size, "%u;%u;%u;%s;%d;%s",
+             v->view_id, v->db_id, v->schema_id, v->view_name,
+             v->is_materialized, v->view_sql);
 }
 
 static void deserialize_view(const char *buf, ViewDesc *v)
@@ -2502,16 +2508,32 @@ static void deserialize_view(const char *buf, ViewDesc *v)
     p = next_field(p, field, sizeof(field)); v->schema_id = (uint32_t)atoi(field);
     p = next_field(p, v->view_name, CAT_MAX_NAME_LEN);
     v->check_option = 0;
+    v->is_materialized = 0;
+    /* Legacy records have view_sql directly after view_name; new records
+     * insert is_materialized (single digit followed by ';'). Detect by
+     * peeking at the next field: if it is purely digits and followed by
+     * another ';', treat it as the flag. */
     if (p && *p) {
-        strncpy(v->view_sql, p, sizeof(v->view_sql) - 1);
+        const char *sc = strchr(p, ';');
+        int numeric = (sc != NULL);
+        for (const char *q = p; numeric && q < sc; q++) {
+            if (*q < '0' || *q > '9') numeric = 0;
+        }
+        if (numeric && sc) {
+            char flag[16];
+            p = next_field(p, flag, sizeof(flag));
+            v->is_materialized = atoi(flag);
+        }
+        strncpy(v->view_sql, p ? p : "", sizeof(v->view_sql) - 1);
         v->view_sql[sizeof(v->view_sql) - 1] = '\0';
     } else {
         v->view_sql[0] = '\0';
     }
 }
 
-int cat_create_view(uint32_t db_id, uint32_t schema_id,
-                    const char *name, const char *sql)
+static int cat_create_view_ex(uint32_t db_id, uint32_t schema_id,
+                              const char *name, const char *sql,
+                              int is_materialized)
 {
     char key[CAT_MAX_KEY_LEN];
     make_view_key(schema_id, name, key, sizeof(key));
@@ -2523,6 +2545,7 @@ int cat_create_view(uint32_t db_id, uint32_t schema_id,
     v.view_id = pgm_next_id(0);
     v.db_id = db_id;
     v.schema_id = schema_id;
+    v.is_materialized = is_materialized;
     strncpy(v.view_name, name, CAT_MAX_NAME_LEN - 1);
     strncpy(v.view_sql, sql, sizeof(v.view_sql) - 1);
     char record[8192];
@@ -2531,6 +2554,18 @@ int cat_create_view(uint32_t db_id, uint32_t schema_id,
     RowID rid = cat_store_record(CAT_SYS_VIEWS, record, rec_len);
     if (rid.page_no == 0) return -1;
     return bt2_insert(&g_cat_trees[CAT_SYS_VIEWS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_create_view(uint32_t db_id, uint32_t schema_id,
+                    const char *name, const char *sql)
+{
+    return cat_create_view_ex(db_id, schema_id, name, sql, 0);
+}
+
+int cat_create_matview(uint32_t db_id, uint32_t schema_id,
+                       const char *name, const char *sql)
+{
+    return cat_create_view_ex(db_id, schema_id, name, sql, 1);
 }
 
 int cat_find_view(uint32_t db_id, uint32_t schema_id,
