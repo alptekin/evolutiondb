@@ -55,6 +55,16 @@ ExprNode *expr_make_column(const char *name)
     return e;
 }
 
+ExprNode *expr_make_excluded(const char *name)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_EXCLUDED_COL;
+    strncpy(e->val.col_name, name, sizeof(e->val.col_name) - 1);
+    snprintf(e->display, sizeof(e->display), "EXCLUDED.%s", name);
+    return e;
+}
+
 ExprNode *expr_make_int(int val)
 {
     ExprNode *e = expr_alloc();
@@ -996,6 +1006,18 @@ double expr_evaluate_num(const ExprNode *e,
         return 0.0;
     }
 
+    case EXPR_EXCLUDED_COL: {
+        /* Resolve via the INSERT column order cached into g_ins.excludedValues[]. */
+        for (int c = 0; c < g_ins.excludedCount; c++) {
+            if (c < g_ins.columnCount &&
+                strcasecmp(g_ins.columns[c], e->val.col_name) == 0) {
+                if (g_ins.excludedNull[c]) return 0.0;
+                return strtod(g_ins.excludedValues[c], NULL);
+            }
+        }
+        return 0.0;
+    }
+
     case EXPR_NEG:
         return -expr_evaluate_num(e->left, col_names, col_values, num_cols);
 
@@ -1064,6 +1086,21 @@ int expr_evaluate(const ExprNode *e,
     if (e->type == EXPR_LITERAL_NULL) {
         out_buf[0] = '\0';
         return 0;  /* returning 0 signals NULL */
+    }
+
+    /* EXCLUDED.col — resolve from the pseudo-row populated by InsertProcess
+     * during ON CONFLICT DO UPDATE. Matched by position through g_ins.columns. */
+    if (e->type == EXPR_EXCLUDED_COL) {
+        for (int c = 0; c < g_ins.excludedCount && c < g_ins.columnCount; c++) {
+            if (strcasecmp(g_ins.columns[c], e->val.col_name) == 0) {
+                if (g_ins.excludedNull[c]) { out_buf[0] = '\0'; return 0; }
+                strncpy(out_buf, g_ins.excludedValues[c], buf_size - 1);
+                out_buf[buf_size - 1] = '\0';
+                return 1;
+            }
+        }
+        out_buf[0] = '\0';
+        return 0;
     }
 
     /* For a plain column reference, return the string value directly
@@ -2436,6 +2473,9 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
     switch (e->type) {
     case EXPR_COLUMN:
         snprintf(tok, sizeof(tok), "C:%s", e->val.col_name);
+        return ser_append(buf, pos, bufSize, tok);
+    case EXPR_EXCLUDED_COL:
+        snprintf(tok, sizeof(tok), "X:%s", e->val.col_name);
         return ser_append(buf, pos, bufSize, tok);
     case EXPR_LITERAL_INT:
         snprintf(tok, sizeof(tok), "I:%d", e->val.intval);

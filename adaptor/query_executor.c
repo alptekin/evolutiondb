@@ -5837,8 +5837,15 @@ static void normalize_sql(char *sql)
                     char *alias_start = dst - 1;
                     while (alias_start > buf && (isalnum((unsigned char)*(alias_start-1)) || *(alias_start-1) == '_'))
                         alias_start--;
-                    dst = alias_start;
-                    src++;
+                    /* Preserve EXCLUDED qualifier — pseudo-table in ON CONFLICT DO UPDATE.
+                     * Unlike table aliases, EXCLUDED.<col> semantics differ from <col>. */
+                    int alias_len = (int)(dst - alias_start);
+                    if (alias_len == 8 && strncasecmp(alias_start, "EXCLUDED", 8) == 0) {
+                        *dst++ = *src++;   /* keep the '.' */
+                    } else {
+                        dst = alias_start;
+                        src++;
+                    }
                 } else {
                     *dst++ = *src++;
                 }

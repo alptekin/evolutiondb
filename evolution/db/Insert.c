@@ -43,6 +43,20 @@ void AddUpsertSet(const char *col, ExprNode *expr)
     g_ins.onDupSetCount++;
 }
 
+/* ---- PostgreSQL ON CONFLICT (Task 84) ---- */
+
+void SetOnConflictCol(const char *col)
+{
+    if (!col) return;
+    strncpy(g_ins.onConflictCol, col, sizeof(g_ins.onConflictCol) - 1);
+    g_ins.onConflictCol[sizeof(g_ins.onConflictCol) - 1] = '\0';
+}
+
+void SetOnConflictAction(int action)
+{
+    g_ins.onConflictAction = action;
+}
+
 /* ---- RETURNING clause parser helpers ---- */
 void SetReturningAll(void)
 {
@@ -639,6 +653,14 @@ static int validate_unique(const char *tblName,
             if (!uniqueFlags[i]) continue;
             if (strcmp(vals[i], "\x01NULL\x01") == 0) continue;
             if (i < nf && strcmp(vals[i], fields[i]) == 0) {
+                /* ON CONFLICT DO NOTHING / DO UPDATE: suppress the error
+                 * and flag the caller to handle the duplicate. */
+                if (g_ins.onConflictAction == EVO_CONFLICT_NOTHING ||
+                    g_ins.onConflictAction == EVO_CONFLICT_UPDATE ||
+                    g_ins.onDupKeyUpdate) {
+                    g_ins.pendingUniqueConflict = 1;
+                    return 0;
+                }
                 snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "duplicate key value violates unique constraint on column \"%s\" (value=%s)",
                          (i < numColNames) ? colNames[i] : "unknown", vals[i]);
@@ -1433,8 +1455,10 @@ int InsertProcess(void)
                 if (preIdxKeys[ix][0] && (secIdx[ix].index_type == 'U' || secIdx[ix].index_type == 'V')) {
                     char dupCheck[1][256];
                     if (btree_search(preIdxPaths[ix], preIdxKeys[ix], dupCheck, 1) > 0) {
-                        if (g_ins.onDupKeyUpdate) {
-                            /* ON DUPLICATE KEY UPDATE: skip store, handle as conflict */
+                        if (g_ins.onDupKeyUpdate ||
+                            g_ins.onConflictAction == EVO_CONFLICT_NOTHING) {
+                            /* ON DUPLICATE KEY UPDATE / ON CONFLICT DO NOTHING:
+                             * treat as duplicate and let the rc==1 branch decide. */
                             upsert_unique_conflict = 1;
                             break;
                         }
@@ -1451,13 +1475,15 @@ int InsertProcess(void)
         }
 
         /* If UNIQUE index conflict + ON DUPLICATE KEY UPDATE, treat as duplicate (rc=1) */
-        int rc = upsert_unique_conflict ? 1 :
+        int rc = (upsert_unique_conflict || g_ins.pendingUniqueConflict) ? 1 :
                  DML_PROF_EXPR("store_single_row_total",
                                store_single_row(&td, cols, ncols, tblName, reorderedRows[i]));
+        g_ins.pendingUniqueConflict = 0;   /* consumed */
         if (rc == 1 && g_ins.onDupKeyUpdate && g_ins.onDupSetCount > 0) {
             /* ON DUPLICATE KEY UPDATE: evaluate SET exprs and call evo_update_row */
 
-            /* Build PK key from this row's values */
+            /* Build PK key from this row's values + populate EXCLUDED
+             * pseudo-row (Task 84 ON CONFLICT DO UPDATE). */
             char pkKey[1024];
             {
                 char tmpR[RECORD_BUF_SIZE];
@@ -1477,6 +1503,36 @@ int InsertProcess(void)
                         pkKey, sizeof(pkKey)) < 0 || pkKey[0] == '\0') {
                     TruncateInsert();
                     retval = -1; goto cleanup;
+                }
+
+                /* Snapshot the would-be-inserted values for EXCLUDED.<col>
+                 * references in DO UPDATE SET expressions. Indexed by table
+                 * column order (rFields is already reordered). */
+                int ec = rnv < 64 ? rnv : 64;
+                for (int ei = 0; ei < ec; ei++) {
+                    int is_n = (strcmp(rFields[ei], NULL_MARKER) == 0);
+                    g_ins.excludedNull[ei] = is_n;
+                    if (is_n) g_ins.excludedValues[ei][0] = '\0';
+                    else {
+                        strncpy(g_ins.excludedValues[ei], rFields[ei],
+                                sizeof(g_ins.excludedValues[ei]) - 1);
+                        g_ins.excludedValues[ei][sizeof(g_ins.excludedValues[ei]) - 1] = '\0';
+                    }
+                }
+                g_ins.excludedCount = ec;
+                /* Overwrite g_ins.columns with the table's column order so
+                 * EXCLUDED.<col> resolves correctly even when the user
+                 * supplied an out-of-order column list
+                 * (`INSERT INTO t(b,a) VALUES ...`) — rFields is in table
+                 * order, so the name lookup must be too. */
+                {
+                    int cc = ncols < 64 ? ncols : 64;
+                    for (int ci = 0; ci < cc; ci++) {
+                        strncpy(g_ins.columns[ci], cols[ci].col_name,
+                                sizeof(g_ins.columns[ci]) - 1);
+                        g_ins.columns[ci][sizeof(g_ins.columns[ci]) - 1] = '\0';
+                    }
+                    g_ins.columnCount = cc;
                 }
             }
 
@@ -1542,6 +1598,10 @@ int InsertProcess(void)
         if (rc == 1 && g_ins.onDupKeyUpdate) {
             /* onDupKeyUpdate set but no SET assignments — treat as skip */
             g_ins.rowCount++;
+            continue;
+        }
+        if (rc == 1 && g_ins.onConflictAction == EVO_CONFLICT_NOTHING) {
+            /* ON CONFLICT DO NOTHING — silent skip, no row counted */
             continue;
         }
         if (rc != 0) {
