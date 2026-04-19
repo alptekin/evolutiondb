@@ -10,6 +10,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include "FullText.h"
 #include <inttypes.h>
 #include "expression.h"
 #include "catalog_internal.h"
@@ -62,6 +63,25 @@ ExprNode *expr_make_excluded(const char *name)
     e->type = EXPR_EXCLUDED_COL;
     strncpy(e->val.col_name, name, sizeof(e->val.col_name) - 1);
     snprintf(e->display, sizeof(e->display), "EXCLUDED.%s", name);
+    return e;
+}
+
+ExprNode *expr_make_match(const char *col_name, const char *query_text)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_MATCH;
+    strncpy(e->val.col_name, col_name ? col_name : "",
+            sizeof(e->val.col_name) - 1);
+    /* Stash the AGAINST literal in `left` as a string ExprNode. */
+    ExprNode *q = expr_alloc();
+    if (!q) return NULL;
+    q->type = EXPR_LITERAL_STR;
+    strncpy(q->val.strval, query_text ? query_text : "",
+            sizeof(q->val.strval) - 1);
+    e->left = q;
+    snprintf(e->display, sizeof(e->display), "MATCH(%s) AGAINST",
+             col_name ? col_name : "");
     return e;
 }
 
@@ -1018,6 +1038,37 @@ double expr_evaluate_num(const ExprNode *e,
         return 0.0;
     }
 
+    case EXPR_MATCH: {
+        /* Full-text match: tokenize the row column value + the AGAINST
+         * literal, return 1.0 if any row token equals any query token. */
+        if (!e->left) return 0.0;
+        const char *col_val = NULL;
+        for (int c = 0; c < num_cols; c++) {
+            if (strcasecmp(col_names[c], e->val.col_name) == 0) {
+                col_val = col_values[c];
+                break;
+            }
+        }
+        if (!col_val || !col_val[0]) return 0.0;
+
+        /* Stack buffers sized from the FT tokenizer limits. A 500-word row
+         * against a 32-term query uses 500*64 + 32*64 = 34 KB stack — OK on
+         * glibc default 8 MB, documented for small-stack builds. */
+        char row_tokens[FT_MAX_TOKENS][FT_MAX_TOKEN_LEN];
+        int  n_row = ft_tokenize(col_val, row_tokens, FT_MAX_TOKENS);
+        char q_tokens[32][FT_MAX_TOKEN_LEN];
+        int  n_q = ft_tokenize(e->left->val.strval, q_tokens, 32);
+        int hits = 0;
+        for (int qi = 0; qi < n_q; qi++) {
+            for (int ri = 0; ri < n_row; ri++) {
+                if (strcmp(q_tokens[qi], row_tokens[ri]) == 0) { hits++; break; }
+            }
+        }
+        /* Simple "any-term" match — hits>0 -> true. Ranking returns the hit
+         * count so ORDER BY MATCH(...) AGAINST(...) works. */
+        return (double)hits;
+    }
+
     case EXPR_NEG:
         return -expr_evaluate_num(e->left, col_names, col_values, num_cols);
 
@@ -1086,6 +1137,14 @@ int expr_evaluate(const ExprNode *e,
     if (e->type == EXPR_LITERAL_NULL) {
         out_buf[0] = '\0';
         return 0;  /* returning 0 signals NULL */
+    }
+
+    /* MATCH(col) AGAINST('query') — defer to the numeric evaluator which
+     * returns the per-row hit count; stringify the integer result. */
+    if (e->type == EXPR_MATCH) {
+        double n = expr_evaluate_num(e, col_names, col_values, num_cols);
+        snprintf(out_buf, (size_t)buf_size, "%d", (int)n);
+        return 1;
     }
 
     /* EXCLUDED.col — resolve from the pseudo-row populated by InsertProcess
@@ -2476,6 +2535,11 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
         return ser_append(buf, pos, bufSize, tok);
     case EXPR_EXCLUDED_COL:
         snprintf(tok, sizeof(tok), "X:%s", e->val.col_name);
+        return ser_append(buf, pos, bufSize, tok);
+    case EXPR_MATCH:
+        snprintf(tok, sizeof(tok), "M:%s:%s",
+                 e->val.col_name,
+                 (e->left && e->left->val.strval[0]) ? e->left->val.strval : "");
         return ser_append(buf, pos, bufSize, tok);
     case EXPR_LITERAL_INT:
         snprintf(tok, sizeof(tok), "I:%d", e->val.intval);

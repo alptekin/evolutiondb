@@ -23,6 +23,7 @@
 #endif
 #include "database.h"
 #include "expression.h"
+#include "FullText.h"
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "hash_idx.h"
@@ -47,6 +48,7 @@ static void idx_reset_flags(void)
     g_idx.ifNotExists = 0;
     g_idx.exprDef[0] = '\0';
     g_idx.usingHash = 0;
+    g_idx.fulltext = 0;
 }
 
 /* ── Concurrent index build modification log ── */
@@ -576,6 +578,11 @@ void SetIndexUsingHash(void)
     g_idx.usingHash = 1;
 }
 
+void SetIndexFulltext(void)
+{
+    g_idx.fulltext = 1;
+}
+
 void SetIndexConcurrent(void)
 {
     g_idx.concurrent = 1;
@@ -794,7 +801,9 @@ int CreateIndexProcess(void)
 
     /* Determine index type */
     char idx_type;
-    if (useHash)
+    if (g_idx.fulltext)
+        idx_type = 'F';          /* Task 86: full-text inverted index */
+    else if (useHash)
         idx_type = g_idx.unique ? 'V' : 'H';
     else
         idx_type = g_idx.unique ? 'U' : 'N';
@@ -809,6 +818,76 @@ int CreateIndexProcess(void)
         g_idx.concTableId = td.table_id;
         g_idx.concRootPage = idx_root;
         /* Don't reset flags — Phase2 needs them */
+        return 0;
+    }
+
+    /* Fulltext population path: tokenize text column, insert one (word, pk)
+     * pair per token into the B+ tree. Bypasses the generic key-builder since
+     * FT is a one-column-text-only index. */
+    if (g_idx.fulltext) {
+        int colIdx = -1;
+        for (int ci = 0; ci < indexNCols; ci++) {
+            if (strcasecmp(indexCols[ci].col_name, g_idx.columnName) == 0) {
+                colIdx = ci; break;
+            }
+        }
+        if (colIdx < 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "FULLTEXT: column '%s' not found", g_idx.columnName);
+            g_err.error = 1;
+            bt2_destroy(&idx_tree);
+            idx_reset_flags();
+            return -1;
+        }
+
+        /* CREATE INDEX runs under the DML mutex, so the table is quiesced:
+         * no MVCC filtering is needed here. Use bt2_cursor directly so
+         * each row's heap RowID comes back with the PK key — avoids a
+         * second bt2_search(&pk_tree, ...) per row. */
+        BTree2 pk_tree = tapi_pk_tree(&td);
+        BTree2Cursor cur;
+        if (bt2_cursor_first(&pk_tree, &cur) == 0) {
+            char pkBuf[BT2_MAX_KEY_LEN + 1];
+            RowID heap_rid;
+            char recBuf[RECORD_BUF_SIZE];
+            while (bt2_cursor_next(&cur, pkBuf, &heap_rid) == 0) {
+                int rec_len = tapi_heap_read(heap_rid, recBuf, sizeof(recBuf));
+                if (rec_len < 0) continue;
+
+                char colValues[CAT_MAX_COLUMNS][256];
+                int  nullArr[CAT_MAX_COLUMNS];
+                int  nv = tup_extract_fields(recBuf, rec_len,
+                                             indexCols, indexNCols,
+                                             colValues, nullArr, 64);
+                if (colIdx >= nv || nullArr[colIdx]) continue;
+
+                char tokens[FT_MAX_TOKENS][FT_MAX_TOKEN_LEN];
+                int n_tok = ft_tokenize(colValues[colIdx], tokens, FT_MAX_TOKENS);
+
+                for (int t = 0; t < n_tok; t++) {
+                    char key[BT2_MAX_KEY_LEN + 1];
+                    if (ft_build_key(tokens[t], pkBuf, key, sizeof(key)) < 0)
+                        continue;
+                    bt2_insert(&idx_tree, key, heap_rid);
+                }
+            }
+        }
+
+        idx_root = idx_tree.root_page;
+        cat_create_index_ex(td.table_id, g_idx.name, idx_root,
+                            g_idx.columnName, idx_type,
+                            NULL);
+        /* FIXME(Task 86 v2): incremental INSERT/UPDATE/DELETE maintenance
+         * for 'F'-type indexes is not implemented. The MATCH evaluator
+         * currently scans the heap + tokenizes per row rather than using
+         * the index, so results remain correct as long as no caller
+         * starts issuing index-backed lookups. Rebuild the index with
+         * CREATE FULLTEXT INDEX after bulk DML. */
+        printf("Index '%s' created on %s(%s) [FULLTEXT — NOTE: index is "
+               "not auto-maintained on INSERT/UPDATE/DELETE; rebuild "
+               "after bulk DML].\n",
+               g_idx.name, g_idx.tableName, g_idx.columnName);
+        idx_reset_flags();
         return 0;
     }
 
