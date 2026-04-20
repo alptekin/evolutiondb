@@ -48,6 +48,13 @@ QueryContext *qctx_alloc(void)
 void qctx_free(QueryContext *ctx)
 {
     if (!ctx) return;
+    /* Release any LATERAL subquery SQL buffers still held by the select slot */
+    for (int i = 0; i < MAX_JOIN_TABLES; i++) {
+        if (ctx->select.joinLateralSql[i]) {
+            free(ctx->select.joinLateralSql[i]);
+            ctx->select.joinLateralSql[i] = NULL;
+        }
+    }
     free(ctx->expr.nodePool);
     free(ctx);
 }

@@ -275,6 +275,7 @@ void AddShardRangeDef(const char *name, const char *bound, int node_id);
 void AddJoinTable(const char *name, const char *alias);
 void SetLastJoinType(int type);
 void SetJoinOnExpr(struct ExprNode *expr);
+void AddLateralTable(const char *sql, const char *alias);
 
 /* Table-level UNIQUE parser helpers */
 void AddUniqueColumn(const char *colName);
