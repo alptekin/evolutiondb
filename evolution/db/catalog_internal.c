@@ -2371,12 +2371,18 @@ int cat_find_partition_by_value(uint32_t table_id, const char *col_value,
                                 ShardDesc *out)
 {
     if (!col_value || !out) return -1;
-    ShardDesc shards[64];
-    int n = cat_list_shards(table_id, shards, 64);
+    ShardDesc shards[EVO_MAX_PARTITIONS];
+    int n = cat_list_shards(table_id, shards, EVO_MAX_PARTITIONS);
     long long vnum = atoll(col_value);
-    int v_is_num = 1;
+    /* Accept '-' only as the leading sign so "5-10" doesn't masquerade
+     * as numeric (atoll would then return 0 — silent mis-routing). */
+    int v_is_num = (col_value[0] != '\0');
     for (const char *p = col_value; *p; p++) {
-        if (!isdigit((unsigned char)*p) && *p != '-') { v_is_num = 0; break; }
+        int leading_minus = (p == col_value && *p == '-' && *(p + 1) != '\0');
+        if (!isdigit((unsigned char)*p) && !leading_minus) {
+            v_is_num = 0;
+            break;
+        }
     }
     for (int i = 0; i < n; i++) {
         const char *bar = strchr(shards[i].range_bound, '|');

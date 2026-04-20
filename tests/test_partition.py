@@ -119,3 +119,98 @@ def test_select_from_children_directly(db):
 
     result = db.query("SELECT id, v FROM pt8_p ORDER BY id")
     assert [(int(r[0]), r[1]) for r in result] == [(1, 'first'), (2, 'second')]
+
+
+# ── Review-fix regression tests (PR-follow-up to #87) ─────────────────
+
+def test_multi_row_insert_same_partition(db):
+    """Multi-row INSERT where every row falls in the same partition must
+    still work after the v1 multi-row-spanning guard lands."""
+    _drop(db, "pt9_lo", "pt9_hi", "pt9")
+    db.query("CREATE TABLE pt9 (id INT PRIMARY KEY, v INT) PARTITION BY RANGE (id)")
+    db.query("CREATE TABLE pt9_lo PARTITION OF pt9 FOR VALUES FROM (0) TO (100)")
+    db.query("CREATE TABLE pt9_hi PARTITION OF pt9 FOR VALUES FROM (100) TO (200)")
+
+    cols, rows, err, tag = simple_query(
+        db._sock, "INSERT INTO pt9 VALUES (1, 10), (2, 20), (3, 30)"
+    )
+    assert err is None, err
+    lo = db.query("SELECT id FROM pt9_lo ORDER BY id")
+    assert [int(r[0]) for r in lo] == [1, 2, 3]
+
+
+def test_multi_row_insert_across_partitions_rejected(db):
+    """Cross-partition multi-row INSERT must be rejected up front to
+    prevent silent mis-routing (review issue #1)."""
+    _drop(db, "pt10_lo", "pt10_hi", "pt10")
+    db.query("CREATE TABLE pt10 (id INT PRIMARY KEY) PARTITION BY RANGE (id)")
+    db.query("CREATE TABLE pt10_lo PARTITION OF pt10 FOR VALUES FROM (0) TO (50)")
+    db.query("CREATE TABLE pt10_hi PARTITION OF pt10 FOR VALUES FROM (50) TO (100)")
+
+    cols, rows, err, tag = simple_query(
+        db._sock, "INSERT INTO pt10 VALUES (5), (75)"
+    )
+    assert err is not None, "cross-partition batch must be rejected"
+    # Neither child should have any rows
+    assert db.query("SELECT COUNT(*) FROM pt10_lo") == [["0"]]
+    assert db.query("SELECT COUNT(*) FROM pt10_hi") == [["0"]]
+
+
+def test_overlapping_partition_rejected(db):
+    """Creating a partition whose range intersects an existing one must
+    fail (review issue #2)."""
+    _drop(db, "pt11_a", "pt11_b", "pt11")
+    db.query("CREATE TABLE pt11 (id INT PRIMARY KEY) PARTITION BY RANGE (id)")
+    db.query("CREATE TABLE pt11_a PARTITION OF pt11 FOR VALUES FROM (0) TO (100)")
+    cols, rows, err, tag = simple_query(
+        db._sock,
+        "CREATE TABLE pt11_b PARTITION OF pt11 FOR VALUES FROM (50) TO (200)"
+    )
+    assert err is not None, "overlapping range must be rejected"
+    assert "overlap" in err.lower(), err
+
+
+def test_negative_bounds(db):
+    """Negative FROM bound + negative INSERT value route correctly — and
+    the numeric-detection in cat_find_partition_by_value no longer
+    mis-classifies strings containing '-' (review issue #3)."""
+    _drop(db, "pt12_neg", "pt12_pos", "pt12")
+    db.query("CREATE TABLE pt12 (id INT PRIMARY KEY) PARTITION BY RANGE (id)")
+    db.query("CREATE TABLE pt12_neg PARTITION OF pt12 FOR VALUES FROM (-100) TO (0)")
+    db.query("CREATE TABLE pt12_pos PARTITION OF pt12 FOR VALUES FROM (0) TO (100)")
+    db.query("INSERT INTO pt12 VALUES (-42)")
+    db.query("INSERT INTO pt12 VALUES (42)")
+
+    assert [int(r[0]) for r in db.query("SELECT id FROM pt12_neg")] == [-42]
+    assert [int(r[0]) for r in db.query("SELECT id FROM pt12_pos")] == [42]
+
+
+def test_pk_uniqueness_documented_gap(db):
+    """v1 limitation: each partition has its own PK tree, so the same
+    primary-key value can exist in two children simultaneously. This
+    test asserts the current (buggy-by-PG-standards) behavior so a
+    future enforcement is flagged by a test failure rather than slipping
+    in silently (review issue #7)."""
+    _drop(db, "pt13_lo", "pt13_hi", "pt13")
+    db.query("CREATE TABLE pt13 (id INT PRIMARY KEY, v INT) PARTITION BY RANGE (v)")
+    db.query("CREATE TABLE pt13_lo PARTITION OF pt13 FOR VALUES FROM (0) TO (10)")
+    db.query("CREATE TABLE pt13_hi PARTITION OF pt13 FOR VALUES FROM (10) TO (20)")
+    db.query("INSERT INTO pt13 VALUES (1, 5)")      # routes to pt13_lo
+    db.query("INSERT INTO pt13 VALUES (1, 15)")     # routes to pt13_hi, same PK 1
+
+    lo = db.query("SELECT id, v FROM pt13_lo")
+    hi = db.query("SELECT id, v FROM pt13_hi")
+    assert [(int(r[0]), int(r[1])) for r in lo] == [(1, 5)]
+    assert [(int(r[0]), int(r[1])) for r in hi] == [(1, 15)]
+
+
+def test_drop_parent_cleans_up_children(db):
+    """DROP TABLE on a partitioned parent should reclaim the shard
+    metadata so child table names can be reused without stale
+    conflicts. v1 does not cascade-drop children yet, but the parent
+    drop must at least not error."""
+    _drop(db, "pt14_p", "pt14")
+    db.query("CREATE TABLE pt14 (id INT PRIMARY KEY) PARTITION BY RANGE (id)")
+    db.query("CREATE TABLE pt14_p PARTITION OF pt14 FOR VALUES FROM (0) TO (100)")
+    cols, rows, err, tag = simple_query(db._sock, "DROP TABLE pt14")
+    assert err is None, err

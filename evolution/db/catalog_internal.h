@@ -48,6 +48,12 @@ typedef struct {
 #define SHARD_RANGE      2
 #define SHARD_PARTITION  3   /* Task 88: local RANGE partitioning (all partitions on owner_node_id=0) */
 
+/* Task 88: ceiling on RANGE partitions per parent. The v1 partition
+ * routing code pulls the full partition list into a stack array, so
+ * the cap bounds both resource use and error behavior (no silent
+ * truncation — CreatePartitionChild rejects the (MAX+1)th). */
+#define EVO_MAX_PARTITIONS  1024
+
 typedef struct {
     uint32_t table_id;
     uint32_t schema_id;

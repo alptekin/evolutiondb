@@ -1210,11 +1210,10 @@ int InsertProcess(void)
     }
 
     /* Task 88: partitioned parent — route to the child partition whose
-     * RANGE bounds contain the partition key's value. Rewrites tblName
-     * + g_ins.tblName then falls through to the normal INSERT path.
-     * v1 limitation: only the first row's partition key is used, so
-     * multi-row inserts into a partitioned table must all fall in the
-     * same partition. */
+     * RANGE bounds contain the partition key's value. v1 supports
+     * multi-row INSERT only when every row maps to the same partition:
+     * cross-partition batches are rejected up front to avoid silent
+     * mis-routing (proper per-row routing lands in v2). */
     if (td.shard_type == SHARD_PARTITION) {
         int partCol = -1;
         for (int pc = 0; pc < ncols; pc++) {
@@ -1223,9 +1222,9 @@ int InsertProcess(void)
             }
         }
         if (partCol >= 0) {
-            /* Extract partition-col value from the first VALUES row.
-             * g_ins.data holds FIELD_SEP-separated values, ROW_SEP between
-             * rows; the values are in user column-list order. */
+            /* Translate table column index -> index in the user-supplied
+             * column list (if present). The values in g_ins.data are in
+             * user-supplied order, not table order. */
             int userCol = partCol;
             if (g_ins.columnCount > 0) {
                 userCol = -1;
@@ -1244,44 +1243,92 @@ int InsertProcess(void)
                 retval = -1; goto cleanup;
             }
 
-            char first_val[128] = "";
-            {
-                char tmp[RECORD_BUF_SIZE];
-                strncpy(tmp, g_ins.data, sizeof(tmp) - 1);
-                tmp[sizeof(tmp) - 1] = '\0';
-                /* Stop at ROW_SEP so we only look at row 0. */
-                char *rsep = strchr(tmp, ROW_SEP);
-                if (rsep) *rsep = '\0';
-                char *sv[256]; int sn = 0;
-                char *t = strtok(tmp, FIELD_SEP);
-                while (t && sn < 256) { sv[sn++] = t; t = strtok(NULL, FIELD_SEP); }
-                if (userCol < sn) {
-                    strncpy(first_val, sv[userCol], sizeof(first_val) - 1);
-                    first_val[sizeof(first_val) - 1] = '\0';
+            /* Walk every row in g_ins.data and assert they all route to
+             * the same partition. Keeps a working copy since strtok_r
+             * mutates the buffer. */
+            char work[RECORD_BUF_SIZE];
+            strncpy(work, g_ins.data, sizeof(work) - 1);
+            work[sizeof(work) - 1] = '\0';
+            char row_sep[2] = { ROW_SEP, '\0' };
+
+            char chosen_child[CAT_MAX_NAME_LEN] = "";
+            char first_val_shown[128] = "";
+            int rowIdx = 0;
+            char *row_save = NULL;
+            char *row = strtok_r(work, row_sep, &row_save);
+            while (row && *row) {
+                /* Extract partition-col value from this row. */
+                char row_buf[RECORD_BUF_SIZE];
+                strncpy(row_buf, row, sizeof(row_buf) - 1);
+                row_buf[sizeof(row_buf) - 1] = '\0';
+                char *field_save = NULL;
+                char *f = strtok_r(row_buf, FIELD_SEP, &field_save);
+                int fi = 0;
+                char val[128] = "";
+                while (f) {
+                    if (fi == userCol) {
+                        strncpy(val, f, sizeof(val) - 1);
+                        val[sizeof(val) - 1] = '\0';
+                        break;
+                    }
+                    f = strtok_r(NULL, FIELD_SEP, &field_save);
+                    fi++;
                 }
+
+                ShardDesc part;
+                if (cat_find_partition_by_value(td.table_id, val, &part) < 0) {
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                             "partition: no partition of '%s' matches %s=%s "
+                             "(row %d)",
+                             tblName, td.shard_key, val, rowIdx + 1);
+                    g_err.error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
+                    TruncateInsert();
+                    retval = -1; goto cleanup;
+                }
+                if (!chosen_child[0]) {
+                    strncpy(chosen_child, part.shard_name,
+                            sizeof(chosen_child) - 1);
+                    chosen_child[sizeof(chosen_child) - 1] = '\0';
+                    strncpy(first_val_shown, val,
+                            sizeof(first_val_shown) - 1);
+                    first_val_shown[sizeof(first_val_shown) - 1] = '\0';
+                } else if (strcmp(chosen_child, part.shard_name) != 0) {
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                             "partition: multi-row INSERT spans multiple "
+                             "partitions (row 1 -> '%s' via %s=%s, "
+                             "row %d -> '%s' via %s=%s). v1 requires all "
+                             "rows of a single INSERT to target the same "
+                             "partition.",
+                             chosen_child, td.shard_key, first_val_shown,
+                             rowIdx + 1, part.shard_name,
+                             td.shard_key, val);
+                    g_err.error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
+                    TruncateInsert();
+                    retval = -1; goto cleanup;
+                }
+
+                rowIdx++;
+                row = strtok_r(NULL, row_sep, &row_save);
             }
 
-            ShardDesc part;
-            if (cat_find_partition_by_value(td.table_id, first_val, &part) < 0) {
-                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                         "partition: no partition of '%s' matches %s=%s",
-                         tblName, td.shard_key, first_val);
-                g_err.error = 1;
-                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
-                TruncateInsert();
-                retval = -1; goto cleanup;
-            }
-
-            strncpy(tblName, part.shard_name, sizeof(tblName) - 1);
-            tblName[sizeof(tblName) - 1] = '\0';
-            strncpy(g_ins.tblName, part.shard_name, sizeof(g_ins.tblName) - 1);
-            g_ins.tblName[sizeof(g_ins.tblName) - 1] = '\0';
-            if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
-                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
-                         "partition: child table '%s' not found", part.shard_name);
-                g_err.error = 1;
-                TruncateInsert();
-                retval = -1; goto cleanup;
+            if (!chosen_child[0]) {
+                /* No rows? Nothing to route — fall through. */
+            } else {
+                strncpy(tblName, chosen_child, sizeof(tblName) - 1);
+                tblName[sizeof(tblName) - 1] = '\0';
+                strncpy(g_ins.tblName, chosen_child,
+                        sizeof(g_ins.tblName) - 1);
+                g_ins.tblName[sizeof(g_ins.tblName) - 1] = '\0';
+                if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                             "partition: child table '%s' not found",
+                             chosen_child);
+                    g_err.error = 1;
+                    TruncateInsert();
+                    retval = -1; goto cleanup;
+                }
             }
         }
     }
