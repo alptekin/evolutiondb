@@ -1776,7 +1776,7 @@
 
 ## Day 45 — Table Partitioning & Lateral Joins
 
-### Task 88: ⬜ Table Partitioning (Feature #53)
+### Task 88: ✅ Table Partitioning (Feature #53)
 
 **Goal:** Basic RANGE/LIST partitioning.
 

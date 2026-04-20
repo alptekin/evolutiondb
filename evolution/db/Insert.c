@@ -1209,6 +1209,83 @@ int InsertProcess(void)
         retval = -1; goto cleanup;
     }
 
+    /* Task 88: partitioned parent — route to the child partition whose
+     * RANGE bounds contain the partition key's value. Rewrites tblName
+     * + g_ins.tblName then falls through to the normal INSERT path.
+     * v1 limitation: only the first row's partition key is used, so
+     * multi-row inserts into a partitioned table must all fall in the
+     * same partition. */
+    if (td.shard_type == SHARD_PARTITION) {
+        int partCol = -1;
+        for (int pc = 0; pc < ncols; pc++) {
+            if (strcasecmp(cols[pc].col_name, td.shard_key) == 0) {
+                partCol = pc; break;
+            }
+        }
+        if (partCol >= 0) {
+            /* Extract partition-col value from the first VALUES row.
+             * g_ins.data holds FIELD_SEP-separated values, ROW_SEP between
+             * rows; the values are in user column-list order. */
+            int userCol = partCol;
+            if (g_ins.columnCount > 0) {
+                userCol = -1;
+                for (int uc = 0; uc < g_ins.columnCount; uc++) {
+                    if (strcasecmp(g_ins.columns[uc], td.shard_key) == 0) {
+                        userCol = uc; break;
+                    }
+                }
+            }
+            if (userCol < 0) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "partition: column '%s' missing from INSERT list",
+                         td.shard_key);
+                g_err.error = 1;
+                TruncateInsert();
+                retval = -1; goto cleanup;
+            }
+
+            char first_val[128] = "";
+            {
+                char tmp[RECORD_BUF_SIZE];
+                strncpy(tmp, g_ins.data, sizeof(tmp) - 1);
+                tmp[sizeof(tmp) - 1] = '\0';
+                /* Stop at ROW_SEP so we only look at row 0. */
+                char *rsep = strchr(tmp, ROW_SEP);
+                if (rsep) *rsep = '\0';
+                char *sv[256]; int sn = 0;
+                char *t = strtok(tmp, FIELD_SEP);
+                while (t && sn < 256) { sv[sn++] = t; t = strtok(NULL, FIELD_SEP); }
+                if (userCol < sn) {
+                    strncpy(first_val, sv[userCol], sizeof(first_val) - 1);
+                    first_val[sizeof(first_val) - 1] = '\0';
+                }
+            }
+
+            ShardDesc part;
+            if (cat_find_partition_by_value(td.table_id, first_val, &part) < 0) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "partition: no partition of '%s' matches %s=%s",
+                         tblName, td.shard_key, first_val);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_CHECK_VIOLATION);
+                TruncateInsert();
+                retval = -1; goto cleanup;
+            }
+
+            strncpy(tblName, part.shard_name, sizeof(tblName) - 1);
+            tblName[sizeof(tblName) - 1] = '\0';
+            strncpy(g_ins.tblName, part.shard_name, sizeof(g_ins.tblName) - 1);
+            g_ins.tblName[sizeof(g_ins.tblName) - 1] = '\0';
+            if (tapi_resolve(tblName, &td, cols, &ncols) < 0) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "partition: child table '%s' not found", part.shard_name);
+                g_err.error = 1;
+                TruncateInsert();
+                retval = -1; goto cleanup;
+            }
+        }
+    }
+
     /* Phase (INSERT opt): probe constraint presence ONCE per stmt
      * so validate_check / validate_unique / validate_fk can be
      * skipped entirely when the table has no such constraints.
