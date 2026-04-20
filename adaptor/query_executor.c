@@ -7343,7 +7343,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                                 memcpy(tname, tstart, tl);
                                 tname[tl] = '\0';
                                 ViewDesc vd;
-                                if (cat_find_view(vdb.db_id, vsch.schema_id, tname, &vd) == 0) {
+                                if (cat_find_view(vdb.db_id, vsch.schema_id, tname, &vd) == 0 &&
+                                    !vd.is_materialized) {
                                     /* Found a view! Merge outer clauses into view SQL */
                                     char merged[8192];
 

@@ -149,6 +149,7 @@ typedef struct {
     char     view_name[CAT_MAX_NAME_LEN];
     char     view_sql[4096];
     int      check_option;   /* 0=none, 1=CASCADED, 2=LOCAL */
+    int      is_materialized; /* 1 = materialized view (Task 87) */
 } ViewDesc;
 
 typedef struct {
@@ -411,6 +412,8 @@ int cat_increment_dead_tuples(uint32_t table_id, int count);
 /* ----------------------------------------------------------------
  *  View operations
  * ---------------------------------------------------------------- */
+int cat_create_matview(uint32_t db_id, uint32_t schema_id,
+                       const char *name, const char *sql);
 int cat_create_view(uint32_t db_id, uint32_t schema_id,
                     const char *name, const char *sql);
 int cat_find_view(uint32_t db_id, uint32_t schema_id,
