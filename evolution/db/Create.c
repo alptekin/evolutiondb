@@ -2500,6 +2500,40 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
         return -1;
     }
 
+    /* List existing partitions for cap + overlap checks BEFORE creating
+     * the child table so we don't have to roll back on detection. */
+    ShardDesc existing_shards[EVO_MAX_PARTITIONS];
+    int existing_count = cat_list_shards(parent.table_id, existing_shards,
+                                         EVO_MAX_PARTITIONS);
+
+    if (existing_count >= EVO_MAX_PARTITIONS) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: '%s' already has the maximum of %d partitions",
+                 parent_name, EVO_MAX_PARTITIONS);
+        g_err.error = 1;
+        return -1;
+    }
+
+    for (int i = 0; i < existing_count; i++) {
+        const char *bar = strchr(existing_shards[i].range_bound, '|');
+        if (!bar) continue;
+        char elow[32], ehigh[32];
+        size_t ll = (size_t)(bar - existing_shards[i].range_bound);
+        if (ll >= sizeof(elow)) ll = sizeof(elow) - 1;
+        memcpy(elow, existing_shards[i].range_bound, ll); elow[ll] = '\0';
+        strncpy(ehigh, bar + 1, sizeof(ehigh) - 1);
+        ehigh[sizeof(ehigh) - 1] = '\0';
+        long long elo = atoll(elow), ehi = atoll(ehigh);
+        if (low < ehi && elo < high) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "partition: range [%d, %d) overlaps existing partition "
+                     "'%s' [%lld, %lld)",
+                     low, high, existing_shards[i].shard_name, elo, ehi);
+            g_err.error = 1;
+            return -1;
+        }
+    }
+
     /* Create child table with parent's columns. cat_create_table takes
      * the column array + table settings separately. */
     if (cat_create_table(sch.schema_id, child_name, parent_cols, ncols,
@@ -2512,10 +2546,6 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
         return -1;
     }
 
-    /* Derive next ordinal by counting existing partitions. */
-    ShardDesc existing_shards[64];
-    int existing_count = cat_list_shards(parent.table_id, existing_shards, 64);
-
     ShardDesc p;
     memset(&p, 0, sizeof(p));
     p.table_id = parent.table_id;
@@ -2524,6 +2554,12 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
     strncpy(p.shard_name, child_name, CAT_MAX_NAME_LEN - 1);
     snprintf(p.range_bound, sizeof(p.range_bound), "%d|%d", low, high);
     if (cat_create_shard(&p) < 0) {
+        /* Rollback: drop the just-created child so the name is reusable. */
+        TableDesc stranded;
+        ColumnDesc sc[CAT_MAX_COLUMNS]; int snc = 0;
+        if (tapi_resolve(child_name, &stranded, sc, &snc) == 0) {
+            cat_drop_table(stranded.table_id);
+        }
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "partition: could not register partition metadata");
         g_err.error = 1;
