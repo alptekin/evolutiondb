@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <pthread.h>
 #include "catalog_internal.h"
 #include "table_api.h"
@@ -2359,6 +2360,57 @@ int cat_list_shards(uint32_t table_id, ShardDesc *out, int max)
         }
     }
     return count;
+}
+
+/* Task 88: Walk shard records for the partitioned table, decode the
+ * range_bound as "low|high", and return the shard whose bounds contain
+ * col_value. Bounds are compared lexicographically — works for ints
+ * padded to uniform width or for strings; numeric comparison falls back
+ * to atoll when both sides parse as integers. */
+int cat_find_partition_by_value(uint32_t table_id, const char *col_value,
+                                ShardDesc *out)
+{
+    if (!col_value || !out) return -1;
+    /* Heap-allocate the shard list — EVO_MAX_PARTITIONS * sizeof(ShardDesc)
+     * is ~384 KB, too large for non-main-thread stacks on macOS (512 KB
+     * default). This path runs on every INSERT route, so stack pressure
+     * matters. */
+    ShardDesc *shards = malloc(EVO_MAX_PARTITIONS * sizeof(ShardDesc));
+    if (!shards) return -1;
+    int n = cat_list_shards(table_id, shards, EVO_MAX_PARTITIONS);
+    long long vnum = atoll(col_value);
+    /* Accept '-' only as the leading sign so "5-10" doesn't masquerade
+     * as numeric (atoll would then return 0 — silent mis-routing). */
+    int v_is_num = (col_value[0] != '\0');
+    for (const char *p = col_value; *p; p++) {
+        int leading_minus = (p == col_value && *p == '-' && *(p + 1) != '\0');
+        if (!isdigit((unsigned char)*p) && !leading_minus) {
+            v_is_num = 0;
+            break;
+        }
+    }
+    int rc = -1;
+    for (int i = 0; i < n; i++) {
+        const char *bar = strchr(shards[i].range_bound, '|');
+        if (!bar) continue;
+        char low[128], high[128];
+        size_t ll = (size_t)(bar - shards[i].range_bound);
+        if (ll >= sizeof(low)) ll = sizeof(low) - 1;
+        memcpy(low, shards[i].range_bound, ll);  low[ll] = '\0';
+        strncpy(high, bar + 1, sizeof(high) - 1); high[sizeof(high) - 1] = '\0';
+
+        int in_range;
+        if (v_is_num) {
+            long long lo = atoll(low), hi = atoll(high);
+            in_range = (vnum >= lo && vnum < hi);
+        } else {
+            in_range = (strcmp(col_value, low) >= 0 &&
+                        strcmp(col_value, high) < 0);
+        }
+        if (in_range) { *out = shards[i]; rc = 0; break; }
+    }
+    free(shards);
+    return rc;
 }
 
 int cat_find_shard(uint32_t table_id, int ordinal, ShardDesc *out)

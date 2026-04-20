@@ -266,6 +266,9 @@ int ReadCheckConstraintsWithNames(const char *tblName, char constraints[][1024],
 /* Shard parser helpers (Create.c) */
 void SetShardHash(const char *colName, int shardCount);
 void SetShardRange(const char *colName);
+void SetPartitionByRange(const char *colName);
+int  CreatePartitionChild(const char *child_name, const char *parent_name,
+                          int low, int high);
 void AddShardRangeDef(const char *name, const char *bound, int node_id);
 
 /* JOIN parser helpers (Select.c) */
