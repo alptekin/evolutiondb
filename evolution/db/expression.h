@@ -303,6 +303,13 @@ ExprNode *expr_deserialize(const char *buf);
 /* Reset expression pool (call before each query) */
 void expr_pool_reset(void);
 
+/* LATERAL nested-execution suppression.
+ * When > 0, expr_pool_reset() is a no-op so an inner query_execute() invoked
+ * during outer execution doesn't destroy the outer's ExprNode pool. The outer
+ * caller saves nodePoolUsed before bumping the counter and restores it after,
+ * reclaiming the inner's allocations. */
+extern __thread int g_expr_pool_nested;
+
 /* Store a select expression with optional alias */
 void expr_store_select(ExprNode *expr, const char *alias);
 

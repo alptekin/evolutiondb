@@ -13,10 +13,15 @@
 	void yyerror(void *scanner, const char *s, ...);
 	static __thread int t_oldstate;
 
-	/* Subquery SQL extraction: track byte position in input */
+	/* Subquery SQL extraction: track byte position in input.
+	 * YY_USER_ACTION runs before every lexer action; we advance
+	 * g_lex_pos by the matched token length so the parser can slice
+	 * out subquery text (used by LATERAL rule for correlated re-exec). */
 	__thread int g_lex_pos = 0;
 	__thread const char *g_lex_input = NULL;
 	__thread int g_in_subquery = 0;
+
+	#define YY_USER_ACTION  g_lex_pos += yyleng;
 %}
 %x COMMENT
 %s BTWMODE
@@ -199,6 +204,7 @@ INDEX					{ return INDEX; }
 KEY					{ return KEY; }
 
 
+LATERAL					{ return LATERAL; }
 LEADING					{ return LEADING; }
 LEAVE					{ return LEAVE; }
 

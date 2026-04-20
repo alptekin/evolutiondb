@@ -17,6 +17,13 @@
 #include "database.h"   /* query_context.h macros for g_expr.nodePool etc. */
 #include "crypto.h"
 
+/* Nested-execution marker (Task 89 — Feature #59).
+ * Counter bumped by the join engine around LATERAL subquery re-execution.
+ * Kept for future use (e.g., to skip heavy setup during nested calls);
+ * expr_pool_reset no longer conditions on this because the lateral driver
+ * snapshots and restores ExprOpts explicitly. */
+__thread int g_expr_pool_nested = 0;
+
 /* ---- Pool allocator ---- */
 ExprNode *expr_alloc(void)
 {
@@ -1166,7 +1173,10 @@ int expr_evaluate(const ExprNode *e,
      * (preserves formatting: dates, strings, booleans, etc.) */
     if (e->type == EXPR_COLUMN) {
         int c;
-        /* Exact match first */
+        const char *dot = strchr(e->val.col_name, '.');
+        const char *bare = dot ? dot + 1 : e->val.col_name;
+
+        /* 1) Exact match in local scope */
         for (c = 0; c < num_cols; c++) {
             if (strcasecmp(col_names[c], e->val.col_name) == 0) {
                 if (strcmp(col_values[c], NULL_MARKER) == 0) { out_buf[0] = '\0'; return 0; }
@@ -1175,21 +1185,72 @@ int expr_evaluate(const ExprNode *e,
                 return 1;
             }
         }
-        /* Qualified fallback: strip qualifier */
-        {
-            const char *dot = strchr(e->val.col_name, '.');
-            const char *bare = dot ? dot + 1 : e->val.col_name;
-            for (c = 0; c < num_cols; c++) {
-                const char *cn_bare = strrchr(col_names[c], '.');
-                cn_bare = cn_bare ? cn_bare + 1 : col_names[c];
+
+        /* 2) LATERAL outer-scope exact match (Task 89 — Feature #59).
+         * Checked BEFORE local bare-name fallback: a qualified reference like
+         * `t1.id` inside a lateral subquery must resolve to the outer table,
+         * not accidentally match a same-named inner column via qualifier
+         * stripping. */
+        if (g_qctx && g_qctx->outer_col_names && g_qctx->outer_col_count > 0) {
+            const char (*ocn)[128] = g_qctx->outer_col_names;
+            const char (*ocv)[256] = g_qctx->outer_col_values;
+            const int   *ocnull    = g_qctx->outer_col_null;
+            int ocnt = g_qctx->outer_col_count;
+            for (c = 0; c < ocnt; c++) {
+                if (strcasecmp(ocn[c], e->val.col_name) == 0) {
+                    if (ocnull && ocnull[c]) { out_buf[0] = '\0'; return 0; }
+                    strncpy(out_buf, ocv[c], buf_size - 1);
+                    out_buf[buf_size - 1] = '\0';
+                    return 1;
+                }
+            }
+            /* Qualified ref, no exact match: try bare name in outer too.
+             * Unqualified refs fall through to local bare-name below first. */
+            if (dot) {
+                for (c = 0; c < ocnt; c++) {
+                    const char *cn_bare = strrchr(ocn[c], '.');
+                    cn_bare = cn_bare ? cn_bare + 1 : ocn[c];
+                    if (strcasecmp(cn_bare, bare) == 0) {
+                        if (ocnull && ocnull[c]) { out_buf[0] = '\0'; return 0; }
+                        strncpy(out_buf, ocv[c], buf_size - 1);
+                        out_buf[buf_size - 1] = '\0';
+                        return 1;
+                    }
+                }
+            }
+        }
+
+        /* 3) Local bare-name fallback (strip qualifier) */
+        for (c = 0; c < num_cols; c++) {
+            const char *cn_bare = strrchr(col_names[c], '.');
+            cn_bare = cn_bare ? cn_bare + 1 : col_names[c];
+            if (strcasecmp(cn_bare, bare) == 0) {
+                if (strcmp(col_values[c], NULL_MARKER) == 0) { out_buf[0] = '\0'; return 0; }
+                strncpy(out_buf, col_values[c], buf_size - 1);
+                out_buf[buf_size - 1] = '\0';
+                return 1;
+            }
+        }
+
+        /* 4) Outer bare-name fallback for unqualified refs */
+        if (!dot && g_qctx && g_qctx->outer_col_names &&
+            g_qctx->outer_col_count > 0) {
+            const char (*ocn)[128] = g_qctx->outer_col_names;
+            const char (*ocv)[256] = g_qctx->outer_col_values;
+            const int   *ocnull    = g_qctx->outer_col_null;
+            int ocnt = g_qctx->outer_col_count;
+            for (c = 0; c < ocnt; c++) {
+                const char *cn_bare = strrchr(ocn[c], '.');
+                cn_bare = cn_bare ? cn_bare + 1 : ocn[c];
                 if (strcasecmp(cn_bare, bare) == 0) {
-                    if (strcmp(col_values[c], NULL_MARKER) == 0) { out_buf[0] = '\0'; return 0; }
-                    strncpy(out_buf, col_values[c], buf_size - 1);
+                    if (ocnull && ocnull[c]) { out_buf[0] = '\0'; return 0; }
+                    strncpy(out_buf, ocv[c], buf_size - 1);
                     out_buf[buf_size - 1] = '\0';
                     return 1;
                 }
             }
         }
+
         out_buf[0] = '\0';
         return 0;
     }
