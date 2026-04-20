@@ -2371,7 +2371,12 @@ int cat_find_partition_by_value(uint32_t table_id, const char *col_value,
                                 ShardDesc *out)
 {
     if (!col_value || !out) return -1;
-    ShardDesc shards[EVO_MAX_PARTITIONS];
+    /* Heap-allocate the shard list — EVO_MAX_PARTITIONS * sizeof(ShardDesc)
+     * is ~384 KB, too large for non-main-thread stacks on macOS (512 KB
+     * default). This path runs on every INSERT route, so stack pressure
+     * matters. */
+    ShardDesc *shards = malloc(EVO_MAX_PARTITIONS * sizeof(ShardDesc));
+    if (!shards) return -1;
     int n = cat_list_shards(table_id, shards, EVO_MAX_PARTITIONS);
     long long vnum = atoll(col_value);
     /* Accept '-' only as the leading sign so "5-10" doesn't masquerade
@@ -2384,6 +2389,7 @@ int cat_find_partition_by_value(uint32_t table_id, const char *col_value,
             break;
         }
     }
+    int rc = -1;
     for (int i = 0; i < n; i++) {
         const char *bar = strchr(shards[i].range_bound, '|');
         if (!bar) continue;
@@ -2401,9 +2407,10 @@ int cat_find_partition_by_value(uint32_t table_id, const char *col_value,
             in_range = (strcmp(col_value, low) >= 0 &&
                         strcmp(col_value, high) < 0);
         }
-        if (in_range) { *out = shards[i]; return 0; }
+        if (in_range) { *out = shards[i]; rc = 0; break; }
     }
-    return -1;
+    free(shards);
+    return rc;
 }
 
 int cat_find_shard(uint32_t table_id, int ordinal, ShardDesc *out)
