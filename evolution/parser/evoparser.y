@@ -46,6 +46,21 @@
 
 	/* Track alias for current select_expr — thread-local */
 	static __thread char g_currentAlias[128];
+
+	/* LATERAL subquery: captured SQL pending alias binding, plus outer
+	 * g_expr slot snapshots that the inner select_stmt parse would
+	 * otherwise overwrite. We save every slot an inner select_stmt or
+	 * its sub-rules can touch so nested parsing is fully isolated. */
+	static __thread char *g_pending_lateral_sql = NULL;
+	static __thread struct ExprNode *g_lateral_saved_whereExpr = NULL;
+	static __thread struct ExprNode *g_lateral_saved_limitExpr = NULL;
+	static __thread struct ExprNode *g_lateral_saved_offsetExpr = NULL;
+	static __thread struct ExprNode *g_lateral_saved_havingExpr = NULL;
+	static __thread int g_lateral_saved_selectExprCount = 0;
+	static __thread struct ExprNode *g_lateral_saved_selectExprs[MAX_SELECT_EXPRS];
+	static __thread int g_lateral_saved_groupByCount = 0;
+	static __thread struct ExprNode *g_lateral_saved_groupByExprs[MAX_GROUP_BY];
+	static __thread int g_lateral_saved_windowSpecCount = 0;
 %}
 
 %pure-parser
@@ -221,6 +236,7 @@
 %token LEAVE
 %token LOOP
 
+%token LATERAL
 %token LESS
 %token LONGTEXT
 %token LOW_PRIORITY
@@ -1072,7 +1088,57 @@ NAME opt_as_alias index_hint
     }
 | NAME '.' NAME opt_as_alias index_hint                                         { emit("TABLE %s.%s", $1, $3); if (g_qctx) AddJoinTable($3, g_currentAlias); free($1); free($3); }
 | table_subquery opt_as NAME                                                    { emit("SUBQUERYAS %s", $3); free($3); }
+| lateral_subquery opt_as NAME
+    {
+        emit("LATERAL %s", $3);
+        if (g_qctx && g_pending_lateral_sql) {
+            AddLateralTable(g_pending_lateral_sql, $3);
+        }
+        if (g_pending_lateral_sql) { free(g_pending_lateral_sql); g_pending_lateral_sql = NULL; }
+        free($3);
+    }
 | '(' table_references ')'							{ emit("TABLEREFERENCES %d", $2); }
+;
+
+lateral_subquery:
+LATERAL '(' {
+        g_subq_mark = g_lex_pos;
+        g_in_subquery = 1;
+        /* The inner select_stmt parser rules unconditionally write to
+         * g_expr.{whereExpr,limitExpr,offsetExpr,havingExpr,selectExprs[],
+         * groupByExprs[],windowSpecs[]} with no g_in_subquery guard.
+         * Snapshot every slot the inner parse can reach so the outer
+         * query's state isn't corrupted. */
+        g_lateral_saved_whereExpr  = g_expr.whereExpr;
+        g_lateral_saved_limitExpr  = g_expr.limitExpr;
+        g_lateral_saved_offsetExpr = g_expr.offsetExpr;
+        g_lateral_saved_havingExpr = g_expr.havingExpr;
+        g_lateral_saved_selectExprCount = g_expr.selectExprCount;
+        g_lateral_saved_groupByCount    = g_expr.groupByCount;
+        g_lateral_saved_windowSpecCount = g_expr.windowSpecCount;
+        memcpy(g_lateral_saved_selectExprs, g_expr.selectExprs,
+               sizeof(g_lateral_saved_selectExprs));
+        memcpy(g_lateral_saved_groupByExprs, g_expr.groupByExprs,
+               sizeof(g_lateral_saved_groupByExprs));
+    } select_stmt ')'
+    {
+        g_in_subquery = 0;
+        /* Restore outer slots; the lateral's SQL text is captured separately
+         * and re-parsed at execution time by the join engine. */
+        g_expr.whereExpr  = g_lateral_saved_whereExpr;
+        g_expr.limitExpr  = g_lateral_saved_limitExpr;
+        g_expr.offsetExpr = g_lateral_saved_offsetExpr;
+        g_expr.havingExpr = g_lateral_saved_havingExpr;
+        g_expr.selectExprCount = g_lateral_saved_selectExprCount;
+        g_expr.groupByCount    = g_lateral_saved_groupByCount;
+        g_expr.windowSpecCount = g_lateral_saved_windowSpecCount;
+        memcpy(g_expr.selectExprs, g_lateral_saved_selectExprs,
+               sizeof(g_lateral_saved_selectExprs));
+        memcpy(g_expr.groupByExprs, g_lateral_saved_groupByExprs,
+               sizeof(g_lateral_saved_groupByExprs));
+        if (g_pending_lateral_sql) free(g_pending_lateral_sql);
+        g_pending_lateral_sql = evo_extract_subq_sql();
+    }
 ;
 
 opt_as: AS

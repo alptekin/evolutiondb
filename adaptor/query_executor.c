@@ -5046,6 +5046,12 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_sel.distinct = 0;
     g_sel.joinTableCount = 0;
     memset(g_sel.joinOnExprs, 0, sizeof(g_sel.joinOnExprs));
+    for (int _ji = 0; _ji < MAX_JOIN_TABLES; _ji++) {
+        if (g_sel.joinLateralSql[_ji]) {
+            free(g_sel.joinLateralSql[_ji]);
+            g_sel.joinLateralSql[_ji] = NULL;
+        }
+    }
     g_create.totalColumnSize = 0;
     g_create.currentColNotNull = 0;
     g_create.currentColPrimaryKey = 0;
@@ -5285,13 +5291,18 @@ parser_done:
                 strncpy(plan.tables[ji].alias, g_sel.joinAliases[ji], 127);
                 plan.join_types[ji] = g_sel.joinTypes[ji];
                 plan.join_conds[ji] = g_sel.joinOnExprs[ji];
-                /* Resolve table to get owner_node */
-                TableDesc jtd;
-                const char *jdb = ctx ? ctx->database : "evosql";
-                const char *jsch = ctx ? ctx->schema : "default";
-                if (cat_resolve_table(jdb, jsch, g_sel.joinTables[ji], &jtd) == 0) {
-                    plan.tables[ji].owner_node = (int)jtd.owner_node_id;
-                    plan.tables[ji].table_id = jtd.table_id;
+                if (g_sel.joinLateralSql[ji]) {
+                    plan.is_lateral[ji] = 1;
+                    plan.lateral_sql[ji] = strdup(g_sel.joinLateralSql[ji]);
+                } else {
+                    /* Resolve real table to get owner_node */
+                    TableDesc jtd;
+                    const char *jdb = ctx ? ctx->database : "evosql";
+                    const char *jsch = ctx ? ctx->schema : "default";
+                    if (cat_resolve_table(jdb, jsch, g_sel.joinTables[ji], &jtd) == 0) {
+                        plan.tables[ji].owner_node = (int)jtd.owner_node_id;
+                        plan.tables[ji].table_id = jtd.table_id;
+                    }
                 }
             }
             plan.where_expr = g_expr.whereExpr;
@@ -5299,6 +5310,14 @@ parser_done:
             rwlock_rdlock(&g_parse_lock);
             join_execute(&plan, rs, ctx, ctx ? &ctx->snapshot : NULL);
             rwlock_rdunlock(&g_parse_lock);
+
+            /* Release lateral SQL copies we owned for the duration of the join */
+            for (int _li = 0; _li < plan.num_tables; _li++) {
+                if (plan.is_lateral[_li] && plan.lateral_sql[_li]) {
+                    free((void *)plan.lateral_sql[_li]);
+                    plan.lateral_sql[_li] = NULL;
+                }
+            }
 
             /* Column projection: if SELECT specified columns (not *),
              * filter the join result to only include requested columns.
@@ -5818,9 +5837,17 @@ static void normalize_sql(char *sql)
 
     /* Pass 3: Remove "alias." prefix from qualified references.
      * SKIP for JOIN queries — qualified names needed for ON conditions.
-     * SKIP content inside single-quoted strings (JSON paths etc.). */
+     * SKIP content inside single-quoted strings (JSON paths etc.).
+     * When a LATERAL correlation scope is published on QueryContext, skip
+     * entirely: the SQL is being re-executed on behalf of the join engine
+     * and its qualifiers may refer to the outer query's tables. */
     {
-        if (!has_join) {
+        int skip_pass3 = has_join;
+        if (!skip_pass3 && g_qctx && g_qctx->outer_col_names &&
+            g_qctx->outer_col_count > 0) {
+            skip_pass3 = 1;
+        }
+        if (!skip_pass3) {
             src = sql;
             dst = buf;
             int in_sq = 0;
@@ -7585,7 +7612,10 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 if (i + 7 < len && isalnum((unsigned char)mat[i + 7]))
                     continue; /* not a keyword boundary */
                 /* Skip derived tables and view subqueries: only process
-                 * (SELECT if preceded by operator, IN, EXISTS — not FROM/JOIN/AS */
+                 * (SELECT if preceded by operator, IN, EXISTS — not FROM/JOIN/AS.
+                 * LATERAL (SELECT ...) is a derived-table variant and MUST NOT be
+                 * materialized eagerly — it's re-evaluated per outer row by the
+                 * join engine. */
                 {
                     int j = i - 1;
                     while (j >= 0 && isspace((unsigned char)mat[j])) j--;
@@ -7593,6 +7623,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         /* Check what precedes the '(' */
                         if (j >= 3 && strncasecmp(mat + j - 3, "FROM", 4) == 0) continue;
                         if (j >= 3 && strncasecmp(mat + j - 3, "JOIN", 4) == 0) continue;
+                        if (j >= 6 && strncasecmp(mat + j - 6, "LATERAL", 7) == 0 &&
+                            (j - 7 < 0 || !isalnum((unsigned char)mat[j - 7]))) continue;
                         if (j >= 1 && strncasecmp(mat + j - 1, "AS", 2) == 0) continue;
                         /* Also skip if preceded by comma (select list or value list) */
                         if (mat[j] == ',') continue;
