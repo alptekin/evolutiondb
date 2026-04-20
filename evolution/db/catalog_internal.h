@@ -43,9 +43,16 @@ typedef struct {
 } SchemaDesc;
 
 /* Shard type constants */
-#define SHARD_NONE   0
-#define SHARD_HASH   1
-#define SHARD_RANGE  2
+#define SHARD_NONE       0
+#define SHARD_HASH       1
+#define SHARD_RANGE      2
+#define SHARD_PARTITION  3   /* Task 88: local RANGE partitioning (all partitions on owner_node_id=0) */
+
+/* Task 88: ceiling on RANGE partitions per parent. The v1 partition
+ * routing code pulls the full partition list into a stack array, so
+ * the cap bounds both resource use and error behavior (no silent
+ * truncation — CreatePartitionChild rejects the (MAX+1)th). */
+#define EVO_MAX_PARTITIONS  1024
 
 typedef struct {
     uint32_t table_id;
@@ -259,6 +266,12 @@ int cat_update_shard_info(uint32_t table_id, const char *table_name,
 int cat_create_shard(const ShardDesc *sd);
 int cat_list_shards(uint32_t table_id, ShardDesc *out, int max);
 int cat_find_shard(uint32_t table_id, int ordinal, ShardDesc *out);
+
+/* Task 88: partition lookup — for a partitioned table + column value,
+ * return the ShardDesc of the matching RANGE partition (low <= v < high).
+ * Returns 0 on match, -1 if value falls in no partition. */
+int cat_find_partition_by_value(uint32_t table_id, const char *col_value,
+                                ShardDesc *out);
 int cat_drop_shards(uint32_t table_id);
 int cat_update_shard_owner(uint32_t table_id, int ordinal, int new_owner);
 

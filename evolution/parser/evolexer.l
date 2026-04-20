@@ -110,6 +110,7 @@ NOTHING					{ return NOTHING; }
 AGAINST					{ return AGAINST; }
 MATERIALIZED			{ return MATERIALIZED; }
 REFRESH					{ return REFRESH; }
+OF						{ return OF; }
 
 
 DEFERRABLE				{ return DEFERRABLE; }
