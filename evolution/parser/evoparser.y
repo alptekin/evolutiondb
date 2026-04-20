@@ -138,6 +138,8 @@
 %token EXCLUDED
 %token NOTHING
 %token AGAINST
+%token MATERIALIZED
+%token REFRESH
 
 %token DATABASE
 %token DECLARE
