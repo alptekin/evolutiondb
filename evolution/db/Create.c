@@ -2501,8 +2501,15 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
     }
 
     /* List existing partitions for cap + overlap checks BEFORE creating
-     * the child table so we don't have to roll back on detection. */
-    ShardDesc existing_shards[EVO_MAX_PARTITIONS];
+     * the child table so we don't have to roll back on detection. Heap-
+     * allocate to avoid a ~384 KB stack frame on macOS non-main threads. */
+    ShardDesc *existing_shards = malloc(EVO_MAX_PARTITIONS * sizeof(ShardDesc));
+    if (!existing_shards) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: out of memory");
+        g_err.error = 1;
+        return -1;
+    }
     int existing_count = cat_list_shards(parent.table_id, existing_shards,
                                          EVO_MAX_PARTITIONS);
 
@@ -2511,6 +2518,7 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
                  "partition: '%s' already has the maximum of %d partitions",
                  parent_name, EVO_MAX_PARTITIONS);
         g_err.error = 1;
+        free(existing_shards);
         return -1;
     }
 
@@ -2530,6 +2538,7 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
                      "'%s' [%lld, %lld)",
                      low, high, existing_shards[i].shard_name, elo, ehi);
             g_err.error = 1;
+            free(existing_shards);
             return -1;
         }
     }
@@ -2543,6 +2552,7 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "partition: could not create child table '%s'", child_name);
         g_err.error = 1;
+        free(existing_shards);
         return -1;
     }
 
@@ -2554,7 +2564,9 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
     strncpy(p.shard_name, child_name, CAT_MAX_NAME_LEN - 1);
     snprintf(p.range_bound, sizeof(p.range_bound), "%d|%d", low, high);
     if (cat_create_shard(&p) < 0) {
-        /* Rollback: drop the just-created child so the name is reusable. */
+        /* Rollback: drop the just-created child so the name is reusable.
+         * Safe under the global DML mutex — no concurrent CREATE TABLE
+         * can have reused the name between cat_create_table and here. */
         TableDesc stranded;
         ColumnDesc sc[CAT_MAX_COLUMNS]; int snc = 0;
         if (tapi_resolve(child_name, &stranded, sc, &snc) == 0) {
@@ -2563,8 +2575,11 @@ int CreatePartitionChild(const char *child_name, const char *parent_name,
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "partition: could not register partition metadata");
         g_err.error = 1;
+        free(existing_shards);
         return -1;
     }
+
+    free(existing_shards);
 
     printf("Partition '%s' created on %s FOR VALUES FROM (%d) TO (%d).\n",
            child_name, parent_name, low, high);

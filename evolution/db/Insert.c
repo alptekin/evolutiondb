@@ -1251,9 +1251,10 @@ int InsertProcess(void)
             work[sizeof(work) - 1] = '\0';
             char row_sep[2] = { ROW_SEP, '\0' };
 
+            int  routed = 0;
             char chosen_child[CAT_MAX_NAME_LEN] = "";
             char first_val_shown[128] = "";
-            int rowIdx = 0;
+            int  rowIdx = 0;
             char *row_save = NULL;
             char *row = strtok_r(work, row_sep, &row_save);
             while (row && *row) {
@@ -1286,13 +1287,14 @@ int InsertProcess(void)
                     TruncateInsert();
                     retval = -1; goto cleanup;
                 }
-                if (!chosen_child[0]) {
+                if (!routed) {
                     strncpy(chosen_child, part.shard_name,
                             sizeof(chosen_child) - 1);
                     chosen_child[sizeof(chosen_child) - 1] = '\0';
                     strncpy(first_val_shown, val,
                             sizeof(first_val_shown) - 1);
                     first_val_shown[sizeof(first_val_shown) - 1] = '\0';
+                    routed = 1;
                 } else if (strcmp(chosen_child, part.shard_name) != 0) {
                     snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                              "partition: multi-row INSERT spans multiple "
@@ -1313,9 +1315,9 @@ int InsertProcess(void)
                 row = strtok_r(NULL, row_sep, &row_save);
             }
 
-            if (!chosen_child[0]) {
-                /* No rows? Nothing to route — fall through. */
-            } else {
+            /* Unreachable under parser invariants (insert_stmt requires
+             * at least one VALUES row), but guard anyway. */
+            if (routed) {
                 strncpy(tblName, chosen_child, sizeof(tblName) - 1);
                 tblName[sizeof(tblName) - 1] = '\0';
                 strncpy(g_ins.tblName, chosen_child,
