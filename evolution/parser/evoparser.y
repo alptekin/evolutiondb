@@ -140,6 +140,7 @@
 %token AGAINST
 %token MATERIALIZED
 %token REFRESH
+%token OF
 
 %token DATABASE
 %token DECLARE
@@ -1973,6 +1974,18 @@ create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME '.' NAME
 '(' create_col_list ')' opt_table_options               { emit("CREATE %d %d %d %s.%s", $2, $4, $9, $5, $7); g_create.isTemporary = $2; free($5); free($7); }
 ;
 
+/* Task 88: CREATE TABLE child PARTITION OF parent FOR VALUES FROM (lo) TO (hi).
+ * Same prefix as other create_table_stmt alternatives (opt_temporary +
+ * opt_if_not_exists + NAME) so the parser disambiguates by 1-token
+ * lookahead after NAME — '(' for column list, PARTITION for this rule. */
+create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME PARTITION OF NAME FOR VALUES FROM '(' INTNUM ')' TO '(' INTNUM ')'
+    {
+        emit("PARTITION OF %s FOR VALUES FROM %d TO %d %s", $8, $13, $17, $5);
+        CreatePartitionChild($5, $8, $13, $17);
+        free($5); free($8);
+    }
+;
+
 opt_table_options: /* empty */
     | opt_table_options AUTO_INCREMENT COMPARISON INTNUM { emit("TABLE OPT AUTOINC %d", $4); SetTableAutoIncrement($4); }
     | opt_table_options AUTO_INCREMENT INTNUM            { emit("TABLE OPT AUTOINC %d", $3); SetTableAutoIncrement($3); }
@@ -1982,6 +1995,8 @@ opt_table_options: /* empty */
         { emit("SHARD HASH %s %d", $6, $9); SetShardHash($6, $9); free($6); }
     | opt_table_options SHARD BY RANGE '(' NAME ')' '(' shard_range_list ')'
         { emit("SHARD RANGE %s", $6); SetShardRange($6); free($6); }
+    | opt_table_options PARTITION BY RANGE '(' NAME ')'
+        { emit("PARTITION BY RANGE %s", $6); SetPartitionByRange($6); free($6); }
 ;
 
 shard_range_list: shard_range_def

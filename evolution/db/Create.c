@@ -2446,6 +2446,95 @@ void SetShardRange(const char *colName)
     g_create.shardCount = g_create.shardRangeCount;
 }
 
+void SetPartitionByRange(const char *colName)
+{
+    /* Task 88: reuse shardType field for local partitioning. shardCount=0
+     * — individual partitions are added later via CREATE TABLE ... PARTITION OF. */
+    g_create.shardType = SHARD_PARTITION;
+    strncpy(g_create.shardKey, colName, sizeof(g_create.shardKey) - 1);
+    g_create.shardKey[sizeof(g_create.shardKey) - 1] = '\0';
+    g_create.shardCount = 0;
+}
+
+/* CREATE TABLE child PARTITION OF parent FOR VALUES FROM (lo) TO (hi):
+ *   - Resolve parent, verify it is partitioned (shard_type=SHARD_PARTITION).
+ *   - Create child table with identical schema by replaying the column set
+ *     via cat_create_table().
+ *   - Register a ShardDesc with range_bound="lo|hi" so cat_find_partition_by_value
+ *     routes rows to the child at INSERT time. */
+int CreatePartitionChild(const char *child_name, const char *parent_name,
+                         int low, int high)
+{
+    TableDesc parent;
+    ColumnDesc parent_cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    if (tapi_resolve(parent_name, &parent, parent_cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: parent table '%s' not found", parent_name);
+        g_err.error = 1;
+        return -1;
+    }
+    if (parent.shard_type != SHARD_PARTITION) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: '%s' is not partitioned (use PARTITION BY RANGE)",
+                 parent_name);
+        g_err.error = 1;
+        return -1;
+    }
+    if (low >= high) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: FROM (%d) must be less than TO (%d)", low, high);
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Create child table in the same schema with identical columns. Use
+     * cat_create_table directly to avoid re-entering the parser. */
+    DatabaseDesc db;
+    SchemaDesc   sch;
+    if (cat_find_database(g_currentDatabase, &db) < 0 ||
+        cat_find_schema(db.db_id, g_currentSchema, &sch) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: current database/schema unresolved");
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Create child table with parent's columns. cat_create_table takes
+     * the column array + table settings separately. */
+    if (cat_create_table(sch.schema_id, child_name, parent_cols, ncols,
+                         parent.pad_size, parent.auto_inc_col,
+                         /*auto_inc_start*/1, parent.auto_inc_step,
+                         /*is_temporary*/0, /*on_commit_delete*/0) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: could not create child table '%s'", child_name);
+        g_err.error = 1;
+        return -1;
+    }
+
+    /* Derive next ordinal by counting existing partitions. */
+    ShardDesc existing_shards[64];
+    int existing_count = cat_list_shards(parent.table_id, existing_shards, 64);
+
+    ShardDesc p;
+    memset(&p, 0, sizeof(p));
+    p.table_id = parent.table_id;
+    p.shard_ordinal = existing_count;
+    p.owner_node_id = 0;
+    strncpy(p.shard_name, child_name, CAT_MAX_NAME_LEN - 1);
+    snprintf(p.range_bound, sizeof(p.range_bound), "%d|%d", low, high);
+    if (cat_create_shard(&p) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "partition: could not register partition metadata");
+        g_err.error = 1;
+        return -1;
+    }
+
+    printf("Partition '%s' created on %s FOR VALUES FROM (%d) TO (%d).\n",
+           child_name, parent_name, low, high);
+    return 0;
+}
+
 void AddShardRangeDef(const char *name, const char *bound, int node_id)
 {
     int i = g_create.shardRangeCount;
