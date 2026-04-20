@@ -3110,7 +3110,91 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
-## Day 84 — Final Task
+## Day 85 — v2 Hardening: COPY
+
+### Task 158: ⬜ COPY v2 — Hardening & Extended Features (Feature #154)
+
+**Goal:** Close the remaining gaps from Task 85 v1 (PR #83): superuser enforcement, `COPY (SELECT ...) TO`, PG BINARY format, multi-line quoted-newline CSV support, and s5cmd sidecar-less WAL-style archiving.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Enforce superuser/ADMIN role for server-side file mode (`COPY t FROM '/path'` / `TO '/path'`). Non-admin attempts return 42501. | `evolution/db/Copy.c`, `adaptor/query_executor.c` (privilege check) |
+| 2 | `realpath()` + configured allow-prefix — defeat symlink traversal. Add `EVOSQL_COPY_ALLOW_PATH` env. | `evolution/db/Copy.c` |
+| 3 | Grammar + executor for `COPY (SELECT ...) TO '/path'` / STDOUT. | `evolution/parser/evoparser.y`, `evolution/db/Copy.c` |
+| 4 | PG wire BINARY format — signed little-endian payload per PG docs, per-column type encoders. | `adaptor/pg_handler.c`, `evolution/db/csv.c` (rename → `copy_format.c`) |
+| 5 | Multi-line quoted fields in CSV — the current parser stops at first newline; fix to respect open quote. | `evolution/db/csv.c` |
+| 6 | NOTICE-style client feedback for per-row parse errors with `ON_ERROR stop|skip` option. | `evolution/db/Copy.c` |
+| 7 | Bench: 1M-row COPY FROM — target ≥500K rows/sec. | `bench/bench_copy.py` (new) |
+| 8 | Tests — `tests/test_copy_v2.py`: superuser gate, symlink reject, (SELECT ...) TO, BINARY format, multi-line CSV. | `tests/test_copy_v2.py` |
+| 9 | Regression — all existing test_copy* pass. | `tests/` |
+| 10 | Docker rebuild + psql `\copy` BINARY test. | Manual |
+
+---
+
+## Day 86 — v2 Hardening: Full-Text Search
+
+### Task 159: ⬜ Full-Text Search v2 — Maintenance & Speedup (Feature #155)
+
+**Goal:** Task 86 v1 (PR #85) shipped a working tokenizer but leaves the inverted index stale on DML and the MATCH evaluator doesn't use it. v2 closes both.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Incremental index maintenance on INSERT: tokenize FT columns post-insert, `bt2_insert` each (word, PK) pair. | `evolution/db/Insert.c`, `evolution/db/FullText.c` |
+| 2 | DELETE: prefix scan `<word>\x1fPK` for the row's PK and remove. | `evolution/db/Delete.c`, `FullText.c` |
+| 3 | UPDATE: diff old vs new tokens, remove+insert. | `evolution/db/Update.c`, `FullText.c` |
+| 4 | Query-time index-accelerated MATCH: prefix-scan each query term, intersect posting lists, rank. | `evolution/db/expression.c` (EXPR_MATCH) |
+| 5 | Phrase queries — `AGAINST('"exact phrase"')` with positional posting lists. | `FullText.c` |
+| 6 | Boolean operators — `+required -excluded` per MySQL IN BOOLEAN MODE. | `FullText.c` |
+| 7 | Multi-column FULLTEXT INDEX — `CREATE FULLTEXT INDEX ON t(col1, col2)` concatenates columns. | `FullText.c`, `evolution/db/Index.c` |
+| 8 | Turkish stemming + case fold (ICU optional build). Document ASCII-only fallback. | `FullText.c` |
+| 9 | Tests — `tests/test_fulltext_v2.py`: maintenance on INSERT/UPDATE/DELETE, index speed-up vs scan, phrase, boolean. | `tests/test_fulltext_v2.py` |
+| 10 | Regression. Docker + manual DBeaver test. | `tests/` |
+
+---
+
+## Day 87 — v2 Hardening: Materialized Views
+
+### Task 160: ⬜ Materialized Views v2 — REFRESH CONCURRENTLY & Dependencies (Feature #156)
+
+**Goal:** Task 87 v1 (PR #86) does a drop-and-rebuild REFRESH with a brief unavailability window. v2 adds in-place refresh and dependency tracking.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `REFRESH MATERIALIZED VIEW CONCURRENTLY name` grammar token + dispatch. | `evolution/parser/evoparser.y`, `adaptor/catalog.c` |
+| 2 | In-place refresh: CTAS into a shadow table, atomic RENAME swap. | `adaptor/catalog.c` |
+| 3 | Dependency tracking: new CAT_SYS_DEPENDS tree (MV ↔ source table IDs). | `evolution/db/catalog_internal.c/h`, `evolution/db/page_mgr.h` (CAT_MAX bump) |
+| 4 | `ALTER TABLE` / `DROP TABLE` on a source emits a notice that dependent MVs are stale. | `adaptor/catalog.c`, `evolution/db/Drop.c` |
+| 5 | `pg_matviews`-compatible catalog view for MV listing. | `adaptor/catalog.c` |
+| 6 | Incremental refresh (delta-based) — track per-MV WAL LSN watermark, replay deltas only. Optional, stretch goal. | `evolution/db/wal.c`, `adaptor/catalog.c` |
+| 7 | Indexes on MVs — `CREATE INDEX ON mv_name (...)` must work and survive REFRESH. | `evolution/db/Index.c` |
+| 8 | Tests — `tests/test_matviews_v2.py`: REFRESH CONCURRENTLY (no read-blocking window), dependency tracking, index on MV. | `tests/test_matviews_v2.py` |
+| 9 | Regression. | `tests/` |
+| 10 | Full system test — Docker. | Manual |
+
+---
+
+## Day 88 — v2 Hardening: Table Partitioning
+
+### Task 161: ⬜ Table Partitioning v2 — SELECT routing, LIST/HASH, multi-row (Feature #157)
+
+**Goal:** Task 88 v1 (PR #87) supports RANGE partitioning with INSERT routing only. v2 closes SELECT/UPDATE/DELETE parent-level routing and adds LIST/HASH + partition cache.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | SELECT from parent — query_executor rewrites `SELECT ... FROM parent` to UNION ALL over children. | `adaptor/query_executor.c` |
+| 2 | UPDATE / DELETE on parent — route per-row (for WHERE-matched partitions only). Partition pruning via WHERE on partition key. | `evolution/db/Update.c`, `evolution/db/Delete.c` |
+| 3 | Multi-row INSERT across partitions — route per row instead of rejecting. Remove the v1 same-partition guard. | `evolution/db/Insert.c` |
+| 4 | LIST partitioning — `PARTITION BY LIST (col)` + `PARTITION OF parent FOR VALUES IN (a, b, c)`. | `evolution/parser/evoparser.y`, `evolution/db/Create.c`, `catalog_internal.c` |
+| 5 | HASH partitioning — `PARTITION BY HASH (col)` + `PARTITION OF parent FOR VALUES WITH (MODULUS m, REMAINDER r)`. | same as #4 |
+| 6 | TableDesc partition cache — transient sorted array of (lo, hi, child_name); binary search at lookup time. | `evolution/db/table_api.c`, `catalog_internal.c` |
+| 7 | Non-INT partition keys — VARCHAR, DATE bounds via string comparison (range_bound already string-encoded). | `catalog_internal.c` |
+| 8 | DETACH PARTITION — ALTER TABLE parent DETACH PARTITION child; child becomes standalone table. ATTACH PARTITION — inverse. | `evolution/parser/evoparser.y`, `Create.c` / new `Partition.c` |
+| 9 | PK uniqueness across partitions — enforce PK-contains-partition-key at CREATE TABLE time. | `evolution/db/Create.c` |
+| 10 | Tests — `tests/test_partition_v2.py`: UNION ALL SELECT, per-row multi-row, LIST, HASH, DATE keys, DETACH/ATTACH, PK enforcement. Plus cap-enforcement edge test for 1025th partition. | `tests/test_partition_v2.py` |
+
+---
+
+## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
 
@@ -3270,6 +3354,10 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 151 | Prometheus + OpenTelemetry Observability | 155 |
 | 152 | EvosSQL Kubernetes Operator | 156 |
 | 153 | Horizontal Sharding Infrastructure | 157 |
+| 154 | COPY v2 — Hardening & Extended Features | 158 |
+| 155 | Full-Text Search v2 — Maintenance & Speedup | 159 |
+| 156 | Materialized Views v2 — REFRESH CONCURRENTLY & Dependencies | 160 |
+| 157 | Table Partitioning v2 — SELECT routing, LIST/HASH, multi-row | 161 |
 
 ---
 
@@ -3327,8 +3415,12 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 81 | 155 | Prometheus + OpenTelemetry Observability (#151) | ☁️ Cloud Native |
 | 82 | 156 | EvosSQL Kubernetes Operator (#152) | ☁️ Cloud Native |
 | 83 | 157 | Horizontal Sharding Infrastructure (#153) | ☁️ Cloud Native |
+| 85 | 158 | COPY v2 — Hardening & Extended Features (#154) | 🔧 v2 Hardening |
+| 86 | 159 | Full-Text Search v2 — Maintenance & Speedup (#155) | 🔧 v2 Hardening |
+| 87 | 160 | Materialized Views v2 — REFRESH CONCURRENTLY & Deps (#156) | 🔧 v2 Hardening |
+| 88 | 161 | Table Partitioning v2 — SELECT routing, LIST/HASH (#157) | 🔧 v2 Hardening |
 
-**Total:** 110 tasks × 10 steps = **1100 steps** over **61 working days** (112 features).
+**Total:** 114 tasks × 10 steps = **1140 steps** over **65 working days** (116 features).
 
 ---
 
