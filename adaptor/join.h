@@ -31,6 +31,11 @@ typedef struct {
     int      join_types[8];        /* tables[1..n]: join type */
     ExprNode *join_conds[8];       /* tables[1..n]: ON condition */
     ExprNode *where_expr;          /* global WHERE */
+    /* LATERAL (Task 89 — Feature #59): when is_lateral[i] != 0, the slot is a
+     * correlated subquery re-evaluated per outer row. lateral_sql[i] is the
+     * captured SQL text; not owned by the plan. */
+    int         is_lateral[8];
+    const char *lateral_sql[8];
 } JoinPlan;
 
 /* Execute a multi-table JOIN and write results to rs.

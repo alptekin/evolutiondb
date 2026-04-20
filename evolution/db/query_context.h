@@ -130,6 +130,12 @@ typedef struct {
     char  joinAliases[MAX_JOIN_TABLES][128];
     int   joinTypes[MAX_JOIN_TABLES];  /* 0=FROM, 100+=INNER, 300+=LEFT/RIGHT */
     ExprNode *joinOnExprs[MAX_JOIN_TABLES]; /* ON condition for tables[1..n] */
+    /* LATERAL subquery (Task 89 — Feature #59): per-join-slot raw SQL.
+     * joinLateralSql[i] non-NULL = slot i is LATERAL (SELECT...);
+     * joinTables[i] holds a synthetic placeholder string, joinAliases[i] the user alias.
+     * SQL buffer is owned by QueryContext lifetime; freed in qctx_free / reset.
+     */
+    char  *joinLateralSql[MAX_JOIN_TABLES];
 } SelectOpts;
 
 /* ---- UPDATE ---- */
@@ -360,6 +366,16 @@ typedef struct QueryContext {
     int          (*trigger_exec_fn)(const char *sql, char *err_msg, int err_size,
                                     char *err_state, void *ctx);
     void          *trigger_exec_ctx;
+    /* LATERAL correlation scope (Task 89 — Feature #59):
+     * When executing a lateral subquery, the outer row's qualified column
+     * names/values are published here so expr_evaluate can resolve
+     * correlated references (e.g., t1.id inside the lateral SELECT).
+     * NULL when no outer scope is active (normal top-level query).
+     */
+    const char (*outer_col_names)[128];
+    const char (*outer_col_values)[256];
+    const int   *outer_col_null;
+    int           outer_col_count;
 } QueryContext;
 
 /* ================================================================

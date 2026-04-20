@@ -257,6 +257,37 @@ void SetJoinOnExpr(struct ExprNode *expr)
     g_sel.joinOnExprs[i] = expr;
 }
 
+/* Register a LATERAL subquery slot. Stores the raw SQL text and alias; the
+ * join execution engine recognizes joinLateralSql[i] != NULL as "this slot is
+ * a lateral subquery, execute per outer row".
+ *
+ * Why: lateral subqueries are parsed once and re-executed with each outer row
+ * bound into QueryContext.outer_col_*. The SQL text is owned by the
+ * QueryContext; cleared in qctx_free / TruncateSelect.
+ */
+void AddLateralTable(const char *sql, const char *alias)
+{
+    extern __thread int g_in_subquery;
+    if (g_in_subquery) return;
+    int i = g_sel.joinTableCount;
+    if (i >= MAX_JOIN_TABLES) return;
+    /* Use a synthetic placeholder name so downstream code that
+     * strcmp()'s joinTables[] won't accidentally match a real table. */
+    strncpy(g_sel.joinTables[i], "<lateral>", 255);
+    g_sel.joinTables[i][255] = '\0';
+    if (alias && alias[0]) {
+        strncpy(g_sel.joinAliases[i], alias, 127);
+        g_sel.joinAliases[i][127] = '\0';
+    } else {
+        g_sel.joinAliases[i][0] = '\0';
+    }
+    g_sel.joinTypes[i] = (i == 0) ? 0 : 100;
+    g_sel.joinOnExprs[i] = NULL;
+    if (g_sel.joinLateralSql[i]) { free(g_sel.joinLateralSql[i]); }
+    g_sel.joinLateralSql[i] = sql ? strdup(sql) : NULL;
+    g_sel.joinTableCount++;
+}
+
 int SelectProcess(void)
 {
     /* Skip if inside subquery parse */

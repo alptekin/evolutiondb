@@ -1795,7 +1795,7 @@
 
 ---
 
-### Task 89: ⬜ Lateral Joins (Feature #59)
+### Task 89: ✅ Lateral Joins (Feature #59)
 
 **Goal:** Implement LATERAL subquery in FROM clause.
 
