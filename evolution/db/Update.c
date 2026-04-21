@@ -22,7 +22,9 @@
 #define UpdateBuildBinaryRecord(fields, numFields, table_id, cols, ncols, out, outSize) \
     update_build_mvcc_record((fields), (numFields), (table_id), (cols), (ncols), (out), (outSize))
 
-/* Build binary tuple with MVCC xmin from current transaction */
+/* Build binary tuple with MVCC xmin from current transaction.
+ * Task 90: array columns get their text representation converted to
+ * the binary blob layout expected by tup_build's family-25 path. */
 static int update_build_mvcc_record(const char fields[][256], int nfields,
                                      uint32_t table_id,
                                      const ColumnDesc *cols, int ncols,
@@ -31,6 +33,9 @@ static int update_build_mvcc_record(const char fields[][256], int nfields,
     const char *valPtrs[CAT_MAX_COLUMNS];
     int nullFlags[CAT_MAX_COLUMNS];
     int n = nfields < 64 ? nfields : 64;
+    char *arr_blobs[CAT_MAX_COLUMNS] = {0};
+    int arr_blob_count = 0;
+
     for (int i = 0; i < n; i++) {
         if (strcmp(fields[i], "\x01NULL\x01") == 0) {
             valPtrs[i] = NULL;
@@ -40,11 +45,34 @@ static int update_build_mvcc_record(const char fields[][256], int nfields,
             nullFlags[i] = 0;
         }
     }
+
+    /* Array normalization */
+    for (int i = 0; i < n && i < ncols; i++) {
+        if (nullFlags[i]) continue;
+        if (!tup_is_array(cols[i].type_code)) continue;
+        int base = tup_array_base_family(cols[i].type_code);
+        char *buf = (char *)malloc(ARRAY_MAX_BLOB);
+        if (!buf) {
+            for (int k = 0; k < arr_blob_count; k++) free(arr_blobs[k]);
+            return -1;
+        }
+        int bl = arr_parse_text(valPtrs[i], base, buf, ARRAY_MAX_BLOB);
+        if (bl < 0) {
+            free(buf);
+            for (int k = 0; k < arr_blob_count; k++) free(arr_blobs[k]);
+            return -1;
+        }
+        arr_blobs[arr_blob_count++] = buf;
+        valPtrs[i] = buf;
+    }
+
     /* Stamp MVCC xmin so concurrent readers with older snapshots
      * see the old version, not this updated one */
     mvcc_ensure_xid(&g_qctx->mvcc_xid);
-    return tup_build(valPtrs, nullFlags, n, table_id,
-                     cols, ncols, out, buf_size, g_qctx->mvcc_xid);
+    int ret = tup_build(valPtrs, nullFlags, n, table_id,
+                        cols, ncols, out, buf_size, g_qctx->mvcc_xid);
+    for (int k = 0; k < arr_blob_count; k++) free(arr_blobs[k]);
+    return ret;
 }
 
 /* Read column names from catalog */
