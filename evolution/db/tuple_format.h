@@ -13,6 +13,8 @@
  *   12-17 CHAR/VARCHAR/… → uint16 len + string
  *   18   UUID            → 16B raw binary
  *   22   BOOLEAN         → 1B
+ *   23   JSON            → uint16 len + string
+ *   25   ARRAY (1-D)     → uint16 len + [ndim:1][flags:1][elem_tc:4][count:2][nullbitmap?][elements]
  */
 #ifndef TUPLE_FORMAT_H
 #define TUPLE_FORMAT_H
@@ -32,6 +34,129 @@
 #define TUPLE_FLAG_XMIN_ABORTED   0x20 /* hint: xmin is known aborted (skip CLOG) */
 #define TUPLE_MVCC_SIZE         8      /* xmin(4) + xmax(4) bytes */
 #define TUPLE_MAX_COLS       255
+
+/* ----------------------------------------------------------------
+ *  ARRAY type family (Task 90 — Feature #60)
+ *
+ *  1-D arrays with NULL-element support, stored as a binary blob
+ *  wrapped in the same uint16 len + bytes envelope used by VARCHAR.
+ *
+ *  type_code encoding: 250000 + base_family
+ *    TINYINT[]   = 250001  (stored as int32)
+ *    SMALLINT[]  = 250002  (stored as int32)
+ *    MEDIUMINT[] = 250003  (stored as int32)
+ *    INT[]       = 250004
+ *    INTEGER[]   = 250005  (alias of INT[])
+ *    BIGINT[]    = 250006  (also covers snowflake_id() values)
+ *    REAL[]      = 250007  (stored as double)
+ *    DOUBLE[]    = 250008
+ *    FLOAT[]     = 250009  (stored as float)
+ *    TIMESTAMP[] = 250010  (covers DATE/TIME/TIMESTAMP — string-encoded)
+ *    DECIMAL[]   = 250011  (NUMERIC[], string-encoded)
+ *    CHAR[]      = 250012
+ *    VARCHAR[]   = 250013  (default VARCHAR(255))
+ *    BINARY[]    = 250014
+ *    VARBINARY[] = 250015
+ *    TEXT[]      = 250017
+ *    UUID[]      = 250018  (16B fixed-width elements)
+ *    BOOLEAN[]   = 250022
+ *    JSON[]      = 250023
+ *
+ *  Blob layout (payload after the outer uint16 length):
+ *    [ndim:1B]       1 in v1
+ *    [flags:1B]      bit0 = HAS_NULLS
+ *    [elem_tc:4B LE] element type_code (scalar, e.g. 40000 for INT)
+ *    [count:2B LE]   number of elements
+ *    [null bitmap]   (count+7)/8 bytes if HAS_NULLS
+ *    [elements ...]  per-element scalar encoding:
+ *                      fixed-width: raw bytes (INT=4B LE, BIGINT=8B LE, BOOL=1B)
+ *                      var-width  : uint16 len + bytes (TEXT/VARCHAR)
+ * ---------------------------------------------------------------- */
+#define TYPE_FAMILY_ARRAY    25
+#define ARRAY_TYPE_BASE      250000
+#define ARRAY_FLAG_HAS_NULLS 0x01
+#define ARRAY_HEADER_SIZE    8   /* ndim(1) + flags(1) + elem_tc(4) + count(2) */
+#define ARRAY_MAX_BLOB       65535
+
+static inline int tup_is_array(int type_code)
+{
+    return (type_code / 10000) == TYPE_FAMILY_ARRAY;
+}
+
+static inline int tup_array_base_family(int type_code)
+{
+    return tup_is_array(type_code) ? (type_code - ARRAY_TYPE_BASE) : -1;
+}
+
+/* Reconstruct the scalar element type_code for a given array base family.
+ * Returns -1 for unsupported base families (ENUM, SET, BLOB, etc.). */
+static inline int tup_array_base_type_code(int base_family)
+{
+    switch (base_family) {
+    case 1:  return 10000;    /* TINYINT / BIT */
+    case 2:  return 20000;    /* SMALLINT */
+    case 3:  return 30000;    /* MEDIUMINT */
+    case 4:  return 40000;    /* INT */
+    case 5:  return 50000;    /* INTEGER (alias of INT) */
+    case 6:  return 60000;    /* BIGINT (covers snowflake_id) */
+    case 7:  return 70000;    /* REAL */
+    case 8:  return 80000;    /* DOUBLE */
+    case 9:  return 90000;    /* FLOAT */
+    case 10: return 100004;   /* TIMESTAMP (default for DATE/TIME/TIMESTAMP family) */
+    case 11: return 110000;   /* DECIMAL / NUMERIC */
+    case 12: return 120255;   /* CHAR(255) */
+    case 13: return 130255;   /* VARCHAR(255) */
+    case 14: return 140255;   /* BINARY(255) */
+    case 15: return 150255;   /* VARBINARY(255) */
+    case 17: return 170000;   /* TEXT */
+    case 18: return 180036;   /* UUID (36-char string form) */
+    case 22: return 220001;   /* BOOLEAN */
+    case 23: return 230000;   /* JSON */
+    default: return -1;       /* unsupported array element type */
+    }
+}
+
+/* ----------------------------------------------------------------
+ *  Array binary codec — build and format 1-D arrays
+ *
+ *  NULL_MARKER in elems[i] (or is_null[i]=1) encodes a NULL element.
+ *  Returns bytes written into out (including 8-byte header), or -1
+ *  on overflow / unsupported base family / invalid element.
+ * ---------------------------------------------------------------- */
+int arr_build_blob(const char *elems[], const int *is_null, int count,
+                   int elem_type_code,
+                   char *out, int out_size);
+
+/* Parse a PG-style text literal "{a,b,NULL,c}" (outer braces required)
+ * into a binary blob for base_family. NULL and empty strings inside
+ * are recognized as NULL elements.
+ * Returns bytes written, or -1 on parse error / size overflow. */
+int arr_parse_text(const char *text, int base_family,
+                   char *out, int out_size);
+
+/* Render a binary blob as PG text "{e1,e2,NULL,...}" with NULL elements
+ * shown as literal NULL (unquoted). TEXT/VARCHAR elements are passed
+ * verbatim — callers must ensure elements don't contain delimiters
+ * that would confuse round-trip (enforced at INSERT time).
+ * Returns bytes written (including terminating NUL), or -1. */
+int arr_format_text(const char *blob, int blob_len, char *out, int out_size);
+
+/* Blob accessors (all bounds-check the blob header and NULL bitmap) */
+int arr_element_count(const char *blob, int blob_len);
+int arr_elem_type_code(const char *blob, int blob_len);
+int arr_is_null_at(const char *blob, int blob_len, int idx);
+
+/* Walk header + all elements, returning total blob size in bytes.
+ * Used by tup_build to find blob boundaries without a separate length
+ * parameter. max_walk caps the walk; pass a sufficiently large value
+ * (e.g. ARRAY_MAX_BLOB). Returns -1 on malformed blob. */
+int arr_blob_len(const char *blob, int max_walk);
+
+/* Copy element idx (1-based per PG semantics) into out as a string.
+ * Writes NULL_MARKER if element is NULL or idx out of range.
+ * Returns 1 on success, 0 on OOB (NULL_MARKER written), -1 on error. */
+int arr_get_element(const char *blob, int blob_len, int idx_1based,
+                    char *out, int out_size);
 
 /* Check if raw data starts with binary tuple magic byte */
 static inline int tup_is_binary(const char *data, int len)

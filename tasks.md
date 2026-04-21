@@ -1816,7 +1816,7 @@
 
 ## Day 46 — Array Type & LISTEN/NOTIFY
 
-### Task 90: ⬜ Array Data Type (Feature #60)
+### Task 90: ✅ Array Data Type (Feature #60)
 
 **Goal:** Implement PostgreSQL-style array columns: `col INT[]`.
 

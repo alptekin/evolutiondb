@@ -41,6 +41,7 @@ AND						{ return ANDOP; }
 ANY						{ return ANY; }
 ALTER					{ return ALTER; }
 ALWAYS					{ return ALWAYS; }
+ARRAY					{ return ARRAY; }
 AS						{ return AS; }
 ASC						{ return ASC; }
 AUTO_INCREMENT			{ return AUTO_INCREMENT; }
@@ -402,6 +403,8 @@ B'[01]+'				{ yylval->strval = strdup(yytext); return STRING; }
 "->>"					{ return JSON_ARROW_TEXT; }									/* JSON ->> */
 "->"					{ return JSON_ARROW; }										/* JSON -> */
 [-+&~|^/%*(),.;!]		{ return yytext[0]; }										/* operators */
+"["						{ return yytext[0]; }										/* array subscript / literal */
+"]"						{ return yytext[0]; }
 "&&"					{ return ANDOP; }
 "||"					{ return OR; }
 "="						{ yylval->subtok = 4; return COMPARISON; }
@@ -432,6 +435,8 @@ SCOPE_IDENTITY/"("		{ return FSCOPE_IDENTITY; }
 GEN_RANDOM_UUID_V7/"("	{ return FGEN_RANDOM_UUID_V7; }
 GEN_RANDOM_UUID/"("		{ return FGEN_RANDOM_UUID; }
 SNOWFLAKE_ID/"("		{ return FSNOWFLAKE_ID; }
+ARRAY_LENGTH/"("		{ return FARRAY_LENGTH; }
+UNNEST/"("				{ return FUNNEST; }
 EVO_SLEEP/"("			{ return FEVO_SLEEP; }
 EVO_JITTER/"("			{ return FEVO_JITTER; }
 DATE_ADD/"("			{ return FDATE_ADD; }
