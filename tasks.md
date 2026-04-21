@@ -3194,6 +3194,25 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
+### Task 162: ⬜ Lateral Joins v2 — Syntax surface, nested / multi-slot, ambiguity (Feature #158)
+
+**Goal:** Task 89 v1 (PR #89) supports comma LATERAL, INNER/LEFT JOIN LATERAL, correlated refs, save/restore around probe + per-row re-exec. v2 closes PG-parity gaps in the lateral surface: explicit CROSS, rejecting RIGHT/FULL, nested / multi-slot regression coverage, clear ambiguity errors, and outer ORDER BY over lateral columns.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Grammar — accept explicit `CROSS JOIN LATERAL ( ... ) alias` as alias for comma-form; map to same JoinPlan slot type. | `evolution/parser/evoparser.y` |
+| 2 | Grammar — reject `RIGHT JOIN LATERAL` and `FULL JOIN LATERAL` with SQL standard error (PG matches). Surface as `42601` / `0A000`. | `evolution/parser/evoparser.y`, `adaptor/query_executor.c` |
+| 3 | Nested LATERAL — `LATERAL (SELECT ... FROM LATERAL (...))` depth ≥ 2. Snapshot save stack must nest correctly; no pool corruption. Add tests covering 3-deep nesting with correlated refs at each level. | `adaptor/join.c`, `tests/test_lateral_v2.py` |
+| 4 | Multi-slot LATERAL — `FROM t1, LATERAL (...) s1, LATERAL (...) s2` with both correlated to `t1` and `s2` correlated to `s1`. Verify Phase 1 probe order + outer_col_* chain. | `adaptor/join.c` |
+| 5 | Ambiguity error — when a bare column (`x`) exists in BOTH inner FROM and outer scope, emit `ERROR: column reference "x" is ambiguous` (`42702`) instead of silently using the inner one. | `evolution/db/expression.c` |
+| 6 | ORDER BY over lateral columns — `ORDER BY u.id, sub.amount` where `sub.amount` is a lateral column currently not fully sorted (pipeline emits per-outer-row order). Either sort the final ResultSet or document the limitation. | `adaptor/query_executor.c`, `evolution/db/Select.c` |
+| 7 | LATERAL with USING — reject (PG requires ON). | `evolution/parser/evoparser.y` |
+| 8 | Parse-once plan cache — pre-compile the lateral subquery's AST at Phase 1 and bind outer row at per-row execution instead of full `query_execute` per row. Optional in v2 if too invasive. | `adaptor/join.c`, `evolution/db/expression.c` |
+| 9 | Tests — `tests/test_lateral_v2.py`: CROSS JOIN LATERAL syntax, RIGHT/FULL rejection, 3-deep nested LATERAL, multi-slot LATERAL chain, ambiguous column error, ORDER BY over lateral col, USING rejection. Minimum 15 tests (10 normal + 3 edge + 2 error). | `tests/test_lateral_v2.py` |
+| 10 | Performance benchmark — compare v1 (per-row full query_execute) vs v2 (with #8 plan cache if done) on 10K-row outer with 3-row lateral. Target: ≥ 5x speedup if plan cache shipped, else document baseline. | `tests/bench_lateral.py`, docs |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
@@ -3419,8 +3438,9 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 86 | 159 | Full-Text Search v2 — Maintenance & Speedup (#155) | 🔧 v2 Hardening |
 | 87 | 160 | Materialized Views v2 — REFRESH CONCURRENTLY & Deps (#156) | 🔧 v2 Hardening |
 | 88 | 161 | Table Partitioning v2 — SELECT routing, LIST/HASH (#157) | 🔧 v2 Hardening |
+| 89 | 162 | Lateral Joins v2 — Syntax surface, nested / multi-slot, ambiguity (#158) | 🔧 v2 Hardening |
 
-**Total:** 114 tasks × 10 steps = **1140 steps** over **65 working days** (116 features).
+**Total:** 115 tasks × 10 steps = **1150 steps** over **65 working days** (117 features).
 
 ---
 
