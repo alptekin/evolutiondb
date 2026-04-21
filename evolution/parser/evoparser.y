@@ -17,6 +17,7 @@
 	extern __thread int g_lex_pos;
 	extern __thread const char *g_lex_input;
 	extern __thread int g_in_subquery;
+	extern __thread int g_in_array_literal;
 	static __thread int g_subq_mark = 0;
 
 	static char *evo_extract_subq_sql(void) {
@@ -99,6 +100,7 @@
 %left '^'
 %left JSON_ARROW JSON_ARROW_TEXT
 %nonassoc UMINUS
+%left '['
 %token ALTER
 %token ADD
 %token AFTER
@@ -331,6 +333,7 @@
 %token UNION
 %token UNIQUE
 %token UUID
+%token ARRAY
 %token JSON
 %token JSON_ARROW
 %token JSON_ARROW_TEXT
@@ -395,6 +398,7 @@
 %token FJSON_OBJECT FJSON_ARRAY FJSON_ARRAYAGG
 %token SEQUENCE FNEXTVAL FCURRVAL FSETVAL FLASTVAL
 %token START INCREMENT MINVALUE CYCLE
+%token FARRAY_LENGTH FUNNEST
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -437,6 +441,8 @@
 %type <exprval> expr
 %type <exprval> select_expr
 %type <exprval> interval_exp
+%type <exprval> any_array_arg
+%type <intval>  array_val_list
 
 %start stmt_list
 %%
@@ -559,6 +565,13 @@ expr: expr '+' expr								{ emit("ADD"); $$ = expr_make_binop(EXPR_ADD, $1, $3)
     { g_in_subquery = 0; emit("CMPANYSELECT %d", $2); $$ = $1; }
 | expr COMPARISON ALL '(' { g_subq_mark = g_lex_pos; g_in_subquery = 1; } select_stmt ')'
     { g_in_subquery = 0; emit("CMPALLSELECT %d", $2); $$ = $1; }
+/* ANY(array) / SOME(array) — array path (LALR(1) distinguishes from select
+ * by the fact that any_array_arg doesn't start with SELECT).
+ * Task 90 — Feature #60. */
+| expr COMPARISON ANY '(' any_array_arg ')'
+    { emit("CMPANYARRAY %d", $2); $$ = expr_make_any_array($2, $1, $5); }
+| expr COMPARISON SOME '(' any_array_arg ')'
+    { emit("CMPANYARRAY %d", $2); $$ = expr_make_any_array($2, $1, $5); }
 ;
 
 expr: expr IS NULLX								{ emit("ISNULL"); $$ = expr_make_is_null($1); }
@@ -574,6 +587,91 @@ expr: expr BETWEEN expr AND expr %prec BETWEEN                                  
 
 val_list: expr									{ $$ = 1; if (g_expr.inListCount < MAX_IN_LIST) g_expr.inListExprs[g_expr.inListCount++] = $1; }
 | expr ',' val_list								{ $$ = 1 + $3; if (g_expr.inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_expr.inListCount; _i>0; _i--) g_expr.inListExprs[_i]=g_expr.inListExprs[_i-1]; g_expr.inListExprs[0]=$1; g_expr.inListCount++; } }
+;
+
+/* Array literal element list — uses dedicated side channel arrListExprs
+ * so ARRAY[...] nested inside IN(...) does not clobber inListExprs. */
+array_val_list: expr
+    { $$ = 1; if (g_expr.arrListCount < MAX_IN_LIST) g_expr.arrListExprs[g_expr.arrListCount++] = $1; }
+| expr ',' array_val_list
+    { $$ = 1 + $3; if (g_expr.arrListCount < MAX_IN_LIST) {
+          int _i; for (_i = g_expr.arrListCount; _i > 0; _i--) g_expr.arrListExprs[_i] = g_expr.arrListExprs[_i - 1];
+          g_expr.arrListExprs[0] = $1; g_expr.arrListCount++;
+      } }
+;
+
+/* Array literal: ARRAY[e1, e2, ...] or ARRAY[]
+ *
+ * While the inner elements parse, g_in_array_literal > 0 suppresses
+ * GetInsertions() so the INSERT-row collector doesn't split each
+ * element into its own field. At reduction we synthesize the canonical
+ * "{e1,e2,NULL,...}" text from the ExprNode literals and record it
+ * as a single field. */
+expr: ARRAY '[' { g_expr.arrListCount = 0; g_in_array_literal++; } array_val_list ']'
+    {
+        g_in_array_literal--;
+        char _arrbuf[4096];
+        int _p = 0;
+        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '{';
+        for (int _i = 0; _i < g_expr.arrListCount; _i++) {
+            if (_i > 0 && _p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = ',';
+            ExprNode *_en = g_expr.arrListExprs[_i];
+            if (!_en) continue;
+            if (_en->type == EXPR_LITERAL_INT)
+                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%d", _en->val.intval);
+            else if (_en->type == EXPR_LITERAL_FLOAT)
+                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%g", _en->val.floatval);
+            else if (_en->type == EXPR_LITERAL_BOOL)
+                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%s",
+                               _en->val.intval ? "true" : "false");
+            else if (_en->type == EXPR_LITERAL_NULL)
+                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
+            else if (_en->type == EXPR_LITERAL_STR) {
+                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
+                for (const char *_s = _en->val.strval; *_s && _p < (int)sizeof(_arrbuf) - 2; _s++) {
+                    if (*_s == '"' || *_s == '\\') _arrbuf[_p++] = '\\';
+                    _arrbuf[_p++] = *_s;
+                }
+                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
+            } else {
+                /* Non-literal element (column ref, func call) — defer to
+                 * runtime evaluation via expr_make_array_literal. Emit
+                 * display placeholder in the INSERT field text. */
+                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
+            }
+        }
+        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '}';
+        _arrbuf[_p] = '\0';
+        GetInsertions(_arrbuf);
+        emit("ARRLIT %d", $4);
+        $$ = expr_make_array_literal(g_expr.arrListExprs, g_expr.arrListCount);
+    }
+| ARRAY '[' ']'
+    {
+        GetInsertions("{}");
+        emit("ARRLIT 0");
+        $$ = expr_make_array_literal(NULL, 0);
+    }
+;
+
+/* Subscript: col[i] or (expr)[i]. %prec '[' binds subscript tightest. */
+expr: expr '[' expr ']' %prec '['
+    { emit("SUBSCRIPT"); $$ = expr_make_subscript($1, $3); }
+;
+
+/* RHS of ANY(...)/SOME(...) when not a subquery. LALR(1) picks this
+ * path whenever the first token after '(' is a valid expr-start (NAME,
+ * ARRAY, '(', INTNUM, etc.) — never SELECT. */
+any_array_arg: expr                 { $$ = $1; }
+;
+
+/* Built-in array functions */
+expr: FARRAY_LENGTH '(' expr ')'
+    { emit("CALL 1 ARRAY_LENGTH"); $$ = expr_make_array_length($3); }
+| FARRAY_LENGTH '(' expr ',' expr ')'
+    { emit("CALL 2 ARRAY_LENGTH"); $$ = expr_make_array_length($3); /* dim ignored in v1 */ }
+| FUNNEST '(' expr ')'
+    { emit("CALL 1 UNNEST"); $$ = expr_make_unnest($3); }
 ;
 
 opt_val_list: /* nil */								{ $$ = 0; }
@@ -1096,6 +1194,25 @@ NAME opt_as_alias index_hint
         }
         if (g_pending_lateral_sql) { free(g_pending_lateral_sql); g_pending_lateral_sql = NULL; }
         free($3);
+    }
+| FUNNEST '(' expr ')'
+    {
+        emit("UNNEST unnest");
+        if (g_qctx) AddUnnestTable($3, "unnest");
+    }
+| FUNNEST '(' expr ')' opt_as NAME
+    {
+        emit("UNNEST %s", $6);
+        if (g_qctx) AddUnnestTable($3, $6);
+        free($6);
+    }
+| FUNNEST '(' expr ')' opt_as NAME '(' NAME ')'
+    {
+        /* PG-style column alias: unnest(arr) AS u(v) — the column takes
+         * the inner name; v1 uses it as the result column name. */
+        emit("UNNEST %s", $8);
+        if (g_qctx) AddUnnestTable($3, $8);
+        free($6); free($8);
     }
 | '(' table_references ')'							{ emit("TABLEREFERENCES %d", $2); }
 ;
@@ -2318,6 +2435,7 @@ BIT opt_length									{ $$ = 10000 + $2; }
 | BOOLEAN                                                                        { $$ = 220001; }
 | UUID                                                                           { $$ = 180036; }
 | JSON                                                                           { $$ = 230000; }
+| data_type '[' ']'                                                              { $$ = 250000 + ($1 / 10000); }
 ;
 
 enum_list: STRING								{ emit("ENUMVAL %s", $1); free($1); $$ = 1; }

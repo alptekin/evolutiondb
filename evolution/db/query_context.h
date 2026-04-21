@@ -136,6 +136,11 @@ typedef struct {
      * SQL buffer is owned by QueryContext lifetime; freed in qctx_free / reset.
      */
     char  *joinLateralSql[MAX_JOIN_TABLES];
+    /* UNNEST (Task 90 — Feature #60): per-join-slot array expression.
+     * joinUnnestExpr[i] non-NULL = slot i is FROM unnest(arr) AS alias;
+     * expanded into N-row set at execution time. Mutually exclusive with
+     * joinLateralSql for the same slot. */
+    ExprNode *joinUnnestExpr[MAX_JOIN_TABLES];
 } SelectOpts;
 
 /* ---- UPDATE ---- */
@@ -219,6 +224,10 @@ typedef struct {
     int       groupByCount;
     ExprNode *inListExprs[MAX_IN_LIST];
     int       inListCount;
+    /* Array literal side channel — Task 90, isolated from inListExprs so
+     * ARRAY[...] nested inside IN(...) does not clobber state. */
+    ExprNode *arrListExprs[MAX_IN_LIST];
+    int       arrListCount;
     ExprNode *caseWhenExprs[MAX_CASE_WHENS];
     ExprNode *caseThenExprs[MAX_CASE_WHENS];
     int       caseWhenCount;

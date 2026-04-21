@@ -288,6 +288,31 @@ void AddLateralTable(const char *sql, const char *alias)
     g_sel.joinTableCount++;
 }
 
+/* Register a FROM unnest(arr) AS alias slot. The array expression is
+ * stored verbatim (not serialized); the join engine evaluates it per
+ * outer row and expands each element into a one-column row for `alias`.
+ * Task 90 — Feature #60. */
+void AddUnnestTable(struct ExprNode *arr_expr, const char *alias)
+{
+    extern __thread int g_in_subquery;
+    if (g_in_subquery) return;
+    int i = g_sel.joinTableCount;
+    if (i >= MAX_JOIN_TABLES) return;
+    strncpy(g_sel.joinTables[i], "<unnest>", 255);
+    g_sel.joinTables[i][255] = '\0';
+    if (alias && alias[0]) {
+        strncpy(g_sel.joinAliases[i], alias, 127);
+        g_sel.joinAliases[i][127] = '\0';
+    } else {
+        g_sel.joinAliases[i][0] = '\0';
+    }
+    g_sel.joinTypes[i] = (i == 0) ? 0 : 100;
+    g_sel.joinOnExprs[i] = NULL;
+    g_sel.joinLateralSql[i] = NULL;
+    g_sel.joinUnnestExpr[i] = arr_expr;
+    g_sel.joinTableCount++;
+}
+
 int SelectProcess(void)
 {
     /* Skip if inside subquery parse */

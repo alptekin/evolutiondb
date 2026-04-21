@@ -367,6 +367,162 @@ ExprNode *expr_make_exists_subquery(const char *sql, int negated)
     return e;
 }
 
+/* ----------------------------------------------------------------
+ *  Array text iteration helpers (Task 90 — Feature #60)
+ *
+ *  Shared by EXPR_SUBSCRIPT / EXPR_ARRAY_LENGTH / EXPR_ANY_ARRAY to
+ *  walk a "{e1,e2,NULL,...}" PG text representation one element at a
+ *  time. Quoted strings with \" and \\ escapes are supported.
+ * ---------------------------------------------------------------- */
+
+/* Seek past optional whitespace and the leading '{'. Returns cursor
+ * positioned at the first element byte, or NULL if not a '{'-array. */
+static const char *arr_text_iter_begin(const char *s)
+{
+    if (!s) return NULL;
+    while (*s && isspace((unsigned char)*s)) s++;
+    if (*s != '{') return NULL;
+    return s + 1;
+}
+
+/* Fetch the next element, advancing *cursor. Writes the element text
+ * into elem (NUL-terminated, truncated to esz-1). Sets *is_null = 1
+ * when the unquoted literal NULL is seen.
+ * Returns: 1 = got element, 0 = end of array, -1 = malformed. */
+static int arr_text_iter_next(const char **cursor,
+                               char *elem, int esz, int *is_null)
+{
+    const char *p = *cursor;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (!*p) return -1;
+    if (*p == '}') { *cursor = p + 1; return 0; }
+
+    int elen = 0;
+    *is_null = 0;
+
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"') {
+            if (*p == '\\' && *(p + 1)) p++;
+            if (elen < esz - 1) elem[elen++] = *p;
+            p++;
+        }
+        if (*p == '"') p++;
+    } else {
+        while (*p && *p != ',' && *p != '}') {
+            if (elen < esz - 1) elem[elen++] = *p;
+            p++;
+        }
+        while (elen > 0 && isspace((unsigned char)elem[elen - 1])) elen--;
+        if (elen == 4 &&
+            (elem[0] | 0x20) == 'n' && (elem[1] | 0x20) == 'u' &&
+            (elem[2] | 0x20) == 'l' && (elem[3] | 0x20) == 'l')
+            *is_null = 1;
+    }
+    elem[elen] = '\0';
+
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p == ',') p++;
+    *cursor = p;
+    return 1;
+}
+
+/* Compare two scalar text values. Tries numeric comparison if both
+ * parse cleanly as a number; otherwise falls back to lexicographic.
+ * cmp_op uses CMP_SUBTOK_* constants. Returns 1 if the comparison holds. */
+static int arr_scalar_cmp(const char *lhs, const char *rhs, int cmp_op)
+{
+    char *le, *re;
+    double ld = strtod(lhs, &le);
+    double rd = strtod(rhs, &re);
+    int cmp;
+    if (*le == '\0' && *re == '\0' && le != lhs && re != rhs) {
+        cmp = (ld < rd) ? -1 : (ld > rd) ? 1 : 0;
+    } else {
+        int sc = strcmp(lhs, rhs);
+        cmp = (sc < 0) ? -1 : (sc > 0) ? 1 : 0;
+    }
+    switch (cmp_op) {
+    case CMP_SUBTOK_EQ: return cmp == 0;
+    case CMP_SUBTOK_NE: return cmp != 0;
+    case CMP_SUBTOK_LT: return cmp <  0;
+    case CMP_SUBTOK_GT: return cmp >  0;
+    case CMP_SUBTOK_LE: return cmp <= 0;
+    case CMP_SUBTOK_GE: return cmp >= 0;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------
+ *  Array constructors (Task 90 — Feature #60)
+ * ---------------------------------------------------------------- */
+
+/* ARRAY[e1, e2, ...] — element expressions are chained through ->extra
+ * so we don't grow the struct. Walk ->left starting from head; last node's
+ * ->left is NULL. val.intval stores element count. */
+ExprNode *expr_make_array_literal(ExprNode **elems, int count)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_ARRAY_LITERAL;
+    e->val.intval = count;
+
+    /* Chain via ->extra: head->extra = elem0; elem0->extra = elem1; ... */
+    ExprNode *prev = e;
+    for (int i = 0; i < count && elems; i++) {
+        if (!elems[i]) continue;
+        prev->extra = elems[i];
+        prev = elems[i];
+    }
+    if (prev) prev->extra = NULL;
+    snprintf(e->display, sizeof(e->display), "ARRAY[%d]", count);
+    return e;
+}
+
+ExprNode *expr_make_subscript(ExprNode *arr, ExprNode *idx)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_SUBSCRIPT;
+    e->left = arr;
+    e->right = idx;
+    snprintf(e->display, sizeof(e->display), "%s[...]",
+             (arr && arr->display[0]) ? arr->display : "arr");
+    return e;
+}
+
+ExprNode *expr_make_array_length(ExprNode *arr)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_ARRAY_LENGTH;
+    e->left = arr;
+    snprintf(e->display, sizeof(e->display), "array_length(...)");
+    return e;
+}
+
+ExprNode *expr_make_any_array(int cmp_op, ExprNode *lhs, ExprNode *arr)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_ANY_ARRAY;
+    e->left = lhs;
+    e->right = arr;
+    e->val.intval = cmp_op;
+    snprintf(e->display, sizeof(e->display), "... ANY(...)");
+    return e;
+}
+
+ExprNode *expr_make_unnest(ExprNode *arr)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_UNNEST;
+    e->left = arr;
+    snprintf(e->display, sizeof(e->display), "unnest(...)");
+    return e;
+}
+
 void snowflake_init(void)
 {
     char *env = getenv("EVOSQL_MACHINE_ID");
@@ -387,25 +543,25 @@ ExprNode *expr_make_cmp(int subtok, ExprNode *left, ExprNode *right)
 {
     ExprNodeType type;
     switch (subtok) {
-    case 4:  type = EXPR_CMP_EQ; break;
-    case 3:  type = EXPR_CMP_NE; break;
-    case 1:  type = EXPR_CMP_LT; break;
-    case 2:  type = EXPR_CMP_GT; break;
-    case 5:  type = EXPR_CMP_LE; break;
-    case 6:  type = EXPR_CMP_GE; break;
-    default: type = EXPR_CMP_EQ; break;
+    case CMP_SUBTOK_EQ: type = EXPR_CMP_EQ; break;
+    case CMP_SUBTOK_NE: type = EXPR_CMP_NE; break;
+    case CMP_SUBTOK_LT: type = EXPR_CMP_LT; break;
+    case CMP_SUBTOK_GT: type = EXPR_CMP_GT; break;
+    case CMP_SUBTOK_LE: type = EXPR_CMP_LE; break;
+    case CMP_SUBTOK_GE: type = EXPR_CMP_GE; break;
+    default:            type = EXPR_CMP_EQ; break;
     }
     ExprNode *e = expr_make_binop(type, left, right);
     if (e) {
         const char *op_str;
         switch (subtok) {
-        case 4:  op_str = "=";  break;
-        case 3:  op_str = "<>"; break;
-        case 1:  op_str = "<";  break;
-        case 2:  op_str = ">";  break;
-        case 5:  op_str = "<="; break;
-        case 6:  op_str = ">="; break;
-        default: op_str = "?";  break;
+        case CMP_SUBTOK_EQ: op_str = "=";  break;
+        case CMP_SUBTOK_NE: op_str = "<>"; break;
+        case CMP_SUBTOK_LT: op_str = "<";  break;
+        case CMP_SUBTOK_GT: op_str = ">";  break;
+        case CMP_SUBTOK_LE: op_str = "<="; break;
+        case CMP_SUBTOK_GE: op_str = ">="; break;
+        default:            op_str = "?";  break;
         }
         snprintf(e->display, sizeof(e->display), "%s %s %s",
                  left ? left->display : "?", op_str,
@@ -2528,6 +2684,141 @@ int expr_evaluate(const ExprNode *e,
         int exists = (cnt > 0);
         if (e->val.intval) exists = !exists; /* NOT EXISTS */
         strncpy(out_buf, exists ? "t" : "f", buf_size);
+        return 1;
+    }
+
+    /* --- Array ops (Task 90) ---
+     * Internal values flow as PG-style text "{e1,e2,NULL,...}". On read,
+     * tokenize; on write, build canonical text. */
+    if (e->type == EXPR_ARRAY_LITERAL) {
+        int count = e->val.intval;
+        /* Walk chain of element exprs through ->extra */
+        int op = 0;
+        if (buf_size < 3) { out_buf[0] = '\0'; return 1; }
+        out_buf[op++] = '{';
+        ExprNode *cur = e->extra;
+        for (int i = 0; i < count && cur; i++) {
+            if (i > 0) {
+                if (op + 1 >= buf_size) break;
+                out_buf[op++] = ',';
+            }
+            char tmp[512];
+            int ok = expr_evaluate(cur, col_names, col_values, num_cols,
+                                    tmp, sizeof(tmp));
+            if (!ok || strcmp(tmp, NULL_MARKER) == 0) {
+                if (op + 4 < buf_size) {
+                    memcpy(out_buf + op, "NULL", 4);
+                    op += 4;
+                }
+            } else {
+                /* Quote if contains , { } " \ or whitespace */
+                int needs_q = 0;
+                for (const char *p = tmp; *p; p++) {
+                    if (*p == ',' || *p == '{' || *p == '}' || *p == '"' ||
+                        *p == '\\' || *p == ' ' || *p == '\t') { needs_q = 1; break; }
+                }
+                if (strcasecmp(tmp, "NULL") == 0) needs_q = 1;
+                if (needs_q && op + 1 < buf_size) out_buf[op++] = '"';
+                for (const char *p = tmp; *p && op + 2 < buf_size; p++) {
+                    if ((*p == '"' || *p == '\\') && needs_q) out_buf[op++] = '\\';
+                    out_buf[op++] = *p;
+                }
+                if (needs_q && op + 1 < buf_size) out_buf[op++] = '"';
+            }
+            cur = cur->extra;
+        }
+        if (op + 1 < buf_size) out_buf[op++] = '}';
+        out_buf[op < buf_size ? op : buf_size - 1] = '\0';
+        return 1;
+    }
+
+    if (e->type == EXPR_SUBSCRIPT) {
+        char arr_str[4096], idx_str[64];
+        int arr_ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                             num_cols, arr_str, sizeof(arr_str)) : 0;
+        int idx_ok = e->right ? expr_evaluate(e->right, col_names, col_values,
+                                              num_cols, idx_str, sizeof(idx_str)) : 0;
+        if (!arr_ok || !idx_ok ||
+            strcmp(arr_str, NULL_MARKER) == 0 ||
+            strcmp(idx_str, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        int idx = atoi(idx_str);
+        const char *cur = arr_text_iter_begin(arr_str);
+        if (!cur) { strncpy(out_buf, NULL_MARKER, buf_size); return 1; }
+
+        char elem[512];
+        int is_null, r, i = 1;
+        while ((r = arr_text_iter_next(&cur, elem, sizeof(elem), &is_null)) == 1) {
+            if (i == idx) {
+                if (is_null) strncpy(out_buf, NULL_MARKER, buf_size);
+                else { strncpy(out_buf, elem, buf_size - 1); out_buf[buf_size - 1] = '\0'; }
+                return 1;
+            }
+            i++;
+        }
+        /* OOB or malformed: NULL per PG semantics */
+        strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+
+    if (e->type == EXPR_ARRAY_LENGTH) {
+        char arr_str[4096];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                          num_cols, arr_str, sizeof(arr_str)) : 0;
+        if (!ok || strcmp(arr_str, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        const char *cur = arr_text_iter_begin(arr_str);
+        if (!cur) { snprintf(out_buf, buf_size, "0"); return 1; }
+
+        char elem[512];
+        int is_null, r, count = 0;
+        while ((r = arr_text_iter_next(&cur, elem, sizeof(elem), &is_null)) == 1)
+            count++;
+        snprintf(out_buf, buf_size, "%d", count);
+        return 1;
+    }
+
+    if (e->type == EXPR_ANY_ARRAY) {
+        char lhs[512], arr_str[4096];
+        int lhs_ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                             num_cols, lhs, sizeof(lhs)) : 0;
+        int arr_ok = e->right ? expr_evaluate(e->right, col_names, col_values,
+                                              num_cols, arr_str, sizeof(arr_str)) : 0;
+        if (!lhs_ok || !arr_ok ||
+            strcmp(lhs, NULL_MARKER) == 0 ||
+            strcmp(arr_str, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        const char *cur = arr_text_iter_begin(arr_str);
+        if (!cur) { strncpy(out_buf, "f", buf_size); return 1; }
+
+        int cmp_op = e->val.intval;
+        int found = 0, any_null = 0;
+        char elem[512];
+        int is_null, r;
+        while ((r = arr_text_iter_next(&cur, elem, sizeof(elem), &is_null)) == 1) {
+            if (is_null) any_null = 1;
+            else if (arr_scalar_cmp(lhs, elem, cmp_op)) { found = 1; break; }
+        }
+        if (found)         strncpy(out_buf, "t", buf_size);
+        else if (any_null) strncpy(out_buf, NULL_MARKER, buf_size);
+        else               strncpy(out_buf, "f", buf_size);
+        return 1;
+    }
+
+    /* EXPR_UNNEST in scalar context: v1 returns the array as-is.
+     * Row-producing semantics require FROM-clause placement — handled by
+     * the join pipeline, not this evaluator. */
+    if (e->type == EXPR_UNNEST) {
+        if (e->left)
+            return expr_evaluate(e->left, col_names, col_values, num_cols,
+                                 out_buf, buf_size);
+        strncpy(out_buf, NULL_MARKER, buf_size);
         return 1;
     }
 
