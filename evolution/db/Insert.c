@@ -21,6 +21,11 @@
 /* Suppression flag: when set, GetInsertions() skips appending to g_ins.data.
  * Used during ON DUPLICATE KEY UPDATE parsing to prevent SET value side effects. */
 __thread int g_ins_upsert_mode = 0;
+/* When > 0, literal atoms inside an ARRAY[...] literal are parsed as
+ * ExprNodes but not appended to the active INSERT row data. The array
+ * rule reconstructs canonical "{e1,e2,...}" text and calls GetInsertions
+ * once at the end. Task 90 — Feature #60. */
+__thread int g_in_array_literal = 0;
 
 void SetOnDupKeyUpdate(void)
 {
@@ -168,6 +173,7 @@ static void capture_generated_id(const char *val)
 int GetInsertions(char *name)
 {
     if (g_ins_upsert_mode) return 1; /* suppress during ON DUPLICATE KEY UPDATE */
+    if (g_in_array_literal > 0) return 1; /* suppress inside ARRAY[...] — Task 90 */
     if (!name) return -1;
 
     /* Strip internal delimiter/separator bytes from user values to prevent
@@ -1125,12 +1131,42 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     /* MVCC: ensure we have a transaction ID for this DML */
     mvcc_ensure_xid(&g_qctx->mvcc_xid);
 
+    /* Array normalization (Task 90): for columns declared as TYPE[], convert
+     * inbound text "{e1,e2,NULL,...}" or ARRAY[...] evaluation result into
+     * the binary blob layout that tup_build's family-25 case expects.
+     * Buffers are freed after tup_build. */
+    char *arr_blobs[CAT_MAX_COLUMNS] = {0};
+    int  arr_blob_count = 0;
+    for (int i = 0; i < nv && i < ncols; i++) {
+        if (is_null[i]) continue;
+        if (!tup_is_array(cols[i].type_code)) continue;
+        int base = tup_array_base_family(cols[i].type_code);
+        char *buf = (char *)malloc(ARRAY_MAX_BLOB);
+        if (!buf) {
+            for (int k = 0; k < arr_blob_count; k++) free(arr_blobs[k]);
+            return -1;
+        }
+        int bl = arr_parse_text(vals_ptrs[i], base, buf, ARRAY_MAX_BLOB);
+        if (bl < 0) {
+            free(buf);
+            for (int k = 0; k < arr_blob_count; k++) free(arr_blobs[k]);
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_TEXT_REPRESENTATION);
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "invalid array literal for column %s", cols[i].col_name);
+            g_err.error = 1;
+            return -1;
+        }
+        arr_blobs[arr_blob_count++] = buf;
+        vals_ptrs[i] = buf;
+    }
+
     /* Build binary tuple from string values */
     char bin_buf[RECORD_BUF_SIZE];
     int bin_len = DML_PROF_EXPR("tup_build",
                                 tup_build(vals_ptrs, is_null, nv, td->table_id,
                                           cols, ncols, bin_buf, sizeof(bin_buf),
                                           g_qctx->mvcc_xid));
+    for (int k = 0; k < arr_blob_count; k++) free(arr_blobs[k]);
     if (bin_len < 0) return -1;
 
     /* Insert binary tuple into heap page */

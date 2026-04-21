@@ -24,6 +24,24 @@
 #define PG_OID_UUID    2950
 #define PG_OID_JSON    114
 
+/* Array type OIDs (Task 90 — Feature #60). Match PostgreSQL pg_type.dat. */
+#define PG_OID_ARRAY_INT2       1005  /* SMALLINT[] */
+#define PG_OID_ARRAY_INT4       1007  /* INT[] / INTEGER[] */
+#define PG_OID_ARRAY_INT8       1016  /* BIGINT[] */
+#define PG_OID_ARRAY_FLOAT4     1021  /* FLOAT[] / REAL[] */
+#define PG_OID_ARRAY_FLOAT8     1022  /* DOUBLE[] */
+#define PG_OID_ARRAY_NUMERIC    1231  /* DECIMAL[] / NUMERIC[] */
+#define PG_OID_ARRAY_DATE       1182  /* DATE[] */
+#define PG_OID_ARRAY_TIME       1183  /* TIME[] */
+#define PG_OID_ARRAY_TIMESTAMP  1115  /* TIMESTAMP[] */
+#define PG_OID_ARRAY_BPCHAR     1014  /* CHAR[] */
+#define PG_OID_ARRAY_VARCHAR    1015  /* VARCHAR[] */
+#define PG_OID_ARRAY_BYTEA      1001  /* BINARY[] / VARBINARY[] */
+#define PG_OID_ARRAY_TEXT       1009  /* TEXT[] */
+#define PG_OID_ARRAY_UUID       2951  /* UUID[] */
+#define PG_OID_ARRAY_BOOL       1000  /* BOOLEAN[] */
+#define PG_OID_ARRAY_JSON       199   /* JSON[] */
+
 typedef struct {
     char   name[MAX_COL_NAME];
     int    pg_type_oid;

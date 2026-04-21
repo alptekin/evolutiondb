@@ -728,22 +728,31 @@ int CreateIndexProcess(void)
         return -1;
     }
 
-    /* Verify all columns exist */
+    /* Verify all columns exist; reject ARRAY columns in v1 (Task 90) */
     {
         char colCheck[256];
         strncpy(colCheck, g_idx.columnName, sizeof(colCheck) - 1);
         colCheck[sizeof(colCheck) - 1] = '\0';
         char *ct = strtok(colCheck, ",");
         while (ct) {
-            int found = 0, i;
+            int found = 0, i, found_idx = -1;
             for (i = 0; i < indexNCols; i++) {
-                if (strcasecmp(indexCols[i].col_name, ct) == 0) { found = 1; break; }
+                if (strcasecmp(indexCols[i].col_name, ct) == 0) { found = 1; found_idx = i; break; }
             }
             if (!found) {
                 snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "column '%s' does not exist in table '%s'",
                          ct, g_idx.tableName);
                 g_err.error = 1;
+                g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0';
+                return -1;
+            }
+            if (tup_is_array(indexCols[found_idx].type_code)) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "cannot create index on array column '%s' (not supported in v1)",
+                         ct);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FEATURE_NOT_SUPPORTED);
                 g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0';
                 return -1;
             }

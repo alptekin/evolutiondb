@@ -169,7 +169,14 @@ typedef enum {
     EXPR_NEXTVAL,           /* NEXTVAL('seq_name') */
     EXPR_CURRVAL,           /* CURRVAL('seq_name') */
     EXPR_SETVAL,            /* SETVAL('seq_name', value) */
-    EXPR_LASTVAL            /* LASTVAL() */
+    EXPR_LASTVAL,           /* LASTVAL() */
+
+    /* Array operations (Task 90 — Feature #60) */
+    EXPR_ARRAY_LITERAL,     /* ARRAY[e1,e2,...] — elements chained via ->extra */
+    EXPR_SUBSCRIPT,         /* arr[idx] — left=arr, right=idx (1-based) */
+    EXPR_ARRAY_LENGTH,      /* array_length(arr) — left=arr */
+    EXPR_ANY_ARRAY,         /* lhs cmp_op ANY(arr) — left=lhs, right=arr, val.intval=cmp_op */
+    EXPR_UNNEST             /* unnest(arr) — left=arr */
 } ExprNodeType;
 
 typedef struct ExprNode {
@@ -270,6 +277,24 @@ ExprNode *expr_make_subquery(const char *sql);
 ExprNode *expr_make_in_subquery(ExprNode *left, const char *sql);
 ExprNode *expr_make_not_in_subquery(ExprNode *left, const char *sql);
 ExprNode *expr_make_exists_subquery(const char *sql, int negated);
+
+/* Array constructors (Task 90 — Feature #60) */
+ExprNode *expr_make_array_literal(ExprNode **elems, int count);
+ExprNode *expr_make_subscript(ExprNode *arr, ExprNode *idx);
+ExprNode *expr_make_array_length(ExprNode *arr);
+ExprNode *expr_make_any_array(int cmp_op, ExprNode *lhs, ExprNode *arr);
+ExprNode *expr_make_unnest(ExprNode *arr);
+
+/* Comparison subtoken codes emitted by the lexer for COMPARISON tokens.
+ * Shared by expr_make_cmp() and any other code that dispatches on the
+ * raw subtok value (e.g. EXPR_ANY_ARRAY evaluator). */
+#define CMP_SUBTOK_LT        1   /* <  */
+#define CMP_SUBTOK_GT        2   /* >  */
+#define CMP_SUBTOK_NE        3   /* <> or != */
+#define CMP_SUBTOK_EQ        4   /* =  */
+#define CMP_SUBTOK_LE        5   /* <= */
+#define CMP_SUBTOK_GE        6   /* >= */
+#define CMP_SUBTOK_NULL_EQ  12   /* <=> (null-safe equals) */
 
 /* Constants for expression array sizes */
 #define MAX_CASE_WHENS 32

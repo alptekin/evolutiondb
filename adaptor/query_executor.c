@@ -206,6 +206,28 @@ int type_encoding_to_pg_oid(int typeEncoding)
     case 18: return PG_OID_UUID;    /* UUID */
     case 22: return PG_OID_VARCHAR; /* BOOLEAN — send as VARCHAR to avoid DBeaver JDBC getByte() error */
     case 23: return PG_OID_JSON;    /* JSON */
+    case 25: {
+        /* ARRAY (Task 90 — Feature #60): dispatch on base family */
+        int base = typeEncoding - 250000;
+        switch (base) {
+        case 1: case 2: return PG_OID_ARRAY_INT2;
+        case 3: case 4: case 5: return PG_OID_ARRAY_INT4;
+        case 6:  return PG_OID_ARRAY_INT8;
+        case 7:  return PG_OID_ARRAY_FLOAT4;
+        case 8:  return PG_OID_ARRAY_FLOAT8;
+        case 9:  return PG_OID_ARRAY_FLOAT4;
+        case 10: return PG_OID_ARRAY_TIMESTAMP;
+        case 11: return PG_OID_ARRAY_NUMERIC;
+        case 12: return PG_OID_ARRAY_BPCHAR;
+        case 13: return PG_OID_ARRAY_VARCHAR;
+        case 14: case 15: return PG_OID_ARRAY_BYTEA;
+        case 17: return PG_OID_ARRAY_TEXT;
+        case 18: return PG_OID_ARRAY_UUID;
+        case 22: return PG_OID_ARRAY_BOOL;
+        case 23: return PG_OID_ARRAY_JSON;
+        default: return PG_OID_TEXT;
+        }
+    }
     default: return PG_OID_TEXT;    /* BLOB, TEXT, ENUM, SET, etc. */
     }
 }
@@ -5051,6 +5073,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
             free(g_sel.joinLateralSql[_ji]);
             g_sel.joinLateralSql[_ji] = NULL;
         }
+        g_sel.joinUnnestExpr[_ji] = NULL;
     }
     g_create.totalColumnSize = 0;
     g_create.currentColNotNull = 0;
@@ -5268,6 +5291,72 @@ parser_done:
             g_ins.insertFromSelect = 0;
             g_sel.lastTable[0] = '\0';
             g_sel.joinTableCount = 0;
+        }
+        /* Single-table UNNEST: SELECT ... FROM unnest(arr) — bypass join
+         * engine and build a one-column synthetic result set directly.
+         * Correlated `FROM t, unnest(t.col)` goes through the multi-table
+         * JOIN branch below. Task 90 — Feature #60. */
+        else if (!rs->has_error && g_sel.joinTableCount == 1 &&
+                 g_sel.joinUnnestExpr[0]) {
+            rs->is_select = 1;
+            const char *alias = g_sel.joinAliases[0][0] ? g_sel.joinAliases[0] : "unnest";
+            /* Column: alias or "unnest"; OID TEXT (25) in v1 */
+            result_add_column(rs, alias, 25);
+
+            char arr_text[4096];
+            static __thread char en[1][128] = { "" };
+            static __thread char ev[1][256] = { "" };
+            int ok = expr_evaluate(g_sel.joinUnnestExpr[0],
+                                   (const char (*)[128])en,
+                                   (const char (*)[256])ev, 0,
+                                   arr_text, sizeof(arr_text));
+
+            if (ok && strcmp(arr_text, "\x01NULL\x01") != 0) {
+                const char *p = arr_text;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p == '{') {
+                    p++;
+                    while (*p) {
+                        while (*p == ' ' || *p == '\t') p++;
+                        if (*p == '}' || *p == '\0') break;
+                        char elem[256];
+                        int elen = 0;
+                        int is_null_elem = 0;
+                        if (*p == '"') {
+                            p++;
+                            while (*p && *p != '"') {
+                                if (*p == '\\' && *(p + 1)) p++;
+                                if (elen < (int)sizeof(elem) - 1) elem[elen++] = *p;
+                                p++;
+                            }
+                            if (*p == '"') p++;
+                        } else {
+                            while (*p && *p != ',' && *p != '}') {
+                                if (elen < (int)sizeof(elem) - 1) elem[elen++] = *p;
+                                p++;
+                            }
+                            while (elen > 0 && (elem[elen - 1] == ' ' || elem[elen - 1] == '\t'))
+                                elen--;
+                            if (elen == 4 &&
+                                (elem[0] | 0x20) == 'n' && (elem[1] | 0x20) == 'u' &&
+                                (elem[2] | 0x20) == 'l' && (elem[3] | 0x20) == 'l')
+                                is_null_elem = 1;
+                        }
+                        elem[elen] = '\0';
+
+                        int row = result_add_row(rs);
+                        if (row < 0) break;
+                        if (is_null_elem) result_set_null(rs, row, 0);
+                        else result_set_field(rs, row, 0, elem);
+
+                        while (*p == ' ' || *p == '\t') p++;
+                        if (*p == ',') p++;
+                    }
+                }
+            }
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
+            g_sel.joinTableCount = 0;
+            g_sel.joinUnnestExpr[0] = NULL;
         }
         /* Multi-table JOIN: if parser detected multiple tables, use join engine */
         else if (!rs->has_error && g_sel.joinTableCount > 1) {

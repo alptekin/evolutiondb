@@ -276,6 +276,7 @@ void AddJoinTable(const char *name, const char *alias);
 void SetLastJoinType(int type);
 void SetJoinOnExpr(struct ExprNode *expr);
 void AddLateralTable(const char *sql, const char *alias);
+void AddUnnestTable(struct ExprNode *arr_expr, const char *alias);
 
 /* Table-level UNIQUE parser helpers */
 void AddUniqueColumn(const char *colName);
