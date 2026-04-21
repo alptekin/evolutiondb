@@ -82,7 +82,7 @@
 | 56 | RETURNING clause | ❌ | ✅ | ✅ | INSERT/UPDATE/DELETE RETURNING *, col1, col2 |
 | 57 | UPSERT (INSERT ... ON CONFLICT) | ❌ | ✅ | ❌ | |
 | 58 | Materialized Views | ❌ | ✅ | ❌ | |
-| 59 | Lateral Joins | ❌ | ✅ | ❌ | |
+| 59 | Lateral Joins | ❌ | ✅ | 🔧 | v1: comma LATERAL, INNER/LEFT JOIN LATERAL, correlated refs, 13/13 tests |
 | 60 | Array data type | ❌ | ✅ | ❌ | |
 | 61 | COPY command (bulk import/export) | ❌ | ✅ | ❌ | |
 | 62 | LISTEN / NOTIFY | ❌ | ✅ | ❌ | |
