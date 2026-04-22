@@ -3,7 +3,7 @@
 
 #define EVODB_VERSION_MAJOR 2
 #define EVODB_VERSION_MINOR 0
-#define EVODB_VERSION_PATCH 5
-#define EVODB_VERSION       "2.0.5"
+#define EVODB_VERSION_PATCH 6
+#define EVODB_VERSION       "2.0.6"
 
 #endif /* EVOLUTIONDB_VERSION_H */
