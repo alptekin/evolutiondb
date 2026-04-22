@@ -3510,7 +3510,10 @@ static void execute_insert_select(const char *srcTable, ResultSet *rs, SessionCt
                 if (col_map[ci] >= 0) map_count++;
             }
             if (map_count > 0) {
+                /* Stack-allocated — must memset before result_init so the
+                 * magic cookie path sees fresh memory, not garbage. */
                 ResultSet projected;
+                memset(&projected, 0, sizeof(projected));
                 result_init(&projected);
                 projected.is_select = 1;
                 for (int ci = 0; ci < g_sel.columnCount; ci++) {
@@ -3612,7 +3615,7 @@ static void execute_insert_select(const char *srcTable, ResultSet *rs, SessionCt
             int rowSize = 1; /* ROW_SEP or terminator */
             for (int c = 0; c < selectRs.num_cols; c++) {
                 if (selectRs.rows[bi].is_null[c] || !selectRs.rows[bi].fields[c])
-                    rowSize += 7 + 1; /* \x01NULL\x01; */
+                    rowSize += 7 + 1; /* \x01NULL\x01 + FIELD_SEP */
                 else
                     rowSize += (int)strlen(selectRs.rows[bi].fields[c]) + 1;
             }
@@ -3627,15 +3630,18 @@ static void execute_insert_select(const char *srcTable, ResultSet *rs, SessionCt
                 break;
             }
 
-            /* Add ROW_SEP between rows */
+            /* Add ROW_SEP between rows, overwriting the trailing FIELD_SEP
+             * that the previous row left behind (InsertProcess expects
+             * FIELD_SEP-separated fields, ROW_SEP-separated rows). */
             if (batchCount > 0) {
-                if (pos > 0 && g_ins.data[pos - 1] == ';')
+                if (pos > 0 && g_ins.data[pos - 1] == FIELD_SEP_CHAR)
                     g_ins.data[pos - 1] = '\x02';
                 else
                     g_ins.data[pos++] = '\x02';
             }
 
-            /* Append row fields as semicolon-delimited string */
+            /* Append row fields separated by FIELD_SEP (0x1F) — matches the
+             * wire format InsertProcess parses via strtok(FIELD_SEP). */
             for (int c = 0; c < selectRs.num_cols; c++) {
                 const char *val;
                 if (selectRs.rows[bi].is_null[c] || !selectRs.rows[bi].fields[c])
@@ -3645,7 +3651,7 @@ static void execute_insert_select(const char *srcTable, ResultSet *rs, SessionCt
                 int vlen = (int)strlen(val);
                 memcpy(g_ins.data + pos, val, vlen);
                 pos += vlen;
-                g_ins.data[pos++] = ';';
+                g_ins.data[pos++] = FIELD_SEP_CHAR;
             }
             g_ins.data[pos] = '\0';
             batchCount++;
