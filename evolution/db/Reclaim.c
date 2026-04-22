@@ -255,8 +255,68 @@ int ReclaimTableProcess(void)
 
                 /* Build PK key */
                 char pkKey[1024];
-                if (tapi_build_pk_key(cols, ncols, rec, rec_len,
-                                      pkKey, sizeof(pkKey)) == 0 && pkKey[0]) {
+                int have_pk = (tapi_build_pk_key(cols, ncols, rec, rec_len,
+                                                 pkKey, sizeof(pkKey)) == 0
+                               && pkKey[0]);
+
+                /* HOT-chain collapse: if the PK tree still points to this
+                 * (about-to-be-deleted) HOT-root slot, follow the on-page
+                 * chain of HEAP_ONLY successors and fold the live tuple's
+                 * payload into the dead slot before removing the chain.
+                 * Without this, deleting the root evicted the PK entry and
+                 * the tail HEAP_ONLY tuples became orphans that tapi_scan
+                 * filters out — a plain UPDATE + RECLAIM cycle then silently
+                 * dropped the row. */
+                if (have_pk && tup_is_hot_updated(rec, rec_len)) {
+                    RowID pk_rid;
+                    RowID dead_rid = { page_no, si };
+                    if (bt2_search(&pk_tree_p0, pkKey, &pk_rid) == 0 &&
+                        pk_rid.page_no == dead_rid.page_no &&
+                        pk_rid.slot_idx == dead_rid.slot_idx) {
+                        RowID live_rid;
+                        char live_rec[RECORD_BUF_SIZE];
+                        int live_len = tapi_follow_hot_chain(
+                            dead_rid, rec, rec_len, NULL,
+                            live_rec, sizeof(live_rec), &live_rid);
+                        if (live_len > 0 && live_rid.page_no == page_no) {
+                            /* Refresh extracted fields + PK key from the
+                             * live payload — these drive secondary-index
+                             * cleanup of the OLD root's index entries. */
+                            (void)tup_extract_fields(live_rec, live_len,
+                                                     cols, ncols,
+                                                     fields, isNull,
+                                                     CAT_MAX_COLUMNS);
+                            char old_pk[1024];
+                            if (tapi_build_pk_key(cols, ncols, rec, rec_len,
+                                                  old_pk, sizeof(old_pk)) == 0) {
+                                /* unused — old PK == pkKey */
+                            }
+                            /* The live tuple still has HEAP_ONLY set — strip
+                             * it so the collapsed root looks like a normal
+                             * indexed tuple. HOT_UPDATED on the new head is
+                             * already clear (the live tip has none). */
+                            live_rec[TUPLE_PREFIX_SIZE + 3] &=
+                                (char)~(TUPLE_FLAG_HEAP_ONLY | TUPLE_FLAG_HOT_UPDATED);
+                            slot_update(page_buf, si, live_rec,
+                                        (uint16_t)live_len);
+                            /* Remove the live tuple's own slot — its content
+                             * now lives at (page_no, si). */
+                            slot_delete(page_buf, live_rid.slot_idx);
+                            page_modified = 1;
+                            /* PK tree already points to si; leave it alone.
+                             * Secondary indexes: the OLD root's index entries
+                             * still reference (page_no, si), which now
+                             * contains the live payload — nothing to rewrite
+                             * here because HOT updates by definition touch no
+                             * indexed column. Skip the delete-from-index +
+                             * slot_delete flow below. */
+                            dead_count++;
+                            continue;
+                        }
+                    }
+                }
+
+                if (have_pk) {
                     /* Only delete PK entry if it still points to THIS dead slot.
                      * Non-destructive UPDATE leaves old versions on heap with the
                      * same PK key — the PK tree now points to the newer version,
