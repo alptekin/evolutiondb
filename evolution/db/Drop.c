@@ -24,6 +24,50 @@ int DropTableProcess(void)
         return -1;
     }
 
+    /* Task 92 — Feature #63: inheritance dependency check.
+     * If this table has children, refuse unless DROP ... CASCADE.
+     * With CASCADE, recursively drop each child first (cat_list_children
+     * returns only direct descendants). */
+    {
+        uint32_t children[64];
+        int nch = cat_list_children(td.table_id, children, 64);
+        if (nch > 0) {
+            if (!g_drop.dropCascade) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "cannot drop table \"%s\" because other objects depend on it",
+                         td.table_name);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE("2BP01");
+                TruncateDrop();
+                return -1;
+            }
+            /* CASCADE: recursively drop children before dropping parent. */
+            for (int i = 0; i < nch; i++) {
+                TableDesc child_td;
+                if (cat_find_table_by_id(children[i], &child_td) < 0) continue;
+                char saved_tbl[1024];
+                strncpy(saved_tbl, g_drop.tblName, sizeof(saved_tbl) - 1);
+                saved_tbl[sizeof(saved_tbl) - 1] = '\0';
+                int saved_if = g_drop.ifExists;
+                strncpy(g_drop.tblName, child_td.table_name,
+                        sizeof(g_drop.tblName) - 1);
+                g_drop.tblName[sizeof(g_drop.tblName) - 1] = '\0';
+                g_drop.ifExists = 1;   /* tolerate already-dropped races */
+                /* dropCascade stays = 1, so grandchildren get dropped too */
+                DropTableProcess();
+                strncpy(g_drop.tblName, saved_tbl, sizeof(g_drop.tblName) - 1);
+                g_drop.tblName[sizeof(g_drop.tblName) - 1] = '\0';
+                g_drop.ifExists = saved_if;
+                g_drop.dropCascade = 1;  /* re-assert after nested call */
+            }
+            /* Re-resolve this table — recursion above may have reset g_err */
+            if (tapi_resolve(g_drop.tblName, &td, NULL, NULL) < 0) {
+                TruncateDrop();
+                return 0;   /* already gone via some cascade path */
+            }
+        }
+    }
+
     /* Check view dependencies — reject if a view references this table */
     {
         DatabaseDesc dbDesc;
@@ -73,6 +117,9 @@ int DropTableProcess(void)
 
     /* Drop table from catalog (removes table, columns, indexes, constraints) */
     cat_drop_table(td.table_id);
+
+    /* Task 92: scrub inheritance entry for this child (no-op if it wasn't a child). */
+    cat_remove_inheritance(td.table_id);
 
     printf("command(s) completed successfully!..\n");
     TruncateDrop();
@@ -258,6 +305,7 @@ int TruncateDrop(void)
     g_drop.truncCascade = 0;
     g_drop.truncContinueIdentity = 0;
     g_drop.truncExtraCount = 0;
+    g_drop.dropCascade = 0;         /* Task 92 — Feature #63 */
 
     return 0;
 }

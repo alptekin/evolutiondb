@@ -1856,7 +1856,7 @@
 
 ## Day 47 — Table Inheritance & Row-Level Security
 
-### Task 92: ⬜ Table Inheritance (Feature #63)
+### Task 92: ✅ Table Inheritance (Feature #63)
 
 **Goal:** Implement PostgreSQL-style table inheritance.
 
@@ -3213,6 +3213,63 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
+### Task 163: ⬜ Array Data Type v2 — Nesting, custom VARCHAR(N)[], operators (Feature #159)
+
+**Goal:** Task 90 v1 (PR #91) supports 1-D arrays over 19 base types with binary blob storage, text-mode I/O, `col[i]` subscript, `ANY(col)`, `array_length()`, and `FROM unnest(arr)` (single-table). v2 closes PG-parity gaps on the expression surface and growth dimensions.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Nested arrays — `INT[][]`, `TEXT[][]`. Extend encoding to ndim > 1 with per-dim size header; update `arr_build_blob`/`arr_format_text` for nested braces `{{1,2},{3,4}}`. | `evolution/db/tuple_format.c` |
+| 2 | Custom element size — `VARCHAR(N)[]`, `BINARY(N)[]` with per-array N stored in the blob element-type-code (not default 255). | `evolution/db/tuple_format.c`, `evolution/parser/evoparser.y` |
+| 3 | Array concatenation — `arr1 \|\| arr2` and `arr \|\| elem` operators. | `evolution/db/expression.c`, `evolution/parser/evoparser.y` |
+| 4 | Array slice — `col[1:3]` sub-array extraction. | `evolution/parser/evoparser.y`, `evolution/db/expression.c` |
+| 5 | Set-equality for arrays — `arr = ARRAY[...]` compares element-wise ordered (matches PG). | `evolution/db/expression.c` |
+| 6 | `unnest()` in SELECT list — SRF (set-returning function) infrastructure. Emits one output row per array element. | `adaptor/query_executor.c` |
+| 7 | Correlated `FROM t, LATERAL unnest(t.col)` — wire UNNEST through the existing LATERAL pipeline with per-outer-row array expansion. | `adaptor/join.c` |
+| 8 | Index on array column — GIN-style inverted index (or fall back to expression-based). Currently rejected with 0A000. | `evolution/db/Index.c`, `evolution/db/hash_idx.c` |
+| 9 | Tests — `tests/test_array_v2.py`: nested, VARCHAR(N)[], `\|\|`, slice `[1:3]`, set-equality, unnest-in-SELECT, correlated LATERAL, GIN lookups. Min 20 tests. | `tests/test_array_v2.py` |
+| 10 | Performance benchmark — 100K-row table with INT[] column, `ANY(col)` filter vs GIN index. Target: ≥ 10x speedup with GIN. | `tests/bench_array_v2.py`, docs |
+
+---
+
+### Task 164: ⬜ LISTEN / NOTIFY v2 — Expression payload, multi-server, persistence (Feature #160)
+
+**Goal:** Task 91 v1 (PR #92) supports LISTEN/NOTIFY/UNLISTEN with commit-time delivery, savepoint scoping, per-TX dedup, and the `evo_notify()`/`pg_notify()` scalar functions on PG and EVO protocols. v2 extends delivery semantics and resilience.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Expression payload — `NOTIFY ch, <expr>` where `<expr>` is a full expression evaluated at NOTIFY time (concat, function calls, column refs). Currently literal-only. | `evolution/parser/evoparser.y`, `adaptor/query_executor.c` |
+| 2 | Cross-server delivery — a NOTIFY on a leader replicates pending notifications via Raft WAL to followers, so listeners connected to any node receive the message after commit. | `adaptor/notify.c`, `adaptor/replication.c`, `adaptor/raft.c` |
+| 3 | Optional persistence — opt-in `NOTIFY ch, 'payload' DURABLE` flag writes to a dedicated WAL segment so a server restart can replay undelivered notifications to reconnecting listeners. | `adaptor/notify.c`, `evolution/db/wal.c` |
+| 4 | Listener queue overflow protection — if a listener's send queue exceeds `evo_listener_queue_max`, drop oldest messages with a `NoticeResponse` warning and a counter metric. | `adaptor/notify.c`, `adaptor/pg_protocol.c` |
+| 5 | `pg_notification_queue_usage()` — return fraction of pending queue used (0.0–1.0) per PG convention. | `evolution/parser/evoparser.y`, `evolution/db/expression.c` |
+| 6 | Channel pattern LISTEN — `LISTEN 'prefix.*'` subscribes to a glob. NOTIFY routes to every subscribing pattern that matches. | `adaptor/notify.c` |
+| 7 | Async session ID in payload — let subscribers reliably distinguish their own notifications (for `SELF` mode) via a well-known header. | `adaptor/notify.c`, `adaptor/pg_protocol.c` |
+| 8 | Deadlock avoidance rework — if the snapshot-then-release pattern ever blocks under pathological fan-out, move to `trylock + backoff` with a bounded retry budget. | `adaptor/notify.c` |
+| 9 | Tests — `tests/test_listen_notify_v2.py`: expression payload, Raft fan-out across 3 nodes, DURABLE replay across restart, queue overflow, pattern subscribe, pg_notification_queue_usage. Min 20 tests. | `tests/test_listen_notify_v2.py` |
+| 10 | Performance benchmark — sustained NOTIFY throughput at 10K subscribers / 1 publisher, 10K distinct channels, 5-minute soak. Target: no memory leak, ≥ 20K msg/sec. | `tests/bench_listen_notify_v2.py`, docs |
+
+---
+
+### Task 165: ⬜ Table Inheritance v2 — Multi-parent, ALTER propagation, constraint inheritance (Feature #161)
+
+**Goal:** Task 92 v1 (PR #93) supports single-parent INHERITS with column copy at CREATE time, SELECT union (recursive, depth 16), `FROM ONLY`, `DROP CASCADE`, and the `pg_inherits` catalog view. v2 brings the model up to full PG parity on schema evolution and constraint semantics.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Multi-parent inheritance — `CREATE TABLE child () INHERITS (p1, p2)`. Column-name duplicates across parents merge when types match, else error `42804`. | `evolution/parser/evoparser.y`, `evolution/db/Create.c` |
+| 2 | ALTER TABLE parent ADD COLUMN — propagate the new column to every descendant (via walking `cat_list_children` recursively). Default values and NOT NULL carry down. | `evolution/db/Create.c` (ALTER path), `adaptor/query_executor.c` |
+| 3 | ALTER TABLE parent DROP COLUMN — reject with `2BP01` if a descendant has a row containing the column; else propagate drop. | `evolution/db/Create.c` |
+| 4 | ALTER TABLE parent RENAME COLUMN — propagate to descendants; update each descendant's catalog row atomically under the DML mutex. | `evolution/db/Create.c`, `evolution/db/catalog_internal.c` |
+| 5 | CHECK constraint inheritance — CHECK declared on parent at CREATE TABLE time auto-replicates to children. Child-added CHECKs stay local. | `evolution/db/Create.c` |
+| 6 | Foreign-key propagation — a FK whose referencing column lives on parent also applies to children (enforce on INSERT into child). | `evolution/db/Insert.c`, `evolution/db/catalog_internal.c` |
+| 7 | Trigger propagation — BEFORE/AFTER triggers on parent fire on child rows too, with correct NEW/OLD bindings. | `evolution/db/Trigger.c` |
+| 8 | Statistics — `cat_list_all_descendants` walks the full subtree; `pg_stat_user_tables` aggregates child row counts under the parent's name. | `evolution/db/catalog_internal.c`, `adaptor/catalog.c` |
+| 9 | Tests — `tests/test_inheritance_v2.py`: multi-parent merge, type-mismatch error (42804), ALTER ADD/DROP/RENAME propagation, CHECK inheritance, FK propagation, trigger fire-through, deep-chain stats. Min 25 tests. | `tests/test_inheritance_v2.py` |
+| 10 | Performance benchmark — 1K descendants with 10K rows each; compare SELECT on parent (union of 10M rows) vs SELECT on ONLY parent. Target: linear scan time proportional to total rows, no per-descendant constant overhead. | `tests/bench_inheritance.py`, docs |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
@@ -3377,6 +3434,9 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 155 | Full-Text Search v2 — Maintenance & Speedup | 159 |
 | 156 | Materialized Views v2 — REFRESH CONCURRENTLY & Dependencies | 160 |
 | 157 | Table Partitioning v2 — SELECT routing, LIST/HASH, multi-row | 161 |
+| 159 | Array Data Type v2 — Nesting, VARCHAR(N)[], operators | 163 |
+| 160 | LISTEN/NOTIFY v2 — Expression payload, multi-server, persistence | 164 |
+| 161 | Table Inheritance v2 — Multi-parent, ALTER propagation | 165 |
 
 ---
 
@@ -3439,6 +3499,9 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 87 | 160 | Materialized Views v2 — REFRESH CONCURRENTLY & Deps (#156) | 🔧 v2 Hardening |
 | 88 | 161 | Table Partitioning v2 — SELECT routing, LIST/HASH (#157) | 🔧 v2 Hardening |
 | 89 | 162 | Lateral Joins v2 — Syntax surface, nested / multi-slot, ambiguity (#158) | 🔧 v2 Hardening |
+| 90 | 163 | Array Data Type v2 — Nesting, VARCHAR(N)[], operators (#159) | 🔧 v2 Hardening |
+| 91 | 164 | LISTEN / NOTIFY v2 — Expression payload, multi-server, persistence (#160) | 🔧 v2 Hardening |
+| 92 | 165 | Table Inheritance v2 — Multi-parent, ALTER propagation (#161) | 🔧 v2 Hardening |
 
 **Total:** 115 tasks × 10 steps = **1150 steps** over **65 working days** (117 features).
 

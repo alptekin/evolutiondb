@@ -71,6 +71,7 @@ typedef struct {
     int      shard_type;       /* SHARD_NONE / SHARD_HASH / SHARD_RANGE */
     char     shard_key[CAT_MAX_NAME_LEN]; /* column name used for sharding */
     int      shard_count;      /* HASH: number of shards */
+    uint32_t parent_table_id; /* Task 92: 0 = no parent; INHERITS sets this */
 
     /* Transient schema-presence flags — populated by tapi_resolve(),
      * NOT serialized. Used by DML inner loops to skip catalog lookups
@@ -254,6 +255,10 @@ int cat_list_tables(uint32_t schema_id, TableDesc *out, int max);
 /* Update owner_node_id for distributed table placement. */
 int cat_update_owner_node(uint32_t table_id, const char *table_name,
                           uint32_t schema_id, uint32_t owner_node_id);
+
+/* Update parent_table_id for INHERITS bookkeeping (Task 92). */
+int cat_update_parent_table_id(uint32_t table_id, const char *table_name,
+                                uint32_t schema_id, uint32_t parent_table_id);
 
 /* Update shard metadata for a table. */
 int cat_update_shard_info(uint32_t table_id, const char *table_name,
@@ -465,6 +470,28 @@ int cat_find_sequence(uint32_t schema_id, const char *seq_name, SequenceDesc *ou
 int cat_update_sequence(const SequenceDesc *seq);
 int cat_drop_sequence(uint32_t schema_id, const char *seq_name);
 int cat_list_sequences(uint32_t schema_id, SequenceDesc *out, int max);
+
+/* ---- Table inheritance (Task 92 — Feature #63) ----
+ *
+ *   cat_add_inheritance       — record (child_id → parent_id). Also
+ *                                sets TableDesc.parent_table_id on the
+ *                                child table row (caller updates the
+ *                                child TableDesc before this).
+ *   cat_find_parent           — 0 if no parent, returns parent_id via out.
+ *   cat_list_children         — direct children only; returns count.
+ *   cat_remove_inheritance    — drop a child's mapping entry.
+ *   cat_list_all_inheritance  — used by pg_inherits view; fills pairs[].
+ */
+int cat_add_inheritance(uint32_t child_table_id, uint32_t parent_table_id);
+int cat_find_parent(uint32_t child_table_id, uint32_t *parent_id_out);
+int cat_list_children(uint32_t parent_table_id, uint32_t *out, int max);
+int cat_remove_inheritance(uint32_t child_table_id);
+
+typedef struct {
+    uint32_t child_id;
+    uint32_t parent_id;
+} InheritPair;
+int cat_list_all_inheritance(InheritPair *out, int max);
 
 /* ----------------------------------------------------------------
  *  Convenience

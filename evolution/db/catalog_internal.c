@@ -136,7 +136,7 @@ static void deserialize_schema(const char *buf, SchemaDesc *s)
 /* --- Table --- */
 static void serialize_table(const TableDesc *t, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d",
+    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d;%u",
              t->table_id, t->schema_id, t->table_name,
              t->pk_root_page, t->heap_page,
              t->num_columns, t->pad_size,
@@ -145,7 +145,8 @@ static void serialize_table(const TableDesc *t, char *buf, int size)
              t->owner_node_id,
              t->shard_type,
              t->shard_key[0] ? t->shard_key : "",
-             t->shard_count);
+             t->shard_count,
+             t->parent_table_id);            /* Task 92: INHERITS */
 }
 
 static void deserialize_table(const char *buf, TableDesc *t)
@@ -197,6 +198,13 @@ static void deserialize_table(const char *buf, TableDesc *t)
         p = next_field(p, field, sizeof(field)); t->shard_count = atoi(field);
     } else {
         t->shard_count = 0;
+    }
+    /* parent_table_id — optional, Task 92 (INHERITS). Pre-2.0.7 rows
+     * have no parent; zero is the sentinel for "no inheritance". */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->parent_table_id = (uint32_t)atoi(field);
+    } else {
+        t->parent_table_id = 0;
     }
     (void)p;
 }
@@ -1036,6 +1044,45 @@ int cat_update_owner_node(uint32_t table_id, const char *table_name,
     TableDesc t;
     deserialize_table(record, &t);
     t.owner_node_id = owner_node_id;
+
+    char new_record[CAT_MAX_RECORD_LEN];
+    serialize_table(&t, new_record, sizeof(new_record));
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+
+    bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+    return 0;
+}
+
+/* Task 92 — Feature #63: update a table's parent_table_id in the catalog. */
+int cat_update_parent_table_id(uint32_t table_id, const char *table_name,
+                                uint32_t schema_id, uint32_t parent_table_id)
+{
+    (void)table_id;
+    char key[CAT_MAX_KEY_LEN];
+    make_table_key(schema_id, table_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLES], key, &rid) < 0)
+        return -1;
+
+    char record[CAT_MAX_RECORD_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    TableDesc t;
+    deserialize_table(record, &t);
+    t.parent_table_id = parent_table_id;
 
     char new_record[CAT_MAX_RECORD_LEN];
     serialize_table(&t, new_record, sizeof(new_record));
@@ -3039,6 +3086,101 @@ int cat_list_sequences(uint32_t schema_id, SequenceDesc *out, int max)
             deserialize_sequence(record, &out[count]);
             count++;
         }
+    }
+    return count;
+}
+
+/* ================================================================
+ *  Inheritance map (CAT_SYS_INHERITANCE) — Task 92, Feature #63
+ *
+ *  Key format: zero-padded 10-digit child_table_id ("0000000042").
+ *  Record format: zero-padded 10-digit parent_table_id ("0000000007").
+ *
+ *  Fixed-width keys/records keep the B+ tree compact and let
+ *  cat_list_all_inheritance sequence-scan without a prefix match.
+ * ================================================================ */
+
+static void make_inherit_key(uint32_t child_id, char *out, int out_size)
+{
+    snprintf(out, out_size, "%010u", child_id);
+}
+
+int cat_add_inheritance(uint32_t child_table_id, uint32_t parent_table_id)
+{
+    if (child_table_id == 0 || parent_table_id == 0) return -1;
+    char key[16], record[16];
+    make_inherit_key(child_table_id, key, sizeof(key));
+    snprintf(record, sizeof(record), "%010u", parent_table_id);
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_INHERITANCE, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_INHERITANCE], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_parent(uint32_t child_table_id, uint32_t *parent_id_out)
+{
+    if (parent_id_out) *parent_id_out = 0;
+    if (child_table_id == 0) return -1;
+    char key[16];
+    make_inherit_key(child_table_id, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_INHERITANCE], key, &rid) < 0)
+        return -1;
+    char record[16];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+    if (parent_id_out) *parent_id_out = (uint32_t)atoi(record);
+    return 0;
+}
+
+int cat_list_children(uint32_t parent_table_id, uint32_t *out, int max)
+{
+    if (!out || max <= 0 || parent_table_id == 0) return 0;
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_INHERITANCE], "", &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[32];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[16];
+        if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+        uint32_t pid = (uint32_t)atoi(record);
+        if (pid == parent_table_id) {
+            out[count++] = (uint32_t)atoi(key);
+        }
+    }
+    return count;
+}
+
+int cat_remove_inheritance(uint32_t child_table_id)
+{
+    if (child_table_id == 0) return 0;
+    char key[16];
+    make_inherit_key(child_table_id, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_INHERITANCE], key, &rid) < 0)
+        return 0;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_INHERITANCE], key);
+    return 1;
+}
+
+int cat_list_all_inheritance(InheritPair *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_INHERITANCE], "", &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[32];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[16];
+        if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+        out[count].child_id  = (uint32_t)atoi(key);
+        out[count].parent_id = (uint32_t)atoi(record);
+        count++;
     }
     return count;
 }
