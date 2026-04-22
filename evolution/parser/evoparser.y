@@ -465,7 +465,7 @@ expr: NAME
         $$ = expr_make_column($1);
         free($1);
     }
-| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
+| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%.127s.%.127s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
 | EXCLUDED '.' NAME                             { emit("EXCLUDEDCOL %s", $3); $$ = expr_make_excluded($3); free($3); }
 | MATCH '(' NAME ')' AGAINST '(' STRING ')'
     {
@@ -590,19 +590,53 @@ expr: expr BETWEEN expr AND expr %prec BETWEEN                                  
 | expr NOT BETWEEN expr AND expr %prec BETWEEN                                  { emit("NOTBETWEEN"); $$ = expr_make_not_between($1, $4, $6); }
 ;
 
-val_list: expr									{ $$ = 1; if (g_expr.inListCount < MAX_IN_LIST) g_expr.inListExprs[g_expr.inListCount++] = $1; }
-| expr ',' val_list								{ $$ = 1 + $3; if (g_expr.inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_expr.inListCount; _i>0; _i--) g_expr.inListExprs[_i]=g_expr.inListExprs[_i-1]; g_expr.inListExprs[0]=$1; g_expr.inListCount++; } }
+val_list: expr
+    {
+        $$ = 1;
+        int _n = g_expr.inListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            g_expr.inListExprs[_n] = $1;
+            g_expr.inListCount = _n + 1;
+        }
+    }
+| expr ',' val_list
+    {
+        $$ = 1 + $3;
+        /* Shift right and insert at front. The guard uses MAX_IN_LIST-1
+         * so writing inListExprs[_n] below is provably in-bounds
+         * (0 <= _n < MAX_IN_LIST). */
+        int _n = g_expr.inListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            for (int _i = _n; _i > 0; _i--)
+                g_expr.inListExprs[_i] = g_expr.inListExprs[_i - 1];
+            g_expr.inListExprs[0] = $1;
+            g_expr.inListCount = _n + 1;
+        }
+    }
 ;
 
 /* Array literal element list — uses dedicated side channel arrListExprs
  * so ARRAY[...] nested inside IN(...) does not clobber inListExprs. */
 array_val_list: expr
-    { $$ = 1; if (g_expr.arrListCount < MAX_IN_LIST) g_expr.arrListExprs[g_expr.arrListCount++] = $1; }
+    {
+        $$ = 1;
+        int _n = g_expr.arrListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            g_expr.arrListExprs[_n] = $1;
+            g_expr.arrListCount = _n + 1;
+        }
+    }
 | expr ',' array_val_list
-    { $$ = 1 + $3; if (g_expr.arrListCount < MAX_IN_LIST) {
-          int _i; for (_i = g_expr.arrListCount; _i > 0; _i--) g_expr.arrListExprs[_i] = g_expr.arrListExprs[_i - 1];
-          g_expr.arrListExprs[0] = $1; g_expr.arrListCount++;
-      } }
+    {
+        $$ = 1 + $3;
+        int _n = g_expr.arrListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            for (int _i = _n; _i > 0; _i--)
+                g_expr.arrListExprs[_i] = g_expr.arrListExprs[_i - 1];
+            g_expr.arrListExprs[0] = $1;
+            g_expr.arrListCount = _n + 1;
+        }
+    }
 ;
 
 /* Array literal: ARRAY[e1, e2, ...] or ARRAY[]
@@ -1119,7 +1153,7 @@ orderby_item: NAME opt_asc_desc
     }
 | NAME '.' NAME opt_asc_desc
     {
-        char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3);
+        char qn[256]; snprintf(qn, sizeof(qn), "%.127s.%.127s", $1, $3);
         emit("ORDERBY %s %d", qn, $4);
         AddOrderByColumn(qn, $4);
         free($1); free($3);
@@ -1758,7 +1792,7 @@ analyze_table_stmt: ANALYZE TABLE NAME
     {
         emit("ANALYZETABLE %s.%s", $3, $5);
         char full[512];
-        snprintf(full, sizeof(full), "%s.%s", $3, $5);
+        snprintf(full, sizeof(full), "%.255s.%.255s", $3, $5);
         GetDropTableName(full);
         free($3); free($5);
     }
