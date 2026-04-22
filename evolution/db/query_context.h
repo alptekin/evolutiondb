@@ -336,6 +336,24 @@ typedef struct {
     char    sqlstate[6];
 } ErrorState;
 
+/* LISTEN/NOTIFY parser-to-executor staging (Task 91 — Feature #62) */
+typedef enum {
+    NOTIFY_CMD_NONE = 0,
+    NOTIFY_CMD_LISTEN,
+    NOTIFY_CMD_UNLISTEN,
+    NOTIFY_CMD_UNLISTEN_ALL,
+    NOTIFY_CMD_NOTIFY,
+    NOTIFY_CMD_NOTIFY_WITH_PAYLOAD
+} NotifyCmdKind;
+
+typedef struct {
+    NotifyCmdKind kind;
+    char          channel[64];
+    char          payload[8001];   /* PG cap 8000 + NUL */
+    int           payload_len;
+    int           self_flag;       /* for LISTEN WITH (self = true) */
+} NotifyOpts;
+
 /* ================================================================
  *  QueryContext — all per-query mutable state
  * ================================================================ */
@@ -355,6 +373,7 @@ typedef struct QueryContext {
     TriggerOpts    trig;
     ReturningOpts  returning;
     CopyOpts       copy;
+    NotifyOpts     notify;    /* Task 91 — Feature #62 */
     ErrorState     err;
     char           temp[1024];
     void         (*tx_undo_callback)(int op_type, const char *table,
@@ -385,6 +404,22 @@ typedef struct QueryContext {
     const char (*outer_col_values)[256];
     const int   *outer_col_null;
     int           outer_col_count;
+
+    /* LISTEN/NOTIFY callbacks (Task 91 — Feature #62):
+     *   notify_enqueue_fn — implements evo_notify(channel, payload):
+     *                       enqueue a pending notify on the current session.
+     *                       Returns 0 on success, -1 on validation error.
+     *   listen_list_fn   — implements pg_listening_channels(): enumerate
+     *                       current session's listens into channels[] as
+     *                       NUL-terminated strings. Returns count.
+     * Both set by the adaptor when it allocates the QueryContext for a
+     * SessionCtx; NULL in stand-alone/test harness (function silently
+     * returns NULL or empty array).
+     */
+    int  (*notify_enqueue_fn)(const char *channel, const char *payload,
+                              void *ctx);
+    int  (*listen_list_fn)(char channels[][64], int max, void *ctx);
+    void *notify_ctx;           /* SessionCtx* cast to void* */
 } QueryContext;
 
 /* ================================================================
@@ -418,6 +453,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_trig        (g_qctx->trig)
 #define g_returning   (g_qctx->returning)
 #define g_copy        (g_qctx->copy)
+#define g_notify      (g_qctx->notify)
 #define g_err         (g_qctx->err)
 
 /* Shared fields */

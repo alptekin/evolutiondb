@@ -1835,7 +1835,7 @@
 
 ---
 
-### Task 91: ⬜ LISTEN / NOTIFY (Feature #62)
+### Task 91: ✅ LISTEN / NOTIFY (Feature #62)
 
 **Goal:** Implement PostgreSQL-style asynchronous notifications.
 

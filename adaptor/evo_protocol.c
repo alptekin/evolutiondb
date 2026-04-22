@@ -31,6 +31,12 @@ extern rwlock_t g_parse_lock;
 
 /* ----------------------------------------------------------------
  *  Send helpers (text-line based)
+ *
+ *  Individual evo_sendf() calls run without the connection mutex
+ *  because most EVO responses are multi-line (RESULT/COLS/COL.../ROW...
+ *  /END/TAG). We hold the mutex at the RESULT-level helpers instead
+ *  so a full reply is atomic, while still letting async NOTIFY lines
+ *  slip between replies at known-idle points.
  * ---------------------------------------------------------------- */
 static int evo_sendf(conn_t *conn, const char *fmt, ...)
 {
@@ -41,6 +47,35 @@ static int evo_sendf(conn_t *conn, const char *fmt, ...)
     va_end(ap);
     if (n <= 0) return -1;
     return conn_send_all(conn, buf, n);
+}
+
+/* LISTEN/NOTIFY async delivery over EVO protocol (Task 91 — Feature #62).
+ * Line-oriented frame the client can read between two READY markers:
+ *     NOTIFY <sender_session_id> <channel> <payload_len>\n
+ *     <payload>\n
+ * Taken as a unit under conn->write_lock so it can't interleave with
+ * a multi-line RESULT being streamed by the query thread. */
+void evo_send_notification(conn_t *conn, int sender_session_id,
+                           const char *channel, const char *payload)
+{
+    if (!conn || !channel) return;
+    if (conn->initialized && !conn->valid) return;
+    int plen = payload ? (int)strlen(payload) : 0;
+
+    if (conn->initialized) {
+        mutex_lock(&conn->write_lock);
+        if (!conn->valid) { mutex_unlock(&conn->write_lock); return; }
+    }
+
+    char header[256];
+    int hn = snprintf(header, sizeof(header),
+                      "NOTIFY %d %s %d\n", sender_session_id,
+                      channel ? channel : "", plen);
+    if (hn > 0) conn_send_all(conn, header, hn);
+    if (plen > 0) conn_send_all(conn, payload, plen);
+    conn_send_all(conn, "\n", 1);
+
+    if (conn->initialized) mutex_unlock(&conn->write_lock);
 }
 
 static int evo_send_result(conn_t *conn, const ResultSet *rs)
@@ -187,6 +222,8 @@ void evo_handle_client(socket_t sock)
     /* Wrap socket in conn_t for TLS-transparent I/O */
     conn_t conn;
     conn_init(&conn, sock);
+    conn_lock_init(&conn, CONN_PROTO_EVO);  /* Task 91: output serialization */
+    session.conn = &conn;                   /* Task 91: async NOTIFY target */
 
     rs = (ResultSet *)calloc(1, sizeof(ResultSet));
     if (!rs) {
@@ -1213,6 +1250,15 @@ void evo_handle_client(socket_t sock)
         }
     }
 
+    /* Task 91: drop LISTEN/NOTIFY state before socket tear-down so
+     * any in-flight async sender sees conn->valid=0 and drops its write. */
+    {
+        extern void notify_session_disconnect(int);
+        extern void notify_discard_session_pending(SessionCtx *);
+        notify_session_disconnect(session.session_id);
+        notify_discard_session_pending(&session);
+    }
+
     /* Unregister from session registry */
     session_unregister(session.session_id);
 
@@ -1221,6 +1267,7 @@ void evo_handle_client(socket_t sock)
     session_cleanup_gtt(&session);
 
     conn_tls_shutdown(&conn);
+    conn_lock_destroy(&conn);
     result_free(rs); free(rs);
     /* NOTE: do NOT close socket — server.c does it */
 }

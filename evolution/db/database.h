@@ -91,6 +91,12 @@ int CreateTableProcess(void);
 int InsertProcess(void);
 int DropTableProcess(void);
 int TruncateTableProcess(void);
+
+/* LISTEN / NOTIFY (Task 91 — Feature #62) — parser helpers */
+void SetListenChannel(const char *channel, int self_flag);
+void SetUnlistenChannel(const char *channel);
+void SetUnlistenAll(void);
+void SetNotifyChannel(const char *channel, const char *payload);
 void TruncateAddTable(const char *name);
 void TruncateSetCascade(void);
 void TruncateSetContinueIdentity(void);

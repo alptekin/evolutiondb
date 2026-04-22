@@ -85,6 +85,20 @@ int pg_buf_send(PgBuf *b, conn_t *conn)
     lenbuf[3] = (msg_body_len      ) & 0xFF;
     memcpy(b->buf + length_offset, lenbuf, 4);
 
+    /* Task 91 — Feature #62: serialize outbound messages so async
+     * NotificationResponse frames from other threads cannot interleave
+     * with this message's bytes. write_lock only held while this
+     * single PG message is in flight. */
+    if (conn && conn->initialized) {
+        mutex_lock(&conn->write_lock);
+        if (!conn->valid) {
+            mutex_unlock(&conn->write_lock);
+            return -1;
+        }
+        int rc = pg_send_all(conn, b->buf, b->len);
+        mutex_unlock(&conn->write_lock);
+        return rc;
+    }
     return pg_send_all(conn, b->buf, b->len);
 }
 
@@ -206,6 +220,22 @@ void pg_send_backend_key_data(conn_t *conn, int pid, int secret)
     pg_buf_init(&b, 'K');
     pg_buf_add_int32(&b, pid);
     pg_buf_add_int32(&b, secret);
+    pg_buf_send(&b, conn);
+}
+
+/* NotificationResponse ('A') — LISTEN/NOTIFY async delivery (Task 91).
+ * Wire format: 'A' | length | pid:4B | channel\0 | payload\0
+ * pid carries the sender's session_id so listeners can identify the source. */
+void pg_send_notification_response(conn_t *conn, int32_t pid,
+                                   const char *channel, const char *payload)
+{
+    if (!conn || !channel) return;
+    if (conn->initialized && !conn->valid) return;
+    PgBuf b;
+    pg_buf_init(&b, 'A');
+    pg_buf_add_int32(&b, (int)pid);
+    pg_buf_add_string(&b, channel);
+    pg_buf_add_string(&b, payload ? payload : "");
     pg_buf_send(&b, conn);
 }
 
