@@ -489,11 +489,21 @@ expr: NAME
         char *sv = $1;
         int slen = (int)strlen(sv);
         emit("STRING %s", sv);
-        /* Strip surrounding quotes before insertion */
+        /* Strip surrounding quotes and collapse doubled quotes (SQL-standard
+         * '' → ' and ANSI "" → ") before storing the literal value. */
         if (slen >= 2 && (sv[0] == '\'' || sv[0] == '"')) {
+            char quote = sv[0];
             char stripped[1024];
-            strncpy(stripped, sv + 1, slen - 2);
-            stripped[slen - 2] = '\0';
+            int j = 0;
+            for (int i = 1; i < slen - 1 && j < (int)sizeof(stripped) - 1; i++) {
+                if (sv[i] == quote && i + 1 < slen - 1 && sv[i + 1] == quote) {
+                    stripped[j++] = quote;
+                    i++;  /* skip the paired quote */
+                } else {
+                    stripped[j++] = sv[i];
+                }
+            }
+            stripped[j] = '\0';
             GetInsertions(stripped);
             $$ = expr_make_string(stripped);
         } else {
