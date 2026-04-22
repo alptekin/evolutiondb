@@ -440,6 +440,16 @@ void AddForeignKeyRefTableSchema(const char *schemaName, const char *tableName)
  *  CREATE TABLE — now uses system catalog + unified storage
  * ---------------------------------------------------------------- */
 
+/* Task 92 — Feature #63: parser helper. Stashes parent name into g_create
+ * so CreateTableProcess() can merge the parent's columns into the child. */
+void SetInheritParent(const char *parent_name)
+{
+    if (!g_qctx || !parent_name) return;
+    strncpy(g_create.inheritParent, parent_name,
+            sizeof(g_create.inheritParent) - 1);
+    g_create.inheritParent[sizeof(g_create.inheritParent) - 1] = '\0';
+}
+
 int CreateTableProcess(void)
 {
     int padSize;
@@ -601,6 +611,79 @@ int CreateTableProcess(void)
     char tableName[CAT_MAX_NAME_LEN];
     tapi_basename(g_create.tblName, tableName, sizeof(tableName));
 
+    /* Task 92 — Feature #63: merge parent columns if INHERITS was used.
+     * Parent columns are prepended; child's own columns keep their order
+     * after the inherited block. Duplicate column names across parent
+     * and child are rejected (42701) in v1 rather than merged. */
+    uint32_t inherit_parent_id = 0;
+    if (g_create.inheritParent[0]) {
+        TableDesc parentDesc;
+        if (cat_find_table(schDesc.schema_id, g_create.inheritParent, &parentDesc) < 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "parent table \"%s\" does not exist",
+                     g_create.inheritParent);
+            g_err.error = 1;
+            strncpy(g_err.sqlstate, "42P01", sizeof(g_err.sqlstate) - 1);
+            g_err.sqlstate[sizeof(g_err.sqlstate) - 1] = '\0';
+            TruncateCreate();
+            return -1;
+        }
+        ColumnDesc parentCols[CAT_MAX_COLUMNS];
+        int parentNCols = cat_find_columns(parentDesc.table_id, parentCols,
+                                            CAT_MAX_COLUMNS);
+        if (parentNCols < 0) parentNCols = 0;
+
+        /* Duplicate-name check */
+        for (int p = 0; p < parentNCols; p++) {
+            for (int c = 0; c < numCols; c++) {
+                if (strcasecmp(parentCols[p].col_name, cols[c].col_name) == 0) {
+                    snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                             "column \"%s\" already inherited from \"%s\"",
+                             cols[c].col_name, g_create.inheritParent);
+                    g_err.error = 1;
+                    EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DUPLICATE_COLUMN);
+                    TruncateCreate();
+                    return -1;
+                }
+            }
+        }
+
+        /* Prepend parent columns. Preserve is_pk from parent only if the
+         * child doesn't define its own PK; otherwise strip parent PK flag. */
+        int child_has_pk = 0;
+        for (int c = 0; c < numCols; c++) if (cols[c].is_pk) child_has_pk = 1;
+
+        if (numCols + parentNCols > CAT_MAX_COLUMNS) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "inherited column count exceeds limit (%d)",
+                     CAT_MAX_COLUMNS);
+            g_err.error = 1;
+            TruncateCreate();
+            return -1;
+        }
+
+        ColumnDesc merged[CAT_MAX_COLUMNS];
+        int merged_n = 0;
+        for (int p = 0; p < parentNCols; p++) {
+            merged[merged_n] = parentCols[p];
+            if (child_has_pk) merged[merged_n].is_pk = 0;
+            merged_n++;
+        }
+        for (int c = 0; c < numCols; c++) merged[merged_n++] = cols[c];
+        memcpy(cols, merged, sizeof(ColumnDesc) * merged_n);
+        numCols = merged_n;
+
+        /* Extend the name array too so downstream logic using colNameArr
+         * still sees all columns (numCols is the authoritative count). */
+        for (int i = 0; i < numCols && i < CAT_MAX_COLUMNS; i++) {
+            strncpy(colNameArr[i], cols[i].col_name, 127);
+            colNameArr[i][127] = '\0';
+        }
+
+        inherit_parent_id = parentDesc.table_id;
+        padSize += 32 * parentNCols;  /* rough per-col pad increase */
+    }
+
     /* Create table in catalog (also creates PK B+ tree internally) */
     int rc = cat_create_table(schDesc.schema_id, tableName,
                               cols, numCols, padSize,
@@ -621,6 +704,14 @@ int CreateTableProcess(void)
             /* Remote table: clear local PK tree and heap (data lives on remote node) */
             cat_update_pk_root((uint32_t)rc, tableName, schDesc.schema_id, 0);
             cat_update_heap_page((uint32_t)rc, tableName, schDesc.schema_id, 0);
+        }
+
+        /* Task 92 — Feature #63: record inheritance mapping and stamp
+         * parent_table_id on the child's TableDesc so tapi_resolve loads it. */
+        if (inherit_parent_id != 0) {
+            cat_add_inheritance((uint32_t)rc, inherit_parent_id);
+            cat_update_parent_table_id((uint32_t)rc, tableName,
+                                        schDesc.schema_id, inherit_parent_id);
         }
     }
     if (rc < 0) {
@@ -821,6 +912,9 @@ void TruncateCreate(void)
     g_create.shardKey[0] = '\0';
     g_create.shardCount = 0;
     g_create.shardRangeCount = 0;
+
+    /* Task 92 — Feature #63: clear INHERITS state */
+    g_create.inheritParent[0] = '\0';
 
     /* Reset FK state */
     g_constr.fkCount = 0;

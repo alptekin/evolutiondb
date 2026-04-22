@@ -1410,6 +1410,130 @@ static void apply_window_functions(ResultSet *rs)
 /* ----------------------------------------------------------------
  *  Collect SELECT results into ResultSet
  * ---------------------------------------------------------------- */
+/* Forward declaration for the inheritance helper below. */
+static void collect_select_results(const char *tableName, ResultSet *rs,
+                                   const Snapshot *snap,
+                                   int forUpdate, uint32_t lock_xid);
+
+/* Task 92 — Feature #63: recursive inheritance collector.
+ *
+ *   collect_with_inheritance walks the inheritance subtree rooted at
+ *   parent_id. It collects rows of the parent (by name) first, then
+ *   recurses into each direct child. Visited table_ids are tracked
+ *   in a caller-provided set so malformed catalog data cannot cause
+ *   infinite recursion; depth is also capped at INHERIT_MAX_DEPTH.
+ *
+ *   Child rows are projected to the parent's column set (child-only
+ *   columns are dropped, any missing column becomes NULL).
+ */
+#define INHERIT_MAX_DEPTH 16
+
+static int visited_has(const uint32_t *visited, int n, uint32_t id) {
+    for (int i = 0; i < n; i++) if (visited[i] == id) return 1;
+    return 0;
+}
+
+static void append_child_rows(const ResultSet *child, ResultSet *parent_rs,
+                               const char *parent_col_names[],
+                               int parent_ncols)
+{
+    /* Build a child→parent column index map (-1 = absent in child) */
+    int map[CAT_MAX_COLUMNS];
+    for (int c = 0; c < parent_ncols && c < CAT_MAX_COLUMNS; c++) {
+        map[c] = -1;
+        for (int k = 0; k < child->num_cols; k++) {
+            if (strcasecmp(child->columns[k].name, parent_col_names[c]) == 0) {
+                map[c] = k;
+                break;
+            }
+        }
+    }
+    for (int r = 0; r < child->num_rows; r++) {
+        int row = result_add_row(parent_rs);
+        if (row < 0) break;
+        for (int c = 0; c < parent_ncols && c < CAT_MAX_COLUMNS; c++) {
+            int k = map[c];
+            if (k < 0 || child->rows[r].is_null[k])
+                result_set_null(parent_rs, row, c);
+            else
+                result_set_field(parent_rs, row, c,
+                                  child->rows[r].fields[k]);
+        }
+    }
+}
+
+static void collect_children_recursive(uint32_t parent_id,
+                                        ResultSet *rs,
+                                        const Snapshot *snap,
+                                        int forUpdate, uint32_t lock_xid,
+                                        const char *parent_col_names[],
+                                        int parent_ncols,
+                                        uint32_t *visited, int *nvisited,
+                                        int depth)
+{
+    if (depth >= INHERIT_MAX_DEPTH) return;
+    uint32_t children[64];
+    int nch = cat_list_children(parent_id, children, 64);
+    for (int i = 0; i < nch; i++) {
+        uint32_t cid = children[i];
+        if (visited_has(visited, *nvisited, cid)) continue;
+        if (*nvisited < 256) visited[(*nvisited)++] = cid;
+
+        TableDesc td;
+        if (cat_find_table_by_id(cid, &td) < 0) continue;
+
+        ResultSet child_rs;
+        memset(&child_rs, 0, sizeof(child_rs));
+        result_init(&child_rs);
+        collect_select_results(td.table_name, &child_rs, snap,
+                                forUpdate, lock_xid);
+        if (!child_rs.has_error) {
+            append_child_rows(&child_rs, rs, parent_col_names, parent_ncols);
+        }
+        result_free(&child_rs);
+
+        /* Recurse into grandchildren */
+        collect_children_recursive(cid, rs, snap, forUpdate, lock_xid,
+                                    parent_col_names, parent_ncols,
+                                    visited, nvisited, depth + 1);
+    }
+}
+
+static void collect_with_inheritance(const char *tableName, ResultSet *rs,
+                                      const Snapshot *snap,
+                                      int forUpdate, uint32_t lock_xid,
+                                      int only_parent)
+{
+    /* Collect parent rows first (normal path) */
+    collect_select_results(tableName, rs, snap, forUpdate, lock_xid);
+    if (rs->has_error || only_parent) return;
+
+    /* Resolve parent TableDesc — skip inheritance scan if not found. */
+    TableDesc parentTd;
+    ColumnDesc parentCols[CAT_MAX_COLUMNS];
+    int parent_ncols;
+    if (tapi_resolve(tableName, &parentTd, parentCols, &parent_ncols) < 0)
+        return;
+
+    uint32_t children[64];
+    int nch = cat_list_children(parentTd.table_id, children, 64);
+    if (nch == 0) return;
+
+    /* Capture parent column names (stable order for projection) */
+    const char *parent_col_names[CAT_MAX_COLUMNS];
+    for (int c = 0; c < parent_ncols && c < CAT_MAX_COLUMNS; c++)
+        parent_col_names[c] = parentCols[c].col_name;
+
+    uint32_t visited[256];
+    int nvisited = 1;
+    visited[0] = parentTd.table_id;
+
+    collect_children_recursive(parentTd.table_id, rs, snap,
+                                forUpdate, lock_xid,
+                                parent_col_names, parent_ncols,
+                                visited, &nvisited, 0);
+}
+
 static void collect_select_results(const char *tableName, ResultSet *rs,
                                    const Snapshot *snap,
                                    int forUpdate, uint32_t lock_xid)
@@ -5098,6 +5222,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_sel.orderByDesc = 0;
     g_sel.orderByCount = 0;
     g_sel.distinct = 0;
+    g_sel.onlyParent = 0;            /* Task 92 — Feature #63 */
     g_sel.joinTableCount = 0;
     memset(g_sel.joinOnExprs, 0, sizeof(g_sel.joinOnExprs));
     for (int _ji = 0; _ji < MAX_JOIN_TABLES; _ji++) {
@@ -5693,18 +5818,19 @@ parser_done:
                         ctx->tx_xid = g_qctx->mvcc_xid;
                 }
                 { extern mutex_t g_dml_mutex; mutex_lock(&g_dml_mutex); }
-                collect_select_results(g_sel.lastTable, rs,
-                                       ctx ? &ctx->snapshot : NULL,
-                                       g_sel.forUpdate,
-                                       ctx ? ctx->tx_xid : 0);
+                collect_with_inheritance(g_sel.lastTable, rs,
+                                         ctx ? &ctx->snapshot : NULL,
+                                         g_sel.forUpdate,
+                                         ctx ? ctx->tx_xid : 0,
+                                         g_sel.onlyParent);
                 { extern mutex_t g_dml_mutex; mutex_unlock(&g_dml_mutex); }
             } else {
                 /* Pass tx_xid for Conflict Guard read tracking in SERIALIZABLE */
                 uint32_t cg_xid = (ctx && ctx->serializable_locked) ? ctx->tx_xid : 0;
                 rwlock_rdlock(&g_parse_lock);
-                collect_select_results(g_sel.lastTable, rs,
-                                       ctx ? &ctx->snapshot : NULL,
-                                       0, cg_xid);
+                collect_with_inheritance(g_sel.lastTable, rs,
+                                         ctx ? &ctx->snapshot : NULL,
+                                         0, cg_xid, g_sel.onlyParent);
                 rwlock_rdunlock(&g_parse_lock);
             }
             g_sel.lastTable[0] = '\0';

@@ -97,6 +97,9 @@ void SetListenChannel(const char *channel, int self_flag);
 void SetUnlistenChannel(const char *channel);
 void SetUnlistenAll(void);
 void SetNotifyChannel(const char *channel, const char *payload);
+
+/* Table Inheritance (Task 92 — Feature #63) — parser helper */
+void SetInheritParent(const char *parent_name);
 void TruncateAddTable(const char *name);
 void TruncateSetCascade(void);
 void TruncateSetContinueIdentity(void);
