@@ -5675,8 +5675,15 @@ parser_done:
                 }
 
                 if (map_count > 0) {
-                    /* Build projected result */
+                    /* Build projected result.
+                     * Must zero the stack-allocated ResultSet before
+                     * result_init() — the init code checks rs->rows &&
+                     * rs->num_rows > 0 to reclaim a reused buffer, and
+                     * stack garbage with non-NULL rows would cause
+                     * `free(): invalid pointer` in the recursive CTE
+                     * re-entry path. */
                     ResultSet projected;
+                    memset(&projected, 0, sizeof(projected));
                     result_init(&projected);
                     projected.is_select = 1;
                     for (int ci = 0; ci < g_sel.columnCount; ci++) {
@@ -7032,6 +7039,32 @@ static int evo_extract_ctes(const char *sql, CteDef *ctes, int *cte_count,
     return 1;
 }
 
+/* Finalize an XID that the CTE recursive driver implicitly created via a
+ * nested query_execute(). Before this helper existed, each of the driver's
+ * flush sites cleared mvcc_xid after CLOG-committing it but never released
+ * row locks or unregistered the TX from MVCC — exactly the cleanup that
+ * catalog.c:1294 / server.c:283 / xa_transaction.c:121 perform at every
+ * other finalize site. The missing release leaked lock-manager entries
+ * keyed on committed XIDs; the second iteration of a recursive CTE (which
+ * re-JOINs against the `__cte_*_work` temp table after a DELETE + INSERT
+ * cycle under a fresh XID) collided with those stale entries and aborted
+ * the server with `free(): invalid pointer`. Centralizing the release
+ * here guarantees every flush site stays in lockstep. */
+static void cte_commit_xid(void)
+{
+    extern __thread QueryContext *g_qctx;
+    extern void lock_release_all(uint32_t);
+    extern void lock_gap_release_all(uint32_t);
+    extern void mvcc_unregister_tx(uint32_t);
+    if (!g_qctx || g_qctx->mvcc_xid == 0) return;
+    uint32_t xid = g_qctx->mvcc_xid;
+    clog_set_committed_csn(xid, pgm_next_csn());
+    lock_release_all(xid);
+    lock_gap_release_all(xid);
+    mvcc_unregister_tx(xid);
+    g_qctx->mvcc_xid = 0;
+}
+
 /* Replace all occurrences of 'from' with 'to' in sql (case-insensitive, word boundary) */
 static void evo_cte_replace_name(char *buf, int bufsz, const char *from, const char *to)
 {
@@ -7202,13 +7235,7 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     snprintf(ins + ioff, isz - ioff, ")");
                     ResultSet ir; memset(&ir, 0, sizeof(ir)); result_init(&ir);
                     query_execute(ins, &ir, ctx);
-                    { extern __thread QueryContext *g_qctx;
-                      if (g_qctx && g_qctx->mvcc_xid > 0) {
-                          uint32_t csn = pgm_next_csn();
-                          clog_set_committed_csn(g_qctx->mvcc_xid, csn);
-                          g_qctx->mvcc_xid = 0;
-                      }
-                    }
+                    cte_commit_xid();          /* Task: CTE crash fix */
                     result_free(&ir); free(ins);
                 }
             }
@@ -7255,12 +7282,7 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     snprintf(ins + ioff, isz - ioff, ")");
                     ResultSet ir; memset(&ir, 0, sizeof(ir)); result_init(&ir);
                     query_execute(ins, &ir, ctx);
-                    { extern __thread QueryContext *g_qctx;
-                      if (g_qctx && g_qctx->mvcc_xid > 0) {
-                          clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
-                          g_qctx->mvcc_xid = 0;
-                      }
-                    }
+                    cte_commit_xid();          /* Task: CTE crash fix */
                     result_free(&ir); free(ins);
                 }
             }
@@ -7293,12 +7315,7 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                   snprintf(trunc, sizeof(trunc), "DELETE FROM %s WHERE 1=1", work_name);
                   ResultSet tr; memset(&tr, 0, sizeof(tr)); result_init(&tr);
                   query_execute(trunc, &tr, ctx);
-                  { extern __thread QueryContext *g_qctx;
-                    if (g_qctx && g_qctx->mvcc_xid > 0) {
-                        clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
-                        g_qctx->mvcc_xid = 0;
-                    }
-                  }
+                  cte_commit_xid();          /* Task: CTE crash fix */
                   result_free(&tr);
                 }
 
@@ -7329,12 +7346,7 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     snprintf(ins1, isz + 256, "INSERT INTO %s VALUES %s", temp_names[i], vals);
                     ResultSet ir1; memset(&ir1, 0, sizeof(ir1)); result_init(&ir1);
                     query_execute(ins1, &ir1, ctx);
-                    { extern __thread QueryContext *g_qctx;
-                      if (g_qctx && g_qctx->mvcc_xid > 0) {
-                          clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
-                          g_qctx->mvcc_xid = 0;
-                      }
-                    }
+                    cte_commit_xid();          /* Task: CTE crash fix */
                     result_free(&ir1); free(ins1);
 
                     /* Insert into working table */
@@ -7342,12 +7354,7 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     snprintf(ins2, isz + 256, "INSERT INTO %s VALUES %s", work_name, vals);
                     ResultSet ir2; memset(&ir2, 0, sizeof(ir2)); result_init(&ir2);
                     query_execute(ins2, &ir2, ctx);
-                    { extern __thread QueryContext *g_qctx;
-                      if (g_qctx && g_qctx->mvcc_xid > 0) {
-                          clog_set_committed_csn(g_qctx->mvcc_xid, pgm_next_csn());
-                          g_qctx->mvcc_xid = 0;
-                      }
-                    }
+                    cte_commit_xid();          /* Task: CTE crash fix */
                     result_free(&ir2); free(ins2);
                     free(vals);
                 }
@@ -7456,15 +7463,10 @@ static int evo_handle_cte(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     memset(&ir, 0, sizeof(ir));
                     result_init(&ir);
                     query_execute(ins, &ir, ctx);
-                    /* Manually commit INSERT XID so subsequent SELECT sees it */
-                    {
-                        extern __thread QueryContext *g_qctx;
-                        if (g_qctx && g_qctx->mvcc_xid > 0) {
-                            uint32_t csn = pgm_next_csn();
-                            clog_set_committed_csn(g_qctx->mvcc_xid, csn);
-                            g_qctx->mvcc_xid = 0;
-                        }
-                    }
+                    /* Manually commit INSERT XID so subsequent SELECT sees
+                     * it; helper also releases row locks to prevent the
+                     * stale-lock crash in second-iteration recursive CTEs. */
+                    cte_commit_xid();
                     result_free(&ir);
                     free(ins);
                 }
