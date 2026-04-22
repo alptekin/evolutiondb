@@ -930,13 +930,26 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
-    /* Check if WHERE column is the primary key */
+    /* Check if WHERE column is the primary key.
+     *
+     * Only treat the equality as a PK lookup when the table has a
+     * SINGLE-column PK — composite PKs are stored in the B+ tree under
+     * a composite key ("v1|v2|..."), so bt2_search(whereVal) on just
+     * one component will always miss. Without this guard, WHERE a = 1
+     * on PRIMARY KEY (a, b) returned zero rows even though the row was
+     * visible to a full scan. */
     int is_pk = 0, pk_col_idx = -1;
+    int pk_col_count = 0;
     for (int i = 0; i < ncols; i++) {
-        if (cols[i].is_pk && strcasecmp(cols[i].col_name, whereCol) == 0) {
-            is_pk = 1;
-            pk_col_idx = i;
-            break;
+        if (cols[i].is_pk) pk_col_count++;
+    }
+    if (pk_col_count == 1) {
+        for (int i = 0; i < ncols; i++) {
+            if (cols[i].is_pk && strcasecmp(cols[i].col_name, whereCol) == 0) {
+                is_pk = 1;
+                pk_col_idx = i;
+                break;
+            }
         }
     }
 
