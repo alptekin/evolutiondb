@@ -74,6 +74,11 @@ typedef struct {
     int      shardCount;          /* HASH: shard count */
     struct { char name[64]; char bound[256]; int node_id; } shardRanges[7];
     int      shardRangeCount;
+    /* Table Inheritance (Task 92 — Feature #63):
+     *   inheritParent — name of the parent table from INHERITS (...); empty
+     *                   string means no inheritance. CreateTableProcess()
+     *                   reads this, resolves the parent, merges its columns. */
+    char     inheritParent[128];
 } CreateOpts;
 
 /* ---- INSERT ---- */
@@ -141,6 +146,9 @@ typedef struct {
      * expanded into N-row set at execution time. Mutually exclusive with
      * joinLateralSql for the same slot. */
     ExprNode *joinUnnestExpr[MAX_JOIN_TABLES];
+    /* Table Inheritance (Task 92 — Feature #63):
+     *   onlyParent — `SELECT * FROM ONLY parent` suppresses child union. */
+    int  onlyParent;
 } SelectOpts;
 
 /* ---- UPDATE ---- */
@@ -172,6 +180,8 @@ typedef struct {
 typedef struct {
     char tblName[1024];             /* was tblDropName */
     int  ifExists;                  /* was dropIfExists */
+    /* DROP TABLE CASCADE (Task 92 — Feature #63): cascades through inheritance */
+    int  dropCascade;               /* 1 = CASCADE, 0 = RESTRICT (default) */
     /* TRUNCATE options */
     int  truncCascade;              /* 1 = CASCADE, 0 = RESTRICT (default) */
     int  truncContinueIdentity;     /* 1 = CONTINUE IDENTITY, 0 = RESTART (default) */

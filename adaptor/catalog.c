@@ -1695,6 +1695,30 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         return 1;
     }
 
+    /* pg_inherits catalog view (Task 92 — Feature #63). Emits one row
+     * per (child, parent, 1) pair stored in CAT_SYS_INHERITANCE, letting
+     * DBeaver/pgAdmin show inheritance edges. */
+    if (stristr_found(sql, "pg_inherits")) {
+        result_add_column(rs, "inhrelid",  PG_OID_INT4);
+        result_add_column(rs, "inhparent", PG_OID_INT4);
+        result_add_column(rs, "inhseqno",  PG_OID_INT4);
+        InheritPair pairs[256];
+        int n = cat_list_all_inheritance(pairs, 256);
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            if (row < 0) break;
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u", pairs[i].child_id);
+            result_set_field(rs, row, 0, buf);
+            snprintf(buf, sizeof(buf), "%u", pairs[i].parent_id);
+            result_set_field(rs, row, 1, buf);
+            result_set_field(rs, row, 2, "1");
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag),
+                 "SELECT %d", rs->num_rows);
+        return 1;
+    }
+
     /* array_to_string, string_to_array — common utility functions */
     if ((stristr_found(sql, "array_to_string") ||
          stristr_found(sql, "string_to_array")) &&

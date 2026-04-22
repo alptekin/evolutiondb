@@ -243,6 +243,8 @@
 %token NOTIFY
 %token UNLISTEN
 %token SELF
+%token INHERITS
+%token ONLY
 %token LESS
 %token LONGTEXT
 %token LOW_PRIORITY
@@ -1257,6 +1259,17 @@ NAME opt_as_alias index_hint
         if (g_qctx) AddJoinTable($1, g_currentAlias);
         free($1);
     }
+/* Task 92 — Feature #63: FROM ONLY parent suppresses inheritance union. */
+| ONLY NAME opt_as_alias index_hint
+    {
+        emit("TABLE ONLY %s", $2);
+        GetSelTableName($2);
+        if (g_qctx) {
+            AddJoinTable($2, g_currentAlias);
+            g_sel.onlyParent = 1;
+        }
+        free($2);
+    }
 | NAME '.' NAME opt_as_alias index_hint                                         { emit("TABLE %s.%s", $1, $3); if (g_qctx) AddJoinTable($3, g_currentAlias); free($1); free($3); }
 | table_subquery opt_as NAME                                                    { emit("SUBQUERYAS %s", $3); free($3); }
 | lateral_subquery opt_as NAME
@@ -1445,20 +1458,28 @@ stmt: drop_table_stmt
     }
 ;
 
-drop_table_stmt: DROP TABLE NAME
+drop_table_stmt: DROP TABLE NAME opt_drop_cascade
     {
         emit("DROPTABLE %s", $3);
         g_drop.ifExists = 0;
         GetDropTableName($3);
         free($3);
     }
-| DROP TABLE IF EXISTS NAME
+| DROP TABLE IF EXISTS NAME opt_drop_cascade
     {
         emit("DROPTABLE IF EXISTS %s", $5);
         g_drop.ifExists = 1;
         GetDropTableName($5);
         free($5);
     }
+;
+
+/* Task 92 — Feature #63: DROP TABLE ... CASCADE cascades through the
+ * inheritance tree. RESTRICT is the default and errors out if children
+ * exist. */
+opt_drop_cascade: /* empty */
+| CASCADE      { g_drop.dropCascade = 1; }
+| RESTRICT     { g_drop.dropCascade = 0; }
 ;
 
 /** create index **/
@@ -2286,12 +2307,24 @@ stmt: create_table_stmt
 ;
 
 create_table_stmt: CREATE opt_temporary TABLE opt_if_not_exists NAME
-'(' create_col_list ')' opt_table_options
+'(' create_col_list ')' opt_table_options opt_inherits
     {
         emit("CREATE %d %d %d %s", $2, $4, $7, $5);
         g_create.isTemporary = $2;
         GetTableName($5);
         free($5);
+    }
+;
+
+/* Task 92 — Feature #63: optional INHERITS (parent) clause.
+ * Stashes the parent name into g_create.inheritParent; the executor
+ * merges parent columns into the child at CreateTableProcess() time. */
+opt_inherits: /* empty */
+| INHERITS '(' NAME ')'
+    {
+        emit("INHERITS %s", $3);
+        SetInheritParent($3);
+        free($3);
     }
 ;
 
