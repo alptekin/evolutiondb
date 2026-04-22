@@ -650,37 +650,58 @@ expr: ARRAY '[' { g_expr.arrListCount = 0; g_in_array_literal++; } array_val_lis
     {
         g_in_array_literal--;
         char _arrbuf[4096];
+        const int _cap = (int)sizeof(_arrbuf);
         int _p = 0;
-        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '{';
+        /* Safe append macros — bound every write to leave at least one
+         * byte for the terminating NUL. snprintf's return value is
+         * clamped to the remaining capacity before being added to _p,
+         * preventing size-argument underflow on the next call. */
+        #define _ARR_ROOM() ( _cap - 1 - _p )
+        #define _ARR_PUTC(c) do { if (_ARR_ROOM() > 0) _arrbuf[_p++] = (c); } while (0)
+        #define _ARR_PRINTF(...) do {                                    \
+            int _r = _ARR_ROOM();                                        \
+            if (_r > 0) {                                                \
+                int _w = snprintf(_arrbuf + _p, (size_t)_r + 1, __VA_ARGS__); \
+                if (_w < 0) break;                                       \
+                if (_w > _r) _w = _r;                                    \
+                _p += _w;                                                \
+            }                                                            \
+        } while (0)
+
+        _ARR_PUTC('{');
         for (int _i = 0; _i < g_expr.arrListCount; _i++) {
-            if (_i > 0 && _p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = ',';
+            if (_i > 0) _ARR_PUTC(',');
             ExprNode *_en = g_expr.arrListExprs[_i];
             if (!_en) continue;
-            if (_en->type == EXPR_LITERAL_INT)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%d", _en->val.intval);
-            else if (_en->type == EXPR_LITERAL_FLOAT)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%g", _en->val.floatval);
-            else if (_en->type == EXPR_LITERAL_BOOL)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%s",
-                               _en->val.intval ? "true" : "false");
-            else if (_en->type == EXPR_LITERAL_NULL)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
-            else if (_en->type == EXPR_LITERAL_STR) {
-                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
-                for (const char *_s = _en->val.strval; *_s && _p < (int)sizeof(_arrbuf) - 2; _s++) {
-                    if (*_s == '"' || *_s == '\\') _arrbuf[_p++] = '\\';
-                    _arrbuf[_p++] = *_s;
+            if (_en->type == EXPR_LITERAL_INT) {
+                _ARR_PRINTF("%d", _en->val.intval);
+            } else if (_en->type == EXPR_LITERAL_FLOAT) {
+                _ARR_PRINTF("%g", _en->val.floatval);
+            } else if (_en->type == EXPR_LITERAL_BOOL) {
+                _ARR_PRINTF("%s", _en->val.intval ? "true" : "false");
+            } else if (_en->type == EXPR_LITERAL_NULL) {
+                _ARR_PRINTF("NULL");
+            } else if (_en->type == EXPR_LITERAL_STR) {
+                _ARR_PUTC('"');
+                for (const char *_s = _en->val.strval; *_s && _ARR_ROOM() > 1; _s++) {
+                    if (*_s == '"' || *_s == '\\') _ARR_PUTC('\\');
+                    _ARR_PUTC(*_s);
                 }
-                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
+                _ARR_PUTC('"');
             } else {
                 /* Non-literal element (column ref, func call) — defer to
                  * runtime evaluation via expr_make_array_literal. Emit
                  * display placeholder in the INSERT field text. */
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
+                _ARR_PRINTF("NULL");
             }
         }
-        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '}';
+        _ARR_PUTC('}');
         _arrbuf[_p] = '\0';
+
+        #undef _ARR_ROOM
+        #undef _ARR_PUTC
+        #undef _ARR_PRINTF
+
         GetInsertions(_arrbuf);
         emit("ARRLIT %d", $4);
         $$ = expr_make_array_literal(g_expr.arrListExprs, g_expr.arrListCount);
