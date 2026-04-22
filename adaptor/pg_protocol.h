@@ -81,6 +81,9 @@ void pg_send_error(conn_t *conn, const char *severity, const char *sqlstate,
 void pg_send_command_complete(conn_t *conn, const char *tag);
 void pg_send_empty_query(conn_t *conn);
 void pg_send_backend_key_data(conn_t *conn, int pid, int secret);
+/* LISTEN/NOTIFY async delivery (Task 91 — Feature #62) */
+void pg_send_notification_response(conn_t *conn, int32_t pid,
+                                   const char *channel, const char *payload);
 void pg_send_result_set(conn_t *conn, const ResultSet *rs);
 
 /* Streaming: send RowDescription header (column metadata) */

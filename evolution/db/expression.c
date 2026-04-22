@@ -523,6 +523,27 @@ ExprNode *expr_make_unnest(ExprNode *arr)
     return e;
 }
 
+/* LISTEN/NOTIFY helpers (Task 91 — Feature #62) */
+ExprNode *expr_make_evo_notify(ExprNode *channel, ExprNode *payload)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_EVO_NOTIFY;
+    e->left  = channel;
+    e->right = payload;
+    snprintf(e->display, sizeof(e->display), "evo_notify(...)");
+    return e;
+}
+
+ExprNode *expr_make_pg_listening_channels(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_PG_LISTENING_CHANNELS;
+    snprintf(e->display, sizeof(e->display), "pg_listening_channels");
+    return e;
+}
+
 void snowflake_init(void)
 {
     char *env = getenv("EVOSQL_MACHINE_ID");
@@ -2819,6 +2840,50 @@ int expr_evaluate(const ExprNode *e,
             return expr_evaluate(e->left, col_names, col_values, num_cols,
                                  out_buf, buf_size);
         strncpy(out_buf, NULL_MARKER, buf_size);
+        return 1;
+    }
+
+    /* evo_notify(channel, payload) — Task 91.
+     * Evaluates both args to strings, enqueues on the current session's
+     * pending notify queue via g_qctx->notify_enqueue_fn. Returns the
+     * payload as the scalar result (matches PG pg_notify() convention
+     * of returning void — but we return the payload so SELECT works). */
+    if (e->type == EXPR_EVO_NOTIFY) {
+        char ch_buf[256], pay_buf[8100];
+        int ok_ch = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                              num_cols, ch_buf, sizeof(ch_buf)) : 0;
+        int ok_pay = e->right ? expr_evaluate(e->right, col_names, col_values,
+                                               num_cols, pay_buf, sizeof(pay_buf)) : 0;
+        const char *ch = (ok_ch && strcmp(ch_buf, NULL_MARKER) != 0) ? ch_buf : "";
+        const char *pay = (ok_pay && strcmp(pay_buf, NULL_MARKER) != 0) ? pay_buf : "";
+        if (g_qctx && g_qctx->notify_enqueue_fn) {
+            (void)g_qctx->notify_enqueue_fn(ch, pay, g_qctx->notify_ctx);
+        }
+        /* Scalar result: the payload (or empty string) */
+        strncpy(out_buf, pay, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
+    /* pg_listening_channels() — returns TEXT[] (canonical PG {a,b,c} text)
+     * of this session's current listens. Used by DBeaver/JDBC introspection. */
+    if (e->type == EXPR_PG_LISTENING_CHANNELS) {
+        char names[32  /* NOTIFY_MAX_LISTEN — per-session cap */][64];
+        int n = 0;
+        if (g_qctx && g_qctx->listen_list_fn) {
+            n = g_qctx->listen_list_fn(names, 32  /* NOTIFY_MAX_LISTEN — per-session cap */,
+                                       g_qctx->notify_ctx);
+        }
+        /* Build "{n1,n2,...}" PG-compatible array text */
+        int op = 0;
+        if (op + 1 < buf_size) out_buf[op++] = '{';
+        for (int i = 0; i < n; i++) {
+            if (i > 0 && op + 1 < buf_size) out_buf[op++] = ',';
+            const char *s = names[i];
+            while (*s && op + 1 < buf_size) out_buf[op++] = *s++;
+        }
+        if (op + 1 < buf_size) out_buf[op++] = '}';
+        out_buf[op < buf_size ? op : buf_size - 1] = '\0';
         return 1;
     }
 

@@ -121,6 +121,12 @@ int main(int argc, char *argv[])
     /* Initialise engine, locks, socket subsystem */
     server_init_ex(buffer_pool_pages);
 
+    /* Task 91: LISTEN/NOTIFY registry */
+    {
+        extern void notify_registry_init(void);
+        notify_registry_init();
+    }
+
     /* TLS initialisation — read cert/key paths from environment */
     {
         const char *cert = getenv("EVOSQL_TLS_CERT");

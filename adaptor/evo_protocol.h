@@ -39,8 +39,14 @@
 
 #define EVO_DEFAULT_PORT 9967
 
+#include "tls.h"
+
 /* Handle a single EVO-protocol client connection.
  * Called from server.c's client_thread — must not close `sock`. */
 void evo_handle_client(socket_t sock);
+
+/* Async LISTEN/NOTIFY delivery (Task 91 — Feature #62). */
+void evo_send_notification(conn_t *conn, int sender_session_id,
+                           const char *channel, const char *payload);
 
 #endif /* EVO_PROTOCOL_H */

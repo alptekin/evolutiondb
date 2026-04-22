@@ -239,6 +239,10 @@
 %token LOOP
 
 %token LATERAL
+%token LISTEN
+%token NOTIFY
+%token UNLISTEN
+%token SELF
 %token LESS
 %token LONGTEXT
 %token LOW_PRIORITY
@@ -399,6 +403,7 @@
 %token SEQUENCE FNEXTVAL FCURRVAL FSETVAL FLASTVAL
 %token START INCREMENT MINVALUE CYCLE
 %token FARRAY_LENGTH FUNNEST
+%token FEVO_NOTIFY FPG_LISTENING_CHANNELS
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -460,7 +465,7 @@ expr: NAME
         $$ = expr_make_column($1);
         free($1);
     }
-| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
+| NAME '.' NAME									{ emit("FIELDNAME %s.%s", $1, $3); { char qn[256]; snprintf(qn, sizeof(qn), "%.127s.%.127s", $1, $3); $$ = expr_make_column(qn); } free($1); free($3); }
 | EXCLUDED '.' NAME                             { emit("EXCLUDEDCOL %s", $3); $$ = expr_make_excluded($3); free($3); }
 | MATCH '(' NAME ')' AGAINST '(' STRING ')'
     {
@@ -585,19 +590,53 @@ expr: expr BETWEEN expr AND expr %prec BETWEEN                                  
 | expr NOT BETWEEN expr AND expr %prec BETWEEN                                  { emit("NOTBETWEEN"); $$ = expr_make_not_between($1, $4, $6); }
 ;
 
-val_list: expr									{ $$ = 1; if (g_expr.inListCount < MAX_IN_LIST) g_expr.inListExprs[g_expr.inListCount++] = $1; }
-| expr ',' val_list								{ $$ = 1 + $3; if (g_expr.inListCount < MAX_IN_LIST) { /* shift right and insert at front */ int _i; for(_i=g_expr.inListCount; _i>0; _i--) g_expr.inListExprs[_i]=g_expr.inListExprs[_i-1]; g_expr.inListExprs[0]=$1; g_expr.inListCount++; } }
+val_list: expr
+    {
+        $$ = 1;
+        int _n = g_expr.inListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            g_expr.inListExprs[_n] = $1;
+            g_expr.inListCount = _n + 1;
+        }
+    }
+| expr ',' val_list
+    {
+        $$ = 1 + $3;
+        /* Shift right and insert at front. The guard uses MAX_IN_LIST-1
+         * so writing inListExprs[_n] below is provably in-bounds
+         * (0 <= _n < MAX_IN_LIST). */
+        int _n = g_expr.inListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            for (int _i = _n; _i > 0; _i--)
+                g_expr.inListExprs[_i] = g_expr.inListExprs[_i - 1];
+            g_expr.inListExprs[0] = $1;
+            g_expr.inListCount = _n + 1;
+        }
+    }
 ;
 
 /* Array literal element list — uses dedicated side channel arrListExprs
  * so ARRAY[...] nested inside IN(...) does not clobber inListExprs. */
 array_val_list: expr
-    { $$ = 1; if (g_expr.arrListCount < MAX_IN_LIST) g_expr.arrListExprs[g_expr.arrListCount++] = $1; }
+    {
+        $$ = 1;
+        int _n = g_expr.arrListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            g_expr.arrListExprs[_n] = $1;
+            g_expr.arrListCount = _n + 1;
+        }
+    }
 | expr ',' array_val_list
-    { $$ = 1 + $3; if (g_expr.arrListCount < MAX_IN_LIST) {
-          int _i; for (_i = g_expr.arrListCount; _i > 0; _i--) g_expr.arrListExprs[_i] = g_expr.arrListExprs[_i - 1];
-          g_expr.arrListExprs[0] = $1; g_expr.arrListCount++;
-      } }
+    {
+        $$ = 1 + $3;
+        int _n = g_expr.arrListCount;
+        if (_n >= 0 && _n < MAX_IN_LIST) {
+            for (int _i = _n; _i > 0; _i--)
+                g_expr.arrListExprs[_i] = g_expr.arrListExprs[_i - 1];
+            g_expr.arrListExprs[0] = $1;
+            g_expr.arrListCount = _n + 1;
+        }
+    }
 ;
 
 /* Array literal: ARRAY[e1, e2, ...] or ARRAY[]
@@ -611,37 +650,58 @@ expr: ARRAY '[' { g_expr.arrListCount = 0; g_in_array_literal++; } array_val_lis
     {
         g_in_array_literal--;
         char _arrbuf[4096];
+        const int _cap = (int)sizeof(_arrbuf);
         int _p = 0;
-        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '{';
+        /* Safe append macros — bound every write to leave at least one
+         * byte for the terminating NUL. snprintf's return value is
+         * clamped to the remaining capacity before being added to _p,
+         * preventing size-argument underflow on the next call. */
+        #define _ARR_ROOM() ( _cap - 1 - _p )
+        #define _ARR_PUTC(c) do { if (_ARR_ROOM() > 0) _arrbuf[_p++] = (c); } while (0)
+        #define _ARR_PRINTF(...) do {                                    \
+            int _r = _ARR_ROOM();                                        \
+            if (_r > 0) {                                                \
+                int _w = snprintf(_arrbuf + _p, (size_t)_r + 1, __VA_ARGS__); \
+                if (_w < 0) break;                                       \
+                if (_w > _r) _w = _r;                                    \
+                _p += _w;                                                \
+            }                                                            \
+        } while (0)
+
+        _ARR_PUTC('{');
         for (int _i = 0; _i < g_expr.arrListCount; _i++) {
-            if (_i > 0 && _p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = ',';
+            if (_i > 0) _ARR_PUTC(',');
             ExprNode *_en = g_expr.arrListExprs[_i];
             if (!_en) continue;
-            if (_en->type == EXPR_LITERAL_INT)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%d", _en->val.intval);
-            else if (_en->type == EXPR_LITERAL_FLOAT)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%g", _en->val.floatval);
-            else if (_en->type == EXPR_LITERAL_BOOL)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%s",
-                               _en->val.intval ? "true" : "false");
-            else if (_en->type == EXPR_LITERAL_NULL)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
-            else if (_en->type == EXPR_LITERAL_STR) {
-                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
-                for (const char *_s = _en->val.strval; *_s && _p < (int)sizeof(_arrbuf) - 2; _s++) {
-                    if (*_s == '"' || *_s == '\\') _arrbuf[_p++] = '\\';
-                    _arrbuf[_p++] = *_s;
+            if (_en->type == EXPR_LITERAL_INT) {
+                _ARR_PRINTF("%d", _en->val.intval);
+            } else if (_en->type == EXPR_LITERAL_FLOAT) {
+                _ARR_PRINTF("%g", _en->val.floatval);
+            } else if (_en->type == EXPR_LITERAL_BOOL) {
+                _ARR_PRINTF("%s", _en->val.intval ? "true" : "false");
+            } else if (_en->type == EXPR_LITERAL_NULL) {
+                _ARR_PRINTF("NULL");
+            } else if (_en->type == EXPR_LITERAL_STR) {
+                _ARR_PUTC('"');
+                for (const char *_s = _en->val.strval; *_s && _ARR_ROOM() > 1; _s++) {
+                    if (*_s == '"' || *_s == '\\') _ARR_PUTC('\\');
+                    _ARR_PUTC(*_s);
                 }
-                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
+                _ARR_PUTC('"');
             } else {
                 /* Non-literal element (column ref, func call) — defer to
                  * runtime evaluation via expr_make_array_literal. Emit
                  * display placeholder in the INSERT field text. */
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
+                _ARR_PRINTF("NULL");
             }
         }
-        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '}';
+        _ARR_PUTC('}');
         _arrbuf[_p] = '\0';
+
+        #undef _ARR_ROOM
+        #undef _ARR_PUTC
+        #undef _ARR_PRINTF
+
         GetInsertions(_arrbuf);
         emit("ARRLIT %d", $4);
         $$ = expr_make_array_literal(g_expr.arrListExprs, g_expr.arrListCount);
@@ -672,6 +732,19 @@ expr: FARRAY_LENGTH '(' expr ')'
     { emit("CALL 2 ARRAY_LENGTH"); $$ = expr_make_array_length($3); /* dim ignored in v1 */ }
 | FUNNEST '(' expr ')'
     { emit("CALL 1 UNNEST"); $$ = expr_make_unnest($3); }
+;
+
+/* Built-in LISTEN/NOTIFY helper functions (Task 91 — Feature #62) */
+expr: FEVO_NOTIFY '(' expr ',' expr ')'
+    {
+        emit("CALL 2 EVO_NOTIFY");
+        $$ = expr_make_evo_notify($3, $5);
+    }
+| FPG_LISTENING_CHANNELS '(' ')'
+    {
+        emit("CALL 0 PG_LISTENING_CHANNELS");
+        $$ = expr_make_pg_listening_channels();
+    }
 ;
 
 opt_val_list: /* nil */								{ $$ = 0; }
@@ -1101,7 +1174,7 @@ orderby_item: NAME opt_asc_desc
     }
 | NAME '.' NAME opt_asc_desc
     {
-        char qn[256]; snprintf(qn, sizeof(qn), "%s.%s", $1, $3);
+        char qn[256]; snprintf(qn, sizeof(qn), "%.127s.%.127s", $1, $3);
         emit("ORDERBY %s %d", qn, $4);
         AddOrderByColumn(qn, $4);
         free($1); free($3);
@@ -1637,6 +1710,75 @@ opt_truncate_options: /* empty */
 | opt_truncate_options CONTINUE IDENTITY        { emit("TRUNCATE CONTINUE IDENTITY"); TruncateSetContinueIdentity(); }
 ;
 
+/** LISTEN / NOTIFY / UNLISTEN — asynchronous pub/sub (Task 91 — Feature #62)
+ *
+ *  LISTEN channel
+ *  LISTEN channel WITH (self = true|false)
+ *  UNLISTEN channel
+ *  UNLISTEN *
+ *  NOTIFY channel
+ *  NOTIFY channel, 'payload'
+ *  NOTIFY channel, <expr>       (future: arbitrary expression payload)
+ *
+ *  The parser stages the command into g_notify; the executor fires it
+ *  (immediate for LISTEN/UNLISTEN, commit-gated for NOTIFY).
+ */
+stmt: listen_stmt     { emit("STMT"); }
+    | unlisten_stmt   { emit("STMT"); }
+    | notify_stmt     { emit("STMT"); }
+;
+
+listen_stmt: LISTEN NAME
+    {
+        emit("LISTEN %s", $2);
+        SetListenChannel($2, 0);
+        free($2);
+    }
+| LISTEN NAME SELF
+    {
+        /* LISTEN channel SELF — opt-in for same-session delivery.
+         * Simplified form (one keyword) instead of WITH (self = true),
+         * sidesteps the '=' token conflict in the LISTEN context. */
+        emit("LISTEN %s SELF", $2);
+        SetListenChannel($2, 1);
+        free($2);
+    }
+;
+
+unlisten_stmt: UNLISTEN NAME
+    {
+        emit("UNLISTEN %s", $2);
+        SetUnlistenChannel($2);
+        free($2);
+    }
+| UNLISTEN '*'
+    {
+        emit("UNLISTEN *");
+        SetUnlistenAll();
+    }
+;
+
+notify_stmt: NOTIFY NAME
+    {
+        emit("NOTIFY %s", $2);
+        SetNotifyChannel($2, NULL);
+        free($2);
+    }
+| NOTIFY NAME ',' STRING
+    {
+        /* Strip surrounding quotes from STRING literal */
+        int slen = (int)strlen($4);
+        char *payload = $4;
+        if (slen >= 2 && (payload[0] == '\'' || payload[0] == '"')) {
+            payload[slen - 1] = '\0';
+            payload++;
+        }
+        emit("NOTIFY %s PAYLOAD", $2);
+        SetNotifyChannel($2, payload);
+        free($2); free($4);
+    }
+;
+
 /** reclaim table — defragmentation **/
 stmt: reclaim_table_stmt
     {
@@ -1671,7 +1813,7 @@ analyze_table_stmt: ANALYZE TABLE NAME
     {
         emit("ANALYZETABLE %s.%s", $3, $5);
         char full[512];
-        snprintf(full, sizeof(full), "%s.%s", $3, $5);
+        snprintf(full, sizeof(full), "%.255s.%.255s", $3, $5);
         GetDropTableName(full);
         free($3); free($5);
     }
