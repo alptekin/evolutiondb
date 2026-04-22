@@ -240,11 +240,28 @@ int TruncateInsert(void)
 
 static int split_row_values(char *row, char **vals, int maxVals)
 {
+    /* strtok collapses consecutive delimiters — that's wrong for INSERT:
+     * an INSERT INTO t VALUES (1, '', '', 'x') produces the buffer
+     * "1\x1F\x1F\x1Fx\x1F", and strtok would read it as three values
+     * instead of four. Walk the string manually, carving out one
+     * (possibly empty) token per FIELD_SEP so the column count matches
+     * what the grammar emitted. */
+    if (!row) return 0;
     int n = 0;
-    char *t = strtok(row, FIELD_SEP);
-    while (t && n < maxVals) {
-        vals[n++] = t;
-        t = strtok(NULL, FIELD_SEP);
+    char *start = row;
+    char *p = row;
+    while (*p && n < maxVals) {
+        if (*p == FIELD_SEP_CHAR) {
+            *p = '\0';
+            vals[n++] = start;
+            start = p + 1;
+        }
+        p++;
+    }
+    /* Trailing token without a terminating separator (rare — GetInsertions
+     * always appends FIELD_SEP — but cheap to guard). */
+    if (n < maxVals && start < p) {
+        vals[n++] = start;
     }
     return n;
 }
