@@ -2,8 +2,8 @@ apiVersion: v1
 entries:
   evolutiondb:
   - apiVersion: v2
-    appVersion: 2.0.6
-    created: "2026-04-22T14:56:00.683951621Z"
+    appVersion: 2.0.7
+    created: "2026-04-22T17:28:36.587304804Z"
     description: EvolutionDB (EvoSQL) is a high-performance SQL database engine written
       in C that implements a comprehensive subset of the SQL standard. It features
       a unified page-based storage architecture with binary tuple format, B+ tree
@@ -13,7 +13,7 @@ entries:
       robust query processing. The server provides dual-protocol connectivity, supporting
       both the PostgreSQL wire protocol for broad client compatibility and a native
       text protocol for lightweight integration.
-    digest: 10155f0c8b1884b88b9d5495ccff01ce13b7ea088d7a1d054657df4df32d9426
+    digest: 681c65f430870031bf1a71a524dfdc75b82bb9a5a94ee957f4e8e59e27971f6d
     home: https://github.com/alptekin/evolutiondb
     keywords:
     - database
@@ -28,6 +28,6 @@ entries:
     - https://github.com/alptekin/evolutiondb
     type: application
     urls:
-    - https://alptekin.github.io/evolutiondb/evolutiondb-2.0.6.tgz
-    version: 2.0.6
-generated: "2026-04-22T14:56:00.683363374Z"
+    - https://alptekin.github.io/evolutiondb/evolutiondb-2.0.7.tgz
+    version: 2.0.7
+generated: "2026-04-22T17:28:36.586746574Z"
