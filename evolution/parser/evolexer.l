@@ -210,6 +210,8 @@ LISTEN					{ return LISTEN; }
 NOTIFY					{ return NOTIFY; }
 UNLISTEN				{ return UNLISTEN; }
 SELF					{ return SELF; }
+INHERITS				{ return INHERITS; }
+ONLY					{ return ONLY; }
 LEADING					{ return LEADING; }
 LEAVE					{ return LEAVE; }
 

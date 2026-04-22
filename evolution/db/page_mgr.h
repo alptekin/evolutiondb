@@ -54,7 +54,7 @@ typedef struct {
 /* ----------------------------------------------------------------
  *  File Header — stored in Page 0
  * ---------------------------------------------------------------- */
-#define CATALOG_ROOT_SLOTS 17   /* max system catalog B+ trees */
+#define CATALOG_ROOT_SLOTS 18   /* max system catalog B+ trees */
 
 typedef enum {
     CAT_SYS_DATABASES  = 0,
@@ -73,7 +73,8 @@ typedef enum {
     CAT_SYS_PROCEDURES   = 13,
     CAT_SYS_TRIGGERS     = 14,
     CAT_SYS_SEQUENCES    = 15,
-    CAT_MAX              = 16
+    CAT_SYS_INHERITANCE  = 16,   /* Task 92: child_table_id -> parent_table_id */
+    CAT_MAX              = 17
 } CatalogID;
 
 typedef struct {
@@ -95,13 +96,13 @@ typedef struct {
     uint8_t  page_iv_prefix[8];               /* fixed CTR IV prefix (never changes on rekey) */
     /* Size breakdown (must total exactly EVO_PAGE_SIZE = 4096):
      *   magic(4) + version(2) + page_size(2) + total_pages(4) + free_list_head(4) = 16
-     *   catalog_roots[17] = 68
+     *   catalog_roots[18] = 72         (Task 92 added CAT_SYS_INHERITANCE)
      *   next_table_id(4) + next_schema_id(4) + next_db_id(4) = 12
      *   next_xid(4) + next_csn(4) = 8
      *   encryption: enabled(1) + salt(16) + wrapped_dek(48) + iv_prefix(8) = 73
-     *   TOTAL non-reserved = 16 + 68 + 12 + 8 + 73 = 177
-     * reserved = 4096 - 177 = 3919 */
-    uint8_t  reserved[EVO_PAGE_SIZE - 177];
+     *   TOTAL non-reserved = 16 + 72 + 12 + 8 + 73 = 181
+     * reserved = 4096 - 181 = 3915 */
+    uint8_t  reserved[EVO_PAGE_SIZE - 181];
 } FileHeader;
 
 /* Compile-time check: FileHeader must fit exactly in one page.
