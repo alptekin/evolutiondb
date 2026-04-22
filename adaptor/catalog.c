@@ -16,6 +16,12 @@
 #include "xa_transaction.h"
 #include "server.h"       /* session_register/list/cancel */
 
+/* Task 91 — Feature #62: forward-declare pending-notify helpers
+ * to avoid pulling query_executor.h (which includes tls.h → OpenSSL
+ * and clashes with engine's crypto.h SHA256_CTX typedef). */
+void notify_flush_commit(SessionCtx *ctx);
+void notify_discard_pending(SessionCtx *ctx, int below_depth);
+
 /* Forward declarations */
 static void close_all_session_cursors(SessionCtx *ctx);
 static int handle_cursor(const char *sql, ResultSet *rs, SessionCtx *ctx);
@@ -1084,6 +1090,7 @@ static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
             { extern int xa_remove_prepared(const char *); xa_remove_prepared(ctx->xa_xid); }
         }
         if (ctx->undo_log) { undo_log_free(ctx->undo_log); ctx->undo_log = NULL; }
+        notify_flush_commit(ctx);            /* Task 91: deliver pending NOTIFYs */
         ctx->in_transaction = 0;
         ctx->tx_aborted = 0;
         ctx->snapshot_valid = 0;
@@ -1248,6 +1255,8 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                     mvcc_unregister_tx(ctx->tx_xid);
                     ctx->tx_xid = 0;
                 }
+                notify_discard_pending(ctx, 0);  /* Task 91: implicit rollback */
+                ctx->savepoint_depth = 0;
             } else {
                 /* Conflict Guard: check for serialization failure before commit */
                 if (ctx->serializable_locked && ctx->tx_xid > 0) {
@@ -1270,6 +1279,8 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                             mvcc_unregister_tx(ctx->tx_xid);
                             ctx->tx_xid = 0;
                         }
+                        notify_discard_pending(ctx, 0);  /* Task 91 */
+                        ctx->savepoint_depth = 0;
                         ctx->in_transaction = 0;
                         ctx->tx_aborted = 0;
                         ctx->snapshot_valid = 0;
@@ -1294,6 +1305,7 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                     ctx->tx_xid = 0;
                 }
             }
+            notify_flush_commit(ctx);      /* Task 91: deliver pending NOTIFYs */
             ctx->in_transaction = 0;
             ctx->tx_aborted = 0;
             ctx->snapshot_valid = 0;
@@ -1376,6 +1388,13 @@ static int handle_transaction(const char *sql, ResultSet *rs,
             /* Destroy savepoints created after this one */
             savepoint_release_after(&ctx->savepoints, idx);
 
+            /* Task 91: drop pending NOTIFYs enqueued after this savepoint.
+             * SAVEPOINT at array-index idx was created when depth was idx,
+             * then bumped to idx+1 for subsequent NOTIFYs. To undo those,
+             * discard entries with savepoint_depth > idx. */
+            notify_discard_pending(ctx, idx);
+            ctx->savepoint_depth = idx;
+
             /* Clear aborted state — PG allows continuing after ROLLBACK TO */
             ctx->tx_aborted = 0;
         } else {
@@ -1399,6 +1418,8 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 mvcc_unregister_tx(ctx->tx_xid);
                 ctx->tx_xid = 0;
             }
+            notify_discard_pending(ctx, 0);    /* Task 91: drop all pending NOTIFYs */
+            ctx->savepoint_depth = 0;
             ctx->in_transaction = 0;
             ctx->tx_aborted = 0;
             ctx->snapshot_valid = 0;
@@ -1442,6 +1463,11 @@ static int handle_transaction(const char *sql, ResultSet *rs,
 
             /* Release this savepoint and all newer ones */
             savepoint_release_after(&ctx->savepoints, idx - 1);
+            /* Task 91: RELEASE keeps NOTIFYs pending but lowers depth so
+             * a subsequent ROLLBACK TO earlier savepoint still discards
+             * them. Depth becomes the remaining savepoint count. */
+            if (ctx->savepoint_depth > idx)
+                ctx->savepoint_depth = idx;
         } else {
             result_set_error(rs, "25P01", "RELEASE SAVEPOINT can only be used in a transaction");
             return 1;
@@ -1470,6 +1496,7 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 result_set_error(rs, "53000", "too many savepoints");
                 return 1;
             }
+            ctx->savepoint_depth++;   /* Task 91: stamp depth on new NOTIFYs */
         } else {
             result_set_error(rs, "25P01", "SAVEPOINT can only be used in a transaction");
             return 1;
@@ -1494,14 +1521,9 @@ static int handle_transaction(const char *sql, ResultSet *rs,
         strcpy(rs->command_tag, "RESET");
         return 1;
     }
-    if (starts_with_i(sql, "LISTEN")) {
-        strcpy(rs->command_tag, "LISTEN");
-        return 1;
-    }
-    if (starts_with_i(sql, "UNLISTEN")) {
-        strcpy(rs->command_tag, "UNLISTEN");
-        return 1;
-    }
+    /* LISTEN / UNLISTEN / NOTIFY are handled by the real dispatch inside
+     * query_executor.c (Task 91 — Feature #62). Do NOT short-circuit here
+     * or the registry never gets updated. */
     return 0;
 }
 
@@ -4615,8 +4637,12 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (handle_builtin_functions(sql, rs)) return 1;
     }
 
-    /* pg_catalog queries */
-    if (stristr_found(sql, "pg_catalog") || stristr_found(sql, "pg_")) {
+    /* pg_catalog queries — but NOT our LISTEN/NOTIFY helpers
+     * (pg_listening_channels, pg_notify); they route through the real
+     * parser/expression engine. Task 91 — Feature #62. */
+    if ((stristr_found(sql, "pg_catalog") || stristr_found(sql, "pg_")) &&
+        !stristr_found(sql, "pg_listening_channels") &&
+        !stristr_found(sql, "pg_notify")) {
         if (handle_pg_catalog(sql, rs, ctx)) return 1;
     }
 

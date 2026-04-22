@@ -7,6 +7,19 @@
 #include "../evolution/db/database.h"
 #include "../evolution/db/mvcc.h"
 
+struct PendingNotify;
+
+/* Required constants for SessionCtx field sizing without pulling notify.h */
+#ifndef NOTIFY_CHANNEL_NAME_MAX
+#define NOTIFY_CHANNEL_NAME_MAX 64
+#endif
+#ifndef NOTIFY_PAYLOAD_MAX
+#define NOTIFY_PAYLOAD_MAX      8000
+#endif
+#ifndef NOTIFY_MAX_LISTEN
+#define NOTIFY_MAX_LISTEN       32
+#endif
+
 /* ----------------------------------------------------------------
  *  Per-connection session context
  *  Each client connection owns one of these.  The active database
@@ -84,7 +97,71 @@ typedef struct {
         int       is_open;
     } cursors[16];
     int cursor_count;
+
+    /* LISTEN/NOTIFY (Task 91 — Feature #62) ---------------------------------
+     *   listening[]        — channels this session is subscribed to; mirrored
+     *                         in the global registry, kept here for disconnect
+     *                         cleanup and pg_listening_channels().
+     *   pending_notifies_*  — singly-linked queue of NOTIFYs issued this TX;
+     *                         flushed at COMMIT post-CLOG and discarded on
+     *                         ROLLBACK. Entries stamp savepoint_depth so
+     *                         ROLLBACK TO SAVEPOINT can drop just the ones
+     *                         that were enqueued after the savepoint mark.
+     *   savepoint_depth    — bumped on SAVEPOINT, decremented on RELEASE;
+     *                         pending entries carry the depth they were
+     *                         enqueued at. -------------------------------- */
+    struct {
+        char channel[NOTIFY_CHANNEL_NAME_MAX];
+        int  self_flag;
+    } listening[NOTIFY_MAX_LISTEN];
+    int listening_count;
+
+    struct PendingNotify *pending_notifies_head;
+    struct PendingNotify *pending_notifies_tail;
+    int pending_notify_count;
+    int savepoint_depth;
+
+    /* The conn_t that owns this session — used when registering in the
+     * notify registry so async senders know where to deliver. Set at
+     * handler startup; never follows a closed socket. Stored as void*
+     * to avoid pulling tls.h/openssl here. */
+    void *conn;
 } SessionCtx;
+
+/* Pending NOTIFY entry — heap-allocated per enqueue, freed by flush/discard. */
+typedef struct PendingNotify {
+    char  channel[NOTIFY_CHANNEL_NAME_MAX];
+    char  payload[NOTIFY_PAYLOAD_MAX + 1];
+    int   sender_session_id;
+    int   savepoint_depth;
+    struct PendingNotify *next;
+} PendingNotify;
+
+/* Pending list management (Task 91) ----------------------------------------
+ *   *_enqueue_pending   — called from NOTIFY statement / evo_notify()
+ *                         evaluator; returns 0 on success, -1 on invalid
+ *                         input (channel too long, payload over cap).
+ *   *_flush_commit      — called from COMMIT handler post-CLOG. Walks pending
+ *                         list; for each entry snapshots the registry and
+ *                         sends to each listener. Frees the list.
+ *   *_discard_pending   — called from ROLLBACK and savepoint rollback.
+ *                         Drops pending entries whose savepoint_depth is
+ *                         strictly greater than below_depth. Pass 0 for
+ *                         full rollback; pass the saved depth for
+ *                         ROLLBACK TO SAVEPOINT. Frees the dropped nodes.
+ *   *_discard_session_pending — convenience: drop everything regardless of
+ *                         depth (used on connection disconnect).
+ * --------------------------------------------------------------------------*/
+int  notify_enqueue_pending(SessionCtx *ctx, const char *channel,
+                            const char *payload);
+void notify_flush_commit(SessionCtx *ctx);
+void notify_discard_pending(SessionCtx *ctx, int below_depth);
+void notify_discard_session_pending(SessionCtx *ctx);
+
+/* listening[] bookkeeping helpers */
+int  notify_session_add_listen(SessionCtx *ctx, const char *channel, int self_flag);
+int  notify_session_remove_listen(SessionCtx *ctx, const char *channel);
+void notify_session_clear_listens(SessionCtx *ctx);
 
 /*
  * Execute a SQL query through EvoSQL engine.

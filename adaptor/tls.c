@@ -74,9 +74,12 @@ int tls_is_available(void)
 
 void conn_init(conn_t *c, socket_t sock)
 {
-    c->sock   = sock;
-    c->ssl    = NULL;
-    c->is_tls = 0;
+    c->sock        = sock;
+    c->ssl         = NULL;
+    c->is_tls      = 0;
+    c->valid       = 1;
+    c->protocol    = CONN_PROTO_PG;  /* default, overwritten by conn_lock_init */
+    c->initialized = 0;
 }
 
 int conn_tls_accept(conn_t *c)
@@ -211,9 +214,12 @@ int  tls_is_available(void)   { return 0; }
 
 void conn_init(conn_t *c, socket_t sock)
 {
-    c->sock   = sock;
-    c->ssl    = NULL;
-    c->is_tls = 0;
+    c->sock        = sock;
+    c->ssl         = NULL;
+    c->is_tls      = 0;
+    c->valid       = 1;
+    c->protocol    = CONN_PROTO_PG;  /* default, overwritten by conn_lock_init */
+    c->initialized = 0;
 }
 
 int conn_tls_accept(conn_t *c)  { (void)c; return -1; }
@@ -245,3 +251,31 @@ int conn_recv_line(conn_t *c, char *buf, int maxlen)
 void conn_tls_shutdown(conn_t *c) { (void)c; }
 
 #endif /* EVOSQL_TLS */
+
+/* ================================================================
+ *  Per-connection output mutex (Task 91 — Feature #62)
+ *
+ *  Shared by both TLS and non-TLS builds — lock primitives are
+ *  abstracted in platform.h.
+ * ================================================================ */
+
+void conn_lock_init(conn_t *c, int protocol)
+{
+    if (!c) return;
+    if (!c->initialized) {
+        mutex_init(&c->write_lock);
+        c->initialized = 1;
+    }
+    c->protocol = protocol;
+    c->valid    = 1;
+}
+
+void conn_lock_destroy(conn_t *c)
+{
+    if (!c || !c->initialized) return;
+    mutex_lock(&c->write_lock);
+    c->valid = 0;
+    mutex_unlock(&c->write_lock);
+    mutex_destroy(&c->write_lock);
+    c->initialized = 0;
+}

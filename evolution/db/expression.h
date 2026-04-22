@@ -176,7 +176,11 @@ typedef enum {
     EXPR_SUBSCRIPT,         /* arr[idx] — left=arr, right=idx (1-based) */
     EXPR_ARRAY_LENGTH,      /* array_length(arr) — left=arr */
     EXPR_ANY_ARRAY,         /* lhs cmp_op ANY(arr) — left=lhs, right=arr, val.intval=cmp_op */
-    EXPR_UNNEST             /* unnest(arr) — left=arr */
+    EXPR_UNNEST,            /* unnest(arr) — left=arr */
+
+    /* LISTEN/NOTIFY helper functions (Task 91 — Feature #62) */
+    EXPR_EVO_NOTIFY,           /* evo_notify(channel, payload) — left/right */
+    EXPR_PG_LISTENING_CHANNELS /* pg_listening_channels() — no children */
 } ExprNodeType;
 
 typedef struct ExprNode {
@@ -284,6 +288,10 @@ ExprNode *expr_make_subscript(ExprNode *arr, ExprNode *idx);
 ExprNode *expr_make_array_length(ExprNode *arr);
 ExprNode *expr_make_any_array(int cmp_op, ExprNode *lhs, ExprNode *arr);
 ExprNode *expr_make_unnest(ExprNode *arr);
+
+/* LISTEN/NOTIFY helpers (Task 91 — Feature #62) */
+ExprNode *expr_make_evo_notify(ExprNode *channel, ExprNode *payload);
+ExprNode *expr_make_pg_listening_channels(void);
 
 /* Comparison subtoken codes emitted by the lexer for COMPARISON tokens.
  * Shared by expr_make_cmp() and any other code that dispatches on the

@@ -16,6 +16,7 @@
 #include "pg_protocol.h"
 #include "join.h"
 #include "util.h"
+#include "notify.h"   /* Task 91 — registry + pending-list helpers */
 #include "../evolution/db/mvcc.h"
 
 /* Flex/Bison externs (reentrant parser) */
@@ -3705,6 +3706,29 @@ static int evo_subquery_exec(const char *sql, char out_values[][256],
     return err ? -1 : 0;
 }
 
+/* LISTEN/NOTIFY expression-engine bridges (Task 91 — Feature #62).
+ * Exported (non-static) so expression.c's EXPR_EVO_NOTIFY /
+ * EXPR_PG_LISTENING_CHANNELS evaluators can resolve them via the
+ * QueryContext function pointers. */
+int evo_notify_enqueue_cb(const char *channel, const char *payload, void *ctx)
+{
+    SessionCtx *session = (SessionCtx *)ctx;
+    if (!session) return -1;
+    return notify_enqueue_pending(session, channel, payload);
+}
+
+int evo_listen_list_cb(char channels[][64], int max, void *ctx)
+{
+    SessionCtx *session = (SessionCtx *)ctx;
+    if (!session) return 0;
+    int n = session->listening_count < max ? session->listening_count : max;
+    for (int i = 0; i < n; i++) {
+        strncpy(channels[i], session->listening[i].channel, 63);
+        channels[i][63] = '\0';
+    }
+    return n;
+}
+
 /* Trigger body execution callback — called from evo_fire_triggers in engine layer.
  * Executes SQL (DML, CALL proc, etc.) via query_execute with mutex skip. */
 static int evo_trigger_exec(const char *sql, char *err_msg, int err_size,
@@ -4976,6 +5000,14 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
         g_qctx->uservar_ctx = ctx;
         g_qctx->trigger_exec_fn = evo_trigger_exec;
         g_qctx->trigger_exec_ctx = ctx;
+        /* Task 91: LISTEN/NOTIFY bridges — evo_notify() + pg_listening_channels() */
+        extern int evo_notify_enqueue_cb(const char *, const char *, void *);
+        extern int evo_listen_list_cb(char (*)[64], int, void *);
+        g_qctx->notify_enqueue_fn = evo_notify_enqueue_cb;
+        g_qctx->listen_list_fn    = evo_listen_list_cb;
+        g_qctx->notify_ctx        = ctx;
+        /* Reset notify command staging for this query */
+        g_qctx->notify.kind = NOTIFY_CMD_NONE;
     }
 
     /* Make a mutable copy, strip \r */
@@ -5222,6 +5254,78 @@ parser_done:
         /* CALL procedure — execute body after successful parse */
         if (!rs->has_error && is_call_query(sql) && g_proc.callName[0]) {
             execute_call_procedure(rs, ctx);
+            goto post_collect;
+        }
+
+        /* LISTEN / UNLISTEN / NOTIFY (Task 91 — Feature #62) -------------
+         * The parser staged the command into g_notify. LISTEN/UNLISTEN are
+         * applied immediately to the session + global registry. NOTIFY
+         * only enqueues into ctx->pending_notifies — the actual delivery
+         * happens at COMMIT (or implicit commit after this statement if
+         * we're in auto-commit mode).
+         * ---------------------------------------------------------------*/
+        if (!rs->has_error && g_notify.kind != NOTIFY_CMD_NONE) {
+            switch (g_notify.kind) {
+            case NOTIFY_CMD_LISTEN:
+                if (notify_listen(ctx->session_id, ctx->conn,
+                                   g_notify.channel, g_notify.self_flag) < 0) {
+                    rs->has_error = 1;
+                    strcpy(rs->error_sqlstate, "42622");
+                    snprintf(rs->error_message, sizeof(rs->error_message),
+                             "channel name too long or invalid");
+                } else {
+                    notify_session_add_listen(ctx, g_notify.channel,
+                                               g_notify.self_flag);
+                    strcpy(rs->command_tag, "LISTEN");
+                }
+                break;
+            case NOTIFY_CMD_UNLISTEN:
+                notify_unlisten(ctx->session_id, g_notify.channel);
+                notify_session_remove_listen(ctx, g_notify.channel);
+                strcpy(rs->command_tag, "UNLISTEN");
+                break;
+            case NOTIFY_CMD_UNLISTEN_ALL:
+                notify_unlisten_all(ctx->session_id);
+                notify_session_clear_listens(ctx);
+                strcpy(rs->command_tag, "UNLISTEN");
+                break;
+            case NOTIFY_CMD_NOTIFY:
+            case NOTIFY_CMD_NOTIFY_WITH_PAYLOAD: {
+                if (g_notify.payload_len < 0) {
+                    /* Parser flagged payload > 8000 bytes */
+                    rs->has_error = 1;
+                    strcpy(rs->error_sqlstate, "22023");
+                    snprintf(rs->error_message, sizeof(rs->error_message),
+                             "payload string too long (max 8000 bytes)");
+                    break;
+                }
+                const char *pay = (g_notify.kind == NOTIFY_CMD_NOTIFY_WITH_PAYLOAD)
+                                    ? g_notify.payload : "";
+                if (notify_enqueue_pending(ctx, g_notify.channel, pay) < 0) {
+                    rs->has_error = 1;
+                    if (strlen(pay) > NOTIFY_PAYLOAD_MAX) {
+                        strcpy(rs->error_sqlstate, "22023");
+                        snprintf(rs->error_message, sizeof(rs->error_message),
+                                 "payload string too long");
+                    } else {
+                        strcpy(rs->error_sqlstate, "42622");
+                        snprintf(rs->error_message, sizeof(rs->error_message),
+                                 "channel name too long or invalid");
+                    }
+                } else {
+                    strcpy(rs->command_tag, "NOTIFY");
+                    /* Auto-commit: if not inside explicit BEGIN, flush now
+                     * so the listener sees the message before the next
+                     * client response. */
+                    if (!ctx->in_transaction) {
+                        notify_flush_commit(ctx);
+                    }
+                }
+                break;
+            }
+            default: break;
+            }
+            g_notify.kind = NOTIFY_CMD_NONE;
             goto post_collect;
         }
 
@@ -5748,6 +5852,15 @@ parser_done:
         }
 
 post_collect: ;
+
+        /* Task 91: flush any pending NOTIFYs enqueued via evo_notify()
+         * during expression evaluation, provided we're not inside an
+         * explicit transaction. For explicit TXs the flush happens at
+         * COMMIT. Implicit single-statement TXs flush here. */
+        if (!rs->has_error && ctx && !ctx->in_transaction &&
+            ctx->pending_notifies_head) {
+            notify_flush_commit(ctx);
+        }
 
         /* RETURNING clause — transfer captured rows to ResultSet */
         if (!rs->has_error && g_returning.active && g_returning_row_count > 0) {

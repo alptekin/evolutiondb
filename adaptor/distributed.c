@@ -490,6 +490,7 @@ void dist_handle_client(socket_t sock)
 {
     conn_t conn;
     conn_init(&conn, sock);
+    conn_lock_init(&conn, CONN_PROTO_PG);  /* Task 91: output serialization */
 
     /* PG startup handshake (trusted — accept any user) */
     char username[256];
@@ -537,6 +538,7 @@ void dist_handle_client(socket_t sock)
             result_free(&rs);
         }
     }
+    conn_lock_destroy(&conn);
 }
 
 /* ================================================================
