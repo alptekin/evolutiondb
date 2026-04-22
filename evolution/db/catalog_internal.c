@@ -1802,7 +1802,19 @@ int cat_update_user(const char *username, const char *new_hash)
     if (bt2_search(&g_cat_trees[CAT_SYS_USERS], username, &rid) < 0)
         return -1;
 
+    /* Read existing descriptor to preserve is_role (and any other fields
+     * that aren't derived from the password). Previously this function
+     * built a fresh UserDesc on the stack and forgot to zero is_role,
+     * so ALTER USER PASSWORD would flip the user into whatever garbage
+     * was on the stack — AuthenticateUser then saw is_role != 0 and
+     * rejected every login, including with the just-set password. */
     UserDesc u;
+    memset(&u, 0, sizeof(u));
+    {
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0)
+            deserialize_user(record, username, &u);
+    }
     strncpy(u.username, username, CAT_MAX_NAME_LEN - 1);
     u.username[CAT_MAX_NAME_LEN - 1] = '\0';
     strncpy(u.password_hash, new_hash, CAT_MAX_HASH_LEN - 1);
