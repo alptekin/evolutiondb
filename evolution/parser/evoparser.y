@@ -239,6 +239,10 @@
 %token LOOP
 
 %token LATERAL
+%token LISTEN
+%token NOTIFY
+%token UNLISTEN
+%token SELF
 %token LESS
 %token LONGTEXT
 %token LOW_PRIORITY
@@ -399,6 +403,7 @@
 %token SEQUENCE FNEXTVAL FCURRVAL FSETVAL FLASTVAL
 %token START INCREMENT MINVALUE CYCLE
 %token FARRAY_LENGTH FUNNEST
+%token FEVO_NOTIFY FPG_LISTENING_CHANNELS
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -672,6 +677,19 @@ expr: FARRAY_LENGTH '(' expr ')'
     { emit("CALL 2 ARRAY_LENGTH"); $$ = expr_make_array_length($3); /* dim ignored in v1 */ }
 | FUNNEST '(' expr ')'
     { emit("CALL 1 UNNEST"); $$ = expr_make_unnest($3); }
+;
+
+/* Built-in LISTEN/NOTIFY helper functions (Task 91 — Feature #62) */
+expr: FEVO_NOTIFY '(' expr ',' expr ')'
+    {
+        emit("CALL 2 EVO_NOTIFY");
+        $$ = expr_make_evo_notify($3, $5);
+    }
+| FPG_LISTENING_CHANNELS '(' ')'
+    {
+        emit("CALL 0 PG_LISTENING_CHANNELS");
+        $$ = expr_make_pg_listening_channels();
+    }
 ;
 
 opt_val_list: /* nil */								{ $$ = 0; }
@@ -1635,6 +1653,75 @@ opt_truncate_options: /* empty */
 | opt_truncate_options RESTRICT                 { emit("TRUNCATE RESTRICT"); }
 | opt_truncate_options RESTART IDENTITY         { emit("TRUNCATE RESTART IDENTITY"); }
 | opt_truncate_options CONTINUE IDENTITY        { emit("TRUNCATE CONTINUE IDENTITY"); TruncateSetContinueIdentity(); }
+;
+
+/** LISTEN / NOTIFY / UNLISTEN — asynchronous pub/sub (Task 91 — Feature #62)
+ *
+ *  LISTEN channel
+ *  LISTEN channel WITH (self = true|false)
+ *  UNLISTEN channel
+ *  UNLISTEN *
+ *  NOTIFY channel
+ *  NOTIFY channel, 'payload'
+ *  NOTIFY channel, <expr>       (future: arbitrary expression payload)
+ *
+ *  The parser stages the command into g_notify; the executor fires it
+ *  (immediate for LISTEN/UNLISTEN, commit-gated for NOTIFY).
+ */
+stmt: listen_stmt     { emit("STMT"); }
+    | unlisten_stmt   { emit("STMT"); }
+    | notify_stmt     { emit("STMT"); }
+;
+
+listen_stmt: LISTEN NAME
+    {
+        emit("LISTEN %s", $2);
+        SetListenChannel($2, 0);
+        free($2);
+    }
+| LISTEN NAME SELF
+    {
+        /* LISTEN channel SELF — opt-in for same-session delivery.
+         * Simplified form (one keyword) instead of WITH (self = true),
+         * sidesteps the '=' token conflict in the LISTEN context. */
+        emit("LISTEN %s SELF", $2);
+        SetListenChannel($2, 1);
+        free($2);
+    }
+;
+
+unlisten_stmt: UNLISTEN NAME
+    {
+        emit("UNLISTEN %s", $2);
+        SetUnlistenChannel($2);
+        free($2);
+    }
+| UNLISTEN '*'
+    {
+        emit("UNLISTEN *");
+        SetUnlistenAll();
+    }
+;
+
+notify_stmt: NOTIFY NAME
+    {
+        emit("NOTIFY %s", $2);
+        SetNotifyChannel($2, NULL);
+        free($2);
+    }
+| NOTIFY NAME ',' STRING
+    {
+        /* Strip surrounding quotes from STRING literal */
+        int slen = (int)strlen($4);
+        char *payload = $4;
+        if (slen >= 2 && (payload[0] == '\'' || payload[0] == '"')) {
+            payload[slen - 1] = '\0';
+            payload++;
+        }
+        emit("NOTIFY %s PAYLOAD", $2);
+        SetNotifyChannel($2, payload);
+        free($2); free($4);
+    }
 ;
 
 /** reclaim table — defragmentation **/

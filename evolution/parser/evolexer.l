@@ -206,6 +206,10 @@ KEY					{ return KEY; }
 
 
 LATERAL					{ return LATERAL; }
+LISTEN					{ return LISTEN; }
+NOTIFY					{ return NOTIFY; }
+UNLISTEN				{ return UNLISTEN; }
+SELF					{ return SELF; }
 LEADING					{ return LEADING; }
 LEAVE					{ return LEAVE; }
 
@@ -435,6 +439,9 @@ SCOPE_IDENTITY/"("		{ return FSCOPE_IDENTITY; }
 GEN_RANDOM_UUID_V7/"("	{ return FGEN_RANDOM_UUID_V7; }
 GEN_RANDOM_UUID/"("		{ return FGEN_RANDOM_UUID; }
 SNOWFLAKE_ID/"("		{ return FSNOWFLAKE_ID; }
+EVO_NOTIFY/"("			{ return FEVO_NOTIFY; }
+PG_NOTIFY/"("			{ return FEVO_NOTIFY; }          /* PG compat alias */
+PG_LISTENING_CHANNELS/"("	{ return FPG_LISTENING_CHANNELS; }
 ARRAY_LENGTH/"("		{ return FARRAY_LENGTH; }
 UNNEST/"("				{ return FUNNEST; }
 EVO_SLEEP/"("			{ return FEVO_SLEEP; }

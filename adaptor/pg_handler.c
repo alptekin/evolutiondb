@@ -280,6 +280,8 @@ void pg_handle_client(socket_t client_sock)
     /* Wrap socket in conn_t for TLS-transparent I/O */
     conn_t conn;
     conn_init(&conn, client_sock);
+    conn_lock_init(&conn, CONN_PROTO_PG);  /* Task 91: output serialization */
+    session.conn = &conn;                  /* Task 91: async NOTIFY target */
 
     /* Allocate per-thread buffers on heap */
     msg_buf = (char *)malloc(65536);
@@ -821,6 +823,15 @@ cleanup:
         }
     }
 
+    /* Task 91: unregister LISTEN/NOTIFY state before socket tear-down so
+     * any in-flight async sender sees conn->valid=0 and drops its write. */
+    {
+        extern void notify_session_disconnect(int);
+        extern void notify_discard_session_pending(SessionCtx *);
+        notify_session_disconnect(session.session_id);
+        notify_discard_session_pending(&session);
+    }
+
     /* Unregister from session registry */
     session_unregister(session.session_id);
 
@@ -829,6 +840,7 @@ cleanup:
     session_cleanup_gtt(&session);
 
     conn_tls_shutdown(&conn);
+    conn_lock_destroy(&conn);
     if (pending_query) free(pending_query);
     free(msg_buf);
     result_free(rs); free(rs);
