@@ -42,13 +42,17 @@ class EvoConnection:
         return line
 
     def handshake(self, user="admin", password="admin"):
-        """Send EVO greeting, handle AUTH, expect HELLO."""
+        """Send EVO greeting, handle STARTTLS, handle AUTH, expect HELLO."""
         self.sock.sendall(b"EVO\n")
         hello = self._recv_line()
         assert hello.startswith("HELLO"), f"Expected HELLO, got: {hello}"
 
-        auth_line = self._recv_line()
-        if auth_line in ("AUTH_REQUIRED", "AUTH_SCRAM"):
+        line = self._recv_line()
+        if line == "STARTTLS":
+            self.sock.sendall(b"NOTLS\n")
+            line = self._recv_line()
+
+        if line in ("AUTH_REQUIRED", "AUTH_SCRAM"):
             self.sock.sendall(f"AUTH {user} {password}\n".encode("utf-8"))
             auth_result = self._recv_line()
             if auth_result != "AUTH_OK":
