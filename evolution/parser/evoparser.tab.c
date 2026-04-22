@@ -1696,91 +1696,91 @@ static const yytype_uint16 yyrline[] =
      539,   540,   541,   542,   543,   544,   545,   546,   547,   548,
      549,   550,   551,   552,   558,   558,   567,   567,   569,   569,
      571,   571,   576,   578,   582,   583,   584,   585,   586,   589,
-     590,   593,   602,   620,   629,   649,   649,   688,   697,   704,
-     708,   710,   712,   717,   722,   729,   730,   733,   733,   734,
-     734,   735,   735,   743,   743,   751,   751,   762,   766,   767,
-     768,   769,   770,   771,   772,   773,   777,   777,   779,   779,
-     781,   781,   784,   784,   786,   786,   788,   788,   790,   790,
-     792,   792,   794,   794,   797,   797,   799,   799,   801,   801,
-     803,   803,   805,   805,   807,   807,   809,   809,   811,   811,
-     814,   814,   816,   816,   818,   818,   822,   823,   824,   825,
-     826,   827,   828,   829,   830,   831,   832,   833,   834,   835,
-     836,   837,   838,   839,   840,   841,   842,   843,   844,   845,
-     846,   847,   848,   849,   850,   851,   852,   853,   854,   855,
-     857,   858,   859,   860,   861,   862,   863,   864,   866,   867,
-     868,   869,   870,   871,   872,   873,   874,   875,   876,   877,
-     878,   879,   880,   881,   882,   883,   884,   885,   886,   887,
-     889,   890,   891,   892,   893,   895,   896,   898,   899,   900,
-     902,   903,   904,   905,   912,   919,   926,   930,   934,   938,
-     942,   946,   952,   953,   954,   957,   963,   970,   971,   972,
-     973,   974,   975,   976,   977,   978,   981,   983,   985,   987,
-     991,   999,  1010,  1011,  1014,  1015,  1018,  1026,  1034,  1045,
-    1055,  1056,  1069,  1085,  1086,  1087,  1088,  1091,  1098,  1106,
-    1107,  1108,  1111,  1112,  1115,  1116,  1120,  1121,  1124,  1126,
-    1130,  1131,  1134,  1136,  1140,  1141,  1144,  1145,  1148,  1154,
-    1161,  1170,  1171,  1172,  1173,  1176,  1177,  1178,  1179,  1180,
-    1183,  1184,  1187,  1188,  1191,  1192,  1193,  1194,  1195,  1196,
-    1197,  1198,  1199,  1202,  1203,  1204,  1212,  1218,  1219,  1220,
-    1223,  1224,  1227,  1228,  1232,  1239,  1240,  1241,  1250,  1255,
-    1261,  1269,  1273,  1273,  1313,  1314,  1318,  1320,  1322,  1324,
-    1326,  1330,  1331,  1332,  1335,  1336,  1339,  1340,  1343,  1344,
-    1345,  1348,  1349,  1352,  1353,  1357,  1359,  1361,  1363,  1366,
-    1367,  1370,  1371,  1374,  1378,  1388,  1396,  1397,  1398,  1399,
-    1403,  1407,  1409,  1413,  1413,  1415,  1420,  1427,  1434,  1444,
-    1451,  1458,  1466,  1476,  1484,  1494,  1502,  1511,  1520,  1530,
-    1538,  1547,  1556,  1566,  1575,  1587,  1592,  1597,  1603,  1610,
-    1617,  1624,  1634,  1641,  1650,  1657,  1663,  1671,  1677,  1685,
-    1686,  1687,  1688,  1689,  1705,  1706,  1707,  1710,  1716,  1727,
-    1733,  1740,  1746,  1762,  1769,  1778,  1785,  1791,  1802,  1805,
-    1811,  1817,  1824,  1830,  1837,  1843,  1849,  1855,  1861,  1867,
-    1873,  1879,  1885,  1891,  1897,  1903,  1909,  1915,  1921,  1929,
-    1930,  1931,  1934,  1942,  1948,  1961,  1962,  1962,  1966,  1967,
-    1970,  1971,  1972,  1976,  1977,  1977,  1981,  1989,  1999,  2000,
-    2001,  2002,  2003,  2006,  2006,  2009,  2010,  2013,  2023,  2036,
-    2037,  2037,  2040,  2041,  2042,  2043,  2046,  2050,  2051,  2052,
-    2053,  2059,  2062,  2068,  2073,  2079,  2083,  2083,  2088,  2089,
-    2091,  2092,  2096,  2097,  2101,  2102,  2103,  2106,  2107,  2108,
-    2109,  2113,  2114,  2118,  2119,  2120,  2121,  2122,  2123,  2124,
-    2125,  2129,  2137,  2146,  2147,  2148,  2152,  2163,  2175,  2186,
-    2201,  2206,  2210,  2211,  2215,  2217,  2219,  2221,  2225,  2226,
-    2232,  2236,  2238,  2240,  2242,  2244,  2249,  2253,  2254,  2258,
-    2267,  2277,  2285,  2293,  2294,  2295,  2296,  2297,  2298,  2300,
-    2302,  2306,  2307,  2310,  2325,  2332,  2347,  2360,  2375,  2388,
-    2389,  2390,  2393,  2394,  2397,  2398,  2399,  2400,  2401,  2402,
-    2403,  2404,  2405,  2407,  2409,  2411,  2413,  2415,  2419,  2420,
-    2423,  2424,  2427,  2428,  2431,  2432,  2433,  2434,  2435,  2436,
-    2437,  2438,  2439,  2440,  2441,  2442,  2443,  2444,  2445,  2446,
-    2447,  2448,  2451,  2452,  2455,  2455,  2465,  2466,  2467,  2468,
-    2469,  2470,  2471,  2472,  2473,  2474,  2475,  2476,  2483,  2484,
-    2485,  2486,  2487,  2488,  2489,  2490,  2491,  2492,  2493,  2494,
-    2495,  2496,  2497,  2498,  2499,  2500,  2501,  2502,  2503,  2506,
-    2507,  2508,  2511,  2512,  2515,  2516,  2517,  2520,  2521,  2522,
-    2526,  2527,  2528,  2529,  2530,  2531,  2532,  2533,  2534,  2535,
-    2536,  2537,  2538,  2539,  2540,  2541,  2542,  2543,  2544,  2545,
-    2546,  2547,  2548,  2549,  2550,  2551,  2552,  2553,  2554,  2555,
-    2556,  2557,  2558,  2559,  2562,  2563,  2566,  2579,  2580,  2581,
-    2585,  2588,  2589,  2590,  2591,  2591,  2593,  2594,  2602,  2606,
-    2612,  2618,  2625,  2632,  2638,  2644,  2651,  2660,  2661,  2664,
-    2665,  2668,  2669,  2670,  2671,  2674,  2675,  2676,  2677,  2678,
-    2679,  2680,  2681,  2682,  2683,  2690,  2691,  2692,  2693,  2694,
-    2695,  2696,  2697,  2700,  2701,  2702,  2702,  2702,  2703,  2703,
-    2703,  2703,  2703,  2703,  2704,  2704,  2704,  2704,  2704,  2704,
-    2704,  2704,  2704,  2705,  2705,  2705,  2705,  2705,  2705,  2705,
-    2706,  2706,  2706,  2706,  2707,  2707,  2707,  2707,  2707,  2707,
-    2707,  2707,  2707,  2707,  2707,  2707,  2708,  2708,  2708,  2708,
-    2708,  2708,  2708,  2708,  2709,  2709,  2709,  2709,  2709,  2709,
-    2709,  2709,  2710,  2710,  2710,  2710,  2710,  2710,  2710,  2710,
-    2710,  2711,  2711,  2711,  2711,  2711,  2711,  2711,  2711,  2712,
-    2712,  2712,  2713,  2713,  2713,  2713,  2713,  2713,  2713,  2713,
-    2714,  2714,  2714,  2714,  2714,  2714,  2714,  2715,  2715,  2715,
-    2715,  2715,  2715,  2715,  2716,  2716,  2716,  2716,  2717,  2717,
-    2717,  2717,  2717,  2717,  2717,  2717,  2717,  2717,  2717,  2717,
-    2718,  2718,  2718,  2718,  2718,  2719,  2726,  2730,  2736,  2742,
-    2748,  2760,  2764,  2770,  2778,  2779,  2782,  2783,  2784,  2785,
-    2786,  2787,  2788,  2795,  2799,  2807,  2808,  2811,  2812,  2813,
-    2816,  2820,  2826,  2835,  2843,  2854,  2858,  2867,  2868,  2872,
-    2873,  2874,  2875,  2876,  2877,  2878,  2879,  2882,  2886,  2892,
-    2902,  2909,  2916,  2924,  2934,  2935,  2936,  2939,  2940
+     590,   593,   602,   620,   629,   649,   649,   709,   718,   725,
+     729,   731,   733,   738,   743,   750,   751,   754,   754,   755,
+     755,   756,   756,   764,   764,   772,   772,   783,   787,   788,
+     789,   790,   791,   792,   793,   794,   798,   798,   800,   800,
+     802,   802,   805,   805,   807,   807,   809,   809,   811,   811,
+     813,   813,   815,   815,   818,   818,   820,   820,   822,   822,
+     824,   824,   826,   826,   828,   828,   830,   830,   832,   832,
+     835,   835,   837,   837,   839,   839,   843,   844,   845,   846,
+     847,   848,   849,   850,   851,   852,   853,   854,   855,   856,
+     857,   858,   859,   860,   861,   862,   863,   864,   865,   866,
+     867,   868,   869,   870,   871,   872,   873,   874,   875,   876,
+     878,   879,   880,   881,   882,   883,   884,   885,   887,   888,
+     889,   890,   891,   892,   893,   894,   895,   896,   897,   898,
+     899,   900,   901,   902,   903,   904,   905,   906,   907,   908,
+     910,   911,   912,   913,   914,   916,   917,   919,   920,   921,
+     923,   924,   925,   926,   933,   940,   947,   951,   955,   959,
+     963,   967,   973,   974,   975,   978,   984,   991,   992,   993,
+     994,   995,   996,   997,   998,   999,  1002,  1004,  1006,  1008,
+    1012,  1020,  1031,  1032,  1035,  1036,  1039,  1047,  1055,  1066,
+    1076,  1077,  1090,  1106,  1107,  1108,  1109,  1112,  1119,  1127,
+    1128,  1129,  1132,  1133,  1136,  1137,  1141,  1142,  1145,  1147,
+    1151,  1152,  1155,  1157,  1161,  1162,  1165,  1166,  1169,  1175,
+    1182,  1191,  1192,  1193,  1194,  1197,  1198,  1199,  1200,  1201,
+    1204,  1205,  1208,  1209,  1212,  1213,  1214,  1215,  1216,  1217,
+    1218,  1219,  1220,  1223,  1224,  1225,  1233,  1239,  1240,  1241,
+    1244,  1245,  1248,  1249,  1253,  1260,  1261,  1262,  1271,  1276,
+    1282,  1290,  1294,  1294,  1334,  1335,  1339,  1341,  1343,  1345,
+    1347,  1351,  1352,  1353,  1356,  1357,  1360,  1361,  1364,  1365,
+    1366,  1369,  1370,  1373,  1374,  1378,  1380,  1382,  1384,  1387,
+    1388,  1391,  1392,  1395,  1399,  1409,  1417,  1418,  1419,  1420,
+    1424,  1428,  1430,  1434,  1434,  1436,  1441,  1448,  1455,  1465,
+    1472,  1479,  1487,  1497,  1505,  1515,  1523,  1532,  1541,  1551,
+    1559,  1568,  1577,  1587,  1596,  1608,  1613,  1618,  1624,  1631,
+    1638,  1645,  1655,  1662,  1671,  1678,  1684,  1692,  1698,  1706,
+    1707,  1708,  1709,  1710,  1726,  1727,  1728,  1731,  1737,  1748,
+    1754,  1761,  1767,  1783,  1790,  1799,  1806,  1812,  1823,  1826,
+    1832,  1838,  1845,  1851,  1858,  1864,  1870,  1876,  1882,  1888,
+    1894,  1900,  1906,  1912,  1918,  1924,  1930,  1936,  1942,  1950,
+    1951,  1952,  1955,  1963,  1969,  1982,  1983,  1983,  1987,  1988,
+    1991,  1992,  1993,  1997,  1998,  1998,  2002,  2010,  2020,  2021,
+    2022,  2023,  2024,  2027,  2027,  2030,  2031,  2034,  2044,  2057,
+    2058,  2058,  2061,  2062,  2063,  2064,  2067,  2071,  2072,  2073,
+    2074,  2080,  2083,  2089,  2094,  2100,  2104,  2104,  2109,  2110,
+    2112,  2113,  2117,  2118,  2122,  2123,  2124,  2127,  2128,  2129,
+    2130,  2134,  2135,  2139,  2140,  2141,  2142,  2143,  2144,  2145,
+    2146,  2150,  2158,  2167,  2168,  2169,  2173,  2184,  2196,  2207,
+    2222,  2227,  2231,  2232,  2236,  2238,  2240,  2242,  2246,  2247,
+    2253,  2257,  2259,  2261,  2263,  2265,  2270,  2274,  2275,  2279,
+    2288,  2298,  2306,  2314,  2315,  2316,  2317,  2318,  2319,  2321,
+    2323,  2327,  2328,  2331,  2346,  2353,  2368,  2381,  2396,  2409,
+    2410,  2411,  2414,  2415,  2418,  2419,  2420,  2421,  2422,  2423,
+    2424,  2425,  2426,  2428,  2430,  2432,  2434,  2436,  2440,  2441,
+    2444,  2445,  2448,  2449,  2452,  2453,  2454,  2455,  2456,  2457,
+    2458,  2459,  2460,  2461,  2462,  2463,  2464,  2465,  2466,  2467,
+    2468,  2469,  2472,  2473,  2476,  2476,  2486,  2487,  2488,  2489,
+    2490,  2491,  2492,  2493,  2494,  2495,  2496,  2497,  2504,  2505,
+    2506,  2507,  2508,  2509,  2510,  2511,  2512,  2513,  2514,  2515,
+    2516,  2517,  2518,  2519,  2520,  2521,  2522,  2523,  2524,  2527,
+    2528,  2529,  2532,  2533,  2536,  2537,  2538,  2541,  2542,  2543,
+    2547,  2548,  2549,  2550,  2551,  2552,  2553,  2554,  2555,  2556,
+    2557,  2558,  2559,  2560,  2561,  2562,  2563,  2564,  2565,  2566,
+    2567,  2568,  2569,  2570,  2571,  2572,  2573,  2574,  2575,  2576,
+    2577,  2578,  2579,  2580,  2583,  2584,  2587,  2600,  2601,  2602,
+    2606,  2609,  2610,  2611,  2612,  2612,  2614,  2615,  2623,  2627,
+    2633,  2639,  2646,  2653,  2659,  2665,  2672,  2681,  2682,  2685,
+    2686,  2689,  2690,  2691,  2692,  2695,  2696,  2697,  2698,  2699,
+    2700,  2701,  2702,  2703,  2704,  2711,  2712,  2713,  2714,  2715,
+    2716,  2717,  2718,  2721,  2722,  2723,  2723,  2723,  2724,  2724,
+    2724,  2724,  2724,  2724,  2725,  2725,  2725,  2725,  2725,  2725,
+    2725,  2725,  2725,  2726,  2726,  2726,  2726,  2726,  2726,  2726,
+    2727,  2727,  2727,  2727,  2728,  2728,  2728,  2728,  2728,  2728,
+    2728,  2728,  2728,  2728,  2728,  2728,  2729,  2729,  2729,  2729,
+    2729,  2729,  2729,  2729,  2730,  2730,  2730,  2730,  2730,  2730,
+    2730,  2730,  2731,  2731,  2731,  2731,  2731,  2731,  2731,  2731,
+    2731,  2732,  2732,  2732,  2732,  2732,  2732,  2732,  2732,  2733,
+    2733,  2733,  2734,  2734,  2734,  2734,  2734,  2734,  2734,  2734,
+    2735,  2735,  2735,  2735,  2735,  2735,  2735,  2736,  2736,  2736,
+    2736,  2736,  2736,  2736,  2737,  2737,  2737,  2737,  2738,  2738,
+    2738,  2738,  2738,  2738,  2738,  2738,  2738,  2738,  2738,  2738,
+    2739,  2739,  2739,  2739,  2739,  2740,  2747,  2751,  2757,  2763,
+    2769,  2781,  2785,  2791,  2799,  2800,  2803,  2804,  2805,  2806,
+    2807,  2808,  2809,  2816,  2820,  2828,  2829,  2832,  2833,  2834,
+    2837,  2841,  2847,  2856,  2864,  2875,  2879,  2888,  2889,  2893,
+    2894,  2895,  2896,  2897,  2898,  2899,  2900,  2903,  2907,  2913,
+    2923,  2930,  2937,  2945,  2955,  2956,  2957,  2960,  2961
 };
 #endif
 
@@ -6508,37 +6508,58 @@ yyreduce:
     {
         g_in_array_literal--;
         char _arrbuf[4096];
+        const int _cap = (int)sizeof(_arrbuf);
         int _p = 0;
-        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '{';
+        /* Safe append macros — bound every write to leave at least one
+         * byte for the terminating NUL. snprintf's return value is
+         * clamped to the remaining capacity before being added to _p,
+         * preventing size-argument underflow on the next call. */
+        #define _ARR_ROOM() ( _cap - 1 - _p )
+        #define _ARR_PUTC(c) do { if (_ARR_ROOM() > 0) _arrbuf[_p++] = (c); } while (0)
+        #define _ARR_PRINTF(...) do {                                    \
+            int _r = _ARR_ROOM();                                        \
+            if (_r > 0) {                                                \
+                int _w = snprintf(_arrbuf + _p, (size_t)_r + 1, __VA_ARGS__); \
+                if (_w < 0) break;                                       \
+                if (_w > _r) _w = _r;                                    \
+                _p += _w;                                                \
+            }                                                            \
+        } while (0)
+
+        _ARR_PUTC('{');
         for (int _i = 0; _i < g_expr.arrListCount; _i++) {
-            if (_i > 0 && _p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = ',';
+            if (_i > 0) _ARR_PUTC(',');
             ExprNode *_en = g_expr.arrListExprs[_i];
             if (!_en) continue;
-            if (_en->type == EXPR_LITERAL_INT)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%d", _en->val.intval);
-            else if (_en->type == EXPR_LITERAL_FLOAT)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%g", _en->val.floatval);
-            else if (_en->type == EXPR_LITERAL_BOOL)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "%s",
-                               _en->val.intval ? "true" : "false");
-            else if (_en->type == EXPR_LITERAL_NULL)
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
-            else if (_en->type == EXPR_LITERAL_STR) {
-                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
-                for (const char *_s = _en->val.strval; *_s && _p < (int)sizeof(_arrbuf) - 2; _s++) {
-                    if (*_s == '"' || *_s == '\\') _arrbuf[_p++] = '\\';
-                    _arrbuf[_p++] = *_s;
+            if (_en->type == EXPR_LITERAL_INT) {
+                _ARR_PRINTF("%d", _en->val.intval);
+            } else if (_en->type == EXPR_LITERAL_FLOAT) {
+                _ARR_PRINTF("%g", _en->val.floatval);
+            } else if (_en->type == EXPR_LITERAL_BOOL) {
+                _ARR_PRINTF("%s", _en->val.intval ? "true" : "false");
+            } else if (_en->type == EXPR_LITERAL_NULL) {
+                _ARR_PRINTF("NULL");
+            } else if (_en->type == EXPR_LITERAL_STR) {
+                _ARR_PUTC('"');
+                for (const char *_s = _en->val.strval; *_s && _ARR_ROOM() > 1; _s++) {
+                    if (*_s == '"' || *_s == '\\') _ARR_PUTC('\\');
+                    _ARR_PUTC(*_s);
                 }
-                if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '"';
+                _ARR_PUTC('"');
             } else {
                 /* Non-literal element (column ref, func call) — defer to
                  * runtime evaluation via expr_make_array_literal. Emit
                  * display placeholder in the INSERT field text. */
-                _p += snprintf(_arrbuf + _p, sizeof(_arrbuf) - _p, "NULL");
+                _ARR_PRINTF("NULL");
             }
         }
-        if (_p < (int)sizeof(_arrbuf) - 1) _arrbuf[_p++] = '}';
+        _ARR_PUTC('}');
         _arrbuf[_p] = '\0';
+
+        #undef _ARR_ROOM
+        #undef _ARR_PUTC
+        #undef _ARR_PRINTF
+
         GetInsertions(_arrbuf);
         emit("ARRLIT %d", (yyvsp[(4) - (5)].intval));
         (yyval.exprval) = expr_make_array_literal(g_expr.arrListExprs, g_expr.arrListCount);
@@ -6546,7 +6567,7 @@ yyreduce:
     break;
 
   case 57:
-#line 689 "parser/evoparser.y"
+#line 710 "parser/evoparser.y"
     {
         GetInsertions("{}");
         emit("ARRLIT 0");
@@ -6555,32 +6576,32 @@ yyreduce:
     break;
 
   case 58:
-#line 698 "parser/evoparser.y"
+#line 719 "parser/evoparser.y"
     { emit("SUBSCRIPT"); (yyval.exprval) = expr_make_subscript((yyvsp[(1) - (4)].exprval), (yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 59:
-#line 704 "parser/evoparser.y"
+#line 725 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(1) - (1)].exprval); ;}
     break;
 
   case 60:
-#line 709 "parser/evoparser.y"
+#line 730 "parser/evoparser.y"
     { emit("CALL 1 ARRAY_LENGTH"); (yyval.exprval) = expr_make_array_length((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 61:
-#line 711 "parser/evoparser.y"
+#line 732 "parser/evoparser.y"
     { emit("CALL 2 ARRAY_LENGTH"); (yyval.exprval) = expr_make_array_length((yyvsp[(3) - (6)].exprval)); /* dim ignored in v1 */ ;}
     break;
 
   case 62:
-#line 713 "parser/evoparser.y"
+#line 734 "parser/evoparser.y"
     { emit("CALL 1 UNNEST"); (yyval.exprval) = expr_make_unnest((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 63:
-#line 718 "parser/evoparser.y"
+#line 739 "parser/evoparser.y"
     {
         emit("CALL 2 EVO_NOTIFY");
         (yyval.exprval) = expr_make_evo_notify((yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval));
@@ -6588,7 +6609,7 @@ yyreduce:
     break;
 
   case 64:
-#line 723 "parser/evoparser.y"
+#line 744 "parser/evoparser.y"
     {
         emit("CALL 0 PG_LISTENING_CHANNELS");
         (yyval.exprval) = expr_make_pg_listening_channels();
@@ -6596,37 +6617,37 @@ yyreduce:
     break;
 
   case 65:
-#line 729 "parser/evoparser.y"
+#line 750 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 67:
-#line 733 "parser/evoparser.y"
+#line 754 "parser/evoparser.y"
     { g_expr.inListCount = 0; ;}
     break;
 
   case 68:
-#line 733 "parser/evoparser.y"
+#line 754 "parser/evoparser.y"
     { emit("ISIN %d", (yyvsp[(5) - (6)].intval)); (yyval.exprval) = expr_make_in((yyvsp[(1) - (6)].exprval), g_expr.inListExprs, g_expr.inListCount); ;}
     break;
 
   case 69:
-#line 734 "parser/evoparser.y"
+#line 755 "parser/evoparser.y"
     { g_expr.inListCount = 0; ;}
     break;
 
   case 70:
-#line 734 "parser/evoparser.y"
+#line 755 "parser/evoparser.y"
     { emit("ISIN %d", (yyvsp[(6) - (7)].intval)); emit("NOT"); (yyval.exprval) = expr_make_not_in((yyvsp[(1) - (7)].exprval), g_expr.inListExprs, g_expr.inListCount); ;}
     break;
 
   case 71:
-#line 735 "parser/evoparser.y"
+#line 756 "parser/evoparser.y"
     { g_subq_mark = g_lex_pos; g_in_subquery = 1; ;}
     break;
 
   case 72:
-#line 736 "parser/evoparser.y"
+#line 757 "parser/evoparser.y"
     {
         g_in_subquery = 0;
         char *sql = evo_extract_subq_sql();
@@ -6637,12 +6658,12 @@ yyreduce:
     break;
 
   case 73:
-#line 743 "parser/evoparser.y"
+#line 764 "parser/evoparser.y"
     { g_subq_mark = g_lex_pos; g_in_subquery = 1; ;}
     break;
 
   case 74:
-#line 744 "parser/evoparser.y"
+#line 765 "parser/evoparser.y"
     {
         g_in_subquery = 0;
         char *sql = evo_extract_subq_sql();
@@ -6653,12 +6674,12 @@ yyreduce:
     break;
 
   case 75:
-#line 751 "parser/evoparser.y"
+#line 772 "parser/evoparser.y"
     { g_subq_mark = g_lex_pos; g_in_subquery = 1; ;}
     break;
 
   case 76:
-#line 752 "parser/evoparser.y"
+#line 773 "parser/evoparser.y"
     {
         g_in_subquery = 0;
         char *sql = evo_extract_subq_sql();
@@ -6669,637 +6690,637 @@ yyreduce:
     break;
 
   case 77:
-#line 762 "parser/evoparser.y"
+#line 783 "parser/evoparser.y"
     { emit("CALL %d %s", (yyvsp[(3) - (4)].intval), (yyvsp[(1) - (4)].strval)); (yyval.exprval) = expr_make_column((yyvsp[(1) - (4)].strval)); free((yyvsp[(1) - (4)].strval)); ;}
     break;
 
   case 78:
-#line 766 "parser/evoparser.y"
+#line 787 "parser/evoparser.y"
     { emit("COUNTALL"); (yyval.exprval) = expr_make_count_star(); ;}
     break;
 
   case 79:
-#line 767 "parser/evoparser.y"
+#line 788 "parser/evoparser.y"
     { emit(" CALL 1 COUNT"); (yyval.exprval) = expr_make_count((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 80:
-#line 768 "parser/evoparser.y"
+#line 789 "parser/evoparser.y"
     { emit(" CALL 1 SUM"); (yyval.exprval) = expr_make_sum((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 81:
-#line 769 "parser/evoparser.y"
+#line 790 "parser/evoparser.y"
     { emit(" CALL 1 AVG"); (yyval.exprval) = expr_make_avg((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 82:
-#line 770 "parser/evoparser.y"
+#line 791 "parser/evoparser.y"
     { emit(" CALL 1 MIN"); (yyval.exprval) = expr_make_min((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 83:
-#line 771 "parser/evoparser.y"
+#line 792 "parser/evoparser.y"
     { emit(" CALL 1 MAX"); (yyval.exprval) = expr_make_max((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 84:
-#line 772 "parser/evoparser.y"
+#line 793 "parser/evoparser.y"
     { emit("CALL 1 GROUP_CONCAT"); ExprNode *e = expr_make_func1(EXPR_GROUP_CONCAT, (yyvsp[(3) - (4)].exprval), "GROUP_CONCAT"); if(e) strcpy(e->val.strval, ","); (yyval.exprval) = e; ;}
     break;
 
   case 85:
-#line 773 "parser/evoparser.y"
+#line 794 "parser/evoparser.y"
     { emit("CALL 2 GROUP_CONCAT"); ExprNode *e = expr_make_func1(EXPR_GROUP_CONCAT, (yyvsp[(3) - (6)].exprval), "GROUP_CONCAT"); if(e) strncpy(e->val.strval, (yyvsp[(5) - (6)].strval), 255); free((yyvsp[(5) - (6)].strval)); (yyval.exprval) = e; ;}
     break;
 
   case 86:
-#line 777 "parser/evoparser.y"
+#line 798 "parser/evoparser.y"
     { AddWindowSpec(EXPR_ROW_NUMBER, NULL); ;}
     break;
 
   case 87:
-#line 778 "parser/evoparser.y"
+#line 799 "parser/evoparser.y"
     { emit("WINDOW ROW_NUMBER"); (yyval.exprval) = expr_make_window(EXPR_ROW_NUMBER, NULL, "ROW_NUMBER()"); ;}
     break;
 
   case 88:
-#line 779 "parser/evoparser.y"
+#line 800 "parser/evoparser.y"
     { AddWindowSpec(EXPR_RANK, NULL); ;}
     break;
 
   case 89:
-#line 780 "parser/evoparser.y"
+#line 801 "parser/evoparser.y"
     { emit("WINDOW RANK"); (yyval.exprval) = expr_make_window(EXPR_RANK, NULL, "RANK()"); ;}
     break;
 
   case 90:
-#line 781 "parser/evoparser.y"
+#line 802 "parser/evoparser.y"
     { AddWindowSpec(EXPR_DENSE_RANK, NULL); ;}
     break;
 
   case 91:
-#line 782 "parser/evoparser.y"
+#line 803 "parser/evoparser.y"
     { emit("WINDOW DENSE_RANK"); (yyval.exprval) = expr_make_window(EXPR_DENSE_RANK, NULL, "DENSE_RANK()"); ;}
     break;
 
   case 92:
-#line 784 "parser/evoparser.y"
+#line 805 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_SUM, (yyvsp[(3) - (6)].exprval)); ;}
     break;
 
   case 93:
-#line 785 "parser/evoparser.y"
+#line 806 "parser/evoparser.y"
     { emit("WINDOW SUM"); (yyval.exprval) = expr_make_window(EXPR_WIN_SUM, (yyvsp[(3) - (10)].exprval), "SUM"); ;}
     break;
 
   case 94:
-#line 786 "parser/evoparser.y"
+#line 807 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_COUNT_STAR, NULL); ;}
     break;
 
   case 95:
-#line 787 "parser/evoparser.y"
+#line 808 "parser/evoparser.y"
     { emit("WINDOW COUNT_STAR"); (yyval.exprval) = expr_make_window(EXPR_WIN_COUNT_STAR, NULL, "COUNT"); ;}
     break;
 
   case 96:
-#line 788 "parser/evoparser.y"
+#line 809 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_COUNT, (yyvsp[(3) - (6)].exprval)); ;}
     break;
 
   case 97:
-#line 789 "parser/evoparser.y"
+#line 810 "parser/evoparser.y"
     { emit("WINDOW COUNT"); (yyval.exprval) = expr_make_window(EXPR_WIN_COUNT, (yyvsp[(3) - (10)].exprval), "COUNT"); ;}
     break;
 
   case 98:
-#line 790 "parser/evoparser.y"
+#line 811 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_AVG, (yyvsp[(3) - (6)].exprval)); ;}
     break;
 
   case 99:
-#line 791 "parser/evoparser.y"
+#line 812 "parser/evoparser.y"
     { emit("WINDOW AVG"); (yyval.exprval) = expr_make_window(EXPR_WIN_AVG, (yyvsp[(3) - (10)].exprval), "AVG"); ;}
     break;
 
   case 100:
-#line 792 "parser/evoparser.y"
+#line 813 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_MIN, (yyvsp[(3) - (6)].exprval)); ;}
     break;
 
   case 101:
-#line 793 "parser/evoparser.y"
+#line 814 "parser/evoparser.y"
     { emit("WINDOW MIN"); (yyval.exprval) = expr_make_window(EXPR_WIN_MIN, (yyvsp[(3) - (10)].exprval), "MIN"); ;}
     break;
 
   case 102:
-#line 794 "parser/evoparser.y"
+#line 815 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_MAX, (yyvsp[(3) - (6)].exprval)); ;}
     break;
 
   case 103:
-#line 795 "parser/evoparser.y"
+#line 816 "parser/evoparser.y"
     { emit("WINDOW MAX"); (yyval.exprval) = expr_make_window(EXPR_WIN_MAX, (yyvsp[(3) - (10)].exprval), "MAX"); ;}
     break;
 
   case 104:
-#line 797 "parser/evoparser.y"
+#line 818 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LEAD, (yyvsp[(3) - (6)].exprval)); ;}
     break;
 
   case 105:
-#line 798 "parser/evoparser.y"
+#line 819 "parser/evoparser.y"
     { emit("WINDOW LEAD"); (yyval.exprval) = expr_make_window(EXPR_WIN_LEAD, (yyvsp[(3) - (10)].exprval), "LEAD"); ;}
     break;
 
   case 106:
-#line 799 "parser/evoparser.y"
+#line 820 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LEAD, (yyvsp[(3) - (8)].exprval)); SetWindowOffset((yyvsp[(5) - (8)].intval)); ;}
     break;
 
   case 107:
-#line 800 "parser/evoparser.y"
+#line 821 "parser/evoparser.y"
     { emit("WINDOW LEAD"); (yyval.exprval) = expr_make_window(EXPR_WIN_LEAD, (yyvsp[(3) - (12)].exprval), "LEAD"); ;}
     break;
 
   case 108:
-#line 801 "parser/evoparser.y"
+#line 822 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LEAD, (yyvsp[(3) - (10)].exprval)); SetWindowOffset((yyvsp[(5) - (10)].intval)); SetWindowDefault((yyvsp[(7) - (10)].strval)); free((yyvsp[(7) - (10)].strval)); ;}
     break;
 
   case 109:
-#line 802 "parser/evoparser.y"
+#line 823 "parser/evoparser.y"
     { emit("WINDOW LEAD"); (yyval.exprval) = expr_make_window(EXPR_WIN_LEAD, (yyvsp[(3) - (14)].exprval), "LEAD"); ;}
     break;
 
   case 110:
-#line 803 "parser/evoparser.y"
+#line 824 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LEAD, (yyvsp[(3) - (10)].exprval)); SetWindowOffset((yyvsp[(5) - (10)].intval)); char _b[32]; snprintf(_b,sizeof(_b),"%d",(yyvsp[(7) - (10)].intval)); SetWindowDefault(_b); ;}
     break;
 
   case 111:
-#line 804 "parser/evoparser.y"
+#line 825 "parser/evoparser.y"
     { emit("WINDOW LEAD"); (yyval.exprval) = expr_make_window(EXPR_WIN_LEAD, (yyvsp[(3) - (14)].exprval), "LEAD"); ;}
     break;
 
   case 112:
-#line 805 "parser/evoparser.y"
+#line 826 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LAG, (yyvsp[(3) - (6)].exprval)); ;}
     break;
 
   case 113:
-#line 806 "parser/evoparser.y"
+#line 827 "parser/evoparser.y"
     { emit("WINDOW LAG"); (yyval.exprval) = expr_make_window(EXPR_WIN_LAG, (yyvsp[(3) - (10)].exprval), "LAG"); ;}
     break;
 
   case 114:
-#line 807 "parser/evoparser.y"
+#line 828 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LAG, (yyvsp[(3) - (8)].exprval)); SetWindowOffset((yyvsp[(5) - (8)].intval)); ;}
     break;
 
   case 115:
-#line 808 "parser/evoparser.y"
+#line 829 "parser/evoparser.y"
     { emit("WINDOW LAG"); (yyval.exprval) = expr_make_window(EXPR_WIN_LAG, (yyvsp[(3) - (12)].exprval), "LAG"); ;}
     break;
 
   case 116:
-#line 809 "parser/evoparser.y"
+#line 830 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LAG, (yyvsp[(3) - (10)].exprval)); SetWindowOffset((yyvsp[(5) - (10)].intval)); SetWindowDefault((yyvsp[(7) - (10)].strval)); free((yyvsp[(7) - (10)].strval)); ;}
     break;
 
   case 117:
-#line 810 "parser/evoparser.y"
+#line 831 "parser/evoparser.y"
     { emit("WINDOW LAG"); (yyval.exprval) = expr_make_window(EXPR_WIN_LAG, (yyvsp[(3) - (14)].exprval), "LAG"); ;}
     break;
 
   case 118:
-#line 811 "parser/evoparser.y"
+#line 832 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_LAG, (yyvsp[(3) - (10)].exprval)); SetWindowOffset((yyvsp[(5) - (10)].intval)); char _b2[32]; snprintf(_b2,sizeof(_b2),"%d",(yyvsp[(7) - (10)].intval)); SetWindowDefault(_b2); ;}
     break;
 
   case 119:
-#line 812 "parser/evoparser.y"
+#line 833 "parser/evoparser.y"
     { emit("WINDOW LAG"); (yyval.exprval) = expr_make_window(EXPR_WIN_LAG, (yyvsp[(3) - (14)].exprval), "LAG"); ;}
     break;
 
   case 120:
-#line 814 "parser/evoparser.y"
+#line 835 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_NTILE, NULL); SetWindowOffset((yyvsp[(3) - (6)].intval)); ;}
     break;
 
   case 121:
-#line 815 "parser/evoparser.y"
+#line 836 "parser/evoparser.y"
     { emit("WINDOW NTILE"); ExprNode *e = expr_make_window(EXPR_WIN_NTILE, NULL, "NTILE()"); if(e) e->val.intval = (yyvsp[(3) - (10)].intval); (yyval.exprval) = e; ;}
     break;
 
   case 122:
-#line 816 "parser/evoparser.y"
+#line 837 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_PERCENT_RANK, NULL); ;}
     break;
 
   case 123:
-#line 817 "parser/evoparser.y"
+#line 838 "parser/evoparser.y"
     { emit("WINDOW PERCENT_RANK"); (yyval.exprval) = expr_make_window(EXPR_WIN_PERCENT_RANK, NULL, "PERCENT_RANK()"); ;}
     break;
 
   case 124:
-#line 818 "parser/evoparser.y"
+#line 839 "parser/evoparser.y"
     { AddWindowSpec(EXPR_WIN_CUME_DIST, NULL); ;}
     break;
 
   case 125:
-#line 819 "parser/evoparser.y"
+#line 840 "parser/evoparser.y"
     { emit("WINDOW CUME_DIST"); (yyval.exprval) = expr_make_window(EXPR_WIN_CUME_DIST, NULL, "CUME_DIST()"); ;}
     break;
 
   case 126:
-#line 822 "parser/evoparser.y"
+#line 843 "parser/evoparser.y"
     { emit("CALL 3 SUBSTR"); (yyval.exprval) = expr_make_substring((yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval)); ;}
     break;
 
   case 127:
-#line 823 "parser/evoparser.y"
+#line 844 "parser/evoparser.y"
     { emit("CALL 2 SUBSTR"); (yyval.exprval) = expr_make_substring((yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), NULL); ;}
     break;
 
   case 128:
-#line 824 "parser/evoparser.y"
+#line 845 "parser/evoparser.y"
     { emit("CALL 2 SUBSTR"); (yyval.exprval) = expr_make_substring((yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), NULL); ;}
     break;
 
   case 129:
-#line 825 "parser/evoparser.y"
+#line 846 "parser/evoparser.y"
     { emit("CALL 3 SUBSTR"); (yyval.exprval) = expr_make_substring((yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval)); ;}
     break;
 
   case 130:
-#line 826 "parser/evoparser.y"
+#line 847 "parser/evoparser.y"
     { emit("CALL 1 TRIM"); (yyval.exprval) = expr_make_trim(3, NULL, (yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 131:
-#line 827 "parser/evoparser.y"
+#line 848 "parser/evoparser.y"
     { emit("CALL 3 TRIM"); (yyval.exprval) = expr_make_trim((yyvsp[(3) - (7)].intval), (yyvsp[(4) - (7)].exprval), (yyvsp[(6) - (7)].exprval)); ;}
     break;
 
   case 132:
-#line 828 "parser/evoparser.y"
+#line 849 "parser/evoparser.y"
     { emit("CALL 2 TRIM"); (yyval.exprval) = expr_make_trim((yyvsp[(3) - (6)].intval), NULL, (yyvsp[(5) - (6)].exprval)); ;}
     break;
 
   case 133:
-#line 829 "parser/evoparser.y"
+#line 850 "parser/evoparser.y"
     { emit("CALL 1 UPPER"); (yyval.exprval) = expr_make_upper((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 134:
-#line 830 "parser/evoparser.y"
+#line 851 "parser/evoparser.y"
     { emit("CALL 1 LOWER"); (yyval.exprval) = expr_make_lower((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 135:
-#line 831 "parser/evoparser.y"
+#line 852 "parser/evoparser.y"
     { emit("CALL 1 LENGTH"); (yyval.exprval) = expr_make_length((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 136:
-#line 832 "parser/evoparser.y"
+#line 853 "parser/evoparser.y"
     { emit("CALL 2 CONCAT"); (yyval.exprval) = expr_make_concat((yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval)); ;}
     break;
 
   case 137:
-#line 833 "parser/evoparser.y"
+#line 854 "parser/evoparser.y"
     { emit("CALL 3 REPLACE"); (yyval.exprval) = expr_make_replace((yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval)); ;}
     break;
 
   case 138:
-#line 834 "parser/evoparser.y"
+#line 855 "parser/evoparser.y"
     { emit("CALL 2 COALESCE"); (yyval.exprval) = expr_make_coalesce((yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval)); ;}
     break;
 
   case 139:
-#line 835 "parser/evoparser.y"
+#line 856 "parser/evoparser.y"
     { emit("CALL 2 LEFT"); (yyval.exprval) = expr_make_func2(EXPR_LEFT, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "LEFT"); ;}
     break;
 
   case 140:
-#line 836 "parser/evoparser.y"
+#line 857 "parser/evoparser.y"
     { emit("CALL 2 RIGHT"); (yyval.exprval) = expr_make_func2(EXPR_RIGHT, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "RIGHT"); ;}
     break;
 
   case 141:
-#line 837 "parser/evoparser.y"
+#line 858 "parser/evoparser.y"
     { emit("CALL 3 LPAD"); (yyval.exprval) = expr_make_func3(EXPR_LPAD, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "LPAD"); ;}
     break;
 
   case 142:
-#line 838 "parser/evoparser.y"
+#line 859 "parser/evoparser.y"
     { emit("CALL 3 RPAD"); (yyval.exprval) = expr_make_func3(EXPR_RPAD, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "RPAD"); ;}
     break;
 
   case 143:
-#line 839 "parser/evoparser.y"
+#line 860 "parser/evoparser.y"
     { emit("CALL 1 REVERSE"); (yyval.exprval) = expr_make_func1(EXPR_REVERSE, (yyvsp[(3) - (4)].exprval), "REVERSE"); ;}
     break;
 
   case 144:
-#line 840 "parser/evoparser.y"
+#line 861 "parser/evoparser.y"
     { emit("CALL 2 REPEAT"); (yyval.exprval) = expr_make_func2(EXPR_REPEAT, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "REPEAT"); ;}
     break;
 
   case 145:
-#line 841 "parser/evoparser.y"
+#line 862 "parser/evoparser.y"
     { emit("CALL 2 INSTR"); (yyval.exprval) = expr_make_func2(EXPR_INSTR, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "INSTR"); ;}
     break;
 
   case 146:
-#line 842 "parser/evoparser.y"
+#line 863 "parser/evoparser.y"
     { emit("CALL 2 LOCATE"); (yyval.exprval) = expr_make_func2(EXPR_LOCATE, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "LOCATE"); ;}
     break;
 
   case 147:
-#line 843 "parser/evoparser.y"
+#line 864 "parser/evoparser.y"
     { emit("CALL 1 ABS"); (yyval.exprval) = expr_make_func1(EXPR_ABS, (yyvsp[(3) - (4)].exprval), "ABS"); ;}
     break;
 
   case 148:
-#line 844 "parser/evoparser.y"
+#line 865 "parser/evoparser.y"
     { emit("CALL 1 CEIL"); (yyval.exprval) = expr_make_func1(EXPR_CEIL, (yyvsp[(3) - (4)].exprval), "CEIL"); ;}
     break;
 
   case 149:
-#line 845 "parser/evoparser.y"
+#line 866 "parser/evoparser.y"
     { emit("CALL 1 FLOOR"); (yyval.exprval) = expr_make_func1(EXPR_FLOOR, (yyvsp[(3) - (4)].exprval), "FLOOR"); ;}
     break;
 
   case 150:
-#line 846 "parser/evoparser.y"
+#line 867 "parser/evoparser.y"
     { emit("CALL 2 ROUND"); (yyval.exprval) = expr_make_func2(EXPR_ROUND, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "ROUND"); ;}
     break;
 
   case 151:
-#line 847 "parser/evoparser.y"
+#line 868 "parser/evoparser.y"
     { emit("CALL 1 ROUND"); (yyval.exprval) = expr_make_func1(EXPR_ROUND, (yyvsp[(3) - (4)].exprval), "ROUND"); ;}
     break;
 
   case 152:
-#line 848 "parser/evoparser.y"
+#line 869 "parser/evoparser.y"
     { emit("CALL 2 POWER"); (yyval.exprval) = expr_make_func2(EXPR_POWER, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "POWER"); ;}
     break;
 
   case 153:
-#line 849 "parser/evoparser.y"
+#line 870 "parser/evoparser.y"
     { emit("CALL 1 SQRT"); (yyval.exprval) = expr_make_func1(EXPR_SQRT, (yyvsp[(3) - (4)].exprval), "SQRT"); ;}
     break;
 
   case 154:
-#line 850 "parser/evoparser.y"
+#line 871 "parser/evoparser.y"
     { emit("CALL 2 MOD"); (yyval.exprval) = expr_make_func2(EXPR_MODFN, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "MOD"); ;}
     break;
 
   case 155:
-#line 851 "parser/evoparser.y"
+#line 872 "parser/evoparser.y"
     { emit("CALL 0 RAND"); (yyval.exprval) = expr_make_func0(EXPR_RAND, "RAND"); ;}
     break;
 
   case 156:
-#line 852 "parser/evoparser.y"
+#line 873 "parser/evoparser.y"
     { emit("CALL 1 LOG"); (yyval.exprval) = expr_make_func1(EXPR_LOG, (yyvsp[(3) - (4)].exprval), "LOG"); ;}
     break;
 
   case 157:
-#line 853 "parser/evoparser.y"
+#line 874 "parser/evoparser.y"
     { emit("CALL 1 LOG10"); (yyval.exprval) = expr_make_func1(EXPR_LOG10, (yyvsp[(3) - (4)].exprval), "LOG10"); ;}
     break;
 
   case 158:
-#line 854 "parser/evoparser.y"
+#line 875 "parser/evoparser.y"
     { emit("CALL 1 SIGN"); (yyval.exprval) = expr_make_func1(EXPR_SIGN, (yyvsp[(3) - (4)].exprval), "SIGN"); ;}
     break;
 
   case 159:
-#line 855 "parser/evoparser.y"
+#line 876 "parser/evoparser.y"
     { emit("CALL 0 PI"); (yyval.exprval) = expr_make_func0(EXPR_PI, "PI"); ;}
     break;
 
   case 160:
-#line 857 "parser/evoparser.y"
+#line 878 "parser/evoparser.y"
     { emit("CALL 0 NOW"); (yyval.exprval) = expr_make_func0(EXPR_NOW, "NOW"); ;}
     break;
 
   case 161:
-#line 858 "parser/evoparser.y"
+#line 879 "parser/evoparser.y"
     { emit("CALL 2 DATEDIFF"); (yyval.exprval) = expr_make_func2(EXPR_DATEDIFF, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "DATEDIFF"); ;}
     break;
 
   case 162:
-#line 859 "parser/evoparser.y"
+#line 880 "parser/evoparser.y"
     { emit("CALL 1 YEAR"); (yyval.exprval) = expr_make_func1(EXPR_YEAR, (yyvsp[(3) - (4)].exprval), "YEAR"); ;}
     break;
 
   case 163:
-#line 860 "parser/evoparser.y"
+#line 881 "parser/evoparser.y"
     { emit("CALL 1 MONTH"); (yyval.exprval) = expr_make_func1(EXPR_MONTH, (yyvsp[(3) - (4)].exprval), "MONTH"); ;}
     break;
 
   case 164:
-#line 861 "parser/evoparser.y"
+#line 882 "parser/evoparser.y"
     { emit("CALL 1 DAY"); (yyval.exprval) = expr_make_func1(EXPR_DAY, (yyvsp[(3) - (4)].exprval), "DAY"); ;}
     break;
 
   case 165:
-#line 862 "parser/evoparser.y"
+#line 883 "parser/evoparser.y"
     { emit("CALL 1 HOUR"); (yyval.exprval) = expr_make_func1(EXPR_HOUR, (yyvsp[(3) - (4)].exprval), "HOUR"); ;}
     break;
 
   case 166:
-#line 863 "parser/evoparser.y"
+#line 884 "parser/evoparser.y"
     { emit("CALL 1 MINUTE"); (yyval.exprval) = expr_make_func1(EXPR_MINUTE, (yyvsp[(3) - (4)].exprval), "MINUTE"); ;}
     break;
 
   case 167:
-#line 864 "parser/evoparser.y"
+#line 885 "parser/evoparser.y"
     { emit("CALL 1 SECOND"); (yyval.exprval) = expr_make_func1(EXPR_SECOND, (yyvsp[(3) - (4)].exprval), "SECOND"); ;}
     break;
 
   case 168:
-#line 866 "parser/evoparser.y"
+#line 887 "parser/evoparser.y"
     { emit("CALL 2 JSON_EXTRACT"); (yyval.exprval) = expr_make_func2(EXPR_JSON_EXTRACT, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "JSON_EXTRACT"); ;}
     break;
 
   case 169:
-#line 867 "parser/evoparser.y"
+#line 888 "parser/evoparser.y"
     { emit("CALL 1 JSON_UNQUOTE"); (yyval.exprval) = expr_make_func1(EXPR_JSON_UNQUOTE, (yyvsp[(3) - (4)].exprval), "JSON_UNQUOTE"); ;}
     break;
 
   case 170:
-#line 868 "parser/evoparser.y"
+#line 889 "parser/evoparser.y"
     { emit("CALL 1 JSON_TYPE"); (yyval.exprval) = expr_make_func1(EXPR_JSON_TYPE, (yyvsp[(3) - (4)].exprval), "JSON_TYPE"); ;}
     break;
 
   case 171:
-#line 869 "parser/evoparser.y"
+#line 890 "parser/evoparser.y"
     { emit("CALL 1 JSON_LENGTH"); (yyval.exprval) = expr_make_func1(EXPR_JSON_LENGTH, (yyvsp[(3) - (4)].exprval), "JSON_LENGTH"); ;}
     break;
 
   case 172:
-#line 870 "parser/evoparser.y"
+#line 891 "parser/evoparser.y"
     { emit("CALL 1 JSON_DEPTH"); (yyval.exprval) = expr_make_func1(EXPR_JSON_DEPTH, (yyvsp[(3) - (4)].exprval), "JSON_DEPTH"); ;}
     break;
 
   case 173:
-#line 871 "parser/evoparser.y"
+#line 892 "parser/evoparser.y"
     { emit("CALL 1 JSON_VALID"); (yyval.exprval) = expr_make_func1(EXPR_JSON_VALID, (yyvsp[(3) - (4)].exprval), "JSON_VALID"); ;}
     break;
 
   case 174:
-#line 872 "parser/evoparser.y"
+#line 893 "parser/evoparser.y"
     { emit("CALL 1 JSON_KEYS"); (yyval.exprval) = expr_make_func1(EXPR_JSON_KEYS, (yyvsp[(3) - (4)].exprval), "JSON_KEYS"); ;}
     break;
 
   case 175:
-#line 873 "parser/evoparser.y"
+#line 894 "parser/evoparser.y"
     { emit("CALL 1 JSON_PRETTY"); (yyval.exprval) = expr_make_func1(EXPR_JSON_PRETTY, (yyvsp[(3) - (4)].exprval), "JSON_PRETTY"); ;}
     break;
 
   case 176:
-#line 874 "parser/evoparser.y"
+#line 895 "parser/evoparser.y"
     { emit("CALL 1 JSON_QUOTE"); (yyval.exprval) = expr_make_func1(EXPR_JSON_QUOTE, (yyvsp[(3) - (4)].exprval), "JSON_QUOTE"); ;}
     break;
 
   case 177:
-#line 875 "parser/evoparser.y"
+#line 896 "parser/evoparser.y"
     { emit("CALL 3 JSON_SET"); (yyval.exprval) = expr_make_func3(EXPR_JSON_SET, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "JSON_SET"); ;}
     break;
 
   case 178:
-#line 876 "parser/evoparser.y"
+#line 897 "parser/evoparser.y"
     { emit("CALL 3 JSON_INSERT"); (yyval.exprval) = expr_make_func3(EXPR_JSON_INSERT, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "JSON_INSERT"); ;}
     break;
 
   case 179:
-#line 877 "parser/evoparser.y"
+#line 898 "parser/evoparser.y"
     { emit("CALL 3 JSON_REPLACE"); (yyval.exprval) = expr_make_func3(EXPR_JSON_REPLACE, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "JSON_REPLACE"); ;}
     break;
 
   case 180:
-#line 878 "parser/evoparser.y"
+#line 899 "parser/evoparser.y"
     { emit("CALL 2 JSON_REMOVE"); (yyval.exprval) = expr_make_func2(EXPR_JSON_REMOVE, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "JSON_REMOVE"); ;}
     break;
 
   case 181:
-#line 879 "parser/evoparser.y"
+#line 900 "parser/evoparser.y"
     { emit("CALL 2 JSON_CONTAINS"); (yyval.exprval) = expr_make_func2(EXPR_JSON_CONTAINS, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "JSON_CONTAINS"); ;}
     break;
 
   case 182:
-#line 880 "parser/evoparser.y"
+#line 901 "parser/evoparser.y"
     { emit("CALL 3 JSON_CONTAINS_PATH"); (yyval.exprval) = expr_make_func3(EXPR_JSON_CONTAINS_PATH, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "JSON_CONTAINS_PATH"); ;}
     break;
 
   case 183:
-#line 881 "parser/evoparser.y"
+#line 902 "parser/evoparser.y"
     { emit("CALL 3 JSON_SEARCH"); (yyval.exprval) = expr_make_func3(EXPR_JSON_SEARCH, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "JSON_SEARCH"); ;}
     break;
 
   case 184:
-#line 882 "parser/evoparser.y"
+#line 903 "parser/evoparser.y"
     { emit("CALL 2 JSON_OBJECT"); (yyval.exprval) = expr_make_func2(EXPR_JSON_OBJECT, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "JSON_OBJECT"); ;}
     break;
 
   case 185:
-#line 883 "parser/evoparser.y"
+#line 904 "parser/evoparser.y"
     { emit("CALL 4 JSON_OBJECT"); ExprNode *p1 = expr_make_func2(EXPR_JSON_OBJECT, (yyvsp[(3) - (10)].exprval), (yyvsp[(5) - (10)].exprval), "JSON_OBJECT"); ExprNode *p2 = expr_make_func2(EXPR_JSON_OBJECT, (yyvsp[(7) - (10)].exprval), (yyvsp[(9) - (10)].exprval), "JSON_OBJECT"); (yyval.exprval) = expr_make_func2(EXPR_JSON_OBJECT, p1, p2, "JSON_OBJECT_MERGE"); ;}
     break;
 
   case 186:
-#line 884 "parser/evoparser.y"
+#line 905 "parser/evoparser.y"
     { emit("CALL 1 JSON_ARRAY"); (yyval.exprval) = expr_make_func1(EXPR_JSON_ARRAY, (yyvsp[(3) - (4)].exprval), "JSON_ARRAY"); ;}
     break;
 
   case 187:
-#line 885 "parser/evoparser.y"
+#line 906 "parser/evoparser.y"
     { emit("CALL 2 JSON_ARRAY"); (yyval.exprval) = expr_make_func2(EXPR_JSON_ARRAY, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "JSON_ARRAY"); ;}
     break;
 
   case 188:
-#line 886 "parser/evoparser.y"
+#line 907 "parser/evoparser.y"
     { emit("CALL 3 JSON_ARRAY"); (yyval.exprval) = expr_make_func3(EXPR_JSON_ARRAY, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "JSON_ARRAY"); ;}
     break;
 
   case 189:
-#line 887 "parser/evoparser.y"
+#line 908 "parser/evoparser.y"
     { emit("CALL 1 JSON_ARRAYAGG"); (yyval.exprval) = expr_make_func1(EXPR_JSON_ARRAYAGG, (yyvsp[(3) - (4)].exprval), "JSON_ARRAYAGG"); ;}
     break;
 
   case 190:
-#line 889 "parser/evoparser.y"
+#line 910 "parser/evoparser.y"
     { emit("CALL 1 NEXTVAL"); (yyval.exprval) = expr_make_func1(EXPR_NEXTVAL, (yyvsp[(3) - (4)].exprval), "NEXTVAL"); ;}
     break;
 
   case 191:
-#line 890 "parser/evoparser.y"
+#line 911 "parser/evoparser.y"
     { emit("CALL 1 CURRVAL"); (yyval.exprval) = expr_make_func1(EXPR_CURRVAL, (yyvsp[(3) - (4)].exprval), "CURRVAL"); ;}
     break;
 
   case 192:
-#line 891 "parser/evoparser.y"
+#line 912 "parser/evoparser.y"
     { emit("CALL 2 SETVAL"); (yyval.exprval) = expr_make_func2(EXPR_SETVAL, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "SETVAL"); ;}
     break;
 
   case 193:
-#line 892 "parser/evoparser.y"
+#line 913 "parser/evoparser.y"
     { emit("CALL 3 SETVAL"); (yyval.exprval) = expr_make_func3(EXPR_SETVAL, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "SETVAL"); ;}
     break;
 
   case 194:
-#line 893 "parser/evoparser.y"
+#line 914 "parser/evoparser.y"
     { emit("CALL 0 LASTVAL"); (yyval.exprval) = expr_make_func0(EXPR_LASTVAL, "LASTVAL"); ;}
     break;
 
   case 195:
-#line 895 "parser/evoparser.y"
+#line 916 "parser/evoparser.y"
     { emit("CAST %d", (yyvsp[(5) - (6)].intval)); ExprNode *e = expr_make_func1(EXPR_CAST, (yyvsp[(3) - (6)].exprval), "CAST"); if(e) e->val.intval = (yyvsp[(5) - (6)].intval); (yyval.exprval) = e; ;}
     break;
 
   case 196:
-#line 896 "parser/evoparser.y"
+#line 917 "parser/evoparser.y"
     { emit("CONVERT %d", (yyvsp[(5) - (6)].intval)); ExprNode *e = expr_make_func1(EXPR_CAST, (yyvsp[(3) - (6)].exprval), "CONVERT"); if(e) e->val.intval = (yyvsp[(5) - (6)].intval); (yyval.exprval) = e; ;}
     break;
 
   case 197:
-#line 898 "parser/evoparser.y"
+#line 919 "parser/evoparser.y"
     { emit("CALL 2 NULLIF"); (yyval.exprval) = expr_make_func2(EXPR_NULLIF, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "NULLIF"); ;}
     break;
 
   case 198:
-#line 899 "parser/evoparser.y"
+#line 920 "parser/evoparser.y"
     { emit("CALL 2 IFNULL"); (yyval.exprval) = expr_make_func2(EXPR_IFNULL, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), "IFNULL"); ;}
     break;
 
   case 199:
-#line 900 "parser/evoparser.y"
+#line 921 "parser/evoparser.y"
     { emit("CALL 3 IF"); (yyval.exprval) = expr_make_func3(EXPR_IF, (yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval), (yyvsp[(7) - (8)].exprval), "IF"); ;}
     break;
 
   case 200:
-#line 902 "parser/evoparser.y"
+#line 923 "parser/evoparser.y"
     { emit("ISUNKNOWN"); (yyval.exprval) = expr_make_is_null((yyvsp[(1) - (3)].exprval)); ;}
     break;
 
   case 201:
-#line 903 "parser/evoparser.y"
+#line 924 "parser/evoparser.y"
     { emit("CALL 3 CONCAT"); (yyval.exprval) = expr_make_concat(expr_make_concat((yyvsp[(3) - (8)].exprval), (yyvsp[(5) - (8)].exprval)), (yyvsp[(7) - (8)].exprval)); ;}
     break;
 
   case 202:
-#line 904 "parser/evoparser.y"
+#line 925 "parser/evoparser.y"
     { emit("CALL 4 CONCAT"); (yyval.exprval) = expr_make_concat(expr_make_concat(expr_make_concat((yyvsp[(3) - (10)].exprval), (yyvsp[(5) - (10)].exprval)), (yyvsp[(7) - (10)].exprval)), (yyvsp[(9) - (10)].exprval)); ;}
     break;
 
   case 203:
-#line 905 "parser/evoparser.y"
+#line 926 "parser/evoparser.y"
     {
                                                         emit("CALL 0 GEN_RANDOM_UUID");
                                                         (yyval.exprval) = expr_make_gen_random_uuid();
@@ -7310,7 +7331,7 @@ yyreduce:
     break;
 
   case 204:
-#line 912 "parser/evoparser.y"
+#line 933 "parser/evoparser.y"
     {
                                                         emit("CALL 0 GEN_RANDOM_UUID_V7");
                                                         (yyval.exprval) = expr_make_gen_random_uuid_v7();
@@ -7321,7 +7342,7 @@ yyreduce:
     break;
 
   case 205:
-#line 919 "parser/evoparser.y"
+#line 940 "parser/evoparser.y"
     {
                                                         emit("CALL 0 SNOWFLAKE_ID");
                                                         (yyval.exprval) = expr_make_snowflake_id();
@@ -7332,7 +7353,7 @@ yyreduce:
     break;
 
   case 206:
-#line 926 "parser/evoparser.y"
+#line 947 "parser/evoparser.y"
     {
                                                         emit("CALL 0 LAST_INSERT_ID");
                                                         (yyval.exprval) = expr_make_last_insert_id();
@@ -7340,7 +7361,7 @@ yyreduce:
     break;
 
   case 207:
-#line 930 "parser/evoparser.y"
+#line 951 "parser/evoparser.y"
     {
                                                         emit("CALL 0 SCOPE_IDENTITY");
                                                         (yyval.exprval) = expr_make_last_insert_id();
@@ -7348,7 +7369,7 @@ yyreduce:
     break;
 
   case 208:
-#line 934 "parser/evoparser.y"
+#line 955 "parser/evoparser.y"
     {
                                                         emit("CALL 0 AT_IDENTITY");
                                                         (yyval.exprval) = expr_make_last_insert_id();
@@ -7356,7 +7377,7 @@ yyreduce:
     break;
 
   case 209:
-#line 938 "parser/evoparser.y"
+#line 959 "parser/evoparser.y"
     {
                                                         emit("CALL 0 AT_LAST_INSERT_ID");
                                                         (yyval.exprval) = expr_make_last_insert_id();
@@ -7364,7 +7385,7 @@ yyreduce:
     break;
 
   case 210:
-#line 942 "parser/evoparser.y"
+#line 963 "parser/evoparser.y"
     {
                                                         emit("CALL 1 EVO_SLEEP");
                                                         (yyval.exprval) = expr_make_evo_sleep((yyvsp[(3) - (4)].exprval));
@@ -7372,7 +7393,7 @@ yyreduce:
     break;
 
   case 211:
-#line 946 "parser/evoparser.y"
+#line 967 "parser/evoparser.y"
     {
                                                         emit("CALL 2 EVO_JITTER");
                                                         (yyval.exprval) = expr_make_evo_jitter((yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval));
@@ -7380,22 +7401,22 @@ yyreduce:
     break;
 
   case 212:
-#line 952 "parser/evoparser.y"
+#line 973 "parser/evoparser.y"
     { emit("NUMBER 1"); (yyval.intval) = 1; ;}
     break;
 
   case 213:
-#line 953 "parser/evoparser.y"
+#line 974 "parser/evoparser.y"
     { emit("NUMBER 2"); (yyval.intval) = 2; ;}
     break;
 
   case 214:
-#line 954 "parser/evoparser.y"
+#line 975 "parser/evoparser.y"
     { emit("NUMBER 3"); (yyval.intval) = 3; ;}
     break;
 
   case 215:
-#line 958 "parser/evoparser.y"
+#line 979 "parser/evoparser.y"
     {
         emit("CALL 3 DATE_ADD");
         /* $5 = unit code (encoded as literal), interval value is in $5's left child */
@@ -7404,7 +7425,7 @@ yyreduce:
     break;
 
   case 216:
-#line 964 "parser/evoparser.y"
+#line 985 "parser/evoparser.y"
     {
         emit("CALL 3 DATE_SUB");
         (yyval.exprval) = expr_make_func3(EXPR_DATE_SUB, (yyvsp[(3) - (6)].exprval), (yyvsp[(5) - (6)].exprval), NULL, "DATE_SUB");
@@ -7412,72 +7433,72 @@ yyreduce:
     break;
 
   case 217:
-#line 970 "parser/evoparser.y"
+#line 991 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "YEAR"); ;}
     break;
 
   case 218:
-#line 971 "parser/evoparser.y"
+#line 992 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "DAY"); ;}
     break;
 
   case 219:
-#line 972 "parser/evoparser.y"
+#line 993 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "DAY"); ;}
     break;
 
   case 220:
-#line 973 "parser/evoparser.y"
+#line 994 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "DAY"); ;}
     break;
 
   case 221:
-#line 974 "parser/evoparser.y"
+#line 995 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "DAY"); ;}
     break;
 
   case 222:
-#line 975 "parser/evoparser.y"
+#line 996 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "MONTH"); ;}
     break;
 
   case 223:
-#line 976 "parser/evoparser.y"
+#line 997 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "HOUR"); ;}
     break;
 
   case 224:
-#line 977 "parser/evoparser.y"
+#line 998 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "HOUR"); ;}
     break;
 
   case 225:
-#line 978 "parser/evoparser.y"
+#line 999 "parser/evoparser.y"
     { (yyval.exprval) = (yyvsp[(2) - (3)].exprval); if ((yyval.exprval)) snprintf((yyval.exprval)->display, sizeof((yyval.exprval)->display), "HOUR"); ;}
     break;
 
   case 226:
-#line 982 "parser/evoparser.y"
+#line 1003 "parser/evoparser.y"
     { emit("CASEVAL %d 0", (yyvsp[(3) - (4)].intval)); (yyval.exprval) = expr_make_case_simple((yyvsp[(2) - (4)].exprval), g_expr.caseWhenCount, NULL); ;}
     break;
 
   case 227:
-#line 984 "parser/evoparser.y"
+#line 1005 "parser/evoparser.y"
     { emit("CASEVAL %d 1", (yyvsp[(3) - (6)].intval)); (yyval.exprval) = expr_make_case_simple((yyvsp[(2) - (6)].exprval), g_expr.caseWhenCount, (yyvsp[(5) - (6)].exprval)); ;}
     break;
 
   case 228:
-#line 986 "parser/evoparser.y"
+#line 1007 "parser/evoparser.y"
     { emit("CASE %d 0", (yyvsp[(2) - (3)].intval)); (yyval.exprval) = expr_make_case_searched(g_expr.caseWhenCount, NULL); ;}
     break;
 
   case 229:
-#line 988 "parser/evoparser.y"
+#line 1009 "parser/evoparser.y"
     { emit("CASE %d 1", (yyvsp[(2) - (5)].intval)); (yyval.exprval) = expr_make_case_searched(g_expr.caseWhenCount, (yyvsp[(4) - (5)].exprval)); ;}
     break;
 
   case 230:
-#line 992 "parser/evoparser.y"
+#line 1013 "parser/evoparser.y"
     {
         g_expr.caseWhenCount = 0;
         g_expr.caseWhenExprs[0] = (yyvsp[(2) - (4)].exprval);
@@ -7488,7 +7509,7 @@ yyreduce:
     break;
 
   case 231:
-#line 1000 "parser/evoparser.y"
+#line 1021 "parser/evoparser.y"
     {
         if (g_expr.caseWhenCount < MAX_CASE_WHENS) {
             g_expr.caseWhenExprs[g_expr.caseWhenCount] = (yyvsp[(3) - (5)].exprval);
@@ -7500,27 +7521,27 @@ yyreduce:
     break;
 
   case 232:
-#line 1010 "parser/evoparser.y"
+#line 1031 "parser/evoparser.y"
     { emit("LIKE"); (yyval.exprval) = expr_make_like((yyvsp[(1) - (3)].exprval), (yyvsp[(3) - (3)].exprval)); ;}
     break;
 
   case 233:
-#line 1011 "parser/evoparser.y"
+#line 1032 "parser/evoparser.y"
     { emit("NOTLIKE"); (yyval.exprval) = expr_make_not_like((yyvsp[(1) - (4)].exprval), (yyvsp[(4) - (4)].exprval)); ;}
     break;
 
   case 234:
-#line 1014 "parser/evoparser.y"
+#line 1035 "parser/evoparser.y"
     { emit("REGEXP"); (yyval.exprval) = expr_make_func2(EXPR_REGEXP, (yyvsp[(1) - (3)].exprval), (yyvsp[(3) - (3)].exprval), "REGEXP"); ;}
     break;
 
   case 235:
-#line 1015 "parser/evoparser.y"
+#line 1036 "parser/evoparser.y"
     { emit("REGEXP NOT"); (yyval.exprval) = expr_make_func2(EXPR_NOT_REGEXP, (yyvsp[(1) - (4)].exprval), (yyvsp[(4) - (4)].exprval), "NOT REGEXP"); ;}
     break;
 
   case 236:
-#line 1019 "parser/evoparser.y"
+#line 1040 "parser/evoparser.y"
     {
         emit("NOW");
         (yyval.exprval) = expr_make_current_timestamp();
@@ -7531,7 +7552,7 @@ yyreduce:
     break;
 
   case 237:
-#line 1027 "parser/evoparser.y"
+#line 1048 "parser/evoparser.y"
     {
         emit("NOW");
         (yyval.exprval) = expr_make_current_date();
@@ -7542,7 +7563,7 @@ yyreduce:
     break;
 
   case 238:
-#line 1035 "parser/evoparser.y"
+#line 1056 "parser/evoparser.y"
     {
         emit("NOW");
         (yyval.exprval) = expr_make_current_time();
@@ -7553,7 +7574,7 @@ yyreduce:
     break;
 
   case 239:
-#line 1046 "parser/evoparser.y"
+#line 1067 "parser/evoparser.y"
     {
         emit("STMT");
         if ((yyvsp[(1) - (1)].intval) == 1)
@@ -7564,12 +7585,12 @@ yyreduce:
     break;
 
   case 240:
-#line 1055 "parser/evoparser.y"
+#line 1076 "parser/evoparser.y"
     { emit("SELECTNODATA %d %d", (yyvsp[(2) - (3)].intval), (yyvsp[(3) - (3)].intval)); g_sel.distinct = ((yyvsp[(2) - (3)].intval) & 02) ? 1 : 0; ;}
     break;
 
   case 241:
-#line 1060 "parser/evoparser.y"
+#line 1081 "parser/evoparser.y"
     {
         emit("SELECT %d %d %d", (yyvsp[(2) - (12)].intval), (yyvsp[(3) - (12)].intval), (yyvsp[(5) - (12)].intval));
         g_sel.distinct = ((yyvsp[(2) - (12)].intval) & 02) ? 1 : 0;
@@ -7581,7 +7602,7 @@ yyreduce:
     break;
 
   case 242:
-#line 1073 "parser/evoparser.y"
+#line 1094 "parser/evoparser.y"
     {
         emit("SELECTINTO %d %d %s %d", (yyvsp[(2) - (12)].intval), (yyvsp[(3) - (12)].intval), (yyvsp[(5) - (12)].strval), (yyvsp[(7) - (12)].intval));
         g_sel.distinct = ((yyvsp[(2) - (12)].intval) & 02) ? 1 : 0;
@@ -7595,17 +7616,17 @@ yyreduce:
     break;
 
   case 244:
-#line 1086 "parser/evoparser.y"
+#line 1107 "parser/evoparser.y"
     { emit("WHERE"); g_expr.whereExpr = (yyvsp[(2) - (2)].exprval); ;}
     break;
 
   case 246:
-#line 1088 "parser/evoparser.y"
+#line 1109 "parser/evoparser.y"
     { emit("GROUPBYLIST %d %d", (yyvsp[(3) - (4)].intval), (yyvsp[(4) - (4)].intval)); ;}
     break;
 
   case 247:
-#line 1091 "parser/evoparser.y"
+#line 1112 "parser/evoparser.y"
     {
         emit("GROUPBY %d", (yyvsp[(2) - (2)].intval));
         g_expr.groupByCount = 0;
@@ -7616,7 +7637,7 @@ yyreduce:
     break;
 
   case 248:
-#line 1098 "parser/evoparser.y"
+#line 1119 "parser/evoparser.y"
     {
         emit("GROUPBY %d", (yyvsp[(4) - (4)].intval));
         if (g_expr.groupByCount < MAX_GROUP_BY)
@@ -7626,57 +7647,57 @@ yyreduce:
     break;
 
   case 249:
-#line 1106 "parser/evoparser.y"
+#line 1127 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 250:
-#line 1107 "parser/evoparser.y"
+#line 1128 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 251:
-#line 1108 "parser/evoparser.y"
+#line 1129 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 252:
-#line 1111 "parser/evoparser.y"
+#line 1132 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 253:
-#line 1112 "parser/evoparser.y"
+#line 1133 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 255:
-#line 1116 "parser/evoparser.y"
+#line 1137 "parser/evoparser.y"
     { emit("HAVING"); g_expr.havingExpr = (yyvsp[(2) - (2)].exprval); ;}
     break;
 
   case 258:
-#line 1125 "parser/evoparser.y"
+#line 1146 "parser/evoparser.y"
     { emit("WINDOW PARTITION %s", (yyvsp[(1) - (1)].strval)); AddWindowPartitionCol((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 259:
-#line 1127 "parser/evoparser.y"
+#line 1148 "parser/evoparser.y"
     { emit("WINDOW PARTITION %s", (yyvsp[(3) - (3)].strval)); AddWindowPartitionCol((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 262:
-#line 1135 "parser/evoparser.y"
+#line 1156 "parser/evoparser.y"
     { emit("WINDOW ORDER %s %d", (yyvsp[(1) - (2)].strval), (yyvsp[(2) - (2)].intval)); AddWindowOrderCol((yyvsp[(1) - (2)].strval), (yyvsp[(2) - (2)].intval)); free((yyvsp[(1) - (2)].strval)); ;}
     break;
 
   case 263:
-#line 1137 "parser/evoparser.y"
+#line 1158 "parser/evoparser.y"
     { emit("WINDOW ORDER %s %d", (yyvsp[(3) - (4)].strval), (yyvsp[(4) - (4)].intval)); AddWindowOrderCol((yyvsp[(3) - (4)].strval), (yyvsp[(4) - (4)].intval)); free((yyvsp[(3) - (4)].strval)); ;}
     break;
 
   case 268:
-#line 1149 "parser/evoparser.y"
+#line 1170 "parser/evoparser.y"
     {
         emit("ORDERBY %s %d", (yyvsp[(1) - (2)].strval), (yyvsp[(2) - (2)].intval));
         AddOrderByColumn((yyvsp[(1) - (2)].strval), (yyvsp[(2) - (2)].intval));
@@ -7685,7 +7706,7 @@ yyreduce:
     break;
 
   case 269:
-#line 1155 "parser/evoparser.y"
+#line 1176 "parser/evoparser.y"
     {
         char qn[256]; snprintf(qn, sizeof(qn), "%.127s.%.127s", (yyvsp[(1) - (4)].strval), (yyvsp[(3) - (4)].strval));
         emit("ORDERBY %s %d", qn, (yyvsp[(4) - (4)].intval));
@@ -7695,7 +7716,7 @@ yyreduce:
     break;
 
   case 270:
-#line 1162 "parser/evoparser.y"
+#line 1183 "parser/evoparser.y"
     {
         char buf[16];
         snprintf(buf, sizeof(buf), "%d", (yyvsp[(1) - (2)].intval));
@@ -7705,122 +7726,122 @@ yyreduce:
     break;
 
   case 271:
-#line 1170 "parser/evoparser.y"
+#line 1191 "parser/evoparser.y"
     { /* no limit */ ;}
     break;
 
   case 272:
-#line 1171 "parser/evoparser.y"
+#line 1192 "parser/evoparser.y"
     { emit("LIMIT 1"); g_expr.limitExpr = (yyvsp[(2) - (2)].exprval); ;}
     break;
 
   case 273:
-#line 1172 "parser/evoparser.y"
+#line 1193 "parser/evoparser.y"
     { emit("LIMIT 2"); g_expr.offsetExpr = (yyvsp[(2) - (4)].exprval); g_expr.limitExpr = (yyvsp[(4) - (4)].exprval); ;}
     break;
 
   case 274:
-#line 1173 "parser/evoparser.y"
+#line 1194 "parser/evoparser.y"
     { emit("LIMIT OFFSET"); g_expr.limitExpr = (yyvsp[(2) - (4)].exprval); g_expr.offsetExpr = (yyvsp[(4) - (4)].exprval); ;}
     break;
 
   case 275:
-#line 1176 "parser/evoparser.y"
+#line 1197 "parser/evoparser.y"
     { /* no locking */ ;}
     break;
 
   case 276:
-#line 1177 "parser/evoparser.y"
+#line 1198 "parser/evoparser.y"
     { g_sel.forUpdate = 1; emit("FOR UPDATE"); ;}
     break;
 
   case 277:
-#line 1178 "parser/evoparser.y"
+#line 1199 "parser/evoparser.y"
     { g_sel.forUpdate = 2; emit("FOR SHARE"); ;}
     break;
 
   case 278:
-#line 1179 "parser/evoparser.y"
+#line 1200 "parser/evoparser.y"
     { g_sel.forUpdate = 1; emit("FOR UPDATE SKIP LOCKED"); ;}
     break;
 
   case 279:
-#line 1180 "parser/evoparser.y"
+#line 1201 "parser/evoparser.y"
     { g_sel.forUpdate = 2; emit("FOR SHARE SKIP LOCKED"); ;}
     break;
 
   case 281:
-#line 1184 "parser/evoparser.y"
+#line 1205 "parser/evoparser.y"
     { emit("INTO %d", (yyvsp[(2) - (2)].intval)); ;}
     break;
 
   case 282:
-#line 1187 "parser/evoparser.y"
+#line 1208 "parser/evoparser.y"
     { emit("COLUMN %s", (yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 283:
-#line 1188 "parser/evoparser.y"
+#line 1209 "parser/evoparser.y"
     { emit("COLUMN %s", (yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 284:
-#line 1191 "parser/evoparser.y"
+#line 1212 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 285:
-#line 1192 "parser/evoparser.y"
+#line 1213 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 01) yyerror(scanner, "duplicate ALL option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 01; ;}
     break;
 
   case 286:
-#line 1193 "parser/evoparser.y"
+#line 1214 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 02) yyerror(scanner, "duplicate DISTINCT option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 02; ;}
     break;
 
   case 287:
-#line 1194 "parser/evoparser.y"
+#line 1215 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 04) yyerror(scanner, "duplicate DISTINCTROW option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 04; ;}
     break;
 
   case 288:
-#line 1195 "parser/evoparser.y"
+#line 1216 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 010) yyerror(scanner, "duplicate HIGH_PRIORITY option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 010; ;}
     break;
 
   case 289:
-#line 1196 "parser/evoparser.y"
+#line 1217 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 020) yyerror(scanner, "duplicate STRAIGHT_JOIN option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 020; ;}
     break;
 
   case 290:
-#line 1197 "parser/evoparser.y"
+#line 1218 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 040) yyerror(scanner, "duplicate SQL_SMALL_RESULT option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 040; ;}
     break;
 
   case 291:
-#line 1198 "parser/evoparser.y"
+#line 1219 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 0100) yyerror(scanner, "duplicate SQL_BIG_RESULT option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 0100; ;}
     break;
 
   case 292:
-#line 1199 "parser/evoparser.y"
+#line 1220 "parser/evoparser.y"
     { if((yyvsp[(1) - (2)].intval) & 0200) yyerror(scanner, "duplicate SQL_CALC_FOUND_ROWS option"); (yyval.intval) = (yyvsp[(1) - (2)].intval) | 0200; ;}
     break;
 
   case 293:
-#line 1202 "parser/evoparser.y"
+#line 1223 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 294:
-#line 1203 "parser/evoparser.y"
+#line 1224 "parser/evoparser.y"
     {(yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 295:
-#line 1205 "parser/evoparser.y"
+#line 1226 "parser/evoparser.y"
     {
         emit("SELECTALL");
         expr_store_select(expr_make_star(), NULL);
@@ -7829,7 +7850,7 @@ yyreduce:
     break;
 
   case 296:
-#line 1213 "parser/evoparser.y"
+#line 1234 "parser/evoparser.y"
     {
         expr_store_select((yyvsp[(1) - (2)].exprval), g_currentAlias[0] ? g_currentAlias : NULL);
         g_currentAlias[0] = '\0';
@@ -7837,32 +7858,32 @@ yyreduce:
     break;
 
   case 297:
-#line 1218 "parser/evoparser.y"
+#line 1239 "parser/evoparser.y"
     { emit ("ALIAS %s", (yyvsp[(2) - (2)].strval)); strncpy(g_currentAlias, (yyvsp[(2) - (2)].strval), sizeof(g_currentAlias)-1); g_currentAlias[sizeof(g_currentAlias)-1] = '\0'; free((yyvsp[(2) - (2)].strval)); ;}
     break;
 
   case 298:
-#line 1219 "parser/evoparser.y"
+#line 1240 "parser/evoparser.y"
     { emit ("ALIAS %s", (yyvsp[(1) - (1)].strval)); strncpy(g_currentAlias, (yyvsp[(1) - (1)].strval), sizeof(g_currentAlias)-1); g_currentAlias[sizeof(g_currentAlias)-1] = '\0'; free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 299:
-#line 1220 "parser/evoparser.y"
+#line 1241 "parser/evoparser.y"
     { g_currentAlias[0] = '\0'; ;}
     break;
 
   case 300:
-#line 1223 "parser/evoparser.y"
+#line 1244 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 301:
-#line 1224 "parser/evoparser.y"
+#line 1245 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 304:
-#line 1233 "parser/evoparser.y"
+#line 1254 "parser/evoparser.y"
     {
         emit("TABLE %s", (yyvsp[(1) - (3)].strval));
         GetSelTableName((yyvsp[(1) - (3)].strval));
@@ -7872,17 +7893,17 @@ yyreduce:
     break;
 
   case 305:
-#line 1239 "parser/evoparser.y"
+#line 1260 "parser/evoparser.y"
     { emit("TABLE %s.%s", (yyvsp[(1) - (5)].strval), (yyvsp[(3) - (5)].strval)); if (g_qctx) AddJoinTable((yyvsp[(3) - (5)].strval), g_currentAlias); free((yyvsp[(1) - (5)].strval)); free((yyvsp[(3) - (5)].strval)); ;}
     break;
 
   case 306:
-#line 1240 "parser/evoparser.y"
+#line 1261 "parser/evoparser.y"
     { emit("SUBQUERYAS %s", (yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 307:
-#line 1242 "parser/evoparser.y"
+#line 1263 "parser/evoparser.y"
     {
         emit("LATERAL %s", (yyvsp[(3) - (3)].strval));
         if (g_qctx && g_pending_lateral_sql) {
@@ -7894,7 +7915,7 @@ yyreduce:
     break;
 
   case 308:
-#line 1251 "parser/evoparser.y"
+#line 1272 "parser/evoparser.y"
     {
         emit("UNNEST unnest");
         if (g_qctx) AddUnnestTable((yyvsp[(3) - (4)].exprval), "unnest");
@@ -7902,7 +7923,7 @@ yyreduce:
     break;
 
   case 309:
-#line 1256 "parser/evoparser.y"
+#line 1277 "parser/evoparser.y"
     {
         emit("UNNEST %s", (yyvsp[(6) - (6)].strval));
         if (g_qctx) AddUnnestTable((yyvsp[(3) - (6)].exprval), (yyvsp[(6) - (6)].strval));
@@ -7911,7 +7932,7 @@ yyreduce:
     break;
 
   case 310:
-#line 1262 "parser/evoparser.y"
+#line 1283 "parser/evoparser.y"
     {
         /* PG-style column alias: unnest(arr) AS u(v) — the column takes
          * the inner name; v1 uses it as the result column name. */
@@ -7922,12 +7943,12 @@ yyreduce:
     break;
 
   case 311:
-#line 1269 "parser/evoparser.y"
+#line 1290 "parser/evoparser.y"
     { emit("TABLEREFERENCES %d", (yyvsp[(2) - (3)].intval)); ;}
     break;
 
   case 312:
-#line 1273 "parser/evoparser.y"
+#line 1294 "parser/evoparser.y"
     {
         g_subq_mark = g_lex_pos;
         g_in_subquery = 1;
@@ -7951,7 +7972,7 @@ yyreduce:
     break;
 
   case 313:
-#line 1293 "parser/evoparser.y"
+#line 1314 "parser/evoparser.y"
     {
         g_in_subquery = 0;
         /* Restore outer slots; the lateral's SQL text is captured separately
@@ -7973,132 +7994,132 @@ yyreduce:
     break;
 
   case 316:
-#line 1319 "parser/evoparser.y"
+#line 1340 "parser/evoparser.y"
     { emit("JOIN %d", 100+(yyvsp[(2) - (5)].intval)); SetLastJoinType(100+(yyvsp[(2) - (5)].intval)); ;}
     break;
 
   case 317:
-#line 1321 "parser/evoparser.y"
+#line 1342 "parser/evoparser.y"
     { emit("JOIN %d", 200); SetLastJoinType(200); ;}
     break;
 
   case 318:
-#line 1323 "parser/evoparser.y"
+#line 1344 "parser/evoparser.y"
     { emit("JOIN %d", 200); SetLastJoinType(200); SetJoinOnExpr((yyvsp[(5) - (5)].exprval)); ;}
     break;
 
   case 319:
-#line 1325 "parser/evoparser.y"
+#line 1346 "parser/evoparser.y"
     { emit("JOIN %d", 300+(yyvsp[(2) - (6)].intval)+(yyvsp[(3) - (6)].intval)); SetLastJoinType(300+(yyvsp[(2) - (6)].intval)+(yyvsp[(3) - (6)].intval)); ;}
     break;
 
   case 320:
-#line 1327 "parser/evoparser.y"
+#line 1348 "parser/evoparser.y"
     { emit("JOIN %d", 400+(yyvsp[(3) - (5)].intval)); SetLastJoinType(400+(yyvsp[(3) - (5)].intval)); ;}
     break;
 
   case 321:
-#line 1330 "parser/evoparser.y"
+#line 1351 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 322:
-#line 1331 "parser/evoparser.y"
+#line 1352 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 323:
-#line 1332 "parser/evoparser.y"
+#line 1353 "parser/evoparser.y"
     { (yyval.intval) = 2; ;}
     break;
 
   case 324:
-#line 1335 "parser/evoparser.y"
+#line 1356 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 325:
-#line 1336 "parser/evoparser.y"
+#line 1357 "parser/evoparser.y"
     {(yyval.intval) = 4; ;}
     break;
 
   case 326:
-#line 1339 "parser/evoparser.y"
+#line 1360 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 327:
-#line 1340 "parser/evoparser.y"
+#line 1361 "parser/evoparser.y"
     { (yyval.intval) = 2; ;}
     break;
 
   case 328:
-#line 1343 "parser/evoparser.y"
+#line 1364 "parser/evoparser.y"
     { (yyval.intval) = 1 + (yyvsp[(2) - (2)].intval); ;}
     break;
 
   case 329:
-#line 1344 "parser/evoparser.y"
+#line 1365 "parser/evoparser.y"
     { (yyval.intval) = 2 + (yyvsp[(2) - (2)].intval); ;}
     break;
 
   case 330:
-#line 1345 "parser/evoparser.y"
+#line 1366 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 333:
-#line 1352 "parser/evoparser.y"
+#line 1373 "parser/evoparser.y"
     { emit("ONEXPR"); SetJoinOnExpr((yyvsp[(2) - (2)].exprval)); ;}
     break;
 
   case 334:
-#line 1353 "parser/evoparser.y"
+#line 1374 "parser/evoparser.y"
     { emit("USING %d", (yyvsp[(3) - (4)].intval)); ;}
     break;
 
   case 335:
-#line 1358 "parser/evoparser.y"
+#line 1379 "parser/evoparser.y"
     { emit("INDEXHINT %d %d", (yyvsp[(5) - (6)].intval), 10+(yyvsp[(3) - (6)].intval)); ;}
     break;
 
   case 336:
-#line 1360 "parser/evoparser.y"
+#line 1381 "parser/evoparser.y"
     { emit("INDEXHINT %d %d", (yyvsp[(5) - (6)].intval), 20+(yyvsp[(3) - (6)].intval)); ;}
     break;
 
   case 337:
-#line 1362 "parser/evoparser.y"
+#line 1383 "parser/evoparser.y"
     { emit("INDEXHINT %d %d", (yyvsp[(5) - (6)].intval), 30+(yyvsp[(3) - (6)].intval)); ;}
     break;
 
   case 339:
-#line 1366 "parser/evoparser.y"
+#line 1387 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 340:
-#line 1367 "parser/evoparser.y"
+#line 1388 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 341:
-#line 1370 "parser/evoparser.y"
+#line 1391 "parser/evoparser.y"
     { emit("INDEX %s", (yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 342:
-#line 1371 "parser/evoparser.y"
+#line 1392 "parser/evoparser.y"
     { emit("INDEX %s", (yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 343:
-#line 1374 "parser/evoparser.y"
+#line 1395 "parser/evoparser.y"
     { emit("SUBQUERY"); ;}
     break;
 
   case 344:
-#line 1379 "parser/evoparser.y"
+#line 1400 "parser/evoparser.y"
     {
         emit("STMT");
         if (!g_del.multiDelete) {
@@ -8108,7 +8129,7 @@ yyreduce:
     break;
 
   case 345:
-#line 1389 "parser/evoparser.y"
+#line 1410 "parser/evoparser.y"
     {
         emit("DELETEONE %d %s", (yyvsp[(2) - (8)].intval), (yyvsp[(4) - (8)].strval));
         GetDelTableName((yyvsp[(4) - (8)].strval));
@@ -8117,47 +8138,47 @@ yyreduce:
     break;
 
   case 346:
-#line 1396 "parser/evoparser.y"
+#line 1417 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) + 01; ;}
     break;
 
   case 347:
-#line 1397 "parser/evoparser.y"
+#line 1418 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) + 02; ;}
     break;
 
   case 348:
-#line 1398 "parser/evoparser.y"
+#line 1419 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) + 04; ;}
     break;
 
   case 349:
-#line 1399 "parser/evoparser.y"
+#line 1420 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 350:
-#line 1404 "parser/evoparser.y"
+#line 1425 "parser/evoparser.y"
     { emit("DELETEMULTI %d %d %d", (yyvsp[(2) - (6)].intval), (yyvsp[(3) - (6)].intval), (yyvsp[(5) - (6)].intval)); if (g_qctx) SetMultiDelete(); ;}
     break;
 
   case 351:
-#line 1408 "parser/evoparser.y"
+#line 1429 "parser/evoparser.y"
     { emit("TABLE %s", (yyvsp[(1) - (2)].strval)); if (g_qctx) AddDeleteTarget((yyvsp[(1) - (2)].strval)); free((yyvsp[(1) - (2)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 352:
-#line 1410 "parser/evoparser.y"
+#line 1431 "parser/evoparser.y"
     { emit("TABLE %s", (yyvsp[(3) - (4)].strval)); if (g_qctx) AddDeleteTarget((yyvsp[(3) - (4)].strval)); free((yyvsp[(3) - (4)].strval)); (yyval.intval) = (yyvsp[(1) - (4)].intval) + 1; ;}
     break;
 
   case 355:
-#line 1416 "parser/evoparser.y"
+#line 1437 "parser/evoparser.y"
     { emit("DELETEMULTI %d %d %d", (yyvsp[(2) - (7)].intval), (yyvsp[(4) - (7)].intval), (yyvsp[(6) - (7)].intval)); if (g_qctx) SetMultiDelete(); ;}
     break;
 
   case 356:
-#line 1421 "parser/evoparser.y"
+#line 1442 "parser/evoparser.y"
     {
         emit("STMT");
         DropTableProcess();
@@ -8165,7 +8186,7 @@ yyreduce:
     break;
 
   case 357:
-#line 1428 "parser/evoparser.y"
+#line 1449 "parser/evoparser.y"
     {
         emit("DROPTABLE %s", (yyvsp[(3) - (3)].strval));
         g_drop.ifExists = 0;
@@ -8175,7 +8196,7 @@ yyreduce:
     break;
 
   case 358:
-#line 1435 "parser/evoparser.y"
+#line 1456 "parser/evoparser.y"
     {
         emit("DROPTABLE IF EXISTS %s", (yyvsp[(5) - (5)].strval));
         g_drop.ifExists = 1;
@@ -8185,7 +8206,7 @@ yyreduce:
     break;
 
   case 359:
-#line 1445 "parser/evoparser.y"
+#line 1466 "parser/evoparser.y"
     {
         emit("STMT");
         CreateIndexProcess();
@@ -8193,7 +8214,7 @@ yyreduce:
     break;
 
   case 360:
-#line 1452 "parser/evoparser.y"
+#line 1473 "parser/evoparser.y"
     {
         emit("CREATEINDEX %s ON %s", (yyvsp[(3) - (8)].strval), (yyvsp[(5) - (8)].strval));
         SetIndexInfo((yyvsp[(3) - (8)].strval), (yyvsp[(5) - (8)].strval), "");
@@ -8203,7 +8224,7 @@ yyreduce:
     break;
 
   case 361:
-#line 1459 "parser/evoparser.y"
+#line 1480 "parser/evoparser.y"
     {
         emit("CREATEINDEX FT %s ON %s", (yyvsp[(4) - (9)].strval), (yyvsp[(6) - (9)].strval));
         SetIndexInfo((yyvsp[(4) - (9)].strval), (yyvsp[(6) - (9)].strval), "");
@@ -8214,7 +8235,7 @@ yyreduce:
     break;
 
   case 362:
-#line 1467 "parser/evoparser.y"
+#line 1488 "parser/evoparser.y"
     {
         /* NOTE: lexer matches "NOT EXISTS" as single EXISTS token (subtok=1),
          * so "IF NOT EXISTS" appears as "IF EXISTS" in grammar */
@@ -8227,7 +8248,7 @@ yyreduce:
     break;
 
   case 363:
-#line 1477 "parser/evoparser.y"
+#line 1498 "parser/evoparser.y"
     {
         emit("CREATEUNIQUEINDEX %s ON %s", (yyvsp[(4) - (9)].strval), (yyvsp[(6) - (9)].strval));
         SetIndexUnique();
@@ -8238,7 +8259,7 @@ yyreduce:
     break;
 
   case 364:
-#line 1485 "parser/evoparser.y"
+#line 1506 "parser/evoparser.y"
     {
         /* NOTE: lexer matches "NOT EXISTS" as single EXISTS token (subtok=1) */
         emit("CREATEUNIQUEINDEX IF NOT EXISTS %s ON %s", (yyvsp[(6) - (11)].strval), (yyvsp[(8) - (11)].strval));
@@ -8251,7 +8272,7 @@ yyreduce:
     break;
 
   case 365:
-#line 1495 "parser/evoparser.y"
+#line 1516 "parser/evoparser.y"
     {
         emit("CREATEHASHINDEX %s ON %s", (yyvsp[(3) - (10)].strval), (yyvsp[(5) - (10)].strval));
         SetIndexUsingHash();
@@ -8262,7 +8283,7 @@ yyreduce:
     break;
 
   case 366:
-#line 1503 "parser/evoparser.y"
+#line 1524 "parser/evoparser.y"
     {
         emit("CREATEHASHINDEX IF NOT EXISTS %s ON %s", (yyvsp[(5) - (12)].strval), (yyvsp[(7) - (12)].strval));
         SetIndexUsingHash();
@@ -8274,7 +8295,7 @@ yyreduce:
     break;
 
   case 367:
-#line 1512 "parser/evoparser.y"
+#line 1533 "parser/evoparser.y"
     {
         emit("CREATEUNIQUEHASHINDEX %s ON %s", (yyvsp[(4) - (11)].strval), (yyvsp[(6) - (11)].strval));
         SetIndexUnique();
@@ -8286,7 +8307,7 @@ yyreduce:
     break;
 
   case 368:
-#line 1521 "parser/evoparser.y"
+#line 1542 "parser/evoparser.y"
     {
         emit("CREATEUNIQUEHASHINDEX IF NOT EXISTS %s ON %s", (yyvsp[(6) - (13)].strval), (yyvsp[(8) - (13)].strval));
         SetIndexUnique();
@@ -8299,7 +8320,7 @@ yyreduce:
     break;
 
   case 369:
-#line 1531 "parser/evoparser.y"
+#line 1552 "parser/evoparser.y"
     {
         emit("CREATEINDEX CONCURRENTLY %s ON %s", (yyvsp[(4) - (9)].strval), (yyvsp[(6) - (9)].strval));
         SetIndexConcurrent();
@@ -8310,7 +8331,7 @@ yyreduce:
     break;
 
   case 370:
-#line 1539 "parser/evoparser.y"
+#line 1560 "parser/evoparser.y"
     {
         emit("CREATEINDEX CONCURRENTLY IF NOT EXISTS %s ON %s", (yyvsp[(6) - (11)].strval), (yyvsp[(8) - (11)].strval));
         SetIndexConcurrent();
@@ -8322,7 +8343,7 @@ yyreduce:
     break;
 
   case 371:
-#line 1548 "parser/evoparser.y"
+#line 1569 "parser/evoparser.y"
     {
         emit("CREATEUNIQUEINDEX CONCURRENTLY %s ON %s", (yyvsp[(5) - (10)].strval), (yyvsp[(7) - (10)].strval));
         SetIndexUnique();
@@ -8334,7 +8355,7 @@ yyreduce:
     break;
 
   case 372:
-#line 1557 "parser/evoparser.y"
+#line 1578 "parser/evoparser.y"
     {
         emit("CREATEUNIQUEINDEX CONCURRENTLY IF NOT EXISTS %s ON %s", (yyvsp[(7) - (12)].strval), (yyvsp[(9) - (12)].strval));
         SetIndexUnique();
@@ -8347,7 +8368,7 @@ yyreduce:
     break;
 
   case 373:
-#line 1567 "parser/evoparser.y"
+#line 1588 "parser/evoparser.y"
     {
         emit("CREATEHASHINDEX CONCURRENTLY %s ON %s", (yyvsp[(4) - (11)].strval), (yyvsp[(6) - (11)].strval));
         SetIndexConcurrent();
@@ -8359,7 +8380,7 @@ yyreduce:
     break;
 
   case 374:
-#line 1576 "parser/evoparser.y"
+#line 1597 "parser/evoparser.y"
     {
         emit("CREATEUNIQUEHASHINDEX CONCURRENTLY %s ON %s", (yyvsp[(5) - (12)].strval), (yyvsp[(7) - (12)].strval));
         SetIndexUnique();
@@ -8372,7 +8393,7 @@ yyreduce:
     break;
 
   case 375:
-#line 1588 "parser/evoparser.y"
+#line 1609 "parser/evoparser.y"
     {
         SetIndexAddColumn((yyvsp[(1) - (1)].strval));
         free((yyvsp[(1) - (1)].strval));
@@ -8380,7 +8401,7 @@ yyreduce:
     break;
 
   case 376:
-#line 1593 "parser/evoparser.y"
+#line 1614 "parser/evoparser.y"
     {
         SetIndexAddColumn((yyvsp[(3) - (3)].strval));
         free((yyvsp[(3) - (3)].strval));
@@ -8388,14 +8409,14 @@ yyreduce:
     break;
 
   case 377:
-#line 1598 "parser/evoparser.y"
+#line 1619 "parser/evoparser.y"
     {
         /* Expression index — single expression, already set via SetIndexExpression */
     ;}
     break;
 
   case 378:
-#line 1604 "parser/evoparser.y"
+#line 1625 "parser/evoparser.y"
     {
         emit("IDX_EXPR UPPER(%s)", (yyvsp[(3) - (4)].strval));
         SetIndexAddColumn((yyvsp[(3) - (4)].strval));
@@ -8405,7 +8426,7 @@ yyreduce:
     break;
 
   case 379:
-#line 1611 "parser/evoparser.y"
+#line 1632 "parser/evoparser.y"
     {
         emit("IDX_EXPR LOWER(%s)", (yyvsp[(3) - (4)].strval));
         SetIndexAddColumn((yyvsp[(3) - (4)].strval));
@@ -8415,7 +8436,7 @@ yyreduce:
     break;
 
   case 380:
-#line 1618 "parser/evoparser.y"
+#line 1639 "parser/evoparser.y"
     {
         emit("IDX_EXPR LENGTH(%s)", (yyvsp[(3) - (4)].strval));
         SetIndexAddColumn((yyvsp[(3) - (4)].strval));
@@ -8425,7 +8446,7 @@ yyreduce:
     break;
 
   case 381:
-#line 1625 "parser/evoparser.y"
+#line 1646 "parser/evoparser.y"
     {
         emit("IDX_EXPR CONCAT(%s,%s)", (yyvsp[(3) - (6)].strval), (yyvsp[(5) - (6)].strval));
         SetIndexAddColumn((yyvsp[(3) - (6)].strval));
@@ -8435,7 +8456,7 @@ yyreduce:
     break;
 
   case 382:
-#line 1635 "parser/evoparser.y"
+#line 1656 "parser/evoparser.y"
     {
         emit("STMT");
         DropIndexProcess();
@@ -8443,7 +8464,7 @@ yyreduce:
     break;
 
   case 383:
-#line 1642 "parser/evoparser.y"
+#line 1663 "parser/evoparser.y"
     {
         emit("DROPINDEX %s", (yyvsp[(3) - (3)].strval));
         SetDropIndexName((yyvsp[(3) - (3)].strval));
@@ -8452,7 +8473,7 @@ yyreduce:
     break;
 
   case 384:
-#line 1651 "parser/evoparser.y"
+#line 1672 "parser/evoparser.y"
     {
         emit("STMT");
         TruncateTableProcess();
@@ -8460,7 +8481,7 @@ yyreduce:
     break;
 
   case 385:
-#line 1658 "parser/evoparser.y"
+#line 1679 "parser/evoparser.y"
     {
         emit("TRUNCATETABLE %s", (yyvsp[(3) - (3)].strval));
         GetDropTableName((yyvsp[(3) - (3)].strval));
@@ -8469,7 +8490,7 @@ yyreduce:
     break;
 
   case 386:
-#line 1664 "parser/evoparser.y"
+#line 1685 "parser/evoparser.y"
     {
         emit("TRUNCATETABLE %s (+multi)", (yyvsp[(3) - (5)].strval));
         GetDropTableName((yyvsp[(3) - (5)].strval));
@@ -8478,7 +8499,7 @@ yyreduce:
     break;
 
   case 387:
-#line 1672 "parser/evoparser.y"
+#line 1693 "parser/evoparser.y"
     {
         emit("TRUNCATE_EXTRA %s", (yyvsp[(1) - (1)].strval));
         TruncateAddTable((yyvsp[(1) - (1)].strval));
@@ -8487,7 +8508,7 @@ yyreduce:
     break;
 
   case 388:
-#line 1678 "parser/evoparser.y"
+#line 1699 "parser/evoparser.y"
     {
         emit("TRUNCATE_EXTRA %s", (yyvsp[(3) - (3)].strval));
         TruncateAddTable((yyvsp[(3) - (3)].strval));
@@ -8496,42 +8517,42 @@ yyreduce:
     break;
 
   case 390:
-#line 1686 "parser/evoparser.y"
+#line 1707 "parser/evoparser.y"
     { emit("TRUNCATE CASCADE"); TruncateSetCascade(); ;}
     break;
 
   case 391:
-#line 1687 "parser/evoparser.y"
+#line 1708 "parser/evoparser.y"
     { emit("TRUNCATE RESTRICT"); ;}
     break;
 
   case 392:
-#line 1688 "parser/evoparser.y"
+#line 1709 "parser/evoparser.y"
     { emit("TRUNCATE RESTART IDENTITY"); ;}
     break;
 
   case 393:
-#line 1689 "parser/evoparser.y"
+#line 1710 "parser/evoparser.y"
     { emit("TRUNCATE CONTINUE IDENTITY"); TruncateSetContinueIdentity(); ;}
     break;
 
   case 394:
-#line 1705 "parser/evoparser.y"
+#line 1726 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 395:
-#line 1706 "parser/evoparser.y"
+#line 1727 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 396:
-#line 1707 "parser/evoparser.y"
+#line 1728 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 397:
-#line 1711 "parser/evoparser.y"
+#line 1732 "parser/evoparser.y"
     {
         emit("LISTEN %s", (yyvsp[(2) - (2)].strval));
         SetListenChannel((yyvsp[(2) - (2)].strval), 0);
@@ -8540,7 +8561,7 @@ yyreduce:
     break;
 
   case 398:
-#line 1717 "parser/evoparser.y"
+#line 1738 "parser/evoparser.y"
     {
         /* LISTEN channel SELF — opt-in for same-session delivery.
          * Simplified form (one keyword) instead of WITH (self = true),
@@ -8552,7 +8573,7 @@ yyreduce:
     break;
 
   case 399:
-#line 1728 "parser/evoparser.y"
+#line 1749 "parser/evoparser.y"
     {
         emit("UNLISTEN %s", (yyvsp[(2) - (2)].strval));
         SetUnlistenChannel((yyvsp[(2) - (2)].strval));
@@ -8561,7 +8582,7 @@ yyreduce:
     break;
 
   case 400:
-#line 1734 "parser/evoparser.y"
+#line 1755 "parser/evoparser.y"
     {
         emit("UNLISTEN *");
         SetUnlistenAll();
@@ -8569,7 +8590,7 @@ yyreduce:
     break;
 
   case 401:
-#line 1741 "parser/evoparser.y"
+#line 1762 "parser/evoparser.y"
     {
         emit("NOTIFY %s", (yyvsp[(2) - (2)].strval));
         SetNotifyChannel((yyvsp[(2) - (2)].strval), NULL);
@@ -8578,7 +8599,7 @@ yyreduce:
     break;
 
   case 402:
-#line 1747 "parser/evoparser.y"
+#line 1768 "parser/evoparser.y"
     {
         /* Strip surrounding quotes from STRING literal */
         int slen = (int)strlen((yyvsp[(4) - (4)].strval));
@@ -8594,7 +8615,7 @@ yyreduce:
     break;
 
   case 403:
-#line 1763 "parser/evoparser.y"
+#line 1784 "parser/evoparser.y"
     {
         emit("STMT");
         ReclaimTableProcess();
@@ -8602,7 +8623,7 @@ yyreduce:
     break;
 
   case 404:
-#line 1770 "parser/evoparser.y"
+#line 1791 "parser/evoparser.y"
     {
         emit("RECLAIMTABLE %s", (yyvsp[(3) - (3)].strval));
         GetDropTableName((yyvsp[(3) - (3)].strval));
@@ -8611,7 +8632,7 @@ yyreduce:
     break;
 
   case 405:
-#line 1779 "parser/evoparser.y"
+#line 1800 "parser/evoparser.y"
     {
         emit("STMT");
         AnalyzeTableProcess();
@@ -8619,7 +8640,7 @@ yyreduce:
     break;
 
   case 406:
-#line 1786 "parser/evoparser.y"
+#line 1807 "parser/evoparser.y"
     {
         emit("ANALYZETABLE %s", (yyvsp[(3) - (3)].strval));
         GetDropTableName((yyvsp[(3) - (3)].strval));
@@ -8628,7 +8649,7 @@ yyreduce:
     break;
 
   case 407:
-#line 1792 "parser/evoparser.y"
+#line 1813 "parser/evoparser.y"
     {
         emit("ANALYZETABLE %s.%s", (yyvsp[(3) - (5)].strval), (yyvsp[(5) - (5)].strval));
         char full[512];
@@ -8639,12 +8660,12 @@ yyreduce:
     break;
 
   case 408:
-#line 1802 "parser/evoparser.y"
+#line 1823 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 409:
-#line 1806 "parser/evoparser.y"
+#line 1827 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD CHECK %s %s", (yyvsp[(3) - (10)].strval), (yyvsp[(6) - (10)].strval));
         AlterTableAddCheckConstraint((yyvsp[(3) - (10)].strval), (yyvsp[(6) - (10)].strval), (yyvsp[(9) - (10)].exprval));
@@ -8653,7 +8674,7 @@ yyreduce:
     break;
 
   case 410:
-#line 1812 "parser/evoparser.y"
+#line 1833 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD UNIQUE %s %s", (yyvsp[(3) - (10)].strval), (yyvsp[(6) - (10)].strval));
         AlterTableAddUniqueConstraint((yyvsp[(3) - (10)].strval), (yyvsp[(6) - (10)].strval));
@@ -8662,7 +8683,7 @@ yyreduce:
     break;
 
   case 411:
-#line 1818 "parser/evoparser.y"
+#line 1839 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD FK %s %s", (yyvsp[(3) - (17)].strval), (yyvsp[(6) - (17)].strval));
         strncpy(g_constr.pendingConstraintName, (yyvsp[(6) - (17)].strval), 127);
@@ -8672,7 +8693,7 @@ yyreduce:
     break;
 
   case 412:
-#line 1825 "parser/evoparser.y"
+#line 1846 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD CHECK NOT VALID %s %s", (yyvsp[(3) - (12)].strval), (yyvsp[(6) - (12)].strval));
         AlterTableAddCheckConstraintNotValid((yyvsp[(3) - (12)].strval), (yyvsp[(6) - (12)].strval), (yyvsp[(9) - (12)].exprval));
@@ -8681,7 +8702,7 @@ yyreduce:
     break;
 
   case 413:
-#line 1831 "parser/evoparser.y"
+#line 1852 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD FK NOT VALID %s %s", (yyvsp[(3) - (19)].strval), (yyvsp[(6) - (19)].strval));
         strncpy(g_constr.pendingConstraintName, (yyvsp[(6) - (19)].strval), 127);
@@ -8691,7 +8712,7 @@ yyreduce:
     break;
 
   case 414:
-#line 1838 "parser/evoparser.y"
+#line 1859 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD PK %s %s", (yyvsp[(3) - (11)].strval), (yyvsp[(6) - (11)].strval));
         AlterTableAddPrimaryKey((yyvsp[(3) - (11)].strval), (yyvsp[(6) - (11)].strval));
@@ -8700,7 +8721,7 @@ yyreduce:
     break;
 
   case 415:
-#line 1844 "parser/evoparser.y"
+#line 1865 "parser/evoparser.y"
     {
         emit("ALTER TABLE DROP CONSTRAINT %s %s", (yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
         AlterTableDropConstraint((yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
@@ -8709,7 +8730,7 @@ yyreduce:
     break;
 
   case 416:
-#line 1850 "parser/evoparser.y"
+#line 1871 "parser/evoparser.y"
     {
         emit("ALTER TABLE RENAME CONSTRAINT %s %s %s", (yyvsp[(3) - (8)].strval), (yyvsp[(6) - (8)].strval), (yyvsp[(8) - (8)].strval));
         AlterTableRenameConstraint((yyvsp[(3) - (8)].strval), (yyvsp[(6) - (8)].strval), (yyvsp[(8) - (8)].strval));
@@ -8718,7 +8739,7 @@ yyreduce:
     break;
 
   case 417:
-#line 1856 "parser/evoparser.y"
+#line 1877 "parser/evoparser.y"
     {
         emit("ALTER TABLE ENABLE CONSTRAINT %s %s", (yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
         AlterTableEnableConstraint((yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
@@ -8727,7 +8748,7 @@ yyreduce:
     break;
 
   case 418:
-#line 1862 "parser/evoparser.y"
+#line 1883 "parser/evoparser.y"
     {
         emit("ALTER TABLE DISABLE CONSTRAINT %s %s", (yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
         AlterTableDisableConstraint((yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
@@ -8736,7 +8757,7 @@ yyreduce:
     break;
 
   case 419:
-#line 1868 "parser/evoparser.y"
+#line 1889 "parser/evoparser.y"
     {
         emit("ALTER TABLE VALIDATE CONSTRAINT %s %s", (yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
         AlterTableValidateConstraint((yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
@@ -8745,7 +8766,7 @@ yyreduce:
     break;
 
   case 420:
-#line 1874 "parser/evoparser.y"
+#line 1895 "parser/evoparser.y"
     {
         emit("ALTER TABLE ADD COLUMN %s %s %d", (yyvsp[(3) - (9)].strval), (yyvsp[(6) - (9)].strval), (yyvsp[(7) - (9)].intval));
         AlterTableAddColumn((yyvsp[(3) - (9)].strval), (yyvsp[(6) - (9)].strval), (yyvsp[(7) - (9)].intval));
@@ -8754,7 +8775,7 @@ yyreduce:
     break;
 
   case 421:
-#line 1880 "parser/evoparser.y"
+#line 1901 "parser/evoparser.y"
     {
         emit("ALTER TABLE DROP COLUMN %s %s", (yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
         AlterTableDropColumn((yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
@@ -8763,7 +8784,7 @@ yyreduce:
     break;
 
   case 422:
-#line 1886 "parser/evoparser.y"
+#line 1907 "parser/evoparser.y"
     {
         emit("ALTER TABLE DROP COLUMN %s %s", (yyvsp[(3) - (5)].strval), (yyvsp[(5) - (5)].strval));
         AlterTableDropColumn((yyvsp[(3) - (5)].strval), (yyvsp[(5) - (5)].strval));
@@ -8772,7 +8793,7 @@ yyreduce:
     break;
 
   case 423:
-#line 1892 "parser/evoparser.y"
+#line 1913 "parser/evoparser.y"
     {
         emit("ALTER TABLE RENAME COLUMN %s %s %s", (yyvsp[(3) - (8)].strval), (yyvsp[(6) - (8)].strval), (yyvsp[(8) - (8)].strval));
         AlterTableRenameColumn((yyvsp[(3) - (8)].strval), (yyvsp[(6) - (8)].strval), (yyvsp[(8) - (8)].strval));
@@ -8781,7 +8802,7 @@ yyreduce:
     break;
 
   case 424:
-#line 1898 "parser/evoparser.y"
+#line 1919 "parser/evoparser.y"
     {
         emit("ALTER TABLE RENAME COLUMN %s %s %s", (yyvsp[(3) - (7)].strval), (yyvsp[(5) - (7)].strval), (yyvsp[(7) - (7)].strval));
         AlterTableRenameColumn((yyvsp[(3) - (7)].strval), (yyvsp[(5) - (7)].strval), (yyvsp[(7) - (7)].strval));
@@ -8790,7 +8811,7 @@ yyreduce:
     break;
 
   case 425:
-#line 1904 "parser/evoparser.y"
+#line 1925 "parser/evoparser.y"
     {
         emit("ALTER TABLE MODIFY COLUMN %s %s %d", (yyvsp[(3) - (9)].strval), (yyvsp[(6) - (9)].strval), (yyvsp[(7) - (9)].intval));
         AlterTableModifyColumn((yyvsp[(3) - (9)].strval), (yyvsp[(6) - (9)].strval), (yyvsp[(7) - (9)].intval));
@@ -8799,7 +8820,7 @@ yyreduce:
     break;
 
   case 426:
-#line 1910 "parser/evoparser.y"
+#line 1931 "parser/evoparser.y"
     {
         emit("ALTER TABLE MODIFY COLUMN %s %s %d", (yyvsp[(3) - (8)].strval), (yyvsp[(5) - (8)].strval), (yyvsp[(6) - (8)].intval));
         AlterTableModifyColumn((yyvsp[(3) - (8)].strval), (yyvsp[(5) - (8)].strval), (yyvsp[(6) - (8)].intval));
@@ -8808,7 +8829,7 @@ yyreduce:
     break;
 
   case 427:
-#line 1916 "parser/evoparser.y"
+#line 1937 "parser/evoparser.y"
     {
         emit("ALTER TABLE CHANGE COLUMN %s %s %s %d", (yyvsp[(3) - (10)].strval), (yyvsp[(6) - (10)].strval), (yyvsp[(7) - (10)].strval), (yyvsp[(8) - (10)].intval));
         AlterTableChangeColumn((yyvsp[(3) - (10)].strval), (yyvsp[(6) - (10)].strval), (yyvsp[(7) - (10)].strval), (yyvsp[(8) - (10)].intval));
@@ -8817,7 +8838,7 @@ yyreduce:
     break;
 
   case 428:
-#line 1922 "parser/evoparser.y"
+#line 1943 "parser/evoparser.y"
     {
         emit("ALTER TABLE CHANGE COLUMN %s %s %s %d", (yyvsp[(3) - (9)].strval), (yyvsp[(5) - (9)].strval), (yyvsp[(6) - (9)].strval), (yyvsp[(7) - (9)].intval));
         AlterTableChangeColumn((yyvsp[(3) - (9)].strval), (yyvsp[(5) - (9)].strval), (yyvsp[(6) - (9)].strval), (yyvsp[(7) - (9)].intval));
@@ -8826,22 +8847,22 @@ yyreduce:
     break;
 
   case 429:
-#line 1929 "parser/evoparser.y"
+#line 1950 "parser/evoparser.y"
     { ;}
     break;
 
   case 430:
-#line 1930 "parser/evoparser.y"
+#line 1951 "parser/evoparser.y"
     { if (g_qctx) g_upd.colPosition = 1; ;}
     break;
 
   case 431:
-#line 1931 "parser/evoparser.y"
+#line 1952 "parser/evoparser.y"
     { if (g_qctx) { g_upd.colPosition = 2; strncpy(g_upd.colPositionAfter, (yyvsp[(2) - (2)].strval), 127); g_upd.colPositionAfter[127] = '\0'; } free((yyvsp[(2) - (2)].strval)); ;}
     break;
 
   case 432:
-#line 1935 "parser/evoparser.y"
+#line 1956 "parser/evoparser.y"
     {
         emit("STMT");
         if (!g_ins.insertFromSelect)
@@ -8850,7 +8871,7 @@ yyreduce:
     break;
 
   case 433:
-#line 1943 "parser/evoparser.y"
+#line 1964 "parser/evoparser.y"
     {
         emit("INSERTVALS %d %d %s", (yyvsp[(2) - (10)].intval), (yyvsp[(7) - (10)].intval), (yyvsp[(4) - (10)].strval));
         GetInsertionTableName((yyvsp[(4) - (10)].strval));
@@ -8859,7 +8880,7 @@ yyreduce:
     break;
 
   case 434:
-#line 1949 "parser/evoparser.y"
+#line 1970 "parser/evoparser.y"
     {
         emit("INSERTSELECT %d %s", (yyvsp[(2) - (6)].intval), (yyvsp[(4) - (6)].strval));
         GetInsertionTableName((yyvsp[(4) - (6)].strval));
@@ -8873,47 +8894,47 @@ yyreduce:
     break;
 
   case 436:
-#line 1962 "parser/evoparser.y"
+#line 1983 "parser/evoparser.y"
     { SetUpsertMode(); ;}
     break;
 
   case 437:
-#line 1962 "parser/evoparser.y"
+#line 1983 "parser/evoparser.y"
     { emit("DUPUPDATE %d", (yyvsp[(5) - (5)].intval)); SetOnDupKeyUpdate(); ;}
     break;
 
   case 440:
-#line 1970 "parser/evoparser.y"
+#line 1991 "parser/evoparser.y"
     { emit("CONFTARGET *"); ;}
     break;
 
   case 441:
-#line 1971 "parser/evoparser.y"
+#line 1992 "parser/evoparser.y"
     { emit("CONFTARGET %s", (yyvsp[(2) - (3)].strval)); SetOnConflictCol((yyvsp[(2) - (3)].strval)); free((yyvsp[(2) - (3)].strval)); ;}
     break;
 
   case 442:
-#line 1972 "parser/evoparser.y"
+#line 1993 "parser/evoparser.y"
     { yyerror(scanner, "composite ON CONFLICT target (a, b, ...) is not yet supported"); free((yyvsp[(2) - (4)].strval)); free((yyvsp[(4) - (4)].strval)); YYERROR; ;}
     break;
 
   case 443:
-#line 1976 "parser/evoparser.y"
+#line 1997 "parser/evoparser.y"
     { emit("CONFACTION NOTHING"); SetOnConflictAction(EVO_CONFLICT_NOTHING); ;}
     break;
 
   case 444:
-#line 1977 "parser/evoparser.y"
+#line 1998 "parser/evoparser.y"
     { SetUpsertMode(); SetOnConflictAction(EVO_CONFLICT_UPDATE); ;}
     break;
 
   case 445:
-#line 1978 "parser/evoparser.y"
+#line 1999 "parser/evoparser.y"
     { emit("CONFACTION UPDATE %d", (yyvsp[(5) - (5)].intval)); SetOnDupKeyUpdate(); ;}
     break;
 
   case 446:
-#line 1982 "parser/evoparser.y"
+#line 2003 "parser/evoparser.y"
     {
         if ((yyvsp[(2) - (3)].subtok) != 4) { yyerror(scanner, "bad upsert assignment to %s", (yyvsp[(1) - (3)].strval)); YYERROR; }
         emit("UPSERTSET %s", (yyvsp[(1) - (3)].strval));
@@ -8924,7 +8945,7 @@ yyreduce:
     break;
 
   case 447:
-#line 1990 "parser/evoparser.y"
+#line 2011 "parser/evoparser.y"
     {
         if ((yyvsp[(4) - (5)].subtok) != 4) { yyerror(scanner, "bad upsert assignment to %s", (yyvsp[(3) - (5)].strval)); YYERROR; }
         emit("UPSERTSET %s", (yyvsp[(3) - (5)].strval));
@@ -8935,37 +8956,37 @@ yyreduce:
     break;
 
   case 448:
-#line 1999 "parser/evoparser.y"
+#line 2020 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 449:
-#line 2000 "parser/evoparser.y"
+#line 2021 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 01 ; ;}
     break;
 
   case 450:
-#line 2001 "parser/evoparser.y"
+#line 2022 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 02 ; ;}
     break;
 
   case 451:
-#line 2002 "parser/evoparser.y"
+#line 2023 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 04 ; ;}
     break;
 
   case 452:
-#line 2003 "parser/evoparser.y"
+#line 2024 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 010 ; ;}
     break;
 
   case 456:
-#line 2010 "parser/evoparser.y"
+#line 2031 "parser/evoparser.y"
     { emit("INSERTCOLS %d", (yyvsp[(2) - (3)].intval)); ;}
     break;
 
   case 457:
-#line 2014 "parser/evoparser.y"
+#line 2035 "parser/evoparser.y"
     {
         g_ins.columnCount = 0;
         strncpy(g_ins.columns[g_ins.columnCount], (yyvsp[(1) - (1)].strval), 127);
@@ -8978,7 +8999,7 @@ yyreduce:
     break;
 
   case 458:
-#line 2024 "parser/evoparser.y"
+#line 2045 "parser/evoparser.y"
     {
         if (g_ins.columnCount < 64) {
             strncpy(g_ins.columns[g_ins.columnCount], (yyvsp[(3) - (3)].strval), 127);
@@ -8992,177 +9013,177 @@ yyreduce:
     break;
 
   case 459:
-#line 2036 "parser/evoparser.y"
+#line 2057 "parser/evoparser.y"
     { emit("VALUES %d", (yyvsp[(2) - (3)].intval)); (yyval.intval) = 1; ;}
     break;
 
   case 460:
-#line 2037 "parser/evoparser.y"
+#line 2058 "parser/evoparser.y"
     { InsertRowSeparator(); ;}
     break;
 
   case 461:
-#line 2037 "parser/evoparser.y"
+#line 2058 "parser/evoparser.y"
     { emit("VALUES %d", (yyvsp[(5) - (6)].intval)); (yyval.intval) = (yyvsp[(1) - (6)].intval) + 1; ;}
     break;
 
   case 462:
-#line 2040 "parser/evoparser.y"
+#line 2061 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 463:
-#line 2041 "parser/evoparser.y"
+#line 2062 "parser/evoparser.y"
     { emit("DEFAULT"); (yyval.intval) = 1; ;}
     break;
 
   case 464:
-#line 2042 "parser/evoparser.y"
+#line 2063 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 465:
-#line 2043 "parser/evoparser.y"
+#line 2064 "parser/evoparser.y"
     { emit("DEFAULT"); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 466:
-#line 2047 "parser/evoparser.y"
+#line 2068 "parser/evoparser.y"
     { emit("INSERTASGN %d %d %s", (yyvsp[(2) - (7)].intval), (yyvsp[(6) - (7)].intval), (yyvsp[(4) - (7)].strval)); free((yyvsp[(4) - (7)].strval)); ;}
     break;
 
   case 467:
-#line 2050 "parser/evoparser.y"
+#line 2071 "parser/evoparser.y"
     { if ((yyvsp[(2) - (3)].subtok) != 4) { yyerror(scanner, "bad insert assignment to %s", (yyvsp[(1) - (3)].strval)); YYERROR; } emit("ASSIGN %s", (yyvsp[(1) - (3)].strval)); free((yyvsp[(1) - (3)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 468:
-#line 2051 "parser/evoparser.y"
+#line 2072 "parser/evoparser.y"
     { if ((yyvsp[(2) - (3)].subtok) != 4) { yyerror(scanner, "bad insert assignment to %s", (yyvsp[(1) - (3)].strval)); YYERROR; } emit("DEFAULT"); emit("ASSIGN %s", (yyvsp[(1) - (3)].strval)); free((yyvsp[(1) - (3)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 469:
-#line 2052 "parser/evoparser.y"
+#line 2073 "parser/evoparser.y"
     { if ((yyvsp[(4) - (5)].subtok) != 4) { yyerror(scanner, "bad insert assignment to %s", (yyvsp[(1) - (5)].intval)); YYERROR; } emit("ASSIGN %s", (yyvsp[(3) - (5)].strval)); free((yyvsp[(3) - (5)].strval)); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 470:
-#line 2053 "parser/evoparser.y"
+#line 2074 "parser/evoparser.y"
     { if ((yyvsp[(4) - (5)].subtok) != 4) { yyerror(scanner, "bad insert assignment to %s", (yyvsp[(1) - (5)].intval)); YYERROR; } emit("DEFAULT"); emit("ASSIGN %s", (yyvsp[(3) - (5)].strval)); free((yyvsp[(3) - (5)].strval)); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 471:
-#line 2059 "parser/evoparser.y"
+#line 2080 "parser/evoparser.y"
     { emit("STMT"); InsertProcess(); ;}
     break;
 
   case 472:
-#line 2065 "parser/evoparser.y"
+#line 2086 "parser/evoparser.y"
     { emit("REPLACEVALS %d %d %s", (yyvsp[(2) - (8)].intval), (yyvsp[(7) - (8)].intval), (yyvsp[(4) - (8)].strval)); GetInsertionTableName((yyvsp[(4) - (8)].strval)); if (g_qctx) g_ins.rowCount = -2; /* REPLACE flag */ free((yyvsp[(4) - (8)].strval)); ;}
     break;
 
   case 473:
-#line 2070 "parser/evoparser.y"
+#line 2091 "parser/evoparser.y"
     { emit("REPLACEASGN %d %d %s", (yyvsp[(2) - (7)].intval), (yyvsp[(6) - (7)].intval), (yyvsp[(4) - (7)].strval)); free((yyvsp[(4) - (7)].strval)); ;}
     break;
 
   case 474:
-#line 2075 "parser/evoparser.y"
+#line 2096 "parser/evoparser.y"
     { emit("REPLACESELECT %d %s", (yyvsp[(2) - (7)].intval), (yyvsp[(4) - (7)].strval)); free((yyvsp[(4) - (7)].strval)); ;}
     break;
 
   case 475:
-#line 2079 "parser/evoparser.y"
+#line 2100 "parser/evoparser.y"
     { emit("STMT"); CopyProcess(); ;}
     break;
 
   case 476:
-#line 2083 "parser/evoparser.y"
+#line 2104 "parser/evoparser.y"
     { CopyBegin((yyvsp[(2) - (2)].strval)); free((yyvsp[(2) - (2)].strval)); ;}
     break;
 
   case 477:
-#line 2085 "parser/evoparser.y"
+#line 2106 "parser/evoparser.y"
     { emit("COPY"); ;}
     break;
 
   case 480:
-#line 2091 "parser/evoparser.y"
+#line 2112 "parser/evoparser.y"
     { CopyAddColumn((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 481:
-#line 2092 "parser/evoparser.y"
+#line 2113 "parser/evoparser.y"
     { CopyAddColumn((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 482:
-#line 2096 "parser/evoparser.y"
+#line 2117 "parser/evoparser.y"
     { CopySetDirection(EVO_COPY_DIR_FROM); ;}
     break;
 
   case 483:
-#line 2097 "parser/evoparser.y"
+#line 2118 "parser/evoparser.y"
     { CopySetDirection(EVO_COPY_DIR_TO); ;}
     break;
 
   case 484:
-#line 2101 "parser/evoparser.y"
+#line 2122 "parser/evoparser.y"
     { CopySetSourcePath((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 485:
-#line 2102 "parser/evoparser.y"
+#line 2123 "parser/evoparser.y"
     { CopySetSourceStream(EVO_COPY_SRC_STDIN); ;}
     break;
 
   case 486:
-#line 2103 "parser/evoparser.y"
+#line 2124 "parser/evoparser.y"
     { CopySetSourceStream(EVO_COPY_SRC_STDOUT); ;}
     break;
 
   case 493:
-#line 2118 "parser/evoparser.y"
+#line 2139 "parser/evoparser.y"
     { CopySetFormat(EVO_COPY_FMT_CSV); ;}
     break;
 
   case 494:
-#line 2119 "parser/evoparser.y"
+#line 2140 "parser/evoparser.y"
     { CopySetFormat(EVO_COPY_FMT_TEXT); ;}
     break;
 
   case 495:
-#line 2120 "parser/evoparser.y"
+#line 2141 "parser/evoparser.y"
     { CopySetDelimiter((yyvsp[(2) - (2)].strval)); free((yyvsp[(2) - (2)].strval)); ;}
     break;
 
   case 496:
-#line 2121 "parser/evoparser.y"
+#line 2142 "parser/evoparser.y"
     { CopySetHeader(1); ;}
     break;
 
   case 497:
-#line 2122 "parser/evoparser.y"
+#line 2143 "parser/evoparser.y"
     { CopySetHeader((yyvsp[(2) - (2)].intval)); ;}
     break;
 
   case 498:
-#line 2123 "parser/evoparser.y"
+#line 2144 "parser/evoparser.y"
     { CopySetNullStr((yyvsp[(2) - (2)].strval)); free((yyvsp[(2) - (2)].strval)); ;}
     break;
 
   case 499:
-#line 2124 "parser/evoparser.y"
+#line 2145 "parser/evoparser.y"
     { CopySetQuote((yyvsp[(2) - (2)].strval)); free((yyvsp[(2) - (2)].strval)); ;}
     break;
 
   case 500:
-#line 2125 "parser/evoparser.y"
+#line 2146 "parser/evoparser.y"
     { CopySetFormat(EVO_COPY_FMT_CSV); ;}
     break;
 
   case 501:
-#line 2130 "parser/evoparser.y"
+#line 2151 "parser/evoparser.y"
     {
         emit("STMT");
         if (!g_upd.multiUpdate) {
@@ -9172,7 +9193,7 @@ yyreduce:
     break;
 
   case 502:
-#line 2139 "parser/evoparser.y"
+#line 2160 "parser/evoparser.y"
     {
         emit("UPDATE %d %d %d", (yyvsp[(2) - (9)].intval), (yyvsp[(3) - (9)].intval), (yyvsp[(5) - (9)].intval));
         if (g_qctx && g_sel.joinTableCount > 1 && !g_upd.multiUpdate)
@@ -9181,22 +9202,22 @@ yyreduce:
     break;
 
   case 503:
-#line 2146 "parser/evoparser.y"
+#line 2167 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 504:
-#line 2147 "parser/evoparser.y"
+#line 2168 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 01 ; ;}
     break;
 
   case 505:
-#line 2148 "parser/evoparser.y"
+#line 2169 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 010 ; ;}
     break;
 
   case 506:
-#line 2153 "parser/evoparser.y"
+#line 2174 "parser/evoparser.y"
     {
         if ((yyvsp[(2) - (3)].subtok) != 4) {
             yyerror(scanner, "bad update assignment to %s", (yyvsp[(1) - (3)].strval));
@@ -9210,7 +9231,7 @@ yyreduce:
     break;
 
   case 507:
-#line 2164 "parser/evoparser.y"
+#line 2185 "parser/evoparser.y"
     {
         if ((yyvsp[(4) - (5)].subtok) != 4) {
             yyerror(scanner, "bad update assignment to %s", (yyvsp[(1) - (5)].strval));
@@ -9225,7 +9246,7 @@ yyreduce:
     break;
 
   case 508:
-#line 2176 "parser/evoparser.y"
+#line 2197 "parser/evoparser.y"
     {
         if ((yyvsp[(4) - (5)].subtok) != 4) {
             yyerror(scanner, "bad update assignment to %s", (yyvsp[(3) - (5)].strval));
@@ -9239,7 +9260,7 @@ yyreduce:
     break;
 
   case 509:
-#line 2187 "parser/evoparser.y"
+#line 2208 "parser/evoparser.y"
     {
         if ((yyvsp[(6) - (7)].subtok) != 4) {
             yyerror(scanner, "bad update assignment to %s.%s", (yyvsp[(3) - (7)].strval), (yyvsp[(5) - (7)].strval));
@@ -9254,102 +9275,102 @@ yyreduce:
     break;
 
   case 510:
-#line 2202 "parser/evoparser.y"
+#line 2223 "parser/evoparser.y"
     { emit("RENAMETABLE %s %s", (yyvsp[(3) - (5)].strval), (yyvsp[(5) - (5)].strval)); RenameTableProcess((yyvsp[(3) - (5)].strval), (yyvsp[(5) - (5)].strval)); free((yyvsp[(3) - (5)].strval)); free((yyvsp[(5) - (5)].strval)); ;}
     break;
 
   case 511:
-#line 2206 "parser/evoparser.y"
+#line 2227 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 512:
-#line 2210 "parser/evoparser.y"
+#line 2231 "parser/evoparser.y"
     { emit("CREATEDATABASE %d %s", (yyvsp[(3) - (4)].intval), (yyvsp[(4) - (4)].strval)); CreateDatabaseProcess((yyvsp[(4) - (4)].strval), (yyvsp[(3) - (4)].intval)); free((yyvsp[(4) - (4)].strval)); ;}
     break;
 
   case 513:
-#line 2211 "parser/evoparser.y"
+#line 2232 "parser/evoparser.y"
     { emit("CREATESCHEMA %d %s", (yyvsp[(3) - (4)].intval), (yyvsp[(4) - (4)].strval)); CreateSchemaProcess((yyvsp[(4) - (4)].strval), (yyvsp[(3) - (4)].intval)); free((yyvsp[(4) - (4)].strval)); ;}
     break;
 
   case 514:
-#line 2216 "parser/evoparser.y"
+#line 2237 "parser/evoparser.y"
     { emit("DROPDATABASE %s", (yyvsp[(3) - (3)].strval)); DropDatabaseProcess((yyvsp[(3) - (3)].strval), 0); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 515:
-#line 2218 "parser/evoparser.y"
+#line 2239 "parser/evoparser.y"
     { emit("DROPDATABASE IF EXISTS %s", (yyvsp[(5) - (5)].strval)); DropDatabaseProcess((yyvsp[(5) - (5)].strval), 1); free((yyvsp[(5) - (5)].strval)); ;}
     break;
 
   case 516:
-#line 2220 "parser/evoparser.y"
+#line 2241 "parser/evoparser.y"
     { emit("DROPSCHEMA %s", (yyvsp[(3) - (3)].strval)); DropSchemaProcess((yyvsp[(3) - (3)].strval), 0); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 517:
-#line 2222 "parser/evoparser.y"
+#line 2243 "parser/evoparser.y"
     { emit("DROPSCHEMA IF EXISTS %s", (yyvsp[(5) - (5)].strval)); DropSchemaProcess((yyvsp[(5) - (5)].strval), 1); free((yyvsp[(5) - (5)].strval)); ;}
     break;
 
   case 518:
-#line 2225 "parser/evoparser.y"
+#line 2246 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 519:
-#line 2226 "parser/evoparser.y"
+#line 2247 "parser/evoparser.y"
     { if(!(yyvsp[(2) - (2)].subtok)) { yyerror(scanner, "IF EXISTS doesn't exist"); YYERROR; } (yyval.intval) = (yyvsp[(2) - (2)].subtok); /* NOT EXISTS hack */ ;}
     break;
 
   case 520:
-#line 2232 "parser/evoparser.y"
+#line 2253 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 521:
-#line 2237 "parser/evoparser.y"
+#line 2258 "parser/evoparser.y"
     { emit("CREATEDOMAIN %s %d", (yyvsp[(3) - (5)].strval)); CreateDomainProcess((yyvsp[(3) - (5)].strval), (yyvsp[(5) - (5)].intval), NULL, 0, 0); free((yyvsp[(3) - (5)].strval)); ;}
     break;
 
   case 522:
-#line 2239 "parser/evoparser.y"
+#line 2260 "parser/evoparser.y"
     { emit("CREATEDOMAIN %s %d DEFAULT", (yyvsp[(3) - (7)].strval)); CreateDomainProcess((yyvsp[(3) - (7)].strval), (yyvsp[(5) - (7)].intval), NULL, 0, 0); free((yyvsp[(3) - (7)].strval)); ;}
     break;
 
   case 523:
-#line 2241 "parser/evoparser.y"
+#line 2262 "parser/evoparser.y"
     { emit("CREATEDOMAIN %s %d NOTNULL", (yyvsp[(3) - (7)].strval)); CreateDomainProcess((yyvsp[(3) - (7)].strval), (yyvsp[(5) - (7)].intval), NULL, 1, 0); free((yyvsp[(3) - (7)].strval)); ;}
     break;
 
   case 524:
-#line 2243 "parser/evoparser.y"
+#line 2264 "parser/evoparser.y"
     { emit("CREATEDOMAIN %s %d CHECK", (yyvsp[(3) - (9)].strval)); CreateDomainProcess((yyvsp[(3) - (9)].strval), (yyvsp[(5) - (9)].intval), (yyvsp[(8) - (9)].exprval), 0, 1); free((yyvsp[(3) - (9)].strval)); ;}
     break;
 
   case 525:
-#line 2245 "parser/evoparser.y"
+#line 2266 "parser/evoparser.y"
     { emit("CREATEDOMAIN %s %d NOTNULL CHECK", (yyvsp[(3) - (11)].strval)); CreateDomainProcess((yyvsp[(3) - (11)].strval), (yyvsp[(5) - (11)].intval), (yyvsp[(10) - (11)].exprval), 1, 1); free((yyvsp[(3) - (11)].strval)); ;}
     break;
 
   case 526:
-#line 2249 "parser/evoparser.y"
+#line 2270 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 527:
-#line 2253 "parser/evoparser.y"
+#line 2274 "parser/evoparser.y"
     { emit("USEDATABASE %s", (yyvsp[(2) - (2)].strval)); UseDatabaseProcess((yyvsp[(2) - (2)].strval)); free((yyvsp[(2) - (2)].strval)); ;}
     break;
 
   case 528:
-#line 2254 "parser/evoparser.y"
+#line 2275 "parser/evoparser.y"
     { emit("USEDATABASE %s", (yyvsp[(3) - (3)].strval)); UseDatabaseProcess((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 529:
-#line 2259 "parser/evoparser.y"
+#line 2280 "parser/evoparser.y"
     {
         emit("STMT");
         if (g_create.ctasMode == CTAS_NONE || g_create.ctasMode == CTAS_EXPLICIT)
@@ -9359,7 +9380,7 @@ yyreduce:
     break;
 
   case 530:
-#line 2269 "parser/evoparser.y"
+#line 2290 "parser/evoparser.y"
     {
         emit("CREATE %d %d %d %s", (yyvsp[(2) - (9)].intval), (yyvsp[(4) - (9)].intval), (yyvsp[(7) - (9)].intval), (yyvsp[(5) - (9)].strval));
         g_create.isTemporary = (yyvsp[(2) - (9)].intval);
@@ -9369,12 +9390,12 @@ yyreduce:
     break;
 
   case 531:
-#line 2278 "parser/evoparser.y"
+#line 2299 "parser/evoparser.y"
     { emit("CREATE %d %d %d %s.%s", (yyvsp[(2) - (11)].intval), (yyvsp[(4) - (11)].intval), (yyvsp[(9) - (11)].intval), (yyvsp[(5) - (11)].strval), (yyvsp[(7) - (11)].strval)); g_create.isTemporary = (yyvsp[(2) - (11)].intval); free((yyvsp[(5) - (11)].strval)); free((yyvsp[(7) - (11)].strval)); ;}
     break;
 
   case 532:
-#line 2286 "parser/evoparser.y"
+#line 2307 "parser/evoparser.y"
     {
         emit("PARTITION OF %s FOR VALUES FROM %d TO %d %s", (yyvsp[(8) - (18)].strval), (yyvsp[(13) - (18)].intval), (yyvsp[(17) - (18)].intval), (yyvsp[(5) - (18)].strval));
         CreatePartitionChild((yyvsp[(5) - (18)].strval), (yyvsp[(8) - (18)].strval), (yyvsp[(13) - (18)].intval), (yyvsp[(17) - (18)].intval));
@@ -9383,42 +9404,42 @@ yyreduce:
     break;
 
   case 534:
-#line 2294 "parser/evoparser.y"
+#line 2315 "parser/evoparser.y"
     { emit("TABLE OPT AUTOINC %d", (yyvsp[(4) - (4)].intval)); SetTableAutoIncrement((yyvsp[(4) - (4)].intval)); ;}
     break;
 
   case 535:
-#line 2295 "parser/evoparser.y"
+#line 2316 "parser/evoparser.y"
     { emit("TABLE OPT AUTOINC %d", (yyvsp[(3) - (3)].intval)); SetTableAutoIncrement((yyvsp[(3) - (3)].intval)); ;}
     break;
 
   case 536:
-#line 2296 "parser/evoparser.y"
+#line 2317 "parser/evoparser.y"
     { emit("TABLE OPT ON COMMIT DELETE ROWS"); g_create.onCommitDelete = 1; ;}
     break;
 
   case 537:
-#line 2297 "parser/evoparser.y"
+#line 2318 "parser/evoparser.y"
     { emit("TABLE OPT ON COMMIT PRESERVE ROWS"); g_create.onCommitDelete = 0; ;}
     break;
 
   case 538:
-#line 2299 "parser/evoparser.y"
+#line 2320 "parser/evoparser.y"
     { emit("SHARD HASH %s %d", (yyvsp[(6) - (9)].strval), (yyvsp[(9) - (9)].intval)); SetShardHash((yyvsp[(6) - (9)].strval), (yyvsp[(9) - (9)].intval)); free((yyvsp[(6) - (9)].strval)); ;}
     break;
 
   case 539:
-#line 2301 "parser/evoparser.y"
+#line 2322 "parser/evoparser.y"
     { emit("SHARD RANGE %s", (yyvsp[(6) - (10)].strval)); SetShardRange((yyvsp[(6) - (10)].strval)); free((yyvsp[(6) - (10)].strval)); ;}
     break;
 
   case 540:
-#line 2303 "parser/evoparser.y"
+#line 2324 "parser/evoparser.y"
     { emit("PARTITION BY RANGE %s", (yyvsp[(6) - (7)].strval)); SetPartitionByRange((yyvsp[(6) - (7)].strval)); free((yyvsp[(6) - (7)].strval)); ;}
     break;
 
   case 543:
-#line 2311 "parser/evoparser.y"
+#line 2332 "parser/evoparser.y"
     {
         char *sv = (yyvsp[(6) - (9)].strval);
         int slen = (int)strlen(sv);
@@ -9436,7 +9457,7 @@ yyreduce:
     break;
 
   case 544:
-#line 2326 "parser/evoparser.y"
+#line 2347 "parser/evoparser.y"
     {
         AddShardRangeDef((yyvsp[(2) - (9)].strval), "", (yyvsp[(9) - (9)].intval));
         free((yyvsp[(2) - (9)].strval));
@@ -9444,7 +9465,7 @@ yyreduce:
     break;
 
   case 545:
-#line 2334 "parser/evoparser.y"
+#line 2355 "parser/evoparser.y"
     {
     emit("CREATESELECT %d %d %d %s", (yyvsp[(2) - (9)].intval), (yyvsp[(4) - (9)].intval), (yyvsp[(7) - (9)].intval), (yyvsp[(5) - (9)].strval));
     g_create.ctasMode = CTAS_EXPLICIT;
@@ -9459,7 +9480,7 @@ yyreduce:
     break;
 
   case 546:
-#line 2348 "parser/evoparser.y"
+#line 2369 "parser/evoparser.y"
     {
     emit("CREATESELECT %d %d 0 %s", (yyvsp[(2) - (6)].intval), (yyvsp[(4) - (6)].intval), (yyvsp[(5) - (6)].strval));
     g_create.ctasMode = CTAS_INFER;
@@ -9473,7 +9494,7 @@ yyreduce:
     break;
 
   case 547:
-#line 2362 "parser/evoparser.y"
+#line 2383 "parser/evoparser.y"
     {
     emit("CREATESELECT %d %d %d %s.%s", (yyvsp[(2) - (11)].intval), (yyvsp[(4) - (11)].intval), (yyvsp[(9) - (11)].intval), (yyvsp[(5) - (11)].strval), (yyvsp[(7) - (11)].strval));
     g_create.ctasMode = CTAS_EXPLICIT;
@@ -9488,7 +9509,7 @@ yyreduce:
     break;
 
   case 548:
-#line 2376 "parser/evoparser.y"
+#line 2397 "parser/evoparser.y"
     {
     emit("CREATESELECT %d %d 0 %s.%s", (yyvsp[(2) - (8)].intval), (yyvsp[(4) - (8)].intval), (yyvsp[(5) - (8)].strval), (yyvsp[(7) - (8)].strval));
     g_create.ctasMode = CTAS_INFER;
@@ -9502,232 +9523,232 @@ yyreduce:
     break;
 
   case 549:
-#line 2388 "parser/evoparser.y"
+#line 2409 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 550:
-#line 2389 "parser/evoparser.y"
+#line 2410 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 551:
-#line 2390 "parser/evoparser.y"
+#line 2411 "parser/evoparser.y"
     { (yyval.intval) = 2; ;}
     break;
 
   case 552:
-#line 2393 "parser/evoparser.y"
+#line 2414 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 553:
-#line 2394 "parser/evoparser.y"
+#line 2415 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 554:
-#line 2397 "parser/evoparser.y"
+#line 2418 "parser/evoparser.y"
     { emit("PRIKEY %d", (yyvsp[(4) - (5)].intval)); ;}
     break;
 
   case 555:
-#line 2398 "parser/evoparser.y"
+#line 2419 "parser/evoparser.y"
     { emit("PRIKEY %d", (yyvsp[(6) - (7)].intval)); g_constr.pendingConstraintName[0] = '\0'; free((yyvsp[(2) - (7)].strval)); ;}
     break;
 
   case 556:
-#line 2399 "parser/evoparser.y"
+#line 2420 "parser/evoparser.y"
     { emit("KEY %d", (yyvsp[(3) - (4)].intval)); ;}
     break;
 
   case 557:
-#line 2400 "parser/evoparser.y"
+#line 2421 "parser/evoparser.y"
     { emit("KEY %d", (yyvsp[(3) - (4)].intval)); ;}
     break;
 
   case 558:
-#line 2401 "parser/evoparser.y"
+#line 2422 "parser/evoparser.y"
     { emit("TEXTINDEX %d", (yyvsp[(4) - (5)].intval)); ;}
     break;
 
   case 559:
-#line 2402 "parser/evoparser.y"
+#line 2423 "parser/evoparser.y"
     { emit("TEXTINDEX %d", (yyvsp[(4) - (5)].intval)); ;}
     break;
 
   case 560:
-#line 2403 "parser/evoparser.y"
+#line 2424 "parser/evoparser.y"
     { emit("CHECK"); AddCheckConstraint((yyvsp[(3) - (4)].exprval)); ;}
     break;
 
   case 561:
-#line 2404 "parser/evoparser.y"
+#line 2425 "parser/evoparser.y"
     { emit("CHECK"); strncpy(g_constr.checkNames[g_constr.checkCount], (yyvsp[(2) - (6)].strval), 127); AddCheckConstraint((yyvsp[(5) - (6)].exprval)); free((yyvsp[(2) - (6)].strval)); ;}
     break;
 
   case 562:
-#line 2406 "parser/evoparser.y"
+#line 2427 "parser/evoparser.y"
     { emit("FOREIGNKEY"); AddForeignKeyRefTable((yyvsp[(7) - (11)].strval)); free((yyvsp[(7) - (11)].strval)); ;}
     break;
 
   case 563:
-#line 2408 "parser/evoparser.y"
+#line 2429 "parser/evoparser.y"
     { emit("FOREIGNKEY CROSSSCHEMA"); AddForeignKeyRefTableSchema((yyvsp[(7) - (13)].strval), (yyvsp[(9) - (13)].strval)); free((yyvsp[(7) - (13)].strval)); free((yyvsp[(9) - (13)].strval)); ;}
     break;
 
   case 564:
-#line 2410 "parser/evoparser.y"
+#line 2431 "parser/evoparser.y"
     { emit("FOREIGNKEY"); strncpy(g_constr.pendingConstraintName, (yyvsp[(2) - (13)].strval), 127); AddForeignKeyRefTable((yyvsp[(9) - (13)].strval)); free((yyvsp[(2) - (13)].strval)); free((yyvsp[(9) - (13)].strval)); ;}
     break;
 
   case 565:
-#line 2412 "parser/evoparser.y"
+#line 2433 "parser/evoparser.y"
     { emit("FOREIGNKEY CROSSSCHEMA"); strncpy(g_constr.pendingConstraintName, (yyvsp[(2) - (15)].strval), 127); AddForeignKeyRefTableSchema((yyvsp[(9) - (15)].strval), (yyvsp[(11) - (15)].strval)); free((yyvsp[(2) - (15)].strval)); free((yyvsp[(9) - (15)].strval)); free((yyvsp[(11) - (15)].strval)); ;}
     break;
 
   case 566:
-#line 2414 "parser/evoparser.y"
+#line 2435 "parser/evoparser.y"
     { emit("UNIQUE %d", (yyvsp[(3) - (4)].intval)); AddUniqueComplete(); ;}
     break;
 
   case 567:
-#line 2416 "parser/evoparser.y"
+#line 2437 "parser/evoparser.y"
     { emit("UNIQUE %d", (yyvsp[(5) - (6)].intval)); strncpy(g_constr.pendingConstraintName, (yyvsp[(2) - (6)].strval), 127); AddUniqueComplete(); free((yyvsp[(2) - (6)].strval)); ;}
     break;
 
   case 568:
-#line 2419 "parser/evoparser.y"
+#line 2440 "parser/evoparser.y"
     { emit("PRIKEY_COL %s", (yyvsp[(1) - (1)].strval)); AddPrimaryKeyColumn((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 569:
-#line 2420 "parser/evoparser.y"
+#line 2441 "parser/evoparser.y"
     { emit("PRIKEY_COL %s", (yyvsp[(3) - (3)].strval)); AddPrimaryKeyColumn((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 570:
-#line 2423 "parser/evoparser.y"
+#line 2444 "parser/evoparser.y"
     { AddForeignKeyColumn((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 571:
-#line 2424 "parser/evoparser.y"
+#line 2445 "parser/evoparser.y"
     { AddForeignKeyColumn((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 572:
-#line 2427 "parser/evoparser.y"
+#line 2448 "parser/evoparser.y"
     { AddForeignKeyRefColumn((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 573:
-#line 2428 "parser/evoparser.y"
+#line 2449 "parser/evoparser.y"
     { AddForeignKeyRefColumn((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 575:
-#line 2432 "parser/evoparser.y"
+#line 2453 "parser/evoparser.y"
     { SetForeignKeyOnDelete(1); ;}
     break;
 
   case 576:
-#line 2433 "parser/evoparser.y"
+#line 2454 "parser/evoparser.y"
     { SetForeignKeyOnDelete(2); ;}
     break;
 
   case 577:
-#line 2434 "parser/evoparser.y"
+#line 2455 "parser/evoparser.y"
     { SetForeignKeyOnDelete(3); ;}
     break;
 
   case 578:
-#line 2435 "parser/evoparser.y"
+#line 2456 "parser/evoparser.y"
     { SetForeignKeyOnDelete(4); ;}
     break;
 
   case 579:
-#line 2436 "parser/evoparser.y"
+#line 2457 "parser/evoparser.y"
     { SetForeignKeyOnUpdate(1); ;}
     break;
 
   case 580:
-#line 2437 "parser/evoparser.y"
+#line 2458 "parser/evoparser.y"
     { SetForeignKeyOnUpdate(2); ;}
     break;
 
   case 581:
-#line 2438 "parser/evoparser.y"
+#line 2459 "parser/evoparser.y"
     { SetForeignKeyOnUpdate(3); ;}
     break;
 
   case 582:
-#line 2439 "parser/evoparser.y"
+#line 2460 "parser/evoparser.y"
     { SetForeignKeyOnUpdate(4); ;}
     break;
 
   case 583:
-#line 2440 "parser/evoparser.y"
+#line 2461 "parser/evoparser.y"
     { SetForeignKeyOnDelete(5); ;}
     break;
 
   case 584:
-#line 2441 "parser/evoparser.y"
+#line 2462 "parser/evoparser.y"
     { SetForeignKeyOnUpdate(5); ;}
     break;
 
   case 585:
-#line 2442 "parser/evoparser.y"
+#line 2463 "parser/evoparser.y"
     { SetForeignKeyMatchType(1); ;}
     break;
 
   case 586:
-#line 2443 "parser/evoparser.y"
+#line 2464 "parser/evoparser.y"
     { SetForeignKeyMatchType(0); ;}
     break;
 
   case 587:
-#line 2444 "parser/evoparser.y"
+#line 2465 "parser/evoparser.y"
     { SetForeignKeyMatchType(2); ;}
     break;
 
   case 588:
-#line 2445 "parser/evoparser.y"
+#line 2466 "parser/evoparser.y"
     { SetForeignKeyDeferrable(1); ;}
     break;
 
   case 589:
-#line 2446 "parser/evoparser.y"
+#line 2467 "parser/evoparser.y"
     { SetForeignKeyDeferrable(0); ;}
     break;
 
   case 590:
-#line 2447 "parser/evoparser.y"
+#line 2468 "parser/evoparser.y"
     { SetForeignKeyDeferrable(2); ;}
     break;
 
   case 591:
-#line 2448 "parser/evoparser.y"
+#line 2469 "parser/evoparser.y"
     { SetForeignKeyDeferrable(1); ;}
     break;
 
   case 592:
-#line 2451 "parser/evoparser.y"
+#line 2472 "parser/evoparser.y"
     { AddUniqueColumn((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 593:
-#line 2452 "parser/evoparser.y"
+#line 2473 "parser/evoparser.y"
     { AddUniqueColumn((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 594:
-#line 2455 "parser/evoparser.y"
+#line 2476 "parser/evoparser.y"
     { emit("STARTCOL"); ;}
     break;
 
   case 595:
-#line 2457 "parser/evoparser.y"
+#line 2478 "parser/evoparser.y"
     {
         emit("COLUMNDEF %d %s", (yyvsp[(3) - (4)].intval), (yyvsp[(2) - (4)].strval));
         GetColumnNames((yyvsp[(2) - (4)].strval));
@@ -9737,57 +9758,57 @@ yyreduce:
     break;
 
   case 596:
-#line 2465 "parser/evoparser.y"
+#line 2486 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 597:
-#line 2466 "parser/evoparser.y"
+#line 2487 "parser/evoparser.y"
     { emit("ATTR NOTNULL"); SetColumnNotNull(); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 599:
-#line 2468 "parser/evoparser.y"
+#line 2489 "parser/evoparser.y"
     { emit("ATTR DEFAULT STRING %s", (yyvsp[(3) - (3)].strval)); SetColumnDefault((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 600:
-#line 2469 "parser/evoparser.y"
+#line 2490 "parser/evoparser.y"
     { char _buf[32]; snprintf(_buf, sizeof(_buf), "%d", (yyvsp[(3) - (3)].intval)); emit("ATTR DEFAULT NUMBER %d", (yyvsp[(3) - (3)].intval)); SetColumnDefault(_buf); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 601:
-#line 2470 "parser/evoparser.y"
+#line 2491 "parser/evoparser.y"
     { char _buf[64]; snprintf(_buf, sizeof(_buf), "%g", (yyvsp[(3) - (3)].floatval)); emit("ATTR DEFAULT FLOAT %g", (yyvsp[(3) - (3)].floatval)); SetColumnDefault(_buf); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 602:
-#line 2471 "parser/evoparser.y"
+#line 2492 "parser/evoparser.y"
     { char _buf[8]; snprintf(_buf, sizeof(_buf), "%s", (yyvsp[(3) - (3)].intval) ? "true" : "false"); emit("ATTR DEFAULT BOOL %d", (yyvsp[(3) - (3)].intval)); SetColumnDefault(_buf); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 603:
-#line 2472 "parser/evoparser.y"
+#line 2493 "parser/evoparser.y"
     { emit("ATTR DEFAULT GEN_RANDOM_UUID"); SetColumnDefault("gen_random_uuid()"); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 604:
-#line 2473 "parser/evoparser.y"
+#line 2494 "parser/evoparser.y"
     { emit("ATTR DEFAULT GEN_RANDOM_UUID_V7"); SetColumnDefault("gen_random_uuid_v7()"); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 605:
-#line 2474 "parser/evoparser.y"
+#line 2495 "parser/evoparser.y"
     { emit("ATTR DEFAULT SNOWFLAKE_ID"); SetColumnDefault("snowflake_id()"); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 606:
-#line 2475 "parser/evoparser.y"
+#line 2496 "parser/evoparser.y"
     { emit("ATTR DEFAULT CURRENT_TIMESTAMP"); SetColumnDefault("CURRENT_TIMESTAMP"); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 607:
-#line 2476 "parser/evoparser.y"
+#line 2497 "parser/evoparser.y"
     {
     char _ser[512]; expr_serialize((yyvsp[(4) - (5)].exprval), _ser, sizeof(_ser));
     char _prefixed[520]; snprintf(_prefixed, sizeof(_prefixed), "EXPR:%s", _ser);
@@ -9798,342 +9819,342 @@ yyreduce:
     break;
 
   case 608:
-#line 2483 "parser/evoparser.y"
+#line 2504 "parser/evoparser.y"
     { emit("ATTR AUTOINC"); SetColumnAutoIncrement(1, 1); (yyval.intval) = (yyvsp[(1) - (2)].intval) + 1; ;}
     break;
 
   case 609:
-#line 2484 "parser/evoparser.y"
+#line 2505 "parser/evoparser.y"
     { emit("ATTR AUTOINC %d %d", (yyvsp[(4) - (7)].intval), (yyvsp[(6) - (7)].intval)); SetColumnAutoIncrement((yyvsp[(4) - (7)].intval), (yyvsp[(6) - (7)].intval)); (yyval.intval) = (yyvsp[(1) - (7)].intval) + 1; ;}
     break;
 
   case 610:
-#line 2485 "parser/evoparser.y"
+#line 2506 "parser/evoparser.y"
     { emit("ATTR AUTOINC %d 1", (yyvsp[(4) - (5)].intval)); SetColumnAutoIncrement((yyvsp[(4) - (5)].intval), 1); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 611:
-#line 2486 "parser/evoparser.y"
+#line 2507 "parser/evoparser.y"
     { emit("ATTR IDENTITY %d %d", (yyvsp[(4) - (7)].intval), (yyvsp[(6) - (7)].intval)); SetColumnAutoIncrement((yyvsp[(4) - (7)].intval), (yyvsp[(6) - (7)].intval)); (yyval.intval) = (yyvsp[(1) - (7)].intval) + 1; ;}
     break;
 
   case 612:
-#line 2487 "parser/evoparser.y"
+#line 2508 "parser/evoparser.y"
     { emit("ATTR IDENTITY %d 1", (yyvsp[(4) - (5)].intval)); SetColumnAutoIncrement((yyvsp[(4) - (5)].intval), 1); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 613:
-#line 2488 "parser/evoparser.y"
+#line 2509 "parser/evoparser.y"
     { emit("ATTR IDENTITY"); SetColumnAutoIncrement(1, 1); (yyval.intval) = (yyvsp[(1) - (2)].intval) + 1; ;}
     break;
 
   case 614:
-#line 2489 "parser/evoparser.y"
+#line 2510 "parser/evoparser.y"
     { emit("ATTR UNIQUEKEY"); SetColumnUnique(); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 615:
-#line 2490 "parser/evoparser.y"
+#line 2511 "parser/evoparser.y"
     { emit("ATTR UNIQUE"); SetColumnUnique(); (yyval.intval) = (yyvsp[(1) - (2)].intval) + 1; ;}
     break;
 
   case 616:
-#line 2491 "parser/evoparser.y"
+#line 2512 "parser/evoparser.y"
     { emit("ATTR PRIKEY"); SetColumnPrimaryKey(); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 617:
-#line 2492 "parser/evoparser.y"
+#line 2513 "parser/evoparser.y"
     { emit("ATTR PRIKEY"); SetColumnPrimaryKey(); (yyval.intval) = (yyvsp[(1) - (2)].intval) + 1; ;}
     break;
 
   case 618:
-#line 2493 "parser/evoparser.y"
+#line 2514 "parser/evoparser.y"
     { emit("ATTR COMMENT %s", (yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 619:
-#line 2494 "parser/evoparser.y"
+#line 2515 "parser/evoparser.y"
     { emit("ATTR CHECK"); AddCheckConstraint((yyvsp[(4) - (5)].exprval)); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 620:
-#line 2495 "parser/evoparser.y"
+#line 2516 "parser/evoparser.y"
     { emit("ATTR UNIQUE"); SetColumnUnique(); free((yyvsp[(3) - (4)].strval)); (yyval.intval) = (yyvsp[(1) - (4)].intval) + 1; ;}
     break;
 
   case 621:
-#line 2496 "parser/evoparser.y"
+#line 2517 "parser/evoparser.y"
     { emit("ATTR PRIKEY"); SetColumnPrimaryKey(); free((yyvsp[(3) - (5)].strval)); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 622:
-#line 2497 "parser/evoparser.y"
+#line 2518 "parser/evoparser.y"
     { emit("ATTR CHECK"); strncpy(g_constr.checkNames[g_constr.checkCount], (yyvsp[(3) - (7)].strval), 127); AddCheckConstraint((yyvsp[(6) - (7)].exprval)); free((yyvsp[(3) - (7)].strval)); (yyval.intval) = (yyvsp[(1) - (7)].intval) + 1; ;}
     break;
 
   case 623:
-#line 2498 "parser/evoparser.y"
+#line 2519 "parser/evoparser.y"
     { emit("ATTR GENERATED STORED"); SetColumnGenerated(1, (yyvsp[(6) - (8)].exprval)); (yyval.intval) = (yyvsp[(1) - (8)].intval) + 1; ;}
     break;
 
   case 624:
-#line 2499 "parser/evoparser.y"
+#line 2520 "parser/evoparser.y"
     { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, (yyvsp[(6) - (8)].exprval)); (yyval.intval) = (yyvsp[(1) - (8)].intval) + 1; ;}
     break;
 
   case 625:
-#line 2500 "parser/evoparser.y"
+#line 2521 "parser/evoparser.y"
     { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, (yyvsp[(6) - (7)].exprval)); (yyval.intval) = (yyvsp[(1) - (7)].intval) + 1; ;}
     break;
 
   case 626:
-#line 2501 "parser/evoparser.y"
+#line 2522 "parser/evoparser.y"
     { emit("ATTR GENERATED STORED"); SetColumnGenerated(1, (yyvsp[(4) - (6)].exprval)); (yyval.intval) = (yyvsp[(1) - (6)].intval) + 1; ;}
     break;
 
   case 627:
-#line 2502 "parser/evoparser.y"
+#line 2523 "parser/evoparser.y"
     { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, (yyvsp[(4) - (6)].exprval)); (yyval.intval) = (yyvsp[(1) - (6)].intval) + 1; ;}
     break;
 
   case 628:
-#line 2503 "parser/evoparser.y"
+#line 2524 "parser/evoparser.y"
     { emit("ATTR GENERATED VIRTUAL"); SetColumnGenerated(2, (yyvsp[(4) - (5)].exprval)); (yyval.intval) = (yyvsp[(1) - (5)].intval) + 1; ;}
     break;
 
   case 629:
-#line 2506 "parser/evoparser.y"
+#line 2527 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 630:
-#line 2507 "parser/evoparser.y"
+#line 2528 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(2) - (3)].intval); ;}
     break;
 
   case 631:
-#line 2508 "parser/evoparser.y"
+#line 2529 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(2) - (5)].intval) + 1000*(yyvsp[(4) - (5)].intval); ;}
     break;
 
   case 632:
-#line 2511 "parser/evoparser.y"
+#line 2532 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 633:
-#line 2512 "parser/evoparser.y"
+#line 2533 "parser/evoparser.y"
     { (yyval.intval) = 4000; ;}
     break;
 
   case 634:
-#line 2515 "parser/evoparser.y"
+#line 2536 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 635:
-#line 2516 "parser/evoparser.y"
+#line 2537 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 1000; ;}
     break;
 
   case 636:
-#line 2517 "parser/evoparser.y"
+#line 2538 "parser/evoparser.y"
     { (yyval.intval) = (yyvsp[(1) - (2)].intval) | 2000; ;}
     break;
 
   case 638:
-#line 2521 "parser/evoparser.y"
+#line 2542 "parser/evoparser.y"
     { emit("COLCHARSET %s", (yyvsp[(4) - (4)].strval)); free((yyvsp[(4) - (4)].strval)); ;}
     break;
 
   case 639:
-#line 2522 "parser/evoparser.y"
+#line 2543 "parser/evoparser.y"
     { emit("COLCOLLATE %s", (yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 640:
-#line 2526 "parser/evoparser.y"
+#line 2547 "parser/evoparser.y"
     { (yyval.intval) = 10000 + (yyvsp[(2) - (2)].intval); ;}
     break;
 
   case 641:
-#line 2527 "parser/evoparser.y"
+#line 2548 "parser/evoparser.y"
     { (yyval.intval) = 10000 + (yyvsp[(2) - (3)].intval); ;}
     break;
 
   case 642:
-#line 2528 "parser/evoparser.y"
+#line 2549 "parser/evoparser.y"
     { (yyval.intval) = 20000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 643:
-#line 2529 "parser/evoparser.y"
+#line 2550 "parser/evoparser.y"
     { (yyval.intval) = 30000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 644:
-#line 2530 "parser/evoparser.y"
+#line 2551 "parser/evoparser.y"
     { (yyval.intval) = 40000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 645:
-#line 2531 "parser/evoparser.y"
+#line 2552 "parser/evoparser.y"
     { (yyval.intval) = 50000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 646:
-#line 2532 "parser/evoparser.y"
+#line 2553 "parser/evoparser.y"
     { (yyval.intval) = 60000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 647:
-#line 2533 "parser/evoparser.y"
+#line 2554 "parser/evoparser.y"
     { (yyval.intval) = 70000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 648:
-#line 2534 "parser/evoparser.y"
+#line 2555 "parser/evoparser.y"
     { (yyval.intval) = 80000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 649:
-#line 2535 "parser/evoparser.y"
+#line 2556 "parser/evoparser.y"
     { (yyval.intval) = 90000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 650:
-#line 2536 "parser/evoparser.y"
+#line 2557 "parser/evoparser.y"
     { (yyval.intval) = 110000 + (yyvsp[(2) - (3)].intval) + (yyvsp[(3) - (3)].intval); ;}
     break;
 
   case 651:
-#line 2537 "parser/evoparser.y"
+#line 2558 "parser/evoparser.y"
     { (yyval.intval) = 100001; ;}
     break;
 
   case 652:
-#line 2538 "parser/evoparser.y"
+#line 2559 "parser/evoparser.y"
     { (yyval.intval) = 100002; ;}
     break;
 
   case 653:
-#line 2539 "parser/evoparser.y"
+#line 2560 "parser/evoparser.y"
     { (yyval.intval) = 100003; ;}
     break;
 
   case 654:
-#line 2540 "parser/evoparser.y"
+#line 2561 "parser/evoparser.y"
     { (yyval.intval) = 100004; ;}
     break;
 
   case 655:
-#line 2541 "parser/evoparser.y"
+#line 2562 "parser/evoparser.y"
     { (yyval.intval) = 100005; ;}
     break;
 
   case 656:
-#line 2542 "parser/evoparser.y"
+#line 2563 "parser/evoparser.y"
     { (yyval.intval) = 120000 + (yyvsp[(2) - (3)].intval); ;}
     break;
 
   case 657:
-#line 2543 "parser/evoparser.y"
+#line 2564 "parser/evoparser.y"
     { (yyval.intval) = 130000 + (yyvsp[(3) - (5)].intval); ;}
     break;
 
   case 658:
-#line 2544 "parser/evoparser.y"
+#line 2565 "parser/evoparser.y"
     { (yyval.intval) = 140000 + (yyvsp[(2) - (2)].intval); ;}
     break;
 
   case 659:
-#line 2545 "parser/evoparser.y"
+#line 2566 "parser/evoparser.y"
     { (yyval.intval) = 150000 + (yyvsp[(3) - (4)].intval); ;}
     break;
 
   case 660:
-#line 2546 "parser/evoparser.y"
+#line 2567 "parser/evoparser.y"
     { (yyval.intval) = 160001; ;}
     break;
 
   case 661:
-#line 2547 "parser/evoparser.y"
+#line 2568 "parser/evoparser.y"
     { (yyval.intval) = 160002; ;}
     break;
 
   case 662:
-#line 2548 "parser/evoparser.y"
+#line 2569 "parser/evoparser.y"
     { (yyval.intval) = 160003; ;}
     break;
 
   case 663:
-#line 2549 "parser/evoparser.y"
+#line 2570 "parser/evoparser.y"
     { (yyval.intval) = 160004; ;}
     break;
 
   case 664:
-#line 2550 "parser/evoparser.y"
+#line 2571 "parser/evoparser.y"
     { (yyval.intval) = 170000 + (yyvsp[(2) - (3)].intval); ;}
     break;
 
   case 665:
-#line 2551 "parser/evoparser.y"
+#line 2572 "parser/evoparser.y"
     { (yyval.intval) = 171000 + (yyvsp[(2) - (3)].intval); ;}
     break;
 
   case 666:
-#line 2552 "parser/evoparser.y"
+#line 2573 "parser/evoparser.y"
     { (yyval.intval) = 172000 + (yyvsp[(2) - (3)].intval); ;}
     break;
 
   case 667:
-#line 2553 "parser/evoparser.y"
+#line 2574 "parser/evoparser.y"
     { (yyval.intval) = 173000 + (yyvsp[(2) - (3)].intval); ;}
     break;
 
   case 668:
-#line 2554 "parser/evoparser.y"
+#line 2575 "parser/evoparser.y"
     { (yyval.intval) = 200000 + (yyvsp[(3) - (5)].intval); ;}
     break;
 
   case 669:
-#line 2555 "parser/evoparser.y"
+#line 2576 "parser/evoparser.y"
     { (yyval.intval) = 210000 + (yyvsp[(3) - (5)].intval); ;}
     break;
 
   case 670:
-#line 2556 "parser/evoparser.y"
+#line 2577 "parser/evoparser.y"
     { (yyval.intval) = 220001; ;}
     break;
 
   case 671:
-#line 2557 "parser/evoparser.y"
+#line 2578 "parser/evoparser.y"
     { (yyval.intval) = 180036; ;}
     break;
 
   case 672:
-#line 2558 "parser/evoparser.y"
+#line 2579 "parser/evoparser.y"
     { (yyval.intval) = 230000; ;}
     break;
 
   case 673:
-#line 2559 "parser/evoparser.y"
+#line 2580 "parser/evoparser.y"
     { (yyval.intval) = 250000 + ((yyvsp[(1) - (3)].intval) / 10000); ;}
     break;
 
   case 674:
-#line 2562 "parser/evoparser.y"
+#line 2583 "parser/evoparser.y"
     { emit("ENUMVAL %s", (yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); (yyval.intval) = 1; ;}
     break;
 
   case 675:
-#line 2563 "parser/evoparser.y"
+#line 2584 "parser/evoparser.y"
     { emit("ENUMVAL %s", (yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); (yyval.intval) = (yyvsp[(1) - (3)].intval) + 1; ;}
     break;
 
   case 676:
-#line 2567 "parser/evoparser.y"
+#line 2588 "parser/evoparser.y"
     {
         emit("CREATESELECT %d", (yyvsp[(1) - (3)].intval));
         /* In CTAS context, select_stmt is not a standalone stmt,
@@ -10147,52 +10168,52 @@ yyreduce:
     break;
 
   case 677:
-#line 2579 "parser/evoparser.y"
+#line 2600 "parser/evoparser.y"
     { (yyval.intval) = 0; ;}
     break;
 
   case 678:
-#line 2580 "parser/evoparser.y"
+#line 2601 "parser/evoparser.y"
     { (yyval.intval) = 1; ;}
     break;
 
   case 679:
-#line 2581 "parser/evoparser.y"
+#line 2602 "parser/evoparser.y"
     { (yyval.intval) = 2; ;}
     break;
 
   case 680:
-#line 2585 "parser/evoparser.y"
+#line 2606 "parser/evoparser.y"
     { emit("STMT"); ;}
     break;
 
   case 681:
-#line 2588 "parser/evoparser.y"
+#line 2609 "parser/evoparser.y"
     { emit("SETSCHEMA %s", (yyvsp[(3) - (3)].strval)); SetSchemaProcess((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
   case 682:
-#line 2589 "parser/evoparser.y"
+#line 2610 "parser/evoparser.y"
     { emit("SETSCHEMA default"); SetSchemaProcess("default"); ;}
     break;
 
   case 686:
-#line 2593 "parser/evoparser.y"
+#line 2614 "parser/evoparser.y"
     { if ((yyvsp[(2) - (3)].subtok) != 4) { yyerror(scanner, "bad set to @%s", (yyvsp[(1) - (3)].strval)); YYERROR; } emit("SET %s", (yyvsp[(1) - (3)].strval)); free((yyvsp[(1) - (3)].strval)); ;}
     break;
 
   case 687:
-#line 2594 "parser/evoparser.y"
+#line 2615 "parser/evoparser.y"
     { emit("SET %s", (yyvsp[(1) - (3)].strval)); free((yyvsp[(1) - (3)].strval)); ;}
     break;
 
   case 688:
-#line 2602 "parser/evoparser.y"
+#line 2623 "parser/evoparser.y"
     { emit("STMT"); CreateProcedureProcess(); ;}
     break;
 
   case 689:
-#line 2607 "parser/evoparser.y"
+#line 2628 "parser/evoparser.y"
     {
         emit("CREATEPROCEDURE %s", (yyvsp[(3) - (10)].strval));
         evo_set_proc_name((yyvsp[(3) - (10)].strval), 0);
@@ -10201,7 +10222,7 @@ yyreduce:
     break;
 
   case 690:
-#line 2613 "parser/evoparser.y"
+#line 2634 "parser/evoparser.y"
     {
         emit("CREATEPROCEDURE %s", (yyvsp[(3) - (9)].strval));
         evo_set_proc_name((yyvsp[(3) - (9)].strval), 0);
@@ -10210,7 +10231,7 @@ yyreduce:
     break;
 
   case 691:
-#line 2619 "parser/evoparser.y"
+#line 2640 "parser/evoparser.y"
     {
         emit("CREATEORREPLACEPROCEDURE %s", (yyvsp[(5) - (12)].strval));
         evo_set_proc_name((yyvsp[(5) - (12)].strval), 0);
@@ -10220,7 +10241,7 @@ yyreduce:
     break;
 
   case 692:
-#line 2626 "parser/evoparser.y"
+#line 2647 "parser/evoparser.y"
     {
         emit("CREATEORREPLACEPROCEDURE %s", (yyvsp[(5) - (11)].strval));
         evo_set_proc_name((yyvsp[(5) - (11)].strval), 0);
@@ -10230,7 +10251,7 @@ yyreduce:
     break;
 
   case 693:
-#line 2633 "parser/evoparser.y"
+#line 2654 "parser/evoparser.y"
     {
         emit("CREATEFUNCTION %s", (yyvsp[(3) - (12)].strval));
         evo_set_proc_name((yyvsp[(3) - (12)].strval), 1);
@@ -10239,7 +10260,7 @@ yyreduce:
     break;
 
   case 694:
-#line 2639 "parser/evoparser.y"
+#line 2660 "parser/evoparser.y"
     {
         emit("CREATEFUNCTION %s", (yyvsp[(3) - (11)].strval));
         evo_set_proc_name((yyvsp[(3) - (11)].strval), 1);
@@ -10248,7 +10269,7 @@ yyreduce:
     break;
 
   case 695:
-#line 2645 "parser/evoparser.y"
+#line 2666 "parser/evoparser.y"
     {
         emit("CREATEORREPLACEFUNCTION %s", (yyvsp[(5) - (14)].strval));
         evo_set_proc_name((yyvsp[(5) - (14)].strval), 1);
@@ -10258,7 +10279,7 @@ yyreduce:
     break;
 
   case 696:
-#line 2652 "parser/evoparser.y"
+#line 2673 "parser/evoparser.y"
     {
         emit("CREATEORREPLACEFUNCTION %s", (yyvsp[(5) - (13)].strval));
         evo_set_proc_name((yyvsp[(5) - (13)].strval), 1);
@@ -10268,97 +10289,97 @@ yyreduce:
     break;
 
   case 701:
-#line 2668 "parser/evoparser.y"
+#line 2689 "parser/evoparser.y"
     { evo_add_proc_param((yyvsp[(1) - (2)].strval), "IN"); free((yyvsp[(1) - (2)].strval)); ;}
     break;
 
   case 702:
-#line 2669 "parser/evoparser.y"
+#line 2690 "parser/evoparser.y"
     { evo_add_proc_param((yyvsp[(2) - (3)].strval), "IN"); free((yyvsp[(2) - (3)].strval)); ;}
     break;
 
   case 703:
-#line 2670 "parser/evoparser.y"
+#line 2691 "parser/evoparser.y"
     { evo_add_proc_param((yyvsp[(2) - (3)].strval), "OUT"); free((yyvsp[(2) - (3)].strval)); ;}
     break;
 
   case 704:
-#line 2671 "parser/evoparser.y"
+#line 2692 "parser/evoparser.y"
     { evo_add_proc_param((yyvsp[(2) - (3)].strval), "INOUT"); free((yyvsp[(2) - (3)].strval)); ;}
     break;
 
   case 705:
-#line 2674 "parser/evoparser.y"
+#line 2695 "parser/evoparser.y"
     { evo_set_proc_return_type("INT"); ;}
     break;
 
   case 706:
-#line 2675 "parser/evoparser.y"
+#line 2696 "parser/evoparser.y"
     { evo_set_proc_return_type("INT"); ;}
     break;
 
   case 707:
-#line 2676 "parser/evoparser.y"
+#line 2697 "parser/evoparser.y"
     { evo_set_proc_return_type("VARCHAR"); ;}
     break;
 
   case 708:
-#line 2677 "parser/evoparser.y"
+#line 2698 "parser/evoparser.y"
     { evo_set_proc_return_type("TEXT"); ;}
     break;
 
   case 709:
-#line 2678 "parser/evoparser.y"
+#line 2699 "parser/evoparser.y"
     { evo_set_proc_return_type("BOOLEAN"); ;}
     break;
 
   case 710:
-#line 2679 "parser/evoparser.y"
+#line 2700 "parser/evoparser.y"
     { evo_set_proc_return_type("FLOAT"); ;}
     break;
 
   case 711:
-#line 2680 "parser/evoparser.y"
+#line 2701 "parser/evoparser.y"
     { evo_set_proc_return_type("DOUBLE"); ;}
     break;
 
   case 712:
-#line 2681 "parser/evoparser.y"
+#line 2702 "parser/evoparser.y"
     { evo_set_proc_return_type("BIGINT"); ;}
     break;
 
   case 713:
-#line 2682 "parser/evoparser.y"
+#line 2703 "parser/evoparser.y"
     { evo_set_proc_return_type("DATE"); ;}
     break;
 
   case 714:
-#line 2683 "parser/evoparser.y"
+#line 2704 "parser/evoparser.y"
     { evo_set_proc_return_type("TIMESTAMP"); ;}
     break;
 
   case 723:
-#line 2700 "parser/evoparser.y"
+#line 2721 "parser/evoparser.y"
     { free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 724:
-#line 2701 "parser/evoparser.y"
+#line 2722 "parser/evoparser.y"
     { free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 845:
-#line 2719 "parser/evoparser.y"
+#line 2740 "parser/evoparser.y"
     { free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 846:
-#line 2726 "parser/evoparser.y"
+#line 2747 "parser/evoparser.y"
     { emit("STMT"); DropProcedureProcess(); ;}
     break;
 
   case 847:
-#line 2731 "parser/evoparser.y"
+#line 2752 "parser/evoparser.y"
     {
         emit("DROPPROCEDURE %s", (yyvsp[(3) - (3)].strval));
         evo_set_proc_drop((yyvsp[(3) - (3)].strval), 0);
@@ -10367,7 +10388,7 @@ yyreduce:
     break;
 
   case 848:
-#line 2737 "parser/evoparser.y"
+#line 2758 "parser/evoparser.y"
     {
         emit("DROPPROCEDURE IF EXISTS %s", (yyvsp[(5) - (5)].strval));
         evo_set_proc_drop((yyvsp[(5) - (5)].strval), 1);
@@ -10376,7 +10397,7 @@ yyreduce:
     break;
 
   case 849:
-#line 2743 "parser/evoparser.y"
+#line 2764 "parser/evoparser.y"
     {
         emit("DROPFUNCTION %s", (yyvsp[(3) - (3)].strval));
         evo_set_proc_drop((yyvsp[(3) - (3)].strval), 0);
@@ -10385,7 +10406,7 @@ yyreduce:
     break;
 
   case 850:
-#line 2749 "parser/evoparser.y"
+#line 2770 "parser/evoparser.y"
     {
         emit("DROPFUNCTION IF EXISTS %s", (yyvsp[(5) - (5)].strval));
         evo_set_proc_drop((yyvsp[(5) - (5)].strval), 1);
@@ -10394,12 +10415,12 @@ yyreduce:
     break;
 
   case 851:
-#line 2760 "parser/evoparser.y"
+#line 2781 "parser/evoparser.y"
     { emit("STMT"); CallProcedureProcess(); ;}
     break;
 
   case 852:
-#line 2765 "parser/evoparser.y"
+#line 2786 "parser/evoparser.y"
     {
         emit("CALL %s 0", (yyvsp[(2) - (4)].strval));
         evo_set_call_name((yyvsp[(2) - (4)].strval));
@@ -10408,7 +10429,7 @@ yyreduce:
     break;
 
   case 853:
-#line 2771 "parser/evoparser.y"
+#line 2792 "parser/evoparser.y"
     {
         emit("CALL %s", (yyvsp[(2) - (5)].strval));
         evo_set_call_name((yyvsp[(2) - (5)].strval));
@@ -10417,47 +10438,47 @@ yyreduce:
     break;
 
   case 856:
-#line 2782 "parser/evoparser.y"
+#line 2803 "parser/evoparser.y"
     { char buf[32]; snprintf(buf,sizeof(buf),"%d",(yyvsp[(1) - (1)].intval)); evo_add_call_arg(buf); ;}
     break;
 
   case 857:
-#line 2783 "parser/evoparser.y"
+#line 2804 "parser/evoparser.y"
     { evo_add_call_arg((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 858:
-#line 2784 "parser/evoparser.y"
+#line 2805 "parser/evoparser.y"
     { char buf[64]; snprintf(buf,sizeof(buf),"%g",(yyvsp[(1) - (1)].floatval)); evo_add_call_arg(buf); ;}
     break;
 
   case 859:
-#line 2785 "parser/evoparser.y"
+#line 2806 "parser/evoparser.y"
     { evo_add_call_arg("NULL"); ;}
     break;
 
   case 860:
-#line 2786 "parser/evoparser.y"
+#line 2807 "parser/evoparser.y"
     { evo_add_call_arg((yyvsp[(1) - (1)].intval) ? "TRUE" : "FALSE"); ;}
     break;
 
   case 861:
-#line 2787 "parser/evoparser.y"
+#line 2808 "parser/evoparser.y"
     { evo_add_call_arg((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 862:
-#line 2788 "parser/evoparser.y"
+#line 2809 "parser/evoparser.y"
     { char buf[256]; snprintf(buf,sizeof(buf),"@%s",(yyvsp[(1) - (1)].strval)); evo_add_call_arg(buf); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 863:
-#line 2795 "parser/evoparser.y"
+#line 2816 "parser/evoparser.y"
     { emit("STMT"); CreateTriggerProcess(); ;}
     break;
 
   case 864:
-#line 2800 "parser/evoparser.y"
+#line 2821 "parser/evoparser.y"
     {
         emit("CREATETRIGGER %s ON %s", (yyvsp[(3) - (13)].strval), (yyvsp[(7) - (13)].strval));
         evo_set_trigger_info((yyvsp[(3) - (13)].strval), (yyvsp[(7) - (13)].strval));
@@ -10466,37 +10487,37 @@ yyreduce:
     break;
 
   case 865:
-#line 2807 "parser/evoparser.y"
+#line 2828 "parser/evoparser.y"
     { evo_set_trigger_timing('B'); ;}
     break;
 
   case 866:
-#line 2808 "parser/evoparser.y"
+#line 2829 "parser/evoparser.y"
     { evo_set_trigger_timing('A'); ;}
     break;
 
   case 867:
-#line 2811 "parser/evoparser.y"
+#line 2832 "parser/evoparser.y"
     { evo_set_trigger_event('I'); ;}
     break;
 
   case 868:
-#line 2812 "parser/evoparser.y"
+#line 2833 "parser/evoparser.y"
     { evo_set_trigger_event('U'); ;}
     break;
 
   case 869:
-#line 2813 "parser/evoparser.y"
+#line 2834 "parser/evoparser.y"
     { evo_set_trigger_event('D'); ;}
     break;
 
   case 870:
-#line 2816 "parser/evoparser.y"
+#line 2837 "parser/evoparser.y"
     { emit("STMT"); DropTriggerProcess(); ;}
     break;
 
   case 871:
-#line 2821 "parser/evoparser.y"
+#line 2842 "parser/evoparser.y"
     {
         emit("DROPTRIGGER %s", (yyvsp[(3) - (3)].strval));
         evo_set_trigger_drop((yyvsp[(3) - (3)].strval), 0);
@@ -10505,7 +10526,7 @@ yyreduce:
     break;
 
   case 872:
-#line 2827 "parser/evoparser.y"
+#line 2848 "parser/evoparser.y"
     {
         emit("DROPTRIGGER IF EXISTS %s", (yyvsp[(5) - (5)].strval));
         evo_set_trigger_drop((yyvsp[(5) - (5)].strval), 1);
@@ -10514,7 +10535,7 @@ yyreduce:
     break;
 
   case 873:
-#line 2836 "parser/evoparser.y"
+#line 2857 "parser/evoparser.y"
     {
         emit("ALTERTRIGGER %s ENABLE", (yyvsp[(3) - (4)].strval));
         evo_set_trigger_drop((yyvsp[(3) - (4)].strval), 0);  /* reuse dropName for trigger name */
@@ -10525,7 +10546,7 @@ yyreduce:
     break;
 
   case 874:
-#line 2844 "parser/evoparser.y"
+#line 2865 "parser/evoparser.y"
     {
         emit("ALTERTRIGGER %s DISABLE", (yyvsp[(3) - (4)].strval));
         evo_set_trigger_drop((yyvsp[(3) - (4)].strval), 0);
@@ -10536,12 +10557,12 @@ yyreduce:
     break;
 
   case 875:
-#line 2854 "parser/evoparser.y"
+#line 2875 "parser/evoparser.y"
     { emit("STMT"); evo_create_sequence_process(); ;}
     break;
 
   case 876:
-#line 2859 "parser/evoparser.y"
+#line 2880 "parser/evoparser.y"
     {
         emit("CREATESEQUENCE %d %s", (yyvsp[(3) - (5)].intval), (yyvsp[(4) - (5)].strval));
         evo_seq_set_name((yyvsp[(4) - (5)].strval));
@@ -10551,52 +10572,52 @@ yyreduce:
     break;
 
   case 879:
-#line 2872 "parser/evoparser.y"
+#line 2893 "parser/evoparser.y"
     { evo_seq_set_start((yyvsp[(3) - (3)].intval)); ;}
     break;
 
   case 880:
-#line 2873 "parser/evoparser.y"
+#line 2894 "parser/evoparser.y"
     { evo_seq_set_start((yyvsp[(2) - (2)].intval)); ;}
     break;
 
   case 881:
-#line 2874 "parser/evoparser.y"
+#line 2895 "parser/evoparser.y"
     { evo_seq_set_increment((yyvsp[(3) - (3)].intval)); ;}
     break;
 
   case 882:
-#line 2875 "parser/evoparser.y"
+#line 2896 "parser/evoparser.y"
     { evo_seq_set_increment((yyvsp[(2) - (2)].intval)); ;}
     break;
 
   case 883:
-#line 2876 "parser/evoparser.y"
+#line 2897 "parser/evoparser.y"
     { evo_seq_set_minvalue((yyvsp[(2) - (2)].intval)); ;}
     break;
 
   case 884:
-#line 2877 "parser/evoparser.y"
+#line 2898 "parser/evoparser.y"
     { evo_seq_set_maxvalue((yyvsp[(2) - (2)].intval)); ;}
     break;
 
   case 885:
-#line 2878 "parser/evoparser.y"
+#line 2899 "parser/evoparser.y"
     { evo_seq_set_cycle(1); ;}
     break;
 
   case 886:
-#line 2879 "parser/evoparser.y"
+#line 2900 "parser/evoparser.y"
     { evo_seq_set_cycle(0); ;}
     break;
 
   case 887:
-#line 2882 "parser/evoparser.y"
+#line 2903 "parser/evoparser.y"
     { emit("STMT"); evo_drop_sequence_process(); ;}
     break;
 
   case 888:
-#line 2887 "parser/evoparser.y"
+#line 2908 "parser/evoparser.y"
     {
         emit("DROPSEQUENCE %s", (yyvsp[(3) - (3)].strval));
         evo_seq_set_name((yyvsp[(3) - (3)].strval));
@@ -10605,7 +10626,7 @@ yyreduce:
     break;
 
   case 889:
-#line 2893 "parser/evoparser.y"
+#line 2914 "parser/evoparser.y"
     {
         emit("DROPSEQUENCE IF EXISTS %s", (yyvsp[(5) - (5)].strval));
         evo_seq_set_name((yyvsp[(5) - (5)].strval));
@@ -10615,7 +10636,7 @@ yyreduce:
     break;
 
   case 890:
-#line 2903 "parser/evoparser.y"
+#line 2924 "parser/evoparser.y"
     {
         emit("ALTERSEQUENCE %s", (yyvsp[(3) - (4)].strval));
         evo_seq_set_name((yyvsp[(3) - (4)].strval));
@@ -10625,7 +10646,7 @@ yyreduce:
     break;
 
   case 891:
-#line 2910 "parser/evoparser.y"
+#line 2931 "parser/evoparser.y"
     {
         emit("ALTERSEQUENCE RESTART %s", (yyvsp[(3) - (4)].strval));
         evo_seq_set_name((yyvsp[(3) - (4)].strval));
@@ -10635,7 +10656,7 @@ yyreduce:
     break;
 
   case 892:
-#line 2917 "parser/evoparser.y"
+#line 2938 "parser/evoparser.y"
     {
         emit("ALTERSEQUENCE RESTART WITH %d %s", (yyvsp[(6) - (6)].intval), (yyvsp[(3) - (6)].strval));
         evo_seq_set_name((yyvsp[(3) - (6)].strval));
@@ -10646,7 +10667,7 @@ yyreduce:
     break;
 
   case 893:
-#line 2925 "parser/evoparser.y"
+#line 2946 "parser/evoparser.y"
     {
         emit("ALTERSEQUENCE RENAME %s TO %s", (yyvsp[(3) - (6)].strval), (yyvsp[(6) - (6)].strval));
         evo_seq_set_name((yyvsp[(3) - (6)].strval));
@@ -10656,23 +10677,23 @@ yyreduce:
     break;
 
   case 895:
-#line 2935 "parser/evoparser.y"
+#line 2956 "parser/evoparser.y"
     { SetReturningAll(); ;}
     break;
 
   case 897:
-#line 2939 "parser/evoparser.y"
+#line 2960 "parser/evoparser.y"
     { AddReturningCol((yyvsp[(1) - (1)].strval)); free((yyvsp[(1) - (1)].strval)); ;}
     break;
 
   case 898:
-#line 2940 "parser/evoparser.y"
+#line 2961 "parser/evoparser.y"
     { AddReturningCol((yyvsp[(3) - (3)].strval)); free((yyvsp[(3) - (3)].strval)); ;}
     break;
 
 
 /* Line 1267 of yacc.c.  */
-#line 10676 "parser/evoparser.tab.c"
+#line 10697 "parser/evoparser.tab.c"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -10886,7 +10907,7 @@ yyreturn:
 }
 
 
-#line 2943 "parser/evoparser.y"
+#line 2964 "parser/evoparser.y"
 
 void emit(const char *s, ...)
 {
