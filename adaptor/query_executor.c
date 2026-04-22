@@ -1101,7 +1101,32 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
             }
             int row = result_add_row(rs);
             if (row < 0) break;
-            populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+            if (has_star) {
+                populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+            } else {
+                /* Column-filtered: same mapping as the PK branch — extract
+                 * every column, then copy only the ones the caller asked
+                 * for into the result. Without this the secondary-index
+                 * fast path was populating `SELECT c1, c2` with values
+                 * from columns (0, 1) regardless of which names the query
+                 * listed, which is what test_encryption's "SELECT name,
+                 * price" caught. */
+                char fields[CAT_MAX_COLUMNS][256];
+                int nullArr[CAT_MAX_COLUMNS];
+                int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
+                                             fields, nullArr, 64);
+                for (int fi = 0; fi < fast_ncols && fi < rs->num_cols; fi++) {
+                    for (int ci = 0; ci < ncols && ci < nf; ci++) {
+                        if (strcasecmp(cols[ci].col_name, fast_cols[fi]) == 0) {
+                            if (nullArr[ci])
+                                result_set_null(rs, row, fi);
+                            else
+                                result_set_field(rs, row, fi, fields[ci]);
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
