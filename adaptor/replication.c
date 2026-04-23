@@ -22,6 +22,7 @@
 #include "../evolution/db/wal.h"
 #include "../evolution/db/page_mgr.h"
 #include "../evolution/db/page_crypt.h"
+#include "../evolution/db/buffer_pool.h"  /* bp_invalidate_page */
 #include "../evolution/db/catalog_internal.h"   /* cat_find_user, UserDesc */
 /* crypto.h defines SHA256_CTX which collides with OpenSSL's when
  * EVOSQL_TLS is defined (tls.h pulls in <openssl/ssl.h>). Keep a
@@ -502,6 +503,12 @@ static void *receiver_loop(void *arg)
                 } else {
                     pwrite(data_fd, page_data, rec_page_len, offset);
                 }
+                /* Invalidate any cached copy in the replica's buffer pool —
+                 * the on-disk page is now newer than whatever bp might have.
+                 * Without this, a SELECT on the replica reads stale pages
+                 * (e.g. old catalog → "relation does not exist" after
+                 * CREATE TABLE on primary). */
+                bp_invalidate_page(data_fd, rec_page_no);
                 records++;
 
                 /* Update replication slot LSN (persist every 100 records) */

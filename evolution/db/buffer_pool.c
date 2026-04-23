@@ -704,6 +704,34 @@ void bp_invalidate_fd(int fd)
     }
 }
 
+void bp_invalidate_page(int fd, uint32_t page_no)
+{
+    int pi;
+    if (!g_pool) return;
+    for (pi = 0; pi < BP_NUM_PARTITIONS; pi++) {
+        BPPartition *part = &g_pool->parts[pi];
+        int i;
+        bp_mutex_lock(&part->lock);
+        for (i = 0; i < part->num_pages; i++) {
+            BPPage *p = &part->pages[i];
+            if (p->fd == fd && p->page_no == page_no) {
+                /* Discard cached contents — next pin will re-read from
+                 * disk. Used by WAL receiver after pwrite replaces the
+                 * on-disk page. Don't write dirty back (the on-disk
+                 * version is newer thanks to WAL replay). */
+                part_hash_remove(part, p->fd, p->page_no);
+                p->fd          = -1;
+                p->dirty       = 0;
+                atomic_store(&p->pin_count, 0);
+                p->usage_count = 0;
+                bp_mutex_unlock(&part->lock);
+                return;
+            }
+        }
+        bp_mutex_unlock(&part->lock);
+    }
+}
+
 void bp_flush_all(void)
 {
     int pi;

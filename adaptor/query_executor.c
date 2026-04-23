@@ -5579,7 +5579,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
      * longjmp back here in GUI mode) MUST be inside this block.
      * This includes the parser AND collect_select_results. */
     if (setjmp(g_err.jmpbuf) == 0) {
-        int parse_result;
+        int parse_result = 0;   /* 0 = ok; 1 = syntax error (yyparse). Must
+                                 * be pre-initialized so the replica
+                                 * write-rejection goto doesn't leave it
+                                 * uninitialized and trip the syntax-error
+                                 * overwrite below. */
 
         /* Reentrant parser: each call gets its own scanner instance.
          * DML uses g_dml_mutex for serialization (doesn't block readers).
