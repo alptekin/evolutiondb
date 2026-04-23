@@ -121,6 +121,11 @@ int DropTableProcess(void)
     /* Task 92: scrub inheritance entry for this child (no-op if it wasn't a child). */
     cat_remove_inheritance(td.table_id);
 
+    /* Task 93: remove any RLS policies attached to this table (no-op if
+     * none). Leaving stale policies around would cause cat_list_policies_
+     * for_table to resurface them if a later CREATE TABLE reused the id. */
+    cat_drop_all_policies_for_table(td.table_id);
+
     printf("command(s) completed successfully!..\n");
     TruncateDrop();
 
