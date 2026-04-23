@@ -1955,7 +1955,7 @@
 
 ---
 
-### Task 97: ⬜ Replication (Feature #54)
+### Task 97: ✅ Replication (Feature #54)
 
 **Goal:** Basic primary→replica streaming replication.
 
