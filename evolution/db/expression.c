@@ -3073,6 +3073,14 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
     case EXPR_JSON_ARROW_TEXT: pos = expr_serialize_r(e->left, buf, pos, bufSize);
                                pos = expr_serialize_r(e->right, buf, pos, bufSize);
                                return ser_append(buf, pos, bufSize, "JAT");
+    /* Task 93: zero-arg session functions used by RLS policies. Only
+     * CURRENT_USER is needed for RLS today; adding CURRENT_TIMESTAMP /
+     * _DATE / _TIME here costs nothing and lets CHECK constraints
+     * reference them too. */
+    case EXPR_CURRENT_USER:     return ser_append(buf, pos, bufSize, "CU");
+    case EXPR_CURRENT_TIMESTAMP: return ser_append(buf, pos, bufSize, "CTS");
+    case EXPR_CURRENT_DATE:      return ser_append(buf, pos, bufSize, "CDT");
+    case EXPR_CURRENT_TIME:      return ser_append(buf, pos, bufSize, "CTM");
     default:
         return pos; /* unsupported node type — skip */
     }
@@ -3110,6 +3118,18 @@ ExprNode *expr_deserialize(const char *buf)
             if (sp < 64) stack[sp++] = expr_make_bool(atoi(tok + 2));
         } else if (tok[0] == 'N' && tok[1] == '\0') {
             if (sp < 64) stack[sp++] = expr_make_null();
+        }
+        /* Task 93: zero-arg session functions — must be handled BEFORE
+         * the unary-operator block (sp >= 1) so CU/CTS/CDT/CTM push a
+         * new node without consuming an operand. */
+        else if (strcmp(tok, "CU") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_user();
+        } else if (strcmp(tok, "CTS") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_timestamp();
+        } else if (strcmp(tok, "CDT") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_date();
+        } else if (strcmp(tok, "CTM") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_time();
         }
         /* Unary operators (check first — before binary) */
         else if ((strcmp(tok, "NOT") == 0 || strcmp(tok, "NEG") == 0 ||
