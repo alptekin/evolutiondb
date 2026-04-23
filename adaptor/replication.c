@@ -639,6 +639,12 @@ static void *reconnect_loop(void *arg)
 
         /* Run receiver loop (blocks until disconnect) */
         ReceiverArg *ra = malloc(sizeof(ReceiverArg));
+        if (!ra) {
+            conn_tls_shutdown(&c);
+            close(sock);
+            sleep(1);
+            continue;
+        }
         ra->c = &c;
         ra->data_fd = g_data_fd_saved;
         receiver_loop(ra);  /* blocks until connection drops */
