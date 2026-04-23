@@ -114,6 +114,33 @@ typedef struct {
 /* List all replication slots. Returns count. */
 int repl_list_slots(ReplicationSlot *out, int max);
 
+/* Update or register a replication slot. Called by sender when a replica
+ * connects (active=1) or by ACK handler to advance confirmed_lsn.
+ * Safe to call from any thread — internally takes the slot mutex. */
+void repl_slot_update(const char *replica_id, uint32_t confirmed_lsn);
+
+/* Replication roles (see EVOSQL_REPLICATION_ROLE) */
+#define REPL_ROLE_PRIMARY   0
+#define REPL_ROLE_REPLICA   1
+#define REPL_ROLE_WITNESS   2
+
+/* Aggregated replication status snapshot. Used by
+ * SHOW REPLICATION STATUS and pg_catalog.pg_stat_replication. */
+typedef struct {
+    int      role;                           /* REPL_ROLE_* */
+    uint32_t my_lsn;                         /* primary: current WAL LSN; replica: last replayed */
+    int      num_replicas;                   /* number of active slots */
+    ReplicationSlot slots[REPL_MAX_SLOTS];
+} ReplicationStatus;
+
+/* Fill out with a consistent snapshot of the current status. */
+int repl_get_status(ReplicationStatus *out);
+
+/* Pin the declared role (called before repl_start_sender/receiver based on
+ * EVOSQL_REPLICATION_ROLE / --role). Accepted values: REPL_ROLE_*. */
+void repl_set_role(int role);
+int  repl_get_role(void);
+
 /* ----------------------------------------------------------------
  *  GAP-D9: Base Backup
  * ---------------------------------------------------------------- */
@@ -130,6 +157,14 @@ int repl_create_backup(const char *backup_path);
 /* Promote this replica to standalone master (stop receiving WAL,
  * accept DML). Called after Raft election or manual promote. */
 int repl_promote(void);
+
+/* ----------------------------------------------------------------
+ *  GAP-D3: Witness node mode
+ *  A witness participates in Raft voting but does not store data
+ *  and must reject SELECTs (see query_executor.c SELECT gate).
+ * ---------------------------------------------------------------- */
+int  repl_is_witness(void);
+void repl_set_witness(int enabled);
 
 /* ----------------------------------------------------------------
  *  GAP-D7: CDC Streaming Protocol

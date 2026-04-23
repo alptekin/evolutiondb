@@ -22,6 +22,11 @@
 #include "../evolution/db/page_mgr.h"
 #include "../evolution/db/page_crypt.h"
 
+/* Allow the role to be pinned from the CLI / env so SHOW REPLICATION STATUS
+ * and pg_is_in_recovery reflect operator intent before any replica connects.
+ * 0 = primary (default), 1 = replica, 2 = witness. Set via repl_set_role(). */
+static int g_repl_role = REPL_ROLE_PRIMARY;
+
 /* ================================================================
  *  Shared state
  * ================================================================ */
@@ -617,6 +622,49 @@ int repl_list_slots(ReplicationSlot *out, int max)
     }
     pthread_mutex_unlock(&g_slot_lock);
     return count;
+}
+
+/* ================================================================
+ *  Aggregated status — SHOW REPLICATION STATUS / pg_stat_replication
+ * ================================================================ */
+
+void repl_set_role(int role)
+{
+    if (role == REPL_ROLE_PRIMARY || role == REPL_ROLE_REPLICA ||
+        role == REPL_ROLE_WITNESS) {
+        g_repl_role = role;
+    }
+}
+
+int repl_get_role(void)
+{
+    /* Late-arriving replica start wins over stored pin. */
+    if (g_is_replica) return REPL_ROLE_REPLICA;
+    return g_repl_role;
+}
+
+int repl_get_status(ReplicationStatus *out)
+{
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+
+    out->role = repl_get_role();
+    if (out->role == REPL_ROLE_REPLICA) {
+        out->my_lsn = g_last_received_lsn;
+    } else {
+        out->my_lsn = wal_get_current_lsn();
+    }
+
+    pthread_mutex_lock(&g_slot_lock);
+    int count = 0;
+    for (int i = 0; i < REPL_MAX_SLOTS; i++) {
+        if (g_repl_slots[i].active) {
+            out->slots[count++] = g_repl_slots[i];
+        }
+    }
+    out->num_replicas = count;
+    pthread_mutex_unlock(&g_slot_lock);
+    return 0;
 }
 
 /* ================================================================

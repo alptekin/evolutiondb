@@ -78,9 +78,49 @@ int main(int argc, char *argv[])
     const char *cluster_nodes = NULL;   /* --cluster node1:port,node2:port,... */
     int node_id = -1;                   /* --node-id 0/1/2/... */
     int dist_port = 9969;              /* --dist-port (distributed query engine) */
+    const char *role_str = NULL;       /* --role primary|replica|witness */
     int i;
 
-    /* Parse CLI arguments */
+    /* Environment defaults (CLI flags below override).
+     *   EVOSQL_REPLICATION_ROLE   = primary | replica | witness
+     *   EVOSQL_PRIMARY_HOST       = upstream host for replicas
+     *   EVOSQL_PRIMARY_PORT       = upstream port for replicas
+     *   EVOSQL_REPLICATION_PORT   = primary listen port for WAL sender
+     *   EVOSQL_REPLICATION_USER   = credential for auth handshake (Commit 4)
+     *   EVOSQL_REPLICATION_PASSWORD
+     */
+    {
+        const char *env_role = getenv("EVOSQL_REPLICATION_ROLE");
+        const char *env_primary_host = getenv("EVOSQL_PRIMARY_HOST");
+        const char *env_primary_port = getenv("EVOSQL_PRIMARY_PORT");
+        const char *env_repl_port = getenv("EVOSQL_REPLICATION_PORT");
+        const char *env_repl_user = getenv("EVOSQL_REPLICATION_USER");
+        const char *env_repl_pass = getenv("EVOSQL_REPLICATION_PASSWORD");
+
+        if (env_role && env_role[0])
+            role_str = env_role;
+        if (env_repl_port && env_repl_port[0])
+            repl_port = atoi(env_repl_port);
+
+        /* If role=replica and primary host given, build a target string. */
+        if (env_role && strcasecmp(env_role, "replica") == 0 &&
+            env_primary_host && env_primary_host[0]) {
+            static char repl_target_buf[320];
+            int pport = (env_primary_port && env_primary_port[0])
+                ? atoi(env_primary_port) : REPL_DEFAULT_PORT;
+            snprintf(repl_target_buf, sizeof(repl_target_buf), "%s:%d",
+                     env_primary_host, pport);
+            replica_target = repl_target_buf;
+        }
+
+        /* Pre-register auth flag. Enforced in handshake in Commit 4. */
+        if (env_repl_user && env_repl_pass) {
+            extern void repl_set_auth(const char *, const char *);
+            repl_set_auth(env_repl_user, env_repl_pass);
+        }
+    }
+
+    /* Parse CLI arguments (override env) */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pg-port") == 0 && i + 1 < argc)
             pg_port = atoi(argv[++i]);
@@ -98,8 +138,28 @@ int main(int argc, char *argv[])
             node_id = atoi(argv[++i]);
         else if (strcmp(argv[i], "--dist-port") == 0 && i + 1 < argc)
             dist_port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--role") == 0 && i + 1 < argc)
+            role_str = argv[++i];
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
+    }
+
+    /* Resolve role string to numeric (pins SHOW REPLICATION STATUS output
+     * before any replica connects). */
+    if (role_str) {
+        extern void repl_set_role(int role);
+        extern void repl_set_witness(int enabled);
+        if (strcasecmp(role_str, "replica") == 0) {
+            repl_set_role(REPL_ROLE_REPLICA);
+        } else if (strcasecmp(role_str, "witness") == 0) {
+            repl_set_role(REPL_ROLE_WITNESS);
+            repl_set_witness(1);
+        } else if (strcasecmp(role_str, "primary") == 0) {
+            repl_set_role(REPL_ROLE_PRIMARY);
+        } else {
+            fprintf(stderr, "[REPL] Unknown role '%s' — expected primary|replica|witness\n",
+                    role_str);
+        }
     }
 
     /* Environment variable override (MySQL-style: bytes or with suffix) */
