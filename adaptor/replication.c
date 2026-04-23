@@ -995,31 +995,114 @@ int repl_get_status(ReplicationStatus *out)
 }
 
 /* ================================================================
- *  GAP-D9: Base Backup
+ *  GAP-D9: Base Backup (Task 97 Commit 7)
+ *
+ *  Produces a directory bundle at `backup_path`:
+ *    <backup_path>/evosql.db      -- full data file, consistent at
+ *                                    wal_fsync time
+ *    <backup_path>/evosql.wal     -- current WAL (for replay past the
+ *                                    LSN pinned in BACKUP_LABEL)
+ *    <backup_path>/BACKUP_LABEL   -- metadata: {start_lsn, timestamp}
+ *    <backup_path>/root            -- catalog-support files (future)
+ *
+ *  If backup_path ends in a regular filename (no trailing slash and
+ *  parent exists but target doesn't), falls back to legacy single-file
+ *  layout for backward compatibility.
  * ================================================================ */
+#include <sys/stat.h>
+#include <dirent.h>
+
+static int copy_file(const char *src, const char *dst)
+{
+    int in = open(src, O_RDONLY);
+    if (in < 0) return -1;
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (out < 0) { close(in); return -1; }
+    char buf[4096];
+    ssize_t n;
+    int rc = 0;
+    while ((n = read(in, buf, sizeof(buf))) > 0) {
+        if (write(out, buf, n) != n) { rc = -1; break; }
+    }
+    if (n < 0) rc = -1;
+    fsync(out);
+    close(in);
+    close(out);
+    return rc;
+}
+
+static int is_directory(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return S_ISDIR(st.st_mode);
+}
+
 int repl_create_backup(const char *backup_path)
 {
     extern int pgm_get_fd(void);
     int src_fd = pgm_get_fd();
     if (src_fd < 0) return -1;
 
-    /* Flush all dirty pages first */
+    /* Flush buffer pool + WAL to pin a consistent LSN. */
     extern void bp_flush_all(void);
     extern void pgm_flush(void);
     pgm_flush();
+    if (wal_is_active()) wal_fsync();
+    uint32_t start_lsn = wal_get_current_lsn();
 
-    /* Get file size */
+    /* Directory-mode backup */
+    if (mkdir(backup_path, 0700) == 0 || is_directory(backup_path)) {
+        char dst_db[1024], dst_wal[1024], dst_label[1024];
+        snprintf(dst_db,    sizeof(dst_db),    "%s/evosql.db", backup_path);
+        snprintf(dst_wal,   sizeof(dst_wal),   "%s/evosql.wal", backup_path);
+        snprintf(dst_label, sizeof(dst_label), "%s/BACKUP_LABEL", backup_path);
+
+        /* Copy evosql.db */
+        off_t file_size = lseek(src_fd, 0, SEEK_END);
+        if (file_size <= 0) return -1;
+        int out = open(dst_db, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (out < 0) return -1;
+        char buf[4096];
+        off_t pos = 0;
+        while (pos < file_size) {
+            ssize_t n = pread(src_fd, buf, sizeof(buf), pos);
+            if (n <= 0) break;
+            if (write(out, buf, n) != n) { close(out); return -1; }
+            pos += n;
+        }
+        fsync(out);
+        close(out);
+
+        /* Copy WAL (best-effort: if missing, BACKUP_LABEL.lsn still
+         * lets the replica replay from its first catch-up stream). */
+        if (access("evosql.wal", R_OK) == 0) copy_file("evosql.wal", dst_wal);
+        else if (access("root/evosql.wal", R_OK) == 0)
+            copy_file("root/evosql.wal", dst_wal);
+
+        /* Write BACKUP_LABEL */
+        FILE *lf = fopen(dst_label, "w");
+        if (lf) {
+            struct timeval tv; gettimeofday(&tv, NULL);
+            fprintf(lf, "start_lsn=%u\n", start_lsn);
+            fprintf(lf, "timestamp=%lld\n", (long long)tv.tv_sec);
+            fprintf(lf, "format=v1\n");
+            fclose(lf);
+        }
+        fprintf(stderr, "[REPL] Base backup bundle created at %s "
+                "(lsn=%u, %lld data bytes)\n",
+                backup_path, start_lsn, (long long)file_size);
+        return 0;
+    }
+
+    /* Legacy single-file path: when backup_path points to a regular file. */
     off_t file_size = lseek(src_fd, 0, SEEK_END);
     if (file_size <= 0) return -1;
-
-    /* Create backup file */
     int dst_fd = open(backup_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (dst_fd < 0) {
         fprintf(stderr, "[REPL] Cannot create backup file: %s\n", backup_path);
         return -1;
     }
-
-    /* Copy page by page */
     char buf[4096];
     off_t pos = 0;
     while (pos < file_size) {
@@ -1030,9 +1113,8 @@ int repl_create_backup(const char *backup_path)
     }
     fsync(dst_fd);
     close(dst_fd);
-
-    fprintf(stderr, "[REPL] Base backup created: %s (%lld bytes)\n",
-            backup_path, (long long)file_size);
+    fprintf(stderr, "[REPL] Base backup created: %s (%lld bytes, lsn=%u)\n",
+            backup_path, (long long)file_size, start_lsn);
     return 0;
 }
 

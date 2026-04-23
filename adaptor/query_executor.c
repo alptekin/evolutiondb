@@ -7853,6 +7853,20 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     result_init(rs);
 
+    /* Witness gate (Task 97 Commit 7): a witness node participates in
+     * Raft voting but does not store data. Reject ALL queries (even
+     * SELECT 1) with SQLSTATE 08006 "connection_failure" — matches
+     * PostgreSQL's convention for "this node cannot serve right now".
+     * Placed above catalog_try_handle so SELECT 1 and pg_catalog shims
+     * are rejected uniformly. */
+    {
+        extern int repl_is_witness(void);
+        if (repl_is_witness()) {
+            result_set_error(rs, "08006", "witness node does not serve queries");
+            return;
+        }
+    }
+
     /* Reject queries exceeding internal buffer size (prevents stack overflow) */
     size_t sql_len = strlen(sql);
     if (sql_len >= sizeof(normalized) - 4) {

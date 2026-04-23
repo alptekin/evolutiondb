@@ -79,6 +79,7 @@ int main(int argc, char *argv[])
     int node_id = -1;                   /* --node-id 0/1/2/... */
     int dist_port = 9969;              /* --dist-port (distributed query engine) */
     const char *role_str = NULL;       /* --role primary|replica|witness */
+    const char *base_backup_path = NULL;  /* --base-backup PATH */
     int i;
 
     /* Environment defaults (CLI flags below override).
@@ -150,6 +151,8 @@ int main(int argc, char *argv[])
             dist_port = atoi(argv[++i]);
         else if (strcmp(argv[i], "--role") == 0 && i + 1 < argc)
             role_str = argv[++i];
+        else if (strcmp(argv[i], "--base-backup") == 0 && i + 1 < argc)
+            base_backup_path = argv[++i];
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
     }
@@ -190,6 +193,16 @@ int main(int argc, char *argv[])
 
     /* Initialise engine, locks, socket subsystem */
     server_init_ex(buffer_pool_pages);
+
+    /* Base-backup mode (Task 97 Commit 7): run the copy and exit
+     * without binding listener sockets. Scripted replica bootstrap
+     * uses this to clone a fresh data directory from primary. */
+    if (base_backup_path) {
+        extern int repl_create_backup(const char *);
+        int rc = repl_create_backup(base_backup_path);
+        server_cleanup();
+        return rc == 0 ? 0 : 1;
+    }
 
     /* Task 91: LISTEN/NOTIFY registry */
     {
