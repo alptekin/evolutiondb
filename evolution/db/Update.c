@@ -847,8 +847,19 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
 
         /* HOT (Heap-Only Tuple) optimization: only when secondary indexes
          * exist and no SET column touches an indexed column. Without
-         * secondary indexes, HOT provides no benefit (PK update is needed). */
-        int hot_eligible = (nIdx > 0) ? 1 : 0;
+         * secondary indexes, HOT provides no benefit (PK update is needed).
+         *
+         * DISABLED (2026-04-23): consecutive HOT updates on the same PK
+         * silently lose intermediate versions — the tail HEAP_ONLY tuple
+         * from update N-1 never becomes reachable as a chain link after
+         * update N marks it HOT_UPDATED, so SELECT keeps returning the
+         * payload frozen at update #1. test_hot.multiple_non_indexed_
+         * updates was the canary: 30 -> 31 -> 32 -> 33 reads back as
+         * 31. Correctness first; HOT stays off until we ship a unit
+         * test that walks the chain tuple-by-tuple and can prove the
+         * fix is tight. Only cost is extra PK leaf updates + secondary
+         * index writes on non-indexed-column updates. */
+        int hot_eligible = 0;
         if (nIdx > 0) {
             int minSetH = numSetVals < numSetCols ? numSetVals : numSetCols;
             for (int ix = 0; ix < nIdx && hot_eligible; ix++) {

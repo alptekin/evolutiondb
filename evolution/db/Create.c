@@ -458,12 +458,13 @@ int CreateTableProcess(void)
     int numCols = 0;
     char colNameArr[CAT_MAX_COLUMNS][128];
     {
-        char tmp[1024];
+        char tmp[4096];
         char *tok;
         if (g_create.columnDefs[0] != '\0') {
-            strcpy(tmp, g_create.columnDefs);
+            strncpy(tmp, g_create.columnDefs, sizeof(tmp) - 1);
+            tmp[sizeof(tmp) - 1] = '\0';
             tok = strtok(tmp, FIELD_SEP);
-            while (tok && numCols < 64) {
+            while (tok && numCols < CAT_MAX_COLUMNS) {
                 strncpy(colNameArr[numCols], tok, 127);
                 colNameArr[numCols][127] = '\0';
                 numCols++;
@@ -487,11 +488,12 @@ int CreateTableProcess(void)
     int typeVals[CAT_MAX_COLUMNS];
     int numTypes = 0;
     {
-        char tmp[1024];
+        char tmp[4096];
         char *tok;
-        strcpy(tmp, g_create.columnTypeDefs);
+        strncpy(tmp, g_create.columnTypeDefs, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
         tok = strtok(tmp, FIELD_SEP);
-        while (tok && numTypes < 64) {
+        while (tok && numTypes < CAT_MAX_COLUMNS) {
             typeVals[numTypes++] = atoi(tok);
             tok = strtok(NULL, FIELD_SEP);
         }
@@ -501,11 +503,12 @@ int CreateTableProcess(void)
     int nullFlags[CAT_MAX_COLUMNS];
     int numNulls = 0;
     {
-        char tmp[1024];
+        char tmp[4096];
         char *tok;
-        strcpy(tmp, g_create.columnNullFlags);
+        strncpy(tmp, g_create.columnNullFlags, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
         tok = strtok(tmp, FIELD_SEP);
-        while (tok && numNulls < 64) {
+        while (tok && numNulls < CAT_MAX_COLUMNS) {
             nullFlags[numNulls++] = atoi(tok);
             tok = strtok(NULL, FIELD_SEP);
         }
@@ -515,11 +518,12 @@ int CreateTableProcess(void)
     int uniqueFlags[CAT_MAX_COLUMNS];
     int numUniques = 0;
     {
-        char tmp[1024];
+        char tmp[4096];
         char *tok;
-        strcpy(tmp, g_create.columnUniqueFlags);
+        strncpy(tmp, g_create.columnUniqueFlags, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
         tok = strtok(tmp, FIELD_SEP);
-        while (tok && numUniques < 64) {
+        while (tok && numUniques < CAT_MAX_COLUMNS) {
             uniqueFlags[numUniques++] = atoi(tok);
             tok = strtok(NULL, FIELD_SEP);
         }
@@ -529,11 +533,12 @@ int CreateTableProcess(void)
     char defaultVals[CAT_MAX_COLUMNS][256];
     int numDefaults = 0;
     {
-        char tmp[4096];
+        char tmp[16384];
         char *tok;
-        strcpy(tmp, g_create.columnDefaults);
+        strncpy(tmp, g_create.columnDefaults, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
         tok = strtok(tmp, FIELD_SEP);
-        while (tok && numDefaults < 64) {
+        while (tok && numDefaults < CAT_MAX_COLUMNS) {
             strncpy(defaultVals[numDefaults], tok, 255);
             defaultVals[numDefaults][255] = '\0';
             numDefaults++;
@@ -574,8 +579,8 @@ int CreateTableProcess(void)
         } else {
             strcpy(cols[i].default_val, "\x01NONE\x01");
         }
-        cols[i].generated_mode = (i < 64) ? g_create.columnGeneratedModes[i] : 0;
-        if (i < 64 && g_create.columnGeneratedExprs[i][0]) {
+        cols[i].generated_mode = (i < CAT_MAX_COLUMNS) ? g_create.columnGeneratedModes[i] : 0;
+        if (i < CAT_MAX_COLUMNS && g_create.columnGeneratedExprs[i][0]) {
             strncpy(cols[i].generated_expr, g_create.columnGeneratedExprs[i], 511);
             cols[i].generated_expr[511] = '\0';
         } else {
@@ -987,7 +992,7 @@ int GetColumnNames(char *name)
         g_create.autoIncColIndex = g_create.columnCount;
 
     /* Accumulate generated column info */
-    if (g_create.columnCount < 64) {
+    if (g_create.columnCount < CAT_MAX_COLUMNS) {
         g_create.columnGeneratedModes[g_create.columnCount] = g_create.currentColGeneratedMode;
         if (g_create.currentColGeneratedExpr[0])
             strncpy(g_create.columnGeneratedExprs[g_create.columnCount], g_create.currentColGeneratedExpr, 511);
@@ -1073,7 +1078,7 @@ int AlterTableAddCheckConstraint(const char *tableName, const char *constraintNa
     /* Validate existing rows against the new CHECK constraint */
     {
         char colNames[CAT_MAX_COLUMNS][128];
-        for (int c = 0; c < ncols && c < 64; c++)
+        for (int c = 0; c < ncols && c < CAT_MAX_COLUMNS; c++)
             strncpy(colNames[c], cols[c].col_name, 127);
 
         TableScanCursor scanCur;
@@ -1570,7 +1575,7 @@ int AlterTableValidateConstraint(const char *tableName, const char *constraintNa
         }
 
         char colNames[CAT_MAX_COLUMNS][128];
-        for (int c = 0; c < ncols && c < 64; c++)
+        for (int c = 0; c < ncols && c < CAT_MAX_COLUMNS; c++)
             strncpy(colNames[c], cols[c].col_name, 127);
 
         TableScanCursor scanCur;
@@ -1936,7 +1941,7 @@ int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode
                 /* Build new tuple with reordered columns */
                 const char *newVals[CAT_MAX_COLUMNS];
                 int newNull2[CAT_MAX_COLUMNS];
-                for (int ni = 0; ni < newNcols && ni < 64; ni++) {
+                for (int ni = 0; ni < newNcols && ni < CAT_MAX_COLUMNS; ni++) {
                     /* Find this column in old layout by name */
                     int found = 0;
                     for (int oi = 0; oi < nf; oi++) {
@@ -2377,7 +2382,7 @@ int AlterTableModifyColumn(const char *tableName, const char *colName, int newTy
                 /* Remap to NEW order */
                 const char *newVals[CAT_MAX_COLUMNS];
                 int newNull2[CAT_MAX_COLUMNS];
-                for (int ni = 0; ni < newNcols && ni < 64; ni++) {
+                for (int ni = 0; ni < newNcols && ni < CAT_MAX_COLUMNS; ni++) {
                     int oi = mapping[ni];
                     if (oi < nf) {
                         newVals[ni] = oldNull[oi] ? NULL : oldFields[oi];

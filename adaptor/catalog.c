@@ -1231,11 +1231,20 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                     ctx->snapshot.my_xid = ctx->tx_xid;
                     ctx->snapshot_valid = 1;
                 }
-                /* SERIALIZABLE: register with Conflict Guard for write skew detection */
+                /* SERIALIZABLE: register with Conflict Guard for write skew detection.
+                 * We also grab g_dml_mutex for the life of the TX so concurrent DML
+                 * from other sessions blocks until COMMIT/ROLLBACK. The mutex
+                 * protects the serializer-style "this TX sees a snapshot consistent
+                 * with a global serial order" guarantee test_isolation expects.
+                 * query_executor checks `serializable_locked` and SKIPS its own
+                 * mutex acquire when the flag is already set, so nested parse
+                 * rounds inside the TX don't deadlock on their own lock. */
                 if (ctx->isolation_level == 3) {
                     extern void cg_register_tx(uint32_t);
                     cg_register_tx(ctx->tx_xid);
-                    ctx->serializable_locked = 1;  /* flag reused: 1 = CG active */
+                    extern mutex_t g_dml_mutex;
+                    mutex_lock(&g_dml_mutex);
+                    ctx->serializable_locked = 1;
                 }
             }
         }
@@ -1284,7 +1293,11 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                         ctx->in_transaction = 0;
                         ctx->tx_aborted = 0;
                         ctx->snapshot_valid = 0;
-                        ctx->serializable_locked = 0;
+                        if (ctx->serializable_locked) {
+                            extern mutex_t g_dml_mutex;
+                            mutex_unlock(&g_dml_mutex);
+                            ctx->serializable_locked = 0;
+                        }
                         strcpy(rs->command_tag, "ROLLBACK");
                         return 1;
                     }
@@ -1315,10 +1328,14 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 ctx->undo_log = NULL;
             }
             savepoint_stack_init(&ctx->savepoints);
-            /* Unregister from Conflict Guard */
+            /* Unregister from Conflict Guard and release the serializer
+             * mutex that BEGIN SERIALIZABLE grabbed. Concurrent DML from
+             * other sessions was blocked waiting on this unlock. */
             if (ctx->serializable_locked) {
                 extern void cg_unregister_tx(uint32_t);
                 if (ctx->tx_xid > 0) cg_unregister_tx(ctx->tx_xid);
+                extern mutex_t g_dml_mutex;
+                mutex_unlock(&g_dml_mutex);
                 ctx->serializable_locked = 0;
             }
             /* GTT ON COMMIT DELETE ROWS: purge session data under mutex */
@@ -1424,10 +1441,14 @@ static int handle_transaction(const char *sql, ResultSet *rs,
             ctx->tx_aborted = 0;
             ctx->snapshot_valid = 0;
             savepoint_stack_init(&ctx->savepoints);
-            /* Unregister from Conflict Guard */
+            /* Unregister from Conflict Guard and release the serializer
+             * mutex that BEGIN SERIALIZABLE grabbed. Concurrent DML from
+             * other sessions was blocked waiting on this unlock. */
             if (ctx->serializable_locked) {
                 extern void cg_unregister_tx(uint32_t);
                 if (ctx->tx_xid > 0) cg_unregister_tx(ctx->tx_xid);
+                extern mutex_t g_dml_mutex;
+                mutex_unlock(&g_dml_mutex);
                 ctx->serializable_locked = 0;
             }
         }

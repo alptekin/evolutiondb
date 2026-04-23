@@ -164,6 +164,13 @@ typedef struct {
     int         copy_header;
     int         copy_column_count;    /* 0 = all columns (default) */
     char        copy_columns[64][128];
+
+    /* Sanity cookie set by result_init() so it can distinguish a live
+     * ResultSet from uninitialized stack memory. Callers that allocate
+     * a ResultSet on the stack MUST memset it to zero before the first
+     * result_init(), otherwise we risk dereferencing garbage pointers
+     * in the "reuse existing buffer" path. See result.c:result_init. */
+    unsigned    result_init_cookie;
 } ResultSet;
 
 void result_init(ResultSet *rs);

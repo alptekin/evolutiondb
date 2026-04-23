@@ -54,6 +54,9 @@ class EvoConn:
         self.s.sendall(b"EVO\n")
         self._recv_line()  # HELLO
         auth = self._recv_line()
+        if auth == "STARTTLS":
+            self.s.sendall(b"NOTLS\n")
+            auth = self._recv_line()
         if auth in ("AUTH_REQUIRED", "AUTH_SCRAM"):
             self.s.sendall(f"AUTH {user} {password}\n".encode())
             result = self._recv_line()

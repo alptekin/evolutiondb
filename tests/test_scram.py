@@ -74,6 +74,15 @@ class EvoScramClient:
     def _send_line(self, line):
         self.sock.sendall((line + "\n").encode("utf-8"))
 
+    def _read_auth_line(self):
+        """Read server's auth offer line, transparently declining STARTTLS
+        so the caller receives the AUTH_SCRAM / AUTH_REQUIRED line."""
+        line = self._recv_line()
+        if line == "STARTTLS":
+            self._send_line("NOTLS")
+            line = self._recv_line()
+        return line
+
     def handshake_scram(self, user="admin", password="admin"):
         """Full SCRAM-SHA-256 handshake. Returns (hello, server_final)."""
         self._send_line("EVO")
@@ -81,6 +90,9 @@ class EvoScramClient:
         assert hello.startswith("HELLO"), f"Expected HELLO, got: {hello}"
 
         auth_line = self._recv_line()
+        if auth_line == "STARTTLS":
+            self._send_line("NOTLS")
+            auth_line = self._recv_line()
         assert auth_line == "AUTH_SCRAM", f"Expected AUTH_SCRAM, got: {auth_line}"
 
         # Generate client nonce (24 random bytes, base64)
@@ -172,6 +184,9 @@ class EvoScramClient:
         assert hello.startswith("HELLO"), f"Expected HELLO, got: {hello}"
 
         auth_line = self._recv_line()
+        if auth_line == "STARTTLS":
+            self._send_line("NOTLS")
+            auth_line = self._recv_line()
         assert auth_line == "AUTH_SCRAM", f"Expected AUTH_SCRAM, got: {auth_line}"
 
         # Send legacy AUTH instead of SCRAM
@@ -282,15 +297,17 @@ def test_scram_query_after_auth():
 def test_scram_wrong_password():
     """SCRAM with wrong password must fail at client-final verification."""
     c = EvoScramClient()
+    raised = False
     try:
         c.handshake_scram("admin", "wrong_password")
-        assert False, "Should have raised an error"
-    except AssertionError:
-        raise
     except Exception:
-        pass  # Expected failure
+        # Either handshake's own AssertionError on SCRAM-SERVER-FINAL
+        # (because server replied ERR) or a protocol-level exception —
+        # both are acceptable proof that authentication was rejected.
+        raised = True
     finally:
         c.close()
+    assert raised, "Wrong password should have triggered authentication failure"
 
 def test_scram_wrong_username():
     """SCRAM with nonexistent user must fail at server-first."""
@@ -298,6 +315,9 @@ def test_scram_wrong_username():
     c._send_line("EVO")
     hello = c._recv_line()
     auth_line = c._recv_line()
+    if auth_line == "STARTTLS":
+        c._send_line("NOTLS")
+        auth_line = c._recv_line()
     assert auth_line == "AUTH_SCRAM"
 
     client_nonce = base64.b64encode(os.urandom(24)).decode("ascii")
@@ -322,6 +342,9 @@ def test_cleartext_wrong_password():
     c._send_line("EVO")
     hello = c._recv_line()
     auth_line = c._recv_line()
+    if auth_line == "STARTTLS":
+        c._send_line("NOTLS")
+        auth_line = c._recv_line()
     assert auth_line == "AUTH_SCRAM"
 
     c._send_line("AUTH admin wrong_password")
@@ -344,6 +367,9 @@ def test_scram_server_sends_auth_scram():
     c._send_line("EVO")
     hello = c._recv_line()
     auth_line = c._recv_line()
+    if auth_line == "STARTTLS":
+        c._send_line("NOTLS")
+        auth_line = c._recv_line()
     assert auth_line == "AUTH_SCRAM", \
         f"Expected AUTH_SCRAM, got: {auth_line}"
     c.close()
@@ -355,7 +381,7 @@ def test_scram_nonce_uniqueness():
         c = EvoScramClient()
         c._send_line("EVO")
         c._recv_line()  # HELLO
-        c._recv_line()  # AUTH_SCRAM
+        c._read_auth_line()  # AUTH_SCRAM (skipping STARTTLS if present)
 
         client_nonce = base64.b64encode(os.urandom(24)).decode("ascii")
         client_first = f"n,,n=admin,r={client_nonce}"
@@ -380,7 +406,7 @@ def test_scram_bad_client_first():
     c = EvoScramClient()
     c._send_line("EVO")
     c._recv_line()  # HELLO
-    c._recv_line()  # AUTH_SCRAM
+    c._read_auth_line()  # AUTH_SCRAM (skipping STARTTLS if present)
 
     # Send garbage as client-first
     c._send_line("SCRAM-CLIENT-FIRST garbage_not_valid")
@@ -393,7 +419,7 @@ def test_scram_bad_client_final():
     c = EvoScramClient()
     c._send_line("EVO")
     c._recv_line()  # HELLO
-    c._recv_line()  # AUTH_SCRAM
+    c._read_auth_line()  # AUTH_SCRAM (skipping STARTTLS if present)
 
     client_nonce = base64.b64encode(os.urandom(24)).decode("ascii")
     client_first = f"n,,n=admin,r={client_nonce}"
@@ -413,7 +439,7 @@ def test_scram_invalid_proof():
     c = EvoScramClient()
     c._send_line("EVO")
     c._recv_line()  # HELLO
-    c._recv_line()  # AUTH_SCRAM
+    c._read_auth_line()  # AUTH_SCRAM (skipping STARTTLS if present)
 
     client_nonce = base64.b64encode(os.urandom(24)).decode("ascii")
     client_first_bare = f"n=admin,r={client_nonce}"
@@ -448,7 +474,7 @@ def test_unexpected_message():
     c = EvoScramClient()
     c._send_line("EVO")
     c._recv_line()  # HELLO
-    c._recv_line()  # AUTH_SCRAM
+    c._read_auth_line()  # AUTH_SCRAM (skipping STARTTLS if present)
 
     c._send_line("SOMETHING_UNEXPECTED")
     resp = c._recv_line()
@@ -460,7 +486,7 @@ def test_scram_iterations_match_stored():
     c = EvoScramClient()
     c._send_line("EVO")
     c._recv_line()  # HELLO
-    c._recv_line()  # AUTH_SCRAM
+    c._read_auth_line()  # AUTH_SCRAM (skipping STARTTLS if present)
 
     client_nonce = base64.b64encode(os.urandom(24)).decode("ascii")
     client_first = f"n,,n=admin,r={client_nonce}"

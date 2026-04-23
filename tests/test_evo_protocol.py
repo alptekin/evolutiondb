@@ -42,19 +42,31 @@ class EvoConnection:
         return line
 
     def handshake(self, user="admin", password="admin"):
-        """Send EVO greeting, handle AUTH, expect HELLO.
+        """Send EVO greeting, handle STARTTLS, handle AUTH, expect HELLO.
 
-        Supports both AUTH_SCRAM and legacy AUTH_REQUIRED responses.
-        When the server sends AUTH_SCRAM, the client falls back to
-        cleartext AUTH (which the server accepts for backward compat).
+        Handles the full EVO handshake sequence:
+          1. Client sends EVO\\n
+          2. Server sends HELLO EvoSQL 1.0\\n
+          3. If TLS available: server sends STARTTLS\\n — client
+             responds with any non-"STARTTLS" line to decline
+          4. Server sends AUTH_SCRAM\\n (or legacy AUTH_REQUIRED)
+          5. Client responds with AUTH <user> <pass>\\n (legacy
+             cleartext fallback — SCRAM is still accepted but we use
+             plain auth for test simplicity; server accepts both)
+          6. Server sends AUTH_OK\\n
         """
         self.sock.sendall(b"EVO\n")
         hello = self._recv_line()
         assert hello.startswith("HELLO"), f"Expected HELLO, got: {hello}"
 
-        # Handle auth flow — server may send AUTH_SCRAM or AUTH_REQUIRED
-        auth_line = self._recv_line()
-        if auth_line in ("AUTH_REQUIRED", "AUTH_SCRAM"):
+        # Next line may be STARTTLS (TLS build) or AUTH_* directly
+        line = self._recv_line()
+        if line == "STARTTLS":
+            # Decline TLS — server continues in plaintext
+            self.sock.sendall(b"NOTLS\n")
+            line = self._recv_line()
+
+        if line in ("AUTH_REQUIRED", "AUTH_SCRAM"):
             self.sock.sendall(f"AUTH {user} {password}\n".encode("utf-8"))
             auth_result = self._recv_line()
             if auth_result != "AUTH_OK":

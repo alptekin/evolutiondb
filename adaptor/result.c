@@ -5,20 +5,50 @@
 
 void result_init(ResultSet *rs)
 {
-    /* Free existing row strings if re-initializing */
-    if (rs->rows && rs->num_rows > 0) {
-        int i;
-        for (i = 0; i < rs->num_rows; i++)
-            row_clear(&rs->rows[i]);
+    /* Safely initialize a ResultSet, tolerant of BOTH fresh stack memory
+     * (uninitialized garbage) and in-place re-init of a live ResultSet.
+     *
+     * Previous implementations tried to reclaim an already-allocated rows[]
+     * buffer without verifying the struct was ever initialized — on stack-
+     * allocated locals that caller forgot to memset, the garbage values in
+     * rs->rows / rs->num_rows / rs->row_capacity made the "reuse" branch
+     * look legitimate, so row_clear() dereferenced random pointers and
+     * aborted with `free(): invalid pointer`. This was the root cause of
+     * the recursive CTE second-iteration crash (post-join projection path
+     * allocates `ResultSet projected;` on stack, then calls result_init).
+     *
+     * Now we demand an explicit memset-to-zero or a matching magic cookie
+     * (set by a previous successful result_init) before we trust any of
+     * the buffer pointers. Otherwise we treat the struct as fresh and
+     * calloc new buffers, potentially leaking whatever was there — but
+     * the caller was already broken if they handed us uninitialized
+     * memory claiming to contain a live ResultSet. */
+    const unsigned RESULT_INIT_COOKIE = 0xEDE17A91u;
+
+    Row        *saved_rows     = NULL;
+    int         saved_row_cap  = 0;
+    ColumnInfo *saved_cols     = NULL;
+    int         saved_col_cap  = 0;
+    void       *saved_stream   = NULL;
+
+    if (rs->result_init_cookie == RESULT_INIT_COOKIE) {
+        /* Known-initialized: safely clean up row strings before reuse. */
+        if (rs->rows && rs->num_rows > 0) {
+            int i;
+            for (i = 0; i < rs->num_rows; i++)
+                row_clear(&rs->rows[i]);
+        }
+        saved_rows     = rs->rows;
+        saved_row_cap  = rs->row_capacity;
+        saved_cols     = rs->columns;
+        saved_col_cap  = rs->col_capacity;
+        saved_stream   = rs->stream_conn;
     }
-    Row *saved_rows = rs->rows;
-    int  saved_row_cap = rs->row_capacity;
-    ColumnInfo *saved_cols = rs->columns;
-    int  saved_col_cap = rs->col_capacity;
-    void *saved_stream_conn = rs->stream_conn;
+    /* else: stack garbage — do NOT dereference rs->rows. */
 
     memset(rs, 0, sizeof(ResultSet));
-    rs->stream_conn = saved_stream_conn;
+    rs->result_init_cookie = RESULT_INIT_COOKIE;
+    rs->stream_conn = saved_stream;
     strcpy(rs->error_sqlstate, "00000");
 
     /* Restore or allocate rows buffer */
