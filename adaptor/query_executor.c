@@ -661,34 +661,186 @@ static int parse_record_fields(const char *recBuf, int recLen,
 
 /* Populate a ResultSet row from a binary tuple record.
  * Skips dropped columns (is_dropped) when mapping physical → logical. */
+/* Write one binary-tuple field into a result row, bypassing the
+ * 256-byte intermediate buffer that tup_extract_fields uses for the
+ * expression engine. VARCHAR/TEXT values up to 2**16 - 1 bytes round-
+ * trip without truncation. Parallel to tuple_format.c's extraction
+ * switch — keep the two in sync when a new type family is added. */
 static void populate_result_row(ResultSet *rs, int row,
                                 const char *recBuf, int recLen,
                                 const ColumnDesc *cols, int ncols)
 {
-    char fields[CAT_MAX_COLUMNS][256];
-    int nullArr[CAT_MAX_COLUMNS];
-    int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
-                                fields, nullArr, 64);
+    if (recLen < (int)(TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE))
+        return;
+    if ((unsigned char)recBuf[0] != TUPLE_MAGIC)
+        return;
+
+    const char *body = recBuf + TUPLE_PREFIX_SIZE;
+    uint8_t num_cols = (uint8_t)body[2];
+    uint8_t flags    = (uint8_t)body[3];
+
+    int num = num_cols;
+    if (num > ncols) num = ncols;
+
+    int mvcc_size = (flags & TUPLE_FLAG_MVCC) ? TUPLE_MVCC_SIZE : 0;
+    int bm_bytes  = (num_cols + 7) / 8;
+    const uint8_t *bm = (const uint8_t *)(body + TUPLE_HEADER_SIZE + mvcc_size);
+    int body_len = recLen - TUPLE_PREFIX_SIZE;
+    int pos = TUPLE_HEADER_SIZE + mvcc_size + bm_bytes;
+
     int logical = 0;  /* result column index (skips dropped) */
-    for (int phys = 0; phys < nf && logical < rs->num_cols; phys++) {
-        if (phys < ncols && cols[phys].is_dropped) continue;
-        if (nullArr[phys]) {
-            result_set_null(rs, row, logical);
-        } else if (rs->columns[logical].pg_type_oid == PG_OID_BOOL) {
-            if (strncasecmp(fields[phys], "true", 4) == 0 ||
-                strcmp(fields[phys], "1") == 0 ||
-                strcmp(fields[phys], "t") == 0)
-                result_set_field(rs, row, logical, "true");
-            else
-                result_set_field(rs, row, logical, "false");
-        } else {
-            result_set_field(rs, row, logical, fields[phys]);
+    for (int phys = 0; phys < num && logical < rs->num_cols; phys++) {
+        int is_null_bit = (flags & TUPLE_FLAG_HAS_NULLS) &&
+                          (bm[phys / 8] & (1 << (phys % 8)));
+        int is_dropped  = (phys < ncols && cols[phys].is_dropped);
+
+        if (is_null_bit) {
+            if (!is_dropped) {
+                result_set_null(rs, row, logical);
+                logical++;
+            }
+            continue;
         }
-        logical++;
+
+        int fam = cols[phys].type_code / 10000;
+        switch (fam) {
+        case 1: case 2: case 3: case 4: case 5: {
+            if (pos + 4 > body_len) return;
+            int32_t ival;
+            memcpy(&ival, body + pos, 4);
+            pos += 4;
+            if (!is_dropped) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%d", ival);
+                result_set_field(rs, row, logical, buf);
+                logical++;
+            }
+            break;
+        }
+        case 6: {
+            if (pos + 8 > body_len) return;
+            int64_t bval;
+            memcpy(&bval, body + pos, 8);
+            pos += 8;
+            if (!is_dropped) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%lld", (long long)bval);
+                result_set_field(rs, row, logical, buf);
+                logical++;
+            }
+            break;
+        }
+        case 7: case 8: {
+            if (pos + 8 > body_len) return;
+            double dval;
+            memcpy(&dval, body + pos, 8);
+            pos += 8;
+            if (!is_dropped) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%.15g", dval);
+                result_set_field(rs, row, logical, buf);
+                logical++;
+            }
+            break;
+        }
+        case 9: {
+            if (pos + 4 > body_len) return;
+            float fval;
+            memcpy(&fval, body + pos, 4);
+            pos += 4;
+            if (!is_dropped) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%.7g", fval);
+                result_set_field(rs, row, logical, buf);
+                logical++;
+            }
+            break;
+        }
+        case 18: {
+            if (pos + 16 > body_len) return;
+            const uint8_t *u = (const uint8_t *)(body + pos);
+            char uuid_buf[40];
+            snprintf(uuid_buf, sizeof(uuid_buf),
+                "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                u[0],u[1],u[2],u[3],u[4],u[5],u[6],u[7],
+                u[8],u[9],u[10],u[11],u[12],u[13],u[14],u[15]);
+            pos += 16;
+            if (!is_dropped) {
+                result_set_field(rs, row, logical, uuid_buf);
+                logical++;
+            }
+            break;
+        }
+        case 22: {
+            if (pos + 1 > body_len) return;
+            uint8_t bv = (uint8_t)body[pos++];
+            if (!is_dropped) {
+                if (rs->columns[logical].pg_type_oid == PG_OID_BOOL)
+                    result_set_field(rs, row, logical, bv ? "true" : "false");
+                else
+                    result_set_field(rs, row, logical, bv ? "true" : "false");
+                logical++;
+            }
+            break;
+        }
+        case 25: {
+            /* ARRAY — delegate to arr_format_text into a scratch buffer
+             * big enough for the typical row (up to 64 KB). Longer arrays
+             * still truncate; that's a v2 concern. */
+            if (pos + 2 > body_len) return;
+            uint16_t slen;
+            memcpy(&slen, body + pos, 2);
+            pos += 2;
+            if (pos + slen > body_len) return;
+            if (!is_dropped) {
+                char scratch[65536];
+                int w = arr_format_text(body + pos, slen,
+                                        scratch, sizeof(scratch));
+                if (w < 0) strcpy(scratch, "{}");
+                result_set_field(rs, row, logical, scratch);
+                logical++;
+            }
+            pos += slen;
+            break;
+        }
+        default: {
+            /* String types → len-prefixed. Write directly from the
+             * binary tuple — no 256-byte cap. */
+            if (pos + 2 > body_len) return;
+            uint16_t slen;
+            memcpy(&slen, body + pos, 2);
+            pos += 2;
+            if (pos + slen > body_len) return;
+            if (!is_dropped) {
+                /* result_set_field strdup's a NUL-terminated copy, so we
+                 * need the bytes contiguous + zero-terminated. A thread-
+                 * local scratch keeps the hot path alloc-free for typical
+                 * row sizes, with a heap fallback for anything larger. */
+                static __thread char stack_scratch[4096];
+                char *scratch;
+                int heap = 0;
+                if ((int)slen + 1 <= (int)sizeof(stack_scratch)) {
+                    scratch = stack_scratch;
+                } else {
+                    scratch = (char *)malloc((size_t)slen + 1);
+                    if (!scratch) { pos += slen; logical++; break; }
+                    heap = 1;
+                }
+                memcpy(scratch, body + pos, slen);
+                scratch[slen] = '\0';
+                result_set_field(rs, row, logical, scratch);
+                if (heap) free(scratch);
+                logical++;
+            }
+            pos += slen;
+            break;
+        }
+        }
     }
+
     /* Schema evolution: fill columns added after this record was inserted.
      * Use DEFAULT value if available, otherwise NULL. */
-    for (int col = nf; col < rs->num_cols && col < ncols; col++) {
+    for (int col = logical; col < rs->num_cols && col < ncols; col++) {
         if (cols[col].default_val[0] != '\0' &&
             strcmp(cols[col].default_val, "\x01NONE\x01") != 0) {
             result_set_field(rs, row, col, cols[col].default_val);
@@ -1049,22 +1201,57 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     if (has_star) {
                         populate_result_row(rs, row, recBuf, recLen, cols, ncols);
                     } else {
-                        /* Column-filtered: extract all then map to selected */
-                        char fields[CAT_MAX_COLUMNS][256];
-                        int nullArr[CAT_MAX_COLUMNS];
-                        int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
-                                                     fields, nullArr, 64);
-                        for (int fi = 0; fi < fast_ncols && fi < rs->num_cols; fi++) {
-                            for (int ci = 0; ci < ncols && ci < nf; ci++) {
-                                if (strcasecmp(cols[ci].col_name, fast_cols[fi]) == 0) {
-                                    if (nullArr[ci])
-                                        result_set_null(rs, row, fi);
-                                    else
-                                        result_set_field(rs, row, fi, fields[ci]);
+                        /* Column-filtered PK path: widen rs->columns to the
+                         * full table layout, let populate_result_row fill
+                         * all columns (long VARCHARs included), then project
+                         * back to the caller's fast_cols list. Avoids the
+                         * 256-byte intermediate tup_extract_fields buffer. */
+                        ColumnInfo saved_cols_meta[CAT_MAX_COLUMNS];
+                        int saved_num_cols = rs->num_cols;
+                        if (saved_num_cols > CAT_MAX_COLUMNS) saved_num_cols = CAT_MAX_COLUMNS;
+                        memcpy(saved_cols_meta, rs->columns,
+                               (size_t)saved_num_cols * sizeof(ColumnInfo));
+
+                        rs->num_cols = 0;
+                        for (int ci = 0; ci < ncols; ci++) {
+                            int oid = type_encoding_to_pg_oid(cols[ci].type_code);
+                            result_add_column(rs, cols[ci].col_name, oid);
+                        }
+                        row_ensure_capacity(&rs->rows[row], rs->num_cols);
+                        rs->rows[row].num_fields = rs->num_cols;
+                        populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+
+                        char *new_fields[CAT_MAX_COLUMNS] = {0};
+                        int   new_nulls[CAT_MAX_COLUMNS] = {0};
+                        int   taken[CAT_MAX_COLUMNS] = {0};
+                        for (int fi = 0; fi < saved_num_cols; fi++) {
+                            for (int ci = 0; ci < rs->num_cols; ci++) {
+                                if (taken[ci]) continue;
+                                if (strcasecmp(rs->columns[ci].name,
+                                               saved_cols_meta[fi].name) == 0) {
+                                    new_fields[fi] = rs->rows[row].fields[ci];
+                                    new_nulls[fi]  = rs->rows[row].is_null[ci];
+                                    rs->rows[row].fields[ci] = NULL;
+                                    rs->rows[row].is_null[ci] = 0;
+                                    taken[ci] = 1;
                                     break;
                                 }
                             }
                         }
+                        for (int ci = 0; ci < rs->num_cols; ci++) {
+                            if (rs->rows[row].fields[ci]) {
+                                free(rs->rows[row].fields[ci]);
+                                rs->rows[row].fields[ci] = NULL;
+                            }
+                        }
+                        for (int fi = 0; fi < saved_num_cols; fi++) {
+                            rs->rows[row].fields[fi]  = new_fields[fi];
+                            rs->rows[row].is_null[fi] = new_nulls[fi];
+                        }
+                        memcpy(rs->columns, saved_cols_meta,
+                               (size_t)saved_num_cols * sizeof(ColumnInfo));
+                        rs->num_cols = saved_num_cols;
+                        rs->rows[row].num_fields = saved_num_cols;
                     }
                 }
             }
@@ -1104,28 +1291,68 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
             if (has_star) {
                 populate_result_row(rs, row, recBuf, recLen, cols, ncols);
             } else {
-                /* Column-filtered: same mapping as the PK branch — extract
-                 * every column, then copy only the ones the caller asked
-                 * for into the result. Without this the secondary-index
-                 * fast path was populating `SELECT c1, c2` with values
-                 * from columns (0, 1) regardless of which names the query
-                 * listed, which is what test_encryption's "SELECT name,
-                 * price" caught. */
-                char fields[CAT_MAX_COLUMNS][256];
-                int nullArr[CAT_MAX_COLUMNS];
-                int nf = tup_extract_fields(recBuf, recLen, cols, ncols,
-                                             fields, nullArr, 64);
-                for (int fi = 0; fi < fast_ncols && fi < rs->num_cols; fi++) {
-                    for (int ci = 0; ci < ncols && ci < nf; ci++) {
-                        if (strcasecmp(cols[ci].col_name, fast_cols[fi]) == 0) {
-                            if (nullArr[ci])
-                                result_set_null(rs, row, fi);
-                            else
-                                result_set_field(rs, row, fi, fields[ci]);
+                /* Column-filtered: route through populate_result_row by
+                 * temporarily widening rs->columns to the full table layout,
+                 * then project back to the caller's `fast_cols` list. This
+                 * reuses the VARCHAR-long-safe extraction code instead of
+                 * duplicating the tuple walk or hitting the 256-byte
+                 * intermediate buffer that the old path used. */
+                ColumnInfo saved_cols_meta[CAT_MAX_COLUMNS];
+                int saved_num_cols = rs->num_cols;
+                if (saved_num_cols > CAT_MAX_COLUMNS) saved_num_cols = CAT_MAX_COLUMNS;
+                memcpy(saved_cols_meta, rs->columns,
+                       (size_t)saved_num_cols * sizeof(ColumnInfo));
+
+                rs->num_cols = 0;
+                for (int ci = 0; ci < ncols; ci++) {
+                    int oid = type_encoding_to_pg_oid(cols[ci].type_code);
+                    result_add_column(rs, cols[ci].col_name, oid);
+                }
+                /* result_add_row allocated a row sized to the old (narrow)
+                 * rs->num_cols; row_ensure_capacity grows it to fit the
+                 * full-table extraction we're about to do. */
+                row_ensure_capacity(&rs->rows[row], rs->num_cols);
+                rs->rows[row].num_fields = rs->num_cols;
+                populate_result_row(rs, row, recBuf, recLen, cols, ncols);
+
+                /* Move each wanted column's field pointer into slot `fi`,
+                 * freeing whatever was there. Leftover slots beyond
+                 * saved_num_cols keep their allocations for row_clear() to
+                 * reclaim on result_free. */
+                char *new_fields[CAT_MAX_COLUMNS] = {0};
+                int   new_nulls[CAT_MAX_COLUMNS] = {0};
+                int   taken[CAT_MAX_COLUMNS] = {0};
+                for (int fi = 0; fi < saved_num_cols; fi++) {
+                    for (int ci = 0; ci < rs->num_cols; ci++) {
+                        if (taken[ci]) continue;
+                        if (strcasecmp(rs->columns[ci].name,
+                                       saved_cols_meta[fi].name) == 0) {
+                            new_fields[fi] = rs->rows[row].fields[ci];
+                            new_nulls[fi]  = rs->rows[row].is_null[ci];
+                            rs->rows[row].fields[ci] = NULL;
+                            rs->rows[row].is_null[ci] = 0;
+                            taken[ci] = 1;
                             break;
                         }
                     }
                 }
+                /* Free any full-table slots the caller didn't want. */
+                for (int ci = 0; ci < rs->num_cols; ci++) {
+                    if (rs->rows[row].fields[ci]) {
+                        free(rs->rows[row].fields[ci]);
+                        rs->rows[row].fields[ci] = NULL;
+                    }
+                }
+                /* Install the projected values. */
+                for (int fi = 0; fi < saved_num_cols; fi++) {
+                    rs->rows[row].fields[fi]  = new_fields[fi];
+                    rs->rows[row].is_null[fi] = new_nulls[fi];
+                }
+                /* Restore the caller's narrow column metadata. */
+                memcpy(rs->columns, saved_cols_meta,
+                       (size_t)saved_num_cols * sizeof(ColumnInfo));
+                rs->num_cols = saved_num_cols;
+                rs->rows[row].num_fields = saved_num_cols;
             }
         }
     }
