@@ -54,6 +54,12 @@ void server_listen(int port, const char *label, protocol_handler_fn handler);
 /* Cleanup (called after all servers stop — usually never). */
 void server_cleanup(void);
 
+/* Post-handler disconnect hook — called from pool workers to log
+ * the "Client disconnected" line and decrement the active counter.
+ * Exported so adaptor/pool.c can share the same logic the legacy
+ * per-connection thread uses. */
+void server_client_disconnected(const char *label);
+
 /* ----------------------------------------------------------------
  *  Session registry — tracks active connections for
  *  SHOW EVO_SESSIONS / SHOW EVO_PROCESSES / KILL QUERY / CancelRequest
