@@ -14,6 +14,13 @@
 #include <stdint.h>
 #include "expression.h"   /* ExprNode, constants */
 
+/* Local copy of CAT_MAX_COLUMNS so the struct layout does not force a
+ * circular include on catalog_internal.h. Must match the canonical
+ * definition in catalog_internal.h / database.h (= 256). */
+#ifndef CAT_MAX_COLUMNS
+#define CAT_MAX_COLUMNS 256
+#endif
+
 /* Forward declaration — full definition in database.h / slotted.h */
 #ifndef ROWID_DEFINED
 #define ROWID_DEFINED
@@ -66,8 +73,8 @@ typedef struct {
     /* Generated columns */
     int      currentColGeneratedMode;
     char     currentColGeneratedExpr[512];
-    int      columnGeneratedModes[64];
-    char     columnGeneratedExprs[64][512];
+    int      columnGeneratedModes[CAT_MAX_COLUMNS];
+    char     columnGeneratedExprs[CAT_MAX_COLUMNS][512];
     /* Sharding */
     int      shardType;           /* SHARD_NONE/HASH/RANGE */
     char     shardKey[128];
@@ -85,8 +92,8 @@ typedef struct {
 typedef struct {
     char tblName[1024];             /* was tblInsertionName */
     char data[RECORD_BUF_SIZE];     /* was insert */
-    char columnNames[1024];
-    char columns[64][128];          /* was insertColumns */
+    char columnNames[4096];         /* larger to carry 100+ column lists */
+    char columns[CAT_MAX_COLUMNS][128];  /* was insertColumns */
     int  columnCount;               /* was insertColumnCount */
     int  rowCount;                  /* was insertCount */
     int  insertFromSelect;          /* 1 = INSERT...SELECT mode */
