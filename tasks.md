@@ -3308,6 +3308,25 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
+### Task 168: ⬜ Replication v2 — Hardening, replica read-after-replay, dynamic leader advert (Feature #164)
+
+**Goal:** Task 97 v1 shipped the hardened transport (auth, TLS, sync-commit, Raft persistence, witness, base backup). v2 closes the residual security/operability gaps surfaced by the Commit 8 security review + the scoped-out "make replica queryable without restart" work.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Hard-fail at boot when `EVO_ENCRYPTION` is enabled but `EVOSQL_REPLICATION_TLS` is off and `--replication-port > 0`. Replication would otherwise stream plaintext page bodies over the wire despite TDE at rest. | `adaptor/main.c` |
+| 2 | Constant-time AUTH handshake — run PBKDF2 against a fixed dummy hash when the supplied user isn't found, so attackers can't enumerate valid usernames by response time. | `adaptor/replication.c` |
+| 3 | Per-source-IP rate limiter on `sender_listener` accept: N failed AUTHs in T seconds → exponential backoff. Stops brute-force against the replication port even though PBKDF2 is already expensive. | `adaptor/replication.c` |
+| 4 | `fsync(dir_fd)` after `rename()` in `raft_save_state` — POSIX atomicity only covers the file, not the directory entry. Without this the post-rename state can be lost on crash and Raft grants a second vote in the same term. | `adaptor/raft.c` |
+| 5 | Bounded drain in `sender_drain_acks` — cap total bytes drained per call (e.g., 4 KiB) so a malicious replica can't starve the sender thread with a recv flood. | `adaptor/replication.c` |
+| 6 | Validate `voted_for` range on `raft_load_state` — reject `voted < -1 \|\| voted >= g_num_nodes`; an attacker with write access to `root/raft.state` could otherwise drive OOB reads of `g_nodes[]`. | `adaptor/raft.c` |
+| 7 | Strict AUTH line parser — reject lines with >1 space or non-printable user bytes; sanitize `user_s` for logging so malformed usernames can't inject control bytes into stderr. | `adaptor/replication.c` |
+| 8 | Replica read-after-replay — `bp_invalidate_page` currently drops bp cache but the catalog layer's in-memory structures still reflect boot-time state. Add a `cat_refresh_on_wal(page_no)` hook invoked from the WAL receiver when the page belongs to a CAT_SYS_* B+ tree, so `SHOW TABLES` / `SELECT` on a replica see replayed state without a restart. | `evolution/db/catalog_internal.c`, `adaptor/replication.c` |
+| 9 | Dynamic leader advert — extend `RaftMessage` (or a side channel in AppendEntries) to carry `repl_host:repl_port`. Replication glue on `RAFT_FOLLOWER` transition calls `repl_start_receiver(leader_host, leader_port, data_fd)` using the adverted address, so Raft failover automatically redirects the receiver. | `adaptor/raft.c`, `adaptor/replication.c` |
+| 10 | Tests — `tests/test_replication_v2.py` with ≥20 cases: TDE+no-TLS boot fails, AUTH timing within 5%, rate-limiter blocks 100 failed attempts, raft.state survives `SIGKILL` between rename and dir fsync, drain bound enforcement, voted_for OOB rejected, replica SELECT after WAL catch-up without restart, 3-node kill-leader failover with auto-redirect. | `tests/test_replication_v2.py` (new) |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
