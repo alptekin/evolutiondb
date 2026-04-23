@@ -3289,6 +3289,25 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
+### Task 167: ⬜ Connection Pooling v2 — Dynamic sizing, diagnostics, per-user partitioning (Feature #163)
+
+**Goal:** Task 96 v1 ships a fixed-size pre-spawned worker pool with a bounded FIFO queue (`EVOSQL_POOL_SIZE`, default 20) and a block-on-full backpressure policy. v2 closes the operational + multi-tenant gaps that v1 explicitly deferred: dynamic sizing, observability, crash recovery, multiplexing, and Windows parity.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Dynamic pool resize — grow when queue depth exceeds a high-watermark and CPU budget allows; shrink idle workers past a low-watermark. `EVOSQL_POOL_MIN` / `_MAX` env vars. Resize loop runs in a dedicated monitor thread (10 s tick). | `adaptor/pool.c`, `adaptor/server.c` |
+| 2 | Worker crash recovery — install a `pthread_cleanup_push` handler + a supervisor thread that detects worker exits (signal, abort) and respawns up to `EVOSQL_POOL_MAX_RESPAWN` times before giving up with an operator-visible error. | `adaptor/pool.c` |
+| 3 | `SHOW POOL` / `SHOW POOL WORKERS` — surface queue depth, avg/p99 wait time, per-worker state (idle/busy), total connections served, respawn count. Add row-returning SHOW variants, emit via `result_add_row`. | `adaptor/catalog.c` (handle_show), `adaptor/pool.c` (instrumentation) |
+| 4 | Backpressure policy choice — `EVOSQL_POOL_OVERFLOW` with three modes: `block` (v1 default), `drop` (close socket with 53300), `error` (PG `ErrorResponse` 53300 "too many connections"). Default stays `block`. | `adaptor/pool.c`, `adaptor/server.c` |
+| 5 | Idle worker timeout — a worker with no task for > `EVOSQL_POOL_IDLE_TIMEOUT` seconds exits; pool tracks min-worker floor so steady-state latency stays predictable. | `adaptor/pool.c` |
+| 6 | Per-user / per-database partitioning — `EVOSQL_POOL_TENANT_WEIGHT` caps a single user's in-flight workers at `ceil(pool_max * weight)`. Prevents noisy-neighbor starvation in multi-tenant RLS deployments (Task 93/166 synergy). | `adaptor/pool.c`, `adaptor/server.c`, `evolution/db/catalog_internal.c` (per-user limit column on UserDesc) |
+| 7 | Shared prepared statement plan cache — a read-mostly LRU keyed by `(normalized_sql, user_id, db_id)` stored in the pool manager, shared across workers. First parse populates, subsequent sessions skip the parser. Invalidated on any DDL targeting a referenced table. | `adaptor/query_executor.c`, new `adaptor/plan_cache.{h,c}` |
+| 8 | Graceful pool resize via SQL — `SET GLOBAL pool_size = N` and `RELOAD POOL` commands drain idle workers and apply the new size without disconnecting live sessions. | `adaptor/catalog.c` (handle_set / handle_reload), `adaptor/pool.c` |
+| 9 | Windows native pool — port the POSIX pthread loop to Win32 (`CreateThread` + `WaitForMultipleObjects` + SRWLock). Removes the `#ifdef _WIN32` no-op stubs Task 96 installed; server behaves identically across platforms. | `adaptor/pool.c` |
+| 10 | Tests — `tests/test_pool_v2.py` with ≥20 cases: pool grows under load, shrinks when idle, SHOW POOL shape, drop/error overflow modes, idle timeout, per-user cap enforcement, plan cache hit ratio after warm-up, live-resize, worker respawn after controlled abort. Add a micro-benchmark comparing v1 vs. v2 p99 connect latency + steady-state RAM. | `tests/test_pool_v2.py` (new), `tests/bench_pool.py` |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
@@ -3457,6 +3476,7 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 160 | LISTEN/NOTIFY v2 — Expression payload, multi-server, persistence | 164 |
 | 161 | Table Inheritance v2 — Multi-parent, ALTER propagation | 165 |
 | 162 | Row-Level Security v2 — ALTER, BYPASSRLS, FORCE, column mask, role hierarchy | 166 |
+| 163 | Connection Pooling v2 — Dynamic sizing, diagnostics, per-user partitioning | 167 |
 
 ---
 
