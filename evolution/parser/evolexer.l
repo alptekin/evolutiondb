@@ -218,7 +218,6 @@ LEAVE					{ return LEAVE; }
 
 LEFT					{ return LEFT; }
 LESS					{ return LESS; }
-LEVEL					{ return LEVEL; }
 LIKE					{ return LIKE; }
 LIMIT					{ return LIMIT; }
 LOCKED					{ return LOCKED; }
