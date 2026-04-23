@@ -54,7 +54,6 @@ ADAPTOR_SRCS = main.c \
                shard.c \
                join.c \
                notify.c \
-               policy.c \
                tls.c \
                util.c
 

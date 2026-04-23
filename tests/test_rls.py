@@ -190,6 +190,115 @@ def test_drop_policy_restores_deny(admin):
 
 
 # ────────────────────────────────────────────────────────────────────
+# Test 7 — INSERT violates WITH CHECK → 42501
+# ────────────────────────────────────────────────────────────────────
+def test_insert_with_check_reject(admin):
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    q(admin, "CREATE POLICY p_own ON rls_orders "
+             "FOR ALL USING (customer = CURRENT_USER) "
+             "WITH CHECK (customer = CURRENT_USER)")
+    a = conn(user="alice", password="alicepw")
+    # Alice trying to insert bob's row — should be rejected.
+    _, _, err, _ = q(a,
+        "INSERT INTO rls_orders VALUES (99, 'bob', 10)")
+    a.close()
+    check("7. INSERT rejected by WITH CHECK",
+          err is not None and "42501" in str(err), f"err={err}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Test 8 — UPDATE only touches USING-matching rows
+# ────────────────────────────────────────────────────────────────────
+def test_update_filtered_by_using(admin):
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    q(admin, "CREATE POLICY p_own ON rls_orders "
+             "FOR ALL USING (customer = CURRENT_USER) "
+             "WITH CHECK (customer = CURRENT_USER)")
+    a = conn(user="alice", password="alicepw")
+    # UPDATE takes a WHERE — EvoSQL's legacy UPDATE-sans-WHERE matches a
+    # single PK which isn't how PG behaves. We still want to prove the
+    # USING gate silently excludes rows the user can't see: the WHERE
+    # here asks for total > 0 (all four rows), but alice's policy limits
+    # reach to id=1 and id=3. Rows 2 and 4 must stay untouched.
+    _, _, err, _ = q(a, "UPDATE rls_orders SET total = 999 WHERE total > 0")
+    a.close()
+    _, rows, _, _ = q(admin,
+        "SELECT id, customer, total FROM rls_orders ORDER BY id")
+    by_id = {r[0]: r for r in rows}
+    alice_touched = (by_id.get('1', ['?','?','?'])[2] == '999'
+                     and by_id.get('3', ['?','?','?'])[2] == '999')
+    bob_untouched = by_id.get('2', ['?','?','?'])[2] == '200'
+    carol_untouched = by_id.get('4', ['?','?','?'])[2] == '75'
+    check("8. UPDATE filtered by USING",
+          err is None and alice_touched and bob_untouched and carol_untouched,
+          f"rows={rows} err={err}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Test 9 — DELETE only touches USING-matching rows
+# ────────────────────────────────────────────────────────────────────
+def test_delete_filtered_by_using(admin):
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    q(admin, "CREATE POLICY p_own ON rls_orders "
+             "FOR ALL USING (customer = CURRENT_USER)")
+    a = conn(user="alice", password="alicepw")
+    # Same WHERE-any trick as test 8: the DELETE asks for everything,
+    # but only alice's USING-matching rows actually vanish.
+    _, _, err, _ = q(a, "DELETE FROM rls_orders WHERE total > 0")
+    a.close()
+    _, rows, _, _ = q(admin, "SELECT id, customer FROM rls_orders ORDER BY id")
+    ids = sorted(r[0] for r in rows)
+    check("9. DELETE filtered by USING",
+          err is None and ids == ['2', '4'],  # bob + carol survive
+          f"remaining={ids} err={err}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Test 10 — Two PERMISSIVE policies are OR'd
+# ────────────────────────────────────────────────────────────────────
+def test_permissive_or(admin):
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    # Policy A: alice sees her own rows.
+    q(admin, "CREATE POLICY p_a ON rls_orders "
+             "FOR SELECT USING (customer = CURRENT_USER)")
+    # Policy B: alice also sees all rows with customer='carol' (union).
+    q(admin, "CREATE POLICY p_b ON rls_orders "
+             "FOR SELECT USING (customer = 'carol')")
+    a = conn(user="alice", password="alicepw")
+    _, rows, _, _ = q(a, "SELECT id FROM rls_orders ORDER BY id")
+    a.close()
+    ids = sorted(r[0] for r in rows)
+    check("10. PERMISSIVE OR composition",
+          ids == ['1', '3', '4'],  # alice's two + carol's one
+          f"ids={ids}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Test 11 — RESTRICTIVE AND'd on top of PERMISSIVE
+# ────────────────────────────────────────────────────────────────────
+def test_permissive_and_restrictive(admin):
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    # PERMISSIVE: alice sees her own rows.
+    q(admin, "CREATE POLICY p_own ON rls_orders "
+             "FOR SELECT USING (customer = CURRENT_USER)")
+    # RESTRICTIVE: total must be > 75 (carves id=3 out of alice's view).
+    q(admin, "CREATE POLICY p_big ON rls_orders AS RESTRICTIVE "
+             "FOR SELECT USING (total > 75)")
+    a = conn(user="alice", password="alicepw")
+    _, rows, _, _ = q(a, "SELECT id, total FROM rls_orders ORDER BY id")
+    a.close()
+    ids = sorted(r[0] for r in rows)
+    check("11. PERMISSIVE + RESTRICTIVE",
+          ids == ['1'],  # id=1 total=100 passes; id=3 total=50 blocked
+          f"ids={ids}")
+
+
+# ────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────
 def main():
@@ -203,6 +312,11 @@ def main():
             test_admin_bypass,
             test_deny_by_default,
             test_drop_policy_restores_deny,
+            test_insert_with_check_reject,
+            test_update_filtered_by_using,
+            test_delete_filtered_by_using,
+            test_permissive_or,
+            test_permissive_and_restrictive,
         ]:
             # Fresh state before every test
             admin.close()
