@@ -49,6 +49,7 @@ typedef enum {
     EXPR_CURRENT_TIMESTAMP, /* CURRENT_TIMESTAMP */
     EXPR_CURRENT_DATE,    /* CURRENT_DATE */
     EXPR_CURRENT_TIME,    /* CURRENT_TIME */
+    EXPR_CURRENT_USER,    /* CURRENT_USER — Task 93 (RLS); returns session username */
     EXPR_COUNT_STAR,       /* COUNT(*) — aggregate */
     EXPR_COUNT,            /* COUNT(expr) — aggregate */
     EXPR_SUM,              /* SUM(expr) — aggregate */
@@ -232,6 +233,7 @@ ExprNode *expr_make_star(void);
 ExprNode *expr_make_current_timestamp(void);
 ExprNode *expr_make_current_date(void);
 ExprNode *expr_make_current_time(void);
+ExprNode *expr_make_current_user(void);
 ExprNode *expr_make_cmp(int subtok, ExprNode *left, ExprNode *right);
 ExprNode *expr_make_is_null(ExprNode *operand);
 ExprNode *expr_make_is_not_null(ExprNode *operand);
