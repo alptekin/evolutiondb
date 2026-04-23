@@ -3270,6 +3270,25 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
+### Task 166: ⬜ Row-Level Security v2 — ALTER, BYPASSRLS, FORCE, column mask, role hierarchy (Feature #162)
+
+**Goal:** Task 93 v1 (PR #98) shipped PostgreSQL-compatible RLS with ENABLE/DISABLE RLS, CREATE/DROP POLICY, USING / WITH CHECK, permissive vs. restrictive composition, FOR-command scoping, superuser bypass (hardcoded `admin`), CURRENT_USER expression, SELECT/INSERT/UPDATE/DELETE enforcement, and JOIN per-table filtering. v2 closes the gap on schema evolution, admin surface, and PG-parity semantics that v1 explicitly deferred.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `ALTER POLICY name ON table RENAME TO new_name` + `ALTER POLICY name ON table USING (…) [WITH CHECK (…)]` — in-place edit without drop/create. Preserve policy ordinal so permissive OR order stays deterministic. | `evolution/parser/evoparser.y`, `evolution/db/Policy.c`, `evolution/db/catalog_internal.c` |
+| 2 | `BYPASSRLS` user attribute — new `is_bypass_rls` column on `UserDesc`, toggled by `ALTER USER name BYPASSRLS / NOBYPASSRLS`. `policy_is_superuser` replaced with catalog lookup; "admin" hardcoding removed. | `evolution/db/UserMgmt.c`, `evolution/db/catalog_internal.*`, `evolution/db/Policy.c`, `evolution/parser/evoparser.y` |
+| 3 | `FORCE ROW LEVEL SECURITY` / `NO FORCE ROW LEVEL SECURITY` — table-level flag that makes even the table owner go through the policy overlay. `TableDesc.rls_forced` (uint8_t), serialized alongside `rls_enabled`. | `evolution/db/catalog_internal.*`, `evolution/db/Policy.c`, `evolution/parser/evoparser.y` |
+| 4 | Column-level RLS — optional `COLUMNS (c1, c2)` clause on `CREATE POLICY`; reads of non-listed columns return NULL for non-superuser sessions (masking). Requires `tup_extract_fields` column-filter hook + executor result-row rewrite. | `evolution/parser/evoparser.y`, `evolution/db/Policy.c`, `adaptor/query_executor.c`, `evolution/db/tuple_format.c` |
+| 5 | Real role hierarchy — `GRANT role_a TO role_b` creates an inheritance edge. `policy_applies_to_user` walks the graph (DFS with cycle guard, depth 32) so `TO admins` matches any user that inherits `admins`. Store edges in `CAT_SYS_GRANTS` with a new scope type `SCOPE_ROLE`. | `evolution/db/GrantMgmt.c`, `evolution/db/catalog_internal.*`, `evolution/db/Policy.c` |
+| 6 | `pg_policies` + `pg_catalog.pg_policy` views — enumerate policies for `\dp+` / DBeaver introspection. Materialize on demand from `cat_list_policies_for_table` walked across all tables. | `adaptor/catalog.c` (pg_catalog shims) |
+| 7 | RLS inside triggers + procedures — trigger body runs with the invoking user's identity when `SECURITY INVOKER`, ignores RLS when `SECURITY DEFINER`. Add `CREATE TRIGGER ... SECURITY {INVOKER|DEFINER}` surface. | `evolution/db/Trigger.c`, `evolution/parser/evoparser.y` |
+| 8 | RLS + materialized views — record the owner + snapshot-time user on REFRESH; `SELECT FROM mv` under a non-owner session re-applies the base-table policy against the cached rows (rejecting rows the current user can't see even if they were materialized earlier). | `evolution/db/Create.c` (REFRESH path), `adaptor/query_executor.c`, new `MatViewOwner` field in `ViewDesc` |
+| 9 | Overlay cache — thread-local LRU (capacity 64) keyed by `(table_id, user_id, cmd)` caching the composed `ExprNode*`. Invalidate on CREATE/DROP/ALTER POLICY and on BYPASSRLS toggle. Benchmark target: 2× improvement on `SELECT` latency against an RLS-enabled table vs. v1. | `evolution/db/Policy.c`, new `policy_cache.{h,c}` |
+| 10 | Tests — `tests/test_rls_v2.py` with ≥25 cases: ALTER POLICY rename + USING/CHECK mutation, BYPASSRLS toggle round-trip, FORCE ROW LEVEL SECURITY (owner gated), column masking, role-hierarchy transitive match, `pg_policies` introspection, SECURITY INVOKER/DEFINER trigger, MV refresh + later SELECT, cache-hit/invalidate sanity, large-policy scaling. | `tests/test_rls_v2.py` (new) |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
@@ -3437,6 +3456,7 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 159 | Array Data Type v2 — Nesting, VARCHAR(N)[], operators | 163 |
 | 160 | LISTEN/NOTIFY v2 — Expression payload, multi-server, persistence | 164 |
 | 161 | Table Inheritance v2 — Multi-parent, ALTER propagation | 165 |
+| 162 | Row-Level Security v2 — ALTER, BYPASSRLS, FORCE, column mask, role hierarchy | 166 |
 
 ---
 
@@ -3502,8 +3522,9 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 90 | 163 | Array Data Type v2 — Nesting, VARCHAR(N)[], operators (#159) | 🔧 v2 Hardening |
 | 91 | 164 | LISTEN / NOTIFY v2 — Expression payload, multi-server, persistence (#160) | 🔧 v2 Hardening |
 | 92 | 165 | Table Inheritance v2 — Multi-parent, ALTER propagation (#161) | 🔧 v2 Hardening |
+| 93 | 166 | Row-Level Security v2 — ALTER, BYPASSRLS, FORCE, column mask, role hierarchy (#162) | 🔧 v2 Hardening |
 
-**Total:** 115 tasks × 10 steps = **1150 steps** over **65 working days** (117 features).
+**Total:** 116 tasks × 10 steps = **1160 steps** over **66 working days** (118 features).
 
 ---
 
