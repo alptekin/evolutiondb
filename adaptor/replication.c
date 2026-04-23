@@ -1058,6 +1058,61 @@ int repl_promote(void)
 }
 
 /* ================================================================
+ *  Task 97 Commit 5: Raft ↔ Replication glue
+ *
+ *  Registered as raft_set_role_callback; fires under g_raft_lock so
+ *  this function MUST NOT acquire any raft_* API. Reads are cheap
+ *  side-effect calls into the replication module itself.
+ * ================================================================ */
+static int g_repl_port_for_raft = 0;   /* set by repl_bind_raft_glue */
+
+void repl_bind_raft_glue(int replication_port)
+{
+    g_repl_port_for_raft = replication_port;
+}
+
+static void repl_on_raft_role_change(int new_role, int leader_id)
+{
+    (void)leader_id;
+    switch (new_role) {
+    case 2: /* RAFT_LEADER */
+        fprintf(stderr, "[REPL↔RAFT] Raft elected us LEADER — promoting\n");
+        /* If we were a replica, flip to primary and start accepting DML. */
+        if (g_is_replica) {
+            g_is_replica = 0;
+            g_repl_running = 0;   /* stops any in-flight receiver loop */
+        }
+        g_repl_role = REPL_ROLE_PRIMARY;
+        /* Start the WAL sender on the configured replication port so
+         * followers can stream from us. Idempotent — no-op if already
+         * running. */
+        if (g_repl_port_for_raft > 0 && g_sender_sock < 0) {
+            extern int repl_start_sender(int);
+            repl_start_sender(g_repl_port_for_raft);
+        }
+        break;
+    case 0: /* RAFT_FOLLOWER */
+        fprintf(stderr, "[REPL↔RAFT] Raft moved us to FOLLOWER\n");
+        g_repl_role = REPL_ROLE_REPLICA;
+        /* The receiver will be started separately by whoever knows the
+         * leader's host:port (e.g. main.c --replica or a Raft
+         * AppendEntries advert carrying host:port). Commit 5 wires the
+         * role flip; dynamic receiver redirect lands alongside Raft
+         * leader advert in a follow-up. */
+        break;
+    case 1: /* RAFT_CANDIDATE */
+    default:
+        break;
+    }
+}
+
+void repl_install_raft_glue(void)
+{
+    extern void raft_set_role_callback(void (*)(int, int));
+    raft_set_role_callback(repl_on_raft_role_change);
+}
+
+/* ================================================================
  *  GAP-D2: Split-Brain Fencing
  *
  *  When a new leader is elected, the old leader must stop accepting

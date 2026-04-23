@@ -262,8 +262,14 @@ int main(int argc, char *argv[])
 
     /* Start Raft consensus if cluster configured */
     if (cluster_nodes && node_id >= 0) {
-        if (raft_init(cluster_nodes, node_id) == 0)
+        if (raft_init(cluster_nodes, node_id) == 0) {
+            /* Task 97 Commit 5: wire Raft role transitions into the
+             * replication module before starting — so the first
+             * election already flips primary/replica automatically. */
+            repl_bind_raft_glue(repl_port > 0 ? repl_port : REPL_DEFAULT_PORT);
+            repl_install_raft_glue();
             raft_start();
+        }
     }
 
     /* Start distributed query engine if cluster configured */

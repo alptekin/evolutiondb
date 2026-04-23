@@ -187,6 +187,15 @@ int repl_create_backup(const char *backup_path);
  * accept DML). Called after Raft election or manual promote. */
 int repl_promote(void);
 
+/* Task 97 Commit 5: Raft ↔ Replication glue.
+ * repl_install_raft_glue registers repl_on_raft_role_change with
+ * raft_set_role_callback so Raft leader elections automatically flip
+ * this node's replication role.
+ * repl_bind_raft_glue sets the replication port so the glue knows
+ * which port to start the sender on when Raft elects us LEADER. */
+void repl_install_raft_glue(void);
+void repl_bind_raft_glue(int replication_port);
+
 /* ----------------------------------------------------------------
  *  GAP-D3: Witness node mode
  *  A witness participates in Raft voting but does not store data

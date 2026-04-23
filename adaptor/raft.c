@@ -37,6 +37,31 @@ static pthread_t    g_heartbeat_thread;
 static pthread_t    g_listener_thread;
 static pthread_mutex_t g_raft_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Role-transition callback (Task 97 Commit 5). Invoked whenever g_role
+ * changes so the replication module can flip primary/replica without
+ * polling. Callback MUST NOT acquire g_raft_lock or call back into
+ * raft_* state mutators — it's invoked synchronously while the lock is
+ * held, so reentrancy would deadlock. Pure side-effects
+ * (repl_start_sender, repl_start_receiver) are fine. */
+typedef void (*raft_role_cb_t)(int new_role, int leader_id);
+static raft_role_cb_t g_role_callback = NULL;
+
+/* Call with g_raft_lock held. Transitions g_role and fires callback if
+ * role changed. */
+static void raft_transition_role_locked(int new_role)
+{
+    int old_role = g_role;
+    g_role = new_role;
+    if (old_role != new_role && g_role_callback) {
+        g_role_callback(new_role, g_leader_id);
+    }
+}
+
+void raft_set_role_callback(void (*cb)(int new_role, int leader_id))
+{
+    g_role_callback = cb;
+}
+
 /* Election timer */
 static int64_t      g_last_heartbeat_ms = 0;
 static int          g_election_timeout_ms = 0;
@@ -122,9 +147,9 @@ static void start_election(void)
 {
     pthread_mutex_lock(&g_raft_lock);
     g_current_term++;
-    g_role = RAFT_CANDIDATE;
     g_voted_for = g_my_id;
     g_leader_id = -1;
+    raft_transition_role_locked(RAFT_CANDIDATE);
     int term = g_current_term;
     int votes = 1;  /* vote for self */
     pthread_mutex_unlock(&g_raft_lock);
@@ -155,12 +180,12 @@ static void start_election(void)
     int majority = g_num_nodes / 2 + 1;
     pthread_mutex_lock(&g_raft_lock);
     if (votes >= majority && g_role == RAFT_CANDIDATE && g_current_term == (uint32_t)term) {
-        g_role = RAFT_LEADER;
         g_leader_id = g_my_id;
+        raft_transition_role_locked(RAFT_LEADER);
         fprintf(stderr, "[RAFT] ★ Elected as LEADER (term %u, %d/%d votes)\n",
                 term, votes, g_num_nodes);
     } else {
-        g_role = RAFT_FOLLOWER;
+        raft_transition_role_locked(RAFT_FOLLOWER);
         fprintf(stderr, "[RAFT] Election failed (term %u, %d/%d votes)\n",
                 term, votes, g_num_nodes);
     }
@@ -230,8 +255,8 @@ static void *heartbeat_thread(void *arg)
                         if (resp.term > term) {
                             pthread_mutex_lock(&g_raft_lock);
                             g_current_term = resp.term;
-                            g_role = RAFT_FOLLOWER;
                             g_leader_id = -1;
+                            raft_transition_role_locked(RAFT_FOLLOWER);
                             pthread_mutex_unlock(&g_raft_lock);
                             fprintf(stderr, "[RAFT] Stepping down: higher term %u\n",
                                     resp.term);
@@ -261,9 +286,9 @@ static void handle_raft_message(int client_fd)
         /* Update term if sender has higher term */
         if (msg.term > g_current_term) {
             g_current_term = msg.term;
-            g_role = RAFT_FOLLOWER;
             g_voted_for = -1;
             g_leader_id = -1;
+            raft_transition_role_locked(RAFT_FOLLOWER);
         }
 
         switch (msg.msg_type) {
@@ -287,8 +312,8 @@ static void handle_raft_message(int client_fd)
         case RAFT_MSG_APPEND_ENTRIES:
             g_leader_id = msg.node_id;
             g_last_heartbeat_ms = now_ms();  /* reset election timer */
-            if (g_role == RAFT_CANDIDATE)
-                g_role = RAFT_FOLLOWER;  /* new leader discovered */
+            if (g_role == RAFT_CANDIDATE || g_role == RAFT_LEADER)
+                raft_transition_role_locked(RAFT_FOLLOWER);  /* new leader discovered */
             resp.msg_type = RAFT_MSG_APPEND_RESPONSE;
             resp.term = g_current_term;
             resp.last_lsn = g_my_lsn;
