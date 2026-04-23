@@ -1082,6 +1082,15 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+    /* Task 93: RLS tables always go through the full scan path — the
+     * fast path reads the row without evaluating the policy overlay,
+     * so PK lookups on an RLS table would leak values that shouldn't
+     * be visible to the caller. */
+    if (td.rls_enabled) {
+        rwlock_rdunlock(&g_parse_lock);
+        return 0;
+    }
+
     /* Check if WHERE column is the primary key.
      *
      * Only treat the equality as a PK lookup when the table has a
@@ -1817,6 +1826,27 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
     if (tapi_resolve(tableName, &td, allCols, &ncols) < 0) {
         result_set_error(rs, "42P01", "relation does not exist");
         return;
+    }
+
+    /* Task 93 — Row-Level Security: stitch the table's USING overlay on
+     * top of g_expr.whereExpr for this scan. Combined result is AND'd
+     * into the same global the rest of collect_select_results reads,
+     * so every WHERE-evaluation path (scan, fast path, expression
+     * index) sees the filtered world. Restored at function exit.
+     * Superusers and non-RLS tables skip the overlay entirely. */
+    ExprNode *saved_where_for_rls = g_expr.whereExpr;
+    int rls_applied = 0;
+    if (td.rls_enabled) {
+        extern ExprNode *policy_build_overlay(uint32_t, const char *, char,
+                                              ExprNode *);
+        ExprNode *overlay = policy_build_overlay(td.table_id,
+                                                 g_qctx ? g_qctx->currentUser : "",
+                                                 'S',
+                                                 g_expr.whereExpr);
+        if (overlay != saved_where_for_rls) {
+            g_expr.whereExpr = overlay;
+            rls_applied = 1;
+        }
     }
 
     /* Set up column metadata from catalog */
@@ -3106,6 +3136,12 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                 rs->num_rows = limit_val;
             }
         }
+    }
+
+    /* Task 93: undo the RLS overlay on g_expr.whereExpr so later
+     * statements on non-RLS tables aren't poisoned by our AND-layer. */
+    if (rls_applied) {
+        g_expr.whereExpr = saved_where_for_rls;
     }
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
