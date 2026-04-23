@@ -50,13 +50,51 @@ static pthread_t    g_sender_thread;
 static pthread_mutex_t g_sender_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_sender_cond = PTHREAD_COND_INITIALIZER;
 
+/* Arguments passed from accept loop to the per-replica streaming thread. */
+typedef struct {
+    int  client_fd;
+    char client_addr[64];   /* "ip:port" used as replica_id for slot tracking */
+} SenderArg;
+
+/* Drain any pending replica→master frames from a non-blocking recv.
+ * Currently parses REPL_MSG_ACK ('A' + uint32 LSN) and updates the slot.
+ * Any other byte stream is silently skipped (Commit 4 will reject).
+ * Returns 0 on normal drain, -1 if peer has closed the connection. */
+static int sender_drain_acks(int client_fd, const char *replica_id)
+{
+    unsigned char buf[256];
+    while (1) {
+        ssize_t n = recv(client_fd, buf, sizeof(buf), MSG_DONTWAIT);
+        if (n == 0) return -1;  /* peer performed orderly close */
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+            return -1;  /* ECONNRESET etc. */
+        }
+        /* Parse ACK frames: 5 bytes each, may arrive coalesced. */
+        for (ssize_t i = 0; i + REPL_ACK_FRAME_SIZE <= n; ) {
+            if (buf[i] == REPL_MSG_ACK) {
+                uint32_t confirmed;
+                memcpy(&confirmed, buf + i + 1, 4);
+                repl_slot_update(replica_id, confirmed);
+                i += REPL_ACK_FRAME_SIZE;
+            } else {
+                i++;  /* byte-level resync */
+            }
+        }
+    }
+}
+
 /* Handle a single replica connection: stream WAL records */
 static void *sender_handle_replica(void *arg)
 {
-    int client_fd = *(int *)arg;
-    free(arg);
+    SenderArg *sa = (SenderArg *)arg;
+    int client_fd = sa->client_fd;
+    char replica_id[64];
+    strncpy(replica_id, sa->client_addr, sizeof(replica_id) - 1);
+    replica_id[sizeof(replica_id) - 1] = '\0';
+    free(sa);
 
-    fprintf(stderr, "[REPL] Replica connected\n");
+    fprintf(stderr, "[REPL] Replica connected: %s\n", replica_id);
 
     /* Read handshake: "REPLICATE <last_lsn>\n" */
     char buf[256];
@@ -68,7 +106,12 @@ static void *sender_handle_replica(void *arg)
     if (strncmp(buf, "REPLICATE ", 10) == 0)
         start_lsn = (uint32_t)atoi(buf + 10);
 
-    fprintf(stderr, "[REPL] Replica requests WAL from LSN %u\n", start_lsn);
+    /* Register slot — active from this point; replicated confirmed_lsn
+     * is start_lsn until the first ACK arrives. */
+    repl_slot_update(replica_id, start_lsn);
+
+    fprintf(stderr, "[REPL] Replica %s requests WAL from LSN %u\n",
+            replica_id, start_lsn);
 
     /* Send WAL file content from the requested offset.
      * WAL records start after the 16-byte header. */
@@ -127,6 +170,9 @@ static void *sender_handle_replica(void *arg)
     }
     close(wal_fd);
 
+    /* Catch-up finished — drain whatever replica already ACK'd. */
+    if (sender_drain_acks(client_fd, replica_id) < 0) goto disconnected;
+
     /* Now stream live: wait for new WAL records */
     while (g_repl_running) {
         pthread_mutex_lock(&g_sender_lock);
@@ -136,6 +182,10 @@ static void *sender_handle_replica(void *arg)
         ts.tv_sec += 5;  /* 5 second heartbeat interval */
         pthread_cond_timedwait(&g_sender_cond, &g_sender_lock, &ts);
         pthread_mutex_unlock(&g_sender_lock);
+
+        /* Pull pending ACKs before sending the next batch so sync_commit
+         * waiters see the latest confirmed_lsn promptly. */
+        if (sender_drain_acks(client_fd, replica_id) < 0) goto disconnected;
 
         /* Check for new records in WAL */
         wal_fd = open("evosql.wal", O_RDONLY);
@@ -178,12 +228,17 @@ static void *sender_handle_replica(void *arg)
         if (g_repl_running) {
             char hb = REPL_MSG_HEARTBEAT;
             if (send(client_fd, &hb, 1, MSG_NOSIGNAL) <= 0)
-                break;
+                goto disconnected;
+            /* Drain one more time — heartbeat tick may coincide with
+             * receiver's periodic ACK. Peer-close detected here too. */
+            if (sender_drain_acks(client_fd, replica_id) < 0)
+                goto disconnected;
         }
     }
 
 disconnected:
-    fprintf(stderr, "[REPL] Replica disconnected\n");
+    fprintf(stderr, "[REPL] Replica disconnected: %s\n", replica_id);
+    repl_slot_deactivate(replica_id);
     close(client_fd);
     return NULL;
 }
@@ -231,10 +286,13 @@ static void *sender_listener(void *arg)
         int nodelay = 1;
         setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
-        int *fd_ptr = malloc(sizeof(int));
-        *fd_ptr = client_fd;
+        SenderArg *sa = malloc(sizeof(SenderArg));
+        if (!sa) { close(client_fd); continue; }
+        sa->client_fd = client_fd;
+        snprintf(sa->client_addr, sizeof(sa->client_addr), "%s:%d",
+                 inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
         pthread_t t;
-        pthread_create(&t, NULL, sender_handle_replica, fd_ptr);
+        pthread_create(&t, NULL, sender_handle_replica, sa);
         pthread_detach(t);
     }
 
@@ -304,6 +362,16 @@ static uint32_t slot_load(void)
     return lsn;
 }
 
+/* Send an ACK frame from replica → master. Safe to call any time after
+ * the socket is connected; errors are ignored (next ACK retries). */
+static void send_ack(int sock, uint32_t confirmed_lsn)
+{
+    unsigned char frame[REPL_ACK_FRAME_SIZE];
+    frame[0] = REPL_MSG_ACK;
+    memcpy(frame + 1, &confirmed_lsn, 4);
+    send(sock, frame, sizeof(frame), MSG_NOSIGNAL);
+}
+
 static void *receiver_loop(void *arg)
 {
     int sock = *(int *)arg;
@@ -313,12 +381,22 @@ static void *receiver_loop(void *arg)
     fprintf(stderr, "[REPL] WAL receiver started (last_lsn=%u)\n", g_last_received_lsn);
 
     int records = 0;
+    /* Initial ACK so master sees the replica's resume point without
+     * waiting for the first WAL record. */
+    send_ack(sock, g_last_received_lsn);
+
     while (g_repl_running) {
         /* Read message type */
         char msg_type;
         if (recv_all(sock, &msg_type, 1) < 0) break;
 
-        if (msg_type == REPL_MSG_HEARTBEAT) continue;
+        if (msg_type == REPL_MSG_HEARTBEAT) {
+            /* Master heartbeat — respond with current confirmed LSN so
+             * sync_commit waiters and SHOW REPLICATION STATUS stay fresh
+             * even when no WAL is flowing. */
+            send_ack(sock, g_last_received_lsn);
+            continue;
+        }
         if (msg_type == REPL_MSG_END) { sleep(1); continue; }
 
         if (msg_type == REPL_MSG_WAL_DATA) {
@@ -358,7 +436,12 @@ static void *receiver_loop(void *arg)
                     uint32_t rec_lsn;
                     memcpy(&rec_lsn, rec, 4);
                     g_last_received_lsn = rec_lsn;
-                    if (records % 100 == 0) slot_save(rec_lsn);
+                    if (records % 100 == 0) {
+                        slot_save(rec_lsn);
+                        /* ACK every 100 records so master sync_commit
+                         * waiters don't stall for the 5s heartbeat. */
+                        send_ack(sock, rec_lsn);
+                    }
                 }
 
                 /* CDC: decode page image for logical replication events */
@@ -579,20 +662,36 @@ void repl_set_auth(const char *user, const char *password)
 static ReplicationSlot g_repl_slots[REPL_MAX_SLOTS];
 static pthread_mutex_t g_slot_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Register/update a replica slot (called when replica connects or ACKs) */
+/* Sync-commit condvar: signaled when repl_slot_update advances a slot's
+ * confirmed_lsn or when a slot drops out. Declared here so both
+ * repl_slot_update and repl_sync_commit (further down) can use them. */
+static pthread_mutex_t g_sync_commit_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_sync_commit_cond = PTHREAD_COND_INITIALIZER;
+
+/* Register/update a replica slot (called when replica connects or ACKs). */
 void repl_slot_update(const char *replica_id, uint32_t confirmed_lsn)
 {
     pthread_mutex_lock(&g_slot_lock);
 
     /* Find existing or free slot */
     int free_idx = -1;
+    int updated = 0;
     for (int i = 0; i < REPL_MAX_SLOTS; i++) {
         if (g_repl_slots[i].active &&
             strcmp(g_repl_slots[i].replica_id, replica_id) == 0) {
-            g_repl_slots[i].confirmed_lsn = confirmed_lsn;
+            if (confirmed_lsn > g_repl_slots[i].confirmed_lsn) {
+                g_repl_slots[i].confirmed_lsn = confirmed_lsn;
+                updated = 1;
+            }
             struct timeval tv; gettimeofday(&tv, NULL);
             g_repl_slots[i].last_seen = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
             pthread_mutex_unlock(&g_slot_lock);
+            if (updated) {
+                /* Wake anyone in repl_sync_commit waiting for this LSN. */
+                pthread_mutex_lock(&g_sync_commit_lock);
+                pthread_cond_broadcast(&g_sync_commit_cond);
+                pthread_mutex_unlock(&g_sync_commit_lock);
+            }
             return;
         }
         if (!g_repl_slots[i].active && free_idx < 0)
@@ -602,14 +701,41 @@ void repl_slot_update(const char *replica_id, uint32_t confirmed_lsn)
     /* New slot */
     if (free_idx >= 0) {
         strncpy(g_repl_slots[free_idx].replica_id, replica_id, 63);
+        g_repl_slots[free_idx].replica_id[63] = '\0';
         g_repl_slots[free_idx].confirmed_lsn = confirmed_lsn;
         g_repl_slots[free_idx].active = 1;
         struct timeval tv; gettimeofday(&tv, NULL);
         g_repl_slots[free_idx].last_seen = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
         fprintf(stderr, "[REPL] New replication slot: %s (lsn=%u)\n",
                 replica_id, confirmed_lsn);
+        pthread_mutex_unlock(&g_slot_lock);
+        pthread_mutex_lock(&g_sync_commit_lock);
+        pthread_cond_broadcast(&g_sync_commit_cond);
+        pthread_mutex_unlock(&g_sync_commit_lock);
+        return;
     }
     pthread_mutex_unlock(&g_slot_lock);
+}
+
+/* Mark a slot inactive when its connection drops. Keeps confirmed_lsn
+ * so catch-up on reconnect can pick up where we left off. */
+void repl_slot_deactivate(const char *replica_id)
+{
+    pthread_mutex_lock(&g_slot_lock);
+    for (int i = 0; i < REPL_MAX_SLOTS; i++) {
+        if (g_repl_slots[i].active &&
+            strcmp(g_repl_slots[i].replica_id, replica_id) == 0) {
+            g_repl_slots[i].active = 0;
+            fprintf(stderr, "[REPL] Slot inactive: %s (last lsn=%u)\n",
+                    replica_id, g_repl_slots[i].confirmed_lsn);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_slot_lock);
+    /* Wake any waiter — fewer replicas changes majority math. */
+    pthread_mutex_lock(&g_sync_commit_lock);
+    pthread_cond_broadcast(&g_sync_commit_cond);
+    pthread_mutex_unlock(&g_sync_commit_lock);
 }
 
 int repl_list_slots(ReplicationSlot *out, int max)
@@ -622,6 +748,82 @@ int repl_list_slots(ReplicationSlot *out, int max)
     }
     pthread_mutex_unlock(&g_slot_lock);
     return count;
+}
+
+/* ================================================================
+ *  Sync-commit logic (Commit 2)
+ *  g_sync_commit_lock/cond are declared at the top of the slot section
+ *  so repl_slot_update can broadcast on them.
+ * ================================================================ */
+
+/* Count active slots whose confirmed_lsn >= target. g_slot_lock must be held. */
+static int count_confirmed_at_least(uint32_t target_lsn)
+{
+    int n = 0;
+    for (int i = 0; i < REPL_MAX_SLOTS; i++) {
+        if (g_repl_slots[i].active && g_repl_slots[i].confirmed_lsn >= target_lsn)
+            n++;
+    }
+    return n;
+}
+
+/* Count active slots. g_slot_lock must be held. */
+static int count_active_slots_locked(void)
+{
+    int n = 0;
+    for (int i = 0; i < REPL_MAX_SLOTS; i++)
+        if (g_repl_slots[i].active) n++;
+    return n;
+}
+
+int repl_sync_commit(uint32_t lsn, int timeout_ms)
+{
+    pthread_mutex_lock(&g_slot_lock);
+    int active = count_active_slots_locked();
+    pthread_mutex_unlock(&g_slot_lock);
+
+    /* No active replicas → no one to wait for. Return success so the
+     * commit path degrades to async replication gracefully. */
+    if (active == 0) return 0;
+
+    /* Majority of replicas: ceil(active/2). For active=1 we need 1,
+     * for active=2 we need 1, for active=3 we need 2, etc. */
+    int needed = (active + 1) / 2;
+
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += timeout_ms / 1000;
+    deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_nsec -= 1000000000L;
+        deadline.tv_sec  += 1;
+    }
+
+    pthread_mutex_lock(&g_sync_commit_lock);
+    int ret = -1;
+    while (1) {
+        pthread_mutex_lock(&g_slot_lock);
+        int got = count_confirmed_at_least(lsn);
+        pthread_mutex_unlock(&g_slot_lock);
+        if (got >= needed) { ret = 0; break; }
+
+        int rc = pthread_cond_timedwait(&g_sync_commit_cond,
+                                         &g_sync_commit_lock, &deadline);
+        if (rc == ETIMEDOUT) break;
+        /* Spurious wakeup — re-check predicate. */
+    }
+    pthread_mutex_unlock(&g_sync_commit_lock);
+    return ret;
+}
+
+int repl_sync_commit_enabled(void)
+{
+    /* Re-read per call so operators can toggle via docker restart. The
+     * overhead is one getenv — negligible compared to fsync on commit. */
+    const char *v = getenv("EVOSQL_SYNC_COMMIT");
+    if (!v || !v[0]) return 0;
+    return (v[0] == '1' || v[0] == 't' || v[0] == 'T' ||
+            v[0] == 'y' || v[0] == 'Y');
 }
 
 /* ================================================================

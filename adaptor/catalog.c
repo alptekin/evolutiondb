@@ -1393,6 +1393,22 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                         extern int pgm_get_fd(void);
                         bp_wal_flush_dirty(pgm_get_fd());
                     }
+                    /* Synchronous commit (Task 97 Commit 2): wait for
+                     * replica majority to confirm this transaction's WAL
+                     * LSN before acknowledging COMMIT to the client.
+                     * Gated by EVOSQL_SYNC_COMMIT=1. Silently degrades
+                     * to async commit on timeout (logged). */
+                    if (repl_sync_commit_enabled()) {
+                        extern uint32_t wal_get_current_lsn(void);
+                        uint32_t target_lsn = wal_get_current_lsn();
+                        if (target_lsn > 0 &&
+                            repl_sync_commit(target_lsn,
+                                             REPL_SYNC_COMMIT_DEFAULT_MS) < 0) {
+                            fprintf(stderr, "[REPL] Sync commit timeout at "
+                                    "LSN %u — falling back to async\n",
+                                    target_lsn);
+                        }
+                    }
                     uint32_t csn = pgm_next_csn();
                     clog_set_committed_csn(ctx->tx_xid, csn);
                     { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid);
