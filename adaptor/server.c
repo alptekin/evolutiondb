@@ -9,6 +9,7 @@
 #include "net.h"
 #include "server.h"
 #include "query_executor.h"
+#include "pool.h"
 #include "../evolution/db/database.h"
 #include "../evolution/db/buffer_pool.h"
 #include "../evolution/db/query_context.h"
@@ -306,15 +307,17 @@ typedef struct {
 
 static THREAD_RETURN client_thread(THREAD_PARAM param)
 {
+    /* Legacy per-connection path — used when pool_init() hasn't run
+     * (non-POSIX builds or EVOSQL_POOL_SIZE=0). Pool path uses the
+     * worker loop in pool.c instead; both converge to the same
+     * per-connection teardown shape below. */
     ClientArg *arg = (ClientArg *)param;
     socket_t   sock    = arg->sock;
     char       label[8];
     strncpy(label, arg->label, sizeof(label));
 
-    /* Run the protocol handler — it owns the conversation */
     arg->handler(sock);
 
-    /* Done — close socket and update counters */
     socket_close(sock);
     free(arg);
 
@@ -325,6 +328,19 @@ static THREAD_RETURN client_thread(THREAD_PARAM param)
     mutex_unlock(&g_conn_lock);
     fflush(stdout);
     return 0;
+}
+
+/* Post-handler disconnect hook called by pool.c workers after the
+ * protocol handler returns. Keeps the "Client disconnected" log line
+ * identical between pool and per-conn paths. */
+void server_client_disconnected(const char *label)
+{
+    mutex_lock(&g_conn_lock);
+    g_active_connections--;
+    printf("[%s] Client disconnected  (active: %d/%d)\n",
+           label, g_active_connections, g_max_connections);
+    mutex_unlock(&g_conn_lock);
+    fflush(stdout);
 }
 
 /* ================================================================
@@ -344,6 +360,30 @@ void server_init_ex(int buffer_pool_pages)
     memset(g_sessions, 0, sizeof(g_sessions));
     g_buffer_pool_pages = (buffer_pool_pages > 0) ? buffer_pool_pages : BP_DEFAULT_PAGES;
     bp_init(g_buffer_pool_pages);
+
+    /* Task 96: connection pool — pre-spawn N workers so accepted
+     * sockets dispatch without a pthread_create round trip. Sized via
+     * EVOSQL_POOL_SIZE (default 20, min 1). Queue capacity stays
+     * proportional to max_connections so a connect storm doesn't OOM
+     * the userland queue. Setting EVOSQL_POOL_SIZE=0 disables the
+     * pool and falls back to the legacy per-connection thread path
+     * (handy for valgrind / thread-sanitizer runs). */
+    {
+        int pool_size = 20;
+        const char *ps = getenv("EVOSQL_POOL_SIZE");
+        if (ps && *ps) {
+            int v = atoi(ps);
+            if (v >= 0) pool_size = v;
+        }
+        if (pool_size > 0) {
+            int queue_cap = g_max_connections > 0 ? g_max_connections : 128;
+            if (pool_init(pool_size, queue_cap) < 0) {
+                fprintf(stderr, "[pool] init failed; falling back to "
+                        "per-connection threads\n");
+                fflush(stderr);
+            }
+        }
+    }
 
     {
         int mb = g_buffer_pool_pages * 4 / 1024;
@@ -367,6 +407,11 @@ int server_get_buffer_pool_pages(void) { return g_buffer_pool_pages; }
 
 void server_cleanup(void)
 {
+    /* Task 96: drain and join worker pool before we start tearing
+     * down globals — a worker mid-handler can still be touching the
+     * catalog and buffer pool. pool_shutdown is idempotent. */
+    pool_shutdown();
+
     auto_reclaim_stop();
     /* WAL checkpoint before pgm_shutdown flushes buffer pool */
     {
@@ -426,7 +471,24 @@ void server_listen(int port, const char *label, protocol_handler_fn handler)
         mutex_unlock(&g_conn_lock);
         fflush(stdout);
 
-        /* ---- Spawn thread ---- */
+        /* ---- Dispatch ----
+         * Try pool_submit first. pool_submit returns 0 on success,
+         * -1 when the pool isn't initialized or shutdown is in
+         * flight. On fallback we spin up a per-connection thread,
+         * matching the pre-Task-96 behavior. */
+        {
+            PoolTask *task = (PoolTask *)malloc(sizeof(PoolTask));
+            if (task) {
+                task->sock    = client_sock;
+                task->handler = handler;
+                strncpy(task->label, label, sizeof(task->label) - 1);
+                task->label[sizeof(task->label) - 1] = '\0';
+                if (pool_submit(task) == 0) continue;
+                free(task);
+            }
+        }
+
+        /* Fallback: legacy per-connection thread. */
         ClientArg *arg = (ClientArg *)malloc(sizeof(ClientArg));
         if (!arg) {
             fprintf(stderr, "[%s] Out of memory for client arg\n", label);
