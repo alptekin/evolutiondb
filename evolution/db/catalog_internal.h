@@ -72,6 +72,7 @@ typedef struct {
     char     shard_key[CAT_MAX_NAME_LEN]; /* column name used for sharding */
     int      shard_count;      /* HASH: number of shards */
     uint32_t parent_table_id; /* Task 92: 0 = no parent; INHERITS sets this */
+    uint8_t  rls_enabled;     /* Task 93: 1 = ROW LEVEL SECURITY enabled on this table */
 
     /* Transient schema-presence flags — populated by tapi_resolve(),
      * NOT serialized. Used by DML inner loops to skip catalog lookups
@@ -198,6 +199,37 @@ typedef struct {
 } SequenceDesc;
 
 /* ----------------------------------------------------------------
+ *  Row-Level Security (Task 93 — Feature #64)
+ * ----------------------------------------------------------------
+ * Policies attach to a table_id. Each policy decides a subset of rows
+ * the session user may act on. USING expression filters reads/deletes/
+ * update-candidates; WITH CHECK expression vets post-write rows on
+ * INSERT / UPDATE. A table with rls_enabled=1 but no policies denies
+ * all access to non-superusers (matches PostgreSQL's default-deny). */
+
+/* Policy command scope — matches PG's per-policy `FOR` clause. */
+#define POLICY_CMD_ALL    '*'
+#define POLICY_CMD_SELECT 'S'
+#define POLICY_CMD_INSERT 'I'
+#define POLICY_CMD_UPDATE 'U'
+#define POLICY_CMD_DELETE 'D'
+
+#define CAT_MAX_POLICY_ROLES 8      /* max roles listed in `TO role_list` */
+#define CAT_MAX_POLICY_EXPR  2048   /* serialized expression size */
+
+typedef struct {
+    uint32_t table_id;                         /* owning table */
+    char     policy_name[CAT_MAX_NAME_LEN];
+    char     command;                          /* POLICY_CMD_* */
+    uint8_t  permissive;                       /* 1 = PERMISSIVE (OR'd), 0 = RESTRICTIVE (AND'd) */
+    int      role_count;                       /* 0 = applies to any role */
+    char     roles[CAT_MAX_POLICY_ROLES][CAT_MAX_NAME_LEN];
+    /* Serialized expressions — both optional. Empty string = absent. */
+    char     using_expr[CAT_MAX_POLICY_EXPR];
+    char     check_expr[CAT_MAX_POLICY_EXPR];
+} PolicyDesc;
+
+/* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
 
@@ -259,6 +291,10 @@ int cat_update_owner_node(uint32_t table_id, const char *table_name,
 /* Update parent_table_id for INHERITS bookkeeping (Task 92). */
 int cat_update_parent_table_id(uint32_t table_id, const char *table_name,
                                 uint32_t schema_id, uint32_t parent_table_id);
+
+/* Task 93: toggle RLS for a table — rewrites the TableDesc with the new
+ * rls_enabled flag, preserving every other field. */
+int cat_update_table_rls_flag(uint32_t table_id, uint8_t rls_enabled);
 
 /* Update shard metadata for a table. */
 int cat_update_shard_info(uint32_t table_id, const char *table_name,
@@ -356,6 +392,22 @@ int cat_drop_grant(const char *username, int scope_type,
                    const char *scope_name);
 int cat_list_grants_for_user(const char *username, GrantDesc *out, int max);
 int cat_drop_all_grants_for_user(const char *username);
+
+/* ----------------------------------------------------------------
+ *  Policy operations (Task 93 — Feature #64)
+ * ----------------------------------------------------------------
+ * Keys in CAT_SYS_POLICIES are "table_id:policy_name" so lookups by
+ * name stay O(log n) and cat_list_policies_for_table can walk a prefix
+ * range. All reads/writes are serialized by cat_lock()/unlock() — the
+ * callers from executor paths don't need to hold cat_lock themselves. */
+int cat_create_policy(const PolicyDesc *pd);
+int cat_find_policy(uint32_t table_id, const char *policy_name,
+                    PolicyDesc *out);
+int cat_drop_policy(uint32_t table_id, const char *policy_name);
+int cat_list_policies_for_table(uint32_t table_id,
+                                PolicyDesc *out, int max);
+/* Clean up every policy attached to a table (called from DROP TABLE). */
+int cat_drop_all_policies_for_table(uint32_t table_id);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)

@@ -1875,7 +1875,7 @@
 
 ---
 
-### Task 93: ⬜ Row-Level Security (Feature #64)
+### Task 93: ✅ Row-Level Security (Feature #64)
 
 **Goal:** Implement RLS policies that filter rows based on current user.
 

@@ -136,7 +136,7 @@ static void deserialize_schema(const char *buf, SchemaDesc *s)
 /* --- Table --- */
 static void serialize_table(const TableDesc *t, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d;%u",
+    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d;%u;%u",
              t->table_id, t->schema_id, t->table_name,
              t->pk_root_page, t->heap_page,
              t->num_columns, t->pad_size,
@@ -146,7 +146,8 @@ static void serialize_table(const TableDesc *t, char *buf, int size)
              t->shard_type,
              t->shard_key[0] ? t->shard_key : "",
              t->shard_count,
-             t->parent_table_id);            /* Task 92: INHERITS */
+             t->parent_table_id,                  /* Task 92: INHERITS */
+             (unsigned int)t->rls_enabled);       /* Task 93: RLS flag */
 }
 
 static void deserialize_table(const char *buf, TableDesc *t)
@@ -205,6 +206,12 @@ static void deserialize_table(const char *buf, TableDesc *t)
         p = next_field(p, field, sizeof(field)); t->parent_table_id = (uint32_t)atoi(field);
     } else {
         t->parent_table_id = 0;
+    }
+    /* rls_enabled — optional, Task 93. Pre-2.0.8 rows default to 0. */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->rls_enabled = (uint8_t)atoi(field);
+    } else {
+        t->rls_enabled = 0;
     }
     (void)p;
 }
@@ -1101,6 +1108,47 @@ int cat_update_parent_table_id(uint32_t table_id, const char *table_name,
 
     bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
     return 0;
+}
+
+/* Task 93 — Feature #64: toggle RLS on a table. Scan all schemas until
+ * we find the table_id — simpler than threading schema_id through every
+ * ENABLE/DISABLE RLS caller (table_id is the stable key). */
+int cat_update_table_rls_flag(uint32_t table_id, uint8_t rls_enabled)
+{
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_TABLES], &cur) < 0)
+        return -1;
+
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+
+        TableDesc t;
+        deserialize_table(record, &t);
+        if (t.table_id != table_id) continue;
+
+        t.rls_enabled = rls_enabled ? 1 : 0;
+
+        char new_record[CAT_MAX_RECORD_LEN];
+        serialize_table(&t, new_record, sizeof(new_record));
+        int new_len = (int)strlen(new_record) + 1;
+
+        char page_buf[EVO_PAGE_SIZE];
+        pgm_read_page(rid.page_no, page_buf);
+        if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+            pgm_write_page(rid.page_no, page_buf);
+            return 0;
+        }
+
+        cat_delete_record(rid);
+        RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+        if (new_rid.page_no == 0) return -1;
+        bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+        return 0;
+    }
+    return -1;  /* table_id not found */
 }
 
 int cat_list_tables(uint32_t schema_id, TableDesc *out, int max)
@@ -3195,4 +3243,193 @@ int cat_list_all_inheritance(InheritPair *out, int max)
         count++;
     }
     return count;
+}
+
+/* ================================================================
+ *  Row-Level Security Policies (CAT_SYS_POLICIES) — Task 93
+ *
+ *  Key format: zero-padded 10-digit table_id + ':' + policy_name,
+ *  giving us per-table prefix scans (cat_list_policies_for_table).
+ *
+ *  Record format:
+ *    table_id ; policy_name ; command ; permissive ; role_count ;
+ *    role0 ; role1 ; ... ; <pad to CAT_MAX_POLICY_ROLES> ;
+ *    <using_b64> ; <check_b64>
+ *
+ *  Expressions are Base16-hex-escaped so the raw serialized AST (which
+ *  may contain ';') survives the delimiter-based splitter. Each expr
+ *  field is capped at CAT_MAX_POLICY_EXPR characters — same cap
+ *  constraint.c uses for CHECK expressions. The encoder is simple and
+ *  inlined below since we don't have a shared escape helper.
+ * ================================================================ */
+
+static void policy_hex_encode(const char *in, char *out, int out_size)
+{
+    static const char *hex = "0123456789abcdef";
+    int oi = 0;
+    if (out_size <= 0) return;
+    for (int i = 0; in[i] != '\0' && oi + 2 < out_size; i++) {
+        unsigned char b = (unsigned char)in[i];
+        out[oi++] = hex[(b >> 4) & 0xF];
+        out[oi++] = hex[b & 0xF];
+    }
+    out[oi] = '\0';
+}
+
+static void policy_hex_decode(const char *in, char *out, int out_size)
+{
+    int oi = 0;
+    if (out_size <= 0) return;
+    for (int i = 0; in[i] != '\0' && in[i + 1] != '\0' && oi + 1 < out_size; i += 2) {
+        int hi, lo;
+        char c;
+        c = in[i];
+        hi = (c >= '0' && c <= '9') ? c - '0'
+           : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+           : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : 0;
+        c = in[i + 1];
+        lo = (c >= '0' && c <= '9') ? c - '0'
+           : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+           : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : 0;
+        out[oi++] = (char)((hi << 4) | lo);
+    }
+    out[oi] = '\0';
+}
+
+static void make_policy_key(uint32_t table_id, const char *policy_name,
+                            char *out, int out_size)
+{
+    snprintf(out, out_size, "%010u:%s", table_id, policy_name);
+}
+
+static int serialize_policy(const PolicyDesc *p, char *buf, int size)
+{
+    char using_hex[CAT_MAX_POLICY_EXPR * 2 + 2];
+    char check_hex[CAT_MAX_POLICY_EXPR * 2 + 2];
+    policy_hex_encode(p->using_expr, using_hex, sizeof(using_hex));
+    policy_hex_encode(p->check_expr, check_hex, sizeof(check_hex));
+
+    /* Start with fixed prefix, then pack roles[] (always CAT_MAX_POLICY_ROLES
+     * slots — empty strings for unused — so deserialize doesn't have to
+     * trust a count). */
+    int n = snprintf(buf, size, "%u;%s;%c;%u;%d",
+                     p->table_id,
+                     p->policy_name,
+                     p->command,
+                     (unsigned)p->permissive,
+                     p->role_count);
+    if (n < 0 || n >= size) return -1;
+    int pos = n;
+    for (int i = 0; i < CAT_MAX_POLICY_ROLES; i++) {
+        int k = snprintf(buf + pos, size - pos, ";%s",
+                         (i < p->role_count && p->roles[i][0]) ? p->roles[i] : "");
+        if (k < 0 || pos + k >= size) return -1;
+        pos += k;
+    }
+    int k = snprintf(buf + pos, size - pos, ";%s;%s", using_hex, check_hex);
+    if (k < 0 || pos + k >= size) return -1;
+    return pos + k;
+}
+
+static void deserialize_policy(const char *buf, PolicyDesc *p)
+{
+    char field[CAT_MAX_POLICY_EXPR * 2 + 2];
+    const char *q = buf;
+    q = next_field(q, field, sizeof(field)); p->table_id   = (uint32_t)atoi(field);
+    q = next_field(q, p->policy_name, CAT_MAX_NAME_LEN);
+    q = next_field(q, field, sizeof(field)); p->command    = field[0] ? field[0] : POLICY_CMD_ALL;
+    q = next_field(q, field, sizeof(field)); p->permissive = (uint8_t)atoi(field);
+    q = next_field(q, field, sizeof(field)); p->role_count = atoi(field);
+    if (p->role_count < 0) p->role_count = 0;
+    if (p->role_count > CAT_MAX_POLICY_ROLES) p->role_count = CAT_MAX_POLICY_ROLES;
+    for (int i = 0; i < CAT_MAX_POLICY_ROLES; i++) {
+        q = next_field(q, p->roles[i], CAT_MAX_NAME_LEN);
+    }
+    /* Decode hex-escaped expression blobs. */
+    char using_hex[CAT_MAX_POLICY_EXPR * 2 + 2] = "";
+    char check_hex[CAT_MAX_POLICY_EXPR * 2 + 2] = "";
+    q = next_field(q, using_hex, sizeof(using_hex));
+    q = next_field(q, check_hex, sizeof(check_hex));
+    policy_hex_decode(using_hex, p->using_expr, sizeof(p->using_expr));
+    policy_hex_decode(check_hex, p->check_expr, sizeof(p->check_expr));
+    (void)q;
+}
+
+int cat_create_policy(const PolicyDesc *pd)
+{
+    if (!pd || pd->policy_name[0] == '\0' || pd->table_id == 0) return -1;
+    char key[CAT_MAX_KEY_LEN];
+    make_policy_key(pd->table_id, pd->policy_name, key, sizeof(key));
+
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_POLICIES], key, &existing) == 0)
+        return -1;  /* duplicate */
+
+    char record[CAT_MAX_POLICY_EXPR * 4 + 512];
+    if (serialize_policy(pd, record, sizeof(record)) < 0) return -1;
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_POLICIES, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_POLICIES], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_policy(uint32_t table_id, const char *policy_name, PolicyDesc *out)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_policy_key(table_id, policy_name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_POLICIES], key, &rid) < 0)
+        return -1;
+    char record[CAT_MAX_POLICY_EXPR * 4 + 512];
+    if (cat_read_record(rid, record, sizeof(record)) < 0) return -1;
+    if (out) deserialize_policy(record, out);
+    return 0;
+}
+
+int cat_drop_policy(uint32_t table_id, const char *policy_name)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_policy_key(table_id, policy_name, key, sizeof(key));
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_POLICIES], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_POLICIES], key);
+    return 0;
+}
+
+int cat_list_policies_for_table(uint32_t table_id, PolicyDesc *out, int max)
+{
+    if (!out || max <= 0 || table_id == 0) return 0;
+    char prefix[32];
+    snprintf(prefix, sizeof(prefix), "%010u:", table_id);
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_POLICIES], prefix, &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    int plen = (int)strlen(prefix);
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, plen) != 0) break;
+        char record[CAT_MAX_POLICY_EXPR * 4 + 512];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_policy(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}
+
+int cat_drop_all_policies_for_table(uint32_t table_id)
+{
+    if (table_id == 0) return 0;
+    /* Collect first, drop second — bt2_cursor state isn't stable across
+     * deletes from the same tree. */
+    PolicyDesc all[64];
+    int n = cat_list_policies_for_table(table_id, all, 64);
+    for (int i = 0; i < n; i++) {
+        cat_drop_policy(table_id, all[i].policy_name);
+    }
+    return n;
 }

@@ -446,6 +446,26 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                                             fields, is_null_arr, CAT_MAX_COLUMNS);
     memcpy(oldFields, fields, sizeof(oldFields));
 
+    /* Task 93: RLS — USING gate on the old row. If the session user's
+     * policy doesn't see this row, silently skip (no error, just not
+     * updated). Return code 2 signals "skipped" to UpdateProcess's
+     * scan-loop caller, which treats it as !=0 and therefore doesn't
+     * increment the row count. */
+    if (td->rls_enabled) {
+        extern int policy_check_write(uint32_t, const char *, char,
+                                      const ColumnDesc *, int,
+                                      const char [][256], const int *);
+        const char *sess_user = db_get_current_user();
+        if (policy_check_write(td->table_id, sess_user, 'U',
+                                allCols, allNCols,
+                                (const char (*)[256])oldFields,
+                                is_null_arr) < 0) {
+            /* NB: the policy helper evaluates USING when no WITH CHECK
+             * is set, which is what we want for the visibility gate. */
+            return 2;
+        }
+    }
+
     /* Replace only the SET columns with new values */
     {
         int minSet = numSetVals < numSetCols ? numSetVals : numSetCols;
@@ -826,6 +846,33 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                                      (const char *)metaCols, 256,
                                      (const char *)fields, 256,
                                      numMetaCols);
+    }
+
+    /* Task 93: RLS — WITH CHECK on the post-SET row. Differs from the
+     * USING gate above: USING already filtered the rows the user can
+     * see; WITH CHECK says "the result must ALSO satisfy the policy."
+     * A failure here is a real error (42501), not a silent skip. */
+    if (td->rls_enabled) {
+        extern int policy_check_write(uint32_t, const char *, char,
+                                      const ColumnDesc *, int,
+                                      const char [][256], const int *);
+        const char *sess_user = db_get_current_user();
+        /* Rebuild an is_null array reflecting the post-SET state. */
+        int post_null[CAT_MAX_COLUMNS];
+        for (int i = 0; i < numFields && i < CAT_MAX_COLUMNS; i++) {
+            post_null[i] = (strcmp(fields[i], "\x01NULL\x01") == 0) ? 1 : 0;
+        }
+        if (policy_check_write(td->table_id, sess_user, 'U',
+                                allCols, allNCols,
+                                (const char (*)[256])fields, post_null) < 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "new row for relation \"%s\" violates row-level "
+                     "security policy",
+                     td->table_name);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INSUFFICIENT_PRIVILEGE);
+            return -1;
+        }
     }
 
     /* Build updated binary record */
