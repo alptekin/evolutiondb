@@ -819,6 +819,8 @@ cleanup:
         if (session.serializable_locked) {
             extern void cg_unregister_tx(uint32_t);
             if (session.tx_xid > 0) cg_unregister_tx(session.tx_xid);
+            extern mutex_t g_dml_mutex;
+            mutex_unlock(&g_dml_mutex);
             session.serializable_locked = 0;
         }
     }
