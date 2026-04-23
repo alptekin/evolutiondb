@@ -377,12 +377,12 @@ def test_fileheader_metadata():
 
     # FileHeader layout (page_mgr.h):
     #   magic(4) + version(2) + page_size(2) + total_pages(4) + free_list_head(4) = 16
-    #   catalog_roots[18] = 72                                                    -> 88
-    #   next_table_id(4) + next_schema_id(4) + next_db_id(4) = 12                 -> 100
-    #   next_xid(4) + next_csn(4) = 8                                             -> 108
-    #   encryption_enabled(1) @ 108, encryption_salt[16] @ 109,
-    #   wrapped_dek[48] @ 125, page_iv_prefix[8] @ 173
-    ENC_OFFSET = 108
+    #   catalog_roots[19] = 76   (Task 93 added CAT_SYS_POLICIES)     -> 92
+    #   next_table_id(4) + next_schema_id(4) + next_db_id(4) = 12     -> 104
+    #   next_xid(4) + next_csn(4) = 8                                 -> 112
+    #   encryption_enabled(1) @ 112, encryption_salt[16] @ 113,
+    #   wrapped_dek[48] @ 129, page_iv_prefix[8] @ 177
+    ENC_OFFSET = 112
 
     enc_enabled = db_bytes[ENC_OFFSET]
     if enc_enabled == 1:

@@ -221,6 +221,15 @@ ExprNode *expr_make_current_time(void)
     return e;
 }
 
+ExprNode *expr_make_current_user(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_CURRENT_USER;
+    strcpy(e->display, "CURRENT_USER");
+    return e;
+}
+
 ExprNode *expr_make_gen_random_uuid(void)
 {
     ExprNode *e = expr_alloc();
@@ -2125,6 +2134,20 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
 
+    /* Task 93: CURRENT_USER — session username from the thread-local
+     * QueryContext. g_qctx is set per-session by the PG/EVO handler so
+     * policy expressions like `customer = CURRENT_USER` resolve against
+     * the live caller, not whoever created the policy. Falls back to
+     * "unknown" when called outside a session (e.g. internal startup). */
+    if (e->type == EXPR_CURRENT_USER) {
+        extern __thread QueryContext *g_qctx;
+        const char *uname = (g_qctx && g_qctx->currentUser[0])
+                                ? g_qctx->currentUser : "unknown";
+        strncpy(out_buf, uname, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
     /* gen_random_uuid() */
     if (e->type == EXPR_GEN_RANDOM_UUID) {
         uint8_t bytes[16];
@@ -3050,6 +3073,14 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
     case EXPR_JSON_ARROW_TEXT: pos = expr_serialize_r(e->left, buf, pos, bufSize);
                                pos = expr_serialize_r(e->right, buf, pos, bufSize);
                                return ser_append(buf, pos, bufSize, "JAT");
+    /* Task 93: zero-arg session functions used by RLS policies. Only
+     * CURRENT_USER is needed for RLS today; adding CURRENT_TIMESTAMP /
+     * _DATE / _TIME here costs nothing and lets CHECK constraints
+     * reference them too. */
+    case EXPR_CURRENT_USER:     return ser_append(buf, pos, bufSize, "CU");
+    case EXPR_CURRENT_TIMESTAMP: return ser_append(buf, pos, bufSize, "CTS");
+    case EXPR_CURRENT_DATE:      return ser_append(buf, pos, bufSize, "CDT");
+    case EXPR_CURRENT_TIME:      return ser_append(buf, pos, bufSize, "CTM");
     default:
         return pos; /* unsupported node type — skip */
     }
@@ -3087,6 +3118,18 @@ ExprNode *expr_deserialize(const char *buf)
             if (sp < 64) stack[sp++] = expr_make_bool(atoi(tok + 2));
         } else if (tok[0] == 'N' && tok[1] == '\0') {
             if (sp < 64) stack[sp++] = expr_make_null();
+        }
+        /* Task 93: zero-arg session functions — must be handled BEFORE
+         * the unary-operator block (sp >= 1) so CU/CTS/CDT/CTM push a
+         * new node without consuming an operand. */
+        else if (strcmp(tok, "CU") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_user();
+        } else if (strcmp(tok, "CTS") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_timestamp();
+        } else if (strcmp(tok, "CDT") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_date();
+        } else if (strcmp(tok, "CTM") == 0) {
+            if (sp < 64) stack[sp++] = expr_make_current_time();
         }
         /* Unary operators (check first — before binary) */
         else if ((strcmp(tok, "NOT") == 0 || strcmp(tok, "NEG") == 0 ||

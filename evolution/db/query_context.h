@@ -318,6 +318,18 @@ typedef struct {
     int  dropIfExists;
 } TriggerOpts;
 
+/* ---- Policy (Task 93 — RLS) ---- */
+typedef struct {
+    char policy_name[128];
+    char table_name[256];
+    char command;          /* '*'=ALL, 'S', 'I', 'U', 'D' */
+    int  permissive;       /* 1=PERMISSIVE (default), 0=RESTRICTIVE */
+    int  role_count;
+    char roles[8][128];
+    ExprNode *using_expr;
+    ExprNode *check_expr;
+} PolicyOpts;
+
 /* ---- RETURNING ---- */
 typedef struct {
     int active;          /* 1 if RETURNING clause present */
@@ -377,6 +389,7 @@ typedef struct {
 typedef struct QueryContext {
     char           currentDatabase[256];
     char           currentSchema[256];
+    char           currentUser[256];     /* Task 93: session username, for RLS / CURRENT_USER */
     CreateOpts     create;
     InsertOpts     insert;
     SelectOpts     select;
@@ -388,6 +401,7 @@ typedef struct QueryContext {
     ConstraintOpts constraint;
     ProcedureOpts  proc;
     TriggerOpts    trig;
+    PolicyOpts     policy;    /* Task 93 — Feature #64 (RLS) */
     ReturningOpts  returning;
     CopyOpts       copy;
     NotifyOpts     notify;    /* Task 91 — Feature #62 */
@@ -468,6 +482,7 @@ void          qctx_free(QueryContext *ctx);
 #define g_constr      (g_qctx->constraint)
 #define g_proc        (g_qctx->proc)
 #define g_trig        (g_qctx->trig)
+#define g_policy      (g_qctx->policy)
 #define g_returning   (g_qctx->returning)
 #define g_copy        (g_qctx->copy)
 #define g_notify      (g_qctx->notify)

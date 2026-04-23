@@ -94,6 +94,24 @@ const char *db_get_current_schema(void)
 }
 
 /* ----------------------------------------------------------------
+ *  Task 93 — Row-Level Security
+ *  Current session username, used by CURRENT_USER expressions and
+ *  RLS policy enforcement. Populated by the session handlers at the
+ *  same points that set the database/schema context.
+ * ---------------------------------------------------------------- */
+void db_set_current_user(const char *username)
+{
+    if (!g_qctx || !username) return;
+    strncpy(g_qctx->currentUser, username, sizeof(g_qctx->currentUser) - 1);
+    g_qctx->currentUser[sizeof(g_qctx->currentUser) - 1] = '\0';
+}
+
+const char *db_get_current_user(void)
+{
+    return (g_qctx && g_qctx->currentUser[0]) ? g_qctx->currentUser : "";
+}
+
+/* ----------------------------------------------------------------
  *  Build full path: root/<currentdb>/<currentschema>/<tableName>
  *  NOTE: Legacy path format kept for backward compatibility with
  *  tapi_basename() which strips the path to extract the table name.

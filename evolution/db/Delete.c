@@ -619,6 +619,29 @@ int DeleteProcess(void)
                                  tup_extract_fields(rec, rec_len, cols, ncols,
                                                     delFields, delIsNull, CAT_MAX_COLUMNS));
 
+                        /* Task 93: RLS — USING gate on DELETE. Rows the
+                         * session user's policy can't see get silently
+                         * skipped (matches PG's DELETE-returns-0 shape
+                         * for invisible rows). Free the match key, bump
+                         * past the row; outer loop continues. */
+                        if (td.rls_enabled) {
+                            extern int policy_check_write(uint32_t,
+                                                          const char *, char,
+                                                          const ColumnDesc *,
+                                                          int,
+                                                          const char [][256],
+                                                          const int *);
+                            const char *sess_user = db_get_current_user();
+                            if (policy_check_write(td.table_id, sess_user, 'D',
+                                                    cols, ncols,
+                                                    (const char (*)[256])delFields,
+                                                    delIsNull) < 0) {
+                                free(matches[i].key);
+                                matches[i].key = NULL;
+                                continue;
+                            }
+                        }
+
                         /* BEFORE DELETE trigger — skip if table has no
                          * triggers (presence flag cached at resolve time,
                          * see table_api.c tapi_resolve). Saves ~5 us/row
