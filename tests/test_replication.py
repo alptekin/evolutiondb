@@ -131,6 +131,20 @@ def test_sync_commit_no_replicas_no_hang():
     assert elapsed < 1.0, f"commit took {elapsed:.2f}s — likely blocked on sync majority"
 
 
+# ─── Commit 4: auth does not disturb primary state when no creds set ───
+def test_no_auth_configured_default():
+    """
+    Default docker primary has no EVOSQL_REPLICATION_USER set — the
+    auth handshake must be skipped entirely and replicas are accepted
+    without challenge. This test just verifies the primary accepts
+    normal queries (i.e. auth init didn't poison the server startup).
+    """
+    s = conn()
+    cols, rows, err, _ = simple_query(s, "SELECT pg_is_in_recovery()")
+    assert err is None
+    assert rows[0][0] in ("f", "false")
+
+
 # ─── Commit 3: TLS replication transport schema ───
 def test_tls_replication_env_var_documented():
     """
@@ -171,7 +185,7 @@ def test_ack_frame_format_is_documented():
 
 
 if __name__ == "__main__":
-    print("=== test_replication.py (Task 97 Commits 1-3) ===\n")
+    print("=== test_replication.py (Task 97 Commits 1-4) ===\n")
     run("SHOW REPLICATION STATUS shape",       test_show_replication_status_shape)
     run("SHOW REPLICATION LAG shape",          test_show_replication_lag_shape)
     run("pg_is_in_recovery() primary=false",   test_pg_is_in_recovery_function)
@@ -180,6 +194,7 @@ if __name__ == "__main__":
     run("Sync commit no-replicas no-hang",     test_sync_commit_no_replicas_no_hang)
     run("ACK frame columns stable",            test_ack_frame_format_is_documented)
     run("TLS transport schema unchanged",      test_tls_replication_env_var_documented)
+    run("No auth configured default works",    test_no_auth_configured_default)
 
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     sys.exit(0 if FAIL == 0 else 1)

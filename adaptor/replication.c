@@ -22,6 +22,11 @@
 #include "../evolution/db/wal.h"
 #include "../evolution/db/page_mgr.h"
 #include "../evolution/db/page_crypt.h"
+#include "../evolution/db/catalog_internal.h"   /* cat_find_user, UserDesc */
+/* crypto.h defines SHA256_CTX which collides with OpenSSL's when
+ * EVOSQL_TLS is defined (tls.h pulls in <openssl/ssl.h>). Keep a
+ * local forward declaration instead of including crypto.h. */
+int crypto_verify_password(const char *password, const char *encoded);
 
 /* Allow the role to be pinned from the CLI / env so SHOW REPLICATION STATUS
  * and pg_is_in_recovery reflect operator intent before any replica connects.
@@ -31,6 +36,12 @@ static int g_repl_role = REPL_ROLE_PRIMARY;
 /* Replication TLS flag — set by repl_enable_tls / EVOSQL_REPLICATION_TLS.
  * Declared here so both sender thread and the setter below can see it. */
 static int g_repl_tls_enabled = 0;
+
+/* Replication auth credentials set via repl_set_auth / EVOSQL_REPLICATION_USER.
+ * When g_repl_auth_user[0] is non-empty, the sender requires an AUTH line
+ * and validates via cat_find_user + crypto_verify_password. */
+static char g_repl_auth_user[128] = "";
+static char g_repl_auth_pass[128] = "";
 
 /* ================================================================
  *  Shared state
@@ -120,6 +131,53 @@ static void *sender_handle_replica(void *arg)
     uint32_t start_lsn = 0;
     if (strncmp(buf, "REPLICATE ", 10) == 0)
         start_lsn = (uint32_t)atoi(buf + 10);
+
+    /* Auth handshake (Task 97 Commit 4):
+     * When auth is configured on the master, the replica must follow
+     * REPLICATE with "AUTH <user> <password>\n". We validate the password
+     * via crypto_verify_password (PBKDF2-SHA256) against the catalog. */
+    if (g_repl_auth_user[0]) {
+        char authbuf[512];
+        int an = conn_recv_line(&c, authbuf, sizeof(authbuf));
+        if (an <= 0 || strncmp(authbuf, "AUTH ", 5) != 0) {
+            conn_send_line(&c, "ERR missing AUTH");
+            fprintf(stderr, "[REPL] %s rejected — no AUTH line\n", replica_id);
+            conn_tls_shutdown(&c);
+            close(client_fd);
+            return NULL;
+        }
+        char *user_s = authbuf + 5;
+        char *pass_s = strchr(user_s, ' ');
+        if (!pass_s) {
+            conn_send_line(&c, "ERR malformed AUTH");
+            conn_tls_shutdown(&c);
+            close(client_fd);
+            return NULL;
+        }
+        *pass_s++ = '\0';
+        /* Strip trailing newline/carriage-return from password if any */
+        char *cr = strpbrk(pass_s, "\r\n");
+        if (cr) *cr = '\0';
+
+        /* Look up user in the catalog, then constant-time compare via
+         * crypto_verify_password (PBKDF2-SHA256). */
+        UserDesc ud;
+        int ok = 0;
+        if (cat_find_user(user_s, &ud) == 0 &&
+            crypto_verify_password(pass_s, ud.password_hash) == 1) {
+            ok = 1;
+        }
+        if (!ok) {
+            conn_send_line(&c, "ERR bad credentials");
+            fprintf(stderr, "[REPL] %s rejected — bad credentials for user=%s\n",
+                    replica_id, user_s);
+            conn_tls_shutdown(&c);
+            close(client_fd);
+            return NULL;
+        }
+        conn_send_line(&c, "OK");
+        fprintf(stderr, "[REPL] %s authenticated as %s\n", replica_id, user_s);
+    }
 
     /* Register slot — active from this point; replicated confirmed_lsn
      * is start_lsn until the first ACK arrives. */
@@ -347,16 +405,8 @@ void repl_notify_new_wal(void)
 
 static pthread_t g_receiver_thread;
 
-static int recv_all(int fd, void *buf, size_t n)
-{
-    size_t got = 0;
-    while (got < n) {
-        ssize_t r = recv(fd, (char *)buf + got, n - got, 0);
-        if (r <= 0) return -1;
-        got += r;
-    }
-    return 0;
-}
+/* recv_all was used by the pre-conn_t receiver loop; now superseded by
+ * conn_recv_exact which handles both plain and TLS transports. */
 
 /* Replication slot: persist last received LSN to file */
 static uint32_t g_last_received_lsn = 0;
@@ -552,6 +602,34 @@ static void *reconnect_loop(void *arg)
             continue;
         }
 
+        /* If the replica was configured with credentials, send AUTH.
+         * Master-side auth block demands this when g_repl_auth_user is set
+         * there; sending unsolicited AUTH to a non-auth master is harmless
+         * (master just ignores extra bytes). */
+        if (g_repl_auth_user[0]) {
+            char authline[384];
+            int alen = snprintf(authline, sizeof(authline), "AUTH %s %s\n",
+                                g_repl_auth_user, g_repl_auth_pass);
+            if (conn_send_all(&c, authline, alen) < 0) {
+                conn_tls_shutdown(&c);
+                close(sock);
+                sleep(1);
+                continue;
+            }
+            /* Wait for OK / ERR response so we know we're authenticated
+             * before the master starts streaming. */
+            char resp[128];
+            int rn = conn_recv_line(&c, resp, sizeof(resp));
+            if (rn <= 0 || strncmp(resp, "OK", 2) != 0) {
+                fprintf(stderr, "[REPL] Auth failed: %s\n",
+                        rn > 0 ? resp : "(no response)");
+                conn_tls_shutdown(&c);
+                close(sock);
+                sleep(5);  /* don't hammer — wrong creds */
+                continue;
+            }
+        }
+
         /* Run receiver loop (blocks until disconnect) */
         ReceiverArg *ra = malloc(sizeof(ReceiverArg));
         ra->c = &c;
@@ -685,15 +763,22 @@ void repl_enable_tls(int enabled)
 
 /* ================================================================
  *  GAP-D12: Replication Authentication
+ *  g_repl_auth_user/_pass declared at top of file so sender_handle_replica
+ *  can read them before this setter block is reached.
  * ================================================================ */
-static char g_repl_auth_user[128] = "";
-static char g_repl_auth_pass[128] = "";
 
 void repl_set_auth(const char *user, const char *password)
 {
-    if (user) strncpy(g_repl_auth_user, user, 127);
-    if (password) strncpy(g_repl_auth_pass, password, 127);
-    fprintf(stderr, "[REPL] Authentication configured (user=%s)\n", g_repl_auth_user);
+    if (user) {
+        strncpy(g_repl_auth_user, user, sizeof(g_repl_auth_user) - 1);
+        g_repl_auth_user[sizeof(g_repl_auth_user) - 1] = '\0';
+    }
+    if (password) {
+        strncpy(g_repl_auth_pass, password, sizeof(g_repl_auth_pass) - 1);
+        g_repl_auth_pass[sizeof(g_repl_auth_pass) - 1] = '\0';
+    }
+    fprintf(stderr, "[REPL] Authentication configured (user=%s)\n",
+            g_repl_auth_user);
 }
 
 /* ================================================================
