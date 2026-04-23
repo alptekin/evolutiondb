@@ -1095,6 +1095,29 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
 
     if (pkKey[0] == '\0') return -1;
 
+    /* Task 93: Row-Level Security — reject the INSERT if the post-
+     * assignment row fails the table's WITH CHECK policy overlay.
+     * is_null is the per-column NULL flag computed just above; we
+     * pass the field array as-is because tup_build's later path
+     * reads the same `vals_ptrs[] / is_null[]` pair. */
+    if (td->rls_enabled) {
+        extern int policy_check_write(uint32_t, const char *, char,
+                                      const ColumnDesc *, int,
+                                      const char [][256], const int *);
+        const char *sess_user = db_get_current_user();
+        if (policy_check_write(td->table_id, sess_user, 'I',
+                                cols, ncols,
+                                (const char (*)[256])fields, is_null) < 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "new row for relation \"%s\" violates row-level "
+                     "security policy",
+                     td->table_name);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INSUFFICIENT_PRIVILEGE);
+            return -1;
+        }
+    }
+
     /* Check for duplicate PK */
     BTree2 pk_tree = tapi_pk_tree(td);
     RowID existing;

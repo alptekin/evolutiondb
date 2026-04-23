@@ -1837,12 +1837,11 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
     ExprNode *saved_where_for_rls = g_expr.whereExpr;
     int rls_applied = 0;
     if (td.rls_enabled) {
-        extern ExprNode *policy_build_overlay(uint32_t, const char *, char,
-                                              ExprNode *);
-        ExprNode *overlay = policy_build_overlay(td.table_id,
-                                                 g_qctx ? g_qctx->currentUser : "",
-                                                 'S',
-                                                 g_expr.whereExpr);
+        ExprNode *overlay = policy_build_overlay(
+            td.table_id,
+            g_qctx ? g_qctx->currentUser : "",
+            'S',
+            g_expr.whereExpr);
         if (overlay != saved_where_for_rls) {
             g_expr.whereExpr = overlay;
             rls_applied = 1;

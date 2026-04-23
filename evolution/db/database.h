@@ -334,6 +334,18 @@ void SetPolicyUsing(struct ExprNode *expr);
 void SetPolicyCheck(struct ExprNode *expr);
 int CreatePolicyProcess(void);
 int DropPolicyProcess(void);
+
+/* RLS enforcement helpers (shared by query_executor + Insert/Update/Delete).
+ * ColumnDesc is declared in catalog_internal.h as a typedef'd anonymous
+ * struct — we can't forward-declare it here, so callers that need the
+ * WRITE-side check include catalog_internal.h and drop in the extern
+ * directly. Only the SELECT overlay helper is exported from this
+ * header (query_executor.c already includes expression.h). */
+int policy_is_superuser(const char *username);
+struct ExprNode *policy_build_overlay(uint32_t table_id,
+                                      const char *username,
+                                      char cmd,
+                                      struct ExprNode *base_where);
 int AlterTableRenameColumn(const char *tableName, const char *oldName, const char *newName);
 int AlterTableModifyColumn(const char *tableName, const char *colName, int newTypeCode);
 int AlterTableChangeColumn(const char *tableName, const char *oldName,
