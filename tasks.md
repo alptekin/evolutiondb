@@ -1936,7 +1936,7 @@
 
 ## Day 49 — Connection Pooling & Replication
 
-### Task 96: ⬜ Connection Pooling (Feature #68)
+### Task 96: ✅ Connection Pooling (Feature #68)
 
 **Goal:** Implement server-side connection pooling to reuse threads/connections.
 
