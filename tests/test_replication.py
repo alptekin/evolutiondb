@@ -131,6 +131,27 @@ def test_sync_commit_no_replicas_no_hang():
     assert elapsed < 1.0, f"commit took {elapsed:.2f}s — likely blocked on sync majority"
 
 
+# ─── Commit 3: TLS replication transport schema ───
+def test_tls_replication_env_var_documented():
+    """
+    EVOSQL_REPLICATION_TLS is the documented switch for upgrading the
+    replication transport. Server builds that honor the flag expose it
+    via pg_is_in_recovery + SHOW REPLICATION STATUS shape — the wire
+    format is unchanged (TLS wrapper is transparent to the protocol).
+
+    This test doesn't spin up a separate TLS primary (that's Commit 8's
+    docker-compose.replication.yml). It just validates the schema hasn't
+    drifted from Commits 1-2.
+    """
+    s = conn()
+    cols, _rows, err, _ = simple_query(s, "SHOW REPLICATION STATUS")
+    assert err is None
+    # When a TLS-enabled primary gets a TLS client, the slot columns
+    # must look identical to plaintext — any divergence is a wire break.
+    assert cols == ["role", "replica_id", "my_lsn", "confirmed_lsn",
+                    "lag_bytes", "active", "last_seen_us"]
+
+
 # ─── Commit 2: ACK frame size constant is wire-stable ───
 def test_ack_frame_format_is_documented():
     """
@@ -150,7 +171,7 @@ def test_ack_frame_format_is_documented():
 
 
 if __name__ == "__main__":
-    print("=== test_replication.py (Task 97 Commits 1-2) ===\n")
+    print("=== test_replication.py (Task 97 Commits 1-3) ===\n")
     run("SHOW REPLICATION STATUS shape",       test_show_replication_status_shape)
     run("SHOW REPLICATION LAG shape",          test_show_replication_lag_shape)
     run("pg_is_in_recovery() primary=false",   test_pg_is_in_recovery_function)
@@ -158,6 +179,7 @@ if __name__ == "__main__":
     run("Role defaults to primary",            test_role_defaults_to_primary)
     run("Sync commit no-replicas no-hang",     test_sync_commit_no_replicas_no_hang)
     run("ACK frame columns stable",            test_ack_frame_format_is_documented)
+    run("TLS transport schema unchanged",      test_tls_replication_env_var_documented)
 
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     sys.exit(0 if FAIL == 0 else 1)

@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include "replication.h"
+#include "tls.h"
 #include "../evolution/db/wal.h"
 #include "../evolution/db/page_mgr.h"
 #include "../evolution/db/page_crypt.h"
@@ -26,6 +27,10 @@
  * and pg_is_in_recovery reflect operator intent before any replica connects.
  * 0 = primary (default), 1 = replica, 2 = witness. Set via repl_set_role(). */
 static int g_repl_role = REPL_ROLE_PRIMARY;
+
+/* Replication TLS flag — set by repl_enable_tls / EVOSQL_REPLICATION_TLS.
+ * Declared here so both sender thread and the setter below can see it. */
+static int g_repl_tls_enabled = 0;
 
 /* ================================================================
  *  Shared state
@@ -56,25 +61,22 @@ typedef struct {
     char client_addr[64];   /* "ip:port" used as replica_id for slot tracking */
 } SenderArg;
 
-/* Drain any pending replica→master frames from a non-blocking recv.
- * Currently parses REPL_MSG_ACK ('A' + uint32 LSN) and updates the slot.
- * Any other byte stream is silently skipped (Commit 4 will reject).
- * Returns 0 on normal drain, -1 if peer has closed the connection. */
-static int sender_drain_acks(int client_fd, const char *replica_id)
+/* Drain any pending replica→master frames. Parses REPL_MSG_ACK
+ * ('A' + uint32 LSN) and updates the slot. Any other byte stream is
+ * silently skipped (Commit 4 will reject). Returns 0 on normal drain,
+ * -1 if peer has closed the connection. */
+static int sender_drain_acks(conn_t *c, const char *replica_id)
 {
-    unsigned char buf[256];
+    char buf[256];
     while (1) {
-        ssize_t n = recv(client_fd, buf, sizeof(buf), MSG_DONTWAIT);
-        if (n == 0) return -1;  /* peer performed orderly close */
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
-            return -1;  /* ECONNRESET etc. */
-        }
-        /* Parse ACK frames: 5 bytes each, may arrive coalesced. */
-        for (ssize_t i = 0; i + REPL_ACK_FRAME_SIZE <= n; ) {
-            if (buf[i] == REPL_MSG_ACK) {
+        int n = conn_try_recv(c, buf, sizeof(buf));
+        if (n == 0) return 0;        /* would block — no data right now */
+        if (n < 0) return -1;        /* peer close / error */
+        unsigned char *u = (unsigned char *)buf;
+        for (int i = 0; i + REPL_ACK_FRAME_SIZE <= n; ) {
+            if (u[i] == REPL_MSG_ACK) {
                 uint32_t confirmed;
-                memcpy(&confirmed, buf + i + 1, 4);
+                memcpy(&confirmed, u + i + 1, 4);
                 repl_slot_update(replica_id, confirmed);
                 i += REPL_ACK_FRAME_SIZE;
             } else {
@@ -96,11 +98,24 @@ static void *sender_handle_replica(void *arg)
 
     fprintf(stderr, "[REPL] Replica connected: %s\n", replica_id);
 
+    /* Wrap the accepted socket in a conn_t so all subsequent I/O flows
+     * through the TLS-aware layer. When repl_enable_tls(1) was set and
+     * the global TLS context is available, upgrade the transport now. */
+    conn_t c;
+    conn_init(&c, client_fd);
+    if (g_repl_tls_enabled && tls_is_available()) {
+        if (conn_tls_accept(&c) < 0) {
+            fprintf(stderr, "[REPL] TLS handshake failed for %s — closing\n",
+                    replica_id);
+            close(client_fd);
+            return NULL;
+        }
+    }
+
     /* Read handshake: "REPLICATE <last_lsn>\n" */
     char buf[256];
-    int n = recv(client_fd, buf, sizeof(buf) - 1, 0);
-    if (n <= 0) { close(client_fd); return NULL; }
-    buf[n] = '\0';
+    int n = conn_recv_line(&c, buf, sizeof(buf));
+    if (n <= 0) { conn_tls_shutdown(&c); close(client_fd); return NULL; }
 
     uint32_t start_lsn = 0;
     if (strncmp(buf, "REPLICATE ", 10) == 0)
@@ -110,8 +125,8 @@ static void *sender_handle_replica(void *arg)
      * is start_lsn until the first ACK arrives. */
     repl_slot_update(replica_id, start_lsn);
 
-    fprintf(stderr, "[REPL] Replica %s requests WAL from LSN %u\n",
-            replica_id, start_lsn);
+    fprintf(stderr, "[REPL] Replica %s requests WAL from LSN %u (tls=%d)\n",
+            replica_id, start_lsn, c.is_tls);
 
     /* Send WAL file content from the requested offset.
      * WAL records start after the 16-byte header. */
@@ -161,9 +176,9 @@ static void *sender_handle_replica(void *arg)
         /* Send: [type:1][len:4][record:N] */
         char msg_type = REPL_MSG_WAL_DATA;
         uint32_t msg_len = (uint32_t)rec_total;
-        send(client_fd, &msg_type, 1, 0);
-        send(client_fd, &msg_len, 4, 0);
-        send(client_fd, rec, rec_total, 0);
+        conn_send_all(&c, &msg_type, 1);
+        conn_send_all(&c, (const char *)&msg_len, 4);
+        conn_send_all(&c, rec, (int)rec_total);
         free(rec);
 
         pos += rec_total;
@@ -171,7 +186,7 @@ static void *sender_handle_replica(void *arg)
     close(wal_fd);
 
     /* Catch-up finished — drain whatever replica already ACK'd. */
-    if (sender_drain_acks(client_fd, replica_id) < 0) goto disconnected;
+    if (sender_drain_acks(&c, replica_id) < 0) goto disconnected;
 
     /* Now stream live: wait for new WAL records */
     while (g_repl_running) {
@@ -185,7 +200,7 @@ static void *sender_handle_replica(void *arg)
 
         /* Pull pending ACKs before sending the next batch so sync_commit
          * waiters see the latest confirmed_lsn promptly. */
-        if (sender_drain_acks(client_fd, replica_id) < 0) goto disconnected;
+        if (sender_drain_acks(&c, replica_id) < 0) goto disconnected;
 
         /* Check for new records in WAL */
         wal_fd = open("evosql.wal", O_RDONLY);
@@ -212,9 +227,9 @@ static void *sender_handle_replica(void *arg)
 
             char msg_type = REPL_MSG_WAL_DATA;
             uint32_t msg_len = (uint32_t)rec_total;
-            if (send(client_fd, &msg_type, 1, 0) <= 0 ||
-                send(client_fd, &msg_len, 4, 0) <= 0 ||
-                send(client_fd, rec, rec_total, 0) <= 0) {
+            if (conn_send_all(&c, &msg_type, 1) < 0 ||
+                conn_send_all(&c, (const char *)&msg_len, 4) < 0 ||
+                conn_send_all(&c, rec, (int)rec_total) < 0) {
                 free(rec);
                 close(wal_fd);
                 goto disconnected;
@@ -227,11 +242,11 @@ static void *sender_handle_replica(void *arg)
         /* Send heartbeat if no data */
         if (g_repl_running) {
             char hb = REPL_MSG_HEARTBEAT;
-            if (send(client_fd, &hb, 1, MSG_NOSIGNAL) <= 0)
+            if (conn_send_all(&c, &hb, 1) < 0)
                 goto disconnected;
             /* Drain one more time — heartbeat tick may coincide with
              * receiver's periodic ACK. Peer-close detected here too. */
-            if (sender_drain_acks(client_fd, replica_id) < 0)
+            if (sender_drain_acks(&c, replica_id) < 0)
                 goto disconnected;
         }
     }
@@ -239,6 +254,7 @@ static void *sender_handle_replica(void *arg)
 disconnected:
     fprintf(stderr, "[REPL] Replica disconnected: %s\n", replica_id);
     repl_slot_deactivate(replica_id);
+    conn_tls_shutdown(&c);
     close(client_fd);
     return NULL;
 }
@@ -364,37 +380,44 @@ static uint32_t slot_load(void)
 
 /* Send an ACK frame from replica → master. Safe to call any time after
  * the socket is connected; errors are ignored (next ACK retries). */
-static void send_ack(int sock, uint32_t confirmed_lsn)
+static void send_ack_conn(conn_t *c, uint32_t confirmed_lsn)
 {
     unsigned char frame[REPL_ACK_FRAME_SIZE];
     frame[0] = REPL_MSG_ACK;
     memcpy(frame + 1, &confirmed_lsn, 4);
-    send(sock, frame, sizeof(frame), MSG_NOSIGNAL);
+    conn_send_all(c, (const char *)frame, sizeof(frame));
 }
+
+typedef struct {
+    conn_t *c;
+    int     data_fd;
+} ReceiverArg;
 
 static void *receiver_loop(void *arg)
 {
-    int sock = *(int *)arg;
-    int data_fd = *((int *)arg + 1);
-    free(arg);
+    ReceiverArg *ra = (ReceiverArg *)arg;
+    conn_t *c = ra->c;
+    int data_fd = ra->data_fd;
+    free(ra);
 
-    fprintf(stderr, "[REPL] WAL receiver started (last_lsn=%u)\n", g_last_received_lsn);
+    fprintf(stderr, "[REPL] WAL receiver started (last_lsn=%u, tls=%d)\n",
+            g_last_received_lsn, c->is_tls);
 
     int records = 0;
     /* Initial ACK so master sees the replica's resume point without
      * waiting for the first WAL record. */
-    send_ack(sock, g_last_received_lsn);
+    send_ack_conn(c, g_last_received_lsn);
 
     while (g_repl_running) {
         /* Read message type */
         char msg_type;
-        if (recv_all(sock, &msg_type, 1) < 0) break;
+        if (conn_recv_exact(c, &msg_type, 1) < 0) break;
 
         if (msg_type == REPL_MSG_HEARTBEAT) {
             /* Master heartbeat — respond with current confirmed LSN so
              * sync_commit waiters and SHOW REPLICATION STATUS stay fresh
              * even when no WAL is flowing. */
-            send_ack(sock, g_last_received_lsn);
+            send_ack_conn(c, g_last_received_lsn);
             continue;
         }
         if (msg_type == REPL_MSG_END) { sleep(1); continue; }
@@ -402,11 +425,11 @@ static void *receiver_loop(void *arg)
         if (msg_type == REPL_MSG_WAL_DATA) {
             /* Read length + record */
             uint32_t msg_len;
-            if (recv_all(sock, &msg_len, 4) < 0) break;
+            if (conn_recv_exact(c, (char *)&msg_len, 4) < 0) break;
 
             char *rec = malloc(msg_len);
             if (!rec) break;
-            if (recv_all(sock, rec, msg_len) < 0) { free(rec); break; }
+            if (conn_recv_exact(c, rec, (int)msg_len) < 0) { free(rec); break; }
 
             /* Parse WAL record header */
             uint32_t rec_page_no;
@@ -440,7 +463,7 @@ static void *receiver_loop(void *arg)
                         slot_save(rec_lsn);
                         /* ACK every 100 records so master sync_commit
                          * waiters don't stall for the 5s heartbeat. */
-                        send_ack(sock, rec_lsn);
+                        send_ack_conn(c, rec_lsn);
                     }
                 }
 
@@ -462,7 +485,8 @@ static void *receiver_loop(void *arg)
     if (g_last_received_lsn > 0) slot_save(g_last_received_lsn);
     fprintf(stderr, "[REPL] WAL receiver stopped after %d records (last_lsn=%u)\n",
             records, g_last_received_lsn);
-    close(sock);
+    conn_tls_shutdown(c);
+    close(c->sock);
     return NULL;
 }
 
@@ -502,19 +526,37 @@ static void *reconnect_loop(void *arg)
         }
 
         backoff_sec = 1;  /* reset on successful connect */
-        fprintf(stderr, "[REPL] Connected to master %s:%d (resume from LSN %u)\n",
-                g_master_host, g_master_port, start_lsn);
+
+        /* Wrap in conn_t and optionally upgrade to TLS matching master. */
+        conn_t c;
+        conn_init(&c, sock);
+        if (g_repl_tls_enabled) {
+            if (conn_tls_connect(&c) < 0) {
+                fprintf(stderr, "[REPL] TLS client handshake failed — retrying\n");
+                close(sock);
+                sleep(2);
+                continue;
+            }
+        }
+
+        fprintf(stderr, "[REPL] Connected to master %s:%d (resume from LSN %u, tls=%d)\n",
+                g_master_host, g_master_port, start_lsn, c.is_tls);
 
         /* Send handshake with last known LSN */
         char handshake[64];
-        snprintf(handshake, sizeof(handshake), "REPLICATE %u\n", start_lsn);
-        send(sock, handshake, strlen(handshake), 0);
+        int hlen = snprintf(handshake, sizeof(handshake), "REPLICATE %u\n", start_lsn);
+        if (conn_send_all(&c, handshake, hlen) < 0) {
+            conn_tls_shutdown(&c);
+            close(sock);
+            sleep(1);
+            continue;
+        }
 
         /* Run receiver loop (blocks until disconnect) */
-        int *args = malloc(sizeof(int) * 2);
-        args[0] = sock;
-        args[1] = g_data_fd_saved;
-        receiver_loop(args);  /* blocks until connection drops */
+        ReceiverArg *ra = malloc(sizeof(ReceiverArg));
+        ra->c = &c;
+        ra->data_fd = g_data_fd_saved;
+        receiver_loop(ra);  /* blocks until connection drops */
 
         if (g_repl_running)
             fprintf(stderr, "[REPL] Connection lost — reconnecting...\n");
@@ -632,10 +674,8 @@ static void cdc_decode_page(const char *page_data, uint16_t page_len,
 }
 
 /* ================================================================
- *  GAP-D11: Replication TLS
+ *  GAP-D11: Replication TLS (g_repl_tls_enabled declared at top)
  * ================================================================ */
-static int g_repl_tls_enabled = 0;
-
 void repl_enable_tls(int enabled)
 {
     g_repl_tls_enabled = enabled;

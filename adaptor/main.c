@@ -96,6 +96,7 @@ int main(int argc, char *argv[])
         const char *env_repl_port = getenv("EVOSQL_REPLICATION_PORT");
         const char *env_repl_user = getenv("EVOSQL_REPLICATION_USER");
         const char *env_repl_pass = getenv("EVOSQL_REPLICATION_PASSWORD");
+        const char *env_repl_tls  = getenv("EVOSQL_REPLICATION_TLS");
 
         if (env_role && env_role[0])
             role_str = env_role;
@@ -117,6 +118,15 @@ int main(int argc, char *argv[])
         if (env_repl_user && env_repl_pass) {
             extern void repl_set_auth(const char *, const char *);
             repl_set_auth(env_repl_user, env_repl_pass);
+        }
+
+        /* Enable TLS on the replication transport when EVOSQL_REPLICATION_TLS
+         * is truthy. Uses the same cert/key as the PG-wire TLS context. */
+        if (env_repl_tls && (env_repl_tls[0] == '1' || env_repl_tls[0] == 't' ||
+                             env_repl_tls[0] == 'T' || env_repl_tls[0] == 'y' ||
+                             env_repl_tls[0] == 'Y')) {
+            extern void repl_enable_tls(int);
+            repl_enable_tls(1);
         }
     }
 

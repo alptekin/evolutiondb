@@ -7,6 +7,11 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#ifndef _WIN32
+#include <sys/socket.h>
+#endif
 #include "platform.h"
 #include "tls.h"
 #include "net.h"
@@ -200,6 +205,41 @@ void conn_tls_shutdown(conn_t *c)
     c->is_tls = 0;
 }
 
+int conn_try_recv(conn_t *c, char *buf, int maxlen)
+{
+    if (c->is_tls && c->ssl) {
+        /* Prefer any already-decrypted bytes — OpenSSL may have buffered
+         * them when the TCP socket delivered a full record. */
+        int pend = SSL_pending(c->ssl);
+        if (pend > 0) {
+            int want = pend < maxlen ? pend : maxlen;
+            int n = SSL_read(c->ssl, buf, want);
+            return n > 0 ? n : -1;
+        }
+        /* No decrypted data. Probe the wire by attempting a non-blocking
+         * read: put the socket in O_NONBLOCK briefly so SSL_read returns
+         * SSL_ERROR_WANT_READ instead of spinning. */
+        int flags = fcntl(c->sock, F_GETFL, 0);
+        if (flags < 0) return 0;
+        fcntl(c->sock, F_SETFL, flags | O_NONBLOCK);
+        int n = SSL_read(c->ssl, buf, maxlen);
+        int err = (n <= 0) ? SSL_get_error(c->ssl, n) : 0;
+        fcntl(c->sock, F_SETFL, flags);  /* restore blocking */
+        if (n > 0) return n;
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+            return 0;
+        return -1;
+    }
+    /* Plain socket path — MSG_DONTWAIT gives the non-blocking read. */
+    ssize_t n = recv(c->sock, buf, maxlen, MSG_DONTWAIT);
+    if (n == 0) return -1;
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+        return -1;
+    }
+    return (int)n;
+}
+
 #else /* !EVOSQL_TLS — stub implementations */
 
 int tls_global_init(const char *cert_file, const char *key_file)
@@ -249,6 +289,17 @@ int conn_recv_line(conn_t *c, char *buf, int maxlen)
 }
 
 void conn_tls_shutdown(conn_t *c) { (void)c; }
+
+int conn_try_recv(conn_t *c, char *buf, int maxlen)
+{
+    ssize_t n = recv(c->sock, buf, maxlen, MSG_DONTWAIT);
+    if (n == 0) return -1;
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+        return -1;
+    }
+    return (int)n;
+}
 
 #endif /* EVOSQL_TLS */
 
