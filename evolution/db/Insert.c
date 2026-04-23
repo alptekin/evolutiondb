@@ -1603,7 +1603,7 @@ int InsertProcess(void)
             strncpy(tmpPre, reorderedRows[i], sizeof(tmpPre) - 1);
             tmpPre[sizeof(tmpPre) - 1] = '\0';
             char *tp = strtok(tmpPre, FIELD_SEP);
-            while (tp && nvPre < 64) { valsPre[nvPre++] = tp; tp = strtok(NULL, FIELD_SEP); }
+            while (tp && nvPre < CAT_MAX_COLUMNS) { valsPre[nvPre++] = tp; tp = strtok(NULL, FIELD_SEP); }
 
             /* Extract PK for secondary index values */
             tapi_build_pk_key_from_vals(cols, ncols, valsPre, nvPre,
@@ -1671,7 +1671,7 @@ int InsertProcess(void)
                 char *rv[CAT_MAX_COLUMNS];
                 int rnv = 0;
                 char *rp = strtok(tmpR, FIELD_SEP);
-                while (rp && rnv < 64) { rv[rnv++] = rp; rp = strtok(NULL, FIELD_SEP); }
+                while (rp && rnv < CAT_MAX_COLUMNS) { rv[rnv++] = rp; rp = strtok(NULL, FIELD_SEP); }
                 char rFields[CAT_MAX_COLUMNS][256];
                 for (int fi = 0; fi < rnv && fi < CAT_MAX_COLUMNS; fi++) {
                     strncpy(rFields[fi], rv[fi], 255);
@@ -1687,7 +1687,7 @@ int InsertProcess(void)
                 /* Snapshot the would-be-inserted values for EXCLUDED.<col>
                  * references in DO UPDATE SET expressions. Indexed by table
                  * column order (rFields is already reordered). */
-                int ec = rnv < 64 ? rnv : 64;
+                int ec = rnv < CAT_MAX_COLUMNS ? rnv : 64;
                 for (int ei = 0; ei < ec; ei++) {
                     int is_n = (strcmp(rFields[ei], NULL_MARKER) == 0);
                     g_ins.excludedNull[ei] = is_n;
@@ -1705,7 +1705,7 @@ int InsertProcess(void)
                  * (`INSERT INTO t(b,a) VALUES ...`) — rFields is in table
                  * order, so the name lookup must be too. */
                 {
-                    int cc = ncols < 64 ? ncols : 64;
+                    int cc = ncols < CAT_MAX_COLUMNS ? ncols : CAT_MAX_COLUMNS;
                     for (int ci = 0; ci < cc; ci++) {
                         strncpy(g_ins.columns[ci], cols[ci].col_name,
                                 sizeof(g_ins.columns[ci]) - 1);
