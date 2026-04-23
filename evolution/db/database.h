@@ -200,6 +200,8 @@ void db_set_current_database(const char *name);
 const char *db_get_current_database(void);
 void db_set_current_schema(const char *name);
 const char *db_get_current_schema(void);
+void db_set_current_user(const char *username);
+const char *db_get_current_user(void);
 void db_table_path(const char *tableName, char *out, int outSize);
 int  db_ext_path(const char *tableName, const char *ext, char *out, int outSize);
 int  db_meta_path(const char *tableName, char *out, int outSize);
@@ -320,6 +322,18 @@ int AlterTableAddColumn(const char *tableName, const char *colName, int typeCode
 int AlterTableDropColumn(const char *tableName, const char *colName);
 int CreateViewProcess(const char *viewName);
 int DropViewProcess(const char *viewName, int ifExists);
+
+/* Task 93 — Row-Level Security */
+int AlterTableToggleRLS(const char *tableName, int enable);
+void SetPolicyName(const char *name);
+void SetPolicyTable(const char *tableName);
+void SetPolicyPermissive(int permissive);
+void SetPolicyCommand(char cmd);
+void AddPolicyRole(const char *role);
+void SetPolicyUsing(struct ExprNode *expr);
+void SetPolicyCheck(struct ExprNode *expr);
+int CreatePolicyProcess(void);
+int DropPolicyProcess(void);
 int AlterTableRenameColumn(const char *tableName, const char *oldName, const char *newName);
 int AlterTableModifyColumn(const char *tableName, const char *colName, int newTypeCode);
 int AlterTableChangeColumn(const char *tableName, const char *oldName,

@@ -99,6 +99,7 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/Json.c \
               $(EVO_DB)/Sequence.c \
               $(EVO_DB)/Notify.c \
+              $(EVO_DB)/Policy.c \
               $(EVO_DB)/dml_profile.c
 
 # Evolution parser source files

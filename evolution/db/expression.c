@@ -221,6 +221,15 @@ ExprNode *expr_make_current_time(void)
     return e;
 }
 
+ExprNode *expr_make_current_user(void)
+{
+    ExprNode *e = expr_alloc();
+    if (!e) return NULL;
+    e->type = EXPR_CURRENT_USER;
+    strcpy(e->display, "CURRENT_USER");
+    return e;
+}
+
 ExprNode *expr_make_gen_random_uuid(void)
 {
     ExprNode *e = expr_alloc();
@@ -2122,6 +2131,20 @@ int expr_evaluate(const ExprNode *e,
             strftime(out_buf, buf_size, "%Y-%m-%d", tm);
         else
             strftime(out_buf, buf_size, "%H:%M:%S", tm);
+        return 1;
+    }
+
+    /* Task 93: CURRENT_USER — session username from the thread-local
+     * QueryContext. g_qctx is set per-session by the PG/EVO handler so
+     * policy expressions like `customer = CURRENT_USER` resolve against
+     * the live caller, not whoever created the policy. Falls back to
+     * "unknown" when called outside a session (e.g. internal startup). */
+    if (e->type == EXPR_CURRENT_USER) {
+        extern __thread QueryContext *g_qctx;
+        const char *uname = (g_qctx && g_qctx->currentUser[0])
+                                ? g_qctx->currentUser : "unknown";
+        strncpy(out_buf, uname, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
         return 1;
     }
 

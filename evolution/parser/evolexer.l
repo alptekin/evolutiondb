@@ -88,6 +88,7 @@ CROSS					{ return CROSS; }
 CURRENT_DATE			{ return CURRENT_DATE; }
 CURRENT_TIME			{ return CURRENT_TIME; }
 CURRENT_TIMESTAMP		{ return CURRENT_TIMESTAMP; }
+CURRENT_USER			{ return CURRENT_USER; }
 
 
 
@@ -217,6 +218,7 @@ LEAVE					{ return LEAVE; }
 
 LEFT					{ return LEFT; }
 LESS					{ return LESS; }
+LEVEL					{ return LEVEL; }
 LIKE					{ return LIKE; }
 LIMIT					{ return LIMIT; }
 LOCKED					{ return LOCKED; }
@@ -268,6 +270,8 @@ OUTER					{ return OUTER; }
 
 PRIMARY					{ return PRIMARY; }
 PROCEDURE				{ return PROCEDURE; }
+POLICY					{ return POLICY; }
+PERMISSIVE				{ return PERMISSIVE; }
 
 
 QUICK					{ return QUICK; }
@@ -287,6 +291,7 @@ REPLACE					{ int c = input(yyscanner); unput(c); if(c == '(') return FREPLACE; 
 RESIGNAL				{ return RESIGNAL; }
 ROW					{ return ROW; }
 RESTRICT				{ return RESTRICT; }
+RESTRICTIVE				{ return RESTRICTIVE; }
 RETURN					{ return RETURN; }
 RETURNING				{ return RETURNING; }
 RETURNS					{ return RETURNS; }
@@ -295,6 +300,7 @@ RETURNS					{ return RETURNS; }
 RIGHT					{ return RIGHT; }
 ROLLUP					{ return ROLLUP; }
 SCHEMA					{ return SCHEMA; }
+SECURITY				{ return SECURITY; }
 SEQUENCE				{ return SEQUENCE; }
 START					{ return START; }
 SHARD					{ return SHARD; }

@@ -300,6 +300,14 @@
 %token TRIGGER
 %token UNTIL
 
+/* Task 93 — Row-Level Security */
+%token POLICY
+%token LEVEL
+%token SECURITY
+%token PERMISSIVE
+%token RESTRICTIVE
+%token CURRENT_USER
+
 %token SQL_SMALL_RESULT
 %token SCHEMA
 %token SHARD
@@ -1071,6 +1079,17 @@ expr: CURRENT_TIMESTAMP
         char _ts[64];
         expr_evaluate($$, NULL, NULL, 0, _ts, sizeof(_ts));
         GetInsertions(_ts);
+    }
+| CURRENT_USER
+    {
+        /* Task 93 — RLS: keep the node itself in the AST (evaluated at
+         * query time) but emit the current session user into the RPN
+         * canonical form so literal comparisons stay serializable. */
+        emit("CURRENT_USER");
+        $$ = expr_make_current_user();
+        char _uu[256];
+        expr_evaluate($$, NULL, NULL, 0, _uu, sizeof(_uu));
+        GetInsertions(_uu);
     }
 ;
 
@@ -1854,6 +1873,67 @@ analyze_table_stmt: ANALYZE TABLE NAME
 stmt: alter_table_stmt                                                          { emit("STMT"); }
 ;
 
+/** Task 93 — Row-Level Security: CREATE POLICY / DROP POLICY **/
+stmt: create_policy_stmt                                                        { emit("STMT"); CreatePolicyProcess(); }
+| drop_policy_stmt                                                              { emit("STMT"); DropPolicyProcess(); }
+;
+
+create_policy_stmt:
+    CREATE POLICY NAME ON NAME opt_policy_as opt_policy_for opt_policy_to
+    opt_policy_using opt_policy_check
+    {
+        emit("CREATE POLICY %s ON %s", $3, $5);
+        SetPolicyName($3);
+        SetPolicyTable($5);
+        free($3); free($5);
+    }
+;
+
+opt_policy_as:                         /* default PERMISSIVE */
+    /* empty */                        { SetPolicyPermissive(1); }
+  | AS PERMISSIVE                      { SetPolicyPermissive(1); }
+  | AS RESTRICTIVE                     { SetPolicyPermissive(0); }
+;
+
+opt_policy_for:
+    /* empty */                        { SetPolicyCommand('*'); }
+  | FOR ALL                            { SetPolicyCommand('*'); }
+  | FOR SELECT                         { SetPolicyCommand('S'); }
+  | FOR INSERT                         { SetPolicyCommand('I'); }
+  | FOR UPDATE                         { SetPolicyCommand('U'); }
+  | FOR DELETE                         { SetPolicyCommand('D'); }
+;
+
+opt_policy_to:
+    /* empty */
+  | TO policy_role_list
+;
+
+policy_role_list:
+    NAME                               { AddPolicyRole($1); free($1); }
+  | policy_role_list ',' NAME          { AddPolicyRole($3); free($3); }
+;
+
+opt_policy_using:
+    /* empty */
+  | USING '(' expr ')'                 { SetPolicyUsing($3); }
+;
+
+opt_policy_check:
+    /* empty */
+  | WITH CHECK '(' expr ')'            { SetPolicyCheck($4); }
+;
+
+drop_policy_stmt:
+    DROP POLICY NAME ON NAME
+    {
+        emit("DROP POLICY %s ON %s", $3, $5);
+        SetPolicyName($3);
+        SetPolicyTable($5);
+        free($3); free($5);
+    }
+;
+
 alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
     {
         emit("ALTER TABLE ADD CHECK %s %s", $3, $6);
@@ -1975,6 +2055,18 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         emit("ALTER TABLE CHANGE COLUMN %s %s %s %d", $3, $5, $6, $7);
         AlterTableChangeColumn($3, $5, $6, $7);
         free($3); free($5); free($6);
+    }
+| ALTER TABLE NAME ENABLE ROW LEVEL SECURITY
+    {
+        emit("ALTER TABLE %s ENABLE RLS", $3);
+        AlterTableToggleRLS($3, 1);
+        free($3);
+    }
+| ALTER TABLE NAME DISABLE ROW LEVEL SECURITY
+    {
+        emit("ALTER TABLE %s DISABLE RLS", $3);
+        AlterTableToggleRLS($3, 0);
+        free($3);
     }
 ;
 

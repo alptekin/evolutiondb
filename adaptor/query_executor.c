@@ -7853,6 +7853,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (ctx) {
         db_set_current_database(ctx->database);
         db_set_current_schema(ctx->schema);
+        db_set_current_user(ctx->username);  /* Task 93: RLS / CURRENT_USER */
         strncpy(g_last_insert_id, ctx->last_insert_id, sizeof(g_last_insert_id) - 1);
         g_last_insert_id[sizeof(g_last_insert_id) - 1] = '\0';
         g_gtt_overrides = ctx->gtt_data;
