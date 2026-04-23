@@ -300,9 +300,11 @@
 %token TRIGGER
 %token UNTIL
 
-/* Task 93 — Row-Level Security */
+/* Task 93 — Row-Level Security.
+ * NB: LEVEL is intentionally NOT a reserved word — it's a common
+ * column / alias name (e.g. CASE … END AS level). The grammar matches
+ * "ENABLE ROW NAME SECURITY" and validates the NAME at runtime. */
 %token POLICY
-%token LEVEL
 %token SECURITY
 %token PERMISSIVE
 %token RESTRICTIVE
@@ -2056,17 +2058,28 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         AlterTableChangeColumn($3, $5, $6, $7);
         free($3); free($5); free($6);
     }
-| ALTER TABLE NAME ENABLE ROW LEVEL SECURITY
+| ALTER TABLE NAME ENABLE ROW NAME SECURITY
     {
+        /* Only accept `ROW LEVEL SECURITY`; any other middle NAME is a
+         * syntax error. Keeping LEVEL as an unreserved NAME lets the
+         * identifier stay free for column/alias use elsewhere. */
+        if (strcasecmp($6, "LEVEL") != 0) {
+            yyerror(scanner, "expected LEVEL after ROW in ENABLE ROW LEVEL SECURITY");
+            free($3); free($6); YYERROR;
+        }
         emit("ALTER TABLE %s ENABLE RLS", $3);
         AlterTableToggleRLS($3, 1);
-        free($3);
+        free($3); free($6);
     }
-| ALTER TABLE NAME DISABLE ROW LEVEL SECURITY
+| ALTER TABLE NAME DISABLE ROW NAME SECURITY
     {
+        if (strcasecmp($6, "LEVEL") != 0) {
+            yyerror(scanner, "expected LEVEL after ROW in DISABLE ROW LEVEL SECURITY");
+            free($3); free($6); YYERROR;
+        }
         emit("ALTER TABLE %s DISABLE RLS", $3);
         AlterTableToggleRLS($3, 0);
-        free($3);
+        free($3); free($6);
     }
 ;
 

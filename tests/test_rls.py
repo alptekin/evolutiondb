@@ -299,6 +299,97 @@ def test_permissive_and_restrictive(admin):
 
 
 # ────────────────────────────────────────────────────────────────────
+# Test 12 — FOR SELECT policy does not apply to UPDATE (PG semantics)
+# ────────────────────────────────────────────────────────────────────
+def test_for_select_does_not_cover_update(admin):
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    # Only a FOR SELECT policy — no FOR UPDATE / FOR ALL.
+    q(admin, "CREATE POLICY p_read ON rls_orders "
+             "FOR SELECT USING (customer = CURRENT_USER)")
+    a = conn(user="alice", password="alicepw")
+    # SELECT should work (FOR SELECT matches).
+    _, rows_read, _, _ = q(a, "SELECT id FROM rls_orders ORDER BY id")
+    # UPDATE has no matching policy → deny-by-default.
+    _, _, _, _ = q(a, "UPDATE rls_orders SET total = 111 WHERE total > 0")
+    a.close()
+    _, rows_admin, _, _ = q(admin, "SELECT total FROM rls_orders ORDER BY id")
+    admin_totals = [r[0] for r in rows_admin]
+    check("12. FOR SELECT does not cover UPDATE",
+          [r[0] for r in rows_read] == ['1', '3']
+          and admin_totals == ['100', '200', '50', '75'],
+          f"reads={rows_read} admin_totals={admin_totals}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Test 13 — Complex USING expression (AND with two operators)
+# ────────────────────────────────────────────────────────────────────
+def test_complex_expression(admin):
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    # Only alice's rows AND total > 60 — should surface id=1 only.
+    q(admin, "CREATE POLICY p_complex ON rls_orders "
+             "FOR SELECT USING (customer = CURRENT_USER AND total > 60)")
+    a = conn(user="alice", password="alicepw")
+    _, rows, _, _ = q(a, "SELECT id, total FROM rls_orders ORDER BY id")
+    a.close()
+    check("13. Complex USING expression",
+          [r[0] for r in rows] == ['1'], f"rows={rows}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Test 14 — RLS + secondary index: fast path must fall through
+# ────────────────────────────────────────────────────────────────────
+def test_rls_with_secondary_index(admin):
+    fresh_table(admin)
+    q(admin, "CREATE INDEX idx_customer ON rls_orders (customer)")
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    q(admin, "CREATE POLICY p_own ON rls_orders "
+             "FOR SELECT USING (customer = CURRENT_USER)")
+    # Alice should still only see her own rows even when the index on
+    # customer would short-cut the fast path to bob's rows.
+    a = conn(user="alice", password="alicepw")
+    _, rows_all, _, _ = q(a, "SELECT id FROM rls_orders ORDER BY id")
+    _, rows_bob, _, _ = q(a,
+        "SELECT id FROM rls_orders WHERE customer = 'bob'")
+    a.close()
+    check("14. RLS blocks secondary-index fast path",
+          [r[0] for r in rows_all] == ['1', '3'] and rows_bob == [],
+          f"all={rows_all} bob={rows_bob}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Test 15 — JOIN with RLS on both tables: each side filters independently
+# ────────────────────────────────────────────────────────────────────
+def test_rls_in_join(admin):
+    q(admin, "DROP TABLE IF EXISTS rls_owners")
+    q(admin, "CREATE TABLE rls_owners "
+             "(owner VARCHAR(64) PRIMARY KEY, team VARCHAR(64))")
+    q(admin, "INSERT INTO rls_owners VALUES ('alice', 'red')")
+    q(admin, "INSERT INTO rls_owners VALUES ('bob',   'blue')")
+    fresh_table(admin)
+    q(admin, "ALTER TABLE rls_orders ENABLE ROW LEVEL SECURITY")
+    q(admin, "CREATE POLICY p_orders_own ON rls_orders "
+             "FOR SELECT USING (customer = CURRENT_USER)")
+    q(admin, "ALTER TABLE rls_owners ENABLE ROW LEVEL SECURITY")
+    q(admin, "CREATE POLICY p_owners_own ON rls_owners "
+             "FOR SELECT USING (owner = CURRENT_USER)")
+    a = conn(user="alice", password="alicepw")
+    _, rows, err, _ = q(a,
+        "SELECT o.id, w.team FROM rls_orders o "
+        "JOIN rls_owners w ON o.customer = w.owner "
+        "ORDER BY o.id")
+    a.close()
+    ids = [r[0] for r in rows]
+    teams = [r[1] for r in rows]
+    check("15. RLS on both sides of a JOIN",
+          err is None and ids == ['1', '3']
+          and all(t == 'red' for t in teams),
+          f"rows={rows} err={err}")
+    q(admin, "DROP TABLE IF EXISTS rls_owners")
+
+
+# ────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────
 def main():
@@ -317,6 +408,10 @@ def main():
             test_delete_filtered_by_using,
             test_permissive_or,
             test_permissive_and_restrictive,
+            test_for_select_does_not_cover_update,
+            test_complex_expression,
+            test_rls_with_secondary_index,
+            test_rls_in_join,
         ]:
             # Fresh state before every test
             admin.close()

@@ -753,10 +753,29 @@ int join_execute(JoinPlan *plan, ResultSet *rs, SessionCtx *ctx,
         return -1;
     }
 
+    /* Task 93: Row-Level Security — AND each RLS-enabled joined table's
+     * USING overlay onto the final WHERE. policy_build_overlay returns
+     * an expression over bare column names, which matches how the join
+     * pipeline's merged row is keyed (col_names[] has unqualified
+     * names). Column-name collisions between tables would misroute the
+     * evaluation, but the JOIN metadata layer prevents ambiguous
+     * references elsewhere in the pipeline, so we inherit that
+     * protection here. */
+    ExprNode *join_where = plan->where_expr;
+    const char *sess_user = (ctx && ctx->username[0]) ? ctx->username : "";
+    for (int jt = 0; jt < plan->num_tables; jt++) {
+        if (!tables[jt].td.rls_enabled) continue;
+        ExprNode *overlay = policy_build_overlay(tables[jt].td.table_id,
+                                                 sess_user,
+                                                 'S',
+                                                 join_where);
+        if (overlay) join_where = overlay;
+    }
+
     pipeline_recurse(tables, plan->num_tables, 0,
                      merged_fields, merged_null, 0,
                      col_names, col_oids, total_cols,
-                     plan->where_expr, rs,
+                     join_where, rs,
                      (const Snapshot *)snap, ctx);
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
