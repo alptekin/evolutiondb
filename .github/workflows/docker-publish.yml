@@ -22,8 +22,17 @@ jobs:
       - name: Generate version tag
         id: version
         run: |
+          # Read MAJOR.MINOR from evolution/db/version.h so tag format
+          # tracks the source-of-truth version constant.
+          MAJOR=$(grep -E '^#define EVODB_VERSION_MAJOR' evolution/db/version.h | awk '{print $3}')
+          MINOR=$(grep -E '^#define EVODB_VERSION_MINOR' evolution/db/version.h | awk '{print $3}')
+          if [ -z "$MAJOR" ] || [ -z "$MINOR" ]; then
+            echo "Failed to parse EVODB_VERSION_{MAJOR,MINOR} from evolution/db/version.h"
+            exit 1
+          fi
+
           DATE_TAG=$(date -u +%Y%m%d)
-          BASE="v1.0.${DATE_TAG}"
+          BASE="v${MAJOR}.${MINOR}.${DATE_TAG}"
 
           # Fetch existing tags matching today's date pattern
           git fetch --tags --force
