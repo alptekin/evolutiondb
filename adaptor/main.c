@@ -78,9 +78,58 @@ int main(int argc, char *argv[])
     const char *cluster_nodes = NULL;   /* --cluster node1:port,node2:port,... */
     int node_id = -1;                   /* --node-id 0/1/2/... */
     int dist_port = 9969;              /* --dist-port (distributed query engine) */
+    const char *role_str = NULL;       /* --role primary|replica|witness */
+    const char *base_backup_path = NULL;  /* --base-backup PATH */
     int i;
 
-    /* Parse CLI arguments */
+    /* Environment defaults (CLI flags below override).
+     *   EVOSQL_REPLICATION_ROLE   = primary | replica | witness
+     *   EVOSQL_PRIMARY_HOST       = upstream host for replicas
+     *   EVOSQL_PRIMARY_PORT       = upstream port for replicas
+     *   EVOSQL_REPLICATION_PORT   = primary listen port for WAL sender
+     *   EVOSQL_REPLICATION_USER   = credential for auth handshake (Commit 4)
+     *   EVOSQL_REPLICATION_PASSWORD
+     */
+    {
+        const char *env_role = getenv("EVOSQL_REPLICATION_ROLE");
+        const char *env_primary_host = getenv("EVOSQL_PRIMARY_HOST");
+        const char *env_primary_port = getenv("EVOSQL_PRIMARY_PORT");
+        const char *env_repl_port = getenv("EVOSQL_REPLICATION_PORT");
+        const char *env_repl_user = getenv("EVOSQL_REPLICATION_USER");
+        const char *env_repl_pass = getenv("EVOSQL_REPLICATION_PASSWORD");
+        const char *env_repl_tls  = getenv("EVOSQL_REPLICATION_TLS");
+
+        if (env_role && env_role[0])
+            role_str = env_role;
+        if (env_repl_port && env_repl_port[0])
+            repl_port = atoi(env_repl_port);
+
+        /* If role=replica and primary host given, build a target string. */
+        if (env_role && strcasecmp(env_role, "replica") == 0 &&
+            env_primary_host && env_primary_host[0]) {
+            static char repl_target_buf[320];
+            int pport = (env_primary_port && env_primary_port[0])
+                ? atoi(env_primary_port) : REPL_DEFAULT_PORT;
+            snprintf(repl_target_buf, sizeof(repl_target_buf), "%s:%d",
+                     env_primary_host, pport);
+            replica_target = repl_target_buf;
+        }
+
+        /* Pre-register auth creds — handshake validates them. */
+        if (env_repl_user && env_repl_pass) {
+            repl_set_auth(env_repl_user, env_repl_pass);
+        }
+
+        /* Enable TLS on the replication transport when EVOSQL_REPLICATION_TLS
+         * is truthy. Uses the same cert/key as the PG-wire TLS context. */
+        if (env_repl_tls && (env_repl_tls[0] == '1' || env_repl_tls[0] == 't' ||
+                             env_repl_tls[0] == 'T' || env_repl_tls[0] == 'y' ||
+                             env_repl_tls[0] == 'Y')) {
+            repl_enable_tls(1);
+        }
+    }
+
+    /* Parse CLI arguments (override env) */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--pg-port") == 0 && i + 1 < argc)
             pg_port = atoi(argv[++i]);
@@ -98,8 +147,28 @@ int main(int argc, char *argv[])
             node_id = atoi(argv[++i]);
         else if (strcmp(argv[i], "--dist-port") == 0 && i + 1 < argc)
             dist_port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--role") == 0 && i + 1 < argc)
+            role_str = argv[++i];
+        else if (strcmp(argv[i], "--base-backup") == 0 && i + 1 < argc)
+            base_backup_path = argv[++i];
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
+    }
+
+    /* Resolve role string to numeric (pins SHOW REPLICATION STATUS output
+     * before any replica connects). */
+    if (role_str) {
+        if (strcasecmp(role_str, "replica") == 0) {
+            repl_set_role(REPL_ROLE_REPLICA);
+        } else if (strcasecmp(role_str, "witness") == 0) {
+            repl_set_role(REPL_ROLE_WITNESS);
+            repl_set_witness(1);
+        } else if (strcasecmp(role_str, "primary") == 0) {
+            repl_set_role(REPL_ROLE_PRIMARY);
+        } else {
+            fprintf(stderr, "[REPL] Unknown role '%s' — expected primary|replica|witness\n",
+                    role_str);
+        }
     }
 
     /* Environment variable override (MySQL-style: bytes or with suffix) */
@@ -120,6 +189,15 @@ int main(int argc, char *argv[])
 
     /* Initialise engine, locks, socket subsystem */
     server_init_ex(buffer_pool_pages);
+
+    /* --base-backup mode: run the copy and exit
+     * without binding listener sockets. Scripted replica bootstrap
+     * uses this to clone a fresh data directory from primary. */
+    if (base_backup_path) {
+        int rc = repl_create_backup(base_backup_path);
+        server_cleanup();
+        return rc == 0 ? 0 : 1;
+    }
 
     /* Task 91: LISTEN/NOTIFY registry */
     {
@@ -165,7 +243,6 @@ int main(int argc, char *argv[])
 
     /* Start replication sender if configured */
     if (repl_port > 0) {
-        extern int repl_start_sender(int);
         repl_start_sender(repl_port);
     }
 
@@ -185,15 +262,20 @@ int main(int argc, char *argv[])
         } else {
             strncpy(host, replica_target, 255);
         }
-        extern int repl_start_receiver(const char *, int, int);
-        extern int pgm_get_fd(void);
+        extern int pgm_get_fd(void);   /* engine-internal, no public header */
         repl_start_receiver(host, rport, pgm_get_fd());
     }
 
     /* Start Raft consensus if cluster configured */
     if (cluster_nodes && node_id >= 0) {
-        if (raft_init(cluster_nodes, node_id) == 0)
+        if (raft_init(cluster_nodes, node_id) == 0) {
+            /* Wire Raft role transitions into the
+             * replication module before starting — so the first
+             * election already flips primary/replica automatically. */
+            repl_bind_raft_glue(repl_port > 0 ? repl_port : REPL_DEFAULT_PORT);
+            repl_install_raft_glue();
             raft_start();
+        }
     }
 
     /* Start distributed query engine if cluster configured */

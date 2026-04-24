@@ -101,6 +101,10 @@ uint32_t wal_log_xa_resolve(const char *xa_xid, int commit);
 /* Check if WAL is active (initialized and operational). */
 int wal_is_active(void);
 
+/* Return the next LSN that will be assigned (i.e. current write position).
+ * Returns 0 if WAL is not active. Used by replication for lag reporting. */
+uint32_t wal_get_current_lsn(void);
+
 /* ----------------------------------------------------------------
  *  Time-Travel Recovery (EvoSQL Snapshot Restore)
  *

@@ -5579,7 +5579,11 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
      * longjmp back here in GUI mode) MUST be inside this block.
      * This includes the parser AND collect_select_results. */
     if (setjmp(g_err.jmpbuf) == 0) {
-        int parse_result;
+        int parse_result = 0;   /* 0 = ok; 1 = syntax error (yyparse). Must
+                                 * be pre-initialized so the replica
+                                 * write-rejection goto doesn't leave it
+                                 * uninitialized and trip the syntax-error
+                                 * overwrite below. */
 
         /* Reentrant parser: each call gets its own scanner instance.
          * DML uses g_dml_mutex for serialization (doesn't block readers).
@@ -7852,6 +7856,20 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     clock_gettime(CLOCK_MONOTONIC, &__prof_start);
 
     result_init(rs);
+
+    /* Witness gate: a witness node participates in
+     * Raft voting but does not store data. Reject ALL queries (even
+     * SELECT 1) with SQLSTATE 08006 "connection_failure" — matches
+     * PostgreSQL's convention for "this node cannot serve right now".
+     * Placed above catalog_try_handle so SELECT 1 and pg_catalog shims
+     * are rejected uniformly. */
+    {
+        extern int repl_is_witness(void);
+        if (repl_is_witness()) {
+            result_set_error(rs, "08006", "witness node does not serve queries");
+            return;
+        }
+    }
 
     /* Reject queries exceeding internal buffer size (prevents stack overflow) */
     size_t sql_len = strlen(sql);
