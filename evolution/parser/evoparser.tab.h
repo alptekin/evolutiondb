@@ -418,7 +418,9 @@
      FVECTOR_NORM = 634,
      FVECTOR_NORMALIZE = 635,
      HNSW = 636,
-     FHNSW_KNN = 637
+     FHNSW_KNN = 637,
+     FHNSW_FILTER_KNN = 638,
+     FHNSW_HYBRID_EXPLAIN = 639
    };
 #endif
 /* Tokens.  */
@@ -802,6 +804,8 @@
 #define FVECTOR_NORMALIZE 635
 #define HNSW 636
 #define FHNSW_KNN 637
+#define FHNSW_FILTER_KNN 638
+#define FHNSW_HYBRID_EXPLAIN 639
 
 
 
@@ -817,7 +821,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 821 "parser/evoparser.tab.h"
+#line 825 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

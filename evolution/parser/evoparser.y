@@ -430,7 +430,7 @@
 %token VEC_L2_OP VEC_INNER_OP
 
 /* HNSW ANN index (Task 202 — Feature #202) */
-%token HNSW FHNSW_KNN
+%token HNSW FHNSW_KNN FHNSW_FILTER_KNN FHNSW_HYBRID_EXPLAIN
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -810,6 +810,26 @@ expr: FCOSINE_DIST '(' expr ',' expr ')'
         emit("CALL 4 HNSW_KNN %d", $9);
         ExprNode *n = expr_make_func3(EXPR_HNSW_KNN, $3, $5, $7, "HNSW_KNN");
         if (n) n->val.intval = $9;
+        $$ = n;
+    }
+| FHNSW_FILTER_KNN '(' expr ',' expr ',' expr ',' INTNUM ',' STRING ')'
+    {
+        /* Task 203: hnsw_filter_knn(tbl, idx, query, k, 'col=val[:mode]').
+         * The 5th arg is a string literal — eval-time code splits it into
+         * column/value (and optional strategy mode: auto/pre/post). */
+        emit("CALL 5 HNSW_FILTER_KNN %d %s", $9, $11);
+        ExprNode *n = expr_make_func3(EXPR_HNSW_FILTER_KNN, $3, $5, $7, "HNSW_FILTER_KNN");
+        if (n) { n->val.intval = $9; n->subquery_sql = strdup($11); }
+        free($11);
+        $$ = n;
+    }
+| FHNSW_HYBRID_EXPLAIN '(' expr ',' expr ',' expr ',' INTNUM ',' STRING ')'
+    {
+        /* Diagnostic sibling — same arg shape, returns strategy string. */
+        emit("CALL 5 HNSW_HYBRID_EXPLAIN %d %s", $9, $11);
+        ExprNode *n = expr_make_func3(EXPR_HNSW_HYBRID_EXPLAIN, $3, $5, $7, "HNSW_HYBRID_EXPLAIN");
+        if (n) { n->val.intval = $9; n->subquery_sql = strdup($11); }
+        free($11);
         $$ = n;
     }
 ;
