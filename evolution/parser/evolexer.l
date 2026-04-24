@@ -376,6 +376,7 @@ VIRTUAL					{ return VIRTUAL; }
 VALUE					{ yylval->strval = strdup("VALUE"); return NAME; }
 VARBINARY				{ return VARBINARY; }
 VARCHAR(ACTER)?			{ return VARCHAR; }
+VECTOR					{ return VECTOR; }
 
 WHEN					{ return WHEN; }
 WHERE					{ return WHERE; }
