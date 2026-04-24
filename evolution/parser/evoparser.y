@@ -108,6 +108,9 @@
 %token ANALYZE
 %token HISTOGRAM
 %token BUCKETS
+%token SAMPLE
+%token PERCENT
+%token ROWS
 %token ANY
 %token AUTO_INCREMENT
 %token ASC
@@ -1858,19 +1861,36 @@ stmt: analyze_table_stmt
 ;
 
 analyze_table_stmt:
-    analyze_table_prefix NAME hist_clause_opt
+    analyze_table_prefix NAME sample_clause_opt hist_clause_opt
     {
         emit("ANALYZETABLE %s", $2);
         GetDropTableName($2);
         free($2);
     }
-  | analyze_table_prefix NAME '.' NAME hist_clause_opt
+  | analyze_table_prefix NAME '.' NAME sample_clause_opt hist_clause_opt
     {
         emit("ANALYZETABLE %s.%s", $2, $4);
         char full[512];
         snprintf(full, sizeof(full), "%.255s.%.255s", $2, $4);
         GetDropTableName(full);
         free($2); free($4);
+    }
+;
+
+/* Optional sampling clause (Task 102):
+ *   ANALYZE TABLE t WITH SAMPLE n PERCENT   — Bernoulli keep prob
+ *   ANALYZE TABLE t WITH SAMPLE n ROWS      — target sample size
+ * Empty clause → auto-default (full scan for <10k rows, 10% sample
+ * otherwise — requires prior ANALYZE to have recorded row_count). */
+sample_clause_opt:
+    /* empty */
+  | WITH SAMPLE INTNUM PERCENT
+    {
+        SetAnalyzeSamplePct($3);
+    }
+  | WITH SAMPLE INTNUM ROWS
+    {
+        SetAnalyzeSampleRows($3);
     }
 ;
 
