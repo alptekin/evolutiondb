@@ -103,9 +103,26 @@ typedef struct {
     uint64_t    count;
 } HistPair;
 
+/* Compare pairs using numeric order when both values parse as doubles,
+ * else lexicographic. Keeps equi-depth bounds consistent with the
+ * query_executor's compare_bound reader — otherwise a bucket stored
+ * in lex order ("1","10","100",...,"2","20") would produce wrong
+ * cumulative lookups for numeric range queries. */
 static int histpair_cmp(const void *a, const void *b)
 {
-    return strcmp(((const HistPair *)a)->val, ((const HistPair *)b)->val);
+    const char *as = ((const HistPair *)a)->val;
+    const char *bs = ((const HistPair *)b)->val;
+    char *e1, *e2;
+    double av = strtod(as, &e1);
+    double bv = strtod(bs, &e2);
+    int a_numeric = (e1 != as && *e1 == '\0');
+    int b_numeric = (e2 != bs && *e2 == '\0');
+    if (a_numeric && b_numeric) {
+        if (av < bv) return -1;
+        if (av > bv) return  1;
+        return 0;
+    }
+    return strcmp(as, bs);
 }
 
 /* Snapshot the set into a flat array of (value, count) pairs, sorted
