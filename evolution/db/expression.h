@@ -181,7 +181,29 @@ typedef enum {
 
     /* LISTEN/NOTIFY helper functions (Task 91 — Feature #62) */
     EXPR_EVO_NOTIFY,           /* evo_notify(channel, payload) — left/right */
-    EXPR_PG_LISTENING_CHANNELS /* pg_listening_channels() — no children */
+    EXPR_PG_LISTENING_CHANNELS,/* pg_listening_channels() — no children */
+
+    /* Vector operations (Task 201 — Feature #201) — pgvector-compatible.
+     * Operators: <=> cosine, <-> L2, <#> inner product.
+     * Functions: cosine_distance, l2_distance, inner_product, l1_distance,
+     *            vector_dim, vector_norm, vector_normalize. */
+    EXPR_VEC_COSINE,           /* left <=> right — cosine distance; falls
+                                * back to null-safe eq for non-vectors so
+                                * existing `SELECT 1 <=> 1` still returns 't' */
+    EXPR_VEC_L2,               /* left <-> right — Euclidean / L2 distance */
+    EXPR_VEC_INNER,            /* left <#> right — negative inner product */
+    EXPR_VEC_L1,               /* l1_distance(left, right) */
+    EXPR_VECTOR_DIM,           /* vector_dim(v) → int */
+    EXPR_VECTOR_NORM,          /* vector_norm(v) → double (L2 norm) */
+    EXPR_VECTOR_NORMALIZE,     /* vector_normalize(v) → vector */
+
+    /* HNSW KNN helper (Task 202 — Feature #202).
+     * hnsw_knn(table_name, index_name, query_text, k) — returns a comma-
+     * separated text list of PK values for the k nearest neighbors,
+     * ordered by ascending distance. Lets tests and ad-hoc SQL exercise
+     * the HNSW index without needing ORDER BY-expr planner routing,
+     * which lives in Task 203. */
+    EXPR_HNSW_KNN              /* left=table, right=index, extra=query, val.intval=k */
 } ExprNodeType;
 
 typedef struct ExprNode {

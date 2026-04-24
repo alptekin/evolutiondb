@@ -210,6 +210,12 @@ typedef struct {
     int  concurrent;          /* CREATE INDEX CONCURRENTLY */
     uint32_t concTableId;     /* saved by Phase1 for Phase2 */
     uint32_t concRootPage;    /* saved by Phase1 for Phase2 */
+
+    /* HNSW ANN (Task 202 — Feature #202) */
+    int  usingHnsw;           /* 1 = CREATE INDEX ... USING HNSW */
+    int  hnswDistanceKind;    /* HNSW_DIST_COSINE/L2/INNER/L1 */
+    int  hnswM;               /* build-time neighbor cap (default 16) */
+    int  hnswEfConstruction;  /* beam width during build (default 64) */
 } IndexOpts;
 
 /* ---- Window Function Spec ---- */

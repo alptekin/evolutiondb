@@ -8140,11 +8140,29 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         result_set_error(rs, "54000", "query too long (max 8KB)");
         return;
     }
-    /* Reject queries with too many commas (proxy for column/value count) */
+    /* Reject queries with too many top-level commas (proxy for column /
+     * value count). Commas INSIDE string literals don't count — VECTOR(N)
+     * and ARRAY literals pack many commas into a single SQL value. */
     {
         int commas = 0;
-        for (size_t ci = 0; ci < sql_len; ci++)
-            if (sql[ci] == ',') commas++;
+        int in_str = 0;
+        char quote = 0;
+        for (size_t ci = 0; ci < sql_len; ci++) {
+            char c = sql[ci];
+            if (in_str) {
+                if (c == quote) {
+                    /* '' and "" are escape pairs — stay inside. */
+                    if (ci + 1 < sql_len && sql[ci + 1] == quote) {
+                        ci++;
+                        continue;
+                    }
+                    in_str = 0;
+                }
+                continue;
+            }
+            if (c == '\'' || c == '"') { in_str = 1; quote = c; continue; }
+            if (c == ',') commas++;
+        }
         if (commas > 200) {
             result_set_error(rs, "54011", "too many columns or values (max 200)");
             return;
