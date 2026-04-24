@@ -137,6 +137,7 @@ void SetIndexUnique(void);
 void SetIndexIfNotExists(void);
 void SetIndexExpression(struct ExprNode *expr);
 void SetIndexUsingHash(void);
+void SetIndexUsingHnsw(int distance_kind, int m, int ef_construction);
 void SetIndexConcurrent(void);
 int  CreateIndexConcurrentlyPhase2(void *mutex_ptr);
 int  CreateIndexConcurrentlyPhase3(void *mutex_ptr);

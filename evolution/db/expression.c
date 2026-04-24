@@ -16,6 +16,8 @@
 #include "catalog_internal.h"
 #include "database.h"   /* query_context.h macros for g_expr.nodePool etc. */
 #include "crypto.h"
+#include "hnsw.h"
+#include "table_api.h"
 
 /* Nested-execution marker (Task 89 — Feature #59).
  * Counter bumped by the join engine around LATERAL subquery re-execution.
@@ -573,25 +575,27 @@ ExprNode *expr_make_cmp(int subtok, ExprNode *left, ExprNode *right)
 {
     ExprNodeType type;
     switch (subtok) {
-    case CMP_SUBTOK_EQ: type = EXPR_CMP_EQ; break;
-    case CMP_SUBTOK_NE: type = EXPR_CMP_NE; break;
-    case CMP_SUBTOK_LT: type = EXPR_CMP_LT; break;
-    case CMP_SUBTOK_GT: type = EXPR_CMP_GT; break;
-    case CMP_SUBTOK_LE: type = EXPR_CMP_LE; break;
-    case CMP_SUBTOK_GE: type = EXPR_CMP_GE; break;
-    default:            type = EXPR_CMP_EQ; break;
+    case CMP_SUBTOK_EQ:      type = EXPR_CMP_EQ;    break;
+    case CMP_SUBTOK_NE:      type = EXPR_CMP_NE;    break;
+    case CMP_SUBTOK_LT:      type = EXPR_CMP_LT;    break;
+    case CMP_SUBTOK_GT:      type = EXPR_CMP_GT;    break;
+    case CMP_SUBTOK_LE:      type = EXPR_CMP_LE;    break;
+    case CMP_SUBTOK_GE:      type = EXPR_CMP_GE;    break;
+    case CMP_SUBTOK_NULL_EQ: type = EXPR_VEC_COSINE; break;  /* Task 201: <=> cosine distance (falls back to null-safe eq for non-vectors) */
+    default:                 type = EXPR_CMP_EQ;    break;
     }
     ExprNode *e = expr_make_binop(type, left, right);
     if (e) {
         const char *op_str;
         switch (subtok) {
-        case CMP_SUBTOK_EQ: op_str = "=";  break;
-        case CMP_SUBTOK_NE: op_str = "<>"; break;
-        case CMP_SUBTOK_LT: op_str = "<";  break;
-        case CMP_SUBTOK_GT: op_str = ">";  break;
-        case CMP_SUBTOK_LE: op_str = "<="; break;
-        case CMP_SUBTOK_GE: op_str = ">="; break;
-        default:            op_str = "?";  break;
+        case CMP_SUBTOK_EQ:      op_str = "=";   break;
+        case CMP_SUBTOK_NE:      op_str = "<>";  break;
+        case CMP_SUBTOK_LT:      op_str = "<";   break;
+        case CMP_SUBTOK_GT:      op_str = ">";   break;
+        case CMP_SUBTOK_LE:      op_str = "<=";  break;
+        case CMP_SUBTOK_GE:      op_str = ">=";  break;
+        case CMP_SUBTOK_NULL_EQ: op_str = "<=>"; break;
+        default:                 op_str = "?";   break;
         }
         snprintf(e->display, sizeof(e->display), "%s %s %s",
                  left ? left->display : "?", op_str,
@@ -1316,6 +1320,148 @@ double expr_evaluate_num(const ExprNode *e,
         return 0.0;
     }
 }
+
+/* ----------------------------------------------------------------
+ *  Vector distance helpers (Task 201 — Feature #201)
+ *
+ *  Vector values reach the expression engine as their text form
+ *  "[f1,f2,...]" (same as tup_extract_fields renders). For distance
+ *  operators and functions we parse that text back into a heap float
+ *  array, compute, and return a numeric string.
+ * ---------------------------------------------------------------- */
+
+/* Returns 1 if s is a vector text literal — i.e., starts with '[' or
+ * '{' and contains comma-separated numeric values. Lightweight sniff
+ * (first non-space char only). */
+static int vec_looks_like(const char *s)
+{
+    if (!s) return 0;
+    while (*s && isspace((unsigned char)*s)) s++;
+    return (*s == '[' || *s == '{');
+}
+
+/* Parse "[f1,f2,...]" or "{f1,f2,...}" into a freshly malloc'd float
+ * array. On success: *out_arr points to the array, *out_n holds the
+ * element count, return 1. On failure: return 0, leaves *out_arr = NULL.
+ * Caller frees the array on success. */
+static int vec_parse_to_floats(const char *text, float **out_arr, int *out_n)
+{
+    *out_arr = NULL; *out_n = 0;
+    if (!text) return 0;
+    const char *p = text;
+    while (*p && isspace((unsigned char)*p)) p++;
+    char open = *p;
+    if (open != '[' && open != '{') return 0;
+    char close = (open == '[') ? ']' : '}';
+    p++;
+
+    int cap = 8, n = 0;
+    float *arr = (float *)malloc(sizeof(float) * cap);
+    if (!arr) return 0;
+
+    while (*p) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == close) break;
+        char *endp = NULL;
+        double d = strtod(p, &endp);
+        if (endp == p) { free(arr); return 0; }
+        if (!(d == d)) { free(arr); return 0; }  /* NaN */
+        if (n >= cap) {
+            cap *= 2;
+            float *nw = (float *)realloc(arr, sizeof(float) * cap);
+            if (!nw) { free(arr); return 0; }
+            arr = nw;
+        }
+        arr[n++] = (float)d;
+        p = endp;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == ',') { p++; continue; }
+        if (*p == close) break;
+        free(arr);
+        return 0;
+    }
+    if (*p != close) { free(arr); return 0; }
+    *out_arr = arr; *out_n = n;
+    return 1;
+}
+
+/* Dot product a · b over n elements */
+static double vec_dot(const float *a, const float *b, int n)
+{
+    double s = 0.0;
+    for (int i = 0; i < n; i++) s += (double)a[i] * (double)b[i];
+    return s;
+}
+
+/* L2 norm sqrt(sum(a[i]²)) */
+static double vec_norm(const float *a, int n)
+{
+    double s = 0.0;
+    for (int i = 0; i < n; i++) s += (double)a[i] * (double)a[i];
+    return sqrt(s);
+}
+
+/* Distance selector: 0=cosine, 1=L2, 2=inner (negative dot), 3=L1.
+ * Writes result into out_buf. Returns 1 on success, 0 if operand text
+ * is not a valid vector, -1 if dimensions don't match. */
+static int vec_distance(int kind, const char *lt, const char *rt,
+                        char *out_buf, int buf_size)
+{
+    float *a = NULL, *b = NULL;
+    int na = 0, nb = 0;
+    if (!vec_parse_to_floats(lt, &a, &na)) return 0;
+    if (!vec_parse_to_floats(rt, &b, &nb)) { free(a); return 0; }
+    if (na != nb || na == 0) { free(a); free(b); return -1; }
+
+    double result = 0.0;
+    switch (kind) {
+    case 0: { /* cosine */
+        double dot = vec_dot(a, b, na);
+        double norm_a = vec_norm(a, na);
+        double norm_b = vec_norm(b, nb);
+        if (norm_a == 0.0 || norm_b == 0.0) result = 1.0;
+        else result = 1.0 - (dot / (norm_a * norm_b));
+        break;
+    }
+    case 1: { /* L2 */
+        double s = 0.0;
+        for (int i = 0; i < na; i++) {
+            double d = (double)a[i] - (double)b[i];
+            s += d * d;
+        }
+        result = sqrt(s);
+        break;
+    }
+    case 2: { /* negative inner product (pgvector convention) */
+        result = -vec_dot(a, b, na);
+        break;
+    }
+    case 3: { /* L1 */
+        double s = 0.0;
+        for (int i = 0; i < na; i++) {
+            double d = (double)a[i] - (double)b[i];
+            if (d < 0) d = -d;
+            s += d;
+        }
+        result = s;
+        break;
+    }
+    default:
+        free(a); free(b);
+        return 0;
+    }
+    free(a); free(b);
+    snprintf(out_buf, (size_t)buf_size, "%.15g", result);
+    return 1;
+}
+
+/* Forward-declared so the '<=>' fallback to null-safe equality can still
+ * reach the regular string-eval path. */
+int expr_evaluate(const ExprNode *e,
+                  const char col_names[][128],
+                  const char col_values[][256],
+                  int num_cols,
+                  char *out_buf, int buf_size);
 
 /* ---- Evaluate to string ---- */
 int expr_evaluate(const ExprNode *e,
@@ -2907,6 +3053,174 @@ int expr_evaluate(const ExprNode *e,
         }
         if (op + 1 < buf_size) out_buf[op++] = '}';
         out_buf[op < buf_size ? op : buf_size - 1] = '\0';
+        return 1;
+    }
+
+    /* ── Vector distance ops (Task 201 — Feature #201) ── */
+    if (e->type == EXPR_VEC_COSINE ||
+        e->type == EXPR_VEC_L2 ||
+        e->type == EXPR_VEC_INNER ||
+        e->type == EXPR_VEC_L1) {
+        char lbuf[8192], rbuf[8192];
+        int ok_l = e->left  ? expr_evaluate(e->left,  col_names, col_values,
+                                            num_cols, lbuf, sizeof(lbuf)) : 0;
+        int ok_r = e->right ? expr_evaluate(e->right, col_names, col_values,
+                                            num_cols, rbuf, sizeof(rbuf)) : 0;
+        /* NULL propagation */
+        if (!ok_l || !ok_r ||
+            strcmp(lbuf, NULL_MARKER) == 0 ||
+            strcmp(rbuf, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+
+        int kind;
+        switch (e->type) {
+        case EXPR_VEC_COSINE: kind = 0; break;
+        case EXPR_VEC_L2:     kind = 1; break;
+        case EXPR_VEC_INNER:  kind = 2; break;
+        default:              kind = 3; break;  /* EXPR_VEC_L1 */
+        }
+
+        if (vec_looks_like(lbuf) && vec_looks_like(rbuf)) {
+            int rc = vec_distance(kind, lbuf, rbuf, out_buf, buf_size);
+            if (rc == 1) return 1;
+            if (rc == -1) {
+                strncpy(out_buf, NULL_MARKER, buf_size - 1);
+                out_buf[buf_size - 1] = '\0';
+                return 1;
+            }
+            /* Fall through: parse failure */
+        }
+
+        /* Non-vector operands — '<=>' falls back to null-safe equality so
+         * existing `SELECT 1 <=> 1` still returns 't'; the other operators
+         * require vectors and return NULL. */
+        if (e->type == EXPR_VEC_COSINE) {
+            strncpy(out_buf,
+                    strcmp(lbuf, rbuf) == 0 ? "t" : "f",
+                    buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        strncpy(out_buf, NULL_MARKER, buf_size - 1);
+        out_buf[buf_size - 1] = '\0';
+        return 1;
+    }
+
+    /* vector_dim(v) — returns integer count of elements */
+    if (e->type == EXPR_VECTOR_DIM) {
+        char vbuf[8192];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                         num_cols, vbuf, sizeof(vbuf)) : 0;
+        if (!ok || strcmp(vbuf, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        float *arr = NULL; int n = 0;
+        if (!vec_parse_to_floats(vbuf, &arr, &n)) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        snprintf(out_buf, (size_t)buf_size, "%d", n);
+        free(arr);
+        return 1;
+    }
+
+    /* vector_norm(v) — L2 norm as double */
+    if (e->type == EXPR_VECTOR_NORM) {
+        char vbuf[8192];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                         num_cols, vbuf, sizeof(vbuf)) : 0;
+        if (!ok || strcmp(vbuf, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        float *arr = NULL; int n = 0;
+        if (!vec_parse_to_floats(vbuf, &arr, &n)) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        double nrm = vec_norm(arr, n);
+        snprintf(out_buf, (size_t)buf_size, "%.15g", nrm);
+        free(arr);
+        return 1;
+    }
+
+    /* vector_normalize(v) — divide each element by the L2 norm. Result
+     * rendered as "[f1,f2,...]" so it round-trips back through the vector
+     * codec or a VECTOR column. Zero-norm vectors return a zero vector. */
+    if (e->type == EXPR_VECTOR_NORMALIZE) {
+        char vbuf[8192];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                         num_cols, vbuf, sizeof(vbuf)) : 0;
+        if (!ok || strcmp(vbuf, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        float *arr = NULL; int n = 0;
+        if (!vec_parse_to_floats(vbuf, &arr, &n) || n <= 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            if (arr) free(arr);
+            return 1;
+        }
+        double nrm = vec_norm(arr, n);
+        int pos = 0;
+        if (pos + 1 < buf_size) out_buf[pos++] = '[';
+        for (int i = 0; i < n; i++) {
+            double v = (nrm > 0.0) ? ((double)arr[i] / nrm) : 0.0;
+            if (i > 0 && pos + 1 < buf_size) out_buf[pos++] = ',';
+            int w = snprintf(out_buf + pos, (size_t)(buf_size - pos), "%g", v);
+            if (w < 0 || pos + w >= buf_size) break;
+            pos += w;
+        }
+        if (pos + 1 < buf_size) out_buf[pos++] = ']';
+        out_buf[pos < buf_size ? pos : buf_size - 1] = '\0';
+        free(arr);
+        return 1;
+    }
+
+    /* hnsw_knn(table_name, index_name, query_text, k) — comma-separated
+     * PK list ordered by ascending distance (Task 202 — Feature #202). */
+    if (e->type == EXPR_HNSW_KNN) {
+        char tbl[256] = "", idx[256] = "", qtxt[4096] = "";
+        int k = e->val.intval;
+        if (k <= 0) k = 10;
+        if (e->left)
+            expr_evaluate(e->left,  col_names, col_values, num_cols, tbl, sizeof(tbl));
+        if (e->right)
+            expr_evaluate(e->right, col_names, col_values, num_cols, idx, sizeof(idx));
+        if (e->extra)
+            expr_evaluate(e->extra, col_names, col_values, num_cols, qtxt, sizeof(qtxt));
+
+        TableDesc td;
+        if (tapi_resolve(tbl, &td, NULL, NULL) < 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        HnswHit hits[256];
+        if (k > 256) k = 256;
+        int n = hnsw_search_knn(td.table_id, idx, qtxt, k, hits);
+        if (n < 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        int pos = 0;
+        for (int i = 0; i < n; i++) {
+            if (i > 0 && pos + 1 < buf_size) out_buf[pos++] = ',';
+            const char *s = hits[i].pk_value;
+            while (*s && pos + 1 < buf_size) out_buf[pos++] = *s++;
+        }
+        out_buf[pos < buf_size ? pos : buf_size - 1] = '\0';
         return 1;
     }
 

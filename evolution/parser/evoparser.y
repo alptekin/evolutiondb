@@ -92,6 +92,7 @@
 %left NOT '!'
 %left BETWEEN
 %left <subtok> COMPARISON /* = <> < > <= >= <=> */
+%left VEC_L2_OP VEC_INNER_OP /* <-> <#> pgvector distance ops */
 %left '|'
 %left '&'
 %left <subtok> SHIFT /* << >> */
@@ -423,8 +424,18 @@
 %token FARRAY_LENGTH FUNNEST
 %token FEVO_NOTIFY FPG_LISTENING_CHANNELS
 
+/* Vector ops (Task 201 — Feature #201) */
+%token FCOSINE_DIST FL2_DIST FINNER_PRODUCT FL1_DIST
+%token FVECTOR_DIM FVECTOR_NORM FVECTOR_NORMALIZE
+%token VEC_L2_OP VEC_INNER_OP
+
+/* HNSW ANN index (Task 202 — Feature #202) */
+%token HNSW FHNSW_KNN
+
 %type <intval> select_opts
 %type <intval> select_stmt
+%type <intval> opt_hnsw_opclass
+%type <intval> opt_hnsw_with hnsw_with_list hnsw_with_item
 %type <intval> select_expr_list
 %type <intval> val_list
 %type <intval> opt_val_list
@@ -772,6 +783,34 @@ expr: FEVO_NOTIFY '(' expr ',' expr ')'
     {
         emit("CALL 0 PG_LISTENING_CHANNELS");
         $$ = expr_make_pg_listening_channels();
+    }
+;
+
+/* Vector distance functions (Task 201 — Feature #201) */
+expr: FCOSINE_DIST '(' expr ',' expr ')'
+    { emit("CALL 2 COSINE_DISTANCE"); $$ = expr_make_func2(EXPR_VEC_COSINE, $3, $5, "COSINE_DISTANCE"); }
+| FL2_DIST '(' expr ',' expr ')'
+    { emit("CALL 2 L2_DISTANCE"); $$ = expr_make_func2(EXPR_VEC_L2, $3, $5, "L2_DISTANCE"); }
+| FINNER_PRODUCT '(' expr ',' expr ')'
+    { emit("CALL 2 INNER_PRODUCT"); $$ = expr_make_func2(EXPR_VEC_INNER, $3, $5, "INNER_PRODUCT"); }
+| FL1_DIST '(' expr ',' expr ')'
+    { emit("CALL 2 L1_DISTANCE"); $$ = expr_make_func2(EXPR_VEC_L1, $3, $5, "L1_DISTANCE"); }
+| FVECTOR_DIM '(' expr ')'
+    { emit("CALL 1 VECTOR_DIM"); $$ = expr_make_func1(EXPR_VECTOR_DIM, $3, "VECTOR_DIM"); }
+| FVECTOR_NORM '(' expr ')'
+    { emit("CALL 1 VECTOR_NORM"); $$ = expr_make_func1(EXPR_VECTOR_NORM, $3, "VECTOR_NORM"); }
+| FVECTOR_NORMALIZE '(' expr ')'
+    { emit("CALL 1 VECTOR_NORMALIZE"); $$ = expr_make_func1(EXPR_VECTOR_NORMALIZE, $3, "VECTOR_NORMALIZE"); }
+| expr VEC_L2_OP expr
+    { emit("VEC_L2"); $$ = expr_make_func2(EXPR_VEC_L2, $1, $3, "<->"); }
+| expr VEC_INNER_OP expr
+    { emit("VEC_INNER"); $$ = expr_make_func2(EXPR_VEC_INNER, $1, $3, "<#>"); }
+| FHNSW_KNN '(' expr ',' expr ',' expr ',' INTNUM ')'
+    {
+        emit("CALL 4 HNSW_KNN %d", $9);
+        ExprNode *n = expr_make_func3(EXPR_HNSW_KNN, $3, $5, $7, "HNSW_KNN");
+        if (n) n->val.intval = $9;
+        $$ = n;
     }
 ;
 
@@ -1660,6 +1699,73 @@ create_index_stmt: CREATE INDEX NAME ON NAME '(' index_col_list ')'
         SetIndexInfo($5, $7, "");
         free($5);
         free($7);
+    }
+
+/* HNSW ANN index (Task 202 — Feature #202).
+ * Grammar:
+ *   CREATE INDEX name ON tbl USING HNSW (col [opclass]) [WITH (m=N, ef_construction=N)]
+ * where opclass is a freestanding NAME (`vector_cosine_ops`, `vector_l2_ops`,
+ * `vector_ip_ops`, `vector_l1_ops`); default is cosine. WITH params default
+ * to m=16, ef_construction=64. */
+| CREATE INDEX NAME ON NAME USING HNSW '(' NAME opt_hnsw_opclass ')' opt_hnsw_with
+    {
+        emit("CREATEHNSWINDEX %s ON %s (%s) dist=%d m=%d ef=%d",
+             $3, $5, $9, $10, $12 >> 16, $12 & 0xFFFF);
+        SetIndexUsingHnsw($10, $12 >> 16, $12 & 0xFFFF);
+        SetIndexInfo($3, $5, $9);
+        free($3); free($5); free($9);
+    }
+| CREATE INDEX IF EXISTS NAME ON NAME USING HNSW '(' NAME opt_hnsw_opclass ')' opt_hnsw_with
+    {
+        emit("CREATEHNSWINDEX IF NOT EXISTS %s ON %s (%s) dist=%d m=%d ef=%d",
+             $5, $7, $11, $12, $14 >> 16, $14 & 0xFFFF);
+        SetIndexUsingHnsw($12, $14 >> 16, $14 & 0xFFFF);
+        SetIndexIfNotExists();
+        SetIndexInfo($5, $7, $11);
+        free($5); free($7); free($11);
+    }
+;
+
+/* opclass defaults to cosine when absent.  0 = cosine, 1 = L2, 2 = inner, 3 = L1 */
+opt_hnsw_opclass: /* nil */    { $$ = 0; }
+| NAME
+    {
+        if (strcasecmp($1, "vector_cosine_ops") == 0)        $$ = 0;
+        else if (strcasecmp($1, "vector_l2_ops") == 0)       $$ = 1;
+        else if (strcasecmp($1, "vector_ip_ops") == 0 ||
+                 strcasecmp($1, "vector_inner_ops") == 0)    $$ = 2;
+        else if (strcasecmp($1, "vector_l1_ops") == 0)       $$ = 3;
+        else $$ = 0;   /* unknown opclass: fall back to cosine */
+        free($1);
+    }
+;
+
+/* WITH list packs (m << 16) | ef_construction into a single int.
+ * Default: m=16, ef_construction=64. */
+opt_hnsw_with: /* nil */       { $$ = (16 << 16) | 64; }
+| WITH '(' hnsw_with_list ')'  { $$ = $3; }
+;
+
+hnsw_with_list: hnsw_with_item                  { $$ = $1; }
+| hnsw_with_list ',' hnsw_with_item
+    {
+        int lm = ($1 >> 16) & 0xFFFF, le = $1 & 0xFFFF;
+        int rm = ($3 >> 16) & 0xFFFF, re = $3 & 0xFFFF;
+        /* Later entries override earlier ones; 0 means "not set in this item". */
+        int m  = rm ? rm : lm;
+        int ef = re ? re : le;
+        $$ = (m << 16) | ef;
+    }
+;
+
+/* `=` is tokenized as COMPARISON with subtok 4; discard the subtok here. */
+hnsw_with_item: NAME COMPARISON INTNUM
+    {
+        int m = 0, ef = 0;
+        if      (strcasecmp($1, "m") == 0)                m  = $3;
+        else if (strcasecmp($1, "ef_construction") == 0)  ef = $3;
+        $$ = (m << 16) | ef;
+        free($1);
     }
 ;
 

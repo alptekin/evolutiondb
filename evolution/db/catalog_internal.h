@@ -120,7 +120,7 @@ typedef struct IndexDesc {
     char     index_name[CAT_MAX_NAME_LEN];
     uint32_t root_page;
     char     col_list[CAT_MAX_NAME_LEN];   /* comma-separated column names */
-    char     index_type;                    /* 'P' primary, 'U' unique, 'N' normal, 'H' hash, 'V' unique hash */
+    char     index_type;                    /* 'P' primary, 'U' unique, 'N' normal, 'H' hash, 'V' unique hash, 'A' HNSW ANN (Task 202) */
     char     expr_def[1024];               /* expression index: serialized RPN, empty if plain column */
     int      is_ready;                     /* IDX_BUILDING or IDX_READY */
 } IndexDesc;
