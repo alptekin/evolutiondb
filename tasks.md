@@ -3327,6 +3327,27 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
+### Task 169: ⬜ ORDER BY expression + HNSW planner hook (Feature #165)
+
+**Goal:** Task 202/203 shipped the HNSW index, distance operators (`<->`, `<#>`, `<=>`), and a `hnsw_filter_knn()` helper, but the canonical pgvector idiom `ORDER BY col <-> $q LIMIT k` still raises a syntax error because the EvoSQL grammar accepts only `NAME` / `NAME.NAME` / `INTNUM` in the ORDER BY list. This task closes the gap end-to-end: grammar extension, planner detection, routing to the HNSW scan, and EXPLAIN surfacing the chosen path. After this lands, LangGraph / LangChain / pgvector-sample queries port mechanically without any SQL rewrite.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Extend `orderby_item` to accept arbitrary `expr opt_asc_desc`. Preserve existing `NAME opt_asc_desc`, `NAME '.' NAME opt_asc_desc`, `INTNUM opt_asc_desc` forms to avoid regressing column-name ordering (including the common `ORDER BY 1`). | `evolution/parser/evoparser.y` |
+| 2 | Capture the ORDER BY expression list in `SelectOpts` alongside the existing name/desc arrays — new `ExprNode *orderByExprs[MAX_ORDERBY]`, kept in sync with `orderByDescs[]`. `AddOrderByExpr()` parser helper mirrors `AddOrderByColumn()`. | `evolution/db/query_context.h`, `evolution/db/database_globals.c`, `evolution/db/Select.c` |
+| 3 | Generic ORDER BY evaluator: after `collect_select_results`, if any orderBy slot carries an expression (not a plain column), evaluate the expression per row into a temporary "sort key" column and run the existing multi-key qsort over that. Keeps plain-column ORDER BY unchanged. | `adaptor/query_executor.c` |
+| 4 | HNSW detector: walk the ORDER BY AST and flag the pattern `expr::{EXPR_VEC_L2|EXPR_VEC_INNER|EXPR_VEC_COSINE}` where the left child is a plain `EXPR_COLUMN` and the right child evaluates to a vector text literal. Record the column, distance kind, and query-literal string in a `SelectOpts` hint slot. | `adaptor/query_executor.c` |
+| 5 | Planner hook: when the HNSW hint is set AND a single-table SELECT has `LIMIT k` AND `cat_list_indexes` returns an `index_type == 'A'` matching the column + opclass, replace the full-table scan with `hnsw_search_knn(..., k)` (or `k * oversample` if a WHERE filter is present). Fetch heap rows by PK in the order returned by the scan. | `adaptor/query_executor.c`, `evolution/db/hnsw.{h,c}` |
+| 6 | WHERE filter integration: reuse Task 203's `hnsw_search_knn_filter` when the WHERE clause simplifies to a single equality predicate; otherwise apply the generic WHERE evaluator to the HNSW candidate rows post-scan. Selectivity threshold stays at 10% to match Task 203's AUTO behaviour. | `adaptor/query_executor.c`, `evolution/db/hnsw.c` |
+| 7 | EXPLAIN output: distinguish `HNSW Index Scan (cos) on tbl.col  (limit=k)` vs `Seq Scan + Vector Sort` and include `rows=k` + `cost ≈ …` stubs so users can see the chosen path without running the query. | `adaptor/query_executor.c` |
+| 8 | Tests — `tests/test_orderby_vector.py` with ≥12 cases: grammar parses `ORDER BY v <-> '[…]' LIMIT k` (all three ops), routes to HNSW when the index exists, falls back to full scan + sort when it doesn't, correctness parity with `hnsw_knn()`, LIMIT=0 edge case, DESC direction (falls back to full scan since HNSW always returns ascending distance), WHERE equality filter reuses Task 203 hybrid path, tableless / subquery ORDER BY still works, nested SELECT ordering unaffected. | `tests/test_orderby_vector.py` (new) |
+| 9 | Regression — `tests/test_orderby*.py`, `tests/test_select*.py`, `tests/test_cte.py`, `tests/test_windowfn.py` all green; plain-column ORDER BY perf unchanged (micro-bench on 100k rows). | `tests/`, `bench/` |
+| 10 | Wiki — document the new grammar + note that ORDER BY a vector expression requires either an HNSW index (for sub-linear scans) or tolerates a full-scan fallback for correctness. Include a pgvector cheat-sheet side-by-side. | `wiki/Hybrid-Search.md`, `wiki/HNSW-Index.md` (new) |
+
+Feature numbering: this task picks up `#165` — the next free slot after Task 168's `#164`. Tasks 200-225 of the Agent Memory block stay on their own `#200-#225` range.
+
+---
+
 # Agent Memory Platform (Feature #200-#225)
 
 **Vision:** "Powering Long-Term Memory for Agents" — Make EvolutionDB the canonical long-term memory backend for AI agent frameworks. Compete with MongoDB `langgraph-store-mongodb`, Pinecone, Zep (Graphiti), Mem0.
