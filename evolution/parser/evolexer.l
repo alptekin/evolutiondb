@@ -459,6 +459,8 @@ PG_NOTIFY/"("			{ return FEVO_NOTIFY; }          /* PG compat alias */
 PG_LISTENING_CHANNELS/"("	{ return FPG_LISTENING_CHANNELS; }
 ARRAY_LENGTH/"("		{ return FARRAY_LENGTH; }
 HNSW_KNN/"("			{ return FHNSW_KNN; }
+HNSW_FILTER_KNN/"("		{ return FHNSW_FILTER_KNN; }
+HNSW_HYBRID_EXPLAIN/"("	{ return FHNSW_HYBRID_EXPLAIN; }
 HNSW					{ return HNSW; }
 COSINE_DISTANCE/"("		{ return FCOSINE_DIST; }
 L2_DISTANCE/"("			{ return FL2_DIST; }

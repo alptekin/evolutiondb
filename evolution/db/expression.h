@@ -203,7 +203,16 @@ typedef enum {
      * ordered by ascending distance. Lets tests and ad-hoc SQL exercise
      * the HNSW index without needing ORDER BY-expr planner routing,
      * which lives in Task 203. */
-    EXPR_HNSW_KNN              /* left=table, right=index, extra=query, val.intval=k */
+    EXPR_HNSW_KNN,             /* left=table, right=index, extra=query, val.intval=k */
+
+    /* Hybrid vector + filter search (Task 203 — Feature #203).
+     *   hnsw_filter_knn(tbl, idx, query, k, filter_col, filter_val [, mode])
+     *   hnsw_hybrid_explain(tbl, idx, query, k, filter_col, filter_val)
+     * The SelectOpts struct carries the extra arg slots because ExprNode
+     * only holds three child pointers. The *_explain variant returns a
+     * strategy diagnostic string instead of the PK list. */
+    EXPR_HNSW_FILTER_KNN,
+    EXPR_HNSW_HYBRID_EXPLAIN
 } ExprNodeType;
 
 typedef struct ExprNode {
