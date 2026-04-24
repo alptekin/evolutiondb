@@ -316,6 +316,238 @@ int hnsw_search_knn(uint32_t table_id, const char *index_name,
     return out_n;
 }
 
+/* ----------------------------------------------------------------
+ *  Hybrid search (Task 203 — Feature #203)
+ *
+ *  Equality-predicate filter over an arbitrary column, combined with
+ *  vector ranking. Auto-selects one of two strategies:
+ *
+ *    pre-filter : look up the filter column in the base table, compute
+ *                 distances only for matching rows, then top-k by distance.
+ *                 Best when the filter is tight (few matches).
+ *
+ *    post-filter: rank all graph vectors, then drop hits whose filter
+ *                 value doesn't match. Oversample by OVERSAMPLE_FACTOR
+ *                 to offset the filter discarding some of the top-k.
+ *                 Best when the filter is loose (matches most rows).
+ *
+ *  AUTO mode measures selectivity (filter_matches / total) and picks
+ *  pre-filter if selectivity < 0.10 else post-filter. This matches the
+ *  Task 203 plan's 10% threshold.
+ * ---------------------------------------------------------------- */
+
+/* Row → filter value cache entry. Keyed by PK since that's what the
+ * graph stores alongside vectors. */
+typedef struct FilterRowCache {
+    char pk_value[256];
+    char filter_value[256];
+    int  null_flag;
+} FilterRowCache;
+
+/* Build {pk → filter_value} map by table-scanning once and extracting
+ * the filter column. Returned as a heap array the caller frees. On
+ * success sets *count, returns the array; on failure returns NULL. */
+static FilterRowCache *build_filter_cache(uint32_t table_id,
+                                           const char *filter_col,
+                                           int *count)
+{
+    *count = 0;
+    TableDesc td;
+    if (cat_find_table_by_id(table_id, &td) != 0) return NULL;
+
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = cat_find_columns(table_id, cols, CAT_MAX_COLUMNS);
+    if (ncols <= 0) return NULL;
+
+    int col_idx = -1;
+    for (int i = 0; i < ncols; i++) {
+        if (strcasecmp(cols[i].col_name, filter_col) == 0) { col_idx = i; break; }
+    }
+    if (col_idx < 0) return NULL;
+
+    TableScanCursor cursor;
+    if (tapi_scan_begin(&td, &cursor) != 0) return NULL;
+
+    int cap = 64, n = 0;
+    FilterRowCache *rows = (FilterRowCache *)malloc(sizeof(*rows) * (size_t)cap);
+    if (!rows) return NULL;
+
+    char pk_buf[HNSW_MAX_PK_LEN];
+    char rec_buf[8192];
+    char fields[CAT_MAX_COLUMNS][256];
+    int  nulls[CAT_MAX_COLUMNS];
+
+    while (tapi_scan_next(&cursor, pk_buf, rec_buf, sizeof(rec_buf)) == 0) {
+        int rec_len = tup_record_len(rec_buf, sizeof(rec_buf));
+        if (rec_len <= 0) continue;
+        int nf = tup_extract_fields(rec_buf, rec_len, cols, ncols,
+                                    fields, nulls, CAT_MAX_COLUMNS);
+        if (nf <= col_idx) continue;
+
+        if (n >= cap) {
+            cap *= 2;
+            FilterRowCache *nw = realloc(rows, sizeof(*rows) * (size_t)cap);
+            if (!nw) { free(rows); return NULL; }
+            rows = nw;
+        }
+        strncpy(rows[n].pk_value, pk_buf, sizeof(rows[n].pk_value) - 1);
+        rows[n].pk_value[sizeof(rows[n].pk_value) - 1] = '\0';
+        if (nulls[col_idx]) {
+            rows[n].null_flag = 1;
+            rows[n].filter_value[0] = '\0';
+        } else {
+            rows[n].null_flag = 0;
+            strncpy(rows[n].filter_value, fields[col_idx],
+                    sizeof(rows[n].filter_value) - 1);
+            rows[n].filter_value[sizeof(rows[n].filter_value) - 1] = '\0';
+        }
+        n++;
+    }
+    *count = n;
+    return rows;
+}
+
+/* Look up the filter value for a single PK in the cache. */
+static const char *cache_lookup(const FilterRowCache *rows, int n,
+                                const char *pk, int *is_null)
+{
+    *is_null = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(rows[i].pk_value, pk) == 0) {
+            if (rows[i].null_flag) { *is_null = 1; return NULL; }
+            return rows[i].filter_value;
+        }
+    }
+    return NULL;
+}
+
+int hnsw_search_knn_filter(uint32_t table_id, const char *index_name,
+                           const char *query_text, int k,
+                           const char *filter_col, const char *filter_val,
+                           int mode,
+                           HnswHit *out_hits,
+                           HnswHybridTrace *trace)
+{
+    if (k <= 0 || !out_hits || !query_text) return -1;
+
+    /* Degrade to plain KNN when no filter. */
+    if (!filter_col || !filter_col[0]) {
+        if (trace) {
+            trace->chosen_strategy = HNSW_HYBRID_POST;
+            trace->candidate_count = 0;
+            trace->filter_matches = 0;
+            trace->selectivity = 1.0;
+        }
+        return hnsw_search_knn(table_id, index_name, query_text, k, out_hits);
+    }
+
+    /* Need the filter cache for both strategies. */
+    int row_count = 0;
+    FilterRowCache *cache = build_filter_cache(table_id, filter_col, &row_count);
+    if (!cache) return -1;
+
+    /* Count matches to compute selectivity. */
+    int matches = 0;
+    for (int i = 0; i < row_count; i++) {
+        if (!cache[i].null_flag && strcmp(cache[i].filter_value, filter_val) == 0)
+            matches++;
+    }
+    double sel = (row_count > 0) ? ((double)matches / (double)row_count) : 0.0;
+
+    int strat = mode;
+    if (strat == HNSW_HYBRID_AUTO) {
+        /* Task 203 plan: <10% selectivity → pre-filter, else post-filter. */
+        strat = (sel < 0.10) ? HNSW_HYBRID_PRE : HNSW_HYBRID_POST;
+    }
+
+    float *query = NULL; int qdim = 0;
+    if (parse_vec_text(query_text, &query, &qdim) != 0) {
+        free(cache);
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_mu);
+    HnswGraph *g = graph_find_or_alloc_locked(table_id, index_name, 0);
+    if (!g || g->dim != qdim) {
+        pthread_mutex_unlock(&g_mu);
+        free(query); free(cache);
+        return -1;
+    }
+
+    int out_n = 0;
+
+    if (strat == HNSW_HYBRID_PRE) {
+        /* Pre-filter: restrict to rows where filter_col = filter_val, rank. */
+        HnswHit *pool = (HnswHit *)malloc(sizeof(HnswHit) * (size_t)(matches + 1));
+        if (!pool) {
+            pthread_mutex_unlock(&g_mu);
+            free(query); free(cache);
+            return -1;
+        }
+        int p = 0;
+        for (int i = 0; i < g->count; i++) {
+            int is_null = 0;
+            const char *fv = cache_lookup(cache, row_count, g->pk_keys[i], &is_null);
+            if (!fv || strcmp(fv, filter_val) != 0) continue;
+            pool[p].distance = compute_distance(g->distance_kind,
+                                                g->vectors + (size_t)i * g->dim,
+                                                query, g->dim);
+            strncpy(pool[p].pk_value, g->pk_keys[i],
+                    sizeof(pool[p].pk_value) - 1);
+            pool[p].pk_value[sizeof(pool[p].pk_value) - 1] = '\0';
+            p++;
+        }
+        pthread_mutex_unlock(&g_mu);
+        qsort(pool, (size_t)p, sizeof(HnswHit), hit_cmp_asc);
+        out_n = (k < p) ? k : p;
+        memcpy(out_hits, pool, sizeof(HnswHit) * (size_t)out_n);
+        free(pool);
+    } else {
+        /* Post-filter: oversample (k / max(sel, 0.01)), then drop non-matches. */
+        double s = (sel > 0.01) ? sel : 0.01;
+        int over = (int)((double)k / s) + k;
+        if (over > g->count) over = g->count;
+        if (over < k)        over = k;
+
+        HnswHit *pool = (HnswHit *)malloc(sizeof(HnswHit) * (size_t)g->count);
+        if (!pool) {
+            pthread_mutex_unlock(&g_mu);
+            free(query); free(cache);
+            return -1;
+        }
+        for (int i = 0; i < g->count; i++) {
+            pool[i].distance = compute_distance(g->distance_kind,
+                                                g->vectors + (size_t)i * g->dim,
+                                                query, g->dim);
+            strncpy(pool[i].pk_value, g->pk_keys[i],
+                    sizeof(pool[i].pk_value) - 1);
+            pool[i].pk_value[sizeof(pool[i].pk_value) - 1] = '\0';
+        }
+        pthread_mutex_unlock(&g_mu);
+        qsort(pool, (size_t)g->count, sizeof(HnswHit), hit_cmp_asc);
+
+        for (int i = 0; i < over && out_n < k; i++) {
+            int is_null = 0;
+            const char *fv = cache_lookup(cache, row_count,
+                                          pool[i].pk_value, &is_null);
+            if (!fv || strcmp(fv, filter_val) != 0) continue;
+            out_hits[out_n++] = pool[i];
+        }
+        free(pool);
+    }
+
+    free(query);
+    free(cache);
+
+    if (trace) {
+        trace->chosen_strategy = strat;
+        trace->candidate_count = row_count;
+        trace->filter_matches  = matches;
+        trace->selectivity     = sel;
+    }
+    return out_n;
+}
+
 void hnsw_drop(uint32_t table_id, const char *index_name)
 {
     pthread_mutex_lock(&g_mu);

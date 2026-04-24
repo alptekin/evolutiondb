@@ -3187,6 +3187,98 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
 
+    /* hnsw_filter_knn(tbl, idx, query, k, 'col=val[:mode]') + sibling
+     * hnsw_hybrid_explain(...) — Task 203 (Feature #203). The filter spec
+     * is `col=val` or `col=val:strategy`, strategy ∈ {auto, pre, post};
+     * default auto. */
+    if (e->type == EXPR_HNSW_FILTER_KNN || e->type == EXPR_HNSW_HYBRID_EXPLAIN) {
+        char tbl[256] = "", idx[256] = "", qtxt[4096] = "";
+        int k = e->val.intval;
+        if (k <= 0) k = 10;
+        if (e->left)
+            expr_evaluate(e->left,  col_names, col_values, num_cols, tbl, sizeof(tbl));
+        if (e->right)
+            expr_evaluate(e->right, col_names, col_values, num_cols, idx, sizeof(idx));
+        if (e->extra)
+            expr_evaluate(e->extra, col_names, col_values, num_cols, qtxt, sizeof(qtxt));
+
+        /* Split 'col=val[:mode]' → col / val / mode. STRING literals keep
+         * their surrounding quotes; strip a matching pair. */
+        char filter_col[128] = "", filter_val[256] = "";
+        int mode = HNSW_HYBRID_AUTO;
+        if (e->subquery_sql && e->subquery_sql[0]) {
+            const char *spec = e->subquery_sql;
+            size_t slen = strlen(spec);
+            if (slen >= 2 &&
+                ((spec[0] == '\'' && spec[slen - 1] == '\'') ||
+                 (spec[0] == '"'  && spec[slen - 1] == '"'))) {
+                char tmp[256];
+                size_t clip = slen - 2;
+                if (clip >= sizeof(tmp)) clip = sizeof(tmp) - 1;
+                memcpy(tmp, spec + 1, clip);
+                tmp[clip] = '\0';
+                free((void *)e->subquery_sql);
+                ((ExprNode *)e)->subquery_sql = strdup(tmp);
+                spec = e->subquery_sql;
+            }
+            const char *eq = strchr(spec, '=');
+            if (eq) {
+                int clen = (int)(eq - spec);
+                if (clen >= (int)sizeof(filter_col)) clen = (int)sizeof(filter_col) - 1;
+                memcpy(filter_col, spec, clen); filter_col[clen] = '\0';
+                const char *rest = eq + 1;
+                const char *colon = strchr(rest, ':');
+                int vlen = colon ? (int)(colon - rest) : (int)strlen(rest);
+                if (vlen >= (int)sizeof(filter_val)) vlen = (int)sizeof(filter_val) - 1;
+                memcpy(filter_val, rest, vlen); filter_val[vlen] = '\0';
+                if (colon) {
+                    if (strcasecmp(colon + 1, "pre") == 0)       mode = HNSW_HYBRID_PRE;
+                    else if (strcasecmp(colon + 1, "post") == 0) mode = HNSW_HYBRID_POST;
+                }
+            }
+        }
+
+        TableDesc td;
+        if (tapi_resolve(tbl, &td, NULL, NULL) < 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+
+        HnswHit hits[256];
+        if (k > 256) k = 256;
+        HnswHybridTrace trace;
+        int n = hnsw_search_knn_filter(td.table_id, idx, qtxt, k,
+                                       filter_col[0] ? filter_col : NULL,
+                                       filter_val,
+                                       mode, hits, &trace);
+        if (n < 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+
+        if (e->type == EXPR_HNSW_HYBRID_EXPLAIN) {
+            const char *name =
+                (trace.chosen_strategy == HNSW_HYBRID_PRE)  ? "pre"  :
+                (trace.chosen_strategy == HNSW_HYBRID_POST) ? "post" : "auto";
+            snprintf(out_buf, (size_t)buf_size,
+                     "strategy=%s sel=%.4f matches=%d/%d hits=%d",
+                     name, trace.selectivity,
+                     trace.filter_matches, trace.candidate_count, n);
+            return 1;
+        }
+
+        int pos = 0;
+        for (int i = 0; i < n; i++) {
+            if (i > 0 && pos + 1 < buf_size) out_buf[pos++] = ',';
+            const char *s = hits[i].pk_value;
+            while (*s && pos + 1 < buf_size) out_buf[pos++] = *s++;
+        }
+        out_buf[pos < buf_size ? pos : buf_size - 1] = '\0';
+        return 1;
+    }
+
     /* hnsw_knn(table_name, index_name, query_text, k) — comma-separated
      * PK list ordered by ascending distance (Task 202 — Feature #202). */
     if (e->type == EXPR_HNSW_KNN) {
