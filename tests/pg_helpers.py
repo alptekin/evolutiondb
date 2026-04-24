@@ -138,6 +138,14 @@ def conn(host=HOST, port=PORT, user=DEFAULT_USER, password=DEFAULT_PASS,
     return s
 
 
+def conn_replica(port=5434, host=HOST, user=DEFAULT_USER,
+                 password=DEFAULT_PASS, database="testdb"):
+    """Open a PG connection to a replica port (5434 = replica1, 5435 = replica2).
+    Task 97 Commit 8: used by test_replication.py end-to-end cases."""
+    return conn(host=host, port=port, user=user, password=password,
+                database=database)
+
+
 class PGConnection:
     """High-level PG connection wrapper with query() and close() methods."""
 

@@ -13,8 +13,10 @@
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/mvcc.h"
 #include "../evolution/db/buffer_pool.h"
+#include "../evolution/db/wal.h"   /* wal_get_current_lsn */
 #include "xa_transaction.h"
 #include "server.h"       /* session_register/list/cancel */
+#include "replication.h"  /* ReplicationStatus, repl_get_status */
 
 /* Task 91 — Feature #62: forward-declare pending-notify helpers
  * to avoid pulling query_executor.h (which includes tls.h → OpenSSL
@@ -776,6 +778,86 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* ── SHOW REPLICATION STATUS ── per-slot view (Task 97 v1) ── */
+    if (stristr_found(sql, "replication") &&
+        stristr_found(sql, "status") &&
+        !stristr_found(sql, "cluster")) {
+        ReplicationStatus st;
+        memset(&st, 0, sizeof(st));
+        repl_get_status(&st);
+
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "role",          PG_OID_TEXT);
+        result_add_column(rs, "replica_id",    PG_OID_TEXT);
+        result_add_column(rs, "my_lsn",        PG_OID_INT8);
+        result_add_column(rs, "confirmed_lsn", PG_OID_INT8);
+        result_add_column(rs, "lag_bytes",     PG_OID_INT8);
+        result_add_column(rs, "active",        PG_OID_BOOL);
+        result_add_column(rs, "last_seen_us",  PG_OID_INT8);
+
+        const char *role_name =
+            st.role == REPL_ROLE_REPLICA ? "replica" :
+            st.role == REPL_ROLE_WITNESS ? "witness" : "primary";
+
+        if (st.num_replicas == 0) {
+            int r = result_add_row(rs);
+            result_set_field(rs, r, 0, role_name);
+            result_set_field(rs, r, 1, "");
+            char b[32];
+            snprintf(b, sizeof(b), "%u", st.my_lsn);
+            result_set_field(rs, r, 2, b);
+            result_set_field(rs, r, 3, "0");
+            result_set_field(rs, r, 4, "0");
+            result_set_field(rs, r, 5, "f");
+            result_set_field(rs, r, 6, "0");
+        } else {
+            for (int i = 0; i < st.num_replicas; i++) {
+                int r = result_add_row(rs);
+                char b[64];
+                result_set_field(rs, r, 0, role_name);
+                result_set_field(rs, r, 1, st.slots[i].replica_id);
+                snprintf(b, sizeof(b), "%u", st.my_lsn);
+                result_set_field(rs, r, 2, b);
+                snprintf(b, sizeof(b), "%u", st.slots[i].confirmed_lsn);
+                result_set_field(rs, r, 3, b);
+                uint32_t lag = (st.my_lsn > st.slots[i].confirmed_lsn)
+                    ? (st.my_lsn - st.slots[i].confirmed_lsn) : 0;
+                snprintf(b, sizeof(b), "%u", lag);
+                result_set_field(rs, r, 4, b);
+                result_set_field(rs, r, 5, st.slots[i].active ? "t" : "f");
+                snprintf(b, sizeof(b), "%lld", (long long)st.slots[i].last_seen);
+                result_set_field(rs, r, 6, b);
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* ── SHOW REPLICATION LAG ── compact lag-per-slot view ── */
+    if (stristr_found(sql, "replication") && stristr_found(sql, "lag")) {
+        ReplicationStatus st;
+        memset(&st, 0, sizeof(st));
+        repl_get_status(&st);
+
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "replica_id", PG_OID_TEXT);
+        result_add_column(rs, "lag_bytes",  PG_OID_INT8);
+
+        for (int i = 0; i < st.num_replicas; i++) {
+            int r = result_add_row(rs);
+            result_set_field(rs, r, 0, st.slots[i].replica_id);
+            char b[32];
+            uint32_t lag = (st.my_lsn > st.slots[i].confirmed_lsn)
+                ? (st.my_lsn - st.slots[i].confirmed_lsn) : 0;
+            snprintf(b, sizeof(b), "%u", lag);
+            result_set_field(rs, r, 1, b);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* ── Other SHOW variables ── */
     result_init(rs);
     rs->is_select = 1;
@@ -1310,6 +1392,21 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                         extern int pgm_get_fd(void);
                         bp_wal_flush_dirty(pgm_get_fd());
                     }
+                    /* Synchronous commit: wait for
+                     * replica majority to confirm this transaction's WAL
+                     * LSN before acknowledging COMMIT to the client.
+                     * Gated by EVOSQL_SYNC_COMMIT=1. Silently degrades
+                     * to async commit on timeout (logged). */
+                    if (repl_sync_commit_enabled()) {
+                        uint32_t target_lsn = wal_get_current_lsn();
+                        if (target_lsn > 0 &&
+                            repl_sync_commit(target_lsn,
+                                             REPL_SYNC_COMMIT_DEFAULT_MS) < 0) {
+                            fprintf(stderr, "[REPL] Sync commit timeout at "
+                                    "LSN %u — falling back to async\n",
+                                    target_lsn);
+                        }
+                    }
                     uint32_t csn = pgm_next_csn();
                     clog_set_committed_csn(ctx->tx_xid, csn);
                     { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid);
@@ -1621,6 +1718,16 @@ static int handle_builtin_functions(const char *sql, ResultSet *rs)
         result_add_column(rs, "inet_server_port", PG_OID_INT4);
         int row = result_add_row(rs);
         result_set_field(rs, row, 0, "5433");
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
+        return 1;
+    }
+
+    /* pg_is_in_recovery() — true on a replica (Task 97 v1). */
+    if (stristr_found(sql, "pg_is_in_recovery")) {
+        result_add_column(rs, "pg_is_in_recovery", PG_OID_BOOL);
+        int row = result_add_row(rs);
+        result_set_field(rs, row, 0,
+            repl_get_role() == REPL_ROLE_REPLICA ? "t" : "f");
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 1");
         return 1;
     }
@@ -2559,6 +2666,63 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         result_add_column(rs, "name", PG_OID_TEXT);
         result_add_column(rs, "setting", PG_OID_TEXT);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT 0");
+        return 1;
+    }
+
+    /* pg_stat_replication (Task 97 v1) — one row per active replica slot.
+     * Columns match PostgreSQL 15 layout for DBeaver/psql introspection. */
+    if (stristr_found(sql, "pg_stat_replication")) {
+        ReplicationStatus st;
+        memset(&st, 0, sizeof(st));
+        repl_get_status(&st);
+
+        result_add_column(rs, "pid",              PG_OID_INT4);
+        result_add_column(rs, "usesysid",         PG_OID_INT4);
+        result_add_column(rs, "usename",          PG_OID_TEXT);
+        result_add_column(rs, "application_name", PG_OID_TEXT);
+        result_add_column(rs, "client_addr",      PG_OID_TEXT);
+        result_add_column(rs, "backend_start",    PG_OID_TEXT);
+        result_add_column(rs, "state",            PG_OID_TEXT);
+        result_add_column(rs, "sent_lsn",         PG_OID_TEXT);
+        result_add_column(rs, "write_lsn",        PG_OID_TEXT);
+        result_add_column(rs, "flush_lsn",        PG_OID_TEXT);
+        result_add_column(rs, "replay_lsn",       PG_OID_TEXT);
+        result_add_column(rs, "sync_state",       PG_OID_TEXT);
+
+        for (int i = 0; i < st.num_replicas; i++) {
+            int r = result_add_row(rs);
+            char b[64];
+            /* Synthetic PID: derive stable-ish number from replica_id */
+            unsigned pid = 0;
+            for (const char *s = st.slots[i].replica_id; *s; s++)
+                pid = pid * 31u + (unsigned char)*s;
+            if (pid == 0) pid = (unsigned)(i + 1);
+            snprintf(b, sizeof(b), "%u", pid & 0x7FFFFFFF);
+            result_set_field(rs, r, 0, b);
+            result_set_field(rs, r, 1, "10");
+            result_set_field(rs, r, 2, "evosql");
+            result_set_field(rs, r, 3, st.slots[i].replica_id);
+            result_set_field(rs, r, 4, st.slots[i].replica_id);
+            /* backend_start: encode last_seen as "YYYY-MM-DD HH:MM:SS+00" */
+            {
+                time_t t = (time_t)(st.slots[i].last_seen / 1000000LL);
+                struct tm tmv;
+                gmtime_r(&t, &tmv);
+                char ts[32];
+                strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S+00", &tmv);
+                result_set_field(rs, r, 5, ts);
+            }
+            result_set_field(rs, r, 6, st.slots[i].active ? "streaming" : "catchup");
+            snprintf(b, sizeof(b), "%u/%u", 0, st.my_lsn);
+            result_set_field(rs, r, 7, b);
+            result_set_field(rs, r, 8, b);
+            result_set_field(rs, r, 9, b);
+            snprintf(b, sizeof(b), "%u/%u", 0, st.slots[i].confirmed_lsn);
+            result_set_field(rs, r, 10, b);
+            result_set_field(rs, r, 11, "async");
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag),
+                 "SELECT %d", st.num_replicas);
         return 1;
     }
 

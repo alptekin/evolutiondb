@@ -104,6 +104,11 @@ int conn_send_line(conn_t *c, const char *line);
 /* Read one line (up to \n). Returns line length or -1. */
 int conn_recv_line(conn_t *c, char *buf, int maxlen);
 
+/* Non-blocking read: returns bytes read (>0), 0 if no data available
+ * right now, or -1 on peer close / error. Works for both plain and
+ * TLS sockets. Used by the replication sender to drain ACK frames. */
+int conn_try_recv(conn_t *c, char *buf, int maxlen);
+
 /* Close TLS layer (if any). Does NOT close the socket. */
 void conn_tls_shutdown(conn_t *c);
 

@@ -1,0 +1,74 @@
+services:
+  # ──────────────────────────────────────────────────────────
+  # Primary — accepts DML, streams WAL to replicas.
+  # ──────────────────────────────────────────────────────────
+  primary:
+    build: .
+    container_name: evo-primary
+    hostname: primary
+    ports:
+      - "5433:5433"    # PG wire
+      - "9968:9968"    # Replication (sender listens here)
+    environment:
+      EVOSQL_USER_NAME: admin
+      EVOSQL_PASSWORD: admin
+      EVOSQL_REPLICATION_ROLE: primary
+      EVOSQL_REPLICATION_PORT: 9968
+      EVOSQL_REPLICATION_USER: admin
+      EVOSQL_REPLICATION_PASSWORD: admin
+      EVOSQL_REPLICATION_TLS: "0"   # Commit 8: TLS optional smoke; set to "1" to enable
+    command: ["/app/evosql-server", "--role", "primary", "--replication-port", "9968"]
+    volumes:
+      - primary-data:/data
+
+  # ──────────────────────────────────────────────────────────
+  # Replica 1 — connects to primary:9968, streams WAL.
+  # Read-only for DML (SQLSTATE 25006 on writes).
+  # ──────────────────────────────────────────────────────────
+  replica1:
+    build: .
+    container_name: evo-replica1
+    hostname: replica1
+    ports:
+      - "5434:5433"
+    environment:
+      EVOSQL_USER_NAME: admin
+      EVOSQL_PASSWORD: admin
+      EVOSQL_REPLICATION_ROLE: replica
+      EVOSQL_PRIMARY_HOST: primary
+      EVOSQL_PRIMARY_PORT: 9968
+      EVOSQL_REPLICATION_USER: admin
+      EVOSQL_REPLICATION_PASSWORD: admin
+    command: ["/app/evosql-server", "--role", "replica", "--replica", "primary:9968"]
+    depends_on:
+      - primary
+    volumes:
+      - replica1-data:/data
+
+  # ──────────────────────────────────────────────────────────
+  # Replica 2 — second replica for majority sync-commit tests.
+  # ──────────────────────────────────────────────────────────
+  replica2:
+    build: .
+    container_name: evo-replica2
+    hostname: replica2
+    ports:
+      - "5435:5433"
+    environment:
+      EVOSQL_USER_NAME: admin
+      EVOSQL_PASSWORD: admin
+      EVOSQL_REPLICATION_ROLE: replica
+      EVOSQL_PRIMARY_HOST: primary
+      EVOSQL_PRIMARY_PORT: 9968
+      EVOSQL_REPLICATION_USER: admin
+      EVOSQL_REPLICATION_PASSWORD: admin
+    command: ["/app/evosql-server", "--role", "replica", "--replica", "primary:9968"]
+    depends_on:
+      - primary
+    volumes:
+      - replica2-data:/data
+
+volumes:
+  primary-data:
+  replica1-data:
+  replica2-data:

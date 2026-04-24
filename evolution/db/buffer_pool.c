@@ -704,6 +704,29 @@ void bp_invalidate_fd(int fd)
     }
 }
 
+void bp_invalidate_page(int fd, uint32_t page_no)
+{
+    /* O(1) per-partition hash lookup — bp_part_idx maps a page to its
+     * owning partition, so we only need to probe one. Called per WAL
+     * record on the replica, so cost matters. */
+    if (!g_pool) return;
+    int pi = bp_part_idx((off_t)page_no);
+    BPPartition *part = &g_pool->parts[pi];
+    bp_mutex_lock(&part->lock);
+    int idx = part_hash_lookup(part, fd, (off_t)page_no);
+    if (idx >= 0) {
+        BPPage *p = &part->pages[idx];
+        /* On-disk page is now authoritative (just pwritten by the WAL
+         * receiver). Drop the cached copy without flushing dirty back. */
+        part_hash_remove(part, p->fd, p->page_no);
+        p->fd          = -1;
+        p->dirty       = 0;
+        atomic_store(&p->pin_count, 0);
+        p->usage_count = 0;
+    }
+    bp_mutex_unlock(&part->lock);
+}
+
 void bp_flush_all(void)
 {
     int pi;

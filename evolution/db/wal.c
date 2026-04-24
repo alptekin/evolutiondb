@@ -450,6 +450,12 @@ int wal_is_active(void)
     return g_wal_active;
 }
 
+uint32_t wal_get_current_lsn(void)
+{
+    if (!g_wal_active) return 0;
+    return g_wal_header.next_lsn;
+}
+
 /* ================================================================
  *  Time-Travel Recovery — restore to a past timestamp
  * ================================================================ */

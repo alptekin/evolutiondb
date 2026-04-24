@@ -33,6 +33,11 @@ dist/
 Debug/
 Release/
 
+# Built binaries
+adaptor/evosql-server
+evolution/evosql
+cli/evosql-cli
+
 # OS files
 Thumbs.db
 Desktop.ini

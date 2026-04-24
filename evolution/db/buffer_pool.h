@@ -80,6 +80,7 @@ int  bp_read_seq(int fd, void *buf, size_t count, off_t offset, BPRing *ring);
  * ---------------------------------------------------------------- */
 void bp_flush_fd(int fd);       /* write all dirty pages for fd */
 void bp_invalidate_fd(int fd);  /* drop all pages for fd (flush first) */
+void bp_invalidate_page(int fd, uint32_t page_no); /* drop single page (WAL replay) */
 void bp_flush_all(void);        /* write all dirty pages */
 void bp_wal_flush_dirty(int fd);/* log dirty pages to WAL + single fsync */
 void bp_track_dirty(uint32_t page_no); /* track page for efficient WAL flush */

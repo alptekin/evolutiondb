@@ -25,6 +25,11 @@
 #define REPL_MSG_WAL_DATA   'W'   /* WAL record data */
 #define REPL_MSG_HEARTBEAT  'H'   /* keepalive */
 #define REPL_MSG_END        'E'   /* caught up, waiting */
+#define REPL_MSG_ACK        'A'   /* replica→master: [type:1][confirmed_lsn:4B] */
+#define REPL_MSG_AUTH       'U'   /* reserved for Commit 4: [type:1][len:4B][user pass] */
+
+/* ACK frame size = type byte + uint32 LSN */
+#define REPL_ACK_FRAME_SIZE 5
 
 /* ----------------------------------------------------------------
  *  Master-side: WAL sender
@@ -114,6 +119,57 @@ typedef struct {
 /* List all replication slots. Returns count. */
 int repl_list_slots(ReplicationSlot *out, int max);
 
+/* Update or register a replication slot. Called by sender when a replica
+ * connects (active=1) or by ACK handler to advance confirmed_lsn.
+ * Safe to call from any thread — internally takes the slot mutex. */
+void repl_slot_update(const char *replica_id, uint32_t confirmed_lsn);
+
+/* Mark a slot inactive on disconnect. Preserves confirmed_lsn for
+ * catch-up on reconnect. */
+void repl_slot_deactivate(const char *replica_id);
+
+/* Replication roles (see EVOSQL_REPLICATION_ROLE) */
+#define REPL_ROLE_PRIMARY   0
+#define REPL_ROLE_REPLICA   1
+#define REPL_ROLE_WITNESS   2
+
+/* Aggregated replication status snapshot. Used by
+ * SHOW REPLICATION STATUS and pg_catalog.pg_stat_replication. */
+typedef struct {
+    int      role;                           /* REPL_ROLE_* */
+    uint32_t my_lsn;                         /* primary: current WAL LSN; replica: last replayed */
+    int      num_replicas;                   /* number of active slots */
+    ReplicationSlot slots[REPL_MAX_SLOTS];
+} ReplicationStatus;
+
+/* Fill out with a consistent snapshot of the current status. */
+int repl_get_status(ReplicationStatus *out);
+
+/* Pin the declared role (called before repl_start_sender/receiver based on
+ * EVOSQL_REPLICATION_ROLE / --role). Accepted values: REPL_ROLE_*. */
+void repl_set_role(int role);
+int  repl_get_role(void);
+
+/* ----------------------------------------------------------------
+ *  Synchronous commit (Commit 2)
+ *
+ *  repl_sync_commit blocks the caller until a majority of active
+ *  replicas have ACK'd confirmed_lsn >= target_lsn. Timeout semantics:
+ *    returns  0 on majority confirmed
+ *    returns -1 on timeout  (caller falls back to async commit)
+ *
+ *  Majority requirement: ceil(num_replicas / 2) ACKs. When no replicas
+ *  are active the call returns 0 immediately (degrade gracefully).
+ * ---------------------------------------------------------------- */
+int  repl_sync_commit(uint32_t lsn, int timeout_ms);
+
+/* Read EVOSQL_SYNC_COMMIT env once (cached). 1 = enabled, 0 = async. */
+int  repl_sync_commit_enabled(void);
+
+/* Default timeout for repl_sync_commit when wired from COMMIT path.
+ * 2000ms matches pg_basebackup's synchronous_commit timeout. */
+#define REPL_SYNC_COMMIT_DEFAULT_MS 2000
+
 /* ----------------------------------------------------------------
  *  GAP-D9: Base Backup
  * ---------------------------------------------------------------- */
@@ -130,6 +186,23 @@ int repl_create_backup(const char *backup_path);
 /* Promote this replica to standalone master (stop receiving WAL,
  * accept DML). Called after Raft election or manual promote. */
 int repl_promote(void);
+
+/* Raft ↔ Replication glue.
+ * repl_install_raft_glue registers repl_on_raft_role_change with
+ * raft_set_role_callback so Raft leader elections automatically flip
+ * this node's replication role.
+ * repl_bind_raft_glue sets the replication port so the glue knows
+ * which port to start the sender on when Raft elects us LEADER. */
+void repl_install_raft_glue(void);
+void repl_bind_raft_glue(int replication_port);
+
+/* ----------------------------------------------------------------
+ *  GAP-D3: Witness node mode
+ *  A witness participates in Raft voting but does not store data
+ *  and must reject SELECTs (see query_executor.c SELECT gate).
+ * ---------------------------------------------------------------- */
+int  repl_is_witness(void);
+void repl_set_witness(int enabled);
 
 /* ----------------------------------------------------------------
  *  GAP-D7: CDC Streaming Protocol

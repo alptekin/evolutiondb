@@ -16,7 +16,14 @@
 #include <netdb.h>
 #include <errno.h>
 #include <sys/time.h>
+#include <fcntl.h>
 #include "raft.h"
+
+/* Persistence constants — see raft_save_state below. */
+#define RAFT_STATE_MAGIC   0x54464152   /* "RAFT" in LE */
+#define RAFT_STATE_PATH    "root/raft.state"
+#define RAFT_SNAPSHOT_PATH "root/raft.snapshot"
+#define RAFT_COMPACTION_INTERVAL 10000  /* AppendEntries count */
 
 /* ================================================================
  *  State
@@ -36,6 +43,117 @@ static pthread_t    g_election_thread;
 static pthread_t    g_heartbeat_thread;
 static pthread_t    g_listener_thread;
 static pthread_mutex_t g_raft_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Role-transition callback. Invoked whenever g_role
+ * changes so the replication module can flip primary/replica without
+ * polling. Callback MUST NOT acquire g_raft_lock or call back into
+ * raft_* state mutators — it's invoked synchronously while the lock is
+ * held, so reentrancy would deadlock. Pure side-effects
+ * (repl_start_sender, repl_start_receiver) are fine. */
+typedef void (*raft_role_cb_t)(int new_role, int leader_id);
+static raft_role_cb_t g_role_callback = NULL;
+
+/* Call with g_raft_lock held. Transitions g_role and fires callback if
+ * role changed. */
+static void raft_transition_role_locked(int new_role)
+{
+    int old_role = g_role;
+    g_role = new_role;
+    if (old_role != new_role && g_role_callback) {
+        g_role_callback(new_role, g_leader_id);
+    }
+}
+
+void raft_set_role_callback(void (*cb)(int new_role, int leader_id))
+{
+    g_role_callback = cb;
+}
+
+/* ================================================================
+ *  Persistence
+ *
+ *  root/raft.state layout (12 bytes, little-endian):
+ *    [magic:4B=0x52414654 "RAFT"][current_term:4B][voted_for:4B]
+ *
+ *  Atomic write: temp file + rename. fsync(fd) before rename so the
+ *  state survives a crash. Called from under g_raft_lock so the
+ *  in-memory values are consistent with the on-disk snapshot.
+ * ================================================================ */
+static void raft_save_state(void)
+{
+    char tmp[] = RAFT_STATE_PATH ".tmp";
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    uint32_t magic = RAFT_STATE_MAGIC;
+    uint32_t term = g_current_term;
+    int32_t voted = g_voted_for;
+    if (write(fd, &magic, 4) == 4 &&
+        write(fd, &term,  4) == 4 &&
+        write(fd, &voted, 4) == 4) {
+        fsync(fd);
+        close(fd);
+        rename(tmp, RAFT_STATE_PATH);
+    } else {
+        close(fd);
+        unlink(tmp);
+    }
+}
+
+static void raft_load_state(void)
+{
+    int fd = open(RAFT_STATE_PATH, O_RDONLY);
+    if (fd < 0) return;
+    uint32_t magic = 0, term = 0;
+    int32_t voted = -1;
+    if (read(fd, &magic, 4) == 4 && magic == RAFT_STATE_MAGIC &&
+        read(fd, &term,  4) == 4 &&
+        read(fd, &voted, 4) == 4) {
+        g_current_term = term;
+        g_voted_for = voted;
+        fprintf(stderr, "[RAFT] Loaded persisted state: term=%u voted_for=%d\n",
+                term, voted);
+    }
+    close(fd);
+}
+
+/* Log compaction: every RAFT_COMPACTION_INTERVAL AppendEntries we
+ * snapshot {my_lsn, term} to root/raft.snapshot. In this v1 Raft there
+ * is no in-memory log to truncate — AppendEntries is heartbeat +
+ * last_lsn advertisement — so the snapshot mainly documents the
+ * high-water mark for operators + sets up space for future log-based
+ * compaction without touching the disk format again. */
+static uint32_t g_append_counter = 0;
+
+static void raft_write_snapshot(void)
+{
+    char tmp[] = RAFT_SNAPSHOT_PATH ".tmp";
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    uint32_t magic = RAFT_STATE_MAGIC;
+    uint32_t committed_lsn = g_my_lsn;
+    uint32_t last_term = g_current_term;
+    if (write(fd, &magic, 4) == 4 &&
+        write(fd, &committed_lsn, 4) == 4 &&
+        write(fd, &last_term, 4) == 4) {
+        fsync(fd);
+        close(fd);
+        rename(tmp, RAFT_SNAPSHOT_PATH);
+        fprintf(stderr, "[RAFT] Snapshot written: committed_lsn=%u term=%u\n",
+                committed_lsn, last_term);
+    } else {
+        close(fd);
+        unlink(tmp);
+    }
+}
+
+static void raft_maybe_compact(void)
+{
+    g_append_counter++;
+    if (g_append_counter >= RAFT_COMPACTION_INTERVAL) {
+        g_append_counter = 0;
+        raft_write_snapshot();
+    }
+}
 
 /* Election timer */
 static int64_t      g_last_heartbeat_ms = 0;
@@ -122,9 +240,12 @@ static void start_election(void)
 {
     pthread_mutex_lock(&g_raft_lock);
     g_current_term++;
-    g_role = RAFT_CANDIDATE;
     g_voted_for = g_my_id;
     g_leader_id = -1;
+    raft_transition_role_locked(RAFT_CANDIDATE);
+    /* Persist term + vote before contacting peers — restart must not
+     * grant a second vote in the same term. */
+    raft_save_state();
     int term = g_current_term;
     int votes = 1;  /* vote for self */
     pthread_mutex_unlock(&g_raft_lock);
@@ -155,12 +276,12 @@ static void start_election(void)
     int majority = g_num_nodes / 2 + 1;
     pthread_mutex_lock(&g_raft_lock);
     if (votes >= majority && g_role == RAFT_CANDIDATE && g_current_term == (uint32_t)term) {
-        g_role = RAFT_LEADER;
         g_leader_id = g_my_id;
+        raft_transition_role_locked(RAFT_LEADER);
         fprintf(stderr, "[RAFT] ★ Elected as LEADER (term %u, %d/%d votes)\n",
                 term, votes, g_num_nodes);
     } else {
-        g_role = RAFT_FOLLOWER;
+        raft_transition_role_locked(RAFT_FOLLOWER);
         fprintf(stderr, "[RAFT] Election failed (term %u, %d/%d votes)\n",
                 term, votes, g_num_nodes);
     }
@@ -230,8 +351,10 @@ static void *heartbeat_thread(void *arg)
                         if (resp.term > term) {
                             pthread_mutex_lock(&g_raft_lock);
                             g_current_term = resp.term;
-                            g_role = RAFT_FOLLOWER;
+                            g_voted_for = -1;  /* new term: reset vote */
                             g_leader_id = -1;
+                            raft_transition_role_locked(RAFT_FOLLOWER);
+                            raft_save_state();
                             pthread_mutex_unlock(&g_raft_lock);
                             fprintf(stderr, "[RAFT] Stepping down: higher term %u\n",
                                     resp.term);
@@ -261,9 +384,10 @@ static void handle_raft_message(int client_fd)
         /* Update term if sender has higher term */
         if (msg.term > g_current_term) {
             g_current_term = msg.term;
-            g_role = RAFT_FOLLOWER;
             g_voted_for = -1;
             g_leader_id = -1;
+            raft_transition_role_locked(RAFT_FOLLOWER);
+            raft_save_state();
         }
 
         switch (msg.msg_type) {
@@ -277,6 +401,7 @@ static void handle_raft_message(int client_fd)
                 g_voted_for = msg.node_id;
                 resp.vote_granted = 1;
                 g_last_heartbeat_ms = now_ms();  /* reset election timer */
+                raft_save_state();  /* persist so restart doesn't revote */
                 fprintf(stderr, "[RAFT] Voted for node %u (term %u)\n",
                         msg.node_id, msg.term);
             }
@@ -287,8 +412,9 @@ static void handle_raft_message(int client_fd)
         case RAFT_MSG_APPEND_ENTRIES:
             g_leader_id = msg.node_id;
             g_last_heartbeat_ms = now_ms();  /* reset election timer */
-            if (g_role == RAFT_CANDIDATE)
-                g_role = RAFT_FOLLOWER;  /* new leader discovered */
+            if (g_role == RAFT_CANDIDATE || g_role == RAFT_LEADER)
+                raft_transition_role_locked(RAFT_FOLLOWER);  /* new leader discovered */
+            raft_maybe_compact();
             resp.msg_type = RAFT_MSG_APPEND_RESPONSE;
             resp.term = g_current_term;
             resp.last_lsn = g_my_lsn;
@@ -392,6 +518,10 @@ int raft_init(const char *nodes_csv, int my_id)
 
     fprintf(stderr, "[RAFT] Cluster: %d nodes, this is node %d (%s:%d)\n",
             g_num_nodes, my_id, g_nodes[my_id].host, g_nodes[my_id].port);
+
+    /* Load persisted term/voted_for so a restart doesn't revote in the
+     * same term (split-brain safety). Silent no-op if file missing. */
+    raft_load_state();
     return 0;
 }
 
