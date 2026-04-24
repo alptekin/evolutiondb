@@ -33,6 +33,8 @@ ADD						{ return ADD; }					/* keywords */
 AFTER					{ return AFTER; }
 ALL						{ return ALL; }
 ANALYZE					{ return ANALYZE; }
+HISTOGRAM				{ return HISTOGRAM; }
+BUCKETS					{ return BUCKETS; }
 
 
 

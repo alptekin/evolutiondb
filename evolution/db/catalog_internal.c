@@ -2257,6 +2257,9 @@ int cat_list_column_stats(uint32_t table_id, ColumnStatsDesc *out, int max)
         /* Skip index stats entries (key contains ":I:") */
         if (strstr(key, ":I:") != NULL)
             continue;
+        /* Skip histogram entries (key contains ":H:") */
+        if (strstr(key, ":H:") != NULL)
+            continue;
         char record[CAT_MAX_RECORD_LEN];
         if (cat_read_record(rid, record, sizeof(record)) >= 0) {
             deserialize_column_stats(record, &out[count]);
@@ -2345,6 +2348,163 @@ int cat_list_index_stats(uint32_t table_id, IndexStatsDesc *out, int max)
         char record[CAT_MAX_RECORD_LEN];
         if (cat_read_record(rid, record, sizeof(record)) >= 0) {
             deserialize_index_stats(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}
+
+/* ----------------------------------------------------------------
+ *  Histograms (Task 99 — Feature #101)
+ *
+ *  Key format "%010u:H:%s" — shares CAT_SYS_TABLE_STATS with table
+ *  stats (":_"), column stats (plain), and index stats (":I:").
+ *
+ *  Serialization (semicolon-delimited, uses `|` inside bucket list
+ *  to avoid collision with bound values that contain ';'):
+ *
+ *    table_id;col_name;type;num_buckets;total_rows;b1|c1|b2|c2|...
+ *
+ *  A 100-bucket histogram with 32-byte bounds and uint64 counts
+ *  fits in ~5 KB — larger than CAT_MAX_RECORD_LEN (2048), so we use
+ *  a local 8 KB serialization buffer and pass the explicit length to
+ *  cat_store_record (slotted storage accepts up to SLOT_MAX_RECORD).
+ * ---------------------------------------------------------------- */
+
+#define HIST_RECORD_BUF_LEN 8192
+
+static void make_histogram_key(uint32_t table_id, const char *col_name,
+                               char *out, int size)
+{
+    snprintf(out, size, "%010u:H:%s", table_id, col_name);
+}
+
+static int serialize_histogram(const HistogramDesc *h, char *buf, int size)
+{
+    int n = snprintf(buf, size, "%u;%s;%c;%d;%lu;",
+                     h->table_id, h->col_name, h->histogram_type,
+                     h->num_buckets, (unsigned long)h->total_rows);
+    if (n < 0 || n >= size) return -1;
+
+    for (int i = 0; i < h->num_buckets; i++) {
+        int m = snprintf(buf + n, size - n, "%s|%lu%s",
+                         h->bucket_bounds[i],
+                         (unsigned long)h->bucket_counts[i],
+                         (i + 1 < h->num_buckets) ? "|" : "");
+        if (m < 0 || m >= size - n) return -1;
+        n += m;
+    }
+    return n;
+}
+
+static void deserialize_histogram(const char *buf, HistogramDesc *h)
+{
+    char field[64];
+    const char *p = buf;
+    memset(h, 0, sizeof(*h));
+
+    p = next_field(p, field, sizeof(field)); h->table_id = (uint32_t)atoi(field);
+    p = next_field(p, h->col_name, CAT_MAX_NAME_LEN);
+    p = next_field(p, field, sizeof(field));
+    h->histogram_type = field[0] ? field[0] : 'E';
+    p = next_field(p, field, sizeof(field)); h->num_buckets = atoi(field);
+    p = next_field(p, field, sizeof(field));
+    h->total_rows = (uint64_t)strtoul(field, NULL, 10);
+
+    /* Remaining payload is `bound|count|bound|count|...` (no trailing `;`). */
+    if (h->num_buckets > HIST_MAX_BUCKETS) h->num_buckets = HIST_MAX_BUCKETS;
+    for (int i = 0; i < h->num_buckets; i++) {
+        /* Read bound up to `|` */
+        int bi = 0;
+        while (*p && *p != '|' && bi < HIST_MAX_BOUND_LEN - 1)
+            h->bucket_bounds[i][bi++] = *p++;
+        h->bucket_bounds[i][bi] = '\0';
+        if (*p == '|') p++;
+
+        /* Read count up to `|` or end */
+        char cnt[32];
+        int ci = 0;
+        while (*p && *p != '|' && ci < (int)sizeof(cnt) - 1)
+            cnt[ci++] = *p++;
+        cnt[ci] = '\0';
+        h->bucket_counts[i] = (uint64_t)strtoul(cnt, NULL, 10);
+        if (*p == '|') p++;
+    }
+}
+
+int cat_store_histogram(const HistogramDesc *h)
+{
+    if (!h || h->num_buckets < 0 || h->num_buckets > HIST_MAX_BUCKETS)
+        return -1;
+
+    char key[CAT_MAX_KEY_LEN];
+    make_histogram_key(h->table_id, h->col_name, key, sizeof(key));
+
+    char record[HIST_RECORD_BUF_LEN];
+    int rec_len = serialize_histogram(h, record, sizeof(record));
+    if (rec_len < 0) return -1;
+
+    RowID old_rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLE_STATS], key, &old_rid) == 0) {
+        cat_delete_record(old_rid);
+        bt2_delete(&g_cat_trees[CAT_SYS_TABLE_STATS], key);
+    }
+
+    RowID rid = cat_store_record(CAT_SYS_TABLE_STATS, record, rec_len + 1);
+    if (rid.page_no == 0) return -1;
+
+    return bt2_insert(&g_cat_trees[CAT_SYS_TABLE_STATS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_get_histogram(uint32_t table_id, const char *col_name,
+                      HistogramDesc *out)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_histogram_key(table_id, col_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLE_STATS], key, &rid) < 0)
+        return -1;
+
+    char record[HIST_RECORD_BUF_LEN];
+    if (cat_read_record(rid, record, sizeof(record)) < 0)
+        return -1;
+
+    if (out) deserialize_histogram(record, out);
+    return 0;
+}
+
+int cat_drop_histogram(uint32_t table_id, const char *col_name)
+{
+    char key[CAT_MAX_KEY_LEN];
+    make_histogram_key(table_id, col_name, key, sizeof(key));
+
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_TABLE_STATS], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_TABLE_STATS], key);
+    return 0;
+}
+
+int cat_list_histograms(uint32_t table_id, HistogramDesc *out, int max)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    snprintf(prefix, sizeof(prefix), "%010u:H:", table_id);
+
+    BTree2Cursor cur;
+    if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_TABLE_STATS], prefix, &cur) < 0)
+        return 0;
+
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        if (strncmp(key, prefix, strlen(prefix)) != 0)
+            break;
+        char record[HIST_RECORD_BUF_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_histogram(record, &out[count]);
             count++;
         }
     }
