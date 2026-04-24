@@ -42,6 +42,11 @@
 #define PG_OID_ARRAY_BOOL       1000  /* BOOLEAN[] */
 #define PG_OID_ARRAY_JSON       199   /* JSON[] */
 
+/* VECTOR(N) — Task 200 / Feature #200. pgvector registers its own OID
+ * via an extension; we send the text representation ("[f1,f2,...]")
+ * so generic PG clients still read it as text. */
+#define PG_OID_VECTOR           25    /* render as text */
+
 typedef struct {
     char   name[MAX_COL_NAME];
     int    pg_type_oid;

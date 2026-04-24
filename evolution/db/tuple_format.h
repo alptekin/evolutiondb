@@ -78,6 +78,46 @@
 #define ARRAY_HEADER_SIZE    8   /* ndim(1) + flags(1) + elem_tc(4) + count(2) */
 #define ARRAY_MAX_BLOB       65535
 
+/* ----------------------------------------------------------------
+ *  VECTOR type family (Task 200 — Feature #200)
+ *
+ *  Fixed-dimension dense float4 vectors. Payload = N × 4 bytes float4 LE
+ *  directly after the column offset — no length prefix because the
+ *  dimension is embedded in the type_code (type_code % 10000 = N).
+ *
+ *  type_code encoding: 260000 + N (N = dimension, 1..VECTOR_MAX_DIM)
+ *    VECTOR(3)    = 260003
+ *    VECTOR(128)  = 260128
+ *    VECTOR(1536) = 261536
+ *
+ *  Text IO format: "[0.1,0.2,0.3]" (no spaces on output, lenient on input)
+ * ---------------------------------------------------------------- */
+#define TYPE_FAMILY_VECTOR   26
+#define VECTOR_TYPE_BASE     260000
+#define VECTOR_MAX_DIM       16384
+
+static inline int tup_is_vector(int type_code)
+{
+    return (type_code / 10000) == TYPE_FAMILY_VECTOR;
+}
+
+static inline int tup_vector_dim(int type_code)
+{
+    return tup_is_vector(type_code) ? (type_code - VECTOR_TYPE_BASE) : -1;
+}
+
+/* Parse "[f1,f2,...]" or "{f1,f2,...}" text literal into a dense float4
+ * buffer of expected_dim * 4 bytes. Accepts optional whitespace and
+ * trailing commas. Returns 0 on success, -1 on dim mismatch / parse
+ * error / non-finite (NaN/Inf) element. */
+int vec_parse_text(const char *text, int expected_dim,
+                   char *out, int out_size);
+
+/* Format dim × float4 binary payload as "[f1,f2,...]" into out_buf.
+ * Returns bytes written (including NUL), -1 on overflow. */
+int vec_format_text(const char *payload, int dim,
+                    char *out_buf, int out_size);
+
 static inline int tup_is_array(int type_code)
 {
     return (type_code / 10000) == TYPE_FAMILY_ARRAY;

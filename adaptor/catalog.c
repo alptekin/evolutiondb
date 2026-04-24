@@ -57,6 +57,7 @@ static int evo_type_to_pg_oid(int typeEncoding)
     case 12: return 1042;   /* CHAR → bpchar */
     case 13: return 1043;   /* VARCHAR → varchar */
     case 22: return 16;     /* BOOLEAN → bool */
+    case 26: return 25;     /* VECTOR(N) → text (Task 200) */
     default: return 25;     /* TEXT, BLOB, etc. */
     }
 }
@@ -79,6 +80,7 @@ static const char *evo_type_to_name(int typeEncoding)
     case 12: return "character";
     case 13: return "character varying";
     case 22: return "boolean";
+    case 26: return "vector";
     default: return "text";
     }
 }
