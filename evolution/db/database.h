@@ -108,6 +108,13 @@ int should_auto_reclaim(uint32_t table_id);
 void auto_reclaim_start(void);
 void auto_reclaim_stop(void);
 int AnalyzeTableProcess(void);
+
+/* Parser-set histogram request (Task 99 — Feature #101).
+ * Called from evoparser.y ANALYZE grammar; consumed by AnalyzeTableProcess. */
+void ResetAnalyzeHist(void);
+void SetAnalyzeHistMode(int mode);       /* 0 auto, 1 UPDATE, 2 DROP */
+void SetAnalyzeHistBuckets(int buckets);
+void AddAnalyzeHistCol(const char *name);
 int CreateDatabaseProcess(const char *name, int if_not_exists);
 int CreateSchemaProcess(const char *name, int if_not_exists);
 int DropDatabaseProcess(const char *name, int if_exists);
