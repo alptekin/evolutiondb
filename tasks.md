@@ -2014,7 +2014,7 @@
 
 ---
 
-### Task 101: ⬜ Statistics System Views (Feature #103)
+### Task 101: ✅ Statistics System Views (Feature #103)
 
 **Goal:** Expose collected statistics via SQL-queryable views: `pg_stats` (column stats + histograms), `pg_stat_user_tables` (table stats + DML counters), `pg_stat_user_indexes` (index stats). Model after PostgreSQL.
 
