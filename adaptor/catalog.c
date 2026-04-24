@@ -2726,6 +2726,312 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* Task 101: statistics views — pg_stats / pg_stat_user_tables /
+     * pg_stat_user_indexes. Model after PostgreSQL so DBeaver/psql
+     * "table statistics" panes work against EvoSQL. Optional
+     * tablename='x' / attname='y' filters are honored for cheap
+     * introspection of a single table. */
+
+    /* Helper: extract a simple `col = 'val'` (or unquoted) filter from
+     * the WHERE clause. Only recognises string-equality on well-known
+     * column names — used to avoid scanning every table when the
+     * caller asked for one. */
+    #define EXTRACT_EQ_FILTER(_name, _out, _out_sz) do {                 \
+        const char *_p = strcasestr_local(sql, (_name));                    \
+        if (_p) {                                                         \
+            _p += strlen((_name));                                        \
+            while (*_p && isspace((unsigned char)*_p)) _p++;              \
+            if (*_p == '=') {                                             \
+                _p++;                                                     \
+                while (*_p && isspace((unsigned char)*_p)) _p++;          \
+                int _quote = (*_p == '\'');                               \
+                if (_quote) _p++;                                         \
+                int _i = 0;                                               \
+                while (*_p && _i + 1 < (int)(_out_sz)) {                  \
+                    if (_quote && *_p == '\'') break;                     \
+                    if (!_quote &&                                        \
+                        (isspace((unsigned char)*_p) || *_p == ')'))      \
+                        break;                                            \
+                    (_out)[_i++] = *_p++;                                 \
+                }                                                         \
+                (_out)[_i] = '\0';                                        \
+            }                                                             \
+        }                                                                 \
+    } while (0)
+
+    /* pg_stats — row per (table, column) with column stats + histogram.
+     * Columns match PostgreSQL 15 layout (histogram_bounds uses the
+     * '{a,b,c}' array-literal syntax PG emits). */
+    if (stristr_found(sql, "pg_stats") &&
+        !stristr_found(sql, "pg_stat_user_")) {
+        result_add_column(rs, "schemaname",        PG_OID_TEXT);
+        result_add_column(rs, "tablename",         PG_OID_TEXT);
+        result_add_column(rs, "attname",           PG_OID_TEXT);
+        result_add_column(rs, "null_frac",         PG_OID_FLOAT8);
+        result_add_column(rs, "n_distinct",        PG_OID_INT8);
+        result_add_column(rs, "avg_width",         PG_OID_INT4);
+        result_add_column(rs, "most_common_vals",  PG_OID_TEXT);
+        result_add_column(rs, "most_common_freqs", PG_OID_TEXT);
+        result_add_column(rs, "histogram_bounds",  PG_OID_TEXT);
+
+        char filter_table[128] = "";
+        char filter_attname[128] = "";
+        EXTRACT_EQ_FILTER("tablename", filter_table, sizeof(filter_table));
+        EXTRACT_EQ_FILTER("attname",   filter_attname, sizeof(filter_attname));
+
+        DatabaseDesc dbDesc; SchemaDesc schDesc;
+        int total = 0;
+        if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
+            cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
+            TableDesc tables[256];
+            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            for (int t = 0; t < nt; t++) {
+                if (tables[t].is_temporary) continue;
+                if (filter_table[0] &&
+                    strcasecmp(tables[t].table_name, filter_table) != 0)
+                    continue;
+
+                TableStatsDesc ts;
+                int has_ts = (cat_get_table_stats(tables[t].table_id, &ts) == 0);
+
+                /* Iterate all columns (not just those with ColumnStatsDesc) —
+                 * UPDATE HISTOGRAM mode stores a histogram without
+                 * refreshing column_stats; such columns must still
+                 * surface in pg_stats. */
+                ColumnDesc cols_cd[CAT_MAX_COLUMNS];
+                int ncols_cd = cat_find_columns(tables[t].table_id,
+                                                cols_cd, CAT_MAX_COLUMNS);
+                for (int c = 0; c < ncols_cd; c++) {
+                    if (cols_cd[c].is_dropped) continue;
+                    if (filter_attname[0] &&
+                        strcasecmp(cols_cd[c].col_name, filter_attname) != 0)
+                        continue;
+
+                    ColumnStatsDesc cs;
+                    int has_cs = (cat_get_column_stats(tables[t].table_id,
+                                                       cols_cd[c].col_name,
+                                                       &cs) == 0);
+
+                    int row = result_add_row(rs);
+                    char b[64];
+                    result_set_field(rs, row, 0, db_get_current_schema());
+                    result_set_field(rs, row, 1, tables[t].table_name);
+                    result_set_field(rs, row, 2, cols_cd[c].col_name);
+
+                    /* null_frac */
+                    double nf = 0.0;
+                    if (has_ts && has_cs && ts.row_count > 0)
+                        nf = (double)cs.null_count / (double)ts.row_count;
+                    snprintf(b, sizeof(b), "%.6f", nf);
+                    result_set_field(rs, row, 3, b);
+
+                    /* n_distinct */
+                    snprintf(b, sizeof(b), "%lu",
+                             has_cs ? (unsigned long)cs.distinct_count : 0UL);
+                    result_set_field(rs, row, 4, b);
+
+                    /* avg_width */
+                    snprintf(b, sizeof(b), "%d", has_cs ? cs.avg_width : 0);
+                    result_set_field(rs, row, 5, b);
+
+                    /* Histogram → MCV or histogram_bounds */
+                    HistogramDesc h;
+                    int mcv_set = 0, hb_set = 0;
+                    if (cat_get_histogram(tables[t].table_id,
+                                          cols_cd[c].col_name, &h) == 0 &&
+                        h.num_buckets > 0) {
+                        if (h.histogram_type == 'F') {
+                            /* Frequency → most_common_vals / _freqs */
+                            char mcv[2048] = "{";
+                            char mcf[2048] = "{";
+                            int lim = h.num_buckets < 10 ? h.num_buckets : 10;
+                            for (int i = 0; i < lim; i++) {
+                                if (i) {
+                                    strncat(mcv, ",",
+                                            sizeof(mcv) - strlen(mcv) - 1);
+                                    strncat(mcf, ",",
+                                            sizeof(mcf) - strlen(mcf) - 1);
+                                }
+                                strncat(mcv, h.bucket_bounds[i],
+                                        sizeof(mcv) - strlen(mcv) - 2);
+                                double freq = h.total_rows > 0
+                                    ? (double)h.bucket_counts[i] /
+                                      (double)h.total_rows : 0.0;
+                                char fbuf[32];
+                                snprintf(fbuf, sizeof(fbuf), "%.4f", freq);
+                                strncat(mcf, fbuf,
+                                        sizeof(mcf) - strlen(mcf) - 2);
+                            }
+                            strncat(mcv, "}", sizeof(mcv) - strlen(mcv) - 1);
+                            strncat(mcf, "}", sizeof(mcf) - strlen(mcf) - 1);
+                            result_set_field(rs, row, 6, mcv);
+                            result_set_field(rs, row, 7, mcf);
+                            mcv_set = 1;
+                        } else if (h.histogram_type == 'E') {
+                            /* Equi-depth → histogram_bounds */
+                            char hb[4096] = "{";
+                            for (int i = 0; i < h.num_buckets; i++) {
+                                if (i) strncat(hb, ",",
+                                              sizeof(hb) - strlen(hb) - 1);
+                                strncat(hb, h.bucket_bounds[i],
+                                        sizeof(hb) - strlen(hb) - 2);
+                            }
+                            strncat(hb, "}", sizeof(hb) - strlen(hb) - 1);
+                            result_set_field(rs, row, 8, hb);
+                            hb_set = 1;
+                        }
+                    }
+                    if (!mcv_set) { result_set_null(rs, row, 6);
+                                    result_set_null(rs, row, 7); }
+                    if (!hb_set)  { result_set_null(rs, row, 8); }
+                    total++;
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag),
+                 "SELECT %d", total);
+        return 1;
+    }
+
+    /* pg_stat_user_tables — row per user table with activity counters. */
+    if (stristr_found(sql, "pg_stat_user_tables") ||
+        stristr_found(sql, "pg_stat_all_tables")) {
+        result_add_column(rs, "relid",              PG_OID_INT4);
+        result_add_column(rs, "schemaname",         PG_OID_TEXT);
+        result_add_column(rs, "relname",            PG_OID_TEXT);
+        result_add_column(rs, "n_live_tup",         PG_OID_INT8);
+        result_add_column(rs, "n_dead_tup",         PG_OID_INT8);
+        result_add_column(rs, "n_mod_since_analyze",PG_OID_INT8);
+        result_add_column(rs, "last_analyze",       PG_OID_TEXT);
+        result_add_column(rs, "last_autoanalyze",   PG_OID_TEXT);
+
+        char filter_table[128] = "";
+        EXTRACT_EQ_FILTER("relname",  filter_table, sizeof(filter_table));
+        if (!filter_table[0])
+            EXTRACT_EQ_FILTER("tablename", filter_table, sizeof(filter_table));
+
+        DatabaseDesc dbDesc; SchemaDesc schDesc;
+        int total = 0;
+        if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
+            cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
+            TableDesc tables[256];
+            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            for (int t = 0; t < nt; t++) {
+                if (tables[t].is_temporary) continue;
+                if (filter_table[0] &&
+                    strcasecmp(tables[t].table_name, filter_table) != 0)
+                    continue;
+
+                TableStatsDesc ts;
+                int has_ts = (cat_get_table_stats(tables[t].table_id, &ts) == 0);
+
+                int row = result_add_row(rs);
+                char b[64];
+                snprintf(b, sizeof(b), "%u", tables[t].table_id);
+                result_set_field(rs, row, 0, b);
+                result_set_field(rs, row, 1, db_get_current_schema());
+                result_set_field(rs, row, 2, tables[t].table_name);
+
+                if (has_ts) {
+                    snprintf(b, sizeof(b), "%lu",
+                             (unsigned long)ts.row_count);
+                    result_set_field(rs, row, 3, b);
+                    snprintf(b, sizeof(b), "%lu",
+                             (unsigned long)ts.dead_tuple_count);
+                    result_set_field(rs, row, 4, b);
+                    snprintf(b, sizeof(b), "%lu",
+                             (unsigned long)ts.dml_since_analyze);
+                    result_set_field(rs, row, 5, b);
+                    if (ts.last_analyzed > 0) {
+                        struct tm tmv;
+                        gmtime_r(&ts.last_analyzed, &tmv);
+                        char tsbuf[32];
+                        strftime(tsbuf, sizeof(tsbuf),
+                                 "%Y-%m-%d %H:%M:%S+00", &tmv);
+                        result_set_field(rs, row, 6, tsbuf);
+                    } else {
+                        result_set_null(rs, row, 6);
+                    }
+                } else {
+                    result_set_field(rs, row, 3, "0");
+                    result_set_field(rs, row, 4, "0");
+                    result_set_field(rs, row, 5, "0");
+                    result_set_null(rs, row, 6);
+                }
+                /* last_autoanalyze — not tracked separately */
+                result_set_null(rs, row, 7);
+                total++;
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag),
+                 "SELECT %d", total);
+        return 1;
+    }
+
+    /* pg_stat_user_indexes — row per (table, index) with B+ tree stats. */
+    if (stristr_found(sql, "pg_stat_user_indexes") ||
+        stristr_found(sql, "pg_stat_all_indexes")) {
+        result_add_column(rs, "relid",         PG_OID_INT4);
+        result_add_column(rs, "schemaname",    PG_OID_TEXT);
+        result_add_column(rs, "relname",       PG_OID_TEXT);
+        result_add_column(rs, "indexrelname",  PG_OID_TEXT);
+        result_add_column(rs, "idx_scan",      PG_OID_INT8);
+        result_add_column(rs, "idx_tup_read",  PG_OID_INT8);
+        result_add_column(rs, "idx_tup_fetch", PG_OID_INT8);
+        result_add_column(rs, "tree_depth",    PG_OID_INT4);  /* extension */
+        result_add_column(rs, "leaf_pages",    PG_OID_INT8);  /* extension */
+
+        char filter_table[128] = "";
+        char filter_index[128] = "";
+        EXTRACT_EQ_FILTER("relname",      filter_table, sizeof(filter_table));
+        if (!filter_table[0])
+            EXTRACT_EQ_FILTER("tablename", filter_table, sizeof(filter_table));
+        EXTRACT_EQ_FILTER("indexrelname", filter_index, sizeof(filter_index));
+
+        DatabaseDesc dbDesc; SchemaDesc schDesc;
+        int total = 0;
+        if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
+            cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
+            TableDesc tables[256];
+            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            for (int t = 0; t < nt; t++) {
+                if (tables[t].is_temporary) continue;
+                if (filter_table[0] &&
+                    strcasecmp(tables[t].table_name, filter_table) != 0)
+                    continue;
+
+                IndexStatsDesc is[32];
+                int nis = cat_list_index_stats(tables[t].table_id, is,
+                                               32);
+                for (int i = 0; i < nis; i++) {
+                    if (filter_index[0] &&
+                        strcasecmp(is[i].index_name, filter_index) != 0)
+                        continue;
+                    int row = result_add_row(rs);
+                    char b[64];
+                    snprintf(b, sizeof(b), "%u", tables[t].table_id);
+                    result_set_field(rs, row, 0, b);
+                    result_set_field(rs, row, 1, db_get_current_schema());
+                    result_set_field(rs, row, 2, tables[t].table_name);
+                    result_set_field(rs, row, 3, is[i].index_name);
+                    result_set_field(rs, row, 4, "0");  /* idx_scan — not tracked */
+                    snprintf(b, sizeof(b), "%lu",
+                             (unsigned long)is[i].total_entries);
+                    result_set_field(rs, row, 5, b);
+                    result_set_field(rs, row, 6, "0");  /* idx_tup_fetch */
+                    snprintf(b, sizeof(b), "%d", is[i].tree_depth);
+                    result_set_field(rs, row, 7, b);
+                    snprintf(b, sizeof(b), "%u", is[i].leaf_pages);
+                    result_set_field(rs, row, 8, b);
+                    total++;
+                }
+            }
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag),
+                 "SELECT %d", total);
+        return 1;
+    }
+
     /* pg_constraint — DBeaver queries for table constraints */
     if (stristr_found(sql, "pg_constraint")) {
         result_add_column(rs, "oid", PG_OID_INT4);
