@@ -418,6 +418,8 @@ B'[01]+'				{ yylval->strval = strdup(yytext); return STRING; }
 
 
 "->>"					{ return JSON_ARROW_TEXT; }									/* JSON ->> */
+"<->"					{ return VEC_L2_OP; }										/* pgvector L2 distance */
+"<#>"					{ return VEC_INNER_OP; }									/* pgvector negative inner product */
 "->"					{ return JSON_ARROW; }										/* JSON -> */
 [-+&~|^/%*(),.;!]		{ return yytext[0]; }										/* operators */
 "["						{ return yytext[0]; }										/* array subscript / literal */
@@ -456,6 +458,13 @@ EVO_NOTIFY/"("			{ return FEVO_NOTIFY; }
 PG_NOTIFY/"("			{ return FEVO_NOTIFY; }          /* PG compat alias */
 PG_LISTENING_CHANNELS/"("	{ return FPG_LISTENING_CHANNELS; }
 ARRAY_LENGTH/"("		{ return FARRAY_LENGTH; }
+COSINE_DISTANCE/"("		{ return FCOSINE_DIST; }
+L2_DISTANCE/"("			{ return FL2_DIST; }
+INNER_PRODUCT/"("		{ return FINNER_PRODUCT; }
+L1_DISTANCE/"("			{ return FL1_DIST; }
+VECTOR_DIM/"("			{ return FVECTOR_DIM; }
+VECTOR_NORM/"("			{ return FVECTOR_NORM; }
+VECTOR_NORMALIZE/"("	{ return FVECTOR_NORMALIZE; }
 UNNEST/"("				{ return FUNNEST; }
 EVO_SLEEP/"("			{ return FEVO_SLEEP; }
 EVO_JITTER/"("			{ return FEVO_JITTER; }
