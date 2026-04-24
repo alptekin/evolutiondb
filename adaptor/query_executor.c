@@ -229,6 +229,7 @@ int type_encoding_to_pg_oid(int typeEncoding)
         default: return PG_OID_TEXT;
         }
     }
+    case 26: return PG_OID_VECTOR;  /* VECTOR(N) — Task 200 / Feature #200 */
     default: return PG_OID_TEXT;    /* BLOB, TEXT, ENUM, SET, etc. */
     }
 }
@@ -801,6 +802,27 @@ static void populate_result_row(ResultSet *rs, int row,
                 logical++;
             }
             pos += slen;
+            break;
+        }
+        case 26: {
+            /* VECTOR(N) — N × 4 bytes float4 LE, no length prefix.
+             * Render as "[f1,f2,...]" into a scratch buffer sized for the
+             * worst case (~16 chars per element for %g output). */
+            int dim = cols[phys].type_code % 10000;
+            if (dim <= 0 || dim > VECTOR_MAX_DIM) return;
+            if (pos + dim * 4 > body_len) return;
+            if (!is_dropped) {
+                /* 24 bytes / element is ample for %g + comma */
+                int scratch_cap = dim * 24 + 16;
+                char *scratch = (char *)malloc((size_t)scratch_cap);
+                if (!scratch) { pos += dim * 4; logical++; break; }
+                int w = vec_format_text(body + pos, dim, scratch, scratch_cap);
+                if (w < 0) strcpy(scratch, "[]");
+                result_set_field(rs, row, logical, scratch);
+                free(scratch);
+                logical++;
+            }
+            pos += dim * 4;
             break;
         }
         default: {
