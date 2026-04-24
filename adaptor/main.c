@@ -115,9 +115,8 @@ int main(int argc, char *argv[])
             replica_target = repl_target_buf;
         }
 
-        /* Pre-register auth flag. Enforced in handshake in Commit 4. */
+        /* Pre-register auth creds — handshake validates them. */
         if (env_repl_user && env_repl_pass) {
-            extern void repl_set_auth(const char *, const char *);
             repl_set_auth(env_repl_user, env_repl_pass);
         }
 
@@ -126,7 +125,6 @@ int main(int argc, char *argv[])
         if (env_repl_tls && (env_repl_tls[0] == '1' || env_repl_tls[0] == 't' ||
                              env_repl_tls[0] == 'T' || env_repl_tls[0] == 'y' ||
                              env_repl_tls[0] == 'Y')) {
-            extern void repl_enable_tls(int);
             repl_enable_tls(1);
         }
     }
@@ -160,8 +158,6 @@ int main(int argc, char *argv[])
     /* Resolve role string to numeric (pins SHOW REPLICATION STATUS output
      * before any replica connects). */
     if (role_str) {
-        extern void repl_set_role(int role);
-        extern void repl_set_witness(int enabled);
         if (strcasecmp(role_str, "replica") == 0) {
             repl_set_role(REPL_ROLE_REPLICA);
         } else if (strcasecmp(role_str, "witness") == 0) {
@@ -198,7 +194,6 @@ int main(int argc, char *argv[])
      * without binding listener sockets. Scripted replica bootstrap
      * uses this to clone a fresh data directory from primary. */
     if (base_backup_path) {
-        extern int repl_create_backup(const char *);
         int rc = repl_create_backup(base_backup_path);
         server_cleanup();
         return rc == 0 ? 0 : 1;
@@ -248,7 +243,6 @@ int main(int argc, char *argv[])
 
     /* Start replication sender if configured */
     if (repl_port > 0) {
-        extern int repl_start_sender(int);
         repl_start_sender(repl_port);
     }
 
@@ -268,8 +262,7 @@ int main(int argc, char *argv[])
         } else {
             strncpy(host, replica_target, 255);
         }
-        extern int repl_start_receiver(const char *, int, int);
-        extern int pgm_get_fd(void);
+        extern int pgm_get_fd(void);   /* engine-internal, no public header */
         repl_start_receiver(host, rport, pgm_get_fd());
     }
 

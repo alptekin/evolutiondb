@@ -13,6 +13,7 @@
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/mvcc.h"
 #include "../evolution/db/buffer_pool.h"
+#include "../evolution/db/wal.h"   /* wal_get_current_lsn */
 #include "xa_transaction.h"
 #include "server.h"       /* session_register/list/cancel */
 #include "replication.h"  /* ReplicationStatus, repl_get_status */
@@ -781,7 +782,6 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
     if (stristr_found(sql, "replication") &&
         stristr_found(sql, "status") &&
         !stristr_found(sql, "cluster")) {
-        extern int repl_get_status(ReplicationStatus *out);
         ReplicationStatus st;
         memset(&st, 0, sizeof(st));
         repl_get_status(&st);
@@ -836,7 +836,6 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* ── SHOW REPLICATION LAG ── compact lag-per-slot view ── */
     if (stristr_found(sql, "replication") && stristr_found(sql, "lag")) {
-        extern int repl_get_status(ReplicationStatus *out);
         ReplicationStatus st;
         memset(&st, 0, sizeof(st));
         repl_get_status(&st);
@@ -1399,7 +1398,6 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                      * Gated by EVOSQL_SYNC_COMMIT=1. Silently degrades
                      * to async commit on timeout (logged). */
                     if (repl_sync_commit_enabled()) {
-                        extern uint32_t wal_get_current_lsn(void);
                         uint32_t target_lsn = wal_get_current_lsn();
                         if (target_lsn > 0 &&
                             repl_sync_commit(target_lsn,
