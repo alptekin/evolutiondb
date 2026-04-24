@@ -1976,7 +1976,7 @@
 
 ## Day 50–54 — ANALYZE & Query Planner Enhancements
 
-### Task 99: ⬜ Histograms — Equi-Depth & Frequency (Feature #101)
+### Task 99: ✅ Histograms — Equi-Depth & Frequency (Feature #101)
 
 **Goal:** Build histogram support for column statistics. Equi-depth histograms for high-NDV columns, frequency histograms for low-NDV columns. MySQL 8.0 + PostgreSQL model: `ANALYZE TABLE t UPDATE HISTOGRAM ON col WITH n BUCKETS`.
 
