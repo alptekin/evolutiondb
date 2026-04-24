@@ -187,7 +187,7 @@ int repl_create_backup(const char *backup_path);
  * accept DML). Called after Raft election or manual promote. */
 int repl_promote(void);
 
-/* Task 97 Commit 5: Raft ↔ Replication glue.
+/* Raft ↔ Replication glue.
  * repl_install_raft_glue registers repl_on_raft_role_change with
  * raft_set_role_callback so Raft leader elections automatically flip
  * this node's replication role.

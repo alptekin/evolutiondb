@@ -7857,7 +7857,7 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     result_init(rs);
 
-    /* Witness gate (Task 97 Commit 7): a witness node participates in
+    /* Witness gate: a witness node participates in
      * Raft voting but does not store data. Reject ALL queries (even
      * SELECT 1) with SQLSTATE 08006 "connection_failure" — matches
      * PostgreSQL's convention for "this node cannot serve right now".

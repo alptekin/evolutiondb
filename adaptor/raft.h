@@ -118,7 +118,7 @@ int raft_get_num_nodes(void);
 int raft_get_my_node_id(void);
 int raft_get_node_host_port(int node_id, char *host, int host_size, int *port);
 
-/* Task 97 Commit 5: role transition callback — fires when g_role
+/* Role-transition callback — fires when g_role
  * changes. Callback runs under g_raft_lock so it MUST NOT acquire any
  * raft_* getter (pure side-effect like repl_start_sender / repl_start_receiver
  * is fine). */

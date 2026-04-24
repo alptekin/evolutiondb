@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include "replication.h"
+#include "raft.h"                              /* RAFT_LEADER/_FOLLOWER/_CANDIDATE */
 #include "tls.h"
 #include "../evolution/db/wal.h"
 #include "../evolution/db/page_mgr.h"
@@ -39,10 +40,15 @@ static int g_repl_role = REPL_ROLE_PRIMARY;
 static int g_repl_tls_enabled = 0;
 
 /* Replication auth credentials set via repl_set_auth / EVOSQL_REPLICATION_USER.
- * When g_repl_auth_user[0] is non-empty, the sender requires an AUTH line
- * and validates via cat_find_user + crypto_verify_password. */
+ * When configured, the sender requires an AUTH line and validates via
+ * cat_find_user + crypto_verify_password. */
 static char g_repl_auth_user[128] = "";
 static char g_repl_auth_pass[128] = "";
+
+static inline int repl_auth_configured(void)
+{
+    return g_repl_auth_user[0] != '\0';
+}
 
 /* ================================================================
  *  Shared state
@@ -133,11 +139,11 @@ static void *sender_handle_replica(void *arg)
     if (strncmp(buf, "REPLICATE ", 10) == 0)
         start_lsn = (uint32_t)atoi(buf + 10);
 
-    /* Auth handshake (Task 97 Commit 4):
+    /* Auth handshake:
      * When auth is configured on the master, the replica must follow
      * REPLICATE with "AUTH <user> <password>\n". We validate the password
      * via crypto_verify_password (PBKDF2-SHA256) against the catalog. */
-    if (g_repl_auth_user[0]) {
+    if (repl_auth_configured()) {
         char authbuf[512];
         int an = conn_recv_line(&c, authbuf, sizeof(authbuf));
         if (an <= 0 || strncmp(authbuf, "AUTH ", 5) != 0) {
@@ -446,10 +452,10 @@ typedef struct {
 
 static void *receiver_loop(void *arg)
 {
+    /* ra is stack-allocated by reconnect_loop — do NOT free. */
     ReceiverArg *ra = (ReceiverArg *)arg;
     conn_t *c = ra->c;
     int data_fd = ra->data_fd;
-    free(ra);
 
     fprintf(stderr, "[REPL] WAL receiver started (last_lsn=%u, tls=%d)\n",
             g_last_received_lsn, c->is_tls);
@@ -610,10 +616,10 @@ static void *reconnect_loop(void *arg)
         }
 
         /* If the replica was configured with credentials, send AUTH.
-         * Master-side auth block demands this when g_repl_auth_user is set
-         * there; sending unsolicited AUTH to a non-auth master is harmless
-         * (master just ignores extra bytes). */
-        if (g_repl_auth_user[0]) {
+         * Master demands this when its own auth is configured; sending
+         * unsolicited AUTH to a non-auth master is harmless (master
+         * just ignores extra bytes). */
+        if (repl_auth_configured()) {
             char authline[384];
             int alen = snprintf(authline, sizeof(authline), "AUTH %s %s\n",
                                 g_repl_auth_user, g_repl_auth_pass);
@@ -637,17 +643,11 @@ static void *reconnect_loop(void *arg)
             }
         }
 
-        /* Run receiver loop (blocks until disconnect) */
-        ReceiverArg *ra = malloc(sizeof(ReceiverArg));
-        if (!ra) {
-            conn_tls_shutdown(&c);
-            close(sock);
-            sleep(1);
-            continue;
-        }
-        ra->c = &c;
-        ra->data_fd = g_data_fd_saved;
-        receiver_loop(ra);  /* blocks until connection drops */
+        /* Run receiver loop (blocks until disconnect). receiver_loop is
+         * called synchronously — ra can live on reconnect_loop's stack
+         * for the duration. */
+        ReceiverArg ra = { .c = &c, .data_fd = g_data_fd_saved };
+        receiver_loop(&ra);
 
         if (g_repl_running)
             fprintf(stderr, "[REPL] Connection lost — reconnecting...\n");
@@ -956,12 +956,15 @@ int repl_sync_commit(uint32_t lsn, int timeout_ms)
 
 int repl_sync_commit_enabled(void)
 {
-    /* Re-read per call so operators can toggle via docker restart. The
-     * overhead is one getenv — negligible compared to fsync on commit. */
+    /* Cached at first call — env var read is only meaningful at boot
+     * (docker restart re-reads the container env). Avoids per-COMMIT
+     * getenv (linear scan of `environ`) on the hot path. */
+    static int cached = -1;
+    if (cached >= 0) return cached;
     const char *v = getenv("EVOSQL_SYNC_COMMIT");
-    if (!v || !v[0]) return 0;
-    return (v[0] == '1' || v[0] == 't' || v[0] == 'T' ||
-            v[0] == 'y' || v[0] == 'Y');
+    cached = (v && (v[0] == '1' || v[0] == 't' || v[0] == 'T' ||
+                    v[0] == 'y' || v[0] == 'Y')) ? 1 : 0;
+    return cached;
 }
 
 /* ================================================================
@@ -1008,7 +1011,7 @@ int repl_get_status(ReplicationStatus *out)
 }
 
 /* ================================================================
- *  GAP-D9: Base Backup (Task 97 Commit 7)
+ *  GAP-D9: Base Backup
  *
  *  Produces a directory bundle at `backup_path`:
  *    <backup_path>/evosql.db      -- full data file, consistent at
@@ -1153,7 +1156,7 @@ int repl_promote(void)
 }
 
 /* ================================================================
- *  Task 97 Commit 5: Raft ↔ Replication glue
+ *  Raft ↔ Replication glue
  *
  *  Registered as raft_set_role_callback; fires under g_raft_lock so
  *  this function MUST NOT acquire any raft_* API. Reads are cheap
@@ -1170,32 +1173,27 @@ static void repl_on_raft_role_change(int new_role, int leader_id)
 {
     (void)leader_id;
     switch (new_role) {
-    case 2: /* RAFT_LEADER */
+    case RAFT_LEADER:
         fprintf(stderr, "[REPL↔RAFT] Raft elected us LEADER — promoting\n");
-        /* If we were a replica, flip to primary and start accepting DML. */
         if (g_is_replica) {
             g_is_replica = 0;
             g_repl_running = 0;   /* stops any in-flight receiver loop */
         }
         g_repl_role = REPL_ROLE_PRIMARY;
-        /* Start the WAL sender on the configured replication port so
-         * followers can stream from us. Idempotent — no-op if already
-         * running. */
+        /* Start the WAL sender on the configured replication port.
+         * Idempotent — no-op if already running. */
         if (g_repl_port_for_raft > 0 && g_sender_sock < 0) {
             extern int repl_start_sender(int);
             repl_start_sender(g_repl_port_for_raft);
         }
         break;
-    case 0: /* RAFT_FOLLOWER */
+    case RAFT_FOLLOWER:
         fprintf(stderr, "[REPL↔RAFT] Raft moved us to FOLLOWER\n");
         g_repl_role = REPL_ROLE_REPLICA;
-        /* The receiver will be started separately by whoever knows the
-         * leader's host:port (e.g. main.c --replica or a Raft
-         * AppendEntries advert carrying host:port). Commit 5 wires the
-         * role flip; dynamic receiver redirect lands alongside Raft
-         * leader advert in a follow-up. */
+        /* Receiver redirect to the new leader's host:port lands in
+         * Task 168 (dynamic leader advert via AppendEntries). */
         break;
-    case 1: /* RAFT_CANDIDATE */
+    case RAFT_CANDIDATE:
     default:
         break;
     }

@@ -194,7 +194,7 @@ int main(int argc, char *argv[])
     /* Initialise engine, locks, socket subsystem */
     server_init_ex(buffer_pool_pages);
 
-    /* Base-backup mode (Task 97 Commit 7): run the copy and exit
+    /* --base-backup mode: run the copy and exit
      * without binding listener sockets. Scripted replica bootstrap
      * uses this to clone a fresh data directory from primary. */
     if (base_backup_path) {
@@ -276,7 +276,7 @@ int main(int argc, char *argv[])
     /* Start Raft consensus if cluster configured */
     if (cluster_nodes && node_id >= 0) {
         if (raft_init(cluster_nodes, node_id) == 0) {
-            /* Task 97 Commit 5: wire Raft role transitions into the
+            /* Wire Raft role transitions into the
              * replication module before starting — so the first
              * election already flips primary/replica automatically. */
             repl_bind_raft_glue(repl_port > 0 ? repl_port : REPL_DEFAULT_PORT);

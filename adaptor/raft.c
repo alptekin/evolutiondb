@@ -19,7 +19,7 @@
 #include <fcntl.h>
 #include "raft.h"
 
-/* Persistence constants — Task 97 Commit 6. See raft_save_state below. */
+/* Persistence constants — see raft_save_state below. */
 #define RAFT_STATE_MAGIC   0x54464152   /* "RAFT" in LE */
 #define RAFT_STATE_PATH    "root/raft.state"
 #define RAFT_SNAPSHOT_PATH "root/raft.snapshot"
@@ -44,7 +44,7 @@ static pthread_t    g_heartbeat_thread;
 static pthread_t    g_listener_thread;
 static pthread_mutex_t g_raft_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Role-transition callback (Task 97 Commit 5). Invoked whenever g_role
+/* Role-transition callback. Invoked whenever g_role
  * changes so the replication module can flip primary/replica without
  * polling. Callback MUST NOT acquire g_raft_lock or call back into
  * raft_* state mutators — it's invoked synchronously while the lock is
@@ -70,7 +70,7 @@ void raft_set_role_callback(void (*cb)(int new_role, int leader_id))
 }
 
 /* ================================================================
- *  Persistence (Task 97 Commit 6)
+ *  Persistence
  *
  *  root/raft.state layout (12 bytes, little-endian):
  *    [magic:4B=0x52414654 "RAFT"][current_term:4B][voted_for:4B]

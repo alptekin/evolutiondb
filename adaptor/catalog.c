@@ -1393,7 +1393,7 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                         extern int pgm_get_fd(void);
                         bp_wal_flush_dirty(pgm_get_fd());
                     }
-                    /* Synchronous commit (Task 97 Commit 2): wait for
+                    /* Synchronous commit: wait for
                      * replica majority to confirm this transaction's WAL
                      * LSN before acknowledging COMMIT to the client.
                      * Gated by EVOSQL_SYNC_COMMIT=1. Silently degrades
