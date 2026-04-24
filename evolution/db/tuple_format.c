@@ -17,6 +17,75 @@ static inline int type_family(int type_code)
 }
 
 /* ----------------------------------------------------------------
+ *  VECTOR codec (Task 200 — Feature #200)
+ *
+ *  Text form:  [f1,f2,...] or {f1,f2,...} (brace variant tolerated)
+ *  Binary:     dim × 4 bytes float4 LE, dimension carried by type_code
+ * ---------------------------------------------------------------- */
+int vec_parse_text(const char *text, int expected_dim,
+                   char *out, int out_size)
+{
+    if (!text || expected_dim <= 0 || expected_dim > VECTOR_MAX_DIM) return -1;
+    if (out_size < expected_dim * 4) return -1;
+
+    const char *p = text;
+    while (*p && isspace((unsigned char)*p)) p++;
+    char open = *p;
+    if (open != '[' && open != '{') return -1;
+    char close = (open == '[') ? ']' : '}';
+    p++;
+
+    int count = 0;
+    while (*p) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == close) break;
+
+        char *endp = NULL;
+        double d = strtod(p, &endp);
+        if (endp == p) return -1;             /* no digits consumed */
+        /* Reject NaN / Inf — embedding vectors must be finite */
+        if (!(d == d) || d > 1e38 || d < -1e38) return -1;
+
+        if (count >= expected_dim) return -1;  /* too many elements */
+        float fv = (float)d;
+        memcpy(out + count * 4, &fv, 4);
+        count++;
+
+        p = endp;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p == ',') { p++; continue; }
+        if (*p == close) break;
+        return -1;                             /* unexpected char */
+    }
+    if (*p != close) return -1;
+    if (count != expected_dim) return -1;       /* dim mismatch */
+    return 0;
+}
+
+int vec_format_text(const char *payload, int dim,
+                    char *out_buf, int out_size)
+{
+    if (!payload || dim <= 0 || out_size < 3) return -1;
+    int pos = 0;
+    out_buf[pos++] = '[';
+    for (int i = 0; i < dim; i++) {
+        if (i > 0) {
+            if (pos + 1 >= out_size) { out_buf[out_size - 1] = '\0'; return -1; }
+            out_buf[pos++] = ',';
+        }
+        float fv;
+        memcpy(&fv, payload + i * 4, 4);
+        int w = snprintf(out_buf + pos, out_size - pos, "%g", (double)fv);
+        if (w < 0 || pos + w >= out_size) { out_buf[out_size - 1] = '\0'; return -1; }
+        pos += w;
+    }
+    if (pos + 2 > out_size) { out_buf[out_size - 1] = '\0'; return -1; }
+    out_buf[pos++] = ']';
+    out_buf[pos] = '\0';
+    return pos + 1;
+}
+
+/* ----------------------------------------------------------------
  *  UUID helpers: hex string ↔ 16-byte binary
  * ---------------------------------------------------------------- */
 
@@ -266,6 +335,17 @@ int tup_build(const char **vals, const int *is_null, int nvals,
             pos += bl;
             break;
         }
+        case 26: {
+            /* VECTOR(N) → N × 4 bytes float4 LE, no length prefix
+             * (dimension carried by type_code). */
+            int dim = cols[i].type_code % 10000;
+            if (dim <= 0 || dim > VECTOR_MAX_DIM) return -1;
+            if (pos + dim * 4 > buf_size) return -1;
+            if (vec_parse_text(v, dim, out + pos, buf_size - pos) < 0)
+                return -1;
+            pos += dim * 4;
+            break;
+        }
         default: {
             /* String types (DATE/TIME/DECIMAL/CHAR/VARCHAR/TEXT/...) → len-prefixed */
             uint16_t slen = (uint16_t)strlen(v);
@@ -400,6 +480,25 @@ int tup_extract_fields(const char *bin_rec, int bin_len,
                 strcpy(fields[i], "{}");
             }
             pos += slen;
+            break;
+        }
+        case 26: {
+            /* VECTOR(N) → read N × 4 bytes float4, format as "[f1,f2,...]".
+             * When the formatted text overflows 256 bytes (large N), fall
+             * back to a truncated rendering ending in "…]" so callers can
+             * still detect vector output. */
+            int dim = cols[i].type_code % 10000;
+            if (dim <= 0 || dim > VECTOR_MAX_DIM) return -1;
+            if (pos + dim * 4 > body_len) return -1;
+            int w = vec_format_text(body + pos, dim, fields[i], 256);
+            if (w < 0) {
+                /* Truncation marker */
+                int n = (int)strlen(fields[i]);
+                if (n > 252) n = 252;
+                memcpy(fields[i] + n, "...]", 4);
+                fields[i][n + 4] = '\0';
+            }
+            pos += dim * 4;
             break;
         }
         default: {

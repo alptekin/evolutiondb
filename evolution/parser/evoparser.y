@@ -367,6 +367,7 @@
 %token VARCHAR
 %token VALUES
 %token VARBINARY
+%token VECTOR
 
 %token WHERE
 %token WHEN
@@ -2794,6 +2795,7 @@ BIT opt_length									{ $$ = 10000 + $2; }
 | BOOLEAN                                                                        { $$ = 220001; }
 | UUID                                                                           { $$ = 180036; }
 | JSON                                                                           { $$ = 230000; }
+| VECTOR '(' INTNUM ')'                                                          { $$ = 260000 + $3; }
 | data_type '[' ']'                                                              { $$ = 250000 + ($1 / 10000); }
 ;
 
