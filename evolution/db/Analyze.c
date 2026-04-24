@@ -246,19 +246,43 @@ typedef struct {
     int  num_buckets;                           /* 0 = use HIST_DEFAULT_BUCKETS */
     int  num_cols;
     char cols[CAT_MAX_COLUMNS][CAT_MAX_NAME_LEN];
+
+    /* Task 102: sampling — set by parser via WITH SAMPLE clause.
+     *   sample_pct > 0  → sample that percentage (1..100)
+     *   sample_rows > 0 → target row count (converted to pct at run)
+     *   both zero       → default auto: full scan for <10k row tables,
+     *                      10% sample otherwise (requires prior stats to
+     *                      know the table size; falls back to full). */
+    int  sample_pct;
+    int  sample_rows;
 } AnalyzeHistReq;
 
-AnalyzeHistReq g_analyze_hist = {0, 0, 0, {{0}}};
+AnalyzeHistReq g_analyze_hist;
 
 void ResetAnalyzeHist(void)
 {
     g_analyze_hist.mode = 0;
     g_analyze_hist.num_buckets = 0;
     g_analyze_hist.num_cols = 0;
+    g_analyze_hist.sample_pct = 0;
+    g_analyze_hist.sample_rows = 0;
 }
 
 void SetAnalyzeHistMode(int mode)         { g_analyze_hist.mode = mode; }
 void SetAnalyzeHistBuckets(int buckets)   { g_analyze_hist.num_buckets = buckets; }
+void SetAnalyzeSamplePct(int pct)
+{
+    if (pct < 1)   pct = 1;
+    if (pct > 100) pct = 100;
+    g_analyze_hist.sample_pct = pct;
+    g_analyze_hist.sample_rows = 0;
+}
+void SetAnalyzeSampleRows(int rows)
+{
+    if (rows < 1) rows = 1;
+    g_analyze_hist.sample_rows = rows;
+    g_analyze_hist.sample_pct = 0;
+}
 void AddAnalyzeHistCol(const char *name)
 {
     if (g_analyze_hist.num_cols >= CAT_MAX_COLUMNS) return;
@@ -332,13 +356,48 @@ int AnalyzeTableProcess(void)
     for (int i = 0; i < ncols; i++)
         dset_init(&dsets[i]);
 
+    /* Task 102: resolve sampling plan for this ANALYZE.
+     * sample_pct  explicit → use it.
+     * sample_rows explicit → convert to pct via prior row_count (or
+     *                        full scan if unknown).
+     * auto-default          → full scan for small tables (<10k rows),
+     *                         10% sample otherwise.
+     * keep_prob stays in [1..100] (percentage of rows kept). */
+    int keep_pct = 100;
+    if (g_analyze_hist.sample_pct > 0) {
+        keep_pct = g_analyze_hist.sample_pct;
+    } else if (g_analyze_hist.sample_rows > 0) {
+        TableStatsDesc prev;
+        if (cat_get_table_stats(td.table_id, &prev) == 0 &&
+            prev.row_count > (uint64_t)g_analyze_hist.sample_rows) {
+            /* Aim for ~sample_rows keeps — ceiling pct. */
+            double p = (double)g_analyze_hist.sample_rows * 100.0 /
+                       (double)prev.row_count;
+            if (p < 1.0) p = 1.0;
+            if (p > 100.0) p = 100.0;
+            keep_pct = (int)p;
+        }
+    } else {
+        TableStatsDesc prev;
+        if (cat_get_table_stats(td.table_id, &prev) == 0 &&
+            prev.row_count > 10000) {
+            keep_pct = 10;
+        }
+    }
+
+    /* Seed rand once per ANALYZE so consecutive calls don't correlate. */
+    srand((unsigned)time(NULL) ^ (unsigned)td.table_id);
+
     /* Scan all rows.
      *
      * Records are binary tuples ([0xE7][table_id][header][bitmap][data]).
-     * The old semicolon-based parser returned garbage for every non-trivial
-     * column, so histogram/ndv/min/max were silently broken. Decode via
-     * tup_extract_fields for the correct per-column strings. */
-    uint64_t row_count = 0;
+     * When sampling, every row still increments scanned_rows (for
+     * bookkeeping on min/max), but only Bernoulli-selected rows
+     * contribute to dsets / null / width / row_count — the totals we
+     * scale up at the end. min/max always track the full scan because
+     * their accuracy is free and sampling would blunt them. */
+    uint64_t row_count = 0;        /* sampled rows */
+    uint64_t scanned_rows = 0;     /* every row visited */
     TableScanCursor cursor;
     if (tapi_scan_begin(&td, &cursor) == 0) {
         char pk_key[1024], record[RECORD_BUF_SIZE];
@@ -346,7 +405,7 @@ int AnalyzeTableProcess(void)
         int  is_null[CAT_MAX_COLUMNS];
 
         while (tapi_scan_next(&cursor, pk_key, record, sizeof(record)) == 0) {
-            row_count++;
+            scanned_rows++;
             int rec_len = tup_record_len(record, (int)sizeof(record));
             if (rec_len <= 0) rec_len = (int)sizeof(record);
 
@@ -354,8 +413,30 @@ int AnalyzeTableProcess(void)
                                            values, is_null, CAT_MAX_COLUMNS);
             if (nvals < 0) nvals = 0;
 
+            /* Bernoulli filter: keep with probability keep_pct / 100.
+             * min/max update regardless — their accuracy is free.*/
+            int sampled = (keep_pct >= 100) ? 1 :
+                           ((rand() % 100) < keep_pct);
+
             for (int c = 0; c < ncols && c < nvals; c++) {
                 int vlen = (int)strlen(values[c]);
+
+                /* min/max always update (see comment above) */
+                if (!is_null[c] && vlen > 0) {
+                    if (!min_set[c]) {
+                        strncpy(min_vals[c], values[c], 255);
+                        strncpy(max_vals[c], values[c], 255);
+                        min_set[c] = 1;
+                    } else {
+                        if (strcmp(values[c], min_vals[c]) < 0)
+                            strncpy(min_vals[c], values[c], 255);
+                        if (strcmp(values[c], max_vals[c]) > 0)
+                            strncpy(max_vals[c], values[c], 255);
+                    }
+                }
+
+                if (!sampled) continue;
+
                 width_sums[c] += (uint64_t)vlen;
 
                 if (is_null[c] || vlen == 0) {
@@ -364,30 +445,30 @@ int AnalyzeTableProcess(void)
                 }
 
                 dset_add(&dsets[c], values[c]);
-
-                /* Track min/max */
-                if (!min_set[c]) {
-                    strncpy(min_vals[c], values[c], 255);
-                    strncpy(max_vals[c], values[c], 255);
-                    min_set[c] = 1;
-                } else {
-                    if (strcmp(values[c], min_vals[c]) < 0)
-                        strncpy(min_vals[c], values[c], 255);
-                    if (strcmp(values[c], max_vals[c]) > 0)
-                        strncpy(max_vals[c], values[c], 255);
-                }
             }
+            if (sampled) row_count++;
         }
     }
 
     /* Count heap pages */
     int page_count = count_heap_pages(&td);
 
+    /* Task 102: scale sampled counters back to full-population estimates.
+     * row_count (sampled) × (scanned / sampled) ≈ total, but we already
+     * know the full scanned_rows without cost, so use it directly. The
+     * scale factor applies to null_count / width_sums so the derived
+     * frequencies stay accurate. Distinct count stays at sampled value
+     * since linear scaling on low-NDV columns would overestimate — for
+     * high-NDV the sample already caps at DISTINCT_CAP anyway. */
+    uint64_t total_row_count = scanned_rows;
+    double scale = (row_count > 0)
+                   ? (double)scanned_rows / (double)row_count : 1.0;
+
     /* Store table-level stats */
     TableStatsDesc ts;
     memset(&ts, 0, sizeof(ts));
     ts.table_id = td.table_id;
-    ts.row_count = row_count;
+    ts.row_count = total_row_count;
     ts.page_count = (uint32_t)page_count;
     ts.last_analyzed = time(NULL);
     cat_store_table_stats(&ts);
@@ -408,7 +489,7 @@ int AnalyzeTableProcess(void)
             memset(&cs, 0, sizeof(cs));
             cs.table_id = td.table_id;
             strncpy(cs.col_name, cols[c].col_name, CAT_MAX_NAME_LEN - 1);
-            cs.null_count = null_counts[c];
+            cs.null_count = (uint64_t)((double)null_counts[c] * scale);
             cs.distinct_count = (uint64_t)dsets[c].count;
             if (min_set[c]) {
                 strncpy(cs.min_value, min_vals[c], 255);
@@ -423,6 +504,15 @@ int AnalyzeTableProcess(void)
             HistogramDesc hist;
             if (build_auto_histogram(&dsets[c], td.table_id,
                                      cols[c].col_name, buckets, &hist) == 0) {
+                /* Scale bucket counts to population estimates so
+                 * histogram-backed selectivity matches the reported
+                 * row_count. */
+                if (scale > 1.0) {
+                    for (int b = 0; b < hist.num_buckets; b++)
+                        hist.bucket_counts[b] =
+                            (uint64_t)((double)hist.bucket_counts[b] * scale);
+                    hist.total_rows = (uint64_t)((double)hist.total_rows * scale);
+                }
                 cat_store_histogram(&hist);
             }
         }
@@ -463,8 +553,14 @@ int AnalyzeTableProcess(void)
 
     ResetAnalyzeHist();
 
-    printf("ANALYZE: %lu rows, %d columns, %d pages\n",
-           (unsigned long)row_count, ncols, page_count);
+    if (keep_pct < 100) {
+        printf("ANALYZE: %lu rows sampled from %lu (keep %d%%), %d columns, %d pages\n",
+               (unsigned long)row_count, (unsigned long)scanned_rows,
+               keep_pct, ncols, page_count);
+    } else {
+        printf("ANALYZE: %lu rows, %d columns, %d pages\n",
+               (unsigned long)scanned_rows, ncols, page_count);
+    }
 
     TruncateDrop();
     return 0;
