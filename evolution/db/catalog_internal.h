@@ -473,6 +473,47 @@ int cat_get_index_stats(uint32_t table_id, const char *index_name,
 /* List all index stats for a table. Returns count found. */
 int cat_list_index_stats(uint32_t table_id, IndexStatsDesc *out, int max);
 
+/* ----------------------------------------------------------------
+ *  Histograms — Task 99 (Feature #101)
+ *
+ *  Per-column histograms for query-planner selectivity estimation.
+ *  Stored in CAT_SYS_TABLE_STATS with key "%010u:H:%s" (table_id:H:col)
+ *  so they coexist with table stats (":_"), column stats (plain), and
+ *  index stats (":I:") in the same B+ tree.
+ *
+ *  Two flavors:
+ *    'F' frequency   — NDV ≤ num_buckets: each distinct value + count
+ *    'E' equi-depth  — NDV >  num_buckets: bucket upper bounds +
+ *                      cumulative counts; each bucket has ~total/N rows
+ * ---------------------------------------------------------------- */
+
+#define HIST_MAX_BUCKETS     100
+#define HIST_MAX_BOUND_LEN   32          /* per-bound string cap */
+#define HIST_DEFAULT_BUCKETS 100
+
+typedef struct {
+    uint32_t table_id;
+    char     col_name[CAT_MAX_NAME_LEN];
+    char     histogram_type;             /* 'F' = frequency, 'E' = equi-depth */
+    int      num_buckets;                /* filled buckets, 0..HIST_MAX_BUCKETS */
+    char     bucket_bounds[HIST_MAX_BUCKETS][HIST_MAX_BOUND_LEN];
+    uint64_t bucket_counts[HIST_MAX_BUCKETS];
+    uint64_t total_rows;                 /* total non-NULL rows sampled */
+} HistogramDesc;
+
+/* Upsert a histogram for (table_id, col_name). */
+int cat_store_histogram(const HistogramDesc *hist);
+
+/* Retrieve histogram. Returns 0 on hit, -1 if none. */
+int cat_get_histogram(uint32_t table_id, const char *col_name,
+                      HistogramDesc *out);
+
+/* Drop histogram for (table_id, col_name). Returns 0 on hit, -1 if none. */
+int cat_drop_histogram(uint32_t table_id, const char *col_name);
+
+/* List all histograms for a table. Returns count found. */
+int cat_list_histograms(uint32_t table_id, HistogramDesc *out, int max);
+
 /* Increment DML counter for auto-analyze tracking. */
 int cat_increment_dml_counter(uint32_t table_id);
 

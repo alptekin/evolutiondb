@@ -8694,14 +8694,46 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         TableStatsDesc _ets;
                         if (cat_get_table_stats(_etd.table_id, &_ets) == 0) {
                             uint64_t est = _ets.row_count;
-                            if (hasWhere && est > 0) {
-                                /* For equality on indexed column, estimate selectivity */
-                                ColumnStatsDesc _ecs;
-                                if (whereCol[0] &&
-                                    cat_get_column_stats(_etd.table_id, whereCol, &_ecs) == 0 &&
-                                    _ecs.distinct_count > 0) {
-                                    est = _ets.row_count / _ecs.distinct_count;
-                                    if (est == 0) est = 1;
+                            if (hasWhere && est > 0 && whereCol[0]) {
+                                /* Task 99: prefer histogram-backed selectivity
+                                 * over the naive rows/NDV estimate. */
+                                HistogramDesc _eh;
+                                int used_hist = 0;
+                                if (whereVal[0] &&
+                                    cat_get_histogram(_etd.table_id, whereCol,
+                                                      &_eh) == 0 &&
+                                    _eh.num_buckets > 0) {
+                                    if (_eh.histogram_type == 'F') {
+                                        /* Frequency histogram: lookup exact value */
+                                        uint64_t hit = 0;
+                                        for (int b = 0; b < _eh.num_buckets; b++) {
+                                            if (strcmp(_eh.bucket_bounds[b],
+                                                      whereVal) == 0) {
+                                                hit = _eh.bucket_counts[b];
+                                                break;
+                                            }
+                                        }
+                                        est = hit ? hit : 1;
+                                        used_hist = 1;
+                                    } else if (_eh.histogram_type == 'E') {
+                                        /* Equi-depth: ~total/num_buckets per bucket */
+                                        if (_eh.total_rows > 0) {
+                                            est = _eh.total_rows /
+                                                  (uint64_t)_eh.num_buckets;
+                                            if (est == 0) est = 1;
+                                            used_hist = 1;
+                                        }
+                                    }
+                                }
+                                if (!used_hist) {
+                                    /* Fall back to rows / NDV */
+                                    ColumnStatsDesc _ecs;
+                                    if (cat_get_column_stats(_etd.table_id,
+                                                             whereCol, &_ecs) == 0 &&
+                                        _ecs.distinct_count > 0) {
+                                        est = _ets.row_count / _ecs.distinct_count;
+                                        if (est == 0) est = 1;
+                                    }
                                 }
                             }
                             snprintf(rowEstimate, sizeof(rowEstimate),

@@ -106,6 +106,8 @@
 %token AFTER
 %token ALL
 %token ANALYZE
+%token HISTOGRAM
+%token BUCKETS
 %token ANY
 %token AUTO_INCREMENT
 %token ASC
@@ -1855,19 +1857,66 @@ stmt: analyze_table_stmt
     }
 ;
 
-analyze_table_stmt: ANALYZE TABLE NAME
+analyze_table_stmt:
+    analyze_table_prefix NAME hist_clause_opt
     {
-        emit("ANALYZETABLE %s", $3);
-        GetDropTableName($3);
-        free($3);
+        emit("ANALYZETABLE %s", $2);
+        GetDropTableName($2);
+        free($2);
     }
-  | ANALYZE TABLE NAME '.' NAME
+  | analyze_table_prefix NAME '.' NAME hist_clause_opt
     {
-        emit("ANALYZETABLE %s.%s", $3, $5);
+        emit("ANALYZETABLE %s.%s", $2, $4);
         char full[512];
-        snprintf(full, sizeof(full), "%.255s.%.255s", $3, $5);
+        snprintf(full, sizeof(full), "%.255s.%.255s", $2, $4);
         GetDropTableName(full);
-        free($3); free($5);
+        free($2); free($4);
+    }
+;
+
+/* Shared prefix — resets histogram request state before the clause runs
+ * so neither variant double-counts cols from a prior ANALYZE. */
+analyze_table_prefix:
+    ANALYZE TABLE
+    {
+        ResetAnalyzeHist();
+    }
+;
+
+/* Optional histogram clause (Task 99):
+ *   ANALYZE TABLE t                                         — auto rebuild
+ *   ANALYZE TABLE t UPDATE HISTOGRAM ON col_list            — default buckets
+ *   ANALYZE TABLE t UPDATE HISTOGRAM ON col_list WITH N BUCKETS
+ *   ANALYZE TABLE t DROP HISTOGRAM ON col_list              — remove
+ * Mode 0 is the default when the clause is absent — the mid-rule
+ * action in analyze_table_stmt already called ResetAnalyzeHist. */
+hist_clause_opt:
+    /* empty */
+  | UPDATE HISTOGRAM ON hist_col_list
+    {
+        SetAnalyzeHistMode(1);
+    }
+  | UPDATE HISTOGRAM ON hist_col_list WITH INTNUM BUCKETS
+    {
+        SetAnalyzeHistMode(1);
+        SetAnalyzeHistBuckets($6);
+    }
+  | DROP HISTOGRAM ON hist_col_list
+    {
+        SetAnalyzeHistMode(2);
+    }
+;
+
+hist_col_list:
+    NAME
+    {
+        AddAnalyzeHistCol($1);
+        free($1);
+    }
+  | hist_col_list ',' NAME
+    {
+        AddAnalyzeHistCol($3);
+        free($3);
     }
 ;
 
