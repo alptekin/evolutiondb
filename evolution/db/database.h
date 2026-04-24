@@ -115,6 +115,10 @@ void ResetAnalyzeHist(void);
 void SetAnalyzeHistMode(int mode);       /* 0 auto, 1 UPDATE, 2 DROP */
 void SetAnalyzeHistBuckets(int buckets);
 void AddAnalyzeHistCol(const char *name);
+
+/* Task 102: sampling — WITH SAMPLE n PERCENT | n ROWS clause. */
+void SetAnalyzeSamplePct(int pct);
+void SetAnalyzeSampleRows(int rows);
 int CreateDatabaseProcess(const char *name, int if_not_exists);
 int CreateSchemaProcess(const char *name, int if_not_exists);
 int DropDatabaseProcess(const char *name, int if_exists);

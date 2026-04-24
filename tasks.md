@@ -2033,7 +2033,7 @@
 
 ---
 
-### Task 102: ⬜ Sample-Based ANALYZE (Feature #104)
+### Task 102: ✅ Sample-Based ANALYZE (Feature #104)
 
 **Goal:** `ANALYZE TABLE t WITH SAMPLE n PERCENT` and `ANALYZE TABLE t WITH SAMPLE n ROWS`. Avoid full table scan for large tables. Scale distinct count and null count estimates to total population.
 
