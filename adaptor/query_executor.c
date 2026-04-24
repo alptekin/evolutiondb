@@ -7843,6 +7843,247 @@ cleanup:
     return 1;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ *  Task 100 — Range selectivity estimation
+ *
+ *  estimate_selectivity(table_id, col, op, val, val2, row_count) returns
+ *  the planner's row-count estimate for a single predicate. Strategy:
+ *
+ *    1. If histogram exists for (table_id, col):
+ *       - `=`     : frequency bucket hit → exact count; equi-depth →
+ *                   total_rows / num_buckets.
+ *       - `<`,`<=`: sum bucket_counts for bounds <= V (equi-depth counts
+ *                   are cumulative, so we read the enclosing bucket).
+ *       - `>`,`>=`: row_count − (<=) count.
+ *       - BETWEEN : (<= hi) − (< lo).
+ *       - LIKE p% : [p, p_next) treated as BETWEEN.
+ *    2. No histogram, column stats available: linear min/max interpolation
+ *       using ColumnStatsDesc. Numeric types parsed as double; strings
+ *       compared lexicographically.
+ *    3. Nothing available: return 0 (caller keeps row_count as-is).
+ * ═══════════════════════════════════════════════════════════════════ */
+
+#define WHERE_OP_NONE    0
+#define WHERE_OP_EQ      1
+#define WHERE_OP_LT      2
+#define WHERE_OP_LE      3
+#define WHERE_OP_GT      4
+#define WHERE_OP_GE      5
+#define WHERE_OP_BETWEEN 6
+#define WHERE_OP_LIKE    7
+
+/* Normalise a string value to a double if possible. Returns 1 on success.
+ * Strings that don't parse as numeric fall back to the caller's string
+ * comparison path. */
+static int parse_as_double(const char *s, double *out)
+{
+    if (!s || !s[0]) return 0;
+    char *end;
+    double v = strtod(s, &end);
+    if (end == s) return 0;
+    while (*end && isspace((unsigned char)*end)) end++;
+    if (*end != '\0') return 0;
+    *out = v;
+    return 1;
+}
+
+/* Linear fraction of a range value within [lo, hi]. Clamped to [0, 1].
+ * Returns 0 on malformed inputs. */
+static double interp_fraction(const char *lo_s, const char *hi_s,
+                              const char *v_s)
+{
+    if (!lo_s || !hi_s || !v_s) return 0.5;
+    double lo, hi, v;
+    if (parse_as_double(lo_s, &lo) && parse_as_double(hi_s, &hi) &&
+        parse_as_double(v_s, &v)) {
+        if (hi <= lo) return 0.5;
+        double f = (v - lo) / (hi - lo);
+        if (f < 0) f = 0;
+        if (f > 1) f = 1;
+        return f;
+    }
+    /* String lex fallback: count character distance on first differing
+     * byte. Rough but monotone. */
+    (void)lo_s; (void)hi_s; (void)v_s;
+    return 0.5;
+}
+
+/* Compare bucket bound vs value. Uses numeric compare when both parse,
+ * else lexicographic. Returns <0, 0, >0 like strcmp. */
+static int compare_bound(const char *bound, const char *val)
+{
+    double bd, vd;
+    if (parse_as_double(bound, &bd) && parse_as_double(val, &vd)) {
+        if (bd < vd) return -1;
+        if (bd > vd) return  1;
+        return 0;
+    }
+    return strcmp(bound, val);
+}
+
+/* Rows with col < V.  Strict less-than. */
+static uint64_t estimate_lt(uint32_t table_id, const char *col,
+                            const char *val, uint64_t row_count)
+{
+    HistogramDesc h;
+    if (cat_get_histogram(table_id, col, &h) == 0 && h.num_buckets > 0) {
+        if (h.histogram_type == 'F') {
+            uint64_t sum = 0;
+            for (int b = 0; b < h.num_buckets; b++) {
+                if (compare_bound(h.bucket_bounds[b], val) < 0)
+                    sum += h.bucket_counts[b];
+            }
+            return sum;
+        }
+        /* Equi-depth: cumulative counts. Return count of last bucket
+         * whose bound < val. */
+        uint64_t cum = 0;
+        for (int b = 0; b < h.num_buckets; b++) {
+            if (compare_bound(h.bucket_bounds[b], val) < 0)
+                cum = h.bucket_counts[b];
+            else
+                break;
+        }
+        return cum;
+    }
+    ColumnStatsDesc cs;
+    if (cat_get_column_stats(table_id, col, &cs) == 0 &&
+        cs.min_value[0] && cs.max_value[0]) {
+        double f = interp_fraction(cs.min_value, cs.max_value, val);
+        return (uint64_t)((double)row_count * f);
+    }
+    return row_count / 2;
+}
+
+/* Rows with col <= V.  Includes equality. */
+static uint64_t estimate_le(uint32_t table_id, const char *col,
+                            const char *val, uint64_t row_count)
+{
+    HistogramDesc h;
+    if (cat_get_histogram(table_id, col, &h) == 0 && h.num_buckets > 0) {
+        if (h.histogram_type == 'F') {
+            uint64_t sum = 0;
+            for (int b = 0; b < h.num_buckets; b++) {
+                if (compare_bound(h.bucket_bounds[b], val) <= 0)
+                    sum += h.bucket_counts[b];
+            }
+            return sum;
+        }
+        /* Equi-depth: first bucket whose bound >= val holds the <= total. */
+        for (int b = 0; b < h.num_buckets; b++) {
+            if (compare_bound(h.bucket_bounds[b], val) >= 0)
+                return h.bucket_counts[b];
+        }
+        return h.total_rows;
+    }
+    ColumnStatsDesc cs;
+    if (cat_get_column_stats(table_id, col, &cs) == 0 &&
+        cs.min_value[0] && cs.max_value[0]) {
+        double f = interp_fraction(cs.min_value, cs.max_value, val);
+        return (uint64_t)((double)row_count * f);
+    }
+    return row_count / 2;
+}
+
+/* Compute the upper bound of a LIKE 'prefix%' range. "abc" → "abd" (bump
+ * last char). Empty prefix or pure '%' → empty result string (caller
+ * treats as open-ended upper). */
+static void like_prefix_upper(const char *prefix, char *out, int out_size)
+{
+    int n = (int)strlen(prefix);
+    if (n <= 0 || n >= out_size) { out[0] = '\0'; return; }
+    memcpy(out, prefix, (size_t)n);
+    out[n] = '\0';
+    /* Bump the last character; if it's already 0x7F, append a high byte. */
+    if ((unsigned char)out[n - 1] < 0x7F) {
+        out[n - 1] = (char)((unsigned char)out[n - 1] + 1);
+    } else if (n + 1 < out_size) {
+        out[n] = (char)0x7F;
+        out[n + 1] = '\0';
+    }
+}
+
+static uint64_t estimate_selectivity(uint32_t table_id, const char *col,
+                                     int op, const char *val,
+                                     const char *val2, uint64_t row_count)
+{
+    if (!col || !col[0] || row_count == 0 || op == WHERE_OP_NONE)
+        return 0;
+
+    switch (op) {
+    case WHERE_OP_EQ: {
+        HistogramDesc h;
+        if (cat_get_histogram(table_id, col, &h) == 0 && h.num_buckets > 0) {
+            if (h.histogram_type == 'F') {
+                for (int b = 0; b < h.num_buckets; b++)
+                    if (strcmp(h.bucket_bounds[b], val) == 0)
+                        return h.bucket_counts[b];
+                return 1;  /* value absent from sample → tiny */
+            }
+            if (h.total_rows > 0) {
+                uint64_t e = h.total_rows / (uint64_t)h.num_buckets;
+                return e ? e : 1;
+            }
+        }
+        ColumnStatsDesc cs;
+        if (cat_get_column_stats(table_id, col, &cs) == 0 &&
+            cs.distinct_count > 0) {
+            uint64_t e = row_count / cs.distinct_count;
+            return e ? e : 1;
+        }
+        return 0;
+    }
+    case WHERE_OP_LE:
+        return estimate_le(table_id, col, val, row_count);
+    case WHERE_OP_LT:
+        return estimate_lt(table_id, col, val, row_count);
+    case WHERE_OP_GT: {
+        uint64_t le = estimate_le(table_id, col, val, row_count);
+        return (row_count > le) ? row_count - le : 0;
+    }
+    case WHERE_OP_GE: {
+        uint64_t lt = estimate_lt(table_id, col, val, row_count);
+        return (row_count > lt) ? row_count - lt : 0;
+    }
+    case WHERE_OP_BETWEEN: {
+        if (!val2 || !val2[0]) return 0;
+        uint64_t le_hi = estimate_le(table_id, col, val2, row_count);
+        uint64_t lt_lo = estimate_lt(table_id, col, val, row_count);
+        return (le_hi > lt_lo) ? le_hi - lt_lo : 1;
+    }
+    case WHERE_OP_LIKE: {
+        /* Only trailing '%' is treated as a prefix range. If '%' appears
+         * earlier or not at all, fall through to equality/full scan. */
+        int n = (int)strlen(val);
+        if (n == 0) return row_count;
+        if (val[n - 1] != '%') {
+            /* No wildcard — treat as equality. */
+            return estimate_selectivity(table_id, col, WHERE_OP_EQ,
+                                        val, NULL, row_count);
+        }
+        for (int i = 0; i < n - 1; i++) {
+            if (val[i] == '%' || val[i] == '_') {
+                /* Interior wildcard — selectivity is unknown. Assume 10%. */
+                uint64_t e = row_count / 10;
+                return e ? e : 1;
+            }
+        }
+        char prefix[256];
+        int plen = n - 1 < (int)sizeof(prefix) - 1 ? n - 1
+                                                    : (int)sizeof(prefix) - 1;
+        memcpy(prefix, val, (size_t)plen);
+        prefix[plen] = '\0';
+        if (plen == 0) return row_count;  /* LIKE '%' */
+        char upper[256];
+        like_prefix_upper(prefix, upper, sizeof(upper));
+        uint64_t lt_upper = estimate_lt(table_id, col, upper, row_count);
+        uint64_t lt_prefix = estimate_lt(table_id, col, prefix, row_count);
+        return (lt_upper > lt_prefix) ? lt_upper - lt_prefix : 1;
+    }
+    }
+    return 0;
+}
+
 void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     char normalized[8192];
@@ -8544,10 +8785,25 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 }
             }
 
-            /* Check if WHERE has a simple col = value or FUNC(col) = value */
-            char whereCol[128] = "", whereVal[256] = "";
-            int hasWhere = 0;
-            int hasExprWhere = 0;
+            /* Parse WHERE into (col, op, val [, val2]).
+             * Supported ops (Task 100): =, <, <=, >, >=, BETWEEN a AND b,
+             * LIKE 'prefix%'. FUNC(col) OP val still supported (hasExprWhere).
+             * AND/OR combining: captures the first predicate + a flag so
+             * the estimator can multiply selectivities independently. */
+            #define WHERE_OP_NONE    0
+            #define WHERE_OP_EQ      1
+            #define WHERE_OP_LT      2
+            #define WHERE_OP_LE      3
+            #define WHERE_OP_GT      4
+            #define WHERE_OP_GE      5
+            #define WHERE_OP_BETWEEN 6
+            #define WHERE_OP_LIKE    7
+
+            char whereCol[128] = "", whereVal[256] = "", whereVal2[256] = "";
+            int  whereOp = WHERE_OP_NONE;
+            int  hasWhere = 0;
+            int  hasExprWhere = 0;
+            int  whereHasAnd = 0, whereHasOr = 0;
             {
                 const char *w = innerNorm;
                 while (*w) {
@@ -8556,17 +8812,16 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         (w[5] == ' ' || w[5] == '\t')) {
                         w += 5;
                         while (*w && isspace((unsigned char)*w)) w++;
-                        /* Simple parse: NAME = VALUE or FUNC(NAME) = VALUE */
+
+                        /* Column or FUNC(col) */
                         int ci = 0;
                         while (*w && (isalnum((unsigned char)*w) || *w == '_') && ci < 127)
                             whereCol[ci++] = *w++;
                         whereCol[ci] = '\0';
                         while (*w && isspace((unsigned char)*w)) w++;
-                        /* Check if it's a function call: FUNC(col) */
                         if (*w == '(') {
                             hasExprWhere = 1;
-                            w++; /* skip ( */
-                            /* Skip everything until matching ) */
+                            w++;
                             int depth = 1;
                             while (*w && depth > 0) {
                                 if (*w == '(') depth++;
@@ -8575,20 +8830,80 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                             }
                             while (*w && isspace((unsigned char)*w)) w++;
                         }
-                        if (*w == '=') {
-                            w++;
+
+                        /* Operator — order matters: >= before >, <= before <. */
+                        if (*w == '>' && w[1] == '=') { whereOp = WHERE_OP_GE; w += 2; }
+                        else if (*w == '<' && w[1] == '=') { whereOp = WHERE_OP_LE; w += 2; }
+                        else if (*w == '<' && w[1] == '>') { /* NE — not supported, skip */ w += 2; }
+                        else if (*w == '>')                { whereOp = WHERE_OP_GT; w++; }
+                        else if (*w == '<')                { whereOp = WHERE_OP_LT; w++; }
+                        else if (*w == '=')                { whereOp = WHERE_OP_EQ; w++; }
+                        else if (strncasecmp(w, "BETWEEN", 7) == 0 &&
+                                 isspace((unsigned char)w[7])) {
+                            whereOp = WHERE_OP_BETWEEN; w += 7;
+                        }
+                        else if (strncasecmp(w, "LIKE", 4) == 0 &&
+                                 isspace((unsigned char)w[4])) {
+                            whereOp = WHERE_OP_LIKE; w += 4;
+                        }
+
+                        /* Value(s) */
+                        if (whereOp != WHERE_OP_NONE) {
                             while (*w && isspace((unsigned char)*w)) w++;
                             int vi = 0;
                             if (*w == '\'') {
                                 w++;
                                 while (*w && *w != '\'' && vi < 255)
                                     whereVal[vi++] = *w++;
+                                if (*w == '\'') w++;
                             } else {
-                                while (*w && !isspace((unsigned char)*w) && *w != ';' && vi < 255)
+                                while (*w && !isspace((unsigned char)*w) &&
+                                       *w != ';' && *w != ')' && vi < 255)
                                     whereVal[vi++] = *w++;
                             }
                             whereVal[vi] = '\0';
+
+                            /* BETWEEN needs the second value after AND */
+                            if (whereOp == WHERE_OP_BETWEEN) {
+                                while (*w && isspace((unsigned char)*w)) w++;
+                                if (strncasecmp(w, "AND", 3) == 0 &&
+                                    isspace((unsigned char)w[3])) {
+                                    w += 3;
+                                    while (*w && isspace((unsigned char)*w)) w++;
+                                    int v2 = 0;
+                                    if (*w == '\'') {
+                                        w++;
+                                        while (*w && *w != '\'' && v2 < 255)
+                                            whereVal2[v2++] = *w++;
+                                        if (*w == '\'') w++;
+                                    } else {
+                                        while (*w && !isspace((unsigned char)*w) &&
+                                               *w != ';' && *w != ')' && v2 < 255)
+                                            whereVal2[v2++] = *w++;
+                                    }
+                                    whereVal2[v2] = '\0';
+                                }
+                            }
                             hasWhere = (whereCol[0] && whereVal[0]);
+                        }
+
+                        /* Scan forward for AND/OR — best-effort combined selectivity. */
+                        {
+                            const char *p = w;
+                            while (*p) {
+                                if ((p == innerNorm || isspace((unsigned char)p[-1])) &&
+                                    strncasecmp(p, "AND", 3) == 0 &&
+                                    isspace((unsigned char)p[3])) {
+                                    whereHasAnd = 1; break;
+                                }
+                                if ((p == innerNorm || isspace((unsigned char)p[-1])) &&
+                                    strncasecmp(p, "OR", 2) == 0 &&
+                                    isspace((unsigned char)p[2])) {
+                                    whereHasOr = 1; break;
+                                }
+                                if (*p == ';') break;
+                                p++;
+                            }
                         }
                         break;
                     }
@@ -8694,46 +9009,34 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         TableStatsDesc _ets;
                         if (cat_get_table_stats(_etd.table_id, &_ets) == 0) {
                             uint64_t est = _ets.row_count;
-                            if (hasWhere && est > 0 && whereCol[0]) {
-                                /* Task 99: prefer histogram-backed selectivity
-                                 * over the naive rows/NDV estimate. */
-                                HistogramDesc _eh;
-                                int used_hist = 0;
-                                if (whereVal[0] &&
-                                    cat_get_histogram(_etd.table_id, whereCol,
-                                                      &_eh) == 0 &&
-                                    _eh.num_buckets > 0) {
-                                    if (_eh.histogram_type == 'F') {
-                                        /* Frequency histogram: lookup exact value */
-                                        uint64_t hit = 0;
-                                        for (int b = 0; b < _eh.num_buckets; b++) {
-                                            if (strcmp(_eh.bucket_bounds[b],
-                                                      whereVal) == 0) {
-                                                hit = _eh.bucket_counts[b];
-                                                break;
-                                            }
-                                        }
-                                        est = hit ? hit : 1;
-                                        used_hist = 1;
-                                    } else if (_eh.histogram_type == 'E') {
-                                        /* Equi-depth: ~total/num_buckets per bucket */
-                                        if (_eh.total_rows > 0) {
-                                            est = _eh.total_rows /
-                                                  (uint64_t)_eh.num_buckets;
-                                            if (est == 0) est = 1;
-                                            used_hist = 1;
-                                        }
-                                    }
-                                }
-                                if (!used_hist) {
-                                    /* Fall back to rows / NDV */
-                                    ColumnStatsDesc _ecs;
-                                    if (cat_get_column_stats(_etd.table_id,
-                                                             whereCol, &_ecs) == 0 &&
-                                        _ecs.distinct_count > 0) {
-                                        est = _ets.row_count / _ecs.distinct_count;
-                                        if (est == 0) est = 1;
-                                    }
+                            if (hasWhere && est > 0 && whereCol[0] &&
+                                whereOp != WHERE_OP_NONE) {
+                                /* Task 100: dispatch by operator.
+                                 * `=` uses the Task 99 histogram hit.
+                                 * Ranges (<, <=, >, >=, BETWEEN, LIKE 'p%')
+                                 * use histogram-bucket interpolation, or
+                                 * fall back to min/max linear interpolation. */
+                                uint64_t sel_est = estimate_selectivity(
+                                    _etd.table_id, whereCol, whereOp,
+                                    whereVal, whereVal2, _ets.row_count);
+                                if (sel_est > 0) est = sel_est;
+
+                                /* AND with independence: multiply selectivities.
+                                 * OR: additive minus product.
+                                 * We only see the first predicate, so apply a
+                                 * nominal second-predicate selectivity of 50%
+                                 * (AND) or leave as-is for OR (already includes
+                                 * the first predicate). This is rougher than a
+                                 * real plan-tree walk but mirrors the
+                                 * independence assumption textbook planners use
+                                 * when column correlation is unknown. */
+                                if (whereHasAnd && est > 1) {
+                                    est = est / 2;
+                                    if (est == 0) est = 1;
+                                } else if (whereHasOr) {
+                                    /* upper-bound for OR — closer to full scan */
+                                    if (est * 2 < _ets.row_count) est *= 2;
+                                    else est = _ets.row_count;
                                 }
                             }
                             snprintf(rowEstimate, sizeof(rowEstimate),
