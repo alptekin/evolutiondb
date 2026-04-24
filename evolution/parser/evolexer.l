@@ -458,6 +458,8 @@ EVO_NOTIFY/"("			{ return FEVO_NOTIFY; }
 PG_NOTIFY/"("			{ return FEVO_NOTIFY; }          /* PG compat alias */
 PG_LISTENING_CHANNELS/"("	{ return FPG_LISTENING_CHANNELS; }
 ARRAY_LENGTH/"("		{ return FARRAY_LENGTH; }
+HNSW_KNN/"("			{ return FHNSW_KNN; }
+HNSW					{ return HNSW; }
 COSINE_DISTANCE/"("		{ return FCOSINE_DIST; }
 L2_DISTANCE/"("			{ return FL2_DIST; }
 INNER_PRODUCT/"("		{ return FINNER_PRODUCT; }

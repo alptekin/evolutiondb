@@ -195,7 +195,15 @@ typedef enum {
     EXPR_VEC_L1,               /* l1_distance(left, right) */
     EXPR_VECTOR_DIM,           /* vector_dim(v) → int */
     EXPR_VECTOR_NORM,          /* vector_norm(v) → double (L2 norm) */
-    EXPR_VECTOR_NORMALIZE      /* vector_normalize(v) → vector */
+    EXPR_VECTOR_NORMALIZE,     /* vector_normalize(v) → vector */
+
+    /* HNSW KNN helper (Task 202 — Feature #202).
+     * hnsw_knn(table_name, index_name, query_text, k) — returns a comma-
+     * separated text list of PK values for the k nearest neighbors,
+     * ordered by ascending distance. Lets tests and ad-hoc SQL exercise
+     * the HNSW index without needing ORDER BY-expr planner routing,
+     * which lives in Task 203. */
+    EXPR_HNSW_KNN              /* left=table, right=index, extra=query, val.intval=k */
 } ExprNodeType;
 
 typedef struct ExprNode {
