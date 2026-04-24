@@ -3327,6 +3327,532 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ---
 
+# Agent Memory Platform (Feature #200-#225)
+
+**Vision:** "Powering Long-Term Memory for Agents" — Make EvolutionDB the canonical long-term memory backend for AI agent frameworks. Compete with MongoDB `langgraph-store-mongodb`, Pinecone, Zep (Graphiti), Mem0.
+
+**Differentiators:** (1) SQL + vector + JSON in a single process (no dual-stack Postgres + Pinecone), (2) Temporal / bitemporal via MVCC-backed `FOR SYSTEM_TIME AS OF`, (3) Reactive push via LISTEN/NOTIFY + durable subscriptions + CDC stream, (4) Embedded + TDE on-prem for regulated sectors.
+
+**Framework coverage (9 frameworks, 7 SQL primitives):** LangGraph (CHECKPOINT + MEMORY STORE), LangChain (MESSAGE LOG + MEMORY + ENTITY + GRAPH), LlamaIndex (MESSAGE LOG + MEMORY + DOCUMENT), CrewAI (CHECKPOINT + MEMORY + ENTITY), AutoGen (MEMORY), Semantic Kernel (MEMORY), Haystack (DOCUMENT + Mongo-filter), Mem0 (MEMORY + GRAPH + ENTITY), Zep (MESSAGE LOG + GRAPH bitemporal).
+
+**MVP critical path** (LangGraph-only demo, ~3 sprints): 200 → 201 → 202 → 204 → 205 → 216 → 218(LangGraph) → 220.
+
+**Full enterprise push:** 26 tasks / 8 sprints / ~9-10 weeks → v3.0.0.
+
+See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture decision record.
+
+---
+
+## Day 94 — Sprint 1: Vector & Semantic Search Foundation
+
+### Task 200: ⬜ VECTOR(N) Data Type (Feature #200)
+
+**Goal:** Add a first-class `VECTOR(N)` type that stores N float4 values as a compact binary payload, with parser/lexer support, tuple format encoding, and full DML + COPY roundtrip.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Tuple format encoding: reserve `type_code = 260000 + N` (N = dimension). Payload = N × 4 bytes float4 LE. Single null bitmap bit. Update `tup_build`, `tup_extract_fields`, `tup_record_len` to handle the new type family. | `evolution/db/tuple_format.{h,c}` |
+| 2 | Parser / lexer: new `VECTOR` token, `data_type` production `VECTOR '(' ICONST ')'`. Dimension must be in [1, 16384]. Regen parser via `make generate`. | `evolution/parser/evolexer.l`, `evoparser.y` |
+| 3 | Literal syntax: `'[0.1, 0.2, 0.3]'::VECTOR(3)` — write vector literal parser in expression.c that converts the text form into the binary payload. Reject non-finite (NaN/Inf). | `evolution/db/expression.c` |
+| 4 | Catalog type mapping: add `PG_OID_VECTOR` stub so `type_encoding_to_pg_oid` exposes the type over PG wire (RowDescription uses OID 0 — client treats as text). | `adaptor/query_executor.c`, `adaptor/result.h` |
+| 5 | INSERT/UPDATE validation: ensure provided vector literal matches the declared dimension; raise SQLSTATE `22023` on mismatch. | `evolution/db/Insert.c`, `Update.c` |
+| 6 | Text I/O roundtrip in `tup_extract_fields` → `'[0.100000,0.200000,0.300000]'` style. Float4 format with 6 decimals. | `evolution/db/tuple_format.c` |
+| 7 | Cast / coercion: `array[f1, f2, f3]::VECTOR(3)`, `vector_to_array(v)`, `array_to_vector(arr)`. Expression evaluator dispatch. | `evolution/db/expression.c` |
+| 8 | Tests — `tests/test_vector_type.py`: CREATE TABLE with `VECTOR(128)`, INSERT literal, SELECT roundtrip, dimension-mismatch rejection, NULL element, array↔vector cast, boundary (N=1, N=16384). ≥10 cases. | `tests/test_vector_type.py` (new) |
+| 9 | Regression — ensure existing tuple_format / insert / select / COPY / dump test suites stay green. | `tests/` |
+| 10 | Docker rebuild + DBeaver smoke: create a table, insert a 384-dim vector, confirm it renders as a bracket-list string. | `Dockerfile` |
+
+---
+
+### Task 201: ⬜ Vector Distance Functions + Operators (Feature #201)
+
+**Goal:** Add pgvector-compatible distance functions (`cosine_distance`, `l2_distance`, `inner_product`, `l1_distance`) + operators (`<=>`, `<->`, `<#>`).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `cosine_distance(a, b)` = `1 − (a·b) / (‖a‖·‖b‖)`. Loop over matched-dim float4 arrays. Returns DOUBLE. | `evolution/db/expression.c` |
+| 2 | `l2_distance(a, b)` = `sqrt(sum((a[i]−b[i])²))`, `inner_product(a, b)` = `−(a·b)` (negative dot), `l1_distance(a, b)` = `sum(|a[i]−b[i]|)`. | `evolution/db/expression.c` |
+| 3 | Operator syntax: `<=>` (cosine), `<->` (L2), `<#>` (negative inner product). Follow pgvector convention. Lexer tokens + parser productions. | `evolution/parser/evolexer.l`, `evoparser.y` |
+| 4 | Expression engine wire: `EXPR_VEC_COSINE`, `EXPR_VEC_L2`, `EXPR_VEC_INNER`, `EXPR_VEC_L1` enum + constructors in expression.h. | `evolution/db/expression.{h,c}` |
+| 5 | Type check: both operands must be `VECTOR(N)` with identical N; return FLOAT8. Raise `42883` on mismatch. | `evolution/db/expression.c` |
+| 6 | Helpers: `vector_dim(v)`, `vector_norm(v)`, `vector_normalize(v)` scalar functions. | `evolution/db/expression.c` |
+| 7 | Regenerate parser via `make generate`; ensure no new shift/reduce conflicts. | `evolution/parser/` |
+| 8 | Tests — `tests/test_vector_ops.py`: known-answer distances for (0,0,0) vs (1,0,0), ORDER BY vec <=> query LIMIT k, NULL-safe semantics, dimension-mismatch error, normalize idempotence. ≥15 cases. | `tests/test_vector_ops.py` (new) |
+| 9 | Regression sweep. | `tests/` |
+| 10 | Full system test: Docker rebuild + DBeaver smoke. | `Dockerfile` |
+
+---
+
+### Task 202: ⬜ HNSW ANN Index (Feature #202)
+
+**Goal:** Graph-based approximate nearest neighbor index via `CREATE INDEX ... USING HNSW (col vector_cosine_ops) WITH (m=16, ef_construction=64)`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | New file `evolution/db/hnsw.{h,c}` — HNSW graph stored on slotted pages. Define `HnswNode` layout: id (uint32), layer (uint8), neighbor count per layer, neighbor RowIDs array. | `evolution/db/hnsw.{h,c}` (new) |
+| 2 | Build path: bottom-up layer assignment with geometric decay (`layer = floor(-ln(rand()) / ln(m))`), greedy search + neighbor refinement per pgvector/HNSW paper, bulk-insert batch mode. | `evolution/db/hnsw.c` |
+| 3 | Search: `hnsw_search(root_page, query_vec, k, ef)` → returns top-k RowIDs ordered by distance. Supports dynamic `ef` per query. | `evolution/db/hnsw.c` |
+| 4 | Catalog: add index_type `'H'` (HNSW) + store `m`, `ef_construction`, `distance_op` in `IndexDesc.params`. | `evolution/db/catalog_internal.{h,c}` |
+| 5 | Parser: `CREATE INDEX ... USING HNSW (col <opclass>) WITH (m=N, ef_construction=N)`. Opclasses: `vector_cosine_ops`, `vector_l2_ops`, `vector_ip_ops`. | `evolution/parser/evoparser.y`, `evolexer.l` |
+| 6 | Maintenance: hook HNSW `insert`/`delete` into `Insert.c`, `Delete.c`, `Update.c` for indexed vector columns. | `evolution/db/Insert.c`, `Delete.c`, `Update.c` |
+| 7 | Planner hook: detect `ORDER BY col <distance_op> $const LIMIT k` → use HNSW scan if the index opclass matches the operator. | `adaptor/query_executor.c` |
+| 8 | Tests — `tests/test_hnsw_index.py`: 10k × 128-dim vectors, recall@10 > 90% vs brute-force, CREATE/DROP INDEX, delete+reinsert correctness, `ef` tuning sanity, boundary `k=1` and `k=1000`. ≥12 cases. | `tests/test_hnsw_index.py` (new) |
+| 9 | Regression + micro-bench: brute force vs HNSW latency comparison in `bench/bench_hnsw.py`. | `tests/`, `bench/bench_hnsw.py` (new) |
+| 10 | Docker rebuild + DBeaver `CREATE INDEX USING HNSW` smoke. | `Dockerfile` |
+
+---
+
+### Task 203: ⬜ Hybrid Search — Vector + Filter (Feature #203)
+
+**Goal:** `ORDER BY vec <=> $q WHERE user_id = 42 LIMIT 10` runs in a single pass using statistics-guided strategy selection.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Planner: detect hybrid pattern (`ORDER BY vec_op LIMIT k` + WHERE filter on same relation). | `adaptor/query_executor.c` |
+| 2 | Strategy A (pre-filter): when filter selectivity < 10%, full scan the filtered rows then vector-sort top-k. Optimal for low selectivity. | `adaptor/query_executor.c` |
+| 3 | Strategy B (post-filter): when filter selectivity > 10%, probe HNSW for `k' = k × ceil(1 / selectivity)` candidates, apply WHERE, take final top-k. | `adaptor/query_executor.c` |
+| 4 | Selectivity source: plug Task 100 range estimator + Task 99 histograms. Fallback to default estimates for column without stats. | `adaptor/query_executor.c` |
+| 5 | EXPLAIN output: distinguish `HNSW Index Scan + Filter` vs `Seq Scan + Vector Sort` paths with cost + estimated rows. | `adaptor/query_executor.c` |
+| 6 | Tests — `tests/test_hybrid_search.py`: both strategies triggered by selectivity, recall + correctness vs pre-computed ground truth, NULL vector rows skipped, LIMIT 0 degenerate case, filter on expression index. ≥10 cases. | `tests/test_hybrid_search.py` (new) |
+| 7 | Regression. | `tests/` |
+| 8 | Benchmark: filter selectivity spectrum (1/10/50/90%) latency curve in `bench/bench_hybrid.py`. | `bench/bench_hybrid.py` (new) |
+| 9 | Wiki page `Hybrid-Search.md` — pattern cookbook with query examples. | `wiki/Hybrid-Search.md` (new) |
+| 10 | Docker rebuild + benchmark comparison vs Postgres+pgvector. | `Dockerfile` |
+
+---
+
+## Day 95 — Sprint 2: Agent Memory Native DDL
+
+### Task 204: ⬜ CHECKPOINT Store DDL + DML (Feature #204)
+
+**Goal:** Native `CREATE CHECKPOINT STORE` + `CHECKPOINT PUT/GET/LIST/PUT WRITES` DML for LangGraph `BaseCheckpointSaver`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | New catalog slot `CAT_SYS_CHECKPOINT_STORES` — store name, config (thread_column, ns_column, retention). | `evolution/db/catalog_internal.{h,c}` |
+| 2 | DDL: `CREATE CHECKPOINT STORE mem_ck [WITH (retention='30 days')]`. | `evolution/parser/evoparser.y` |
+| 3 | DDL: `DROP CHECKPOINT STORE mem_ck [CASCADE]`. | `evolution/parser/evoparser.y` |
+| 4 | Physical backing table auto-created: `__ck_<name>(thread_id TEXT, checkpoint_ns TEXT, checkpoint_id TEXT PK, values JSON, metadata JSON, parent_config JSON, created_at TIMESTAMP)`. | `evolution/db/Checkpoint.{h,c}` (new) |
+| 5 | DML: `CHECKPOINT PUT INTO mem_ck (thread_id, ns, id, values, metadata [, parent_config])`. | `evolution/db/Checkpoint.c`, `evoparser.y` |
+| 6 | DML: `CHECKPOINT GET FROM mem_ck WHERE thread_id=? [AT id?]` → returns latest-by-thread if `AT` omitted. | `evolution/db/Checkpoint.c` |
+| 7 | DML: `CHECKPOINT LIST FROM mem_ck WHERE thread_id=? [LIMIT n]` → history DESC order. | `evolution/db/Checkpoint.c` |
+| 8 | DML: `CHECKPOINT PUT WRITES INTO mem_ck (...)` — atomic batch for pending/intermediate state. | `evolution/db/Checkpoint.c` |
+| 9 | Tests — `tests/test_checkpoint_store.py`: CREATE/DROP, put/get/list/put_writes, thread isolation, JSON metadata roundtrip, latest-by-thread semantics. ≥15 cases. | `tests/test_checkpoint_store.py` (new) |
+| 10 | Wiki `Checkpoint-Store.md` + regression. | `wiki/Checkpoint-Store.md` (new) |
+
+---
+
+### Task 205: ⬜ MEMORY Store DDL + DML (Feature #205)
+
+**Goal:** Native `CREATE MEMORY STORE` + `MEMORY PUT/GET/SEARCH/DELETE/LIST NAMESPACES` for LangGraph `BaseStore` + cross-framework long-term memory.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Catalog slot `CAT_SYS_MEMORY_STORES` — name, embedding_column, embedding_dim, distance_op, index_type (default HNSW). | `evolution/db/catalog_internal.{h,c}` |
+| 2 | DDL: `CREATE MEMORY STORE mem [WITH (embedding_dim=1536, distance='cosine')]`. | `evolution/parser/evoparser.y` |
+| 3 | Physical backing table: `__mem_<name>(namespace TEXT[], key TEXT, value JSON, embedding VECTOR(N) NULL, created_at TIMESTAMP, ttl_at TIMESTAMP NULL)`, PK `(namespace, key)`. | `evolution/db/Memory.{h,c}` (new) |
+| 4 | DML: `MEMORY PUT INTO mem (ns, key, value [, embedding])`. Upsert semantics. | `evolution/db/Memory.c` |
+| 5 | DML: `MEMORY GET FROM mem WHERE ns=? AND key=?` → single row or empty. | `evolution/db/Memory.c` |
+| 6 | DML: `MEMORY SEARCH mem USING VECTOR $q [WHERE filter] LIMIT k` — hybrid search wrapper (Task 203 reuse). | `evolution/db/Memory.c` |
+| 7 | DML: `MEMORY DELETE FROM mem WHERE ns=? AND key=?` — single-row delete. | `evolution/db/Memory.c` |
+| 8 | DML: `MEMORY LIST NAMESPACES IN mem PREFIX (?)` — hierarchical prefix scan using bt2_cursor_seek. | `evolution/db/Memory.c` |
+| 9 | Tests — `tests/test_memory_store.py`: put/get/search/delete/list, namespace hierarchy, embedding roundtrip, TTL expiry sanity. ≥18 cases. | `tests/test_memory_store.py` (new) |
+| 10 | Wiki `Memory-Store.md`. | `wiki/Memory-Store.md` (new) |
+
+---
+
+### Task 206: ⬜ Namespace Hierarchy + Multi-Tenant Policy (Feature #206)
+
+**Goal:** Tuple-based namespace `(user_id, 'memories', ...)` + RLS-on-MEMORY-STORE integration.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Namespace storage format: text array serialized as `'{user_42,memories,session_1}'` in PK prefix. | `evolution/db/Memory.c` |
+| 2 | Prefix scan: zero-padded prefix match via `bt2_cursor_seek` — walk keys where PK starts with given namespace tuple. | `evolution/db/Memory.c` |
+| 3 | `LIST NAMESPACES` child discovery: distinct first-level children under a prefix. | `evolution/db/Memory.c` |
+| 4 | RLS integration: `CREATE POLICY pname ON MEMORY STORE mem FOR SEARCH USING (namespace[1] = current_user)`. | `evolution/db/Policy.c`, `evoparser.y` |
+| 5 | `current_user` in policy evaluator: resolves from session context during MEMORY access. | `evolution/db/expression.c`, `Policy.c` |
+| 6 | Permissive / restrictive policy composition applied to memory store paths. | `evolution/db/Policy.c` |
+| 7 | EXPLAIN on MEMORY SEARCH: show `Policy Filter: ...` line. | `adaptor/query_executor.c` |
+| 8 | Tests — `tests/test_memory_multitenant.py`: two users, separate namespaces, PUT/GET isolation, SEARCH cross-leak prevention, RLS policy toggle. ≥12 cases. | `tests/test_memory_multitenant.py` (new) |
+| 9 | Regression on existing RLS tests. | `tests/` |
+| 10 | Wiki section: multi-tenant patterns in `Memory-Store.md`. | `wiki/Memory-Store.md` |
+
+---
+
+## Day 96 — Sprint 3: Temporal / Bitemporal Memory
+
+### Task 207: ⬜ FOR SYSTEM_TIME AS OF Query Syntax (Feature #207)
+
+**Goal:** `SELECT * FROM memories FOR SYSTEM_TIME AS OF '2026-04-20 14:00'` — snapshot-travel via MVCC.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Parser: `table_ref FOR SYSTEM_TIME AS OF expr` production. | `evoparser.y`, `evolexer.l` |
+| 2 | MVCC: timestamp → CSN lookup via CSN ring buffer cache + CLOG binary search for older records. | `evolution/db/mvcc.{h,c}` |
+| 3 | QueryContext: `snapshot_at_csn` override field used by Select scan path so visibility predicate uses historical snapshot. | `evolution/db/query_context.h` |
+| 4 | `AS OF TIMESTAMP expr` vs `AS OF TRANSACTION xid_literal` (XID-based) variants. | `evoparser.y` |
+| 5 | Retention bound check: out-of-range timestamp (before WAL retention) → SQLSTATE `22023` `out_of_range_snapshot`. | `evolution/db/Select.c`, `mvcc.c` |
+| 6 | Tests — `tests/test_temporal_query.py`: INSERT, capture t1, UPDATE, capture t2; AS OF t1 returns old values, AS OF t2 returns new, out-of-window error. ≥10 cases. | `tests/test_temporal_query.py` (new) |
+| 7 | Regenerate parser. | `evolution/parser/` |
+| 8 | Regression. | `tests/` |
+| 9 | Wiki `Temporal-Queries.md`. | `wiki/Temporal-Queries.md` (new) |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 208: ⬜ WITH SYSTEM VERSIONING — Temporal Tables (Feature #208)
+
+**Goal:** `CREATE TABLE ... WITH SYSTEM VERSIONING` → automatic `valid_from`, `valid_to` columns + shadow history table.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | DDL: `CREATE TABLE t (...) WITH SYSTEM VERSIONING`. Add `TableDesc.system_versioned` flag. | `evolution/db/Create.c`, `catalog_internal.h` |
+| 2 | Auto-inject `valid_from TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`, `valid_to TIMESTAMP NOT NULL DEFAULT '9999-12-31 23:59:59'`. | `evolution/db/Create.c` |
+| 3 | Auto-create history table: `t_history` with identical schema + mandatory `valid_from`, `valid_to`. | `evolution/db/Create.c` |
+| 4 | UPDATE/DELETE hook: copy old row into history with `valid_to = CURRENT_TIMESTAMP`; new row gets `valid_from = CURRENT_TIMESTAMP`. | `evolution/db/Update.c`, `Delete.c` |
+| 5 | `FOR SYSTEM_TIME BETWEEN x AND y` — bitemporal range query, union of main + history. Complements Task 207. | `evoparser.y`, `Select.c` |
+| 6 | Edge: `DROP TABLE t` cascades to history table. `DROP TABLE t_history` alone rejected with `0A000`. | `evolution/db/Drop.c` |
+| 7 | Tests — `tests/test_system_versioning.py`: INSERT → UPDATE → DELETE → AS OF queries see correct history state, BETWEEN range union, DROP cascade. ≥12 cases. | `tests/test_system_versioning.py` (new) |
+| 8 | Regression. | `tests/` |
+| 9 | Wiki `Temporal-Queries.md` update. | `wiki/Temporal-Queries.md` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 209: ⬜ WAL Retention Policy for AS OF Window (Feature #209)
+
+**Goal:** `SET SYSTEM_TIME_RETENTION = '30 days'` bounds the AS OF query window and the history-table disk footprint.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | GUC-style setting: `EVOSQL_SYSTEM_TIME_RETENTION_DAYS` env var + SQL `SET` syntax. Default: 7 days. | `evolution/db/database_globals.c`, `adaptor/catalog.c` |
+| 2 | WAL archive pruning: after each checkpoint, delete archive files older than retention. | `evolution/db/wal.c` |
+| 3 | Pruning daemon: runs hourly using existing auto-reclaim thread pattern. | `evolution/db/auto_reclaim.c` |
+| 4 | History table pruning (Task 208): `DELETE FROM t_history WHERE valid_to < now() - retention`. | `evolution/db/Reclaim.c` |
+| 5 | `SHOW SYSTEM_TIME_RETENTION` + pg_catalog view `pg_retention_policy`. | `adaptor/catalog.c` |
+| 6 | Tests — `tests/test_temporal_retention.py`: AS OF beyond retention → error; within window → success; pruning actually deletes history. ≥8 cases. | `tests/test_temporal_retention.py` (new) |
+| 7 | Regression. | `tests/` |
+| 8 | Wiki. | `wiki/Temporal-Queries.md` |
+| 9 | Docker env var + Helm values.yaml exposure. | `docker-compose.yml`, `deploy/helm/evolutiondb/values.yaml` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+## Day 97 — Sprint 4: Reactive Streaming
+
+### Task 210: ⬜ Durable Subscription Cursor (Feature #210)
+
+**Goal:** Client disconnect doesn't lose messages — resume-on-reconnect via ack-based cursor.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Catalog `CAT_SYS_SUBSCRIPTIONS` — subscription_id, channel, last_ack_lsn, consumer_addr, created_at. | `evolution/db/catalog_internal.{h,c}` |
+| 2 | DDL: `CREATE SUBSCRIPTION s FOR CHANNEL 'memory_updated' DURABLE`. | `evoparser.y` |
+| 3 | NOTIFY path extension: durable channels also WAL-log + append to `__sub_queue` table. | `adaptor/notify.c`, `evolution/db/Notify.c` |
+| 4 | `RESUME SUBSCRIPTION s FROM lsn?` — replay unacked messages, advance cursor on ack. | `adaptor/notify.c` |
+| 5 | Retention: acked messages pruned immediately; unacked TTL default 7 days. | `evolution/db/Notify.c` |
+| 6 | PG wire extension: new message type for subscription resume; reuse CancelRequest framing. | `adaptor/pg_protocol.c` |
+| 7 | Tests — `tests/test_durable_subscription.py`: publish → disconnect → reconnect → previously missed messages delivered, ack advances cursor, TTL prunes unacked. ≥10 cases. | `tests/test_durable_subscription.py` (new) |
+| 8 | Regression — existing LISTEN/NOTIFY must stay working (non-durable channels). | `tests/` |
+| 9 | Wiki `LISTEN-NOTIFY.md` update. | `wiki/LISTEN-NOTIFY.md` |
+| 10 | Docker rebuild. | `Dockerfile` |
+
+---
+
+### Task 211: ⬜ CDC Streaming Server (Feature #211)
+
+**Goal:** External consumers (Kafka/agent) subscribe to CDC events over TCP JSON lines (finish GAP-D7 stub).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `adaptor/replication.c repl_start_cdc_server(port)` — full accept loop + per-client WAL decoder. | `adaptor/replication.c` |
+| 2 | JSON event format: `{"op":"I","table":"memories","pk":"42","new":{...},"lsn":N,"ts":...}`. `op` ∈ `I/U/D`. | `adaptor/replication.c` |
+| 3 | Filter DDL: `CREATE CDC STREAM s FOR TABLE memories [WHERE ...]`. Catalog entry + WAL decoder plug-in. | `evoparser.y`, `catalog_internal.c` |
+| 4 | Consumer handshake: `CDC SUBSCRIBE s [FROM LSN n]`, ack-based resume. | `adaptor/replication.c` |
+| 5 | CLI flag `--cdc-port 9970` (opt-in, default off). | `adaptor/main.c` |
+| 6 | Tests — `tests/test_cdc_stream.py`: DML → CDC client receives JSON events, filter works, resume from LSN. ≥10 cases. | `tests/test_cdc_stream.py` (new) |
+| 7 | Regression. | `tests/` |
+| 8 | Wiki `CDC.md`. | `wiki/CDC.md` (new) |
+| 9 | Docker compose CDC port expose. | `docker-compose.yml` |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 212: ⬜ MEMORY Event Triggers (Feature #212)
+
+**Goal:** `ON MEMORY PUT mem DO ...` — trigger surface at the MEMORY STORE level.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Trigger scope extension: `cat_create_trigger` accepts MEMORY_STORE target alongside tables. | `evolution/db/catalog_internal.{h,c}`, `Trigger.c` |
+| 2 | Hook into `MEMORY PUT/DELETE` execution path — fire BEFORE/AFTER. | `evolution/db/Memory.c` |
+| 3 | OLD/NEW namespace + value access from trigger body. | `evolution/db/Trigger.c` |
+| 4 | Cascade guard: recursive flag prevents infinite loop on self-referencing MEMORY PUT inside trigger. | `evolution/db/Trigger.c` |
+| 5 | Tests — `tests/test_memory_trigger.py`: AFTER PUT auto-summary generation, AFTER DELETE audit log, cascade guard activation, OLD/NEW bindings. ≥10 cases. | `tests/test_memory_trigger.py` (new) |
+| 6 | Regression. | `tests/` |
+| 7 | Wiki update. | `wiki/Memory-Store.md` |
+| 8 | Full system test. | `Dockerfile` |
+| 9 | Example pattern: auto-summary trigger invoking a stored procedure. | `docs/agent-patterns/auto-summary.md` (new) |
+| 10 | DBeaver / psql compat smoke. | Manual |
+
+---
+
+## Day 98 — Sprint 5: Agent Ops
+
+### Task 213: ⬜ TTL Column Syntax + Auto-Expire (Feature #213)
+
+**Goal:** `CREATE TABLE ... WITH (ttl_column='expires_at')` — background DELETE daemon for expired rows.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `TableDesc.ttl_column_name[128]` field. DDL parse: `WITH (ttl_column='expires_at')`. | `evolution/db/catalog_internal.h`, `Create.c`, `evoparser.y` |
+| 2 | `ALTER TABLE t SET TTL COLUMN = 'col_name'` / `DROP TTL`. | `evoparser.y`, `Create.c` |
+| 3 | TTL daemon thread (auto-reclaim pattern): per minute tick, `DELETE FROM t WHERE ttl_col < NOW()`. | `evolution/db/auto_reclaim.c`, new `ttl_daemon.c` |
+| 4 | Index acceleration: if TTL column has a btree index, range-prune; otherwise seq scan. | `evolution/db/ttl_daemon.c` |
+| 5 | MEMORY STORE default `ttl_at` column auto-registered as TTL column. | `evolution/db/Memory.c` |
+| 6 | `SHOW TTL` — list tables with TTL columns and their status. | `adaptor/catalog.c` |
+| 7 | Tests — `tests/test_ttl.py`: past `expires_at` auto-delete within 60 s, future rows survive, ALTER SET/DROP TTL roundtrip, indexed vs non-indexed daemon. ≥10 cases. | `tests/test_ttl.py` (new) |
+| 8 | Regression. | `tests/` |
+| 9 | Wiki `TTL.md`. | `wiki/TTL.md` (new) |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+### Task 214: ⬜ Auto-Summarization Template (Feature #214)
+
+**Goal:** Stored procedure template + `token_length(text)` built-in for conversation buffer rollup.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `token_length(text)` built-in: split-by-whitespace count (reasonable default; tuned by LLM in v2). | `evolution/db/expression.c` |
+| 2 | Sample procedure: `CREATE PROCEDURE summarize_thread(thread_id TEXT, max_tokens INT)`. | `docs/agent-patterns/summarize-procedure.sql` (new) |
+| 3 | External summarization hook: `pg_call_external('summarize', json_payload)` UDF stub (v2 promotes to real HTTP). | `evolution/db/expression.c` |
+| 4 | CHECKPOINT store trigger glue: every N-th PUT invokes `summarize_thread` (Task 212 consumer). | `evolution/db/Checkpoint.c` |
+| 5 | Metadata: `summarized_at`, `summary_tokens_saved` columns on checkpoint rows. | `evolution/db/Checkpoint.c` |
+| 6 | Tests — `tests/test_auto_summarize.py`: 100-message thread → summary triggered, token_length correctness, external hook stub returns known value. ≥8 cases. | `tests/test_auto_summarize.py` (new) |
+| 7 | Regression. | `tests/` |
+| 8 | Wiki `Agent-Patterns.md`. | `wiki/Agent-Patterns.md` (new) |
+| 9 | Docker rebuild. | `Dockerfile` |
+| 10 | DBeaver smoke. | Manual |
+
+---
+
+### Task 215: ⬜ Scheduled Jobs / CRON (Feature #215)
+
+**Goal:** Cron-style scheduled SQL execution — `ANALYZE`, TTL prune, custom agent jobs.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Catalog `CAT_SYS_SCHEDULED_JOBS` — name, cron_expr, sql, last_run, status. | `evolution/db/catalog_internal.{h,c}` |
+| 2 | DDL: `CREATE JOB j ON SCHEDULE '*/5 * * * *' DO 'ANALYZE TABLE t'`. | `evoparser.y` |
+| 3 | Cron evaluator — 30 s tick, minute-level resolution. | new `evolution/db/Scheduler.{h,c}` |
+| 4 | DDL: `DROP JOB j`, `SHOW JOBS`, `ALTER JOB j DISABLE/ENABLE`. | `evoparser.y`, `adaptor/catalog.c` |
+| 5 | Background thread lifecycle + SIGTERM safe shutdown (existing auto-reclaim pattern). | `evolution/db/Scheduler.c`, `adaptor/main.c` |
+| 6 | Tests — `tests/test_scheduled_jobs.py`: create job with 1-minute schedule → fires, DISABLE stops it, SHOW JOBS lists state. ≥8 cases. | `tests/test_scheduled_jobs.py` (new) |
+| 7 | Regression. | `tests/` |
+| 8 | Wiki `Scheduled-Jobs.md`. | `wiki/Scheduled-Jobs.md` (new) |
+| 9 | Full system test. | `Dockerfile` |
+| 10 | Multi-node race: 3-node cluster, confirm only leader runs each job (or leader elects via Raft). | `tests/` |
+
+---
+
+## Day 99 — Sprint 6: Framework-Common Primitives
+
+### Task 222: ⬜ MESSAGE LOG (Append-Only Chat History) (Feature #222)
+
+**Goal:** `CREATE MESSAGE LOG chat` — one-line-per-message ordered log. Covers LangChain `BaseChatMessageHistory`, LlamaIndex `ChatMemoryBuffer`, AutoGen `Memory`, Zep session messages.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Catalog `CAT_SYS_MESSAGE_LOGS` + new object. DDL `CREATE MESSAGE LOG chat [WITH (ttl='7 days')]`. | `evolution/db/catalog_internal.{h,c}`, `evoparser.y` |
+| 2 | Physical table `__ml_<name>(session_id TEXT, seq INT, role TEXT, content JSON, meta JSON, created_at TIMESTAMP)`, PK `(session_id, seq)`. | `evolution/db/MessageLog.{h,c}` (new) |
+| 3 | `LOG APPEND INTO chat (session_id, role, content [, meta])` — auto-increment seq atomically. | `evolution/db/MessageLog.c` |
+| 4 | `LOG READ FROM chat WHERE session_id=? [LAST n] [SINCE ts]` — ordered ASC. | `evolution/db/MessageLog.c` |
+| 5 | `LOG TRUNCATE FROM chat WHERE session_id=? [BEFORE seq]`. | `evolution/db/MessageLog.c` |
+| 6 | `LOG COUNT FROM chat WHERE session_id=?` — fast length for memory-bound summarization triggers. | `evolution/db/MessageLog.c` |
+| 7 | TTL integration (Task 213): `WITH (ttl='7 days')` auto-registers TTL daemon on the log. | `evolution/db/MessageLog.c` |
+| 8 | Tests — `tests/test_message_log.py`: append/read/truncate/count, session isolation, seq monotonicity, TTL expiry. ≥12 cases. | `tests/test_message_log.py` (new) |
+| 9 | Regression. | `tests/` |
+| 10 | Wiki `Message-Log.md`. | `wiki/Message-Log.md` (new) |
+
+---
+
+### Task 223: ⬜ DOCUMENT STORE + Mongo-Style JSON Filter (Feature #223)
+
+**Goal:** Haystack `DocumentStore.filter_documents(filters={...})` + LlamaIndex `BaseDocumentStore`.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `CREATE DOCUMENT STORE docs` DDL + catalog entry. | `evoparser.y`, `catalog_internal.{h,c}` |
+| 2 | Physical table `__doc_<name>(id TEXT PK, content TEXT, meta JSON, embedding VECTOR(N) NULL, created_at TIMESTAMP)`. | `evolution/db/Document.{h,c}` (new) |
+| 3 | `DOCUMENT WRITE INTO docs (id, content, meta [, embedding])` — batch insert supported. | `evolution/db/Document.c` |
+| 4 | Mongo-filter DSL parser: `{"$and":[{"user_id":"42"},{"score":{"$gt":0.5}}]}` → AST → internal WHERE predicate. Operators: `$eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $and, $or, $not, $exists` — 12 total. | `evolution/db/mongo_filter.{h,c}` (new) |
+| 5 | `DOCUMENT FILTER FROM docs WHERE $json_filter$ [LIMIT n]`. Filter delimited by `$ ... $` shell-like markers to avoid SQL escape wars. | `evolution/db/Document.c`, `evoparser.y` |
+| 6 | `DOCUMENT SEARCH docs USING VECTOR $q [WHERE $filter$] LIMIT k` — hybrid search wrapper (Task 203 reuse). | `evolution/db/Document.c` |
+| 7 | `DOCUMENT DELETE FROM docs WHERE $filter$`. | `evolution/db/Document.c` |
+| 8 | Tests — `tests/test_document_store.py`: all 12 operators, hybrid search with filter, delete-by-filter, unsupported operator rejected. ≥15 cases. | `tests/test_document_store.py` (new) |
+| 9 | Regression. | `tests/` |
+| 10 | Wiki `Document-Store.md`. | `wiki/Document-Store.md` (new) |
+
+---
+
+### Task 224: ⬜ GRAPH STORE — Temporal Knowledge Graph (Feature #224)
+
+**Goal:** Zep Graphiti + Mem0 graph mode + LangChain KG equivalent. Bitemporal edges (`valid_from`, `valid_to`, `invalid_at` per triple).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `CREATE GRAPH STORE kg` DDL + catalog entry. | `evoparser.y`, `catalog_internal.{h,c}` |
+| 2 | Node table `__kg_<name>_nodes(id TEXT PK, type TEXT, props JSON, embedding VECTOR NULL, valid_from, valid_to)`. Edge table `__kg_<name>_edges(src_id, dst_id, rel TEXT, props JSON, valid_from, valid_to, invalid_at NULL, PK (src,rel,dst,valid_from))`. | `evolution/db/Graph.{h,c}` (new) |
+| 3 | `GRAPH UPSERT NODE INTO kg (id, type [, props, embedding])`. | `evolution/db/Graph.c` |
+| 4 | `GRAPH UPSERT EDGE INTO kg (src, rel, dst [, props])` — auto `valid_from = NOW()`, mark older matching triple's `invalid_at = NOW()`. | `evolution/db/Graph.c` |
+| 5 | `GRAPH NEIGHBORS OF id IN kg [AS OF ts] [DEPTH n] [WHERE rel IN (...)]` — BFS up to n hops, bitemporal filter. | `evolution/db/Graph.c` |
+| 6 | `GRAPH SEARCH kg USING VECTOR $q LIMIT k` — node embedding similarity. | `evolution/db/Graph.c` |
+| 7 | `GRAPH PATH FROM a TO b IN kg [AS OF ts]` — shortest path (BFS, depth cap 8). | `evolution/db/Graph.c` |
+| 8 | Tests — `tests/test_graph_store.py`: upsert, neighbors, path, bitemporal query ("what did we know about X 6 months ago?"), vector similarity. ≥15 cases. | `tests/test_graph_store.py` (new) |
+| 9 | Regression. | `tests/` |
+| 10 | Wiki `Graph-Store.md` — emphasize Zep-parity + temporal edge example. | `wiki/Graph-Store.md` (new) |
+
+---
+
+### Task 225: ⬜ ENTITY MEMORY Templates (Feature #225)
+
+**Goal:** LangChain `ConversationEntityMemory` + CrewAI `EntityMemory` — one-SQL-object template.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `CREATE ENTITY STORE entities` — catalog + physical table `__ent_<name>(entity_key TEXT PK, summary TEXT, facts JSON, mention_count INT, last_seen TIMESTAMP)`. | `evoparser.y`, `evolution/db/Entity.{h,c}` (new) |
+| 2 | `ENTITY PUT INTO entities (key, summary [, facts])` — upsert + `mention_count += 1`. | `evolution/db/Entity.c` |
+| 3 | `ENTITY GET FROM entities WHERE key = ?`. | `evolution/db/Entity.c` |
+| 4 | `ENTITY RANK FROM entities LIMIT n` — ORDER BY mention_count DESC, last_seen DESC. | `evolution/db/Entity.c` |
+| 5 | Entity summary refresh trigger (Task 212 consumer): every 10th PUT invokes external LLM summary hook. | `evolution/db/Entity.c`, `docs/agent-patterns/entity-summary.sql` (new) |
+| 6 | TTL hook: entity not mentioned for N days → auto-expire (Task 213 integration). | `evolution/db/Entity.c` |
+| 7 | Tests — `tests/test_entity_store.py`: put/get/rank, mention_count increment, summary refresh stub, TTL expiry. ≥10 cases. | `tests/test_entity_store.py` (new) |
+| 8 | Regression. | `tests/` |
+| 9 | Wiki `Entity-Store.md`. | `wiki/Entity-Store.md` (new) |
+| 10 | Full system test. | `Dockerfile` |
+
+---
+
+## Day 100 — Sprint 7: C Client Library + FFI Adapters
+
+### Task 216: ⬜ libevosql-memory C SDK — Core (Feature #216)
+
+**Goal:** `libevosql-memory.{so,dylib,a}` — opaque connection handle, checkpoint + memory + vector API, pkg-config install.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | New directory `client/libevosql-memory/` with Makefile. Optional CMakeLists. | `client/libevosql-memory/Makefile` (new) |
+| 2 | Public header `include/evosql_memory.h` — opaque `evo_conn_t`, `evo_error_t`, constants, structs. | `client/libevosql-memory/include/evosql_memory.h` (new) |
+| 3 | `evo_connect(host, port, user, pass, **conn_out)`, `evo_close(conn)` — EVO text protocol client. | `client/libevosql-memory/src/conn.c` (new) |
+| 4 | Checkpoint API: `evo_checkpoint_put`, `evo_checkpoint_get`, `evo_checkpoint_list`. | `client/libevosql-memory/src/checkpoint.c` |
+| 5 | Memory API: `evo_memory_put`, `evo_memory_get`, `evo_memory_search`, `evo_memory_delete`, `evo_memory_list_namespaces`. | `client/libevosql-memory/src/memory.c` |
+| 6 | Vector helpers: `evo_vector_from_floats(float *arr, int n)`, `evo_vector_free`. | `client/libevosql-memory/src/vector.c` |
+| 7 | Error handling: thread-local `last_error`, `evo_strerror(rc)`. | `client/libevosql-memory/src/error.c` |
+| 8 | Tests — C unit suite `tests/test_sdk.c` (CUnit or plain main). ≥15 cases. | `client/libevosql-memory/tests/test_sdk.c` (new) |
+| 9 | `make install` + pkg-config file `evosql-memory.pc`. | `client/libevosql-memory/Makefile` |
+| 10 | README + example `examples/put_get.c`. | `client/libevosql-memory/README.md`, `examples/` |
+
+---
+
+### Task 217: ⬜ C SDK Streaming / Subscribe (Feature #217)
+
+**Goal:** `evo_subscribe` callback-based event delivery built on Task 210 durable subscriptions.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `evo_subscribe(conn, channel, callback, ctx)` — background thread per subscription. | `client/libevosql-memory/src/subscribe.c` (new) |
+| 2 | CDC client: `evo_cdc_subscribe(conn, stream, callback, from_lsn)`. | `client/libevosql-memory/src/cdc.c` (new) |
+| 3 | Thread-safe callback dispatch: mutex around callback invocation + event queue buffer. | `client/libevosql-memory/src/subscribe.c` |
+| 4 | Graceful unsubscribe: `evo_unsubscribe(sub)` joins thread, flushes pending. | `client/libevosql-memory/src/subscribe.c` |
+| 5 | Ack API: `evo_ack_up_to(subscription, lsn)` — advances cursor. | `client/libevosql-memory/src/subscribe.c` |
+| 6 | Tests — callback fires on NOTIFY, CDC events delivered in order, unsubscribe is deterministic, concurrent 1k threads. | `client/libevosql-memory/tests/test_subscribe.c` |
+| 7 | Example: reactive agent loop. | `examples/reactive_agent.c` |
+| 8 | Thread-safety doc section. | `client/libevosql-memory/README.md` |
+| 9 | Regression against server-side tests. | `tests/` |
+| 10 | Docker compose test: server + SDK client in compose, assert events flow. | `docker-compose.yml` |
+
+---
+
+### Task 218: ⬜ FFI Bindings + Multi-Framework Adapters (Feature #218)
+
+**Goal:** Python/Go/Rust FFI bindings + 6 framework adapter reference implementations.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | **LangGraph** `BaseCheckpointSaver` + `BaseStore` Python shim (ctypes over Task 204/205 DML). | `examples/python/adapters/langgraph_evosql.py` (new) |
+| 2 | **LangChain classic** `BaseChatMessageHistory` + `VectorStoreRetrieverMemory` + `ConversationEntityMemory` → Task 222 + 205 + 225. | `examples/python/adapters/langchain_evosql.py` (new) |
+| 3 | **LlamaIndex** `BaseKVStore` + `BaseDocumentStore` + `ChatMemoryBuffer` → 205 + 223 + 222. | `examples/python/adapters/llamaindex_evosql.py` (new) |
+| 4 | **CrewAI** `ShortTermMemory` + `LongTermMemory` + `EntityMemory` → 205 + 204 + 225. | `examples/python/adapters/crewai_evosql.py` (new) |
+| 5 | **AutoGen / AG2** `Memory` protocol (`add/query/clear`) → Task 205 (MemoryContent MIME in JSON). | `examples/python/adapters/autogen_evosql.py` (new) |
+| 6 | **Mem0-compatible** Python API — drop-in `from evosql_memory import Memory` with `add/search/get/update/delete/history`. | `examples/python/adapters/mem0_compat.py` (new) |
+| 7 | Go cgo example + Rust bindgen stub (FFI scaffolding, not a full adapter). | `examples/go/`, `examples/rust/` |
+| 8 | Demo app: LangGraph ReAct agent using MESSAGE LOG + CHECKPOINT + MEMORY SEARCH end-to-end. | `examples/python/react_agent_demo.py` (new) |
+| 9 | Documentation: framework-by-framework table mapping interfaces to EvoSQL primitives. | `wiki/Agent-Frameworks.md` (new) |
+| 10 | Docker-compose demo stack + blog post draft. | `docker-compose.demo.yml` (new), `docs/blog/multi-framework-launch.md` (new) |
+
+---
+
+## Day 101 — Sprint 8: Benchmarks & Positioning
+
+### Task 219: ⬜ Agent-Memory Benchmark Harness (Feature #219)
+
+**Goal:** LongMemEval accuracy + p50/p99 latency vs Zep, Mem0, langgraph-store-mongodb, (optional) Pinecone.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | LongMemEval dataset loader — parse `https://github.com/xiaowu0162/LongMemEval` JSON corpus. | `bench/longmemeval/loader.py` (new) |
+| 2 | Ingest: dataset → MEMORY STORE (Task 205) via C SDK FFI. | `bench/longmemeval/ingest.py` |
+| 3 | Query: per-question semantic recall + answer, route through grader harness. | `bench/longmemeval/run.py` |
+| 4 | Comparison backends: Zep (docker), Mem0 (pip), langgraph-store-mongodb (docker), Pinecone (optional via API key). | `bench/longmemeval/compare.py` |
+| 5 | Latency bench: p50/p99 for checkpoint PUT/GET, memory SEARCH k=10 — 1k iterations × 5 backends. | `bench/latency/` (new) |
+| 6 | Reactive latency: LISTEN/NOTIFY push vs Mongo change-stream polling — agent tick-loop replay. | `bench/reactive/` (new) |
+| 7 | Temporal query: "what did we know 6 months ago?" — EvoSQL AS OF vs Zep Graphiti vs Mongo materialized snapshots. | `bench/temporal/` (new) |
+| 8 | Report: markdown table + accuracy/latency/cost matrix. Targets: LongMemEval ≥ Zep (63.8%), p99 checkpoint PUT < 5 ms, reactive push latency < 10 ms. | `docs/benchmarks/v1.md` (new) |
+| 9 | CI weekly run + README badge. | `.github/workflows/bench.yml` (new), `README.md` |
+| 10 | Docker compose bench target + wiki. | `docker-compose.bench.yml` (new), `wiki/Benchmarks.md` (new) |
+
+---
+
+### Task 220: ⬜ Multi-Framework Compatibility Suite (Feature #220)
+
+**Goal:** Run each framework's official/in-house conformance suite against EvoSQL — prove "works with X" via passing tests.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | **LangGraph** — run `langgraph-checkpoint-tests` (official) + BaseStore suite. | `tests/framework_compat/langgraph/` (new) |
+| 2 | **LangChain** — `ChatMessageHistory` + `BaseMemory` test matrix. | `tests/framework_compat/langchain/` (new) |
+| 3 | **LlamaIndex** — `BaseKVStore` + `BaseDocumentStore` protocol conformance. | `tests/framework_compat/llamaindex/` (new) |
+| 4 | **CrewAI** — no official suite; write our own covering reset/search happy paths. | `tests/framework_compat/crewai/` (new) |
+| 5 | **AutoGen** — `Memory` protocol conformance (add/query/clear). | `tests/framework_compat/autogen/` (new) |
+| 6 | **Mem0** — REST-compat smoke (add/search/delete) via our `mem0_compat` adapter. | `tests/framework_compat/mem0_compat/` (new) |
+| 7 | Async + concurrency stress: 1k concurrent threads per adapter. | `tests/framework_compat/stress/` (new) |
+| 8 | CI matrix — one job per framework. | `.github/workflows/framework-compat.yml` (new) |
+| 9 | Passing badges in README per framework. | `README.md` |
+| 10 | Wiki `Agent-Frameworks.md` compat table — native / via-adapter / missing per feature. | `wiki/Agent-Frameworks.md` |
+
+---
+
+### Task 221: ⬜ Positioning & Docs Relaunch (Feature #221)
+
+**Goal:** Landing page rewrite, comparison matrix, ADR-002 publish, v3.0.0 release.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | New `README.md` — agent-memory positioning front-and-center; keep SQL engine description secondary. | `README.md` |
+| 2 | Comparison matrix: EvoSQL vs Mongo langgraph-store vs Pinecone vs Zep vs Mem0 vs Weaviate — feature grid. | `docs/comparison.md` (new) |
+| 3 | Architecture diagram — SQL + vector + JSON single-process, reactive streaming, temporal. | `docs/architecture.svg` (new) |
+| 4 | Getting started: 60-second quickstart (docker run + MEMORY STORE + C SDK PUT). | `docs/quickstart.md` (new) |
+| 5 | ADR-002: Agent Memory pivot — scope, why, alternatives, consequences. Link from README. | `docs/adr/ADR-002-agent-memory-platform-roadmap.md` |
+| 6 | Wiki home page update — point to new "Agent Memory" sidebar section. | `wiki/Home.md` |
+| 7 | Pricing/positioning landing (self-host free + enterprise support placeholder). | `docs/pricing.md` (new) |
+| 8 | Blog post: "Powering Long-Term Memory for Agents" launch. | `docs/blog/2026-launch.md` (new) |
+| 9 | Version bump to v3.0.0 (major: product repositioning). | `evolution/db/version.h`, `deploy/helm/evolutiondb/Chart.yaml` |
+| 10 | Release notes. | `docs/release-notes/3.0.0.md` (new) |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
