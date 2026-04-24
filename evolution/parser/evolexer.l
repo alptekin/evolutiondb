@@ -35,6 +35,9 @@ ALL						{ return ALL; }
 ANALYZE					{ return ANALYZE; }
 HISTOGRAM				{ return HISTOGRAM; }
 BUCKETS					{ return BUCKETS; }
+SAMPLE					{ return SAMPLE; }
+PERCENT					{ return PERCENT; }
+ROWS					{ return ROWS; }
 
 
 
