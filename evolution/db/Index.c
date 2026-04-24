@@ -28,6 +28,7 @@
 #include "table_api.h"
 #include "hash_idx.h"
 #include "tuple_format.h"
+#include "hnsw.h"
 
 #define CONC_BATCH_SIZE 100  /* rows per batch for CONCURRENTLY populate */
 #define CONC_MOD_LOG_INIT_CAP 256
@@ -578,6 +579,14 @@ void SetIndexUsingHash(void)
     g_idx.usingHash = 1;
 }
 
+void SetIndexUsingHnsw(int distance_kind, int m, int ef_construction)
+{
+    g_idx.usingHnsw = 1;
+    g_idx.hnswDistanceKind   = distance_kind;
+    g_idx.hnswM              = m > 0 ? m : 16;
+    g_idx.hnswEfConstruction = ef_construction > 0 ? ef_construction : 64;
+}
+
 void SetIndexFulltext(void)
 {
     g_idx.fulltext = 1;
@@ -778,6 +787,65 @@ int CreateIndexProcess(void)
                 return -1;
             }
         }
+    }
+
+    /* HNSW ANN (Task 202 — Feature #202) — no on-disk btree, graph lives
+     * in memory; build via scan. Catalog entry records params so a v1.1
+     * boot-time rebuild can replay. */
+    if (g_idx.usingHnsw) {
+        char colName[256];
+        strncpy(colName, g_idx.columnName, sizeof(colName) - 1);
+        colName[sizeof(colName) - 1] = '\0';
+        /* Single-column only in v1 */
+        if (strchr(colName, ',') != NULL) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "HNSW index supports a single vector column in v1");
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FEATURE_NOT_SUPPORTED);
+            g_idx.unique = 0; g_idx.ifNotExists = 0;
+            g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0; g_idx.usingHnsw = 0;
+            return -1;
+        }
+        int found_idx = -1;
+        for (int i = 0; i < indexNCols; i++) {
+            if (strcasecmp(indexCols[i].col_name, colName) == 0) {
+                found_idx = i; break;
+            }
+        }
+        if (found_idx < 0 || !tup_is_vector(indexCols[found_idx].type_code)) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "HNSW index requires a VECTOR column, got '%s'", colName);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_INVALID_PARAMETER_VALUE);
+            g_idx.unique = 0; g_idx.ifNotExists = 0;
+            g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0; g_idx.usingHnsw = 0;
+            return -1;
+        }
+
+        /* Register the index in the catalog with type 'A'. root_page is 0
+         * (no on-disk tree); params packed into expr_def slot for future
+         * auto-rebuild. */
+        char paramBuf[128];
+        snprintf(paramBuf, sizeof(paramBuf), "HNSW:d=%d,m=%d,ef=%d",
+                 g_idx.hnswDistanceKind, g_idx.hnswM, g_idx.hnswEfConstruction);
+        cat_create_index_ex(td.table_id, g_idx.name, 0,
+                            g_idx.columnName, 'A', paramBuf);
+        cat_update_index_ready(td.table_id, g_idx.name, IDX_READY);
+
+        if (hnsw_build(td.table_id, g_idx.name, colName,
+                       g_idx.hnswDistanceKind,
+                       g_idx.hnswM, g_idx.hnswEfConstruction) != 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "hnsw_build failed for index '%s'", g_idx.name);
+            g_err.error = 1;
+            g_idx.unique = 0; g_idx.ifNotExists = 0;
+            g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0; g_idx.usingHnsw = 0;
+            return -1;
+        }
+
+        g_idx.unique = 0; g_idx.ifNotExists = 0;
+        g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0; g_idx.usingHnsw = 0;
+        return 0;
     }
 
     /* Create index structure (B+ tree or hash) */
@@ -1280,8 +1348,11 @@ int DropIndexProcess(void)
         return -1;
     }
 
-    /* Destroy index pages (hash or B+ tree) */
-    if (idx.index_type == 'H' || idx.index_type == 'V') {
+    /* Destroy index pages (hash, B+ tree, or HNSW in-memory graph) */
+    if (idx.index_type == 'A') {
+        /* HNSW — in-memory only, free the graph */
+        hnsw_drop(idx.table_id, g_idx.name);
+    } else if (idx.index_type == 'H' || idx.index_type == 'V') {
         HashIndex hi = { .dir_page = idx.root_page };
         hash_idx_destroy(&hi);
     } else {

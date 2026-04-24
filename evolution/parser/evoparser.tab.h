@@ -416,7 +416,9 @@
      FL1_DIST = 632,
      FVECTOR_DIM = 633,
      FVECTOR_NORM = 634,
-     FVECTOR_NORMALIZE = 635
+     FVECTOR_NORMALIZE = 635,
+     HNSW = 636,
+     FHNSW_KNN = 637
    };
 #endif
 /* Tokens.  */
@@ -798,6 +800,8 @@
 #define FVECTOR_DIM 633
 #define FVECTOR_NORM 634
 #define FVECTOR_NORMALIZE 635
+#define HNSW 636
+#define FHNSW_KNN 637
 
 
 
@@ -813,7 +817,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 817 "parser/evoparser.tab.h"
+#line 821 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

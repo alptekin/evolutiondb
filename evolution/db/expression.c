@@ -16,6 +16,8 @@
 #include "catalog_internal.h"
 #include "database.h"   /* query_context.h macros for g_expr.nodePool etc. */
 #include "crypto.h"
+#include "hnsw.h"
+#include "table_api.h"
 
 /* Nested-execution marker (Task 89 — Feature #59).
  * Counter bumped by the join engine around LATERAL subquery re-execution.
@@ -3182,6 +3184,43 @@ int expr_evaluate(const ExprNode *e,
         if (pos + 1 < buf_size) out_buf[pos++] = ']';
         out_buf[pos < buf_size ? pos : buf_size - 1] = '\0';
         free(arr);
+        return 1;
+    }
+
+    /* hnsw_knn(table_name, index_name, query_text, k) — comma-separated
+     * PK list ordered by ascending distance (Task 202 — Feature #202). */
+    if (e->type == EXPR_HNSW_KNN) {
+        char tbl[256] = "", idx[256] = "", qtxt[4096] = "";
+        int k = e->val.intval;
+        if (k <= 0) k = 10;
+        if (e->left)
+            expr_evaluate(e->left,  col_names, col_values, num_cols, tbl, sizeof(tbl));
+        if (e->right)
+            expr_evaluate(e->right, col_names, col_values, num_cols, idx, sizeof(idx));
+        if (e->extra)
+            expr_evaluate(e->extra, col_names, col_values, num_cols, qtxt, sizeof(qtxt));
+
+        TableDesc td;
+        if (tapi_resolve(tbl, &td, NULL, NULL) < 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        HnswHit hits[256];
+        if (k > 256) k = 256;
+        int n = hnsw_search_knn(td.table_id, idx, qtxt, k, hits);
+        if (n < 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size - 1);
+            out_buf[buf_size - 1] = '\0';
+            return 1;
+        }
+        int pos = 0;
+        for (int i = 0; i < n; i++) {
+            if (i > 0 && pos + 1 < buf_size) out_buf[pos++] = ',';
+            const char *s = hits[i].pk_value;
+            while (*s && pos + 1 < buf_size) out_buf[pos++] = *s++;
+        }
+        out_buf[pos < buf_size ? pos : buf_size - 1] = '\0';
         return 1;
     }
 
