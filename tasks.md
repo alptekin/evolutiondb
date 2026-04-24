@@ -1995,7 +1995,7 @@
 
 ---
 
-### Task 100: ⬜ Range Selectivity Estimation (Feature #102)
+### Task 100: ✅ Range Selectivity Estimation (Feature #102)
 
 **Goal:** Enable row estimation for range predicates (`>`, `<`, `>=`, `<=`, `BETWEEN`). Use min/max interpolation (no histogram) or histogram bucket interpolation (when histogram exists).
 
