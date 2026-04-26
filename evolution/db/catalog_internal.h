@@ -230,6 +230,33 @@ typedef struct {
 } PolicyDesc;
 
 /* ----------------------------------------------------------------
+ *  Checkpoint Store (Task 204 — Feature #204)
+ *
+ *  Native LangGraph BaseCheckpointSaver backend. A "checkpoint store"
+ *  is a named registry entry that owns a backing table __ck_<name> with
+ *  a fixed schema:
+ *
+ *    thread_id      VARCHAR(255) NOT NULL
+ *    checkpoint_ns  VARCHAR(255) NOT NULL
+ *    checkpoint_id  VARCHAR(255) PRIMARY KEY
+ *    parent_id      VARCHAR(255)
+ *    values         JSON
+ *    metadata       JSON
+ *    parent_config  JSON
+ *    created_at     TIMESTAMP
+ *
+ *  Optional retention is stored as a free-form text expression
+ *  ("30 days" / "1 hour"); enforcement of retention pruning is a
+ *  follow-up (Task 209 WAL retention reuses the same expression). */
+#define CAT_MAX_CKSTORE_RETENTION 64
+
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];           /* logical store name */
+    uint32_t backing_table_id;                 /* __ck_<name> table_id */
+    char     retention[CAT_MAX_CKSTORE_RETENTION]; /* "" = no retention */
+} CheckpointStoreDesc;
+
+/* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
 
@@ -408,6 +435,15 @@ int cat_list_policies_for_table(uint32_t table_id,
                                 PolicyDesc *out, int max);
 /* Clean up every policy attached to a table (called from DROP TABLE). */
 int cat_drop_all_policies_for_table(uint32_t table_id);
+
+/* ----------------------------------------------------------------
+ *  Checkpoint store catalog API (Task 204 — Feature #204)
+ *
+ *  Keys in CAT_SYS_CHECKPOINT_STORES are the lowercased store name. */
+int cat_create_checkpoint_store(const CheckpointStoreDesc *desc);
+int cat_find_checkpoint_store(const char *name, CheckpointStoreDesc *out);
+int cat_drop_checkpoint_store(const char *name);
+int cat_list_checkpoint_stores(CheckpointStoreDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)

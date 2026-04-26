@@ -9,6 +9,7 @@
 	#include <stdio.h>
 	#include "../db/database.h"
 	#include "../db/expression.h"
+	#include "../db/Checkpoint.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -432,10 +433,14 @@
 /* HNSW ANN index (Task 202 — Feature #202) */
 %token HNSW FHNSW_KNN FHNSW_FILTER_KNN FHNSW_HYBRID_EXPLAIN
 
+/* Checkpoint store (Task 204 — Feature #204) */
+%token CHECKPOINT STORE RETENTION PUT GET LIST WRITES
+
 %type <intval> select_opts
 %type <intval> select_stmt
 %type <intval> opt_hnsw_opclass
 %type <intval> opt_hnsw_with hnsw_with_list hnsw_with_item
+%type <strval> opt_ck_with
 %type <intval> select_expr_list
 %type <intval> val_list
 %type <intval> opt_val_list
@@ -1910,6 +1915,75 @@ opt_truncate_options: /* empty */
 stmt: listen_stmt     { emit("STMT"); }
     | unlisten_stmt   { emit("STMT"); }
     | notify_stmt     { emit("STMT"); }
+;
+
+/* ── Checkpoint store DDL (Task 204 — Feature #204) ──
+ * CREATE CHECKPOINT STORE name [WITH (retention='30 days')]
+ * DROP   CHECKPOINT STORE name [CASCADE]
+ *
+ * The IF NOT EXISTS / IF EXISTS guards keep the productions terse by
+ * encoding the flag in $$ — 1 = guard present. */
+stmt: create_checkpoint_store_stmt { emit("STMT"); }
+    | drop_checkpoint_store_stmt   { emit("STMT"); }
+;
+
+create_checkpoint_store_stmt:
+  CREATE CHECKPOINT STORE NAME opt_ck_with
+    {
+        emit("CREATE CHECKPOINT STORE %s", $4);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        if ($5) SetCheckpointStoreRetention($5);
+        CreateCheckpointStoreProcess(0);
+        free($4);
+        if ($5) free($5);
+    }
+| CREATE CHECKPOINT STORE IF EXISTS NAME opt_ck_with
+    {
+        /* "IF NOT EXISTS" is tokenized by the lexer as IF EXISTS with the
+         * subtok flag set on EXISTS. Mirrors CREATE INDEX IF NOT EXISTS. */
+        emit("CREATE CHECKPOINT STORE IF NOT EXISTS %s", $6);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($6);
+        if ($7) SetCheckpointStoreRetention($7);
+        CreateCheckpointStoreProcess(1);
+        free($6);
+        if ($7) free($7);
+    }
+;
+
+/* Optional WITH (retention = '30 days') clause. Returns the retention
+ * literal as a heap string (caller frees), or NULL if absent. */
+opt_ck_with: /* nil */                          { $$ = NULL; }
+| WITH '(' RETENTION COMPARISON STRING ')'      { $$ = $5; }
+;
+
+drop_checkpoint_store_stmt:
+  DROP CHECKPOINT STORE NAME
+    {
+        emit("DROP CHECKPOINT STORE %s", $4);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        DropCheckpointStoreProcess(0);
+        free($4);
+    }
+| DROP CHECKPOINT STORE NAME CASCADE
+    {
+        emit("DROP CHECKPOINT STORE %s CASCADE", $4);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        SetCheckpointStoreCascade(1);
+        DropCheckpointStoreProcess(0);
+        free($4);
+    }
+| DROP CHECKPOINT STORE IF EXISTS NAME
+    {
+        emit("DROP CHECKPOINT STORE IF EXISTS %s", $6);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($6);
+        DropCheckpointStoreProcess(1);
+        free($6);
+    }
 ;
 
 listen_stmt: LISTEN NAME
