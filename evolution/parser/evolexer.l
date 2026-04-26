@@ -325,7 +325,14 @@ QUOTE					{ return QUOTE; }
 SIMPLE					{ return SIMPLE; }
 INT2|SMALLINT			{ return SMALLINT; }
 STORED					{ return STORED; }
+STORE					{ return STORE; }
 SOME					{ return SOME; }
+CHECKPOINT				{ return CHECKPOINT; }
+RETENTION				{ return RETENTION; }
+WRITES					{ return WRITES; }
+PUT						{ return PUT; }
+GET						{ return GET; }
+LIST					{ return LIST; }
 
 
 
