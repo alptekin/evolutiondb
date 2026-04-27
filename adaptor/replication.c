@@ -64,6 +64,87 @@ static void cdc_decode_page(const char *page_data, uint16_t page_len,
 static void *cdc_accept_loop(void *arg);
 static void *cdc_client_handler(void *arg);
 
+/* Task 211 — multi-client CDC fan-out.
+ *
+ * Each connected CDC client registers its (cb, ctx) pair through
+ * cdc_subscribe; cdc_decode_page iterates the registry so every client
+ * gets every event. The legacy g_cdc_callback above keeps the single-
+ * client API working for code that hasn't been migrated. */
+typedef struct {
+    repl_change_callback  cb;
+    void                 *ctx;
+    int                   active;
+} CdcSubscriber;
+#define CDC_MAX_SUBSCRIBERS 32
+static CdcSubscriber  g_cdc_subs[CDC_MAX_SUBSCRIBERS];
+static pthread_mutex_t g_cdc_subs_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int cdc_subscribe(repl_change_callback cb, void *ctx)
+{
+    pthread_mutex_lock(&g_cdc_subs_lock);
+    int slot = -1;
+    for (int i = 0; i < CDC_MAX_SUBSCRIBERS; i++) {
+        if (!g_cdc_subs[i].active) {
+            g_cdc_subs[i].cb = cb;
+            g_cdc_subs[i].ctx = ctx;
+            g_cdc_subs[i].active = 1;
+            slot = i;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_cdc_subs_lock);
+    return slot;
+}
+
+static void cdc_unsubscribe(int slot)
+{
+    if (slot < 0 || slot >= CDC_MAX_SUBSCRIBERS) return;
+    pthread_mutex_lock(&g_cdc_subs_lock);
+    g_cdc_subs[slot].active = 0;
+    g_cdc_subs[slot].cb = NULL;
+    g_cdc_subs[slot].ctx = NULL;
+    pthread_mutex_unlock(&g_cdc_subs_lock);
+}
+
+/* Has any consumer registered? bp_wal_flush_dirty checks this so the
+ * primary-side decode short-circuits when no one is listening. */
+int cdc_has_subscribers(void)
+{
+    if (g_cdc_callback) return 1;
+    for (int i = 0; i < CDC_MAX_SUBSCRIBERS; i++)
+        if (g_cdc_subs[i].active) return 1;
+    return 0;
+}
+
+/* Filter override for the primary path: when set to a non-zero XID, the
+ * decoder only emits events whose xmin (or xmax for D) matches. Without
+ * this filter the same page would replay every old tuple every time it
+ * came back through bp_wal_flush_dirty, and a Kafka consumer would see
+ * duplicate INSERT events for unchanged rows. The replica replay path
+ * (which streams one record at a time) leaves this at 0. */
+static __thread uint32_t g_cdc_filter_xid = 0;
+
+/* Decode page and fan out to every active subscriber. Public so the
+ * primary buffer-pool path can call it directly after wal_log_page. */
+void cdc_dispatch_page(const char *page_data, uint16_t page_len,
+                        uint32_t page_no, int64_t timestamp)
+{
+    cdc_decode_page(page_data, page_len, page_no, timestamp);
+}
+
+/* Primary entry point: dispatch with the current transaction's XID
+ * applied as a filter. bp_wal_flush_dirty calls this so the post-flush
+ * decode emits one event per changed tuple, not the entire page's
+ * historical contents. */
+void cdc_dispatch_page_xid(const char *page_data, uint16_t page_len,
+                            uint32_t page_no, int64_t timestamp,
+                            uint32_t filter_xid)
+{
+    g_cdc_filter_xid = filter_xid;
+    cdc_decode_page(page_data, page_len, page_no, timestamp);
+    g_cdc_filter_xid = 0;
+}
+
 /* ================================================================
  *  Master: WAL sender
  * ================================================================ */
@@ -700,12 +781,32 @@ void repl_set_change_callback(repl_change_callback cb, void *ctx)
     g_cdc_ctx = ctx;
 }
 
+/* Dispatch one event to every active subscriber AND the legacy
+ * single-callback consumer. Snapshots the subscriber list under the
+ * lock then releases — callbacks must not re-enter the registry. */
+static void cdc_emit(const ReplicationChangeEvent *event)
+{
+    if (g_cdc_callback) g_cdc_callback(event, g_cdc_ctx);
+    CdcSubscriber snap[CDC_MAX_SUBSCRIBERS];
+    int n = 0;
+    pthread_mutex_lock(&g_cdc_subs_lock);
+    for (int i = 0; i < CDC_MAX_SUBSCRIBERS; i++) {
+        if (g_cdc_subs[i].active) snap[n++] = g_cdc_subs[i];
+    }
+    pthread_mutex_unlock(&g_cdc_subs_lock);
+    for (int i = 0; i < n; i++) {
+        if (snap[i].cb) snap[i].cb(event, snap[i].ctx);
+    }
+}
+
 /* Decode a WAL page image and emit CDC events.
- * Called during replica WAL replay if a callback is registered. */
+ * Called during replica WAL replay if a callback is registered, and
+ * directly from bp_wal_flush_dirty on the primary so streaming works
+ * without a replica node. */
 static void cdc_decode_page(const char *page_data, uint16_t page_len,
                              uint32_t page_no, int64_t timestamp)
 {
-    if (!g_cdc_callback || page_len < 16) return;
+    if (!cdc_has_subscribers() || page_len < 16) return;
 
     /* Read slotted page header */
     uint16_t num_slots;
@@ -746,6 +847,7 @@ static void cdc_decode_page(const char *page_data, uint16_t page_len,
 
         if (xmax == 0 && xmin > 0) {
             /* Live tuple — could be INSERT */
+            if (g_cdc_filter_xid != 0 && xmin != g_cdc_filter_xid) continue;
             if (flags & 0x08) {
                 /* HEAP_ONLY = UPDATE new version */
                 event.type = 'U';
@@ -754,12 +856,13 @@ static void cdc_decode_page(const char *page_data, uint16_t page_len,
                 event.type = 'I';
                 event.xid = xmin;
             }
-            g_cdc_callback(&event, g_cdc_ctx);
+            cdc_emit(&event);
         } else if (xmax > 0 && !(flags & 0x04)) {
             /* xmax set, not HOT_UPDATED → DELETE */
+            if (g_cdc_filter_xid != 0 && xmax != g_cdc_filter_xid) continue;
             event.type = 'D';
             event.xid = xmax;
-            g_cdc_callback(&event, g_cdc_ctx);
+            cdc_emit(&event);
         }
     }
 }
@@ -1267,37 +1370,91 @@ const char *repl_get_read_target(void)
  * ================================================================ */
 static int g_cdc_server_sock = -1;
 
+/* Per-client state — owns the socket and the subscriber slot. */
+typedef struct {
+    int fd;
+    int sub_slot;
+    pthread_mutex_t write_lock;     /* serialize writes from concurrent decode threads */
+} CdcClient;
+
+/* Resolve table_id → "table_name" for the JSON payload. Falls back to
+ * the numeric id when the lookup misses (catalog cache races, dropped
+ * table, etc.). v1 keeps schema-qualification out of the wire — the
+ * default schema covers every existing test path; multi-schema users
+ * read the schema from the catalog directly. */
+static void cdc_table_name_for(uint32_t table_id, char *out, int out_size)
+{
+    extern int cat_find_table_by_id(uint32_t, TableDesc *);
+    TableDesc td;
+    if (cat_find_table_by_id(table_id, &td) == 0) {
+        snprintf(out, out_size, "%s", td.table_name);
+        return;
+    }
+    snprintf(out, out_size, "table_%u", table_id);
+}
+
 static void cdc_stream_event(const ReplicationChangeEvent *event, void *ctx)
 {
-    int client_fd = *(int *)ctx;
-    char json[512];
+    CdcClient *cc = (CdcClient *)ctx;
+    if (!cc || cc->fd < 0) return;
+
+    char tbl[256];
+    cdc_table_name_for(event->table_id, tbl, sizeof(tbl));
+
+    /* Single-line JSON, NDJSON-friendly — Kafka Connect, jq, etc.
+     * `op` matches the Debezium convention. `pk` is the composite key
+     * the executor stamped on the WAL record (best-effort — empty
+     * string if the decoder couldn't recover it). */
+    char json[1024];
     snprintf(json, sizeof(json),
-             "{\"type\":\"%c\",\"table_id\":%u,\"xid\":%u,"
-             "\"pk\":\"%s\",\"ts\":%lld}\n",
-             event->type, event->table_id, event->xid,
+             "{\"op\":\"%c\",\"table\":\"%s\",\"table_id\":%u,"
+             "\"xid\":%u,\"pk\":\"%s\",\"ts\":%lld}\n",
+             event->type, tbl, event->table_id, event->xid,
              event->pk_key, (long long)event->timestamp);
-    send(client_fd, json, strlen(json), MSG_NOSIGNAL);
+
+    pthread_mutex_lock(&cc->write_lock);
+    send(cc->fd, json, strlen(json), MSG_NOSIGNAL);
+    pthread_mutex_unlock(&cc->write_lock);
 }
 
 static void *cdc_client_handler(void *arg)
 {
     int fd = *(int *)arg;
     free(arg);
-    fprintf(stderr, "[CDC] Consumer connected\n");
+    fprintf(stderr, "[CDC] Consumer connected (fd=%d)\n", fd);
 
-    /* Register CDC callback for this client */
-    int *fd_ctx = malloc(sizeof(int));
-    *fd_ctx = fd;
-    repl_set_change_callback(cdc_stream_event, fd_ctx);
+    CdcClient *cc = calloc(1, sizeof(*cc));
+    if (!cc) { close(fd); return NULL; }
+    cc->fd = fd;
+    pthread_mutex_init(&cc->write_lock, NULL);
 
-    /* Keep connection alive until client disconnects */
-    char buf[1];
-    while (recv(fd, buf, 1, 0) > 0) { /* wait */ }
+    cc->sub_slot = cdc_subscribe(cdc_stream_event, cc);
+    if (cc->sub_slot < 0) {
+        const char *err =
+            "{\"error\":\"cdc subscriber slots exhausted\"}\n";
+        send(fd, err, strlen(err), MSG_NOSIGNAL);
+        pthread_mutex_destroy(&cc->write_lock);
+        close(fd);
+        free(cc);
+        return NULL;
+    }
 
-    repl_set_change_callback(NULL, NULL);
-    free(fd_ctx);
+    /* Greeting — lets the client confirm the channel is live before
+     * it starts producing DML upstream. */
+    const char *hello = "{\"event\":\"ready\"}\n";
+    send(fd, hello, strlen(hello), MSG_NOSIGNAL);
+
+    /* Keep the socket open until the client closes its end. The
+     * server doesn't read commands in v1; the stream is one-way
+     * once the connection is established. */
+    char buf[64];
+    while (recv(fd, buf, sizeof(buf), 0) > 0) { /* discard */ }
+
+    cdc_unsubscribe(cc->sub_slot);
+    pthread_mutex_destroy(&cc->write_lock);
     close(fd);
-    fprintf(stderr, "[CDC] Consumer disconnected\n");
+    free(cc);
+    fprintf(stderr, "[CDC] Consumer disconnected (fd=%d)\n", fd);
     return NULL;
 }
 
