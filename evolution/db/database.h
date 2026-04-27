@@ -349,6 +349,9 @@ int CreatePolicyProcess(void);
 int DropPolicyProcess(void);
 int AlterMemoryStoreToggleRLS(const char *store_name, int enable);
 
+/* Task 207 — temporal query parser hook. */
+void SetAsOfXid(uint32_t at_xid);
+
 /* RLS enforcement helpers (shared by query_executor + Insert/Update/Delete).
  * ColumnDesc is declared in catalog_internal.h as a typedef'd anonymous
  * struct — we can't forward-declare it here, so callers that need the

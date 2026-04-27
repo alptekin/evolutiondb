@@ -437,7 +437,10 @@
      NAMESPACE = 653,
      NAMESPACES = 654,
      PREFIX = 655,
-     NS = 656
+     NS = 656,
+     SYSTEM_TIME = 657,
+     TRANSACTION = 658,
+     FEVO_CURRENT_XID = 659
    };
 #endif
 /* Tokens.  */
@@ -840,13 +843,16 @@
 #define NAMESPACES 654
 #define PREFIX 655
 #define NS 656
+#define SYSTEM_TIME 657
+#define TRANSACTION 658
+#define FEVO_CURRENT_XID 659
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 72 "parser/evoparser.y"
+#line 72 "evolution/parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -855,7 +861,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 859 "parser/evoparser.tab.h"
+#line 865 "evolution/parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
