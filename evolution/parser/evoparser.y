@@ -450,6 +450,9 @@
 /* Durable subscriptions (Task 210 — Feature #210) */
 %token SUBSCRIPTION CHANNEL RESUME ACK UPTO
 
+/* TTL columns + auto-expire (Task 213 — Feature #213) */
+%token TTL TTL_COLUMN
+
 %type <intval> select_opts
 %type <intval> select_stmt
 %type <intval> opt_hnsw_opclass
@@ -2809,6 +2812,18 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         AlterMemoryStoreToggleRLS($4, 0);
         free($4); free($7);
     }
+| ALTER TABLE NAME SET TTL_COLUMN COMPARISON STRING
+    {
+        emit("ALTER TABLE %s SET TTL %s", $3, $7);
+        AlterTableSetTtl($3, $7);
+        free($3); free($7);
+    }
+| ALTER TABLE NAME DROP TTL
+    {
+        emit("ALTER TABLE %s DROP TTL", $3);
+        AlterTableSetTtl($3, NULL);
+        free($3);
+    }
 ;
 
 opt_col_position: /* nil */                     { }
@@ -3203,6 +3218,11 @@ opt_table_options: /* empty */
      * CreateTableProcess. */
     | opt_table_options WITH SYSTEM VERSIONING
         { emit("TABLE OPT WITH SYSTEM VERSIONING"); SetTableSystemVersioned(); }
+    /* Task 213 — WITH (ttl_column = 'expires_at'). The auto_reclaim
+     * daemon prunes rows whose value in this column is older than
+     * NOW() on every tick. */
+    | opt_table_options WITH '(' TTL_COLUMN COMPARISON STRING ')'
+        { emit("TABLE OPT TTL_COLUMN %s", $6); SetTableTtlColumn($6); free($6); }
 ;
 
 shard_range_list: shard_range_def

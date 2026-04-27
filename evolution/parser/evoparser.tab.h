@@ -447,7 +447,9 @@
      CHANNEL = 663,
      RESUME = 664,
      ACK = 665,
-     UPTO = 666
+     UPTO = 666,
+     TTL = 667,
+     TTL_COLUMN = 668
    };
 #endif
 /* Tokens.  */
@@ -860,6 +862,8 @@
 #define RESUME 664
 #define ACK 665
 #define UPTO 666
+#define TTL 667
+#define TTL_COLUMN 668
 
 
 
@@ -875,7 +879,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 879 "parser/evoparser.tab.h"
+#line 883 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

@@ -136,7 +136,7 @@ static void deserialize_schema(const char *buf, SchemaDesc *s)
 /* --- Table --- */
 static void serialize_table(const TableDesc *t, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d;%u;%u;%u;%u",
+    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d;%u;%u;%u;%u;%s",
              t->table_id, t->schema_id, t->table_name,
              t->pk_root_page, t->heap_page,
              t->num_columns, t->pad_size,
@@ -149,7 +149,8 @@ static void serialize_table(const TableDesc *t, char *buf, int size)
              t->parent_table_id,                  /* Task 92: INHERITS */
              (unsigned int)t->rls_enabled,        /* Task 93: RLS flag */
              (unsigned int)t->system_versioned,   /* Task 208: SYSTEM VERSIONING flag */
-             t->history_table_id);                /* Task 208: shadow table id */
+             t->history_table_id,                 /* Task 208: shadow table id */
+             t->ttl_column[0] ? t->ttl_column : "");  /* Task 213: TTL col */
 }
 
 static void deserialize_table(const char *buf, TableDesc *t)
@@ -226,6 +227,12 @@ static void deserialize_table(const char *buf, TableDesc *t)
         p = next_field(p, field, sizeof(field)); t->history_table_id = (uint32_t)atoi(field);
     } else {
         t->history_table_id = 0;
+    }
+    /* ttl_column — optional, Task 213. Pre-task rows default empty. */
+    if (p && *p) {
+        p = next_field(p, t->ttl_column, CAT_MAX_NAME_LEN);
+    } else {
+        t->ttl_column[0] = '\0';
     }
     (void)p;
 }
@@ -1187,6 +1194,51 @@ int cat_update_table_versioning(uint32_t table_id,
 
         t.system_versioned  = system_versioned ? 1 : 0;
         t.history_table_id  = history_table_id;
+
+        char new_record[CAT_MAX_RECORD_LEN];
+        serialize_table(&t, new_record, sizeof(new_record));
+        int new_len = (int)strlen(new_record) + 1;
+
+        char page_buf[EVO_PAGE_SIZE];
+        pgm_read_page(rid.page_no, page_buf);
+        if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+            pgm_write_page(rid.page_no, page_buf);
+            return 0;
+        }
+
+        cat_delete_record(rid);
+        RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+        if (new_rid.page_no == 0) return -1;
+        bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+        return 0;
+    }
+    return -1;
+}
+
+/* Task 213 — flip the ttl_column field on an existing table.
+ * Pass an empty string to disable TTL. */
+int cat_update_table_ttl(uint32_t table_id, const char *ttl_column)
+{
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_TABLES], &cur) < 0)
+        return -1;
+
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+
+        TableDesc t;
+        deserialize_table(record, &t);
+        if (t.table_id != table_id) continue;
+
+        if (ttl_column && *ttl_column) {
+            strncpy(t.ttl_column, ttl_column, CAT_MAX_NAME_LEN - 1);
+            t.ttl_column[CAT_MAX_NAME_LEN - 1] = '\0';
+        } else {
+            t.ttl_column[0] = '\0';
+        }
 
         char new_record[CAT_MAX_RECORD_LEN];
         serialize_table(&t, new_record, sizeof(new_record));

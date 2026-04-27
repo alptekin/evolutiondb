@@ -336,6 +336,8 @@ CHANNEL					{ return CHANNEL; }
 RESUME					{ return RESUME; }
 ACK						{ return ACK; }
 UPTO					{ return UPTO; }
+TTL						{ return TTL; }
+TTL_COLUMN				{ return TTL_COLUMN; }
 TRANSACTION				{ return TRANSACTION; }
 EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }
