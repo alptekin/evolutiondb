@@ -157,6 +157,113 @@ static void retention_pass(time_t now_ts)
 }
 
 /* ================================================================
+ *  Task 210 — durable subscription prune pass.
+ *
+ *  For each registered subscription, walk the backing __sub_<name>
+ *  table and delete rows whose seq is <= last_ack_seq (the consumer
+ *  has acknowledged), plus rows whose posted_at is older than
+ *  ttl_days * 86400 seconds (lapsed unack'd).
+ *
+ *  The same victim-collect-then-bulk-delete dance from the temporal
+ *  retention pass — cursor invalidation rules are the same. */
+static void prune_subscription_queue(const TableDesc *histTd,
+                                      int64_t last_ack_seq,
+                                      time_t  ttl_cutoff)
+{
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = cat_find_columns(histTd->table_id, cols, CAT_MAX_COLUMNS);
+    if (ncols <= 0) return;
+
+    int seq_idx = -1, posted_idx = -1;
+    for (int i = 0; i < ncols; i++) {
+        if (strcasecmp(cols[i].col_name, "seq") == 0)        seq_idx = i;
+        else if (strcasecmp(cols[i].col_name, "posted_at") == 0) posted_idx = i;
+    }
+    if (seq_idx < 0) return;
+
+    BTree2 tree = { histTd->pk_root_page };
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&tree, &cur) < 0) return;
+
+    typedef struct { char key[64]; RowID rid; } Victim;
+    enum { MAX_VICTIMS = 256 };
+    Victim victims[MAX_VICTIMS];
+    int nv = 0;
+
+    char key[64];
+    RowID rid;
+    while (nv < MAX_VICTIMS && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char rec[RECORD_BUF_SIZE];
+        int rec_len = tapi_heap_read(rid, rec, sizeof(rec));
+        if (rec_len <= 0) continue;
+
+        char fields[CAT_MAX_COLUMNS][256];
+        int  is_null[CAT_MAX_COLUMNS];
+        int nf = tup_extract_fields(rec, rec_len, cols, ncols,
+                                    fields, is_null, CAT_MAX_COLUMNS);
+        if (nf <= seq_idx) continue;
+
+        int64_t row_seq = (int64_t)strtoll(fields[seq_idx], NULL, 10);
+        int prune = 0;
+
+        if (row_seq <= last_ack_seq) {
+            prune = 1;                /* acknowledged — drop */
+        } else if (ttl_cutoff > 0 && posted_idx >= 0 && nf > posted_idx &&
+                   !is_null[posted_idx]) {
+            struct tm tm;
+            memset(&tm, 0, sizeof(tm));
+            if (sscanf(fields[posted_idx],
+                       "%4d-%2d-%2d %2d:%2d:%2d",
+                       &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+                       &tm.tm_hour, &tm.tm_min, &tm.tm_sec) >= 3) {
+                tm.tm_year -= 1900; tm.tm_mon -= 1;
+                time_t row_ts = timegm(&tm);
+                if (row_ts < ttl_cutoff) prune = 1;
+            }
+        }
+        if (!prune) continue;
+
+        strncpy(victims[nv].key, key, sizeof(victims[nv].key) - 1);
+        victims[nv].key[sizeof(victims[nv].key) - 1] = '\0';
+        victims[nv].rid = rid;
+        nv++;
+    }
+
+    for (int i = 0; i < nv; i++) {
+        BTree2 t = { histTd->pk_root_page };
+        bt2_delete(&t, victims[i].key);
+        if (t.root_page != histTd->pk_root_page) {
+            cat_update_pk_root(histTd->table_id,
+                               histTd->table_name,
+                               histTd->schema_id,
+                               t.root_page);
+        }
+        tapi_heap_delete(victims[i].rid);
+    }
+
+    if (nv > 0) {
+        fprintf(stderr,
+                "[subscription-prune] Pruned %d row(s) from %s\n",
+                nv, histTd->table_name);
+    }
+}
+
+static void subscription_prune_pass(time_t now_ts)
+{
+    SubscriptionDesc subs[64];
+    int n = cat_list_subscriptions(subs, 64);
+    for (int i = 0; i < n; i++) {
+        TableDesc histTd;
+        if (cat_find_table_by_id(subs[i].backing_table_id, &histTd) != 0)
+            continue;
+        time_t ttl_cutoff = (subs[i].ttl_days > 0)
+            ? (now_ts - (time_t)subs[i].ttl_days * 86400)
+            : 0;
+        prune_subscription_queue(&histTd, subs[i].last_ack_seq, ttl_cutoff);
+    }
+}
+
+/* ================================================================
  *  Background thread
  * ================================================================ */
 static void *auto_reclaim_worker(void *arg)
@@ -182,11 +289,14 @@ static void *auto_reclaim_worker(void *arg)
         /* Task 209 — prune system-versioned history rows whose valid_to
          * fell outside the retention window. Runs under the same write
          * lock the dead-tuple sweep uses below so DML and DDL are
-         * serialized against pruning. */
+         * serialized against pruning. Task 210 piggybacks: drop acked
+         * + TTL-expired durable subscription rows in the same window. */
         {
             extern rwlock_t g_parse_lock;
             rwlock_wrlock(&g_parse_lock);
-            retention_pass(time(NULL));
+            time_t now_ts = time(NULL);
+            retention_pass(now_ts);
+            subscription_prune_pass(now_ts);
             rwlock_wrunlock(&g_parse_lock);
         }
 

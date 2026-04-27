@@ -11,6 +11,7 @@
 	#include "../db/expression.h"
 	#include "../db/Checkpoint.h"
 	#include "../db/Memory.h"
+	#include "../db/Subscription.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -445,6 +446,9 @@
 
 /* System-versioned tables (Task 208 — Feature #208) */
 %token SYSTEM VERSIONING
+
+/* Durable subscriptions (Task 210 — Feature #210) */
+%token SUBSCRIPTION CHANNEL RESUME ACK UPTO
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -2368,6 +2372,87 @@ notify_stmt: NOTIFY NAME
         emit("NOTIFY %s PAYLOAD", $2);
         SetNotifyChannel($2, payload);
         free($2); free($4);
+    }
+;
+
+/* ── Durable subscriptions (Task 210 — Feature #210) ──
+ * CREATE SUBSCRIPTION name FOR CHANNEL chname
+ * DROP   SUBSCRIPTION name [IF EXISTS]
+ * RESUME SUBSCRIPTION name           — returns (seq, payload, posted_at)
+ * ACK    SUBSCRIPTION name UPTO seq  — advances last_ack watermark
+ *
+ * SHOW SUBSCRIPTIONS is handled by adaptor/catalog.c (string match). */
+stmt: create_subscription_stmt { emit("STMT"); }
+    | drop_subscription_stmt   { emit("STMT"); }
+    | resume_subscription_stmt { emit("STMT"); }
+    | ack_subscription_stmt    { emit("STMT"); }
+;
+
+create_subscription_stmt:
+  CREATE SUBSCRIPTION NAME FOR CHANNEL NAME
+    {
+        emit("CREATE SUBSCRIPTION %s FOR %s", $3, $6);
+        ResetSubscriptionOpts();
+        SetSubscriptionName($3);
+        SetSubscriptionChannel($6);
+        CreateSubscriptionProcess(0);
+        free($3); free($6);
+    }
+| CREATE SUBSCRIPTION IF EXISTS NAME FOR CHANNEL NAME
+    {
+        /* IF NOT EXISTS — lexer collapses the NOT, so we receive
+         * IF EXISTS with the subtok flag already set by the upstream
+         * "IF NOT EXISTS" production. The flag value isn't surfaced
+         * at this point; mirror the checkpoint store path which also
+         * accepts both spellings. */
+        emit("CREATE SUBSCRIPTION IF NOT EXISTS %s FOR %s", $5, $8);
+        ResetSubscriptionOpts();
+        SetSubscriptionName($5);
+        SetSubscriptionChannel($8);
+        CreateSubscriptionProcess(1);
+        free($5); free($8);
+    }
+;
+
+drop_subscription_stmt:
+  DROP SUBSCRIPTION NAME
+    {
+        emit("DROP SUBSCRIPTION %s", $3);
+        ResetSubscriptionOpts();
+        SetSubscriptionName($3);
+        DropSubscriptionProcess(0);
+        free($3);
+    }
+| DROP SUBSCRIPTION IF EXISTS NAME
+    {
+        emit("DROP SUBSCRIPTION IF EXISTS %s", $5);
+        ResetSubscriptionOpts();
+        SetSubscriptionName($5);
+        DropSubscriptionProcess(1);
+        free($5);
+    }
+;
+
+resume_subscription_stmt:
+  RESUME SUBSCRIPTION NAME
+    {
+        emit("RESUME SUBSCRIPTION %s", $3);
+        ResetSubscriptionOpts();
+        SetSubscriptionName($3);
+        ResumeSubscriptionProcess();
+        free($3);
+    }
+;
+
+ack_subscription_stmt:
+  ACK SUBSCRIPTION NAME UPTO INTNUM
+    {
+        emit("ACK SUBSCRIPTION %s UPTO %d", $3, $5);
+        ResetSubscriptionOpts();
+        SetSubscriptionName($3);
+        SetSubscriptionAckSeq((long long)$5);
+        AckSubscriptionProcess();
+        free($3);
     }
 ;
 

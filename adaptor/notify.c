@@ -360,6 +360,17 @@ void notify_flush_commit(SessionCtx *ctx)
                                               (int32_t)pn->sender_session_id,
                                               pn->channel, pn->payload);
         }
+        /* Task 210 — durable subscriptions: append the notification to
+         * every persistent mailbox bound to this channel so consumers
+         * who weren't connected at broadcast time can drain the queue
+         * via RESUME after they reconnect. Runs after the in-memory
+         * fan-out so the fast path (no durable subscribers) doesn't
+         * pay the catalog walk. */
+        {
+            extern void subscription_publish(const char *channel,
+                                             const char *payload);
+            subscription_publish(pn->channel, pn->payload);
+        }
         PendingNotify *next = pn->next;
         free(pn);
         pn = next;

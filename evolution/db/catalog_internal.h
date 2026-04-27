@@ -292,6 +292,27 @@ typedef struct {
 } MemoryStoreDesc;
 
 /* ----------------------------------------------------------------
+ *  Task 210 — Durable subscription registry
+ *
+ *  CAT_SYS_SUBSCRIPTIONS holds one row per CREATE SUBSCRIPTION. The
+ *  backing table __sub_<name> stores pending notifications as
+ *  (seq INT PK, payload TEXT, posted_at TIMESTAMP). last_ack_seq
+ *  marks the high-water mark the consumer has acknowledged; the
+ *  pruning daemon deletes any backing-table row whose seq is
+ *  <= last_ack_seq, plus rows whose posted_at is older than
+ *  ttl_days. ttl_days = 0 disables the TTL prune (acked-only
+ *  prune still runs).
+ * ---------------------------------------------------------------- */
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];
+    char     channel[CAT_MAX_NAME_LEN];
+    uint32_t backing_table_id;
+    int64_t  last_ack_seq;        /* monotonic; 0 means nothing acked */
+    int64_t  next_seq;            /* next seq to assign on append */
+    int      ttl_days;            /* 0 = no TTL prune */
+} SubscriptionDesc;
+
+/* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
 
@@ -494,6 +515,19 @@ int cat_create_memory_store(const MemoryStoreDesc *desc);
 int cat_find_memory_store(const char *name, MemoryStoreDesc *out);
 int cat_drop_memory_store(const char *name);
 int cat_list_memory_stores(MemoryStoreDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Subscription registry API (Task 210 — Feature #210)
+ *
+ *  Keys in CAT_SYS_SUBSCRIPTIONS are the lowercased subscription
+ *  name. Updates rewrite the row in place via cat_update_subscription
+ *  (the seq counters and last_ack_seq mutate on every NOTIFY / ACK,
+ *  so a faster path matters). */
+int cat_create_subscription(const SubscriptionDesc *desc);
+int cat_find_subscription(const char *name, SubscriptionDesc *out);
+int cat_drop_subscription(const char *name);
+int cat_list_subscriptions(SubscriptionDesc *out, int max);
+int cat_update_subscription(const SubscriptionDesc *desc);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)
