@@ -183,8 +183,8 @@ typedef enum {
     EXPR_EVO_NOTIFY,           /* evo_notify(channel, payload) — left/right */
     EXPR_PG_LISTENING_CHANNELS,/* pg_listening_channels() — no children */
 
-    /* Vector operations (Task 201 — Feature #201) — pgvector-compatible.
-     * Operators: <=> cosine, <-> L2, <#> inner product.
+    /* Vector operations (Task 201 — Feature #201) — EvolutionDB's
+     * evovector layer. Operators: <=> cosine, <-> L2, <#> inner product.
      * Functions: cosine_distance, l2_distance, inner_product, l1_distance,
      *            vector_dim, vector_norm, vector_normalize. */
     EXPR_VEC_COSINE,           /* left <=> right — cosine distance; falls

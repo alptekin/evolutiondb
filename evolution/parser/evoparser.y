@@ -92,7 +92,7 @@
 %left NOT '!'
 %left BETWEEN
 %left <subtok> COMPARISON /* = <> < > <= >= <=> */
-%left VEC_L2_OP VEC_INNER_OP /* <-> <#> pgvector distance ops */
+%left VEC_L2_OP VEC_INNER_OP /* <-> <#> evovector distance ops */
 %left '|'
 %left '&'
 %left <subtok> SHIFT /* << >> */

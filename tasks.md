@@ -3329,7 +3329,7 @@ Deferred until after 6.1 + 6.2 results are verified.
 
 ### Task 169: ⬜ ORDER BY expression + HNSW planner hook (Feature #165)
 
-**Goal:** Task 202/203 shipped the HNSW index, distance operators (`<->`, `<#>`, `<=>`), and a `hnsw_filter_knn()` helper, but the canonical pgvector idiom `ORDER BY col <-> $q LIMIT k` still raises a syntax error because the EvoSQL grammar accepts only `NAME` / `NAME.NAME` / `INTNUM` in the ORDER BY list. This task closes the gap end-to-end: grammar extension, planner detection, routing to the HNSW scan, and EXPLAIN surfacing the chosen path. After this lands, LangGraph / LangChain / pgvector-sample queries port mechanically without any SQL rewrite.
+**Goal:** Task 202/203 shipped the HNSW index, distance operators (`<->`, `<#>`, `<=>`), and a `hnsw_filter_knn()` helper, but the canonical evovector idiom `ORDER BY col <-> $q LIMIT k` still raises a syntax error because the EvoSQL grammar accepts only `NAME` / `NAME.NAME` / `INTNUM` in the ORDER BY list. This task closes the gap end-to-end: grammar extension, planner detection, routing to the HNSW scan, and EXPLAIN surfacing the chosen path. After this lands, LangGraph / LangChain / evovector-sample queries port mechanically without any SQL rewrite.
 
 | Step | Description | Files |
 |------|-------------|-------|
@@ -3342,7 +3342,7 @@ Deferred until after 6.1 + 6.2 results are verified.
 | 7 | EXPLAIN output: distinguish `HNSW Index Scan (cos) on tbl.col  (limit=k)` vs `Seq Scan + Vector Sort` and include `rows=k` + `cost ≈ …` stubs so users can see the chosen path without running the query. | `adaptor/query_executor.c` |
 | 8 | Tests — `tests/test_orderby_vector.py` with ≥12 cases: grammar parses `ORDER BY v <-> '[…]' LIMIT k` (all three ops), routes to HNSW when the index exists, falls back to full scan + sort when it doesn't, correctness parity with `hnsw_knn()`, LIMIT=0 edge case, DESC direction (falls back to full scan since HNSW always returns ascending distance), WHERE equality filter reuses Task 203 hybrid path, tableless / subquery ORDER BY still works, nested SELECT ordering unaffected. | `tests/test_orderby_vector.py` (new) |
 | 9 | Regression — `tests/test_orderby*.py`, `tests/test_select*.py`, `tests/test_cte.py`, `tests/test_windowfn.py` all green; plain-column ORDER BY perf unchanged (micro-bench on 100k rows). | `tests/`, `bench/` |
-| 10 | Wiki — document the new grammar + note that ORDER BY a vector expression requires either an HNSW index (for sub-linear scans) or tolerates a full-scan fallback for correctness. Include a pgvector cheat-sheet side-by-side. | `wiki/Hybrid-Search.md`, `wiki/HNSW-Index.md` (new) |
+| 10 | Wiki — document the new grammar + note that ORDER BY a vector expression requires either an HNSW index (for sub-linear scans) or tolerates a full-scan fallback for correctness. Include an evovector cheat-sheet side-by-side. | `wiki/Hybrid-Search.md`, `wiki/HNSW-Index.md` (new) |
 
 Feature numbering: this task picks up `#165` — the next free slot after Task 168's `#164`. Tasks 200-225 of the Agent Memory block stay on their own `#200-#225` range.
 
@@ -3387,13 +3387,13 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ### Task 201: ⬜ Vector Distance Functions + Operators (Feature #201)
 
-**Goal:** Add pgvector-compatible distance functions (`cosine_distance`, `l2_distance`, `inner_product`, `l1_distance`) + operators (`<=>`, `<->`, `<#>`).
+**Goal:** Land the EvolutionDB-native evovector layer — distance functions (`cosine_distance`, `l2_distance`, `inner_product`, `l1_distance`) and operators (`<=>`, `<->`, `<#>`) in one cohesive surface.
 
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | `cosine_distance(a, b)` = `1 − (a·b) / (‖a‖·‖b‖)`. Loop over matched-dim float4 arrays. Returns DOUBLE. | `evolution/db/expression.c` |
 | 2 | `l2_distance(a, b)` = `sqrt(sum((a[i]−b[i])²))`, `inner_product(a, b)` = `−(a·b)` (negative dot), `l1_distance(a, b)` = `sum(|a[i]−b[i]|)`. | `evolution/db/expression.c` |
-| 3 | Operator syntax: `<=>` (cosine), `<->` (L2), `<#>` (negative inner product). Follow pgvector convention. Lexer tokens + parser productions. | `evolution/parser/evolexer.l`, `evoparser.y` |
+| 3 | Operator syntax: `<=>` (cosine), `<->` (L2), `<#>` (negative inner product). Adopt the evovector convention shared with the wider Postgres-compatible vector ecosystem. Lexer tokens + parser productions. | `evolution/parser/evolexer.l`, `evoparser.y` |
 | 4 | Expression engine wire: `EXPR_VEC_COSINE`, `EXPR_VEC_L2`, `EXPR_VEC_INNER`, `EXPR_VEC_L1` enum + constructors in expression.h. | `evolution/db/expression.{h,c}` |
 | 5 | Type check: both operands must be `VECTOR(N)` with identical N; return FLOAT8. Raise `42883` on mismatch. | `evolution/db/expression.c` |
 | 6 | Helpers: `vector_dim(v)`, `vector_norm(v)`, `vector_normalize(v)` scalar functions. | `evolution/db/expression.c` |
@@ -3411,7 +3411,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 | Step | Description | Files |
 |------|-------------|-------|
 | 1 | New file `evolution/db/hnsw.{h,c}` — HNSW graph stored on slotted pages. Define `HnswNode` layout: id (uint32), layer (uint8), neighbor count per layer, neighbor RowIDs array. | `evolution/db/hnsw.{h,c}` (new) |
-| 2 | Build path: bottom-up layer assignment with geometric decay (`layer = floor(-ln(rand()) / ln(m))`), greedy search + neighbor refinement per pgvector/HNSW paper, bulk-insert batch mode. | `evolution/db/hnsw.c` |
+| 2 | Build path: bottom-up layer assignment with geometric decay (`layer = floor(-ln(rand()) / ln(m))`), greedy search + neighbor refinement per the canonical HNSW paper, bulk-insert batch mode. | `evolution/db/hnsw.c` |
 | 3 | Search: `hnsw_search(root_page, query_vec, k, ef)` → returns top-k RowIDs ordered by distance. Supports dynamic `ef` per query. | `evolution/db/hnsw.c` |
 | 4 | Catalog: add index_type `'H'` (HNSW) + store `m`, `ef_construction`, `distance_op` in `IndexDesc.params`. | `evolution/db/catalog_internal.{h,c}` |
 | 5 | Parser: `CREATE INDEX ... USING HNSW (col <opclass>) WITH (m=N, ef_construction=N)`. Opclasses: `vector_cosine_ops`, `vector_l2_ops`, `vector_ip_ops`. | `evolution/parser/evoparser.y`, `evolexer.l` |
@@ -3438,7 +3438,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 | 7 | Regression. | `tests/` |
 | 8 | Benchmark: filter selectivity spectrum (1/10/50/90%) latency curve in `bench/bench_hybrid.py`. | `bench/bench_hybrid.py` (new) |
 | 9 | Wiki page `Hybrid-Search.md` — pattern cookbook with query examples. | `wiki/Hybrid-Search.md` (new) |
-| 10 | Docker rebuild + benchmark comparison vs Postgres+pgvector. | `Dockerfile` |
+| 10 | Docker rebuild + benchmark comparison vs Postgres-stack vector extensions. | `Dockerfile` |
 
 ---
 

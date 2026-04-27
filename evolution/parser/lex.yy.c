@@ -4088,12 +4088,12 @@ YY_RULE_SETUP
 case 290:
 YY_RULE_SETUP
 #line 421 "parser/evolexer.l"
-{ return VEC_L2_OP; }										/* pgvector L2 distance */
+{ return VEC_L2_OP; }										/* evovector L2 distance */
 	YY_BREAK
 case 291:
 YY_RULE_SETUP
 #line 422 "parser/evolexer.l"
-{ return VEC_INNER_OP; }									/* pgvector negative inner product */
+{ return VEC_INNER_OP; }									/* evovector negative inner product */
 	YY_BREAK
 case 292:
 YY_RULE_SETUP
