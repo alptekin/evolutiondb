@@ -545,6 +545,29 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* Task 222 — SHOW MESSAGE LOGS lists every CREATE MESSAGE LOG. */
+    if (stristr_found(sql, "message logs") ||
+        stristr_found(sql, "message_logs")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "name",              PG_OID_TEXT);
+        result_add_column(rs, "backing_table_id",  PG_OID_INT4);
+        result_add_column(rs, "ttl_days",          PG_OID_INT4);
+        MessageLogDesc logs[64];
+        int n = cat_list_message_logs(logs, 64);
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, logs[i].name);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u", logs[i].backing_table_id);
+            result_set_field(rs, row, 1, buf);
+            snprintf(buf, sizeof(buf), "%d", logs[i].ttl_days);
+            result_set_field(rs, row, 2, buf);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* Task 215 — SHOW JOBS lists every registered scheduled job with
      * its cron pattern, the SQL it runs, enabled flag, and the unix
      * timestamp of its last fire (0 = never run). */

@@ -4128,3 +4128,90 @@ int cat_update_scheduled_job(const ScheduledJobDesc *desc)
     if (new_rid.page_no == 0) return -1;
     return bt2_update(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, new_rid);
 }
+
+/* ================================================================
+ *  Message logs (Task 222 — Feature #222)
+ *
+ *  Key   : lowercased log name
+ *  Value : "name;backing_table_id;ttl_days"
+ * ================================================================ */
+static int serialize_message_log(const MessageLogDesc *d,
+                                  char *buf, int size)
+{
+    int n = snprintf(buf, size, "%s;%u;%d",
+                     d->name, d->backing_table_id, d->ttl_days);
+    return (n < 0 || n >= size) ? -1 : n;
+}
+
+static void deserialize_message_log(const char *buf, MessageLogDesc *d)
+{
+    char field[256];
+    const char *q = buf;
+    q = next_field(q, d->name, CAT_MAX_NAME_LEN);
+    q = next_field(q, field, sizeof(field));
+    d->backing_table_id = (uint32_t)strtoul(field, NULL, 10);
+    q = next_field(q, field, sizeof(field));
+    d->ttl_days = atoi(field);
+    (void)q;
+}
+
+int cat_create_message_log(const MessageLogDesc *desc)
+{
+    if (!desc || desc->name[0] == '\0') return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", desc->name);
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_MESSAGE_LOGS], key, &existing) == 0)
+        return -1;
+    char record[256];
+    if (serialize_message_log(desc, record, sizeof(record)) < 0) return -1;
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_MESSAGE_LOGS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_MESSAGE_LOGS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_message_log(const char *name, MessageLogDesc *out)
+{
+    if (!name || !*name) return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_MESSAGE_LOGS], key, &rid) < 0)
+        return -1;
+    char record[256];
+    if (cat_read_record(rid, record, sizeof(record)) < 0) return -1;
+    if (out) deserialize_message_log(record, out);
+    return 0;
+}
+
+int cat_drop_message_log(const char *name)
+{
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_MESSAGE_LOGS], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_MESSAGE_LOGS], key);
+    return 0;
+}
+
+int cat_list_message_logs(MessageLogDesc *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_MESSAGE_LOGS], &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[256];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_message_log(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}

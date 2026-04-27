@@ -454,7 +454,12 @@
      FPG_CALL_EXTERNAL = 670,
      JOB = 671,
      JOBS = 672,
-     SCHEDULE = 673
+     SCHEDULE = 673,
+     MESSAGE = 674,
+     APPEND = 675,
+     READ = 676,
+     LAST = 677,
+     SESSION = 678
    };
 #endif
 /* Tokens.  */
@@ -874,13 +879,18 @@
 #define JOB 671
 #define JOBS 672
 #define SCHEDULE 673
+#define MESSAGE 674
+#define APPEND 675
+#define READ 676
+#define LAST 677
+#define SESSION 678
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 74 "parser/evoparser.y"
+#line 75 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -889,7 +899,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 893 "parser/evoparser.tab.h"
+#line 903 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

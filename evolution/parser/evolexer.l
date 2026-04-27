@@ -341,6 +341,11 @@ TTL_COLUMN				{ return TTL_COLUMN; }
 JOB						{ return JOB; }
 JOBS					{ return JOBS; }
 SCHEDULE				{ return SCHEDULE; }
+MESSAGE					{ return MESSAGE; }
+APPEND					{ return APPEND; }
+READ					{ return READ; }
+LAST					{ return LAST; }
+SESSION					{ return SESSION; }
 TRANSACTION				{ return TRANSACTION; }
 EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }
