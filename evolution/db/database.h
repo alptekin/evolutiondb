@@ -339,6 +339,7 @@ int DropViewProcess(const char *viewName, int ifExists);
 int AlterTableToggleRLS(const char *tableName, int enable);
 void SetPolicyName(const char *name);
 void SetPolicyTable(const char *tableName);
+void SetPolicyTableForMemoryStore(const char *store_name);
 void SetPolicyPermissive(int permissive);
 void SetPolicyCommand(char cmd);
 void AddPolicyRole(const char *role);
@@ -346,6 +347,7 @@ void SetPolicyUsing(struct ExprNode *expr);
 void SetPolicyCheck(struct ExprNode *expr);
 int CreatePolicyProcess(void);
 int DropPolicyProcess(void);
+int AlterMemoryStoreToggleRLS(const char *store_name, int enable);
 
 /* RLS enforcement helpers (shared by query_executor + Insert/Update/Delete).
  * ColumnDesc is declared in catalog_internal.h as a typedef'd anonymous
