@@ -346,6 +346,9 @@ APPEND					{ return APPEND; }
 READ					{ return READ; }
 LAST					{ return LAST; }
 SESSION					{ return SESSION; }
+DOCUMENT				{ return DOCUMENT; }
+WRITE					{ return WRITE; }
+FILTER					{ return FILTER; }
 TRANSACTION				{ return TRANSACTION; }
 EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }
