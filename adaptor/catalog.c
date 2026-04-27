@@ -545,6 +545,33 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* Task 215 — SHOW JOBS lists every registered scheduled job with
+     * its cron pattern, the SQL it runs, enabled flag, and the unix
+     * timestamp of its last fire (0 = never run). */
+    if (stristr_found(sql, "jobs")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "name",         PG_OID_TEXT);
+        result_add_column(rs, "schedule",     PG_OID_TEXT);
+        result_add_column(rs, "sql",          PG_OID_TEXT);
+        result_add_column(rs, "enabled",      PG_OID_BOOL);
+        result_add_column(rs, "last_run_unix", PG_OID_INT8);
+        ScheduledJobDesc jobs[64];
+        int n = cat_list_scheduled_jobs(jobs, 64);
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, jobs[i].name);
+            result_set_field(rs, row, 1, jobs[i].cron_expr);
+            result_set_field(rs, row, 2, jobs[i].sql);
+            result_set_field(rs, row, 3, jobs[i].enabled ? "true" : "false");
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lld", (long long)jobs[i].last_run_unix);
+            result_set_field(rs, row, 4, buf);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* Task 210 — SHOW SUBSCRIPTIONS lists every durable subscription
      * with its bound channel, ack watermark, next seq, and TTL knob. */
     if (stristr_found(sql, "subscriptions")) {
