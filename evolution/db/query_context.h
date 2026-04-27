@@ -86,6 +86,10 @@ typedef struct {
      *                   string means no inheritance. CreateTableProcess()
      *                   reads this, resolves the parent, merges its columns. */
     char     inheritParent[128];
+    /* System-versioned tables (Task 208 — Feature #208).
+     *   1 = WITH SYSTEM VERSIONING — CreateTableProcess auto-injects
+     *       valid_from / valid_to columns + creates <name>_history. */
+    int      systemVersioned;
 } CreateOpts;
 
 /* ---- INSERT ---- */
