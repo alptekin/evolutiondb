@@ -4,11 +4,13 @@ services:
     ports:
       - "5433:5433"
       - "9967:9967"
+      - "9970:9970"   # Task 211: CDC streaming (JSON Lines)
     volumes:
       - evosql-data:/data
     environment:
       EVOSQL_USER_NAME: admin
       EVOSQL_PASSWORD: admin
+      EVOSQL_CDC_PORT: 9970
       EVOSQL_ENCRYPTION_KEY: ${EVOSQL_ENCRYPTION_KEY:-MuhtacOldugunKudret!DamarlarindakiAsilKandaMevcuttur}
       # To generate a random password, remove or comment out EVOSQL_PASSWORD
       # To disable encryption, set EVOSQL_ENCRYPTION_KEY to empty string
