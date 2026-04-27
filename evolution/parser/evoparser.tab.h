@@ -451,7 +451,10 @@
      TTL = 667,
      TTL_COLUMN = 668,
      FTOKEN_LENGTH = 669,
-     FPG_CALL_EXTERNAL = 670
+     FPG_CALL_EXTERNAL = 670,
+     JOB = 671,
+     JOBS = 672,
+     SCHEDULE = 673
    };
 #endif
 /* Tokens.  */
@@ -868,13 +871,16 @@
 #define TTL_COLUMN 668
 #define FTOKEN_LENGTH 669
 #define FPG_CALL_EXTERNAL 670
+#define JOB 671
+#define JOBS 672
+#define SCHEDULE 673
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 73 "parser/evoparser.y"
+#line 74 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -883,7 +889,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 887 "parser/evoparser.tab.h"
+#line 893 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

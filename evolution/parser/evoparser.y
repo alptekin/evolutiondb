@@ -12,6 +12,7 @@
 	#include "../db/Checkpoint.h"
 	#include "../db/Memory.h"
 	#include "../db/Subscription.h"
+	#include "../db/Schedule.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -455,6 +456,9 @@
 
 /* Auto-summarize helpers (Task 214 — Feature #214) */
 %token FTOKEN_LENGTH FPG_CALL_EXTERNAL
+
+/* Scheduled jobs (Task 215 — Feature #215) */
+%token JOB JOBS SCHEDULE
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -2460,6 +2464,83 @@ ack_subscription_stmt:
         SetSubscriptionName($3);
         SetSubscriptionAckSeq((long long)$5);
         AckSubscriptionProcess();
+        free($3);
+    }
+;
+
+/* ── Scheduled jobs / CRON (Task 215 — Feature #215) ──
+ *   CREATE JOB name ON SCHEDULE 'min hour dom mon dow' DO 'sql';
+ *   DROP   JOB name [IF EXISTS];
+ *   ALTER  JOB name {ENABLE|DISABLE};
+ *   SHOW   JOBS                    (handled in adaptor/catalog.c)
+ *
+ * The cron expression and SQL body both ride in as STRING literals so
+ * the lexer's quoting rules cover whitespace and special chars; the
+ * scheduler's evaluator strips them before storing. */
+stmt: create_job_stmt   { emit("STMT"); }
+    | drop_job_stmt     { emit("STMT"); }
+    | alter_job_stmt    { emit("STMT"); }
+;
+
+create_job_stmt:
+  CREATE JOB NAME ON SCHEDULE STRING DO STRING
+    {
+        emit("CREATE JOB %s ON SCHEDULE %s", $3, $6);
+        ResetScheduleOpts();
+        SetJobName($3);
+        SetJobCronExpr($6);
+        SetJobSql($8);
+        CreateJobProcess(0);
+        free($3); free($6); free($8);
+    }
+| CREATE JOB IF EXISTS NAME ON SCHEDULE STRING DO STRING
+    {
+        emit("CREATE JOB IF NOT EXISTS %s ON SCHEDULE %s", $5, $8);
+        ResetScheduleOpts();
+        SetJobName($5);
+        SetJobCronExpr($8);
+        SetJobSql($10);
+        CreateJobProcess(1);
+        free($5); free($8); free($10);
+    }
+;
+
+drop_job_stmt:
+  DROP JOB NAME
+    {
+        emit("DROP JOB %s", $3);
+        ResetScheduleOpts();
+        SetJobDropName($3);
+        SetJobDropIfExists(0);
+        DropJobProcess();
+        free($3);
+    }
+| DROP JOB IF EXISTS NAME
+    {
+        emit("DROP JOB IF EXISTS %s", $5);
+        ResetScheduleOpts();
+        SetJobDropName($5);
+        SetJobDropIfExists(1);
+        DropJobProcess();
+        free($5);
+    }
+;
+
+alter_job_stmt:
+  ALTER JOB NAME ENABLE
+    {
+        emit("ALTER JOB %s ENABLE", $3);
+        ResetScheduleOpts();
+        SetJobDropName($3);
+        AlterJobProcess(1);
+        free($3);
+    }
+| ALTER JOB NAME DISABLE
+    {
+        emit("ALTER JOB %s DISABLE", $3);
+        ResetScheduleOpts();
+        SetJobDropName($3);
+        AlterJobProcess(0);
         free($3);
     }
 ;

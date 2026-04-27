@@ -19,6 +19,7 @@
 #include "table_api.h"
 #include "tuple_format.h"
 #include "btree2.h"
+#include "Schedule.h"
 #include "../../adaptor/platform.h"
 
 /* Auto-RECLAIM interval in seconds. Default 30s; tests can lower it
@@ -394,7 +395,9 @@ static void *auto_reclaim_worker(void *arg)
          * serialized against pruning. Task 210 piggybacks: drop acked
          * + TTL-expired durable subscription rows in the same window.
          * Task 213 adds the column-driven TTL prune for any table with
-         * a configured ttl_column. */
+         * a configured ttl_column. Task 215 fires due cron jobs at
+         * the same cadence — minute granularity is the fastest the
+         * cron evaluator supports anyway. */
         {
             extern rwlock_t g_parse_lock;
             rwlock_wrlock(&g_parse_lock);
@@ -403,6 +406,10 @@ static void *auto_reclaim_worker(void *arg)
             subscription_prune_pass(now_ts);
             ttl_prune_pass(now_ts);
             rwlock_wrunlock(&g_parse_lock);
+            /* schedule_run_due takes its own per-job rwlock when it
+             * dispatches the SQL through the executor, so it stays
+             * outside the wrlock above. */
+            schedule_run_due((int64_t)now_ts);
         }
 
         /* Scan all databases → schemas → tables */
