@@ -429,7 +429,15 @@
      LIST = 645,
      WRITES = 646,
      THREAD = 647,
-     AT = 648
+     AT = 648,
+     MEMORY = 649,
+     EMBEDDING_DIM = 650,
+     DISTANCE = 651,
+     SEARCH = 652,
+     NAMESPACE = 653,
+     NAMESPACES = 654,
+     PREFIX = 655,
+     NS = 656
    };
 #endif
 /* Tokens.  */
@@ -824,13 +832,21 @@
 #define WRITES 646
 #define THREAD 647
 #define AT 648
+#define MEMORY 649
+#define EMBEDDING_DIM 650
+#define DISTANCE 651
+#define SEARCH 652
+#define NAMESPACE 653
+#define NAMESPACES 654
+#define PREFIX 655
+#define NS 656
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 71 "parser/evoparser.y"
+#line 72 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -839,7 +855,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 843 "parser/evoparser.tab.h"
+#line 859 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
