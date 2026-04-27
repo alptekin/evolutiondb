@@ -24,30 +24,60 @@
 /* ----------------------------------------------------------------
  *  Per-statement state
  * ---------------------------------------------------------------- */
+#define CK_PUT_FIELDS 7   /* thread_id, ns, id, parent_id, values, metadata, parent_config */
+
 typedef struct {
     char store_name[CAT_MAX_NAME_LEN];
     char retention[64];
     int  cascade;
+
+    /* PUT / PUT WRITES — 7 user-supplied column values, indexed by put_idx.
+     * Each slot is either a string literal or "" + null_flag = 1 for NULL. */
+    char put_field[CK_PUT_FIELDS][1024];
+    int  put_null[CK_PUT_FIELDS];
+
+    /* GET / LIST */
+    char thread_id[256];
+    char at_id[256];
+    int  limit_n;          /* < 0 = no limit */
 } CheckpointOpts;
 
 static __thread CheckpointOpts g_ck;
 
-void ResetCheckpointOpts(void)            { memset(&g_ck, 0, sizeof(g_ck)); }
+void ResetCheckpointOpts(void)
+{
+    memset(&g_ck, 0, sizeof(g_ck));
+    g_ck.limit_n = -1;
+}
 void SetCheckpointStoreName(const char *name)     { if (name) snprintf(g_ck.store_name, sizeof(g_ck.store_name), "%s", name); }
 void SetCheckpointStoreRetention(const char *e)   { if (e)    snprintf(g_ck.retention,  sizeof(g_ck.retention),  "%s", e);    }
 void SetCheckpointStoreCascade(int cascade)        { g_ck.cascade = cascade ? 1 : 0; }
 
-/* DML setters retained as no-ops so the grammar / future tasks can wire
- * them up without further engine plumbing. */
-void SetCheckpointThread(const char *t)            { (void)t; }
-void SetCheckpointNs(const char *n)                { (void)n; }
-void SetCheckpointId(const char *i)                { (void)i; }
-void SetCheckpointParent(const char *p)            { (void)p; }
-void SetCheckpointValues(const char *j)            { (void)j; }
-void SetCheckpointMetadata(const char *j)          { (void)j; }
-void SetCheckpointParentConfig(const char *j)      { (void)j; }
-void SetCheckpointAtId(const char *i)              { (void)i; }
-void SetCheckpointLimit(int n)                     { (void)n; }
+void SetCheckpointPutField(int idx, const char *literal_or_null)
+{
+    if (idx < 0 || idx >= CK_PUT_FIELDS) return;
+    if (!literal_or_null) {
+        g_ck.put_null[idx] = 1;
+        g_ck.put_field[idx][0] = '\0';
+    } else {
+        g_ck.put_null[idx] = 0;
+        snprintf(g_ck.put_field[idx], sizeof(g_ck.put_field[idx]),
+                 "%s", literal_or_null);
+    }
+}
+
+void SetCheckpointThread(const char *t)
+{
+    if (t) snprintf(g_ck.thread_id, sizeof(g_ck.thread_id), "%s", t);
+}
+void SetCheckpointAtId(const char *i)
+{
+    if (i) snprintf(g_ck.at_id, sizeof(g_ck.at_id), "%s", i);
+}
+void SetCheckpointLimit(int n)
+{
+    g_ck.limit_n = n;
+}
 
 /* ----------------------------------------------------------------
  *  Helpers
@@ -226,14 +256,177 @@ int DropCheckpointStoreProcess(int if_exists)
 }
 
 /* ----------------------------------------------------------------
- *  DML stubs — wired to the engine in v1.1.
+ *  DML — CHECKPOINT PUT / PUT WRITES / GET / LIST
  *
- *  Today the engine offers the same surface via plain INSERT / SELECT
- *  on __ck_<store_name>. These stubs return 0 (success) so the parser
- *  can emit the new tokens without breaking already-running test
- *  suites; the grammar productions intentionally do not call them yet.
+ *  Strategy: bypass parser re-entry. Each DML processor populates the
+ *  thread-local INSERT or SELECT options struct directly and calls the
+ *  engine processor. Output (rows for GET/LIST, affected count for PUT)
+ *  flows through the same ResultSet the executor returns, so MVCC, RLS,
+ *  triggers, and replication apply identically to a hand-written
+ *  INSERT / SELECT.
+ *
+ *  The PUT shape is fixed (8 columns; the 8th — created_at — is set
+ *  here, not by the user). GET and LIST emit a SELECT against the
+ *  backing table with thread_id as the WHERE filter and either a
+ *  latest-1 or full-history ORDER BY.
  * ---------------------------------------------------------------- */
-int CheckpointPutProcess(void)        { return 0; }
-int CheckpointGetProcess(void)        { return 0; }
-int CheckpointListProcess(void)       { return 0; }
-int CheckpointPutWritesProcess(void)  { return 0; }
+
+/* Accessors for the thread-local DML opt blocks defined in
+ * database_globals.c. Declared in query_context.h via macros. */
+#include "expression.h"  /* g_expr / g_ins / g_sel macros via database.h */
+
+static const char *put_field_or_null(int idx)
+{
+    if (g_ck.put_null[idx]) return NULL;
+    return g_ck.put_field[idx];
+}
+
+/* Append literal to g_ins.data with FIELD_SEP terminator. NULL → engine's
+ * NULL marker so tup_build sets the bit in the row's null bitmap. */
+static void append_ins_field(const char *value)
+{
+    char tmp[1024];
+    if (!value) {
+        snprintf(tmp, sizeof(tmp), "%s", "\x01NULL\x01");
+    } else {
+        char raw[1024];
+        snprintf(raw, sizeof(raw), "%s", value);
+        strip_quotes(raw);
+        snprintf(tmp, sizeof(tmp), "%s", raw);
+    }
+    GetInsertions(tmp);
+}
+
+int CheckpointPutProcess(int is_writes)
+{
+    (void)is_writes;   /* v1: writes-vs-full distinction is application-level */
+
+    CheckpointStoreDesc desc;
+    if (cat_find_checkpoint_store(g_ck.store_name, &desc) != 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "checkpoint store '%s' does not exist", g_ck.store_name);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+
+    char tbl[256];
+    backing_table_name(g_ck.store_name, tbl, sizeof(tbl));
+
+    /* Reset and populate g_ins for one row, eight columns. */
+    TruncateInsert();
+    GetInsertionTableName(tbl);
+
+    g_ins.columnCount = 8;
+    snprintf(g_ins.columns[0], sizeof(g_ins.columns[0]), "%s", "thread_id");
+    snprintf(g_ins.columns[1], sizeof(g_ins.columns[1]), "%s", "checkpoint_ns");
+    snprintf(g_ins.columns[2], sizeof(g_ins.columns[2]), "%s", "checkpoint_id");
+    snprintf(g_ins.columns[3], sizeof(g_ins.columns[3]), "%s", "parent_id");
+    snprintf(g_ins.columns[4], sizeof(g_ins.columns[4]), "%s", "ck_values");
+    snprintf(g_ins.columns[5], sizeof(g_ins.columns[5]), "%s", "metadata");
+    snprintf(g_ins.columns[6], sizeof(g_ins.columns[6]), "%s", "parent_config");
+    snprintf(g_ins.columns[7], sizeof(g_ins.columns[7]), "%s", "created_at");
+
+    /* User-supplied 7 fields, then auto-set created_at. */
+    for (int idx = 0; idx < CK_PUT_FIELDS; idx++)
+        append_ins_field(put_field_or_null(idx));
+
+    char ts[32];
+    {
+        time_t now = time(NULL);
+        struct tm tm;
+#ifdef _WIN32
+        gmtime_s(&tm, &now);
+#else
+        gmtime_r(&now, &tm);
+#endif
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+    }
+    GetInsertions(ts);
+    InsertRowSeparator();
+    g_ins.rowCount = 1;
+    g_ins.insertFromSelect = 0;
+
+    int rc = InsertProcess();
+    TruncateInsert();
+    return rc;
+}
+
+/* Build a stable SELECT against the backing table by populating g_sel
+ * + g_expr.whereExpr + ORDER BY + LIMIT, then call SelectProcess. */
+static int run_checkpoint_select(int latest_only)
+{
+    char tbl[256];
+    backing_table_name(g_ck.store_name, tbl, sizeof(tbl));
+
+    char thr[256];
+    snprintf(thr, sizeof(thr), "%s", g_ck.thread_id);
+    strip_quotes(thr);
+
+    /* Reset SELECT state and seed with a star projection over the backing
+     * table, plus thread_id = 'thr' WHERE clause. */
+    memset(&g_sel, 0, sizeof(g_sel));
+    snprintf(g_sel.tblName, sizeof(g_sel.tblName), "%s", tbl);
+    g_sel.columnCount = 1;
+    snprintf(g_sel.columns[0], sizeof(g_sel.columns[0]), "*");
+
+    g_expr.selectExprCount = 1;
+    g_expr.selectExprs[0] = expr_make_star();
+
+    /* WHERE thread_id = 'thr' */
+    ExprNode *col = expr_make_column("thread_id");
+    ExprNode *lit = expr_make_string(thr);
+    g_expr.whereExpr = expr_make_cmp(/* CMP_SUBTOK_EQ */ 4, col, lit);
+
+    /* ORDER BY created_at DESC (newest first); for latest_only also LIMIT 1. */
+    g_sel.orderByCount = 1;
+    snprintf(g_sel.orderByColumns[0], sizeof(g_sel.orderByColumns[0]), "created_at");
+    g_sel.orderByDescs[0] = 1;
+
+    if (latest_only) {
+        g_expr.limitExpr = expr_make_int(1);
+    } else if (g_ck.limit_n > 0) {
+        g_expr.limitExpr = expr_make_int(g_ck.limit_n);
+    }
+
+    /* AT id filter narrows the WHERE further. */
+    if (latest_only && g_ck.at_id[0]) {
+        char at[256];
+        snprintf(at, sizeof(at), "%s", g_ck.at_id);
+        strip_quotes(at);
+        ExprNode *id_col = expr_make_column("checkpoint_id");
+        ExprNode *id_lit = expr_make_string(at);
+        ExprNode *id_cmp = expr_make_cmp(4, id_col, id_lit);
+        g_expr.whereExpr = expr_make_and(g_expr.whereExpr, id_cmp);
+        /* AT id implies a single deterministic row → no LIMIT needed. */
+        g_expr.limitExpr = NULL;
+    }
+
+    return SelectProcess();
+}
+
+int CheckpointGetProcess(void)
+{
+    CheckpointStoreDesc desc;
+    if (cat_find_checkpoint_store(g_ck.store_name, &desc) != 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "checkpoint store '%s' does not exist", g_ck.store_name);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+    return run_checkpoint_select(/* latest_only */ 1);
+}
+
+int CheckpointListProcess(void)
+{
+    CheckpointStoreDesc desc;
+    if (cat_find_checkpoint_store(g_ck.store_name, &desc) != 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "checkpoint store '%s' does not exist", g_ck.store_name);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+    return run_checkpoint_select(/* latest_only */ 0);
+}

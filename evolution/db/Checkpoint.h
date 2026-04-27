@@ -20,23 +20,22 @@ void  SetCheckpointStoreRetention(const char *expr);
 void  SetCheckpointStoreCascade(int cascade);
 void  ResetCheckpointOpts(void);
 
-/* DML field collectors — set during PUT / PUT WRITES parser actions. */
-void  SetCheckpointThread(const char *thread_id);
-void  SetCheckpointNs(const char *ns);
-void  SetCheckpointId(const char *id);
-void  SetCheckpointParent(const char *parent_id);
-void  SetCheckpointValues(const char *json);
-void  SetCheckpointMetadata(const char *json);
-void  SetCheckpointParentConfig(const char *json);
-void  SetCheckpointAtId(const char *id);
-void  SetCheckpointLimit(int n);
+/* (DML field collectors moved below the new top-level processors.) */
 
 /* ---- Top-level statement processors ---- */
 int  CreateCheckpointStoreProcess(int if_not_exists);
 int  DropCheckpointStoreProcess(int if_exists);
-int  CheckpointPutProcess(void);            /* CHECKPOINT PUT */
+int  CheckpointPutProcess(int is_writes);   /* CHECKPOINT PUT [WRITES] */
 int  CheckpointGetProcess(void);            /* CHECKPOINT GET (single row) */
 int  CheckpointListProcess(void);           /* CHECKPOINT LIST (history) */
-int  CheckpointPutWritesProcess(void);      /* CHECKPOINT PUT WRITES (batch) */
+
+/* DML field collectors for the new grammar — populated by parser actions
+ * before the corresponding *Process call. Strings are stored verbatim;
+ * the helpers strip surrounding quotes. NULL pointers are accepted and
+ * map to the SQL NULL marker. */
+void SetCheckpointPutField(int idx, const char *literal_or_null);
+void SetCheckpointThread(const char *thread_id);
+void SetCheckpointAtId(const char *id);
+void SetCheckpointLimit(int n);
 
 #endif /* CHECKPOINT_H */
