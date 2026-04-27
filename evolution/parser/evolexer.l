@@ -349,6 +349,13 @@ SESSION					{ return SESSION; }
 DOCUMENT				{ return DOCUMENT; }
 WRITE					{ return WRITE; }
 FILTER					{ return FILTER; }
+GRAPH					{ return GRAPH; }
+NEIGHBORS				{ return NEIGHBORS; }
+NODE					{ return NODE; }
+EDGE					{ return EDGE; }
+DEPTH					{ return DEPTH; }
+OF						{ return OF; }
+UPSERT					{ return UPSERT; }
 TRANSACTION				{ return TRANSACTION; }
 EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }

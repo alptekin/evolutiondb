@@ -355,6 +355,23 @@ typedef struct {
 } DocumentStoreDesc;
 
 /* ----------------------------------------------------------------
+ *  Task 224 — Bitemporal knowledge graph
+ *
+ *  CAT_SYS_GRAPH_STORES holds one row per CREATE GRAPH STORE. The
+ *  store carries two backing tables — kg_<name>_nodes and
+ *  kg_<name>_edges — each stamped with valid_from / valid_to /
+ *  invalid_at on every row. UPSERT EDGE auto-closes a prior triple
+ *  by stamping its invalid_at to NOW(); NEIGHBORS BFS filters edges
+ *  through (valid_from <= AS OF AND (invalid_at IS NULL OR
+ *  invalid_at > AS OF)) to surface the graph that was live at the
+ *  given snapshot. Zep Graphiti parity. */
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];
+    uint32_t nodes_table_id;
+    uint32_t edges_table_id;
+} GraphStoreDesc;
+
+/* ----------------------------------------------------------------
  *  Task 215 — Scheduled jobs (cron)
  *
  *  CAT_SYS_SCHEDULED_JOBS holds one row per CREATE JOB. The scheduler
@@ -620,6 +637,13 @@ int cat_create_document_store(const DocumentStoreDesc *desc);
 int cat_find_document_store(const char *name, DocumentStoreDesc *out);
 int cat_drop_document_store(const char *name);
 int cat_list_document_stores(DocumentStoreDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Graph store catalog API (Task 224 — Feature #224) */
+int cat_create_graph_store(const GraphStoreDesc *desc);
+int cat_find_graph_store(const char *name, GraphStoreDesc *out);
+int cat_drop_graph_store(const char *name);
+int cat_list_graph_stores(GraphStoreDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)
