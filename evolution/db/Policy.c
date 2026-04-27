@@ -45,6 +45,25 @@ void SetPolicyTable(const char *tableName)
     g_policy.table_name[sizeof(g_policy.table_name) - 1] = '\0';
 }
 
+/* Task 206: route a `... ON MEMORY STORE name` policy onto its backing
+ * table by looking the store up in the catalog and storing the
+ * mem_<name> table name. Falls back to the literal store name if the
+ * store does not exist; CreatePolicyProcess will surface the
+ * "relation does not exist" error in that case, matching the
+ * behaviour of CREATE POLICY against an unknown table. */
+void SetPolicyTableForMemoryStore(const char *store_name)
+{
+    if (!g_qctx || !store_name) return;
+    MemoryStoreDesc desc;
+    if (cat_find_memory_store(store_name, &desc) == 0) {
+        snprintf(g_policy.table_name, sizeof(g_policy.table_name),
+                 "mem_%s", store_name);
+    } else {
+        snprintf(g_policy.table_name, sizeof(g_policy.table_name),
+                 "%s", store_name);
+    }
+}
+
 void SetPolicyPermissive(int permissive)
 {
     if (!g_qctx) return;
@@ -112,6 +131,30 @@ int AlterTableToggleRLS(const char *tableName, int enable)
         return -1;
     }
     return 0;
+}
+
+/* Task 206: ALTER MEMORY STORE name ENABLE / DISABLE ROW LEVEL SECURITY
+ * Resolves the backing table name and reuses the existing toggle path.*/
+int AlterMemoryStoreToggleRLS(const char *store_name, int enable)
+{
+    if (!store_name || !store_name[0]) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "ALTER MEMORY STORE: missing store name");
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SYNTAX_ERROR);
+        return -1;
+    }
+    MemoryStoreDesc desc;
+    if (cat_find_memory_store(store_name, &desc) != 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "memory store \"%s\" does not exist", store_name);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE("42704");
+        return -1;
+    }
+    char tbl[300];
+    snprintf(tbl, sizeof(tbl), "mem_%s", store_name);
+    return AlterTableToggleRLS(tbl, enable);
 }
 
 /* ----------------------------------------------------------------
