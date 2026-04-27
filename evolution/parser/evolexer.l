@@ -427,8 +427,8 @@ B'[01]+'				{ yylval->strval = strdup(yytext); return STRING; }
 
 
 "->>"					{ return JSON_ARROW_TEXT; }									/* JSON ->> */
-"<->"					{ return VEC_L2_OP; }										/* pgvector L2 distance */
-"<#>"					{ return VEC_INNER_OP; }									/* pgvector negative inner product */
+"<->"					{ return VEC_L2_OP; }										/* evovector L2 distance */
+"<#>"					{ return VEC_INNER_OP; }									/* evovector negative inner product */
 "->"					{ return JSON_ARROW; }										/* JSON -> */
 [-+&~|^/%*(),.;!]		{ return yytext[0]; }										/* operators */
 "["						{ return yytext[0]; }										/* array subscript / literal */

@@ -1432,7 +1432,7 @@ static int vec_distance(int kind, const char *lt, const char *rt,
         result = sqrt(s);
         break;
     }
-    case 2: { /* negative inner product (pgvector convention) */
+    case 2: { /* negative inner product (evovector convention) */
         result = -vec_dot(a, b, na);
         break;
     }
