@@ -137,6 +137,26 @@ int CreateTriggerProcess(void)
         return -1;
     }
 
+    /* Task 212 — ON MEMORY STORE resolution. The grammar stages the
+     * store name with an "@mem:" prefix so we know to look it up
+     * through cat_find_memory_store and substitute the backing table
+     * mem_<name>. After substitution the trigger fires on the backing
+     * table the same way a regular table trigger does. */
+    char effectiveTbl[CAT_MAX_NAME_LEN];
+    if (strncmp(g_trig.tableName, "@mem:", 5) == 0) {
+        const char *store = g_trig.tableName + 5;
+        MemoryStoreDesc ms;
+        if (cat_find_memory_store(store, &ms) != 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "memory store \"%s\" does not exist", store);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE("42704");
+            return -1;
+        }
+        snprintf(effectiveTbl, sizeof(effectiveTbl), "mem_%s", store);
+        snprintf(g_trig.tableName, sizeof(g_trig.tableName), "%s", effectiveTbl);
+    }
+
     /* Verify target table exists */
     TableDesc td;
     if (cat_resolve_table(g_currentDatabase, schema, g_trig.tableName, &td) < 0) {
