@@ -3056,6 +3056,17 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
 
+    /* Task 207 — evo_current_xid(): last-assigned MVCC transaction id.
+     * Tests use this to capture the snapshot they want to query later
+     * via FOR SYSTEM_TIME AS OF TRANSACTION <xid>. */
+    if (e->type == EXPR_CURRENT_XID) {
+        uint32_t xid = pgm_peek_xid();
+        /* peek returns next_xid; the last assigned is one less. */
+        snprintf(out_buf, (size_t)buf_size, "%u",
+                 xid > 0 ? xid - 1 : 0);
+        return 1;
+    }
+
     /* ── Vector distance ops (Task 201 — Feature #201) ── */
     if (e->type == EXPR_VEC_COSINE ||
         e->type == EXPR_VEC_L2 ||

@@ -205,6 +205,11 @@ typedef enum {
      * which lives in Task 203. */
     EXPR_HNSW_KNN,             /* left=table, right=index, extra=query, val.intval=k */
 
+    /* Task 207 — temporal helpers
+     *   evo_current_xid()  — last assigned MVCC transaction id (uint32)
+     */
+    EXPR_CURRENT_XID,
+
     /* Hybrid vector + filter search (Task 203 — Feature #203).
      *   hnsw_filter_knn(tbl, idx, query, k, filter_col, filter_val [, mode])
      *   hnsw_hybrid_explain(tbl, idx, query, k, filter_col, filter_val)
