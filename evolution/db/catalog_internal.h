@@ -75,6 +75,12 @@ typedef struct {
     uint8_t  rls_enabled;     /* Task 93: 1 = ROW LEVEL SECURITY enabled on this table */
     uint8_t  system_versioned;/* Task 208: 1 = WITH SYSTEM VERSIONING. Auto-injects valid_from/valid_to columns + auto-tracks history into <name>_history. */
     uint32_t history_table_id;/* Task 208: 0 if not versioned; else table_id of <name>_history. */
+    char     ttl_column[CAT_MAX_NAME_LEN];
+                              /* Task 213: name of the column that drives
+                               *   automatic row expiry. Empty = TTL off.
+                               *   The auto_reclaim daemon decodes the
+                               *   column on every tick and deletes any
+                               *   row whose value is older than NOW(). */
 
     /* Transient schema-presence flags — populated by tapi_resolve(),
      * NOT serialized. Used by DML inner loops to skip catalog lookups
@@ -384,6 +390,10 @@ int cat_update_table_rls_flag(uint32_t table_id, uint8_t rls_enabled);
 int cat_update_table_versioning(uint32_t table_id,
                                 uint8_t system_versioned,
                                 uint32_t history_table_id);
+
+/* Task 213 — set or clear the TTL driver column on an existing table.
+ * Pass NULL or "" to disable TTL pruning for that table. */
+int cat_update_table_ttl(uint32_t table_id, const char *ttl_column);
 
 /* Update shard metadata for a table. */
 int cat_update_shard_info(uint32_t table_id, const char *table_name,

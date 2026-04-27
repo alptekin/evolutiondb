@@ -11,6 +11,10 @@ services:
       EVOSQL_USER_NAME: admin
       EVOSQL_PASSWORD: admin
       EVOSQL_CDC_PORT: 9970
+      # Task 213 — drop the auto-RECLAIM tick to 2s so TTL-driven row
+      # expiry runs visibly inside a normal test iteration. Production
+      # leaves the default 30s (set this back if running benchmarks).
+      EVOSQL_AUTO_RECLAIM_INTERVAL_SEC: 2
       EVOSQL_ENCRYPTION_KEY: ${EVOSQL_ENCRYPTION_KEY:-MuhtacOldugunKudret!DamarlarindakiAsilKandaMevcuttur}
       # To generate a random password, remove or comment out EVOSQL_PASSWORD
       # To disable encryption, set EVOSQL_ENCRYPTION_KEY to empty string
