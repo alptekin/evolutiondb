@@ -92,6 +92,7 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/Memory.c \
               $(EVO_DB)/Subscription.c \
               $(EVO_DB)/Schedule.c \
+              $(EVO_DB)/MessageLog.c \
               $(EVO_DB)/page_crypt.c \
               $(EVO_DB)/mvcc.c \
               $(EVO_DB)/vmap.c \
