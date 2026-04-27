@@ -338,6 +338,9 @@ ACK						{ return ACK; }
 UPTO					{ return UPTO; }
 TTL						{ return TTL; }
 TTL_COLUMN				{ return TTL_COLUMN; }
+JOB						{ return JOB; }
+JOBS					{ return JOBS; }
+SCHEDULE				{ return SCHEDULE; }
 TRANSACTION				{ return TRANSACTION; }
 EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }

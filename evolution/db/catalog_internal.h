@@ -319,6 +319,24 @@ typedef struct {
 } SubscriptionDesc;
 
 /* ----------------------------------------------------------------
+ *  Task 215 — Scheduled jobs (cron)
+ *
+ *  CAT_SYS_SCHEDULED_JOBS holds one row per CREATE JOB. The scheduler
+ *  thread (auto_reclaim_worker piggyback) runs a 5-field cron
+ *  evaluator on every tick and triggers each job whose pattern
+ *  matches the current minute. last_run_unix tracks the most recent
+ *  fire so we can rate-limit if multiple ticks land in the same
+ *  minute. enabled = 1 by default; ALTER JOB DISABLE flips it to 0.
+ * ---------------------------------------------------------------- */
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];
+    char     cron_expr[64];       /* "min hour dom mon dow" */
+    char     sql[1024];           /* statement run on tick */
+    int      enabled;             /* 1 = active, 0 = paused */
+    int64_t  last_run_unix;       /* 0 = never run */
+} ScheduledJobDesc;
+
+/* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
 
@@ -538,6 +556,18 @@ int cat_find_subscription(const char *name, SubscriptionDesc *out);
 int cat_drop_subscription(const char *name);
 int cat_list_subscriptions(SubscriptionDesc *out, int max);
 int cat_update_subscription(const SubscriptionDesc *desc);
+
+/* ----------------------------------------------------------------
+ *  Scheduled jobs API (Task 215 — Feature #215)
+ *
+ *  Keys in CAT_SYS_SCHEDULED_JOBS are the lowercased job name.
+ *  cat_update_scheduled_job rewrites the row in place — the
+ *  scheduler stamps last_run_unix on every fire. */
+int cat_create_scheduled_job(const ScheduledJobDesc *desc);
+int cat_find_scheduled_job(const char *name, ScheduledJobDesc *out);
+int cat_drop_scheduled_job(const char *name);
+int cat_list_scheduled_jobs(ScheduledJobDesc *out, int max);
+int cat_update_scheduled_job(const ScheduledJobDesc *desc);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)

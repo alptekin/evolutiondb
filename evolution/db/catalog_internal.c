@@ -4012,3 +4012,119 @@ int cat_update_subscription(const SubscriptionDesc *desc)
     if (new_rid.page_no == 0) return -1;
     return bt2_update(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, new_rid);
 }
+
+/* ================================================================
+ *  Scheduled jobs (Task 215 — Feature #215)
+ *
+ *  Key   : lowercased job name
+ *  Value : "name;cron_expr;sql;enabled;last_run_unix"
+ *
+ *  cron_expr and sql are stored verbatim — the scheduler tick parses
+ *  the cron expression itself, the executor consumes the sql via the
+ *  query_execute callback. */
+static int serialize_scheduled_job(const ScheduledJobDesc *d,
+                                    char *buf, int size)
+{
+    int n = snprintf(buf, size, "%s;%s;%s;%d;%lld",
+                     d->name, d->cron_expr, d->sql,
+                     d->enabled, (long long)d->last_run_unix);
+    return (n < 0 || n >= size) ? -1 : n;
+}
+
+static void deserialize_scheduled_job(const char *buf, ScheduledJobDesc *d)
+{
+    char field[1024];
+    const char *q = buf;
+    q = next_field(q, d->name,      CAT_MAX_NAME_LEN);
+    q = next_field(q, d->cron_expr, sizeof(d->cron_expr));
+    q = next_field(q, d->sql,       sizeof(d->sql));
+    q = next_field(q, field, sizeof(field)); d->enabled = atoi(field);
+    q = next_field(q, field, sizeof(field));
+    d->last_run_unix = (int64_t)strtoll(field, NULL, 10);
+    (void)q;
+}
+
+int cat_create_scheduled_job(const ScheduledJobDesc *desc)
+{
+    if (!desc || desc->name[0] == '\0') return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", desc->name);
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, &existing) == 0)
+        return -1;
+    char record[2048];
+    if (serialize_scheduled_job(desc, record, sizeof(record)) < 0) return -1;
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_SCHEDULED_JOBS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_scheduled_job(const char *name, ScheduledJobDesc *out)
+{
+    if (!name || !*name) return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, &rid) < 0)
+        return -1;
+    char record[2048];
+    if (cat_read_record(rid, record, sizeof(record)) < 0) return -1;
+    if (out) deserialize_scheduled_job(record, out);
+    return 0;
+}
+
+int cat_drop_scheduled_job(const char *name)
+{
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key);
+    return 0;
+}
+
+int cat_list_scheduled_jobs(ScheduledJobDesc *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[2048];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_scheduled_job(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}
+
+int cat_update_scheduled_job(const ScheduledJobDesc *desc)
+{
+    if (!desc || desc->name[0] == '\0') return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", desc->name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, &rid) < 0)
+        return -1;
+    char new_record[2048];
+    if (serialize_scheduled_job(desc, new_record, sizeof(new_record)) < 0)
+        return -1;
+    int new_len = (int)strlen(new_record) + 1;
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_SCHEDULED_JOBS, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+    return bt2_update(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, new_rid);
+}
