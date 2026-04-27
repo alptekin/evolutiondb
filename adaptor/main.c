@@ -178,6 +178,17 @@ int main(int argc, char *argv[])
             buffer_pool_pages = parse_buffer_size(env);
     }
 
+    /* Task 209 — Temporal retention window seed (default 7 days, 0
+     * disables). Runtime SET SYSTEM_TIME_RETENTION = N overrides. */
+    {
+        extern volatile int g_system_time_retention_days;
+        const char *env = getenv("EVOSQL_SYSTEM_TIME_RETENTION_DAYS");
+        if (env && env[0]) {
+            int n = atoi(env);
+            if (n >= 0) g_system_time_retention_days = n;
+        }
+    }
+
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
     signal(SIGTERM, shutdown_handler);
