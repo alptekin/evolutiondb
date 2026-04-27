@@ -136,7 +136,7 @@ static void deserialize_schema(const char *buf, SchemaDesc *s)
 /* --- Table --- */
 static void serialize_table(const TableDesc *t, char *buf, int size)
 {
-    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d;%u;%u",
+    snprintf(buf, size, "%u;%u;%s;%u;%u;%d;%d;%d;%d;%d;%d;%d;%u;%d;%s;%d;%u;%u;%u;%u",
              t->table_id, t->schema_id, t->table_name,
              t->pk_root_page, t->heap_page,
              t->num_columns, t->pad_size,
@@ -147,7 +147,9 @@ static void serialize_table(const TableDesc *t, char *buf, int size)
              t->shard_key[0] ? t->shard_key : "",
              t->shard_count,
              t->parent_table_id,                  /* Task 92: INHERITS */
-             (unsigned int)t->rls_enabled);       /* Task 93: RLS flag */
+             (unsigned int)t->rls_enabled,        /* Task 93: RLS flag */
+             (unsigned int)t->system_versioned,   /* Task 208: SYSTEM VERSIONING flag */
+             t->history_table_id);                /* Task 208: shadow table id */
 }
 
 static void deserialize_table(const char *buf, TableDesc *t)
@@ -212,6 +214,18 @@ static void deserialize_table(const char *buf, TableDesc *t)
         p = next_field(p, field, sizeof(field)); t->rls_enabled = (uint8_t)atoi(field);
     } else {
         t->rls_enabled = 0;
+    }
+    /* system_versioned + history_table_id — optional, Task 208.
+     * Pre-task rows default to 0 / 0. */
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->system_versioned = (uint8_t)atoi(field);
+    } else {
+        t->system_versioned = 0;
+    }
+    if (p && *p) {
+        p = next_field(p, field, sizeof(field)); t->history_table_id = (uint32_t)atoi(field);
+    } else {
+        t->history_table_id = 0;
     }
     (void)p;
 }
@@ -1149,6 +1163,49 @@ int cat_update_table_rls_flag(uint32_t table_id, uint8_t rls_enabled)
         return 0;
     }
     return -1;  /* table_id not found */
+}
+
+/* Task 208 — flip the SYSTEM VERSIONING flag on an existing table and
+ * link its history shadow. Pass history_table_id = 0 to unlink. */
+int cat_update_table_versioning(uint32_t table_id,
+                                uint8_t system_versioned,
+                                uint32_t history_table_id)
+{
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_TABLES], &cur) < 0)
+        return -1;
+
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[CAT_MAX_RECORD_LEN];
+        if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+
+        TableDesc t;
+        deserialize_table(record, &t);
+        if (t.table_id != table_id) continue;
+
+        t.system_versioned  = system_versioned ? 1 : 0;
+        t.history_table_id  = history_table_id;
+
+        char new_record[CAT_MAX_RECORD_LEN];
+        serialize_table(&t, new_record, sizeof(new_record));
+        int new_len = (int)strlen(new_record) + 1;
+
+        char page_buf[EVO_PAGE_SIZE];
+        pgm_read_page(rid.page_no, page_buf);
+        if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+            pgm_write_page(rid.page_no, page_buf);
+            return 0;
+        }
+
+        cat_delete_record(rid);
+        RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, new_len);
+        if (new_rid.page_no == 0) return -1;
+        bt2_update(&g_cat_trees[CAT_SYS_TABLES], key, new_rid);
+        return 0;
+    }
+    return -1;
 }
 
 int cat_list_tables(uint32_t schema_id, TableDesc *out, int max)

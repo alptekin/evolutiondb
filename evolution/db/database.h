@@ -276,6 +276,8 @@ void SetColumnDefault(const char *value);
 void SetColumnAutoIncrement(int start, int step);
 void SetColumnGenerated(int mode, struct ExprNode *expr);
 void SetTableAutoIncrement(int startVal);
+/* Task 208 — flag CREATE TABLE for SYSTEM VERSIONING. */
+void SetTableSystemVersioned(void);
 void AddPrimaryKeyColumn(const char *colName);
 int ReadPrimaryKeys(const char *tblName, int *indices, int maxCols);
 int ReadPrimaryKey(const char *tblName);
