@@ -3834,3 +3834,129 @@ int cat_list_memory_stores(MemoryStoreDesc *out, int max)
     }
     return count;
 }
+
+/* ================================================================
+ *  Subscriptions (Task 210 — Feature #210)
+ *
+ *  Key   : lowercased subscription name
+ *  Value : "name;channel;backing_table_id;last_ack_seq;next_seq;ttl_days"
+ * ================================================================ */
+static int serialize_subscription(const SubscriptionDesc *d,
+                                   char *buf, int size)
+{
+    int n = snprintf(buf, size, "%s;%s;%u;%lld;%lld;%d",
+                     d->name, d->channel, d->backing_table_id,
+                     (long long)d->last_ack_seq,
+                     (long long)d->next_seq,
+                     d->ttl_days);
+    return (n < 0 || n >= size) ? -1 : n;
+}
+
+static void deserialize_subscription(const char *buf, SubscriptionDesc *d)
+{
+    char field[256];
+    const char *q = buf;
+    q = next_field(q, d->name,    CAT_MAX_NAME_LEN);
+    q = next_field(q, d->channel, CAT_MAX_NAME_LEN);
+    q = next_field(q, field, sizeof(field));
+    d->backing_table_id = (uint32_t)strtoul(field, NULL, 10);
+    q = next_field(q, field, sizeof(field));
+    d->last_ack_seq = (int64_t)strtoll(field, NULL, 10);
+    q = next_field(q, field, sizeof(field));
+    d->next_seq = (int64_t)strtoll(field, NULL, 10);
+    q = next_field(q, field, sizeof(field));
+    d->ttl_days = atoi(field);
+    (void)q;
+}
+
+int cat_create_subscription(const SubscriptionDesc *desc)
+{
+    if (!desc || desc->name[0] == '\0') return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", desc->name);
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, &existing) == 0)
+        return -1;
+    char record[512];
+    if (serialize_subscription(desc, record, sizeof(record)) < 0) return -1;
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_SUBSCRIPTIONS, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_subscription(const char *name, SubscriptionDesc *out)
+{
+    if (!name || !*name) return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, &rid) < 0)
+        return -1;
+    char record[512];
+    if (cat_read_record(rid, record, sizeof(record)) < 0) return -1;
+    if (out) deserialize_subscription(record, out);
+    return 0;
+}
+
+int cat_drop_subscription(const char *name)
+{
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key);
+    return 0;
+}
+
+int cat_list_subscriptions(SubscriptionDesc *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[512];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_subscription(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}
+
+/* The seq counters and last_ack_seq mutate on every NOTIFY / ACK, so
+ * an in-place rewrite avoids the delete + re-insert round-trip on the
+ * hot path. Falls back to delete+insert if slot_update can't widen the
+ * record (rare — sizes match on the same record format). */
+int cat_update_subscription(const SubscriptionDesc *desc)
+{
+    if (!desc || desc->name[0] == '\0') return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", desc->name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, &rid) < 0)
+        return -1;
+
+    char new_record[512];
+    if (serialize_subscription(desc, new_record, sizeof(new_record)) < 0)
+        return -1;
+    int new_len = (int)strlen(new_record) + 1;
+
+    char page_buf[EVO_PAGE_SIZE];
+    pgm_read_page(rid.page_no, page_buf);
+    if (slot_update(page_buf, rid.slot_idx, new_record, (uint16_t)new_len) == 0) {
+        pgm_write_page(rid.page_no, page_buf);
+        return 0;
+    }
+
+    cat_delete_record(rid);
+    RowID new_rid = cat_store_record(CAT_SYS_SUBSCRIPTIONS, new_record, new_len);
+    if (new_rid.page_no == 0) return -1;
+    return bt2_update(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, new_rid);
+}
