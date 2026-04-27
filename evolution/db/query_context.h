@@ -90,6 +90,11 @@ typedef struct {
      *   1 = WITH SYSTEM VERSIONING — CreateTableProcess auto-injects
      *       valid_from / valid_to columns + creates <name>_history. */
     int      systemVersioned;
+    /* TTL column (Task 213 — Feature #213).
+     *   Empty = no TTL. CreateTableProcess persists this on the
+     *   TableDesc; the auto_reclaim daemon prunes rows whose
+     *   value in this column has fallen below NOW(). */
+    char     ttlColumn[128];
 } CreateOpts;
 
 /* ---- INSERT ---- */
