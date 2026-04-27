@@ -3348,6 +3348,46 @@ Feature numbering: this task picks up `#165` — the next free slot after Task 1
 
 ---
 
+### Task 170: ⬜ Scheduled Jobs v2 — In-database SQL execution + isolation (Feature #166)
+
+**Goal:** Task 215 v1 ships the cron DDL surface (`CREATE / DROP / ALTER JOB`, `SHOW JOBS`), the 5-field cron evaluator, persistent catalog storage, and minute-bucketed `last_run_unix` tracking — but the SQL body itself doesn't execute yet because re-entering `query_execute` from the auto-RECLAIM thread stomps thread-local state (`g_qctx`, parser globals) and SEGVs even on `SELECT 1`. v2 closes the gap so a registered job actually runs its statement.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Dedicated job-worker thread pool — pre-spawn N workers (`EVOSQL_JOB_WORKERS`, default 2) at server boot, each with the same 16 MB stack the auto-RECLAIM thread uses + the full `qctx_alloc` / `g_qctx` / `g_currentDatabase` initialization that connection-pool workers do. The scheduler tick enqueues `(job_name, sql)` onto a bounded SPSC ring; a worker drains the ring under its own session context. | `evolution/db/Schedule.{c,h}`, `adaptor/server.c` |
+| 2 | `safe_query_execute` wrapper for jobs — synthesize a minimal `SessionCtx` (`session_id = -1`, `username = "scheduler"`, `database` from the job row), set the per-thread error trampoline so a job-side `longjmp` can't escape into the daemon, and surface failures via the job's row instead of crashing the worker. | `adaptor/server.c`, `adaptor/query_executor.c` |
+| 3 | Per-job status columns on `ScheduledJobDesc` — `last_run_status` (`success` / `error` / `timeout` / `skipped`), `last_run_duration_ms`, `last_error_msg[256]`, `consecutive_failures`. Surface via `SHOW JOBS`. | `evolution/db/catalog_internal.{c,h}`, `adaptor/catalog.c` |
+| 4 | Per-job timeout knob — `CREATE JOB ... ON SCHEDULE ... DO ... WITH (timeout = '5min')`. Worker arms a watchdog before dispatch; on hit, raises `57014` and stamps `last_run_status = 'timeout'`. | `evolution/parser/evoparser.y`, `evolution/db/Schedule.c` |
+| 5 | Backoff on consecutive failures — `MAX_CONSECUTIVE_FAILURES = 3` flips `enabled = 0` automatically and emits a `[scheduler] Job X paused after N failures` line. `ALTER JOB X RESET` reactivates and zeroes the counter. | `evolution/db/Schedule.c`, `evolution/parser/evoparser.y` |
+| 6 | Range / list / step cron syntax — extend the v1 evaluator to handle `*/N`, `1-5`, `1,3,5`, `*/2,8-17` per field. Keeps the existing per-field validator structure; only the parser per-field gains a tokenizer. | `evolution/db/Schedule.c` |
+| 7 | Per-job time zone — `WITH (timezone = 'Europe/Istanbul')` evaluates the cron pattern in that zone. Defaults to UTC. Uses `tzset()` + `localtime_r` against a temporary `TZ` env override under a global lock. | `evolution/db/Schedule.c` |
+| 8 | Concurrency policy — `WITH (overlap = 'skip' / 'queue' / 'cancel-running')` controls what happens when a job's previous fire is still running. Default `skip` (today's de-facto behavior via `last_run_unix`). | `evolution/db/Schedule.c` |
+| 9 | `pg_catalog.pg_jobs` view — exposes name, schedule, sql, enabled, last_run_unix, last_run_status, last_run_duration_ms, consecutive_failures, last_error_msg through the standard catalog query path so DBeaver / pgAdmin can display the schedule list. | `adaptor/catalog.c` (`handle_pg_catalog`) |
+| 10 | Tests — `tests/test_scheduled_jobs_v2.py` with ≥15 cases: SQL actually executes (DDL + DML + CALL proc), timeout fires `57014`, consecutive failures pause the job, `RESET` reactivates, range/list/step cron expressions match correctly, time-zone offset honored, overlap policies, `pg_jobs` view shape, server stays alive across 5 minutes of `* * * * *` job firing under stress. | `tests/test_scheduled_jobs_v2.py` (new) |
+
+---
+
+### Task 171: ⬜ Job Chains / Workflow DAG — Sequential + parallel job orchestration (Feature #167)
+
+**Goal:** Task 215 + Task 170 cover *standalone* periodic jobs. Real ETL / agent-ops workflows need composition: "run `ingest` daily at 03:00, then `transform` if `ingest` succeeded, then `notify_slack` whether transform passed or failed". Today the only way to get that is to write the orchestration in an external runner (Airflow, k8s CronJob chain, n8n). This task adds the DAG primitive directly into the SQL surface so a workflow lives next to the data it operates on.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | New DDL — `CREATE JOB CHAIN name AS (job_a -> job_b -> job_c)`. Parses left-to-right into a linked-list DAG persisted in a new catalog slot `CAT_SYS_JOB_CHAINS` (slot 22 → CATALOG_ROOT_SLOTS = 24, FileHeader bumped to v5). Each link carries `on_status` (`success` / `failure` / `any` — default `success`). | `evolution/db/page_mgr.h`, `evolution/db/catalog_internal.{c,h}`, `evolution/parser/evoparser.y`, new `evolution/db/JobChain.{c,h}` |
+| 2 | Branching syntax — `CREATE JOB CHAIN nightly AS ( ingest -> {transform_a, transform_b} -> finalize )`. Curly braces denote a parallel fan-out: dispatcher waits for *all* parallel branches before advancing. Linear chain stays the default for simple cases. | `evolution/parser/evoparser.y`, `evolution/db/JobChain.c` |
+| 3 | Conditional edges — `job_a -[on success]-> job_b`, `job_a -[on failure]-> alert`. Generalizes the default `on_status = success` from step 1 into per-edge guards. Multiple outgoing edges from the same job give branching by status. | `evolution/parser/evoparser.y`, `evolution/db/JobChain.c` |
+| 4 | Chain runner — when a job from the chain enters a terminal state (success/error/timeout via Task 170 status fields), the chain runner walks outgoing edges, evaluates `on_status` predicates, and dispatches the matched successors onto the same job-worker queue. Persistent run state in `__jobchain_runs` (run_id, chain_name, started_at, current_node, finished_at, status). | `evolution/db/JobChain.c`, `evolution/db/Schedule.c` |
+| 5 | Schedule binding — `CREATE JOB CHAIN nightly ON SCHEDULE '0 3 * * *' AS (...)`. The cron tick triggers the chain's first node instead of a single job. Chain-level enable/disable wraps the per-job flags. | `evolution/parser/evoparser.y`, `evolution/db/Schedule.c` |
+| 6 | Manual trigger — `RUN CHAIN nightly`. Useful for ad-hoc backfills, testing, or human-driven kickoffs. Returns the new `run_id` so the caller can poll progress via `SHOW CHAIN RUNS WHERE run_id = ?`. | `evolution/parser/evoparser.y`, `evolution/db/JobChain.c` |
+| 7 | Introspection — `SHOW CHAINS`, `SHOW CHAIN RUNS`, `SHOW CHAIN nightly` (graphviz-style edge dump). Surfaces enough for an operator to debug a stuck workflow without dropping into psql + custom SQL. | `adaptor/catalog.c`, `evolution/db/JobChain.c` |
+| 8 | Cycle detector — at `CREATE JOB CHAIN` time, run a topological sort and refuse to register a chain with a cycle (`42P17`). Loops via a follow-up task with `LOOP` syntax later. | `evolution/db/JobChain.c` |
+| 9 | Run history retention — `CREATE JOB CHAIN ... WITH (history_keep = 100)` caps how many past runs the daemon retains; older rows in `__jobchain_runs` get pruned by the auto_reclaim TTL pass (Task 213). Default 1000. | `evolution/db/JobChain.c`, `evolution/db/auto_reclaim.c` |
+| 10 | Tests — `tests/test_job_chain.py` with ≥15 cases: linear chain runs in order, branching `{a,b}` waits for both, `on success` skips when predecessor errored, `on failure` triggers, conditional edges honor predicates, `RUN CHAIN` works without a schedule, `SHOW CHAIN RUNS` shape, cycle rejected, retention prunes old runs, chain disabled stops further fires, kill-server-mid-chain leaves consistent state on restart. | `tests/test_job_chain.py` (new) |
+
+This task depends on Task 170 (the per-job status fields are what the edge predicates evaluate). Together 170 + 171 elevate `CREATE JOB` from a glorified cron alternative into a first-class workflow surface — agents can declare their daily ETL pipeline as SQL alongside the tables it reads + writes, with no Airflow/Prefect runner needed.
+
+---
+
 # Agent Memory Platform (Feature #200-#225)
 
 **Vision:** "Powering Long-Term Memory for Agents" — Make EvolutionDB the canonical long-term memory backend for AI agent frameworks. Compete with MongoDB `langgraph-store-mongodb`, Pinecone, Zep (Graphiti), Mem0.
@@ -3662,6 +3702,8 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 ### Task 215: ⬜ Scheduled Jobs / CRON (Feature #215)
 
 **Goal:** Cron-style scheduled SQL execution — `ANALYZE`, TTL prune, custom agent jobs.
+
+> **v1 ships the DDL surface + persistent catalog + cron evaluator + minute-bucketed `last_run_unix`.** Actual SQL execution from the daemon thread is deferred — re-entering `query_execute` from a non-pool thread stomps thread-local state and SEGVs. **Task 170 (Scheduled Jobs v2)** wires the SQL execution onto a dedicated job-worker pool with timeouts, status tracking, and auto-pause-on-failure. **Task 171 (Job Chains)** then layers DAG / parallel / conditional orchestration on top.
 
 | Step | Description | Files |
 |------|-------------|-------|
