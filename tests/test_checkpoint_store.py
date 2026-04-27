@@ -220,6 +220,148 @@ def test_pk_uniqueness():
     assert e2 is not None, "duplicate PK should fail"
 
 
+# ─── 16. CHECKPOINT PUT native DML ───
+def test_put_dml_basic():
+    s = conn()
+    cleanup(s, "ckp1")
+    simple_query(s, "CREATE CHECKPOINT STORE ckp1")
+    _, _, err, _ = simple_query(s,
+        "CHECKPOINT PUT INTO ckp1 VALUES "
+        "('th-100', 'default', 'cp-001', NULL, '{\"step\":1}', '{\"trace\":\"a\"}', NULL)")
+    assert err is None, f"PUT failed: {err}"
+    _, rows, _, _ = simple_query(s,
+        "SELECT thread_id, checkpoint_id, ck_values FROM ck_ckp1")
+    assert len(rows) == 1
+    assert rows[0][0] == "th-100" and rows[0][1] == "cp-001"
+    assert rows[0][2] == '{"step":1}'
+
+
+# ─── 17. CHECKPOINT GET (latest by thread) ───
+def test_get_latest_by_thread():
+    s = conn()
+    cleanup(s, "ckg1")
+    simple_query(s, "CREATE CHECKPOINT STORE ckg1")
+    for i in range(1, 4):
+        simple_query(s,
+            f"CHECKPOINT PUT INTO ckg1 VALUES "
+            f"('th', 'default', 'cp-{i}', NULL, '{{}}', '{{}}', NULL)")
+    _, rows, err, _ = simple_query(s,
+        "CHECKPOINT GET FROM ckg1 THREAD 'th'")
+    assert err is None, f"GET failed: {err}"
+    assert len(rows) == 1, f"GET returned {len(rows)} rows, want 1"
+    # The latest (most recent created_at) — could be any of cp-1/2/3 if
+    # rows share a clock-second; assert it is one of them.
+    assert rows[0][2] in {"cp-1", "cp-2", "cp-3"}, f"unexpected: {rows[0]}"
+
+
+# ─── 18. CHECKPOINT GET ... AT specific id ───
+def test_get_at_specific_id():
+    s = conn()
+    cleanup(s, "ckg2")
+    simple_query(s, "CREATE CHECKPOINT STORE ckg2")
+    simple_query(s, "CHECKPOINT PUT INTO ckg2 VALUES ('t', '', 'cA', NULL, '{}', '{}', NULL)")
+    simple_query(s, "CHECKPOINT PUT INTO ckg2 VALUES ('t', '', 'cB', NULL, '{}', '{}', NULL)")
+    _, rows, err, _ = simple_query(s,
+        "CHECKPOINT GET FROM ckg2 THREAD 't' AT 'cA'")
+    assert err is None, f"GET AT failed: {err}"
+    assert len(rows) == 1 and rows[0][2] == "cA", f"GET AT: {rows}"
+
+
+# ─── 19. CHECKPOINT LIST returns full history DESC ───
+def test_list_history():
+    s = conn()
+    cleanup(s, "ckl1")
+    simple_query(s, "CREATE CHECKPOINT STORE ckl1")
+    for i in range(1, 4):
+        simple_query(s,
+            f"CHECKPOINT PUT INTO ckl1 VALUES "
+            f"('th', 'default', 'cp-{i}', NULL, '{{}}', '{{}}', NULL)")
+    _, rows, err, _ = simple_query(s,
+        "CHECKPOINT LIST FROM ckl1 THREAD 'th'")
+    assert err is None, f"LIST failed: {err}"
+    assert len(rows) == 3
+
+
+# ─── 20. CHECKPOINT LIST ... LIMIT n ───
+def test_list_limit():
+    s = conn()
+    cleanup(s, "ckl2")
+    simple_query(s, "CREATE CHECKPOINT STORE ckl2")
+    for i in range(1, 6):
+        simple_query(s,
+            f"CHECKPOINT PUT INTO ckl2 VALUES "
+            f"('t', '', 'cp-{i}', NULL, '{{}}', '{{}}', NULL)")
+    _, rows, err, _ = simple_query(s,
+        "CHECKPOINT LIST FROM ckl2 THREAD 't' LIMIT 2")
+    assert err is None, f"LIST LIMIT failed: {err}"
+    assert len(rows) == 2
+
+
+# ─── 21. CHECKPOINT PUT WRITES — same shape, accepted by grammar ───
+def test_put_writes():
+    s = conn()
+    cleanup(s, "ckw1")
+    simple_query(s, "CREATE CHECKPOINT STORE ckw1")
+    _, _, err, _ = simple_query(s,
+        "CHECKPOINT PUT WRITES INTO ckw1 VALUES "
+        "('t', '', 'cw1', 'parent', '{\"writes\":[1,2]}', '{}', '{}')")
+    assert err is None, f"PUT WRITES failed: {err}"
+    _, rows, _, _ = simple_query(s,
+        "SELECT checkpoint_id, parent_id FROM ck_ckw1")
+    assert rows[0][0] == "cw1" and rows[0][1] == "parent"
+
+
+# ─── 22. CHECKPOINT PUT against missing store → error ───
+def test_put_missing_store():
+    s = conn()
+    cleanup(s, "ck_missing_p")
+    _, _, err, _ = simple_query(s,
+        "CHECKPOINT PUT INTO ck_missing_p VALUES "
+        "('t', '', 'c', NULL, '{}', '{}', NULL)")
+    assert err is not None, "PUT into missing store should error"
+
+
+# ─── 23. NULL values pass through PUT correctly ───
+def test_put_null_fields():
+    s = conn()
+    cleanup(s, "ckn1")
+    simple_query(s, "CREATE CHECKPOINT STORE ckn1")
+    _, _, err, _ = simple_query(s,
+        "CHECKPOINT PUT INTO ckn1 VALUES "
+        "('t', NULL, 'cn1', NULL, '{}', NULL, NULL)")
+    assert err is None, f"PUT with NULLs failed: {err}"
+    _, rows, _, _ = simple_query(s,
+        "SELECT checkpoint_id, parent_id, metadata, parent_config FROM ck_ckn1")
+    assert rows[0][0] == "cn1"
+    assert rows[0][1] is None and rows[0][2] is None and rows[0][3] is None
+
+
+# ─── 24. PUT then GET round-trips JSON values intact ───
+def test_put_get_json_roundtrip():
+    s = conn()
+    cleanup(s, "ckj1")
+    simple_query(s, "CREATE CHECKPOINT STORE ckj1")
+    json_blob = '{"messages":[{"role":"user","content":"hi"}]}'
+    simple_query(s,
+        f"CHECKPOINT PUT INTO ckj1 VALUES "
+        f"('t', '', 'c1', NULL, '{json_blob}', '{{}}', NULL)")
+    _, rows, _, _ = simple_query(s,
+        "CHECKPOINT GET FROM ckj1 THREAD 't' AT 'c1'")
+    assert len(rows) == 1
+    assert rows[0][4] == json_blob, f"json roundtrip: {rows[0][4]}"
+
+
+# ─── 25. GET on empty store returns empty result ───
+def test_get_empty_store():
+    s = conn()
+    cleanup(s, "cke1")
+    simple_query(s, "CREATE CHECKPOINT STORE cke1")
+    _, rows, err, _ = simple_query(s,
+        "CHECKPOINT GET FROM cke1 THREAD 'no-such-thread'")
+    assert err is None, f"GET empty: {err}"
+    assert len(rows) == 0
+
+
 if __name__ == "__main__":
     print("=== test_checkpoint_store.py (Task 204) ===\n")
     run("CREATE CHECKPOINT STORE",                test_create_basic)
@@ -237,6 +379,16 @@ if __name__ == "__main__":
     run("Thread isolation",                       test_thread_isolation)
     run("Re-create after DROP",                   test_recreate_after_drop)
     run("Backing table PK uniqueness",            test_pk_uniqueness)
+    run("CHECKPOINT PUT native DML",              test_put_dml_basic)
+    run("CHECKPOINT GET latest by thread",        test_get_latest_by_thread)
+    run("CHECKPOINT GET ... AT id",               test_get_at_specific_id)
+    run("CHECKPOINT LIST returns history",        test_list_history)
+    run("CHECKPOINT LIST ... LIMIT n",            test_list_limit)
+    run("CHECKPOINT PUT WRITES grammar",          test_put_writes)
+    run("PUT against missing store errors",       test_put_missing_store)
+    run("PUT with NULL fields",                   test_put_null_fields)
+    run("PUT then GET JSON roundtrip",            test_put_get_json_roundtrip)
+    run("GET on empty store",                     test_get_empty_store)
 
     print(f"\n=== {PASS} passed, {FAIL} failed ===")
     sys.exit(0 if FAIL == 0 else 1)

@@ -333,6 +333,8 @@ WRITES					{ return WRITES; }
 PUT						{ return PUT; }
 GET						{ return GET; }
 LIST					{ return LIST; }
+THREAD					{ return THREAD; }
+AT						{ return AT; }
 
 
 

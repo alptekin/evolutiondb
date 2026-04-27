@@ -427,7 +427,9 @@
      PUT = 643,
      GET = 644,
      LIST = 645,
-     WRITES = 646
+     WRITES = 646,
+     THREAD = 647,
+     AT = 648
    };
 #endif
 /* Tokens.  */
@@ -820,6 +822,8 @@
 #define GET 644
 #define LIST 645
 #define WRITES 646
+#define THREAD 647
+#define AT 648
 
 
 
@@ -835,7 +839,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 839 "parser/evoparser.tab.h"
+#line 843 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
