@@ -467,7 +467,9 @@
      NEIGHBORS = 683,
      EDGE = 684,
      DEPTH = 685,
-     UPSERT = 686
+     UPSERT = 686,
+     ENTITY = 687,
+     RANK = 688
    };
 #endif
 /* Tokens.  */
@@ -900,13 +902,15 @@
 #define EDGE 684
 #define DEPTH 685
 #define UPSERT 686
+#define ENTITY 687
+#define RANK 688
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 77 "parser/evoparser.y"
+#line 78 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -915,7 +919,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 919 "parser/evoparser.tab.h"
+#line 923 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

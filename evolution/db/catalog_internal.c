@@ -4392,3 +4392,90 @@ int cat_list_graph_stores(GraphStoreDesc *out, int max)
     }
     return count;
 }
+
+/* ================================================================
+ *  Entity stores (Task 225 — Feature #225)
+ *
+ *  Key   : lowercased store name
+ *  Value : "name;backing_table_id;ttl_days"
+ * ================================================================ */
+static int serialize_entity_store(const EntityStoreDesc *d,
+                                   char *buf, int size)
+{
+    int n = snprintf(buf, size, "%s;%u;%d",
+                     d->name, d->backing_table_id, d->ttl_days);
+    return (n < 0 || n >= size) ? -1 : n;
+}
+
+static void deserialize_entity_store(const char *buf, EntityStoreDesc *d)
+{
+    char field[256];
+    const char *q = buf;
+    q = next_field(q, d->name, CAT_MAX_NAME_LEN);
+    q = next_field(q, field, sizeof(field));
+    d->backing_table_id = (uint32_t)strtoul(field, NULL, 10);
+    q = next_field(q, field, sizeof(field));
+    d->ttl_days = atoi(field);
+    (void)q;
+}
+
+int cat_create_entity_store(const EntityStoreDesc *desc)
+{
+    if (!desc || desc->name[0] == '\0') return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", desc->name);
+    RowID existing;
+    if (bt2_search(&g_cat_trees[CAT_SYS_ENTITY_STORES], key, &existing) == 0)
+        return -1;
+    char record[256];
+    if (serialize_entity_store(desc, record, sizeof(record)) < 0) return -1;
+    int rec_len = (int)strlen(record) + 1;
+    RowID rid = cat_store_record(CAT_SYS_ENTITY_STORES, record, rec_len);
+    if (rid.page_no == 0) return -1;
+    return bt2_insert(&g_cat_trees[CAT_SYS_ENTITY_STORES], key, rid) == 0 ? 0 : -1;
+}
+
+int cat_find_entity_store(const char *name, EntityStoreDesc *out)
+{
+    if (!name || !*name) return -1;
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_ENTITY_STORES], key, &rid) < 0)
+        return -1;
+    char record[256];
+    if (cat_read_record(rid, record, sizeof(record)) < 0) return -1;
+    if (out) deserialize_entity_store(record, out);
+    return 0;
+}
+
+int cat_drop_entity_store(const char *name)
+{
+    char key[CAT_MAX_KEY_LEN];
+    snprintf(key, sizeof(key), "%s", name);
+    RowID rid;
+    if (bt2_search(&g_cat_trees[CAT_SYS_ENTITY_STORES], key, &rid) < 0)
+        return -1;
+    cat_delete_record(rid);
+    bt2_delete(&g_cat_trees[CAT_SYS_ENTITY_STORES], key);
+    return 0;
+}
+
+int cat_list_entity_stores(EntityStoreDesc *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_ENTITY_STORES], &cur) < 0)
+        return 0;
+    int count = 0;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (count < max && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[256];
+        if (cat_read_record(rid, record, sizeof(record)) >= 0) {
+            deserialize_entity_store(record, &out[count]);
+            count++;
+        }
+    }
+    return count;
+}

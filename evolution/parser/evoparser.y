@@ -16,6 +16,7 @@
 	#include "../db/MessageLog.h"
 	#include "../db/Document.h"
 	#include "../db/Graph.h"
+	#include "../db/Entity.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -472,6 +473,9 @@
 /* Bitemporal knowledge graph (Task 224 — Feature #224)
  *   NODE / OF are already declared above (Task 95 / 89). */
 %token GRAPH NEIGHBORS EDGE DEPTH UPSERT
+
+/* Entity store templates (Task 225 — Feature #225) */
+%token ENTITY RANK
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -2975,6 +2979,107 @@ graph_dml_stmt:
         SetGraphNeighborsAsOf($9);
         GraphNeighborsProcess();
         free($4); free($6); free($9);
+    }
+;
+
+/* ── Entity store templates (Task 225 — Feature #225) ──
+ *   CREATE ENTITY STORE name [IF NOT EXISTS]
+ *   DROP   ENTITY STORE name [IF EXISTS]
+ *   ENTITY PUT INTO name VALUES ('key', 'summary' [, 'facts'])
+ *   ENTITY GET FROM name WHERE KEY COMPARISON STRING
+ *   ENTITY RANK FROM name [LIMIT N]
+ */
+stmt: create_entity_store_stmt   { emit("STMT"); }
+    | drop_entity_store_stmt     { emit("STMT"); }
+    | entity_dml_stmt            { emit("STMT"); }
+;
+
+create_entity_store_stmt:
+  CREATE ENTITY STORE NAME
+    {
+        emit("CREATE ENTITY STORE %s", $4);
+        ResetEntityOpts();
+        SetEntityStoreName($4);
+        CreateEntityStoreProcess(0);
+        free($4);
+    }
+| CREATE ENTITY STORE IF EXISTS NAME
+    {
+        emit("CREATE ENTITY STORE IF NOT EXISTS %s", $6);
+        ResetEntityOpts();
+        SetEntityStoreName($6);
+        CreateEntityStoreProcess(1);
+        free($6);
+    }
+;
+
+drop_entity_store_stmt:
+  DROP ENTITY STORE NAME
+    {
+        emit("DROP ENTITY STORE %s", $4);
+        ResetEntityOpts();
+        SetEntityStoreName($4);
+        DropEntityStoreProcess(0);
+        free($4);
+    }
+| DROP ENTITY STORE IF EXISTS NAME
+    {
+        emit("DROP ENTITY STORE IF EXISTS %s", $6);
+        ResetEntityOpts();
+        SetEntityStoreName($6);
+        DropEntityStoreProcess(1);
+        free($6);
+    }
+;
+
+entity_dml_stmt:
+  ENTITY PUT INTO NAME VALUES '(' STRING ',' STRING ')'
+    {
+        emit("ENTITY PUT INTO %s", $4);
+        ResetEntityOpts();
+        SetEntityStoreName($4);
+        SetEntityKey($7);
+        SetEntitySummary($9);
+        SetEntityFacts(NULL);
+        EntityPutProcess();
+        free($4); free($7); free($9);
+    }
+| ENTITY PUT INTO NAME VALUES '(' STRING ',' STRING ',' STRING ')'
+    {
+        emit("ENTITY PUT INTO %s WITH facts", $4);
+        ResetEntityOpts();
+        SetEntityStoreName($4);
+        SetEntityKey($7);
+        SetEntitySummary($9);
+        SetEntityFacts($11);
+        EntityPutProcess();
+        free($4); free($7); free($9); free($11);
+    }
+| ENTITY GET FROM NAME WHERE KEY COMPARISON STRING
+    {
+        emit("ENTITY GET FROM %s KEY=%s", $4, $8);
+        ResetEntityOpts();
+        SetEntityStoreName($4);
+        SetEntityKey($8);
+        EntityGetProcess();
+        free($4); free($8);
+    }
+| ENTITY RANK FROM NAME
+    {
+        emit("ENTITY RANK FROM %s", $4);
+        ResetEntityOpts();
+        SetEntityStoreName($4);
+        EntityRankProcess();
+        free($4);
+    }
+| ENTITY RANK FROM NAME LIMIT INTNUM
+    {
+        emit("ENTITY RANK FROM %s LIMIT %d", $4, $6);
+        ResetEntityOpts();
+        SetEntityStoreName($4);
+        SetEntityLimit($6);
+        EntityRankProcess();
+        free($4);
     }
 ;
 
