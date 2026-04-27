@@ -468,6 +468,41 @@ static int handle_set(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
+    /* Task 209 — SET SYSTEM_TIME_RETENTION = N
+     *   N = number of days; 0 disables pruning + AS OF window check.
+     * The accepted RHS is bare integer or quoted "N days" (units beyond
+     * "day(s)" reject — we don't pretend to parse a full Postgres
+     * interval string in v1). */
+    {
+        const char *p = sql + 3;
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (strncasecmp(p, "system_time_retention", 21) == 0) {
+            p += 21;
+            while (*p && (isspace((unsigned char)*p) || *p == '=' || *p == '\'')) p++;
+            int val = atoi(p);
+            /* Optional unit suffix — only "day" / "days" recognized;
+             * anything else falls through and the integer value stands. */
+            const char *q = p;
+            while (*q && (isdigit((unsigned char)*q) || isspace((unsigned char)*q))) q++;
+            if (*q && strncasecmp(q, "day", 3) != 0 && *q != '\'' && *q != ';') {
+                result_set_error(rs, "22023",
+                    "SET SYSTEM_TIME_RETENTION accepts an integer "
+                    "(days) or 'N days' literal");
+                return 1;
+            }
+            if (val < 0) {
+                result_set_error(rs, "22023",
+                    "SYSTEM_TIME_RETENTION must be non-negative");
+                return 1;
+            }
+            extern volatile int g_system_time_retention_days;
+            g_system_time_retention_days = val;
+            result_init(rs);
+            snprintf(rs->command_tag, sizeof(rs->command_tag), "SET");
+            return 1;
+        }
+    }
+
     result_init(rs);
     strcpy(rs->command_tag, "SET");
     return 1;
@@ -490,6 +525,22 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
             int row = result_add_row(rs);
             result_set_field(rs, row, 0, dbs[i].db_name);
         }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* Task 209 — SHOW SYSTEM_TIME_RETENTION returns the days knob.
+     * 0 means pruning is disabled and AS OF reaches as far as the MVCC
+     * chain allows. */
+    if (stristr_found(sql, "system_time_retention")) {
+        extern volatile int g_system_time_retention_days;
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "system_time_retention_days", PG_OID_INT4);
+        int row = result_add_row(rs);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", g_system_time_retention_days);
+        result_set_field(rs, row, 0, buf);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
