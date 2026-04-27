@@ -42,9 +42,9 @@
 #define PG_OID_ARRAY_BOOL       1000  /* BOOLEAN[] */
 #define PG_OID_ARRAY_JSON       199   /* JSON[] */
 
-/* VECTOR(N) — Task 200 / Feature #200. pgvector registers its own OID
- * via an extension; we send the text representation ("[f1,f2,...]")
- * so generic PG clients still read it as text. */
+/* VECTOR(N) — Task 200 / Feature #200. EvolutionDB's evovector layer
+ * doesn't depend on a registered binary OID; we send the text form
+ * ("[f1,f2,...]") so generic PG clients still read it as text. */
 #define PG_OID_VECTOR           25    /* render as text */
 
 typedef struct {

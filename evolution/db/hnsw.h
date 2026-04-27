@@ -36,7 +36,7 @@ void hnsw_shutdown(void);
 /* Build (or rebuild) the graph for a given (table_id, index_name) pair.
  *  - col_name:       vector column to index
  *  - distance_kind:  HNSW_DIST_* selector
- *  - m, ef_construction: pgvector-style build params (stored, consulted
+ *  - m, ef_construction: evovector build params (stored, consulted
  *                        by the v1.1 graph implementation)
  *  Scans the table, decodes the VECTOR(dim) column from each live row,
  *  and stores (pk_text, vector) pairs. Returns 0 on success, -1 on error
