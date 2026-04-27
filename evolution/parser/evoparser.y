@@ -440,6 +440,9 @@
 /* Memory store (Task 205 — Feature #205) */
 %token MEMORY EMBEDDING_DIM DISTANCE SEARCH NAMESPACE NAMESPACES PREFIX NS
 
+/* Temporal query (Task 207 — Feature #207) */
+%token SYSTEM_TIME TRANSACTION FEVO_CURRENT_XID
+
 %type <intval> select_opts
 %type <intval> select_stmt
 %type <intval> opt_hnsw_opclass
@@ -794,6 +797,11 @@ expr: FEVO_NOTIFY '(' expr ',' expr ')'
     {
         emit("CALL 0 PG_LISTENING_CHANNELS");
         $$ = expr_make_pg_listening_channels();
+    }
+| FEVO_CURRENT_XID '(' ')'
+    {
+        emit("CALL 0 EVO_CURRENT_XID");
+        $$ = expr_make_func0(EXPR_CURRENT_XID, "EVO_CURRENT_XID");
     }
 ;
 
@@ -1185,6 +1193,7 @@ stmt: select_stmt
 select_stmt: SELECT select_opts select_expr_list                                { emit("SELECTNODATA %d %d", $2, $3); g_sel.distinct = ($2 & 02) ? 1 : 0; } ;
 | SELECT select_opts select_expr_list
 FROM table_references
+opt_for_system_time
 opt_where opt_groupby opt_having opt_orderby opt_limit
 opt_for_update opt_into_list
     {
@@ -1301,6 +1310,18 @@ opt_limit: /* nil */ { /* no limit */ }
 | LIMIT expr                                               { emit("LIMIT 1"); g_expr.limitExpr = $2; }
 | LIMIT expr ',' expr								{ emit("LIMIT 2"); g_expr.offsetExpr = $2; g_expr.limitExpr = $4; }
 | LIMIT expr OFFSET expr							{ emit("LIMIT OFFSET"); g_expr.limitExpr = $2; g_expr.offsetExpr = $4; }
+;
+
+/* Task 207 — temporal query: FOR SYSTEM_TIME AS OF transaction-id.
+ *   FOR SYSTEM_TIME AS OF TRANSACTION <xid>  → snapshot just past <xid>
+ *
+ * Note: a terse `AS OF TRANSACTION <xid>` form was considered but
+ * collides with the existing `FROM tbl AS alias` table-alias rule.
+ * Stick with the SQL:2011-standard `FOR SYSTEM_TIME AS OF` opener,
+ * which has an unambiguous keyword prefix. */
+opt_for_system_time: /* nil */
+| FOR SYSTEM_TIME AS OF TRANSACTION INTNUM
+        { emit("FOR SYSTEM_TIME AS OF TRANSACTION %d", $6); SetAsOfXid((uint32_t)$6); }
 ;
 
 opt_for_update: /* nil */                                  { /* no locking */ }

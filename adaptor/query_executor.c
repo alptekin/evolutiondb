@@ -963,6 +963,28 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
     if (!from_pos || !where_pos) return 0;
 
+    /* Task 207: temporal SELECT (FOR SYSTEM_TIME AS OF ...) needs the
+     * full parser path so opt_for_system_time fires and the snapshot
+     * override lands. Skip the fast-path when the keyword is present
+     * between FROM and WHERE. */
+    {
+        const char *kw = strstr(from_pos, "FOR ");
+        if (kw && kw < where_pos) {
+            const char *st = strstr(kw, "SYSTEM_TIME");
+            if (st && st < where_pos) return 0;
+        }
+        /* Case-insensitive variant */
+        const char *p = from_pos;
+        while (p < where_pos) {
+            if ((p[0] == 'f' || p[0] == 'F') && (p[1] == 'o' || p[1] == 'O') &&
+                (p[2] == 'r' || p[2] == 'R') && isspace((unsigned char)p[3]) &&
+                strncasecmp(p, "FOR SYSTEM_TIME", 15) == 0) {
+                return 0;
+            }
+            p++;
+        }
+    }
+
     /* Parse column list: SELECT * or SELECT col1, col2, ... */
     int has_star = 0;
     char fast_cols[16][128];
@@ -1187,10 +1209,13 @@ static int try_fast_select(const char *sql, ResultSet *rs, SessionCtx *ctx)
         }
     }
 
-    /* Take MVCC snapshot */
+    /* Take MVCC snapshot — honour the temporal AS OF override if set. */
     Snapshot snap;
     memset(&snap, 0, sizeof(snap));
-    if (ctx) {
+    uint32_t asof_pk = (g_qctx ? g_qctx->asof_xid : 0);
+    if (asof_pk > 0) {
+        mvcc_snapshot_at_xid(asof_pk, &snap);
+    } else if (ctx) {
         if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
             snap = ctx->snapshot;
         } else {
@@ -3318,7 +3343,14 @@ static void execute_multi_delete(ResultSet *rs, SessionCtx *ctx)
 
     Snapshot snap;
     memset(&snap, 0, sizeof(snap));
-    if (ctx) {
+    /* Task 207 — temporal SELECT: when the parser captured an
+     * AS OF TRANSACTION xid, build a synthetic snapshot positioned
+     * right after that XID committed, bypassing repeatable-read
+     * caching for this single statement. */
+    uint32_t asof = (g_qctx ? g_qctx->asof_xid : 0);
+    if (asof > 0) {
+        mvcc_snapshot_at_xid(asof, &snap);
+    } else if (ctx) {
         if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
             snap = ctx->snapshot;
         } else {
@@ -3494,10 +3526,13 @@ static void execute_multi_update(ResultSet *rs, SessionCtx *ctx)
         }
     }
 
-    /* MVCC snapshot */
+    /* MVCC snapshot — honour the temporal AS OF override if set. */
     Snapshot snap;
     memset(&snap, 0, sizeof(snap));
-    if (ctx) {
+    uint32_t asof2 = (g_qctx ? g_qctx->asof_xid : 0);
+    if (asof2 > 0) {
+        mvcc_snapshot_at_xid(asof2, &snap);
+    } else if (ctx) {
         if (ctx->isolation_level >= 2 && ctx->snapshot_valid)
             snap = ctx->snapshot;
         else {
@@ -6134,7 +6169,18 @@ parser_done:
          * Take a snapshot before collecting for MVCC visibility. */
         else if (!rs->has_error && g_sel.lastTable[0] != '\0') {
             /* Take snapshot for MVCC visibility filtering */
-            if (ctx) {
+            uint32_t asof_st = (g_qctx ? g_qctx->asof_xid : 0);
+            if (asof_st > 0) {
+                /* Task 207 — temporal SELECT: synthetic snapshot at the
+                 * given XID, bypassing TX-cached snapshot. */
+                if (ctx) {
+                    mvcc_snapshot_at_xid(asof_st, &ctx->snapshot);
+                    /* Don't mark as valid — we want this to be a single-
+                     * statement view, the next plain SELECT should take
+                     * a fresh live snapshot. */
+                    ctx->snapshot_valid = 0;
+                }
+            } else if (ctx) {
                 if (ctx->isolation_level >= 2 && ctx->snapshot_valid) {
                     /* REPEATABLE READ / SERIALIZABLE: reuse TX snapshot */
                 } else {
@@ -6596,7 +6642,11 @@ static void normalize_sql(char *sql)
                     (*src == ' ' || *src == '\t') &&
                     strncasecmp(src + 1, "AS ", 3) == 0 &&
                     (isalpha((unsigned char)src[4]) || src[4] == '_') &&
-                    src > sql && *(src - 1) != ')') {  /* preserve AS after derived tables */
+                    src > sql && *(src - 1) != ')' &&
+                    /* Task 207: don't swallow `AS OF TRANSACTION ...` —
+                     * that's the temporal-query keyword, not a table alias. */
+                    !(strncasecmp(src + 4, "OF ", 3) == 0 ||
+                      strncasecmp(src + 4, "OF\t", 3) == 0)) {
                     char *p = (char *)src + 4;
                     while (*p && (isalnum((unsigned char)*p) || *p == '_'))
                         p++;

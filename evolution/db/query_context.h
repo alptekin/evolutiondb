@@ -418,6 +418,11 @@ typedef struct QueryContext {
                                      int data_len, RowID old_rid);
     /* MVCC: current transaction ID for DML operations (0 = no MVCC) */
     uint32_t       mvcc_xid;
+    /* Task 207 — temporal query: when set (>0) the SELECT path uses a
+     * synthetic snapshot at this XID instead of mvcc_snapshot_take's
+     * live one, so the query sees the database as it was right after
+     * that transaction committed. Cleared between statements. */
+    uint32_t       asof_xid;
     /* Distributed: target node for CREATE TABLE ON NODE N */
     uint32_t       create_on_node_id;
     /* Subquery execution callback (set by adaptor, called by expression engine) */

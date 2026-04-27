@@ -23,6 +23,7 @@
 #include "mvcc.h"
 #include "page_mgr.h"
 #include "tuple_format.h"
+#include "query_context.h"
 
 /* ================================================================
  *  CLOG constants
@@ -188,6 +189,37 @@ void mvcc_snapshot_take(Snapshot *out)
     pthread_mutex_unlock(&g_csn_lock);
 
     pthread_mutex_unlock(&g_active_lock);
+}
+
+/* ----------------------------------------------------------------
+ *  Task 207 — temporal query helpers
+ *
+ *  mvcc_snapshot_at_xid builds a synthetic snapshot that sees the
+ *  database as it was right after `at_xid` committed: every committed
+ *  XID <= at_xid is visible, anything assigned after is invisible.
+ *  No active list — the historical view doesn't track concurrency.
+ * ---------------------------------------------------------------- */
+void mvcc_snapshot_at_xid(uint32_t at_xid, Snapshot *out)
+{
+    memset(out, 0, sizeof(Snapshot));
+    if (at_xid == 0) {
+        mvcc_snapshot_take(out);
+        return;
+    }
+    out->xmin = at_xid + 1;     /* nothing in-progress in the past view */
+    out->xmax = at_xid + 1;     /* anything >= xmax is "future" → invisible */
+    out->nactive = 0;
+    out->my_xid = 0;
+    out->snapshot_csn = clog_get_csn(at_xid);
+}
+
+/* Parser-side helper for the temporal SELECT grammar. Stores the
+ * requested as-of XID in the active QueryContext; query_executor reads
+ * it back when constructing the snapshot for the SELECT it's about to
+ * run, then resets it so the next statement starts fresh. */
+void SetAsOfXid(uint32_t at_xid)
+{
+    if (g_qctx) g_qctx->asof_xid = at_xid;
 }
 
 /* ================================================================
