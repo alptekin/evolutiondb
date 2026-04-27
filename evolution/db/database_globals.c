@@ -43,3 +43,10 @@ __thread volatile int g_query_cancelled = 0;
 
 /* Lock wait timeout — thread-local, 0 = use default */
 __thread int g_lock_timeout_ms = 0;
+
+/* Task 209 — Temporal retention window (days). 0 = disabled (no
+ * pruning, AS OF unbounded). Read from EVOSQL_SYSTEM_TIME_RETENTION_DAYS
+ * at startup; runtime SET SYSTEM_TIME_RETENTION = N overrides. The
+ * auto-RECLAIM worker reads this on every tick to prune
+ * <name>_history rows whose valid_to fell outside the window. */
+volatile int g_system_time_retention_days = 7;

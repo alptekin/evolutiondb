@@ -140,6 +140,11 @@ void clog_set_committed_csn(uint32_t xid, uint32_t csn);
 /* Get the CSN for a committed XID. Returns 0 if not committed or not found. */
 uint32_t clog_get_csn(uint32_t xid);
 
+/* Task 209 — wall-clock seconds (UTC) at which the XID was committed,
+ * or 0 if the slot was evicted from the ring (or the XID never reached
+ * the cache). Used by AS OF to bound by retention window. */
+int64_t clog_get_commit_ts(uint32_t xid);
+
 /* Mark a transaction as aborted (status = 10) */
 void clog_set_aborted(uint32_t xid);
 

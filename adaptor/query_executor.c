@@ -6180,6 +6180,29 @@ parser_done:
             /* Take snapshot for MVCC visibility filtering */
             uint32_t asof_st = (g_qctx ? g_qctx->asof_xid : 0);
             if (asof_st > 0) {
+                /* Task 209 — bound the AS OF target by the retention
+                 * window. If the requested XID's commit timestamp lives
+                 * in the CSN ring AND it predates the window, refuse
+                 * up-front instead of silently returning a fuzzy view.
+                 * If the slot is missing (ring eviction) we lean on the
+                 * existing MVCC visibility (no false negatives). */
+                int retention_days = g_system_time_retention_days;
+                if (retention_days > 0) {
+                    int64_t commit_ts = clog_get_commit_ts(asof_st);
+                    int64_t now_ts    = (int64_t)time(NULL);
+                    int64_t cutoff    = now_ts - (int64_t)retention_days * 86400;
+                    if (commit_ts > 0 && commit_ts < cutoff) {
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                                 "snapshot xid %u is outside "
+                                 "SYSTEM_TIME_RETENTION window of %d days",
+                                 asof_st, retention_days);
+                        result_set_error(rs, "22023", msg);
+                        rwlock_rdunlock(&g_parse_lock);
+                        TruncateSelect();
+                        return;
+                    }
+                }
                 /* Task 207 — temporal SELECT: synthetic snapshot at the
                  * given XID, bypassing TX-cached snapshot. */
                 if (ctx) {

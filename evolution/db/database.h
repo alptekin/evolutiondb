@@ -26,6 +26,12 @@ extern __thread volatile int g_query_cancelled;
  * 0 = use default (LOCK_WAIT_TIMEOUT_MS = 5000ms) */
 extern __thread int g_lock_timeout_ms;
 
+/* Task 209 — Temporal retention window in days. 0 disables pruning
+ * and lets AS OF reach as far back as MVCC allows. Default 7;
+ * EVOSQL_SYSTEM_TIME_RETENTION_DAYS env at startup, runtime
+ * SET SYSTEM_TIME_RETENTION = N overrides. */
+extern volatile int g_system_time_retention_days;
+
 
 /* Minimum padded record size - ensures UPDATE can overwrite in-place */
 #define RECORD_PAD_SIZE 256

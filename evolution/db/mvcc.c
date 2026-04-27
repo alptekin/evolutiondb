@@ -71,7 +71,13 @@ static pthread_mutex_t g_clog_lock = PTHREAD_MUTEX_INITIALIZER;
  *  <= snapshot_csn, it's visible without scanning the active list.
  * ================================================================ */
 #define CSN_CACHE_SIZE 4096
-static struct { uint32_t xid; uint32_t csn; } g_csn_cache[CSN_CACHE_SIZE];
+static struct {
+    uint32_t xid;
+    uint32_t csn;
+    /* Task 209 — commit wall-clock timestamp (unix seconds, UTC).
+     * 0 means "never observed" / slot empty for this XID. */
+    int64_t  commit_ts;
+} g_csn_cache[CSN_CACHE_SIZE];
 static pthread_mutex_t g_csn_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t g_last_committed_csn = 0;
 
@@ -403,12 +409,33 @@ void clog_set_committed_csn(uint32_t xid, uint32_t csn)
 {
     clog_set_status(xid, CLOG_COMMITTED);
 
+    /* Task 209 — capture wall-clock alongside CSN so AS OF can decide
+     * whether the requested XID still falls within the retention
+     * window. Non-fatal if time() returns -1 — the retention check
+     * just treats commit_ts==0 as "unknown". */
+    int64_t ts = (int64_t)time(NULL);
+
     pthread_mutex_lock(&g_csn_lock);
     g_csn_cache[xid % CSN_CACHE_SIZE].xid = xid;
     g_csn_cache[xid % CSN_CACHE_SIZE].csn = csn;
+    g_csn_cache[xid % CSN_CACHE_SIZE].commit_ts = ts;
     if (csn > g_last_committed_csn)
         g_last_committed_csn = csn;
     pthread_mutex_unlock(&g_csn_lock);
+}
+
+/* Task 209 — return the commit wall-clock for an XID if the ring still
+ * holds the slot for it; 0 if evicted or never recorded. Used by the
+ * AS OF retention bound check. */
+int64_t clog_get_commit_ts(uint32_t xid)
+{
+    if (xid == 0) return 0;
+    pthread_mutex_lock(&g_csn_lock);
+    int64_t ts = 0;
+    if (g_csn_cache[xid % CSN_CACHE_SIZE].xid == xid)
+        ts = g_csn_cache[xid % CSN_CACHE_SIZE].commit_ts;
+    pthread_mutex_unlock(&g_csn_lock);
+    return ts;
 }
 
 uint32_t clog_get_csn(uint32_t xid)
