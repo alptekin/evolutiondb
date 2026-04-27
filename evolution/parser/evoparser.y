@@ -2469,6 +2469,18 @@ create_policy_stmt:
         SetPolicyTable($5);
         free($3); free($5);
     }
+  /* Task 206: CREATE POLICY ... ON MEMORY STORE name — sugar that
+   * resolves to a regular table policy on the backing mem_<name>
+   * table. The policy expression can reference mem_namespace,
+   * mem_key, mem_value just like any other table column. */
+  | CREATE POLICY NAME ON MEMORY STORE NAME opt_policy_as opt_policy_for opt_policy_to
+    opt_policy_using opt_policy_check
+    {
+        emit("CREATE POLICY %s ON MEMORY STORE %s", $3, $7);
+        SetPolicyName($3);
+        SetPolicyTableForMemoryStore($7);
+        free($3); free($7);
+    }
 ;
 
 opt_policy_as:                         /* default PERMISSIVE */
@@ -2513,6 +2525,13 @@ drop_policy_stmt:
         SetPolicyName($3);
         SetPolicyTable($5);
         free($3); free($5);
+    }
+  | DROP POLICY NAME ON MEMORY STORE NAME
+    {
+        emit("DROP POLICY %s ON MEMORY STORE %s", $3, $7);
+        SetPolicyName($3);
+        SetPolicyTableForMemoryStore($7);
+        free($3); free($7);
     }
 ;
 
@@ -2660,6 +2679,26 @@ alter_table_stmt: ALTER TABLE NAME ADD CONSTRAINT NAME CHECK '(' expr ')'
         emit("ALTER TABLE %s DISABLE RLS", $3);
         AlterTableToggleRLS($3, 0);
         free($3); free($6);
+    }
+| ALTER MEMORY STORE NAME ENABLE ROW NAME SECURITY
+    {
+        if (strcasecmp($7, "LEVEL") != 0) {
+            yyerror(scanner, "expected LEVEL after ROW in ENABLE ROW LEVEL SECURITY");
+            free($4); free($7); YYERROR;
+        }
+        emit("ALTER MEMORY STORE %s ENABLE RLS", $4);
+        AlterMemoryStoreToggleRLS($4, 1);
+        free($4); free($7);
+    }
+| ALTER MEMORY STORE NAME DISABLE ROW NAME SECURITY
+    {
+        if (strcasecmp($7, "LEVEL") != 0) {
+            yyerror(scanner, "expected LEVEL after ROW in DISABLE ROW LEVEL SECURITY");
+            free($4); free($7); YYERROR;
+        }
+        emit("ALTER MEMORY STORE %s DISABLE RLS", $4);
+        AlterMemoryStoreToggleRLS($4, 0);
+        free($4); free($7);
     }
 ;
 
