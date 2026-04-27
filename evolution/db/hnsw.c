@@ -2,7 +2,7 @@
  * hnsw.c — In-memory vector index for `CREATE INDEX ... USING HNSW`
  *
  * v1 strategy: brute-force top-k over a dense per-graph vector store.
- * The module exposes the pgvector-style build + search surface so SQL
+ * The module exposes the evovector build + search surface so SQL
  * callers see the same shape a v1.1 graph-based traversal will use.
  *
  * Graphs live in a small static table keyed by (table_id, index_name);

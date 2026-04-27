@@ -60,7 +60,7 @@ Plan dosyasi `/Users/wechip/.claude/plans/golden-wobbling-hanrahan.md`'de **26 t
 
 ### Sutun A — Vector & Semantic Search (Task 200-203)
 - **Task 200**: `VECTOR(N)` tipi. Tuple format `type_code = 260000 + N`, N×4 byte payload, null bitmap tek bit. Parser `VECTOR(128)` type rule, `'[0.1, 0.2, 0.3]'::VECTOR(3)` literal, INSERT/SELECT dimension validation.
-- **Task 201**: `cosine_distance`, `l2_distance`, `inner_product`, `l1_distance` fonksiyonlari; operatorler `<=>`, `<->`, `<#>` (pgvector convention); `vector_dim`, `vector_norm`, `vector_normalize` helpers.
+- **Task 201**: `cosine_distance`, `l2_distance`, `inner_product`, `l1_distance` fonksiyonlari; operatorler `<=>`, `<->`, `<#>` (evovector convention); `vector_dim`, `vector_norm`, `vector_normalize` helpers.
 - **Task 202**: HNSW ANN index — `CREATE INDEX ... USING HNSW (col vector_cosine_ops) WITH (m=16, ef_construction=64)`. Graph on slotted pages, M-layer linked lists, greedy search + refinement. `ORDER BY col <=> $1 LIMIT k` planner hook.
 - **Task 203**: Hybrid search — vector + filter tek pass. Selectivity < %10 → full scan + vector sort; > %10 → HNSW `k' = k/selectivity` aday + post-filter.
 
@@ -134,8 +134,8 @@ Release: v3.0.0 (major: urun repositioning).
 - **Dezavantajlar**: Multi-framework ekosistem tutunma firsati kacar — LangChain/CrewAI kullanicilari rakiplerde kalir; C SDK yoklugu Python'a bagimli kilar (Go/Rust/Node ekosistemi kendi basina sarmak zorunda); Mem0-compatible REST API yoklugunda Mem0 gocu engellenir; "agent-memory platform" iddiasini kismi tutar.
 
 ### Secenek 4: Saf vector DB (sadece Sutun A) — Pinecone-lite
-- **Avantajlar**: Minimal is (~1 sprint); `VECTOR + HNSW + hybrid` Postgres'te olmayan pattern; OSS pgvector'a alternatif.
-- **Dezavantajlar**: Agent-memory vizyonu kaybolur — pgvector zaten var, Qdrant/LanceDB/Weaviate ile rekabet komodite; MVCC/JSON/replication/TDE/RLS avantajlari gorunmez kalir; gelecekte agent platformuna gecis icin yine ayni 26 task'a donmek gerekir.
+- **Avantajlar**: Minimal is (~1 sprint); evovector + HNSW + hybrid kombinasyonu mevcut SQL motorlarinda nadir; Postgres vektor eklentilerine alternatif sunar.
+- **Dezavantajlar**: Agent-memory vizyonu kaybolur — Postgres'in mevcut vektor eklentisi yerini koruyamaz, Qdrant/LanceDB/Weaviate ile rekabet komodite; MVCC/JSON/replication/TDE/RLS avantajlari gorunmez kalir; gelecekte agent platformuna gecis icin yine ayni 26 task'a donmek gerekir.
 
 ### Secenek 5: **External integration** — Mongo/Pinecone icin bridge + CDC → "use what exists"
 - **Avantajlar**: Bakim yuku dista; mevcut Task 91 LISTEN/NOTIFY'yi Pinecone/Mongo'ya akitan adapter yazilir.
