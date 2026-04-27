@@ -114,6 +114,12 @@ uint32_t mvcc_get_oldest_active(void);
 /* Capture a consistent snapshot of xmin, xmax, and active XIDs */
 void mvcc_snapshot_take(Snapshot *out);
 
+/* Task 207 — build a synthetic snapshot positioned right after the
+ * given transaction committed. Every committed XID <= at_xid is
+ * visible; anything assigned later is invisible. at_xid == 0 falls
+ * back to mvcc_snapshot_take. */
+void mvcc_snapshot_at_xid(uint32_t at_xid, Snapshot *out);
+
 /* ----------------------------------------------------------------
  *  CLOG — Commit Log
  *

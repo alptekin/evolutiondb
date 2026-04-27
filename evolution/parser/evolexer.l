@@ -328,6 +328,9 @@ STORED					{ return STORED; }
 STORE					{ return STORE; }
 SOME					{ return SOME; }
 CHECKPOINT				{ return CHECKPOINT; }
+SYSTEM_TIME				{ return SYSTEM_TIME; }
+TRANSACTION				{ return TRANSACTION; }
+EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }
 EMBEDDING_DIM			{ return EMBEDDING_DIM; }
 DISTANCE				{ return DISTANCE; }
