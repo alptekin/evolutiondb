@@ -459,7 +459,10 @@
      APPEND = 675,
      READ = 676,
      LAST = 677,
-     SESSION = 678
+     SESSION = 678,
+     DOCUMENT = 679,
+     WRITE = 680,
+     FILTER = 681
    };
 #endif
 /* Tokens.  */
@@ -884,13 +887,16 @@
 #define READ 676
 #define LAST 677
 #define SESSION 678
+#define DOCUMENT 679
+#define WRITE 680
+#define FILTER 681
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 75 "parser/evoparser.y"
+#line 76 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -899,7 +905,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 903 "parser/evoparser.tab.h"
+#line 909 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
