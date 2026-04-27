@@ -356,6 +356,8 @@ EDGE					{ return EDGE; }
 DEPTH					{ return DEPTH; }
 OF						{ return OF; }
 UPSERT					{ return UPSERT; }
+ENTITY					{ return ENTITY; }
+RANK					{ return RANK; }
 TRANSACTION				{ return TRANSACTION; }
 EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }

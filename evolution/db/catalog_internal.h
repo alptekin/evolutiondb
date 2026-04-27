@@ -372,6 +372,23 @@ typedef struct {
 } GraphStoreDesc;
 
 /* ----------------------------------------------------------------
+ *  Task 225 — Entity store templates
+ *
+ *  CAT_SYS_ENTITY_STORES holds one row per CREATE ENTITY STORE. The
+ *  backing table ent_<name> stores rows as
+ *    (entity_key VARCHAR(255) PK, summary VARCHAR(8000),
+ *     facts VARCHAR(8000) JSON, mention_count INT NOT NULL DEFAULT 0,
+ *     last_seen TIMESTAMP NOT NULL)
+ *  Drop-in for LangChain ConversationEntityMemory + CrewAI EntityMemory
+ *  patterns.
+ * ---------------------------------------------------------------- */
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];
+    uint32_t backing_table_id;
+    int      ttl_days;
+} EntityStoreDesc;
+
+/* ----------------------------------------------------------------
  *  Task 215 — Scheduled jobs (cron)
  *
  *  CAT_SYS_SCHEDULED_JOBS holds one row per CREATE JOB. The scheduler
@@ -644,6 +661,13 @@ int cat_create_graph_store(const GraphStoreDesc *desc);
 int cat_find_graph_store(const char *name, GraphStoreDesc *out);
 int cat_drop_graph_store(const char *name);
 int cat_list_graph_stores(GraphStoreDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Entity store catalog API (Task 225 — Feature #225) */
+int cat_create_entity_store(const EntityStoreDesc *desc);
+int cat_find_entity_store(const char *name, EntityStoreDesc *out);
+int cat_drop_entity_store(const char *name);
+int cat_list_entity_stores(EntityStoreDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)
