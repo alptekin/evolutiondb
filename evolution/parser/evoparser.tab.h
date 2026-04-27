@@ -442,7 +442,12 @@
      TRANSACTION = 658,
      FEVO_CURRENT_XID = 659,
      SYSTEM = 660,
-     VERSIONING = 661
+     VERSIONING = 661,
+     SUBSCRIPTION = 662,
+     CHANNEL = 663,
+     RESUME = 664,
+     ACK = 665,
+     UPTO = 666
    };
 #endif
 /* Tokens.  */
@@ -850,13 +855,18 @@
 #define FEVO_CURRENT_XID 659
 #define SYSTEM 660
 #define VERSIONING 661
+#define SUBSCRIPTION 662
+#define CHANNEL 663
+#define RESUME 664
+#define ACK 665
+#define UPTO 666
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 72 "parser/evoparser.y"
+#line 73 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -865,7 +875,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 869 "parser/evoparser.tab.h"
+#line 879 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

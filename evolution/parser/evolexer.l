@@ -331,6 +331,11 @@ CHECKPOINT				{ return CHECKPOINT; }
 SYSTEM_TIME				{ return SYSTEM_TIME; }
 SYSTEM					{ return SYSTEM; }
 VERSIONING				{ return VERSIONING; }
+SUBSCRIPTION			{ return SUBSCRIPTION; }
+CHANNEL					{ return CHANNEL; }
+RESUME					{ return RESUME; }
+ACK						{ return ACK; }
+UPTO					{ return UPTO; }
 TRANSACTION				{ return TRANSACTION; }
 EVO_CURRENT_XID/"("		{ return FEVO_CURRENT_XID; }
 MEMORY					{ return MEMORY; }

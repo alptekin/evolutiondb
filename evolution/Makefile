@@ -58,6 +58,7 @@ SRCS = main.c \
        db/Policy.c \
        db/Checkpoint.c \
        db/Memory.c \
+       db/Subscription.c \
        db/dml_profile.c
 
 OBJS = $(SRCS:.c=.o)

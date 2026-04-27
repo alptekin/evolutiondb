@@ -545,6 +545,34 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* Task 210 — SHOW SUBSCRIPTIONS lists every durable subscription
+     * with its bound channel, ack watermark, next seq, and TTL knob. */
+    if (stristr_found(sql, "subscriptions")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "name",          PG_OID_TEXT);
+        result_add_column(rs, "channel",       PG_OID_TEXT);
+        result_add_column(rs, "last_ack_seq",  PG_OID_INT8);
+        result_add_column(rs, "next_seq",      PG_OID_INT8);
+        result_add_column(rs, "ttl_days",      PG_OID_INT4);
+        SubscriptionDesc subs[64];
+        int n = cat_list_subscriptions(subs, 64);
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, subs[i].name);
+            result_set_field(rs, row, 1, subs[i].channel);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lld", (long long)subs[i].last_ack_seq);
+            result_set_field(rs, row, 2, buf);
+            snprintf(buf, sizeof(buf), "%lld", (long long)subs[i].next_seq);
+            result_set_field(rs, row, 3, buf);
+            snprintf(buf, sizeof(buf), "%d", subs[i].ttl_days);
+            result_set_field(rs, row, 4, buf);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* ── SHOW SCHEMAS ── */
     if (stristr_found(sql, "schemas")) {
         result_init(rs);
