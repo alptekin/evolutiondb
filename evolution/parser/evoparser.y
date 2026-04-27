@@ -3705,6 +3705,20 @@ create_trigger_stmt:
         evo_set_trigger_info($3, $7);
         free($3); free($7);
     }
+| CREATE TRIGGER NAME trigger_timing trigger_event ON MEMORY STORE NAME FOR EACH ROW BEGINWORK proc_body_skip END
+    {
+        /* Task 212 — ON MEMORY STORE form. The parser action lays the
+         * store name into g_trig.tableName with a sentinel prefix so
+         * CreateTriggerProcess knows to resolve it through the memory
+         * store catalog (mem_<name>) rather than the regular table
+         * lookup. PUT events were already mapped to 'I' upstream in
+         * trigger_event, so the firing path stays unchanged. */
+        emit("CREATETRIGGER %s ON MEMORY STORE %s", $3, $9);
+        char qualified[128];
+        snprintf(qualified, sizeof(qualified), "@mem:%s", $9);
+        evo_set_trigger_info($3, qualified);
+        free($3); free($9);
+    }
 ;
 
 trigger_timing: BEFORE                               { evo_set_trigger_timing('B'); }
@@ -3714,6 +3728,7 @@ trigger_timing: BEFORE                               { evo_set_trigger_timing('B
 trigger_event: INSERT                                { evo_set_trigger_event('I'); }
 | UPDATE                                             { evo_set_trigger_event('U'); }
 | DELETE                                             { evo_set_trigger_event('D'); }
+| PUT                                                { evo_set_trigger_event('I'); }
 ;
 
 stmt: drop_trigger_stmt                              { emit("STMT"); DropTriggerProcess(); }
