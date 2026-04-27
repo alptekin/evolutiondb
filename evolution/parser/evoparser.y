@@ -15,6 +15,7 @@
 	#include "../db/Schedule.h"
 	#include "../db/MessageLog.h"
 	#include "../db/Document.h"
+	#include "../db/Graph.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -467,6 +468,10 @@
 
 /* Document store + Mongo-style filter DSL (Task 223 — Feature #223) */
 %token DOCUMENT WRITE FILTER
+
+/* Bitemporal knowledge graph (Task 224 — Feature #224)
+ *   NODE / OF are already declared above (Task 95 / 89). */
+%token GRAPH NEIGHBORS EDGE DEPTH UPSERT
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -2853,6 +2858,123 @@ doc_dml_stmt:
         SetDocumentFilterJson($6);
         DocumentDeleteProcess();
         free($4); free($6);
+    }
+;
+
+/* ── Bitemporal knowledge graph (Task 224 — Feature #224) ──
+ *   CREATE GRAPH STORE name [IF NOT EXISTS]
+ *   DROP   GRAPH STORE name [IF EXISTS]
+ *   GRAPH UPSERT NODE INTO name VALUES ('id','type','props')
+ *   GRAPH UPSERT EDGE INTO name VALUES ('src','rel','dst' [, 'props'])
+ *   GRAPH NEIGHBORS OF 'id' IN name [DEPTH N] [AS OF 'YYYY-MM-DD HH:MM:SS']
+ */
+stmt: create_graph_store_stmt   { emit("STMT"); }
+    | drop_graph_store_stmt     { emit("STMT"); }
+    | graph_dml_stmt            { emit("STMT"); }
+;
+
+create_graph_store_stmt:
+  CREATE GRAPH STORE NAME
+    {
+        emit("CREATE GRAPH STORE %s", $4);
+        ResetGraphOpts();
+        SetGraphStoreName($4);
+        CreateGraphStoreProcess(0);
+        free($4);
+    }
+| CREATE GRAPH STORE IF EXISTS NAME
+    {
+        emit("CREATE GRAPH STORE IF NOT EXISTS %s", $6);
+        ResetGraphOpts();
+        SetGraphStoreName($6);
+        CreateGraphStoreProcess(1);
+        free($6);
+    }
+;
+
+drop_graph_store_stmt:
+  DROP GRAPH STORE NAME
+    {
+        emit("DROP GRAPH STORE %s", $4);
+        ResetGraphOpts();
+        SetGraphStoreName($4);
+        DropGraphStoreProcess(0);
+        free($4);
+    }
+| DROP GRAPH STORE IF EXISTS NAME
+    {
+        emit("DROP GRAPH STORE IF EXISTS %s", $6);
+        ResetGraphOpts();
+        SetGraphStoreName($6);
+        DropGraphStoreProcess(1);
+        free($6);
+    }
+;
+
+graph_dml_stmt:
+  GRAPH UPSERT NODE INTO NAME VALUES '(' STRING ',' STRING ',' STRING ')'
+    {
+        emit("GRAPH UPSERT NODE INTO %s", $5);
+        ResetGraphOpts();
+        SetGraphStoreName($5);
+        SetGraphNodeId($8);
+        SetGraphNodeType($10);
+        SetGraphNodeProps($12);
+        GraphUpsertNodeProcess();
+        free($5); free($8); free($10); free($12);
+    }
+| GRAPH UPSERT EDGE INTO NAME VALUES '(' STRING ',' STRING ',' STRING ')'
+    {
+        emit("GRAPH UPSERT EDGE INTO %s", $5);
+        ResetGraphOpts();
+        SetGraphStoreName($5);
+        SetGraphEdgeSrc($8);
+        SetGraphEdgeRel($10);
+        SetGraphEdgeDst($12);
+        SetGraphEdgeProps(NULL);
+        GraphUpsertEdgeProcess();
+        free($5); free($8); free($10); free($12);
+    }
+| GRAPH UPSERT EDGE INTO NAME VALUES '(' STRING ',' STRING ',' STRING ',' STRING ')'
+    {
+        emit("GRAPH UPSERT EDGE INTO %s WITH props", $5);
+        ResetGraphOpts();
+        SetGraphStoreName($5);
+        SetGraphEdgeSrc($8);
+        SetGraphEdgeRel($10);
+        SetGraphEdgeDst($12);
+        SetGraphEdgeProps($14);
+        GraphUpsertEdgeProcess();
+        free($5); free($8); free($10); free($12); free($14);
+    }
+| GRAPH NEIGHBORS OF STRING IN NAME
+    {
+        emit("GRAPH NEIGHBORS OF %s IN %s", $4, $6);
+        ResetGraphOpts();
+        SetGraphStoreName($6);
+        SetGraphNeighborsId($4);
+        GraphNeighborsProcess();
+        free($4); free($6);
+    }
+| GRAPH NEIGHBORS OF STRING IN NAME DEPTH INTNUM
+    {
+        emit("GRAPH NEIGHBORS OF %s IN %s DEPTH %d", $4, $6, $8);
+        ResetGraphOpts();
+        SetGraphStoreName($6);
+        SetGraphNeighborsId($4);
+        SetGraphNeighborsDepth($8);
+        GraphNeighborsProcess();
+        free($4); free($6);
+    }
+| GRAPH NEIGHBORS OF STRING IN NAME AS OF STRING
+    {
+        emit("GRAPH NEIGHBORS OF %s IN %s AS OF %s", $4, $6, $9);
+        ResetGraphOpts();
+        SetGraphStoreName($6);
+        SetGraphNeighborsId($4);
+        SetGraphNeighborsAsOf($9);
+        GraphNeighborsProcess();
+        free($4); free($6); free($9);
     }
 ;
 
