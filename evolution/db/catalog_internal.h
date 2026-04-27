@@ -319,6 +319,26 @@ typedef struct {
 } SubscriptionDesc;
 
 /* ----------------------------------------------------------------
+ *  Task 222 — Append-only chat history / MESSAGE LOG
+ *
+ *  CAT_SYS_MESSAGE_LOGS holds one row per CREATE MESSAGE LOG. The
+ *  backing table ml_<name> stores rows as
+ *    (seq INT8 PK, session_id VARCHAR, role VARCHAR, content TEXT,
+ *     meta JSON, created_at TIMESTAMP)
+ *  with a synthetic monotonic seq generated server-side at append
+ *  time (one global per log, not per session — keeps the surface
+ *  one column simpler at the cost of slightly fuzzier per-session
+ *  ordering bookkeeping; the created_at + seq pair is monotonic
+ *  enough to sort within a session deterministically).
+ *  ttl_days = 0 disables the auto-expire pass (Task 213 hook).
+ * ---------------------------------------------------------------- */
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];
+    uint32_t backing_table_id;
+    int      ttl_days;
+} MessageLogDesc;
+
+/* ----------------------------------------------------------------
  *  Task 215 — Scheduled jobs (cron)
  *
  *  CAT_SYS_SCHEDULED_JOBS holds one row per CREATE JOB. The scheduler
@@ -568,6 +588,15 @@ int cat_find_scheduled_job(const char *name, ScheduledJobDesc *out);
 int cat_drop_scheduled_job(const char *name);
 int cat_list_scheduled_jobs(ScheduledJobDesc *out, int max);
 int cat_update_scheduled_job(const ScheduledJobDesc *desc);
+
+/* ----------------------------------------------------------------
+ *  Message-log catalog API (Task 222 — Feature #222)
+ *
+ *  Keys in CAT_SYS_MESSAGE_LOGS are the lowercased log name. */
+int cat_create_message_log(const MessageLogDesc *desc);
+int cat_find_message_log(const char *name, MessageLogDesc *out);
+int cat_drop_message_log(const char *name);
+int cat_list_message_logs(MessageLogDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)

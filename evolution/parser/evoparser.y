@@ -13,6 +13,7 @@
 	#include "../db/Memory.h"
 	#include "../db/Subscription.h"
 	#include "../db/Schedule.h"
+	#include "../db/MessageLog.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -459,6 +460,9 @@
 
 /* Scheduled jobs (Task 215 — Feature #215) */
 %token JOB JOBS SCHEDULE
+
+/* Append-only message log (Task 222 — Feature #222) */
+%token MESSAGE APPEND READ LAST SESSION
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -2542,6 +2546,161 @@ alter_job_stmt:
         SetJobDropName($3);
         AlterJobProcess(0);
         free($3);
+    }
+;
+
+/* ── Append-only message log (Task 222 — Feature #222) ──
+ *   CREATE MESSAGE LOG name [WITH (ttl='7 days')]
+ *   DROP   MESSAGE LOG name [IF EXISTS]
+ *   MESSAGE APPEND   INTO name VALUES ('sid','role','content' [, 'meta'])
+ *   MESSAGE READ     FROM name WHERE SESSION COMPARISON STRING [LAST INTNUM]
+ *   MESSAGE TRUNCATE FROM name WHERE SESSION COMPARISON STRING [BEFORE INTNUM]
+ *   MESSAGE COUNT    FROM name WHERE SESSION COMPARISON STRING
+ *
+ * 'LOG' in DDL is a NAME token (the lexer reserves LOG for the math
+ * function context only); we cross-check it in the parser action so
+ * `CREATE MESSAGE FOO bar` doesn't slip through. */
+stmt: create_message_log_stmt   { emit("STMT"); }
+    | drop_message_log_stmt     { emit("STMT"); }
+    | message_dml_stmt          { emit("STMT"); }
+;
+
+create_message_log_stmt:
+  CREATE MESSAGE NAME NAME
+    {
+        if (strcasecmp($3, "LOG") != 0) {
+            yyerror(scanner, "expected LOG after MESSAGE in CREATE MESSAGE LOG");
+            free($3); free($4); YYERROR;
+        }
+        emit("CREATE MESSAGE LOG %s", $4);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        CreateMessageLogProcess(0);
+        free($3); free($4);
+    }
+| CREATE MESSAGE NAME NAME WITH '(' TTL COMPARISON STRING ')'
+    {
+        if (strcasecmp($3, "LOG") != 0) {
+            yyerror(scanner, "expected LOG after MESSAGE in CREATE MESSAGE LOG");
+            free($3); free($4); free($9); YYERROR;
+        }
+        emit("CREATE MESSAGE LOG %s WITH ttl=%s", $4, $9);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        /* literal "<N> days" or bare "<N>" — first integer wins */
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s", $9);
+        int slen = (int)strlen(buf);
+        if (slen >= 2 && buf[0] == '\'' && buf[slen-1] == '\'') {
+            buf[slen-1] = '\0';
+            SetMessageLogTtlDays(atoi(buf + 1));
+        } else {
+            SetMessageLogTtlDays(atoi(buf));
+        }
+        CreateMessageLogProcess(0);
+        free($3); free($4); free($9);
+    }
+;
+
+drop_message_log_stmt:
+  DROP MESSAGE NAME NAME
+    {
+        if (strcasecmp($3, "LOG") != 0) {
+            yyerror(scanner, "expected LOG after MESSAGE in DROP MESSAGE LOG");
+            free($3); free($4); YYERROR;
+        }
+        emit("DROP MESSAGE LOG %s", $4);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        DropMessageLogProcess(0);
+        free($3); free($4);
+    }
+| DROP MESSAGE NAME IF EXISTS NAME
+    {
+        if (strcasecmp($3, "LOG") != 0) {
+            yyerror(scanner, "expected LOG after MESSAGE in DROP MESSAGE LOG");
+            free($3); free($6); YYERROR;
+        }
+        emit("DROP MESSAGE LOG IF EXISTS %s", $6);
+        ResetMessageLogOpts();
+        SetMessageLogName($6);
+        DropMessageLogProcess(1);
+        free($3); free($6);
+    }
+;
+
+message_dml_stmt:
+  MESSAGE APPEND INTO NAME VALUES '(' STRING ',' STRING ',' STRING ')'
+    {
+        emit("MESSAGE APPEND INTO %s", $4);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        SetMessageLogSession($7);
+        SetMessageLogRole($9);
+        SetMessageLogContent($11);
+        SetMessageLogMeta(NULL);
+        LogAppendProcess();
+        free($4); free($7); free($9); free($11);
+    }
+| MESSAGE APPEND INTO NAME VALUES '(' STRING ',' STRING ',' STRING ',' STRING ')'
+    {
+        emit("MESSAGE APPEND INTO %s WITH meta", $4);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        SetMessageLogSession($7);
+        SetMessageLogRole($9);
+        SetMessageLogContent($11);
+        SetMessageLogMeta($13);
+        LogAppendProcess();
+        free($4); free($7); free($9); free($11); free($13);
+    }
+| MESSAGE READ FROM NAME WHERE SESSION COMPARISON STRING
+    {
+        emit("MESSAGE READ FROM %s SESSION=%s", $4, $8);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        SetMessageLogSession($8);
+        LogReadProcess();
+        free($4); free($8);
+    }
+| MESSAGE READ FROM NAME WHERE SESSION COMPARISON STRING LAST INTNUM
+    {
+        emit("MESSAGE READ FROM %s SESSION=%s LAST %d", $4, $8, $10);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        SetMessageLogSession($8);
+        SetMessageLogLimit($10);
+        LogReadProcess();
+        free($4); free($8);
+    }
+| MESSAGE TRUNCATE FROM NAME WHERE SESSION COMPARISON STRING
+    {
+        emit("MESSAGE TRUNCATE FROM %s SESSION=%s", $4, $8);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        SetMessageLogSession($8);
+        LogTruncateProcess();
+        free($4); free($8);
+    }
+| MESSAGE TRUNCATE FROM NAME WHERE SESSION COMPARISON STRING BEFORE INTNUM
+    {
+        emit("MESSAGE TRUNCATE FROM %s SESSION=%s BEFORE %d", $4, $8, $10);
+        ResetMessageLogOpts();
+        SetMessageLogName($4);
+        SetMessageLogSession($8);
+        SetMessageLogTruncSeq((long long)$10);
+        LogTruncateProcess();
+        free($4); free($8);
+    }
+| MESSAGE FCOUNT '(' '*' ')' FROM NAME WHERE SESSION COMPARISON STRING
+    {
+        /* COUNT(*) — FCOUNT is the lexer token for COUNT followed by '(' */
+        emit("MESSAGE COUNT FROM %s SESSION=%s", $7, $11);
+        ResetMessageLogOpts();
+        SetMessageLogName($7);
+        SetMessageLogSession($11);
+        LogCountProcess();
+        free($7); free($11);
     }
 ;
 

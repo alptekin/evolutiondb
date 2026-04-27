@@ -21,8 +21,9 @@
  *   2 — Task 93: CAT_SYS_POLICIES slot added, catalog_roots[] widens to 19
  *   3 — Task 210: CAT_SYS_SUBSCRIPTIONS slot, catalog_roots[] widens to 22
  *   4 — Task 215: CAT_SYS_SCHEDULED_JOBS slot, catalog_roots[] widens to 23
+ *   5 — Task 222: CAT_SYS_MESSAGE_LOGS slot, catalog_roots[] widens to 24
  */
-#define EVO_FILE_VERSION 4
+#define EVO_FILE_VERSION 5
 #define EVO_PAGE_SIZE    4096
 
 #define PGM_INITIAL_PAGES  64   /* 256KB initial file size */
@@ -61,7 +62,7 @@ typedef struct {
 /* ----------------------------------------------------------------
  *  File Header — stored in Page 0
  * ---------------------------------------------------------------- */
-#define CATALOG_ROOT_SLOTS 23   /* max system catalog B+ trees */
+#define CATALOG_ROOT_SLOTS 24   /* max system catalog B+ trees */
 
 typedef enum {
     CAT_SYS_DATABASES  = 0,
@@ -86,7 +87,8 @@ typedef enum {
     CAT_SYS_MEMORY_STORES     = 19,  /* Task 205: name -> MemoryStoreDesc */
     CAT_SYS_SUBSCRIPTIONS     = 20,  /* Task 210: name -> SubscriptionDesc */
     CAT_SYS_SCHEDULED_JOBS    = 21,  /* Task 215: name -> ScheduledJobDesc */
-    CAT_MAX              = 22
+    CAT_SYS_MESSAGE_LOGS      = 22,  /* Task 222: name -> MessageLogDesc */
+    CAT_MAX              = 23
 } CatalogID;
 
 typedef struct {
@@ -108,13 +110,13 @@ typedef struct {
     uint8_t  page_iv_prefix[8];               /* fixed CTR IV prefix (never changes on rekey) */
     /* Size breakdown (must total exactly EVO_PAGE_SIZE = 4096):
      *   magic(4) + version(2) + page_size(2) + total_pages(4) + free_list_head(4) = 16
-     *   catalog_roots[23] = 92         (Task 215 added CAT_SYS_SCHEDULED_JOBS)
+     *   catalog_roots[24] = 96         (Task 222 added CAT_SYS_MESSAGE_LOGS)
      *   next_table_id(4) + next_schema_id(4) + next_db_id(4) = 12
      *   next_xid(4) + next_csn(4) = 8
      *   encryption: enabled(1) + salt(16) + wrapped_dek(48) + iv_prefix(8) = 73
-     *   TOTAL non-reserved = 16 + 92 + 12 + 8 + 73 = 201
-     * reserved = 4096 - 201 = 3895 */
-    uint8_t  reserved[EVO_PAGE_SIZE - 201];
+     *   TOTAL non-reserved = 16 + 96 + 12 + 8 + 73 = 205
+     * reserved = 4096 - 205 = 3891 */
+    uint8_t  reserved[EVO_PAGE_SIZE - 205];
 } FileHeader;
 
 /* Compile-time check: FileHeader must fit exactly in one page.
