@@ -74,6 +74,7 @@ int main(int argc, char *argv[])
     int evo_port = DEFAULT_EVO_PORT;
     int buffer_pool_pages = 0;  /* 0 = use default */
     int repl_port = 0;         /* 0 = replication disabled */
+    int cdc_port  = 0;         /* Task 211: 0 = CDC streaming disabled */
     const char *replica_target = NULL;  /* --replica host:port */
     const char *cluster_nodes = NULL;   /* --cluster node1:port,node2:port,... */
     int node_id = -1;                   /* --node-id 0/1/2/... */
@@ -139,6 +140,8 @@ int main(int argc, char *argv[])
             buffer_pool_pages = parse_buffer_size(argv[++i]);
         else if (strcmp(argv[i], "--replication-port") == 0 && i + 1 < argc)
             repl_port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--cdc-port") == 0 && i + 1 < argc)
+            cdc_port = atoi(argv[++i]);   /* Task 211 */
         else if (strcmp(argv[i], "--replica") == 0 && i + 1 < argc)
             replica_target = argv[++i];
         else if (strcmp(argv[i], "--cluster") == 0 && i + 1 < argc)
@@ -249,12 +252,30 @@ int main(int argc, char *argv[])
         printf("  Replication: sender on port %d\n", repl_port);
     if (replica_target)
         printf("  Replication: replica of %s\n", replica_target);
+    /* Task 211 — env fallback for CDC port matches the rest of the
+     * server's "CLI flag wins, env fills in" pattern. */
+    if (cdc_port == 0) {
+        const char *env = getenv("EVOSQL_CDC_PORT");
+        if (env && env[0]) cdc_port = atoi(env);
+    }
+    if (cdc_port > 0)
+        printf("  CDC streaming on port %d (JSON Lines)\n", cdc_port);
     printf("==============================================\n");
     fflush(stdout);
 
     /* Start replication sender if configured */
     if (repl_port > 0) {
         repl_start_sender(repl_port);
+    }
+
+    /* Task 211 — start the CDC streaming server. The connect-time
+     * subscriber registry lives in replication.c so the same WAL
+     * decoder feeds both replica replay and primary push. */
+    if (cdc_port > 0) {
+        extern int repl_start_cdc_server(int);
+        if (repl_start_cdc_server(cdc_port) != 0) {
+            fprintf(stderr, "[CDC] Failed to bind on port %d\n", cdc_port);
+        }
     }
 
     /* Start replica receiver if configured */

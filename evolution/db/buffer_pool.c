@@ -9,8 +9,10 @@
 #include "buffer_pool.h"
 #include "page_crypt.h"
 #include "apue.h"
+#include "query_context.h"   /* Task 211 — g_qctx for CDC filter_xid */
 
 #include <string.h>
+#include <sys/time.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -485,10 +487,13 @@ int bp_write(int fd, const void *buf, size_t count, off_t offset)
         atomic_thread_fence(memory_order_release);
 
         memcpy(p->data + page_offset, src + buf_pos, to_write);
-        if (!p->dirty) {
-            p->dirty = 1;
-            bp_track_dirty((uint32_t)p->page_no);
-        }
+        p->dirty = 1;
+        /* Re-track on every write: bp_track_dirty's set semantics keep
+         * the page list short, but a page that stayed dirty across two
+         * WAL flushes (e.g. heap pages reused by back-to-back INSERTs)
+         * would otherwise miss the second flush. The set check inside
+         * bp_track_dirty makes this safe — duplicates short-circuit. */
+        bp_track_dirty((uint32_t)p->page_no);
 
         if (page_offset + (int)to_write > p->valid_len)
             p->valid_len = page_offset + (int)to_write;
@@ -775,6 +780,27 @@ void bp_wal_flush_dirty(int fd)
     extern uint32_t wal_log_page(uint32_t, const void *, uint16_t);
     extern void wal_fsync(void);
     extern int wal_is_active(void);
+    /* Task 211 — CDC primary hook.
+     * Once a page has been logged to WAL, decode it and emit logical
+     * change events to any registered subscribers. Tested via the
+     * --cdc-port consumer protocol; the lookup short-circuits when
+     * no subscribers are connected so the hot commit path is free.
+     *
+     * The filter_xid pulled from QueryContext is what tells the decoder
+     * which tuples on the page are NEW (this transaction's writes) vs
+     * historical (already emitted). Without it, every back-to-back
+     * INSERT would redeliver the entire page to consumers. */
+    extern int  cdc_has_subscribers(void);
+    extern void cdc_dispatch_page_xid(const char *, uint16_t, uint32_t,
+                                      int64_t, uint32_t);
+    int cdc_active = cdc_has_subscribers();
+    int64_t cdc_ts = 0;
+    uint32_t cdc_xid = 0;
+    if (cdc_active) {
+        struct timeval tv; gettimeofday(&tv, NULL);
+        cdc_ts = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
+        if (g_qctx) cdc_xid = g_qctx->mvcc_xid;
+    }
     if (!g_pool || !wal_is_active()) return;
 
     if (!g_dirty_overflow && g_dirty_count > 0) {
@@ -787,8 +813,13 @@ void bp_wal_flush_dirty(int fd)
             int idx = part_hash_lookup(part, fd, (off_t)pno);
             if (idx >= 0) {
                 BPPage *p = &part->pages[idx];
-                if (p->dirty)
+                if (p->dirty) {
                     wal_log_page(pno, p->data, (uint16_t)p->valid_len);
+                    if (cdc_active)
+                        cdc_dispatch_page_xid(p->data,
+                                              (uint16_t)p->valid_len,
+                                              pno, cdc_ts, cdc_xid);
+                }
             }
             bp_mutex_unlock(&part->lock);
         }
@@ -800,9 +831,15 @@ void bp_wal_flush_dirty(int fd)
             bp_mutex_lock(&part->lock);
             for (int i = 0; i < part->num_pages; i++) {
                 BPPage *p = &part->pages[i];
-                if (p->fd == fd && p->dirty)
+                if (p->fd == fd && p->dirty) {
                     wal_log_page((uint32_t)p->page_no, p->data,
                                  (uint16_t)p->valid_len);
+                    if (cdc_active)
+                        cdc_dispatch_page_xid(p->data,
+                                              (uint16_t)p->valid_len,
+                                              (uint32_t)p->page_no,
+                                              cdc_ts, cdc_xid);
+                }
             }
             bp_mutex_unlock(&part->lock);
         }
