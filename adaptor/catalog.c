@@ -545,6 +545,29 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* Task 225 — SHOW ENTITY STORES lists every CREATE ENTITY STORE. */
+    if (stristr_found(sql, "entity stores") ||
+        stristr_found(sql, "entity_stores")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "name",              PG_OID_TEXT);
+        result_add_column(rs, "backing_table_id",  PG_OID_INT4);
+        result_add_column(rs, "ttl_days",          PG_OID_INT4);
+        EntityStoreDesc stores[64];
+        int n = cat_list_entity_stores(stores, 64);
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, stores[i].name);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u", stores[i].backing_table_id);
+            result_set_field(rs, row, 1, buf);
+            snprintf(buf, sizeof(buf), "%d", stores[i].ttl_days);
+            result_set_field(rs, row, 2, buf);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* Task 224 — SHOW GRAPH STORES lists every CREATE GRAPH STORE. */
     if (stristr_found(sql, "graph stores") ||
         stristr_found(sql, "graph_stores")) {
