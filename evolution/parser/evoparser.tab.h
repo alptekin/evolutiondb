@@ -462,7 +462,12 @@
      SESSION = 678,
      DOCUMENT = 679,
      WRITE = 680,
-     FILTER = 681
+     FILTER = 681,
+     GRAPH = 682,
+     NEIGHBORS = 683,
+     EDGE = 684,
+     DEPTH = 685,
+     UPSERT = 686
    };
 #endif
 /* Tokens.  */
@@ -890,13 +895,18 @@
 #define DOCUMENT 679
 #define WRITE 680
 #define FILTER 681
+#define GRAPH 682
+#define NEIGHBORS 683
+#define EDGE 684
+#define DEPTH 685
+#define UPSERT 686
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 76 "parser/evoparser.y"
+#line 77 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -905,7 +915,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 909 "parser/evoparser.tab.h"
+#line 919 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
