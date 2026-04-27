@@ -135,6 +135,74 @@ int evo_vector_format(const float *vec, int n,
                        char *out, int out_size);
 
 /* ----------------------------------------------------------------
+ *  Streaming / Subscribe (Task 217)
+ *
+ *  Two reactive surfaces:
+ *
+ *    1. evo_subscribe()      → LISTEN/NOTIFY: classic per-channel
+ *                              push from any session that runs
+ *                              `NOTIFY <channel>` or trigger fires.
+ *    2. evo_cdc_subscribe()  → CDC: server-emitted JSON-lines stream
+ *                              of every WAL change (INSERT/UPDATE/
+ *                              DELETE) on the configured port.
+ *
+ *  Each subscription owns a dedicated socket and a worker thread.
+ *  The callback fires under an internal mutex so a single subscription
+ *  never re-enters itself, but two different subscriptions run their
+ *  callbacks in parallel. evo_unsubscribe joins the worker cleanly.
+ * ---------------------------------------------------------------- */
+
+/* Opaque subscription handle. */
+typedef struct evo_subscription evo_subscription_t;
+
+/* Callback signature.
+ *
+ *   - For LISTEN/NOTIFY: `channel` is the channel name, `payload` is
+ *     the message body (may be empty), `lsn` is 0.
+ *   - For CDC: `channel` is the table name, `payload` is the full JSON
+ *     line, `lsn` is the WAL position when available (0 otherwise).
+ *
+ *   The callback runs on the subscription's worker thread. Treat its
+ *   arguments as borrowed pointers — copy what you need, then return.
+ */
+typedef void (*evo_event_callback_t)(const char *channel,
+                                      const char *payload,
+                                      uint64_t lsn,
+                                      void *ctx);
+
+/* LISTEN on the named channel and dispatch every NOTIFY to `callback`.
+ * Opens its own connection (the host/port/creds are re-used so the
+ * caller doesn't have to lend out an evo_conn_t whose lifetime they
+ * already manage). Returns NULL on connect / listen failure — call
+ * evo_strerror(NULL) for the reason. */
+evo_subscription_t *evo_subscribe(const char *host, int port,
+                                   const char *user, const char *password,
+                                   const char *channel,
+                                   evo_event_callback_t callback,
+                                   void *ctx);
+
+/* Subscribe to the CDC JSON-lines stream on `cdc_port` (default 9970).
+ * `from_lsn` is reserved for v2 (server doesn't accept it yet); pass 0.
+ * Each event line is delivered as `payload` to the callback; `channel`
+ * is the table name extracted from the JSON. Returns NULL on connect
+ * failure. */
+evo_subscription_t *evo_cdc_subscribe(const char *host, int cdc_port,
+                                       evo_event_callback_t callback,
+                                       void *ctx,
+                                       uint64_t from_lsn);
+
+/* Advance the cursor for a CDC subscription so the server can prune
+ * acked events. v1 records the highest acked LSN locally; the server-
+ * side ack channel is wired in v2 once Task 211 ships durable
+ * subscription queues for CDC. NOTIFY subscriptions ignore this
+ * call (transient channel, nothing to ack). Returns EVO_OK. */
+int evo_ack_up_to(evo_subscription_t *sub, uint64_t lsn);
+
+/* Stop the worker, close the socket, and free the subscription. The
+ * callback will not fire again after this returns. NULL-tolerant. */
+void evo_unsubscribe(evo_subscription_t *sub);
+
+/* ----------------------------------------------------------------
  *  Error inspection
  * ---------------------------------------------------------------- */
 

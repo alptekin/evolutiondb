@@ -3819,7 +3819,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 217: ⬜ C SDK Streaming / Subscribe (Feature #217)
+### Task 217: ✅ C SDK Streaming / Subscribe (Feature #217)
 
 **Goal:** `evo_subscribe` callback-based event delivery built on Task 210 durable subscriptions.
 

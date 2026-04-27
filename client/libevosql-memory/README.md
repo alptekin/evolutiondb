@@ -81,6 +81,62 @@ per thread. The last-error string returned by `evo_strerror()` is
 stored in thread-local storage, so an error on one thread doesn't
 leak into another's reading.
 
+Subscriptions (`evo_subscription_t`, see Streaming below) own their
+own dedicated socket and worker thread internally. The callback fires
+under an internal mutex per subscription, so a single subscription
+never re-enters its own callback. Two distinct subscriptions run
+their callbacks in parallel — your callback must be safe for that.
+
+## Streaming / Subscribe
+
+Two reactive surfaces:
+
+```c
+typedef void (*evo_event_callback_t)(const char *channel,
+                                      const char *payload,
+                                      uint64_t lsn, void *ctx);
+
+evo_subscription_t *evo_subscribe(const char *host, int port,
+                                   const char *user, const char *pass,
+                                   const char *channel,
+                                   evo_event_callback_t cb, void *ctx);
+
+evo_subscription_t *evo_cdc_subscribe(const char *host, int cdc_port,
+                                       evo_event_callback_t cb, void *ctx,
+                                       uint64_t from_lsn);
+
+int  evo_ack_up_to(evo_subscription_t *sub, uint64_t lsn);
+void evo_unsubscribe(evo_subscription_t *sub);
+```
+
+`evo_subscribe()` opens its own connection on the EVO port, runs
+`LISTEN <channel>`, and dispatches every NOTIFY arriving on that
+session to your callback. `evo_cdc_subscribe()` connects to the CDC
+JSON-lines stream (default port 9970) and emits one callback per WAL
+change.
+
+`evo_unsubscribe()` is deterministic: it flags the worker, shuts down
+the socket so the blocked `recv()` returns, joins the worker thread,
+then frees. The callback will not fire after `evo_unsubscribe()`
+returns.
+
+Minimal reactive loop (see `examples/reactive_agent.c`):
+
+```c
+void on_event(const char *channel, const char *payload,
+              uint64_t lsn, void *ctx) {
+    printf("[event] %s -> %s\n", channel, payload);
+}
+
+evo_subscription_t *sub = evo_subscribe(
+    "127.0.0.1", 9967, "admin", "admin",
+    "agent_events", on_event, NULL);
+
+/* …main loop runs as long as the agent is alive… */
+
+evo_unsubscribe(sub);
+```
+
 ## API surface
 
 | Group       | Functions |
@@ -90,6 +146,7 @@ leak into another's reading.
 | Memory      | `evo_memory_put`, `evo_memory_get`, `evo_memory_delete` |
 | Checkpoint  | `evo_checkpoint_put`, `evo_checkpoint_get_latest` |
 | Vectors     | `evo_vector_format` |
+| Streaming   | `evo_subscribe`, `evo_cdc_subscribe`, `evo_ack_up_to`, `evo_unsubscribe` |
 | Errors      | `evo_strerror`, `evo_sqlstate` |
 
 See `include/evosql_memory.h` for the canonical signatures and
