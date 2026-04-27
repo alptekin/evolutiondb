@@ -420,7 +420,16 @@
      HNSW = 636,
      FHNSW_KNN = 637,
      FHNSW_FILTER_KNN = 638,
-     FHNSW_HYBRID_EXPLAIN = 639
+     FHNSW_HYBRID_EXPLAIN = 639,
+     CHECKPOINT = 640,
+     STORE = 641,
+     RETENTION = 642,
+     PUT = 643,
+     GET = 644,
+     LIST = 645,
+     WRITES = 646,
+     THREAD = 647,
+     AT = 648
    };
 #endif
 /* Tokens.  */
@@ -806,13 +815,22 @@
 #define FHNSW_KNN 637
 #define FHNSW_FILTER_KNN 638
 #define FHNSW_HYBRID_EXPLAIN 639
+#define CHECKPOINT 640
+#define STORE 641
+#define RETENTION 642
+#define PUT 643
+#define GET 644
+#define LIST 645
+#define WRITES 646
+#define THREAD 647
+#define AT 648
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 70 "parser/evoparser.y"
+#line 71 "parser/evoparser.y"
 {
 	int intval;
 	double floatval;
@@ -821,7 +839,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 825 "parser/evoparser.tab.h"
+#line 843 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
