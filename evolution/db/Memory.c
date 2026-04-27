@@ -494,6 +494,10 @@ int MemorySearchProcess(void)
 
 /* ----------------------------------------------------------------
  *  MEMORY DELETE FROM name WHERE NS=ns AND KEY=key
+ *
+ *  Routes through the engine's DeleteProcess so RLS policies, FK
+ *  cascade, MVCC, and triggers all apply identically to a
+ *  hand-written DELETE FROM mem_<name> WHERE pk = '...'.
  * ---------------------------------------------------------------- */
 int MemoryDeleteProcess(void)
 {
@@ -508,23 +512,18 @@ int MemoryDeleteProcess(void)
     char tbl[256];
     backing_table_name(g_mem.store_name, tbl, sizeof(tbl));
 
-    /* Do the delete via the catalog-level path: lookup by composite
-     * PK, drop from heap + PK tree. Reuses existing single-PK delete
-     * machinery without needing a parser path through DeleteProcess. */
-    TableDesc td;
-    if (cat_find_table(resolve_schema_id(), tbl, &td) != 0) return -1;
-
     char pk[600];
     make_pk(g_mem.ns, g_mem.key, pk, sizeof(pk));
 
-    BTree2 pk_tree = { .root_page = td.pk_root_page };
-    RowID rid;
-    if (bt2_search(&pk_tree, pk, &rid) < 0) return 0;   /* idempotent */
-
-    if (g_qctx) mvcc_ensure_xid(&g_qctx->mvcc_xid);
-    tapi_heap_delete(rid);
-    bt2_delete(&pk_tree, pk);
-    return 0;
+    /* Populate DeleteOpts and emit DELETE FROM mem_<name> WHERE pk=...
+     * The standard delete path applies any RLS policy attached to the
+     * backing table — that's what makes MEMORY DELETE multi-tenant safe. */
+    memset(&g_del, 0, sizeof(g_del));
+    snprintf(g_del.tblName, sizeof(g_del.tblName), "%s", tbl);
+    g_expr.whereExpr = expr_make_cmp(4 /* CMP_SUBTOK_EQ */,
+                                     expr_make_column("pk"),
+                                     expr_make_string(pk));
+    return DeleteProcess();
 }
 
 /* ----------------------------------------------------------------
