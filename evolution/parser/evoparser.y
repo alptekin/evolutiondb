@@ -443,6 +443,9 @@
 /* Temporal query (Task 207 — Feature #207) */
 %token SYSTEM_TIME TRANSACTION FEVO_CURRENT_XID
 
+/* System-versioned tables (Task 208 — Feature #208) */
+%token SYSTEM VERSIONING
+
 %type <intval> select_opts
 %type <intval> select_stmt
 %type <intval> opt_hnsw_opclass
@@ -3110,6 +3113,11 @@ opt_table_options: /* empty */
         { emit("SHARD RANGE %s", $6); SetShardRange($6); free($6); }
     | opt_table_options PARTITION BY RANGE '(' NAME ')'
         { emit("PARTITION BY RANGE %s", $6); SetPartitionByRange($6); free($6); }
+    /* Task 208 — WITH SYSTEM VERSIONING. Auto-injects valid_from /
+     * valid_to columns and links a <name>_history shadow table on
+     * CreateTableProcess. */
+    | opt_table_options WITH SYSTEM VERSIONING
+        { emit("TABLE OPT WITH SYSTEM VERSIONING"); SetTableSystemVersioned(); }
 ;
 
 shard_range_list: shard_range_def

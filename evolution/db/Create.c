@@ -313,6 +313,14 @@ void SetTableAutoIncrement(int startVal)
         g_create.autoIncStart = startVal;
 }
 
+/* Task 208 — flag the table for system versioning. Read by
+ * CreateTableProcess after columns / constraints are staged so we can
+ * append valid_from / valid_to and build the history shadow table. */
+void SetTableSystemVersioned(void)
+{
+    g_create.systemVersioned = 1;
+}
+
 void AddPrimaryKeyColumn(const char *colName)
 {
     if (g_create.pkColumnCount < 16) {
@@ -689,6 +697,43 @@ int CreateTableProcess(void)
         padSize += 32 * parentNCols;  /* rough per-col pad increase */
     }
 
+    /* Task 208 — WITH SYSTEM VERSIONING: append valid_from / valid_to
+     * timestamp columns to the schema before persisting. The history
+     * shadow table is created right after the main table is registered
+     * so cat_create_table doesn't have to know anything about it. */
+    int versioned = g_create.systemVersioned;
+    if (versioned) {
+        if (numCols + 2 > CAT_MAX_COLUMNS) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "WITH SYSTEM VERSIONING: too many columns to add valid_from/valid_to");
+            g_err.error = 1;
+            TruncateCreate();
+            return -1;
+        }
+        memset(&cols[numCols], 0, sizeof(cols[0]));
+        snprintf(cols[numCols].col_name, sizeof(cols[numCols].col_name), "valid_from");
+        cols[numCols].type_code = 100003;        /* TIMESTAMP */
+        cols[numCols].col_ordinal = numCols;
+        /* nullable on disk so column-list INSERTs can omit it; the
+         * Insert.c auto-fill kicks in before the row hits the heap. */
+        cols[numCols].is_not_null = 0;
+        /* The "no default specified" sentinel — without this, an empty
+         * default_val makes the column-list INSERT path emit "" instead
+         * of NULL_MARKER and the auto-fill never kicks in. */
+        strcpy(cols[numCols].default_val, "\x01NONE\x01");
+        snprintf(colNameArr[numCols], 128, "%s", "valid_from");
+        numCols++;
+
+        memset(&cols[numCols], 0, sizeof(cols[0]));
+        snprintf(cols[numCols].col_name, sizeof(cols[numCols].col_name), "valid_to");
+        cols[numCols].type_code = 100003;        /* TIMESTAMP */
+        cols[numCols].col_ordinal = numCols;
+        cols[numCols].is_not_null = 0;
+        strcpy(cols[numCols].default_val, "\x01NONE\x01");
+        snprintf(colNameArr[numCols], 128, "%s", "valid_to");
+        numCols++;
+    }
+
     /* Create table in catalog (also creates PK B+ tree internally) */
     int rc = cat_create_table(schDesc.schema_id, tableName,
                               cols, numCols, padSize,
@@ -717,6 +762,34 @@ int CreateTableProcess(void)
             cat_add_inheritance((uint32_t)rc, inherit_parent_id);
             cat_update_parent_table_id((uint32_t)rc, tableName,
                                         schDesc.schema_id, inherit_parent_id);
+        }
+
+        /* Task 208 — WITH SYSTEM VERSIONING: build the <name>_history
+         * shadow table with the same column layout (PK column drops the
+         * is_pk flag — history rows are append-only and reuse the
+         * primary key value across versions) and persist the flag +
+         * shadow link on the main table. */
+        if (versioned) {
+            char histName[CAT_MAX_NAME_LEN];
+            snprintf(histName, sizeof(histName), "%s_history", tableName);
+
+            ColumnDesc histCols[CAT_MAX_COLUMNS];
+            int histNCols = numCols;
+            for (int i = 0; i < numCols; i++) {
+                histCols[i] = cols[i];
+                /* Drop PK on the shadow — multiple versions share PK value. */
+                histCols[i].is_pk = 0;
+                /* Drop UNIQUE for the same reason. */
+                histCols[i].is_unique = 0;
+            }
+            int hist_rc = cat_create_table(schDesc.schema_id, histName,
+                                            histCols, histNCols, padSize,
+                                            -1, 0, 1,
+                                            0, 0);
+            if (hist_rc >= 0) {
+                cat_update_table_versioning((uint32_t)rc, 1,
+                                             (uint32_t)hist_rc);
+            }
         }
     }
     if (rc < 0) {

@@ -1936,15 +1936,24 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
         char eq_col[128], eq_val[256];
         if (extract_eq_condition(g_expr.whereExpr, eq_col, sizeof(eq_col),
                                  eq_val, sizeof(eq_val))) {
-            /* Check if eq_col is the primary key */
+            /* Check if eq_col is the primary key.
+             *
+             * Walk is_pk flags directly instead of routing through
+             * tapi_get_pk_indices — the helper falls back to "column 0
+             * is the implicit PK" when nothing is marked, which mis-
+             * fires on tables that genuinely have no PK (e.g. the
+             * Task 208 system-versioning history shadow). The fast
+             * path already does the same explicit walk for the same
+             * reason. */
             int is_pk = 0;
             {
-                int pkIndices[16];
-                int nPK = tapi_get_pk_indices(allCols, ncols, pkIndices, 16);
-                if (nPK == 1 && pkIndices[0] < ncols) {
-                    if (strcasecmp(allCols[pkIndices[0]].col_name, eq_col) == 0)
-                        is_pk = 1;
+                int pk_count = 0, pk_idx = -1;
+                for (int i = 0; i < ncols; i++) {
+                    if (allCols[i].is_pk) { pk_count++; pk_idx = i; }
                 }
+                if (pk_count == 1 && pk_idx >= 0 &&
+                    strcasecmp(allCols[pk_idx].col_name, eq_col) == 0)
+                    is_pk = 1;
             }
 
             if (is_pk) {

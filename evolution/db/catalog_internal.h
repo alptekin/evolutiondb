@@ -73,6 +73,8 @@ typedef struct {
     int      shard_count;      /* HASH: number of shards */
     uint32_t parent_table_id; /* Task 92: 0 = no parent; INHERITS sets this */
     uint8_t  rls_enabled;     /* Task 93: 1 = ROW LEVEL SECURITY enabled on this table */
+    uint8_t  system_versioned;/* Task 208: 1 = WITH SYSTEM VERSIONING. Auto-injects valid_from/valid_to columns + auto-tracks history into <name>_history. */
+    uint32_t history_table_id;/* Task 208: 0 if not versioned; else table_id of <name>_history. */
 
     /* Transient schema-presence flags — populated by tapi_resolve(),
      * NOT serialized. Used by DML inner loops to skip catalog lookups
@@ -355,6 +357,12 @@ int cat_update_parent_table_id(uint32_t table_id, const char *table_name,
 /* Task 93: toggle RLS for a table — rewrites the TableDesc with the new
  * rls_enabled flag, preserving every other field. */
 int cat_update_table_rls_flag(uint32_t table_id, uint8_t rls_enabled);
+/* Task 208 — flip the SYSTEM VERSIONING flag and link / unlink the
+ * history shadow's table_id. Used by CREATE TABLE ... WITH SYSTEM
+ * VERSIONING and DROP TABLE cleanup. */
+int cat_update_table_versioning(uint32_t table_id,
+                                uint8_t system_versioned,
+                                uint32_t history_table_id);
 
 /* Update shard metadata for a table. */
 int cat_update_shard_info(uint32_t table_id, const char *table_name,
