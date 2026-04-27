@@ -21,8 +21,12 @@
 #include "btree2.h"
 #include "../../adaptor/platform.h"
 
-/* Auto-RECLAIM interval in seconds */
-#define AUTO_RECLAIM_INTERVAL_SEC  30
+/* Auto-RECLAIM interval in seconds. Default 30s; tests can lower it
+ * via EVOSQL_AUTO_RECLAIM_INTERVAL_SEC (1..30) so a TTL prune fires
+ * within a single test iteration without a 30-second wall-clock
+ * sleep. The lower bound stays at 1 to keep CPU pressure modest. */
+#define AUTO_RECLAIM_INTERVAL_SEC_DEFAULT  30
+static int g_auto_reclaim_interval_sec = AUTO_RECLAIM_INTERVAL_SEC_DEFAULT;
 
 /* ================================================================
  *  Thread state
@@ -264,6 +268,104 @@ static void subscription_prune_pass(time_t now_ts)
 }
 
 /* ================================================================
+ *  Task 213 — TTL column auto-expire
+ *
+ *  For each table with a non-empty ttl_column, walk the heap and
+ *  delete rows whose value in that column is older than NOW(). The
+ *  daemon does this once per tick under the same write lock the
+ *  retention pass uses, so DML and DDL serialize cleanly with TTL.
+ *  Rows whose TTL value is NULL are preserved (a NULL means
+ *  "no expiry yet" — the typical contract for newly inserted rows).
+ * ================================================================ */
+static void ttl_prune_table(const TableDesc *td, time_t cutoff)
+{
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = cat_find_columns(td->table_id, cols, CAT_MAX_COLUMNS);
+    if (ncols <= 0) return;
+
+    int ttl_idx = -1;
+    for (int i = 0; i < ncols; i++) {
+        if (strcasecmp(cols[i].col_name, td->ttl_column) == 0) {
+            ttl_idx = i; break;
+        }
+    }
+    if (ttl_idx < 0) return;     /* column dropped — daemon no-op */
+
+    BTree2 tree = { td->pk_root_page };
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&tree, &cur) < 0) return;
+
+    typedef struct { char key[256]; RowID rid; } Victim;
+    enum { MAX_VICTIMS = 256 };
+    Victim victims[MAX_VICTIMS];
+    int nv = 0;
+
+    char key[256];
+    RowID rid;
+    while (nv < MAX_VICTIMS && bt2_cursor_next(&cur, key, &rid) == 0) {
+        char rec[RECORD_BUF_SIZE];
+        int rec_len = tapi_heap_read(rid, rec, sizeof(rec));
+        if (rec_len <= 0) continue;
+
+        char fields[CAT_MAX_COLUMNS][256];
+        int  is_null[CAT_MAX_COLUMNS];
+        int nf = tup_extract_fields(rec, rec_len, cols, ncols,
+                                    fields, is_null, CAT_MAX_COLUMNS);
+        if (nf <= ttl_idx || is_null[ttl_idx]) continue;
+
+        struct tm tm;
+        memset(&tm, 0, sizeof(tm));
+        if (sscanf(fields[ttl_idx],
+                   "%4d-%2d-%2d %2d:%2d:%2d",
+                   &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+                   &tm.tm_hour, &tm.tm_min, &tm.tm_sec) < 3)
+            continue;
+        tm.tm_year -= 1900; tm.tm_mon -= 1;
+        time_t row_ts = timegm(&tm);
+        if (row_ts >= cutoff) continue;     /* still alive */
+
+        strncpy(victims[nv].key, key, sizeof(victims[nv].key) - 1);
+        victims[nv].key[sizeof(victims[nv].key) - 1] = '\0';
+        victims[nv].rid = rid;
+        nv++;
+    }
+
+    for (int i = 0; i < nv; i++) {
+        BTree2 t = { td->pk_root_page };
+        bt2_delete(&t, victims[i].key);
+        if (t.root_page != td->pk_root_page) {
+            cat_update_pk_root(td->table_id, td->table_name,
+                               td->schema_id, t.root_page);
+        }
+        tapi_heap_delete(victims[i].rid);
+    }
+
+    if (nv > 0) {
+        fprintf(stderr,
+                "[ttl-prune] Expired %d row(s) from %s.%s\n",
+                nv, td->ttl_column, td->table_name);
+    }
+}
+
+static void ttl_prune_pass(time_t now_ts)
+{
+    DatabaseDesc dbs[8];
+    int ndb = cat_list_databases(dbs, 8);
+    for (int di = 0; di < ndb; di++) {
+        SchemaDesc schemas[16];
+        int ns = cat_list_schemas(dbs[di].db_id, schemas, 16);
+        for (int si = 0; si < ns; si++) {
+            TableDesc tables[64];
+            int nt = cat_list_tables(schemas[si].schema_id, tables, 64);
+            for (int ti = 0; ti < nt; ti++) {
+                if (!tables[ti].ttl_column[0]) continue;
+                ttl_prune_table(&tables[ti], now_ts);
+            }
+        }
+    }
+}
+
+/* ================================================================
  *  Background thread
  * ================================================================ */
 static void *auto_reclaim_worker(void *arg)
@@ -272,7 +374,7 @@ static void *auto_reclaim_worker(void *arg)
 
     while (g_reclaim_running) {
         /* Sleep in small increments so we can check g_reclaim_running */
-        for (int s = 0; s < AUTO_RECLAIM_INTERVAL_SEC && g_reclaim_running; s++)
+        for (int s = 0; s < g_auto_reclaim_interval_sec && g_reclaim_running; s++)
             sleep(1);
 
         if (!g_reclaim_running) break;
@@ -290,13 +392,16 @@ static void *auto_reclaim_worker(void *arg)
          * fell outside the retention window. Runs under the same write
          * lock the dead-tuple sweep uses below so DML and DDL are
          * serialized against pruning. Task 210 piggybacks: drop acked
-         * + TTL-expired durable subscription rows in the same window. */
+         * + TTL-expired durable subscription rows in the same window.
+         * Task 213 adds the column-driven TTL prune for any table with
+         * a configured ttl_column. */
         {
             extern rwlock_t g_parse_lock;
             rwlock_wrlock(&g_parse_lock);
             time_t now_ts = time(NULL);
             retention_pass(now_ts);
             subscription_prune_pass(now_ts);
+            ttl_prune_pass(now_ts);
             rwlock_wrunlock(&g_parse_lock);
         }
 
@@ -361,6 +466,17 @@ void auto_reclaim_start(void)
     if (g_reclaim_running) return;
     g_reclaim_running = 1;
 
+    /* Honor EVOSQL_AUTO_RECLAIM_INTERVAL_SEC for test runs that need
+     * the daemon to fire faster than every 30 seconds. */
+    {
+        const char *env = getenv("EVOSQL_AUTO_RECLAIM_INTERVAL_SEC");
+        if (env && env[0]) {
+            int n = atoi(env);
+            if (n >= 1 && n <= AUTO_RECLAIM_INTERVAL_SEC_DEFAULT)
+                g_auto_reclaim_interval_sec = n;
+        }
+    }
+
     /* The auto-RECLAIM worker calls into ReclaimTableProcess, which
      * allocates ~250 KB of locals on entry (`ColumnDesc cols[256]`
      * ≈ 237 KB) and more in its inner phases. macOS pthread default
@@ -381,7 +497,7 @@ void auto_reclaim_start(void)
         return;
     }
     fprintf(stderr, "[auto-RECLAIM] Background thread started (interval=%ds, threshold=20%%, stack=16MB)\n",
-            AUTO_RECLAIM_INTERVAL_SEC);
+            g_auto_reclaim_interval_sec);
 }
 
 void auto_reclaim_stop(void)

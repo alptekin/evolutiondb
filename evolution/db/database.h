@@ -284,6 +284,10 @@ void SetColumnGenerated(int mode, struct ExprNode *expr);
 void SetTableAutoIncrement(int startVal);
 /* Task 208 — flag CREATE TABLE for SYSTEM VERSIONING. */
 void SetTableSystemVersioned(void);
+/* Task 213 — stage TTL column for CREATE TABLE / ALTER TABLE SET TTL. */
+void SetTableTtlColumn(const char *col);
+/* Task 213 — apply or clear TTL on an existing table at ALTER time. */
+int  AlterTableSetTtl(const char *tableName, const char *col_literal);
 void AddPrimaryKeyColumn(const char *colName);
 int ReadPrimaryKeys(const char *tblName, int *indices, int maxCols);
 int ReadPrimaryKey(const char *tblName);

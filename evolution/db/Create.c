@@ -321,6 +321,72 @@ void SetTableSystemVersioned(void)
     g_create.systemVersioned = 1;
 }
 
+/* Task 213 — stage the TTL column literal coming in via
+ * WITH (ttl_column = 'col') or ALTER TABLE n SET TTL = 'col'. The
+ * lexer already strips outer quotes, but we keep the strip here as a
+ * safety so callers passing raw quoted strings still work. */
+void SetTableTtlColumn(const char *col)
+{
+    if (!col) { g_create.ttlColumn[0] = '\0'; return; }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s", col);
+    int n = (int)strlen(buf);
+    if (n >= 2 && buf[0] == '\'' && buf[n - 1] == '\'') {
+        memmove(buf, buf + 1, n - 2);
+        buf[n - 2] = '\0';
+    }
+    snprintf(g_create.ttlColumn, sizeof(g_create.ttlColumn), "%s", buf);
+}
+
+/* Task 213 — runtime ALTER TABLE handler. Pass NULL to clear the TTL
+ * driver; pass a quoted or bare column name to set it. Verifies the
+ * column actually exists on the target table before persisting so a
+ * typo doesn't silently disable the daemon's prune for that table. */
+int AlterTableSetTtl(const char *tableName, const char *col_literal)
+{
+    if (!tableName || !tableName[0]) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "ALTER TABLE: missing table name");
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_SYNTAX_ERROR);
+        return -1;
+    }
+    TableDesc td;
+    ColumnDesc cols[CAT_MAX_COLUMNS];
+    int ncols = 0;
+    if (tapi_resolve(tableName, &td, cols, &ncols) < 0) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "relation \"%s\" does not exist", tableName);
+        g_err.error = 1;
+        EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_TABLE);
+        return -1;
+    }
+
+    char clean[128] = "";
+    if (col_literal && col_literal[0]) {
+        snprintf(clean, sizeof(clean), "%s", col_literal);
+        int n = (int)strlen(clean);
+        if (n >= 2 && clean[0] == '\'' && clean[n - 1] == '\'') {
+            memmove(clean, clean + 1, n - 2);
+            clean[n - 2] = '\0';
+        }
+        int found = 0;
+        for (int i = 0; i < ncols; i++) {
+            if (strcasecmp(cols[i].col_name, clean) == 0) { found = 1; break; }
+        }
+        if (!found) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "ttl_column \"%s\" does not exist on table \"%s\"",
+                     clean, tableName);
+            g_err.error = 1;
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_COLUMN);
+            return -1;
+        }
+    }
+    cat_update_table_ttl(td.table_id, clean[0] ? clean : NULL);
+    return 0;
+}
+
 void AddPrimaryKeyColumn(const char *colName)
 {
     if (g_create.pkColumnCount < 16) {
@@ -790,6 +856,32 @@ int CreateTableProcess(void)
                 cat_update_table_versioning((uint32_t)rc, 1,
                                              (uint32_t)hist_rc);
             }
+        }
+
+        /* Task 213 — persist the TTL driver column on the freshly
+         * created table. The auto_reclaim daemon reads this on every
+         * tick and prunes rows whose value in this column is in the
+         * past. Verifying the column actually exists on the table
+         * keeps the operator from typo'ing themselves into a silent
+         * no-op. */
+        if (g_create.ttlColumn[0]) {
+            int found_idx = -1;
+            for (int i = 0; i < numCols; i++) {
+                if (strcasecmp(cols[i].col_name, g_create.ttlColumn) == 0) {
+                    found_idx = i; break;
+                }
+            }
+            if (found_idx < 0) {
+                snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                         "ttl_column \"%s\" does not exist on table \"%s\"",
+                         g_create.ttlColumn, tableName);
+                g_err.error = 1;
+                EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNDEFINED_COLUMN);
+                cat_drop_table((uint32_t)rc);
+                TruncateCreate();
+                return -1;
+            }
+            cat_update_table_ttl((uint32_t)rc, g_create.ttlColumn);
         }
     }
     if (rc < 0) {
