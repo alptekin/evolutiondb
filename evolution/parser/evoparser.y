@@ -9,6 +9,7 @@
 	#include <stdio.h>
 	#include "../db/database.h"
 	#include "../db/expression.h"
+	#include "../db/Checkpoint.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -432,10 +433,15 @@
 /* HNSW ANN index (Task 202 — Feature #202) */
 %token HNSW FHNSW_KNN FHNSW_FILTER_KNN FHNSW_HYBRID_EXPLAIN
 
+/* Checkpoint store (Task 204 — Feature #204) */
+%token CHECKPOINT STORE RETENTION PUT GET LIST WRITES THREAD AT
+
 %type <intval> select_opts
 %type <intval> select_stmt
 %type <intval> opt_hnsw_opclass
 %type <intval> opt_hnsw_with hnsw_with_list hnsw_with_item
+%type <strval> opt_ck_with
+%type <strval> ck_put_val
 %type <intval> select_expr_list
 %type <intval> val_list
 %type <intval> opt_val_list
@@ -1910,6 +1916,183 @@ opt_truncate_options: /* empty */
 stmt: listen_stmt     { emit("STMT"); }
     | unlisten_stmt   { emit("STMT"); }
     | notify_stmt     { emit("STMT"); }
+;
+
+/* ── Checkpoint store DDL (Task 204 — Feature #204) ──
+ * CREATE CHECKPOINT STORE name [WITH (retention='30 days')]
+ * DROP   CHECKPOINT STORE name [CASCADE]
+ *
+ * The IF NOT EXISTS / IF EXISTS guards keep the productions terse by
+ * encoding the flag in $$ — 1 = guard present. */
+stmt: create_checkpoint_store_stmt { emit("STMT"); }
+    | drop_checkpoint_store_stmt   { emit("STMT"); }
+;
+
+create_checkpoint_store_stmt:
+  CREATE CHECKPOINT STORE NAME opt_ck_with
+    {
+        emit("CREATE CHECKPOINT STORE %s", $4);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        if ($5) SetCheckpointStoreRetention($5);
+        CreateCheckpointStoreProcess(0);
+        free($4);
+        if ($5) free($5);
+    }
+| CREATE CHECKPOINT STORE IF EXISTS NAME opt_ck_with
+    {
+        /* "IF NOT EXISTS" is tokenized by the lexer as IF EXISTS with the
+         * subtok flag set on EXISTS. Mirrors CREATE INDEX IF NOT EXISTS. */
+        emit("CREATE CHECKPOINT STORE IF NOT EXISTS %s", $6);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($6);
+        if ($7) SetCheckpointStoreRetention($7);
+        CreateCheckpointStoreProcess(1);
+        free($6);
+        if ($7) free($7);
+    }
+;
+
+/* Optional WITH (retention = '30 days') clause. Returns the retention
+ * literal as a heap string (caller frees), or NULL if absent. */
+opt_ck_with: /* nil */                          { $$ = NULL; }
+| WITH '(' RETENTION COMPARISON STRING ')'      { $$ = $5; }
+;
+
+drop_checkpoint_store_stmt:
+  DROP CHECKPOINT STORE NAME
+    {
+        emit("DROP CHECKPOINT STORE %s", $4);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        DropCheckpointStoreProcess(0);
+        free($4);
+    }
+| DROP CHECKPOINT STORE NAME CASCADE
+    {
+        emit("DROP CHECKPOINT STORE %s CASCADE", $4);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        SetCheckpointStoreCascade(1);
+        DropCheckpointStoreProcess(0);
+        free($4);
+    }
+| DROP CHECKPOINT STORE IF EXISTS NAME
+    {
+        emit("DROP CHECKPOINT STORE IF EXISTS %s", $6);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($6);
+        DropCheckpointStoreProcess(1);
+        free($6);
+    }
+;
+
+/* ── Checkpoint DML — Task 204 (Feature #204) ──
+ *
+ *   CHECKPOINT PUT [WRITES] INTO name VALUES (
+ *       thread_id, ns, id, parent_id, values_json, metadata_json, parent_config_json )
+ *   CHECKPOINT GET FROM name THREAD STRING [AT STRING]
+ *   CHECKPOINT LIST FROM name THREAD STRING [LIMIT INTNUM]
+ *
+ *  Each value slot accepts STRING or NULL. The grammar collects them via
+ *  SetCheckpointPutField(idx, value) so the engine sees one canonical
+ *  shape regardless of which optional fields the user supplied.
+ *
+ *  WRITES is parsed but does not change semantics in v1 — it's an
+ *  intentionally cosmetic alias kept for the LangGraph put_writes API. */
+stmt: ck_put_stmt   { emit("STMT"); }
+    | ck_get_stmt   { emit("STMT"); }
+    | ck_list_stmt  { emit("STMT"); }
+;
+
+ck_put_stmt:
+  CHECKPOINT PUT INTO NAME VALUES '(' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ')'
+    {
+        emit("CHECKPOINT PUT INTO %s", $4);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        SetCheckpointPutField(0, $7);
+        SetCheckpointPutField(1, $9);
+        SetCheckpointPutField(2, $11);
+        SetCheckpointPutField(3, $13);
+        SetCheckpointPutField(4, $15);
+        SetCheckpointPutField(5, $17);
+        SetCheckpointPutField(6, $19);
+        CheckpointPutProcess(0);
+        free($4);
+        if ($7) free($7); if ($9) free($9); if ($11) free($11); if ($13) free($13);
+        if ($15) free($15); if ($17) free($17); if ($19) free($19);
+    }
+| CHECKPOINT PUT WRITES INTO NAME VALUES '(' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ',' ck_put_val ')'
+    {
+        emit("CHECKPOINT PUT WRITES INTO %s", $5);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($5);
+        SetCheckpointPutField(0, $8);
+        SetCheckpointPutField(1, $10);
+        SetCheckpointPutField(2, $12);
+        SetCheckpointPutField(3, $14);
+        SetCheckpointPutField(4, $16);
+        SetCheckpointPutField(5, $18);
+        SetCheckpointPutField(6, $20);
+        CheckpointPutProcess(1);
+        free($5);
+        if ($8)  free($8);  if ($10) free($10); if ($12) free($12); if ($14) free($14);
+        if ($16) free($16); if ($18) free($18); if ($20) free($20);
+    }
+;
+
+/* Each value slot is either a STRING literal (already heap-allocated by
+ * the lexer) or NULL — represented as a NULL pointer at the C level so
+ * the action can tell "not set" from "empty string". */
+ck_put_val: STRING        { $$ = $1; }
+          | NULLX         { $$ = NULL; }
+;
+
+/* CHECKPOINT GET FROM name THREAD '<id>' [AT '<chk_id>'] */
+ck_get_stmt:
+  CHECKPOINT GET FROM NAME THREAD STRING
+    {
+        emit("CHECKPOINT GET FROM %s THREAD %s", $4, $6);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        SetCheckpointThread($6);
+        CheckpointGetProcess();
+        free($4); free($6);
+    }
+| CHECKPOINT GET FROM NAME THREAD STRING AT STRING
+    {
+        emit("CHECKPOINT GET FROM %s THREAD %s AT %s", $4, $6, $8);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        SetCheckpointThread($6);
+        SetCheckpointAtId($8);
+        CheckpointGetProcess();
+        free($4); free($6); free($8);
+    }
+;
+
+/* CHECKPOINT LIST FROM name THREAD '<id>' [LIMIT n] */
+ck_list_stmt:
+  CHECKPOINT LIST FROM NAME THREAD STRING
+    {
+        emit("CHECKPOINT LIST FROM %s THREAD %s", $4, $6);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        SetCheckpointThread($6);
+        CheckpointListProcess();
+        free($4); free($6);
+    }
+| CHECKPOINT LIST FROM NAME THREAD STRING LIMIT INTNUM
+    {
+        emit("CHECKPOINT LIST FROM %s THREAD %s LIMIT %d", $4, $6, $8);
+        ResetCheckpointOpts();
+        SetCheckpointStoreName($4);
+        SetCheckpointThread($6);
+        SetCheckpointLimit($8);
+        CheckpointListProcess();
+        free($4); free($6);
+    }
 ;
 
 listen_stmt: LISTEN NAME
