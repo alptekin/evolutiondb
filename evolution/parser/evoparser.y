@@ -10,6 +10,7 @@
 	#include "../db/database.h"
 	#include "../db/expression.h"
 	#include "../db/Checkpoint.h"
+	#include "../db/Memory.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -436,12 +437,16 @@
 /* Checkpoint store (Task 204 — Feature #204) */
 %token CHECKPOINT STORE RETENTION PUT GET LIST WRITES THREAD AT
 
+/* Memory store (Task 205 — Feature #205) */
+%token MEMORY EMBEDDING_DIM DISTANCE SEARCH NAMESPACE NAMESPACES PREFIX NS
+
 %type <intval> select_opts
 %type <intval> select_stmt
 %type <intval> opt_hnsw_opclass
 %type <intval> opt_hnsw_with hnsw_with_list hnsw_with_item
 %type <strval> opt_ck_with
 %type <strval> ck_put_val
+%type <strval> mem_val
 %type <intval> select_expr_list
 %type <intval> val_list
 %type <intval> opt_val_list
@@ -2092,6 +2097,202 @@ ck_list_stmt:
         SetCheckpointLimit($8);
         CheckpointListProcess();
         free($4); free($6);
+    }
+;
+
+/* ── Memory store DDL + DML — Task 205 (Feature #205) ──
+ *
+ *   CREATE MEMORY STORE name [WITH (embedding_dim = N, distance = 'cosine')]
+ *   DROP   MEMORY STORE name [CASCADE]
+ *   MEMORY PUT INTO name VALUES (ns, key, value [, embedding])
+ *   MEMORY GET FROM name WHERE NS = '<ns>' AND KEY = '<key>'
+ *   MEMORY SEARCH name USING VECTOR '<query>' [LIMIT n]
+ *   MEMORY DELETE FROM name WHERE NS = '<ns>' AND KEY = '<key>'
+ *   MEMORY LIST NAMESPACES IN name [PREFIX '<prefix>']
+ *
+ * Each value slot uses STRING or NULL via mem_val so the engine sees
+ * one canonical shape regardless of which optional fields the caller
+ * supplied. All NSE / KEY / DISTANCE comparisons use COMPARISON because
+ * the lexer maps `=` to that token. */
+stmt: create_memory_store_stmt { emit("STMT"); }
+    | drop_memory_store_stmt   { emit("STMT"); }
+    | mem_put_stmt             { emit("STMT"); }
+    | mem_get_stmt             { emit("STMT"); }
+    | mem_search_stmt          { emit("STMT"); }
+    | mem_delete_stmt          { emit("STMT"); }
+    | mem_list_ns_stmt         { emit("STMT"); }
+;
+
+create_memory_store_stmt:
+  CREATE MEMORY STORE NAME mem_reset opt_mem_with
+    {
+        emit("CREATE MEMORY STORE %s", $4);
+        SetMemoryStoreName($4);
+        CreateMemoryStoreProcess(0);
+        free($4);
+    }
+| CREATE MEMORY STORE IF EXISTS NAME mem_reset opt_mem_with
+    {
+        emit("CREATE MEMORY STORE IF NOT EXISTS %s", $6);
+        SetMemoryStoreName($6);
+        CreateMemoryStoreProcess(1);
+        free($6);
+    }
+;
+
+/* Mid-rule trick: resetting g_mem before the optional WITH list is
+ * captured in a dedicated empty production so the action ordering is
+ * deterministic. */
+mem_reset: /* nil */ { ResetMemoryOpts(); }
+;
+
+opt_mem_with: /* nil */
+| WITH '(' mem_with_list ')'
+;
+
+mem_with_list:
+  mem_with_item
+| mem_with_list ',' mem_with_item
+;
+
+mem_with_item:
+  EMBEDDING_DIM COMPARISON INTNUM
+        { SetMemoryEmbeddingDim($3); }
+| DISTANCE COMPARISON STRING
+        { SetMemoryDistance($3); free($3); }
+;
+
+drop_memory_store_stmt:
+  DROP MEMORY STORE NAME
+    {
+        emit("DROP MEMORY STORE %s", $4);
+        ResetMemoryOpts();
+        SetMemoryStoreName($4);
+        DropMemoryStoreProcess(0);
+        free($4);
+    }
+| DROP MEMORY STORE NAME CASCADE
+    {
+        emit("DROP MEMORY STORE %s CASCADE", $4);
+        ResetMemoryOpts();
+        SetMemoryStoreName($4);
+        SetMemoryStoreCascade(1);
+        DropMemoryStoreProcess(0);
+        free($4);
+    }
+| DROP MEMORY STORE IF EXISTS NAME
+    {
+        emit("DROP MEMORY STORE IF EXISTS %s", $6);
+        ResetMemoryOpts();
+        SetMemoryStoreName($6);
+        DropMemoryStoreProcess(1);
+        free($6);
+    }
+;
+
+/* MEMORY PUT INTO name VALUES (ns, key, value [, embedding]) */
+mem_put_stmt:
+  MEMORY PUT INTO NAME VALUES '(' mem_val ',' mem_val ',' mem_val ')'
+    {
+        emit("MEMORY PUT INTO %s", $4);
+        ResetMemoryOpts();
+        SetMemoryStoreName($4);
+        SetMemoryNs($7);
+        SetMemoryKey($9);
+        SetMemoryValue($11);
+        MemoryPutProcess();
+        free($4);
+        if ($7) free($7); if ($9) free($9); if ($11) free($11);
+    }
+| MEMORY PUT INTO NAME VALUES '(' mem_val ',' mem_val ',' mem_val ',' mem_val ')'
+    {
+        emit("MEMORY PUT INTO %s w/embedding", $4);
+        ResetMemoryOpts();
+        SetMemoryStoreName($4);
+        SetMemoryNs($7);
+        SetMemoryKey($9);
+        SetMemoryValue($11);
+        SetMemoryEmbedding($13);
+        MemoryPutProcess();
+        free($4);
+        if ($7) free($7); if ($9) free($9); if ($11) free($11); if ($13) free($13);
+    }
+;
+
+mem_val: STRING        { $$ = $1; }
+       | NULLX         { $$ = NULL; }
+;
+
+/* MEMORY GET FROM name WHERE NS = '<ns>' AND KEY = '<key>' */
+mem_get_stmt:
+  MEMORY GET FROM NAME WHERE NS COMPARISON STRING ANDOP KEY COMPARISON STRING
+    {
+        emit("MEMORY GET FROM %s NS=%s KEY=%s", $4, $8, $12);
+        ResetMemoryOpts();
+        SetMemoryStoreName($4);
+        SetMemoryNs($8);
+        SetMemoryKey($12);
+        MemoryGetProcess();
+        free($4); free($8); free($12);
+    }
+;
+
+/* MEMORY SEARCH name USING VECTOR '<query>' [LIMIT n] */
+mem_search_stmt:
+  MEMORY SEARCH NAME USING VECTOR STRING
+    {
+        emit("MEMORY SEARCH %s", $3);
+        ResetMemoryOpts();
+        SetMemoryStoreName($3);
+        SetMemoryQuery($6);
+        SetMemoryLimit(10);
+        MemorySearchProcess();
+        free($3); free($6);
+    }
+| MEMORY SEARCH NAME USING VECTOR STRING LIMIT INTNUM
+    {
+        emit("MEMORY SEARCH %s LIMIT %d", $3, $8);
+        ResetMemoryOpts();
+        SetMemoryStoreName($3);
+        SetMemoryQuery($6);
+        SetMemoryLimit($8);
+        MemorySearchProcess();
+        free($3); free($6);
+    }
+;
+
+/* MEMORY DELETE FROM name WHERE NS = '<ns>' AND KEY = '<key>' */
+mem_delete_stmt:
+  MEMORY DELETE FROM NAME WHERE NS COMPARISON STRING ANDOP KEY COMPARISON STRING
+    {
+        emit("MEMORY DELETE FROM %s NS=%s KEY=%s", $4, $8, $12);
+        ResetMemoryOpts();
+        SetMemoryStoreName($4);
+        SetMemoryNs($8);
+        SetMemoryKey($12);
+        MemoryDeleteProcess();
+        free($4); free($8); free($12);
+    }
+;
+
+/* MEMORY LIST NAMESPACES IN name [PREFIX '<prefix>'] */
+mem_list_ns_stmt:
+  MEMORY LIST NAMESPACES IN NAME
+    {
+        emit("MEMORY LIST NAMESPACES IN %s", $5);
+        ResetMemoryOpts();
+        SetMemoryStoreName($5);
+        MemoryListNamespacesProcess();
+        free($5);
+    }
+| MEMORY LIST NAMESPACES IN NAME PREFIX STRING
+    {
+        emit("MEMORY LIST NAMESPACES IN %s PREFIX %s", $5, $7);
+        ResetMemoryOpts();
+        SetMemoryStoreName($5);
+        SetMemoryPrefix($7);
+        MemoryListNamespacesProcess();
+        free($5); free($7);
     }
 ;
 

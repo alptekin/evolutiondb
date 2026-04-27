@@ -328,6 +328,14 @@ STORED					{ return STORED; }
 STORE					{ return STORE; }
 SOME					{ return SOME; }
 CHECKPOINT				{ return CHECKPOINT; }
+MEMORY					{ return MEMORY; }
+EMBEDDING_DIM			{ return EMBEDDING_DIM; }
+DISTANCE				{ return DISTANCE; }
+SEARCH					{ return SEARCH; }
+NAMESPACE				{ return NAMESPACE; }
+NAMESPACES				{ return NAMESPACES; }
+PREFIX					{ return PREFIX; }
+NS						{ return NS; }
 RETENTION				{ return RETENTION; }
 WRITES					{ return WRITES; }
 PUT						{ return PUT; }
