@@ -474,6 +474,8 @@ UPPER/"("				{ return FUPPER; }
 LOWER/"("				{ return FLOWER; }
 LENGTH/"("			{ return FLENGTH; }
 CHAR_LENGTH/"("		{ return FLENGTH; }
+TOKEN_LENGTH/"("	{ return FTOKEN_LENGTH; }
+EVO_CALL_EXTERNAL/"("	{ return FPG_CALL_EXTERNAL; }
 CONCAT/"("			{ return FCONCAT; }
 COALESCE/"("			{ return FCOALESCE; }
 LAST_INSERT_ID/"("		{ return FLAST_INSERT_ID; }

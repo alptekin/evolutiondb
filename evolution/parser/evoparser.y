@@ -453,6 +453,9 @@
 /* TTL columns + auto-expire (Task 213 — Feature #213) */
 %token TTL TTL_COLUMN
 
+/* Auto-summarize helpers (Task 214 — Feature #214) */
+%token FTOKEN_LENGTH FPG_CALL_EXTERNAL
+
 %type <intval> select_opts
 %type <intval> select_stmt
 %type <intval> opt_hnsw_opclass
@@ -966,6 +969,8 @@ expr: FSUBSTRING '(' expr ',' expr ',' expr ')'   { emit("CALL 3 SUBSTR"); $$ = 
 | FUPPER '(' expr ')'                              { emit("CALL 1 UPPER"); $$ = expr_make_upper($3); }
 | FLOWER '(' expr ')'                              { emit("CALL 1 LOWER"); $$ = expr_make_lower($3); }
 | FLENGTH '(' expr ')'                             { emit("CALL 1 LENGTH"); $$ = expr_make_length($3); }
+| FTOKEN_LENGTH '(' expr ')'                       { emit("CALL 1 TOKEN_LENGTH"); $$ = expr_make_func1(EXPR_TOKEN_LENGTH, $3, "token_length"); }
+| FPG_CALL_EXTERNAL '(' expr ',' expr ')'          { emit("CALL 2 EVO_CALL_EXTERNAL"); $$ = expr_make_func2(EXPR_PG_CALL_EXTERNAL, $3, $5, "evo_call_external"); }
 | FCONCAT '(' expr ',' expr ')'                    { emit("CALL 2 CONCAT"); $$ = expr_make_concat($3, $5); }
 | FREPLACE '(' expr ',' expr ',' expr ')'          { emit("CALL 3 REPLACE"); $$ = expr_make_replace($3, $5, $7); }
 | FCOALESCE '(' expr ',' expr ')'                  { emit("CALL 2 COALESCE"); $$ = expr_make_coalesce($3, $5); }

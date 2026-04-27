@@ -62,6 +62,8 @@ typedef enum {
     EXPR_UPPER,           /* UPPER(str) */
     EXPR_LOWER,           /* LOWER(str) */
     EXPR_LENGTH,          /* LENGTH(str) / CHAR_LENGTH(str) */
+    EXPR_TOKEN_LENGTH,    /* token_length(str) — Task 214: whitespace-split count */
+    EXPR_PG_CALL_EXTERNAL, /* pg_call_external(name, arg) — Task 214 stub */
     EXPR_CONCAT,          /* CONCAT(a, b) — left || right */
     EXPR_REPLACE,         /* REPLACE(str, from, to) */
     EXPR_COALESCE,        /* COALESCE(a, b) */
