@@ -3800,7 +3800,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 100 — Sprint 7: C Client Library + FFI Adapters
 
-### Task 216: ⬜ libevosql-memory C SDK — Core (Feature #216)
+### Task 216: ✅ libevosql-memory C SDK — Core (Feature #216)
 
 **Goal:** `libevosql-memory.{so,dylib,a}` — opaque connection handle, checkpoint + memory + vector API, pkg-config install.
 
