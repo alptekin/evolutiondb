@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <fcntl.h>
 #include "database.h"
 #include "expression.h"
@@ -486,6 +487,93 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                     }
                     break;
                 }
+            }
+        }
+    }
+
+    /* Task 208 — system-versioned table: copy the OLD row into the
+     * shadow history table with valid_to = NOW(), then override
+     * valid_from / valid_to in the NEW row so the live row carries the
+     * fresh interval. The user's SET list overrides whatever they put,
+     * but the timing columns are non-negotiable for audit accuracy. */
+    if (td->system_versioned && td->history_table_id != 0) {
+        char now_str[32];
+        {
+            time_t now = time(NULL);
+            struct tm tm;
+#ifdef _WIN32
+            gmtime_s(&tm, &now);
+#else
+            gmtime_r(&now, &tm);
+#endif
+            strftime(now_str, sizeof(now_str), "%Y-%m-%d %H:%M:%S", &tm);
+        }
+
+        /* Snapshot old fields BEFORE SET overrides land. We re-extract
+         * from existingData to be sure we have the unmodified values. */
+        char old_fields[CAT_MAX_COLUMNS][256];
+        int old_isnull[CAT_MAX_COLUMNS];
+        int old_nf = tup_extract_fields(existingData, existingDataLen,
+                                        allCols, allNCols, old_fields,
+                                        old_isnull, CAT_MAX_COLUMNS);
+        if (old_nf > 0) {
+            /* Override valid_to in the snapshotted row → NOW() */
+            for (int oi = 0; oi < old_nf && oi < allNCols; oi++) {
+                if (strcasecmp(allCols[oi].col_name, "valid_to") == 0) {
+                    snprintf(old_fields[oi], sizeof(old_fields[0]),
+                             "%s", now_str);
+                    old_isnull[oi] = 0;
+                    break;
+                }
+            }
+            /* Build a tuple for the history table and append. */
+            TableDesc histTd;
+            if (cat_find_table_by_id(td->history_table_id, &histTd) == 0) {
+                ColumnDesc histCols[CAT_MAX_COLUMNS];
+                int histNCols = cat_find_columns(histTd.table_id,
+                                                  histCols, CAT_MAX_COLUMNS);
+                if (histNCols > 0) {
+                    char histRec[RECORD_BUF_SIZE];
+                    int histLen = tup_build_from_fields(
+                        (const char (*)[256])old_fields, old_nf,
+                        histTd.table_id, histCols, histNCols,
+                        histRec, sizeof(histRec));
+                    if (histLen > 0) {
+                        RowID hrid = tapi_heap_insert(&histTd, histRec, (uint16_t)histLen);
+                        if (hrid.page_no != 0) {
+                            /* History rows are append-only and several
+                             * versions can share the same logical PK, so
+                             * we mint a synthetic, scan-only key from
+                             * the heap RowID (10-digit zero-padded page
+                             * + 5-digit slot). Equality predicates on
+                             * user PK columns fall back to a full scan,
+                             * which is what we want here — audit reads
+                             * sweep the whole shadow. */
+                            char hkey[BT2_MAX_KEY_LEN + 1];
+                            snprintf(hkey, sizeof(hkey),
+                                     "h%010u:%05u",
+                                     hrid.page_no, hrid.slot_idx);
+                            BTree2 hist_pk_tree = tapi_pk_tree(&histTd);
+                            int ins_rc = bt2_insert(&hist_pk_tree, hkey, hrid);
+                            if (ins_rc == 0 &&
+                                hist_pk_tree.root_page != histTd.pk_root_page) {
+                                cat_update_pk_root(histTd.table_id,
+                                                    histTd.table_name,
+                                                    histTd.schema_id,
+                                                    hist_pk_tree.root_page);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Now bump valid_from / valid_to in the live row. */
+        for (int oi = 0; oi < allNCols && oi < numFields; oi++) {
+            if (strcasecmp(allCols[oi].col_name, "valid_from") == 0) {
+                snprintf(fields[oi], 256, "%s", now_str);
+            } else if (strcasecmp(allCols[oi].col_name, "valid_to") == 0) {
+                snprintf(fields[oi], 256, "%s", "9999-12-31 23:59:59");
             }
         }
     }

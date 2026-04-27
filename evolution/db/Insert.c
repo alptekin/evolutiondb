@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <time.h>
 #include "database.h"
 #include "expression.h"
 #include "catalog_internal.h"
@@ -525,6 +526,12 @@ static int validate_types(const char *tblName, char **vals, int numValues)
                 if (!tmpCols[ac].is_dropped) active++;
             }
             if (active > 0 && active < numTypes) activeTypes = active;
+            /* Task 208: on system-versioned tables the engine auto-fills
+             * valid_from / valid_to when the user omits them, so the
+             * caller's value count is allowed to be short by exactly 2. */
+            if (tmpTd.system_versioned && numValues + 2 == activeTypes) {
+                activeTypes = numValues;
+            }
         }
     }
     if (numValues != activeTypes) {
@@ -1075,6 +1082,42 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
                     vals_ptrs[i] = "\x01NULL\x01";
                     is_null[i] = 1;
                 }
+            }
+        }
+    }
+
+    /* Task 208 — auto-fill valid_from / valid_to on a system-versioned
+     * table when the user hasn't supplied them. valid_from = NOW(),
+     * valid_to = '9999-12-31 23:59:59'. Two cases:
+     *   1) User supplied a short row (e.g. INSERT INTO t VALUES(1, 'x'))
+     *      — pad the missing trailing slots and auto-fill.
+     *   2) User explicitly passed NULL — auto-fill that slot too. */
+    static __thread char ck_now_buf[32];
+    static const char ck_far_future[] = "9999-12-31 23:59:59";
+    if (td->system_versioned) {
+        time_t now = time(NULL);
+        struct tm tm;
+#ifdef _WIN32
+        gmtime_s(&tm, &now);
+#else
+        gmtime_r(&now, &tm);
+#endif
+        strftime(ck_now_buf, sizeof(ck_now_buf), "%Y-%m-%d %H:%M:%S", &tm);
+
+        /* Pad missing trailing slots so iteration covers every column. */
+        for (int i = nv; i < ncols && i < CAT_MAX_COLUMNS; i++) {
+            vals_ptrs[i] = "\x01NULL\x01";
+            is_null[i]   = 1;
+        }
+        if (ncols > nv) nv = ncols;
+
+        for (int i = 0; i < ncols && i < CAT_MAX_COLUMNS; i++) {
+            if (strcasecmp(cols[i].col_name, "valid_from") == 0 && is_null[i]) {
+                vals_ptrs[i] = ck_now_buf;
+                is_null[i]   = 0;
+            } else if (strcasecmp(cols[i].col_name, "valid_to") == 0 && is_null[i]) {
+                vals_ptrs[i] = ck_far_future;
+                is_null[i]   = 0;
             }
         }
     }
