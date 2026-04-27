@@ -449,7 +449,9 @@
      ACK = 665,
      UPTO = 666,
      TTL = 667,
-     TTL_COLUMN = 668
+     TTL_COLUMN = 668,
+     FTOKEN_LENGTH = 669,
+     FPG_CALL_EXTERNAL = 670
    };
 #endif
 /* Tokens.  */
@@ -864,6 +866,8 @@
 #define UPTO 666
 #define TTL 667
 #define TTL_COLUMN 668
+#define FTOKEN_LENGTH 669
+#define FPG_CALL_EXTERNAL 670
 
 
 
@@ -879,7 +883,7 @@ typedef union YYSTYPE
 	struct ExprNode *exprval;
 }
 /* Line 1529 of yacc.c.  */
-#line 883 "parser/evoparser.tab.h"
+#line 887 "parser/evoparser.tab.h"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

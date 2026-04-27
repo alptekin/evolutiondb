@@ -1922,6 +1922,57 @@ int expr_evaluate(const ExprNode *e,
         return 1;
     }
 
+    /* Task 214 — token_length(s): coarse whitespace-split count. The
+     * agent-summarization template uses this as a stand-in for an LLM
+     * tokenizer; close enough to drive a "summarize after N tokens"
+     * threshold without round-tripping through Python. */
+    if (e->type == EXPR_TOKEN_LENGTH) {
+        char str_buf[8192];
+        int ok = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                          num_cols, str_buf, sizeof(str_buf)) : 0;
+        if (!ok || strcmp(str_buf, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        int count = 0;
+        int in_token = 0;
+        for (const char *p = str_buf; *p; p++) {
+            if (isspace((unsigned char)*p)) {
+                in_token = 0;
+            } else if (!in_token) {
+                in_token = 1;
+                count++;
+            }
+        }
+        snprintf(out_buf, buf_size, "%d", count);
+        return 1;
+    }
+
+    /* Task 214 — evo_call_external(name, payload). v1 is a stub: it
+     * returns a deterministic placeholder so the agent-summarization
+     * template can plug in a "summarize this" call without depending
+     * on a live LLM endpoint. The format is "ext:<name>:<payload>",
+     * truncated to fit the output buffer. v2 will replace the body
+     * with a real HTTP / RPC dispatcher. */
+    if (e->type == EXPR_PG_CALL_EXTERNAL) {
+        char name_buf[128];
+        char arg_buf[4096];
+        int ok_n = e->left ? expr_evaluate(e->left, col_names, col_values,
+                                            num_cols, name_buf,
+                                            sizeof(name_buf)) : 0;
+        int ok_a = e->right ? expr_evaluate(e->right, col_names, col_values,
+                                             num_cols, arg_buf,
+                                             sizeof(arg_buf)) : 0;
+        if (!ok_n || strcmp(name_buf, NULL_MARKER) == 0) {
+            strncpy(out_buf, NULL_MARKER, buf_size);
+            return 1;
+        }
+        if (!ok_a) arg_buf[0] = '\0';
+        if (strcmp(arg_buf, NULL_MARKER) == 0) arg_buf[0] = '\0';
+        snprintf(out_buf, buf_size, "ext:%s:%s", name_buf, arg_buf);
+        return 1;
+    }
+
     if (e->type == EXPR_CONCAT) {
         char buf_a[512], buf_b[512];
         int ok_a = e->left ? expr_evaluate(e->left, col_names, col_values, num_cols, buf_a, sizeof(buf_a)) : 0;
@@ -3477,6 +3528,12 @@ static int expr_serialize_r(const ExprNode *e, char *buf, int pos, int bufSize)
                           return ser_append(buf, pos, bufSize, "LWR");
     case EXPR_LENGTH:     pos = expr_serialize_r(e->left, buf, pos, bufSize);
                           return ser_append(buf, pos, bufSize, "LEN");
+    case EXPR_TOKEN_LENGTH: pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "TOK");
+    case EXPR_PG_CALL_EXTERNAL:
+                          pos = expr_serialize_r(e->left, buf, pos, bufSize);
+                          pos = expr_serialize_r(e->right, buf, pos, bufSize);
+                          return ser_append(buf, pos, bufSize, "EXT");
     /* Binary functions */
     case EXPR_CONCAT:     pos = expr_serialize_r(e->left, buf, pos, bufSize);
                           pos = expr_serialize_r(e->right, buf, pos, bufSize);
@@ -3552,7 +3609,8 @@ ExprNode *expr_deserialize(const char *buf)
         else if ((strcmp(tok, "NOT") == 0 || strcmp(tok, "NEG") == 0 ||
                   strcmp(tok, "ISNULL") == 0 || strcmp(tok, "ISNN") == 0 ||
                   strcmp(tok, "UPR") == 0 || strcmp(tok, "LWR") == 0 ||
-                  strcmp(tok, "LEN") == 0) && sp >= 1) {
+                  strcmp(tok, "LEN") == 0 ||
+                  strcmp(tok, "TOK") == 0) && sp >= 1) {
             ExprNode *operand = stack[--sp];
             ExprNode *node = NULL;
             if      (strcmp(tok, "NOT") == 0)    node = expr_make_not(operand);
@@ -3562,6 +3620,7 @@ ExprNode *expr_deserialize(const char *buf)
             else if (strcmp(tok, "UPR") == 0)    node = expr_make_upper(operand);
             else if (strcmp(tok, "LWR") == 0)    node = expr_make_lower(operand);
             else if (strcmp(tok, "LEN") == 0)    node = expr_make_length(operand);
+            else if (strcmp(tok, "TOK") == 0)    node = expr_make_func1(EXPR_TOKEN_LENGTH, operand, "token_length");
             if (node && sp < 64) stack[sp++] = node;
         }
         /* Binary operators — pop two operands */
@@ -3587,6 +3646,7 @@ ExprNode *expr_deserialize(const char *buf)
             else if (strcmp(tok, "LIKE") == 0)  node = expr_make_like(left, right);
             else if (strcmp(tok, "NLIKE") == 0) node = expr_make_not_like(left, right);
             else if (strcmp(tok, "CAT") == 0)   node = expr_make_concat(left, right);
+            else if (strcmp(tok, "EXT") == 0)   node = expr_make_func2(EXPR_PG_CALL_EXTERNAL, left, right, "evo_call_external");
             else if (strcmp(tok, "COA") == 0)   node = expr_make_coalesce(left, right);
             else if (strcmp(tok, "JA") == 0)    node = expr_make_json_arrow(left, right);
             else if (strcmp(tok, "JAT") == 0)   node = expr_make_json_arrow_text(left, right);
