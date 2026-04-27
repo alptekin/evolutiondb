@@ -257,6 +257,39 @@ typedef struct {
 } CheckpointStoreDesc;
 
 /* ----------------------------------------------------------------
+ *  Memory Store (Task 205 — Feature #205)
+ *
+ *  Long-term, namespace-keyed agent memory with optional embedded
+ *  vectors. A memory store is a named registry entry that owns a
+ *  backing table mem_<name>:
+ *
+ *    namespace      VARCHAR(255) NOT NULL
+ *    mem_key        VARCHAR(255) NOT NULL
+ *    value          JSON
+ *    embedding      VECTOR(N) NULL          -- N from embedding_dim, 0 = no vector
+ *    created_at     TIMESTAMP
+ *    ttl_at         TIMESTAMP NULL
+ *
+ *  Uniqueness: (namespace || \x1F || mem_key) is encoded into a single
+ *  VARCHAR primary key so the existing single-column PK machinery
+ *  applies. Hierarchical namespace lookups walk a prefix range under
+ *  the same PK. The composite key is constructed by Memory.c at PUT /
+ *  GET / DELETE time.
+ *
+ *  distance_kind matches HNSW_DIST_* selector (cosine / L2 / inner / L1). */
+#define MEMORY_DIST_COSINE  0
+#define MEMORY_DIST_L2      1
+#define MEMORY_DIST_INNER   2
+#define MEMORY_DIST_L1      3
+
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];
+    uint32_t backing_table_id;
+    int      embedding_dim;        /* 0 = no embedding column declared */
+    int      distance_kind;        /* MEMORY_DIST_* */
+} MemoryStoreDesc;
+
+/* ----------------------------------------------------------------
  *  Lifecycle
  * ---------------------------------------------------------------- */
 
@@ -444,6 +477,15 @@ int cat_create_checkpoint_store(const CheckpointStoreDesc *desc);
 int cat_find_checkpoint_store(const char *name, CheckpointStoreDesc *out);
 int cat_drop_checkpoint_store(const char *name);
 int cat_list_checkpoint_stores(CheckpointStoreDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Memory store catalog API (Task 205 — Feature #205)
+ *
+ *  Keys in CAT_SYS_MEMORY_STORES are the lowercased store name. */
+int cat_create_memory_store(const MemoryStoreDesc *desc);
+int cat_find_memory_store(const char *name, MemoryStoreDesc *out);
+int cat_drop_memory_store(const char *name);
+int cat_list_memory_stores(MemoryStoreDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)
