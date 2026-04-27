@@ -63,6 +63,7 @@ SRCS = main.c \
        db/MessageLog.c \
        db/Document.c \
        db/mongo_filter.c \
+       db/Graph.c \
        db/dml_profile.c
 
 OBJS = $(SRCS:.c=.o)
