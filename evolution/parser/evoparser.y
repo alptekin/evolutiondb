@@ -14,6 +14,7 @@
 	#include "../db/Subscription.h"
 	#include "../db/Schedule.h"
 	#include "../db/MessageLog.h"
+	#include "../db/Document.h"
 
 	void yyerror(void *scanner, const char *s, ...);
 	void emit(const char *s, ...);
@@ -463,6 +464,9 @@
 
 /* Append-only message log (Task 222 — Feature #222) */
 %token MESSAGE APPEND READ LAST SESSION
+
+/* Document store + Mongo-style filter DSL (Task 223 — Feature #223) */
+%token DOCUMENT WRITE FILTER
 
 %type <intval> select_opts
 %type <intval> select_stmt
@@ -2701,6 +2705,154 @@ message_dml_stmt:
         SetMessageLogSession($11);
         LogCountProcess();
         free($7); free($11);
+    }
+;
+
+/* ── Document store with Mongo-style filter DSL (Task 223 — Feature #223) ──
+ *   CREATE DOCUMENT STORE name [WITH (embedding_dim = N, distance = 'cosine')]
+ *   DROP   DOCUMENT STORE name [IF EXISTS]
+ *   DOCUMENT WRITE  INTO name VALUES ('id','content','meta' [, '[v1,v2,...]'])
+ *   DOCUMENT FILTER FROM name WHERE '<json filter>' [LIMIT N]
+ *   DOCUMENT SEARCH name USING VECTOR '[v1,v2,...]'
+ *                                    [WHERE '<json filter>'] LIMIT N
+ *   DOCUMENT DELETE FROM name WHERE '<json filter>'
+ *
+ * Filter strings ride in as STRING literals — the lexer already
+ * handles quoted JSON; mongo_filter_parse converts them into
+ * ExprNode trees inside Document.c. */
+stmt: create_doc_store_stmt   { emit("STMT"); }
+    | drop_doc_store_stmt     { emit("STMT"); }
+    | doc_dml_stmt            { emit("STMT"); }
+;
+
+create_doc_store_stmt:
+  CREATE DOCUMENT STORE NAME doc_reset opt_doc_with
+    {
+        emit("CREATE DOCUMENT STORE %s", $4);
+        SetDocumentStoreName($4);
+        CreateDocumentStoreProcess(0);
+        free($4);
+    }
+| CREATE DOCUMENT STORE IF EXISTS NAME doc_reset opt_doc_with
+    {
+        emit("CREATE DOCUMENT STORE IF NOT EXISTS %s", $6);
+        SetDocumentStoreName($6);
+        CreateDocumentStoreProcess(1);
+        free($6);
+    }
+;
+
+doc_reset: /* mid-rule: clear staging before WITH list parses */
+    { ResetDocumentOpts(); }
+;
+
+opt_doc_with: /* nil */
+| WITH '(' doc_with_list ')'
+;
+
+doc_with_list:
+  doc_with_item
+| doc_with_list ',' doc_with_item
+;
+
+doc_with_item:
+  EMBEDDING_DIM COMPARISON INTNUM
+        { SetDocumentEmbeddingDim($3); }
+| DISTANCE COMPARISON STRING
+        { SetDocumentDistance($3); free($3); }
+;
+
+drop_doc_store_stmt:
+  DROP DOCUMENT STORE NAME
+    {
+        emit("DROP DOCUMENT STORE %s", $4);
+        ResetDocumentOpts();
+        SetDocumentStoreName($4);
+        DropDocumentStoreProcess(0);
+        free($4);
+    }
+| DROP DOCUMENT STORE IF EXISTS NAME
+    {
+        emit("DROP DOCUMENT STORE IF EXISTS %s", $6);
+        ResetDocumentOpts();
+        SetDocumentStoreName($6);
+        DropDocumentStoreProcess(1);
+        free($6);
+    }
+;
+
+doc_dml_stmt:
+  DOCUMENT WRITE INTO NAME VALUES '(' STRING ',' STRING ',' STRING ')'
+    {
+        emit("DOCUMENT WRITE INTO %s", $4);
+        ResetDocumentOpts();
+        SetDocumentStoreName($4);
+        SetDocumentId($7);
+        SetDocumentContent($9);
+        SetDocumentMeta($11);
+        DocumentWriteProcess();
+        free($4); free($7); free($9); free($11);
+    }
+| DOCUMENT WRITE INTO NAME VALUES '(' STRING ',' STRING ',' STRING ',' STRING ')'
+    {
+        emit("DOCUMENT WRITE INTO %s WITH embedding", $4);
+        ResetDocumentOpts();
+        SetDocumentStoreName($4);
+        SetDocumentId($7);
+        SetDocumentContent($9);
+        SetDocumentMeta($11);
+        SetDocumentEmbedding($13);
+        DocumentWriteProcess();
+        free($4); free($7); free($9); free($11); free($13);
+    }
+| DOCUMENT FILTER FROM NAME WHERE STRING
+    {
+        emit("DOCUMENT FILTER FROM %s WHERE json", $4);
+        ResetDocumentOpts();
+        SetDocumentStoreName($4);
+        SetDocumentFilterJson($6);
+        DocumentFilterProcess();
+        free($4); free($6);
+    }
+| DOCUMENT FILTER FROM NAME WHERE STRING LIMIT INTNUM
+    {
+        emit("DOCUMENT FILTER FROM %s WHERE json LIMIT %d", $4, $8);
+        ResetDocumentOpts();
+        SetDocumentStoreName($4);
+        SetDocumentFilterJson($6);
+        SetDocumentLimit($8);
+        DocumentFilterProcess();
+        free($4); free($6);
+    }
+| DOCUMENT SEARCH NAME USING VECTOR STRING LIMIT INTNUM
+    {
+        emit("DOCUMENT SEARCH %s LIMIT %d", $3, $8);
+        ResetDocumentOpts();
+        SetDocumentStoreName($3);
+        SetDocumentQuery($6);
+        SetDocumentLimit($8);
+        DocumentSearchProcess();
+        free($3); free($6);
+    }
+| DOCUMENT SEARCH NAME USING VECTOR STRING WHERE STRING LIMIT INTNUM
+    {
+        emit("DOCUMENT SEARCH %s WHERE json LIMIT %d", $3, $10);
+        ResetDocumentOpts();
+        SetDocumentStoreName($3);
+        SetDocumentQuery($6);
+        SetDocumentFilterJson($8);
+        SetDocumentLimit($10);
+        DocumentSearchProcess();
+        free($3); free($6); free($8);
+    }
+| DOCUMENT DELETE FROM NAME WHERE STRING
+    {
+        emit("DOCUMENT DELETE FROM %s WHERE json", $4);
+        ResetDocumentOpts();
+        SetDocumentStoreName($4);
+        SetDocumentFilterJson($6);
+        DocumentDeleteProcess();
+        free($4); free($6);
     }
 ;
 

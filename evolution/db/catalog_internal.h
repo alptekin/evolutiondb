@@ -339,6 +339,22 @@ typedef struct {
 } MessageLogDesc;
 
 /* ----------------------------------------------------------------
+ *  Task 223 — Document store with Mongo-style filter DSL
+ *
+ *  CAT_SYS_DOCUMENT_STORES holds one row per CREATE DOCUMENT STORE.
+ *  The backing table doc_<name> stores rows as
+ *    (id VARCHAR(255) PK, content TEXT, meta VARCHAR(8000) JSON,
+ *     embedding VECTOR(N) NULL, created_at TIMESTAMP)
+ *  embedding_dim == 0 means "no embedding column" — pure JSON KV.
+ *  distance_kind reuses the MEMORY_DIST_* constants for SEARCH. */
+typedef struct {
+    char     name[CAT_MAX_NAME_LEN];
+    uint32_t backing_table_id;
+    int      embedding_dim;
+    int      distance_kind;        /* MEMORY_DIST_* */
+} DocumentStoreDesc;
+
+/* ----------------------------------------------------------------
  *  Task 215 — Scheduled jobs (cron)
  *
  *  CAT_SYS_SCHEDULED_JOBS holds one row per CREATE JOB. The scheduler
@@ -597,6 +613,13 @@ int cat_create_message_log(const MessageLogDesc *desc);
 int cat_find_message_log(const char *name, MessageLogDesc *out);
 int cat_drop_message_log(const char *name);
 int cat_list_message_logs(MessageLogDesc *out, int max);
+
+/* ----------------------------------------------------------------
+ *  Document store catalog API (Task 223 — Feature #223) */
+int cat_create_document_store(const DocumentStoreDesc *desc);
+int cat_find_document_store(const char *name, DocumentStoreDesc *out);
+int cat_drop_document_store(const char *name);
+int cat_list_document_stores(DocumentStoreDesc *out, int max);
 
 /* ----------------------------------------------------------------
  *  Table statistics (ANALYZE TABLE)
