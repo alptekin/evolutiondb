@@ -1,0 +1,53 @@
+name: Bench (agent-memory)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly Monday 03:00 UTC — keeps numbers fresh without bombing the
+    # CI queue. Manually triggerable from the Actions tab when a PR
+    # touches engine hot paths.
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      evosql:
+        image: evolutiondb/evolutiondb:latest
+        ports:
+          - 9967:9967
+          - 5433:5433
+        options: >-
+          --health-cmd "echo > /dev/tcp/127.0.0.1/9967"
+          --health-interval 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build libevosql-memory
+        working-directory: client/libevosql-memory
+        run: make all
+
+      - name: Wait for evosql server
+        run: |
+          for i in $(seq 1 30); do
+            python3 -c 'import socket; s=socket.socket(); s.settimeout(1); s.connect(("127.0.0.1", 9967))' \
+              2>/dev/null && exit 0
+            sleep 1
+          done
+          echo "evosql server never came up"; exit 1
+
+      - name: Run bench harness
+        run: python3 bench/run_all.py
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-memory-bench-v1
+          path: docs/benchmarks/v1.md
