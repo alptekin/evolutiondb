@@ -21,6 +21,9 @@ jobs:
         ports:
           - 9967:9967
           - 5433:5433
+        env:
+          EVOSQL_USER_NAME: admin
+          EVOSQL_PASSWORD: admin
         # No --health-cmd: the bundled image ships a sh-only userland
         # so /dev/tcp/... bash builtins aren't available. The job has
         # an explicit `Wait for evosql server` step below that uses
