@@ -3859,7 +3859,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 101 — Sprint 8: Benchmarks & Positioning
 
-### Task 219: ⬜ Agent-Memory Benchmark Harness (Feature #219)
+### Task 219: ✅ Agent-Memory Benchmark Harness (Feature #219)
 
 **Goal:** LongMemEval accuracy + p50/p99 latency vs Zep, Mem0, langgraph-store-mongodb, (optional) Pinecone.
 
