@@ -3916,6 +3916,25 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
+### Task 226: ✅ Multi-Language SDK Bindings — Rust / Go / C++ / .NET / Node.js (Feature #226)
+
+**Goal:** Take the C SDK shipped in Tasks 216-217 and add language-native wrappers so non-Python stacks can consume EvolutionDB drop-in.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | **Rust** crate — `Cargo.toml`, `build.rs` discovers `libevosql-memory.a`, `src/lib.rs` exposes a `Connection` with typed `Error` enum and `format_vector` helper. `!Send` via `PhantomData<*const ()>`. | `client/rust-evosql-memory/` (new) |
+| 2 | **Go** module — `go.mod`, `evosql.go` with cgo `${SRCDIR}` directives, idiomatic `*Conn` with finalizer, typed `*Error` returns. | `client/go-evosql-memory/` (new) |
+| 3 | **C++** header-only RAII wrapper — `include/evosql_memory.hpp`, `evosql::Connection` move-constructible, `evosql::Error` exception hierarchy with `NotFound` subclass. | `client/cpp-evosql-memory/` (new) |
+| 4 | **.NET** P/Invoke class library — `EvoSQLMemory.csproj` (net8.0), `Native.cs` DllImport surface, `Connection : IDisposable`, `EvoException` + `EvoNotFoundException`. | `client/dotnet-evosql-memory/` (new) |
+| 5 | **Node.js** ffi-napi binding — `package.json` (Node 18+), `lib/index.js` with `Connection` class auto-discovering the shared library, `EvoError` + `EvoNotFoundError`. | `client/node-evosql-memory/` (new) |
+| 6 | Smoke example per language — drop store / create store / put / get / drop. | `client/*/examples/` |
+| 7 | Per-language README — build, usage, threading, error model. | `client/*/README.md` |
+| 8 | Top-level `client/README.md` — diagram + table mapping language to directory + status, "adding a new language" runbook. | `client/README.md` (new) |
+| 9 | C++ smoke build verified end-to-end against the running server (alice → `{"role":"pm","team":"infra"}`). | manual |
+| 10 | tasks.md entry + commit + PR. | `tasks.md` |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
