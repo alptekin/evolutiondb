@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>EvoSQLMemory</AssemblyName>
+    <RootNamespace>EvoSQLMemory</RootNamespace>
+    <Version>1.0.0</Version>
+    <Authors>EvolutionDB</Authors>
+    <Description>EvoSQL agent-memory client (.NET P/Invoke binding over libevosql-memory).</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/alptekin/evolutiondb</RepositoryUrl>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+</Project>
