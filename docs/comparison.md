@@ -81,6 +81,23 @@ We agree, which is why
 is a drop-in for `from mem0 import Memory`. The argument is the same
 backend, lower TCO, and you keep your existing Mem0-shaped code.
 
+## Apples-to-apples latency
+
+Cross-vendor `memory_put` / `memory_get` numbers are produced by
+[`bench/vendors/run_all.py`](../bench/vendors/README.md) and roll up
+into [docs/benchmarks/v2-vendors.md](benchmarks/v2-vendors.md). The
+same iteration count + key shape + value payload runs through every
+backend whose driver and dependent service are available; missing
+backends are skipped with a one-line note in the report so it's
+obvious why a row is empty.
+
+```bash
+docker compose up -d                              # EvoSQL
+docker compose -f docker-compose.bench.yml up -d  # mongo + weaviate
+pip install pymongo weaviate-client
+python3 bench/vendors/run_all.py --iters 200
+```
+
 ## Open question
 
 Where should this go next? Pull requests welcome on
