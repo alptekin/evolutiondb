@@ -51,8 +51,10 @@ tmpclaude-*
 *~
 *.pyc
 __pycache__/
-tests/
+tests/*
 !client/libevosql-memory/tests/
+!tests/framework_compat/
+!tests/framework_compat/**
 wiki/
 *.claude
 wal.*

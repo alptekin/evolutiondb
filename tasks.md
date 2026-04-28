@@ -3878,7 +3878,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 220: ⬜ Multi-Framework Compatibility Suite (Feature #220)
+### Task 220: ✅ Multi-Framework Compatibility Suite (Feature #220)
 
 **Goal:** Run each framework's official/in-house conformance suite against EvoSQL — prove "works with X" via passing tests.
 

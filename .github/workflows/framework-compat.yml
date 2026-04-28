@@ -1,0 +1,74 @@
+name: Framework Compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      evosql:
+        image: evolutiondb/evolutiondb:latest
+        ports:
+          - 9967:9967
+          - 5433:5433
+        env:
+          # Pin admin/admin so the test harness can connect; without
+          # this the image generates a random password at startup.
+          EVOSQL_USER_NAME: admin
+          EVOSQL_PASSWORD: admin
+        # No --health-cmd: the bundled image ships a sh-only userland
+        # so /dev/tcp/... bash builtins aren't available. Instead the
+        # job has an explicit `Wait for evosql server` step below that
+        # uses python3 from the runner image.
+
+    strategy:
+      fail-fast: false
+      matrix:
+        framework:
+          - name: langgraph
+            path: tests/framework_compat/langgraph/test_lg_compat.py
+          - name: langchain
+            path: tests/framework_compat/langchain/test_lc_compat.py
+          - name: llamaindex
+            path: tests/framework_compat/llamaindex/test_li_compat.py
+          - name: crewai
+            path: tests/framework_compat/crewai/test_crew_compat.py
+          - name: autogen
+            path: tests/framework_compat/autogen/test_ag_compat.py
+          - name: mem0
+            path: tests/framework_compat/mem0_compat/test_m0_compat.py
+          - name: stress
+            path: tests/framework_compat/stress/test_concurrency.py
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build libevosql-memory
+        working-directory: client/libevosql-memory
+        run: make all
+
+      - name: Wait for evosql server
+        run: |
+          for i in $(seq 1 30); do
+            python3 -c 'import socket; s=socket.socket(); s.settimeout(1); s.connect(("127.0.0.1", 9967))' \
+              2>/dev/null && exit 0
+            sleep 1
+          done
+          echo "evosql server never came up"; exit 1
+
+      - name: Run ${{ matrix.framework.name }} compat
+        env:
+          FCOMPAT_TRACEBACK: "1"
+          FCOMPAT_STRESS_WORKERS: "8"
+          FCOMPAT_STRESS_OPS: "20"
+        run: python3 ${{ matrix.framework.path }}
