@@ -1,0 +1,3 @@
+# anthropic — only needed when ANTHROPIC_API_KEY is set; pinned to a
+# version whose Messages API surface matches what agent.py uses.
+anthropic>=0.40,<1.0

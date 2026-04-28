@@ -1,0 +1,49 @@
+# docker-compose.demo.yml — single-shot Claude-backed agent demo.
+#
+# Brings up the EvolutionDB server, the demo agent container, and
+# runs the full end-to-end memory test suite. With ANTHROPIC_API_KEY
+# set, the agent calls Claude Sonnet 4 for real; without, the
+# bundled deterministic StubLLM drives the same scenario.
+#
+# Single-command run:
+#   docker compose -f docker-compose.demo.yml up --build --abort-on-container-exit
+#
+# The exit code of the `agent` container becomes the compose run's
+# exit code, so this is also a CI-friendly "did the agent demo
+# break" check.
+services:
+  evosql:
+    # Build evosql from the repo so the demo always tracks the current
+    # code (and works natively on whatever architecture the host runs
+    # — the published image is x86_64-only). Removes the need for a
+    # separate `docker compose pull` step too.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      EVOSQL_USER_NAME: admin
+      EVOSQL_PASSWORD: admin
+    expose:
+      - "9967"
+      - "5433"
+    # Optional: surface the ports on the host so an analyst can
+    # connect with DBeaver while the agent is running.
+    ports:
+      - "9967:9967"
+      - "5433:5433"
+
+  agent:
+    build:
+      context: .
+      dockerfile: examples/full_agent_demo/Dockerfile
+    environment:
+      EVOSQL_HOST: evosql
+      EVOSQL_PORT: 9967
+      EVOSQL_USER: admin
+      EVOSQL_PASSWORD: admin
+      # Pass through ANTHROPIC_API_KEY from the host shell. When
+      # unset the agent falls back to the deterministic StubLLM.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL:   ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+    depends_on:
+      - evosql
