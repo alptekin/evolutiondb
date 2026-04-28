@@ -58,10 +58,13 @@ class EvoCrewMemory:
 
     # ----- Long-term -----------------------------------------------
     def ltm_save(self, task_signature: str, summary: Dict[str, Any]) -> None:
-        # Use task_signature as both thread_id and checkpoint_id so the
-        # latest summary per task is trivially queryable.
+        # task_signature is the thread_id; the checkpoint_id is unique
+        # per save so re-saving the same task signature appends to the
+        # history rather than colliding on the PK. ltm_recall returns
+        # the latest by created_at.
+        import uuid
         self._conn.checkpoint_put(self._ltm, task_signature, "",
-                                    task_signature,
+                                    f"{task_signature}__{uuid.uuid4().hex[:8]}",
                                     json.dumps(summary), "{}")
 
     def ltm_recall(self, task_signature: str) -> Optional[Dict[str, Any]]:
