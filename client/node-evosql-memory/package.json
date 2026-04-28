@@ -1,0 +1,29 @@
+{
+  "name": "evosql-memory",
+  "version": "1.0.0",
+  "description": "EvoSQL agent-memory client (Node.js binding over libevosql-memory).",
+  "main": "lib/index.js",
+  "scripts": {
+    "example": "node examples/put_get.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ffi-napi": "^4.0.3",
+    "ref-napi": "^3.0.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alptekin/evolutiondb"
+  },
+  "keywords": [
+    "evosql",
+    "evolutiondb",
+    "agent-memory",
+    "langgraph",
+    "vector",
+    "checkpoint"
+  ]
+}
