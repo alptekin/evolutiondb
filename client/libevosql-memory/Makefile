@@ -28,13 +28,17 @@ else
 endif
 
 BUILD_DIR = build
-SRC      = src/conn.c
-OBJ      = $(BUILD_DIR)/conn.o
+SRC      = src/conn.c src/subscribe.c
+OBJ      = $(BUILD_DIR)/conn.o $(BUILD_DIR)/subscribe.o
 SHARED   = $(BUILD_DIR)/libevosql-memory.$(SHARED_EXT)
 STATIC   = $(BUILD_DIR)/libevosql-memory.a
 
-TEST_BIN = $(BUILD_DIR)/test_sdk
-TEST_SRC = tests/test_sdk.c
+TEST_BIN          = $(BUILD_DIR)/test_sdk
+TEST_SRC          = tests/test_sdk.c
+TEST_SUB_BIN      = $(BUILD_DIR)/test_subscribe
+TEST_SUB_SRC      = tests/test_subscribe.c
+
+LDLIBS = -lpthread
 
 PKGCONFIG = $(BUILD_DIR)/evosql-memory.pc
 
@@ -45,11 +49,14 @@ all: $(SHARED) $(STATIC) $(PKGCONFIG)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(OBJ): $(SRC) include/evosql_memory.h | $(BUILD_DIR)
+$(BUILD_DIR)/conn.o: src/conn.c include/evosql_memory.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(BUILD_DIR)/subscribe.o: src/subscribe.c include/evosql_memory.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(SHARED): $(OBJ)
-	$(CC) $(SHARED_FLAGS) -o $@ $^
+	$(CC) $(SHARED_FLAGS) -o $@ $^ $(LDLIBS)
 
 $(STATIC): $(OBJ)
 	ar rcs $@ $^
@@ -67,11 +74,16 @@ $(PKGCONFIG): | $(BUILD_DIR)
 	@echo "Cflags: -I\$${includedir}" >> $@
 
 $(TEST_BIN): $(TEST_SRC) $(STATIC)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(TEST_SRC) $(STATIC)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(TEST_SRC) $(STATIC) $(LDLIBS)
 
-test: $(TEST_BIN)
-	@echo "==> Running libevosql-memory test suite (server must be on 127.0.0.1:9967)"
+$(TEST_SUB_BIN): $(TEST_SUB_SRC) $(STATIC)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(TEST_SUB_SRC) $(STATIC) $(LDLIBS)
+
+test: $(TEST_BIN) $(TEST_SUB_BIN)
+	@echo "==> Running libevosql-memory core suite (server must be on 127.0.0.1:9967)"
 	@$(TEST_BIN)
+	@echo "==> Running libevosql-memory streaming suite"
+	@$(TEST_SUB_BIN)
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/include
