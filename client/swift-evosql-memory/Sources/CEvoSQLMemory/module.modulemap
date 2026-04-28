@@ -1,0 +1,12 @@
+// SwiftPM system module for libevosql-memory.
+//
+// SwiftPM uses this map to expose the C header to the Swift target.
+// The `header` line points at our checked-in shim; the shim
+// `#include`s the real header from the C SDK source tree so the
+// path resolves whether the user installed the SDK system-wide or
+// built it in place.
+module CEvoSQLMemory {
+    header "shim.h"
+    link "evosql-memory"
+    export *
+}

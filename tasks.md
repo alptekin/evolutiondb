@@ -3935,6 +3935,22 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
+### Task 227: ✅ Multi-Language SDK Bindings — Java / Ruby / Swift (Feature #227)
+
+**Goal:** Extend the Task 226 multi-language story to three more dil ecosystem'leri so kurumsal Java backend'leri, Ruby on Rails uygulamalari, and iOS/macOS Swift apps can consume EvolutionDB drop-in.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | **Java** binding — Maven layout, JNA (`jna 5.14`), `Connection : AutoCloseable`, `EvoException` + `NotFoundException`, smoke `PutGet` main. | `client/java-evosql-memory/` (new) |
+| 2 | **Ruby** binding — gemspec + Gemfile, `ffi` gem 1.17, `EvoSQLMemory::Connection.open` with block-form auto-close, `EvoSQLMemory::Error` + `NotFound`. | `client/ruby-evosql-memory/` (new) |
+| 3 | **Swift** binding — SwiftPM package, system module + Swift module split (`CEvoSQLMemory` modulemap → `EvoSQLMemory` Swift target), `Connection` class with `deinit`-driven close, `EvoError` / `EvoNotFound` structs. | `client/swift-evosql-memory/` (new) |
+| 4 | Per-language smoke example — drop store / create / put / get / drop. | `client/*/examples/`, `client/*/Sources/PutGetExample/` |
+| 5 | Per-language README — build, usage, threading, error model. | `client/*/README.md` |
+| 6 | `client/README.md` — diagram updated to show 9 languages, status table extended with Java / Ruby / Swift rows. | `client/README.md` |
+| 7 | tasks.md entry + commit + PR. | `tasks.md` |
+
+---
+
 ### Task 228: ✅ Full Claude-backed Agent Demo (single-command Docker, end-to-end tested) (Feature #228)
 
 **Goal:** Tek komutla ayağa kalkan, gerçek Claude'a bağlanabilen, deterministik stub fallback'i olan, beş turlu uzun-vadeli-hafıza senaryosu üstünden assertion'ları olan kapsamlı bir agent demosu. Bu task Sprint 7-8'de yazdığımız tüm parçaların (C SDK, Python ctypes, framework adapter'ları, MEMORY/MESSAGE LOG/ENTITY/CHECKPOINT STORE DDL'leri) çalışan bir agent içinde birleştiğini ispatlıyor.
