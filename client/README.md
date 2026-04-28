@@ -14,9 +14,9 @@ Every client speaks to the server through one common foundation:
               │   libevosql-memory  (C, the FFI seam)        │
               │   Connection + Subscription + agent-memory   │
               └──────────────────────────────────────────────┘
-                  ▲      ▲      ▲      ▲      ▲      ▲
-                  │      │      │      │      │      │
-            Python  Rust   Go    C++   .NET    Node
+                  ▲     ▲     ▲     ▲     ▲     ▲     ▲     ▲     ▲
+                  │     │     │     │     │     │     │     │     │
+            Python Rust  Go   C++  .NET  Node  Java  Ruby Swift
 ```
 
 `libevosql-memory` is the canonical client. Every higher-level
@@ -35,6 +35,9 @@ re-implementing the wire protocol.
 | C++         | [`cpp-evosql-memory/`](cpp-evosql-memory/)       | shipped — Task 226 | header-only RAII, C++17 |
 | .NET        | [`dotnet-evosql-memory/`](dotnet-evosql-memory/) | shipped — Task 226 | net8.0, P/Invoke |
 | Node.js     | [`node-evosql-memory/`](node-evosql-memory/)     | shipped — Task 226 | ffi-napi, Node 18+ |
+| Java        | [`java-evosql-memory/`](java-evosql-memory/)     | shipped — Task 227 | JNA, Maven, Java 17+ |
+| Ruby        | [`ruby-evosql-memory/`](ruby-evosql-memory/)     | shipped — Task 227 | `ffi` gem, Ruby 2.7+ |
+| Swift       | [`swift-evosql-memory/`](swift-evosql-memory/)   | shipped — Task 227 | SwiftPM, native C interop, Swift 5.7+ |
 
 ## Build the C SDK once
 
