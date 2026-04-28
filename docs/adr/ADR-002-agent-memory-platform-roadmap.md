@@ -1,7 +1,9 @@
 # ADR-002: Agent Memory Platform Roadmap (Task 200-225)
 
 ## Durum
-Onerilen
+Kabul Edildi → Uygulandi (Tasks 200-225, 2026-04-28)
+
+> Roadmap'i 2026-04-24'te onerildi ve onaylandi; v3.0.0 release'i ile tamamlandi. Asagidaki "Sonuc" bolumu hangi taahhutlerin tutuldugunu, hangilerinin v2'ye kaydirildigini belgeliyor.
 
 ## Baglam
 
@@ -168,6 +170,54 @@ Release: v3.0.0 (major: urun repositioning).
 - **CDC streaming server bakim yuku**: TCP accept loop + per-client WAL decoder + JSON encoding; bug'lar production'da gozlemi gecikmeli olur; opsiyonel flag (`--cdc-port 9970`) default disabled — opt-in model.
 - **C SDK sinirli adapter demo**: Task 218 Python adapter'larin hepsi **reference** implementation; resmi pip paketleri v3.1'de upstream'e (LangGraph contrib) gonderilecek; kullanici ilk gunde kopyala-yapistir kullanir.
 
+## Sonuc (Tasks 200-225, 2026-04-28 itibariyle)
+
+### Teslim edilenler (✅)
+
+- **Vector + ANN** — Task 200 `VECTOR(N)` tipi, Task 201 distance fonksiyonlari (`<=>`, `<->`, `<#>`), Task 202 HNSW indexi, Task 203 hybrid search.
+- **Agent-memory native DDL** — Task 204 `CHECKPOINT STORE`, Task 205 `MEMORY STORE`, Task 206 namespace hierarchy + RLS.
+- **Temporal** — Task 207 `FOR SYSTEM_TIME AS OF TRANSACTION`, Task 208 `WITH SYSTEM VERSIONING`, Task 209 retention politikasi.
+- **Reactive** — Task 210 durable subscription cursor, Task 211 CDC streaming, Task 212 MEMORY trigger.
+- **Agent ops** — Task 213 TTL kolonu, Task 214 auto-summarize procedure template, Task 215 scheduled jobs (v1: takvim + last_run, SQL exec v2'ye Task 170 olarak).
+- **Framework primitives** — Task 222 `MESSAGE LOG`, Task 223 `DOCUMENT STORE` + Mongo filtre DSL'i, Task 224 `GRAPH STORE` (bitemporal kenarlar), Task 225 `ENTITY STORE`.
+- **C SDK + Python + adapters** — Task 216 `libevosql-memory` core, Task 217 streaming/subscribe, Task 218 Python ctypes binding + 6 framework adapter (LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Mem0).
+- **Bench + uyumluluk + relaunch** — Task 219 latency/reactive/temporal/longmemeval bench harness'i, Task 220 framework-compat CI matrix'i (44 case + stress), Task 221 README rewrite + comparison matrix + quickstart + release 3.0.0.
+
+### v2'ye birakilanlar
+
+- **Task 215 SQL exec**: scheduled jobs v1 takvim + last_run kayitlari; auto-RECLAIM thread'inden `query_execute` re-entry'si TLS state'i bozdugu icin SQL bodisi v2'ye (Task 170) birakildi.
+- **Task 211 ack kanali**: CDC subscriber tarafinda local cursor kaydedildi; sunucu tarafli ack kanali Task 211 v2'de durable subscription queue ile geliyor.
+- **Cross-vendor benchmark**: Zep / Mem0 / langgraph-store-mongodb / Pinecone karsilastirma satirlari Task 219 v2'de — backend'ler ayri Docker imajlari olarak gelecek.
+- **Metadata path filtreleri**: Task 223 mongo-filter DSL'i ust seviye kolonlarda calisiyor; `meta.subkey` JSON path filtreleri v2.
+
+### Olculen sonuclar (single-process p99, `bench/run_all.py`)
+
+| op | p99 |
+|----|-----|
+| `MEMORY PUT` | ~ 8 ms |
+| `MEMORY GET` | ~ 2 ms |
+| `CHECKPOINT PUT` | ~ 5 ms |
+| `MEMORY SEARCH` (top-10) | ~ 4 ms |
+| NOTIFY push delivery | ~ 0.4 ms |
+| polling @ 1 s | ~ 990 ms (≈ 2900× yavaslik) |
+
+LongMemEval public dataset'i ile cross-vendor karsilastirma v2'ye birakildi; sentetik fixture uzerinde lexical-fallback recall@10 = 1.0 ile harness pipeline'i dogrulandi.
+
+### Tek-binary thesis dogrulamasi
+
+Iddia: "MongoDB + Pinecone dual-stack'ini tek binary ile degistir".
+Sonuc: PG wire (5433) + EVO native (9967) tek `evolutiondb/evolutiondb:latest` Docker imaji uzerinden:
+
+- `CREATE MEMORY STORE … WITH (embedding_dim=1536)` ile vector storage
+- `CREATE CHECKPOINT STORE` ile LangGraph backend
+- `CREATE MESSAGE LOG`, `CREATE DOCUMENT STORE`, `CREATE GRAPH STORE`, `CREATE ENTITY STORE` ile diger framework primitive'leri
+- `LISTEN/NOTIFY` + durable subscription'lar ile push streaming
+- `FOR SYSTEM_TIME AS OF TRANSACTION` ile time-travel
+- 6 framework adapter'i (Python) ile resmi protokol uyumu (44 compat case + 3 concurrency stress, CI matrix'inde her commit'te yesil)
+
+iddianin altyapisi tamamlandi.
+
 ## Tarih
 
-2026-04-24
+- 2026-04-24 (onerildi)
+- 2026-04-28 (uygulandi, v3.0.0 ile yayina alindi)

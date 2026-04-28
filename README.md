@@ -1,140 +1,189 @@
-# EvoSQL - SQL Database Engine
+# EvolutionDB — Powering Long-Term Memory for Agents
 
-I started this project approximately 18 years ago, driven by a deep curiosity about how database engines work internally. At the time, I began building a relational SQL database engine from scratch in C — implementing core components such as the parser, storage engine, indexing structures, and execution layer myself.
+A single-process database that gives AI agent frameworks everything
+they need from one binary: **SQL + vector search + JSON + temporal
+queries + reactive push streaming** with first-class adapters for
+**LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, and Mem0**.
 
-Soon after the initial development phase, the project was set aside. It did not remain active in a public repository; instead, it was archived and stayed on a DVD for many years — preserved, but untouched.
+> _Replace the MongoDB + Pinecone dual-stack — and the polling loops
+> that go with it — with a single Postgres-compatible server you run
+> locally or on-prem._
 
-About one month ago, I rediscovered the project and decided to revive it. This time, I resumed development as a solo engineer with the assistance of Claude OPUS 4.6. In just a few days, I was able to implement and refine significantly more functionality than I had built over several years in the past. The combination of prior architectural vision and modern AI-assisted development dramatically accelerated progress.
+[![Framework Compat](https://github.com/alptekin/evolutiondb/actions/workflows/framework-compat.yml/badge.svg)](https://github.com/alptekin/evolutiondb/actions/workflows/framework-compat.yml)
+[![CodeQL](https://github.com/alptekin/evolutiondb/actions/workflows/codeql.yml/badge.svg)](https://github.com/alptekin/evolutiondb/actions/workflows/codeql.yml)
 
-EvolutionDB was born as a relational database engine, but its next evolution is clear: it will incorporate AI capabilities to translate natural language directly into optimized SQL, enabling intuitive human interaction while preserving the performance characteristics of a high-speed relational core. The goal is a database that remains structurally rigorous and extremely fast, yet accessible through natural language — bridging classical relational systems with modern AI-driven interfaces.
+## Why EvolutionDB for agent memory
 
----
+| Need | What we give you |
+|------|------------------|
+| LangGraph-compatible checkpoint store | `CHECKPOINT STORE` DDL/DML + `EvoCheckpointSaver` |
+| Cross-thread memory with vector search | `MEMORY STORE … WITH (embedding_dim=N)` + HNSW index |
+| Append-only chat history | `MESSAGE LOG` + `EvoChatMessageHistory` |
+| Mongo-style document store w/ filter DSL | `DOCUMENT STORE` + `$and / $or / $eq / $gt …` |
+| Temporal-knowledge graph (bitemporal edges) | `GRAPH STORE` with `valid_from / valid_to / invalid_at` |
+| LangChain entity memory | `ENTITY STORE` with auto-bumped `mention_count` |
+| "Notify me when X changes" | `LISTEN/NOTIFY` push + durable subscription queues |
+| Replay / time-travel queries | `FOR SYSTEM_TIME AS OF TRANSACTION <xid>` |
+| Postgres clients (psql, DBeaver, JDBC) | Drop-in PG wire protocol on port 5433 |
+| On-prem regulated deploys | AES-256 Transparent Data Encryption (TDE) |
 
-EvoSQL is a SQL database engine written in C featuring unified page-based storage with binary tuple format, a Flex/Bison SQL parser, B+ tree indexing, a Clock Sweep buffer pool, undo-log transactions, and a dual-protocol server that speaks both PostgreSQL wire protocol and a native text protocol.
+For the head-to-head against MongoDB / Pinecone / Zep / Mem0 / Weaviate
+see [docs/comparison.md](docs/comparison.md).
 
-For detailed architecture documentation, see the [Wiki](../../wiki).
-
-## Quick Start
+## 60-second quickstart
 
 ```bash
-# Start server via Docker
-docker compose up -d
+docker compose up -d              # PG:5433  EVO:9967
 
-# Connect with PostgreSQL clients (psql, DBeaver, JDBC)
-psql -h localhost -p 5433 -U admin -W evosql
+# Python (LangGraph drop-in via the bundled adapter)
+export PYTHONPATH=$PWD/client/python-evosql-memory:$PYTHONPATH
+python3 - <<'PY'
+from evosql_memory import connect
+from evosql_memory.adapters.langgraph_evosql import EvoCheckpointSaver, EvoBaseStore
 
-# Connect with EvoSQL CLI
-./cli/evosql-cli -W admin
+c = connect("127.0.0.1", 9967, "admin", "admin")
+saver = EvoCheckpointSaver(c, "demo_ck")
+store = EvoBaseStore(c, "demo_mem")
+
+cfg = {"configurable": {"thread_id": "agent-1", "checkpoint_ns": ""}}
+saver.put(cfg, {"id": "cp-1", "channels": {"step": 1}})
+print("latest:", saver.get(cfg))
+
+store.put(("user_42", "memos"), "favourite", {"genre": "jazz"})
+print("memo:",   store.get(("user_42", "memos"), "favourite"))
+PY
 ```
 
-The admin password is set via `EVOSQL_PASSWORD` environment variable. If not set, a random password is generated and printed to stdout on first startup:
+The full quickstart (C SDK, ReAct demo, Mem0 drop-in, reactive
+subscription) is at [docs/quickstart.md](docs/quickstart.md).
 
-```bash
-docker logs evolutiondb-evosql-1 | grep "GENERATED PASSWORD"
+## SQL surface (first-class objects)
+
+```sql
+-- LangGraph BaseCheckpointSaver
+CREATE CHECKPOINT STORE agent_checkpoints;
+
+-- LangGraph BaseStore + LangChain VectorStoreRetrieverMemory
+CREATE MEMORY STORE agent_memories WITH (embedding_dim = 1536);
+
+-- LangChain BaseChatMessageHistory + LlamaIndex ChatMemoryBuffer
+CREATE MESSAGE LOG agent_chat;
+
+-- Haystack DocumentStore + LlamaIndex BaseDocumentStore
+CREATE DOCUMENT STORE agent_docs;
+
+-- Zep Graphiti + Mem0 graph mode (bitemporal edges)
+CREATE GRAPH STORE agent_kg;
+
+-- LangChain ConversationEntityMemory + CrewAI EntityMemory
+CREATE ENTITY STORE agent_entities;
 ```
+
+Plus everything you'd expect from a relational engine: tables,
+indexes, constraints, JOINs, subqueries, transactions, MVCC,
+prepared statements, COPY, replication, RLS.
+
+## Clients
+
+| Layer            | Path                                   | Status |
+|------------------|----------------------------------------|--------|
+| C SDK            | [`client/libevosql-memory/`](client/libevosql-memory/) | shipped — connect, exec, memory/checkpoint, vector helpers, NOTIFY + CDC subscribe |
+| Python ctypes    | [`client/python-evosql-memory/`](client/python-evosql-memory/) | shipped — auto-discovers the SDK; thread-local errors |
+| Framework adapters | `evosql_memory.adapters.*`           | shipped — LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Mem0 |
+| Postgres wire    | `psql -h 127.0.0.1 -p 5433 …`          | shipped — DBeaver / pgAdmin / JDBC compatible |
+| Native EVO       | `./cli/evosql-cli -W admin`            | shipped |
+
+Compatibility tests for every adapter run on push and PR via
+[`framework-compat.yml`](.github/workflows/framework-compat.yml).
+
+## Performance (single process, p99)
+
+From `bench/run_all.py` (full report at
+[docs/benchmarks/v1.md](docs/benchmarks/v1.md)):
+
+| op                          | p99 (ms) |
+|-----------------------------|---------:|
+| `MEMORY PUT`                | ~ 8 |
+| `MEMORY GET`                | ~ 2 |
+| `CHECKPOINT PUT`            | ~ 5 |
+| `CHECKPOINT GET LATEST`     | ~ 1 |
+| `MEMORY SEARCH` (top-10)    | ~ 4 |
+| `NOTIFY` push delivery      | ~ 0.4 |
+| polling @ 1 s interval      | ~ 990 |
+
+Push is roughly **2900× faster** than a 1-second polling loop — the
+gap that lets reactive agents react in real time instead of every
+poll tick.
 
 ## Build
 
-**Requirements:** GCC, Bison, Flex, libreadline-dev. For TLS: libssl-dev.
+**Requirements:** GCC, Bison, Flex, libreadline-dev. For TLS:
+libssl-dev.
 
 ```bash
-make                  # Build all components
-make evolution        # Core SQL engine (evolution/evosql)
-make adaptor          # Dual-protocol server (adaptor/evosql-server)
-make cli              # CLI client (cli/evosql-cli)
-make adaptor TLS=1    # Build with OpenSSL TLS support
-make clean            # Clean all build artifacts
-make generate         # Regenerate Flex/Bison parser from .y/.l files
+make                  # core engine + adaptor + CLI
+make adaptor TLS=1    # build with OpenSSL TLS support
+make clean
+make generate         # regenerate Flex/Bison parser from .y/.l files
+make -C client/libevosql-memory   # build the C SDK
 ```
 
 ## Docker
 
 ```bash
-docker compose up -d                                          # PG:5433 + EVO:9967
-docker run -d -p 5433:5433 -p 9967:9967 -e EVOSQL_PASSWORD=mysecret evosql  # Manual
+docker compose up -d                    # PG:5433  EVO:9967
+docker compose down                     # stop (data preserved)
+docker compose down -v                  # stop and delete data
 
-docker compose down       # Stop (data preserved)
-docker compose down -v    # Stop and delete data
+docker run -d -p 5433:5433 -p 9967:9967 \
+    -e EVOSQL_PASSWORD=mysecret evolutiondb/evolutiondb:latest
 ```
-
-## SQL Examples
-
-```sql
-CREATE TABLE users (
-    id      INT NOT NULL PRIMARY KEY,
-    name    VARCHAR(50) NOT NULL,
-    email   VARCHAR(100),
-    active  BOOLEAN DEFAULT true
-);
-
-INSERT INTO users VALUES (1, 'Alice', 'alice@example.com', true);
-
-SELECT * FROM users WHERE active = true ORDER BY name;
-
-UPDATE users SET email = 'new@example.com' WHERE id = 1;
-
-DELETE FROM users WHERE active = false;
-```
-
-## Features
-
-**SQL Support:**
-DDL (CREATE/DROP/ALTER TABLE, CREATE INDEX, CREATE DOMAIN), DML (SELECT, INSERT, UPDATE, DELETE), WHERE (=, <>, <, >, <=, >=, AND, OR, NOT, IN, LIKE, BETWEEN, IS NULL), ORDER BY, GROUP BY, HAVING, LIMIT/OFFSET, DISTINCT, CASE, JOINs, subqueries, aggregates (SUM, AVG, MIN, MAX, COUNT), string/date functions, EXPLAIN
-
-**Data Types:**
-INT, BIGINT, FLOAT, DOUBLE, DECIMAL, BOOLEAN, CHAR(N), VARCHAR(N), TEXT, DATE, TIME, DATETIME, TIMESTAMP, UUID
-
-**Constraints & Indexes:**
-PRIMARY KEY, FOREIGN KEY (CASCADE, SET NULL, SET DEFAULT, RESTRICT), NOT NULL, CHECK, UNIQUE, named constraints (CONSTRAINT name ...), ALTER TABLE ADD/DROP/ENABLE/DISABLE CONSTRAINT, secondary indexes, composite indexes, expression indexes (UPPER/LOWER/LENGTH/CONCAT)
-
-**Storage:**
-Unified page-based storage (single `evosql.db` file), 4KB pages with Clock Sweep buffer pool, slotted pages, B+ tree indexing, binary tuple format, system catalog in B+ trees, AES-256 Transparent Data Encryption (TDE)
-
-**Transactions:**
-BEGIN/COMMIT/ROLLBACK, SAVEPOINT/ROLLBACK TO/RELEASE, undo-log based recovery, per-session isolation
-
-**Security:**
-User management (CREATE/DROP/ALTER USER), PBKDF2-SHA256 password hashing, GRANT/REVOKE privileges (DATABASE/SCHEMA/TABLE scope, PUBLIC, WITH GRANT OPTION), TLS/SSL with auto-generated certificates
-
-**Protocols:**
-PostgreSQL wire protocol v3 (port 5433) — compatible with psql, DBeaver, pgAdmin, JDBC; native EVO text protocol (port 9967) for the CLI client
-
-**ID Generation:**
-gen_random_uuid() (v4), gen_random_uuid_v7() (RFC 9562), snowflake_id() (Twitter-style 64-bit), AUTO_INCREMENT / IDENTITY(start, step)
-
-**Other:**
-Generated/computed columns (STORED, VIRTUAL), expression-based DEFAULT values, RECLAIM TABLE (page defragmentation), LAST_INSERT_ID(), TRUNCATE TABLE
 
 ## Testing
 
-27 test suites, 450+ tests (Python, requires running server):
-
 ```bash
 docker compose up -d
-python tests/test_where.py
-python tests/test_aggregates.py
-python tests/test_foreign_key.py
-# ...
+python tests/test_memory_store.py
+python tests/test_checkpoint_store.py
+python tests/test_evo_protocol.py
+python client/python-evosql-memory/python_tests/test_adapters.py
+python tests/framework_compat/langgraph/test_lg_compat.py
 ```
+
+## Background
+
+EvolutionDB started ~18 years ago as a personal C database project
+to learn how engines work internally — parser, storage, indexing,
+execution layer, all from scratch. It was archived on a DVD and
+sat dormant for over a decade.
+
+Resumed in early 2026 with AI-assisted development, the engine
+matured into a Postgres-compatible relational core and then pivoted
+toward agent memory: storing the kind of structured, semi-structured,
+vector-indexed, and time-versioned state that AI agent frameworks
+need but currently get by stitching together MongoDB + Pinecone +
+custom polling + a hand-rolled checkpointer.
+
+The agent-memory pivot is documented in
+[ADR-002](docs/adr/ADR-002-agent-memory-platform-roadmap.md).
 
 ## Documentation
 
-Detailed architecture and internals documentation is available in the [Wiki](../../wiki):
+- [60-second quickstart](docs/quickstart.md)
+- [Comparison vs MongoDB / Pinecone / Zep / Mem0 / Weaviate](docs/comparison.md)
+- [Benchmarks](docs/benchmarks/v1.md)
+- [ADR-002 — Agent Memory pivot](docs/adr/ADR-002-agent-memory-platform-roadmap.md)
+- [Release notes 3.0.0](docs/release-notes/3.0.0.md)
+- [Launch blog post](docs/blog/2026-launch.md)
+
+Architecture deep-dives live in the [Wiki](../../wiki):
 
 - [Architecture Overview](../../wiki/Architecture)
 - [Unified Storage](../../wiki/Unified-Storage-Overview)
-- [Storage Engine](../../wiki/Storage-Engine)
-- [B+ Tree](../../wiki/BPlus-Tree)
-- [System Catalog](../../wiki/System-Catalog)
-- [SQL Parser](../../wiki/SQL-Parser)
-- [SQL Operations](../../wiki/SQL-Operations)
-- [Expression Engine](../../wiki/Expression-Engine)
-- [Table API and DML](../../wiki/Table-API-and-DML)
-- [Query Context](../../wiki/Query-Context)
+- [Storage Engine](../../wiki/Storage-Engine) · [B+ Tree](../../wiki/BPlus-Tree) · [System Catalog](../../wiki/System-Catalog)
+- [SQL Parser](../../wiki/SQL-Parser) · [SQL Operations](../../wiki/SQL-Operations) · [Expression Engine](../../wiki/Expression-Engine)
 - [Transactions](../../wiki/Transactions)
+- [PostgreSQL Wire Protocol](../../wiki/PostgreSQL-Wire-Protocol) · [EVO Protocol](../../wiki/EVO-Protocol)
 - [Authentication and Security](../../wiki/Authentication-and-Security)
-- [PostgreSQL Wire Protocol](../../wiki/PostgreSQL-Wire-Protocol)
-- [EVO Protocol](../../wiki/EVO-Protocol)
 - [Server Architecture](../../wiki/Server-Architecture)
-- [Page Manager and Slotted Pages](../../wiki/Page-Manager-and-Slotted-Pages)
 - [CLI Client](../../wiki/CLI-Client)

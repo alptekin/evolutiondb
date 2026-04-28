@@ -3897,7 +3897,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 221: ⬜ Positioning & Docs Relaunch (Feature #221)
+### Task 221: ✅ Positioning & Docs Relaunch (Feature #221)
 
 **Goal:** Landing page rewrite, comparison matrix, ADR-002 publish, v3.0.0 release.
 
