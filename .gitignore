@@ -55,6 +55,8 @@ tests/*
 !client/libevosql-memory/tests/
 !tests/framework_compat/
 !tests/framework_compat/**
+.env
+.env.local
 wiki/
 *.claude
 wal.*

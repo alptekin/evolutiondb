@@ -3951,6 +3951,25 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
+### Task 228: ✅ Full Claude-backed Agent Demo (single-command Docker, end-to-end tested) (Feature #228)
+
+**Goal:** Tek komutla ayağa kalkan, gerçek Claude'a bağlanabilen, deterministik stub fallback'i olan, beş turlu uzun-vadeli-hafıza senaryosu üstünden assertion'ları olan kapsamlı bir agent demosu. Bu task Sprint 7-8'de yazdığımız tüm parçaların (C SDK, Python ctypes, framework adapter'ları, MEMORY/MESSAGE LOG/ENTITY/CHECKPOINT STORE DDL'leri) çalışan bir agent içinde birleştiğini ispatlıyor.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `memory_backend.py` — MEMORY/MESSAGE/ENTITY/CHECKPOINT facade. Test edilebilir küçük bir API yüzeyi; agent kodu sadece bu sınıfa konuşuyor. | `examples/full_agent_demo/memory_backend.py` (new) |
+| 2 | `llm.py` — Anthropic SDK + StubLLM aynı `LLM` Protocol'ünün arkasında. ANTHROPIC_API_KEY varsa Claude Sonnet 4, yoksa deterministik regex-driven mock. | `examples/full_agent_demo/llm.py` (new) |
+| 3 | `agent.py` — Tool-use döngüsü: save_memory / search_memory / remember_entity araçları her turda agent tarafından çağrılıyor; her tur sonunda checkpoint yazılıyor. | `examples/full_agent_demo/agent.py` (new) |
+| 4 | `scenarios.py` — beş turluk script: Miles Davis tercihi → small talk → Acme şirket bilgisi → "albüm öner" (recall testi) → "kim olduğumu bil" (search testi). Her tur için lambda assertion'ı. | `examples/full_agent_demo/scenarios.py` (new) |
+| 5 | `test_agent.py` — 7-case end-to-end suite: backend round-trip, message log ordering, fact recall across turns, checkpoint persistence, scripted scenario under stub, scripted scenario under real Claude (skipped without key). | `examples/full_agent_demo/test_agent.py` (new) |
+| 6 | `Dockerfile` — multi-stage: builder (gcc) C SDK'yı derler, runtime (python:3.12-slim) bunu + Python binding'i + demo'yu paketler. Build aşaması `rm -rf build` ile başlıyor (host Mach-O `.o` kontaminasyonunu engellemek için). | `examples/full_agent_demo/Dockerfile` (new) |
+| 7 | `entrypoint.sh` — TCP-poll-until-ready helper, sonra test_agent.py'i exec'liyor. | `examples/full_agent_demo/entrypoint.sh` (new) |
+| 8 | `docker-compose.demo.yml` — evosql (repo'dan build, Apple Silicon native) + agent service, ANTHROPIC_API_KEY env vars'tan geçiyor. Single command: `docker compose -f docker-compose.demo.yml up --build --abort-on-container-exit`. | `docker-compose.demo.yml` (new) |
+| 9 | `README.md` — tek-komut çalıştırma, transcript örneği, Claude'la nasıl çalışılacağı, debug komutları (DBeaver / psql / LISTEN), assertion tablosu. | `examples/full_agent_demo/README.md` (new) |
+| 10 | Verification: `docker compose -f docker-compose.demo.yml up --build --abort-on-container-exit` → 7 PASS / 0 FAIL, agent exit 0, evosql clean shutdown. | manual |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
