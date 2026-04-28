@@ -3838,7 +3838,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 218: ⬜ FFI Bindings + Multi-Framework Adapters (Feature #218)
+### Task 218: ✅ FFI Bindings + Multi-Framework Adapters (Feature #218)
 
 **Goal:** Python/Go/Rust FFI bindings + 6 framework adapter reference implementations.
 
