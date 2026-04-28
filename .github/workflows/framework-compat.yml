@@ -20,10 +20,10 @@ jobs:
         ports:
           - 9967:9967
           - 5433:5433
-        options: >-
-          --health-cmd "echo > /dev/tcp/127.0.0.1/9967"
-          --health-interval 5s
-          --health-retries 12
+        # No --health-cmd: the bundled image ships a sh-only userland
+        # so /dev/tcp/... bash builtins aren't available. Instead the
+        # job has an explicit `Wait for evosql server` step below that
+        # uses python3 from the runner image.
 
     strategy:
       fail-fast: false
