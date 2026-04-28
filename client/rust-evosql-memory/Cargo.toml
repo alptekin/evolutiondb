@@ -1,0 +1,27 @@
+[package]
+name        = "evosql-memory"
+version     = "1.0.0"
+edition     = "2021"
+description = "EvoSQL agent-memory client (Rust bindings over libevosql-memory)"
+license     = "MIT"
+readme      = "README.md"
+repository  = "https://github.com/alptekin/evolutiondb"
+
+# Linking is done in build.rs — we don't depend on libevosql-memory-sys
+# being a separate crate; the static archive is shipped alongside the
+# C SDK in the same repo.
+links = "evosql-memory"
+
+[lib]
+name = "evosql_memory"
+path = "src/lib.rs"
+
+[[example]]
+name = "put_get"
+path = "examples/put_get.rs"
+
+[build-dependencies]
+# build.rs uses standard cargo build helpers only.
+
+[dependencies]
+# Pure FFI — no runtime dependencies.
