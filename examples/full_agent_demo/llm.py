@@ -469,11 +469,16 @@ class OllamaLLM:
 def make_llm() -> LLM:
     """Pick the LLM backend by env var precedence:
 
-      1. OLLAMA_BASE_URL or OLLAMA_MODEL set → OllamaLLM (local)
-      2. ANTHROPIC_API_KEY set                → ClaudeLLM   (cloud)
-      3. otherwise                            → StubLLM     (offline / CI)
+      1. OLLAMA_BASE_URL set → OllamaLLM (local)
+      2. ANTHROPIC_API_KEY set → ClaudeLLM (cloud)
+      3. otherwise            → StubLLM   (offline / CI)
+
+    OLLAMA_MODEL alone does NOT switch to Ollama — compose files often
+    bake a default model name into the container env even when the
+    user wants to talk to Claude, and we don't want that to silently
+    short-circuit. The base URL is the real signal.
     """
-    if os.environ.get("OLLAMA_BASE_URL") or os.environ.get("OLLAMA_MODEL"):
+    if os.environ.get("OLLAMA_BASE_URL"):
         return OllamaLLM()
     if os.environ.get("ANTHROPIC_API_KEY"):
         return ClaudeLLM()
