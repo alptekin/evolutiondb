@@ -11,14 +11,47 @@ for the agent-memory primitives that ship with EvolutionDB:
 This library is the FFI seam — Python `ctypes`, Go `cgo`, Rust
 `bindgen`, and Node `node-ffi-napi` all bind to `evosql_memory.h`.
 
-## Build
+## Install — pre-built binaries
+
+The fastest path: download the pre-built artifact for your platform
+from the project's GitHub Releases page:
+
+> https://github.com/alptekin/evolutiondb/releases/latest
+
+Five platforms ship per release:
+
+| Asset                                        | Platform                  |
+|---------------------------------------------- |-------------------------- |
+| `libevosql-memory-linux-x64-vX.Y.Z.tar.gz`    | Linux glibc x86_64        |
+| `libevosql-memory-linux-arm64-vX.Y.Z.tar.gz`  | Linux glibc aarch64       |
+| `libevosql-memory-macos-arm64-vX.Y.Z.tar.gz`  | macOS 14+ Apple Silicon   |
+| `libevosql-memory-macos-x64-vX.Y.Z.tar.gz`    | macOS 13+ Intel           |
+| `libevosql-memory-windows-x64-vX.Y.Z.zip`     | Windows 10/11 x86_64      |
+
+Each archive untars to a single directory containing
+`libevosql-memory.{so,dylib,dll}`, the static archive
+`libevosql-memory.a`, and `evosql_memory.h`. Verify the asset's
+SHA-256 against `SHA256SUMS` (also attached to the same release).
+
+```bash
+curl -L https://github.com/alptekin/evolutiondb/releases/latest/download/libevosql-memory-linux-x64-v3.0.1.tar.gz \
+    | tar -xz
+cp libevosql-memory-linux-x64/libevosql-memory.so /usr/local/lib/
+cp libevosql-memory-linux-x64/evosql_memory.h     /usr/local/include/
+```
+
+## Build from source
 
 ```bash
 cd client/libevosql-memory
-make            # build/libevosql-memory.{dylib,so} + .a + pkg-config
+make            # build/libevosql-memory.{dylib,so,dll} + .a + pkg-config
 make test       # runs against 127.0.0.1:9967 (server must be up)
 make install PREFIX=/usr/local
 ```
+
+The Makefile detects the host (Darwin / Linux / MinGW / MSYS) and
+picks the right shared-library extension and link flags. Windows
+builds use MinGW-w64 and link `ws2_32` + `pthread`.
 
 Artifacts land in `build/`:
 
@@ -26,6 +59,7 @@ Artifacts land in `build/`:
 build/
   libevosql-memory.dylib   # macOS shared
   libevosql-memory.so      # Linux shared
+  libevosql-memory.dll     # Windows shared (with .dll.a import lib)
   libevosql-memory.a       # static archive
   evosql-memory.pc         # pkg-config
   test_sdk                 # unit-test binary

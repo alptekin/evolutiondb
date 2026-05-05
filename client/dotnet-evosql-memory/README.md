@@ -3,6 +3,13 @@
 P/Invoke binding over `libevosql-memory`. Targets net8.0 with
 nullable-reference-types enabled.
 
+> **Pre-built binaries** for Linux / macOS / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Drop the platform-correct `libevosql-memory.{dylib,so,dll}` next
+> to your binary (or set `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH`)
+> and skip the `make -C ../libevosql-memory` step.
+
 ## Build
 
 ```bash
