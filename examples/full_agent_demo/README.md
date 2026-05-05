@@ -55,6 +55,54 @@ docker compose -f docker-compose.demo.yml --env-file .env up --build \
 The same loop drives Claude Sonnet 4 (or any model you set in
 `ANTHROPIC_MODEL`) over the Messages API with tool-use enabled.
 
+## With a local LLM (Ollama / Llama 3.1 8B)
+
+The demo also runs without an API key by talking to a locally
+hosted Ollama instance — useful for offline / regulated / on-prem
+environments where leaving an external API call out of the data
+path matters.
+
+```bash
+# .env on first run:
+#   OLLAMA_BASE_URL=http://ollama:11434
+#   OLLAMA_MODEL=llama3.1:8b-instruct-q4_K_M
+docker compose -f docker-compose.demo.yml --profile local-llm \
+    --env-file .env up --build --abort-on-container-exit
+```
+
+What happens on first boot:
+
+1. `ollama` service starts on port 11434 (inside the compose network).
+2. `ollama-pull` sidecar downloads the model (~ 5 GB for the 4-bit
+   quantised Llama 3.1 8B Instruct) into a persistent
+   `ollama_data` volume; subsequent runs reuse it.
+3. The `agent` service detects `OLLAMA_BASE_URL` and routes every
+   tool-use turn through `OllamaLLM`. The agent loop, tool
+   schemas, and memory backend are unchanged.
+
+`make_llm()` priority is **Ollama → Claude → Stub**, so providing
+`OLLAMA_BASE_URL` overrides Claude even if `ANTHROPIC_API_KEY` is
+also set.
+
+### Caveats with small local models
+
+Llama 3.1 8B (and other CPU-friendly options like Qwen 2.5 7B) are
+less reliable at deciding to call tools than Claude Sonnet / GPT-4o.
+Two practical knobs:
+
+- **Use the instruct-q4_K_M quantisation** (default). The
+  non-instruct variants don't follow the tool-call schema.
+- **Tighten `SYSTEM_PROMPT`** if the model skips `save_memory`
+  on simple preference statements. Adding two-shot examples in the
+  prompt typically lifts the call rate above 90%.
+
+### CPU latency expectations
+
+On a modern x86 laptop the first LLM call takes 5-15 seconds while
+the model loads into RAM; subsequent calls are 2-4 seconds per
+turn. For interactive use (rather than CI), a GPU is recommended —
+the runtime is identical, just faster.
+
 ## What you get
 
 ```
