@@ -1,0 +1,106 @@
+name: Release
+
+# Triggered by pushing a v* tag.
+#
+# Pipeline:
+#   1. Run the native-build matrix (calls the workflow we already have)
+#      to produce platform-tagged libevosql-memory-<os>-<arch> artifacts.
+#   2. Download every artifact, repack each into a tar.gz / zip whose
+#      name embeds the tag, and create a GitHub Release with all five
+#      assets attached.
+#
+# The Release becomes the "package repository" in this phase: every
+# downstream language binding's README points at it, so users get
+# pre-built libraries without compiling.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v3.0.1)"
+        required: true
+
+permissions:
+  contents: write     # create_release / upload_release_asset
+  actions: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/native-build.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # for `gh release create --notes-from-tag`
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Repack each platform into a release-shaped archive
+        run: |
+          set -e
+          TAG=${{ steps.tag.outputs.tag }}
+          mkdir -p assets
+          cd dist
+          for d in libevosql-memory-*; do
+              [ -d "$d" ] || continue
+              OUT=$d-$TAG
+              # The matrix uploaded a one-level directory inside each
+              # artifact named after the platform; pack that directly so
+              # the user untars to a known folder name.
+              SRC_DIR=$(ls -d $d/libevosql-memory-* 2>/dev/null | head -1)
+              if [ -z "$SRC_DIR" ]; then
+                  SRC_DIR=$d
+              fi
+              if [ "${d##*-}" = "windows-x64" ] || [[ "$d" == *windows* ]]; then
+                  ( cd "$(dirname "$SRC_DIR")" && \
+                    zip -r "../../assets/${OUT}.zip" "$(basename "$SRC_DIR")" )
+              else
+                  tar -czf "../assets/${OUT}.tar.gz" \
+                      -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
+              fi
+          done
+          cd ..
+          ls -la assets
+
+      - name: Generate SHA-256 manifest
+        run: |
+          cd assets
+          for f in *; do
+              shasum -a 256 "$f" >> SHA256SUMS
+          done
+          cat SHA256SUMS
+
+      - name: Create the GitHub Release + upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${{ steps.tag.outputs.tag }}
+          # Idempotent: if a release for the tag already exists, just
+          # upload more assets. Otherwise create one.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" assets/* --clobber
+          else
+              gh release create "$TAG" \
+                  --title "$TAG" \
+                  --generate-notes \
+                  assets/*
+          fi
