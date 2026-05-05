@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EvolutionDB · Long-term Memory Agent</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg:        #0e1116;
+    --panel:     #161b22;
+    --panel-2:   #1c232c;
+    --border:    #2b333d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --accent:    #58a6ff;
+    --accent-2:  #79c0ff;
+    --user-bg:   #1f6feb33;
+    --bot-bg:    #21262d;
+    --tool-bg:   #30363d;
+    --tool-fg:   #ffa657;
+    --ok:        #3fb950;
+    --err:       #f85149;
+    --shadow:    0 4px 18px rgba(0,0,0,.35);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    grid-template-rows: 56px 1fr 110px;
+    grid-template-areas:
+      "header header"
+      "chat   panel"
+      "input  panel";
+    height: 100vh;
+  }
+  header {
+    grid-area: header;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 16px;
+    gap: 16px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  header h1 small {
+    font-weight: 400;
+    color: var(--muted);
+    margin-left: 8px;
+    font-size: 12px;
+  }
+  .chip {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .chip.live  { color: var(--ok);     border-color: #2f4d35; }
+  .chip.warn  { color: var(--tool-fg); border-color: #6c4322; }
+  .chip.err   { color: var(--err);     border-color: #6c2228; }
+  header .grow { flex: 1; }
+  header button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  header button:hover { border-color: var(--accent); }
+
+  #chat {
+    grid-area: chat;
+    overflow-y: auto;
+    padding: 24px;
+  }
+  .msg { display: flex; flex-direction: column; margin-bottom: 16px; }
+  .msg .role {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .msg .body {
+    background: var(--bot-bg);
+    padding: 10px 14px;
+    border-radius: 8px;
+    max-width: 80%;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .msg.user        { align-items: flex-end; }
+  .msg.user .body  { background: var(--user-bg); }
+  .msg.tool .body  {
+    background: var(--tool-bg);
+    color: var(--tool-fg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .msg.thinking .body {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  #composer {
+    grid-area: input;
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  #composer textarea {
+    flex: 1;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    resize: none;
+    height: 80px;
+  }
+  #composer textarea:focus { outline: 1px solid var(--accent); }
+  #send {
+    background: var(--accent);
+    color: #0d1117;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    padding: 0 22px;
+    height: 80px;
+    cursor: pointer;
+  }
+  #send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  aside {
+    grid-area: panel;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 16px;
+  }
+  aside h2 {
+    margin: 0 0 8px 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+  }
+  aside section { margin-bottom: 22px; }
+  aside .item {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+  aside .item .key {
+    color: var(--accent-2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+  }
+  aside .empty {
+    color: var(--muted);
+    font-size: 12px;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>EvolutionDB <small>long-term memory agent</small></h1>
+    <span class="chip" id="llm-chip">llm: …</span>
+    <span class="chip" id="session-chip">session: …</span>
+    <div class="grow"></div>
+    <button id="reset-btn" title="Drop + recreate the demo stores">reset</button>
+  </header>
+
+  <div id="chat">
+    <div class="msg thinking">
+      <div class="role">agent</div>
+      <div class="body">
+        Hi. Tell me something about yourself, then ask me to remember it
+        later. Each turn shows the tool calls the model made — that's
+        how the agent talks to EvolutionDB.
+      </div>
+    </div>
+  </div>
+
+  <form id="composer" onsubmit="event.preventDefault(); send();">
+    <textarea id="msg" placeholder="message…   (⌘/Ctrl + Enter to send)"
+                autofocus></textarea>
+    <button id="send" type="submit">send</button>
+  </form>
+
+  <aside>
+    <section>
+      <h2>memories</h2>
+      <div id="memories"><div class="empty">no facts saved yet</div></div>
+    </section>
+    <section>
+      <h2>entities</h2>
+      <div id="entities"><div class="empty">no entities yet</div></div>
+    </section>
+    <section>
+      <h2>recent messages</h2>
+      <div id="messages"><div class="empty">empty</div></div>
+    </section>
+  </aside>
+
+<script>
+const chatEl     = document.getElementById('chat');
+const msgEl      = document.getElementById('msg');
+const sendBtn    = document.getElementById('send');
+const llmChip    = document.getElementById('llm-chip');
+const sessChip   = document.getElementById('session-chip');
+const resetBtn   = document.getElementById('reset-btn');
+const memEl      = document.getElementById('memories');
+const entEl      = document.getElementById('entities');
+const msgsPanel  = document.getElementById('messages');
+
+function add(role, body, klass) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + (klass || role);
+    wrap.innerHTML = `<div class="role">${role}</div>
+                      <div class="body"></div>`;
+    wrap.querySelector('.body').textContent = body;
+    chatEl.appendChild(wrap);
+    chatEl.scrollTop = chatEl.scrollHeight;
+    return wrap;
+}
+
+function fmtTool(tc) {
+    let s = tc.name + '(';
+    s += Object.entries(tc.input || {})
+              .map(([k, v]) =>
+                k + '=' +
+                (typeof v === 'string' ? JSON.stringify(v)
+                                       : JSON.stringify(v)))
+              .join(', ');
+    return s + ')';
+}
+
+async function refreshState() {
+    const r = await fetch('/api/state');
+    if (!r.ok) return;
+    const s = await r.json();
+
+    llmChip.textContent = 'llm: ' + s.llm;
+    llmChip.className   = 'chip ' + (s.llm === 'stub' ? 'warn' : 'live');
+    sessChip.textContent = 'session: ' + s.session_id;
+
+    memEl.innerHTML = '';
+    if (!s.memories.length) {
+        memEl.innerHTML = '<div class="empty">no facts saved yet</div>';
+    } else {
+        for (const m of s.memories) {
+            const fact = (m.value && m.value.fact) || JSON.stringify(m.value);
+            const tags = (m.value && m.value.tags) || [];
+            const tagHtml = tags.length
+                ? ' <span class="key">' + tags.map(t => '#' + t).join(' ') + '</span>'
+                : '';
+            const div = document.createElement('div');
+            div.className = 'item';
+            div.innerHTML = '';
+            div.appendChild(document.createTextNode(fact || ''));
+            const meta = document.createElement('div');
+            meta.style = 'margin-top:4px;color:var(--muted);font-size:11px;';
+            meta.innerHTML =
+                '<span class="key">' + m.namespace + '/' + m.key + '</span>' + tagHtml;
+            div.appendChild(meta);
+            memEl.appendChild(div);
+        }
+    }
+
+    entEl.innerHTML = '';
+    if (!s.entities.length) {
+        entEl.innerHTML = '<div class="empty">no entities yet</div>';
+    } else {
+        for (const e of s.entities) {
+            const div = document.createElement('div');
+            div.className = 'item';
+            div.innerHTML = '';
+            div.appendChild(document.createTextNode(e.summary || e.key));
+            const meta = document.createElement('div');
+            meta.style = 'margin-top:4px;color:var(--muted);font-size:11px;';
+            meta.textContent = e.key + ' · mentioned ' + e.mention_count + 'x';
+            div.appendChild(meta);
+            entEl.appendChild(div);
+        }
+    }
+
+    msgsPanel.innerHTML = '';
+    if (!s.messages.length) {
+        msgsPanel.innerHTML = '<div class="empty">empty</div>';
+    } else {
+        for (const m of s.messages) {
+            const div = document.createElement('div');
+            div.className = 'item';
+            div.innerHTML = '';
+            const role = document.createElement('span');
+            role.className = 'key';
+            role.textContent = m.role + ': ';
+            div.appendChild(role);
+            div.appendChild(document.createTextNode(m.content));
+            msgsPanel.appendChild(div);
+        }
+    }
+}
+
+async function send() {
+    const message = msgEl.value.trim();
+    if (!message) return;
+    msgEl.value = '';
+    msgEl.style.height = '80px';
+    sendBtn.disabled = true;
+
+    add('you', message);
+    const thinking = add('agent', 'thinking…', 'thinking');
+
+    try {
+        const r = await fetch('/api/chat', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ message }),
+        });
+        if (!r.ok) {
+            const txt = await r.text();
+            thinking.querySelector('.body').textContent = 'error: ' + txt;
+            thinking.classList.remove('thinking');
+            return;
+        }
+        const s = await r.json();
+        chatEl.removeChild(thinking);
+
+        for (const tc of (s.tool_calls || [])) {
+            add('tool', fmtTool(tc), 'tool');
+        }
+        add('agent', s.assistant || '(no reply)');
+
+        await refreshState();
+    } catch (e) {
+        thinking.querySelector('.body').textContent = 'request failed: ' + e;
+        thinking.classList.remove('thinking');
+    } finally {
+        sendBtn.disabled = false;
+        msgEl.focus();
+    }
+}
+
+resetBtn.addEventListener('click', async () => {
+    if (!confirm('Reset will drop and recreate every demo store. Continue?')) return;
+    sendBtn.disabled = true;
+    try {
+        await fetch('/api/reset', { method: 'POST' });
+        chatEl.innerHTML = '';
+        add('agent',
+            'Stores cleared. Tell me something new.',
+            'thinking');
+        await refreshState();
+    } finally {
+        sendBtn.disabled = false;
+    }
+});
+
+// Keyboard: ⌘+Enter / Ctrl+Enter sends.
+msgEl.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        send();
+    }
+});
+
+refreshState();
+</script>
+</body>
+</html>

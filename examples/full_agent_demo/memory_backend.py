@@ -35,6 +35,18 @@ if os.path.isdir(_PY_SDK) and _PY_SDK not in sys.path:
 
 
 def _e(s: str) -> str:
+    """Escape a value for inclusion in a single-quoted SQL literal.
+
+    The EVO wire protocol is line-based: every SQL statement is sent
+    as one `SQL <len>\\n<sql>\\n` frame. Embedded newlines in a string
+    literal break the server's line reader (it would treat the second
+    line as a separate command). LLM responses routinely include
+    \\n / \\r / \\t — collapse them to spaces so a chat reply never
+    bricks the wire frame, then double single-quotes for SQL.
+    """
+    if not isinstance(s, str):
+        s = str(s)
+    s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
     return s.replace("'", "''")
 
 
@@ -170,11 +182,51 @@ class MemoryBackend:
     # ------------------------------------------------------------------
     # Checkpoint per turn — useful for debugging / replay
     # ------------------------------------------------------------------
+    # The SDK's evo_checkpoint_put serialises into a 16 KB SQL literal
+    # buffer (e_v[16384] in conn.c). Long LLM replies + accumulated
+    # tool_result blobs blow past that easily — the buffer truncates
+    # mid-string, server rejects "invalid JSON" and the whole turn
+    # fails. Two guards:
+    #   - shrink the state to a summary that always fits;
+    #   - swallow any residual EvoSqlError so a checkpoint problem
+    #     never breaks the user-facing chat flow.
+
+    _CK_MAX_FIELD = 4000   # per-field char cap inside the snapshot
+
     def checkpoint(self, thread_id: str, step: int,
                      state: Dict[str, Any]) -> None:
-        self.conn.checkpoint_put(
-            self.checkpoints, thread_id, "",
-            f"step-{step}", json.dumps(state), "{}")
+        def _short(v: Any) -> Any:
+            if isinstance(v, str):
+                if len(v) > self._CK_MAX_FIELD:
+                    return v[:self._CK_MAX_FIELD] + "…[truncated]"
+                return v
+            if isinstance(v, list):
+                return [_short(x) for x in v[:32]]   # cap list length too
+            if isinstance(v, dict):
+                return {k: _short(val) for k, val in v.items()}
+            return v
+
+        slim = {
+            "step":         state.get("step"),
+            "session":      state.get("session"),
+            "user":         _short(state.get("user", "")),
+            "assistant":    _short(state.get("assistant", "")),
+            "tool_calls":   _short(state.get("tool_calls", [])),
+            # Drop the verbose tool_results bodies — keep only names so
+            # replay can see WHAT was called, not the full search hits.
+            "tool_results": [
+                {"name": tr.get("name", "?")}
+                for tr in (state.get("tool_results") or [])
+            ],
+            "llm":          state.get("llm"),
+        }
+        try:
+            self.conn.checkpoint_put(
+                self.checkpoints, thread_id, "",
+                f"step-{step}", json.dumps(slim), "{}")
+        except Exception as e:
+            # A failed checkpoint is debug data — don't kill the chat.
+            print(f"[checkpoint warn] {e}", flush=True)
 
     def latest_checkpoint(self, thread_id: str) -> Optional[Dict[str, Any]]:
         from evosql_memory import EvoNotFound

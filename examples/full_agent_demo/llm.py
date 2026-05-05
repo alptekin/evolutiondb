@@ -299,8 +299,187 @@ class StubLLM:
         return "Noted."
 
 
+# --------------------------------------------------------------------
+# Local LLM via Ollama (CPU-friendly, e.g. llama3.2:3b-instruct-q4_K_M)
+# --------------------------------------------------------------------
+class OllamaLLM:
+    """Ollama backend (https://ollama.com).
+
+    The agent loop only cares that turn() returns the same shape as
+    Claude / Stub. Ollama's /api/chat surface accepts an OpenAI-shaped
+    `tools` list and emits `message.tool_calls` when the model picks
+    one — we translate both directions so the upstream tool schemas
+    (defined in TOOL_SCHEMAS) round-trip without modification.
+
+    Performance note: small models (Llama 3.1 8B Instruct, Qwen 2.5
+    7B) decide to call tools less reliably than Claude / GPT-4o. The
+    agent.py loop already tolerates "no tool call this turn" — the
+    StubLLM exercises that fallback in the test suite — and a
+    follow-up task can add a regex-driven tool-call backstop on top
+    of Ollama for harder reliability guarantees.
+    """
+    name = "ollama"
+
+    def __init__(self,
+                  base_url: str = None,
+                  model: str = None,
+                  timeout: int = 300):
+        try:
+            import requests          # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(
+                "OllamaLLM requires `requests` — pip install requests") from e
+
+        self._base_url = (base_url or
+                            os.environ.get("OLLAMA_BASE_URL",
+                                              "http://localhost:11434"))
+        self._model = (model or
+                          os.environ.get("OLLAMA_MODEL",
+                                            "llama3.2:3b-instruct-q4_K_M"))
+        self._timeout = timeout
+
+    def turn(self, system_prompt, messages, tools):
+        import requests
+        ollama_messages = self._to_ollama_messages(system_prompt, messages)
+        ollama_tools = [
+            {"type": "function",
+             "function": {
+                 "name":        t["name"],
+                 "description": t["description"],
+                 "parameters":  t["input_schema"],
+             }}
+            for t in tools
+        ]
+        try:
+            resp = requests.post(
+                f"{self._base_url}/api/chat",
+                json={
+                    "model":   self._model,
+                    "messages": ollama_messages,
+                    "tools":   ollama_tools,
+                    "stream":  False,
+                },
+                timeout=self._timeout,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as e:
+            return {"text": f"(ollama error: {e})",
+                     "tool_calls": [],
+                     "stop_reason": "end_turn"}
+
+        msg = payload.get("message", {}) or {}
+        text = msg.get("content", "") or ""
+
+        tool_calls: List[Dict[str, Any]] = []
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function", {}) or {}
+            args = fn.get("arguments")
+            # Ollama returns arguments either as a JSON string or as
+            # a parsed dict — normalise to a dict for the agent loop.
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+            elif not isinstance(args, dict):
+                args = {}
+            tool_calls.append({
+                "id":    tc.get("id") or f"oc_{len(tool_calls)}",
+                "name":  fn.get("name", ""),
+                "input": args,
+            })
+
+        stop = "tool_use" if tool_calls else "end_turn"
+        return {"text": text, "tool_calls": tool_calls,
+                 "stop_reason": stop, "raw": payload}
+
+    @staticmethod
+    def _to_ollama_messages(system_prompt: str,
+                              messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Translate the Anthropic-shaped chat history into Ollama's
+        flatter format. Ollama wants string content per message and
+        carries tool calls / tool results as separate roles."""
+        out: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+        ]
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content")
+
+            # Anthropic-style content blocks. Flatten to Ollama:
+            #   - text blocks → role/message text
+            #   - tool_use blocks → assistant message with tool_calls
+            #   - tool_result blocks → role=tool messages
+            if isinstance(content, list):
+                texts: List[str] = []
+                tool_use_blocks: List[Dict[str, Any]] = []
+                tool_result_blocks: List[Dict[str, Any]] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "text":
+                        texts.append(block.get("text", "") or "")
+                    elif btype == "tool_use":
+                        tool_use_blocks.append({
+                            "id":   block.get("id"),
+                            "type": "function",
+                            "function": {
+                                "name":      block.get("name", ""),
+                                "arguments": block.get("input") or {},
+                            },
+                        })
+                    elif btype == "tool_result":
+                        result_text = ""
+                        rc = block.get("content")
+                        if isinstance(rc, list):
+                            for sub in rc:
+                                if isinstance(sub, dict) and \
+                                   sub.get("type") == "text":
+                                    result_text += sub.get("text", "") or ""
+                        elif isinstance(rc, str):
+                            result_text = rc
+                        tool_result_blocks.append({
+                            "tool_call_id": block.get("tool_use_id"),
+                            "content":      result_text,
+                        })
+
+                if role == "assistant" and tool_use_blocks:
+                    out.append({
+                        "role":       "assistant",
+                        "content":    " ".join(texts),
+                        "tool_calls": tool_use_blocks,
+                    })
+                elif tool_result_blocks:
+                    # Each tool_result becomes its own role=tool message.
+                    for trb in tool_result_blocks:
+                        out.append({
+                            "role":         "tool",
+                            "content":      trb["content"],
+                            "tool_call_id": trb["tool_call_id"],
+                        })
+                else:
+                    out.append({"role": role, "content": " ".join(texts)})
+            else:
+                out.append({"role": role, "content": str(content or "")})
+        return out
+
+
 def make_llm() -> LLM:
-    """Pick ClaudeLLM if the API key is set, else StubLLM."""
+    """Pick the LLM backend by env var precedence:
+
+      1. OLLAMA_BASE_URL set → OllamaLLM (local)
+      2. ANTHROPIC_API_KEY set → ClaudeLLM (cloud)
+      3. otherwise            → StubLLM   (offline / CI)
+
+    OLLAMA_MODEL alone does NOT switch to Ollama — compose files often
+    bake a default model name into the container env even when the
+    user wants to talk to Claude, and we don't want that to silently
+    short-circuit. The base URL is the real signal.
+    """
+    if os.environ.get("OLLAMA_BASE_URL"):
+        return OllamaLLM()
     if os.environ.get("ANTHROPIC_API_KEY"):
         return ClaudeLLM()
     return StubLLM()
