@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Drop the contents of `mcpServers` into your existing Claude",
+    "Desktop config (the file with the same shape) — don't replace",
+    "the whole file unless this is your first MCP server.",
+    "",
+    "Path on macOS:",
+    "  ~/Library/Application Support/Claude/claude_desktop_config.json",
+    "Path on Windows:",
+    "  %APPDATA%\\Claude\\claude_desktop_config.json"
+  ],
+  "mcpServers": {
+    "evolutiondb-memory": {
+      "command": "python3",
+      "args": ["-m", "mcp_server_evosql"],
+      "env": {
+        "PYTHONPATH": "/ABSOLUTE/PATH/TO/evolutiondb/client/mcp-server-evosql:/ABSOLUTE/PATH/TO/evolutiondb/client/python-evosql-memory",
+        "EVOSQL_MEMORY_LIB": "/ABSOLUTE/PATH/TO/evolutiondb/client/libevosql-memory/build/libevosql-memory.dylib",
+        "EVOSQL_HOST": "127.0.0.1",
+        "EVOSQL_PORT": "9967",
+        "EVOSQL_USER": "admin",
+        "EVOSQL_PASSWORD": "admin",
+        "MCP_USER_ID": "alptekin",
+        "MCP_STORE_PREFIX": "claude_desktop"
+      }
+    }
+  }
+}
