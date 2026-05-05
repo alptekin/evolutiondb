@@ -300,7 +300,7 @@ class StubLLM:
 
 
 # --------------------------------------------------------------------
-# Local LLM via Ollama (CPU-friendly, e.g. llama3.1:8b-instruct-q4_K_M)
+# Local LLM via Ollama (CPU-friendly, e.g. llama3.2:3b-instruct-q4_K_M)
 # --------------------------------------------------------------------
 class OllamaLLM:
     """Ollama backend (https://ollama.com).
@@ -335,7 +335,7 @@ class OllamaLLM:
                                               "http://localhost:11434"))
         self._model = (model or
                           os.environ.get("OLLAMA_MODEL",
-                                            "llama3.1:8b-instruct-q4_K_M"))
+                                            "llama3.2:3b-instruct-q4_K_M"))
         self._timeout = timeout
 
     def turn(self, system_prompt, messages, tools):
