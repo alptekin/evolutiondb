@@ -300,7 +300,7 @@ class StubLLM:
 
 
 # --------------------------------------------------------------------
-# Local LLM via Ollama (CPU-friendly, e.g. llama3.1:8b-instruct-q4_K_M)
+# Local LLM via Ollama (CPU-friendly, e.g. llama3.2:3b-instruct-q4_K_M)
 # --------------------------------------------------------------------
 class OllamaLLM:
     """Ollama backend (https://ollama.com).
@@ -335,7 +335,7 @@ class OllamaLLM:
                                               "http://localhost:11434"))
         self._model = (model or
                           os.environ.get("OLLAMA_MODEL",
-                                            "llama3.1:8b-instruct-q4_K_M"))
+                                            "llama3.2:3b-instruct-q4_K_M"))
         self._timeout = timeout
 
     def turn(self, system_prompt, messages, tools):
@@ -469,11 +469,16 @@ class OllamaLLM:
 def make_llm() -> LLM:
     """Pick the LLM backend by env var precedence:
 
-      1. OLLAMA_BASE_URL or OLLAMA_MODEL set → OllamaLLM (local)
-      2. ANTHROPIC_API_KEY set                → ClaudeLLM   (cloud)
-      3. otherwise                            → StubLLM     (offline / CI)
+      1. OLLAMA_BASE_URL set → OllamaLLM (local)
+      2. ANTHROPIC_API_KEY set → ClaudeLLM (cloud)
+      3. otherwise            → StubLLM   (offline / CI)
+
+    OLLAMA_MODEL alone does NOT switch to Ollama — compose files often
+    bake a default model name into the container env even when the
+    user wants to talk to Claude, and we don't want that to silently
+    short-circuit. The base URL is the real signal.
     """
-    if os.environ.get("OLLAMA_BASE_URL") or os.environ.get("OLLAMA_MODEL"):
+    if os.environ.get("OLLAMA_BASE_URL"):
         return OllamaLLM()
     if os.environ.get("ANTHROPIC_API_KEY"):
         return ClaudeLLM()

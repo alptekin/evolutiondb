@@ -65,7 +65,7 @@ path matters.
 ```bash
 # .env on first run:
 #   OLLAMA_BASE_URL=http://ollama:11434
-#   OLLAMA_MODEL=llama3.1:8b-instruct-q4_K_M
+#   OLLAMA_MODEL=llama3.2:3b-instruct-q4_K_M
 docker compose -f docker-compose.demo.yml --profile local-llm \
     --env-file .env up --build --abort-on-container-exit
 ```

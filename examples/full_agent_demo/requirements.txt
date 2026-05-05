@@ -6,3 +6,10 @@ anthropic>=0.40,<1.0
 # so a missing install would only matter if the user activates that
 # backend. Cheap to bundle anyway.
 requests>=2.31,<3.0
+
+# fastapi + uvicorn — only the agent-web service uses these. The
+# default test container ignores web_server.py and runs test_agent.py
+# instead. Cheap to bundle so the same image serves both modes.
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+pydantic>=2.0,<3.0
