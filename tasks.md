@@ -4006,6 +4006,25 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
+### Task 232: ✅ MCP Server — Claude Desktop ↔ EvolutionDB long-term memory (Feature #232)
+
+**Goal:** Claude Desktop / Claude Code'u EvolutionDB'ye gerçek bir uzun-vadeli hafıza backend'i olarak bağlamak. Pipeline: `Claude Max → MCP Server → EvolutionDB (local Docker)`. Her sohbette Claude tool çağrısı ile yeni bilgileri kaydeder, sonraki sohbetlerde aynı araçla çağırır — kullanıcı her seferinde aynı bağlamı tekrar yapıştırmak zorunda kalmaz, token tasarrufu yapar (~3.5×).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `mcp_server_evosql` Python paketi — newline-delimited JSON-RPC 2.0 stdio loop, MCP protokolü versiyon `2024-11-05`. | `client/mcp-server-evosql/mcp_server_evosql/{__init__,__main__,server}.py` (new) |
+| 2 | Beş tool: `save_memory(fact, tags)`, `search_memory(query, tag, limit)`, `recent_memories(limit)`, `forget(key)`, `list_tags()`. Her çağrı içeride `MCP_USER_ID` ile namespace'e zorla yazılıyor — Claude'un user_id uydurmasına izin yok. | `mcp_server_evosql/server.py` |
+| 3 | Idempotent `CREATE MEMORY STORE` + `CREATE ENTITY STORE` — server restart'ında veri kaybı yok; `MCP_STORE_PREFIX` env ile multi-instance izolasyon. | `mcp_server_evosql/server.py` |
+| 4 | `pyproject.toml` — installable as a console script (`pip install -e .` → `mcp-server-evosql`). Sadece evosql_memory binding'ine bağımlı, başka pip dep yok. | `client/mcp-server-evosql/pyproject.toml` (new) |
+| 5 | `examples/claude_desktop_config.json` — Claude Desktop / Claude Code'a yapıştırılacak hazır JSON; macOS / Windows config dosya yolları belgelenmiş. | `examples/claude_desktop_config.json` (new) |
+| 6 | `tests/test_mcp.py` — server'ı subprocess olarak spawn eder (Claude Desktop'ın yaptığı gibi), JSON-RPC mesajları gönderir, yanıtları doğrular. 8 case: initialize handshake, tools/list discovery, save+search round-trip, tag-filtered search, recent ordering, forget, list_tags aggregation, "user_id LLM tarafından override edilemez" izolasyon testi. | `client/mcp-server-evosql/tests/test_mcp.py` (new) |
+| 7 | `README.md` — neden, ne sunuyor, nasıl kurulur (Docker → SDK build → Claude Desktop config), env vars tablosu, JSON-RPC wire format, bilinen sınırlar. | `client/mcp-server-evosql/README.md` (new) |
+| 8 | `client/README.md` — yeni "Servers" bölümü, MCP satırı eklenmiş; mevcut dil binding tablosu olduğu gibi kalmış. | `client/README.md` |
+| 9 | Verification: `python3 tests/test_mcp.py` → 8/8 passed. Live EvolutionDB üstünde subprocess spawn → save/search/forget/list_tags hepsi yeşil. | manual |
+| 10 | tasks.md entry + commit + PR. | `tasks.md` |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
