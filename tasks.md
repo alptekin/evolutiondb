@@ -3989,6 +3989,23 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
+### Task 230: ✅ Local LLM support — Ollama / Llama 3.1 8B (Feature #230)
+
+**Goal:** Demo agent'ın LLM seçimini üç yola çıkarıyoruz — bulut Claude (Task 228), deterministik stub (Task 228), ve şimdi local Ollama. Aynı agent loop, aynı tool schema, aynı senaryo; tek fark `make_llm()` fonksiyonunun env değişkenlerine bakarak hangi backend'i tercih ettiği. Local Ollama yolu CPU üstünde çalışan Llama 3.1 8B Instruct (4-bit quantized) modeli ile EvolutionDB'yi regulated / on-prem / offline ortamlarda da gerçek bir LLM ile sürebilir hale getiriyor.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `OllamaLLM` sınıfı — `/api/chat` endpoint'ine OpenAI-shaped tools listesi gönderir; modelin `message.tool_calls` çıktısını agent loop'un beklediği `{name, input}` formatına çevirir. Anthropic-shaped chat history'yi Ollama'nın flat formatına dönüştüren `_to_ollama_messages` helper'ı. | `examples/full_agent_demo/llm.py` |
+| 2 | `make_llm()` precedence — `OLLAMA_BASE_URL` veya `OLLAMA_MODEL` set ise OllamaLLM, sonra `ANTHROPIC_API_KEY` set ise ClaudeLLM, hiçbiri yoksa StubLLM. | `examples/full_agent_demo/llm.py` |
+| 3 | `requirements.txt` — `requests>=2.31` (lazy-imported by OllamaLLM, ucuz dependency). | `examples/full_agent_demo/requirements.txt` |
+| 4 | `docker-compose.demo.yml` — `local-llm` profili altında `ollama` (image: ollama/ollama:latest, persistent volume) + `ollama-pull` (init container, model'i otomatik indirir) servisleri. Default profilde aktif değil — opt-in. | `docker-compose.demo.yml` |
+| 5 | `.env.example` — yorum satırları ile üç LLM backend'inin nasıl seçildiğini belgele; OLLAMA_BASE_URL ve OLLAMA_MODEL placeholder'ları. | `examples/full_agent_demo/.env.example` |
+| 6 | `README.md` — "With a local LLM (Ollama / Llama 3.1 8B)" bölümü: nasıl `--profile local-llm` ile çalıştırılır, ilk boot'ta ne oluyor (5GB indirme, tek seferlik), make_llm precedence kuralı, küçük model uyarıları (tool-call güvenilirliği), CPU latency beklentileri. | `examples/full_agent_demo/README.md` |
+| 7 | Verification — `make_llm()` priority test: OLLAMA_MODEL set → OllamaLLM, hiçbir env yok → StubLLM (Python import + class kontrol). Live e2e test (Docker'la) — Docker daemon çevrimdışı olduğunda imkânsız ama kod purely additive: stub/Claude path'leri aynı kaldı. | manual |
+| 8 | tasks.md entry + commit + PR. | `tasks.md` |
+
+---
+
 ### Task 232: ✅ MCP Server — Claude Desktop ↔ EvolutionDB long-term memory (Feature #232)
 
 **Goal:** Claude Desktop / Claude Code'u EvolutionDB'ye gerçek bir uzun-vadeli hafıza backend'i olarak bağlamak. Pipeline: `Claude Max → MCP Server → EvolutionDB (local Docker)`. Her sohbette Claude tool çağrısı ile yeni bilgileri kaydeder, sonraki sohbetlerde aynı araçla çağırır — kullanıcı her seferinde aynı bağlamı tekrar yapıştırmak zorunda kalmaz, token tasarrufu yapar (~3.5×).

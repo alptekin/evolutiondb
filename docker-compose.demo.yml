@@ -1,16 +1,31 @@
-# docker-compose.demo.yml — single-shot Claude-backed agent demo.
+# docker-compose.demo.yml — single-shot agent demo.
 #
-# Brings up the EvolutionDB server, the demo agent container, and
-# runs the full end-to-end memory test suite. With ANTHROPIC_API_KEY
-# set, the agent calls Claude Sonnet 4 for real; without, the
-# bundled deterministic StubLLM drives the same scenario.
+# Brings up EvolutionDB + the agent container + (optionally) a local
+# Ollama LLM. The agent picks its LLM backend by env var:
 #
-# Single-command run:
+#   1. OLLAMA_BASE_URL  → OllamaLLM   (local, CPU-friendly)
+#   2. ANTHROPIC_API_KEY → ClaudeLLM  (cloud)
+#   3. neither           → StubLLM    (deterministic, offline / CI)
+#
+# Three ways to run:
+#
+#   # Default — StubLLM (offline, no key, no GPU):
 #   docker compose -f docker-compose.demo.yml up --build --abort-on-container-exit
 #
+#   # Real Claude:
+#   ANTHROPIC_API_KEY=sk-ant-... \
+#     docker compose -f docker-compose.demo.yml up --build --abort-on-container-exit
+#
+#   # Local Ollama (Llama 3.1 8B Instruct on CPU):
+#   docker compose -f docker-compose.demo.yml --profile local-llm up \
+#       --build --abort-on-container-exit
+#
+# The first run with --profile local-llm pulls the 4-bit-quantised
+# Llama 3.1 8B model on first boot (~5 GB on disk, one-shot download).
+# Subsequent runs reuse the persistent volume.
+#
 # The exit code of the `agent` container becomes the compose run's
-# exit code, so this is also a CI-friendly "did the agent demo
-# break" check.
+# exit code, so this is also a CI-friendly "did the agent demo break".
 services:
   evosql:
     # Build evosql from the repo so the demo always tracks the current
@@ -36,14 +51,110 @@ services:
     build:
       context: .
       dockerfile: examples/full_agent_demo/Dockerfile
+    # `.env` (next to docker-compose.demo.yml) is read directly into
+    # the container — no shell interpolation involved, so a key with
+    # special characters or odd line endings can't get silently lost
+    # the way `environment: ANTHROPIC_API_KEY: ${...:-}` did. Optional:
+    # if .env doesn't exist, the agent falls back to StubLLM.
+    env_file:
+      - .env
     environment:
       EVOSQL_HOST: evosql
       EVOSQL_PORT: 9967
       EVOSQL_USER: admin
       EVOSQL_PASSWORD: admin
-      # Pass through ANTHROPIC_API_KEY from the host shell. When
-      # unset the agent falls back to the deterministic StubLLM.
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL:   ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
     depends_on:
       - evosql
+
+  # ----- Web UI (agent-web profile) ---------------------------------
+  # Same Dockerfile as the test runner above, but command override
+  # boots a FastAPI server on :8000 that serves examples/full_agent_demo
+  # /static/index.html — a chat page where you type messages and watch
+  # the agent's tool calls + memory grow live.
+  #
+  # Run:
+  #   docker compose -f docker-compose.demo.yml --profile web up -d
+  # Then open http://localhost:8000
+  #
+  # Pair with --profile local-llm to drive the page through Ollama:
+  #   docker compose -f docker-compose.demo.yml --profile web \
+  #       --profile local-llm --env-file .env up -d
+  agent-web:
+    build:
+      context: .
+      dockerfile: examples/full_agent_demo/Dockerfile
+    profiles: [web]
+    # Wait for evosql, then run uvicorn binding to 0.0.0.0 so the host
+    # port mapping reaches it. Single-line `exec` so YAML / sh parsing
+    # doesn't drop the --host flag.
+    command:
+      - sh
+      - -c
+      - >
+        for i in $$(seq 1 60); do
+          python3 -c 'import socket; s=socket.create_connection(("evosql",9967),1); s.close()' 2>/dev/null && break;
+          sleep 1;
+        done;
+        cd /app && exec python3 -m uvicorn web_server:app --host 0.0.0.0 --port 8000 --proxy-headers
+    # `.env` is read directly — no shell interpolation, so the key
+    # value transmits verbatim. Place ANTHROPIC_API_KEY (cloud LLM)
+    # OR OLLAMA_BASE_URL (local LLM) there; the agent's make_llm()
+    # picks the right backend based on which one is set.
+    env_file:
+      - .env
+    environment:
+      EVOSQL_HOST: evosql
+      EVOSQL_PORT: 9967
+      EVOSQL_USER: admin
+      EVOSQL_PASSWORD: admin
+      # Optional: override the session id / store prefix the web UI
+      # binds to so two browser tabs against two compose stacks don't
+      # mix. These are NOT secrets so interpolation is fine.
+      WEB_STORE_PREFIX:  ${WEB_STORE_PREFIX:-web}
+      WEB_SESSION_ID:    ${WEB_SESSION_ID:-browser-session}
+      # Sticky user_id for every save_memory / search_memory call.
+      # The model may invent different values ("user", "default_user",
+      # the person's name, etc.); execute_tool overrides them all
+      # with this sticky id so writes and reads meet in the same
+      # namespace.
+      WEB_USER_ID:       ${WEB_USER_ID:-alptekin_topal}
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    depends_on:
+      - evosql
+
+
+  # ----- Optional: local Ollama LLM ----------------------------------
+  # Activate with `--profile local-llm`. The init container pre-pulls
+  # the configured model so the first agent turn doesn't time out
+  # waiting for a 5 GB download.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    volumes:
+      - ollama_data:/root/.ollama
+    expose:
+      - "11434"
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    depends_on:
+      - ollama
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for ollama to come up, then pull the model. exits clean
+        # so it doesn't block compose on success.
+        for i in $$(seq 1 30); do
+          if ollama list -- 2>/dev/null; then break; fi
+          sleep 2
+        done
+        ollama pull "$${OLLAMA_MODEL:-llama3.2:3b-instruct-q4_K_M}"
+    environment:
+      OLLAMA_HOST:  http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b-instruct-q4_K_M}
+
+volumes:
+  ollama_data:

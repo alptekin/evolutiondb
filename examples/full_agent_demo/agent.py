@@ -31,25 +31,83 @@ from llm           import LLM, SYSTEM_PROMPT, TOOL_SCHEMAS, make_llm
 
 def execute_tool(backend: MemoryBackend, name: str, args: Dict[str, Any]) -> str:
     """Run the agent's tool against the live memory backend and
-    return the JSON string the model will see as tool_result."""
+    return the JSON string the model will see as tool_result.
+
+    Small models (Llama 3.x 8B, Qwen 2.5 7B) routinely emit calls with
+    missing or malformed args. Rather than crashing the turn we
+    coerce gracefully and return a structured error string so the
+    model can self-correct on the next iteration.
+
+    Even strong models (Claude Sonnet 4) drift on the 'user_id' arg —
+    they invent values like 'user' / 'default_user' / 'alptekin' /
+    the user's name across the same conversation, fragmenting the
+    namespace so a later search_memory misses earlier facts. We
+    override server-side: whatever the model passes in, we replace
+    with a single sticky id from WEB_USER_ID env (or 'default_user'
+    if unset). Same effect as the deterministic 'session-bound id'
+    Claude best-practice docs recommend, applied at the tool boundary
+    so it can never be bypassed."""
+
+    DEFAULT_USER = os.environ.get("WEB_USER_ID", "default_user")
+
+    def _coerce_str(v, default=""):
+        if v is None: return default
+        if isinstance(v, (list, tuple)):
+            return ", ".join(map(str, v))
+        return str(v)
+
+    def _coerce_tags(v):
+        if v is None: return []
+        if isinstance(v, list):  return [str(x) for x in v]
+        if isinstance(v, str):
+            # Llama sometimes serialises tags as a single quoted Python
+            # repr, e.g. "['jazz', 'musician']" — try json.loads, fall
+            # back to a 1-element list.
+            try:
+                parsed = json.loads(v.replace("'", '"'))
+                if isinstance(parsed, list):
+                    return [str(x) for x in parsed]
+            except Exception:
+                pass
+            return [v]
+        return [str(v)]
+
+    # Fixed user_id, overrides whatever the model invented. Both
+    # save_memory and search_memory route through the same namespace
+    # so writes and reads always meet.
+    forced_user = DEFAULT_USER
+
     if name == "save_memory":
+        fact = _coerce_str(args.get("fact"))
+        if not fact:
+            return json.dumps({"ok": False,
+                                 "error": "save_memory requires non-empty 'fact'"})
         key = backend.save_memory(
-            user_id=args["user_id"],
-            fact=args["fact"],
-            tags=args.get("tags") or [])
-        return json.dumps({"ok": True, "key": key})
+            user_id=forced_user,
+            fact=fact,
+            tags=_coerce_tags(args.get("tags")))
+        return json.dumps({"ok": True, "key": key, "user_id": forced_user})
 
     if name == "search_memory":
+        query = _coerce_str(args.get("query"))
+        if not query:
+            return json.dumps({"ok": False,
+                                 "error": "search_memory requires non-empty 'query'"})
         results = backend.search_memory(
-            user_id=args["user_id"],
-            query=args["query"])
-        return json.dumps({"ok": True, "results": results})
+            user_id=forced_user,
+            query=query)
+        return json.dumps({"ok": True, "results": results,
+                              "user_id": forced_user})
 
     if name == "remember_entity":
+        ekey = _coerce_str(args.get("key"))
+        summ = _coerce_str(args.get("summary"))
+        if not ekey or not summ:
+            return json.dumps({"ok": False,
+                                 "error": "remember_entity requires 'key' + 'summary'"})
         backend.remember_entity(
-            key=args["key"],
-            summary=args["summary"],
-            facts=args.get("facts"))
+            key=ekey, summary=summ,
+            facts=args.get("facts") if isinstance(args.get("facts"), dict) else None)
         return json.dumps({"ok": True})
 
     return json.dumps({"ok": False,
