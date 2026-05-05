@@ -123,6 +123,7 @@ services:
     depends_on:
       - evosql
 
+
   # ----- Optional: local Ollama LLM ----------------------------------
   # Activate with `--profile local-llm`. The init container pre-pulls
   # the configured model so the first agent turn doesn't time out
