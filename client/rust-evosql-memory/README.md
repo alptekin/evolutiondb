@@ -4,6 +4,12 @@ Rust bindings over `libevosql-memory`. Cargo crate that links the
 static archive at build time, exposes a `Connection` handle with
 typed errors, and a `format_vector` helper.
 
+> **Pre-built binaries** for Linux / macOS / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Set `EVOSQL_MEMORY_LIB_DIR` to the unpacked directory and skip
+> the in-tree `make -C ../libevosql-memory` step.
+
 ## Build
 
 The C SDK must be built first:

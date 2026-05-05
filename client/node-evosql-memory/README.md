@@ -2,6 +2,12 @@
 
 `ffi-napi`-based binding over `libevosql-memory`. Supports Node 18+.
 
+> **Pre-built binaries** for Linux / macOS / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Set `EVOSQL_MEMORY_LIB` to the unpacked shared library path and
+> skip the `make -C ../libevosql-memory` step.
+
 ## Build
 
 ```bash

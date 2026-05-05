@@ -25,12 +25,35 @@
 #include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
-#include <unistd.h>
 #include <errno.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
+
+/* Windows / POSIX socket abstraction. Mirrors cli/evosql-cli.c so
+ * the SDK can be cross-compiled with MinGW (linked against ws2_32). */
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #include <windows.h>
+  #pragma comment(lib, "ws2_32.lib")
+  #define EVO_CLOSE(s) closesocket(s)
+  #define EVO_LASTERR  WSAGetLastError()
+  static void evo_winsock_startup_once(void) {
+      static int done = 0;
+      if (done) return;
+      WSADATA w;
+      WSAStartup(MAKEWORD(2, 2), &w);
+      done = 1;
+  }
+#else
+  #include <unistd.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #define EVO_CLOSE(s) close(s)
+  #define EVO_LASTERR  errno
+  static inline void evo_winsock_startup_once(void) {}
+#endif
+
 #include "../include/evosql_memory.h"
 
 /* ----------------------------------------------------------------
@@ -140,6 +163,10 @@ evo_conn_t *evo_connect(const char *host, int port,
         return NULL;
     }
 
+    /* On Windows, winsock has to be initialised once per process before
+     * any socket call. Idempotent on POSIX. */
+    evo_winsock_startup_once();
+
     /* Resolve host. */
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
@@ -161,7 +188,7 @@ evo_conn_t *evo_connect(const char *host, int port,
     if (connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
         evo_set_error(EVO_ERR_CONNECT, "connect(%s:%d) failed: %s",
                       host, port, strerror(errno));
-        close(sock);
+        EVO_CLOSE(sock);
         freeaddrinfo(res);
         return NULL;
     }
@@ -170,7 +197,7 @@ evo_conn_t *evo_connect(const char *host, int port,
     evo_conn_t *c = (evo_conn_t *)calloc(1, sizeof(*c));
     if (!c) {
         evo_set_error(EVO_ERR_BUFFER, "out of memory");
-        close(sock);
+        EVO_CLOSE(sock);
         return NULL;
     }
     c->sock = sock;
@@ -223,7 +250,7 @@ void evo_close(evo_conn_t *conn)
     if (!conn) return;
     /* Best-effort QUIT; server replies BYE but we don't care. */
     send_line(conn, "QUIT\n");
-    if (conn->sock >= 0) close(conn->sock);
+    if (conn->sock >= 0) EVO_CLOSE(conn->sock);
     free(conn);
 }
 

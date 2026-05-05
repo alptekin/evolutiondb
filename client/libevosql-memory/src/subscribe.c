@@ -27,13 +27,43 @@
 #include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
-#include <pthread.h>
-#include <unistd.h>
 #include <errno.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
+
+/* Windows / POSIX socket abstraction. MinGW-w64 ships a winpthreads
+ * shim so <pthread.h> works on Windows too — the only thing we have
+ * to switch is the socket headers and the close() name. */
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #include <windows.h>
+  #pragma comment(lib, "ws2_32.lib")
+  #include <pthread.h>
+  #define EVO_CLOSE(s)    closesocket(s)
+  #define EVO_SHUTDOWN(s) shutdown(s, SD_BOTH)
+  /* MinGW's <errno.h> doesn't define EPROTO; pick a stand-in that
+   * exists on every platform we ship to. */
+  #ifndef EPROTO
+    #define EPROTO ENOTRECOVERABLE
+  #endif
+  static void evo_winsock_startup_once_sub(void) {
+      static int done = 0;
+      if (done) return;
+      WSADATA w;
+      WSAStartup(MAKEWORD(2, 2), &w);
+      done = 1;
+  }
+#else
+  #include <unistd.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <pthread.h>
+  #define EVO_CLOSE(s)    close(s)
+  #define EVO_SHUTDOWN(s) shutdown(s, SHUT_RDWR)
+  static inline void evo_winsock_startup_once_sub(void) {}
+#endif
+
 #include "../include/evosql_memory.h"
 
 /* Forward decls from conn.c — the subscription opens its own raw
@@ -139,6 +169,7 @@ static int sub_send_line(int fd, const char *line)
 static int evo_dial(const char *host, int port,
                      const char *user, const char *password)
 {
+    evo_winsock_startup_once_sub();
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_INET;
@@ -158,7 +189,7 @@ static int evo_dial(const char *host, int port,
     if (connect(s, res->ai_addr, res->ai_addrlen) < 0) {
         evo_set_error(-2, "subscribe: connect(%s:%d) failed: %s",
                       host, port, strerror(errno));
-        close(s);
+        EVO_CLOSE(s);
         freeaddrinfo(res);
         return -1;
     }
@@ -193,7 +224,7 @@ static int evo_dial(const char *host, int port,
     return s;
 
 err:
-    close(s);
+    EVO_CLOSE(s);
     return -1;
 }
 
@@ -272,7 +303,7 @@ evo_subscription_t *evo_subscribe(const char *host, int port,
     evo_subscription_t *s = (evo_subscription_t *)calloc(1, sizeof(*s));
     if (!s) {
         evo_set_error(-6, "out of memory");
-        close(sock);
+        EVO_CLOSE(sock);
         return NULL;
     }
     s->kind  = SUB_NOTIFY;
@@ -290,7 +321,7 @@ evo_subscription_t *evo_subscribe(const char *host, int port,
     if (sub_send_all(sock, hdr, hl) < 0 ||
         sub_send_all(sock, sql, sql_len) < 0) {
         evo_set_error(-4, "subscribe: SQL frame send failed");
-        close(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
+        EVO_CLOSE(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
         return NULL;
     }
 
@@ -304,19 +335,19 @@ evo_subscription_t *evo_subscribe(const char *host, int port,
         if (strcmp(line, "READY") == 0) saw_ready = 1;
         else if (strncmp(line, "ERR ", 4) == 0) {
             evo_set_error(-5, "subscribe: %s", line + 4);
-            close(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
+            EVO_CLOSE(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
             return NULL;
         }
     }
     if (!saw_ready) {
         evo_set_error(-4, "subscribe: never saw READY after LISTEN");
-        close(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
+        EVO_CLOSE(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
         return NULL;
     }
 
     if (pthread_create(&s->worker, NULL, notify_worker, s) != 0) {
         evo_set_error(-1, "subscribe: pthread_create failed");
-        close(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
+        EVO_CLOSE(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
         return NULL;
     }
     s->worker_started = 1;
@@ -391,6 +422,8 @@ evo_subscription_t *evo_cdc_subscribe(const char *host, int cdc_port,
         return NULL;
     }
 
+    evo_winsock_startup_once_sub();
+
     /* CDC port is plain TCP — no EVO handshake, no auth. */
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
@@ -406,14 +439,14 @@ evo_subscription_t *evo_cdc_subscribe(const char *host, int cdc_port,
         connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
         evo_set_error(-2, "cdc_subscribe: connect(%s:%d) failed: %s",
                       host, cdc_port, strerror(errno));
-        if (sock >= 0) close(sock);
+        if (sock >= 0) EVO_CLOSE(sock);
         freeaddrinfo(res);
         return NULL;
     }
     freeaddrinfo(res);
 
     evo_subscription_t *s = (evo_subscription_t *)calloc(1, sizeof(*s));
-    if (!s) { close(sock); evo_set_error(-6, "OOM"); return NULL; }
+    if (!s) { EVO_CLOSE(sock); evo_set_error(-6, "OOM"); return NULL; }
     s->kind  = SUB_CDC;
     s->sock  = sock;
     s->cb    = callback;
@@ -426,7 +459,7 @@ evo_subscription_t *evo_cdc_subscribe(const char *host, int cdc_port,
 
     if (pthread_create(&s->worker, NULL, cdc_worker, s) != 0) {
         evo_set_error(-1, "cdc_subscribe: pthread_create failed");
-        close(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
+        EVO_CLOSE(sock); pthread_mutex_destroy(&s->cb_lock); free(s);
         return NULL;
     }
     s->worker_started = 1;
@@ -451,13 +484,13 @@ void evo_unsubscribe(evo_subscription_t *sub)
      * unblocks readers without reusing the fd until we explicitly
      * close it below. */
     sub->should_stop = 1;
-    if (sub->sock >= 0) shutdown(sub->sock, SHUT_RDWR);
+    if (sub->sock >= 0) EVO_SHUTDOWN(sub->sock);
 
     if (sub->worker_started) {
         pthread_join(sub->worker, NULL);
     }
 
-    if (sub->sock >= 0) close(sub->sock);
+    if (sub->sock >= 0) EVO_CLOSE(sub->sock);
     pthread_mutex_destroy(&sub->cb_lock);
     free(sub);
 }
