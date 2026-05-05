@@ -69,6 +69,55 @@ services:
     depends_on:
       - evosql
 
+  # ----- Web UI (agent-web profile) ---------------------------------
+  # Same Dockerfile as the test runner above, but command override
+  # boots a FastAPI server on :8000 that serves examples/full_agent_demo
+  # /static/index.html — a chat page where you type messages and watch
+  # the agent's tool calls + memory grow live.
+  #
+  # Run:
+  #   docker compose -f docker-compose.demo.yml --profile web up -d
+  # Then open http://localhost:8000
+  #
+  # Pair with --profile local-llm to drive the page through Ollama:
+  #   docker compose -f docker-compose.demo.yml --profile web \
+  #       --profile local-llm --env-file .env up -d
+  agent-web:
+    build:
+      context: .
+      dockerfile: examples/full_agent_demo/Dockerfile
+    profiles: [web]
+    # Wait for evosql, then run uvicorn binding to 0.0.0.0 so the host
+    # port mapping reaches it. Single-line `exec` so YAML / sh parsing
+    # doesn't drop the --host flag.
+    command:
+      - sh
+      - -c
+      - >
+        for i in $$(seq 1 60); do
+          python3 -c 'import socket; s=socket.create_connection(("evosql",9967),1); s.close()' 2>/dev/null && break;
+          sleep 1;
+        done;
+        cd /app && exec python3 -m uvicorn web_server:app --host 0.0.0.0 --port 8000 --proxy-headers
+    environment:
+      EVOSQL_HOST: evosql
+      EVOSQL_PORT: 9967
+      EVOSQL_USER: admin
+      EVOSQL_PASSWORD: admin
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL:   ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      OLLAMA_BASE_URL:   ${OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL:      ${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}
+      # Optional: override the session id / store prefix the web UI
+      # binds to so two browser tabs against two compose stacks don't
+      # mix.
+      WEB_STORE_PREFIX:  ${WEB_STORE_PREFIX:-web}
+      WEB_SESSION_ID:    ${WEB_SESSION_ID:-browser-session}
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    depends_on:
+      - evosql
+
   # ----- Optional: local Ollama LLM ----------------------------------
   # Activate with `--profile local-llm`. The init container pre-pulls
   # the configured model so the first agent turn doesn't time out
