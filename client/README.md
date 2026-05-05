@@ -39,6 +39,20 @@ re-implementing the wire protocol.
 | Ruby        | [`ruby-evosql-memory/`](ruby-evosql-memory/)     | shipped — Task 227 | `ffi` gem, Ruby 2.7+ |
 | Swift       | [`swift-evosql-memory/`](swift-evosql-memory/)   | shipped — Task 227 | SwiftPM, native C interop, Swift 5.7+ |
 
+## Pre-built binaries (recommended)
+
+Every release tagged `v*` triggers
+[`.github/workflows/release.yml`](../.github/workflows/release.yml),
+which builds `libevosql-memory.{so,dylib,dll}` for five platforms
+(Linux x64 / arm64, macOS arm64 / x64, Windows x64) and attaches
+them as GitHub Release assets:
+
+> https://github.com/alptekin/evolutiondb/releases/latest
+
+Each language binding's README shows the env var (`EVOSQL_MEMORY_LIB`,
+`EVOSQL_MEMORY_LIB_DIR`, `-Djna.library.path=...`, `CGO_LDFLAGS=-L...`,
+etc.) you set so that binding picks up the pre-built artifact.
+
 ## Build the C SDK once
 
 Every other binding consumes the artifact at

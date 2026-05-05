@@ -2,6 +2,12 @@
 
 JNA-based binding over `libevosql-memory`. Targets Java 17+.
 
+> **Pre-built binaries** for Linux / macOS / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Pass the unpacked path via `-Djna.library.path=…` and skip the
+> `make -C ../libevosql-memory` step.
+
 ## Build
 
 ```bash

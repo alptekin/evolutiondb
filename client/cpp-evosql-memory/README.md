@@ -3,6 +3,12 @@
 Header-only RAII wrapper around `libevosql-memory`. Drops in to any
 C++17 project — no build system required.
 
+> **Pre-built binaries** for Linux / macOS / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Link against the unpacked `libevosql-memory.a` (or the shared
+> library) and skip the `make -C ../libevosql-memory` step.
+
 ## Usage
 
 ```cpp
