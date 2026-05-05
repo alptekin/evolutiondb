@@ -3,6 +3,12 @@
 Swift Package Manager binding over `libevosql-memory`. Uses Swift's
 native C interop — no FFI gem needed. Targets Swift 5.7+.
 
+> **Pre-built binaries** for macOS / Linux / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Pass the unpacked directory via `-Xcc -I… -Xlinker -L…` and skip
+> the `make -C ../libevosql-memory` step.
+
 ## Build
 
 ```bash

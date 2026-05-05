@@ -3970,6 +3970,25 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
+### Task 229: ✅ Multi-Platform Native Build Pipeline + GitHub Releases (Feature #229)
+
+**Goal:** Paket repo'larına (NuGet, PyPI, Maven Central, RubyGems, crates.io) yayın yapmadan önceki zorunlu önkoşul. Beş platform (Linux x64, Linux arm64, macOS arm64, macOS x64, Windows x64) için `libevosql-memory.{so,dylib,dll}` artefaktları her tag push'unda otomatik üretiliyor; GitHub Releases'a yükleniyor; her dil binding'inin README'si bu binary'lere işaret ediyor. Phase 1 dağıtım stratejisi — geri çekilebilir, taahhütsüz.
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | Windows MinGW desteği için C SDK'da socket shim — `_WIN32` ifdef ile `<winsock2.h>` + `closesocket` + `WSAStartup`. `EPROTO` fallback (MinGW errno'suz). conn.c + subscribe.c. | `client/libevosql-memory/src/conn.c`, `client/libevosql-memory/src/subscribe.c` |
+| 2 | Makefile multi-platform branch — Darwin / Linux / MINGW / MSYS algılayıp doğru SHARED_EXT (.dylib/.so/.dll) ve LDLIBS (-lpthread vs -lws2_32 -lpthread) seçimi. Windows `--out-implib` ile import lib üretimi. | `client/libevosql-memory/Makefile` |
+| 3 | `.github/workflows/native-build.yml` — 5 leg matrix (ubuntu-latest, ubuntu-22.04-arm, macos-14, macos-13, windows-latest); MinGW chocolatey kurulumu Windows için; `make clean all` her leg'de; her platform için ayrı upload-artifact (libevosql-memory-<os>-<arch>) shared+static+header+README ile. | `.github/workflows/native-build.yml` (new) |
+| 4 | `.github/workflows/release.yml` — `v*` tag push'unda native-build matrix'ini reuse `workflow_call` ile çağırıyor; download-artifact ile her platform paketini topluyor; tar.gz/zip olarak yeniden paketliyor; SHA256SUMS üretiyor; `gh release create` ile asset'leri yüklüyor. Idempotent: var olan release'e ek asset upload eder. | `.github/workflows/release.yml` (new) |
+| 5 | C SDK README'sine "Pre-built binaries" bölümü — beş platform asset tablosu, curl + tar örneği, install path. | `client/libevosql-memory/README.md` |
+| 6 | Her dil binding README'sinin başına "Pre-built binaries" admonition'ı — kullanıcının nereden indireceği + hangi env var ile kullanacağı (`EVOSQL_MEMORY_LIB`, `EVOSQL_MEMORY_LIB_DIR`, `-Djna.library.path=`, `CGO_LDFLAGS=`, vs.) tek satırda. | `client/{python,rust,go,cpp,dotnet,node,java,ruby,swift}-evosql-memory/README.md` |
+| 7 | `client/README.md` — top-level "Pre-built binaries (recommended)" section pointing at the release pipeline + env-var summary. | `client/README.md` |
+| 8 | Verification (yerel): macOS arm64 üstünde `make clean test` clean — Windows shim'i POSIX path'te bypass ediliyor, mevcut davranış değişmiyor. | manual |
+| 9 | tasks.md entry + commit + PR. | `tasks.md` |
+| 10 | Sonraki adım not: tag push edildiğinde matrix gerçekten beş platformda compile edip GH Release asset'lerini doldurdukça, paket repo'larına (Phase 2) yayın açılabilir. | (next-step doc) |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening

@@ -4,6 +4,12 @@ cgo binding over `libevosql-memory`. Idiomatic Go API with a
 `Conn` struct, typed `*Error` returns, and a finalizer-backed
 `Close()`.
 
+> **Pre-built binaries** for Linux / macOS / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Pass the unpacked directory through `CGO_LDFLAGS=-L… -levosql-memory`
+> and skip the `make -C ../libevosql-memory` step.
+
 ## Build
 
 ```bash
