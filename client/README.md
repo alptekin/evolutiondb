@@ -39,6 +39,12 @@ re-implementing the wire protocol.
 | Ruby        | [`ruby-evosql-memory/`](ruby-evosql-memory/)     | shipped — Task 227 | `ffi` gem, Ruby 2.7+ |
 | Swift       | [`swift-evosql-memory/`](swift-evosql-memory/)   | shipped — Task 227 | SwiftPM, native C interop, Swift 5.7+ |
 
+## Servers
+
+| Server | Path | Status | Purpose |
+|--------|------|--------|---------|
+| MCP (stdio) | [`mcp-server-evosql/`](mcp-server-evosql/) | shipped — Task 232 | Plug into Claude Desktop / Claude Code; gives the chat persistent long-term memory backed by EvolutionDB |
+
 ## Pre-built binaries (recommended)
 
 Every release tagged `v*` triggers
