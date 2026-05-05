@@ -3,6 +3,12 @@
 Pythonic ctypes wrapper over `libevosql-memory.{dylib,so}` plus
 ready-to-use adapters for six agent frameworks.
 
+> **Pre-built binaries** for Linux x64 / arm64, macOS arm64 / x64,
+> and Windows x64 are attached to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Point `EVOSQL_MEMORY_LIB` at the downloaded shared library and
+> skip the `make -C ../libevosql-memory` step.
+
 ```
 client/python-evosql-memory/
 ├── evosql_memory/

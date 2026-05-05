@@ -3,6 +3,12 @@
 `ffi`-based binding over `libevosql-memory`. Pure-Ruby (no C
 extension build), works with MRI Ruby 2.7+.
 
+> **Pre-built binaries** for Linux / macOS / Windows are attached
+> to every GitHub Release —
+> [github.com/alptekin/evolutiondb/releases/latest](https://github.com/alptekin/evolutiondb/releases/latest).
+> Set `ENV['EVOSQL_MEMORY_LIB']` to the unpacked shared library
+> path and skip the `make -C ../libevosql-memory` step.
+
 ## Build
 
 ```bash

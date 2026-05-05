@@ -20,11 +20,25 @@ INCLUDES = -Iinclude
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
-    SHARED_EXT = dylib
+    SHARED_EXT   = dylib
     SHARED_FLAGS = -dynamiclib -install_name @rpath/libevosql-memory.dylib
-else
-    SHARED_EXT = so
+    LDLIBS       = -lpthread
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+    SHARED_EXT   = dll
+    SHARED_FLAGS = -shared -Wl,--out-implib,$(BUILD_DIR)/libevosql-memory.dll.a
+    LDLIBS       = -lws2_32 -lpthread
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+    SHARED_EXT   = dll
+    SHARED_FLAGS = -shared -Wl,--out-implib,$(BUILD_DIR)/libevosql-memory.dll.a
+    LDLIBS       = -lws2_32 -lpthread
+else ifeq ($(UNAME_S),Linux)
+    SHARED_EXT   = so
     SHARED_FLAGS = -shared -Wl,-soname,libevosql-memory.so
+    LDLIBS       = -lpthread
+else
+    SHARED_EXT   = so
+    SHARED_FLAGS = -shared
+    LDLIBS       = -lpthread
 endif
 
 BUILD_DIR = build
@@ -37,8 +51,6 @@ TEST_BIN          = $(BUILD_DIR)/test_sdk
 TEST_SRC          = tests/test_sdk.c
 TEST_SUB_BIN      = $(BUILD_DIR)/test_subscribe
 TEST_SUB_SRC      = tests/test_subscribe.c
-
-LDLIBS = -lpthread
 
 PKGCONFIG = $(BUILD_DIR)/evosql-memory.pc
 

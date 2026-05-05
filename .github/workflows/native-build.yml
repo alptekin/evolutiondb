@@ -1,0 +1,108 @@
+name: Native build (multi-platform)
+
+# Builds libevosql-memory for every platform we ship binaries for.
+# Triggered:
+#   - on every push to main + every PR (smoke check that all platforms
+#     still compile),
+#   - via workflow_dispatch (so the release workflow can call this
+#     deliberately on a specific tag),
+#   - and via workflow_call (so the release workflow can reuse the
+#     matrix and harvest the artifacts).
+#
+# Per matrix leg we upload an artifact named libevosql-memory-<os>-<arch>
+# containing the platform-correct shared library + the static archive +
+# the public header. The release workflow downloads all of these and
+# repackages them for the GitHub Release.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/libevosql-memory/**'
+      - '.github/workflows/native-build.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'client/libevosql-memory/**'
+      - '.github/workflows/native-build.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name:    linux-x64
+            runner:  ubuntu-latest
+            shared:  libevosql-memory.so
+          - name:    linux-arm64
+            runner:  ubuntu-22.04-arm
+            shared:  libevosql-memory.so
+          - name:    macos-arm64
+            runner:  macos-14            # Apple Silicon
+            shared:  libevosql-memory.dylib
+          - name:    macos-x64
+            runner:  macos-13            # Intel
+            shared:  libevosql-memory.dylib
+          - name:    windows-x64
+            runner:  windows-latest
+            shared:  libevosql-memory.dll
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Windows: install MinGW-w64 so we can build the .dll with the
+      # same Makefile path Linux/macOS use.
+      - name: Install MinGW (Windows only)
+        if: matrix.target.name == 'windows-x64'
+        shell: pwsh
+        run: |
+          choco install -y mingw --no-progress
+          echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" `
+              | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build the SDK
+        shell: bash
+        run: |
+          cd client/libevosql-memory
+          if [ "${{ matrix.target.name }}" = "windows-x64" ]; then
+            export CC=gcc          # MinGW gcc
+            uname -s               # confirm MINGW64_NT-… → Makefile picks .dll path
+          fi
+          make clean all
+
+      - name: Inspect the built artifact
+        shell: bash
+        run: |
+          ls -la client/libevosql-memory/build/
+          file client/libevosql-memory/build/${{ matrix.target.shared }} || true
+
+      - name: Pack the artifact
+        shell: bash
+        run: |
+          OUT=staged-${{ matrix.target.name }}
+          mkdir -p $OUT/libevosql-memory-${{ matrix.target.name }}
+          cp client/libevosql-memory/build/${{ matrix.target.shared }} \
+             $OUT/libevosql-memory-${{ matrix.target.name }}/
+          cp client/libevosql-memory/build/libevosql-memory.a \
+             $OUT/libevosql-memory-${{ matrix.target.name }}/
+          cp client/libevosql-memory/include/evosql_memory.h \
+             $OUT/libevosql-memory-${{ matrix.target.name }}/
+          cp client/libevosql-memory/README.md \
+             $OUT/libevosql-memory-${{ matrix.target.name }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libevosql-memory-${{ matrix.target.name }}
+          path: staged-${{ matrix.target.name }}
+          if-no-files-found: error
+          retention-days: 30
