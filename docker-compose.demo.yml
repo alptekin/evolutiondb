@@ -1,16 +1,31 @@
-# docker-compose.demo.yml — single-shot Claude-backed agent demo.
+# docker-compose.demo.yml — single-shot agent demo.
 #
-# Brings up the EvolutionDB server, the demo agent container, and
-# runs the full end-to-end memory test suite. With ANTHROPIC_API_KEY
-# set, the agent calls Claude Sonnet 4 for real; without, the
-# bundled deterministic StubLLM drives the same scenario.
+# Brings up EvolutionDB + the agent container + (optionally) a local
+# Ollama LLM. The agent picks its LLM backend by env var:
 #
-# Single-command run:
+#   1. OLLAMA_BASE_URL  → OllamaLLM   (local, CPU-friendly)
+#   2. ANTHROPIC_API_KEY → ClaudeLLM  (cloud)
+#   3. neither           → StubLLM    (deterministic, offline / CI)
+#
+# Three ways to run:
+#
+#   # Default — StubLLM (offline, no key, no GPU):
 #   docker compose -f docker-compose.demo.yml up --build --abort-on-container-exit
 #
+#   # Real Claude:
+#   ANTHROPIC_API_KEY=sk-ant-... \
+#     docker compose -f docker-compose.demo.yml up --build --abort-on-container-exit
+#
+#   # Local Ollama (Llama 3.1 8B Instruct on CPU):
+#   docker compose -f docker-compose.demo.yml --profile local-llm up \
+#       --build --abort-on-container-exit
+#
+# The first run with --profile local-llm pulls the 4-bit-quantised
+# Llama 3.1 8B model on first boot (~5 GB on disk, one-shot download).
+# Subsequent runs reuse the persistent volume.
+#
 # The exit code of the `agent` container becomes the compose run's
-# exit code, so this is also a CI-friendly "did the agent demo
-# break" check.
+# exit code, so this is also a CI-friendly "did the agent demo break".
 services:
   evosql:
     # Build evosql from the repo so the demo always tracks the current
@@ -42,8 +57,49 @@ services:
       EVOSQL_USER: admin
       EVOSQL_PASSWORD: admin
       # Pass through ANTHROPIC_API_KEY from the host shell. When
-      # unset the agent falls back to the deterministic StubLLM.
+      # unset the agent falls back to the deterministic StubLLM
+      # — unless the local-llm profile activates Ollama.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL:   ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      # Pre-baked address for the Ollama service in the local-llm
+      # profile. Empty on the default profile so make_llm() doesn't
+      # think Ollama is reachable.
+      OLLAMA_BASE_URL:   ${OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL:      ${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}
     depends_on:
       - evosql
+
+  # ----- Optional: local Ollama LLM ----------------------------------
+  # Activate with `--profile local-llm`. The init container pre-pulls
+  # the configured model so the first agent turn doesn't time out
+  # waiting for a 5 GB download.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    volumes:
+      - ollama_data:/root/.ollama
+    expose:
+      - "11434"
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    depends_on:
+      - ollama
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for ollama to come up, then pull the model. exits clean
+        # so it doesn't block compose on success.
+        for i in $$(seq 1 30); do
+          if ollama list -- 2>/dev/null; then break; fi
+          sleep 2
+        done
+        ollama pull "$${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}"
+    environment:
+      OLLAMA_HOST:  http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}
+
+volumes:
+  ollama_data:

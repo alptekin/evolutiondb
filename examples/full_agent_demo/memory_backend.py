@@ -35,6 +35,18 @@ if os.path.isdir(_PY_SDK) and _PY_SDK not in sys.path:
 
 
 def _e(s: str) -> str:
+    """Escape a value for inclusion in a single-quoted SQL literal.
+
+    The EVO wire protocol is line-based: every SQL statement is sent
+    as one `SQL <len>\\n<sql>\\n` frame. Embedded newlines in a string
+    literal break the server's line reader (it would treat the second
+    line as a separate command). LLM responses routinely include
+    \\n / \\r / \\t — collapse them to spaces so a chat reply never
+    bricks the wire frame, then double single-quotes for SQL.
+    """
+    if not isinstance(s, str):
+        s = str(s)
+    s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
     return s.replace("'", "''")
 
 
