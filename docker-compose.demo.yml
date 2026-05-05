@@ -51,23 +51,78 @@ services:
     build:
       context: .
       dockerfile: examples/full_agent_demo/Dockerfile
+    # `.env` (next to docker-compose.demo.yml) is read directly into
+    # the container — no shell interpolation involved, so a key with
+    # special characters or odd line endings can't get silently lost
+    # the way `environment: ANTHROPIC_API_KEY: ${...:-}` did. Optional:
+    # if .env doesn't exist, the agent falls back to StubLLM.
+    env_file:
+      - .env
     environment:
       EVOSQL_HOST: evosql
       EVOSQL_PORT: 9967
       EVOSQL_USER: admin
       EVOSQL_PASSWORD: admin
-      # Pass through ANTHROPIC_API_KEY from the host shell. When
-      # unset the agent falls back to the deterministic StubLLM
-      # — unless the local-llm profile activates Ollama.
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL:   ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
-      # Pre-baked address for the Ollama service in the local-llm
-      # profile. Empty on the default profile so make_llm() doesn't
-      # think Ollama is reachable.
-      OLLAMA_BASE_URL:   ${OLLAMA_BASE_URL:-}
-      OLLAMA_MODEL:      ${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}
     depends_on:
       - evosql
+
+  # ----- Web UI (agent-web profile) ---------------------------------
+  # Same Dockerfile as the test runner above, but command override
+  # boots a FastAPI server on :8000 that serves examples/full_agent_demo
+  # /static/index.html — a chat page where you type messages and watch
+  # the agent's tool calls + memory grow live.
+  #
+  # Run:
+  #   docker compose -f docker-compose.demo.yml --profile web up -d
+  # Then open http://localhost:8000
+  #
+  # Pair with --profile local-llm to drive the page through Ollama:
+  #   docker compose -f docker-compose.demo.yml --profile web \
+  #       --profile local-llm --env-file .env up -d
+  agent-web:
+    build:
+      context: .
+      dockerfile: examples/full_agent_demo/Dockerfile
+    profiles: [web]
+    # Wait for evosql, then run uvicorn binding to 0.0.0.0 so the host
+    # port mapping reaches it. Single-line `exec` so YAML / sh parsing
+    # doesn't drop the --host flag.
+    command:
+      - sh
+      - -c
+      - >
+        for i in $$(seq 1 60); do
+          python3 -c 'import socket; s=socket.create_connection(("evosql",9967),1); s.close()' 2>/dev/null && break;
+          sleep 1;
+        done;
+        cd /app && exec python3 -m uvicorn web_server:app --host 0.0.0.0 --port 8000 --proxy-headers
+    # `.env` is read directly — no shell interpolation, so the key
+    # value transmits verbatim. Place ANTHROPIC_API_KEY (cloud LLM)
+    # OR OLLAMA_BASE_URL (local LLM) there; the agent's make_llm()
+    # picks the right backend based on which one is set.
+    env_file:
+      - .env
+    environment:
+      EVOSQL_HOST: evosql
+      EVOSQL_PORT: 9967
+      EVOSQL_USER: admin
+      EVOSQL_PASSWORD: admin
+      # Optional: override the session id / store prefix the web UI
+      # binds to so two browser tabs against two compose stacks don't
+      # mix. These are NOT secrets so interpolation is fine.
+      WEB_STORE_PREFIX:  ${WEB_STORE_PREFIX:-web}
+      WEB_SESSION_ID:    ${WEB_SESSION_ID:-browser-session}
+      # Sticky user_id for every save_memory / search_memory call.
+      # The model may invent different values ("user", "default_user",
+      # the person's name, etc.); execute_tool overrides them all
+      # with this sticky id so writes and reads meet in the same
+      # namespace.
+      WEB_USER_ID:       ${WEB_USER_ID:-alptekin_topal}
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    depends_on:
+      - evosql
+
 
   # ----- Optional: local Ollama LLM ----------------------------------
   # Activate with `--profile local-llm`. The init container pre-pulls
@@ -96,10 +151,10 @@ services:
           if ollama list -- 2>/dev/null; then break; fi
           sleep 2
         done
-        ollama pull "$${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}"
+        ollama pull "$${OLLAMA_MODEL:-llama3.2:3b-instruct-q4_K_M}"
     environment:
       OLLAMA_HOST:  http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b-instruct-q4_K_M}
 
 volumes:
   ollama_data:
