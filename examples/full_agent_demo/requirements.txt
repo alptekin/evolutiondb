@@ -1,3 +1,8 @@
 # anthropic — only needed when ANTHROPIC_API_KEY is set; pinned to a
 # version whose Messages API surface matches what agent.py uses.
 anthropic>=0.40,<1.0
+
+# requests — used by OllamaLLM (local-llm profile). Imported lazily,
+# so a missing install would only matter if the user activates that
+# backend. Cheap to bundle anyway.
+requests>=2.31,<3.0
