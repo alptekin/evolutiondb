@@ -31,25 +31,67 @@ from llm           import LLM, SYSTEM_PROMPT, TOOL_SCHEMAS, make_llm
 
 def execute_tool(backend: MemoryBackend, name: str, args: Dict[str, Any]) -> str:
     """Run the agent's tool against the live memory backend and
-    return the JSON string the model will see as tool_result."""
+    return the JSON string the model will see as tool_result.
+
+    Small models (Llama 3.x 8B, Qwen 2.5 7B) routinely emit calls with
+    missing or malformed args. Rather than crashing the turn we
+    coerce gracefully and return a structured error string so the
+    model can self-correct on the next iteration."""
+
+    DEFAULT_USER = "default_user"
+
+    def _coerce_str(v, default=""):
+        if v is None: return default
+        if isinstance(v, (list, tuple)):
+            return ", ".join(map(str, v))
+        return str(v)
+
+    def _coerce_tags(v):
+        if v is None: return []
+        if isinstance(v, list):  return [str(x) for x in v]
+        if isinstance(v, str):
+            # Llama sometimes serialises tags as a single quoted Python
+            # repr, e.g. "['jazz', 'musician']" — try json.loads, fall
+            # back to a 1-element list.
+            try:
+                parsed = json.loads(v.replace("'", '"'))
+                if isinstance(parsed, list):
+                    return [str(x) for x in parsed]
+            except Exception:
+                pass
+            return [v]
+        return [str(v)]
+
     if name == "save_memory":
+        fact = _coerce_str(args.get("fact"))
+        if not fact:
+            return json.dumps({"ok": False,
+                                 "error": "save_memory requires non-empty 'fact'"})
         key = backend.save_memory(
-            user_id=args["user_id"],
-            fact=args["fact"],
-            tags=args.get("tags") or [])
+            user_id=_coerce_str(args.get("user_id"), DEFAULT_USER),
+            fact=fact,
+            tags=_coerce_tags(args.get("tags")))
         return json.dumps({"ok": True, "key": key})
 
     if name == "search_memory":
+        query = _coerce_str(args.get("query"))
+        if not query:
+            return json.dumps({"ok": False,
+                                 "error": "search_memory requires non-empty 'query'"})
         results = backend.search_memory(
-            user_id=args["user_id"],
-            query=args["query"])
+            user_id=_coerce_str(args.get("user_id"), DEFAULT_USER),
+            query=query)
         return json.dumps({"ok": True, "results": results})
 
     if name == "remember_entity":
+        ekey = _coerce_str(args.get("key"))
+        summ = _coerce_str(args.get("summary"))
+        if not ekey or not summ:
+            return json.dumps({"ok": False,
+                                 "error": "remember_entity requires 'key' + 'summary'"})
         backend.remember_entity(
-            key=args["key"],
-            summary=args["summary"],
-            facts=args.get("facts"))
+            key=ekey, summary=summ,
+            facts=args.get("facts") if isinstance(args.get("facts"), dict) else None)
         return json.dumps({"ok": True})
 
     return json.dumps({"ok": False,
