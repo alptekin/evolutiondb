@@ -1,0 +1,81 @@
+# Smithery configuration — https://smithery.ai/docs/config#smitheryyaml
+#
+# Lets Smithery's web installer drop EvolutionDB long-term memory into
+# any MCP-aware client (Claude Desktop, Cursor, Cline, etc.) with a few
+# clicks. The user supplies their connection details + namespace; we
+# spawn `uvx mcp-server-evolutiondb` over stdio with the env populated.
+#
+# Pre-req: a running EvolutionDB instance reachable on the configured
+# host:port. The easiest way is `docker compose up -d` from the main
+# repo (https://github.com/alptekin/evolutiondb).
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    title: EvolutionDB Long-Term Memory
+    description: >
+      Persistent long-term memory for Claude. Anything Claude decides to
+      remember during a conversation is written to a real database; in
+      any future session — same window or weeks later — it can recall
+      without you having to repaste context.
+    properties:
+      MCP_USER_ID:
+        type: string
+        title: Your namespace identifier
+        description: >
+          Sticky user_id for every memory written through this server.
+          Anything you set here scopes your private namespace and stops
+          the model from drifting it across sessions.
+        default: default_user
+      EVOSQL_HOST:
+        type: string
+        title: EvolutionDB host
+        default: 127.0.0.1
+      EVOSQL_PORT:
+        type: string
+        title: EvolutionDB PostgreSQL-wire port
+        default: "5433"
+      EVOSQL_USER:
+        type: string
+        title: Database user
+        default: admin
+      EVOSQL_PASSWORD:
+        type: string
+        title: Database password
+        format: password
+        default: admin
+      EVOSQL_DATABASE:
+        type: string
+        title: Database name
+        default: testdb
+      MCP_STORE_PREFIX:
+        type: string
+        title: Catalog store prefix
+        default: claude_desktop
+    required:
+      - MCP_USER_ID
+
+  commandFunction: |-
+    (config) => ({
+      command: "uvx",
+      args: ["mcp-server-evolutiondb"],
+      env: {
+        EVOSQL_HOST:      config.EVOSQL_HOST      || "127.0.0.1",
+        EVOSQL_PORT:      config.EVOSQL_PORT      || "5433",
+        EVOSQL_USER:      config.EVOSQL_USER      || "admin",
+        EVOSQL_PASSWORD:  config.EVOSQL_PASSWORD  || "admin",
+        EVOSQL_DATABASE:  config.EVOSQL_DATABASE  || "testdb",
+        MCP_USER_ID:      config.MCP_USER_ID      || "default_user",
+        MCP_STORE_PREFIX: config.MCP_STORE_PREFIX || "claude_desktop"
+      }
+    })
+
+  exampleConfig:
+    MCP_USER_ID: alptekin
+    EVOSQL_HOST: 127.0.0.1
+    EVOSQL_PORT: "5433"
+    EVOSQL_USER: admin
+    EVOSQL_PASSWORD: admin
+    EVOSQL_DATABASE: testdb
+    MCP_STORE_PREFIX: claude_desktop

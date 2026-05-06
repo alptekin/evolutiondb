@@ -1,4 +1,6 @@
-# mcp-server-evosql
+# mcp-server-evolutiondb
+
+<!-- mcp-name: io.github.alptekin/evolutiondb-memory -->
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server
 that gives Claude Desktop / Claude Code persistent **long-term
@@ -6,6 +8,21 @@ memory** backed by EvolutionDB. Anything Claude decides to remember
 during a conversation is written to a real database; in any future
 session — same window or weeks later — Claude can search it back
 without you having to repaste context.
+
+## Install
+
+```bash
+pipx install mcp-server-evolutiondb
+# or:  pip install --user mcp-server-evolutiondb
+```
+
+The package installs the `mcp-server-evolutiondb` console entry-point
+(also aliased as `mcp-server-evosql`). It speaks the PostgreSQL wire
+protocol over `psycopg`, so installation is **pure-Python** — no C
+toolchain, no `libevosql-memory.so` to build. EvolutionDB still has
+to be running somewhere reachable; `docker compose up -d` in the
+[main repo](https://github.com/alptekin/evolutiondb) is the easiest
+way.
 
 ```
    ┌──────────────────┐         ┌─────────────────────┐         ┌────────────────┐
