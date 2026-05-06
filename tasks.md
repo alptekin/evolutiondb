@@ -2790,7 +2790,7 @@
 
 ---
 
-### Task 142: ⬜ DML Inner-Loop Profiling Harness (Phase 6.0)
+### Task 142: ✅ DML Inner-Loop Profiling Harness (Phase 6.0)
 
 **Goal:** Build a minimal, zero-overhead-when-off profiling harness for the DELETE/UPDATE inner loop so Phase 6.1 is driven by real per-helper numbers instead of code-reading estimates.
 
@@ -2817,7 +2817,7 @@
 
 **Unblocks:** Task 143 (Phase 6.1) — cache table schema presence flags.
 
-### Task 143: ⬜ DML Phase 6.1 — Schema Presence Flag Cache
+### Task 143: ✅ DML Phase 6.1 — Schema Presence Flag Cache
 
 **Goal:** Cache per-table "has triggers / has secondary indexes / has referencing FKs" flags on `TableDesc` so the DML inner loop can `if (td->has_triggers) evo_fire_triggers(...)` instead of entering the catalog-scanning helper every row.
 
@@ -2835,7 +2835,7 @@
 
 **Expected impact:** DELETE 5K 85 → ~25 ms (~60 ms save), UPDATE 2K 65 → ~40 ms.
 
-### Task 144: ⬜ DML Phase 6.2 — Fast Path RowID Carry-Through
+### Task 144: ✅ DML Phase 6.2 — Fast Path RowID Carry-Through
 
 **Goal:** Eliminate the redundant `bt2_search` per row in the fast path by saving `(key, rid)` pairs when the cursor walk collects them. Currently the fast path drops the rid from `bt2_cursor_next` and re-looks it up inside the delete/update loop.
 
@@ -2850,7 +2850,7 @@
 
 **Expected impact:** DELETE 5K → ~10-15 ms, hitting the <10 ms target range.
 
-### Task 145: ⬜ DML Phase 6.3 — Per-Page Batching (optional)
+### Task 145: ✅ DML Phase 6.3 — Per-Page Batching (optional)
 
 **Goal:** Group same-page soft-deletes so `pgm_read_page` / `pgm_write_page` / `vmap_clear` run once per page instead of once per row. Low priority — per Task 142 data these helpers already sum to <5% of loop_total once 6.1 + 6.2 land, so savings are in the 1-2 ms range.
 
@@ -3406,7 +3406,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 94 — Sprint 1: Vector & Semantic Search Foundation
 
-### Task 200: ⬜ VECTOR(N) Data Type (Feature #200)
+### Task 200: ✅ VECTOR(N) Data Type (Feature #200)
 
 **Goal:** Add a first-class `VECTOR(N)` type that stores N float4 values as a compact binary payload, with parser/lexer support, tuple format encoding, and full DML + COPY roundtrip.
 
@@ -3425,7 +3425,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 201: ⬜ Vector Distance Functions + Operators (Feature #201)
+### Task 201: ✅ Vector Distance Functions + Operators (Feature #201)
 
 **Goal:** Land the EvolutionDB-native evovector layer — distance functions (`cosine_distance`, `l2_distance`, `inner_product`, `l1_distance`) and operators (`<=>`, `<->`, `<#>`) in one cohesive surface.
 
@@ -3444,7 +3444,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 202: ⬜ HNSW ANN Index (Feature #202)
+### Task 202: ✅ HNSW ANN Index (Feature #202)
 
 **Goal:** Graph-based approximate nearest neighbor index via `CREATE INDEX ... USING HNSW (col vector_cosine_ops) WITH (m=16, ef_construction=64)`.
 
@@ -3463,7 +3463,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 203: ⬜ Hybrid Search — Vector + Filter (Feature #203)
+### Task 203: ✅ Hybrid Search — Vector + Filter (Feature #203)
 
 **Goal:** `ORDER BY vec <=> $q WHERE user_id = 42 LIMIT 10` runs in a single pass using statistics-guided strategy selection.
 
@@ -3484,7 +3484,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 95 — Sprint 2: Agent Memory Native DDL
 
-### Task 204: ⬜ CHECKPOINT Store DDL + DML (Feature #204)
+### Task 204: ✅ CHECKPOINT Store DDL + DML (Feature #204)
 
 **Goal:** Native `CREATE CHECKPOINT STORE` + `CHECKPOINT PUT/GET/LIST/PUT WRITES` DML for LangGraph `BaseCheckpointSaver`.
 
@@ -3503,7 +3503,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 205: ⬜ MEMORY Store DDL + DML (Feature #205)
+### Task 205: ✅ MEMORY Store DDL + DML (Feature #205)
 
 **Goal:** Native `CREATE MEMORY STORE` + `MEMORY PUT/GET/SEARCH/DELETE/LIST NAMESPACES` for LangGraph `BaseStore` + cross-framework long-term memory.
 
@@ -3522,7 +3522,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 206: ⬜ Namespace Hierarchy + Multi-Tenant Policy (Feature #206)
+### Task 206: ✅ Namespace Hierarchy + Multi-Tenant Policy (Feature #206)
 
 **Goal:** Tuple-based namespace `(user_id, 'memories', ...)` + RLS-on-MEMORY-STORE integration.
 
@@ -3543,7 +3543,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 96 — Sprint 3: Temporal / Bitemporal Memory
 
-### Task 207: ⬜ FOR SYSTEM_TIME AS OF Query Syntax (Feature #207)
+### Task 207: ✅ FOR SYSTEM_TIME AS OF Query Syntax (Feature #207)
 
 **Goal:** `SELECT * FROM memories FOR SYSTEM_TIME AS OF '2026-04-20 14:00'` — snapshot-travel via MVCC.
 
@@ -3562,7 +3562,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 208: ⬜ WITH SYSTEM VERSIONING — Temporal Tables (Feature #208)
+### Task 208: ✅ WITH SYSTEM VERSIONING — Temporal Tables (Feature #208)
 
 **Goal:** `CREATE TABLE ... WITH SYSTEM VERSIONING` → automatic `valid_from`, `valid_to` columns + shadow history table.
 
@@ -3581,7 +3581,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 209: ⬜ WAL Retention Policy for AS OF Window (Feature #209)
+### Task 209: ✅ WAL Retention Policy for AS OF Window (Feature #209)
 
 **Goal:** `SET SYSTEM_TIME_RETENTION = '30 days'` bounds the AS OF query window and the history-table disk footprint.
 
@@ -3602,7 +3602,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 97 — Sprint 4: Reactive Streaming
 
-### Task 210: ⬜ Durable Subscription Cursor (Feature #210)
+### Task 210: ✅ Durable Subscription Cursor (Feature #210)
 
 **Goal:** Client disconnect doesn't lose messages — resume-on-reconnect via ack-based cursor.
 
@@ -3621,7 +3621,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 211: ⬜ CDC Streaming Server (Feature #211)
+### Task 211: ✅ CDC Streaming Server (Feature #211)
 
 **Goal:** External consumers (Kafka/agent) subscribe to CDC events over TCP JSON lines (finish GAP-D7 stub).
 
@@ -3640,7 +3640,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 212: ⬜ MEMORY Event Triggers (Feature #212)
+### Task 212: ✅ MEMORY Event Triggers (Feature #212)
 
 **Goal:** `ON MEMORY PUT mem DO ...` — trigger surface at the MEMORY STORE level.
 
@@ -3661,7 +3661,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 98 — Sprint 5: Agent Ops
 
-### Task 213: ⬜ TTL Column Syntax + Auto-Expire (Feature #213)
+### Task 213: ✅ TTL Column Syntax + Auto-Expire (Feature #213)
 
 **Goal:** `CREATE TABLE ... WITH (ttl_column='expires_at')` — background DELETE daemon for expired rows.
 
@@ -3680,7 +3680,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 214: ⬜ Auto-Summarization Template (Feature #214)
+### Task 214: ✅ Auto-Summarization Template (Feature #214)
 
 **Goal:** Stored procedure template + `token_length(text)` built-in for conversation buffer rollup.
 
@@ -3699,7 +3699,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 215: ⬜ Scheduled Jobs / CRON (Feature #215)
+### Task 215: ✅ Scheduled Jobs / CRON (Feature #215)
 
 **Goal:** Cron-style scheduled SQL execution — `ANALYZE`, TTL prune, custom agent jobs.
 
@@ -3722,7 +3722,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ## Day 99 — Sprint 6: Framework-Common Primitives
 
-### Task 222: ⬜ MESSAGE LOG (Append-Only Chat History) (Feature #222)
+### Task 222: ✅ MESSAGE LOG (Append-Only Chat History) (Feature #222)
 
 **Goal:** `CREATE MESSAGE LOG chat` — one-line-per-message ordered log. Covers LangChain `BaseChatMessageHistory`, LlamaIndex `ChatMemoryBuffer`, AutoGen `Memory`, Zep session messages.
 
@@ -3741,7 +3741,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 223: ⬜ DOCUMENT STORE + Mongo-Style JSON Filter (Feature #223)
+### Task 223: ✅ DOCUMENT STORE + Mongo-Style JSON Filter (Feature #223)
 
 **Goal:** Haystack `DocumentStore.filter_documents(filters={...})` + LlamaIndex `BaseDocumentStore`.
 
@@ -3760,7 +3760,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 224: ⬜ GRAPH STORE — Temporal Knowledge Graph (Feature #224)
+### Task 224: ✅ GRAPH STORE — Temporal Knowledge Graph (Feature #224)
 
 **Goal:** Zep Graphiti + Mem0 graph mode + LangChain KG equivalent. Bitemporal edges (`valid_from`, `valid_to`, `invalid_at` per triple).
 
@@ -3779,7 +3779,7 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
-### Task 225: ⬜ ENTITY MEMORY Templates (Feature #225)
+### Task 225: ✅ ENTITY MEMORY Templates (Feature #225)
 
 **Goal:** LangChain `ConversationEntityMemory` + CrewAI `EntityMemory` — one-SQL-object template.
 
