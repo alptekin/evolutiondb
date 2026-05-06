@@ -1,0 +1,129 @@
+{
+  "dxt_version": "0.1",
+  "name": "evolutiondb-memory",
+  "display_name": "EvolutionDB Long-Term Memory",
+  "version": "1.1.0",
+  "description": "Persistent long-term memory for Claude. Backed by EvolutionDB; what you tell Claude in one chat is recallable in every future chat.",
+  "long_description": "Drops in a `save_memory` / `search_memory` / `recent_memories` / `forget` / `list_tags` tool surface so Claude can remember preferences, decisions, biographical details, and project context across sessions. Backed by EvolutionDB (open source, runs in one Docker container) over the PostgreSQL wire protocol — no opaque blob storage, every fact is a real row you can `SELECT` against. Namespace-pinned server-side from the `MCP_USER_ID` env var to keep the LLM from fragmenting the namespace across sessions.",
+  "author": {
+    "name": "alptekin topal",
+    "email": "topal.alptekin@gmail.com",
+    "url": "https://github.com/alptekin"
+  },
+  "homepage": "https://alptekin.github.io/evolutiondb/",
+  "documentation": "https://alptekin.github.io/evolutiondb/blog/series/01-mcp-bridge/",
+  "support": "https://github.com/alptekin/evolutiondb/issues",
+  "icon": "icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alptekin/evolutiondb"
+  },
+  "keywords": [
+    "memory",
+    "long-term-memory",
+    "agent-memory",
+    "evolutiondb",
+    "database",
+    "persistence"
+  ],
+  "server": {
+    "type": "python",
+    "entry_point": "server/main.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": [
+        "${__dirname}/server/main.py"
+      ],
+      "env": {
+        "PYTHONPATH": "${__dirname}/server/lib",
+        "EVOSQL_HOST": "${user_config.evosql_host}",
+        "EVOSQL_PORT": "${user_config.evosql_port}",
+        "EVOSQL_USER": "${user_config.evosql_user}",
+        "EVOSQL_PASSWORD": "${user_config.evosql_password}",
+        "EVOSQL_DATABASE": "${user_config.evosql_database}",
+        "MCP_USER_ID": "${user_config.mcp_user_id}",
+        "MCP_STORE_PREFIX": "${user_config.mcp_store_prefix}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "save_memory",
+      "description": "Persist a long-term fact about the user."
+    },
+    {
+      "name": "search_memory",
+      "description": "Search remembered facts before answering."
+    },
+    {
+      "name": "recent_memories",
+      "description": "List the most recently saved facts."
+    },
+    {
+      "name": "forget",
+      "description": "Delete a stored fact by its key."
+    },
+    {
+      "name": "list_tags",
+      "description": "List all distinct tags used so far."
+    }
+  ],
+  "tools_generated": false,
+  "user_config": {
+    "evosql_host": {
+      "type": "string",
+      "title": "EvolutionDB host",
+      "description": "Host where EvolutionDB is reachable (PostgreSQL wire protocol).",
+      "default": "127.0.0.1",
+      "required": true
+    },
+    "evosql_port": {
+      "type": "number",
+      "title": "EvolutionDB PG-wire port",
+      "description": "EvolutionDB's PostgreSQL-protocol port (default 5433).",
+      "default": 5433,
+      "required": true
+    },
+    "evosql_user": {
+      "type": "string",
+      "title": "Database user",
+      "default": "admin",
+      "required": true
+    },
+    "evosql_password": {
+      "type": "string",
+      "title": "Database password",
+      "sensitive": true,
+      "default": "admin",
+      "required": true
+    },
+    "evosql_database": {
+      "type": "string",
+      "title": "Database name",
+      "default": "testdb",
+      "required": true
+    },
+    "mcp_user_id": {
+      "type": "string",
+      "title": "Your namespace identifier",
+      "description": "Sticky user_id for every memory Claude writes through this extension. Anything you set here scopes your private memory namespace and stops the LLM from drifting it across sessions.",
+      "default": "default_user",
+      "required": true
+    },
+    "mcp_store_prefix": {
+      "type": "string",
+      "title": "Catalog store prefix",
+      "description": "Prefix for the auto-created MEMORY STORE / ENTITY STORE catalog objects.",
+      "default": "claude_desktop",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.9"
+    }
+  }
+}
