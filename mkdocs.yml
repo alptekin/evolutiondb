@@ -1,0 +1,119 @@
+site_name: EvolutionDB
+site_description: The agent-memory backend that fits in one binary.
+site_url: https://alptekin.github.io/evolutiondb/
+site_author: alptekin topal
+
+repo_url: https://github.com/alptekin/evolutiondb
+repo_name: alptekin/evolutiondb
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - navigation.instant
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/alptekin/evolutiondb
+      name: EvolutionDB on GitHub
+  generator: false
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.smartsymbols
+  - pymdownx.caret
+  - pymdownx.tilde
+  - pymdownx.mark
+  - pymdownx.keys
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Comparison: comparison.md
+  - Blog:
+      - blog/index.md
+      - "Long-term memory (product story)": blog/2026-05-long-term-memory-medium.md
+      - "v3.0.0 launch": blog/2026-launch.md
+      - Technical series:
+          - "Series index": blog/series/00-index.md
+          - "01 — The MCP bridge": blog/series/01-mcp-bridge.md
+          - "02 — MEMORY STORE on disk": blog/series/02-memory-store-internals.md
+          - "03 — VECTOR(N) and HNSW": blog/series/03-vector-hnsw.md
+          - "04 — Temporal memory": blog/series/04-temporal-mvcc.md
+          - "05 — Push, not poll": blog/series/05-push-not-poll.md
+          - "06 — The C SDK and FFI": blog/series/06-c-sdk-and-ffi.md
+          - "07 — Multi-tenant memory": blog/series/07-multi-tenant.md
+          - "08 — Benchmarks": blog/series/08-benchmarks.md
+  - Architecture:
+      - "ADR-001 — Replication v1": adr/ADR-001-task-97-replication-v1.md
+      - "ADR-002 — Agent-memory roadmap": adr/ADR-002-agent-memory-platform-roadmap.md
+      - Performance:
+          - "DML profile — baseline": dml-profile-baseline.md
+          - "DML profile — phase 6.1": dml-profile-phase6.1.md
+          - "DML profile — phase 6.2": dml-profile-phase6.2.md
+          - "DML profile — phase 6.3": dml-profile-phase6.3.md
+          - "Benchmarks v1": benchmarks/v1.md
+          - "Benchmarks v2 — vendor sweep": benchmarks/v2-vendors.md
+  - Release notes:
+      - "3.0.0": release-notes/3.0.0.md

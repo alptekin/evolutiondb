@@ -33,6 +33,10 @@ dist/
 Debug/
 Release/
 
+# MkDocs site build + venv
+site/
+.mkdocs-venv/
+
 # Built binaries
 adaptor/evosql-server
 evolution/evosql
