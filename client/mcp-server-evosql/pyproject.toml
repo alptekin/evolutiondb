@@ -3,26 +3,55 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mcp-server-evosql"
-version = "1.0.0"
+name = "mcp-server-evolutiondb"
+version = "1.1.0"
 description = "MCP (Model Context Protocol) server backed by EvolutionDB — gives Claude Desktop / Claude Code persistent long-term memory."
 requires-python = ">=3.9"
 license = {text = "MIT"}
 readme = "README.md"
-keywords = ["mcp", "model-context-protocol", "evolutiondb", "claude", "long-term-memory"]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "evolutiondb",
+    "claude",
+    "claude-desktop",
+    "claude-code",
+    "long-term-memory",
+    "agent-memory",
+]
 authors = [
-    {name = "EvolutionDB"}
+    {name = "alptekin topal", email = "topal.alptekin@gmail.com"},
 ]
 classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = []
+
+dependencies = [
+    "psycopg[binary]>=3.1",
+]
+
+[project.urls]
+Homepage      = "https://github.com/alptekin/evolutiondb"
+Documentation = "https://alptekin.github.io/evolutiondb/"
+Repository    = "https://github.com/alptekin/evolutiondb"
+Issues        = "https://github.com/alptekin/evolutiondb/issues"
+Source        = "https://github.com/alptekin/evolutiondb/tree/main/client/mcp-server-evosql"
 
 [project.scripts]
-mcp-server-evosql = "mcp_server_evosql.__main__:main"
+mcp-server-evolutiondb = "mcp_server_evosql.__main__:main"
+mcp-server-evosql      = "mcp_server_evosql.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["mcp_server_evosql*"]

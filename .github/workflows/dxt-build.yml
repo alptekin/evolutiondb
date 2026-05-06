@@ -1,0 +1,95 @@
+name: DXT — Build per-platform Claude Desktop extensions
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "client/mcp-server-evosql/**"
+      - ".github/workflows/dxt-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-13       # x86_64
+          - macos-14       # arm64
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build .dxt (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: client/mcp-server-evosql
+        run: |
+          python3 -m pip install --upgrade pip
+          chmod +x dxt/build.sh
+          ./dxt/build.sh
+
+      - name: Build .dxt (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: client/mcp-server-evosql
+        run: |
+          python -m pip install --upgrade pip
+          $version = (python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          $work = New-Item -ItemType Directory -Path "$env:TEMP/dxt-stage-$version" -Force
+          New-Item -ItemType Directory -Path "$work/server/lib" -Force | Out-Null
+          Copy-Item dxt/manifest.json "$work/manifest.json"
+          Copy-Item dxt/server/main.py "$work/server/main.py"
+          if (Test-Path dxt/icon.png) { Copy-Item dxt/icon.png "$work/icon.png" }
+          python -m pip install --no-compile --target "$work/server/lib" --upgrade . "psycopg[binary]>=3.1"
+          Get-ChildItem -Path "$work/server/lib" -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $out = "dist/mcp-server-evolutiondb-$version-windows-amd64.dxt"
+          if (Test-Path $out) { Remove-Item $out }
+          Compress-Archive -Path "$work/*" -DestinationPath $out -Force
+          Get-ChildItem $out
+
+      - name: Rename POSIX artifact with platform tag
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: client/mcp-server-evosql
+        run: |
+          version=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          src="dist/mcp-server-evolutiondb-${version}.dxt"
+          os_tag=$(uname -s | tr '[:upper:]' '[:lower:]')
+          arch_tag=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          dst="dist/mcp-server-evolutiondb-${version}-${os_tag}-${arch_tag}.dxt"
+          mv "$src" "$dst"
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dxt-${{ matrix.os }}
+          path: client/mcp-server-evosql/dist/*.dxt
+          if-no-files-found: error
+
+  release-attach:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dxt-artifacts
+          merge-multiple: true
+
+      - name: Attach .dxt files to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dxt-artifacts/*.dxt
