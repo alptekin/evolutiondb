@@ -77,14 +77,14 @@ process, push delivery on edge updates, and the on-prem story.
 ### "Mem0 has the cleanest memory.add() API"
 
 We agree, which is why
-[`evosql_memory.adapters.mem0_compat`](../client/python-evosql-memory/evosql_memory/adapters/mem0_compat.py)
+[`evosql_memory.adapters.mem0_compat`](https://github.com/alptekin/evolutiondb/blob/main/client/python-evosql-memory/evosql_memory/adapters/mem0_compat.py)
 is a drop-in for `from mem0 import Memory`. The argument is the same
 backend, lower TCO, and you keep your existing Mem0-shaped code.
 
 ## Apples-to-apples latency
 
 Cross-vendor `memory_put` / `memory_get` numbers are produced by
-[`bench/vendors/run_all.py`](../bench/vendors/README.md) and roll up
+[`bench/vendors/run_all.py`](https://github.com/alptekin/evolutiondb/blob/main/bench/vendors/README.md) and roll up
 into [docs/benchmarks/v2-vendors.md](benchmarks/v2-vendors.md). The
 same iteration count + key shape + value payload runs through every
 backend whose driver and dependent service are available; missing
