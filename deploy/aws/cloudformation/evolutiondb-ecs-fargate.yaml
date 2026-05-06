@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EvolutionDB on AWS Fargate. Creates a single-task ECS service
+  backed by an EFS volume for /var/lib/evosql, plus an internal
+  Network Load Balancer for the PostgreSQL wire and EVO native
+  ports.
+
+  Public-facing deploys: terminate TLS at an ALB or NLB upstream
+  (PostgreSQL protocol over plain TCP behind a NLB is fine for
+  internal traffic; expose to the internet only with TLS termination).
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: evolutiondb-cluster
+    Description: Existing or new ECS cluster name.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where EvolutionDB will run.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the Fargate task (private subnets recommended).
+
+  AllowedClientCidr:
+    Type: String
+    Default: 10.0.0.0/8
+    Description: CIDR range allowed to reach the EvolutionDB ports through the NLB.
+
+  EvosqlPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the built-in `admin` account.
+
+  ImageTag:
+    Type: String
+    Default: latest
+
+  Cpu:
+    Type: String
+    Default: "1024"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+    Description: vCPU units for the Fargate task.
+
+  Memory:
+    Type: String
+    Default: "2048"
+    AllowedValues: ["512", "1024", "2048", "4096", "8192", "16384"]
+    Description: Memory MB for the Fargate task.
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      ClusterSettings:
+        - { Name: containerInsights, Value: enabled }
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ClusterName}/evolutiondb
+      RetentionInDays: 14
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: EvolutionDB Fargate service
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5433
+          ToPort: 5433
+          CidrIp: !Ref AllowedClientCidr
+        - IpProtocol: tcp
+          FromPort: 9967
+          ToPort: 9967
+          CidrIp: !Ref AllowedClientCidr
+
+  EfsFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+
+  EfsMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EfsFileSystem
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroups: [!Ref EfsSecurityGroup]
+
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: EvolutionDB EFS access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: evolutiondb
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      Volumes:
+        - Name: evosql-data
+          EFSVolumeConfiguration:
+            FilesystemId: !Ref EfsFileSystem
+            TransitEncryption: ENABLED
+      ContainerDefinitions:
+        - Name: evolutiondb
+          Image: !Sub public.ecr.aws/evolutiondb/evolutiondb:${ImageTag}
+          PortMappings:
+            - { ContainerPort: 5433, Protocol: tcp }
+            - { ContainerPort: 9967, Protocol: tcp }
+          Environment:
+            - { Name: EVOSQL_PASSWORD, Value: !Ref EvosqlPassword }
+          MountPoints:
+            - { ContainerPath: /var/lib/evosql, SourceVolume: evosql-data }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: [EfsMountTarget1]
+    Properties:
+      ServiceName: evolutiondb
+      Cluster: !Ref Cluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref SubnetIds
+          SecurityGroups: [!Ref ServiceSecurityGroup]
+          AssignPublicIp: DISABLED
+      TaskDefinition: !Ref TaskDefinition
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  LogGroupName:
+    Value: !Ref LogGroup
+  EfsFileSystemId:
+    Value: !Ref EfsFileSystem

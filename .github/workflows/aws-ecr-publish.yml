@@ -1,0 +1,97 @@
+name: AWS ECR Public — Publish container image
+
+# Pushes the EvolutionDB Docker image to AWS ECR Public Gallery
+# alongside the existing Docker Hub publish, so AWS Marketplace
+# subscribers pull from a registry inside AWS's network.
+#
+# Triggers:
+#   - Same `push: branches: [main]` as docker-publish.yml so a
+#     successful Docker Hub publish has a matching ECR Public push.
+#   - On `v*` tag for explicit release-tagged images.
+#   - workflow_dispatch for manual re-publishes.
+#
+# Auth options (pick one; OIDC recommended):
+#   1. OIDC (preferred): set `AWS_ECR_PUBLISH_ROLE_ARN` repo
+#      variable (NOT secret) to an IAM role that trusts GitHub
+#      Actions OIDC for this repo + has
+#      AmazonElasticContainerRegistryPublicPowerUser.
+#   2. Static keys: set `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
+#      repo secrets. Less secure; rotate quarterly.
+# The workflow tries OIDC first and falls back to static keys.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  ECR_PUBLIC_REGISTRY: public.ecr.aws/evolutiondb
+  IMAGE_NAME: evolutiondb
+
+permissions:
+  contents: read
+  id-token: write   # required for OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version tag
+        id: version
+        run: |
+          MAJOR=$(grep -E '^#define EVODB_VERSION_MAJOR' evolution/db/version.h | awk '{print $3}')
+          MINOR=$(grep -E '^#define EVODB_VERSION_MINOR' evolution/db/version.h | awk '{print $3}')
+          DATE_TAG=$(date -u +%Y%m%d)
+          BASE="v${MAJOR}.${MINOR}.${DATE_TAG}"
+          # Pick the same per-day sequence as docker-publish.yml so the tags align.
+          git fetch --tags --force
+          EXISTING=$(git tag -l "${BASE}.*" | sed "s/${BASE}\.//" | sort -n | tail -1)
+          SEQ=$([ -z "$EXISTING" ] && echo 1 || echo $((EXISTING + 1)))
+          echo "version=${BASE}.${SEQ}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}
+          aws-region: us-east-1   # ECR Public is always us-east-1
+
+      - name: Configure AWS credentials (static keys fallback)
+        if: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN == '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.ECR_PUBLIC_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.ECR_PUBLIC_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/alptekin/evolutiondb
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.description=EvolutionDB — Long-term memory backend for AI agents (PostgreSQL wire compatible).

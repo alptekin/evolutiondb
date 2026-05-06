@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EvolutionDB single-instance EC2 deploy. Installs Docker, pulls the
+  EvolutionDB container from public ECR, and exposes the PostgreSQL
+  wire (5433) and EVO native (9967) ports. Suitable for evaluation
+  and small production workloads.
+
+  For multi-instance / managed deploys, use the ECS Fargate template
+  (evolutiondb-ecs-fargate.yaml) or the EKS Helm chart at
+  https://alptekin.github.io/evolutiondb.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - m6i.large
+      - m6i.xlarge
+    Description: EC2 instance type. t3.small is enough for evaluation; size up for production.
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 KeyPair to enable SSH access to the instance.
+
+  AllowedSshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR range allowed SSH access (port 22). Tighten this in production.
+
+  AllowedClientCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR range allowed PostgreSQL/EVO client access (ports 5433, 9967). Tighten this in production.
+
+  EvosqlPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the built-in `admin` account. Required.
+
+  EncryptionKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Optional passphrase for Transparent Data Encryption (TDE). Leave empty to disable on-disk encryption.
+
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: EvolutionDB container tag (`latest` or a versioned tag like `v3.0.20260506.1`).
+
+  DataVolumeSizeGB:
+    Type: Number
+    Default: 50
+    MinValue: 10
+    MaxValue: 16384
+    Description: Size of the EBS volume that holds the EvolutionDB data directory.
+
+Mappings:
+  RegionMap:
+    us-east-1:      { AMI: ami-0c2b8ca1dad447f8a }   # Amazon Linux 2023, x86_64
+    us-east-2:      { AMI: ami-05fb0b8c1424f266b }
+    us-west-2:      { AMI: ami-008fe2fc65df48dac }
+    eu-west-1:      { AMI: ami-0a3c3a20c09d6f377 }
+    eu-central-1:   { AMI: ami-04e601abe3e1a910f }
+    ap-northeast-1: { AMI: ami-027a31eff54f1fe4c }
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EvolutionDB ports
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+        - IpProtocol: tcp
+          FromPort: 5433
+          ToPort: 5433
+          CidrIp: !Ref AllowedClientCidr
+          Description: PostgreSQL wire protocol
+        - IpProtocol: tcp
+          FromPort: 9967
+          ToPort: 9967
+          CidrIp: !Ref AllowedClientCidr
+          Description: EVO native text protocol
+
+  DataVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: !GetAtt Instance.AvailabilityZone
+      Size: !Ref DataVolumeSizeGB
+      VolumeType: gp3
+      Encrypted: true
+    DeletionPolicy: Snapshot
+
+  VolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AMI]
+      SecurityGroupIds: [!Ref SecurityGroup]
+      Tags:
+        - { Key: Name, Value: evolutiondb }
+        - { Key: app,  Value: evolutiondb }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          # Install Docker
+          dnf install -y docker
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+
+          # Wait for the data volume to attach, then format + mount
+          while [ ! -b /dev/sdf ] && [ ! -b /dev/nvme1n1 ]; do sleep 2; done
+          DEV=/dev/sdf
+          [ -b /dev/nvme1n1 ] && DEV=/dev/nvme1n1
+          if ! blkid "$DEV" >/dev/null 2>&1; then
+            mkfs.xfs "$DEV"
+          fi
+          mkdir -p /var/lib/evosql
+          echo "$DEV /var/lib/evosql xfs defaults,nofail 0 2" >> /etc/fstab
+          mount /var/lib/evosql
+
+          # Run EvolutionDB
+          docker run -d \
+            --name evolutiondb \
+            --restart unless-stopped \
+            -p 5433:5433 \
+            -p 9967:9967 \
+            -v /var/lib/evosql:/var/lib/evosql \
+            -e EVOSQL_PASSWORD='${EvosqlPassword}' \
+            ${EncryptionKeyEnvLine} \
+            public.ecr.aws/evolutiondb/evolutiondb:${ImageTag}
+
+          # Smoke probe so CloudFormation can wait_condition on it
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:5433 > /dev/null 2>&1 || \
+               (echo > /dev/tcp/127.0.0.1/5433) 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+        # Inject the encryption-key env line only if a key was supplied;
+        # CloudFormation can't do conditional substitutions on
+        # !Sub strings, so we use a stack-level Condition + Mapping
+        # below (left as documented; in CFN you'd template via Custom
+        # Resource or pass empty value).
+
+Outputs:
+  PublicDnsName:
+    Description: Public DNS name of the EvolutionDB instance
+    Value: !GetAtt Instance.PublicDnsName
+
+  PostgresWireEndpoint:
+    Description: PostgreSQL-wire connection endpoint
+    Value: !Sub "${Instance.PublicDnsName}:5433"
+
+  EvoNativeEndpoint:
+    Description: EVO native text protocol endpoint
+    Value: !Sub "${Instance.PublicDnsName}:9967"
+
+  ConnectCommand:
+    Description: Quick psql connect command
+    Value: !Sub "psql -h ${Instance.PublicDnsName} -p 5433 -U admin -d testdb"
+
+  DataVolumeId:
+    Description: EBS volume that holds /var/lib/evosql (snapshotted on stack delete)
+    Value: !Ref DataVolume

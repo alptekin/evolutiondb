@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 640" font-family="Inter, system-ui, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fafafa"/>
+      <stop offset="1" stop-color="#eef2f5"/>
+    </linearGradient>
+    <linearGradient id="db" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#283593"/>
+      <stop offset="1" stop-color="#1a237e"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#283593"/>
+    </marker>
+  </defs>
+
+  <rect width="1024" height="640" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="512" y="42" font-size="24" font-weight="700" text-anchor="middle" fill="#1a237e">EvolutionDB on AWS</text>
+  <text x="512" y="68" font-size="14" text-anchor="middle" fill="#5a647d">One container. PostgreSQL wire. Native agent-memory primitives.</text>
+
+  <!-- Clients group -->
+  <g>
+    <rect x="40" y="120" width="240" height="400" rx="14" fill="#ffffff" stroke="#cfd8dc" stroke-width="1.5"/>
+    <text x="160" y="145" font-size="13" font-weight="600" text-anchor="middle" fill="#5a647d">CLIENTS</text>
+
+    <rect x="60" y="170" width="200" height="60" rx="8" fill="#fff3e0" stroke="#fb8c00"/>
+    <text x="160" y="200" font-size="14" font-weight="600" text-anchor="middle" fill="#e65100">Claude Desktop</text>
+    <text x="160" y="218" font-size="11" text-anchor="middle" fill="#a8651b">via mcp-server-evolutiondb</text>
+
+    <rect x="60" y="240" width="200" height="60" rx="8" fill="#e3f2fd" stroke="#1976d2"/>
+    <text x="160" y="270" font-size="14" font-weight="600" text-anchor="middle" fill="#0d47a1">LangGraph / Mem0</text>
+    <text x="160" y="288" font-size="11" text-anchor="middle" fill="#1565c0">via 6 framework adapters</text>
+
+    <rect x="60" y="310" width="200" height="60" rx="8" fill="#f3e5f5" stroke="#7b1fa2"/>
+    <text x="160" y="340" font-size="14" font-weight="600" text-anchor="middle" fill="#4a148c">DBeaver / psql</text>
+    <text x="160" y="358" font-size="11" text-anchor="middle" fill="#6a1b9a">PostgreSQL wire 5433</text>
+
+    <rect x="60" y="380" width="200" height="60" rx="8" fill="#e8f5e9" stroke="#388e3c"/>
+    <text x="160" y="410" font-size="14" font-weight="600" text-anchor="middle" fill="#1b5e20">Your application</text>
+    <text x="160" y="428" font-size="11" text-anchor="middle" fill="#2e7d32">any PG driver</text>
+  </g>
+
+  <!-- AWS account boundary -->
+  <g>
+    <rect x="320" y="100" width="660" height="450" rx="14" fill="#ffffff" stroke="#9aa6b2" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="650" y="125" font-size="13" font-weight="600" text-anchor="middle" fill="#5a647d">YOUR AWS ACCOUNT</text>
+
+    <!-- VPC -->
+    <rect x="350" y="150" width="600" height="380" rx="10" fill="#f6f8fb" stroke="#bdc3cf"/>
+    <text x="370" y="175" font-size="12" font-weight="600" fill="#5a647d">VPC · private subnet</text>
+
+    <!-- ECS Fargate / EC2 / EKS -->
+    <rect x="380" y="200" width="540" height="120" rx="10" fill="#ffffff" stroke="#283593" stroke-width="2"/>
+    <text x="400" y="222" font-size="12" font-weight="600" fill="#5a647d">Compute (pick one)</text>
+    <text x="400" y="244" font-size="14" font-weight="600" fill="#1a237e">ECS Fargate</text>
+    <text x="400" y="261" font-size="11" fill="#5a647d">CFN: evolutiondb-ecs-fargate.yaml</text>
+    <text x="560" y="244" font-size="14" font-weight="600" fill="#1a237e">EC2 single-instance</text>
+    <text x="560" y="261" font-size="11" fill="#5a647d">CFN: evolutiondb-ec2.yaml</text>
+    <text x="760" y="244" font-size="14" font-weight="600" fill="#1a237e">EKS via Helm</text>
+    <text x="760" y="261" font-size="11" fill="#5a647d">helm install evolutiondb</text>
+
+    <!-- EvolutionDB container -->
+    <rect x="445" y="300" width="410" height="100" rx="10" fill="url(#db)"/>
+    <text x="650" y="332" font-size="20" font-weight="700" text-anchor="middle" fill="#ffffff">evolutiondb container</text>
+    <text x="650" y="356" font-size="12" text-anchor="middle" fill="#bbc6f5">public.ecr.aws/evolutiondb/evolutiondb</text>
+    <text x="650" y="378" font-size="12" text-anchor="middle" fill="#bbc6f5">port 5433 (PG wire) · 9967 (EVO)</text>
+
+    <!-- Persistent storage -->
+    <rect x="380" y="430" width="240" height="80" rx="10" fill="#fff8e1" stroke="#f9a825"/>
+    <text x="500" y="455" font-size="13" font-weight="600" text-anchor="middle" fill="#7e5b00">Persistent storage</text>
+    <text x="500" y="475" font-size="11" text-anchor="middle" fill="#7e5b00">EBS gp3 (EC2) · EFS (Fargate)</text>
+    <text x="500" y="492" font-size="11" text-anchor="middle" fill="#7e5b00">/var/lib/evosql · TDE optional</text>
+
+    <!-- Observability -->
+    <rect x="640" y="430" width="280" height="80" rx="10" fill="#e8f5e9" stroke="#388e3c"/>
+    <text x="780" y="455" font-size="13" font-weight="600" text-anchor="middle" fill="#1b5e20">Observability</text>
+    <text x="780" y="475" font-size="11" text-anchor="middle" fill="#1b5e20">CloudWatch Logs · Prometheus exporter</text>
+    <text x="780" y="492" font-size="11" text-anchor="middle" fill="#1b5e20">Grafana dashboard included</text>
+  </g>
+
+  <!-- Arrows -->
+  <line x1="280" y1="200" x2="380" y2="270" stroke="#283593" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="280" y1="270" x2="380" y2="285" stroke="#283593" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="280" y1="340" x2="380" y2="320" stroke="#283593" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="280" y1="410" x2="380" y2="350" stroke="#283593" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Down arrow from container to storage -->
+  <line x1="500" y1="400" x2="500" y2="430" stroke="#283593" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Container -> Observability (right) -->
+  <line x1="780" y1="400" x2="780" y2="430" stroke="#283593" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Footer -->
+  <text x="512" y="600" font-size="11" text-anchor="middle" fill="#5a647d">
+    Single binary · MIT-licensed · MEMORY/CHECKPOINT/MESSAGE LOG/DOCUMENT/GRAPH/ENTITY stores · VECTOR(N)+HNSW · FOR SYSTEM_TIME AS OF · LISTEN/NOTIFY+CDC · TDE+RLS
+  </text>
+  <text x="512" y="620" font-size="10" text-anchor="middle" fill="#9aa6b2">github.com/alptekin/evolutiondb · alptekin.github.io/evolutiondb</text>
+</svg>
