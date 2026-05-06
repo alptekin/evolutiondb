@@ -1,5 +1,5 @@
 {
-  "dxt_version": "0.1",
+  "manifest_version": "0.3",
   "name": "evolutiondb-memory",
   "display_name": "EvolutionDB Long-Term Memory",
   "version": "1.1.0",
@@ -47,29 +47,7 @@
       }
     }
   },
-  "tools": [
-    {
-      "name": "save_memory",
-      "description": "Persist a long-term fact about the user."
-    },
-    {
-      "name": "search_memory",
-      "description": "Search remembered facts before answering."
-    },
-    {
-      "name": "recent_memories",
-      "description": "List the most recently saved facts."
-    },
-    {
-      "name": "forget",
-      "description": "Delete a stored fact by its key."
-    },
-    {
-      "name": "list_tags",
-      "description": "List all distinct tags used so far."
-    }
-  ],
-  "tools_generated": false,
+  "tools_generated": true,
   "user_config": {
     "evosql_host": {
       "type": "string",
