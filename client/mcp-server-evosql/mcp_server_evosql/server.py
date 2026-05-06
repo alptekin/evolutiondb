@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.1.0"
+SERVER_VERSION   = "1.1.1"
 
 
 # ---------------------------------------------------------------- #
