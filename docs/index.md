@@ -10,7 +10,7 @@ hide:
 EvolutionDB is an open-source SQL database, written in C, that fits in
 **one binary** and replaces the four-product side stack agents typically
 need: a relational database, a document store, a vector index, and a
-push channel. It speaks the **PostgreSQL wire protocol**, so every tool
+push channel. It could speaks the **PostgreSQL wire protocol**, so every tool
 you already use (psql, DBeaver, pgAdmin, your ORM) connects to it
 unchanged.
 
