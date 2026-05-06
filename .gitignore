@@ -37,6 +37,12 @@ Release/
 site/
 .mkdocs-venv/
 
+# Python packaging artifacts (mcp-server-evosql, python-evosql-memory, etc.)
+client/**/dist/
+client/**/build/
+client/**/.venv/
+client/**/*.egg-info/
+
 # Built binaries
 adaptor/evosql-server
 evolution/evosql

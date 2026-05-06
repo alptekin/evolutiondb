@@ -1,0 +1,77 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.alptekin/evolutiondb-memory",
+  "title": "EvolutionDB Long-Term Memory",
+  "description": "Persistent long-term memory for Claude Desktop / Claude Code, backed by EvolutionDB. Save preferences, decisions, and biographical facts during a conversation; recall them in any future session through search_memory.",
+  "version": "1.1.0",
+  "repository": {
+    "url": "https://github.com/alptekin/evolutiondb",
+    "source": "github",
+    "subfolder": "client/mcp-server-evosql"
+  },
+  "homepage": "https://alptekin.github.io/evolutiondb/",
+  "license": "MIT",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "mcp-server-evolutiondb",
+      "version": "1.1.0",
+      "runtimeHint": "python3",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "EVOSQL_HOST",
+          "description": "Hostname where EvolutionDB is reachable on the PostgreSQL wire (port 5433).",
+          "isRequired": false,
+          "format": "string",
+          "default": "127.0.0.1"
+        },
+        {
+          "name": "EVOSQL_PORT",
+          "description": "EvolutionDB's PostgreSQL-protocol port.",
+          "isRequired": false,
+          "format": "string",
+          "default": "5433"
+        },
+        {
+          "name": "EVOSQL_USER",
+          "description": "Database user.",
+          "isRequired": false,
+          "format": "string",
+          "default": "admin"
+        },
+        {
+          "name": "EVOSQL_PASSWORD",
+          "description": "Database password.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "default": "admin"
+        },
+        {
+          "name": "EVOSQL_DATABASE",
+          "description": "Database name to use.",
+          "isRequired": false,
+          "format": "string",
+          "default": "testdb"
+        },
+        {
+          "name": "MCP_USER_ID",
+          "description": "Sticky namespace identifier for every memory Claude writes through this server. Server-side override — the LLM cannot fragment your namespace by inventing other IDs.",
+          "isRequired": true,
+          "format": "string",
+          "default": "default_user"
+        },
+        {
+          "name": "MCP_STORE_PREFIX",
+          "description": "Prefix for the auto-created MEMORY STORE / ENTITY STORE catalog objects.",
+          "isRequired": false,
+          "format": "string",
+          "default": "claude_desktop"
+        }
+      ]
+    }
+  ]
+}

@@ -5,26 +5,25 @@ through the MCP (Model Context Protocol) standard.
 
 Protocol surface implemented:
   - initialize             — handshake, advertises tools capability
-  - tools/list             — describes the four memory tools
-  - tools/call             — dispatches to save / search / recent / forget
+  - tools/list             — describes the five memory tools
+  - tools/call             — dispatches to save / search / recent /
+                              forget / list_tags
   - notifications/initialized (incoming, no response needed)
   - shutdown / exit        — clean teardown
 
 Threading: MCP stdio is single-threaded. Every request is processed
-in order, so the underlying evosql_memory.Connection (not thread-safe)
-stays inside one event loop.
+in order, so the underlying psycopg connection stays inside one
+event loop.
 
-User isolation: every tool call has its `user_id` server-side overridden
-to MCP_USER_ID env (default "default_user"). This is the same sticky-id
-trick we apply in the web demo — keeps the LLM from fragmenting the
-namespace across "user" / "default_user" / the user's actual name etc.
+User isolation: every tool call has its `user_id` server-side
+overridden to MCP_USER_ID env (default "default_user"). This is the
+sticky-id trick — keeps the LLM from fragmenting the namespace
+across "user" / "default_user" / the user's actual name etc.
 
-Stores: the server creates four catalog objects on first run with the
-prefix MCP_STORE_PREFIX (default "mcp"):
-   __mem_<prefix>_mem      MEMORY STORE
-   __ml_<prefix>_msgs       (unused by MCP server but reserved)
-   __ent_<prefix>_ents     ENTITY STORE
-   __ck_<prefix>_ck         (unused but reserved for future replay)
+Backend: speaks the PostgreSQL wire protocol (port 5433) over psycopg.
+This avoids having to ship a compiled C library on PyPI; psycopg has
+pre-built binary wheels on every platform. EvolutionDB's PG adaptor
+parses the same MEMORY DDL/DML the EVO native protocol does.
 """
 from __future__ import annotations
 
@@ -36,28 +35,22 @@ import traceback
 import uuid
 from typing import Any, Dict, List, Optional
 
-# ---------------------------------------------------------------- #
-#  Path bootstrap so the SDK is importable even when this server is #
-#  spawned by Claude Desktop with a stripped-down PYTHONPATH.        #
-# ---------------------------------------------------------------- #
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_SDK = os.environ.get(
-    "EVOSQL_PYTHON_SDK",
-    os.path.normpath(os.path.join(_HERE, "..", "..",
-                                    "python-evosql-memory")))
-if os.path.isdir(_SDK) and _SDK not in sys.path:
-    sys.path.insert(0, _SDK)
-
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.0.0"
+SERVER_VERSION   = "1.1.0"
 
 
 # ---------------------------------------------------------------- #
-#  Memory backend — same shape as examples/full_agent_demo.         #
+#  Memory backend — speaks EvolutionDB over psycopg / PG wire.       #
 # ---------------------------------------------------------------- #
 def _e(s: str) -> str:
+    """Escape a value for inline SQL.
+
+    The MEMORY DDL/DML doesn't take parameters in the EVO grammar,
+    so we have to inline. We strip control bytes and double up
+    apostrophes — same defensive shape as the upstream Python SDK.
+    """
     if not isinstance(s, str):
         s = str(s)
     s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
@@ -66,25 +59,52 @@ def _e(s: str) -> str:
 
 class MemoryBackend:
     def __init__(self, host: str, port: int, user: str, password: str,
-                  prefix: str):
-        from evosql_memory import connect
-        self.conn = connect(host, port, user, password)
+                  database: str, prefix: str):
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError(
+                "mcp-server-evosql requires psycopg. "
+                "Install with `pip install 'mcp-server-evosql'` "
+                "or `pip install psycopg[binary]>=3.1`."
+            ) from exc
+
+        self.psycopg = psycopg
+        self.conn = psycopg.connect(
+            host=host, port=port, user=user, password=password,
+            dbname=database, autocommit=True,
+        )
         self.memory   = f"{prefix}_mem"
         self.entities = f"{prefix}_ents"
-        # Idempotent CREATE — the server must not lose data across restarts.
+        # Idempotent CREATE — the server must not lose data across
+        # restarts. Both objects already exist on second start, the
+        # error is silently swallowed.
         for kind, name in [
             ("MEMORY STORE", self.memory),
             ("ENTITY STORE", self.entities),
         ]:
             try:
-                self.conn.exec_(f"CREATE {kind} {name}")
+                with self.conn.cursor() as cur:
+                    cur.execute(f"CREATE {kind} {name}")
             except Exception:
                 pass
 
+    # -- helpers ------------------------------------------------------
+    def _exec(self, sql: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(sql)
+
+    def _query(self, sql: str) -> List[List[str]]:
+        with self.conn.cursor() as cur:
+            cur.execute(sql)
+            try:
+                return [list(map(_to_str, row)) for row in cur.fetchall()]
+            except self.psycopg.ProgrammingError:
+                return []
+
+    # -- DML wrappers -------------------------------------------------
     def save(self, user_id: str, fact: str,
               tags: Optional[List[str]] = None) -> str:
-        # ms-precision created field so back-to-back saves order
-        # deterministically inside `recent`.
         created = time.time()
         key = f"mem_{int(created*1000)}_{uuid.uuid4().hex[:6]}"
         value = json.dumps({
@@ -92,17 +112,20 @@ class MemoryBackend:
             "tags":    tags or [],
             "created": created,
         })
-        self.conn.memory_put(self.memory, user_id, key, value)
+        self._exec(
+            f"MEMORY PUT INTO {self.memory} VALUES "
+            f"('{_e(user_id)}','{_e(key)}','{_e(value)}')"
+        )
         return key
 
     def search(self, user_id: str, query: str,
                 limit: int = 5,
                 tag: Optional[str] = None) -> List[Dict[str, Any]]:
-        sql = (f"SELECT mem_namespace, mem_key, mem_value FROM "
-               f"__mem_{self.memory} WHERE mem_namespace = "
-               f"'{_e(user_id)}' LIMIT 512")
-        rows = self.conn.query(sql, max_rows=512, max_cols=8,
-                                  col_buf_size=8192)
+        rows = self._query(
+            f"SELECT mem_namespace, mem_key, mem_value FROM "
+            f"__mem_{self.memory} WHERE mem_namespace = "
+            f"'{_e(user_id)}' LIMIT 512"
+        )
         q_terms = [w for w in query.lower().split() if len(w) > 1]
         out: List[Dict[str, Any]] = []
         for r in rows:
@@ -124,11 +147,11 @@ class MemoryBackend:
         return out[:limit]
 
     def recent(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        sql = (f"SELECT mem_namespace, mem_key, mem_value FROM "
-               f"__mem_{self.memory} WHERE mem_namespace = "
-               f"'{_e(user_id)}' LIMIT 512")
-        rows = self.conn.query(sql, max_rows=512, max_cols=8,
-                                  col_buf_size=8192)
+        rows = self._query(
+            f"SELECT mem_namespace, mem_key, mem_value FROM "
+            f"__mem_{self.memory} WHERE mem_namespace = "
+            f"'{_e(user_id)}' LIMIT 512"
+        )
         out: List[Dict[str, Any]] = []
         for r in rows:
             try:
@@ -141,17 +164,20 @@ class MemoryBackend:
 
     def forget(self, user_id: str, key: str) -> bool:
         try:
-            self.conn.memory_delete(self.memory, user_id, key)
+            self._exec(
+                f"MEMORY DELETE FROM {self.memory} "
+                f"WHERE NS='{_e(user_id)}' AND KEY='{_e(key)}'"
+            )
             return True
         except Exception:
             return False
 
     def list_tags(self, user_id: str) -> List[Dict[str, Any]]:
-        sql = (f"SELECT mem_namespace, mem_value FROM "
-               f"__mem_{self.memory} WHERE mem_namespace = "
-               f"'{_e(user_id)}' LIMIT 512")
-        rows = self.conn.query(sql, max_rows=512, max_cols=4,
-                                  col_buf_size=4096)
+        rows = self._query(
+            f"SELECT mem_namespace, mem_value FROM "
+            f"__mem_{self.memory} WHERE mem_namespace = "
+            f"'{_e(user_id)}' LIMIT 512"
+        )
         counts: Dict[str, int] = {}
         for r in rows:
             try:
@@ -163,6 +189,19 @@ class MemoryBackend:
         out = [{"tag": t, "count": c} for t, c in counts.items()]
         out.sort(key=lambda x: -x["count"])
         return out
+
+
+def _to_str(v: Any) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            return v.decode("utf-8")
+        except UnicodeDecodeError:
+            return v.decode("latin-1", "replace")
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False)
+    return str(v)
 
 
 # ---------------------------------------------------------------- #
@@ -249,9 +288,12 @@ class MCPServer:
     def __init__(self) -> None:
         self.user_id = os.environ.get("MCP_USER_ID", "default_user")
         self.host    = os.environ.get("EVOSQL_HOST",     "127.0.0.1")
-        self.port    = int(os.environ.get("EVOSQL_PORT", "9967"))
+        # Default to PostgreSQL wire (5433). Older deployments using EVO
+        # native (9967) won't work over psycopg — point them at 5433.
+        self.port    = int(os.environ.get("EVOSQL_PORT", "5433"))
         self.user    = os.environ.get("EVOSQL_USER",     "admin")
         self.pw      = os.environ.get("EVOSQL_PASSWORD", "admin")
+        self.db      = os.environ.get("EVOSQL_DATABASE", "testdb")
         self.prefix  = os.environ.get("MCP_STORE_PREFIX", "mcp")
         self.backend: Optional[MemoryBackend] = None
 
@@ -259,7 +301,7 @@ class MCPServer:
         if self.backend is None:
             self.backend = MemoryBackend(self.host, self.port,
                                             self.user, self.pw,
-                                            self.prefix)
+                                            self.db, self.prefix)
         return self.backend
 
     # -- tool dispatch ------------------------------------------------
