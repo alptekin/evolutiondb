@@ -1,11 +1,71 @@
 # Publishing `mcp-server-evolutiondb`
 
 This document captures every distribution channel the EvolutionDB MCP
-server is shipped through, with the exact command sequence to push a
-new version to each. Three of the four channels require account
-credentials we can't bake into the repo, so each section ends in the
-manual command the maintainer runs. Re-run them in order on every
-release.
+server is shipped through.
+
+## TL;DR — automated path
+
+After the one-time setup below (PyPI Trusted Publisher + Smithery GitHub
+App), every new release is one command:
+
+```bash
+# Bump the three version fields in lockstep first:
+#   - client/mcp-server-evosql/pyproject.toml          → project.version
+#   - client/mcp-server-evosql/server.json             → version + packages[0].version
+#   - client/mcp-server-evosql/dxt/manifest.json       → version
+# then:
+git tag v1.2.0
+git push --tags
+```
+
+What runs on the tag push:
+
+| Workflow                  | Builds / Publishes                                       |
+|---------------------------|----------------------------------------------------------|
+| `.github/workflows/mcp-release.yml` | sdist + wheel → **PyPI**; `server.json` → **MCP Registry** |
+| `.github/workflows/dxt-build.yml`   | per-platform `.dxt` files → **GitHub Release**          |
+| Smithery (continuous)     | Re-renders config when `smithery.yaml` changes on `main` |
+
+No tokens leave your laptop. PyPI uses Trusted Publishing (OIDC), MCP
+Registry uses GitHub OIDC, DXT uses the workflow's own permissions.
+
+## One-time setup (you only do these once)
+
+1. **PyPI Trusted Publishing** (eliminates the API token):
+   - Go to https://pypi.org/manage/project/mcp-server-evolutiondb/settings/publishing/
+   - "Add a new pending publisher" → Repository: `alptekin/evolutiondb`,
+     Workflow filename: `mcp-release.yml`, Environment name: `pypi`.
+   - Once added, the `PYPI_API_TOKEN` secret can be deleted from the
+     repo. Until you do this step, the workflow uses the secret as
+     fallback.
+2. **MCP Registry** — nothing to set up. The workflow uses GitHub
+   Actions' OIDC identity, which the registry trusts for the
+   `io.github.alptekin/...` namespace because that's your GitHub
+   account.
+3. **Smithery.ai** — install the Smithery GitHub App on
+   `alptekin/evolutiondb` (one-time, browser-based) and point it at
+   `client/mcp-server-evosql/smithery.yaml`. After that, Smithery
+   polls the file on `main` and re-renders the install page on
+   change.
+4. **Anthropic DXT directory** — manual submission per release the
+   first time you ship a major version; subsequent updates surface
+   automatically once the directory has the listing.
+
+If you skip the first step (PyPI Trusted Publishing), the workflow
+uses the existing `PYPI_API_TOKEN` repo secret instead — works the
+same, just with a token to rotate manually.
+
+---
+
+## Manual / first-time path (already done; kept for reference)
+
+If you ever need to publish from a laptop instead of CI — first
+release of a new package, debugging a CI failure, or shipping a
+hotfix without a tag — follow the per-channel steps below.
+
+Three of the four channels require account credentials we can't bake
+into the repo, so each section ends in the manual command the
+maintainer runs. Re-run them in order.
 
 The four channels:
 

@@ -43,6 +43,9 @@ client/**/build/
 client/**/.venv/
 client/**/*.egg-info/
 
+# CLI tools downloaded into the package dir during local publish
+client/mcp-server-evosql/mcp-publisher
+
 # Built binaries
 adaptor/evosql-server
 evolution/evosql
