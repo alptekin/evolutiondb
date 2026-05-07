@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.1.2"
+SERVER_VERSION   = "1.1.3"
 
 
 # ---------------------------------------------------------------- #
@@ -58,6 +58,14 @@ def _e(s: str) -> str:
 
 
 class MemoryBackend:
+    # Long-running MCP server processes outlive the database container
+    # they connect to (docker compose restart, server upgrade, network
+    # blip). Without retry the next tool call after a connection drop
+    # returns "the connection is closed" and the user has to restart
+    # the whole MCP host (Claude Desktop / Claude Code) to recover.
+    _RECONNECT_ATTEMPTS = 3
+    _RECONNECT_BACKOFF_SEC = 0.5
+
     def __init__(self, host: str, port: int, user: str, password: str,
                   database: str, prefix: str):
         try:
@@ -69,11 +77,12 @@ class MemoryBackend:
                 "or `pip install psycopg[binary]>=3.1`."
             ) from exc
 
-        self.psycopg = psycopg
-        self.conn = psycopg.connect(
+        self.psycopg  = psycopg
+        self._conn_kwargs = dict(
             host=host, port=port, user=user, password=password,
             dbname=database, autocommit=True,
         )
+        self.conn = self._connect()
         self.memory   = f"{prefix}_mem"
         self.entities = f"{prefix}_ents"
         # Idempotent CREATE — the server must not lose data across
@@ -89,18 +98,63 @@ class MemoryBackend:
             except Exception:
                 pass
 
+    # -- connection lifecycle ----------------------------------------
+    def _connect(self):
+        return self.psycopg.connect(**self._conn_kwargs)
+
+    def _is_dead_connection_error(self, exc: BaseException) -> bool:
+        """psycopg surfaces stale-connection failures via OperationalError
+        (and InterfaceError for a fully-closed handle). Anything else
+        is a real query error we should propagate as-is."""
+        return isinstance(exc, (self.psycopg.OperationalError,
+                                self.psycopg.InterfaceError))
+
+    def _with_retry(self, fn):
+        """Run `fn(cursor)` against the live connection. If the connection
+        is dead, close it, reopen it, and try again — up to
+        _RECONNECT_ATTEMPTS times. Final failure surfaces the original
+        OperationalError so the JSON-RPC dispatcher can return a
+        meaningful tool error."""
+        last_exc = None
+        for attempt in range(self._RECONNECT_ATTEMPTS):
+            try:
+                with self.conn.cursor() as cur:
+                    return fn(cur)
+            except Exception as exc:
+                if not self._is_dead_connection_error(exc):
+                    raise
+                last_exc = exc
+                print(f"[mcp-evosql] connection lost (attempt "
+                      f"{attempt + 1}/{self._RECONNECT_ATTEMPTS}): {exc}",
+                      file=sys.stderr, flush=True)
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+                if attempt + 1 < self._RECONNECT_ATTEMPTS:
+                    time.sleep(self._RECONNECT_BACKOFF_SEC * (attempt + 1))
+                    try:
+                        self.conn = self._connect()
+                    except Exception as reconnect_exc:
+                        last_exc = reconnect_exc
+                        continue
+        # Out of attempts — re-raise the last error so the caller knows.
+        raise last_exc  # type: ignore[misc]
+
     # -- helpers ------------------------------------------------------
     def _exec(self, sql: str) -> None:
-        with self.conn.cursor() as cur:
+        def run(cur):
             cur.execute(sql)
+        self._with_retry(run)
 
     def _query(self, sql: str) -> List[List[str]]:
-        with self.conn.cursor() as cur:
+        def run(cur):
             cur.execute(sql)
             try:
                 return [list(map(_to_str, row)) for row in cur.fetchall()]
             except self.psycopg.ProgrammingError:
                 return []
+        return self._with_retry(run)
 
     # -- DML wrappers -------------------------------------------------
     def save(self, user_id: str, fact: str,
