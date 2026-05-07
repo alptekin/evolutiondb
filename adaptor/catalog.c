@@ -545,6 +545,65 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         return 1;
     }
 
+    /* Task 205 — SHOW MEMORY STORES lists every CREATE MEMORY STORE.
+     *
+     * Match before "stores" alone so this handler wins. Earlier
+     * versions silently fell through to the empty-row default,
+     * which made operators believe the catalog was empty even when
+     * MEMORY PUT was succeeding against the heap. */
+    if (stristr_found(sql, "memory stores") ||
+        stristr_found(sql, "memory_stores")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "name",              PG_OID_TEXT);
+        result_add_column(rs, "backing_table_id",  PG_OID_INT4);
+        result_add_column(rs, "embedding_dim",     PG_OID_INT4);
+        result_add_column(rs, "distance",          PG_OID_TEXT);
+        MemoryStoreDesc stores[64];
+        int n = cat_list_memory_stores(stores, 64);
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, stores[i].name);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u", stores[i].backing_table_id);
+            result_set_field(rs, row, 1, buf);
+            snprintf(buf, sizeof(buf), "%d", stores[i].embedding_dim);
+            result_set_field(rs, row, 2, buf);
+            const char *dist = "cosine";
+            switch (stores[i].distance_kind) {
+                case MEMORY_DIST_L2:    dist = "l2";     break;
+                case MEMORY_DIST_INNER: dist = "inner";  break;
+                case MEMORY_DIST_L1:    dist = "l1";     break;
+                default:                dist = "cosine"; break;
+            }
+            result_set_field(rs, row, 3, dist);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
+    /* Task 204 — SHOW CHECKPOINT STORES lists every CREATE CHECKPOINT STORE. */
+    if (stristr_found(sql, "checkpoint stores") ||
+        stristr_found(sql, "checkpoint_stores")) {
+        result_init(rs);
+        rs->is_select = 1;
+        result_add_column(rs, "name",              PG_OID_TEXT);
+        result_add_column(rs, "backing_table_id",  PG_OID_INT4);
+        result_add_column(rs, "retention",         PG_OID_TEXT);
+        CheckpointStoreDesc stores[64];
+        int n = cat_list_checkpoint_stores(stores, 64);
+        for (int i = 0; i < n; i++) {
+            int row = result_add_row(rs);
+            result_set_field(rs, row, 0, stores[i].name);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u", stores[i].backing_table_id);
+            result_set_field(rs, row, 1, buf);
+            result_set_field(rs, row, 2, stores[i].retention);
+        }
+        snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
+        return 1;
+    }
+
     /* Task 225 — SHOW ENTITY STORES lists every CREATE ENTITY STORE. */
     if (stristr_found(sql, "entity stores") ||
         stristr_found(sql, "entity_stores")) {
