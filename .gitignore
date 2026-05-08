@@ -41,6 +41,7 @@ site/
 client/**/dist/
 client/**/build/
 client/**/.venv/
+client/**/.venv-*/
 client/**/*.egg-info/
 
 # CLI tools downloaded into the package dir during local publish
