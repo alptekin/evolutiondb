@@ -235,9 +235,32 @@ def _build_argparser() -> argparse.ArgumentParser:
                         "for chats that already have a stored watermark.")
     p.add_argument("--dry-run", action="store_true",
                    help="Talk to Graph but don't write to EvolutionDB.")
+    p.add_argument("--embedded", action="store_true",
+                   help="Bring up a self-contained evosql-server on the "
+                        "default PG + EVO ports before syncing. Downloads "
+                        "the platform-correct binary from the latest "
+                        "server-v* GitHub release on first use and caches "
+                        "it under ~/.evosql/bin. DBeaver / psql / the "
+                        "bundled CLI still connect to the same ports.")
     p.add_argument("--env-file", default=".env",
                    help="Path to a dotenv file (default: ./.env).")
     return p
+
+
+def _ensure_embedded(cfg: "Config") -> int:
+    """Bring up the embedded evosql-server if --embedded was passed."""
+    from . import embedded as embedded_mod
+    try:
+        embedded_mod.EmbeddedServer(
+            pg_port=cfg.evosql_port,
+            admin_user=cfg.evosql_user,
+            admin_password=cfg.evosql_pass,
+        ).ensure_running()
+        return 0
+    except embedded_mod.EmbeddedError as exc:
+        print(f"[teams-sync] embedded server failed: {exc}",
+              file=sys.stderr)
+        return 5
 
 
 def _print_result(counters: Dict[str, int], *, dry_run: bool) -> None:
@@ -263,6 +286,11 @@ def main(argv: Optional[list] = None) -> int:
     except ValueError as exc:
         print(f"[teams-sync] {exc}", file=sys.stderr)
         return 2
+
+    if args.embedded:
+        rc = _ensure_embedded(cfg)
+        if rc != 0:
+            return rc
 
     if args.auth:
         try:
