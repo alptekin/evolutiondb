@@ -36,6 +36,23 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
     }
     return NULL;
 }
+#include <io.h>
+#include <sys/types.h>
+/* POSIX positional read / write are absent on MinGW. Emulate via
+ * lseek + read + write under the assumption that the caller has its
+ * own mutex around concurrent fd access (buffer_pool.c does, and
+ * page_mgr.c's calls happen during single-threaded startup). */
+#ifndef ssize_t
+typedef long ssize_t;
+#endif
+static inline ssize_t pread(int fd, void *buf, size_t count, long long offset) {
+    if (_lseeki64(fd, offset, SEEK_SET) == (long long)-1) return -1;
+    return _read(fd, buf, (unsigned int)count);
+}
+static inline ssize_t pwrite(int fd, const void *buf, size_t count, long long offset) {
+    if (_lseeki64(fd, offset, SEEK_SET) == (long long)-1) return -1;
+    return _write(fd, buf, (unsigned int)count);
+}
 #endif  /* EVOSQL_HAVE_POSIX_SHIMS */
 /* Align __thread with __declspec(thread) on MinGW to match the storage
  * class declared in catalog/query_context headers (see
