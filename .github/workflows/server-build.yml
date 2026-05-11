@@ -39,9 +39,6 @@ jobs:
           - asset:    evosql-server-macos-arm64
             runner:   macos-14
             os:       macos
-          - asset:    evosql-server-macos-x86_64
-            runner:   macos-13
-            os:       macos
           - asset:    evosql-server-windows-x86_64.exe
             runner:   windows-latest
             os:       windows
@@ -99,12 +96,10 @@ jobs:
           set -eu
           # macOS clang/ld does not honour -Bstatic — we point at the
           # full path of the .a archives so they win over the dylibs
-          # in the same directory.
-          if [ "${{ matrix.target.asset }}" = "evosql-server-macos-arm64" ]; then
-            OPENSSL_PREFIX="/opt/homebrew/opt/openssl@3"
-          else
-            OPENSSL_PREFIX="/usr/local/opt/openssl@3"
-          fi
+          # in the same directory. Only the Apple Silicon build is
+          # shipped; macOS Intel hardware is rare enough downstream
+          # that we don't pay the queue tax of a macos-13 runner.
+          OPENSSL_PREFIX="/opt/homebrew/opt/openssl@3"
           make -C adaptor clean
           make -C adaptor TLS=1 \
             CFLAGS="-Wall -O2 -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I${OPENSSL_PREFIX}/include" \
