@@ -51,6 +51,9 @@ static inline ssize_t pwrite(int fd, const void *buf, size_t count, long long of
     if (_lseeki64(fd, offset, SEEK_SET) == (long long)-1) return -1;
     return _write(fd, buf, (unsigned int)count);
 }
+/* POSIX fsync -> MinGW _commit: both flush the OS write cache for an
+ * open file descriptor to disk before returning. */
+static inline int fsync(int fd) { return _commit(fd); }
 #endif  /* EVOSQL_HAVE_POSIX_SHIMS */
 /* Align __thread with __declspec(thread) on MinGW to match the storage
  * class declared in catalog/query_context headers (see
