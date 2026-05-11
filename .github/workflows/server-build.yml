@@ -1,0 +1,210 @@
+name: EvoSQL server — cross-platform release
+
+# Build the evosql-server binary for every platform we ship and
+# attach the stripped binaries to a GitHub Release.
+#
+# Triggers
+#   - push tag matching server-v* — full build + Release upload.
+#   - workflow_dispatch — build only, no upload (for smoke testing).
+#   - workflow_call — let other workflows reuse the matrix.
+#
+# OpenSSL is statically linked so the resulting binary runs on a
+# stock machine without an OpenSSL package installed. That keeps the
+# embedded-mode story honest: pip install evolutiondb-teams-sync,
+# pass --embedded, and the sync downloads one self-contained file.
+
+on:
+  push:
+    tags: ["server-v*"]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: write   # release upload needs write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target.asset }}
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - asset:    evosql-server-linux-x86_64
+            runner:   ubuntu-latest
+            os:       linux
+          - asset:    evosql-server-linux-arm64
+            runner:   ubuntu-22.04-arm
+            os:       linux
+          - asset:    evosql-server-macos-arm64
+            runner:   macos-14
+            os:       macos
+          - asset:    evosql-server-macos-x86_64
+            runner:   macos-13
+            os:       macos
+          - asset:    evosql-server-windows-x86_64.exe
+            runner:   windows-latest
+            os:       windows
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ----- Toolchain + OpenSSL prep ---------------------------------
+      - name: Install build deps (Linux)
+        if: matrix.target.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison flex make gcc libssl-dev libreadline-dev
+
+      - name: Install build deps (macOS)
+        if: matrix.target.os == 'macos'
+        run: |
+          brew update >/dev/null
+          brew install bison flex openssl@3
+
+      - name: Install MSYS2 + MinGW (Windows)
+        if: matrix.target.os == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-bison
+            mingw-w64-x86_64-flex
+
+      # ----- Build evosql-server with static OpenSSL ------------------
+      - name: Build (Linux)
+        if: matrix.target.os == 'linux'
+        run: |
+          make -C adaptor clean
+          # libssl-dev installs the .a archives at the same prefix as
+          # the .so files; -Wl,-Bstatic / -Bdynamic toggles static
+          # linking just for ssl + crypto, leaving glibc / libdl
+          # dynamic (truly static glibc tends to break dlopen).
+          make -C adaptor TLS=1 \
+            LDFLAGS="-lpthread -lm -Wl,-Bstatic -lssl -lcrypto -Wl,-Bdynamic -ldl"
+          strip adaptor/evosql-server
+          mv adaptor/evosql-server "${{ matrix.target.asset }}"
+          file "${{ matrix.target.asset }}"
+          ls -lh "${{ matrix.target.asset }}"
+
+      - name: Build (macOS)
+        if: matrix.target.os == 'macos'
+        run: |
+          set -eu
+          # macOS clang/ld does not honour -Bstatic — we point at the
+          # full path of the .a archives so they win over the dylibs
+          # in the same directory.
+          if [ "${{ matrix.target.asset }}" = "evosql-server-macos-arm64" ]; then
+            OPENSSL_PREFIX="/opt/homebrew/opt/openssl@3"
+          else
+            OPENSSL_PREFIX="/usr/local/opt/openssl@3"
+          fi
+          make -C adaptor clean
+          make -C adaptor TLS=1 \
+            CFLAGS="-Wall -O2 -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I${OPENSSL_PREFIX}/include" \
+            LDFLAGS="-lpthread -lm ${OPENSSL_PREFIX}/lib/libssl.a ${OPENSSL_PREFIX}/lib/libcrypto.a"
+          strip -x adaptor/evosql-server
+          mv adaptor/evosql-server "${{ matrix.target.asset }}"
+          file "${{ matrix.target.asset }}"
+          ls -lh "${{ matrix.target.asset }}"
+
+      - name: Build (Windows)
+        if: matrix.target.os == 'windows'
+        shell: msys2 {0}
+        run: |
+          export PATH="/mingw64/bin:$PATH"
+          make -C adaptor clean
+          # MinGW OpenSSL ships static archives under /mingw64/lib.
+          # Force static linking for libssl/libcrypto by absolute path,
+          # use static gcc runtime so the .exe has no MinGW dll dep,
+          # and add the standard Windows sockets/crypt32 libs OpenSSL
+          # transitively needs.
+          make -C adaptor TLS=1 \
+            CFLAGS="-Wall -O2 -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I/mingw64/include" \
+            LDFLAGS="-static -static-libgcc /mingw64/lib/libssl.a /mingw64/lib/libcrypto.a -lws2_32 -lcrypt32 -lbcrypt -lz"
+          strip adaptor/evosql-server.exe
+          mv adaptor/evosql-server.exe "${{ matrix.target.asset }}"
+          file "${{ matrix.target.asset }}"
+          ls -lh "${{ matrix.target.asset }}"
+
+      # ----- Smoke test the produced binary ---------------------------
+      - name: Smoke test (Linux / macOS)
+        if: matrix.target.os != 'windows'
+        run: |
+          chmod +x "${{ matrix.target.asset }}"
+          # Start, listen on free ports, kill after a moment. If the
+          # binary segfaults on startup the workflow fails here.
+          ./"${{ matrix.target.asset }}" --pg-port 15433 --evo-port 19967 &
+          PID=$!
+          sleep 2
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "evosql-server started cleanly (pid=$PID)"
+            kill "$PID" || true
+            wait "$PID" 2>/dev/null || true
+          else
+            echo "::error::evosql-server failed to stay up"
+            exit 1
+          fi
+
+      - name: Smoke test (Windows)
+        if: matrix.target.os == 'windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath ".\${{ matrix.target.asset }}" `
+              -ArgumentList "--pg-port","15433","--evo-port","19967" `
+              -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          if ($p.HasExited) {
+            Write-Error "evosql-server exited immediately (code $($p.ExitCode))"
+            exit 1
+          }
+          Stop-Process -Id $p.Id -Force
+
+      # ----- Upload as workflow artifact ------------------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target.asset }}
+          path: ${{ matrix.target.asset }}
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Attach binaries to GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/server-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Lay out and checksum
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cd release
+          for f in *; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+          ls -lh
+
+      - name: Create / update the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release/*
+          fail_on_unmatched_files: true
