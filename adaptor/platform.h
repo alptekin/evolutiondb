@@ -86,6 +86,16 @@ typedef SRWLOCK rwlock_t;
 /* Process ID */
 #define platform_getpid()  ((int)GetCurrentProcessId())
 
+/* Cross-platform sleep (milliseconds) — Win32 Sleep takes ms directly. */
+#define platform_sleep_ms(ms)  Sleep((DWORD)(ms))
+
+/* Current time in milliseconds. GetTickCount64 is monotonic and
+ * ms-resolution, which matches how the Unix branch uses gettimeofday
+ * for connect / query elapsed timing. */
+static inline int64_t platform_now_ms(void) {
+    return (int64_t)GetTickCount64();
+}
+
 /* Directory listing (for catalog.c *.meta scanning) */
 typedef struct {
     WIN32_FIND_DATAA fd;
