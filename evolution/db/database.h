@@ -5,6 +5,40 @@
 #include <stdint.h>
 #include "evosql_errcodes.h"
 
+/* Win32 / MinGW does not ship gmtime_r (POSIX reentrant) or
+ * strcasestr (GNU extension). The engine code in evolution/db reaches
+ * for both directly without going through adaptor/platform.h, so we
+ * define the portable shims here at the central engine header so
+ * every translation unit picks them up. Identical bodies live in
+ * adaptor/platform.h; either header reaching a call site is fine. */
+#ifdef _WIN32
+#include <time.h>
+#include <ctype.h>
+#include <string.h>
+static inline struct tm *gmtime_r(const time_t *t, struct tm *out) {
+    return (gmtime_s(out, t) == 0) ? out : NULL;
+}
+static inline char *strcasestr(const char *haystack, const char *needle) {
+    if (!needle || !*needle) return (char *)haystack;
+    for (; *haystack; ++haystack) {
+        size_t i = 0;
+        while (haystack[i] && needle[i] &&
+               tolower((unsigned char)haystack[i]) ==
+               tolower((unsigned char)needle[i]))
+            ++i;
+        if (!needle[i]) return (char *)haystack;
+    }
+    return NULL;
+}
+/* Align __thread with __declspec(thread) on MinGW to match the storage
+ * class declared in catalog/query_context headers (see
+ * adaptor/platform.h for the same alias). */
+#ifndef _WIN32_TLS_ALIASED
+#define _WIN32_TLS_ALIASED
+#define __thread __declspec(thread)
+#endif
+#endif  /* _WIN32 */
+
 /* Max columns per table — must match catalog_internal.h */
 #ifndef CAT_MAX_COLUMNS
 #define CAT_MAX_COLUMNS 256
