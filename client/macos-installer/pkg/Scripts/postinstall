@@ -1,0 +1,46 @@
+#!/bin/sh
+# postinstall — fix permissions, make the data dir, and hand the
+# LaunchDaemon to launchctl so the server starts immediately and on
+# every boot. Idempotent — re-running the installer over an existing
+# install is a supported flow.
+set -eu
+
+BIN=/usr/local/bin/evosql-server
+DATA=/usr/local/share/evosql
+PLIST=/Library/LaunchDaemons/com.evolutiondb.server.plist
+
+# Strip the macOS quarantine attribute the downloaded .pkg might
+# have inherited so the daemon can actually exec the binary.
+/usr/bin/xattr -dr com.apple.quarantine "$BIN"        2>/dev/null || true
+/usr/bin/xattr -dr com.apple.quarantine "$PLIST"      2>/dev/null || true
+
+/bin/chmod 755 "$BIN"
+
+# The daemon writes evosql.db and the WAL into $DATA. Make sure it
+# is owned by root and group-writable so a future "Standard" user
+# install variant would still work.
+/bin/mkdir -p "$DATA"
+/usr/sbin/chown -R root:wheel "$DATA"
+/bin/chmod 755 "$DATA"
+
+# Drop a tiny uninstaller next to the data dir.
+cat > "$DATA/uninstall.sh" <<'UNINSTALL'
+#!/bin/sh
+set -eu
+PLIST=/Library/LaunchDaemons/com.evolutiondb.server.plist
+if [ -f "$PLIST" ]; then
+    /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+    /bin/rm -f "$PLIST"
+fi
+/bin/rm -f /usr/local/bin/evosql-server
+/bin/rm -rf /usr/local/share/evosql
+echo "EvolutionDB removed."
+UNINSTALL
+/bin/chmod 755 "$DATA/uninstall.sh"
+
+# Load + start the daemon. bootstrap is the modern launchctl verb;
+# `enable` makes sure a previously disabled service comes back.
+/bin/launchctl enable system/com.evolutiondb.server || true
+/bin/launchctl bootstrap system "$PLIST"
+
+exit 0

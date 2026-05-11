@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  distribution.xml — turns a plain component .pkg into a productbuild
+  bundle that gives the user a real "next next finish" wizard with
+  Welcome / Read Me / License / Install Location / Conclusion screens.
+  Apple's Installer.app renders this on every recent macOS without
+  needing any third-party UI framework.
+-->
+<installer-gui-script minSpecVersion="1">
+    <title>EvolutionDB Server</title>
+    <organization>com.evolutiondb</organization>
+
+    <welcome    file="Welcome.html"    mime-type="text/html"/>
+    <license    file="License.txt"     mime-type="text/plain"/>
+    <conclusion file="Conclusion.html" mime-type="text/html"/>
+
+    <!-- Refuse to install on macOS < 12 (Monterey). The arm64 build
+         we ship is unsigned ad-hoc; older macOS Gatekeeper variants
+         block the daemon launch with little hint why. -->
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="12.0"/>
+        </allowed-os-versions>
+    </volume-check>
+
+    <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.evolutiondb.server.pkg"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default"/>
+    <choice id="com.evolutiondb.server.pkg" visible="false">
+        <pkg-ref id="com.evolutiondb.server.pkg"/>
+    </choice>
+
+    <pkg-ref id="com.evolutiondb.server.pkg"
+             version="0.1.0"
+             onConclusion="none">EvolutionDB.pkg</pkg-ref>
+</installer-gui-script>
