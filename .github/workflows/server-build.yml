@@ -120,8 +120,17 @@ jobs:
           # use static gcc runtime so the .exe has no MinGW dll dep,
           # and add the standard Windows sockets/crypt32 libs OpenSSL
           # transitively needs.
+          # MinGW gcc treats `__thread` and `__declspec(thread)` as
+          # distinct storage classes. The codebase declares TLS globals
+          # both ways across headers, so apply a preprocessor alias
+          # globally (-D__thread=__declspec(thread)) to force every
+          # translation unit into one shape and avoid "non-thread-local
+          # declaration follows thread-local declaration" errors. The
+          # macro lands before any source is parsed, so even headers
+          # that include each other in arbitrary order see the same
+          # token after preprocessing.
           make -C adaptor TLS=1 \
-            CFLAGS="-Wall -g -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I/mingw64/include" \
+            CFLAGS="-Wall -g -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I/mingw64/include '-D__thread=__declspec(thread)'" \
             LDFLAGS="-static -static-libgcc /mingw64/lib/libssl.a /mingw64/lib/libcrypto.a -lws2_32 -lcrypt32 -lbcrypt -lz"
           strip adaptor/evosql-server.exe
           mv adaptor/evosql-server.exe "${{ matrix.target.asset }}"

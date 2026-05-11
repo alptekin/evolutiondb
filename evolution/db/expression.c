@@ -8,6 +8,8 @@
 #include <math.h>
 #ifndef _WIN32
 #include <regex.h>
+#else
+#include <windows.h>   /* GetComputerNameA, DWORD */
 #endif
 #include <time.h>
 #include <sys/time.h>
@@ -563,8 +565,14 @@ void snowflake_init(void)
     if (env) {
         g_snowflake_machine_id = (uint16_t)(atoi(env) & 0x3FF);
     } else {
-        char hostname[256];
+        char hostname[256] = "";
+#ifdef _WIN32
+        DWORD hn_size = sizeof(hostname);
+        GetComputerNameA(hostname, &hn_size);
+        if (hostname[0]) {
+#else
         if (gethostname(hostname, sizeof(hostname)) == 0) {
+#endif
             unsigned int h = 0;
             for (int i = 0; hostname[i]; i++)
                 h = h * 31 + (unsigned char)hostname[i];
