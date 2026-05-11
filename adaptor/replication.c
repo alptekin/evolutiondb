@@ -3,10 +3,21 @@
  *
  * Master: accepts replica connections, streams WAL records.
  * Replica: connects to master, receives and replays WAL records.
+ *
+ * Replication relies on POSIX sockets and pthreads. MinGW does not
+ * provide either API in compatible form, so on Windows we compile
+ * stubs at the bottom of this file and skip the full implementation
+ * between #ifndef _WIN32 ... #endif. Replication is opt-in at runtime
+ * (--replica / --cluster), so the default embedded-mode + sync flow
+ * keeps working on Windows builds without any of this.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "replication.h"
+
+#ifndef _WIN32
+
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/socket.h>
@@ -17,7 +28,6 @@
 #include <sys/time.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "replication.h"
 #include "raft.h"                              /* RAFT_LEADER/_FOLLOWER/_CANDIDATE */
 #include "tls.h"
 #include "../evolution/db/wal.h"
@@ -1516,3 +1526,34 @@ static void *cdc_accept_loop(void *arg)
     }
     return NULL;
 }
+
+#else  /* _WIN32 — Windows MinGW stubs */
+
+int  repl_start_sender(int port)                                  { (void)port; return -1; }
+void repl_stop_sender(void)                                       {}
+void repl_notify_new_wal(void)                                    {}
+int  repl_start_receiver(const char *h, int p, int fd)            { (void)h; (void)p; (void)fd; return -1; }
+void repl_stop_receiver(void)                                     {}
+int  repl_is_replica(void)                                        { return 0; }
+void repl_set_change_callback(repl_change_callback cb, void *ctx) { (void)cb; (void)ctx; }
+void repl_enable_tls(int enabled)                                 { (void)enabled; }
+void repl_set_auth(const char *u, const char *p)                  { (void)u; (void)p; }
+int  repl_list_slots(ReplicationSlot *out, int max)               { (void)out; (void)max; return 0; }
+void repl_slot_update(const char *id, uint32_t lsn)               { (void)id; (void)lsn; }
+void repl_slot_deactivate(const char *id)                         { (void)id; }
+int  repl_get_status(ReplicationStatus *out)                      { if (out) memset(out, 0, sizeof(*out)); return 0; }
+void repl_set_role(int role)                                      { (void)role; }
+int  repl_get_role(void)                                          { return REPL_ROLE_PRIMARY; }
+int  repl_sync_commit(uint32_t lsn, int timeout_ms)               { (void)lsn; (void)timeout_ms; return 0; }
+int  repl_sync_commit_enabled(void)                               { return 0; }
+int  repl_create_backup(const char *path)                         { (void)path; return -1; }
+int  repl_promote(void)                                           { return -1; }
+void repl_install_raft_glue(void)                                 {}
+void repl_bind_raft_glue(int port)                                { (void)port; }
+int  repl_is_witness(void)                                        { return 0; }
+void repl_set_witness(int enabled)                                { (void)enabled; }
+int  repl_start_cdc_server(int port)                              { (void)port; return -1; }
+int  repl_add_member(const char *h, int p)                        { (void)h; (void)p; return -1; }
+int  repl_remove_member(int node_id)                              { (void)node_id; return -1; }
+
+#endif  /* _WIN32 */

@@ -3,10 +3,18 @@
  *
  * Implements leader election + heartbeat + replication slot tracking.
  * WAL streaming (AppendEntries) reuses the existing replication infrastructure.
+ *
+ * Same Windows story as replication.c: the implementation is gated
+ * on POSIX sockets + pthreads, so on MinGW we compile stubs at the
+ * bottom of the file. Raft is opt-in via --cluster.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "raft.h"
+
+#ifndef _WIN32
+
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/socket.h>
@@ -17,7 +25,6 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <fcntl.h>
-#include "raft.h"
 
 /* Persistence constants — see raft_save_state below. */
 #define RAFT_STATE_MAGIC   0x54464152   /* "RAFT" in LE */
@@ -658,3 +665,24 @@ int raft_get_node_host_port(int node_id, char *host, int host_size, int *port)
     *port = g_nodes[node_id].port;
     return 0;
 }
+
+#else  /* _WIN32 — Windows MinGW stubs */
+
+int  raft_init(const char *nodes_csv, int my_id)                  { (void)nodes_csv; (void)my_id; return -1; }
+int  raft_start(void)                                              { return -1; }
+void raft_stop(void)                                               {}
+int  raft_get_role(void)                                           { return RAFT_FOLLOWER; }
+uint32_t raft_get_term(void)                                       { return 0; }
+int  raft_get_leader_id(void)                                      { return -1; }
+int  raft_is_leader(void)                                          { return 0; }
+int  raft_replicate_wal(uint32_t lsn)                              { (void)lsn; return 0; }
+int  raft_sync_commit(uint32_t lsn)                                { (void)lsn; return 0; }
+void raft_get_lag(uint32_t *my_lsn, uint32_t lags[], int *n)       { if (my_lsn) *my_lsn = 0; if (n) *n = 0; (void)lags; }
+int  raft_add_member(const char *host, int port)                   { (void)host; (void)port; return -1; }
+int  raft_remove_member(int node_id)                               { (void)node_id; return -1; }
+int  raft_get_num_nodes(void)                                      { return 0; }
+int  raft_get_my_node_id(void)                                     { return -1; }
+int  raft_get_node_host_port(int n, char *h, int hs, int *p)       { (void)n; (void)h; (void)hs; (void)p; return -1; }
+void raft_set_role_callback(void (*cb)(int, int))                  { (void)cb; }
+
+#endif  /* _WIN32 */
