@@ -1,0 +1,17 @@
+#!/bin/sh
+# AppRun — entry point the AppImage runtime invokes. Fall through to
+# the bundled evosql-server with whatever args the user passed.
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# A friendly default cwd so the DB file lands somewhere predictable
+# instead of inside the AppImage mount point.
+DATA_DIR="${EVOSQL_DATA_DIR:-$HOME/.evosql/data}"
+mkdir -p "$DATA_DIR"
+cd "$DATA_DIR" || exit 1
+
+# Allow the user to override the auto-generated admin password so the
+# AppImage is usable without copy-pasting it out of the boot log.
+export EVOSQL_USER_NAME="${EVOSQL_USER_NAME:-admin}"
+export EVOSQL_PASSWORD="${EVOSQL_PASSWORD:-admin}"
+
+exec "$HERE/usr/bin/evosql-server" "$@"

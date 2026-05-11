@@ -1,0 +1,10 @@
+#!/bin/sh
+# prerm — stop the daemon before files disappear.
+set -e
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop    evolutiondb.service >/dev/null 2>&1 || true
+    systemctl disable evolutiondb.service >/dev/null 2>&1 || true
+fi
+
+exit 0

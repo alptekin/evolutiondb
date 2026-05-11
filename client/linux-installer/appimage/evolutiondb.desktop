@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=EvolutionDB
+GenericName=SQL engine
+Comment=Long-term memory database for AI assistants
+Exec=evosql-server
+Icon=evolutiondb
+Terminal=true
+Type=Application
+Categories=Development;Database;
