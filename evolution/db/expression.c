@@ -6,7 +6,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#ifndef _WIN32
 #include <regex.h>
+#endif
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -2706,6 +2708,7 @@ int expr_evaluate(const ExprNode *e,
             strncpy(out_buf, NULL_MARKER, buf_size);
             return 1;
         }
+#ifndef _WIN32
         regex_t regex;
         int rc = regcomp(&regex, pat, REG_EXTENDED | REG_NOSUB);
         if (rc != 0) {
@@ -2717,6 +2720,13 @@ int expr_evaluate(const ExprNode *e,
         if (e->type == EXPR_NOT_REGEXP) match = !match;
         strncpy(out_buf, match ? "t" : "f", buf_size);
         return 1;
+#else
+        /* MinGW does not ship POSIX <regex.h>. Treat REGEXP / NOT
+         * REGEXP as false until a real regex shim is bundled. */
+        (void)str; (void)pat;
+        strncpy(out_buf, "f", buf_size);
+        return 1;
+#endif
     }
 
     /* ── CAST / NULLIF / IF / IS TRUE ── */
