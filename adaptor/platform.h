@@ -22,6 +22,15 @@
 #include <io.h>
 #include <process.h>
 
+/* MinGW gcc supports the GCC `__thread` extension *and* the Win32
+ * `__declspec(thread)` attribute, but treats them as distinct
+ * storage classes. Headers across the project declare a TLS global
+ * with one form while individual translation units redeclare it
+ * with the other, producing "thread-local declaration follows
+ * non-thread-local declaration" errors on MinGW. Aliasing one to
+ * the other at preprocessor level forces a single storage class. */
+#define __thread __declspec(thread)
+
 typedef SOCKET socket_t;
 #ifndef __MINGW32__
 typedef int socklen_t;
