@@ -100,6 +100,31 @@ static inline int64_t platform_now_ms(void) {
     return (int64_t)GetTickCount64();
 }
 
+/* POSIX reentrant gmtime. Win32 ships gmtime_s with swapped args
+ * and an errno_t return — wrap it so callers keep the POSIX shape. */
+#include <time.h>
+static inline struct tm *gmtime_r(const time_t *t, struct tm *out) {
+    return (gmtime_s(out, t) == 0) ? out : NULL;
+}
+
+/* GNU strcasestr is missing on MinGW; provide a minimal portable
+ * implementation. Case insensitive substring search, returns the
+ * first match in haystack or NULL. */
+#include <ctype.h>
+#include <string.h>
+static inline char *strcasestr(const char *haystack, const char *needle) {
+    if (!needle || !*needle) return (char *)haystack;
+    for (; *haystack; ++haystack) {
+        size_t i = 0;
+        while (haystack[i] && needle[i] &&
+               tolower((unsigned char)haystack[i]) ==
+               tolower((unsigned char)needle[i]))
+            ++i;
+        if (!needle[i]) return (char *)haystack;
+    }
+    return NULL;
+}
+
 /* Directory listing (for catalog.c *.meta scanning) */
 typedef struct {
     WIN32_FIND_DATAA fd;
