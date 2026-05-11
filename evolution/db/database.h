@@ -54,6 +54,9 @@ static inline ssize_t pwrite(int fd, const void *buf, size_t count, long long of
 /* POSIX fsync -> MinGW _commit: both flush the OS write cache for an
  * open file descriptor to disk before returning. */
 static inline int fsync(int fd) { return _commit(fd); }
+/* GNU timegm -> MinGW _mkgmtime: both convert struct tm in UTC to
+ * time_t without consulting the local timezone. */
+static inline time_t timegm(struct tm *tm) { return _mkgmtime(tm); }
 #endif  /* EVOSQL_HAVE_POSIX_SHIMS */
 /* Align __thread with __declspec(thread) on MinGW to match the storage
  * class declared in catalog/query_context headers (see
