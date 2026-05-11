@@ -37,14 +37,11 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
     return NULL;
 }
 #include <io.h>
-#include <sys/types.h>
+#include <sys/types.h>      /* ssize_t */
 /* POSIX positional read / write are absent on MinGW. Emulate via
  * lseek + read + write under the assumption that the caller has its
  * own mutex around concurrent fd access (buffer_pool.c does, and
  * page_mgr.c's calls happen during single-threaded startup). */
-#ifndef ssize_t
-typedef long ssize_t;
-#endif
 static inline ssize_t pread(int fd, void *buf, size_t count, long long offset) {
     if (_lseeki64(fd, offset, SEEK_SET) == (long long)-1) return -1;
     return _read(fd, buf, (unsigned int)count);
