@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <pthread.h>
 
+#include "database.h"      /* MinGW pread/pwrite + strcasestr shims */
 #include "page_mgr.h"
 #include "buffer_pool.h"
 #include "page_crypt.h"
