@@ -4,11 +4,21 @@
  * Transparent query routing: any node can serve any query.
  * Tables have owner_node_id in the catalog; queries targeting
  * remote tables are forwarded via PG wire protocol.
+ *
+ * Windows MinGW does not provide the POSIX socket headers this
+ * routing logic uses, so the implementation is gated on _WIN32 and
+ * a stub block lives at the bottom of the file. Distributed mode is
+ * opt-in via dist_init/--cluster — the default single-node embedded
+ * flow still compiles + runs on Windows.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include "distributed.h"
+
+#ifndef _WIN32
+
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -16,7 +26,6 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <errno.h>
-#include "distributed.h"
 #include "pg_protocol.h"
 #include "server.h"
 #include "net.h"
@@ -680,3 +689,18 @@ int dist_move_table(const char *table_name, int dest_node_id,
     snprintf(rs->command_tag, sizeof(rs->command_tag), "MOVE TABLE");
     return 0;
 }
+
+#else  /* _WIN32 — Windows MinGW stubs */
+
+int  dist_init(int my_node_id, int my_pg_port)                     { (void)my_node_id; (void)my_pg_port; return -1; }
+int  dist_is_enabled(void)                                          { return 0; }
+int  dist_get_my_id(void)                                           { return -1; }
+int  dist_register_node(int node_id, const char *host, int p, int d){ (void)node_id; (void)host; (void)p; (void)d; return -1; }
+int  dist_get_num_nodes(void)                                       { return 0; }
+int  dist_get_node_info(int node_id, DistNodeInfo *out)             { (void)node_id; if (out) memset(out, 0, sizeof(*out)); return -1; }
+int  dist_try_route(const char *sql, ResultSet *rs, SessionCtx *c)  { (void)sql; (void)rs; (void)c; return 0; }
+int  dist_forward_query(int node_id, const char *sql, ResultSet *rs){ (void)node_id; (void)sql; (void)rs; return -1; }
+void dist_handle_client(socket_t sock)                              { (void)sock; }
+int  dist_move_table(const char *t, int n, ResultSet *rs, SessionCtx *c){ (void)t; (void)n; (void)rs; (void)c; return -1; }
+
+#endif  /* _WIN32 */
