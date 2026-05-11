@@ -104,7 +104,7 @@ jobs:
           OPENSSL_PREFIX="/opt/homebrew/opt/openssl@3"
           make -C adaptor clean
           make -C adaptor TLS=1 \
-            CFLAGS="-Wall -O2 -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I${OPENSSL_PREFIX}/include" \
+            CFLAGS="-Wall -g -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I${OPENSSL_PREFIX}/include" \
             LDFLAGS="-lpthread -lm ${OPENSSL_PREFIX}/lib/libssl.a ${OPENSSL_PREFIX}/lib/libcrypto.a"
           strip -x adaptor/evosql-server
           mv adaptor/evosql-server "${{ matrix.target.asset }}"
@@ -123,7 +123,7 @@ jobs:
           # and add the standard Windows sockets/crypt32 libs OpenSSL
           # transitively needs.
           make -C adaptor TLS=1 \
-            CFLAGS="-Wall -O2 -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I/mingw64/include" \
+            CFLAGS="-Wall -g -pipe -DEVOSQL_TLS -DEVO_ENCRYPTION -I/mingw64/include" \
             LDFLAGS="-static -static-libgcc /mingw64/lib/libssl.a /mingw64/lib/libcrypto.a -lws2_32 -lcrypt32 -lbcrypt -lz"
           strip adaptor/evosql-server.exe
           mv adaptor/evosql-server.exe "${{ matrix.target.asset }}"
