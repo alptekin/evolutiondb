@@ -703,9 +703,13 @@ int join_execute(JoinPlan *plan, ResultSet *rs, SessionCtx *ctx,
                         }
                         merged_off += tables[j].ncols;
                     }
-                    found_left:
-
-                    /* Find right_col in this table */
+                    found_left: ;
+                    /* Find right_col in this table.  The trailing
+                     * `;` above is a null statement so the label
+                     * sits ahead of a statement instead of a
+                     * declaration — clang rejects label+decl as a
+                     * C99/C11 violation even though GCC accepts it
+                     * as an extension. */
                     int ridx = find_col_idx(tables[i].cols, tables[i].ncols, right_col);
                     if (ridx >= 0) {
                         tables[i].right_key_col_idx = ridx;
