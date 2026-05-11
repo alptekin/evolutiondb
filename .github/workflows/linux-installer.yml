@@ -39,7 +39,12 @@ jobs:
       - name: Resolve target tag
         id: tag
         run: |
-          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          input_tag="${{ github.event.inputs.tag }}"
+          if [ -n "$input_tag" ]; then
+            tag="$input_tag"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
           version="${tag#server-v}"
           echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
