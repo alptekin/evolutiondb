@@ -1,0 +1,127 @@
+name: Linux installer (.deb + .rpm + .AppImage)
+
+# Builds Linux distribution packages from the just-published
+# evosql-server-linux-* binaries and re-attaches them to the same
+# GitHub Release the server-build workflow created.
+
+on:
+  push:
+    tags: ["server-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "server-v* tag to build the installer against"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build Linux ${{ matrix.target.deb_arch }} packages
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - asset_in:  evosql-server-linux-x86_64
+            deb_arch:  amd64
+            runner:    ubuntu-latest
+          - asset_in:  evosql-server-linux-arm64
+            deb_arch:  arm64
+            runner:    ubuntu-22.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve target tag
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          version="${tag#server-v}"
+          echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              dpkg-dev alien fakeroot wget file libfuse2
+
+      - name: Install appimagetool
+        run: |
+          arch="$(uname -m)"
+          case "$arch" in
+              x86_64)  url=https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage ;;
+              aarch64) url=https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage ;;
+              *) echo "no appimagetool for $arch"; exit 0 ;;
+          esac
+          wget -qO /tmp/appimagetool "$url"
+          chmod +x /tmp/appimagetool
+          sudo mv /tmp/appimagetool /usr/local/bin/appimagetool
+
+      - name: Wait for server binary on the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          asset="${{ matrix.target.asset_in }}"
+          for i in $(seq 1 60); do
+            if gh release view "$tag" --json assets \
+                --jq ".assets[] | select(.name == \"$asset\") | .name" \
+                | grep -q evosql-server; then
+              echo "release $tag has $asset"
+              exit 0
+            fi
+            echo "Waiting for $asset on $tag ($i/60)..."
+            sleep 15
+          done
+          echo "::error::$asset never showed up on release $tag"
+          exit 1
+
+      - name: Download server binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" \
+              --pattern '${{ matrix.target.asset_in }}' \
+              --dir /tmp/dl
+          chmod 755 /tmp/dl/${{ matrix.target.asset_in }}
+
+      - name: Build .deb + .rpm + .AppImage
+        run: |
+          chmod +x client/linux-installer/build.sh \
+                   client/linux-installer/debian/DEBIAN/postinst \
+                   client/linux-installer/debian/DEBIAN/prerm \
+                   client/linux-installer/debian/DEBIAN/postrm \
+                   client/linux-installer/appimage/AppRun
+          # AppImage tooling refuses to run inside a Docker/Action
+          # sandbox unless the runtime can be extracted in place.
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          ./client/linux-installer/build.sh \
+              /tmp/dl/${{ matrix.target.asset_in }} \
+              "${{ steps.tag.outputs.version }}" \
+              "${{ matrix.target.deb_arch }}"
+          ls -lh client/linux-installer/out
+
+      - name: sha256 manifests
+        run: |
+          cd client/linux-installer/out
+          for f in *.deb *.rpm *.AppImage; do
+            [ -e "$f" ] || continue
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+          ls -lh
+
+      - name: Attach packages to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            client/linux-installer/out/*.deb
+            client/linux-installer/out/*.rpm
+            client/linux-installer/out/*.AppImage
+            client/linux-installer/out/*.sha256
+          fail_on_unmatched_files: false

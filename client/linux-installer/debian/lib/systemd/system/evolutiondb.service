@@ -1,0 +1,30 @@
+[Unit]
+Description=EvolutionDB SQL engine
+Documentation=https://github.com/alptekin/evolutiondb
+After=network.target
+
+[Service]
+Type=simple
+User=evolutiondb
+Group=evolutiondb
+WorkingDirectory=/var/lib/evolutiondb
+ExecStart=/usr/bin/evosql-server --pg-port 5433 --evo-port 9967
+Environment=EVOSQL_USER_NAME=admin
+Environment=EVOSQL_PASSWORD=admin
+Restart=on-failure
+RestartSec=2
+
+# A modest hardening profile that still lets the engine bind ports
+# and touch its own data directory. PrivateTmp keeps the WAL temp
+# files from leaking; ProtectSystem=strict + ReadWritePaths makes
+# the rest of the filesystem effectively read-only to the daemon.
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/evolutiondb /var/log/evolutiondb
+StandardOutput=append:/var/log/evolutiondb/server.log
+StandardError=append:/var/log/evolutiondb/server.log
+
+[Install]
+WantedBy=multi-user.target
