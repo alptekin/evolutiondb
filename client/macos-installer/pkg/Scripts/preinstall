@@ -1,0 +1,16 @@
+#!/bin/sh
+# preinstall — stop a running daemon and free the ports before laying
+# down a new binary, so we never have to fight a live process for
+# write access to /usr/local/bin/evosql-server.
+set -eu
+
+PLIST=/Library/LaunchDaemons/com.evolutiondb.server.plist
+
+if [ -f "$PLIST" ]; then
+    /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+fi
+
+# Kill any straggler in case it was started by hand.
+/usr/bin/pkill -f "evosql-server.*5433" 2>/dev/null || true
+
+exit 0

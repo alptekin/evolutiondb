@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.evolutiondb.server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/evosql-server</string>
+        <string>--pg-port</string>
+        <string>5433</string>
+        <string>--evo-port</string>
+        <string>9967</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/share/evosql</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>EVOSQL_USER_NAME</key>
+        <string>admin</string>
+        <key>EVOSQL_PASSWORD</key>
+        <string>admin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/share/evosql/server.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/usr/local/share/evosql/server.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

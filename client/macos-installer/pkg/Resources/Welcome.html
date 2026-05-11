@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Welcome</title>
+<style>
+body { font: 13px -apple-system, Helvetica, sans-serif; color: #1d1d1f; padding: 20px; line-height: 1.55; }
+h1 { font-size: 22px; margin: 0 0 12px; font-weight: 600; }
+h2 { font-size: 15px; margin: 22px 0 6px; font-weight: 600; }
+ul { padding-left: 22px; margin: 6px 0; }
+li { margin: 3px 0; }
+code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #f2f2f7; padding: 1px 5px; border-radius: 4px; }
+small { color: #6e6e73; }
+</style></head>
+<body>
+<h1>Welcome to EvolutionDB Server</h1>
+
+<p>EvolutionDB is an open source SQL engine designed to act as the
+long-term memory layer for AI assistants. This installer sets up the
+server so that Claude, ChatGPT, GitHub Copilot, and any other
+MCP-aware client can keep persistent memory across conversations on
+this Mac.</p>
+
+<h2>What this installer does</h2>
+<ul>
+  <li>Copies the <code>evosql-server</code> binary to
+      <code>/usr/local/bin</code></li>
+  <li>Creates a data directory at
+      <code>/usr/local/share/evosql</code></li>
+  <li>Installs a system LaunchDaemon at
+      <code>/Library/LaunchDaemons/com.evolutiondb.server.plist</code></li>
+  <li>Starts the server on login and keeps it running across
+      reboots</li>
+</ul>
+
+<h2>What it does <em>not</em> do</h2>
+<ul>
+  <li>Open any network ports beyond the local loopback interface
+      (<code>127.0.0.1:5433</code> and <code>127.0.0.1:9967</code>)</li>
+  <li>Send any data to a remote server</li>
+  <li>Modify your existing PostgreSQL installation, if any</li>
+</ul>
+
+<p><small>You can uninstall everything later by running
+<code>sudo /usr/local/share/evosql/uninstall.sh</code>.</small></p>
+</body></html>

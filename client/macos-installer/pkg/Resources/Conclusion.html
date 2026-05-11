@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Done</title>
+<style>
+body { font: 13px -apple-system, Helvetica, sans-serif; color: #1d1d1f; padding: 20px; line-height: 1.55; }
+h1 { font-size: 22px; margin: 0 0 12px; font-weight: 600; }
+h2 { font-size: 15px; margin: 22px 0 6px; font-weight: 600; }
+table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+td, th { text-align: left; padding: 5px 8px; border-bottom: 1px solid #e5e5ea; vertical-align: top; }
+th { color: #6e6e73; font-weight: 500; font-size: 12px; }
+code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #f2f2f7; padding: 1px 5px; border-radius: 4px; }
+pre { background: #1d1d1f; color: #f5f5f7; padding: 10px 14px; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow-x: auto; }
+small { color: #6e6e73; }
+</style></head>
+<body>
+<h1>EvolutionDB is running.</h1>
+
+<p>The server is now active in the background and will start
+automatically every time this Mac boots. You can connect to it from
+any PostgreSQL-compatible client.</p>
+
+<h2>Files placed on disk</h2>
+<table>
+  <tr><th>Path</th><th>Purpose</th></tr>
+  <tr><td><code>/usr/local/bin/evosql-server</code></td>
+      <td>The database engine binary</td></tr>
+  <tr><td><code>/usr/local/share/evosql/</code></td>
+      <td>Data directory (DB file, WAL, etc.)</td></tr>
+  <tr><td><code>/usr/local/share/evosql/uninstall.sh</code></td>
+      <td>Script that removes everything this installer created</td></tr>
+  <tr><td><code>/Library/LaunchDaemons/com.evolutiondb.server.plist</code></td>
+      <td>System-level LaunchDaemon that keeps the server up</td></tr>
+</table>
+
+<h2>Connect to it</h2>
+<pre>psql -h 127.0.0.1 -p 5433 -U admin -d evosql
+# password: admin</pre>
+
+<p>Or open DBeaver / TablePlus / pgAdmin and point them at
+<code>127.0.0.1:5433</code> with username <code>admin</code> and
+password <code>admin</code>.</p>
+
+<h2>Wire it into Claude Desktop</h2>
+<p>Drop this block into <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>:</p>
+<pre>{
+  "mcpServers": {
+    "evolutiondb-memory": {
+      "command": "uvx",
+      "args": ["mcp-server-evolutiondb"],
+      "env": {
+        "EVOSQL_HOST": "127.0.0.1",
+        "EVOSQL_PORT": "5433",
+        "EVOSQL_USER": "admin",
+        "EVOSQL_PASSWORD": "admin",
+        "EVOSQL_DATABASE": "evosql",
+        "MCP_USER_ID": "you",
+        "MCP_STORE_PREFIX": "mcp"
+      }
+    }
+  }
+}</pre>
+
+<p>Restart Claude Desktop with <code>Cmd Q</code> and start a new
+conversation. Memory now persists across sessions.</p>
+
+<h2>Stop or remove the server</h2>
+<pre>sudo launchctl bootout system /Library/LaunchDaemons/com.evolutiondb.server.plist  # stop
+sudo /usr/local/share/evosql/uninstall.sh                                          # uninstall</pre>
+
+<p><small>Default credentials are <code>admin</code>/<code>admin</code>.
+Change them with <code>ALTER USER admin PASSWORD '&lt;new&gt;'</code>
+from <code>psql</code> when you're ready for a real workload.</small></p>
+</body></html>
