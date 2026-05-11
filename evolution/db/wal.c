@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/time.h>
+#include "database.h"  /* MinGW pread/pwrite/fsync shims */
 #include "wal.h"
 #include "page_mgr.h"
 #include "page_crypt.h"
