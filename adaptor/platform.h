@@ -8,6 +8,10 @@
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
+/* int64_t is used by platform_now_ms() on every branch — pull it
+ * in once at the top so neither side has to repeat the include. */
+#include <stdint.h>
+
 #ifdef _WIN32
 /* ================================================================
  *  Windows
