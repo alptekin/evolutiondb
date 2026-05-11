@@ -23,9 +23,10 @@ jobs:
     name: Build Windows .exe installer
     runs-on: ubuntu-latest      # makensis cross-compiles cleanly on Linux
     steps:
+      # Check out main (default branch). The installer scripts may
+      # post-date the release tag we're packaging — the tag is only
+      # used by `gh release download` / upload below.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve target tag
         id: tag
