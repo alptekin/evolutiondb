@@ -74,8 +74,8 @@ jobs:
             base-devel
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-openssl
-            mingw-w64-x86_64-bison
-            mingw-w64-x86_64-flex
+            bison
+            flex
 
       # ----- Build evosql-server with static OpenSSL ------------------
       - name: Build (Linux)
