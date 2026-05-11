@@ -34,18 +34,32 @@ class GraphClient:
         # rotate tokens without the sync loop having to know.
         self._token_provider = token_provider
         self._client = httpx.Client(timeout=HTTP_TIMEOUT)
+        self._me: Optional[Dict] = None
 
     def close(self) -> None:
         self._client.close()
 
     # -- public ------------------------------------------------------
+    def get_me(self) -> Dict:
+        """Return the signed-in user's profile (`id`, `displayName`,
+        `userPrincipalName`). Cached for the lifetime of the client
+        so per-message sender filtering doesn't hit Graph N times."""
+        if self._me is None:
+            resp = self._get_with_retry(f"{GRAPH_BASE}/me", retries=5)
+            self._me = resp.json()
+        return self._me
+
     def list_chats(self) -> List[Dict]:
         """Return every chat the user is part of, ordered by recent
-        activity descending. Result is small (Graph caps at the user's
-        actual chat count, typically <500), so we materialize fully."""
+        activity descending. `$expand=members` is essential for 1:1
+        chats — they don't carry a topic, so the only way to render a
+        useful chat_name like "Orhan Yılmaz" is to read the other
+        member out of the member list. Result is small (Graph caps
+        at the user's actual chat count, typically <500), so we
+        materialize fully."""
         url = (f"{GRAPH_BASE}/me/chats?$top=50"
                f"&$orderby=lastMessagePreview/createdDateTime desc"
-               f"&$expand=lastMessagePreview")
+               f"&$expand=members,lastMessagePreview")
         return list(self._iter_pages(url))
 
     def get_chat_messages(self, chat_id: str,
@@ -112,18 +126,43 @@ class GraphClient:
             return 5.0
 
 
-def chat_display_name(chat: Dict) -> str:
-    """Best-effort label for a chat: use the topic if it has one
-    (group chat with explicit name), otherwise fall back to the
-    member list. Returned name lands in tags / chat_name."""
+def chat_display_name(chat: Dict, me_id: Optional[str] = None) -> str:
+    """Best-effort label for a chat. Group chats with an explicit
+    topic return that topic. 1:1 chats have no topic, so we surface
+    the other member's display name (excluding the signed-in user).
+    Group chats without a topic fall back to a member list summary.
+
+    Passing `me_id` is what makes 1:1 chats render as the other
+    person's name; without it we'd return both members' names
+    including the user's own, which adds noise to tags and
+    `chat_name`."""
     topic = chat.get("topic")
     if topic:
         return topic
     members = chat.get("members") or []
-    names = [m.get("displayName") for m in members if m.get("displayName")]
-    if names:
+    others = [m for m in members
+              if m.get("displayName")
+              and (not me_id or m.get("userId") != me_id)]
+    if others:
+        names = [m["displayName"] for m in others]
         return ", ".join(names[:3]) + (" ..." if len(names) > 3 else "")
     return chat.get("id", "unknown chat")
+
+
+def strip_sender_prefix(text: str, sender_name: str) -> str:
+    """Some Teams tenants render the sender's display name at the
+    head of every message body, producing duplicated "Name | Org:
+    Name | Org: ..." output when we then prepend the sender again
+    for the searchable `fact` field. Strip an exact-prefix match of
+    the sender's display name plus any leading separator, but only
+    when the result still has content."""
+    if not text or not sender_name:
+        return text
+    if text.startswith(sender_name):
+        rest = text[len(sender_name):].lstrip(":|·- \t")
+        if rest:
+            return rest
+    return text
 
 
 def message_text(msg: Dict) -> str:

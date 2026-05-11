@@ -111,15 +111,21 @@ def parse_since(text: str) -> str:
 # ---------------------------------------------------------------- #
 #  Sync passes                                                      #
 # ---------------------------------------------------------------- #
-def _build_message_record(chat: Dict, msg: Dict) -> Optional[Dict]:
+def _build_message_record(chat: Dict, msg: Dict,
+                          me_id: Optional[str] = None) -> Optional[Dict]:
     """Shape one Graph message into the JSON we persist. Returns None
-    for system messages and empty bodies (no signal worth indexing)."""
+    for system messages and empty bodies (no signal worth indexing).
+
+    `me_id` is the signed-in user's AAD object id. Passing it lets
+    1:1 chat_name resolve to the other participant instead of the
+    chat's opaque id."""
     text = graph_mod.message_text(msg)
     if not text.strip():
         return None
     sender = graph_mod.message_sender(msg)
+    text = graph_mod.strip_sender_prefix(text, sender["name"])
     fact = (f"{sender['name']}: {text}" if sender["name"] else text)
-    chat_name = graph_mod.chat_display_name(chat)
+    chat_name = graph_mod.chat_display_name(chat, me_id)
     return {
         "fact":         fact,
         "source":       "teams",
@@ -155,6 +161,8 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
             namespace=cfg.user_id,
         )
 
+    me_id = (graph.get_me() or {}).get("id")
+
     counters = {"chats": 0, "messages": 0, "skipped": 0,
                 "inaccessible_chats": 0}
     try:
@@ -172,7 +180,7 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
             try:
                 for msg in graph.get_chat_messages(chat_id,
                                                     since_iso=watermark):
-                    rec = _build_message_record(chat, msg)
+                    rec = _build_message_record(chat, msg, me_id)
                     if not rec:
                         counters["skipped"] += 1
                         continue
