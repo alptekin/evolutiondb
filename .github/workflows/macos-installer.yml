@@ -26,9 +26,10 @@ jobs:
     name: Build macOS installer
     runs-on: macos-14   # Apple Silicon
     steps:
+      # Always check out the default branch — the installer scripts
+      # live there and may post-date the release tag we're packaging.
+      # The tag only matters for `gh release download` / upload below.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve target tag
         id: tag
