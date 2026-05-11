@@ -216,28 +216,34 @@ int conn_try_recv(conn_t *c, char *buf, int maxlen)
             int n = SSL_read(c->ssl, buf, want);
             return n > 0 ? n : -1;
         }
-        /* No decrypted data. Probe the wire by attempting a non-blocking
-         * read: put the socket in O_NONBLOCK briefly so SSL_read returns
-         * SSL_ERROR_WANT_READ instead of spinning. */
-        int flags = fcntl(c->sock, F_GETFL, 0);
-        if (flags < 0) return 0;
-        fcntl(c->sock, F_SETFL, flags | O_NONBLOCK);
+        /* No decrypted data. Probe the wire by switching the socket
+         * to non-blocking briefly so SSL_read returns
+         * SSL_ERROR_WANT_READ instead of spinning. The toggle goes
+         * through platform.h so it works under both fcntl (POSIX)
+         * and ioctlsocket (Winsock). */
+        if (platform_set_nonblocking(c->sock, 1) < 0) return 0;
         int n = SSL_read(c->ssl, buf, maxlen);
         int err = (n <= 0) ? SSL_get_error(c->ssl, n) : 0;
-        fcntl(c->sock, F_SETFL, flags);  /* restore blocking */
+        platform_set_nonblocking(c->sock, 0);  /* restore blocking */
         if (n > 0) return n;
         if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
             return 0;
         return -1;
     }
-    /* Plain socket path — MSG_DONTWAIT gives the non-blocking read. */
-    ssize_t n = recv(c->sock, buf, maxlen, MSG_DONTWAIT);
-    if (n == 0) return -1;
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+    /* Plain socket path — toggle non-blocking around recv. On POSIX
+     * MSG_DONTWAIT would do the same thing in a single call; on
+     * Winsock MSG_DONTWAIT does not exist and the only portable way
+     * to get a non-blocking recv is the ioctlsocket flip below. */
+    platform_set_nonblocking(c->sock, 1);
+    int n_int = (int)recv(c->sock, buf, maxlen, 0);
+    int save_errno = errno;
+    platform_set_nonblocking(c->sock, 0);
+    if (n_int == 0) return -1;
+    if (n_int < 0) {
+        if (save_errno == EAGAIN || save_errno == EWOULDBLOCK) return 0;
         return -1;
     }
-    return (int)n;
+    return n_int;
 }
 
 #else /* !EVOSQL_TLS — stub implementations */
