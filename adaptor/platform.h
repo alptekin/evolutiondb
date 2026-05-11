@@ -116,6 +116,19 @@ static inline struct tm *gmtime_r(const time_t *t, struct tm *out) {
     return (gmtime_s(out, t) == 0) ? out : NULL;
 }
 
+/* Non-blocking socket toggle. POSIX uses fcntl(O_NONBLOCK); Windows
+ * uses ioctlsocket(FIONBIO). Callers pass 1 to switch a socket into
+ * non-blocking mode and 0 to restore the default blocking shape.
+ * MSG_DONTWAIT does not exist on Winsock, so the recv path that
+ * relies on it must wrap the call with these two helpers instead. */
+static inline int platform_set_nonblocking(socket_t s, int nonblocking) {
+    u_long mode = nonblocking ? 1 : 0;
+    return (ioctlsocket(s, FIONBIO, &mode) == 0) ? 0 : -1;
+}
+#ifndef MSG_DONTWAIT
+#define MSG_DONTWAIT 0   /* Winsock has no non-blocking flag bit. */
+#endif
+
 /* GNU strcasestr is missing on MinGW; provide a minimal portable
  * implementation. Case insensitive substring search, returns the
  * first match in haystack or NULL. */
@@ -206,6 +219,18 @@ typedef int socket_t;
 #define SOCKET_INVALID  (-1)
 #define SOCKET_ERR      (-1)
 #define socket_close(s) close(s)
+
+/* POSIX twin of the Windows non-blocking toggle. Uses fcntl(F_SETFL)
+ * so the call shape matches the Win32 ioctlsocket(FIONBIO) version.
+ * The TLS read path momentarily switches the socket to non-blocking
+ * to probe for buffered ciphertext without spinning. */
+static inline int platform_set_nonblocking(socket_t s, int nonblocking) {
+    int flags = fcntl(s, F_GETFL, 0);
+    if (flags < 0) return -1;
+    if (nonblocking) flags |=  O_NONBLOCK;
+    else             flags &= ~O_NONBLOCK;
+    return (fcntl(s, F_SETFL, flags) == 0) ? 0 : -1;
+}
 
 #define socket_init()
 #define socket_cleanup()
