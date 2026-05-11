@@ -52,6 +52,11 @@ adaptor/evosql-server
 evolution/evosql
 cli/evosql-cli
 
+# macOS installer build artifacts (binary staged + .pkg/.dmg output)
+client/macos-installer/out/
+client/macos-installer/pkg/payload-root/usr/local/bin/evosql-server
+client/macos-installer/pkg/payload-root/Library/LaunchDaemons/com.evolutiondb.server.plist
+
 # OS files
 Thumbs.db
 Desktop.ini

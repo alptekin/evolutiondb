@@ -1,0 +1,98 @@
+name: macOS installer (.pkg + .dmg)
+
+# Builds the macOS Installer.app wizard package + a drag-mountable
+# .dmg for end users, then attaches both to the same GitHub Release
+# the server-build workflow populated with the bare binary.
+#
+# Triggered by:
+#   - tag push matching server-v* (so a release of the server picks
+#     up its companion installer in the same Release page)
+#   - workflow_dispatch (manual rebuild against an existing release)
+
+on:
+  push:
+    tags: ["server-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "server-v* tag to build the installer against"
+        required: true
+
+permissions:
+  contents: write   # release upload needs write
+
+jobs:
+  installer:
+    name: Build macOS installer
+    runs-on: macos-14   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve target tag
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          version="${tag#server-v}"
+          echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      # ----- Pull the matching macOS binary out of the Release ------
+      # The server-build workflow runs first on the same tag and
+      # attaches evosql-server-macos-arm64 as an asset. We re-download
+      # it instead of rebuilding so the installer ships the exact same
+      # bits the rest of the world gets.
+      - name: Wait for server binary on the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          for i in $(seq 1 60); do
+            if gh release view "$tag" --json assets \
+                --jq '.assets[] | select(.name == "evosql-server-macos-arm64") | .name' \
+                | grep -q evosql-server; then
+              echo "release $tag has evosql-server-macos-arm64"
+              exit 0
+            fi
+            echo "Waiting for evosql-server-macos-arm64 on $tag ($i/60)..."
+            sleep 15
+          done
+          echo "::error::server binary never showed up on release $tag"
+          exit 1
+
+      - name: Download evosql-server-macos-arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" \
+              --pattern 'evosql-server-macos-arm64' \
+              --dir /tmp/dl
+          chmod 755 /tmp/dl/evosql-server-macos-arm64
+          ls -lh /tmp/dl
+
+      # ----- Build the installer ------------------------------------
+      - name: Build .pkg and .dmg
+        run: |
+          ./client/macos-installer/build.sh \
+              /tmp/dl/evosql-server-macos-arm64 \
+              "${{ steps.tag.outputs.version }}"
+          ls -lh client/macos-installer/out
+
+      - name: Produce sha256 manifests
+        run: |
+          cd client/macos-installer/out
+          for f in *.pkg *.dmg; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+          ls -lh
+
+      - name: Attach installer to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            client/macos-installer/out/*.pkg
+            client/macos-installer/out/*.dmg
+            client/macos-installer/out/*.sha256
+          fail_on_unmatched_files: true
