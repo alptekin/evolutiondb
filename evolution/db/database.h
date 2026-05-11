@@ -37,6 +37,7 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
     return NULL;
 }
 #include <io.h>
+#include <stdio.h>          /* SEEK_SET */
 #include <sys/types.h>      /* ssize_t */
 /* POSIX positional read / write are absent on MinGW. Emulate via
  * lseek + read + write under the assumption that the caller has its
