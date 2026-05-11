@@ -39,11 +39,9 @@ jobs:
           - asset:    evosql-server-macos-arm64
             runner:   macos-14
             os:       macos
-          # Windows is parked until adaptor/{replication,raft,distributed,
-          # scram,pool}.c are ported off raw POSIX sockets + pthread.
-          # Embedded mode works without those, but Windows MinGW cannot
-          # link them today. Bring this entry back once the Winsock port
-          # lands.
+          - asset:    evosql-server-windows-x86_64.exe
+            runner:   windows-latest
+            os:       windows
 
     steps:
       - name: Checkout
