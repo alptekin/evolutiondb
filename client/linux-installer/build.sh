@@ -36,6 +36,13 @@ mkdir -p "$OUT"
 # .deb                                                              #
 # ----------------------------------------------------------------- #
 echo ">> .deb"
+# Make sure the on-disk layout under debian/ exists. Git does not
+# preserve empty directories so the runner-side checkout is missing
+# the path bins go into.
+mkdir -p "$DEB_STAGE/usr/bin" \
+         "$DEB_STAGE/usr/share/doc/evolutiondb" \
+         "$DEB_STAGE/lib/systemd/system" \
+         "$DEB_STAGE/var/lib/evolutiondb"
 cp "$BIN_SRC" "$DEB_STAGE/usr/bin/evosql-server"
 chmod 755     "$DEB_STAGE/usr/bin/evosql-server"
 
