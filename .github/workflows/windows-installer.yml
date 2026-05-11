@@ -1,0 +1,97 @@
+name: Windows installer (.exe)
+
+# Wraps the evosql-server-windows-x86_64.exe binary in a Modern UI 2
+# NSIS wizard. Gracefully no-ops on tags where the Windows binary
+# has not been published yet — that lets this workflow live in main
+# while adaptor/{replication,raft,distributed,pool,scram}.c are
+# being ported off raw POSIX sockets to Winsock.
+
+on:
+  push:
+    tags: ["server-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "server-v* tag to build the installer against"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    name: Build Windows .exe installer
+    runs-on: ubuntu-latest      # makensis cross-compiles cleanly on Linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve target tag
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          version="${tag#server-v}"
+          echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      # Check if the Windows binary has been published. If not, exit
+      # gracefully with a clear message rather than failing the run.
+      - name: Look for Windows binary on the release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          if gh release view "$tag" --json assets \
+               --jq '.assets[] | select(.name == "evosql-server-windows-x86_64.exe") | .name' \
+               | grep -q evosql-server; then
+            echo "binary_present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "binary_present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Windows binary on release $tag — skipping installer build."
+          fi
+
+      - name: Install NSIS
+        if: steps.check.outputs.binary_present == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nsis
+
+      - name: Download Windows binary
+        if: steps.check.outputs.binary_present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" \
+              --pattern 'evosql-server-windows-x86_64.exe' \
+              --dir /tmp/dl
+          ls -lh /tmp/dl
+
+      - name: Build .exe installer
+        if: steps.check.outputs.binary_present == 'true'
+        run: |
+          cd client/windows-installer
+          makensis -V2 \
+              -DVERSION="${{ steps.tag.outputs.version }}" \
+              -DSRC_BINARY=/tmp/dl/evosql-server-windows-x86_64.exe \
+              EvolutionDB.nsi
+          ls -lh ./*.exe
+
+      - name: sha256 manifest
+        if: steps.check.outputs.binary_present == 'true'
+        run: |
+          cd client/windows-installer
+          for f in EvolutionDB-*.exe; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+
+      - name: Attach to the release
+        if: steps.check.outputs.binary_present == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            client/windows-installer/EvolutionDB-*.exe
+            client/windows-installer/*.sha256
+          fail_on_unmatched_files: true
