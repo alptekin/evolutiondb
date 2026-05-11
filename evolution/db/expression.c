@@ -2337,7 +2337,8 @@ int expr_evaluate(const ExprNode *e,
      * the live caller, not whoever created the policy. Falls back to
      * "unknown" when called outside a session (e.g. internal startup). */
     if (e->type == EXPR_CURRENT_USER) {
-        extern __thread QueryContext *g_qctx;
+        /* g_qctx comes from query_context.h via database.h; the
+         * inline __thread redeclaration conflicted on MinGW. */
         const char *uname = (g_qctx && g_qctx->currentUser[0])
                                 ? g_qctx->currentUser : "unknown";
         strncpy(out_buf, uname, buf_size - 1);

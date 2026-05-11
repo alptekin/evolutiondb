@@ -7466,7 +7466,10 @@ static int evo_extract_ctes(const char *sql, CteDef *ctes, int *cte_count,
  * here guarantees every flush site stays in lockstep. */
 static void cte_commit_xid(void)
 {
-    extern __thread QueryContext *g_qctx;
+    /* g_qctx visibility comes from database.h -> query_context.h
+     * chain (already included at the top of this file). A redundant
+     * inline `extern __thread` clashed with the header's
+     * __declspec(thread) on MinGW. */
     extern void lock_release_all(uint32_t);
     extern void lock_gap_release_all(uint32_t);
     extern void mvcc_unregister_tx(uint32_t);
