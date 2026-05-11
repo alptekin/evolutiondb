@@ -114,14 +114,26 @@ int pool_init(int size, int queue_cap)
     g_workers = (pthread_t *)calloc((size_t)size, sizeof(pthread_t));
     if (!g_workers) { free(g_queue); g_queue = NULL; return -1; }
 
+    /* Worker threads execute the same query path as the network
+     * accept loop, which on a fresh CREATE MEMORY STORE touches deep
+     * call chains (parser → planner → catalog mutator → page
+     * manager). macOS gives each pthread a 512 KB default stack
+     * which overflows on those paths; matching the rest of the
+     * codebase at 16 MB keeps the worker pool identical in shape to
+     * threads created via platform.h's thread_create macro. */
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 16 * 1024 * 1024);
     for (int i = 0; i < size; i++) {
-        if (pthread_create(&g_workers[i], NULL, worker_main, NULL) != 0) {
+        if (pthread_create(&g_workers[i], &attr, worker_main, NULL) != 0) {
             /* Partial init — tear down what we started. */
             g_worker_count = i;
+            pthread_attr_destroy(&attr);
             pool_shutdown();
             return -1;
         }
     }
+    pthread_attr_destroy(&attr);
     g_worker_count = size;
 
     fprintf(stderr, "[pool] initialized: %d workers, queue cap %d\n",
