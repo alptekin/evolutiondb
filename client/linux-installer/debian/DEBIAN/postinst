@@ -1,0 +1,25 @@
+#!/bin/sh
+# postinst — runs after dpkg unpacks files. Create the system user
+# the daemon runs as, lay down the log directory, fix ownership,
+# enable + start the systemd unit.
+set -e
+
+# Create unprivileged service account if it does not exist already.
+if ! getent passwd evolutiondb >/dev/null; then
+    adduser --system --group --no-create-home \
+            --home /var/lib/evolutiondb --shell /usr/sbin/nologin \
+            evolutiondb >/dev/null
+fi
+
+mkdir -p /var/log/evolutiondb
+chown -R evolutiondb:evolutiondb /var/lib/evolutiondb /var/log/evolutiondb
+chmod 755 /var/lib/evolutiondb /var/log/evolutiondb
+
+# Tell systemd a new unit landed, then enable + start.
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload
+    systemctl enable  evolutiondb.service >/dev/null 2>&1 || true
+    systemctl restart evolutiondb.service || true
+fi
+
+exit 0

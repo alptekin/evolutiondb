@@ -57,6 +57,12 @@ client/macos-installer/out/
 client/macos-installer/pkg/payload-root/usr/local/bin/evosql-server
 client/macos-installer/pkg/payload-root/Library/LaunchDaemons/com.evolutiondb.server.plist
 
+# Linux installer build artifacts
+client/linux-installer/out/
+client/linux-installer/appimage-stage/
+client/linux-installer/debian/usr/bin/evosql-server
+client/linux-installer/debian/DEBIAN/control
+
 # OS files
 Thumbs.db
 Desktop.ini

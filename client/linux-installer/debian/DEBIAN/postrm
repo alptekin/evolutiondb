@@ -1,0 +1,19 @@
+#!/bin/sh
+# postrm — clean up systemd state on `apt purge`. Keep the data
+# directory unless the user explicitly purges, mirroring the
+# behaviour of postgresql-common.
+set -e
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+case "$1" in
+    purge)
+        deluser --quiet --system evolutiondb >/dev/null 2>&1 || true
+        delgroup --quiet --system --only-if-empty evolutiondb >/dev/null 2>&1 || true
+        rm -rf /var/lib/evolutiondb /var/log/evolutiondb
+        ;;
+esac
+
+exit 0
