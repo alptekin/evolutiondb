@@ -110,8 +110,12 @@ static inline int64_t platform_now_ms(void) {
 }
 
 /* POSIX reentrant gmtime. Win32 ships gmtime_s with swapped args
- * and an errno_t return — wrap it so callers keep the POSIX shape. */
+ * and an errno_t return — wrap it so callers keep the POSIX shape.
+ * Guarded against double-definition because evolution/db/database.h
+ * also defines the same shim and many adaptor TUs reach both. */
 #include <time.h>
+#ifndef EVOSQL_HAVE_POSIX_SHIMS
+#define EVOSQL_HAVE_POSIX_SHIMS
 static inline struct tm *gmtime_r(const time_t *t, struct tm *out) {
     return (gmtime_s(out, t) == 0) ? out : NULL;
 }
@@ -146,6 +150,7 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
     }
     return NULL;
 }
+#endif  /* EVOSQL_HAVE_POSIX_SHIMS */
 
 /* Directory listing (for catalog.c *.meta scanning) */
 typedef struct {

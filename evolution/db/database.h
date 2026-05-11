@@ -15,6 +15,12 @@
 #include <time.h>
 #include <ctype.h>
 #include <string.h>
+/* The same shims also live in adaptor/platform.h. catalog.c (and any
+ * other adaptor translation unit) reaches both headers via includes,
+ * so guard the definitions to avoid a "redefinition of static inline"
+ * error from MinGW gcc. */
+#ifndef EVOSQL_HAVE_POSIX_SHIMS
+#define EVOSQL_HAVE_POSIX_SHIMS
 static inline struct tm *gmtime_r(const time_t *t, struct tm *out) {
     return (gmtime_s(out, t) == 0) ? out : NULL;
 }
@@ -30,6 +36,7 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
     }
     return NULL;
 }
+#endif  /* EVOSQL_HAVE_POSIX_SHIMS */
 /* Align __thread with __declspec(thread) on MinGW to match the storage
  * class declared in catalog/query_context headers (see
  * adaptor/platform.h for the same alias). */
