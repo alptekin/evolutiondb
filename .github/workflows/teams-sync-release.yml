@@ -43,7 +43,12 @@ jobs:
       - name: Verify version matches the tag
         working-directory: client/teams-sync
         run: |
-          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          input_tag="${{ github.event.inputs.tag }}"
+          if [ -n "$input_tag" ]; then
+            tag="$input_tag"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
           ver="${tag#teams-sync-v}"
           py_ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
           if [ "$ver" != "$py_ver" ]; then
