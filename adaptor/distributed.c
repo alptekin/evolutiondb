@@ -15,23 +15,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "distributed.h"
-
-#ifndef _WIN32
-
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <errno.h>
+#include "platform.h"
+#include "distributed.h"
 #include "pg_protocol.h"
 #include "server.h"
 #include "net.h"
 #include "../evolution/db/catalog_internal.h"
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/database.h"
+
+#ifndef _WIN32
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#endif
 
 /* ================================================================
  *  State
@@ -110,7 +111,7 @@ static int dist_connect(int node_id)
 
     /* Close stale socket */
     if (g_dist_pool[node_id].sock >= 0) {
-        close(g_dist_pool[node_id].sock);
+        socket_close(g_dist_pool[node_id].sock);
         g_dist_pool[node_id].sock = -1;
         g_dist_pool[node_id].connected = 0;
     }
@@ -142,7 +143,7 @@ static int dist_connect(int node_id)
     if (connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
         fprintf(stderr, "[DIST] Cannot connect to node %d (%s:%d): %s\n",
                 node_id, ni->host, ni->dist_port, strerror(errno));
-        close(sock);
+        socket_close(sock);
         freeaddrinfo(res);
         return -1;
     }
@@ -168,16 +169,16 @@ static int dist_connect(int node_id)
     startup[3] = (slen      ) & 0xff;
 
     if (net_send_all(sock, startup, slen) < 0) {
-        close(sock);
+        socket_close(sock);
         return -1;
     }
 
     /* Read responses until ReadyForQuery ('Z') */
     char hdr[5];
     while (1) {
-        if (net_recv_exact(sock, hdr, 1) < 0) { close(sock); return -1; }
+        if (net_recv_exact(sock, hdr, 1) < 0) { socket_close(sock); return -1; }
         char msg_type = hdr[0];
-        if (net_recv_exact(sock, hdr, 4) < 0) { close(sock); return -1; }
+        if (net_recv_exact(sock, hdr, 4) < 0) { socket_close(sock); return -1; }
         int msg_len = ((unsigned char)hdr[0] << 24) |
                       ((unsigned char)hdr[1] << 16) |
                       ((unsigned char)hdr[2] <<  8) |
@@ -185,12 +186,12 @@ static int dist_connect(int node_id)
         int body_len = msg_len - 4;
         if (body_len > 0 && body_len < 65536) {
             char discard[65536];
-            if (net_recv_exact(sock, discard, body_len) < 0) { close(sock); return -1; }
+            if (net_recv_exact(sock, discard, body_len) < 0) { socket_close(sock); return -1; }
         }
         if (msg_type == 'Z') break; /* ReadyForQuery */
         if (msg_type == 'E') {
             fprintf(stderr, "[DIST] Startup error from node %d\n", node_id);
-            close(sock);
+            socket_close(sock);
             return -1;
         }
     }
@@ -309,7 +310,7 @@ int dist_forward_query(int node_id, const char *sql, ResultSet *rs)
     if (net_send_all(sock, header, 5) < 0 ||
         net_send_all(sock, sql, sql_len) < 0) {
         /* Connection broken — invalidate pool */
-        close(sock);
+        socket_close(sock);
         g_dist_pool[node_id].sock = -1;
         g_dist_pool[node_id].connected = 0;
         result_set_error(rs, "08006", "Connection to remote node lost");
@@ -446,7 +447,7 @@ int dist_forward_query(int node_id, const char *sql, ResultSet *rs)
     return rs->has_error ? -1 : 0;
 
 conn_error:
-    close(sock);
+    socket_close(sock);
     g_dist_pool[node_id].sock = -1;
     g_dist_pool[node_id].connected = 0;
     result_set_error(rs, "08006", "Connection to remote node lost during query");
@@ -689,18 +690,3 @@ int dist_move_table(const char *table_name, int dest_node_id,
     snprintf(rs->command_tag, sizeof(rs->command_tag), "MOVE TABLE");
     return 0;
 }
-
-#else  /* _WIN32 — Windows MinGW stubs */
-
-int  dist_init(int my_node_id, int my_pg_port)                     { (void)my_node_id; (void)my_pg_port; return -1; }
-int  dist_is_enabled(void)                                          { return 0; }
-int  dist_get_my_id(void)                                           { return -1; }
-int  dist_register_node(int node_id, const char *host, int p, int d){ (void)node_id; (void)host; (void)p; (void)d; return -1; }
-int  dist_get_num_nodes(void)                                       { return 0; }
-int  dist_get_node_info(int node_id, DistNodeInfo *out)             { (void)node_id; if (out) memset(out, 0, sizeof(*out)); return -1; }
-int  dist_try_route(const char *sql, ResultSet *rs, SessionCtx *c)  { (void)sql; (void)rs; (void)c; return 0; }
-int  dist_forward_query(int node_id, const char *sql, ResultSet *rs){ (void)node_id; (void)sql; (void)rs; return -1; }
-void dist_handle_client(socket_t sock)                              { (void)sock; }
-int  dist_move_table(const char *t, int n, ResultSet *rs, SessionCtx *c){ (void)t; (void)n; (void)rs; (void)c; return -1; }
-
-#endif  /* _WIN32 */

@@ -14,27 +14,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>     /* MSYS2 mingw-w64-x86_64-winpthreads ships this on Windows */
+#include "platform.h"
 #include "replication.h"
+#include "raft.h"                              /* RAFT_LEADER/_FOLLOWER/_CANDIDATE */
+#include "tls.h"
+#include "../evolution/db/database.h"     /* pread / pwrite shims on Windows */
+#include "../evolution/db/wal.h"
+#include "../evolution/db/page_mgr.h"
+#include "../evolution/db/page_crypt.h"
+#include "../evolution/db/buffer_pool.h"  /* bp_invalidate_page */
+#include "../evolution/db/catalog_internal.h"   /* cat_find_user, UserDesc */
 
 #ifndef _WIN32
-
 #include <unistd.h>
-#include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/time.h>
-#include <fcntl.h>
-#include <errno.h>
-#include "raft.h"                              /* RAFT_LEADER/_FOLLOWER/_CANDIDATE */
-#include "tls.h"
-#include "../evolution/db/wal.h"
-#include "../evolution/db/page_mgr.h"
-#include "../evolution/db/page_crypt.h"
-#include "../evolution/db/buffer_pool.h"  /* bp_invalidate_page */
-#include "../evolution/db/catalog_internal.h"   /* cat_find_user, UserDesc */
+#endif
 /* crypto.h defines SHA256_CTX which collides with OpenSSL's when
  * EVOSQL_TLS is defined (tls.h pulls in <openssl/ssl.h>). Keep a
  * local forward declaration instead of including crypto.h. */
@@ -216,7 +218,7 @@ static void *sender_handle_replica(void *arg)
         if (conn_tls_accept(&c) < 0) {
             fprintf(stderr, "[REPL] TLS handshake failed for %s — closing\n",
                     replica_id);
-            close(client_fd);
+            socket_close(client_fd);
             return NULL;
         }
     }
@@ -224,7 +226,7 @@ static void *sender_handle_replica(void *arg)
     /* Read handshake: "REPLICATE <last_lsn>\n" */
     char buf[256];
     int n = conn_recv_line(&c, buf, sizeof(buf));
-    if (n <= 0) { conn_tls_shutdown(&c); close(client_fd); return NULL; }
+    if (n <= 0) { conn_tls_shutdown(&c); socket_close(client_fd); return NULL; }
 
     uint32_t start_lsn = 0;
     if (strncmp(buf, "REPLICATE ", 10) == 0)
@@ -241,7 +243,7 @@ static void *sender_handle_replica(void *arg)
             conn_send_line(&c, "ERR missing AUTH");
             fprintf(stderr, "[REPL] %s rejected — no AUTH line\n", replica_id);
             conn_tls_shutdown(&c);
-            close(client_fd);
+            socket_close(client_fd);
             return NULL;
         }
         char *user_s = authbuf + 5;
@@ -249,7 +251,7 @@ static void *sender_handle_replica(void *arg)
         if (!pass_s) {
             conn_send_line(&c, "ERR malformed AUTH");
             conn_tls_shutdown(&c);
-            close(client_fd);
+            socket_close(client_fd);
             return NULL;
         }
         *pass_s++ = '\0';
@@ -270,7 +272,7 @@ static void *sender_handle_replica(void *arg)
             fprintf(stderr, "[REPL] %s rejected — bad credentials for user=%s\n",
                     replica_id, user_s);
             conn_tls_shutdown(&c);
-            close(client_fd);
+            socket_close(client_fd);
             return NULL;
         }
         conn_send_line(&c, "OK");
@@ -293,7 +295,7 @@ static void *sender_handle_replica(void *arg)
     }
     if (wal_fd < 0) {
         fprintf(stderr, "[REPL] Cannot open WAL file for streaming\n");
-        close(client_fd);
+        socket_close(client_fd);
         return NULL;
     }
 
@@ -411,7 +413,7 @@ disconnected:
     fprintf(stderr, "[REPL] Replica disconnected: %s\n", replica_id);
     repl_slot_deactivate(replica_id);
     conn_tls_shutdown(&c);
-    close(client_fd);
+    socket_close(client_fd);
     return NULL;
 }
 
@@ -438,7 +440,7 @@ static void *sender_listener(void *arg)
     if (bind(g_sender_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fprintf(stderr, "[REPL] Cannot bind replication port %d: %s\n",
                 port, strerror(errno));
-        close(g_sender_sock);
+        socket_close(g_sender_sock);
         g_sender_sock = -1;
         return NULL;
     }
@@ -459,7 +461,7 @@ static void *sender_listener(void *arg)
         setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
         SenderArg *sa = malloc(sizeof(SenderArg));
-        if (!sa) { close(client_fd); continue; }
+        if (!sa) { socket_close(client_fd); continue; }
         sa->client_fd = client_fd;
         snprintf(sa->client_addr, sizeof(sa->client_addr), "%s:%d",
                  inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
@@ -486,7 +488,7 @@ void repl_stop_sender(void)
     pthread_cond_broadcast(&g_sender_cond);
     if (g_sender_sock >= 0) {
         shutdown(g_sender_sock, SHUT_RDWR);
-        close(g_sender_sock);
+        socket_close(g_sender_sock);
         g_sender_sock = -1;
     }
     pthread_join(g_sender_thread, NULL);
@@ -640,7 +642,7 @@ static void *receiver_loop(void *arg)
     fprintf(stderr, "[REPL] WAL receiver stopped after %d records (last_lsn=%u)\n",
             records, g_last_received_lsn);
     conn_tls_shutdown(c);
-    close(c->sock);
+    socket_close(c->sock);
     return NULL;
 }
 
@@ -671,7 +673,7 @@ static void *reconnect_loop(void *arg)
         else addr.sin_addr.s_addr = inet_addr(g_master_host);
 
         if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-            close(sock);
+            socket_close(sock);
             fprintf(stderr, "[REPL] Cannot connect to master %s:%d — retry in %ds\n",
                     g_master_host, g_master_port, backoff_sec);
             sleep(backoff_sec);
@@ -687,7 +689,7 @@ static void *reconnect_loop(void *arg)
         if (g_repl_tls_enabled) {
             if (conn_tls_connect(&c) < 0) {
                 fprintf(stderr, "[REPL] TLS client handshake failed — retrying\n");
-                close(sock);
+                socket_close(sock);
                 sleep(2);
                 continue;
             }
@@ -701,7 +703,7 @@ static void *reconnect_loop(void *arg)
         int hlen = snprintf(handshake, sizeof(handshake), "REPLICATE %u\n", start_lsn);
         if (conn_send_all(&c, handshake, hlen) < 0) {
             conn_tls_shutdown(&c);
-            close(sock);
+            socket_close(sock);
             sleep(1);
             continue;
         }
@@ -716,7 +718,7 @@ static void *reconnect_loop(void *arg)
                                 g_repl_auth_user, g_repl_auth_pass);
             if (conn_send_all(&c, authline, alen) < 0) {
                 conn_tls_shutdown(&c);
-                close(sock);
+                socket_close(sock);
                 sleep(1);
                 continue;
             }
@@ -728,7 +730,7 @@ static void *reconnect_loop(void *arg)
                 fprintf(stderr, "[REPL] Auth failed: %s\n",
                         rn > 0 ? resp : "(no response)");
                 conn_tls_shutdown(&c);
-                close(sock);
+                socket_close(sock);
                 sleep(5);  /* don't hammer — wrong creds */
                 continue;
             }
@@ -1526,47 +1528,3 @@ static void *cdc_accept_loop(void *arg)
     }
     return NULL;
 }
-
-#else  /* _WIN32 — Windows MinGW stubs */
-
-int  repl_start_sender(int port)                                  { (void)port; return -1; }
-void repl_stop_sender(void)                                       {}
-void repl_notify_new_wal(void)                                    {}
-int  repl_start_receiver(const char *h, int p, int fd)            { (void)h; (void)p; (void)fd; return -1; }
-void repl_stop_receiver(void)                                     {}
-int  repl_is_replica(void)                                        { return 0; }
-void repl_set_change_callback(repl_change_callback cb, void *ctx) { (void)cb; (void)ctx; }
-void repl_enable_tls(int enabled)                                 { (void)enabled; }
-void repl_set_auth(const char *u, const char *p)                  { (void)u; (void)p; }
-int  repl_list_slots(ReplicationSlot *out, int max)               { (void)out; (void)max; return 0; }
-void repl_slot_update(const char *id, uint32_t lsn)               { (void)id; (void)lsn; }
-void repl_slot_deactivate(const char *id)                         { (void)id; }
-int  repl_get_status(ReplicationStatus *out)                      { if (out) memset(out, 0, sizeof(*out)); return 0; }
-void repl_set_role(int role)                                      { (void)role; }
-int  repl_get_role(void)                                          { return REPL_ROLE_PRIMARY; }
-int  repl_sync_commit(uint32_t lsn, int timeout_ms)               { (void)lsn; (void)timeout_ms; return 0; }
-int  repl_sync_commit_enabled(void)                               { return 0; }
-int  repl_create_backup(const char *path)                         { (void)path; return -1; }
-int  repl_promote(void)                                           { return -1; }
-void repl_install_raft_glue(void)                                 {}
-void repl_bind_raft_glue(int port)                                { (void)port; }
-int  repl_is_witness(void)                                        { return 0; }
-void repl_set_witness(int enabled)                                { (void)enabled; }
-int  repl_start_cdc_server(int port)                              { (void)port; return -1; }
-int  repl_add_member(const char *h, int p)                        { (void)h; (void)p; return -1; }
-int  repl_remove_member(int node_id)                              { (void)node_id; return -1; }
-
-/* CDC dispatch entry points called unconditionally from buffer_pool.c.
- * Windows builds have no replication / CDC, so they reduce to no-ops
- * and the buffer pool skips the encode pass via the zero return of
- * cdc_has_subscribers. */
-int  cdc_has_subscribers(void) { return 0; }
-void cdc_dispatch_page(const char *p, uint16_t l, uint32_t n, int64_t t) {
-    (void)p; (void)l; (void)n; (void)t;
-}
-void cdc_dispatch_page_xid(const char *p, uint16_t l, uint32_t n, int64_t t,
-                            uint32_t xid) {
-    (void)p; (void)l; (void)n; (void)t; (void)xid;
-}
-
-#endif  /* _WIN32 */
