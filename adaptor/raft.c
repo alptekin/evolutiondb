@@ -14,7 +14,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>     /* MSYS2 mingw-w64-x86_64-winpthreads ships this */
+#include <sys/time.h>    /* gettimeofday — MinGW ships a POSIX version */
 #include "platform.h"
+#include "../evolution/db/database.h"   /* fsync + usleep shims on Windows */
 #include "raft.h"
 
 #ifndef _WIN32
@@ -24,7 +26,6 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <sys/time.h>
 #endif
 
 /* Persistence constants — see raft_save_state below. */
@@ -220,7 +221,7 @@ static int connect_to_node(RaftNode *node)
 static int send_msg(RaftNode *node, const RaftMessage *msg)
 {
     if (connect_to_node(node) < 0) return -1;
-    ssize_t n = send(node->sock, msg, RAFT_MSG_SIZE, MSG_NOSIGNAL);
+    ssize_t n = send(node->sock, (const char *)msg, RAFT_MSG_SIZE, MSG_NOSIGNAL);
     if (n != (ssize_t)RAFT_MSG_SIZE) {
         socket_close(node->sock);
         node->sock = -1;
@@ -414,7 +415,7 @@ static void handle_raft_message(int client_fd)
                         msg.node_id, msg.term);
             }
             pthread_mutex_unlock(&g_raft_lock);
-            send(client_fd, &resp, RAFT_MSG_SIZE, MSG_NOSIGNAL);
+            send(client_fd, (const char *)&resp, RAFT_MSG_SIZE, MSG_NOSIGNAL);
             break;
 
         case RAFT_MSG_APPEND_ENTRIES:
@@ -427,7 +428,7 @@ static void handle_raft_message(int client_fd)
             resp.term = g_current_term;
             resp.last_lsn = g_my_lsn;
             pthread_mutex_unlock(&g_raft_lock);
-            send(client_fd, &resp, RAFT_MSG_SIZE, MSG_NOSIGNAL);
+            send(client_fd, (const char *)&resp, RAFT_MSG_SIZE, MSG_NOSIGNAL);
             break;
 
         default:

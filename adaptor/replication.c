@@ -17,11 +17,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>     /* MSYS2 mingw-w64-x86_64-winpthreads ships this on Windows */
+#include <sys/time.h>    /* gettimeofday — MinGW supplies a POSIX version */
 #include "platform.h"
 #include "replication.h"
 #include "raft.h"                              /* RAFT_LEADER/_FOLLOWER/_CANDIDATE */
 #include "tls.h"
-#include "../evolution/db/database.h"     /* pread / pwrite shims on Windows */
+#include "../evolution/db/database.h"     /* pread / pwrite / fsync / usleep shims on Windows */
 #include "../evolution/db/wal.h"
 #include "../evolution/db/page_mgr.h"
 #include "../evolution/db/page_crypt.h"
@@ -35,7 +36,6 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <sys/time.h>
 #endif
 /* crypto.h defines SHA256_CTX which collides with OpenSSL's when
  * EVOSQL_TLS is defined (tls.h pulls in <openssl/ssl.h>). Keep a
