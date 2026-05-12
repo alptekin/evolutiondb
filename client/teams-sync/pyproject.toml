@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolutiondb-teams-sync"
-version = "0.1.1"
+version = "0.1.2"
 description = "Sync Microsoft Teams 1:1 + group chat messages into EvolutionDB long-term memory."
 requires-python = ">=3.9"
 license = {text = "MIT"}
