@@ -68,6 +68,14 @@ static inline unsigned int sleep(unsigned int seconds) {
     Sleep((DWORD)seconds * 1000);
     return 0;
 }
+/* POSIX usleep(microseconds) -> Win32 Sleep(ms). MinGW deprecates
+ * its own usleep so this shim wins via the EVOSQL_HAVE_POSIX_FILE_SHIMS
+ * guard. Microsecond resolution collapses to millisecond — acceptable
+ * for the sleep-loop callers (raft election timer, sender pacing). */
+static inline int usleep(unsigned long usec) {
+    Sleep((DWORD)((usec + 999) / 1000));
+    return 0;
+}
 /* gettimeofday: MinGW already ships a POSIX-compatible version via
  * <sys/time.h>, so no shim needed here. */
 #include <sys/time.h>
