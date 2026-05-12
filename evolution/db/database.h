@@ -44,6 +44,8 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
  * block on its side). */
 #ifndef EVOSQL_HAVE_POSIX_FILE_SHIMS
 #define EVOSQL_HAVE_POSIX_FILE_SHIMS
+#include <windows.h>        /* Sleep, DWORD, ULARGE_INTEGER */
+#include <winsock2.h>       /* SD_* shutdown constants */
 #include <io.h>
 #include <stdio.h>          /* SEEK_SET */
 #include <sys/types.h>      /* ssize_t */
