@@ -80,10 +80,23 @@ Or from source if you're working on the code:
 pip install -e .
 ```
 
-### 4. Log in once
+### 4. One-stop bootstrap
 
 ```bash
-python -m teams_sync.sync --auth
+evosql-teams-sync --setup
+```
+
+Run this once after `pip install`. It downloads the platform-correct
+`evosql-server` binary from the latest `server-v*` GitHub release,
+caches it under `~/.evosql/bin`, and merges the MCP server entry into
+Claude Desktop's `claude_desktop_config.json`. The command is
+idempotent — re-running it on a configured machine reports
+"nothing to do" and exits.
+
+### 5. Log in once
+
+```bash
+evosql-teams-sync --auth
 ```
 
 The CLI prints a Microsoft login URL and a short code. Open the URL,
