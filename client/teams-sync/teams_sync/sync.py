@@ -224,6 +224,13 @@ def _build_argparser() -> argparse.ArgumentParser:
         description="Stream Microsoft Teams chats into EvolutionDB memory.",
     )
     g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--setup", action="store_true",
+                   help="One-time bootstrap: download the embedded "
+                        "evosql-server binary, register it with the "
+                        "host's MCP-aware clients (writes Claude "
+                        "Desktop config when present), and exit. Run "
+                        "this once after pip install; afterwards use "
+                        "--auth / --once / --interval as normal.")
     g.add_argument("--auth", action="store_true",
                    help="Run device-code login and exit.")
     g.add_argument("--once", action="store_true",
@@ -286,6 +293,13 @@ def main(argv: Optional[list] = None) -> int:
     except ValueError as exc:
         print(f"[teams-sync] {exc}", file=sys.stderr)
         return 2
+
+    if args.setup:
+        from . import setup_cmd
+        return setup_cmd.run_setup(
+            user_id=cfg.user_id,
+            evosql_port=cfg.evosql_port,
+        )
 
     if args.embedded:
         rc = _ensure_embedded(cfg)
