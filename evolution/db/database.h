@@ -66,22 +66,12 @@ static inline unsigned int sleep(unsigned int seconds) {
     Sleep((DWORD)seconds * 1000);
     return 0;
 }
-/* POSIX gettimeofday -> GetSystemTimeAsFileTime conversion. The
- * 100-ns FILETIME ticks since 1601 are shifted to a Unix-epoch
- * struct timeval. */
+/* gettimeofday: MinGW already ships a POSIX-compatible version via
+ * <sys/time.h>, so no shim needed here. */
 #include <sys/time.h>
-static inline int gettimeofday(struct timeval *tv, void *tz) {
-    (void)tz;
-    FILETIME ft; ULARGE_INTEGER li;
-    GetSystemTimeAsFileTime(&ft);
-    li.LowPart = ft.dwLowDateTime; li.HighPart = ft.dwHighDateTime;
-    uint64_t usec = (li.QuadPart - 116444736000000000ULL) / 10ULL;
-    tv->tv_sec  = (long)(usec / 1000000ULL);
-    tv->tv_usec = (long)(usec % 1000000ULL);
-    return 0;
-}
 /* mkdir on MinGW takes only the path; POSIX adds a mode. Drop the
  * mode silently — NTFS does not honour Unix permission bits. */
+#include <direct.h>     /* _mkdir */
 static inline int evo_mkdir_compat(const char *path, int mode) {
     (void)mode;
     return _mkdir(path);
