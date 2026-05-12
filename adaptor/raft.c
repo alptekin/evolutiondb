@@ -11,20 +11,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>     /* MSYS2 mingw-w64-x86_64-winpthreads ships this */
+#include "platform.h"
 #include "raft.h"
 
 #ifndef _WIN32
-
 #include <unistd.h>
-#include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <errno.h>
 #include <sys/time.h>
-#include <fcntl.h>
+#endif
 
 /* Persistence constants — see raft_save_state below. */
 #define RAFT_STATE_MAGIC   0x54464152   /* "RAFT" in LE */
@@ -204,7 +205,7 @@ static int connect_to_node(RaftNode *node)
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sock);
+        socket_close(sock);
         return -1;
     }
 
@@ -221,7 +222,7 @@ static int send_msg(RaftNode *node, const RaftMessage *msg)
     if (connect_to_node(node) < 0) return -1;
     ssize_t n = send(node->sock, msg, RAFT_MSG_SIZE, MSG_NOSIGNAL);
     if (n != (ssize_t)RAFT_MSG_SIZE) {
-        close(node->sock);
+        socket_close(node->sock);
         node->sock = -1;
         node->connected = 0;
         return -1;
@@ -434,7 +435,7 @@ static void handle_raft_message(int client_fd)
             break;
         }
     }
-    close(client_fd);
+    socket_close(client_fd);
 }
 
 static void *listener_thread_fn(void *arg)
@@ -457,7 +458,7 @@ static void *listener_thread_fn(void *arg)
     if (bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fprintf(stderr, "[RAFT] Cannot bind port %d: %s\n",
                 g_nodes[g_my_id].port, strerror(errno));
-        close(listen_sock);
+        socket_close(listen_sock);
         return NULL;
     }
 
@@ -480,7 +481,7 @@ static void *listener_thread_fn(void *arg)
         pthread_detach(t);
     }
 
-    close(listen_sock);
+    socket_close(listen_sock);
     return NULL;
 }
 
@@ -550,7 +551,7 @@ void raft_stop(void)
     /* Close all node connections */
     for (int i = 0; i < g_num_nodes; i++) {
         if (g_nodes[i].sock >= 0) {
-            close(g_nodes[i].sock);
+            socket_close(g_nodes[i].sock);
             g_nodes[i].sock = -1;
         }
     }
@@ -638,7 +639,7 @@ int raft_remove_member(int node_id)
         return -1;
     }
     if (g_nodes[node_id].sock >= 0)
-        close(g_nodes[node_id].sock);
+        socket_close(g_nodes[node_id].sock);
     /* Shift remaining nodes */
     for (int i = node_id; i < g_num_nodes - 1; i++)
         g_nodes[i] = g_nodes[i + 1];
@@ -665,24 +666,3 @@ int raft_get_node_host_port(int node_id, char *host, int host_size, int *port)
     *port = g_nodes[node_id].port;
     return 0;
 }
-
-#else  /* _WIN32 — Windows MinGW stubs */
-
-int  raft_init(const char *nodes_csv, int my_id)                  { (void)nodes_csv; (void)my_id; return -1; }
-int  raft_start(void)                                              { return -1; }
-void raft_stop(void)                                               {}
-int  raft_get_role(void)                                           { return RAFT_FOLLOWER; }
-uint32_t raft_get_term(void)                                       { return 0; }
-int  raft_get_leader_id(void)                                      { return -1; }
-int  raft_is_leader(void)                                          { return 0; }
-int  raft_replicate_wal(uint32_t lsn)                              { (void)lsn; return 0; }
-int  raft_sync_commit(uint32_t lsn)                                { (void)lsn; return 0; }
-void raft_get_lag(uint32_t *my_lsn, uint32_t lags[], int *n)       { if (my_lsn) *my_lsn = 0; if (n) *n = 0; (void)lags; }
-int  raft_add_member(const char *host, int port)                   { (void)host; (void)port; return -1; }
-int  raft_remove_member(int node_id)                               { (void)node_id; return -1; }
-int  raft_get_num_nodes(void)                                      { return 0; }
-int  raft_get_my_node_id(void)                                     { return -1; }
-int  raft_get_node_host_port(int n, char *h, int hs, int *p)       { (void)n; (void)h; (void)hs; (void)p; return -1; }
-void raft_set_role_callback(void (*cb)(int, int))                  { (void)cb; }
-
-#endif  /* _WIN32 */

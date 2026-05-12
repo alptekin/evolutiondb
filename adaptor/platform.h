@@ -65,6 +65,22 @@ typedef int socklen_t;
 #ifndef close
 #define close        _close
 #endif
+#ifndef read
+#define read         _read
+#endif
+#ifndef write
+#define write        _write
+#endif
+#ifndef unlink
+#define unlink       _unlink
+#endif
+
+/* Linux's MSG_NOSIGNAL suppresses SIGPIPE on socket writes — a
+ * concept that doesn't exist on Winsock (no signals on sockets).
+ * Make the flag a no-op so portable code keeps the same syntax. */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 #define NULL_DEVICE  "NUL"
 
