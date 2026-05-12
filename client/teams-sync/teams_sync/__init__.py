@@ -14,4 +14,4 @@ Quick start:
     python -m teams_sync.sync --interval 600  # daemon, 10-minute poll
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"

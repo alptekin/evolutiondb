@@ -15,11 +15,96 @@ token silently.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 import msal
+
+
+# -------------------------------------------------------------------- #
+#  Surface the device code through whatever desktop affordances are    #
+#  available so a daemon-mode sync running under launchd / systemd     #
+#  isn't silently stuck waiting for a code the user never sees.        #
+# -------------------------------------------------------------------- #
+def _surface_device_code(code: str, url: str) -> None:
+    """Best-effort: pop a native notification, open the device login
+    page in the default browser, and copy the code to the clipboard
+    so the user can paste it without leaving the dialog. Silent if
+    the host platform has none of these tools available."""
+    if sys.platform == "darwin":
+        _surface_macos(code, url)
+    elif sys.platform.startswith("linux"):
+        _surface_linux(code, url)
+    elif sys.platform.startswith("win"):
+        _surface_windows(code, url)
+
+
+def _spawn(args, *, input_text: Optional[str] = None) -> None:
+    """Fire-and-forget subprocess that never blocks the caller and
+    swallows any error — these are UI niceties, not critical path."""
+    try:
+        kwargs = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if input_text is not None:
+            subprocess.run(args, input=input_text, text=True, timeout=3,
+                            check=False, **kwargs)
+        else:
+            subprocess.Popen(args, **kwargs)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _surface_macos(code: str, url: str) -> None:
+    # 1. Clipboard: paste-ready
+    _spawn(["pbcopy"], input_text=code)
+    # 2. Default browser opens the device login page
+    _spawn(["open", url])
+    # 3. Banner notification (Notification Center)
+    title = "EvolutionDB Teams Sync"
+    sub_msg = f"Code {code} copied to clipboard."
+    _spawn([
+        "osascript", "-e",
+        (f'display notification "{sub_msg}" with title "{title}"'
+         f' sound name "Glass"')
+    ])
+    # 4. Modal dialog so the user can't miss it. AppleScript can't
+    #    embed newlines literally; use \\n which the shell parses.
+    dialog = (
+        f"Microsoft Teams sync needs to renew its login.\\n\\n"
+        f"Code:  {code}\\n\\n"
+        f"The Microsoft device login page is opening in your "
+        f"browser. The code is already on your clipboard — paste it "
+        f"there, sign in with your work account, and click Accept."
+    )
+    _spawn([
+        "osascript", "-e",
+        (f'display dialog "{dialog}" buttons {{"OK"}} default button "OK" '
+         f'with title "{title}" with icon caution')
+    ])
+
+
+def _surface_linux(code: str, url: str) -> None:
+    _spawn(["xdg-open", url])
+    # Try to copy to clipboard via xclip / wl-copy / xsel — first one
+    # that's installed wins. _spawn timeouts in 3 s if none.
+    for clip in (["xclip", "-selection", "clipboard"],
+                  ["wl-copy"],
+                  ["xsel", "--clipboard", "--input"]):
+        _spawn(clip, input_text=code)
+    msg = f"Teams sync needs re-auth. Code: {code}"
+    _spawn(["notify-send", "EvolutionDB Teams Sync", msg])
+
+
+def _surface_windows(code: str, url: str) -> None:
+    # PowerShell Set-Clipboard for the code, then Start-Process to
+    # open the device login page in the default browser. A native
+    # MessageBox would be louder but PowerShell's quote escaping
+    # combined with f-strings is fragile enough that we skip it —
+    # the clipboard + browser duo is the same shape macOS users get.
+    _spawn(["powershell", "-NoProfile", "-Command",
+            "Set-Clipboard", "-Value", code])
+    _spawn(["cmd", "/c", "start", url])
 
 
 # Permissions the app needs. All three are user-consent only — Chat.Read
@@ -78,14 +163,17 @@ class TeamsAuth:
 
     # -- public surface ---------------------------------------------
     def login_interactive(self) -> str:
-        """Run the device-code flow. Prints the user_code + verification
-        URL and blocks until the user completes login or times out.
-        Returns the access token."""
+        """Run the device-code flow. Surfaces the user_code via every
+        affordance the host platform offers (terminal stderr, macOS
+        notification + native dialog, clipboard copy, default-browser
+        auto-launch), then blocks until the user completes login or
+        MSAL times out. Returns the access token."""
         flow = self.app.initiate_device_flow(scopes=SCOPES)
         if "user_code" not in flow:
             raise RuntimeError(f"device flow init failed: {flow}")
         # Print to stderr so --once piped output stays clean.
         print(flow["message"], file=sys.stderr, flush=True)
+        _surface_device_code(flow["user_code"], flow["verification_uri"])
         result = self.app.acquire_token_by_device_flow(flow)
         self.store.flush()
         return self._extract_token(result)
