@@ -429,7 +429,7 @@ static void *sender_listener(void *arg)
     }
 
     int opt = 1;
-    setsockopt(g_sender_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(g_sender_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -458,7 +458,7 @@ static void *sender_listener(void *arg)
         }
 
         int nodelay = 1;
-        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&nodelay, sizeof(nodelay));
 
         SenderArg *sa = malloc(sizeof(SenderArg));
         if (!sa) { socket_close(client_fd); continue; }
@@ -1476,7 +1476,7 @@ int repl_start_cdc_server(int port)
     if (g_cdc_server_sock < 0) return -1;
 
     int opt = 1;
-    setsockopt(g_cdc_server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(g_cdc_server_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
