@@ -1556,4 +1556,17 @@ int  repl_start_cdc_server(int port)                              { (void)port; 
 int  repl_add_member(const char *h, int p)                        { (void)h; (void)p; return -1; }
 int  repl_remove_member(int node_id)                              { (void)node_id; return -1; }
 
+/* CDC dispatch entry points called unconditionally from buffer_pool.c.
+ * Windows builds have no replication / CDC, so they reduce to no-ops
+ * and the buffer pool skips the encode pass via the zero return of
+ * cdc_has_subscribers. */
+int  cdc_has_subscribers(void) { return 0; }
+void cdc_dispatch_page(const char *p, uint16_t l, uint32_t n, int64_t t) {
+    (void)p; (void)l; (void)n; (void)t;
+}
+void cdc_dispatch_page_xid(const char *p, uint16_t l, uint32_t n, int64_t t,
+                            uint32_t xid) {
+    (void)p; (void)l; (void)n; (void)t; (void)xid;
+}
+
 #endif  /* _WIN32 */
