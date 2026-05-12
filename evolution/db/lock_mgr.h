@@ -24,7 +24,13 @@
 
 #include <stdint.h>
 
-/* Lock modes */
+/* Lock modes — undef any Windows winnt.h defs that collide. */
+#ifdef LOCK_EXCLUSIVE
+#undef LOCK_EXCLUSIVE
+#endif
+#ifdef LOCK_SHARED
+#undef LOCK_SHARED
+#endif
 #define LOCK_NONE       0
 #define LOCK_SHARED     1
 #define LOCK_EXCLUSIVE  2
