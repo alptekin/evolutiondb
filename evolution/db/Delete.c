@@ -698,14 +698,14 @@ int DeleteProcess(void)
                         int lr = DML_PROF_EXPR("lock_row_acquire",
                                                lock_row_acquire(td.table_id, mkey,
                                                                 g_qctx->mvcc_xid,
-                                                                LOCK_EXCLUSIVE));
-                        if (lr == LOCK_DEADLOCK) {
+                                                                EVO_LOCK_EXCLUSIVE));
+                        if (lr == EVO_LOCK_DEADLOCK) {
                             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "deadlock detected while waiting for lock on row (key=%s)",
                                      mkey);
                             g_err.error = 1;
                             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DEADLOCK_DETECTED);
-                        } else if (lr != LOCK_OK) {
+                        } else if (lr != EVO_LOCK_OK) {
                             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                      "could not obtain lock on row (key=%s)",
                                      mkey);
@@ -918,15 +918,15 @@ int evo_delete_row(const char *tableName,
       cg_check_write(mvcc_xid, td.table_id, pkKey); }
 
     int lr = lock_row_acquire(td.table_id, pkKey,
-                              mvcc_xid, LOCK_EXCLUSIVE);
-    if (lr == LOCK_DEADLOCK) {
+                              mvcc_xid, EVO_LOCK_EXCLUSIVE);
+    if (lr == EVO_LOCK_DEADLOCK) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "deadlock detected while waiting for lock on row (key=%s)",
                  pkKey);
         g_err.error = 1;
         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DEADLOCK_DETECTED);
         return -1;
-    } else if (lr != LOCK_OK) {
+    } else if (lr != EVO_LOCK_OK) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "could not obtain lock on row (key=%s)", pkKey);
         g_err.error = 1;

@@ -5,8 +5,8 @@
  * Locks are identified by (table_id, pk_key) and held by transaction XID.
  *
  * Lock modes:
- *   LOCK_SHARED    — multiple holders allowed (for SELECT FOR UPDATE SHARE)
- *   LOCK_EXCLUSIVE — single holder (for UPDATE/DELETE/SELECT FOR UPDATE)
+ *   EVO_LOCK_SHARED    — multiple holders allowed (for SELECT FOR UPDATE SHARE)
+ *   EVO_LOCK_EXCLUSIVE — single holder (for UPDATE/DELETE/SELECT FOR UPDATE)
  *
  * Lock lifecycle:
  *   - Acquired during DML (UPDATE/DELETE) or SELECT FOR UPDATE
@@ -17,7 +17,7 @@
  *   - EXCLUSIVE vs EXCLUSIVE: second requester waits (with timeout)
  *   - EXCLUSIVE vs SHARED: second requester waits
  *   - SHARED vs SHARED: both acquire immediately
- *   - If timeout expires: returns LOCK_TIMEOUT error
+ *   - If timeout expires: returns EVO_LOCK_TIMEOUT error
  */
 #ifndef LOCK_MGR_H
 #define LOCK_MGR_H
@@ -25,21 +25,21 @@
 #include <stdint.h>
 
 /* Lock modes — undef any Windows winnt.h defs that collide. */
-#ifdef LOCK_EXCLUSIVE
-#undef LOCK_EXCLUSIVE
+#ifdef EVO_LOCK_EXCLUSIVE
+#undef EVO_LOCK_EXCLUSIVE
 #endif
-#ifdef LOCK_SHARED
-#undef LOCK_SHARED
+#ifdef EVO_LOCK_SHARED
+#undef EVO_LOCK_SHARED
 #endif
-#define LOCK_NONE       0
-#define LOCK_SHARED     1
-#define LOCK_EXCLUSIVE  2
+#define EVO_LOCK_NONE       0
+#define EVO_LOCK_SHARED     1
+#define EVO_LOCK_EXCLUSIVE  2
 
 /* Lock result codes */
-#define LOCK_OK         0
-#define LOCK_TIMEOUT   -1
-#define LOCK_ERROR     -2
-#define LOCK_DEADLOCK  -3
+#define EVO_LOCK_OK         0
+#define EVO_LOCK_TIMEOUT   -1
+#define EVO_LOCK_ERROR     -2
+#define EVO_LOCK_DEADLOCK  -3
 
 /* Default lock wait timeout in milliseconds (5 seconds) */
 #define LOCK_WAIT_TIMEOUT_MS  5000
@@ -56,7 +56,7 @@ void lock_mgr_shutdown(void);
 
 /* Acquire a row lock.
  * Blocks if the row is already locked by a different XID in a conflicting mode.
- * Returns LOCK_OK on success, LOCK_TIMEOUT if wait exceeds timeout.
+ * Returns EVO_LOCK_OK on success, EVO_LOCK_TIMEOUT if wait exceeds timeout.
  * Re-entrant: acquiring the same lock by the same XID is a no-op. */
 int lock_row_acquire(uint32_t table_id, const char *pk_key,
                      uint32_t xid, int mode);
@@ -69,7 +69,7 @@ void lock_row_release(uint32_t table_id, const char *pk_key, uint32_t xid);
  * Called at COMMIT, ROLLBACK, auto-commit, or disconnect. */
 void lock_release_all(uint32_t xid);
 
-/* Check if a row is locked. Returns the lock mode (LOCK_NONE if not locked).
+/* Check if a row is locked. Returns the lock mode (EVO_LOCK_NONE if not locked).
  * If holder_xid is non-NULL, stores the holder's XID. */
 int lock_row_check(uint32_t table_id, const char *pk_key, uint32_t *holder_xid);
 
@@ -95,7 +95,7 @@ void lock_gap_acquire(uint32_t table_id, const char *gap_lo,
                       const char *gap_hi, uint32_t xid);
 
 /* Check if an INSERT key falls within any gap lock held by other TXs.
- * Returns LOCK_OK if no conflict, LOCK_TIMEOUT if blocked (with wait). */
+ * Returns EVO_LOCK_OK if no conflict, EVO_LOCK_TIMEOUT if blocked (with wait). */
 int lock_gap_check_insert(uint32_t table_id, const char *key, uint32_t xid);
 
 /* Release all gap locks held by a given XID. */
