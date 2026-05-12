@@ -1,0 +1,26 @@
+pkgbase = evolutiondb-bin
+	pkgdesc = SQL engine with built-in long-term memory primitives for AI assistants (prebuilt)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/alptekin/evolutiondb
+	install = evolutiondb.install
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = openssl
+	provides = evolutiondb
+	conflicts = evolutiondb
+	source_x86_64 = evosql-server::https://github.com/alptekin/evolutiondb/releases/download/server-v0.1.0/evosql-server-linux-x86_64
+	source_x86_64 = evolutiondb.service::https://github.com/alptekin/evolutiondb/raw/server-v0.1.0/client/linux-installer/debian/lib/systemd/system/evolutiondb.service
+	source_x86_64 = LICENSE::https://github.com/alptekin/evolutiondb/raw/server-v0.1.0/client/macos-installer/pkg/Resources/License.txt
+	sha256sums_x86_64 = 58f0042acacb160168f7906788d53db5e4ae02989d783e6758251f54da78ffed
+	sha256sums_x86_64 = SKIP
+	sha256sums_x86_64 = SKIP
+	source_aarch64 = evosql-server::https://github.com/alptekin/evolutiondb/releases/download/server-v0.1.0/evosql-server-linux-arm64
+	source_aarch64 = evolutiondb.service::https://github.com/alptekin/evolutiondb/raw/server-v0.1.0/client/linux-installer/debian/lib/systemd/system/evolutiondb.service
+	source_aarch64 = LICENSE::https://github.com/alptekin/evolutiondb/raw/server-v0.1.0/client/macos-installer/pkg/Resources/License.txt
+	sha256sums_aarch64 = 572424fa8087e3012b41fd8c76f5f97d8993798ca87f97c8f7f8c7db31e501a5
+	sha256sums_aarch64 = SKIP
+	sha256sums_aarch64 = SKIP
+
+pkgname = evolutiondb-bin

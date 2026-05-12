@@ -1,0 +1,53 @@
+# Maintainer: alptekin topal <topal.alptekin@gmail.com>
+#
+# evolutiondb-bin — prebuilt binary distribution of the EvolutionDB
+# server, sourced directly from the matching GitHub Release. Use
+# this when you want the same statically-linked binary the rest of
+# the world is running; use `evolutiondb` (source build) for a
+# locally-compiled variant.
+
+pkgname=evolutiondb-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SQL engine with built-in long-term memory primitives for AI assistants (prebuilt)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/alptekin/evolutiondb"
+license=('MIT')
+depends=('openssl')
+provides=('evolutiondb')
+conflicts=('evolutiondb')
+install=evolutiondb.install
+
+_release="server-v${pkgver}"
+_systemd_unit="${url}/raw/${_release}/client/linux-installer/debian/lib/systemd/system/evolutiondb.service"
+_license="${url}/raw/${_release}/client/macos-installer/pkg/Resources/License.txt"
+
+source_x86_64=(
+    "evosql-server::${url}/releases/download/${_release}/evosql-server-linux-x86_64"
+    "evolutiondb.service::${_systemd_unit}"
+    "LICENSE::${_license}"
+)
+source_aarch64=(
+    "evosql-server::${url}/releases/download/${_release}/evosql-server-linux-arm64"
+    "evolutiondb.service::${_systemd_unit}"
+    "LICENSE::${_license}"
+)
+
+# sha256 of evosql-server is fixed per arch; the systemd unit + LICENSE
+# are pinned to the tag so they don't drift either. Update on bump.
+sha256sums_x86_64=(
+    '58f0042acacb160168f7906788d53db5e4ae02989d783e6758251f54da78ffed'
+    'SKIP'
+    'SKIP'
+)
+sha256sums_aarch64=(
+    '572424fa8087e3012b41fd8c76f5f97d8993798ca87f97c8f7f8c7db31e501a5'
+    'SKIP'
+    'SKIP'
+)
+
+package() {
+    install -Dm755 "$srcdir/evosql-server"        "$pkgdir/usr/bin/evosql-server"
+    install -Dm644 "$srcdir/evolutiondb.service"  "$pkgdir/usr/lib/systemd/system/evolutiondb.service"
+    install -Dm644 "$srcdir/LICENSE"              "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
