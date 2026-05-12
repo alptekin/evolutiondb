@@ -27,7 +27,7 @@ typedef struct LockEntry {
     uint32_t         table_id;
     char             pk_key[LOCK_KEY_MAX];
     uint32_t         holder_xid;     /* XID holding the lock */
-    int              lock_mode;      /* LOCK_SHARED or LOCK_EXCLUSIVE */
+    int              lock_mode;      /* EVO_LOCK_SHARED or EVO_LOCK_EXCLUSIVE */
     int              waiter_count;   /* number of threads waiting */
     pthread_cond_t   cond;           /* waiters sleep here */
     struct LockEntry *next;          /* hash chain */
@@ -105,8 +105,8 @@ static void remove_entry(uint32_t table_id, const char *pk_key,
 /* Check if two lock modes conflict. */
 static int modes_conflict(int held, int requested)
 {
-    if (held == LOCK_NONE || requested == LOCK_NONE) return 0;
-    if (held == LOCK_SHARED && requested == LOCK_SHARED) return 0;
+    if (held == EVO_LOCK_NONE || requested == EVO_LOCK_NONE) return 0;
+    if (held == EVO_LOCK_SHARED && requested == EVO_LOCK_SHARED) return 0;
     return 1;  /* EXCLUSIVE conflicts with everything */
 }
 
@@ -189,7 +189,7 @@ void lock_mgr_shutdown(void)
 int lock_row_acquire(uint32_t table_id, const char *pk_key,
                      uint32_t xid, int mode)
 {
-    if (xid == 0 || !pk_key || !pk_key[0]) return LOCK_OK;
+    if (xid == 0 || !pk_key || !pk_key[0]) return EVO_LOCK_OK;
 
     uint32_t bucket = lock_hash(table_id, pk_key);
 
@@ -201,16 +201,16 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
         /* No existing lock — create one */
         create_entry(table_id, pk_key, xid, mode, bucket);
         pthread_mutex_unlock(&g_lock_mutex);
-        return LOCK_OK;
+        return EVO_LOCK_OK;
     }
 
     /* Re-entrant: same XID already holds the lock */
     if (e->holder_xid == xid) {
         /* Upgrade SHARED → EXCLUSIVE if needed */
-        if (mode == LOCK_EXCLUSIVE && e->lock_mode == LOCK_SHARED)
-            e->lock_mode = LOCK_EXCLUSIVE;
+        if (mode == EVO_LOCK_EXCLUSIVE && e->lock_mode == EVO_LOCK_SHARED)
+            e->lock_mode = EVO_LOCK_EXCLUSIVE;
         pthread_mutex_unlock(&g_lock_mutex);
-        return LOCK_OK;
+        return EVO_LOCK_OK;
     }
 
     /* Conflict — need to wait */
@@ -220,13 +220,13 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
          * we'd need a list of holders. For now, SHARED is treated as
          * compatible but only one XID is tracked (last wins). */
         pthread_mutex_unlock(&g_lock_mutex);
-        return LOCK_OK;
+        return EVO_LOCK_OK;
     }
 
     /* Deadlock detection: check if waiting would create a cycle */
     if (detect_deadlock(xid, e->holder_xid)) {
         pthread_mutex_unlock(&g_lock_mutex);
-        return LOCK_DEADLOCK;
+        return EVO_LOCK_DEADLOCK;
     }
 
     /* Register in wait-for graph before sleeping */
@@ -250,13 +250,13 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
         }
     }
 
-    int result = LOCK_OK;
+    int result = EVO_LOCK_OK;
     while (e->holder_xid != 0 && e->holder_xid != xid &&
            modes_conflict(e->lock_mode, mode)) {
         int rc = pthread_cond_timedwait(&e->cond, &g_lock_mutex, &ts);
         if (rc != 0) {
             /* Timeout or error */
-            result = LOCK_TIMEOUT;
+            result = EVO_LOCK_TIMEOUT;
             break;
         }
         /* Re-check: the entry might have been freed and recreated */
@@ -266,7 +266,7 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
             wait_for_clear(xid);
             create_entry(table_id, pk_key, xid, mode, bucket);
             pthread_mutex_unlock(&g_lock_mutex);
-            return LOCK_OK;
+            return EVO_LOCK_OK;
         }
     }
 
@@ -274,7 +274,7 @@ int lock_row_acquire(uint32_t table_id, const char *pk_key,
     wait_for_clear(xid);
     if (e) e->waiter_count--;
 
-    if (result == LOCK_OK && e) {
+    if (result == EVO_LOCK_OK && e) {
         /* Lock acquired */
         if (e->holder_xid == 0) {
             e->holder_xid = xid;
@@ -299,7 +299,7 @@ void lock_row_release(uint32_t table_id, const char *pk_key, uint32_t xid)
         if (e->waiter_count > 0) {
             /* Wake up waiters — they'll re-check and acquire */
             e->holder_xid = 0;
-            e->lock_mode = LOCK_NONE;
+            e->lock_mode = EVO_LOCK_NONE;
             pthread_cond_broadcast(&e->cond);
         } else {
             /* No waiters — remove entry entirely */
@@ -323,7 +323,7 @@ void lock_release_all(uint32_t xid)
             if (e->holder_xid == xid) {
                 if (e->waiter_count > 0) {
                     e->holder_xid = 0;
-                    e->lock_mode = LOCK_NONE;
+                    e->lock_mode = EVO_LOCK_NONE;
                     pthread_cond_broadcast(&e->cond);
                 } else {
                     remove_entry(e->table_id, e->pk_key, i);
@@ -338,14 +338,14 @@ void lock_release_all(uint32_t xid)
 
 int lock_row_check(uint32_t table_id, const char *pk_key, uint32_t *holder_xid)
 {
-    if (!pk_key || !pk_key[0]) return LOCK_NONE;
+    if (!pk_key || !pk_key[0]) return EVO_LOCK_NONE;
 
     uint32_t bucket = lock_hash(table_id, pk_key);
 
     pthread_mutex_lock(&g_lock_mutex);
 
     LockEntry *e = find_entry(table_id, pk_key, bucket);
-    int mode = LOCK_NONE;
+    int mode = EVO_LOCK_NONE;
     if (e && e->holder_xid != 0) {
         mode = e->lock_mode;
         if (holder_xid) *holder_xid = e->holder_xid;
@@ -439,7 +439,7 @@ void lock_gap_acquire(uint32_t table_id, const char *gap_lo,
 
 int lock_gap_check_insert(uint32_t table_id, const char *key, uint32_t xid)
 {
-    if (xid == 0 || !key) return LOCK_OK;
+    if (xid == 0 || !key) return EVO_LOCK_OK;
 
     uint32_t bucket = gap_hash(table_id);
 
@@ -459,7 +459,7 @@ int lock_gap_check_insert(uint32_t table_id, const char *key, uint32_t xid)
 
     if (!blocker) {
         pthread_mutex_unlock(&g_lock_mutex);
-        return LOCK_OK;
+        return EVO_LOCK_OK;
     }
 
     /* Wait for the gap lock to be released */
@@ -481,11 +481,11 @@ int lock_gap_check_insert(uint32_t table_id, const char *key, uint32_t xid)
         }
     }
 
-    int result = LOCK_OK;
+    int result = EVO_LOCK_OK;
     while (blocker->holder_xid != 0 && blocker->holder_xid != xid) {
         int rc = pthread_cond_timedwait(&blocker->cond, &g_lock_mutex, &ts);
         if (rc != 0) {
-            result = LOCK_TIMEOUT;
+            result = EVO_LOCK_TIMEOUT;
             break;
         }
     }

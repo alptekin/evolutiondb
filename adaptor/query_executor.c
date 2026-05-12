@@ -2140,7 +2140,7 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                 /* FOR UPDATE/SHARE: acquire row lock before including in result */
                 if (forUpdate && lock_xid > 0) {
                     extern int lock_row_acquire(uint32_t, const char *, uint32_t, int);
-                    int lock_mode = (forUpdate == 1) ? 2 /*LOCK_EXCLUSIVE*/ : 1 /*LOCK_SHARED*/;
+                    int lock_mode = (forUpdate == 1) ? 2 /*EVO_LOCK_EXCLUSIVE*/ : 1 /*EVO_LOCK_SHARED*/;
                     if (lock_row_acquire(td.table_id, keyBuf, lock_xid, lock_mode) != 0) {
                         result_set_error(rs, "55P03",
                             "could not obtain lock on row");

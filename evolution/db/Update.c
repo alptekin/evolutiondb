@@ -415,14 +415,14 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     {
         int lr = DML_PROF_EXPR("lock_row_acquire",
                                lock_row_acquire(td->table_id, pkKey, g_qctx->mvcc_xid,
-                                                LOCK_EXCLUSIVE));
-        if (lr == LOCK_DEADLOCK) {
+                                                EVO_LOCK_EXCLUSIVE));
+        if (lr == EVO_LOCK_DEADLOCK) {
             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "deadlock detected while waiting for lock on row (key=%s)", pkKey);
             g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_DEADLOCK_DETECTED);
             return -1;
-        } else if (lr != LOCK_OK) {
+        } else if (lr != EVO_LOCK_OK) {
             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "could not obtain lock on row (key=%s)", pkKey);
             g_err.error = 1;
