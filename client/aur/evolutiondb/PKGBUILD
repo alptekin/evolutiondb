@@ -1,0 +1,38 @@
+# Maintainer: alptekin topal <topal.alptekin@gmail.com>
+#
+# evolutiondb — source build of the EvolutionDB server. The repo
+# ships a hand-rolled Makefile rather than autotools, so the build
+# is unusually short: `make adaptor TLS=1`. AUR users who prefer
+# their own toolchain over the binary release should pick this
+# package; conflicts with evolutiondb-bin to keep one engine on
+# disk.
+
+pkgname=evolutiondb
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SQL engine with built-in long-term memory primitives for AI assistants"
+arch=('x86_64' 'aarch64')
+url="https://github.com/alptekin/evolutiondb"
+license=('MIT')
+depends=('openssl')
+makedepends=('gcc' 'make' 'bison' 'flex')
+provides=('evolutiondb')
+conflicts=('evolutiondb-bin')
+install=evolutiondb.install
+source=("$pkgname-$pkgver.tar.gz::${url}/archive/server-v${pkgver}.tar.gz")
+sha256sums=('SKIP')  # tarball checksums change every git rebase; update on tag
+
+build() {
+    cd "evolutiondb-server-v${pkgver}"
+    make -C adaptor TLS=1
+}
+
+package() {
+    cd "evolutiondb-server-v${pkgver}"
+    install -Dm755 adaptor/evosql-server \
+        "$pkgdir/usr/bin/evosql-server"
+    install -Dm644 client/linux-installer/debian/lib/systemd/system/evolutiondb.service \
+        "$pkgdir/usr/lib/systemd/system/evolutiondb.service"
+    install -Dm644 client/macos-installer/pkg/Resources/License.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
