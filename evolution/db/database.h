@@ -36,6 +36,14 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
     }
     return NULL;
 }
+#endif  /* EVOSQL_HAVE_POSIX_SHIMS */
+
+/* File / sockets / time shims sit behind their own guard so this
+ * group still lands even when an earlier include of adaptor/platform.h
+ * already defined EVOSQL_HAVE_POSIX_SHIMS (that header skips this
+ * block on its side). */
+#ifndef EVOSQL_HAVE_POSIX_FILE_SHIMS
+#define EVOSQL_HAVE_POSIX_FILE_SHIMS
 #include <io.h>
 #include <stdio.h>          /* SEEK_SET */
 #include <sys/types.h>      /* ssize_t */
@@ -51,13 +59,45 @@ static inline ssize_t pwrite(int fd, const void *buf, size_t count, long long of
     if (_lseeki64(fd, offset, SEEK_SET) == (long long)-1) return -1;
     return _write(fd, buf, (unsigned int)count);
 }
-/* POSIX fsync -> MinGW _commit: both flush the OS write cache for an
- * open file descriptor to disk before returning. */
 static inline int fsync(int fd) { return _commit(fd); }
-/* GNU timegm -> MinGW _mkgmtime: both convert struct tm in UTC to
- * time_t without consulting the local timezone. */
 static inline time_t timegm(struct tm *tm) { return _mkgmtime(tm); }
-#endif  /* EVOSQL_HAVE_POSIX_SHIMS */
+/* POSIX sleep(seconds) -> Win32 Sleep(ms). */
+static inline unsigned int sleep(unsigned int seconds) {
+    Sleep((DWORD)seconds * 1000);
+    return 0;
+}
+/* POSIX gettimeofday -> GetSystemTimeAsFileTime conversion. The
+ * 100-ns FILETIME ticks since 1601 are shifted to a Unix-epoch
+ * struct timeval. */
+#include <sys/time.h>
+static inline int gettimeofday(struct timeval *tv, void *tz) {
+    (void)tz;
+    FILETIME ft; ULARGE_INTEGER li;
+    GetSystemTimeAsFileTime(&ft);
+    li.LowPart = ft.dwLowDateTime; li.HighPart = ft.dwHighDateTime;
+    uint64_t usec = (li.QuadPart - 116444736000000000ULL) / 10ULL;
+    tv->tv_sec  = (long)(usec / 1000000ULL);
+    tv->tv_usec = (long)(usec % 1000000ULL);
+    return 0;
+}
+/* mkdir on MinGW takes only the path; POSIX adds a mode. Drop the
+ * mode silently — NTFS does not honour Unix permission bits. */
+static inline int evo_mkdir_compat(const char *path, int mode) {
+    (void)mode;
+    return _mkdir(path);
+}
+#define mkdir(path, mode) evo_mkdir_compat(path, mode)
+/* POSIX shutdown() constants map to Winsock SD_* equivalents. */
+#ifndef SHUT_RD
+#define SHUT_RD   SD_RECEIVE
+#endif
+#ifndef SHUT_WR
+#define SHUT_WR   SD_SEND
+#endif
+#ifndef SHUT_RDWR
+#define SHUT_RDWR SD_BOTH
+#endif
+#endif  /* EVOSQL_HAVE_POSIX_FILE_SHIMS */
 /* Align __thread with __declspec(thread) on MinGW to match the storage
  * class declared in catalog/query_context headers (see
  * adaptor/platform.h for the same alias). */

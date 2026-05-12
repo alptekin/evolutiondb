@@ -138,7 +138,7 @@ static int dist_connect(int node_id)
 
     /* Set TCP_NODELAY */
     int flag = 1;
-    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&flag, sizeof(flag));
 
     if (connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
         fprintf(stderr, "[DIST] Cannot connect to node %d (%s:%d): %s\n",
