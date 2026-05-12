@@ -133,6 +133,27 @@ Claude Code picks it up automatically on the next `claude` invocation.
 | `MCP_STORE_PREFIX`     | `mcp`              | Catalog object prefix |
 | `EVOSQL_PYTHON_SDK`    | (auto-discovered)  | Override path to the Python ctypes binding |
 | `EVOSQL_MEMORY_LIB`    | (auto-discovered)  | Override path to libevosql-memory.dylib/so |
+| `EVOSQL_EMBEDDING_PROVIDER` | `none`        | `openai`, `local`, or `none`. Turns `search_memory` into hybrid semantic+keyword |
+| `EVOSQL_EMBEDDING_MODEL`    | provider default | Override embedding model (e.g. `text-embedding-3-large`) |
+| `OPENAI_API_KEY`            | —             | Required when provider is `openai` |
+
+## Semantic search
+
+`search_memory` runs in keyword mode by default. Setting
+`EVOSQL_EMBEDDING_PROVIDER=openai` (with `OPENAI_API_KEY`) or
+`EVOSQL_EMBEDDING_PROVIDER=local` flips it into hybrid mode: new
+saves are tagged with a dense vector and queries are ranked by a
+weighted mix of cosine similarity (0.7) and substring overlap (0.3).
+Rows saved before you enabled embeddings continue to score on
+keyword overlap only, so the switch is non-destructive — older
+memories don't disappear, they just rank lower against semantically
+strong matches.
+
+The `local` provider needs an extra install:
+
+```
+pip install 'mcp-server-evolutiondb[embeddings-local]'
+```
 
 ## Tests
 
