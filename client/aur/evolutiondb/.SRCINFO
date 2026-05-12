@@ -1,0 +1,20 @@
+pkgbase = evolutiondb
+	pkgdesc = SQL engine with built-in long-term memory primitives for AI assistants
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/alptekin/evolutiondb
+	install = evolutiondb.install
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = gcc
+	makedepends = make
+	makedepends = bison
+	makedepends = flex
+	depends = openssl
+	provides = evolutiondb
+	conflicts = evolutiondb-bin
+	source = evolutiondb-0.1.0.tar.gz::https://github.com/alptekin/evolutiondb/archive/server-v0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = evolutiondb

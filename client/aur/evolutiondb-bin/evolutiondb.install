@@ -1,0 +1,49 @@
+## evolutiondb.install — Arch user / data dir / systemd hooks.
+##
+## pacman invokes the named functions automatically at the right
+## point in the install / upgrade / remove lifecycle. Stay quiet by
+## default; one info banner on first install is enough.
+
+_setup_user() {
+    if ! getent passwd evolutiondb >/dev/null; then
+        useradd --system --no-create-home --shell /usr/bin/nologin \
+                --home /var/lib/evolutiondb evolutiondb
+    fi
+    install -d -o evolutiondb -g evolutiondb -m 0755 \
+            /var/lib/evolutiondb /var/log/evolutiondb
+}
+
+post_install() {
+    _setup_user
+    systemctl daemon-reload
+    cat <<'BANNER'
+==> EvolutionDB installed. Enable + start with:
+==>     sudo systemctl enable --now evolutiondb
+==> Default credentials are admin / admin (port 5433 PG wire,
+==> 9967 EVO native). Change with `ALTER USER admin PASSWORD ...`
+==> once you're connected.
+BANNER
+}
+
+post_upgrade() {
+    _setup_user
+    systemctl daemon-reload
+    systemctl is-active --quiet evolutiondb && \
+        systemctl try-restart evolutiondb || true
+}
+
+pre_remove() {
+    systemctl is-enabled --quiet evolutiondb && \
+        systemctl disable --now evolutiondb || true
+}
+
+post_remove() {
+    systemctl daemon-reload
+    cat <<'BANNER'
+==> The evolutiondb system user and /var/lib/evolutiondb are kept
+==> in case you reinstall later. Remove them manually if you want a
+==> full wipe:
+==>     sudo rm -rf /var/lib/evolutiondb /var/log/evolutiondb
+==>     sudo userdel evolutiondb
+BANNER
+}
