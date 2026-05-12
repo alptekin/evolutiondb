@@ -149,6 +149,17 @@ static inline int platform_set_nonblocking(socket_t s, int nonblocking) {
 #define MSG_DONTWAIT 0   /* Winsock has no non-blocking flag bit. */
 #endif
 
+/* POSIX shutdown() constants -> Winsock SD_* equivalents. */
+#ifndef SHUT_RD
+#define SHUT_RD   SD_RECEIVE
+#endif
+#ifndef SHUT_WR
+#define SHUT_WR   SD_SEND
+#endif
+#ifndef SHUT_RDWR
+#define SHUT_RDWR SD_BOTH
+#endif
+
 /* GNU strcasestr is missing on MinGW; provide a minimal portable
  * implementation. Case insensitive substring search, returns the
  * first match in haystack or NULL. */

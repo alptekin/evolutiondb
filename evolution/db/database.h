@@ -44,8 +44,10 @@ static inline char *strcasestr(const char *haystack, const char *needle) {
  * block on its side). */
 #ifndef EVOSQL_HAVE_POSIX_FILE_SHIMS
 #define EVOSQL_HAVE_POSIX_FILE_SHIMS
-#include <windows.h>        /* Sleep, DWORD, ULARGE_INTEGER */
-#include <winsock2.h>       /* SD_* shutdown constants */
+/* No windows.h / winsock2.h here on purpose: pulling them in
+ * polluted the namespace badly enough that the Bison parser tokens
+ * (BOOL, LPSTR, ...) started colliding with WinAPI typedefs. The
+ * shims below only need the MS C-runtime, not the Win32 API. */
 #include <io.h>
 #include <stdio.h>          /* SEEK_SET */
 #include <sys/types.h>      /* ssize_t */
@@ -77,16 +79,6 @@ static inline int evo_mkdir_compat(const char *path, int mode) {
     return _mkdir(path);
 }
 #define mkdir(path, mode) evo_mkdir_compat(path, mode)
-/* POSIX shutdown() constants map to Winsock SD_* equivalents. */
-#ifndef SHUT_RD
-#define SHUT_RD   SD_RECEIVE
-#endif
-#ifndef SHUT_WR
-#define SHUT_WR   SD_SEND
-#endif
-#ifndef SHUT_RDWR
-#define SHUT_RDWR SD_BOTH
-#endif
 #endif  /* EVOSQL_HAVE_POSIX_FILE_SHIMS */
 /* Align __thread with __declspec(thread) on MinGW to match the storage
  * class declared in catalog/query_context headers (see
