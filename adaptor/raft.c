@@ -201,8 +201,8 @@ static int connect_to_node(RaftNode *node)
 
     /* Non-blocking connect with timeout */
     struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
 
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         socket_close(sock);
@@ -210,7 +210,7 @@ static int connect_to_node(RaftNode *node)
     }
 
     int nodelay = 1;
-    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&nodelay, sizeof(nodelay));
 
     node->sock = sock;
     node->connected = 1;
@@ -447,7 +447,7 @@ static void *listener_thread_fn(void *arg)
     if (listen_sock < 0) return NULL;
 
     int opt = 1;
-    setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
