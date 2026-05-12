@@ -36,9 +36,11 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 
+from .embeddings import EmbeddingProvider, provider_from_env
+
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.1.3"
+SERVER_VERSION   = "1.2.0"
 
 
 # ---------------------------------------------------------------- #
@@ -67,7 +69,9 @@ class MemoryBackend:
     _RECONNECT_BACKOFF_SEC = 0.5
 
     def __init__(self, host: str, port: int, user: str, password: str,
-                  database: str, prefix: str):
+                  database: str, prefix: str,
+                  embedder: Optional["EmbeddingProvider"] = None):
+        self.embedder = embedder
         try:
             import psycopg
         except ImportError as exc:
@@ -161,11 +165,22 @@ class MemoryBackend:
               tags: Optional[List[str]] = None) -> str:
         created = time.time()
         key = f"mem_{int(created*1000)}_{uuid.uuid4().hex[:6]}"
-        value = json.dumps({
+        record: Dict[str, Any] = {
             "fact":    fact,
             "tags":    tags or [],
             "created": created,
-        })
+        }
+        if self.embedder is not None:
+            # Concatenate tags so a save like
+            # "fact='likes Go'" tags=['language'] still ranks for the
+            # query "programming languages" via the embedding model.
+            emb_text = fact if not (tags or []) else \
+                       fact + " " + " ".join(tags or [])
+            vec = self.embedder.embed(emb_text)
+            if vec:
+                record["emb"]       = vec
+                record["emb_model"] = self.embedder.kind
+        value = json.dumps(record)
         self._exec(
             f"MEMORY PUT INTO {self.memory} VALUES "
             f"('{_e(user_id)}','{_e(key)}','{_e(value)}')"
@@ -181,6 +196,14 @@ class MemoryBackend:
             f"'{_e(user_id)}' LIMIT 512"
         )
         q_terms = [w for w in query.lower().split() if len(w) > 1]
+
+        # Compute the query embedding once. If the embedder is off or
+        # the call fails, q_vec is None and we silently fall through to
+        # pure keyword scoring.
+        q_vec: Optional[List[float]] = None
+        if self.embedder is not None:
+            q_vec = self.embedder.embed(query)
+
         out: List[Dict[str, Any]] = []
         for r in rows:
             try:
@@ -191,12 +214,33 @@ class MemoryBackend:
                 continue
             haystack = (rec.get("fact", "").lower() + " " +
                         " ".join(rec.get("tags") or []).lower())
-            score = sum(1 for w in q_terms if w in haystack)
+
+            kw_hits = sum(1 for w in q_terms if w in haystack)
+            kw_score = kw_hits / max(len(q_terms), 1)
+
+            sem_score = 0.0
+            row_vec = rec.get("emb")
+            if q_vec and isinstance(row_vec, list):
+                from .embeddings import cosine
+                sem_score = max(0.0, cosine(q_vec, row_vec))
+
+            # Hybrid: prefer semantic when available, but keep keyword
+            # weight non-zero so an exact term match always beats a
+            # vaguely-similar embedding.
+            if sem_score > 0:
+                final = 0.7 * sem_score + 0.3 * kw_score
+            else:
+                final = float(kw_hits)
+
             if tag and tag.lower() not in [t.lower() for t in (rec.get("tags") or [])]:
                 continue
-            if score == 0 and not tag:
+            if final == 0 and not tag:
                 continue
-            out.append({"key": r[1], "score": score, **rec})
+
+            # Strip the embedding vector from the response — it's noise
+            # for the LLM and inflates token cost.
+            rec_out = {k: v for k, v in rec.items() if k != "emb"}
+            out.append({"key": r[1], "score": round(final, 4), **rec_out})
         out.sort(key=lambda x: -x["score"])
         return out[:limit]
 
@@ -293,8 +337,10 @@ TOOLS = [
         "description": (
             "Search remembered facts. Call this BEFORE answering any "
             "question that depends on prior knowledge of the user. "
-            "Substring + tag matching; supply both `query` and "
-            "(optionally) `tag` to narrow."
+            "Semantic + keyword hybrid: when the server is configured "
+            "with an embedding provider it ranks by meaning, and falls "
+            "back to substring matching otherwise. Supply both `query` "
+            "and (optionally) `tag` to narrow."
         ),
         "inputSchema": {
             "type": "object",
@@ -349,13 +395,15 @@ class MCPServer:
         self.pw      = os.environ.get("EVOSQL_PASSWORD", "admin")
         self.db      = os.environ.get("EVOSQL_DATABASE", "testdb")
         self.prefix  = os.environ.get("MCP_STORE_PREFIX", "mcp")
+        self.embedder = provider_from_env()
         self.backend: Optional[MemoryBackend] = None
 
     def _connect(self) -> MemoryBackend:
         if self.backend is None:
             self.backend = MemoryBackend(self.host, self.port,
                                             self.user, self.pw,
-                                            self.db, self.prefix)
+                                            self.db, self.prefix,
+                                            embedder=self.embedder)
         return self.backend
 
     # -- tool dispatch ------------------------------------------------
