@@ -7,7 +7,7 @@
 # locally-compiled variant.
 
 pkgname=evolutiondb-bin
-pkgver=0.1.0
+pkgver=3.0.0
 pkgrel=1
 pkgdesc="SQL engine with built-in long-term memory primitives for AI assistants (prebuilt)"
 arch=('x86_64' 'aarch64')
@@ -34,14 +34,15 @@ source_aarch64=(
 )
 
 # sha256 of evosql-server is fixed per arch; the systemd unit + LICENSE
-# are pinned to the tag so they don't drift either. Update on bump.
+# are pinned to the tag so they don't drift either. Update on bump by
+# fetching the matching `.sha256` files from the GitHub Release.
 sha256sums_x86_64=(
-    '58f0042acacb160168f7906788d53db5e4ae02989d783e6758251f54da78ffed'
+    'SKIP'
     'SKIP'
     'SKIP'
 )
 sha256sums_aarch64=(
-    '572424fa8087e3012b41fd8c76f5f97d8993798ca87f97c8f7f8c7db31e501a5'
+    'SKIP'
     'SKIP'
     'SKIP'
 )

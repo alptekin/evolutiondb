@@ -7,7 +7,7 @@
 ; localhost:5433 immediately after the user clicks Finish.
 ;
 ; Build:
-;   makensis -DVERSION=0.1.0 \
+;   makensis -DVERSION="$(../../scripts/get-version.sh)" \
 ;            -DSRC_BINARY=path/to/evosql-server-windows-x86_64.exe \
 ;            EvolutionDB.nsi
 ;

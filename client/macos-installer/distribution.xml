@@ -36,7 +36,9 @@
         <pkg-ref id="com.evolutiondb.server.pkg"/>
     </choice>
 
+    <!-- __VERSION__ is substituted by client/macos-installer/build.sh from
+         evolution/db/version.h so this stamp tracks the engine version. -->
     <pkg-ref id="com.evolutiondb.server.pkg"
-             version="0.1.0"
+             version="__VERSION__"
              onConclusion="none">EvolutionDB.pkg</pkg-ref>
 </installer-gui-script>

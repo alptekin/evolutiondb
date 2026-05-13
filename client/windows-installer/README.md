@@ -20,7 +20,7 @@ already listening on `127.0.0.1:5433` (PostgreSQL wire) and
 
 ```bash
 sudo apt-get install -y nsis           # makensis is in the nsis pkg
-makensis -DVERSION=0.1.0 \
+makensis -DVERSION="$(../../scripts/get-version.sh)" \
          -DSRC_BINARY=/path/to/evosql-server-windows-x86_64.exe \
          EvolutionDB.nsi
 ```
