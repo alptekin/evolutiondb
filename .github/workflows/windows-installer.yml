@@ -50,22 +50,30 @@ jobs:
           echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      # Check if the Windows binary has been published. If not, exit
-      # gracefully with a clear message rather than failing the run.
-      - name: Look for Windows binary on the release
+      # Wait up to 15 minutes for the Windows binary. server-build
+      # runs in parallel with this workflow on the same tag push and
+      # the Windows job is the slowest in the matrix — a one-shot
+      # check loses the race and skips the installer. Mirror the
+      # 60×15s wait loop used by the macOS and Linux installers.
+      - name: Wait for Windows binary on the release
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.tag.outputs.tag }}"
-          if gh release view "$tag" --json assets \
-               --jq '.assets[] | select(.name == "evosql-server-windows-x86_64.exe") | .name' \
-               | grep -q evosql-server; then
-            echo "binary_present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "binary_present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No Windows binary on release $tag — skipping installer build."
-          fi
+          for i in $(seq 1 60); do
+            if gh release view "$tag" --json assets \
+                 --jq '.assets[] | select(.name == "evosql-server-windows-x86_64.exe") | .name' \
+                 | grep -q evosql-server; then
+              echo "release $tag has evosql-server-windows-x86_64.exe"
+              echo "binary_present=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Waiting for evosql-server-windows-x86_64.exe on $tag ($i/60) ..."
+            sleep 15
+          done
+          echo "binary_present=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::No Windows binary on release $tag after 15 minutes — skipping installer build."
 
       - name: Install NSIS
         if: steps.check.outputs.binary_present == 'true'
