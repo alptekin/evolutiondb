@@ -31,7 +31,7 @@ jobs:
       # The tag only matters for `gh release download` / upload below.
       - uses: actions/checkout@v4
 
-      - name: Resolve target tag
+      - name: Resolve target tag and version
         id: tag
         run: |
           # workflow_dispatch sets GITHUB_REF_NAME to the dispatched
@@ -44,7 +44,16 @@ jobs:
           else
             tag="$GITHUB_REF_NAME"
           fi
-          version="${tag#server-v}"
+          # version.h is the single source of truth for the user-
+          # visible version stamped onto every installer artefact.
+          # The tag is only used for `gh release download / upload`.
+          version="$(./scripts/get-version.sh)"
+          tag_version="${tag#server-v}"
+          if [ "$tag" != "$version" ] && [ "$tag_version" != "$version" ]; then
+            echo "::error::tag '$tag' does not match version.h ($version) — " \
+                 "bump version.h or retag before releasing"
+            exit 1
+          fi
           echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 

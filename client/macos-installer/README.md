@@ -23,14 +23,19 @@ LaunchDaemon plist.
 ## Building locally
 
 ```bash
-./build.sh /path/to/evosql-server-macos-arm64 0.1.0
+# Version defaults to whatever evolution/db/version.h says, so the
+# common case needs no second argument.
+./build.sh /path/to/evosql-server-macos-arm64
+
+# Override only when you want to stamp a non-canonical version.
+./build.sh /path/to/evosql-server-macos-arm64 3.0.0
 ```
 
 Outputs land in `./out/`:
 
 ```
-EvolutionDB-0.1.0.pkg     # productbuild wizard
-EvolutionDB-0.1.0.dmg     # single-file distribution
+EvolutionDB-3.0.0.pkg     # productbuild wizard
+EvolutionDB-3.0.0.dmg     # single-file distribution
 ```
 
 ## CI

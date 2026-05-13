@@ -40,16 +40,18 @@ distros.
 sudo apt-get install -y dpkg-dev alien fakeroot
 # AppImage support is optional; install appimagetool if you want it.
 
-./build.sh /path/to/evosql-server-linux-x86_64 0.1.0 amd64
-./build.sh /path/to/evosql-server-linux-arm64  0.1.0 arm64
+# Version defaults to evolution/db/version.h. Pass an empty string
+# as the second argument when you also need to set arch.
+./build.sh /path/to/evosql-server-linux-x86_64 ''  amd64
+./build.sh /path/to/evosql-server-linux-arm64  ''  arm64
 ```
 
 Outputs land in `./out/`:
 
 ```
-evolutiondb_0.1.0_amd64.deb
-evolutiondb-0.1.0.x86_64.rpm
-EvolutionDB-0.1.0-x86_64.AppImage
+evolutiondb_3.0.0_amd64.deb
+evolutiondb-3.0.0.x86_64.rpm
+EvolutionDB-3.0.0-x86_64.AppImage
 ```
 
 ## CI

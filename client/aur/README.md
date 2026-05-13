@@ -44,7 +44,7 @@ makepkg -si --noconfirm        # builds + installs + removes
 makepkg --printsrcinfo > .SRCINFO
 
 git add PKGBUILD evolutiondb.install .SRCINFO
-git commit -m "Initial import: evolutiondb-bin 0.1.0"
+git commit -m "Initial import: evolutiondb-bin 3.0.0"
 git push origin master
 ```
 
