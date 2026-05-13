@@ -40,7 +40,7 @@ from .embeddings import EmbeddingProvider, provider_from_env
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.2.0"
+SERVER_VERSION   = "1.3.0"
 
 
 # ---------------------------------------------------------------- #

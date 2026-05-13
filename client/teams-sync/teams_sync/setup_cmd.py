@@ -7,81 +7,20 @@ After `pip install evolutiondb-teams-sync`:
   * the Python sync tool itself is on $PATH
   * mcp-server-evolutiondb is on $PATH (pulled in as a dependency)
 
-What's still missing for a fresh user is the C engine binary, plus a
-working Claude Desktop config that points the MCP server at it.
-This module fills those two gaps:
+What's still missing for a fresh user is the C engine binary, plus
+working MCP host configs (Claude Desktop, ChatGPT Desktop, Gemini
+CLI) that point at the MCP server. This module fills those gaps:
 
   1. Download evosql-server for the host platform if not cached.
-  2. Detect Claude Desktop on disk and merge an `evolutiondb-memory`
-     entry into its config. Existing entries are preserved; only the
-     env block is updated.
+  2. Delegate config wiring to mcp_server_evosql.setup so every host
+     detected on disk gets an `evolutiondb-memory` entry. Existing
+     entries are preserved; only the matching block is updated.
 
 It is idempotent — re-running it on a configured machine is a no-op.
 """
 from __future__ import annotations
 
-import json
-import os
-import platform
 import sys
-from pathlib import Path
-from typing import Optional
-
-
-CLAUDE_CONFIG_PATHS = {
-    "darwin": "~/Library/Application Support/Claude/claude_desktop_config.json",
-    "linux":  "~/.config/Claude/claude_desktop_config.json",
-    "win32":  "~/AppData/Roaming/Claude/claude_desktop_config.json",
-}
-
-
-def _claude_config_path() -> Optional[Path]:
-    raw = CLAUDE_CONFIG_PATHS.get(sys.platform)
-    if not raw:
-        return None
-    return Path(os.path.expanduser(raw))
-
-
-def _mcp_block(user_id: str, evosql_port: int = 5433) -> dict:
-    """The env block we slot into claude_desktop_config.json. Matches
-    what the manual setup instructions ask the user to paste."""
-    return {
-        "command": "uvx",
-        "args":    ["mcp-server-evolutiondb"],
-        "env": {
-            "EVOSQL_HOST":      "127.0.0.1",
-            "EVOSQL_PORT":      str(evosql_port),
-            "EVOSQL_USER":      "admin",
-            "EVOSQL_PASSWORD":  "admin",
-            "EVOSQL_DATABASE":  "evosql",
-            "MCP_USER_ID":      user_id,
-            "MCP_STORE_PREFIX": "mcp",
-        },
-    }
-
-
-def _merge_claude_config(path: Path, user_id: str, evosql_port: int) -> bool:
-    """Return True if we wrote anything, False if the config was
-    already pointing at our MCP server."""
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            print(f"[setup] {path} is not valid JSON, leaving it alone",
-                  file=sys.stderr)
-            return False
-    else:
-        existing = {}
-
-    existing.setdefault("mcpServers", {})
-    new_block = _mcp_block(user_id, evosql_port)
-    if existing["mcpServers"].get("evolutiondb-memory") == new_block:
-        return False
-    existing["mcpServers"]["evolutiondb-memory"] = new_block
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    return True
 
 
 def run_setup(*, user_id: str, evosql_port: int = 5433) -> int:
@@ -104,33 +43,37 @@ def run_setup(*, user_id: str, evosql_port: int = 5433) -> int:
               file=sys.stderr)
         return 5
 
-    # ----- Step 2: claude_desktop_config.json -------------------
-    cfg_path = _claude_config_path()
-    if cfg_path is None:
-        print(f"[setup] no Claude Desktop config path is known for "
-              f"sys.platform={sys.platform}; skipping client wiring",
-              file=sys.stderr)
-        return 0
-
-    if _merge_claude_config(cfg_path, user_id, evosql_port):
-        print(f"[setup] wired evolutiondb-memory into {cfg_path}",
-              file=sys.stderr)
-        print(f"[setup] restart Claude Desktop (Cmd Q / Quit) to pick "
-              f"up the new MCP server.", file=sys.stderr)
-    else:
-        print(f"[setup] {cfg_path} already pointing at evolutiondb-"
-              f"memory; nothing to do.", file=sys.stderr)
-
-    # ----- Step 3: confirm mcp-server-evolutiondb is installed --
+    # ----- Step 2: confirm mcp-server-evolutiondb is installed --
     try:
-        import importlib
-        importlib.import_module("mcp_server_evosql")
-        print("[setup] mcp-server-evolutiondb import OK", file=sys.stderr)
+        from mcp_server_evosql import setup as mcp_setup
     except ImportError:
         print("[setup] mcp-server-evolutiondb is NOT installed. Run:\n"
               "        pip install mcp-server-evolutiondb",
               file=sys.stderr)
         return 6
+
+    # ----- Step 3: wire every host config we can detect ---------
+    any_wrote = False
+    for spec in mcp_setup.CLIENTS:
+        r = mcp_setup.configure_client(spec, user_id=user_id,
+                                         evosql_port=evosql_port)
+        if r["status"] == "wrote":
+            any_wrote = True
+            print(f"[setup] {spec.label}: wrote {r['path']}",
+                  file=sys.stderr)
+            print(f"        → {r['restart_hint']}", file=sys.stderr)
+        elif r["status"] == "unchanged":
+            print(f"[setup] {spec.label}: already configured "
+                  f"({r['path']})", file=sys.stderr)
+        elif r["status"] == "unsupported":
+            print(f"[setup] {spec.label}: not detected — skipping",
+                  file=sys.stderr)
+        elif r["status"] == "error":
+            print(f"[setup] {spec.label}: failed — {r.get('error')}",
+                  file=sys.stderr)
+
+    if not any_wrote:
+        print("[setup] no host configs needed updating.", file=sys.stderr)
 
     print("[setup] done. Next: `evosql-teams-sync --auth` to log into "
           "Teams, then `--interval 600` for daemon mode.",
