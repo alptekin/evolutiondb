@@ -108,18 +108,72 @@ Say "remember that I take my espresso single-shot, no sugar"; Claude
 will run `save_memory(...)`. Days later open a new chat, ask "what
 do I drink?" — Claude runs `search_memory(...)` and recalls.
 
-## Same setup for Claude Code
+## One-command setup for all supported hosts
 
-If you use Claude Code (the CLI), drop the same `mcpServers` entry
-into `~/.claude/mcp.json`:
+`pip install mcp-server-evolutiondb` puts a small `evolutiondb-mcp-setup`
+helper on $PATH. It autodetects every MCP host installed on the
+machine and merges the `evolutiondb-memory` server into each of
+their config files in one go:
 
 ```bash
-mkdir -p ~/.claude
-cp client/mcp-server-evosql/examples/claude_desktop_config.json ~/.claude/mcp.json
-# edit the absolute paths
+evolutiondb-mcp-setup
+# [setup] Claude Desktop: wrote /Users/you/Library/Application Support/Claude/claude_desktop_config.json
+# [setup] ChatGPT Desktop: not detected — skipping
+# [setup] Gemini CLI: wrote /Users/you/.gemini/settings.json
 ```
 
-Claude Code picks it up automatically on the next `claude` invocation.
+The merge is idempotent — running it twice changes nothing the
+second time. Existing `mcpServers` entries are preserved; only the
+`evolutiondb-memory` block is overwritten.
+
+Useful flags:
+
+- `--dry-run` — show what would change, write nothing.
+- `--client claude-desktop` — only configure one host (repeatable).
+- `--user-id NAME` — override the sticky namespace (default: `$MCP_USER_ID` or `default_user`).
+- `--port 5433` — non-default EvolutionDB PG-wire port.
+
+Override config paths via env vars when the auto-detected location
+is wrong for your install: `EVOSQL_CLAUDE_CONFIG`,
+`EVOSQL_CHATGPT_CONFIG`, `EVOSQL_GEMINI_CONFIG`.
+
+## Per-host manual config
+
+If you'd rather hand-edit, every host accepts the same JSON shape —
+the `mcpServers` block is part of the MCP spec, not specific to any
+vendor:
+
+```json
+{
+  "mcpServers": {
+    "evolutiondb-memory": {
+      "command": "uvx",
+      "args":    ["mcp-server-evolutiondb"],
+      "env": {
+        "EVOSQL_HOST":      "127.0.0.1",
+        "EVOSQL_PORT":      "5433",
+        "EVOSQL_USER":      "admin",
+        "EVOSQL_PASSWORD":  "admin",
+        "EVOSQL_DATABASE":  "evosql",
+        "MCP_USER_ID":      "your-handle",
+        "MCP_STORE_PREFIX": "mcp"
+      }
+    }
+  }
+}
+```
+
+File paths:
+
+| Host             | macOS                                                                  | Linux / WSL                              | Windows                                          |
+|------------------|------------------------------------------------------------------------|------------------------------------------|--------------------------------------------------|
+| Claude Desktop   | `~/Library/Application Support/Claude/claude_desktop_config.json`      | `~/.config/Claude/claude_desktop_config.json` | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Claude Code      | `~/.claude/mcp.json`                                                   | `~/.claude/mcp.json`                     | `%USERPROFILE%\.claude\mcp.json`                |
+| ChatGPT Desktop  | `~/Library/Application Support/ChatGPT/mcp.json`                       | `~/.config/ChatGPT/mcp.json`             | `%APPDATA%\ChatGPT\mcp.json`                    |
+| Gemini CLI       | `~/.gemini/settings.json`                                              | `~/.gemini/settings.json`                | `%USERPROFILE%\.gemini\settings.json`           |
+
+After editing, restart the host (or for Gemini CLI, just run the next
+command — it re-reads its config on every launch).
 
 ## Configuration
 
