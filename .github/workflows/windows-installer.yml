@@ -28,7 +28,7 @@ jobs:
       # used by `gh release download` / upload below.
       - uses: actions/checkout@v4
 
-      - name: Resolve target tag
+      - name: Resolve target tag and version
         id: tag
         run: |
           input_tag="${{ github.event.inputs.tag }}"
@@ -37,7 +37,16 @@ jobs:
           else
             tag="$GITHUB_REF_NAME"
           fi
-          version="${tag#server-v}"
+          # version.h is the source of truth for the version baked into
+          # EvolutionDB-<version>-x86_64.exe and the NSIS metadata. The
+          # tag is only used for release upload/download.
+          chmod +x ./scripts/get-version.sh
+          version="$(./scripts/get-version.sh)"
+          tag_version="${tag#server-v}"
+          if [ "$tag" != "$version" ] && [ "$tag_version" != "$version" ]; then
+            echo "::error::tag '$tag' does not match version.h ($version)"
+            exit 1
+          fi
           echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 

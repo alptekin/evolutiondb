@@ -189,6 +189,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Refuse to publish a release whose tag doesn't agree with the
+      # version baked into the binaries (read from evolution/db/version.h).
+      # Catches the "tag bumped but version.h forgotten" mistake.
+      - name: Verify tag matches version.h
+        run: |
+          version="$(./scripts/get-version.sh)"
+          tag="${GITHUB_REF_NAME#server-v}"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag is server-v$tag but version.h says $version — refusing to release"
+            exit 1
+          fi
+
       - name: Pull all platform artifacts
         uses: actions/download-artifact@v4
         with:

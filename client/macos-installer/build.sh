@@ -15,9 +15,12 @@
 set -euo pipefail
 
 BIN_SRC="${1:?usage: build.sh <evosql-server binary> [version]}"
-VERSION="${2:-0.1.0}"
-
+# Default to the version stamped in evolution/db/version.h so a local
+# `./build.sh /path/to/binary` ships an installer whose stamp matches
+# the engine binary it carries.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT_REPO="$(cd "$ROOT/../.." && pwd)"
+VERSION="${2:-$("$ROOT_REPO/scripts/get-version.sh")}"
 PAYLOAD_ROOT="$ROOT/pkg/payload-root"
 OUT="$ROOT/out"
 PKG_NAME="EvolutionDB-${VERSION}.pkg"
@@ -48,9 +51,15 @@ pkgbuild \
     --install-location / \
     "$OUT/EvolutionDB.pkg"
 
+# Materialise distribution.xml with the __VERSION__ placeholder filled
+# in. We don't edit the checked-in file in place — keeps `git diff`
+# clean across local rebuilds.
+DIST_RENDERED="$OUT/distribution.rendered.xml"
+sed "s/__VERSION__/${VERSION}/g" "$ROOT/distribution.xml" > "$DIST_RENDERED"
+
 # Distribution .pkg with welcome / license / conclusion screens.
 productbuild \
-    --distribution "$ROOT/distribution.xml" \
+    --distribution "$DIST_RENDERED" \
     --resources "$ROOT/pkg/Resources" \
     --package-path "$OUT" \
     --version "$VERSION" \
