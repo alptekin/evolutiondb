@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Gemini CLI (`gemini-cli`) MCP config. Drop the contents of",
+    "`mcpServers` into your existing settings file.",
+    "",
+    "Path on every platform:",
+    "  ~/.gemini/settings.json",
+    "",
+    "Or run `evolutiondb-mcp-setup` to write this automatically.",
+    "gemini-cli reads the file on every launch — no restart needed."
+  ],
+  "mcpServers": {
+    "evolutiondb-memory": {
+      "command": "uvx",
+      "args":    ["mcp-server-evolutiondb"],
+      "env": {
+        "EVOSQL_HOST":      "127.0.0.1",
+        "EVOSQL_PORT":      "5433",
+        "EVOSQL_USER":      "admin",
+        "EVOSQL_PASSWORD":  "admin",
+        "EVOSQL_DATABASE":  "evosql",
+        "MCP_USER_ID":      "your-handle",
+        "MCP_STORE_PREFIX": "mcp"
+      }
+    }
+  }
+}

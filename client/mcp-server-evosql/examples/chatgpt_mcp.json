@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "ChatGPT Desktop MCP config. Drop the contents of `mcpServers`",
+    "into your existing config file; don't replace the whole file",
+    "unless this is your first MCP server.",
+    "",
+    "Path on macOS:",
+    "  ~/Library/Application Support/ChatGPT/mcp.json",
+    "Path on Windows:",
+    "  %APPDATA%\\ChatGPT\\mcp.json",
+    "",
+    "Or run `evolutiondb-mcp-setup` to write this automatically."
+  ],
+  "mcpServers": {
+    "evolutiondb-memory": {
+      "command": "uvx",
+      "args":    ["mcp-server-evolutiondb"],
+      "env": {
+        "EVOSQL_HOST":      "127.0.0.1",
+        "EVOSQL_PORT":      "5433",
+        "EVOSQL_USER":      "admin",
+        "EVOSQL_PASSWORD":  "admin",
+        "EVOSQL_DATABASE":  "evosql",
+        "MCP_USER_ID":      "your-handle",
+        "MCP_STORE_PREFIX": "mcp"
+      }
+    }
+  }
+}
