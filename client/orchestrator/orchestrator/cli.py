@@ -23,6 +23,7 @@ import sys
 from typing import List, Optional
 
 from . import config as cfg_mod
+from . import schedule as sched_mod
 from . import supervisor as sup
 
 
@@ -38,8 +39,8 @@ def render_status_table(rows: dict) -> str:
     lines: List[str] = []
     lines.append(f"{'':2}  {'connector':<10}  {'label':<22}  "
                  f"{'state':<10}  {'managed':<10}  {'pid':<8}  "
-                 f"{'agent':<14}")
-    lines.append("-" * 90)
+                 f"{'agent':<14}  {'boot':<6}")
+    lines.append("-" * 96)
     for name, r in rows.items():
         lines.append(
             f"{_state_badge(r['state']):2}  "
@@ -48,7 +49,8 @@ def render_status_table(rows: dict) -> str:
             f"{r['state']:<10}  "
             f"{(r.get('managed_by') or '—'):<10}  "
             f"{str(r.get('pid') or '—'):<8}  "
-            f"{(r.get('agent_owner') or '—'):<14}"
+            f"{(r.get('agent_owner') or '—'):<14}  "
+            f"{('yes' if r.get('scheduled') else 'no'):<6}"
         )
     return "\n".join(lines)
 
@@ -73,6 +75,18 @@ def cmd_start(args) -> int:
 
 def cmd_stop(args) -> int:
     r = sup.stop(args.name)
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("ok") else 1
+
+
+def cmd_schedule(args) -> int:
+    r = sched_mod.schedule(args.name, interval=args.interval)
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("ok") else 1
+
+
+def cmd_unschedule(args) -> int:
+    r = sched_mod.unschedule(args.name)
     print(json.dumps(r, indent=2))
     return 0 if r.get("ok") else 1
 
@@ -182,6 +196,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("name",
         choices=[c.name for c in cfg_mod.CONNECTORS])
 
+    sp = sub.add_parser("schedule",
+        help="Register the connector with launchd / systemd so it "
+             "survives a reboot.")
+    sp.add_argument("name",
+        choices=[c.name for c in cfg_mod.CONNECTORS])
+    sp.add_argument("--interval", type=int, default=None,
+        help="Poll interval in seconds (default: per-connector).")
+
+    sp = sub.add_parser("unschedule",
+        help="Remove the connector from launchd / systemd.")
+    sp.add_argument("name",
+        choices=[c.name for c in cfg_mod.CONNECTORS])
+
     sp = sub.add_parser("set-agent",
         help="Set an agent ownership label (or 'none' to clear).")
     sp.add_argument("name",
@@ -204,12 +231,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     return {
-        "status":    cmd_status,
-        "start":     cmd_start,
-        "stop":      cmd_stop,
-        "set-agent": cmd_set_agent,
-        "client":    cmd_client,
-        "web":       cmd_web,
+        "status":     cmd_status,
+        "start":      cmd_start,
+        "stop":       cmd_stop,
+        "schedule":   cmd_schedule,
+        "unschedule": cmd_unschedule,
+        "set-agent":  cmd_set_agent,
+        "client":     cmd_client,
+        "web":        cmd_web,
     }[args.cmd](args)
 
 
