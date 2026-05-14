@@ -25,6 +25,7 @@ from typing import Optional
 from . import config as cfg_mod
 from . import schedule as sched_mod
 from . import supervisor as sup
+from . import tunnel as tunnel_mod
 
 
 INDEX_HTML = """<!doctype html>
@@ -110,6 +111,11 @@ INDEX_HTML = """<!doctype html>
 <h2>ai memory clients</h2>
 <div id="clients" class="grid">loading …</div>
 
+<h2>mcp tunnel</h2>
+<div id="tunnel" class="grid" style="grid-template-columns: 1fr;">
+  loading …
+</div>
+
 <div class="links">
   <a href="http://127.0.0.1:8765/" target="_blank">browse memory →</a>
   <a href="https://github.com/alptekin/evolutiondb#evolutiondb-hub"
@@ -132,7 +138,62 @@ async function api(method, url, body) {
 async function loadAll() {
   document.getElementById("userId").textContent =
     new URLSearchParams(location.search).get("u") || "alptekin_topal";
-  await Promise.all([loadSources(), loadClients()]);
+  await Promise.all([loadSources(), loadClients(), loadTunnel()]);
+}
+async function loadTunnel() {
+  const t = await api("GET", "/api/tunnel");
+  const root = document.getElementById("tunnel");
+  root.innerHTML = "";
+  const card = document.createElement("div");
+  card.className = "card";
+  const badge = t.running ? "running" : "stopped";
+  const cfd   = t.cloudflared ? "running" : "stopped";
+  card.innerHTML = `
+    <h3>evolutiondb-mcp-http
+      <span class="badge ${badge}">${badge}</span></h3>
+    <div class="desc">Streamable HTTP transport for web hosts
+      (ChatGPT, Gemini, Claude on the web).</div>
+    <div class="row"><span class="k">local url</span>
+      <span class="v">${t.running ? "http://127.0.0.1:" + t.port + "/mcp" : "—"}</span></div>
+    <div class="row"><span class="k">public url</span>
+      <span class="v">${t.public_url ? t.public_url + "/mcp" : "—"}</span></div>
+    <div class="row"><span class="k">bearer</span>
+      <span class="v">${t.token ? (t.token.slice(0,8) + "…(copy below)") : "—"}</span></div>
+    <div class="row"><span class="k">cloudflared</span>
+      <span class="badge ${t.cloudflared ? "running" : "stopped"}">${cfd}</span></div>
+    <div class="actions">
+      <button class="primary" data-act="start" ${t.running ? "disabled" : ""}>
+        start</button>
+      <button class="danger"  data-act="stop"  ${t.running ? "" : "disabled"}>
+        stop</button>
+      ${t.token ? `<button data-act="copy-token">copy token</button>` : ""}
+      ${t.public_url ? `<button data-act="copy-url">copy public url</button>` : ""}
+    </div>
+    <div class="err" data-err="tunnel"></div>
+  `;
+  root.appendChild(card);
+  card.querySelectorAll("button[data-act]").forEach(b => {
+    b.addEventListener("click", async () => {
+      const act = b.dataset.act;
+      if (act === "copy-token") {
+        await navigator.clipboard.writeText(t.token);
+        b.textContent = "copied!"; setTimeout(() => b.textContent = "copy token", 1500);
+        return;
+      }
+      if (act === "copy-url") {
+        await navigator.clipboard.writeText(t.public_url + "/mcp");
+        b.textContent = "copied!"; setTimeout(() => b.textContent = "copy public url", 1500);
+        return;
+      }
+      b.disabled = true;
+      const r = await api("POST", `/api/tunnel/${act}`);
+      if (!r.ok) {
+        card.querySelector(`[data-err="tunnel"]`).textContent =
+          r.error || "operation failed";
+      }
+      loadTunnel();
+    });
+  });
 }
 async function loadSources() {
   const data = await api("GET", "/api/sources");
@@ -327,6 +388,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/clients":
             clients = {a.name: _client_state(a) for a in cfg_mod.AGENTS}
             return self._send_json(200, {"clients": clients})
+        if path == "/api/tunnel":
+            return self._send_json(200, tunnel_mod.status())
         if path == "/api/health":
             return self._send_json(200, {"ok": True})
         self._send_json(404, {"error": "not found"})
@@ -361,6 +424,18 @@ class _Handler(BaseHTTPRequestHandler):
                         agent = ""
                     return self._send_json(
                         200, sup.set_agent_owner(name, agent))
+            return self._send_json(404, {"error": "not found"})
+
+        # Tunnel ops: /api/tunnel/{start|stop}
+        if path.startswith("/api/tunnel/"):
+            op = path[len("/api/tunnel/"):]
+            if op == "start":
+                b = body or {}
+                return self._send_json(200, tunnel_mod.start(
+                    port=b.get("port"), token=b.get("token"),
+                    tunnel=not b.get("no_public")))
+            if op == "stop":
+                return self._send_json(200, tunnel_mod.stop())
             return self._send_json(404, {"error": "not found"})
 
         # Client ops: /api/clients/<name>/{enable|disable}
