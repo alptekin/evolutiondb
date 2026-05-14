@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 from . import config as cfg_mod
+from . import install as install_mod
 from . import schedule as sched_mod
 from . import supervisor as sup
 from . import tunnel as tunnel_mod
@@ -242,6 +243,13 @@ async function loadSources() {
                 ${!src.binary ? "disabled" : ""}>
           ${src.scheduled ? "unschedule" : "schedule"}</button>
       </div>
+      <div class="actions">
+        <button data-act="install" data-name="${h(name)}">
+          ${src.binary ? "reinstall / upgrade" : "install"}</button>
+        <button data-act="auth"    data-name="${h(name)}"
+                ${!src.binary ? "disabled" : ""}>
+          authenticate</button>
+      </div>
       <div class="err" data-err="${h(name)}"></div>
     `;
     root.appendChild(card);
@@ -250,11 +258,32 @@ async function loadSources() {
   root.querySelectorAll("button[data-act]").forEach(b => {
     b.addEventListener("click", async () => {
       const name = b.dataset.name, act = b.dataset.act;
+      const errEl = root.querySelector(`[data-err="${name}"]`);
+      const label = b.textContent;
       b.disabled = true;
+      if (act === "install") b.textContent = "installing…";
+      else if (act === "auth") b.textContent = "running auth…";
+      else b.textContent = "…";
       const r = await api("POST", `/api/sources/${name}/${act}`);
+      b.textContent = label;
       if (!r.ok) {
-        root.querySelector(`[data-err="${name}"]`).textContent =
-          r.error || "operation failed";
+        errEl.textContent = r.error || "operation failed";
+      } else if (act === "install") {
+        errEl.textContent = "installed " + (r.binary || "");
+        errEl.style.color = "#065f46";
+      } else if (act === "auth") {
+        if (r.auth_kind === "env") {
+          errEl.textContent = "edit " + r.env_path + " — " +
+                              (r.hint || "");
+          errEl.style.color = "#92400e";
+        } else {
+          errEl.textContent = "auth started (pid " + r.pid + "). "
+                              + (r.hint || "check your browser.");
+          errEl.style.color = "#065f46";
+        }
+      } else {
+        errEl.textContent = "";
+        errEl.style.color = "";
       }
       loadSources();
     });
@@ -418,6 +447,12 @@ class _Handler(BaseHTTPRequestHandler):
                 if op == "unschedule":
                     return self._send_json(200,
                                             sched_mod.unschedule(name))
+                if op == "install":
+                    return self._send_json(200,
+                                            install_mod.install(name))
+                if op == "auth":
+                    return self._send_json(200,
+                                            install_mod.authenticate(name))
                 if op == "agent":
                     agent = (body or {}).get("agent")
                     if agent and agent.lower() in ("none", "clear", "-"):
