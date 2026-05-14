@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from . import config as cfg_mod
+from . import schedule as sched_mod
 from . import state as state_mod
 
 
@@ -108,6 +109,7 @@ def status(name: str) -> Dict[str, object]:
             "interval":      entry.get("interval", spec.poll_default),
             "agent_owner":   entry.get("agent_owner"),
             "binary":        shutil.which(spec.cli_entry),
+            "scheduled":     sched_mod.is_scheduled(name),
         }
 
     # Stale pid in the state file — clear it.
@@ -125,6 +127,7 @@ def status(name: str) -> Dict[str, object]:
             "pid":           external_pid,
             "agent_owner":   entry.get("agent_owner"),
             "binary":        shutil.which(spec.cli_entry),
+            "scheduled":     sched_mod.is_scheduled(name),
         }
 
     return {
@@ -135,6 +138,7 @@ def status(name: str) -> Dict[str, object]:
         "pid":           None,
         "agent_owner":   entry.get("agent_owner"),
         "binary":        shutil.which(spec.cli_entry),
+        "scheduled":     sched_mod.is_scheduled(name),
     }
 
 
