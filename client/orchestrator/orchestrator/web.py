@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 from . import config as cfg_mod
+from . import schedule as sched_mod
 from . import supervisor as sup
 
 
@@ -59,6 +60,8 @@ INDEX_HTML = """<!doctype html>
   .badge.wired     { background: #d1fae5; color: #065f46; }
   .badge.unwired   { background: #e5e5e5; color: #555; }
   .badge.notinst   { background: #fde2e2; color: #991b1b; }
+  .badge.boot      { background: #ede9fe; color: #5b21b6; }
+  .badge.noboot    { background: #f5f5f5; color: #888; }
   .actions { display: flex; gap: .4rem; margin-top: .7rem; }
   button { padding: .35rem .8rem; border: 1px solid #ccc; background: #fff;
             border-radius: 4px; cursor: pointer; font: inherit;
@@ -161,6 +164,11 @@ async function loadSources() {
                placeholder="claude / gemini / chatgpt / …"
                data-name="${h(name)}" />
       </div>
+      <div class="row">
+        <span class="k">boot</span>
+        <span class="badge ${src.scheduled ? "boot" : "noboot"}">
+          ${src.scheduled ? "scheduled" : "manual"}</span>
+      </div>
       <div class="actions">
         <button class="primary"  data-act="start"  data-name="${h(name)}"
                 ${state === "running" || !src.binary ? "disabled" : ""}>
@@ -168,6 +176,10 @@ async function loadSources() {
         <button class="danger"   data-act="stop"   data-name="${h(name)}"
                 ${state !== "running" || mgr !== "hub" ? "disabled" : ""}>
           stop</button>
+        <button data-act="${src.scheduled ? "unschedule" : "schedule"}"
+                data-name="${h(name)}"
+                ${!src.binary ? "disabled" : ""}>
+          ${src.scheduled ? "unschedule" : "schedule"}</button>
       </div>
       <div class="err" data-err="${h(name)}"></div>
     `;
@@ -335,6 +347,14 @@ class _Handler(BaseHTTPRequestHandler):
                                          if body else None))
                 if op == "stop":
                     return self._send_json(200, sup.stop(name))
+                if op == "schedule":
+                    return self._send_json(200, sched_mod.schedule(
+                        name,
+                        interval=(body or {}).get("interval")
+                                  if body else None))
+                if op == "unschedule":
+                    return self._send_json(200,
+                                            sched_mod.unschedule(name))
                 if op == "agent":
                     agent = (body or {}).get("agent")
                     if agent and agent.lower() in ("none", "clear", "-"):
