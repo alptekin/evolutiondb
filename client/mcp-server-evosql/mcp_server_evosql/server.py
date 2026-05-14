@@ -37,10 +37,11 @@ from typing import Any, Dict, List, Optional
 
 
 from .embeddings import EmbeddingProvider, provider_from_env
+from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.5.0"
+SERVER_VERSION   = "1.6.0"
 
 
 # ---------------------------------------------------------------- #
@@ -70,8 +71,10 @@ class MemoryBackend:
 
     def __init__(self, host: str, port: int, user: str, password: str,
                   database: str, prefix: str,
-                  embedder: Optional["EmbeddingProvider"] = None):
+                  embedder: Optional["EmbeddingProvider"] = None,
+                  tagger: Optional["TopicTagger"] = None):
         self.embedder = embedder
+        self.tagger   = tagger
         try:
             import psycopg
         except ImportError as exc:
@@ -165,11 +168,23 @@ class MemoryBackend:
               tags: Optional[List[str]] = None) -> str:
         created = time.time()
         key = f"mem_{int(created*1000)}_{uuid.uuid4().hex[:6]}"
+        # Topic tags are merged into the regular `tags` list so the
+        # existing tag-filter logic in search picks them up for free.
+        topic_tags: List[str] = []
+        if self.tagger is not None:
+            try:
+                topic_tags = self.tagger.tag(fact)
+            except Exception:
+                topic_tags = []
+        merged_tags = sorted(set((tags or []) + topic_tags))
         record: Dict[str, Any] = {
             "fact":    fact,
-            "tags":    tags or [],
+            "tags":    merged_tags,
             "created": created,
         }
+        if topic_tags:
+            record["topic_tags"]  = topic_tags
+            record["topic_model"] = self.tagger.kind
         if self.embedder is not None:
             # Concatenate tags so a save like
             # "fact='likes Go'" tags=['language'] still ranks for the
@@ -436,6 +451,7 @@ class MCPServer:
         self.db      = os.environ.get("EVOSQL_DATABASE", "testdb")
         self.prefix  = os.environ.get("MCP_STORE_PREFIX", "mcp")
         self.embedder = provider_from_env()
+        self.tagger   = tagger_provider_from_env()
         self.backend: Optional[MemoryBackend] = None
 
     def _connect(self) -> MemoryBackend:
@@ -443,7 +459,8 @@ class MCPServer:
             self.backend = MemoryBackend(self.host, self.port,
                                             self.user, self.pw,
                                             self.db, self.prefix,
-                                            embedder=self.embedder)
+                                            embedder=self.embedder,
+                                            tagger=self.tagger)
         return self.backend
 
     # -- tool dispatch ------------------------------------------------
