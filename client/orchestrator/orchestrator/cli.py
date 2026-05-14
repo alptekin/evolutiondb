@@ -25,6 +25,7 @@ from typing import List, Optional
 from . import config as cfg_mod
 from . import schedule as sched_mod
 from . import supervisor as sup
+from . import tunnel as tunnel_mod
 
 
 # ---------------------------------------------------------------- #
@@ -168,6 +169,24 @@ def cmd_client(args) -> int:
     return 1
 
 
+def cmd_tunnel(args) -> int:
+    if args.op == "status":
+        print(json.dumps(tunnel_mod.status(), indent=2))
+        return 0
+    if args.op == "start":
+        r = tunnel_mod.start(port=args.port,
+                              token=args.token,
+                              tunnel=not args.no_public)
+        print(json.dumps(r, indent=2))
+        return 0 if r.get("ok") else 1
+    if args.op == "stop":
+        r = tunnel_mod.stop()
+        print(json.dumps(r, indent=2))
+        return 0 if r.get("ok") else 1
+    print(f"error: unknown op {args.op!r}", file=sys.stderr)
+    return 1
+
+
 def cmd_web(args) -> int:
     from . import web as web_mod
     return web_mod.serve(host=args.host, port=args.port)
@@ -221,6 +240,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[a.name for a in cfg_mod.AGENTS])
     sp.add_argument("op", choices=["status", "enable", "disable"])
 
+    sp = sub.add_parser("tunnel",
+        help="Start / stop the MCP HTTP transport + cloudflared tunnel.")
+    sp.add_argument("op", choices=["start", "stop", "status"])
+    sp.add_argument("--port", type=int, default=None,
+        help="HTTP port for evolutiondb-mcp-http (default 8970).")
+    sp.add_argument("--token", default=None,
+        help="Bearer token. Auto-generated if omitted.")
+    sp.add_argument("--no-public", action="store_true",
+        help="Skip the cloudflared tunnel; only the local listener.")
+
     sp = sub.add_parser("web", help="Start the web UI.")
     sp.add_argument("--port", type=int, default=8771)
     sp.add_argument("--host", default="127.0.0.1")
@@ -238,6 +267,7 @@ def main(argv: Optional[list] = None) -> int:
         "unschedule": cmd_unschedule,
         "set-agent":  cmd_set_agent,
         "client":     cmd_client,
+        "tunnel":     cmd_tunnel,
         "web":        cmd_web,
     }[args.cmd](args)
 
