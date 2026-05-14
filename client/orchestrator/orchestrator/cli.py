@@ -23,6 +23,7 @@ import sys
 from typing import List, Optional
 
 from . import config as cfg_mod
+from . import install as install_mod
 from . import schedule as sched_mod
 from . import supervisor as sup
 from . import tunnel as tunnel_mod
@@ -169,6 +170,18 @@ def cmd_client(args) -> int:
     return 1
 
 
+def cmd_install(args) -> int:
+    r = install_mod.install(args.name)
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("ok") else 1
+
+
+def cmd_auth(args) -> int:
+    r = install_mod.authenticate(args.name)
+    print(json.dumps(r, indent=2))
+    return 0 if r.get("ok") else 1
+
+
 def cmd_tunnel(args) -> int:
     if args.op == "status":
         print(json.dumps(tunnel_mod.status(), indent=2))
@@ -240,6 +253,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[a.name for a in cfg_mod.AGENTS])
     sp.add_argument("op", choices=["status", "enable", "disable"])
 
+    sp = sub.add_parser("install",
+        help="Install (or upgrade) one connector's PyPI package.")
+    sp.add_argument("name",
+        choices=[c.name for c in cfg_mod.CONNECTORS])
+
+    sp = sub.add_parser("auth",
+        help="Run a connector's --auth flow (or report the .env "
+             "path for token-based connectors).")
+    sp.add_argument("name",
+        choices=[c.name for c in cfg_mod.CONNECTORS])
+
     sp = sub.add_parser("tunnel",
         help="Start / stop the MCP HTTP transport + cloudflared tunnel.")
     sp.add_argument("op", choices=["start", "stop", "status"])
@@ -265,6 +289,8 @@ def main(argv: Optional[list] = None) -> int:
         "stop":       cmd_stop,
         "schedule":   cmd_schedule,
         "unschedule": cmd_unschedule,
+        "install":    cmd_install,
+        "auth":       cmd_auth,
         "set-agent":  cmd_set_agent,
         "client":     cmd_client,
         "tunnel":     cmd_tunnel,
