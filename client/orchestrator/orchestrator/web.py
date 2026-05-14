@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 
 from . import config as cfg_mod
+from . import inspector_mgr as inspect_mod
 from . import install as install_mod
 from . import schedule as sched_mod
 from . import supervisor as sup
@@ -117,6 +118,9 @@ INDEX_HTML = """<!doctype html>
   loading …
 </div>
 
+<h2>memory inspector</h2>
+<div id="inspector"></div>
+
 <div class="links">
   <a href="http://127.0.0.1:8765/" target="_blank">browse memory →</a>
   <a href="https://github.com/alptekin/evolutiondb#evolutiondb-hub"
@@ -139,7 +143,61 @@ async function api(method, url, body) {
 async function loadAll() {
   document.getElementById("userId").textContent =
     new URLSearchParams(location.search).get("u") || "alptekin_topal";
-  await Promise.all([loadSources(), loadClients(), loadTunnel()]);
+  await Promise.all([loadSources(), loadClients(),
+                      loadTunnel(), loadInspector()]);
+}
+async function loadInspector() {
+  const r = await api("GET", "/api/inspector");
+  const root = document.getElementById("inspector");
+  if (r.running && r.url) {
+    root.innerHTML = `
+      <div style="display:flex;justify-content:space-between;
+                  align-items:center;margin-bottom:.5rem;">
+        <div style="font-size:13px;color:#666">
+          embedded ${h(r.url)}
+        </div>
+        <div>
+          <a href="${h(r.url)}" target="_blank"
+             style="color:#4f46e5;font-size:13px;
+                    margin-right:.5rem">open in new tab</a>
+          <button data-act="stop">stop</button>
+        </div>
+      </div>
+      <iframe src="${h(r.url)}"
+        style="width:100%;height:560px;border:1px solid #e5e5e5;
+               border-radius:8px"></iframe>
+    `;
+    root.querySelector("button[data-act='stop']")
+        .addEventListener("click", async () => {
+      await api("POST", "/api/inspector/stop");
+      loadInspector();
+    });
+  } else {
+    root.innerHTML = `
+      <div class="card">
+        <h3>memory inspector
+          <span class="badge stopped">stopped</span></h3>
+        <div class="desc">
+          Browse and delete records across every source. Runs on
+          127.0.0.1:8765 — embedded below once started.
+        </div>
+        <div class="actions">
+          <button class="primary" data-act="start">start inspector</button>
+        </div>
+        <div class="err" data-err="inspector"></div>
+      </div>
+    `;
+    root.querySelector("button[data-act='start']")
+        .addEventListener("click", async () => {
+      const r = await api("POST", "/api/inspector/start");
+      if (!r.ok) {
+        root.querySelector("[data-err='inspector']").textContent =
+          r.error || "failed to start";
+      }
+      // Give the iframe a moment to come up before reloading.
+      setTimeout(loadInspector, 800);
+    });
+  }
 }
 async function loadTunnel() {
   const t = await api("GET", "/api/tunnel");
@@ -419,6 +477,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send_json(200, {"clients": clients})
         if path == "/api/tunnel":
             return self._send_json(200, tunnel_mod.status())
+        if path == "/api/inspector":
+            return self._send_json(200, inspect_mod.status())
         if path == "/api/health":
             return self._send_json(200, {"ok": True})
         self._send_json(404, {"error": "not found"})
@@ -471,6 +531,18 @@ class _Handler(BaseHTTPRequestHandler):
                     tunnel=not b.get("no_public")))
             if op == "stop":
                 return self._send_json(200, tunnel_mod.stop())
+            return self._send_json(404, {"error": "not found"})
+
+        # Inspector ops: /api/inspector/{start|stop}
+        if path.startswith("/api/inspector/"):
+            op = path[len("/api/inspector/"):]
+            if op == "start":
+                b = body or {}
+                return self._send_json(200,
+                                        inspect_mod.start(
+                                            port=b.get("port")))
+            if op == "stop":
+                return self._send_json(200, inspect_mod.stop())
             return self._send_json(404, {"error": "not found"})
 
         # Client ops: /api/clients/<name>/{enable|disable}

@@ -23,6 +23,7 @@ import sys
 from typing import List, Optional
 
 from . import config as cfg_mod
+from . import inspector_mgr as inspect_mod
 from . import install as install_mod
 from . import schedule as sched_mod
 from . import supervisor as sup
@@ -200,6 +201,22 @@ def cmd_tunnel(args) -> int:
     return 1
 
 
+def cmd_inspector(args) -> int:
+    if args.op == "status":
+        print(json.dumps(inspect_mod.status(), indent=2))
+        return 0
+    if args.op == "start":
+        r = inspect_mod.start(port=args.port)
+        print(json.dumps(r, indent=2))
+        return 0 if r.get("ok") else 1
+    if args.op == "stop":
+        r = inspect_mod.stop()
+        print(json.dumps(r, indent=2))
+        return 0 if r.get("ok") else 1
+    print(f"error: unknown op {args.op!r}", file=sys.stderr)
+    return 1
+
+
 def cmd_web(args) -> int:
     from . import web as web_mod
     return web_mod.serve(host=args.host, port=args.port)
@@ -274,6 +291,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-public", action="store_true",
         help="Skip the cloudflared tunnel; only the local listener.")
 
+    sp = sub.add_parser("inspector",
+        help="Start / stop / status of the embedded memory browser.")
+    sp.add_argument("op", choices=["start", "stop", "status"])
+    sp.add_argument("--port", type=int, default=None,
+        help="Port for evolutiondb-inspector (default 8765).")
+
     sp = sub.add_parser("web", help="Start the web UI.")
     sp.add_argument("--port", type=int, default=8771)
     sp.add_argument("--host", default="127.0.0.1")
@@ -294,6 +317,7 @@ def main(argv: Optional[list] = None) -> int:
         "set-agent":  cmd_set_agent,
         "client":     cmd_client,
         "tunnel":     cmd_tunnel,
+        "inspector":  cmd_inspector,
         "web":        cmd_web,
     }[args.cmd](args)
 
