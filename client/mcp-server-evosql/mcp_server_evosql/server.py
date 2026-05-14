@@ -40,7 +40,7 @@ from .embeddings import EmbeddingProvider, provider_from_env
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.3.0"
+SERVER_VERSION   = "1.4.0"
 
 
 # ---------------------------------------------------------------- #
@@ -189,7 +189,8 @@ class MemoryBackend:
 
     def search(self, user_id: str, query: str,
                 limit: int = 5,
-                tag: Optional[str] = None) -> List[Dict[str, Any]]:
+                tag: Optional[str] = None,
+                sender: Optional[str] = None) -> List[Dict[str, Any]]:
         rows = self._query(
             f"SELECT mem_namespace, mem_key, mem_value FROM "
             f"__mem_{self.memory} WHERE mem_namespace = "
@@ -203,6 +204,24 @@ class MemoryBackend:
         q_vec: Optional[List[float]] = None
         if self.embedder is not None:
             q_vec = self.embedder.embed(query)
+
+        # Resolve the sender filter through the identity catalog so
+        # "Onur" expands to every alias of the right human (and only
+        # that human). If the catalog has no match we fall back to a
+        # literal substring filter on the sender field.
+        sender_alias_set: Optional[set] = None
+        sender_literal: Optional[str]   = None
+        if sender:
+            from .identity import IdentityStore, _normalize_alias
+            ident_store = IdentityStore(self.conn, user_id)
+            try:
+                aliases = ident_store.resolve(sender)
+            except Exception:
+                aliases = []
+            if aliases:
+                sender_alias_set = {_normalize_alias(a) for a in aliases}
+            else:
+                sender_literal = sender.lower()
 
         out: List[Dict[str, Any]] = []
         for r in rows:
@@ -234,7 +253,21 @@ class MemoryBackend:
 
             if tag and tag.lower() not in [t.lower() for t in (rec.get("tags") or [])]:
                 continue
-            if final == 0 and not tag:
+
+            if sender_alias_set is not None:
+                from .identity import _normalize_alias
+                rec_snd = _normalize_alias(rec.get("sender") or "")
+                if rec_snd not in sender_alias_set:
+                    continue
+            elif sender_literal is not None:
+                if sender_literal not in (rec.get("sender") or "").lower():
+                    continue
+
+            # When the user supplied an explicit sender/tag filter we
+            # surface the row even if it has no keyword hits — the
+            # filter itself is the relevance signal.
+            if final == 0 and not tag and sender_alias_set is None \
+                    and sender_literal is None:
                 continue
 
             # Strip the embedding vector from the response — it's noise
@@ -339,16 +372,23 @@ TOOLS = [
             "question that depends on prior knowledge of the user. "
             "Semantic + keyword hybrid: when the server is configured "
             "with an embedding provider it ranks by meaning, and falls "
-            "back to substring matching otherwise. Supply both `query` "
-            "and (optionally) `tag` to narrow."
+            "back to substring matching otherwise. Pass `sender` to "
+            "limit results to one person — aliases of that person are "
+            "auto-resolved from the identity catalog, so a different "
+            "human whose name happens to share a substring will not "
+            "leak through. Pass `tag` to narrow by topic."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string"},
-                "tag":   {"type": "string",
+                "query":  {"type": "string"},
+                "tag":    {"type": "string",
                             "description": "Optional tag filter."},
-                "limit": {"type": "integer", "default": 5},
+                "sender": {"type": "string",
+                            "description": "Filter by one human. "
+                                "Aliases are expanded through the "
+                                "identity catalog when present."},
+                "limit":  {"type": "integer", "default": 5},
             },
             "required": ["query"],
         },
@@ -423,11 +463,14 @@ class MCPServer:
             q = args.get("query") or ""
             if not q.strip():
                 return {"error": "search_memory requires non-empty `query`"}
-            tag = args.get("tag")
-            limit = int(args.get("limit") or 5)
+            tag    = args.get("tag")
+            sender = args.get("sender")
+            limit  = int(args.get("limit") or 5)
             return {"ok": True,
                     "user_id": self.user_id,
-                    "results": b.search(self.user_id, q, limit=limit, tag=tag)}
+                    "results": b.search(self.user_id, q,
+                                          limit=limit, tag=tag,
+                                          sender=sender)}
 
         if name == "recent_memories":
             limit = int(args.get("limit") or 10)
