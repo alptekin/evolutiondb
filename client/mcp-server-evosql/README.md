@@ -175,6 +175,46 @@ File paths:
 After editing, restart the host (or for Gemini CLI, just run the next
 command — it re-reads its config on every launch).
 
+## Remote HTTP transport (web ChatGPT, Gemini app, etc.)
+
+Web-only MCP hosts cannot spawn a local process and so cannot use
+stdio. They speak the spec's "streamable HTTP" transport instead.
+Run the same server as an HTTP listener and point a tunnel at it:
+
+```bash
+# 1. Start the HTTP listener (default port 8970, path /mcp).
+export EVOSQL_MCP_AUTH_TOKEN=$(openssl rand -hex 24)
+evolutiondb-mcp-http
+
+# 2. Expose it through a tunnel. Pick whichever you already use.
+cloudflared tunnel --url http://127.0.0.1:8970
+#   → outputs https://random-words.trycloudflare.com
+# OR
+ngrok http 8970
+#   → outputs https://random.ngrok-free.app
+```
+
+In the web host's "MCP Connectors" or "Custom MCP server" panel,
+register:
+
+- URL: `https://your-tunnel-host/mcp`
+- Authorization: `Bearer <the token you just generated>`
+
+The server enforces three guards when bound to anything other than
+loopback:
+
+- Every request must carry the bearer token.
+- `Origin` (when present) must be on the allow-list. The defaults
+  cover `chat.openai.com`, `chatgpt.com`, `claude.ai`,
+  `gemini.google.com`. Override via `EVOSQL_MCP_ALLOWED_ORIGINS`
+  (comma-separated).
+- Bound to 127.0.0.1 by default. The CLI warns if you flip to
+  `0.0.0.0` without a token.
+
+Identical tool surface as stdio — `save_memory`, `search_memory`,
+`recent_memories`, `forget`, `list_tags`. New tools land in both
+transports at once because both go through the same `MCPServer.handle`.
+
 ## Configuration
 
 | Env var               | Default            | Purpose |

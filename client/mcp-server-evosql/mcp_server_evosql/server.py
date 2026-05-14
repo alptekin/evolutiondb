@@ -41,7 +41,7 @@ from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_e
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.6.0"
+SERVER_VERSION   = "1.7.0"
 
 
 # ---------------------------------------------------------------- #
