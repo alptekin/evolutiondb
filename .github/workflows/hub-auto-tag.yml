@@ -1,0 +1,69 @@
+name: Hub Auto-tag — push hub-v<version> on pyproject bump
+
+# When a PR that touches client/orchestrator/pyproject.toml lands on
+# `main`, this workflow reads the new version and pushes the matching
+# `hub-v<version>` tag automatically — which in turn triggers
+# `hub-release.yml` to build the wheel and publish to PyPI.
+#
+# Net effect: the only thing the maintainer does for a Hub
+# release is bump `project.version` in pyproject.toml inside a normal
+# PR. The release pipeline fires on merge with no further commands.
+#
+# Idempotent: if the tag already exists (e.g. a re-run after a CI
+# hiccup) the workflow exits cleanly without re-tagging.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/orchestrator/pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to push the tag
+
+concurrency:
+  group: hub-auto-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history so the tag attaches to HEAD
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read hub version
+        id: ver
+        working-directory: client/orchestrator
+        run: |
+          ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "Detected evolutiondb-hub version: ${ver}"
+
+      - name: Skip if tag already exists
+        id: gate
+        run: |
+          tag="hub-v${{ steps.ver.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists on origin — nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tag + push
+        if: steps.gate.outputs.exists == 'false'
+        env:
+          TAG: hub-v${{ steps.ver.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "evolutiondb-hub ${TAG} — auto-tagged from main"
+          git push origin "${TAG}"
+          echo "Pushed ${TAG}; hub-release.yml will fire on it."
