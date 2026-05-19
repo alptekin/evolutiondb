@@ -20,6 +20,14 @@ on:
       tag:
         description: "Existing tag to re-publish (e.g. browser-sync-v0.1.0)"
         required: true
+  # The auto-tag workflow pushes the tag with the default GITHUB_TOKEN,
+  # which by GitHub policy cannot trigger another workflow's `push`
+  # event. Listen for the auto-tag completion instead so the release
+  # chain runs end-to-end on a normal merge.
+  workflow_run:
+    workflows: ["Browser Sync Auto-tag — push browser-sync-v<version> on pyproject bump"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -29,12 +37,19 @@ jobs:
   pypi:
     name: Publish evolutiondb-browser-sync to PyPI
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
     environment:
       name: pypi-browser-sync
       url: https://pypi.org/project/evolutiondb-browser-sync/
     steps:
       - uses: actions/checkout@v4
         with:
+          # workflow_run fires from `main` (the auto-tag's branch) and
+          # carries no tag ref — derive the tag from pyproject below.
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: actions/setup-python@v5
@@ -45,13 +60,16 @@ jobs:
       - name: Verify version matches the tag
         working-directory: client/browser-sync
         run: |
-          input_tag="${{ github.event.inputs.tag }}"
-          if [ -n "$input_tag" ]; then
-            tag="$input_tag"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+            tag="browser-sync-v${ver}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            tag="${{ github.event.inputs.tag }}"
+            ver="${tag#browser-sync-v}"
           else
             tag="$GITHUB_REF_NAME"
+            ver="${tag#browser-sync-v}"
           fi
-          ver="${tag#browser-sync-v}"
           py_ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
           if [ "$ver" != "$py_ver" ]; then
             echo "::error::tag ${tag} (=> ${ver}) does not match pyproject version ${py_ver}"
