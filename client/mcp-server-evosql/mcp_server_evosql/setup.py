@@ -23,8 +23,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -39,6 +40,16 @@ class ClientSpec:
     paths: Dict[str, List[str]]
     env_override: str
     restart_hint: str
+    # Command the hub runs when the user clicks "install". Empty
+    # list means there is no scripted installer for this host yet
+    # and the UI must hide the install affordance.
+    install_cmd: List[str] = field(default_factory=list)
+    # Shell binary that proves the host is installed even when no
+    # config file has been generated yet (CLI apps create their
+    # config dir on first run). When set and on PATH, the hub
+    # treats the host as installed-but-unwired and lets `enable`
+    # bootstrap the config from scratch.
+    cli_command: str = ""
 
 
 CLIENTS: List[ClientSpec] = [
@@ -52,6 +63,20 @@ CLIENTS: List[ClientSpec] = [
         },
         env_override="EVOSQL_CLAUDE_CONFIG",
         restart_hint="Quit Claude Desktop (⌘Q on macOS) and reopen.",
+        install_cmd=["brew", "install", "--cask", "claude"],
+    ),
+    ClientSpec(
+        name="claude-code",
+        label="Claude Code (CLI)",
+        paths={
+            "darwin": ["~/.claude.json"],
+            "linux":  ["~/.claude.json"],
+            "win32":  ["~/.claude.json"],
+        },
+        env_override="EVOSQL_CLAUDE_CODE_CONFIG",
+        restart_hint="No restart needed; Claude Code re-reads MCP servers on every session.",
+        install_cmd=["npm", "install", "-g", "@anthropic-ai/claude-code"],
+        cli_command="claude",
     ),
     ClientSpec(
         name="chatgpt-desktop",
@@ -73,6 +98,19 @@ CLIENTS: List[ClientSpec] = [
         restart_hint=("Quit ChatGPT Desktop (⌘Q on macOS) and reopen, "
                       "then enable the evolutiondb-memory connector "
                       "under Settings → Connectors."),
+        install_cmd=["brew", "install", "--cask", "chatgpt"],
+    ),
+    ClientSpec(
+        name="chatgpt-cli",
+        label="OpenAI Codex (CLI)",
+        # Codex stores its config as TOML, not JSON, so wiring is
+        # left to the user for now — install only.
+        paths={"darwin": [], "linux": [], "win32": []},
+        env_override="EVOSQL_CODEX_CONFIG",
+        restart_hint=("Run `codex mcp add evolutiondb-memory uvx "
+                      "mcp-server-evolutiondb` once to wire memory."),
+        install_cmd=["npm", "install", "-g", "@openai/codex"],
+        cli_command="codex",
     ),
     ClientSpec(
         name="gemini-cli",
@@ -84,6 +122,20 @@ CLIENTS: List[ClientSpec] = [
         },
         env_override="EVOSQL_GEMINI_CONFIG",
         restart_hint="No restart needed; gemini-cli reads its config on every launch.",
+        install_cmd=["npm", "install", "-g", "@google/gemini-cli"],
+        cli_command="gemini",
+    ),
+    ClientSpec(
+        name="gemini-code",
+        label="Gemini Code Assist",
+        # VSCode/JetBrains extension — config is managed inside the
+        # editor, not as a standalone JSON file, so wiring is left
+        # to the user.
+        paths={"darwin": [], "linux": [], "win32": []},
+        env_override="EVOSQL_GEMINI_CODE_CONFIG",
+        restart_hint=("Reload VS Code (⌘⇧P → Reload Window) and sign in "
+                      "to Gemini Code Assist from the side panel."),
+        install_cmd=["code", "--install-extension", "Google.geminicodeassist"],
     ),
 ]
 
@@ -98,7 +150,13 @@ def resolve_path(spec: ClientSpec) -> Optional[Path]:
     The env override always wins. Otherwise we walk the per-platform
     candidate list and pick the first one whose parent directory
     already exists *or* the file itself exists (covers both fresh
-    installs and migrations between app names)."""
+    installs and migrations between app names).
+
+    Fallback for CLI hosts: when nothing matched but `cli_command`
+    is on PATH, return the first candidate path even if its dir
+    doesn't exist yet. CLI apps create the dir on first run, but
+    we want `enable` to be able to bootstrap the config before that
+    happens — `merge_config` already mkdir's the parent."""
     override = os.environ.get(spec.env_override, "").strip()
     if override:
         return Path(os.path.expanduser(override))
@@ -108,6 +166,10 @@ def resolve_path(spec: ClientSpec) -> Optional[Path]:
         p = Path(os.path.expanduser(raw))
         if p.exists() or p.parent.exists():
             return p
+
+    cli = getattr(spec, "cli_command", "")
+    if cli and candidates and shutil.which(cli):
+        return Path(os.path.expanduser(candidates[0]))
     return None
 
 

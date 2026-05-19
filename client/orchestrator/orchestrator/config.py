@@ -122,7 +122,10 @@ class AgentSpec:
 
 
 AGENTS: List[AgentSpec] = [
-    AgentSpec("claude-desktop",   "Claude Desktop",   "claude-desktop"),
-    AgentSpec("chatgpt-desktop",  "ChatGPT Desktop",  "chatgpt-desktop"),
-    AgentSpec("gemini-cli",       "Gemini CLI",       "gemini-cli"),
+    AgentSpec("claude-desktop",   "Claude Desktop",       "claude-desktop"),
+    AgentSpec("claude-code",      "Claude Code (CLI)",    "claude-code"),
+    AgentSpec("chatgpt-desktop",  "ChatGPT Desktop",      "chatgpt-desktop"),
+    AgentSpec("chatgpt-cli",      "OpenAI Codex (CLI)",   "chatgpt-cli"),
+    AgentSpec("gemini-cli",       "Gemini CLI",           "gemini-cli"),
+    AgentSpec("gemini-code",      "Gemini Code Assist",   "gemini-code"),
 ]
