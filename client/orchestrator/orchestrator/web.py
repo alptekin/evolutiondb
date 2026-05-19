@@ -365,13 +365,16 @@ async function loadClients() {
     card.className = "card";
     const badge = c.state === "wired" ? "wired"
                 : c.state === "unwired" ? "unwired" : "notinst";
+    const showInstall = c.state === "not_installed" && c.installable;
     card.innerHTML = `
       <h3>${h(c.label)} <span class="badge ${badge}">${h(c.state)}</span></h3>
       <div class="desc">config: <code style="font-family:ui-monospace">${
         h(c.config_path || "(not detected)")}</code></div>
       <div class="actions">
+        ${showInstall ? `<button class="primary" data-name="${h(name)}"
+                data-act="install" data-long="1">install</button>` : ""}
         <button class="primary" data-name="${h(name)}" data-act="enable"
-                ${c.state === "wired" ? "disabled" : ""}>enable</button>
+                ${c.state === "wired" || c.state === "not_installed" ? "disabled" : ""}>enable</button>
         <button class="danger"  data-name="${h(name)}" data-act="disable"
                 ${c.state === "wired" ? "" : "disabled"}>disable</button>
       </div>
@@ -382,12 +385,22 @@ async function loadClients() {
   root.querySelectorAll("button[data-act]").forEach(b => {
     b.addEventListener("click", async () => {
       const name = b.dataset.name, act = b.dataset.act;
+      const errEl = root.querySelector(`[data-err="${name}"]`);
+      const orig  = b.textContent;
       b.disabled = true;
+      if (b.dataset.long) {
+        b.textContent = "installing…";
+        errEl.textContent = "this can take several minutes "
+                            + "(brew/npm download + extract).";
+      }
       const r = await api("POST", `/api/clients/${name}/${act}`);
       if (!r.ok) {
-        root.querySelector(`[data-err="${name}"]`).textContent =
-          r.error || "operation failed";
+        errEl.textContent = (r.error || "operation failed")
+                            + (r.tail ? " — " + r.tail.split("\\n").slice(-3).join(" / ") : "");
+      } else if (b.dataset.long) {
+        errEl.textContent = "installed. " + (r.log ? "log: " + r.log : "");
       }
+      b.textContent = orig;
       loadClients();
     });
   });
@@ -418,26 +431,36 @@ def _client_state(spec) -> dict:
         from mcp_server_evosql import setup as mcp_setup
     except ImportError:
         return {"label": spec.label, "state": "missing-mcp-package",
-                "config_path": None}
+                "config_path": None, "installable": False}
     real_spec = next((c for c in mcp_setup.CLIENTS
                        if c.name == spec.name), None)
     if real_spec is None:
         return {"label": spec.label, "state": "unknown",
-                "config_path": None}
+                "config_path": None, "installable": False}
+    installable = bool(getattr(real_spec, "install_cmd", []))
+    cli = getattr(real_spec, "cli_command", "")
     path = mcp_setup.resolve_path(real_spec)
     if path is None or not path.exists():
+        import shutil as _sh
+        if cli and _sh.which(cli):
+            # Binary is on PATH but the host hasn't created its
+            # config yet — bootstrap-from-scratch is supported, so
+            # surface as unwired (install button gone, enable on).
+            return {"label": spec.label, "state": "unwired",
+                    "config_path": str(path) if path else None,
+                    "installable": False}
         return {"label": spec.label, "state": "not_installed",
-                "config_path": None}
+                "config_path": None, "installable": installable}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         present = bool((data.get("mcpServers") or {})
                         .get("evolutiondb-memory"))
     except Exception:
         return {"label": spec.label, "state": "unreadable",
-                "config_path": str(path)}
+                "config_path": str(path), "installable": False}
     return {"label": spec.label,
              "state": "wired" if present else "unwired",
-             "config_path": str(path)}
+             "config_path": str(path), "installable": False}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -601,6 +624,10 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send_json(200, {"ok": True,
                                             "path": str(path),
                                             "removed": True})
+        if op == "install":
+            from . import client_install
+            return self._send_json(200, client_install.install(
+                spec.name, list(getattr(spec, "install_cmd", []))))
         return self._send_json(404, {"ok": False, "error": "unknown op"})
 
 
