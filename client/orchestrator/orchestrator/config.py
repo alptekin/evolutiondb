@@ -110,6 +110,21 @@ CONNECTORS: List[ConnectorSpec] = [
         poll_default=900,
         indexes=["summary", "attendees", "location", "deep link"],
     ),
+    ConnectorSpec(
+        name="browser",
+        label="Browser History",
+        cli_entry="evolutiondb-browser-sync",
+        module_name="browser_sync",
+        pip_package="evolutiondb-browser-sync",
+        description=("Chrome, Edge, Firefox, Brave, Arc, Vivaldi "
+                      "and Opera history on macOS, Linux and Windows."),
+        requires_auth=False,
+        auth_subcommand=None,
+        auth_hint=("No auth. The sync reads each browser's local "
+                   "SQLite history file directly."),
+        poll_default=1800,
+        indexes=["url", "title", "visit count", "last visit"],
+    ),
 ]
 
 
