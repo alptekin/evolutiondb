@@ -44,7 +44,11 @@ class GmailClient:
               retried: bool = False) -> Dict:
         url = f"{GMAIL_API}{path}"
         if params:
-            url = f"{url}?{urllib.parse.urlencode(params)}"
+            # doseq=True so list-valued params (e.g. metadataHeaders)
+            # become repeated query parameters as the Gmail API
+            # expects, instead of being comma-joined into one value
+            # that the API treats as a literal header name.
+            url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
         req = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {self._token_provider()}",
             "Accept":        "application/json",
@@ -105,7 +109,8 @@ class GmailClient:
         return self._get(
             f"/users/me/messages/{msg_id}",
             {"format": "metadata",
-             "metadataHeaders": "From,To,Cc,Subject,Date,Message-ID"})
+             "metadataHeaders": ["From", "To", "Cc", "Subject",
+                                  "Date", "Message-ID"]})
 
     def list_labels(self) -> List[Dict]:
         resp = self._get("/users/me/labels")
