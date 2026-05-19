@@ -141,6 +141,92 @@ CLIENTS: List[ClientSpec] = [
 
 
 # ---------------------------------------------------------------- #
+#  Custom (user-added) clients                                      #
+# ---------------------------------------------------------------- #
+_CUSTOM_CLIENTS_PATH = Path(
+    "~/.evosql/custom_clients.json").expanduser()
+
+
+def _hydrate_client(d):
+    try:
+        return ClientSpec(
+            name         = str(d["name"]),
+            label        = str(d.get("label", d["name"])),
+            paths        = dict(d.get("paths") or {}),
+            env_override = str(d.get("env_override", "")),
+            restart_hint = str(d.get("restart_hint", "")),
+            install_cmd  = list(d.get("install_cmd") or []),
+            cli_command  = str(d.get("cli_command", "")),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _load_custom_clients():
+    if not _CUSTOM_CLIENTS_PATH.is_file():
+        return
+    try:
+        raw = json.loads(
+            _CUSTOM_CLIENTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(raw, list):
+        return
+    existing = {c.name for c in CLIENTS}
+    for d in raw:
+        spec = _hydrate_client(d)
+        if spec and spec.name not in existing:
+            CLIENTS.append(spec)
+            existing.add(spec.name)
+
+
+_load_custom_clients()
+
+
+def add_custom_client(spec_dict) -> dict:
+    """Persist a new ClientSpec to disk and append to CLIENTS."""
+    name = (spec_dict.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "name is required"}
+    if any(c.name == name for c in CLIENTS):
+        return {"ok": False,
+                "error": f"client '{name}' already exists"}
+
+    spec = _hydrate_client(spec_dict)
+    if spec is None:
+        return {"ok": False, "error": "could not parse spec"}
+
+    items = []
+    if _CUSTOM_CLIENTS_PATH.is_file():
+        try:
+            items = json.loads(
+                _CUSTOM_CLIENTS_PATH.read_text(encoding="utf-8"))
+            if not isinstance(items, list):
+                items = []
+        except (OSError, json.JSONDecodeError):
+            items = []
+
+    items.append({
+        "name":         spec.name,
+        "label":        spec.label,
+        "paths":        spec.paths,
+        "env_override": spec.env_override,
+        "restart_hint": spec.restart_hint,
+        "install_cmd":  spec.install_cmd,
+        "cli_command":  spec.cli_command,
+    })
+    try:
+        _CUSTOM_CLIENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CUSTOM_CLIENTS_PATH.write_text(
+            json.dumps(items, indent=2), encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"failed to persist: {exc}"}
+
+    CLIENTS.append(spec)
+    return {"ok": True, "spec": items[-1]}
+
+
+# ---------------------------------------------------------------- #
 #  Path resolution                                                  #
 # ---------------------------------------------------------------- #
 def resolve_path(spec: ClientSpec) -> Optional[Path]:
