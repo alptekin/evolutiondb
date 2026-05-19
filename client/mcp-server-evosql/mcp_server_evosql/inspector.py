@@ -98,14 +98,19 @@ INDEX_HTML = """<!doctype html>
     <option value="">(any source)</option>
     <option>teams</option><option>gmail</option>
     <option>slack</option><option>github</option>
+    <option>calendar</option><option>browser</option>
     <option>manual</option>
   </select>
   <input id="sender" placeholder="sender (substring)" size="22" />
   <select id="limit">
     <option>20</option><option selected>50</option>
     <option>100</option><option>500</option>
+    <option>1000</option><option>2000</option>
   </select>
   <button onclick="load()">refresh</button>
+  <span style="flex:1"></span>
+  <button id="prev" onclick="prev()">◀ prev</button>
+  <button id="next" onclick="next()">next ▶</button>
 </div>
 <table>
 <thead><tr>
@@ -118,12 +123,19 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+let _offset = 0;
+function _ts(m) {
+  return m.modified_at || m.last_visited_at || m.updated_at
+      || m.created_at  || m.sent_at         || m.start
+      || m.created     || '';
+}
 async function load() {
   const params = new URLSearchParams();
   for (const id of ['q','source','sender','limit']) {
     const v = document.getElementById(id).value.trim();
     if (v) params.set(id, v);
   }
+  params.set('offset', String(_offset));
   const r = await fetch('/api/memories?' + params).then(r => r.json());
   const tbody = document.getElementById('rows');
   tbody.innerHTML = '';
@@ -132,7 +144,7 @@ async function load() {
   } else {
     for (const m of r.results) {
       const tr = document.createElement('tr');
-      const when = m.modified_at || m.created_at || m.sent_at || '';
+      const when = _ts(m);
       const src  = (m.source || 'manual').toLowerCase();
       const chat = m.chat_name || m.repo || m.channel_name || '';
       tr.innerHTML = `
@@ -150,20 +162,40 @@ async function load() {
       tbody.appendChild(tr);
     }
   }
+  const from = r.total === 0 ? 0 : (r.offset || 0) + 1;
+  const to   = (r.offset || 0) + (r.shown || 0);
   document.getElementById('count').textContent =
-    `${r.shown} of ${r.total} record${r.total === 1 ? '' : 's'}`;
+    r.total === 0
+      ? '0 records'
+      : `${from}–${to} of ${r.total} record${r.total === 1 ? '' : 's'}`;
+  document.getElementById('prev').disabled = (r.offset || 0) <= 0;
+  document.getElementById('next').disabled =
+    (r.offset || 0) + (r.shown || 0) >= (r.total || 0);
+}
+function _limit() {
+  return Math.max(1, parseInt(
+    document.getElementById('limit').value, 10) || 50);
+}
+function prev() {
+  _offset = Math.max(0, _offset - _limit());
+  load();
+}
+function next() {
+  _offset = _offset + _limit();
+  load();
 }
 async function del(key) {
   if (!confirm('Delete this record?\\n\\n' + key)) return;
   await fetch('/api/memory/' + encodeURIComponent(key), {method: 'DELETE'});
   load();
 }
+function _resetAndLoad() { _offset = 0; load(); }
 ['q','sender'].forEach(id => {
   document.getElementById(id).addEventListener('keydown',
-    e => { if (e.key === 'Enter') load(); });
+    e => { if (e.key === 'Enter') _resetAndLoad(); });
 });
 ['source','limit'].forEach(id => {
-  document.getElementById(id).addEventListener('change', load);
+  document.getElementById(id).addEventListener('change', _resetAndLoad);
 });
 load();
 </script>
@@ -211,12 +243,30 @@ def filter_records(rows: List[Dict[str, Any]], *,
             if q not in haystack:
                 continue
         out.append(r)
-    out.sort(key=lambda x: (x.get("modified_at")
-                             or x.get("created_at")
-                             or x.get("sent_at")
-                             or ""),
-              reverse=True)
+    out.sort(key=_best_ts, reverse=True)
     return out
+
+
+# Each connector stamps its own timestamp field; pick the latest
+# ISO-formatted candidate so all sources sort against each other.
+_TS_FIELDS = (
+    "modified_at",      # Teams, generic
+    "last_visited_at",  # browser-sync
+    "updated_at",       # GitHub, generic
+    "created_at",       # most connectors
+    "sent_at",          # Gmail
+    "start",            # Calendar (event start time)
+    "created",          # alt naming
+)
+
+
+def _best_ts(record: Dict[str, Any]) -> str:
+    best = ""
+    for k in _TS_FIELDS:
+        v = record.get(k)
+        if isinstance(v, str) and v > best:
+            best = v
+    return best
 
 
 # ---------------------------------------------------------------- #
@@ -303,6 +353,10 @@ class InspectorHandler(BaseHTTPRequestHandler):
             limit = max(1, min(2000, int(qs.get("limit", ["50"])[0])))
         except ValueError:
             limit = 50
+        try:
+            offset = max(0, int(qs.get("offset", ["0"])[0]))
+        except ValueError:
+            offset = 0
         ns    = _namespace()
         store = _memory_store_name()
 
@@ -334,10 +388,13 @@ class InspectorHandler(BaseHTTPRequestHandler):
 
         filtered = filter_records(records, q=q, source=source, sender=sender)
         total = len(filtered)
+        page  = filtered[offset:offset + limit]
         self._send_json(200, {
             "total":   total,
-            "shown":   min(total, limit),
-            "results": filtered[:limit],
+            "shown":   len(page),
+            "offset":  offset,
+            "limit":   limit,
+            "results": page,
         })
 
     def _handle_identities(self):
