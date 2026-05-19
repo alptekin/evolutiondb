@@ -34,7 +34,8 @@ from . import state as state_mod
 from . import supervisor as sup
 
 
-DEFAULT_PORT = 8970
+DEFAULT_PORT       = 8970
+DEFAULT_OAUTH_PORT = 8972
 LOG_DIR = Path("~/.evosql/logs").expanduser()
 _CFD_URL_RE = re.compile(r"https://[a-z0-9\-]+\.trycloudflare\.com")
 
@@ -46,23 +47,29 @@ def status() -> Dict[str, object]:
     state  = state_mod.load()
     tunnel = state.get("tunnel") or {}
 
-    http_pid = tunnel.get("http_pid") or 0
-    cfd_pid  = tunnel.get("cloudflared_pid") or 0
+    http_pid  = tunnel.get("http_pid") or 0
+    cfd_pid   = tunnel.get("cloudflared_pid") or 0
+    oauth_pid = tunnel.get("oauth_pid") or 0
 
-    http_alive = bool(http_pid) and sup.pid_alive(http_pid)
-    cfd_alive  = bool(cfd_pid)  and sup.pid_alive(cfd_pid)
+    http_alive  = bool(http_pid)  and sup.pid_alive(http_pid)
+    cfd_alive   = bool(cfd_pid)   and sup.pid_alive(cfd_pid)
+    oauth_alive = bool(oauth_pid) and sup.pid_alive(oauth_pid)
 
     # If only one half is alive, surface that — the state file got
     # cleaned up unevenly between runs.
     return {
-        "running":        http_alive,
-        "http_pid":       http_pid if http_alive else None,
-        "port":           tunnel.get("port") or DEFAULT_PORT,
-        "token":          tunnel.get("token") if http_alive else None,
-        "cloudflared":    cfd_alive,
+        "running":         http_alive,
+        "http_pid":        http_pid if http_alive else None,
+        "port":            tunnel.get("port") or DEFAULT_PORT,
+        "token":           tunnel.get("token") if http_alive else None,
+        "oauth":           oauth_alive,
+        "oauth_pid":       oauth_pid if oauth_alive else None,
+        "oauth_port":      tunnel.get("oauth_port") or DEFAULT_OAUTH_PORT,
+        "cloudflared":     cfd_alive,
         "cloudflared_pid": cfd_pid if cfd_alive else None,
-        "public_url":     tunnel.get("public_url") if cfd_alive else None,
-        "log_http":       str(LOG_DIR / "mcp-http.log"),
+        "public_url":      tunnel.get("public_url") if cfd_alive else None,
+        "log_http":        str(LOG_DIR / "mcp-http.log"),
+        "log_oauth":       str(LOG_DIR / "mcp-oauth.log"),
         "log_cloudflared": str(LOG_DIR / "cloudflared.log"),
     }
 
@@ -115,24 +122,75 @@ def start(*, port: Optional[int] = None,
         "port":             port,
         "token":            token,
         "started_at":       int(time.time()),
+        "oauth_pid":        None,
+        "oauth_port":       None,
         "cloudflared_pid":  None,
         "public_url":       None,
     })
     state_mod.save(state)
 
     result: Dict[str, object] = {
-        "ok":       True,
-        "http_pid": proc.pid,
-        "port":     port,
-        "token":    token,
+        "ok":        True,
+        "http_pid":  proc.pid,
+        "port":      port,
+        "token":     token,
         "local_url": f"http://127.0.0.1:{port}/mcp",
     }
 
+    # OAuth proxy in front of the bearer-only http_transport so that
+    # ChatGPT-class clients (which require OAuth 2.1) can connect.
+    oauth = _start_oauth_proxy(upstream_port=port, upstream_token=token)
+    result["oauth_proxy"] = oauth
+    if not oauth.get("ok"):
+        # If the proxy failed, fall back to exposing http_transport
+        # directly — same behaviour as before this feature landed.
+        public_port = port
+    else:
+        public_port = int(oauth.get("port") or DEFAULT_OAUTH_PORT)
+
     if tunnel:
-        cfd = _start_cloudflared(port)
+        cfd = _start_cloudflared(public_port)
         result["cloudflared"] = cfd
 
     return result
+
+
+def _start_oauth_proxy(*, upstream_port: int,
+                        upstream_token: str) -> Dict[str, object]:
+    binary = shutil.which("evolutiondb-mcp-oauth")
+    if binary is None:
+        return {"ok": False, "error": (
+            "evolutiondb-mcp-oauth not on PATH. Reinstall "
+            "`pip install mcp-server-evolutiondb` to get the proxy.")}
+
+    port = int(os.environ.get("EVOSQL_OAUTH_PROXY_PORT",
+                                str(DEFAULT_OAUTH_PORT)))
+    log_fh = open(LOG_DIR / "mcp-oauth.log", "ab", buffering=0)
+    env = os.environ.copy()
+    env["EVOSQL_MCP_UPSTREAM"]     = f"http://127.0.0.1:{upstream_port}/mcp"
+    env["EVOSQL_MCP_AUTH_TOKEN"]   = upstream_token
+    env["EVOSQL_OAUTH_PROXY_PORT"] = str(port)
+
+    proc = subprocess.Popen(
+        [binary, "--host", "127.0.0.1", "--port", str(port)],
+        stdout=log_fh, stderr=log_fh, stdin=subprocess.DEVNULL,
+        start_new_session=True, close_fds=True, env=env,
+    )
+    time.sleep(0.3)
+    if proc.poll() is not None:
+        return {"ok": False, "error": (
+            f"evolutiondb-mcp-oauth exited immediately "
+            f"(rc={proc.returncode}). See {LOG_DIR / 'mcp-oauth.log'}")}
+
+    state = state_mod.load()
+    state.setdefault("tunnel", {}).update({
+        "oauth_pid":  proc.pid,
+        "oauth_port": port,
+    })
+    state_mod.save(state)
+
+    return {"ok": True, "pid": proc.pid, "port": port,
+            "local_url": f"http://127.0.0.1:{port}/mcp"}
 
 
 def _start_cloudflared(port: int) -> Dict[str, object]:
@@ -197,7 +255,7 @@ def stop() -> Dict[str, object]:
     state  = state_mod.load()
     tunnel = state.get("tunnel") or {}
     killed = []
-    for key in ("cloudflared_pid", "http_pid"):
+    for key in ("cloudflared_pid", "oauth_pid", "http_pid"):
         pid = tunnel.get(key) or 0
         if pid and sup.pid_alive(pid):
             try:
@@ -209,10 +267,10 @@ def stop() -> Dict[str, object]:
     deadline = time.time() + 2.0
     while time.time() < deadline:
         if all(not sup.pid_alive(tunnel.get(k) or 0)
-                for k in ("cloudflared_pid", "http_pid")):
+                for k in ("cloudflared_pid", "oauth_pid", "http_pid")):
             break
         time.sleep(0.1)
-    for key in ("cloudflared_pid", "http_pid"):
+    for key in ("cloudflared_pid", "oauth_pid", "http_pid"):
         pid = tunnel.get(key) or 0
         if pid and sup.pid_alive(pid):
             try:
