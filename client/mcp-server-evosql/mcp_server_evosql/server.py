@@ -209,7 +209,7 @@ class MemoryBackend:
         rows = self._query(
             f"SELECT mem_namespace, mem_key, mem_value FROM "
             f"__mem_{self.memory} WHERE mem_namespace = "
-            f"'{_e(user_id)}' LIMIT 512"
+            f"'{_e(user_id)}' LIMIT 10000"
         )
         q_terms = [w for w in query.lower().split() if len(w) > 1]
 
@@ -246,8 +246,24 @@ class MemoryBackend:
                 rec = {"fact": r[2]}
             if not rec or not rec.get("fact"):
                 continue
-            haystack = (rec.get("fact", "").lower() + " " +
-                        " ".join(rec.get("tags") or []).lower())
+            # Match across every text field a connector might use, not
+            # only `fact`. Teams uses `text`, gmail uses `subject` +
+            # `snippet`, calendar uses `summary`, browser uses `title`
+            # + `url`. Anything keyword-relevant goes in here.
+            haystack = " ".join([
+                str(rec.get("fact")     or ""),
+                str(rec.get("text")     or ""),
+                str(rec.get("snippet")  or ""),
+                str(rec.get("body")     or ""),
+                str(rec.get("subject")  or ""),
+                str(rec.get("summary")  or ""),
+                str(rec.get("title")    or ""),
+                str(rec.get("url")      or ""),
+                str(rec.get("sender")   or ""),
+                str(rec.get("from")     or ""),
+                str(rec.get("author")   or ""),
+                " ".join(rec.get("tags") or []),
+            ]).lower()
 
             kw_hits = sum(1 for w in q_terms if w in haystack)
             kw_score = kw_hits / max(len(q_terms), 1)
@@ -296,7 +312,7 @@ class MemoryBackend:
         rows = self._query(
             f"SELECT mem_namespace, mem_key, mem_value FROM "
             f"__mem_{self.memory} WHERE mem_namespace = "
-            f"'{_e(user_id)}' LIMIT 512"
+            f"'{_e(user_id)}' LIMIT 10000"
         )
         out: List[Dict[str, Any]] = []
         for r in rows:
@@ -322,7 +338,7 @@ class MemoryBackend:
         rows = self._query(
             f"SELECT mem_namespace, mem_value FROM "
             f"__mem_{self.memory} WHERE mem_namespace = "
-            f"'{_e(user_id)}' LIMIT 512"
+            f"'{_e(user_id)}' LIMIT 10000"
         )
         counts: Dict[str, int] = {}
         for r in rows:
