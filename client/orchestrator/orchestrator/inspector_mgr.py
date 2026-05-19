@@ -26,6 +26,25 @@ DEFAULT_PORT = 8765
 LOG_DIR = Path("~/.evosql/logs").expanduser()
 
 
+def _resolve_user_id() -> str:
+    """Pick the MCP namespace the inspector should browse.
+
+    Env wins (so the operator can override per-launch). State file
+    is the durable fallback — once a real user_id flows through
+    here we persist it, so future hub restarts without the env still
+    open the right namespace. Last-resort default matches the
+    server-side default so behaviour stays predictable."""
+    state  = state_mod.load()
+    env_id = os.environ.get("MCP_USER_ID", "").strip()
+    if env_id:
+        if state_mod.get_user_id(state) != env_id:
+            state_mod.set_user_id(state, env_id)
+            state_mod.save(state)
+        return env_id
+    saved = state_mod.get_user_id(state)
+    return saved or "default_user"
+
+
 def status() -> Dict[str, object]:
     state    = state_mod.load()
     inspect  = state.get("inspector") or {}
@@ -60,10 +79,13 @@ def start(*, port: Optional[int] = None) -> Dict[str, object]:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_fh = open(LOG_DIR / "inspector.log", "ab", buffering=0)
 
+    spawn_env = os.environ.copy()
+    spawn_env["MCP_USER_ID"] = _resolve_user_id()
+
     proc = subprocess.Popen(
         [binary, "--host", "127.0.0.1", "--port", str(port)],
         stdout=log_fh, stderr=log_fh, stdin=subprocess.DEVNULL,
-        start_new_session=True, close_fds=True,
+        start_new_session=True, close_fds=True, env=spawn_env,
     )
     time.sleep(0.3)
     if proc.poll() is not None:
