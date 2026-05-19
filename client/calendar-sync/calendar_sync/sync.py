@@ -274,7 +274,10 @@ def main(argv: Optional[list] = None) -> int:
                         help="Run consent flow and exit")
     parser.add_argument("--once",     action="store_true")
     parser.add_argument("--interval", type=int)
-    parser.add_argument("--since",    default="30d")
+    # 30d hits Google Calendar's exact-30-day ceiling for
+    # `updatedMin` + `showDeleted=true` and the API responds 410.
+    # Step in one day to stay inside the supported window.
+    parser.add_argument("--since",    default="29d")
     parser.add_argument("--dry-run",  action="store_true")
     parser.add_argument("--env-file", default=".env")
     args = parser.parse_args(argv)
