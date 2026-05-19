@@ -72,3 +72,16 @@ def remove_source_pid(state: Dict[str, Any], name: str) -> None:
     entry = get_source(state, name)
     entry.pop("pid", None)
     entry.pop("started_at", None)
+
+
+def get_user_id(state: Dict[str, Any]) -> Optional[str]:
+    """Return the namespace label the hub uses when spawning helpers
+    (inspector, ad-hoc connectors). Set once via `set_user_id`; lives
+    alongside source state so the value survives hub restarts even
+    when the operator forgets to export `MCP_USER_ID`."""
+    v = state.get("user_id")
+    return v if isinstance(v, str) and v else None
+
+
+def set_user_id(state: Dict[str, Any], user_id: str) -> None:
+    state["user_id"] = user_id
