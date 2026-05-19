@@ -64,6 +64,7 @@ evolutiondb-identity   = "mcp_server_evosql.identity_cli:main"
 evolutiondb-inspector  = "mcp_server_evosql.inspector:main"
 evolutiondb-tags       = "mcp_server_evosql.tagger_cli:main"
 evolutiondb-mcp-http   = "mcp_server_evosql.http_transport:main"
+evolutiondb-mcp-oauth  = "mcp_server_evosql.oauth_proxy:main"
 
 [tool.setuptools.packages.find]
 include = ["mcp_server_evosql*"]
