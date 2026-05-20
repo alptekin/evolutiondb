@@ -110,7 +110,23 @@ class MemoryStore:
             f"('{_e(self.namespace)}','{_e(WATERMARK_KEY)}','{_e(value)}')"))
 
     def put_record(self, key: str, record: Dict) -> None:
+        # MEMORY PUT acts as upsert for small payloads but reports a
+        # spurious "duplicate key" error for larger ones; clearing the
+        # existing row first sidesteps that path. The DELETE is cheap
+        # and harmless when no row exists yet.
         value = json.dumps(record, ensure_ascii=False)
-        self._retry(lambda cur: cur.execute(
-            f"MEMORY PUT INTO {self.store} VALUES "
-            f"('{_e(self.namespace)}','{_e(key)}','{_e(value)}')"))
+        def run(cur):
+            cur.execute(
+                f"DELETE FROM __mem_{self.store} "
+                f"WHERE mem_namespace = '{_e(self.namespace)}' "
+                f"AND mem_key = '{_e(key)}'")
+            cur.execute(
+                f"MEMORY PUT INTO {self.store} VALUES "
+                f"('{_e(self.namespace)}','{_e(key)}','{_e(value)}')")
+        try:
+            self._retry(run)
+        except Exception as exc:
+            print(f"[notes-sync] put_record FAILED key={key!r} "
+                  f"value_len={len(value)} err={exc}",
+                  file=sys.stderr, flush=True)
+            raise
