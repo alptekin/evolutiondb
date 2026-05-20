@@ -23,9 +23,175 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Iterator, Optional
+from typing import Dict, Iterator, List, Optional
+from urllib.parse import urlparse
 
 from .scanner import CHROMIUM, FIREFOX, Profile
+
+
+# ---------------------------------------------------------------- #
+#  Content tagging                                                  #
+# ---------------------------------------------------------------- #
+# A visit's `tags` field starts out generic ("browser", "history",
+# "chrome"). _content_tags() inspects the URL host (and a little of
+# the path, for YouTube) and adds topical labels so the catalog can
+# answer questions like "what did I read about coding this week" or
+# "which videos did I watch" without scanning every URL string.
+#
+# Lookups are exact-suffix matches on the registrable host; this is
+# cheaper than parsing tld registries and catches the long tail of
+# regional clones (e.g. youtube.com vs m.youtube.com) without false
+# positives.
+
+_DOMAIN_TAGS: Dict[str, List[str]] = {
+    # Video
+    "youtube.com":           ["youtube", "video"],
+    "youtu.be":              ["youtube", "video"],
+    "vimeo.com":             ["video"],
+    "netflix.com":           ["video", "streaming"],
+    "disneyplus.com":        ["video", "streaming"],
+    "twitch.tv":             ["video", "streaming"],
+    # Code / dev
+    "github.com":            ["github", "code"],
+    "gist.github.com":       ["github", "code"],
+    "gitlab.com":            ["gitlab", "code"],
+    "bitbucket.org":         ["bitbucket", "code"],
+    "stackoverflow.com":     ["stackoverflow", "code"],
+    "stackexchange.com":     ["stackoverflow", "code"],
+    "pypi.org":              ["code", "docs"],
+    "npmjs.com":             ["code", "docs"],
+    "crates.io":             ["code", "docs"],
+    # Docs
+    "developer.mozilla.org": ["docs"],
+    "docs.python.org":       ["docs"],
+    "react.dev":             ["docs"],
+    "nodejs.org":            ["docs"],
+    "kubernetes.io":         ["docs"],
+    "postgresql.org":        ["docs"],
+    # Search engines
+    "google.com":            ["search"],
+    "bing.com":              ["search"],
+    "duckduckgo.com":        ["search"],
+    # AI
+    "chatgpt.com":           ["ai"],
+    "openai.com":            ["ai"],
+    "claude.ai":             ["ai"],
+    "anthropic.com":         ["ai"],
+    "gemini.google.com":     ["ai"],
+    "perplexity.ai":         ["ai"],
+    "huggingface.co":        ["ai"],
+    # Social
+    "twitter.com":           ["twitter", "social"],
+    "x.com":                 ["twitter", "social"],
+    "linkedin.com":          ["linkedin", "social"],
+    "reddit.com":            ["reddit", "social"],
+    "facebook.com":          ["facebook", "social"],
+    "instagram.com":         ["instagram", "social"],
+    "threads.net":           ["social"],
+    "mastodon.social":       ["social"],
+    "bsky.app":              ["social"],
+    # Reading / blogs
+    "medium.com":            ["blog", "reading"],
+    "dev.to":                ["blog", "reading"],
+    "substack.com":          ["blog", "reading"],
+    "hashnode.com":          ["blog", "reading"],
+    "news.ycombinator.com":  ["hn", "news"],
+    # News (intl)
+    "bbc.com":               ["news"],
+    "bbc.co.uk":             ["news"],
+    "cnn.com":               ["news"],
+    "nytimes.com":           ["news"],
+    "reuters.com":           ["news"],
+    "theguardian.com":       ["news"],
+    "wsj.com":               ["news"],
+    # News (TR)
+    "hurriyet.com.tr":       ["news"],
+    "milliyet.com.tr":       ["news"],
+    "sabah.com.tr":          ["news"],
+    "sozcu.com.tr":          ["news"],
+    "haberturk.com":         ["news"],
+    "ntv.com.tr":            ["news"],
+    "cnnturk.com":           ["news"],
+    "t24.com.tr":            ["news"],
+    # Shopping
+    "amazon.com":            ["shopping"],
+    "amazon.com.tr":         ["shopping"],
+    "ebay.com":              ["shopping"],
+    "trendyol.com":          ["shopping"],
+    "hepsiburada.com":       ["shopping"],
+    "n11.com":               ["shopping"],
+    "gittigidiyor.com":      ["shopping"],
+    # Email / productivity
+    "mail.google.com":       ["email"],
+    "outlook.live.com":      ["email"],
+    "outlook.office.com":    ["email"],
+    "calendar.google.com":   ["calendar"],
+    "drive.google.com":      ["docs", "storage"],
+    "docs.google.com":       ["docs"],
+    "notion.so":             ["docs", "notes"],
+    "slack.com":             ["chat", "work"],
+    "teams.microsoft.com":   ["chat", "work"],
+    "discord.com":           ["chat"],
+    # Maps / travel
+    "maps.google.com":       ["maps"],
+    "google.com/maps":       ["maps"],
+    "booking.com":           ["travel"],
+    "airbnb.com":            ["travel"],
+    # Banking (TR)
+    "garanti.com.tr":        ["banking", "finance"],
+    "garantibbva.com.tr":    ["banking", "finance"],
+    "akbank.com":            ["banking", "finance"],
+    "isbank.com.tr":         ["banking", "finance"],
+    "yapikredi.com.tr":      ["banking", "finance"],
+    "ziraatbank.com.tr":     ["banking", "finance"],
+    "denizbank.com":         ["banking", "finance"],
+    "finansbank.com.tr":     ["banking", "finance"],
+}
+
+
+def _host(url: str) -> str:
+    try:
+        h = urlparse(url).hostname or ""
+    except Exception:
+        return ""
+    return h.lower().lstrip(".")
+
+
+def _content_tags(url: str) -> List[str]:
+    """Derive topical tags from the URL. The host is matched as a
+    progressively shortened suffix so `m.youtube.com` and
+    `music.youtube.com` both hit the `youtube.com` rule.
+    """
+    host = _host(url)
+    if not host:
+        return []
+    parts = host.split(".")
+    tags: List[str] = []
+    seen = set()
+    for i in range(len(parts) - 1):
+        candidate = ".".join(parts[i:])
+        for t in _DOMAIN_TAGS.get(candidate, ()):
+            if t not in seen:
+                seen.add(t)
+                tags.append(t)
+        if tags:
+            break
+    # YouTube path nuances — only meaningful for youtube hosts.
+    if "youtube" in tags:
+        try:
+            path = urlparse(url).path or ""
+        except Exception:
+            path = ""
+        if path.startswith("/shorts/"):
+            tags.append("shorts")
+        elif path.startswith("/watch"):
+            tags.append("watch")
+        elif path.startswith("/@") or path.startswith("/channel/") \
+                or path.startswith("/c/") or path.startswith("/user/"):
+            tags.append("channel")
+        elif path.startswith("/playlist"):
+            tags.append("playlist")
+    return tags
 
 
 _CHROME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
@@ -139,7 +305,8 @@ def _build_record(profile: Profile, url: str, title: str,
         "visit_count":     int(visit_count or 0),
         "last_visited_at": last_iso,
         "url_hash":        url_hash,
-        "tags":            ["browser", "history", profile.browser],
+        "tags":            ["browser", "history", profile.browser,
+                              *_content_tags(url)],
     }
 
 
