@@ -1,0 +1,76 @@
+name: Notion Sync Release — PyPI
+
+on:
+  push:
+    tags: ["notion-sync-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to re-publish (e.g. notion-sync-v0.1.0)"
+        required: true
+  workflow_run:
+    workflows: ["Notion Sync Auto-tag — push notion-sync-v<version> on pyproject bump"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  pypi:
+    name: Publish evolutiondb-notion-sync to PyPI
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
+    environment:
+      name: pypi-notion-sync
+      url: https://pypi.org/project/evolutiondb-notion-sync/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Verify version matches the tag
+        working-directory: client/notion-sync
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+            tag="notion-sync-v${ver}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            tag="${{ github.event.inputs.tag }}"
+            ver="${tag#notion-sync-v}"
+          else
+            tag="$GITHUB_REF_NAME"
+            ver="${tag#notion-sync-v}"
+          fi
+          py_ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          if [ "$ver" != "$py_ver" ]; then
+            echo "::error::tag ${tag} (=> ${ver}) does not match pyproject version ${py_ver}"
+            exit 1
+          fi
+      - name: Build sdist + wheel
+        working-directory: client/notion-sync
+        run: |
+          python3 -m pip install --upgrade pip build
+          rm -rf dist build *.egg-info
+          python3 -m build --sdist --wheel
+      - name: Verify the wheel installs and the entry point runs
+        working-directory: client/notion-sync
+        run: |
+          python3 -m venv /tmp/install-check
+          /tmp/install-check/bin/pip install --upgrade pip
+          /tmp/install-check/bin/pip install dist/evolutiondb_notion_sync-*.whl
+          /tmp/install-check/bin/evolutiondb-notion-sync --help
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: client/notion-sync/dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

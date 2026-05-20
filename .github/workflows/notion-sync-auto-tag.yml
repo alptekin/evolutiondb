@@ -1,0 +1,50 @@
+name: Notion Sync Auto-tag — push notion-sync-v<version> on pyproject bump
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/notion-sync/pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: notion-sync-auto-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Read notion-sync version
+        id: ver
+        working-directory: client/notion-sync
+        run: |
+          ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+      - name: Skip if tag already exists
+        id: gate
+        run: |
+          tag="notion-sync-v${{ steps.ver.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "${tag}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Tag + push
+        if: steps.gate.outputs.exists == 'false'
+        env:
+          TAG: notion-sync-v${{ steps.ver.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "evolutiondb-notion-sync ${TAG} — auto-tagged from main"
+          git push origin "${TAG}"
