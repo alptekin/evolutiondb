@@ -95,11 +95,18 @@ def _html_to_text(body_html: str) -> str:
 
 
 def iter_notes() -> Iterable[Dict]:
-    """Spawn osascript and stream JSON notes line by line."""
+    """Spawn osascript and stream JSON notes line by line.
+
+    JXA's `console.log` writes to stderr, not stdout, so we merge the
+    two streams. Any non-JSON line (genuine osascript errors) falls
+    through the JSONDecodeError branch and is ignored. Without the
+    merge, the stderr pipe fills (~64KB) on the first oversized note
+    and osascript blocks forever.
+    """
     try:
         proc = subprocess.Popen(
             ["/usr/bin/osascript", "-l", "JavaScript", "-e", _JXA],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1)
     except FileNotFoundError:
         print("[notes-sync] /usr/bin/osascript not found — Notes "
@@ -126,12 +133,7 @@ def iter_notes() -> Iterable[Dict]:
             proc.stdout.close()
         except Exception:
             pass
-        rc = proc.wait(timeout=600)
-        if rc != 0 and proc.stderr is not None:
-            err = proc.stderr.read().strip()
-            if err:
-                print(f"[notes-sync] osascript stderr: {err[:400]}",
-                      file=sys.stderr, flush=True)
+        proc.wait(timeout=600)
 
 
 # ---------------------------------------------------------------- #
@@ -161,12 +163,27 @@ class Config:
                                             "mcp_mem")
 
 
+# EvolutionDB caps a single SQL statement at 8KB. The MEMORY PUT
+# wrapper, JSON envelope (title/folder/timestamps/tags), and SQL
+# single-quote doubling can roughly double the on-wire byte count
+# against the raw text. We leave generous headroom so a note full
+# of quotes or multi-byte UTF-8 still fits in one statement.
+_MAX_TEXT_CHARS = 3000
+
+
 def _build_record(n: Dict) -> Optional[Dict]:
     title = (n.get("name") or "").strip() or "(untitled)"
     text  = _html_to_text(n.get("body") or "")
     if not text and title == "(untitled)":
         return None
+    truncated = False
+    if len(text) > _MAX_TEXT_CHARS:
+        text = text[:_MAX_TEXT_CHARS]
+        truncated = True
     modified = n.get("modified") or n.get("created") or ""
+    tags = ["notes", "apple-notes"]
+    if truncated:
+        tags.append("truncated")
     return {
         "fact":         f"Note \"{title}\": {text[:240]}",
         "source":       "notes",
@@ -177,7 +194,8 @@ def _build_record(n: Dict) -> Optional[Dict]:
         "note_id":      n.get("id") or "",
         "modified_at":  modified,
         "created_at":   n.get("created") or "",
-        "tags":         ["notes", "apple-notes"],
+        "truncated":    truncated,
+        "tags":         tags,
     }
 
 
@@ -202,23 +220,27 @@ def sync_once(cfg: Config, *, since_iso: Optional[str],
     floor = wm or since_iso
     highest = floor or ""
 
-    try:
-        for raw in iter_notes():
-            rec = _build_record(raw)
-            if not rec:
-                counters["skipped"] += 1
-                continue
-            if floor and rec["modified_at"] <= floor:
-                continue
-            if store:
+    for raw in iter_notes():
+        rec = _build_record(raw)
+        if not rec:
+            counters["skipped"] += 1
+            continue
+        if floor and rec["modified_at"] <= floor:
+            continue
+        if store:
+            try:
                 store.put_record(_note_key(rec), rec)
-            counters["notes"] += 1
-            if rec["modified_at"] > highest:
-                highest = rec["modified_at"]
-    except Exception as exc:  # noqa: BLE001
-        print(f"[notes-sync] read failed: {exc}",
-              file=sys.stderr, flush=True)
-        counters["errors"] += 1
+            except Exception as exc:  # noqa: BLE001
+                # One bad row should not abort the whole run; the next
+                # invocation will retry. Track and move on.
+                print(f"[notes-sync] note write failed "
+                      f"(title={rec['title'][:60]!r}): {exc}",
+                      file=sys.stderr, flush=True)
+                counters["errors"] += 1
+                continue
+        counters["notes"] += 1
+        if rec["modified_at"] > highest:
+            highest = rec["modified_at"]
 
     if store and highest and highest != (wm or ""):
         store.set_watermark_iso(highest)
