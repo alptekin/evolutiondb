@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolutiondb-browser-sync"
-version = "0.1.0"
+version = "0.1.1"
 description = "Sync browser history (Chrome, Edge, Firefox) into EvolutionDB long-term memory."
 requires-python = ">=3.9"
 license = {text = "MIT"}
