@@ -125,6 +125,67 @@ CONNECTORS: List[ConnectorSpec] = [
         poll_default=1800,
         indexes=["url", "title", "visit count", "last visit"],
     ),
+    ConnectorSpec(
+        name="imessage",
+        label="iMessage / SMS",
+        cli_entry="evolutiondb-imessage-sync",
+        module_name="imessage_sync",
+        pip_package="evolutiondb-imessage-sync",
+        description="macOS Messages.app chats (iMessage + SMS).",
+        requires_auth=False,
+        auth_subcommand=None,
+        auth_hint=("Needs Full Disk Access for the shell that runs "
+                   "the sync (System Settings → Privacy & Security)."),
+        poll_default=600,
+        indexes=["text", "sender", "chat", "service"],
+    ),
+    ConnectorSpec(
+        name="notes",
+        label="Apple Notes",
+        cli_entry="evolutiondb-notes-sync",
+        module_name="notes_sync",
+        pip_package="evolutiondb-notes-sync",
+        description="macOS Apple Notes content via the Notes.app "
+                    "automation bridge.",
+        requires_auth=False,
+        auth_subcommand=None,
+        auth_hint=("First run prompts for Automation permission "
+                   "for Notes.app."),
+        poll_default=1800,
+        indexes=["title", "body", "folder", "modified"],
+    ),
+    ConnectorSpec(
+        name="notion",
+        label="Notion",
+        cli_entry="evolutiondb-notion-sync",
+        module_name="notion_sync",
+        pip_package="evolutiondb-notion-sync",
+        description="Notion pages shared with an integration token.",
+        requires_auth=True,
+        auth_subcommand=None,
+        auth_hint=("Create an internal integration at "
+                   "notion.so/my-integrations and add the token as "
+                   "NOTION_TOKEN in .env. Share each page or "
+                   "database with that integration."),
+        poll_default=900,
+        indexes=["title", "page body", "url", "modified"],
+    ),
+    ConnectorSpec(
+        name="youtube",
+        label="YouTube",
+        cli_entry="evolutiondb-youtube-sync",
+        module_name="youtube_sync",
+        pip_package="evolutiondb-youtube-sync",
+        description=("YouTube subscriptions, playlists and liked "
+                      "videos via the Data API."),
+        requires_auth=True,
+        auth_hint=("Reuses the gmail-sync Google OAuth client; add "
+                   "the youtube.readonly scope on the OAuth consent "
+                   "screen, then run --auth once to cache a refresh "
+                   "token at ~/.evosql/youtube_token.json."),
+        poll_default=3600,
+        indexes=["channel", "playlist title", "video title", "url"],
+    ),
 ]
 
 

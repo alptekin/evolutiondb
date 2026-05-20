@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evolutiondb-imessage-sync"
+version = "0.1.0"
+description = "Sync macOS iMessage + SMS history into EvolutionDB long-term memory."
+requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["evolutiondb", "imessage", "sms", "macos", "long-term-memory",
+            "agent-memory", "mcp"]
+authors = [{name = "alptekin topal", email = "topal.alptekin@gmail.com"}]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Chat",
+    "Topic :: Database",
+]
+dependencies = ["psycopg[binary]>=3.1"]
+
+[project.urls]
+Homepage   = "https://github.com/alptekin/evolutiondb"
+Repository = "https://github.com/alptekin/evolutiondb"
+Source     = "https://github.com/alptekin/evolutiondb/tree/main/client/imessage-sync"
+Issues     = "https://github.com/alptekin/evolutiondb/issues"
+
+[project.scripts]
+evolutiondb-imessage-sync = "imessage_sync.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["imessage_sync*"]
