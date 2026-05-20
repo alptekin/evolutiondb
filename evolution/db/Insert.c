@@ -1256,7 +1256,25 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     uint16_t rec_len = (uint16_t)bin_len;
     RowID rid = DML_PROF_EXPR("heap_insert",
                               tapi_heap_insert(td, bin_buf, rec_len));
-    if (rid.page_no == 0) return -1;
+    if (rid.page_no == 0) {
+        /* Differentiate "tuple too large for a single page" from a
+         * generic allocation failure so the caller doesn't mis-report
+         * this as a duplicate-key error. SLOT_MAX_RECORD is the
+         * largest record that fits within a slotted page. */
+        if (rec_len > SLOT_MAX_RECORD) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "row is too large for a single page: "
+                     "%u bytes (max %d)",
+                     (unsigned)rec_len, (int)SLOT_MAX_RECORD);
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+        } else {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "heap insert failed: could not allocate page");
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+        }
+        g_err.error = 1;
+        return -1;
+    }
 
     /* VMAP: clear all-visible flag for the affected heap page */
     DML_PROF("vmap_clear", vmap_clear(rid.page_no));
