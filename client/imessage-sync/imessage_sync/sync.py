@@ -16,6 +16,23 @@ from typing import List, Optional
 from . import extract as ext_mod
 from . import state   as state_mod
 
+# Optional PII protection — evolutiondb-pii's protect_record runs
+# detect → mask → encrypt over the text/sender/chat fields when
+# present. With no public key on disk it's a transparent passthrough.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "text", "sender", "handle", "chat"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS,
+                        key_prefix=f"{main_key}_pii")
+
 
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -102,7 +119,10 @@ def sync_once(cfg: Config, *, since_ns_floor: int,
                 continue
             key = _msg_key(record)
             if store:
+                record, companions = _protect(record, key)
                 store.put_record(key, record)
+                for ck, cv in companions:
+                    store.put_record(ck, cv)
             counters["messages"] += 1
             if ad > highest:
                 highest = ad

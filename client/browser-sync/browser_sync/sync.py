@@ -33,6 +33,23 @@ from . import scanner as scan_mod
 from . import extract as ext_mod
 from . import state   as state_mod
 
+# Optional PII protection. URLs and titles can contain emails (login
+# pages), session tokens (query strings), and customer names — the
+# masker scrubs them before MEMORY PUT when a key file is present.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "title", "url"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS,
+                        key_prefix=f"{main_key}_pii")
+
 
 # ---------------------------------------------------------------- #
 #  Config + .env loader (same shape as sibling syncs)               #
@@ -126,7 +143,10 @@ def sync_once(cfg: Config, *, since_iso: Optional[str],
             for record in ext_mod.iter_visits(prof, since_iso=floor):
                 key = _record_key(record)
                 if store:
+                    record, companions = _protect(record, key)
                     store.put_record(key, record)
+                    for ck, cv in companions:
+                        store.put_record(ck, cv)
                 counters["visits"] += 1
                 if record["last_visited_at"] > latest:
                     latest = record["last_visited_at"]

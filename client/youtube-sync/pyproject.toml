@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolutiondb-youtube-sync"
-version = "0.1.0"
+version = "0.1.1"
 description = "Sync YouTube subscriptions, playlists and liked videos into EvolutionDB long-term memory."
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Multimedia :: Video",
 ]
-dependencies = ["psycopg[binary]>=3.1"]
+dependencies = ["psycopg[binary]>=3.1", "evolutiondb-pii>=0.1.1"]
 
 [project.urls]
 Homepage   = "https://github.com/alptekin/evolutiondb"
