@@ -80,8 +80,9 @@
 #define TOAST_STUB_MAGIC      0xE6
 
 /* On-disk size of the heap stub. Matches the byte offsets in tuple_format
- * so MVCC accessors work without branching on the marker. */
-#define TOAST_STUB_SIZE       33
+ * so MVCC accessors work without branching on the marker. Bumped to 41
+ * to carry the compression metadata (original_len + flags). */
+#define TOAST_STUB_SIZE       41
 
 /* The threshold at which tup_build hands its output to toast_write
  * instead of letting tapi_heap_insert reject it. Generous safety margin
@@ -90,15 +91,29 @@
 
 /* Stub format version. Bumped if the stub layout changes — readers honour
  * older versions for backward compat. */
-#define TOAST_REF_VERSION     1
+#define TOAST_REF_VERSION     2
+
+/* ToastRef.flags bits. */
+#define TOAST_REF_FLAG_LZ4    0x01    /* chain bytes are LZ4-compressed */
+
+/* Compression decision threshold — keep the compressed form only when
+ * it shaves at least 25% off the original. Anything tighter than this
+ * means LZ4 found little redundancy (already-compressed data, random
+ * bytes, base64 blobs) and the decompression cost on every read
+ * isn't worth the marginal space saving. */
+#define TOAST_COMPRESS_RATIO_NUM   3
+#define TOAST_COMPRESS_RATIO_DEN   4
 
 
 typedef struct {
     uint32_t first_page;
     uint32_t last_page;
-    uint32_t total_len;
-    uint32_t crc32;
+    uint32_t chain_len;       /* bytes physically stored on the chain */
+    uint32_t crc32;           /* CRC of the on-chain bytes              */
+    uint32_t original_len;    /* bytes after decompression (== chain_len
+                                 when uncompressed)                     */
     uint8_t  version;
+    uint8_t  flags;           /* TOAST_REF_FLAG_*                       */
 } ToastRef;
 
 

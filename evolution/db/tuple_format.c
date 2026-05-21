@@ -403,11 +403,12 @@ int tup_extract_fields(const char *bin_rec, int bin_len,
         ToastRef ref;
         if (toast_parse_stub(bin_rec, bin_len, NULL, &ref) != 0)
             return -1;
-        if (ref.total_len == 0 || ref.total_len > 64 * 1024 * 1024)
+        if (ref.original_len == 0 ||
+            ref.original_len > 64 * 1024 * 1024)
             return -1;  /* sanity cap: 64 MB ceiling on a single tuple */
-        char *full = (char *)malloc(ref.total_len);
+        char *full = (char *)malloc(ref.original_len);
         if (!full) return -1;
-        int n = toast_read(&ref, full, ref.total_len);
+        int n = toast_read(&ref, full, ref.original_len);
         if (n < 0) { free(full); return -1; }
         int rc = tup_extract_fields(full, n, cols, ncols,
                                      fields, is_null, max_fields);

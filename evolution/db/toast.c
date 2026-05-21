@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <lz4.h>
 
 
 /* ----------------------------------------------------------------
@@ -96,31 +97,67 @@ static uint32_t get_le32(const uint8_t *p)
 
 /* ----------------------------------------------------------------
  *  Chain write — allocate as many PAGE_OVERFLOW pages as needed,
- *  link them via PageHeader.next_page. If any allocation or write
- *  fails midway, every page we already grabbed gets freed before we
- *  return so we don't leak orphan chains.
+ *  link them via PageHeader.next_page. LZ4 is tried first; the
+ *  compressed bytes only stick if they shave at least 25% off the
+ *  input, so already-dense data (random bytes, base64, JPEG) skips
+ *  the decompression cost on every read.
+ *
+ *  If any allocation or write fails midway, every page we already
+ *  grabbed gets freed before we return so partial chains never
+ *  surface to the caller.
  * ---------------------------------------------------------------- */
 int toast_write(const char *data, uint32_t len, ToastRef *ref_out)
 {
     if (!data || !ref_out || len == 0) return -1;
 
-    uint32_t crc = toast_crc32(data, len);
+    /* Try LZ4 first. The compression bound is conservative
+     * (LZ4_compressBound is always >= len + small constant). Buffer
+     * the result on the heap because `len` can exceed the 4 KB
+     * stack frame budget. */
+    const char *chain_data = data;
+    uint32_t chain_len     = len;
+    uint8_t  ref_flags     = 0;
+    char *comp_buf = NULL;
+
+    {
+        int bound = LZ4_compressBound((int)len);
+        if (bound > 0) {
+            comp_buf = (char *)malloc((size_t)bound);
+            if (comp_buf) {
+                int comp_len = LZ4_compress_default(
+                    data, comp_buf, (int)len, bound);
+                /* Accept the compressed form only if it shaves at
+                 * least 1 - (NUM/DEN) of the bytes. Otherwise the
+                 * per-read decompress cost outweighs the saving. */
+                if (comp_len > 0 &&
+                    (uint64_t)comp_len * TOAST_COMPRESS_RATIO_DEN <
+                        (uint64_t)len * TOAST_COMPRESS_RATIO_NUM) {
+                    chain_data = comp_buf;
+                    chain_len  = (uint32_t)comp_len;
+                    ref_flags |= TOAST_REF_FLAG_LZ4;
+                }
+            }
+        }
+    }
+
+    uint32_t crc = toast_crc32(chain_data, chain_len);
 
     /* Pass 1: figure out how many chunks we need and pre-allocate
      * every page. Doing it upfront lets us patch next_page links in
      * a single pass without re-reading earlier chunks. */
-    uint32_t chunk_count = (len + TOAST_CHUNK_PAYLOAD - 1)
+    uint32_t chunk_count = (chain_len + TOAST_CHUNK_PAYLOAD - 1)
                           / TOAST_CHUNK_PAYLOAD;
-    if (chunk_count == 0) return -1;
+    if (chunk_count == 0) { free(comp_buf); return -1; }
 
     uint32_t *pages = (uint32_t *)calloc(chunk_count, sizeof(uint32_t));
-    if (!pages) return -1;
+    if (!pages) { free(comp_buf); return -1; }
 
     for (uint32_t i = 0; i < chunk_count; i++) {
         uint32_t p = pgm_alloc_page(PAGE_OVERFLOW);
         if (p == 0) {
             for (uint32_t j = 0; j < i; j++) pgm_free_page(pages[j]);
             free(pages);
+            free(comp_buf);
             return -1;
         }
         pages[i] = p;
@@ -137,10 +174,11 @@ int toast_write(const char *data, uint32_t len, ToastRef *ref_out)
         ph->next_page = (i + 1 < chunk_count) ? pages[i + 1] : 0;
         ph->prev_page = 0;
 
-        uint32_t remaining = len - offset;
+        uint32_t remaining = chain_len - offset;
         uint32_t this_chunk = remaining > TOAST_CHUNK_PAYLOAD
                               ? TOAST_CHUNK_PAYLOAD : remaining;
-        memcpy(page_buf + PAGE_HEADER_SIZE, data + offset, this_chunk);
+        memcpy(page_buf + PAGE_HEADER_SIZE,
+               chain_data + offset, this_chunk);
         ph->free_space = (uint16_t)(PAGE_USABLE - this_chunk);
 
         if (pgm_write_page(pages[i], page_buf) < 0) {
@@ -148,59 +186,98 @@ int toast_write(const char *data, uint32_t len, ToastRef *ref_out)
              * this one — caller never sees a partial chain. */
             for (uint32_t j = 0; j < chunk_count; j++) pgm_free_page(pages[j]);
             free(pages);
+            free(comp_buf);
             return -1;
         }
         offset += this_chunk;
     }
 
-    ref_out->first_page = pages[0];
-    ref_out->last_page  = pages[chunk_count - 1];
-    ref_out->total_len  = len;
-    ref_out->crc32      = crc;
-    ref_out->version    = TOAST_REF_VERSION;
+    ref_out->first_page   = pages[0];
+    ref_out->last_page    = pages[chunk_count - 1];
+    ref_out->chain_len    = chain_len;
+    ref_out->crc32        = crc;
+    ref_out->original_len = len;
+    ref_out->version      = TOAST_REF_VERSION;
+    ref_out->flags        = ref_flags;
 
     free(pages);
+    free(comp_buf);
     return 0;
 }
 
 
 /* ----------------------------------------------------------------
- *  Chain read — walks next_page links, accumulates payloads, then
- *  verifies CRC against the value stored in the ref.
+ *  Chain read — walks next_page links, accumulates payloads,
+ *  verifies CRC, then decompresses if the chain bytes were LZ4-
+ *  squeezed at write time. `buf_out` must be sized for
+ *  `ref->original_len`.
  * ---------------------------------------------------------------- */
 int toast_read(const ToastRef *ref, char *buf_out, uint32_t buf_size)
 {
     if (!ref || !buf_out) return -1;
     if (ref->first_page == 0) return -1;
-    if (ref->total_len > buf_size) return -1;
+    if (ref->original_len > buf_size) return -1;
+
+    /* When compressed, we read the chain into a staging buffer and
+     * decompress into the caller's. When uncompressed, the chain
+     * is already the final payload — write straight into buf_out. */
+    int compressed = (ref->flags & TOAST_REF_FLAG_LZ4) != 0;
+    char *chain_buf = compressed
+                        ? (char *)malloc(ref->chain_len)
+                        : buf_out;
+    if (!chain_buf) return -1;
 
     char page_buf[EVO_PAGE_SIZE];
     uint32_t offset   = 0;
     uint32_t page_no  = ref->first_page;
     uint32_t safety   = 0;
 
-    while (page_no != 0 && offset < ref->total_len) {
-        if (pgm_read_page(page_no, page_buf) < 0) return -1;
+    while (page_no != 0 && offset < ref->chain_len) {
+        if (pgm_read_page(page_no, page_buf) < 0) {
+            if (compressed) free(chain_buf);
+            return -1;
+        }
         const PageHeader *ph = (const PageHeader *)page_buf;
-        if (ph->page_type != PAGE_OVERFLOW) return -1;
+        if (ph->page_type != PAGE_OVERFLOW) {
+            if (compressed) free(chain_buf);
+            return -1;
+        }
 
         uint16_t this_chunk = (uint16_t)(PAGE_USABLE - ph->free_space);
-        if ((uint32_t)this_chunk > ref->total_len - offset)
-            this_chunk = (uint16_t)(ref->total_len - offset);
-        memcpy(buf_out + offset,
+        if ((uint32_t)this_chunk > ref->chain_len - offset)
+            this_chunk = (uint16_t)(ref->chain_len - offset);
+        memcpy(chain_buf + offset,
                page_buf + PAGE_HEADER_SIZE, this_chunk);
         offset += this_chunk;
 
         page_no = ph->next_page;
 
-        /* Cheap loop guard — a chain longer than total_len chunks
+        /* Cheap loop guard — a chain longer than chain_len chunks
          * has to be corrupt. */
-        if (++safety > (ref->total_len / 64) + 1024) return -1;
+        if (++safety > (ref->chain_len / 64) + 1024) {
+            if (compressed) free(chain_buf);
+            return -1;
+        }
     }
 
-    if (offset != ref->total_len) return -1;
-    if (toast_crc32(buf_out, ref->total_len) != ref->crc32) return -1;
-    return (int)ref->total_len;
+    if (offset != ref->chain_len) {
+        if (compressed) free(chain_buf);
+        return -1;
+    }
+    if (toast_crc32(chain_buf, ref->chain_len) != ref->crc32) {
+        if (compressed) free(chain_buf);
+        return -1;
+    }
+
+    if (compressed) {
+        int decoded = LZ4_decompress_safe(
+            chain_buf, buf_out,
+            (int)ref->chain_len, (int)ref->original_len);
+        free(chain_buf);
+        if (decoded < 0 || (uint32_t)decoded != ref->original_len)
+            return -1;
+    }
+    return (int)ref->original_len;
 }
 
 
@@ -223,7 +300,7 @@ int toast_free(const ToastRef *ref)
                         ? ph->next_page : 0;
         pgm_free_page(page_no);
         page_no = next;
-        if (++safety > (ref->total_len / 64) + 1024) break;
+        if (++safety > (ref->chain_len / 64) + 1024) break;
     }
     return 0;
 }
@@ -279,11 +356,13 @@ int toast_build_stub(uint32_t table_id,
     /* Ref payload starts after the mirrored MVCC area: 5 + 4 + 8 = 17. */
     put_le32(p + 17, ref->first_page);
     put_le32(p + 21, ref->last_page);
-    put_le32(p + 25, ref->total_len);
+    put_le32(p + 25, ref->chain_len);
     put_le32(p + 29, ref->crc32);
-    /* version byte sits in the last reserved slot — currently unused
-     * because TOAST_STUB_SIZE is fixed at 33; a v2 layout that grows
-     * the stub will pick this up. */
+    put_le32(p + 33, ref->original_len);
+    p[37] = (uint8_t)TOAST_REF_VERSION;
+    p[38] = ref->flags;
+    /* bytes 39 + 40 stay zero — reserved for future use without
+     * forcing another stub size bump. */
 
     return TOAST_STUB_SIZE;
 }
@@ -299,11 +378,18 @@ int toast_parse_stub(const char *rec, int rec_len,
     const uint8_t *p = (const uint8_t *)rec;
     if (table_id_out) *table_id_out = get_le32(p + 1);
 
-    ref_out->first_page = get_le32(p + 17);
-    ref_out->last_page  = get_le32(p + 21);
-    ref_out->total_len  = get_le32(p + 25);
-    ref_out->crc32      = get_le32(p + 29);
-    ref_out->version    = TOAST_REF_VERSION;
+    ref_out->first_page   = get_le32(p + 17);
+    ref_out->last_page    = get_le32(p + 21);
+    ref_out->chain_len    = get_le32(p + 25);
+    ref_out->crc32        = get_le32(p + 29);
+    ref_out->original_len = get_le32(p + 33);
+    ref_out->version      = p[37];
+    ref_out->flags        = p[38];
+    /* original_len of 0 (older stubs that predated the field) means
+     * the chain bytes are also the payload bytes — fall back to
+     * chain_len so the read path knows how much to allocate. */
+    if (ref_out->original_len == 0)
+        ref_out->original_len = ref_out->chain_len;
     return 0;
 }
 
@@ -317,7 +403,7 @@ int toast_free_if_stub(const char *rec, int rec_len)
     /* toast_free walks the chain and counts pages via its own
      * safety counter; here we just want a "non-zero on actual
      * reclaim" signal so callers can log / track it. */
-    uint32_t chunks = (ref.total_len + TOAST_CHUNK_PAYLOAD - 1)
+    uint32_t chunks = (ref.chain_len + TOAST_CHUNK_PAYLOAD - 1)
                       / TOAST_CHUNK_PAYLOAD;
     toast_free(&ref);
     return (int)chunks;
