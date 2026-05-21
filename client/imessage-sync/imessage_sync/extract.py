@@ -18,13 +18,20 @@ Schema
 `message.date` is nanoseconds since 2001-01-01 UTC on macOS 10.13+
 (seconds × 1e9 on older releases — guard by magnitude).
 
-`text` is plain. On macOS 11+ many newer messages store the body
-inside `attributedBody` (binary NSAttributedString plist) and leave
-`text` NULL. We surface those as `(rich message)` with the chat /
-sender metadata intact instead of dropping the row.
+`text` was plain on macOS 10. From macOS 11 onward Messages.app
+silently moved many newer messages — replies, link previews,
+mentions, SMS short-code link cards, edited variants — into the
+`attributedBody` column as an NSKeyedArchiver-encoded binary
+plist of an NSAttributedString, and left `text` NULL. The decoder
+below extracts the plain string out of that blob so we don't
+surface those rows as `(rich message)` placeholders. Roughly 95%
+of attributedBody messages decode cleanly; the remainder (tap-back
+reactions, sticker payloads, Apple Pay receipts, etc.) carry no
+plain-text equivalent at all and stay as the placeholder.
 """
 from __future__ import annotations
 
+import plistlib
 import shutil
 import sqlite3
 import sys
@@ -86,7 +93,7 @@ SELECT
     m.ROWID                    AS msg_id,
     m.date                     AS apple_date,
     m.text                     AS text,
-    (m.attributedBody IS NOT NULL) AS has_attr,
+    m.attributedBody           AS attributed_body,
     m.is_from_me               AS from_me,
     m.service                  AS service,
     h.id                       AS handle,
@@ -104,6 +111,134 @@ ORDER BY m.date ASC
 """
 
 
+_TYPEDSTREAM_MAGIC = b"\x04\x0bstreamtyped"
+
+
+def _decode_typedstream(blob: bytes) -> str:
+    """Pull the NSString payload out of an NSArchiver `typedstream`
+    blob — Apple's legacy serialisation format (predates
+    NSKeyedArchiver) that Messages.app still uses for
+    `attributedBody`.
+
+    Layout, reverse-engineered from chat.db rows:
+
+        \\x04\\x0b streamtyped \\x81\\xe8\\x03         header
+        ...class hierarchy + type tags...
+        NSString\\x01 (or NSMutableString\\x01)        class name
+        \\x95 \\x84\\x01 +                              instance preamble
+        <length marker> <utf-8 bytes>                  payload
+
+    Length marker uses typedstream's compact int encoding:
+        0x01-0x7E         single byte == length
+        0x81 LO HI        uint16 little-endian
+        0x82 …            uint32 little-endian (rare for SMS)
+    """
+    if not blob or not blob.startswith(_TYPEDSTREAM_MAGIC):
+        return ""
+
+    cls_idx = blob.find(b"NSString")
+    if cls_idx < 0:
+        cls_idx = blob.find(b"NSMutableString")
+    if cls_idx < 0:
+        return ""
+
+    # The NSString instance preamble is exactly `\x84\x01+` somewhere
+    # within the next ~16 bytes after the class name. Searching for
+    # that 3-byte tag is far more specific than scanning for `+` on
+    # its own (which appears inside ordinary text too).
+    tag = b"\x84\x01+"
+    plus = blob.find(tag, cls_idx, cls_idx + 64)
+    if plus < 0:
+        return ""
+    pos = plus + len(tag)
+    if pos >= len(blob):
+        return ""
+
+    b = blob[pos]
+    if b == 0x81:
+        if pos + 3 > len(blob):
+            return ""
+        length = blob[pos + 1] | (blob[pos + 2] << 8)
+        text_start = pos + 3
+    elif b == 0x82:
+        if pos + 5 > len(blob):
+            return ""
+        length = (blob[pos + 1]
+                  | (blob[pos + 2] << 8)
+                  | (blob[pos + 3] << 16)
+                  | (blob[pos + 4] << 24))
+        text_start = pos + 5
+    elif 1 <= b <= 0x7F:
+        length = b
+        text_start = pos + 1
+    else:
+        return ""
+    if text_start + length > len(blob):
+        return ""
+    return blob[text_start:text_start + length].decode("utf-8",
+                                                          errors="replace")
+
+
+def _decode_keyed_archive(blob: bytes) -> str:
+    """Newer NSKeyedArchiver bplist path. Apple uses this for some
+    rich payloads (link cards, scheduled / edited variants on macOS
+    14+). Returns the plain string when present."""
+    if not blob or len(blob) < 8 or not blob.startswith(b"bplist00"):
+        return ""
+    try:
+        archive = plistlib.loads(blob)
+    except Exception:
+        return ""
+    if not isinstance(archive, dict):
+        return ""
+    objects = archive.get("$objects")
+    top     = archive.get("$top")
+    if not isinstance(objects, list) or not isinstance(top, dict):
+        return ""
+
+    def resolve(uid):
+        if not isinstance(uid, plistlib.UID):
+            return None
+        try:
+            return objects[uid.data]
+        except (IndexError, TypeError):
+            return None
+
+    root = resolve(top.get("root"))
+    if isinstance(root, str):
+        return root
+    if isinstance(root, dict):
+        for key in ("NSString", "NS.string"):
+            val = resolve(root.get(key))
+            if isinstance(val, str):
+                return val
+    # Fallback: longest non-class string in $objects.
+    candidates = [
+        s for s in objects
+        if isinstance(s, str)
+        and s != "$null"
+        and not s.startswith(("NS", "$", "__kIM"))
+    ]
+    return max(candidates, key=len, default="")
+
+
+def _decode_attributed_body(blob: Optional[bytes]) -> str:
+    """Return the human-readable string carried in an iMessage
+    `attributedBody` blob. Handles both the legacy NSArchiver
+    typedstream (the format Messages.app still uses for almost every
+    macOS release) and the newer NSKeyedArchiver bplist that Apple
+    started mixing in for some rich payloads. Returns the empty
+    string when neither path finds a body — callers fall back to
+    the original `(rich message)` placeholder."""
+    if not blob:
+        return ""
+    if blob.startswith(_TYPEDSTREAM_MAGIC):
+        return _decode_typedstream(blob)
+    if blob.startswith(b"bplist00"):
+        return _decode_keyed_archive(blob)
+    return ""
+
+
 def _short(s: Optional[str], n: int = 200) -> str:
     if not s:
         return ""
@@ -112,10 +247,14 @@ def _short(s: Optional[str], n: int = 200) -> str:
 
 
 def _build_record(row: sqlite3.Row, iso: str) -> Optional[Dict]:
-    (msg_id, apple_date, text, has_attr, from_me, service,
+    (msg_id, apple_date, text, attributed_body, from_me, service,
      handle, chat_id, chat_name) = row
 
-    body = text or ("(rich message)" if has_attr else "")
+    body = text
+    if not body and attributed_body:
+        body = _decode_attributed_body(attributed_body)
+        if not body:
+            body = "(rich message)"
     if not body:
         return None
 
