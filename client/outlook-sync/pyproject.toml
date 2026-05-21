@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolutiondb-outlook-sync"
-version = "0.1.1"
+version = "0.1.2"
 description = "Sync Microsoft Outlook / Microsoft 365 mail into EvolutionDB long-term memory."
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -40,6 +40,7 @@ classifiers = [
 
 dependencies = [
     "psycopg[binary]>=3.1",
+    "evolutiondb-pii>=0.1.0",
 ]
 
 [project.urls]
