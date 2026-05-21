@@ -237,20 +237,28 @@ def sync_once(cfg: Config, *,
     highest = floor or ""
 
     counters = {"messages": 0, "skipped": 0, "errors": 0}
+    seen_ids: set = set()
 
-    for msg in client.list_messages(received_after_iso=floor,
-                                     folder_filter=folder_filter_id):
+    def _ingest(msg: Dict) -> None:
+        """Common per-message handler. Used by both the cross-folder
+        pass and the explicit SentItems pass; in-process `seen_ids`
+        deduplicates so a message that surfaces from both passes only
+        writes one row."""
         msg_id = msg.get("id")
         if not msg_id:
             counters["errors"] += 1
-            continue
+            return
+        if msg_id in seen_ids:
+            counters["skipped"] += 1
+            return
+        seen_ids.add(msg_id)
         if store and store.has_message(msg_id):
             counters["skipped"] += 1
-            continue
+            return
         rec = _build_record(msg, folder_lookup)
         if not rec:
             counters["skipped"] += 1
-            continue
+            return
         if store:
             try:
                 store.put_record(f"outlook_msg_{msg_id}", rec)
@@ -261,10 +269,32 @@ def sync_once(cfg: Config, *,
                       f"(subject={rec['subject'][:60]!r}): {exc}",
                       file=sys.stderr, flush=True)
                 counters["errors"] += 1
-                continue
+                return
         counters["messages"] += 1
+        nonlocal highest
         if rec["received_at"] > highest:
             highest = rec["received_at"]
+
+    # Pass 1 — cross-folder /me/messages. Picks up inbox, junk, drafts,
+    # and any Sent Items the cross-folder filter happens to bubble up.
+    for msg in client.list_messages(received_after_iso=floor,
+                                     folder_filter=folder_filter_id):
+        _ingest(msg)
+
+    # Pass 2 — well-known SentItems folder. Cross-folder /me/messages
+    # consistently under-reports Sent (one digit returned on a full
+    # mailbox), which made downstream "did I reply?" analysis useless.
+    # The folder-scoped endpoint returns the full outbound history.
+    # Skip when the user asked for a single specific folder via
+    # --folder; the explicit filter takes precedence.
+    if folder_filter_id is None:
+        try:
+            for msg in client.list_sent_messages(received_after_iso=floor):
+                _ingest(msg)
+        except api_mod.GraphError as exc:
+            print(f"[outlook-sync] SentItems pass failed: {exc}",
+                  file=sys.stderr, flush=True)
+            counters["errors"] += 1
 
     if store and highest and highest != (wm or ""):
         store.set_watermark_iso(highest)
