@@ -138,6 +138,28 @@ class OutlookClient:
             params["$filter"] = " and ".join(filters)
         yield from self._paginate(f"{GRAPH_API}/me/messages", params)
 
+    def list_sent_messages(self, *,
+                           received_after_iso: Optional[str] = None,
+                           top: int = 50) -> Iterator[Dict]:
+        """Cross-folder `/me/messages` regularly under-reports Sent
+        Items — only a handful trickle through, never the full
+        outbound history. Querying the well-known SentItems folder
+        explicitly bypasses whatever Graph filter is in the way and
+        gives us the complete record of replies the user sent. The
+        message IDs are stable, so the sync loop's per-key upsert
+        deduplicates anything the cross-folder pass already saw.
+        """
+        params: Dict[str, str] = {
+            "$select":  MESSAGE_SELECT,
+            "$top":     str(top),
+            "$orderby": "receivedDateTime asc",
+        }
+        if received_after_iso:
+            params["$filter"] = (
+                f"receivedDateTime gt {received_after_iso}")
+        yield from self._paginate(
+            f"{GRAPH_API}/me/mailFolders/sentitems/messages", params)
+
     def list_folders(self) -> List[Dict]:
         """Flat list of mail folders. Graph returns nested children
         only when explicitly walked, so a single top-level call gets
