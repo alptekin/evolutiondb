@@ -57,10 +57,29 @@ static void strip_quotes(char *s)
 {
     if (!s) return;
     int n = (int)strlen(s);
-    if (n >= 2 && s[0] == '\'' && s[n - 1] == '\'') {
-        memmove(s, s + 1, n - 2);
-        s[n - 2] = '\0';
+    if (n < 2) return;
+    char quote;
+    if (s[0] == '\'' && s[n - 1] == '\'')      quote = '\'';
+    else if (s[0] == '"'  && s[n - 1] == '"')  quote = '"';
+    else return;
+
+    /* Drop the surrounding quotes AND collapse SQL-standard doubled
+     * inner quotes (`''` → `'`, ANSI `""` → `"`). evoparser.y line
+     * 562 does this for STRING tokens that flow through expressions,
+     * but MEMORY / DOCUMENT / ENTITY / CHECKPOINT store values come
+     * in through their own `mem_val`-style rules that forward the
+     * raw lexer text; un-doubling here keeps writes round-trippable
+     * for any value containing the quote character. */
+    int j = 0;
+    for (int i = 1; i < n - 1; i++) {
+        if (s[i] == quote && i + 1 < n - 1 && s[i + 1] == quote) {
+            s[j++] = quote;
+            i++;   /* skip the paired quote */
+        } else {
+            s[j++] = s[i];
+        }
     }
+    s[j] = '\0';
 }
 
 void SetMemoryDistance(const char *lit)
