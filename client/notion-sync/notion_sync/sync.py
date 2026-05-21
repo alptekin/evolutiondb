@@ -14,6 +14,23 @@ from typing import Dict, List, Optional
 from . import api   as api_mod
 from . import state as state_mod
 
+# Optional PII protection — Notion pages frequently mix notes,
+# emails, phone numbers, and account credentials. Run them through
+# the masker before storage when a key file is present.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "title", "text"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS,
+                        key_prefix=f"{main_key}_pii")
+
 
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -118,7 +135,11 @@ def sync_once(cfg: Config, *,
             counters["skipped"] += 1
             continue
         if store:
-            store.put_record(_page_key(rec["page_id"]), rec)
+            main_key = _page_key(rec["page_id"])
+            rec, companions = _protect(rec, main_key)
+            store.put_record(main_key, rec)
+            for ck, cv in companions:
+                store.put_record(ck, cv)
         counters["pages"] += 1
         if last > highest:
             highest = last

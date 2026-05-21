@@ -31,6 +31,26 @@ from typing import Dict, Iterable, List, Optional
 
 from . import state as state_mod
 
+# Optional PII protection. evolutiondb-pii ships protect_record()
+# which masks + encrypts on the way to MEMORY PUT when a public
+# key exists; without one it is a transparent passthrough.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+# Apple-Notes prose lives in title + text; everything else is
+# structural metadata (folder, ids, timestamps) and stays plain.
+_PII_FIELDS = ["fact", "title", "text"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(
+        rec, fields=_PII_FIELDS,
+        key_prefix=f"notes_pii_{main_key.removeprefix('note_')}")
+
 
 # JXA evaluated by osascript. Emits one JSON object per line so a
 # Python iterator can process notes without holding everything in
@@ -229,7 +249,11 @@ def sync_once(cfg: Config, *, since_iso: Optional[str],
             continue
         if store:
             try:
-                store.put_record(_note_key(rec), rec)
+                main_key = _note_key(rec)
+                rec, companions = _protect(rec, main_key)
+                store.put_record(main_key, rec)
+                for ck, cv in companions:
+                    store.put_record(ck, cv)
             except Exception as exc:  # noqa: BLE001
                 # One bad row should not abort the whole run; the next
                 # invocation will retry. Track and move on.

@@ -37,6 +37,24 @@ from . import api as api_mod
 from . import auth as auth_mod
 from . import state as state_mod
 
+# Optional PII protection — event summaries, descriptions, and the
+# attendee list routinely contain emails, phone numbers, and other
+# tokens worth keeping out of public-LLM context windows.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "summary", "description", "location",
+                "organizer", "attendees"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS,
+                        key_prefix=f"{main_key}_pii")
+
 
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -243,7 +261,10 @@ def sync_once(cfg: Config, *, since_iso: Optional[str],
                 counters["skipped"] += 1
                 continue
             if store:
+                rec, companions = _protect(rec, key)
                 store.put_record(key, rec)
+                for ck, cv in companions:
+                    store.put_record(ck, cv)
             counters["events"] += 1
 
         if store and page.get("next_sync_token"):
