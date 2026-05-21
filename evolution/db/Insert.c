@@ -9,6 +9,7 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "tuple_format.h"
+#include "toast.h"
 #include "vmap.h"
 #include "mvcc.h"
 #include "table_lock.h"
@@ -1252,15 +1253,50 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     for (int k = 0; k < arr_blob_count; k++) free(arr_blobs[k]);
     if (bin_len < 0) return -1;
 
-    /* Insert binary tuple into heap page */
-    uint16_t rec_len = (uint16_t)bin_len;
+    /* TOAST overflow: tuples heading past the slotted-page ceiling
+     * get their body written to a PAGE_OVERFLOW chain; what lands in
+     * the heap slot is a 33-byte stub that points at the chain and
+     * mirrors the source's MVCC header so visibility accessors keep
+     * working without branching. */
+    char stub_buf[TOAST_STUB_SIZE];
+    char *insert_buf  = bin_buf;
+    int   insert_len  = bin_len;
+    ToastRef toast_ref_out;
+    int   toast_written = 0;
+    if (insert_len > TOAST_THRESHOLD) {
+        if (toast_write(bin_buf, (uint32_t)bin_len, &toast_ref_out) < 0) {
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "overflow page allocation failed for oversized tuple");
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+            g_err.error = 1;
+            return -1;
+        }
+        int stub_len = toast_build_stub(td->table_id,
+                                          bin_buf, bin_len,
+                                          &toast_ref_out,
+                                          stub_buf, sizeof(stub_buf));
+        if (stub_len < 0) {
+            toast_free(&toast_ref_out);
+            snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                     "TOAST stub build failed");
+            EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+            g_err.error = 1;
+            return -1;
+        }
+        insert_buf  = stub_buf;
+        insert_len  = stub_len;
+        toast_written = 1;
+    }
+
+    /* Insert binary tuple (or its stub) into a heap page */
+    uint16_t rec_len = (uint16_t)insert_len;
     RowID rid = DML_PROF_EXPR("heap_insert",
-                              tapi_heap_insert(td, bin_buf, rec_len));
+                              tapi_heap_insert(td, insert_buf, rec_len));
     if (rid.page_no == 0) {
-        /* Differentiate "tuple too large for a single page" from a
-         * generic allocation failure so the caller doesn't mis-report
-         * this as a duplicate-key error. SLOT_MAX_RECORD is the
-         * largest record that fits within a slotted page. */
+        /* Heap allocation failed even for the small stub — must be
+         * page-manager exhaustion. Roll back the chain we just wrote
+         * so the file doesn't accumulate orphan overflow pages. */
+        if (toast_written) toast_free(&toast_ref_out);
         if (rec_len > SLOT_MAX_RECORD) {
             snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                      "row is too large for a single page: "

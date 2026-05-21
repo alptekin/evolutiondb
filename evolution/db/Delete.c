@@ -8,6 +8,7 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "tuple_format.h"
+#include "toast.h"
 #include "vmap.h"
 #include "mvcc.h"
 #include "lock_mgr.h"
@@ -729,9 +730,14 @@ int DeleteProcess(void)
                     DML_PROF("vmap_clear", vmap_clear(rid.page_no));
                     if (DML_PROF_EXPR("heap_set_xmax",
                                       tapi_heap_set_xmax(rid, g_qctx->mvcc_xid)) < 0) {
-                        /* Pre-MVCC tuple — fall back to physical delete */
+                        /* Pre-MVCC tuple — fall back to physical delete.
+                         * Drop the heap slot first, then reclaim the
+                         * overflow chain so a crash in between leaves
+                         * an orphan chain (recoverable) rather than a
+                         * dangling stub. */
                         tapi_heap_delete(rid);
                         bt2_delete(&pk_tree, mkey);
+                        toast_free_if_stub(rec, rec_len);
                         td.pk_root_page = pk_tree.root_page;
                     }
                     /* AFTER DELETE trigger — same guard as BEFORE */
@@ -832,10 +838,14 @@ int DeleteProcess(void)
             mvcc_ensure_xid(&g_qctx->mvcc_xid);
             vmap_clear(rid.page_no);
             if (tapi_heap_set_xmax(rid, g_qctx->mvcc_xid) < 0) {
-                /* Pre-MVCC tuple — fall back to physical delete */
+                /* Pre-MVCC fallback: delete the heap slot first,
+                 * then reclaim the chain so a crash in between
+                 * leaves an orphan chain (recoverable) instead of
+                 * a dangling stub. */
                 tapi_heap_delete(rid);
                 bt2_delete(&pk_tree, str);
                 td.pk_root_page = pk_tree.root_page;
+                toast_free_if_stub(rec, rec_len);
             }
             printf("Record deleted successfully.\n");
             g_del.rowCount = 1;
@@ -936,8 +946,12 @@ int evo_delete_row(const char *tableName,
 
     vmap_clear(rid.page_no);
     if (tapi_heap_set_xmax(rid, mvcc_xid) < 0) {
+        /* Pre-MVCC fallback: physical delete + chain reclaim.
+         * Heap slot goes first so a crash leaves an orphan chain
+         * rather than a dangling stub. */
         tapi_heap_delete(rid);
         bt2_delete(&pk_tree, pkKey);
+        toast_free_if_stub(rec, rec_len);
     }
 
     cat_increment_dml_counter(td.table_id);

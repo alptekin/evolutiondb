@@ -12,6 +12,7 @@
 #include "../evolution/db/table_api.h"
 #include "../evolution/db/expression.h"
 #include "../evolution/db/tuple_format.h"
+#include "../evolution/db/toast.h"
 #include "../evolution/db/buffer_pool.h"
 #include "pg_protocol.h"
 #include "join.h"
@@ -671,6 +672,23 @@ static void populate_result_row(ResultSet *rs, int row,
                                 const char *recBuf, int recLen,
                                 const ColumnDesc *cols, int ncols)
 {
+    /* TOAST stub — rehydrate the full tuple body from its overflow
+     * chain and recurse. The recursive call sees TUPLE_MAGIC and
+     * proceeds through the normal extraction switch. */
+    if (recLen >= 1 && (unsigned char)recBuf[0] == TOAST_STUB_MAGIC) {
+        ToastRef ref;
+        if (toast_parse_stub(recBuf, recLen, NULL, &ref) != 0) return;
+        if (ref.original_len == 0 ||
+            ref.original_len > 64 * 1024 * 1024) return;
+        char *full = (char *)malloc(ref.original_len);
+        if (!full) return;
+        int n = toast_read(&ref, full, ref.original_len);
+        if (n < 0) { free(full); return; }
+        populate_result_row(rs, row, full, n, cols, ncols);
+        free(full);
+        return;
+    }
+
     if (recLen < (int)(TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE))
         return;
     if ((unsigned char)recBuf[0] != TUPLE_MAGIC)

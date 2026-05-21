@@ -28,8 +28,23 @@ else
     CFLAGS_TLS =
 endif
 
+# liblz4 — used by the TOAST overflow store to keep large text rows
+# from monopolising disk space. The library is a small (~150 KB)
+# system dependency available everywhere as `liblz4-dev` (Debian /
+# Ubuntu), `lz4` (Homebrew, Alpine apk), or `lz4-devel` (RHEL /
+# Fedora). On macOS we also have to point the include + lib paths at
+# the Homebrew cellar because `/opt/homebrew` isn't on the default
+# system search path.
+LDFLAGS += -llz4
+ifeq ($(UNAME),Darwin)
+    CFLAGS_LZ4 = -I/opt/homebrew/include
+    LDFLAGS   += -L/opt/homebrew/lib
+else
+    CFLAGS_LZ4 =
+endif
+
 CC = gcc
-CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS -pipe $(CFLAGS_TLS)
+CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS -pipe $(CFLAGS_TLS) $(CFLAGS_LZ4)
 
 # Evolution engine paths
 EVO_DB     = ../evolution/db
@@ -86,6 +101,7 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/catalog_internal.c \
               $(EVO_DB)/table_api.c \
               $(EVO_DB)/tuple_format.c \
+              $(EVO_DB)/toast.c \
               $(EVO_DB)/hash_idx.c \
               $(EVO_DB)/hnsw.c \
               $(EVO_DB)/Checkpoint.c \
