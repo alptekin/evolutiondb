@@ -186,6 +186,30 @@ CONNECTORS: List[ConnectorSpec] = [
         poll_default=3600,
         indexes=["channel", "playlist title", "video title", "url"],
     ),
+    ConnectorSpec(
+        name="outlook",
+        label="Outlook",
+        cli_entry="evolutiondb-outlook-sync",
+        module_name="outlook_sync",
+        pip_package="evolutiondb-outlook-sync",
+        description=("Microsoft 365 / Outlook mail via Microsoft "
+                      "Graph. Subject, from, to, body, folder, "
+                      "categories, importance, attachment flag."),
+        requires_auth=True,
+        auth_subcommand="--auth",
+        auth_hint=("Register a public-client app in Azure Portal → "
+                   "Entra ID, enable 'Allow public client flows', add "
+                   "Microsoft Graph delegated scopes Mail.Read + "
+                   "User.Read + offline_access, then put the "
+                   "Application (client) ID + Directory (tenant) ID "
+                   "in .env as AZURE_CLIENT_ID + AZURE_TENANT_ID. "
+                   "Use `common` for personal Microsoft accounts. "
+                   "Run --auth once to print a device code and cache "
+                   "a refresh token at ~/.evosql/outlook_token.json."),
+        poll_default=900,
+        indexes=["subject", "from", "to", "body", "folder",
+                  "categories"],
+    ),
 ]
 
 
