@@ -1,0 +1,211 @@
+{
+  "version": 1,
+  "comment": "Default PII detection + masking rules. Override or extend by writing a JSON file with the same shape to ~/.evosql/pii_rules.json — the loader merges user rules over the defaults using `name` as the key.",
+  "rules": [
+    {
+      "name": "email",
+      "enabled": true,
+      "priority": 100,
+      "tag": "email",
+      "pattern": "[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}",
+      "validate": null,
+      "mask": {
+        "kind": "keep_after",
+        "separator": "@",
+        "head_stars": 3
+      }
+    },
+    {
+      "name": "credit_card",
+      "enabled": true,
+      "priority": 95,
+      "tag": "credit_card",
+      "pattern": "\\b(?:\\d[ \\-]?){12,18}\\d\\b",
+      "validate": "luhn",
+      "mask": {
+        "kind": "positional",
+        "keep_first": 8,
+        "keep_last": 4,
+        "preserve_sep": true
+      }
+    },
+    {
+      "name": "tckn",
+      "enabled": true,
+      "priority": 95,
+      "tag": "tckn",
+      "pattern": "\\b\\d{11}\\b",
+      "validate": "tckn_checksum",
+      "mask": {
+        "kind": "positional",
+        "keep_first": 5,
+        "keep_last": 0
+      }
+    },
+    {
+      "name": "iban",
+      "enabled": true,
+      "priority": 95,
+      "tag": "iban",
+      "pattern": "\\b[A-Z]{2}\\d{2}(?:[ ]?[A-Z0-9]{4}){4,8}(?:[ ]?[A-Z0-9]{1,4})?\\b",
+      "validate": "iban_mod97",
+      "mask": {
+        "kind": "positional",
+        "keep_first": 4,
+        "keep_last": 2,
+        "preserve_sep": true
+      }
+    },
+    {
+      "name": "phone_tr",
+      "enabled": true,
+      "priority": 80,
+      "tag": "phone",
+      "pattern": "(?:\\+90[ ]?)?\\(?0?5\\d{2}\\)?[ \\-]?\\d{3}[ \\-]?\\d{2}[ \\-]?\\d{2}",
+      "validate": null,
+      "mask": {
+        "kind": "positional",
+        "keep_first": 7,
+        "keep_last": 2,
+        "preserve_sep": true
+      }
+    },
+    {
+      "name": "phone_intl",
+      "enabled": true,
+      "priority": 70,
+      "tag": "phone",
+      "pattern": "\\+\\d{1,3}[ \\-]?\\(?\\d{1,4}\\)?[ \\-]?\\d{2,4}[ \\-]?\\d{2,4}[ \\-]?\\d{2,4}",
+      "validate": null,
+      "mask": {
+        "kind": "positional",
+        "keep_first": 5,
+        "keep_last": 2,
+        "preserve_sep": true
+      }
+    },
+    {
+      "name": "vkn",
+      "enabled": true,
+      "priority": 90,
+      "tag": "vkn",
+      "pattern": "\\b\\d{10}\\b",
+      "validate": "vkn_checksum",
+      "mask": {
+        "kind": "positional",
+        "keep_first": 6,
+        "keep_last": 0
+      }
+    },
+    {
+      "name": "passport_generic",
+      "enabled": true,
+      "priority": 60,
+      "tag": "passport",
+      "pattern": "\\b[A-Z]\\d{7,8}\\b",
+      "validate": null,
+      "mask": {
+        "kind": "positional",
+        "keep_first": 4,
+        "keep_last": 0
+      }
+    },
+    {
+      "name": "plate_tr",
+      "enabled": true,
+      "priority": 75,
+      "tag": "plate",
+      "pattern": "\\b\\d{2}[ ]?[A-Z]{1,3}[ ]?\\d{2,4}\\b",
+      "validate": null,
+      "mask": {
+        "kind": "positional",
+        "keep_first": 5,
+        "keep_last": 2,
+        "preserve_sep": true
+      }
+    },
+    {
+      "name": "api_token_long",
+      "enabled": true,
+      "priority": 85,
+      "tag": "api_token",
+      "pattern": "\\b(?:sk-|pk-|tok-|gho_|ghp_|github_pat_|secret_)[A-Za-z0-9_\\-]{16,}\\b",
+      "validate": null,
+      "mask": {
+        "kind": "positional",
+        "keep_first": 7,
+        "keep_last": 3,
+        "preserve_sep": false
+      }
+    },
+    {
+      "name": "high_entropy_blob",
+      "enabled": true,
+      "priority": 50,
+      "tag": "secret",
+      "pattern": "\\b[A-Za-z0-9_\\-+/=]{32,}\\b",
+      "validate": "entropy_gte_4_0",
+      "mask": {
+        "kind": "positional",
+        "keep_first": 4,
+        "keep_last": 3,
+        "preserve_sep": false
+      }
+    },
+    {
+      "name": "jwt",
+      "enabled": true,
+      "priority": 88,
+      "tag": "jwt",
+      "pattern": "\\beyJ[A-Za-z0-9_\\-]+\\.[A-Za-z0-9_\\-]+\\.[A-Za-z0-9_\\-]+\\b",
+      "validate": null,
+      "mask": {
+        "kind": "positional",
+        "keep_first": 8,
+        "keep_last": 0
+      }
+    },
+    {
+      "name": "url_with_credentials",
+      "enabled": true,
+      "priority": 92,
+      "tag": "url_secret",
+      "pattern": "https?://[^\\s:@]+:[^\\s:@]+@[^\\s]+",
+      "validate": null,
+      "mask": {
+        "kind": "template",
+        "template": "{scheme}://***:***@{host_path}",
+        "extract": "url_userinfo"
+      }
+    },
+    {
+      "name": "date_of_birth",
+      "enabled": false,
+      "priority": 40,
+      "tag": "dob",
+      "pattern": "\\b(?:0[1-9]|[12]\\d|3[01])[./\\-](?:0[1-9]|1[0-2])[./\\-](?:19|20)\\d{2}\\b",
+      "validate": null,
+      "mask": {
+        "kind": "template",
+        "template": "**/**/****",
+        "extract": "literal"
+      }
+    },
+    {
+      "name": "person_name_tr",
+      "enabled": false,
+      "priority": 30,
+      "tag": "name",
+      "pattern": "\\b(?:[A-ZİĞŞÇÖÜ][a-zığşçöü]{1,15})(?:\\s+[A-ZİĞŞÇÖÜ][a-zığşçöü]{1,15}){1,2}\\b",
+      "validate": "person_name_heuristic",
+      "mask": {
+        "kind": "name_smart",
+        "short_threshold": 5
+      }
+    }
+  ],
+  "limits": {
+    "max_matches_per_field": 200,
+    "max_field_chars_scanned": 65536
+  }
+}
