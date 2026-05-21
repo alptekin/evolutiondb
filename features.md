@@ -124,6 +124,7 @@
 | 93 | SHOW PROCESSLIST / sessions | ✅ | ✅ | ✅ | Session registry, SHOW EVO_SESSIONS |
 | 94 | Constraint Management | ✅ | ✅ | ✅ | Named constraints, NOT VALID, ENABLE/DISABLE/VALIDATE |
 | 95 | ALTER TABLE ADD COLUMN | ✅ | ✅ | ✅ | Existing rows return NULL for new column |
+| 96 | Row Overflow Storage (TOAST) | ✅ | ✅ | ⬜ | Transparent off-page storage for large `VARCHAR`/`TEXT`/`JSON`/`BLOB`; LZ4 compression; Task #233 |
 
 ## ⚙️ Resolved Storage Limitations
 
@@ -134,7 +135,7 @@
 | Dynamic allocation | ✅ Resolved | No static caps on ORDER BY, UPDATE, DELETE |
 | Row-level locking / MVCC | ✅ Resolved | lock_mgr.c + 7-layer MVCC |
 | Crash recovery | ✅ Resolved | FPI-based WAL + checkpoint |
-| Record size cap | ~8 KB | TOAST not yet implemented |
+| Record size cap | 4 KB (one slotted page) | TOAST overflow planned — Task #233 (Feature #96) |
 | Connection pooling | ❌ | Thread-per-connection model |
 
 ## 🏗️ Unified Storage Migration — Complete ✅
