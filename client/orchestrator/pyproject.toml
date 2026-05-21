@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolutiondb-hub"
-version = "0.5.0"
+version = "0.5.1"
 description = "One panel for every EvolutionDB sync connector and AI memory client. Web UI and terminal share the same controls."
 requires-python = ">=3.9"
 license = {text = "MIT"}
