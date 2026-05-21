@@ -12,14 +12,16 @@ Public surface:
     )
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
-from .detect   import detect, Match
-from .mask     import mask
-from .crypto   import encrypt_record, decrypt_record, generate_keypair
-from .rules    import load_rules, Rule
+from .detect      import detect, Match
+from .mask        import mask
+from .crypto      import encrypt_record, decrypt_record, generate_keypair
+from .rules       import load_rules, Rule
+from .integration import protect_record
 
 __all__ = [
     "detect", "mask", "encrypt_record", "decrypt_record",
-    "generate_keypair", "load_rules", "Match", "Rule",
+    "generate_keypair", "load_rules", "protect_record",
+    "Match", "Rule",
 ]

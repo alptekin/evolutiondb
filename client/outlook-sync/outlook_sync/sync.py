@@ -33,6 +33,17 @@ from . import api as api_mod
 from . import auth as auth_mod
 from . import state as state_mod
 
+# Optional PII protection. evolutiondb-pii ships protect_record()
+# which masks + encrypts on the way to MEMORY PUT when a public
+# key exists; without one it is a transparent passthrough. The
+# helper handles engine resolution, token chunking, and companion
+# row formatting so this file stays focused on Graph + Outlook
+# specifics.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
 
 # Stored mail bodies stay safely under the engine's 4 KB per-row
 # ceiling (PR #240 made the limit honest; Task #233 will remove it).
@@ -47,103 +58,11 @@ _PII_FIELDS = ["fact", "subject", "from", "to", "cc", "snippet", "body"]
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
-# ---------------------------------------------------------------- #
-#  Optional PII protection                                          #
-# ---------------------------------------------------------------- #
-# When evolutiondb-pii is installed AND a public key exists under
-# ~/.evosql/pii_public.pem, every record is masked + encrypted
-# before MEMORY PUT. The row stores the masked rendering inline and
-# the original sensitive fragments as opaque ciphertext under
-# `_pii.tokens`. search_memory and any downstream LLM see only the
-# masked form; restoring originals requires the private key via
-# `evolutiondb-pii decrypt`.
-_pii_state = {"checked": False, "engine": None, "public_key": None}
-
-
-def _pii_engine():
-    """Resolve the PII engine lazily. Returns `None` when protection
-    is disabled (library missing, key missing, or user opted out)."""
-    if _pii_state["checked"]:
-        return _pii_state["engine"]
-    _pii_state["checked"] = True
-
-    mode = (os.environ.get("OUTLOOK_PII_MASK", "auto") or "auto").lower()
-    if mode == "off":
-        return None
-
-    try:
-        from evolutiondb_pii import (encrypt_record as _enc,
-                                       load_rules)
-        from evolutiondb_pii.crypto import (DEFAULT_PUBLIC_KEY_PATH,
-                                              load_public_key)
-    except ImportError:
-        if mode == "on":
-            print("[outlook-sync] OUTLOOK_PII_MASK=on but "
-                  "evolutiondb-pii is not installed",
-                  file=sys.stderr, flush=True)
-        return None
-
-    key_path = os.environ.get("EVOSQL_PII_PUBLIC_KEY",
-                                DEFAULT_PUBLIC_KEY_PATH)
-    try:
-        pubkey = load_public_key(key_path)
-    except FileNotFoundError:
-        if mode == "on":
-            print(f"[outlook-sync] OUTLOOK_PII_MASK=on but no public "
-                  f"key at {key_path}. Run `evolutiondb-pii keygen`.",
-                  file=sys.stderr, flush=True)
-        return None
-
-    rules = load_rules()
-    print(f"[outlook-sync] PII protection enabled "
-          f"({len(rules)} rules, key={key_path})",
-          file=sys.stderr, flush=True)
-    _pii_state["public_key"] = pubkey
-    _pii_state["engine"] = {
-        "encrypt": _enc, "public_key": pubkey, "rules": rules,
-    }
-    return _pii_state["engine"]
-
-
-def _apply_pii(rec: Dict):
-    """Return (masked_rec, tokens). No-op when protection is off
-    returns (rec, [])."""
-    eng = _pii_engine()
-    if eng is None:
+def _protect(rec, main_key):
+    if _pii_protect is None:
         return rec, []
-    masked, tokens = eng["encrypt"](
-        rec, fields=_PII_FIELDS,
-        public_key=eng["public_key"],
-        rules=eng["rules"])
-    return masked, tokens
-
-
-# Single MEMORY PUT carries one SQL statement, which the engine
-# caps at 8 KB on the wire. Each PII token weighs ~600 bytes
-# (RSA-OAEP-wrapped AES key dominates), so any oversize mail with
-# more than ~10 detected fragments would blow past the limit if
-# we stored the token list inline. Split tokens into companion
-# rows of ~5 KB each and keep only a list of pointers on the
-# primary row — the main record stays small and snappy for
-# search_memory, the cipher tokens get fetched only when an
-# operator calls `evolutiondb-pii decrypt`.
-_PII_CHUNK_BYTES = 5500
-
-
-def _chunk_tokens(tokens):
-    if not tokens:
-        return []
-    chunks, current, size = [], [], 0
-    for tok in tokens:
-        t_size = len(json.dumps(tok, ensure_ascii=False))
-        if current and size + t_size > _PII_CHUNK_BYTES:
-            chunks.append(current)
-            current, size = [], 0
-        current.append(tok)
-        size += t_size
-    if current:
-        chunks.append(current)
-    return chunks
+    return _pii_protect(rec, fields=_PII_FIELDS,
+                        key_prefix=f"{main_key}_pii")
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -365,20 +284,13 @@ def sync_once(cfg: Config, *,
         if not rec:
             counters["skipped"] += 1
             return
-        rec, pii_tokens = _apply_pii(rec)
-        pii_chunks = _chunk_tokens(pii_tokens)
-        if pii_chunks:
-            rec["_pii_refs"] = [
-                f"outlook_pii_{msg_id}_{i}" for i in range(len(pii_chunks))]
+        main_key = f"outlook_msg_{msg_id}"
+        rec, companions = _protect(rec, main_key)
         if store:
             try:
-                store.put_record(f"outlook_msg_{msg_id}", rec)
-                for i, chunk in enumerate(pii_chunks):
-                    store.put_record(
-                        f"outlook_pii_{msg_id}_{i}",
-                        {"version": 1, "of": "outlook",
-                          "msg_id": msg_id, "chunk": i,
-                          "tokens": chunk})
+                store.put_record(main_key, rec)
+                for ck, cv in companions:
+                    store.put_record(ck, cv)
             except Exception as exc:  # noqa: BLE001
                 # One bad row should not abort the whole pass — log
                 # and move on so the rest of the inbox still lands.
