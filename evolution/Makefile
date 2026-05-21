@@ -6,12 +6,17 @@ UNAME := $(shell uname -s 2>/dev/null || echo Windows)
 
 CC = gcc
 CFLAGS = -Wall -g -D_CRT_SECURE_NO_WARNINGS
-LDFLAGS =
+LDFLAGS = -llz4
 
 ifeq ($(UNAME),Linux)
     EXE = evosql
 else ifeq ($(UNAME),Darwin)
     EXE = evosql
+    # Homebrew installs liblz4 under /opt/homebrew on Apple Silicon
+    # and /usr/local on Intel — point at both so build doesn't need
+    # the caller to pre-set PKG_CONFIG_PATH.
+    CFLAGS  += -I/opt/homebrew/include -I/usr/local/include
+    LDFLAGS += -L/opt/homebrew/lib -L/usr/local/lib
 else
     EXE = evosql.exe
 endif

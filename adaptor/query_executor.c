@@ -678,10 +678,11 @@ static void populate_result_row(ResultSet *rs, int row,
     if (recLen >= 1 && (unsigned char)recBuf[0] == TOAST_STUB_MAGIC) {
         ToastRef ref;
         if (toast_parse_stub(recBuf, recLen, NULL, &ref) != 0) return;
-        if (ref.total_len == 0 || ref.total_len > 64 * 1024 * 1024) return;
-        char *full = (char *)malloc(ref.total_len);
+        if (ref.original_len == 0 ||
+            ref.original_len > 64 * 1024 * 1024) return;
+        char *full = (char *)malloc(ref.original_len);
         if (!full) return;
-        int n = toast_read(&ref, full, ref.total_len);
+        int n = toast_read(&ref, full, ref.original_len);
         if (n < 0) { free(full); return; }
         populate_result_row(rs, row, full, n, cols, ncols);
         free(full);
