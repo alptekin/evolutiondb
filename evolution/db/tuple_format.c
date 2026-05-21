@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include "tuple_format.h"
 #include "expression.h"  /* NULL_MARKER */
+#include "toast.h"       /* TOAST_STUB_MAGIC + rehydration helpers */
 
 /* ----------------------------------------------------------------
  *  Type family helper
@@ -133,6 +134,10 @@ static void uuid_format(const uint8_t *bin, char *out)
  * ---------------------------------------------------------------- */
 int tup_record_len(const char *bin_rec, int buf_len)
 {
+    if (buf_len < 1) return -1;
+    if ((unsigned char)bin_rec[0] == TOAST_STUB_MAGIC) {
+        return (buf_len >= TOAST_STUB_SIZE) ? TOAST_STUB_SIZE : -1;
+    }
     if (buf_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE)
         return -1;
     if ((unsigned char)bin_rec[0] != TUPLE_MAGIC)
@@ -150,7 +155,12 @@ int tup_has_mvcc(const char *tuple_data, int tuple_len)
 {
     if (tuple_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE)
         return 0;
-    if ((unsigned char)tuple_data[0] != TUPLE_MAGIC)
+    /* TOAST stubs mirror the magic/header/MVCC byte layout of a
+     * normal tuple, so the same offset-based xmin / xmax / flags
+     * accessors work on them once the magic check accepts the stub
+     * marker too. */
+    unsigned char m = (unsigned char)tuple_data[0];
+    if (m != TUPLE_MAGIC && m != TOAST_STUB_MAGIC)
         return 0;
     uint8_t flags = (uint8_t)tuple_data[TUPLE_PREFIX_SIZE + 3];
     return (flags & TUPLE_FLAG_MVCC) ? 1 : 0;
@@ -386,6 +396,25 @@ int tup_extract_fields(const char *bin_rec, int bin_len,
                        const ColumnDesc *cols, int ncols,
                        char fields[][256], int *is_null, int max_fields)
 {
+    /* TOAST stub — rehydrate the chain and recurse with the inlined
+     * tuple bytes. The recursive call sees TUPLE_MAGIC at byte 0 and
+     * proceeds through the normal path. */
+    if (bin_len >= 1 && (unsigned char)bin_rec[0] == TOAST_STUB_MAGIC) {
+        ToastRef ref;
+        if (toast_parse_stub(bin_rec, bin_len, NULL, &ref) != 0)
+            return -1;
+        if (ref.total_len == 0 || ref.total_len > 64 * 1024 * 1024)
+            return -1;  /* sanity cap: 64 MB ceiling on a single tuple */
+        char *full = (char *)malloc(ref.total_len);
+        if (!full) return -1;
+        int n = toast_read(&ref, full, ref.total_len);
+        if (n < 0) { free(full); return -1; }
+        int rc = tup_extract_fields(full, n, cols, ncols,
+                                     fields, is_null, max_fields);
+        free(full);
+        return rc;
+    }
+
     if (bin_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE)
         return -1;
     if ((unsigned char)bin_rec[0] != TUPLE_MAGIC)
