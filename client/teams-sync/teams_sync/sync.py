@@ -36,6 +36,23 @@ from . import auth as auth_mod
 from . import graph as graph_mod
 from . import state as state_mod
 
+# Optional PII protection — chat bodies routinely contain emails,
+# phone numbers, IBANs, and the like; masking them keeps the rows
+# safe to surface to a public LLM via search_memory.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "text", "sender", "chat"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS,
+                        key_prefix=f"{main_key}_pii")
+
 
 # ---------------------------------------------------------------- #
 #  Config                                                           #
@@ -187,7 +204,10 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
                     if store:
                         key = (f"teams_chat_{chat_id}_"
                                f"{rec['message_id']}")
+                        rec, companions = _protect(rec, key)
                         store.put_message(key, rec)
+                        for ck, cv in companions:
+                            store.put_message(ck, cv)
                     wrote += 1
                     if (rec["modified_at"] or "") > (highest_seen or ""):
                         highest_seen = rec["modified_at"]

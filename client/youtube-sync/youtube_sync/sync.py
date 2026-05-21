@@ -20,6 +20,24 @@ from . import api   as api_mod
 from . import auth  as auth_mod
 from . import state as state_mod
 
+# Optional PII protection. YouTube data is mostly metadata
+# (channel + video titles), but video descriptions and channel
+# About sections can carry contact details — same masker, same
+# transparent passthrough when no key is on disk.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "title", "description", "channel", "url"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS,
+                        key_prefix=f"{main_key}_pii")
+
 
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -176,7 +194,11 @@ def sync_once(cfg: Config, *,
                 if not rec:
                     continue
                 if store:
-                    store.put_record(key_fn(rec), rec)
+                    main_key = key_fn(rec)
+                    rec, companions = _protect(rec, main_key)
+                    store.put_record(main_key, rec)
+                    for ck, cv in companions:
+                        store.put_record(ck, cv)
                 counters[label] += 1
         except Exception as exc:  # noqa: BLE001
             print(f"[youtube-sync] {label} fetch failed: {exc}",
