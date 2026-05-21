@@ -6,6 +6,7 @@
 #include "table_api.h"
 #include "mvcc.h"
 #include "tuple_format.h"
+#include "toast.h"
 #include "vmap.h"
 
 /*
@@ -297,6 +298,10 @@ int ReclaimTableProcess(void)
                              * already clear (the live tip has none). */
                             live_rec[TUPLE_PREFIX_SIZE + 3] &=
                                 (char)~(TUPLE_FLAG_HEAP_ONLY | TUPLE_FLAG_HOT_UPDATED);
+                            /* The dead-root slot might have pointed at an
+                             * overflow chain; reclaim it before its bytes
+                             * get overwritten by the live payload below. */
+                            toast_free_if_stub(rec, rec_len);
                             slot_update(page_buf, si, live_rec,
                                         (uint16_t)live_len);
                             /* Remove the live tuple's own slot — its content
@@ -345,9 +350,16 @@ int ReclaimTableProcess(void)
                     }
                 }
 
-                /* Delete the slot */
+                /* Delete the slot first, then reclaim any TOAST
+                 * overflow chain. Ordering matters: if we crash in
+                 * between, the worst case is an orphan chain
+                 * (pages allocated but unreferenced — recoverable
+                 * later by a sweeper) instead of a half-freed
+                 * chain that still has a live stub pointing at it
+                 * (which would CRC-fail on read). */
                 slot_delete(page_buf, si);
                 page_modified = 1;
+                toast_free_if_stub(rec, rec_len);
                 dead_count++;
             }
 
