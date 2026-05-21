@@ -145,4 +145,12 @@ int toast_parse_stub(const char *rec, int rec_len,
                      uint32_t *table_id_out,
                      ToastRef *ref_out);
 
+/* If `rec` is a TOAST stub, parse it and free the underlying
+ * overflow chain. Safe no-op on a normal tuple, NULL, or too-short
+ * buffer. Returns the number of pages freed (0 on no-op, 1+ on
+ * actual reclaim). Callers reach this from every physical
+ * heap-slot removal site so a deleted / replaced oversize row
+ * doesn't leak its chain pages. */
+int toast_free_if_stub(const char *rec, int rec_len);
+
 #endif /* EVO_TOAST_H */

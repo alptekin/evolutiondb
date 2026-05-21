@@ -12,6 +12,7 @@
 #include "expression.h"
 #include "catalog_internal.h"
 #include "table_api.h"
+#include "toast.h"
 #include "tuple_format.h"
 #include "mvcc.h"
 #include "Memory.h"
@@ -319,9 +320,23 @@ int MemoryPutProcess(void)
             BTree2 pk_tree = { .root_page = dtd.pk_root_page };
             RowID rid;
             if (bt2_search(&pk_tree, pk, &rid) == 0) {
+                /* Read the existing slot first so we can reclaim
+                 * its TOAST overflow chain when it's a stub —
+                 * MEMORY PUT physically deletes the row instead of
+                 * relying on RECLAIM, so the helper has to fire
+                 * here or the chain leaks for every overwrite. */
+                char prev_rec[TOAST_STUB_SIZE + 16];
+                int prev_len = tapi_heap_read(rid, prev_rec,
+                                                sizeof(prev_rec));
                 if (g_qctx) mvcc_ensure_xid(&g_qctx->mvcc_xid);
+                /* Delete the heap slot + bt2 entry first; the chain
+                 * free happens last so a crash in between is an
+                 * orphan chain (recoverable) rather than a dangling
+                 * stub that would CRC-fail on read. */
                 tapi_heap_delete(rid);
                 bt2_delete(&pk_tree, pk);
+                if (prev_len > 0)
+                    toast_free_if_stub(prev_rec, prev_len);
             }
         }
     }
