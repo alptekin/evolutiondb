@@ -306,3 +306,19 @@ int toast_parse_stub(const char *rec, int rec_len,
     ref_out->version    = TOAST_REF_VERSION;
     return 0;
 }
+
+
+int toast_free_if_stub(const char *rec, int rec_len)
+{
+    if (!toast_is_stub(rec, rec_len)) return 0;
+    ToastRef ref;
+    if (toast_parse_stub(rec, rec_len, NULL, &ref) != 0) return 0;
+    if (ref.first_page == 0) return 0;
+    /* toast_free walks the chain and counts pages via its own
+     * safety counter; here we just want a "non-zero on actual
+     * reclaim" signal so callers can log / track it. */
+    uint32_t chunks = (ref.total_len + TOAST_CHUNK_PAYLOAD - 1)
+                      / TOAST_CHUNK_PAYLOAD;
+    toast_free(&ref);
+    return (int)chunks;
+}

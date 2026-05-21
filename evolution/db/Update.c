@@ -9,6 +9,7 @@
 #include "catalog_internal.h"
 #include "table_api.h"
 #include "tuple_format.h"
+#include "toast.h"
 #include "vmap.h"
 #include "mvcc.h"
 #include "lock_mgr.h"
@@ -1092,8 +1093,12 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
         DML_PROF("vmap_clear", vmap_clear(rid.page_no));
         if (DML_PROF_EXPR("heap_set_xmax",
                           tapi_heap_set_xmax(rid, g_qctx->mvcc_xid)) < 0) {
-            /* Pre-MVCC tuple: physically delete old record */
+            /* Pre-MVCC tuple: physically delete old record. Free
+             * the overflow chain after the heap slot is gone so a
+             * crash in between is an orphan chain (recoverable),
+             * not a dangling stub that would CRC-fail on read. */
             tapi_heap_delete(rid);
+            toast_free_if_stub(existingData, existingDataLen);
             hot_eligible = 0;  /* can't HOT without MVCC old version */
         }
 
