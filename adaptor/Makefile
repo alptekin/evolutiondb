@@ -86,6 +86,7 @@ EVO_DB_SRCS = $(EVO_DB)/error.c \
               $(EVO_DB)/catalog_internal.c \
               $(EVO_DB)/table_api.c \
               $(EVO_DB)/tuple_format.c \
+              $(EVO_DB)/toast.c \
               $(EVO_DB)/hash_idx.c \
               $(EVO_DB)/hnsw.c \
               $(EVO_DB)/Checkpoint.c \

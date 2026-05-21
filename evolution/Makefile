@@ -47,6 +47,7 @@ SRCS = main.c \
        db/catalog_internal.c \
        db/table_api.c \
        db/tuple_format.c \
+       db/toast.c \
        db/hash_idx.c \
        db/page_crypt.c \
        db/mvcc.c \

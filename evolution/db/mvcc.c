@@ -23,6 +23,7 @@
 #include "mvcc.h"
 #include "page_mgr.h"
 #include "tuple_format.h"
+#include "toast.h"
 #include "query_context.h"
 
 /* ================================================================
@@ -596,9 +597,12 @@ void mvcc_set_hint_committed(uint32_t page_no, uint16_t slot_idx)
     memcpy(&rec_offset, page_buf + PAGE_HEADER_SIZE + 6 + slot_idx * 4, 2);
     if (rec_offset == 0) return;  /* deleted slot */
 
-    /* Check magic + MVCC flag */
+    /* Check magic + MVCC flag. The TOAST stub uses TOAST_STUB_MAGIC
+     * but mirrors the flags byte at the same offset, so the hint
+     * write still lands correctly. */
     char *rec = page_buf + rec_offset;
-    if ((unsigned char)rec[0] != TUPLE_MAGIC) return;
+    unsigned char m = (unsigned char)rec[0];
+    if (m != TUPLE_MAGIC && m != TOAST_STUB_MAGIC) return;
     uint8_t *flags = (uint8_t *)&rec[TUPLE_PREFIX_SIZE + 3];
     if (!(*flags & TUPLE_FLAG_MVCC)) return;
     if (*flags & TUPLE_FLAG_XMIN_COMMITTED) return;  /* already set */
