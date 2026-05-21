@@ -4025,6 +4025,27 @@ See `docs/adr/ADR-002-agent-memory-platform-roadmap.md` for the architecture dec
 
 ---
 
+## Day 102 — Sprint 9: Overflow Storage for Large Rows
+
+### Task 233: ⬜ TOAST-Style Row Overflow Storage (Feature #233)
+
+**Goal:** Bugün her satır tek bir 4 KB slotted page'e sığmak zorunda; `SLOT_MAX_RECORD = 4070` byte üstü tuple `54000 / row is too large for a single page` hatasıyla reddediliyor. PostgreSQL TOAST, MySQL `ROW_FORMAT=DYNAMIC`, SQLite overflow page chain, SQL Server `ROW_OVERFLOW_DATA`, Oracle chained rows + LOB segments — büyük SQL motorlarının hiçbiri bu limiti kullanıcıya göstermez. EvolutionDB'ye PostgreSQL TOAST pattern'inde **şeffaf taşma deposu** ekle: büyük alanları ayrı `PAGE_TOAST` zincirine taşı, ana tuple'da kısa bir pointer bırak. Tetikleyici production case: Apple Notes Türkçe içeriği `evolutiondb-notes-sync` üzerinden 4 KB+ tuple üretiyor (PR #240 yanıltıcı duplicate-key mesajını düzeltti ama gerçek sınır hâlâ kullanıcıya görünüyor).
+
+| Step | Description | Files |
+|------|-------------|-------|
+| 1 | `PAGE_TOAST` page tipi + `pgm_alloc_page(PAGE_TOAST)`. Layout: `[PageHeader][next_page:4][prev_page:4][payload_len:2][payload bytes...]`. Zincir doğrusal (sibling pointer'lı), reclaim dahil. | `evolution/db/page_mgr.h`, `evolution/db/page_mgr.c` |
+| 2 | `toast.h/c` modülü: `toast_write(value, len) → ToastRef{first_page, total_len, chunk_count, crc32}`, `toast_read(ref, out_buf, max) → len`, `toast_free(ref)`. Chunk boyu `EVO_PAGE_SIZE - header - 14 ≈ 4070 byte`. CRC32 ile bütünlük kontrolü. | `evolution/db/toast.h`, `evolution/db/toast.c` (new) |
+| 3 | Tuple format genişletmesi: yeni alan flag `TUPLE_FLAG_FIELD_TOASTED = 0x10`; flag set ise alan değeri yerine 18-byte `ToastRef` binary olarak gömülür. Backward compat: flag yoksa eski okuyucular hâlâ çalışır. | `evolution/db/tuple_format.h`, `evolution/db/tuple_format.c` |
+| 4 | `tup_build()` push policy: tuple build sırasında toplam boyut `SLOT_MAX_RECORD` eşiğine yaklaşırsa, en büyük variable-length alanları (`VARCHAR`, `TEXT`, `JSON`, `BINARY`, `BYTEA`) `toast_write()` ile dışa al; pointer bırak. Eşik altında kalana kadar iteratif uygula (PostgreSQL'in pglz_compress_strategy mantığı). | `evolution/db/tuple_format.c` |
+| 5 | `tup_extract_fields()` read-path: bir alanın TOASTED bayrağı set ise `ToastRef`'i çöz, `toast_read()` ile rehydrate et, çağırana plaintext döndür. Anti-pollution ring kullan (büyük scan'ler buffer pool'u kirletmesin). | `evolution/db/tuple_format.c`, `evolution/db/buffer_pool.c` |
+| 6 | DML lifecycle: INSERT yazar, UPDATE eski TOAST zincirini free + yeni write, DELETE eski zinciri free. RECLAIM TOAST zincirleri taranmayan satırlardan sonra GC. MVCC: TOAST zincirleri xmin/xmax taşımaz; sahibi heap tuple'ın visibility'sine göre yaşar. | `evolution/db/Insert.c`, `evolution/db/Update.c`, `evolution/db/Delete.c`, `evolution/db/Reclaim.c` |
+| 7 | WAL FPI / replay: `toast_write` ve `toast_free` WAL'a kaydedilir; crash recovery sırasında heap replay'inden ÖNCE TOAST replay (ana tuple çözülürken zincirin sağlam olması için). | `evolution/db/wal.c` |
+| 8 | LZ4 sıkıştırma (opsiyonel ama default açık): TOAST yazımından önce LZ4 dene; sıkıştırma oranı <%75 ise sıkıştır, değilse plaintext. `ToastRef.flags` 1 bit ile işaretle. Build-time `LZ4=1` flag, runtime fallback yoksa skip. Türkçe / İngilizce metin için ~%50 kazanç beklenir. | `evolution/db/toast.c`, `Makefile` |
+| 9 | Test suite `tests/test_toast.py`: 15+ case — (a) 4070 byte üstü satır artık başarılı, (b) tek satırın 1 MB JSON field'ı round-trip, (c) UPDATE eski zinciri free ediyor (`__sys_page_count` öncesi/sonrası), (d) DELETE + RECLAIM zincirleri geri kazanıyor, (e) CRASH + WAL replay sonrası okuyabiliyor, (f) MVCC eski xmin'li satırın TOAST'u snapshot'tan görünür, (g) LZ4 on/off davranışı, (h) bin-tuple format backward compat (TOASTED flag olmayan eski satırlar hâlâ okunuyor). | `tests/test_toast.py` (new) |
+| 10 | Documentation + tasks.md entry + commit + PR. `docs/storage/toast.md` — design, threshold seçimi, sıkıştırma stratejisi, sınırlar (max 1 TB / alan, chunk size). `README.md` "Limits" tablosunda eski `row ≤ 4 KB` satırını `row ≤ 1 TB (transparent overflow)` ile güncelle. | `docs/storage/toast.md` (new), `README.md`, `tasks.md` |
+
+---
+
 ## Day 89 — Final Task
 
 ### Task 98: ⬜ Comprehensive Integration & Hardening
