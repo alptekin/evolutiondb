@@ -233,5 +233,134 @@ class TestUserRuleOverride(unittest.TestCase):
             tmp.unlink()
 
 
+class TestPassphraseWrap(unittest.TestCase):
+    """Passphrase-wrapped private key round-trip — the core of the
+    DB-backed keystore. A wrong passphrase must fail; the right one
+    must restore an RSA key that decrypts ciphertext encrypted
+    under the matching public key."""
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from evolutiondb_pii.crypto import (encrypt_record,
+                                              decrypt_record,
+                                              wrap_private_key,
+                                              unwrap_private_key)
+        self.priv = rsa.generate_private_key(public_exponent=65537,
+                                              key_size=2048)
+        self.pub  = self.priv.public_key()
+        self.wrap_private_key  = wrap_private_key
+        self.unwrap_private_key = unwrap_private_key
+        self.encrypt_record = encrypt_record
+        self.decrypt_record = decrypt_record
+
+    def test_wrap_unwrap_correct_passphrase(self):
+        wrapped = self.wrap_private_key(self.priv, b"correct-horse")
+        out = self.unwrap_private_key(wrapped, b"correct-horse")
+        # Round-trip: encrypt with the public key, decrypt with the
+        # unwrapped private key — payload must restore.
+        rec  = {"text": "Müşteri Mehmet, kart 4111 1111 1111 1111"}
+        masked, tokens = self.encrypt_record(
+            rec, fields=["text"], public_key=self.pub)
+        restored = self.decrypt_record(masked, tokens, private_key=out)
+        self.assertEqual(restored["text"], rec["text"])
+
+    def test_wrap_unwrap_wrong_passphrase(self):
+        wrapped = self.wrap_private_key(self.priv, b"correct-horse")
+        with self.assertRaises(ValueError):
+            self.unwrap_private_key(wrapped, b"battery-staple")
+
+    def test_wrap_rejects_empty_passphrase(self):
+        with self.assertRaises(ValueError):
+            self.wrap_private_key(self.priv, b"")
+
+
+class TestDbBackedFlowsLocally(unittest.TestCase):
+    """End-to-end flows without a live DB — we substitute an
+    in-memory dict-backed fake `store_io` that has the same surface
+    `keystore.py` and `rule_store.py` expect (write_row / fetch_row /
+    fetch_rows_with_prefix)."""
+    def setUp(self):
+        import evolutiondb_pii.store_io as io
+        self._real = {fn: getattr(io, fn)
+                      for fn in ("write_row", "fetch_row",
+                                  "fetch_rows_with_prefix",
+                                  "connect_from_env")}
+        self._db = {}
+
+        def write_row(_conn, store, ns, key, value):
+            self._db.setdefault(store, {}).setdefault(ns, {})[key] = value
+
+        def fetch_row(_conn, store, ns, key):
+            return (self._db.get(store, {})
+                            .get(ns, {})
+                            .get(key))
+
+        def fetch_rows_with_prefix(_conn, store, ns, prefix, *,
+                                    limit=100_000):
+            for k, v in (self._db.get(store, {})
+                                  .get(ns, {}).items()):
+                if k.startswith(prefix):
+                    yield k, v
+
+        def fake_connect_from_env(env=None):  # noqa: ARG001
+            return object()    # opaque, never inspected
+
+        io.write_row              = write_row
+        io.fetch_row              = fetch_row
+        io.fetch_rows_with_prefix = fetch_rows_with_prefix
+        io.connect_from_env       = fake_connect_from_env
+
+    def tearDown(self):
+        import evolutiondb_pii.store_io as io
+        for fn, ref in self._real.items():
+            setattr(io, fn, ref)
+
+    def test_db_keystore_roundtrip(self):
+        import evolutiondb_pii.keystore as ks
+        conn = object()
+        info = ks.generate_keypair_in_db(conn, b"hunter2",
+                                          namespace="alice")
+        self.assertIn("key_id",       info)
+        self.assertIn("public_pem",   info)
+        pub  = ks.read_public_key(mode="db",  namespace="alice", conn=conn)
+        priv = ks.read_private_key(mode="db", namespace="alice",
+                                    passphrase=b"hunter2", conn=conn)
+        # Encrypt then decrypt with the round-tripped pair.
+        from evolutiondb_pii.crypto import (encrypt_record,
+                                              decrypt_record)
+        masked, toks = encrypt_record(
+            {"text": "Email: a@b.com"}, fields=["text"], public_key=pub)
+        restored = decrypt_record(masked, toks, private_key=priv)
+        self.assertEqual(restored["text"], "Email: a@b.com")
+
+    def test_db_keystore_wrong_passphrase(self):
+        import evolutiondb_pii.keystore as ks
+        conn = object()
+        ks.generate_keypair_in_db(conn, b"hunter2", namespace="alice")
+        with self.assertRaises(ValueError):
+            ks.read_private_key(mode="db", namespace="alice",
+                                  passphrase=b"wrong", conn=conn)
+
+    def test_db_rules_pushpull(self):
+        import evolutiondb_pii.rule_store as rs
+        conn = object()
+        blob = {"version": 1, "rules": [
+            {"name": "internal_id", "enabled": True,
+              "priority": 50, "tag": "emp_id",
+              "pattern": r"\bEMP-\d{6}\b",
+              "mask": {"kind": "positional",
+                        "keep_first": 4, "keep_last": 0}},
+            {"name": "ticket_id",   "enabled": True,
+              "priority": 40, "tag": "ticket",
+              "pattern": r"\bT-\d{5}\b",
+              "mask": {"kind": "full_star"}},
+        ]}
+        rs.push_rules(conn, blob, namespace="alice", replace=False)
+        pulled = rs.pull_rules(conn, namespace="alice")
+        # Rules round-trip — every name we pushed is present.
+        names_in  = {r["name"] for r in blob["rules"]}
+        names_out = {r["name"] for r in pulled["rules"]}
+        self.assertEqual(names_in, names_out)
+
+
 if __name__ == "__main__":
     unittest.main()
