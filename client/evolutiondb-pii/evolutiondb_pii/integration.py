@@ -59,20 +59,29 @@ def _resolve_engine(env_var: str = "EVOSQL_PII_MASK"):
         return None
 
     try:
-        from .crypto import (DEFAULT_PUBLIC_KEY_PATH, encrypt_record,
-                              load_public_key)
-        from .rules  import load_rules
+        from .crypto    import (DEFAULT_PUBLIC_KEY_PATH, encrypt_record,
+                                 load_public_key)
+        from .keystore  import read_public_key as _ks_read_public
+        from .rules     import load_rules
     except Exception:                                # pragma: no cover
         return None
 
-    key_path = os.environ.get("EVOSQL_PII_PUBLIC_KEY",
-                                DEFAULT_PUBLIC_KEY_PATH)
+    # Honour the keystore selector first; only if it's `file` (or
+    # absent + no DB row exists) do we fall back to the explicit
+    # `EVOSQL_PII_PUBLIC_KEY` path. The keystore module already
+    # implements the `auto` → DB-first-then-file walk.
+    keystore_mode = os.environ.get("EVOSQL_PII_KEYSTORE")
     try:
-        pubkey = load_public_key(key_path)
-    except FileNotFoundError:
+        if keystore_mode:
+            pubkey = _ks_read_public(mode=keystore_mode)
+        else:
+            key_path = os.environ.get("EVOSQL_PII_PUBLIC_KEY",
+                                       DEFAULT_PUBLIC_KEY_PATH)
+            pubkey = load_public_key(key_path)
+    except FileNotFoundError as exc:
         if mode == "on":
             print(f"[evolutiondb-pii] {env_var}=on but no public "
-                  f"key at {key_path}. Run `evolutiondb-pii keygen`.",
+                  f"key available: {exc}",
                   file=sys.stderr, flush=True)
         return None
 

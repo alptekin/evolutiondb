@@ -41,7 +41,47 @@ from .mask    import mask
 from .rules   import load_rules
 
 
+def _read_passphrase(prompt: str = "Private key passphrase: ") -> str:
+    """Read a passphrase non-interactively when `EVOSQL_PII_PASSPHRASE`
+    is set in the environment, otherwise fall back to an interactive
+    `getpass`. The env var path makes the CLI scriptable for ops
+    workflows that pull secrets from a vault."""
+    pw = os.environ.get("EVOSQL_PII_PASSPHRASE")
+    if pw:
+        return pw
+    return getpass(prompt)
+
+
 def _cmd_keygen(args: argparse.Namespace) -> int:
+    # DB-backed branch — wrap the private key with a passphrase
+    # and write a single `__pii_keystore` row.
+    if args.store == "db":
+        from . import keystore as ks
+        from . import store_io
+        conn = store_io.connect_from_env()
+        if ks.db_keystore_exists(conn, namespace=args.namespace) \
+                and not args.force:
+            print("error: a keystore row already exists; pass "
+                  "--force to overwrite (rotates the keypair; any "
+                  "previously-encrypted tokens become unreadable)",
+                  file=sys.stderr)
+            return 2
+        pw = _read_passphrase("Private key passphrase: ")
+        if not pw:
+            print("error: --store=db requires a non-empty passphrase",
+                  file=sys.stderr)
+            return 2
+        info = ks.generate_keypair_in_db(conn, pw.encode("utf-8"),
+                                           namespace=args.namespace,
+                                           bits=args.bits)
+        print(json.dumps({"ok": True,
+                          "store":     "db",
+                          "namespace": ks._resolve_namespace(args.namespace),
+                          "key_id":    info["key_id"],
+                          "created_at": info["created_at"]}))
+        return 0
+
+    # Filesystem branch (default — unchanged behaviour from v0.2.0).
     pub  = Path(args.public_key).expanduser()
     priv = Path(args.private_key).expanduser()
     if (pub.exists() or priv.exists()) and not args.force:
@@ -52,14 +92,93 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
         return 2
     passphrase: bytes | None = None
     if args.passphrase:
-        pw = getpass("Private key passphrase (empty = none): ")
+        pw = _read_passphrase("Private key passphrase (empty = none): ")
         if pw:
             passphrase = pw.encode("utf-8")
     info = generate_keypair(public_path=str(pub),
                               private_path=str(priv),
                               bits=args.bits,
                               passphrase=passphrase)
+    print(json.dumps({"ok": True, "store": "file", **info}))
+    return 0
+
+
+def _cmd_keystore_import(args: argparse.Namespace) -> int:
+    """Lift an existing filesystem keypair into the DB so the
+    operator doesn't have to rotate to migrate."""
+    from . import keystore as ks
+    from . import store_io
+    pw = _read_passphrase("Private key passphrase: ")
+    if not pw:
+        print("error: keystore import requires a non-empty passphrase",
+              file=sys.stderr)
+        return 2
+    conn = store_io.connect_from_env()
+    info = ks.import_files_to_db(
+        conn, pw.encode("utf-8"),
+        public_path=args.public_key, private_path=args.private_key,
+        namespace=args.namespace)
+    print(json.dumps({"ok": True, "key_id": info["key_id"],
+                      "namespace": ks._resolve_namespace(args.namespace)}))
+    return 0
+
+
+def _cmd_keystore_export(args: argparse.Namespace) -> int:
+    """Move a DB keystore back to filesystem PEMs. Useful when
+    leaving the DB-backed setup."""
+    from . import keystore as ks
+    from . import store_io
+    pw = _read_passphrase("Private key passphrase: ")
+    if not pw:
+        print("error: export requires the passphrase", file=sys.stderr)
+        return 2
+    conn = store_io.connect_from_env()
+    out = ks.export_db_to_files(
+        conn, pw.encode("utf-8"),
+        public_path=args.public_key, private_path=args.private_key,
+        namespace=args.namespace)
+    print(json.dumps({"ok": True, **out}))
+    return 0
+
+
+def _cmd_rules_push(args: argparse.Namespace) -> int:
+    from . import rule_store, store_io
+    text = (sys.stdin.read() if args.input == "-"
+            else Path(args.input).expanduser().read_text(encoding="utf-8"))
+    blob = json.loads(text)
+    conn = store_io.connect_from_env()
+    info = rule_store.push_rules(conn, blob,
+                                   namespace=args.namespace,
+                                   replace=args.replace)
     print(json.dumps({"ok": True, **info}))
+    return 0
+
+
+def _cmd_rules_pull(args: argparse.Namespace) -> int:
+    from . import rule_store, store_io
+    conn = store_io.connect_from_env()
+    blob = rule_store.pull_rules(conn, namespace=args.namespace)
+    sys.stdout.write(json.dumps(blob, ensure_ascii=False, indent=2))
+    sys.stdout.write("\n")
+    return 0
+
+
+def _cmd_rules_list(args: argparse.Namespace) -> int:
+    from . import rule_store, store_io
+    conn = store_io.connect_from_env()
+    rows = rule_store.list_rules(conn, namespace=args.namespace)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False))
+        return 0
+    if not rows:
+        print("(no rules in DB store)")
+        return 0
+    print(f"  {'name':25s} {'tag':18s} prio  enabled")
+    for r in rows:
+        print(f"  {(r['name'] or '')[:25]:25s} "
+              f"{(r.get('tag') or '')[:18]:18s} "
+              f"{(r.get('priority') or 0):4d}  "
+              f"{'yes' if r.get('enabled', True) else 'no'}")
     return 0
 
 
@@ -95,12 +214,7 @@ def _cmd_encrypt(args: argparse.Namespace) -> int:
 def _cmd_decrypt(args: argparse.Namespace) -> int:
     blob = json.loads(_read_input(args.input))
     masked_rec = {"text": blob["masked"]}
-    passphrase: bytes | None = None
-    if args.passphrase:
-        pw = getpass("Private key passphrase: ")
-        if pw:
-            passphrase = pw.encode("utf-8")
-    priv = load_private_key(args.private_key, passphrase=passphrase)
+    priv = _resolve_private_key(args)
     out = decrypt_record(masked_rec, blob.get("cipher_tokens", []),
                           private_key=priv)
     sys.stdout.write(out["text"])
@@ -108,17 +222,35 @@ def _cmd_decrypt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_private_key(args: argparse.Namespace):
+    """Shared helper for every subcommand that decrypts. Honours
+    --keystore={file,db}. In `db` mode the passphrase is always
+    required (it's the AES wrap of the row); in `file` mode it's
+    optional (the on-disk PEM may have no encryption)."""
+    keystore_mode = (getattr(args, "keystore", None)
+                     or "file").lower()
+    if keystore_mode == "db":
+        from . import keystore as ks
+        pw = _read_passphrase("Private key passphrase: ")
+        if not pw:
+            raise RuntimeError("DB keystore requires a passphrase")
+        return ks.read_private_key(
+            mode="db", namespace=getattr(args, "namespace", None),
+            passphrase=pw.encode("utf-8"))
+    passphrase: bytes | None = None
+    if getattr(args, "passphrase", False):
+        pw = _read_passphrase("Private key passphrase: ")
+        if pw:
+            passphrase = pw.encode("utf-8")
+    return load_private_key(args.private_key, passphrase=passphrase)
+
+
 def _cmd_row_decrypt(args: argparse.Namespace) -> int:
     """Reconstruct the plaintext form of a record stored in
     EvolutionDB by stitching its main row together with the cipher
     tokens spread across its companion rows."""
     from . import store_io
-    passphrase: bytes | None = None
-    if args.passphrase:
-        pw = getpass("Private key passphrase: ")
-        if pw:
-            passphrase = pw.encode("utf-8")
-    priv = load_private_key(args.private_key, passphrase=passphrase)
+    priv = _resolve_private_key(args)
     conn = store_io.connect_from_env()
     main_rec = store_io.fetch_row(conn, args.store, args.namespace,
                                     args.key)
@@ -229,15 +361,67 @@ def main(argv: List[str] | None = None) -> int:
 
     # ── keygen ──────────────────────────────────────────────────
     sp = sub.add_parser("keygen", help="Create an RSA-2048 keypair")
-    sp.add_argument("--public-key",  default=DEFAULT_PUBLIC_KEY_PATH)
-    sp.add_argument("--private-key", default=DEFAULT_PRIVATE_KEY_PATH)
+    sp.add_argument("--store", choices=["file", "db"], default="file",
+        help="`file` writes ~/.evosql/pii_*.pem; `db` wraps the "
+             "private key with a passphrase you type and stores it "
+             "in the __pii_keystore memory store")
+    sp.add_argument("--namespace", default=None,
+        help="MCP_USER_ID for the keystore row (defaults to env)")
+    sp.add_argument("--public-key",  default=DEFAULT_PUBLIC_KEY_PATH,
+        help="Only used with --store=file")
+    sp.add_argument("--private-key", default=DEFAULT_PRIVATE_KEY_PATH,
+        help="Only used with --store=file")
     sp.add_argument("--bits",        type=int, default=2048)
     sp.add_argument("--passphrase",  action="store_true",
                     help="Prompt for a passphrase to encrypt the "
-                         "private key")
+                         "filesystem private key (--store=file). "
+                         "Always prompted in --store=db mode.")
     sp.add_argument("--force",       action="store_true",
-                    help="Overwrite an existing keypair on disk")
+                    help="Overwrite an existing keypair")
     sp.set_defaults(func=_cmd_keygen)
+
+    # ── keystore import/export ──────────────────────────────────
+    sp = sub.add_parser("keystore-import",
+        help="Move an existing filesystem keypair into the DB-"
+             "backed keystore (wraps the private key with a "
+             "passphrase before persisting)")
+    sp.add_argument("--namespace",   default=None)
+    sp.add_argument("--public-key",  default=DEFAULT_PUBLIC_KEY_PATH)
+    sp.add_argument("--private-key", default=DEFAULT_PRIVATE_KEY_PATH)
+    sp.set_defaults(func=_cmd_keystore_import)
+
+    sp = sub.add_parser("keystore-export",
+        help="Pull a DB-backed keypair out as filesystem PEMs — "
+             "the inverse of `keystore-import`")
+    sp.add_argument("--namespace",   default=None)
+    sp.add_argument("--public-key",  default=DEFAULT_PUBLIC_KEY_PATH)
+    sp.add_argument("--private-key", default=DEFAULT_PRIVATE_KEY_PATH)
+    sp.set_defaults(func=_cmd_keystore_export)
+
+    # ── rules push / pull / list ────────────────────────────────
+    sp = sub.add_parser("rules-push",
+        help="Upload a JSON rule set into the __pii_rules memory "
+             "store. Subsequent sync runs see these overrides "
+             "without `~/.evosql/pii_rules.json` on disk.")
+    sp.add_argument("input", help="path to a JSON file, or - for stdin")
+    sp.add_argument("--namespace", default=None)
+    sp.add_argument("--replace",   action="store_true",
+        help="Delete every existing rule row before writing — the "
+             "DB state ends up byte-for-byte equal to the input")
+    sp.set_defaults(func=_cmd_rules_push)
+
+    sp = sub.add_parser("rules-pull",
+        help="Dump the DB-stored rule set to stdout as JSON")
+    sp.add_argument("--namespace", default=None)
+    sp.set_defaults(func=_cmd_rules_pull)
+
+    sp = sub.add_parser("rules-list",
+        help="Compact name/tag/priority/enabled table view of the "
+             "DB-stored rules")
+    sp.add_argument("--namespace", default=None)
+    sp.add_argument("--json",      action="store_true",
+        help="Machine-readable JSON output")
+    sp.set_defaults(func=_cmd_rules_list)
 
     # ── scan ────────────────────────────────────────────────────
     sp = sub.add_parser("scan",
@@ -261,9 +445,16 @@ def main(argv: List[str] | None = None) -> int:
         help="Restore a record produced by `encrypt` back to its "
              "original text (needs the private key)")
     sp.add_argument("input")
+    sp.add_argument("--keystore", choices=["file", "db"],
+        default="file",
+        help="Where to read the private key from (file = PEM on "
+             "disk, db = wrapped row in __pii_keystore)")
+    sp.add_argument("--namespace", default=None,
+        help="DB keystore namespace (only used with --keystore=db)")
     sp.add_argument("--private-key", default=DEFAULT_PRIVATE_KEY_PATH)
     sp.add_argument("--passphrase",  action="store_true",
-                    help="Prompt for the private-key passphrase")
+                    help="Prompt for the PEM passphrase (file mode). "
+                         "Always prompted in --keystore=db mode.")
     sp.set_defaults(func=_cmd_decrypt)
 
     # ── row-decrypt ─────────────────────────────────────────────
@@ -271,14 +462,20 @@ def main(argv: List[str] | None = None) -> int:
         help="Fetch a row from a live EvolutionDB memory store, "
              "stitch its cipher tokens from the companion rows, "
              "and print the reconstructed JSON")
-    sp.add_argument("--store",      default="mcp_mem")
+    sp.add_argument("--store",      default="mcp_mem",
+        help="Memory store the primary row lives in")
+    sp.add_argument("--keystore",   choices=["file", "db"],
+        default="file",
+        help="Where to read the private key from")
     sp.add_argument("--namespace",  required=True,
                     help="The MCP_USER_ID under which the row was "
-                         "written")
+                         "written; also doubles as the keystore "
+                         "namespace when --keystore=db")
     sp.add_argument("--key",        required=True,
                     help="The mem_key of the primary row (e.g. "
                          "`outlook_msg_AAMk…`)")
-    sp.add_argument("--private-key", default=DEFAULT_PRIVATE_KEY_PATH)
+    sp.add_argument("--private-key", default=DEFAULT_PRIVATE_KEY_PATH,
+        help="Only used with --keystore=file")
     sp.add_argument("--passphrase",  action="store_true")
     sp.set_defaults(func=_cmd_row_decrypt)
 
