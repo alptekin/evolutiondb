@@ -53,13 +53,23 @@ def connect_from_env(env: Optional[Dict[str, str]] = None):
 
 def fetch_row(conn, store: str, namespace: str, key: str) -> Optional[Dict]:
     """Fetch a single (ns, key) row and return its parsed value, or
-    None when the row does not exist."""
-    with conn.cursor() as cur:
-        cur.execute(
-            f"SELECT mem_value FROM __mem_{store} "
-            f"WHERE mem_namespace='{_e(namespace)}' "
-            f"AND mem_key='{_e(key)}'")
-        row = cur.fetchone()
+    None when the row does not exist.
+
+    A missing memory store is treated as an empty store (returns
+    None) so callers can probe before any write has happened — the
+    keystore + rule-store namespaces are auto-created on first
+    `write_row`, never with a separate setup call."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT mem_value FROM __mem_{store} "
+                f"WHERE mem_namespace='{_e(namespace)}' "
+                f"AND mem_key='{_e(key)}'")
+            row = cur.fetchone()
+    except Exception as exc:
+        if "relation does not exist" in str(exc).lower():
+            return None
+        raise
     if not row:
         return None
     v = row[0]
@@ -71,30 +81,69 @@ def fetch_rows_with_prefix(conn, store: str, namespace: str,
                             *, limit: int = 100_000
                             ) -> Iterable[Tuple[str, Dict]]:
     """Iterate every row whose key starts with `key_prefix`. Returns
-    (key, value) tuples."""
-    with conn.cursor() as cur:
-        cur.execute(
-            f"SELECT mem_key, mem_value FROM __mem_{store} "
-            f"WHERE mem_namespace='{_e(namespace)}' "
-            f"AND mem_key LIKE '{_e(key_prefix)}%' LIMIT {limit}")
-        for k, v in cur.fetchall():
-            yield k, (v if isinstance(v, dict) else json.loads(v))
+    (key, value) tuples. Missing-store maps to an empty iterator —
+    callers never have to special-case the bootstrap state."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT mem_key, mem_value FROM __mem_{store} "
+                f"WHERE mem_namespace='{_e(namespace)}' "
+                f"AND mem_key LIKE '{_e(key_prefix)}%' LIMIT {limit}")
+            rows = cur.fetchall()
+    except Exception as exc:
+        if "relation does not exist" in str(exc).lower():
+            return
+        raise
+    for k, v in rows:
+        yield k, (v if isinstance(v, dict) else json.loads(v))
 
 
 def write_row(conn, store: str, namespace: str, key: str,
               value: Dict) -> None:
     """Upsert one row. Uses DELETE + MEMORY PUT to dodge the legacy
     duplicate-key issue PR #240 documented for large value
-    upserts."""
+    upserts.
+
+    First-time use against a new memory store triggers a `relation
+    does not exist` error from the engine; we transparently
+    `CREATE MEMORY STORE` once and retry. That keeps the keystore
+    + rule-store namespaces self-bootstrapping — no operator-side
+    schema setup."""
     payload = json.dumps(value, ensure_ascii=False)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"DELETE FROM __mem_{store} "
-            f"WHERE mem_namespace='{_e(namespace)}' "
-            f"AND mem_key='{_e(key)}'")
-        cur.execute(
-            f"MEMORY PUT INTO {store} VALUES "
-            f"('{_e(namespace)}','{_e(key)}','{_e(payload)}')")
+
+    def _do_write():
+        with conn.cursor() as cur:
+            cur.execute(
+                f"DELETE FROM __mem_{store} "
+                f"WHERE mem_namespace='{_e(namespace)}' "
+                f"AND mem_key='{_e(key)}'")
+            cur.execute(
+                f"MEMORY PUT INTO {store} VALUES "
+                f"('{_e(namespace)}','{_e(key)}','{_e(payload)}')")
+
+    try:
+        _do_write()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if ("relation does not exist" in msg
+                or "memory store" in msg):
+            ensure_store(conn, store)
+            _do_write()
+        else:
+            raise
+
+
+def ensure_store(conn, store: str) -> None:
+    """Idempotent `CREATE MEMORY STORE`. The engine returns an
+    error on duplicate-name attempts; we swallow it and treat it
+    as success."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"CREATE MEMORY STORE {store}")
+    except Exception:
+        # Already exists, or transient parser issue — either way,
+        # the next write will surface a real failure.
+        pass
 
 
 # ---------------------------------------------------------------- #
