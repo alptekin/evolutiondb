@@ -104,9 +104,22 @@ def _load_default_blob() -> Dict[str, Any]:
 
 
 def _load_user_blob(path: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Look up the user's rule overrides. Three sources, picked in
+    order:
+
+      1. Explicit `path` argument (e.g. from `--rules-file`).
+      2. `EVOSQL_PII_RULES=db` — fetch from the `__pii_rules`
+         memory store on the live server.
+      3. `EVOSQL_PII_RULES=<path>` — read that JSON file.
+      4. Default path `~/.evosql/pii_rules.json` if it exists.
+
+    Returns the parsed `{version, rules}` blob, or `None` when no
+    overrides are present."""
     if path is None:
-        path = os.environ.get("EVOSQL_PII_RULES",
-                              DEFAULT_USER_RULES_PATH)
+        env_val = os.environ.get("EVOSQL_PII_RULES")
+        if (env_val or "").lower() == "db":
+            return _load_db_blob()
+        path = env_val or DEFAULT_USER_RULES_PATH
     p = Path(path).expanduser()
     if not p.is_file():
         return None
@@ -115,6 +128,25 @@ def _load_user_blob(path: Optional[str]) -> Optional[Dict[str, Any]]:
     except (json.JSONDecodeError, OSError) as exc:
         raise RuntimeError(
             f"failed to read user rules at {p}: {exc}") from exc
+
+
+def _load_db_blob() -> Optional[Dict[str, Any]]:
+    """Lazily-imported DB rule loader. Kept out of module load so a
+    user who only wants file-based rules doesn't pay a psycopg
+    import cost."""
+    try:
+        from .rule_store import load_db_rules_blob
+        from .store_io   import connect_from_env
+    except Exception:
+        return None
+    try:
+        conn = connect_from_env()
+    except Exception:
+        return None
+    try:
+        return load_db_rules_blob(conn)
+    except Exception:
+        return None
 
 
 def load_rules(user_path: Optional[str] = None) -> List[Rule]:

@@ -35,6 +35,7 @@ from typing import Dict, List, Optional, Tuple
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from .detect import detect
 from .mask   import apply_mask, mask
@@ -43,6 +44,14 @@ from .rules  import Rule, load_rules
 
 DEFAULT_PUBLIC_KEY_PATH  = "~/.evosql/pii_public.pem"
 DEFAULT_PRIVATE_KEY_PATH = "~/.evosql/pii_private.pem"
+
+# Same PBKDF2 iteration count as the engine's password hashing +
+# TDE master-key derivation (evolution/db/crypto.h:18). Keeping the
+# value consistent across the codebase means a single security
+# review covers every place we turn a passphrase into a key.
+PBKDF2_ITERATIONS = 100_000
+PBKDF2_SALT_LEN   = 16
+PBKDF2_KEY_LEN    = 32
 
 
 # ---------------------------------------------------------------- #
@@ -113,6 +122,100 @@ def load_private_key(path: str = DEFAULT_PRIVATE_KEY_PATH,
             "or run `evolutiondb-pii keygen` to create one")
     return serialization.load_pem_private_key(
         p.read_bytes(), password=passphrase)
+
+
+# ---------------------------------------------------------------- #
+#  Passphrase-wrapped private key
+#
+#  Layout the keystore stores when a private key lives in the DB:
+#
+#      kdf: {name, iters, salt}        — PBKDF2 parameters
+#      wrapped:
+#        alg: "aes-256-gcm"
+#        iv: base64
+#        ciphertext: base64            — plaintext PEM bytes,
+#                                        AES-GCM encrypted under
+#                                        the PBKDF2-derived key
+#
+#  Same shape `crypto.c` writes for the engine-side TDE wrap of
+#  the data-encryption key, just sitting one level up the stack.
+# ---------------------------------------------------------------- #
+def _derive_kdf_key(passphrase: bytes, salt: bytes,
+                    iters: int = PBKDF2_ITERATIONS) -> bytes:
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(),
+                     length=PBKDF2_KEY_LEN, salt=salt,
+                     iterations=iters)
+    return kdf.derive(passphrase)
+
+
+def wrap_private_key(private_key, passphrase: bytes) -> Dict[str, object]:
+    """Serialise an RSA private key to PEM, then encrypt the PEM
+    bytes under a passphrase-derived AES-256-GCM key. Returns a
+    dict ready to drop into the keystore row."""
+    if not passphrase:
+        raise ValueError("wrap_private_key needs a non-empty passphrase")
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption())
+
+    salt    = secrets.token_bytes(PBKDF2_SALT_LEN)
+    iv      = secrets.token_bytes(12)
+    kdf_key = _derive_kdf_key(passphrase, salt)
+    ct      = AESGCM(kdf_key).encrypt(iv, pem, None)
+    return {
+        "kdf": {
+            "name":  "pbkdf2-sha256",
+            "iters": PBKDF2_ITERATIONS,
+            "salt":  _b64e(salt),
+        },
+        "wrapped": {
+            "alg":        "aes-256-gcm",
+            "iv":         _b64e(iv),
+            "ciphertext": _b64e(ct),
+        },
+    }
+
+
+def unwrap_private_key(wrapped: Dict[str, object], passphrase: bytes):
+    """Reverse of wrap_private_key. Raises ValueError on a wrong
+    passphrase (AESGCM raises InvalidTag, we surface that as a
+    plain ValueError so callers don't import cryptography just for
+    one exception type)."""
+    if not passphrase:
+        raise ValueError("unwrap_private_key needs a passphrase")
+    if not isinstance(wrapped, dict):
+        raise ValueError("wrapped payload is not an object")
+    kdf = wrapped.get("kdf") or {}
+    w   = wrapped.get("wrapped") or {}
+    if (kdf.get("name") or "") != "pbkdf2-sha256":
+        raise ValueError(f"unsupported KDF: {kdf.get('name')!r}")
+    if (w.get("alg") or "") != "aes-256-gcm":
+        raise ValueError(f"unsupported wrap alg: {w.get('alg')!r}")
+    salt    = _b64d(kdf["salt"])
+    iv      = _b64d(w["iv"])
+    ct      = _b64d(w["ciphertext"])
+    kdf_key = _derive_kdf_key(passphrase, salt,
+                                iters=int(kdf.get("iters",
+                                                    PBKDF2_ITERATIONS)))
+    try:
+        pem = AESGCM(kdf_key).decrypt(iv, ct, None)
+    except Exception as exc:                         # InvalidTag etc.
+        raise ValueError("private key unwrap failed — wrong "
+                         "passphrase?") from exc
+    return serialization.load_pem_private_key(pem, password=None)
+
+
+def public_key_pem(public_key) -> bytes:
+    """PEM bytes for the public half — handy when serialising into
+    a keystore row."""
+    return public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+def public_key_from_pem(pem_bytes: bytes):
+    return serialization.load_pem_public_key(pem_bytes)
 
 
 # ---------------------------------------------------------------- #
