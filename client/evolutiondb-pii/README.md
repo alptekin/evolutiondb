@@ -42,14 +42,81 @@ The only runtime dependency is `cryptography>=42`.
 
 ## One-time setup
 
+Two equivalent storage modes — pick whichever fits the deployment.
+
+### File-backed (default — single host, simplest)
+
 ```bash
 evolutiondb-pii keygen
-# {"ok": true, "public": "~/.evosql/pii_public.pem",
+# {"ok": true, "store": "file",
+#  "public": "~/.evosql/pii_public.pem",
 #  "private": "~/.evosql/pii_private.pem", "bits": "2048"}
 ```
 
 The private file lands at mode `0600`. Pass `--passphrase` to
-encrypt it at rest (you'll be prompted on `decrypt`).
+encrypt the PEM at rest.
+
+### DB-backed (recommended for multi-host or shared backup)
+
+```bash
+evolutiondb-pii keygen --store=db
+# Private key passphrase: ********
+# {"ok": true, "store": "db",
+#  "namespace": "alptekin_topal",
+#  "key_id": "0db220f5-…",
+#  "created_at": "2026-05-22T18:58:39Z"}
+```
+
+The keypair is wrapped with **PBKDF2-SHA256 (100 000 iterations)
++ AES-256-GCM** before it lands in `__mem_pii_keystore`. The
+passphrase you type is the only thing that can unwrap it — a DB
+snapshot alone is useless to an attacker. The `mem_namespace`
+column scopes each user's row by `MCP_USER_ID`, so multi-tenant
+setups isolate keypairs without extra schema work.
+
+`EVOSQL_PII_PASSPHRASE=…` lets you drive the CLI non-interactively
+(CI, ops scripts pulling from Vault).
+
+To migrate an existing filesystem keypair into the DB without
+rotating:
+
+```bash
+evolutiondb-pii keystore-import   # reads ~/.evosql/pii_*.pem
+```
+
+And to leave the DB-backed mode:
+
+```bash
+evolutiondb-pii keystore-export   # writes ~/.evosql/pii_*.pem
+```
+
+Tell the sync clients which keystore to use:
+
+```bash
+export EVOSQL_PII_KEYSTORE=db    # or "file" or "auto" (default)
+```
+
+`auto` prefers the DB row when one exists and falls back to the
+filesystem PEM — zero-config migration path.
+
+### Custom rule set in the DB
+
+Same shape as the JSON file, just stored as one row per rule in
+the `__mem_pii_rules` memory store:
+
+```bash
+# Upload a rule file once
+evolutiondb-pii rules-push my_rules.json --replace
+# Inspect what's live
+evolutiondb-pii rules-list
+# Dump for diffing or backup
+evolutiondb-pii rules-pull > /tmp/dump.json
+# Tell the library to read from the DB instead of disk
+export EVOSQL_PII_RULES=db
+```
+
+DB rules layer the same way the file overrides do — they merge
+over defaults by `name`.
 
 ## Quick tour
 
@@ -138,22 +205,53 @@ url_with_credentials. `date_of_birth` and `person_name_tr` are
 ## CLI
 
 ```
-evolutiondb-pii keygen          # one-time RSA setup
-evolutiondb-pii scan FILE       # show the masked rendering
-evolutiondb-pii encrypt FILE    # emit {masked, cipher_tokens} JSON
-evolutiondb-pii decrypt FILE    # restore plaintext (needs private key)
+evolutiondb-pii keygen [--store=file|db]
+                                  # one-time RSA setup. With --store=db the
+                                  # private key is passphrase-wrapped before
+                                  # it lands in __mem_pii_keystore.
+evolutiondb-pii keystore-import   # move a filesystem keypair into the DB
+evolutiondb-pii keystore-export   # pull a DB keypair back to filesystem PEMs
+evolutiondb-pii rules-push FILE   # upload rules to __mem_pii_rules
+evolutiondb-pii rules-pull        # dump DB rules as JSON
+evolutiondb-pii rules-list        # compact summary table
+evolutiondb-pii scan FILE         # show the masked rendering
+evolutiondb-pii encrypt FILE      # emit {masked, cipher_tokens} JSON
+evolutiondb-pii decrypt FILE [--keystore=auto|file|db]
+                                  # restore plaintext (needs private key)
+evolutiondb-pii row-decrypt --store=… --namespace=… --key=…
+                                  # fetch a row + companions from DB and
+                                  # restore it; honours --keystore
+evolutiondb-pii backfill --store=… [--namespace=…]
+                                  # re-mask + companion-write every legacy
+                                  # plaintext row in a memory store
 ```
 
 `FILE` is `-` for stdin.
 
+### Environment matrix
+
+| Variable                   | Meaning                                                              |
+|----------------------------|----------------------------------------------------------------------|
+| `EVOSQL_PII_KEYSTORE`      | `auto` (default), `file`, or `db`. Tells the library where the keypair lives. |
+| `EVOSQL_PII_RULES`         | A path to a JSON override file, or the literal `db` to read rules from `__mem_pii_rules`. |
+| `EVOSQL_PII_PASSPHRASE`    | Non-interactive private-key passphrase (CI / Vault flows).           |
+| `EVOSQL_PII_MASK`          | `on` (default) — flip to `off` to disable masking and protection at the integration layer. |
+| `MCP_USER_ID`              | Namespace for DB keystore + rules rows (default `default_user`).     |
+
 ## Roadmap
 
-- Phase 1 (this release): library + rule format + crypto + tests
-- Phase 2: pilot integration in `outlook-sync` (every PII type lives
-  in mail bodies)
-- Phase 3: roll into the other eight sync clients
-- Phase 4: `CREATE MEMORY STORE … WITH MASKING=on` SQL surface +
-  `MEMORY GET DECRYPTED FROM …` for explicit operator decryption
+- Phase 1: library + rule format + crypto + tests *(shipped)*
+- Phase 2: sync-client pilot in `outlook-sync` *(shipped)*
+- Phase 3: roll into the rest of the sync fleet *(shipped)*
+- Phase 4: companion-row chunking + 4400+ row backfill *(shipped)*
+- Phase 5 (this release): keystore + rules in the database, with
+  passphrase-wrapped private key
+- Phase 6: multi-keypair + key rotation (`keygen --rotate`,
+  `rekey --from=… --to=…`, `revoke --key-id=…`)
+- Phase 7: engine SQL surface — `CREATE MEMORY STORE … WITH
+  MASKING=on` + `MEMORY GET DECRYPTED FROM …`
+- Phase 8: multi-tenant keystore (RLS per `MCP_USER_ID`, shared
+  baseline rules, decrypt audit log)
 
 ## Limits
 
@@ -163,8 +261,15 @@ evolutiondb-pii decrypt FILE    # restore plaintext (needs private key)
 - Validators are conservative — they err on the side of dropping
   ambiguous spans rather than leaking; a clearly valid PII that
   happens to flunk a checksum will look like normal text.
-- Keys live on disk under `~/.evosql/`. Rotation rewraps every
-  token — there is no in-place re-encrypt today; the library can
-  emit a new public key but cipher tokens encrypted against the
-  old public key must be decrypted then re-encrypted under the new
-  one.
+- Keys live on disk under `~/.evosql/` **or** in
+  `__mem_pii_keystore` (passphrase-wrapped). Either way, rotation
+  rewraps every token — there is no in-place re-encrypt today; the
+  library emits a new public key but cipher tokens encrypted
+  against the old public key must be decrypted then re-encrypted
+  under the new one. Phase 6 will add `keygen --rotate` and a
+  `rekey` command so the legacy key can stay around in
+  `decrypt_only` mode while new writes move to the fresh one.
+- DB-backed keystore + rules need the operator's passphrase only
+  at decrypt time, not at write time. Sync workers can keep using
+  the public key alone (they never need the private one), so PII
+  protection runs unattended after the initial `keygen --store=db`.

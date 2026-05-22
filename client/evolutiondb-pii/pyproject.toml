@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolutiondb-pii"
-version = "0.2.0"
+version = "0.3.0"
 description = "PII detection, masking, and hybrid AES-256-GCM + RSA-OAEP encryption for EvolutionDB sync clients."
 requires-python = ">=3.9"
 license = {text = "MIT"}
