@@ -1,0 +1,233 @@
+# Gold Eval Set v0 — MCP memory retrieval quality
+#
+# Each entry below is a query you'd actually ask Claude through the
+# MCP memory layer. For each, list 3-5 mem_keys from your live store
+# that you consider the IDEAL retrieval — the rows that *should* have
+# come back in the top-5.
+#
+# Workflow to label a query:
+#
+#   1. Find candidate keys:
+#        python tests/eval_memory_quality.py \
+#            --collect "Süreyya'nın e-postası ne" \
+#            --prefix mcp
+#      Top-20 candidates print with key + truncated fact.
+#
+#   2. Pick the 3-5 best, paste them under ideal_keys.
+#
+#   3. Repeat for each query. The harness skips queries with empty
+#      ideal_keys — partial fills are OK to start, but aim for ≥20
+#      filled queries before declaring the baseline.
+#
+# Append-only discipline: never delete or mutate a query once it has
+# been labeled. If the underlying data drifts and the ideal_keys are
+# no longer correct, add a new query id (q001 → q001_v2) and leave
+# the old one as historical record. This protects month-over-month
+# comparisons.
+#
+# Coverage target: 40 queries, 10 per category.
+#   - simple_fact: single-entity recall ("X'in e-postası ne")
+#   - recent:      time-bounded ("son hafta X")
+#   - aggregation: cross-row synthesis ("en çok X")
+#   - relational:  multi-entity ("X'te kim aktif")
+
+version: 1
+created: "2026-05-23"
+metadata:
+  # Leave user_id empty → harness uses MCP_USER_ID env at runtime.
+  user_id: ""
+  memory_prefix: "mcp"
+  notes: >
+    Initial template — 10 seed queries (Turkish) covering all four
+    categories. Replace with your own questions; add 30 more to hit
+    the 40-target before declaring baseline.
+
+queries:
+  # ─── simple_fact ───────────────────────────────────────────────
+  - id: q001
+    category: simple_fact
+    query: "Süreyya'nın e-postası ne"
+    ideal_keys: []
+    notes: ""
+
+  - id: q002
+    category: simple_fact
+    query: "Emlak Katılım'ın proje yöneticisi kim"
+    ideal_keys: []
+    notes: ""
+
+  - id: q003
+    category: simple_fact
+    query: "GİB raporları için bizim ana iletişim noktamız kim"
+    ideal_keys: []
+    notes: ""
+
+  # ─── recent ────────────────────────────────────────────────────
+  - id: q004
+    category: recent
+    query: "son hafta hangi escalation oldu"
+    ideal_keys: []
+    notes: ""
+
+  - id: q005
+    category: recent
+    query: "geçen hafta tamamlanan iş"
+    ideal_keys: []
+    notes: ""
+
+  - id: q012
+    category: recent
+    query: "bu hafta istanbula neden gitmiştim"
+    ideal_keys: []
+    notes: >
+      Negative-case sorgu: önceki sondaj sonucu dataset içinde bu
+      haftaki istanbul gezisine doğrudan atıf yok. ideal_keys boş
+      kalır — harness şu an boş ideal'li query'leri skip ediyor, ama
+      Stage 5'te "ilgili sonuç yok" davranışını test edecek özel
+      bayrak (no_relevant: true) eklenebilir.
+
+  # ─── aggregation ───────────────────────────────────────────────
+  - id: q006
+    category: aggregation
+    query: "müşteriler en çok neyi istiyor"
+    ideal_keys: []
+    notes: "Bu sentez gerektirir; baseline'da düşük çıkması beklenir."
+
+  - id: q007
+    category: aggregation
+    query: "GİB raporlamasında en sık şikayet konuları"
+    ideal_keys: []
+    notes: ""
+
+  - id: q011
+    category: aggregation
+    query: "bauhaus da ne kadar para harcadım?"
+    ideal_keys:
+      - gmail_msg_19e323d569c2c5ab
+    notes: >
+      Retrieval ölçümü: ideal = mevcut tek Bauhaus fatura bilgilendirme
+      maili. Top-K içinde getirebildi mi soruyu burası test eder.
+      Synthesis tarafı için q011_synth'e bak.
+
+  - id: q014
+    category: aggregation
+    query: "Bu ay kaç kesinti maili geldi? Toplam kesinti süresini kesinti maillerinden çıkart ve farkı makine domain vb şekilde grupla"
+    requires_unbounded_k: true
+    ideal_keys:
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsMQAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsMgAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsOwAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsPQAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsYgAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsYwAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsZAAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiOePkwAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiP4JKAAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiP4JOgAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiP4JQQAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiP4JRAAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiP4JnAAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiP4JqgAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACi9Wj4AAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACjVps-gAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACklpHTgAAAA==
+    notes: >
+      Cardinality-aware retrieval testi. "Bu ay" = Mayıs 2026.
+      İdeal cevap kümesi = Mayıs içerisinde gelen 17 operasyonel
+      kesinti / planlı çalışma duyurusu (System Operations | Wechip,
+      BKM Sistem İşletim Birimi, İK Ümraniye Elektrik). Sabit top-K
+      limit'i sayma sorularında yetersizdir — Adım 5.5 (query-type
+      classifier + adaptif K) eklenene kadar harness `requires_
+      unbounded_k: true` olan query'leri skip eder. Bu kayıt aktif
+      olduğunda, baseline'da hem retrieval coverage (kaç tanesini
+      getirebildi) hem cardinality recall (doğru sayıyı söyleyebildi
+      mi) ölçülür.
+
+  # ─── relational ────────────────────────────────────────────────
+  - id: q008
+    category: relational
+    query: "Çapraz İşlem Testleri'ne kim katkı verdi"
+    ideal_keys: []
+    notes: ""
+
+  - id: q009
+    category: relational
+    query: "Noname Kart projesinde aktif paydaşlar"
+    ideal_keys: []
+    notes: ""
+
+  - id: q010
+    category: relational
+    query: "Süreyya son ay kimle yazışıyor"
+    ideal_keys:
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4ziTQAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4zidwAAAA==
+      - outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwAChR4vjQAAAA==
+    notes: ""
+
+  # ─── synthesis (Stage 5 eval — model'in ürettiği cevabın kalitesi) ──
+  # Bu kategori retrieval'dan farklıdır: ideal_keys aynı zamanda
+  # kullanılır (synthesis girdisi olarak), fakat asıl ölçüm
+  # expected_answer ile model çıktısının LLM-judge karşılaştırmasıdır.
+  # Şu an sadece şeması tanımlı; Stage 5 commit'inde harness'a
+  # synthesis pipeline eklenecek.
+  - id: q011_synth
+    category: synthesis
+    query: "bauhaus da ne kadar para harcadım?"
+    ideal_keys:
+      - gmail_msg_19e323d569c2c5ab
+    expected_answer: |
+      Mevcut veri tabanında Bauhaus alışverişine ait tek bir fatura
+      bilgilendirme maili bulunuyor (2026-05-16 tarihli, e-arşiv
+      fatura numarası LDG2026000001818). Fatura tutarı mail
+      gövdesinde belirtilmemiş; toplam harcama hesabı için PDF
+      ekinin açılması gerekir. Mevcut metadata ile kesin TL miktar
+      çıkartılamaz; "tek alışveriş kaydı var, tutar metinde yok"
+      cevabı doğru kabul edilir.
+    notes: >
+      Stage 5 synthesis eval kapsamında değerlendirilir. expected_answer
+      mevcut veri-bazlı; eğer ileride fatura body'sine PDF parse'ı
+      eklenirse veya kullanıcı gerçek tutarı manuel yazarsa güncellensin.
+
+  - id: q012_synth
+    category: synthesis
+    query: "bu hafta istanbula neden gitmiştim"
+    ideal_keys: []
+    expected_answer: |
+      Mevcut veri tabanında bu haftaki Istanbul gezisine doğrudan
+      atıf bulunan bir kayıt yok. Doğru sentez cevabı: "böyle bir
+      kayıt sistemde yok, başka kaynaktan teyit edilmesi gerekir"
+      formunda olmalı. Model halüsinasyon yapıp uydurma bir cevap
+      üretmemelidir.
+    notes: >
+      "Veri yok" sınıfı için negative baseline. Synthesis pipeline'ın
+      anti-halüsinasyon savunması (Adım 19 co-presented evidence)
+      burada test edilir.
+
+  - id: q015
+    category: aggregation
+    query: "son production release ne zaman çıkıldı ve hangi servisler güncellendi"
+    ideal_keys:
+      - browser_visit_chrome_Chrome_Default_0a954bf9c24d0c75
+      - browser_visit_chrome_Chrome_Default_1d8c8eeb7f0c28c4
+      - browser_visit_chrome_Chrome_Default_1f1ec74494be3fa8
+      - browser_visit_chrome_Chrome_Default_16b167e5c48344b7
+      - browser_visit_chrome_Chrome_Default_01744fa23b2660de
+      - browser_visit_chrome_Chrome_Default_5343a4d6b6909d13
+    notes: >
+      Cross-source aggregation testi. Son production release 2026-05-13
+      tarihinde release-branch PR'ları açılarak başladı (4 servis:
+      Issuer.Customer #5280, Issuer.Prepaid #5284, Issuer.Card #5285,
+      Alpha.UI #5288), 2026-05-14 tarihinde main'e merge edildi
+      (Common.GlobalData #5302, Personalization #5305). Teams
+      mesajlarında "release/proda/canlı" kelimeleri geçtiği için
+      keyword-only retrieval büyük olasılıkla teams sohbetlerini ileri
+      getirir; gerçek deploy kanıtı ise Azure DevOps PR visit
+      kayıtlarındadır. Multi-source coverage'ı ölçer.
+
+  # TODO: add 30 more queries to reach the 40-target. Suggested split:
+  #   simple_fact:  +7   (q016-q022)
+  #   recent:       +8   (q023-q030)
+  #   aggregation:  +7   (q031-q037, plus q011/q014/q015 already filled)
+  #   relational:   +7   (q038-q044, plus q010 already filled)
+  #   synthesis:    track separately as q0XX_synth pairs as needed.
