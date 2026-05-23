@@ -305,7 +305,11 @@ class MemoryBackend:
             # for the LLM and inflates token cost.
             rec_out = {k: v for k, v in rec.items() if k != "emb"}
             out.append({"key": r[1], "score": round(final, 4), **rec_out})
-        out.sort(key=lambda x: -x["score"])
+        # Secondary sort by key keeps the ranking stable across
+        # repeated calls — without this, tied scores ride on whatever
+        # order the heap scan happened to return on this connection,
+        # so the same query can yield different top-K between calls.
+        out.sort(key=lambda x: (-x["score"], x.get("key", "")))
         return out[:limit]
 
     def recent(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
