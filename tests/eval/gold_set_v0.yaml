@@ -543,6 +543,72 @@ queries:
       Cross-reference: q015 (13.05 prod release süreci), q018 (kadro
       kompozisyonu — kim hangi pozisyonda).
 
+  # ─── PII compliance gate (Adım 3) ──────────────────────────────
+  # Bu beş query retrieval kalitesi için değil, dönen satırların
+  # plaintext PII içermediğini doğrulamak için. ideal_keys boş;
+  # harness pii_check: true'yu görünce sorguyu çalıştırır,
+  # backend.search çıktısındaki her fact'i evolutiondb_pii.mask()'ten
+  # geçirir, fark görürse o satırı leak olarak işaretler.
+  # Gate kapısı: 5/5 sorgu sızıntısız + __mem_pii_keystore ve
+  # __mem_pii_rules tablolarının default-namespace search'inden boş
+  # dönmesi.
+  - id: q027
+    category: pii
+    query: "kredi kart numaram nedir"
+    pii_check: true
+    ideal_keys: []
+    notes: >
+      PII guard — kredi kart pattern'i (credit_card rule, Luhn-validated).
+      Beklenen: dönen satırlarda kart numarası bulunursa maskli formda
+      olmalı (örn. "5218 0711 **** 5683"); plaintext 16-19 haneli
+      Luhn-uyumlu numara fail'dir.
+
+  - id: q028
+    category: pii
+    query: "TC kimlik numaram nedir"
+    pii_check: true
+    ideal_keys: []
+    notes: >
+      PII guard — tckn rule. Beklenen: ham 11 haneli TC numarası
+      retrieval cevabında plaintext görünmez; maskli formda
+      ("10000******" gibi) OK. False-positive olabilecek 11-haneli
+      kampanya/URL ID'leri TC pattern'ine düşmez çünkü rule başlangıç
+      1-9 + Luhn benzeri checksum'la güçlendiriliyor.
+
+  - id: q029
+    category: pii
+    query: "iban numaram nedir"
+    pii_check: true
+    ideal_keys: []
+    notes: >
+      PII guard — iban rule. Beklenen: TR ile başlayan 26-haneli IBAN
+      plaintext dönmez. Mevcut veride iki IBAN var (Ziraat Bankası
+      kullanıcı kendi + bağış kampanyası); ikisi de maskli dönmeli
+      ("TR90********************02" formu).
+
+  - id: q030
+    category: pii
+    query: "kayıtlı e-posta adresim nedir"
+    pii_check: true
+    ideal_keys: []
+    notes: >
+      PII guard — email rule. Beklenen: dönen satırlarda e-posta
+      bulunursa "lo***@example.com" formunda mask'li görünmeli.
+      Note: kullanıcının kendi adresi (topal.alptekin@gmail.com)
+      sync sırasında çok sayıda URL'de geçiyor; mask rule bunu da
+      maskelemeli — sürekli özür için ayrım yapılmaz, herkes maskli.
+
+  - id: q031
+    category: pii
+    query: "telefon numaram nedir"
+    pii_check: true
+    ideal_keys: []
+    notes: >
+      PII guard — phone_tr ve phone_intl rule'ları (priority 80 ve
+      70). Beklenen: 05XX XXX XX XX veya +90 prefix'li numaralar
+      plaintext dönmez; örn. Kübra Yıkılmaz'ın "0531 694 ** 26"
+      formu gibi karakter-mask'li dönmeli.
+
   # TODO: add 30 more queries to reach the 40-target. Suggested split:
   #   simple_fact:  +7   (q016-q022)
   #   recent:       +8   (q023-q030)
