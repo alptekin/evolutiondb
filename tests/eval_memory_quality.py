@@ -49,6 +49,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MCP_PKG = _REPO_ROOT / "client" / "mcp-server-evosql"
 if str(_MCP_PKG) not in sys.path:
     sys.path.insert(0, str(_MCP_PKG))
+_PII_PKG = _REPO_ROOT / "client" / "evolutiondb-pii"
+if str(_PII_PKG) not in sys.path:
+    sys.path.insert(0, str(_PII_PKG))
 
 try:
     import yaml
@@ -59,6 +62,20 @@ except ImportError:
 
 from mcp_server_evosql.server import MemoryBackend  # noqa: E402
 from mcp_server_evosql.embeddings import provider_from_env  # noqa: E402
+
+# evolutiondb-pii is optional for the basic eval but required when
+# any query has pii_check: true. Keystore and rules MUST come from
+# the DB-backed stores — env is set here so a stray file fallback
+# never silently changes the verdict.
+os.environ.setdefault("EVOSQL_PII_KEYSTORE", "db")
+os.environ.setdefault("EVOSQL_PII_RULES", "db")
+try:
+    from evolutiondb_pii import mask as _pii_mask  # noqa: E402
+    _PII_OK = True
+except Exception as _exc:  # pragma: no cover — environment-dependent
+    _pii_mask = None  # type: ignore
+    _PII_OK = False
+    _PII_IMPORT_ERR = repr(_exc)
 
 
 # ---------------------------------------------------------------- #
@@ -99,6 +116,85 @@ def percentile(values: List[float], pct: float) -> float:
     s = sorted(values)
     idx = max(0, min(len(s) - 1, int(round(pct / 100.0 * (len(s) - 1)))))
     return s[idx]
+
+
+# ---------------------------------------------------------------- #
+#  PII gate — Adım 3                                                 #
+# ---------------------------------------------------------------- #
+def pii_scan_results(results: List[Dict[str, Any]]
+                     ) -> List[Dict[str, Any]]:
+    """For each row in `results`, run the DB-backed PII rule set over
+    its fact text. Returns the rows where mask() rewrote any
+    substring — i.e. rows that exposed plaintext PII through search.
+    Each leak entry contains the row key, a truncated original
+    snippet, and the masked counterpart so a reviewer can confirm
+    the rule fired correctly without re-handling raw PII."""
+    if not _PII_OK:
+        raise RuntimeError(
+            f"evolutiondb_pii unavailable — pii_check requires the "
+            f"library to be importable. Original error: {_PII_IMPORT_ERR}"
+        )
+    leaks: List[Dict[str, Any]] = []
+    for r in results:
+        fact = r.get("fact") or ""
+        masked = _pii_mask(fact)
+        if masked != fact:
+            leaks.append({
+                "key": r.get("key", ""),
+                "original_snippet": fact[:120],
+                "masked_snippet": masked[:120],
+            })
+    return leaks
+
+
+def pii_isolation_check(backend: MemoryBackend, user_id: str
+                        ) -> Dict[str, Any]:
+    """The PII keystore and rules live in their own memory stores
+    (__mem_pii_keystore / __mem_pii_rules) and contain wrapped
+    keypairs + rule definitions — the user owns those rows by
+    design. What MUST NOT happen is the user-facing search path
+    leaking them: backend.search() reads only the configured prefix
+    store, so even a query that name-checks "keystore" or "rules"
+    must never return a row from those tables. This probe issues
+    several adversarial queries and inspects the returned keys for
+    PII store prefixes; any hit is a compliance failure."""
+    probes = [
+        "pii keystore",
+        "private key passphrase",
+        "credit_card rule pattern",
+        "evolutiondb-pii rules",
+        "encrypted token wrapped key",
+    ]
+    forbidden_prefixes = ("pii_keystore_", "pii_rules_", "pii_token_")
+    findings: Dict[str, Any] = {"clean": True, "details": [],
+                                 "probes": probes}
+    for q in probes:
+        try:
+            rows = backend.search(user_id, q, limit=20)
+        except Exception as exc:
+            findings["details"].append({
+                "probe": q,
+                "status": "search_failed",
+                "error": repr(exc),
+            })
+            continue
+        bad = [r.get("key", "") for r in rows
+               if any(r.get("key", "").startswith(p)
+                       for p in forbidden_prefixes)]
+        if bad:
+            findings["clean"] = False
+            findings["details"].append({
+                "probe": q,
+                "status": "leaked",
+                "leaked_keys": bad,
+            })
+        else:
+            findings["details"].append({
+                "probe": q,
+                "status": "clean",
+                "returned_keys_count": len(rows),
+            })
+    return findings
 
 
 # ---------------------------------------------------------------- #
@@ -159,16 +255,24 @@ def run_eval(gold_path: Path, out_base: Path, *,
     user_id = resolve_user_id(meta)
 
     all_queries = gold.get("queries") or []
-    # Two skip reasons today:
-    #   - empty ideal_keys (not labeled yet)
+    # Skip reasons:
+    #   - empty ideal_keys AND no pii_check (nothing to measure)
     #   - requires_unbounded_k: true (waits for adaptive-K support;
     #     see Adım 5.5 in the plan — these queries need a different
     #     pipeline than fixed-top-K recall)
+    # pii_check queries are kept even when ideal_keys is empty: the
+    # gate is "no plaintext PII in returned rows", not retrieval
+    # quality. They contribute 0.0 to recall metrics (which is the
+    # honest read — we are not asking the system to retrieve PII).
     queries = [
         q for q in all_queries
-        if q.get("ideal_keys") and not q.get("requires_unbounded_k")
+        if (q.get("ideal_keys") or q.get("pii_check"))
+        and not q.get("requires_unbounded_k")
     ]
-    skipped_unfilled = sum(1 for q in all_queries if not q.get("ideal_keys"))
+    skipped_unfilled = sum(
+        1 for q in all_queries
+        if not q.get("ideal_keys") and not q.get("pii_check")
+    )
     skipped_unbounded = sum(1 for q in all_queries
                               if q.get("requires_unbounded_k"))
     skipped = skipped_unfilled + skipped_unbounded
@@ -188,12 +292,16 @@ def run_eval(gold_path: Path, out_base: Path, *,
 
     per_query: List[Dict[str, Any]] = []
     by_cat: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    pii_gate_total = 0
+    pii_gate_passed = 0
+    pii_gate_failures: List[Dict[str, Any]] = []
 
     for q in queries:
         qid = q["id"]
         category = q.get("category", "uncategorized")
         text = q["query"]
         ideal = q["ideal_keys"]
+        pii_check_on = bool(q.get("pii_check"))
         t0 = time.perf_counter()
         try:
             results = backend.search(user_id, text, limit=search_limit)
@@ -217,6 +325,16 @@ def run_eval(gold_path: Path, out_base: Path, *,
             "ndcg_at_10": ndcg_at_k(returned, ideal, 10),
             "error": error,
         }
+        if pii_check_on:
+            pii_gate_total += 1
+            leaks = pii_scan_results(results)
+            row["pii_check"] = True
+            row["pii_leaks"] = leaks
+            row["pii_clean"] = not leaks
+            if leaks:
+                pii_gate_failures.append({"id": qid, "leaks": leaks})
+            else:
+                pii_gate_passed += 1
         per_query.append(row)
         by_cat[category].append(row)
 
@@ -226,6 +344,16 @@ def run_eval(gold_path: Path, out_base: Path, *,
         return round(sum(r[field] for r in rows) / len(rows), 4)
 
     latencies = [r["latency_ms"] for r in per_query]
+    isolation = pii_isolation_check(backend, user_id) if _PII_OK else {
+        "clean": None,
+        "details": [{"status": "pii_lib_unavailable",
+                      "error": _PII_IMPORT_ERR}],
+    }
+    pii_gate_clean = (
+        pii_gate_total > 0
+        and pii_gate_passed == pii_gate_total
+        and isolation.get("clean") is not False
+    )
     aggregate = {
         "query_count": len(per_query),
         "skipped_unfilled": skipped_unfilled,
@@ -237,6 +365,13 @@ def run_eval(gold_path: Path, out_base: Path, *,
         "latency_ms_p50": round(percentile(latencies, 50), 2),
         "latency_ms_p95": round(percentile(latencies, 95), 2),
         "latency_ms_mean": round(statistics.mean(latencies), 2),
+        "pii_gate": {
+            "total": pii_gate_total,
+            "passed": pii_gate_passed,
+            "clean": pii_gate_clean,
+            "isolation": isolation,
+            "failures": pii_gate_failures,
+        },
     }
 
     category_summary: Dict[str, Dict[str, Any]] = {}
@@ -282,6 +417,12 @@ def run_eval(gold_path: Path, out_base: Path, *,
           f"p95={aggregate['latency_ms_p95']}ms "
           f"({aggregate['query_count']} queries, "
           f"{aggregate['skipped_unfilled']} skipped)")
+    gate = aggregate.get("pii_gate") or {}
+    if gate.get("total", 0) > 0:
+        verdict = "PASS" if gate.get("clean") else "FAIL"
+        print(f"[eval] PII gate {verdict} — {gate.get('passed', 0)}/"
+              f"{gate.get('total', 0)} queries clean, isolation "
+              f"{'clean' if gate.get('isolation', {}).get('clean') else 'leak'}")
     return report
 
 
@@ -328,8 +469,52 @@ def render_markdown(report: Dict[str, Any]) -> str:
             f"{c['recall_at_10']} | {c['mrr']} | {c['ndcg_at_10']} | "
             f"{c['latency_ms_p50']} ms |"
         )
+    gate = agg.get("pii_gate") or {}
+    if gate.get("total", 0) > 0 or gate.get("isolation"):
+        lines += [
+            "",
+            "## PII Gate",
+            "",
+            f"- pii_check queries run:  {gate.get('total', 0)}",
+            f"- pii_check queries clean: {gate.get('passed', 0)}",
+            f"- Overall gate verdict:    "
+            f"{'PASS' if gate.get('clean') else 'FAIL'}",
+            "",
+        ]
+        iso = gate.get("isolation") or {}
+        if iso.get("details"):
+            lines += [
+                "### PII Store Isolation",
+                "",
+                "| Probe | Status | Notes |",
+                "|---|---|---|",
+            ]
+            for d in iso["details"]:
+                if d.get("status") == "leaked":
+                    note = ", ".join(d.get("leaked_keys") or [])
+                elif d.get("status") == "search_failed":
+                    note = d.get("error", "—")
+                else:
+                    note = f"{d.get('returned_keys_count', 0)} rows, none from PII stores"
+                lines.append(
+                    f"| `{d.get('probe', '?')}` | {d.get('status', '?')} | "
+                    f"{note} |"
+                )
+            lines.append("")
+        if gate.get("failures"):
+            lines += [
+                "### PII Query Failures",
+                "",
+                "| Query | Leaked rows |",
+                "|---|---|",
+            ]
+            for f in gate["failures"]:
+                rows_summary = ", ".join(
+                    leak["key"][:32] for leak in f.get("leaks", [])
+                )
+                lines.append(f"| {f['id']} | {rows_summary} |")
+            lines.append("")
     lines += [
-        "",
         "Per-query detail with returned vs. ideal keys: see the "
         "accompanying `.json`.",
         "",
@@ -526,8 +711,15 @@ def main() -> None:
         print(f"[eval] gold set not found: {args.gold}", file=sys.stderr)
         sys.exit(2)
 
-    run_eval(args.gold, args.out, search_limit=args.limit,
-              warmup=not args.no_warmup)
+    report = run_eval(args.gold, args.out, search_limit=args.limit,
+                       warmup=not args.no_warmup)
+    # PII gate is a CI hard gate (Adım 3): when any pii_check
+    # queries were measured and either a query leaked or an
+    # isolation probe leaked, exit non-zero so the pipeline blocks.
+    gate = report["aggregate"].get("pii_gate") or {}
+    if gate.get("total", 0) > 0 and not gate.get("clean"):
+        print("[eval] PII gate FAIL — exiting 3", file=sys.stderr)
+        sys.exit(3)
 
 
 if __name__ == "__main__":
