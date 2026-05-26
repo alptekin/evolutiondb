@@ -406,9 +406,21 @@ void AddOrderByVecExpr(const char *col, const char *vec_literal, int desc)
     strncpy(g_sel.orderByVecColumn, col,
             sizeof(g_sel.orderByVecColumn) - 1);
     g_sel.orderByVecColumn[sizeof(g_sel.orderByVecColumn) - 1] = '\0';
-    strncpy(g_sel.orderByVecLiteral, vec_literal,
-            sizeof(g_sel.orderByVecLiteral) - 1);
-    g_sel.orderByVecLiteral[sizeof(g_sel.orderByVecLiteral) - 1] = '\0';
+    /* STRING token yytext keeps its surrounding quotes ('[...]'). The
+     * vec parser wants raw `[…]` form, so peel one matching quote pair
+     * off the ends before storing. */
+    const char *vs = vec_literal;
+    size_t vlen = strlen(vs);
+    if (vlen >= 2 &&
+        ((vs[0] == '\'' && vs[vlen - 1] == '\'') ||
+         (vs[0] == '"'  && vs[vlen - 1] == '"'))) {
+        vs += 1;
+        vlen -= 2;
+    }
+    if (vlen >= sizeof(g_sel.orderByVecLiteral))
+        vlen = sizeof(g_sel.orderByVecLiteral) - 1;
+    memcpy(g_sel.orderByVecLiteral, vs, vlen);
+    g_sel.orderByVecLiteral[vlen] = '\0';
     g_sel.orderByVecDesc = desc ? 1 : 0;
 }
 

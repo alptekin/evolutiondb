@@ -2989,7 +2989,16 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                             const char *p = strstr(jv, "\"emb\"");
                             if (p) {
                                 p = strchr(p, ':');
-                                if (p) raw = p + 1;
+                                if (p) {
+                                    p++;
+                                    while (*p == ' ' || *p == '\t') p++;
+                                    /* MEMORY PUT stores emb as a JSON
+                                     * string ("[f1,f2,...]"); the
+                                     * vec parser wants a raw bracket,
+                                     * so skip the wrapping quote. */
+                                    if (*p == '"') p++;
+                                    raw = p;
+                                }
                             }
                         }
                     }
