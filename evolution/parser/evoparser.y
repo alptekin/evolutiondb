@@ -1340,6 +1340,23 @@ orderby_item: NAME opt_asc_desc
         emit("ORDERBY %s %d", buf, $2);
         AddOrderByColumn(buf, $2);
     }
+/* Task 204 — Adım 5: vector ORDER BY using cosine-distance operator
+ * `<=>` (subtok 12). Form: ORDER BY emb <=> '[f1,f2,...]' [ASC|DESC].
+ * Only the cosine subtok is accepted here — the other COMPARISON
+ * sub-operators (=, <, >, …) in ORDER BY position don't make sense
+ * and would just be silently dropped, so reject them at the grammar
+ * level. */
+| NAME COMPARISON STRING opt_asc_desc
+    {
+        if ($2 != 12) {
+            yyerror(scanner, "ORDER BY supports only the cosine-"
+                    "distance operator <=> in expression position");
+            YYERROR;
+        }
+        emit("ORDERBY_VEC %s %s %d", $1, $3, $4);
+        AddOrderByVecExpr($1, $3, $4);
+        free($1); free($3);
+    }
 ;
 
 opt_limit: /* nil */ { /* no limit */ }

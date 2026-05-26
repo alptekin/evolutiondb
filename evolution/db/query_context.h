@@ -139,6 +139,14 @@ typedef struct {
     char orderByColumns[8][256];
     int  orderByDescs[8];
     int  orderByCount;
+    /* Vector ORDER BY (Task 204 — Adım 5): `col <=> 'vec_literal' [ASC|DESC]`.
+     * Set by parser via AddOrderByVecExpr() when an orderby_item uses the
+     * cosine-distance operator. Select planner detects orderByVecColumn[0]
+     * != '\0' and switches to a vector-sort path (brute force until HNSW
+     * lands in Task 202 / Adım 8). */
+    char orderByVecColumn[256];
+    char orderByVecLiteral[16384];
+    int  orderByVecDesc;
     /* Sort context (qsort callback) */
     int  sortColIndex;
     int  sortDesc;
