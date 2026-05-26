@@ -1395,32 +1395,6 @@ static int vec_parse_to_floats(const char *text, float **out_arr, int *out_n)
     return 1;
 }
 
-/* Exported parser wrapper for the SELECT planner — same math the
- * WHERE-clause distance ops use, no second implementation to drift. */
-int evo_vec_parse_to_floats(const char *text, float **out_arr, int *out_n)
-{
-    return vec_parse_to_floats(text, out_arr, out_n);
-}
-
-/* Exported cosine distance (1 - cos_sim). Returns 1.0 (max) when
- * either vector has zero norm or dimensions mismatch — that pushes
- * unusable rows to the bottom under ascending ORDER BY. */
-double evo_vec_cosine_distance(const float *a, int na, const float *b, int nb)
-{
-    if (!a || !b || na <= 0 || nb <= 0 || na != nb) return 1.0;
-    double dot = 0.0, na2 = 0.0, nb2 = 0.0;
-    for (int i = 0; i < na; i++) {
-        dot += (double)a[i] * (double)b[i];
-        na2 += (double)a[i] * (double)a[i];
-        nb2 += (double)b[i] * (double)b[i];
-    }
-    if (na2 <= 0 || nb2 <= 0) return 1.0;
-    double cos_sim = dot / (sqrt(na2) * sqrt(nb2));
-    if (cos_sim > 1.0) cos_sim = 1.0;
-    if (cos_sim < -1.0) cos_sim = -1.0;
-    return 1.0 - cos_sim;
-}
-
 /* Dot product a · b over n elements */
 static double vec_dot(const float *a, const float *b, int n)
 {

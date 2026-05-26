@@ -2947,96 +2947,9 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
             }
         }
     }
-    /* Task 204 — Adım 5b: vector ORDER BY brute-force sort.
-     * Path is taken when the parser captured a `col <=> 'vec'`
-     * orderby_item (see evoparser.y / AddOrderByVecExpr). Column
-     * lookup is case-insensitive; row values either come from a
-     * VECTOR(N) typed column (already a "[f1,f2,...]" string) or
-     * from a JSON-stringified mem_value where the embedding lives
-     * under the "emb" key. The latter shape is what the MCP MEMORY
-     * STORE writes, and it's the path Adım 6 will exercise once
-     * the search() rewrite lands. */
-    if (g_sel.orderByVecColumn[0] != '\0' && rs->num_rows > 1) {
-        int ci = -1, mvi = -1, k;
-        for (k = 0; k < rs->num_cols; k++) {
-            if (strcasecmp(rs->columns[k].name,
-                            g_sel.orderByVecColumn) == 0) {
-                ci = k;
-            }
-            if (strcasecmp(rs->columns[k].name, "mem_value") == 0) {
-                mvi = k;
-            }
-        }
-        float *qvec = NULL;
-        int qn = 0;
-        if (!evo_vec_parse_to_floats(g_sel.orderByVecLiteral,
-                                       &qvec, &qn) || qn <= 0) {
-            qvec = NULL;
-        }
-        if (qvec && (ci >= 0 || mvi >= 0)) {
-            int n = rs->num_rows;
-            double *dist = (double *)malloc(sizeof(double) * n);
-            int    *idx  = (int    *)malloc(sizeof(int)    * n);
-            if (dist && idx) {
-                int i;
-                for (i = 0; i < n; i++) {
-                    idx[i] = i;
-                    const char *raw = NULL;
-                    if (ci >= 0) raw = rs->rows[i].fields[ci];
-                    if (!raw && mvi >= 0) {
-                        const char *jv = rs->rows[i].fields[mvi];
-                        if (jv) {
-                            const char *p = strstr(jv, "\"emb\"");
-                            if (p) {
-                                p = strchr(p, ':');
-                                if (p) raw = p + 1;
-                            }
-                        }
-                    }
-                    float *rv = NULL;
-                    int rn = 0;
-                    if (raw && evo_vec_parse_to_floats(raw, &rv, &rn)
-                        && rn > 0) {
-                        dist[i] = evo_vec_cosine_distance(qvec, qn,
-                                                            rv, rn);
-                        free(rv);
-                    } else {
-                        dist[i] = 1.0;   /* push to bottom */
-                    }
-                }
-                int a, b;
-                int desc = g_sel.orderByVecDesc;
-                for (a = 1; a < n; a++) {
-                    int   ki = idx[a];
-                    double kd = dist[ki];
-                    b = a - 1;
-                    while (b >= 0) {
-                        double bd = dist[idx[b]];
-                        int swap = desc ? (kd > bd) : (kd < bd);
-                        if (!swap) break;
-                        idx[b + 1] = idx[b];
-                        b--;
-                    }
-                    idx[b + 1] = ki;
-                }
-                Row *tmp = (Row *)malloc(sizeof(Row) * n);
-                if (tmp) {
-                    for (i = 0; i < n; i++) tmp[i] = rs->rows[idx[i]];
-                    memcpy(rs->rows, tmp, sizeof(Row) * n);
-                    free(tmp);
-                }
-            }
-            free(dist);
-            free(idx);
-        }
-        if (qvec) free(qvec);
-    }
     g_sel.orderByColumn[0] = '\0';
     g_sel.orderByDesc = 0;
     g_sel.orderByCount = 0;
-    g_sel.orderByVecColumn[0] = '\0';
-    g_sel.orderByVecLiteral[0] = '\0';
-    g_sel.orderByVecDesc = 0;
 
     /* --- Column filtering / expression evaluation (using parser AST) --- */
     if (!did_aggregate && g_expr.selectExprCount > 0 && rs->num_cols > 0) {
