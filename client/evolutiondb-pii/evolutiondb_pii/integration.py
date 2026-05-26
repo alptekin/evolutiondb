@@ -45,16 +45,18 @@ _state = {"checked": False, "engine": None}
 def _resolve_engine(env_var: str = "EVOSQL_PII_MASK"):
     """Resolve the PII engine on first call and cache it.
 
-    `env_var` controls activation: `auto` (default) enables when a
-    public key exists at `~/.evosql/pii_public.pem`; `on` forces
-    and surfaces an error message when the key is missing; `off`
-    skips the engine entirely.
+    `env_var` controls activation: `on` (default) forces the engine
+    and surfaces an error when the keystore is missing — sync
+    clients route every record through here, so a silent passthrough
+    would leak plaintext PII into the memory store; `auto` enables
+    only when a key exists (legacy behavior, kept for callers that
+    explicitly opt in); `off` skips the engine entirely.
     """
     if _state["checked"]:
         return _state["engine"]
     _state["checked"] = True
 
-    mode = (os.environ.get(env_var, "auto") or "auto").lower()
+    mode = (os.environ.get(env_var, "on") or "on").lower()
     if mode == "off":
         return None
 
