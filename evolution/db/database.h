@@ -156,10 +156,6 @@ int GetColumnSize(int typeVal);
 int GetOrderByColumn(char *name);
 void SetOrderByDirection(int desc);
 void AddOrderByColumn(const char *name, int desc);
-/* Task 204 — Adım 5: ORDER BY <col> <=> '<vec_literal>' [ASC|DESC].
- * vec_literal is the bracketed "[f1,f2,...]" form an embedding column
- * carries (same shape Document.c writes for VECTOR(N) typed cols). */
-void AddOrderByVecExpr(const char *col, const char *vec_literal, int desc);
 
 /* Window function parser helpers */
 void AddWindowSpec(int funcType, struct ExprNode *arg);
