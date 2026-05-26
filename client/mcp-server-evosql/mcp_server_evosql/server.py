@@ -36,7 +36,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 
-from .embeddings import EmbeddingProvider, provider_from_env
+from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec
 from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
@@ -193,8 +193,17 @@ class MemoryBackend:
                        fact + " " + " ".join(tags or [])
             vec = self.embedder.embed(emb_text)
             if vec:
-                record["emb"]       = vec
-                record["emb_model"] = self.embedder.kind
+                record["emb"]       = encode_vec(vec)
+                # Store provider + model name so a future backfill
+                # can spot stale vectors after a model upgrade. Old
+                # rows wrote only the provider kind; the search path
+                # treats either shape as opaque, so this is forward-
+                # compatible without a migration.
+                model_name = getattr(self.embedder, "model_name", "")
+                record["emb_model"] = (
+                    f"{self.embedder.kind}:{model_name}"
+                    if model_name else self.embedder.kind
+                )
         value = json.dumps(record)
         self._exec(
             f"MEMORY PUT INTO {self.memory} VALUES "
@@ -269,18 +278,22 @@ class MemoryBackend:
             kw_score = kw_hits / max(len(q_terms), 1)
 
             sem_score = 0.0
-            row_vec = rec.get("emb")
-            if q_vec and isinstance(row_vec, list):
+            row_vec = decode_vec(rec.get("emb"))
+            if q_vec and row_vec:
                 from .embeddings import cosine
                 sem_score = max(0.0, cosine(q_vec, row_vec))
 
             # Hybrid: prefer semantic when available, but keep keyword
             # weight non-zero so an exact term match always beats a
-            # vaguely-similar embedding.
+            # vaguely-similar embedding. Both branches normalize to
+            # the same 0-1 scale; mixing a 0-1 hybrid against a 0-N
+            # raw hit-count would let embedding-less rows dominate
+            # purely because their integer count is bigger than any
+            # cosine.
             if sem_score > 0:
                 final = 0.7 * sem_score + 0.3 * kw_score
             else:
-                final = float(kw_hits)
+                final = kw_score
 
             if tag and tag.lower() not in [t.lower() for t in (rec.get("tags") or [])]:
                 continue

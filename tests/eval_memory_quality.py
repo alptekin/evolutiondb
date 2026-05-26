@@ -296,12 +296,27 @@ def run_eval(gold_path: Path, out_base: Path, *,
     pii_gate_passed = 0
     pii_gate_failures: List[Dict[str, Any]] = []
 
+    # Workaround: under bge-m3 the backend silently degrades after
+    # ~6 large LIMIT-10000 SELECTs on the same psycopg connection —
+    # subsequent calls return zero rows without raising. _with_retry
+    # never sees an exception so it doesn't reconnect. Until the
+    # server-side cause is tracked down, refresh just the connection
+    # before each query — embedder/tagger stay shared so the bge-m3
+    # weights load once.
+    def _refresh_conn(b: MemoryBackend) -> None:
+        try:
+            b.conn.close()
+        except Exception:
+            pass
+        b.conn = b._connect()
+
     for q in queries:
         qid = q["id"]
         category = q.get("category", "uncategorized")
         text = q["query"]
         ideal = q["ideal_keys"]
         pii_check_on = bool(q.get("pii_check"))
+        _refresh_conn(backend)
         t0 = time.perf_counter()
         try:
             results = backend.search(user_id, text, limit=search_limit)
