@@ -124,6 +124,12 @@ typedef struct {
     char      excludedValues[64][256];
     int       excludedNull[64];
     int       excludedCount;
+    /* MEMORY PUT upsert: on a PK collision, atomically repoint the PK
+     * to the freshly-inserted heap tuple and drop the old one, instead
+     * of the old delete-then-insert path that could lose the row if the
+     * re-insert hit a stale-tree duplicate. Engine-internal, never set
+     * by the SQL grammar. */
+    int       memUpsert;
 } InsertOpts;
 
 /* ---- SELECT ---- */

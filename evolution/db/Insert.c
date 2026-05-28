@@ -1174,6 +1174,13 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
             mvcc_ensure_xid(&g_qctx->mvcc_xid);
             evo_delete_row(tblName, pkKey, g_qctx->mvcc_xid);
             pk_tree = tapi_pk_tree(td);
+        } else if (g_ins.memUpsert) {
+            /* MEMORY PUT upsert: don't bail on the duplicate. Fall
+             * through to build + heap-insert the new tuple; the
+             * bt2_insert collision below repoints the PK to it and
+             * drops the old tuple atomically (new-first, swap-last),
+             * so a failure can't leave the row deleted. */
+            mvcc_ensure_xid(&g_qctx->mvcc_xid);
         } else {
             return 1; /* duplicate */
         }
@@ -1319,8 +1326,36 @@ static int store_single_row(TableDesc *td, const ColumnDesc *cols, int ncols,
     int _bti = DML_PROF_EXPR("bt2_insert",
                              bt2_insert(&pk_tree, pkKey, rid));
     if (_bti != 0) {
+        /* PK collision. MEMORY PUT upsert: the new heap tuple is
+         * already written, so repoint the PK entry to it and drop the
+         * previous tuple. This is the atomic order — new tuple lands
+         * first, the swap happens last — so a failure leaves the old
+         * row intact instead of deleting it before a re-insert that
+         * might not land (the bug that lost a row during backfill). */
+        if (g_ins.memUpsert) {
+            RowID old_rid;
+            if (bt2_search(&pk_tree, pkKey, &old_rid) == 0) {
+                char old_rec[TOAST_STUB_SIZE + 16];
+                int old_len = tapi_heap_read(old_rid, old_rec,
+                                              sizeof(old_rec));
+                if (bt2_update(&pk_tree, pkKey, rid) == 0) {
+                    if (pk_tree.root_page != td->pk_root_page) {
+                        td->pk_root_page = pk_tree.root_page;
+                        cat_update_pk_root(td->table_id, td->table_name,
+                                           td->schema_id,
+                                           pk_tree.root_page);
+                    }
+                    tapi_heap_delete(old_rid);
+                    if (old_len > 0)
+                        toast_free_if_stub(old_rec, old_len);
+                    vmap_clear(rid.page_no);
+                    return 0;
+                }
+            }
+        }
         /* Shouldn't happen since we checked, but clean up */
         tapi_heap_delete(rid);
+        if (toast_written) toast_free(&toast_ref_out);
         return 1;
     }
 
