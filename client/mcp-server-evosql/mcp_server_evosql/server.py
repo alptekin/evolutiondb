@@ -38,6 +38,7 @@ from typing import Any, Dict, List, Optional
 
 
 from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env, embedder2_from_env
+from .query_transform import QueryTransform, query_transform_from_env
 from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
@@ -137,12 +138,19 @@ class MemoryBackend:
                   reranker: Optional["Reranker"] = None,
                   lexical: str = "simple",
                   rerank_mode: str = "override",
-                  embedder2: Optional["EmbeddingProvider"] = None):
+                  embedder2: Optional["EmbeddingProvider"] = None,
+                  query_transform: Optional["QueryTransform"] = None):
         self.embedder = embedder
         # Optional second dense embedder (e5) for RRF ensemble. When
         # present, search() fuses bge + e5 + keyword rankings via
         # Reciprocal Rank Fusion. Stored under the `emb2` record key.
         self.embedder2 = embedder2
+        # Optional query-side transform (translate/hyde/multi). Rewrites
+        # the raw query into variants embedded alongside the original;
+        # search() max-pools dense similarity across them to close the
+        # cross-source query↔doc gap. Default no-op = identity.
+        from .query_transform import _NoOpTransform
+        self.query_transform = query_transform or _NoOpTransform()
         self.tagger   = tagger
         self.reranker = reranker
         # Lexical scorer: "simple" = legacy binary term-presence
@@ -323,20 +331,36 @@ class MemoryBackend:
         )
         q_terms = [w for w in query.lower().split() if len(w) > 1]
 
-        # Compute the query embedding once. If the embedder is off or
-        # the call fails, q_vec is None and we silently fall through to
-        # pure keyword scoring.
-        q_vec: Optional[List[float]] = None
+        # Query-side transform: rewrite the raw query into variants that
+        # sit closer to the documents' vocabulary (TR→EN translation,
+        # HyDE answer-space, or multi-paraphrase). The original query is
+        # always variants[0], so the dense channels can only GAIN
+        # coverage from the extra phrasings — never lose the baseline.
+        # No-op transform returns just [query], leaving the path
+        # identical to before.
+        variants = self.query_transform.transform(query)
+
+        # Compute the query embedding for every variant. If the embedder
+        # is off or a call fails the list is empty and we silently fall
+        # through to pure keyword scoring. Per row we max-pool cosine
+        # across variants (best-matching phrasing wins).
+        q_vecs: List[List[float]] = []
         if self.embedder is not None:
-            q_vec = self.embedder.embed(query)
-        # Second dense query vector (e5, asymmetric query prefix) for
-        # the RRF ensemble. None when no second embedder is wired up.
-        q_vec2: Optional[List[float]] = None
+            for v in variants:
+                qv = self.embedder.embed(v)
+                if qv:
+                    q_vecs.append(qv)
+        # Second dense query vectors (e5, asymmetric query prefix) for
+        # the RRF ensemble. Empty when no second embedder is wired up.
+        q_vecs2: List[List[float]] = []
         use_rrf = (self.embedder2 is not None
                    and self.embedder2.kind != "none")
         emb2_by_key: Dict[str, Any] = {}
         if use_rrf:
-            q_vec2 = self.embedder2.embed_query(query)
+            for v in variants:
+                qv2 = self.embedder2.embed_query(v)
+                if qv2:
+                    q_vecs2.append(qv2)
             # Pull the second vectors from the separate emb2 store and
             # map them by key. Older rows may still carry emb2 inline on
             # the main record (pre-split backfill) — the candidate loop
@@ -437,18 +461,20 @@ class MemoryBackend:
             from .embeddings import cosine
             sem_score = 0.0
             row_vec = decode_vec(rec.get("emb"))
-            if q_vec and row_vec:
-                sem_score = max(0.0, cosine(q_vec, row_vec))
+            if q_vecs and row_vec:
+                sem_score = max((max(0.0, cosine(qv, row_vec))
+                                 for qv in q_vecs), default=0.0)
 
             sem2_score = 0.0
-            if use_rrf and q_vec2:
+            if use_rrf and q_vecs2:
                 # Prefer the separate emb2 store; fall back to an inline
                 # emb2 on the main record for pre-split rows.
                 row_vec2 = emb2_by_key.get(c["key"])
                 if row_vec2 is None:
                     row_vec2 = decode_vec(rec.get("emb2"))
                 if row_vec2:
-                    sem2_score = max(0.0, cosine(q_vec2, row_vec2))
+                    sem2_score = max((max(0.0, cosine(qv2, row_vec2))
+                                      for qv2 in q_vecs2), default=0.0)
 
             # Hybrid: prefer semantic when available, but keep keyword
             # weight non-zero so an exact term match always beats a
@@ -735,6 +761,7 @@ class MCPServer:
         self.lexical  = os.environ.get("EVOSQL_LEXICAL", "simple").lower()
         self.rerank_mode = os.environ.get("EVOSQL_RERANK_MODE",
                                           "override").lower()
+        self.query_transform = query_transform_from_env()
         self.backend: Optional[MemoryBackend] = None
 
     def _connect(self) -> MemoryBackend:
@@ -747,7 +774,8 @@ class MCPServer:
                                             reranker=self.reranker,
                                             lexical=self.lexical,
                                             rerank_mode=self.rerank_mode,
-                                            embedder2=self.embedder2)
+                                            embedder2=self.embedder2,
+                                            query_transform=self.query_transform)
         return self.backend
 
     # -- tool dispatch ------------------------------------------------
