@@ -62,6 +62,7 @@ except ImportError:
 
 from mcp_server_evosql.server import MemoryBackend  # noqa: E402
 from mcp_server_evosql.embeddings import provider_from_env, reranker_from_env, embedder2_from_env  # noqa: E402
+from mcp_server_evosql.query_transform import query_transform_from_env  # noqa: E402
 
 # evolutiondb-pii is optional for the basic eval but required when
 # any query has pii_check: true. Keystore and rules MUST come from
@@ -211,6 +212,7 @@ def build_backend(memory_prefix: str) -> MemoryBackend:
     reranker = reranker_from_env(embedder)
     lexical = os.environ.get("EVOSQL_LEXICAL", "simple").lower()
     rerank_mode = os.environ.get("EVOSQL_RERANK_MODE", "override").lower()
+    query_transform = query_transform_from_env()
     # The tagger is only consulted on save; eval is read-only so we
     # skip building one to keep startup quiet.
     return MemoryBackend(
@@ -218,6 +220,7 @@ def build_backend(memory_prefix: str) -> MemoryBackend:
         database=database, prefix=memory_prefix,
         embedder=embedder, tagger=None, reranker=reranker,
         lexical=lexical, rerank_mode=rerank_mode, embedder2=embedder2,
+        query_transform=query_transform,
     )
 
 
@@ -251,12 +254,17 @@ def resolve_embed_meta(backend: MemoryBackend) -> Dict[str, str]:
     e2 = getattr(backend, "embedder2", None)
     e2_kind = e2.kind if e2 else "none"
     e2_model = getattr(e2, "model_name", "") if e2 else ""
+    qt = getattr(backend, "query_transform", None)
+    qt_kind = getattr(qt, "kind", "off") if qt else "off"
+    qt_model = getattr(qt, "model", "n/a") if qt else "n/a"
     return {"provider": kind, "model": model,
             "rerank": rerank_kind,
             "rerank_model": rerank_model or "n/a",
             "lexical": getattr(backend, "lexical", "simple"),
             "embedder2": e2_kind,
-            "embedder2_model": e2_model or "n/a"}
+            "embedder2_model": e2_model or "n/a",
+            "query_transform": qt_kind,
+            "query_transform_model": qt_model or "n/a"}
 
 
 # ---------------------------------------------------------------- #
@@ -430,6 +438,9 @@ def run_eval(gold_path: Path, out_base: Path, *,
             "lexical": embed_meta.get("lexical", "simple"),
             "embedder2": embed_meta.get("embedder2", "none"),
             "embedder2_model": embed_meta.get("embedder2_model", "n/a"),
+            "query_transform": embed_meta.get("query_transform", "off"),
+            "query_transform_model": embed_meta.get(
+                "query_transform_model", "n/a"),
             "search_limit": search_limit,
             "warmup": warmup,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -483,6 +494,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
         f"- Reranker: `{cfg.get('rerank', 'none')}`"
         + (f" (`{cfg.get('rerank_model')}`)"
            if cfg.get('rerank', 'none') != 'none' else ""),
+        f"- Query transform: `{cfg.get('query_transform', 'off')}`"
+        + (f" (`{cfg.get('query_transform_model')}`)"
+           if cfg.get('query_transform', 'off') != 'off' else ""),
         f"- Memory prefix: `{cfg['memory_prefix']}`",
         f"- Search limit: {cfg['search_limit']}",
         f"- Query count: {agg['query_count']} "
