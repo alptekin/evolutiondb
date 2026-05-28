@@ -5699,6 +5699,7 @@ static void execute_via_parser(const char *sql, ResultSet *rs, SessionCtx *ctx)
     g_ins.insertFromSelect = 0;
     g_ins.onDupKeyUpdate = 0;
     g_ins.onDupSetCount = 0;
+    g_ins.memUpsert = 0;
     memset(g_ins.onDupSetExprs, 0, sizeof(g_ins.onDupSetExprs));
     { extern __thread int g_ins_upsert_mode; g_ins_upsert_mode = 0; }
     g_expr.whereSel[0] = '\0';
