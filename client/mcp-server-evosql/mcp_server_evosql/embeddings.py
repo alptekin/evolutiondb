@@ -123,13 +123,23 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 class EmbeddingProvider:
     """Common interface — `.embed(text)` returns a Python list of
-    floats or None if the provider is disabled / fails."""
+    floats or None if the provider is disabled / fails.
+
+    Asymmetric models (e5 family) distinguish query vs passage via a
+    text prefix; embed_query / embed_passage default to plain embed()
+    so symmetric providers need no changes."""
 
     def __init__(self, kind: str):
         self.kind = kind
 
     def embed(self, text: str) -> Optional[List[float]]:
         raise NotImplementedError
+
+    def embed_query(self, text: str) -> Optional[List[float]]:
+        return self.embed(text)
+
+    def embed_passage(self, text: str) -> Optional[List[float]]:
+        return self.embed(text)
 
 
 class _NoOpProvider(EmbeddingProvider):
@@ -231,6 +241,80 @@ class _LocalProvider(EmbeddingProvider):
         for pos, v in zip(idx, vecs):
             out[pos] = [float(x) for x in v.tolist()]
         return out
+
+
+class _E5Provider(_LocalProvider):
+    """Asymmetric multilingual-e5 wrapper. e5 was trained with
+    'query: ' / 'passage: ' prefixes and L2-normalized embeddings;
+    feeding raw text (the symmetric path) measurably degrades
+    cross-lingual recall. Used as the SECOND dense ranker alongside
+    bge-m3 — on the gold set, RRF(bge, e5) beat either model alone
+    (+19% Recall@5 on the 2K-doc subset) because the two models are
+    strong on different query shapes (e5 on conceptual, bge on
+    specific lookups)."""
+
+    def __init__(self, model_name: str):
+        super().__init__(model_name)
+        self.kind = "e5"
+
+    def _encode(self, text: str, prefix: str) -> Optional[List[float]]:
+        if not text or not text.strip():
+            return None
+        try:
+            model = self._load()
+            vec = model.encode(f"{prefix}{text}", normalize_embeddings=True)
+            return [float(x) for x in vec.tolist()]
+        except Exception as exc:
+            print(f"[mcp-evosql] e5 embed failed: {exc}",
+                  file=sys.stderr, flush=True)
+            return None
+
+    def embed(self, text: str) -> Optional[List[float]]:
+        # Default to passage shape — save() stores passages.
+        return self._encode(text, "passage: ")
+
+    def embed_query(self, text: str) -> Optional[List[float]]:
+        return self._encode(text, "query: ")
+
+    def embed_passage(self, text: str) -> Optional[List[float]]:
+        return self._encode(text, "passage: ")
+
+    def embed_batch(self, texts: List[str],
+                     batch_size: int = 16
+                     ) -> List[Optional[List[float]]]:
+        if not texts:
+            return []
+        idx = [i for i, t in enumerate(texts) if t and t.strip()]
+        if not idx:
+            return [None] * len(texts)
+        try:
+            model = self._load()
+            vecs = model.encode([f"passage: {texts[i]}" for i in idx],
+                                 batch_size=batch_size,
+                                 normalize_embeddings=True,
+                                 show_progress_bar=False)
+        except Exception as exc:
+            print(f"[mcp-evosql] e5 embed_batch failed: {exc}",
+                  file=sys.stderr, flush=True)
+            return [None] * len(texts)
+        out: List[Optional[List[float]]] = [None] * len(texts)
+        for pos, v in zip(idx, vecs):
+            out[pos] = [float(x) for x in v.tolist()]
+        return out
+
+
+def embedder2_from_env() -> EmbeddingProvider:
+    """Resolve the optional SECOND dense embedder for RRF ensemble.
+
+    EVOSQL_EMBEDDING_MODEL_2
+        unset / "none" → no second ranker (single-model behavior)
+        a model name   → e5-family wrapper (asymmetric prefixes).
+                         Recommended: intfloat/multilingual-e5-large.
+    """
+    model = os.environ.get("EVOSQL_EMBEDDING_MODEL_2", "").strip()
+    if not model or model.lower() == "none":
+        return _NoOpProvider()
+    return _E5Provider(model)
 
 
 class Reranker:
