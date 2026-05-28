@@ -21,35 +21,40 @@ to the dense channels — never strip the baseline signal.
 Three transform modes (`EVOSQL_QUERY_TRANSFORM`):
 
   off        identity — returns [query]. Default. No behavior change,
-             no LLM call, production stays exactly as before.
+             no model load, production stays exactly as before.
 
   translate  TR→EN translation. Bridges the Turkish-query ↔ English-
              doc gap directly. Variants: [query, english_query].
 
-  hyde       Hypothetical Document Embeddings. The LLM writes a short
+  hyde       Hypothetical Document Embeddings. The model writes a short
              plausible answer/document for the query; that text is
              embedded instead of the question, landing the query
              vector in answer-space. Variants: [query, hypo_doc].
 
-  multi      Multi-query expansion. The LLM emits N paraphrases /
+  multi      Multi-query expansion. The model emits N paraphrases /
              reformulations; each is embedded and max-pooled.
              Variants: [query, para_1, … para_N].
 
-The LLM backend is any OpenAI-compatible /v1/chat/completions
-endpoint (mirrors tagger.py). It defaults to a local ollama server so
-the experiment runs offline and free; point EVOSQL_QT_BASE_URL at
-api.openai.com to use a hosted model. Every failure path degrades to
-the identity transform, so a flaky or absent LLM never breaks search.
+The rewrite model runs IN-PROCESS via transformers (a small
+instruction-tuned causal LM), exactly like the embedding models run
+in-process via sentence-transformers. It auto-downloads from
+HuggingFace on first use and runs fully offline thereafter — no
+ollama, no external daemon, no network endpoint. transformers + torch
+already ship with the `embeddings-local` extra, so the query
+transform adds no new heavy dependency. Every failure path degrades
+to the identity transform, so a missing model never breaks search.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from typing import List, Optional
+
+# The rewrite model is loaded after the MCP process has already used
+# tokenizers (for embeddings), so HF's fork-safety check would warn on
+# every search. We run generation single-threaded anyway, so silence it.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
 def _clean_line(s: str) -> str:
@@ -66,7 +71,7 @@ class QueryTransform:
     The original query is ALWAYS element 0 so callers can rely on the
     baseline signal being present regardless of transform success.
     `kind` is the active mode for reporting; `model` identifies the
-    LLM (or "n/a" for the no-op)."""
+    rewrite model (or "n/a" for the no-op)."""
 
     kind  = "off"
     model = "n/a"
@@ -80,23 +85,57 @@ class _NoOpTransform(QueryTransform):
     model = "n/a"
 
 
-class _LLMTransform(QueryTransform):
-    """OpenAI-compatible chat client. One short completion per query,
-    parsed into variant strings. Results are cached in-process keyed
-    by the raw query so repeated identical queries (and eval warm-up
-    passes) don't re-hit the model."""
+class _LocalGenTransform(QueryTransform):
+    """In-process query rewriter backed by a small instruction-tuned
+    causal LM (transformers). Lazy-loaded so the model download +
+    load cost is paid only when a search actually routes through here,
+    not at MCPServer startup. Results are cached in-process keyed by
+    the raw query so repeated identical queries (and eval warm-up
+    passes) don't re-run generation."""
 
-    def __init__(self, mode: str, base_url: str, model: str,
-                  api_key: str = "", n_variants: int = 3,
-                  timeout: int = 20):
-        self.kind       = mode
-        self.mode       = mode
-        self.model      = model
-        self._url       = base_url
-        self._api_key   = api_key
-        self._n         = max(1, n_variants)
-        self._timeout   = timeout
+    def __init__(self, mode: str, model: str, n_variants: int = 3,
+                  max_new_tokens: int = 0):
+        self.kind   = mode
+        self.mode   = mode
+        self.model  = model
+        self._n     = max(1, n_variants)
+        self._max_new = max_new_tokens
+        self._tok   = None
+        self._lm    = None
+        self._device = None
         self._cache: dict = {}
+
+    # -- lazy model load ---------------------------------------------
+    def _load(self):
+        if self._lm is not None:
+            return True
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            if torch.cuda.is_available():
+                self._device = "cuda"
+            elif getattr(torch.backends, "mps", None) and \
+                    torch.backends.mps.is_available():
+                self._device = "mps"
+            else:
+                self._device = "cpu"
+            self._tok = AutoTokenizer.from_pretrained(self.model)
+            self._lm = AutoModelForCausalLM.from_pretrained(
+                self.model, torch_dtype="auto").to(self._device)
+            self._lm.eval()
+            # We decode greedily (do_sample=False); clear the model's
+            # sampling defaults so transformers doesn't warn on every
+            # call that temperature/top_p/top_k are set but unused.
+            gc = self._lm.generation_config
+            gc.do_sample = False
+            gc.temperature = None
+            gc.top_p = None
+            gc.top_k = None
+            return True
+        except Exception as exc:
+            print(f"[query-transform] model load failed ({self.model}): "
+                  f"{exc}; transform disabled.", file=sys.stderr, flush=True)
+            return False
 
     # -- prompt construction per mode --------------------------------
     def _messages(self, query: str):
@@ -137,28 +176,27 @@ class _LLMTransform(QueryTransform):
         return [{"role": "system", "content": sys_p},
                 {"role": "user",   "content": query[:1000]}]
 
-    def _call(self, query: str) -> Optional[str]:
-        max_tokens = 200 if self.mode != "translate" else 80
-        body = json.dumps({
-            "model": self.model,
-            "messages": self._messages(query),
-            "max_tokens":  max_tokens,
-            "temperature": 0.0,
-            "stream": False,
-        }).encode()
-        headers = {"Content-Type": "application/json",
-                    "Accept": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        req = urllib.request.Request(self._url, data=body, method="POST",
-                                      headers=headers)
+    def _generate(self, query: str) -> Optional[str]:
+        if not self._load():
+            return None
+        max_new = self._max_new or (80 if self.mode == "translate" else 200)
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                payload = json.loads(resp.read().decode())
-            return payload["choices"][0]["message"]["content"]
-        except (urllib.error.URLError, TimeoutError,
-                ValueError, KeyError, IndexError) as exc:
-            print(f"[query-transform] {self.mode} call failed: {exc}",
+            import torch
+            text = self._tok.apply_chat_template(
+                self._messages(query), tokenize=False,
+                add_generation_prompt=True)
+            inputs = self._tok(text, return_tensors="pt").to(self._device)
+            with torch.no_grad():
+                out = self._lm.generate(
+                    **inputs, max_new_tokens=max_new, do_sample=False,
+                    pad_token_id=(self._tok.pad_token_id
+                                  if self._tok.pad_token_id is not None
+                                  else self._tok.eos_token_id))
+            # Decode only the newly generated continuation.
+            gen = out[0][inputs["input_ids"].shape[1]:]
+            return self._tok.decode(gen, skip_special_tokens=True)
+        except Exception as exc:
+            print(f"[query-transform] {self.mode} generation failed: {exc}",
                   file=sys.stderr, flush=True)
             return None
 
@@ -181,7 +219,7 @@ class _LLMTransform(QueryTransform):
         if q in self._cache:
             return self._cache[q]
         variants = [query]  # original always first — additive only
-        raw = self._call(q)
+        raw = self._generate(q)
         if raw:
             for v in self._parse(raw):
                 if v and v.lower() != q.lower() and v not in variants:
@@ -195,20 +233,16 @@ def query_transform_from_env() -> QueryTransform:
 
     EVOSQL_QUERY_TRANSFORM
         off | translate | hyde | multi   (default: off)
-    EVOSQL_QT_BASE_URL
-        OpenAI-compatible chat endpoint. Default the local ollama
-        server (http://localhost:11434/v1/chat/completions) so the
-        experiment runs offline; set to
-        https://api.openai.com/v1/chat/completions for a hosted model.
     EVOSQL_QT_MODEL
-        Model id. Default qwen2.5 (the local model used in the
-        haystack-enrichment experiments).
-    EVOSQL_QT_API_KEY
-        Bearer token. Falls back to OPENAI_API_KEY. ollama ignores it.
+        HuggingFace model id for the in-process rewrite LM. Default
+        Qwen/Qwen2.5-1.5B-Instruct — small, multilingual (strong on
+        Turkish), instruction-tuned, CPU-runnable, auto-downloads on
+        first use. Heavier ids (…-3B-Instruct) trade speed for quality.
     EVOSQL_QT_N
         Variant count for `multi` mode (default 3).
-    EVOSQL_QT_TIMEOUT
-        Per-call timeout seconds (default 20).
+    EVOSQL_QT_MAX_TOKENS
+        Override the generation length cap (default 80 for translate,
+        200 otherwise).
     """
     mode = os.environ.get("EVOSQL_QUERY_TRANSFORM", "off").strip().lower()
     if mode in ("", "off", "none", "0", "false"):
@@ -217,19 +251,15 @@ def query_transform_from_env() -> QueryTransform:
         print(f"[query-transform] unknown mode '{mode}'; disabling.",
               file=sys.stderr, flush=True)
         return _NoOpTransform()
-    base_url = os.environ.get(
-        "EVOSQL_QT_BASE_URL",
-        "http://localhost:11434/v1/chat/completions").strip()
-    model = os.environ.get("EVOSQL_QT_MODEL", "qwen2.5").strip()
-    api_key = (os.environ.get("EVOSQL_QT_API_KEY", "").strip()
-               or os.environ.get("OPENAI_API_KEY", "").strip())
+    model = os.environ.get("EVOSQL_QT_MODEL",
+                           "Qwen/Qwen2.5-1.5B-Instruct").strip()
     try:
         n = int(os.environ.get("EVOSQL_QT_N", "3"))
     except ValueError:
         n = 3
     try:
-        timeout = int(os.environ.get("EVOSQL_QT_TIMEOUT", "20"))
+        max_new = int(os.environ.get("EVOSQL_QT_MAX_TOKENS", "0"))
     except ValueError:
-        timeout = 20
-    return _LLMTransform(mode, base_url, model, api_key=api_key,
-                          n_variants=n, timeout=timeout)
+        max_new = 0
+    return _LocalGenTransform(mode, model, n_variants=n,
+                               max_new_tokens=max_new)
