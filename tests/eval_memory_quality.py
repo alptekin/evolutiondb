@@ -61,7 +61,7 @@ except ImportError:
     sys.exit(2)
 
 from mcp_server_evosql.server import MemoryBackend  # noqa: E402
-from mcp_server_evosql.embeddings import provider_from_env  # noqa: E402
+from mcp_server_evosql.embeddings import provider_from_env, reranker_from_env  # noqa: E402
 
 # evolutiondb-pii is optional for the basic eval but required when
 # any query has pii_check: true. Keystore and rules MUST come from
@@ -205,14 +205,18 @@ def build_backend(memory_prefix: str) -> MemoryBackend:
     port = int(os.environ.get("EVOSQL_PORT", "5433"))
     user = os.environ.get("EVOSQL_USER", "admin")
     password = os.environ.get("EVOSQL_PASSWORD", "admin")
-    database = os.environ.get("EVOSQL_DATABASE", "testdb")
+    database = os.environ.get("EVOSQL_DATABASE", "evosql")
     embedder = provider_from_env()
+    reranker = reranker_from_env(embedder)
+    lexical = os.environ.get("EVOSQL_LEXICAL", "simple").lower()
+    rerank_mode = os.environ.get("EVOSQL_RERANK_MODE", "override").lower()
     # The tagger is only consulted on save; eval is read-only so we
     # skip building one to keep startup quiet.
     return MemoryBackend(
         host=host, port=port, user=user, password=password,
         database=database, prefix=memory_prefix,
-        embedder=embedder, tagger=None,
+        embedder=embedder, tagger=None, reranker=reranker,
+        lexical=lexical, rerank_mode=rerank_mode,
     )
 
 
@@ -239,7 +243,14 @@ def resolve_embed_meta(backend: MemoryBackend) -> Dict[str, str]:
             model = "sentence-transformers/all-MiniLM-L6-v2"
         else:
             model = "n/a"
-    return {"provider": kind, "model": model}
+    rerank_kind = (backend.reranker.kind
+                    if getattr(backend, "reranker", None) else "none")
+    rerank_model = (getattr(backend.reranker, "model_name", "")
+                    if backend.reranker is not None else "")
+    return {"provider": kind, "model": model,
+            "rerank": rerank_kind,
+            "rerank_model": rerank_model or "n/a",
+            "lexical": getattr(backend, "lexical", "simple")}
 
 
 # ---------------------------------------------------------------- #
@@ -408,6 +419,9 @@ def run_eval(gold_path: Path, out_base: Path, *,
             "memory_prefix": memory_prefix,
             "embedding_provider": embed_meta["provider"],
             "embedding_model": embed_meta["model"],
+            "rerank": embed_meta.get("rerank", "none"),
+            "rerank_model": embed_meta.get("rerank_model", "n/a"),
+            "lexical": embed_meta.get("lexical", "simple"),
             "search_limit": search_limit,
             "warmup": warmup,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -454,6 +468,10 @@ def render_markdown(report: Dict[str, Any]) -> str:
         "",
         f"- Embedding provider: `{cfg['embedding_provider']}`",
         f"- Embedding model: `{cfg['embedding_model']}`",
+        f"- Lexical scorer: `{cfg.get('lexical', 'simple')}`",
+        f"- Reranker: `{cfg.get('rerank', 'none')}`"
+        + (f" (`{cfg.get('rerank_model')}`)"
+           if cfg.get('rerank', 'none') != 'none' else ""),
         f"- Memory prefix: `{cfg['memory_prefix']}`",
         f"- Search limit: {cfg['search_limit']}",
         f"- Query count: {agg['query_count']} "

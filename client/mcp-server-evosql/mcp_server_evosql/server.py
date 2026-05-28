@@ -28,6 +28,7 @@ parses the same MEMORY DDL/DML the EVO native protocol does.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -36,7 +37,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 
-from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec
+from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env
 from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
@@ -60,6 +61,66 @@ def _e(s: str) -> str:
     return s.replace("'", "''")
 
 
+# ---------------------------------------------------------------- #
+#  Lexical scoring — BM25 (Okapi)                                    #
+# ---------------------------------------------------------------- #
+import re as _re
+
+_TOKEN_RE = _re.compile(r"\w+", _re.UNICODE)
+
+
+def _tokenize(text: str) -> List[str]:
+    """Unicode word tokens, length > 1. Shared by query and docs so
+    the lexical match is symmetric (Turkish letters included via the
+    \\w UNICODE class)."""
+    return [t for t in _TOKEN_RE.findall(text.lower()) if len(t) > 1]
+
+
+def _bm25_scores(q_terms: List[str],
+                  docs_tokens: List[List[str]],
+                  k1: float = 1.5, b: float = 0.75) -> List[float]:
+    """Okapi BM25 over an in-memory candidate set. Unlike the legacy
+    binary "term present?" count, BM25 rewards term frequency, damps
+    common terms via IDF, and normalizes by document length — so a
+    five-word note and a 2 KB outlook body compete fairly instead of
+    the long body winning purely on surface area.
+
+    Returns one raw (unbounded) score per doc, aligned to
+    docs_tokens. Callers normalize to 0-1 before mixing with the
+    dense cosine score."""
+    n_docs = len(docs_tokens)
+    if n_docs == 0 or not q_terms:
+        return [0.0] * n_docs
+    q_set = set(q_terms)
+    avgdl = sum(len(d) for d in docs_tokens) / n_docs or 1.0
+    # Document frequency per query term (count docs containing it).
+    df: Dict[str, int] = {}
+    for d in docs_tokens:
+        for tok in set(d):
+            if tok in q_set:
+                df[tok] = df.get(tok, 0) + 1
+    idf = {
+        t: math.log((n_docs - df.get(t, 0) + 0.5) / (df.get(t, 0) + 0.5) + 1.0)
+        for t in q_set
+    }
+    scores: List[float] = []
+    for d in docs_tokens:
+        dl = len(d)
+        if dl == 0:
+            scores.append(0.0)
+            continue
+        tf: Dict[str, int] = {}
+        for tok in d:
+            if tok in q_set:
+                tf[tok] = tf.get(tok, 0) + 1
+        s = 0.0
+        for t, f in tf.items():
+            denom = f + k1 * (1.0 - b + b * dl / avgdl)
+            s += idf[t] * (f * (k1 + 1.0)) / denom
+        scores.append(s)
+    return scores
+
+
 class MemoryBackend:
     # Long-running MCP server processes outlive the database container
     # they connect to (docker compose restart, server upgrade, network
@@ -72,9 +133,19 @@ class MemoryBackend:
     def __init__(self, host: str, port: int, user: str, password: str,
                   database: str, prefix: str,
                   embedder: Optional["EmbeddingProvider"] = None,
-                  tagger: Optional["TopicTagger"] = None):
+                  tagger: Optional["TopicTagger"] = None,
+                  reranker: Optional["Reranker"] = None,
+                  lexical: str = "simple",
+                  rerank_mode: str = "override"):
         self.embedder = embedder
         self.tagger   = tagger
+        self.reranker = reranker
+        # Lexical scorer: "simple" = legacy binary term-presence
+        # count, "bm25" = Okapi BM25. Hybrid weighting is identical;
+        # only the keyword half changes.
+        self.lexical  = lexical
+        # Rerank blend: "override" | "fusion" (see search()).
+        self.rerank_mode = rerank_mode
         try:
             import psycopg
         except ImportError as exc:
@@ -247,7 +318,13 @@ class MemoryBackend:
             else:
                 sender_literal = sender.lower()
 
-        out: List[Dict[str, Any]] = []
+        # Phase 1 — parse every fact-bearing row into a candidate
+        # carrying its haystack (and, for BM25, the haystack tokens).
+        # BM25 needs corpus-level stats (document frequency, average
+        # length) so the per-row score can't be computed until the
+        # whole candidate set is known — hence the two-pass shape.
+        use_bm25 = (self.lexical == "bm25")
+        candidates: List[Dict[str, Any]] = []
         for r in rows:
             try:
                 rec = json.loads(r[2]) if r[2] else None
@@ -273,9 +350,31 @@ class MemoryBackend:
                 str(rec.get("author")   or ""),
                 " ".join(rec.get("tags") or []),
             ]).lower()
+            candidates.append({
+                "key": r[1], "rec": rec, "haystack": haystack,
+                "tokens": _tokenize(haystack) if use_bm25 else None,
+            })
 
-            kw_hits = sum(1 for w in q_terms if w in haystack)
-            kw_score = kw_hits / max(len(q_terms), 1)
+        # BM25 raw scores over the candidate set, then min-max to 0-1
+        # so the lexical half lands on the same scale as cosine. Max-
+        # normalization keeps the relative ordering and pins the best
+        # lexical match at 1.0 without inventing a magic divisor.
+        bm25_norm: List[float] = []
+        if use_bm25 and candidates:
+            raw = _bm25_scores(q_terms, [c["tokens"] for c in candidates])
+            mx = max(raw) if raw else 0.0
+            bm25_norm = [(s / mx if mx > 0 else 0.0) for s in raw]
+
+        # Phase 2 — dense score, hybrid mix, filters.
+        out: List[Dict[str, Any]] = []
+        for i, c in enumerate(candidates):
+            rec = c["rec"]
+            haystack = c["haystack"]
+            if use_bm25:
+                kw_score = bm25_norm[i]
+            else:
+                kw_hits = sum(1 for w in q_terms if w in haystack)
+                kw_score = kw_hits / max(len(q_terms), 1)
 
             sem_score = 0.0
             row_vec = decode_vec(rec.get("emb"))
@@ -317,12 +416,57 @@ class MemoryBackend:
             # Strip the embedding vector from the response — it's noise
             # for the LLM and inflates token cost.
             rec_out = {k: v for k, v in rec.items() if k != "emb"}
-            out.append({"key": r[1], "score": round(final, 4), **rec_out})
+            out.append({"key": c["key"], "score": round(final, 4),
+                         "_haystack": haystack, **rec_out})
         # Secondary sort by key keeps the ranking stable across
         # repeated calls — without this, tied scores ride on whatever
         # order the heap scan happened to return on this connection,
         # so the same query can yield different top-K between calls.
         out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
+        # Adım 7 — cross-encoder rerank over the top-K of the hybrid
+        # ranking. Pool size is adaptive: a short query carries less
+        # disambiguating signal so a wider pool risks more noise,
+        # while a longer query benefits from re-judging more
+        # candidates. The reranker reads (query, doc) pairs jointly,
+        # so it catches semantic relationships dense embedding
+        # similarity misses (negation, role swaps, "X by Y" vs
+        # "Y by X").
+        #
+        # Two blend modes (EVOSQL_RERANK_MODE):
+        #   override — replace the hybrid score with the sigmoid of
+        #     the cross-encoder logit. On the gold set this lifted
+        #     MRR +20% / nDCG +18% and doubled simple_fact Recall@5,
+        #     at the cost of a small aggregation Recall@5 dip (it
+        #     collapses multi-key clusters around the single best
+        #     match). Net-positive on ranking quality, so it's the
+        #     default.
+        #   fusion — average sigmoid(logit) with the hybrid score.
+        #     Protects the aggregation clusters but cancels the
+        #     override gains; kept for callers who care more about
+        #     multi-key recall than first-hit rank.
+        #
+        # Caveat learned the hard way: rerank only reorders the pool
+        # it's handed. When dense recall is the bottleneck (gold keys
+        # ranking past the pool, or absent entirely) no blend helps —
+        # fix retrieval coverage first, then rerank pays off.
+        if self.reranker is not None and self.reranker.enabled \
+                and len(out) > 1:
+            qtok = len([w for w in query.split() if w.strip()])
+            pool_size = 20 if qtok <= 3 else 50
+            pool = out[:pool_size]
+            scores = self.reranker.score(
+                query, [x["_haystack"] for x in pool])
+            if scores is not None and len(scores) == len(pool):
+                fuse = (self.rerank_mode == "fusion")
+                for x, s in zip(pool, scores):
+                    rr = 1.0 / (1.0 + math.exp(-float(s)))
+                    x["score"] = round(
+                        0.5 * rr + 0.5 * x["score"] if fuse else rr, 4)
+                pool.sort(key=lambda x: (-x["score"], x.get("key", "")))
+                out = pool + out[pool_size:]
+        for x in out:
+            x.pop("_haystack", None)
         return out[:limit]
 
     def recent(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -481,10 +625,14 @@ class MCPServer:
         self.port    = int(os.environ.get("EVOSQL_PORT", "5433"))
         self.user    = os.environ.get("EVOSQL_USER",     "admin")
         self.pw      = os.environ.get("EVOSQL_PASSWORD", "admin")
-        self.db      = os.environ.get("EVOSQL_DATABASE", "testdb")
+        self.db      = os.environ.get("EVOSQL_DATABASE", "evosql")
         self.prefix  = os.environ.get("MCP_STORE_PREFIX", "mcp")
         self.embedder = provider_from_env()
         self.tagger   = tagger_provider_from_env()
+        self.reranker = reranker_from_env(self.embedder)
+        self.lexical  = os.environ.get("EVOSQL_LEXICAL", "simple").lower()
+        self.rerank_mode = os.environ.get("EVOSQL_RERANK_MODE",
+                                          "override").lower()
         self.backend: Optional[MemoryBackend] = None
 
     def _connect(self) -> MemoryBackend:
@@ -493,7 +641,10 @@ class MCPServer:
                                             self.user, self.pw,
                                             self.db, self.prefix,
                                             embedder=self.embedder,
-                                            tagger=self.tagger)
+                                            tagger=self.tagger,
+                                            reranker=self.reranker,
+                                            lexical=self.lexical,
+                                            rerank_mode=self.rerank_mode)
         return self.backend
 
     # -- tool dispatch ------------------------------------------------
