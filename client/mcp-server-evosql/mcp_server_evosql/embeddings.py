@@ -233,6 +233,100 @@ class _LocalProvider(EmbeddingProvider):
         return out
 
 
+class Reranker:
+    """Cross-encoder reranker — scores (query, doc) pairs jointly so
+    near-tied embedding neighbors get reordered by the model that
+    actually reads both texts together. The base class is the no-op
+    fallback so callers can `reranker.score(...)` unconditionally."""
+
+    def __init__(self, kind: str):
+        self.kind = kind
+
+    @property
+    def enabled(self) -> bool:
+        return False
+
+    def score(self, query: str,
+                docs: Sequence[str]) -> Optional[List[float]]:
+        """Return one score per doc, ordered to match `docs`. None
+        means the reranker is off or the call failed; the caller
+        keeps the upstream hybrid ranking in that case."""
+        return None
+
+
+class _NoOpReranker(Reranker):
+    def __init__(self):
+        super().__init__("none")
+
+
+class _CrossEncoderReranker(Reranker):
+    """sentence-transformers CrossEncoder wrapper. Lazy-loaded so the
+    model download cost is paid only when the first search actually
+    routes through here, not at MCPServer startup."""
+
+    def __init__(self, model_name: str):
+        super().__init__("cross-encoder")
+        self.model_name = model_name
+        self._model = None
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    def _load(self):
+        if self._model is None:
+            from sentence_transformers import CrossEncoder
+            self._model = CrossEncoder(self.model_name)
+        return self._model
+
+    def score(self, query: str,
+                docs: Sequence[str]) -> Optional[List[float]]:
+        if not query or not docs:
+            return None
+        try:
+            model = self._load()
+            pairs = [(query, d or "") for d in docs]
+            scores = model.predict(pairs, show_progress_bar=False)
+        except Exception as exc:
+            print(f"[mcp-evosql] cross-encoder rerank failed: {exc}",
+                  file=sys.stderr, flush=True)
+            return None
+        return [float(x) for x in scores]
+
+
+def reranker_from_env(
+        provider: Optional[EmbeddingProvider] = None) -> Reranker:
+    """Resolve the reranker backend.
+
+    EVOSQL_RERANK
+        "1"/"true"/"on"  → force enable (default when an embedding
+                            provider is configured)
+        "0"/"false"/"off"→ force disable
+        unset            → on when `provider` is local/openai, off
+                            otherwise (pure-keyword backends gain
+                            nothing from cross-encoder rerank)
+    EVOSQL_RERANK_MODEL
+        Override the cross-encoder name. Default
+        BAAI/bge-reranker-base — multilingual, CPU-friendly.
+    """
+    raw = os.environ.get("EVOSQL_RERANK", "").strip().lower()
+    if raw in ("0", "false", "off", "no"):
+        return _NoOpReranker()
+    if raw in ("1", "true", "on", "yes"):
+        forced_on = True
+    else:
+        forced_on = False
+    if not forced_on:
+        # Default-on only when a real embedding provider is wired up;
+        # without dense scores reranking has nothing meaningful to
+        # rerank and the cross-encoder import + load is pure cost.
+        if provider is None or provider.kind == "none":
+            return _NoOpReranker()
+    model = os.environ.get("EVOSQL_RERANK_MODEL",
+                           "BAAI/bge-reranker-base")
+    return _CrossEncoderReranker(model)
+
+
 def provider_from_env() -> EmbeddingProvider:
     """Resolve the embedding backend from environment variables.
 
