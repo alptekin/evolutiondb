@@ -37,7 +37,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 
-from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env
+from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env, embedder2_from_env
 from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
@@ -136,8 +136,13 @@ class MemoryBackend:
                   tagger: Optional["TopicTagger"] = None,
                   reranker: Optional["Reranker"] = None,
                   lexical: str = "simple",
-                  rerank_mode: str = "override"):
+                  rerank_mode: str = "override",
+                  embedder2: Optional["EmbeddingProvider"] = None):
         self.embedder = embedder
+        # Optional second dense embedder (e5) for RRF ensemble. When
+        # present, search() fuses bge + e5 + keyword rankings via
+        # Reciprocal Rank Fusion. Stored under the `emb2` record key.
+        self.embedder2 = embedder2
         self.tagger   = tagger
         self.reranker = reranker
         # Lexical scorer: "simple" = legacy binary term-presence
@@ -163,13 +168,19 @@ class MemoryBackend:
         self.conn = self._connect()
         self.memory   = f"{prefix}_mem"
         self.entities = f"{prefix}_ents"
+        # Second dense vector (e5) lives in a SEPARATE store keyed by the
+        # same mem_key, not on the main record. Two reasons: the main row
+        # plus two int8 vectors plus a long body can blow past the 8KB
+        # statement cap, and keeping emb2 out of the main store means a
+        # backfill never rewrites — and so never risks — the primary data.
+        self.emb2_store = f"{prefix}_emb2"
         # Idempotent CREATE — the server must not lose data across
-        # restarts. Both objects already exist on second start, the
-        # error is silently swallowed.
-        for kind, name in [
-            ("MEMORY STORE", self.memory),
-            ("ENTITY STORE", self.entities),
-        ]:
+        # restarts. Stores already exist on second start, error swallowed.
+        stores = [("MEMORY STORE", self.memory),
+                  ("ENTITY STORE", self.entities)]
+        if self.embedder2 is not None and self.embedder2.kind != "none":
+            stores.append(("MEMORY STORE", self.emb2_store))
+        for kind, name in stores:
             try:
                 with self.conn.cursor() as cur:
                     cur.execute(f"CREATE {kind} {name}")
@@ -256,12 +267,12 @@ class MemoryBackend:
         if topic_tags:
             record["topic_tags"]  = topic_tags
             record["topic_model"] = self.tagger.kind
+        # Concatenate tags so a save like "fact='likes Go'"
+        # tags=['language'] still ranks for the query "programming
+        # languages" via the embedding model. Shared by both embedders.
+        emb_text = fact if not (tags or []) else \
+                   fact + " " + " ".join(tags or [])
         if self.embedder is not None:
-            # Concatenate tags so a save like
-            # "fact='likes Go'" tags=['language'] still ranks for the
-            # query "programming languages" via the embedding model.
-            emb_text = fact if not (tags or []) else \
-                       fact + " " + " ".join(tags or [])
             vec = self.embedder.embed(emb_text)
             if vec:
                 record["emb"]       = encode_vec(vec)
@@ -280,6 +291,25 @@ class MemoryBackend:
             f"MEMORY PUT INTO {self.memory} VALUES "
             f"('{_e(user_id)}','{_e(key)}','{_e(value)}')"
         )
+        # Second dense vector (e5) goes to the separate emb2 store under
+        # the same key — never onto the main record (see __init__).
+        if self.embedder2 is not None and self.embedder2.kind != "none":
+            vec2 = self.embedder2.embed_passage(emb_text)
+            if vec2:
+                m2 = getattr(self.embedder2, "model_name", "")
+                e2rec = {
+                    "emb2": encode_vec(vec2),
+                    "emb2_model": f"{self.embedder2.kind}:{m2}"
+                                  if m2 else self.embedder2.kind,
+                }
+                e2val = json.dumps(e2rec)
+                try:
+                    self._exec(
+                        f"MEMORY PUT INTO {self.emb2_store} VALUES "
+                        f"('{_e(user_id)}','{_e(key)}','{_e(e2val)}')"
+                    )
+                except Exception:
+                    pass  # emb2 is best-effort; main row already saved
         return key
 
     def search(self, user_id: str, query: str,
@@ -299,6 +329,34 @@ class MemoryBackend:
         q_vec: Optional[List[float]] = None
         if self.embedder is not None:
             q_vec = self.embedder.embed(query)
+        # Second dense query vector (e5, asymmetric query prefix) for
+        # the RRF ensemble. None when no second embedder is wired up.
+        q_vec2: Optional[List[float]] = None
+        use_rrf = (self.embedder2 is not None
+                   and self.embedder2.kind != "none")
+        emb2_by_key: Dict[str, Any] = {}
+        if use_rrf:
+            q_vec2 = self.embedder2.embed_query(query)
+            # Pull the second vectors from the separate emb2 store and
+            # map them by key. Older rows may still carry emb2 inline on
+            # the main record (pre-split backfill) — the candidate loop
+            # falls back to that, so both layouts are supported.
+            try:
+                e2rows = self._query(
+                    f"SELECT mem_key, mem_value FROM "
+                    f"__mem_{self.emb2_store} WHERE mem_namespace = "
+                    f"'{_e(user_id)}' LIMIT 20000"
+                )
+                for ek, ev in e2rows:
+                    try:
+                        er = json.loads(ev) if isinstance(ev, str) else ev
+                    except Exception:
+                        continue
+                    dv = decode_vec((er or {}).get("emb2"))
+                    if dv:
+                        emb2_by_key[ek] = dv
+            except Exception:
+                pass  # emb2 store may not exist yet — RRF degrades to bge+kw
 
         # Resolve the sender filter through the identity catalog so
         # "Onur" expands to every alias of the right human (and only
@@ -376,11 +434,21 @@ class MemoryBackend:
                 kw_hits = sum(1 for w in q_terms if w in haystack)
                 kw_score = kw_hits / max(len(q_terms), 1)
 
+            from .embeddings import cosine
             sem_score = 0.0
             row_vec = decode_vec(rec.get("emb"))
             if q_vec and row_vec:
-                from .embeddings import cosine
                 sem_score = max(0.0, cosine(q_vec, row_vec))
+
+            sem2_score = 0.0
+            if use_rrf and q_vec2:
+                # Prefer the separate emb2 store; fall back to an inline
+                # emb2 on the main record for pre-split rows.
+                row_vec2 = emb2_by_key.get(c["key"])
+                if row_vec2 is None:
+                    row_vec2 = decode_vec(rec.get("emb2"))
+                if row_vec2:
+                    sem2_score = max(0.0, cosine(q_vec2, row_vec2))
 
             # Hybrid: prefer semantic when available, but keep keyword
             # weight non-zero so an exact term match always beats a
@@ -407,17 +475,50 @@ class MemoryBackend:
                     continue
 
             # When the user supplied an explicit sender/tag filter we
-            # surface the row even if it has no keyword hits — the
-            # filter itself is the relevance signal.
-            if final == 0 and not tag and sender_alias_set is None \
+            # surface the row even if it has no signal — the filter
+            # itself is the relevance signal. Under RRF, "has signal"
+            # means any of the three rankers scored it.
+            has_signal = (final > 0 or sem_score > 0
+                          or sem2_score > 0 or kw_score > 0)
+            if not has_signal and not tag and sender_alias_set is None \
                     and sender_literal is None:
                 continue
 
-            # Strip the embedding vector from the response — it's noise
+            # Strip both embedding vectors from the response — noise
             # for the LLM and inflates token cost.
-            rec_out = {k: v for k, v in rec.items() if k != "emb"}
+            rec_out = {k: v for k, v in rec.items()
+                       if k not in ("emb", "emb2")}
             out.append({"key": c["key"], "score": round(final, 4),
-                         "_haystack": haystack, **rec_out})
+                         "_haystack": haystack,
+                         "_bge": sem_score, "_e5": sem2_score,
+                         "_kw": kw_score, **rec_out})
+
+        # RRF ensemble: when a second dense ranker is present, fuse the
+        # bge / e5 / keyword rankings by Reciprocal Rank Fusion rather
+        # than the linear hybrid. RRF is rank-based, so it needs the
+        # full candidate set scored first (this block), then ranks each
+        # ranker independently and sums 1/(k+rank). It beat both single
+        # models and the linear blend on the gold set because the two
+        # dense models are strong on disjoint query shapes.
+        if use_rrf and out:
+            K = 60
+            def _ranks(field):
+                order = sorted(range(len(out)),
+                               key=lambda i: -out[i][field])
+                r = [0] * len(out)
+                for pos, idx in enumerate(order):
+                    r[idx] = pos
+                return r
+            rb = _ranks("_bge")
+            re5 = _ranks("_e5")
+            rkw = _ranks("_kw")
+            for i, x in enumerate(out):
+                fused = (1.0 / (K + rb[i]) + 1.0 / (K + re5[i])
+                         + 1.0 / (K + rkw[i]))
+                x["score"] = round(fused, 6)
+        for x in out:
+            for f in ("_bge", "_e5", "_kw"):
+                x.pop(f, None)
         # Secondary sort by key keeps the ranking stable across
         # repeated calls — without this, tied scores ride on whatever
         # order the heap scan happened to return on this connection,
@@ -628,6 +729,7 @@ class MCPServer:
         self.db      = os.environ.get("EVOSQL_DATABASE", "evosql")
         self.prefix  = os.environ.get("MCP_STORE_PREFIX", "mcp")
         self.embedder = provider_from_env()
+        self.embedder2 = embedder2_from_env()
         self.tagger   = tagger_provider_from_env()
         self.reranker = reranker_from_env(self.embedder)
         self.lexical  = os.environ.get("EVOSQL_LEXICAL", "simple").lower()
@@ -644,7 +746,8 @@ class MCPServer:
                                             tagger=self.tagger,
                                             reranker=self.reranker,
                                             lexical=self.lexical,
-                                            rerank_mode=self.rerank_mode)
+                                            rerank_mode=self.rerank_mode,
+                                            embedder2=self.embedder2)
         return self.backend
 
     # -- tool dispatch ------------------------------------------------

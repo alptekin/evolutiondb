@@ -61,7 +61,7 @@ except ImportError:
     sys.exit(2)
 
 from mcp_server_evosql.server import MemoryBackend  # noqa: E402
-from mcp_server_evosql.embeddings import provider_from_env, reranker_from_env  # noqa: E402
+from mcp_server_evosql.embeddings import provider_from_env, reranker_from_env, embedder2_from_env  # noqa: E402
 
 # evolutiondb-pii is optional for the basic eval but required when
 # any query has pii_check: true. Keystore and rules MUST come from
@@ -207,6 +207,7 @@ def build_backend(memory_prefix: str) -> MemoryBackend:
     password = os.environ.get("EVOSQL_PASSWORD", "admin")
     database = os.environ.get("EVOSQL_DATABASE", "evosql")
     embedder = provider_from_env()
+    embedder2 = embedder2_from_env()
     reranker = reranker_from_env(embedder)
     lexical = os.environ.get("EVOSQL_LEXICAL", "simple").lower()
     rerank_mode = os.environ.get("EVOSQL_RERANK_MODE", "override").lower()
@@ -216,7 +217,7 @@ def build_backend(memory_prefix: str) -> MemoryBackend:
         host=host, port=port, user=user, password=password,
         database=database, prefix=memory_prefix,
         embedder=embedder, tagger=None, reranker=reranker,
-        lexical=lexical, rerank_mode=rerank_mode,
+        lexical=lexical, rerank_mode=rerank_mode, embedder2=embedder2,
     )
 
 
@@ -247,10 +248,15 @@ def resolve_embed_meta(backend: MemoryBackend) -> Dict[str, str]:
                     if getattr(backend, "reranker", None) else "none")
     rerank_model = (getattr(backend.reranker, "model_name", "")
                     if backend.reranker is not None else "")
+    e2 = getattr(backend, "embedder2", None)
+    e2_kind = e2.kind if e2 else "none"
+    e2_model = getattr(e2, "model_name", "") if e2 else ""
     return {"provider": kind, "model": model,
             "rerank": rerank_kind,
             "rerank_model": rerank_model or "n/a",
-            "lexical": getattr(backend, "lexical", "simple")}
+            "lexical": getattr(backend, "lexical", "simple"),
+            "embedder2": e2_kind,
+            "embedder2_model": e2_model or "n/a"}
 
 
 # ---------------------------------------------------------------- #
@@ -422,6 +428,8 @@ def run_eval(gold_path: Path, out_base: Path, *,
             "rerank": embed_meta.get("rerank", "none"),
             "rerank_model": embed_meta.get("rerank_model", "n/a"),
             "lexical": embed_meta.get("lexical", "simple"),
+            "embedder2": embed_meta.get("embedder2", "none"),
+            "embedder2_model": embed_meta.get("embedder2_model", "n/a"),
             "search_limit": search_limit,
             "warmup": warmup,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -468,6 +476,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
         "",
         f"- Embedding provider: `{cfg['embedding_provider']}`",
         f"- Embedding model: `{cfg['embedding_model']}`",
+        f"- Second embedder (RRF): `{cfg.get('embedder2', 'none')}`"
+        + (f" (`{cfg.get('embedder2_model')}`)"
+           if cfg.get('embedder2', 'none') != 'none' else ""),
         f"- Lexical scorer: `{cfg.get('lexical', 'simple')}`",
         f"- Reranker: `{cfg.get('rerank', 'none')}`"
         + (f" (`{cfg.get('rerank_model')}`)"
