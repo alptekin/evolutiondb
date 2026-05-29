@@ -140,14 +140,17 @@ static void retention_pass(time_t now_ts)
     if (days <= 0) return;
     time_t cutoff = now_ts - (time_t)days * 86400;
 
-    DatabaseDesc dbs[8];
-    int ndb = cat_list_databases(dbs, 8);
+    DatabaseDesc *dbs = NULL;
+    int ndb = cat_list_databases_all(&dbs);
+    if (ndb < 0) ndb = 0;
     for (int di = 0; di < ndb; di++) {
-        SchemaDesc schemas[16];
-        int ns = cat_list_schemas(dbs[di].db_id, schemas, 16);
+        SchemaDesc *schemas = NULL;
+        int ns = cat_list_schemas_all(dbs[di].db_id, &schemas);
+        if (ns < 0) ns = 0;
         for (int si = 0; si < ns; si++) {
-            TableDesc tables[64];
-            int nt = cat_list_tables(schemas[si].schema_id, tables, 64);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int ti = 0; ti < nt; ti++) {
                 if (!tables[ti].system_versioned) continue;
                 if (tables[ti].history_table_id == 0) continue;
@@ -157,8 +160,11 @@ static void retention_pass(time_t now_ts)
                                          &histTd) != 0) continue;
                 prune_history_rows(&histTd, cutoff);
             }
+            free(tables);
         }
+        free(schemas);
     }
+    free(dbs);
 }
 
 /* ================================================================
@@ -255,8 +261,9 @@ static void prune_subscription_queue(const TableDesc *histTd,
 
 static void subscription_prune_pass(time_t now_ts)
 {
-    SubscriptionDesc subs[64];
-    int n = cat_list_subscriptions(subs, 64);
+    SubscriptionDesc *subs = NULL;
+    int n = cat_list_subscriptions_all(&subs);
+    if (n < 0) n = 0;
     for (int i = 0; i < n; i++) {
         TableDesc histTd;
         if (cat_find_table_by_id(subs[i].backing_table_id, &histTd) != 0)
@@ -266,6 +273,7 @@ static void subscription_prune_pass(time_t now_ts)
             : 0;
         prune_subscription_queue(&histTd, subs[i].last_ack_seq, ttl_cutoff);
     }
+    free(subs);
 }
 
 /* ================================================================
@@ -350,20 +358,26 @@ static void ttl_prune_table(const TableDesc *td, time_t cutoff)
 
 static void ttl_prune_pass(time_t now_ts)
 {
-    DatabaseDesc dbs[8];
-    int ndb = cat_list_databases(dbs, 8);
+    DatabaseDesc *dbs = NULL;
+    int ndb = cat_list_databases_all(&dbs);
+    if (ndb < 0) ndb = 0;
     for (int di = 0; di < ndb; di++) {
-        SchemaDesc schemas[16];
-        int ns = cat_list_schemas(dbs[di].db_id, schemas, 16);
+        SchemaDesc *schemas = NULL;
+        int ns = cat_list_schemas_all(dbs[di].db_id, &schemas);
+        if (ns < 0) ns = 0;
         for (int si = 0; si < ns; si++) {
-            TableDesc tables[64];
-            int nt = cat_list_tables(schemas[si].schema_id, tables, 64);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int ti = 0; ti < nt; ti++) {
                 if (!tables[ti].ttl_column[0]) continue;
                 ttl_prune_table(&tables[ti], now_ts);
             }
+            free(tables);
         }
+        free(schemas);
     }
+    free(dbs);
 }
 
 /* ================================================================
@@ -413,19 +427,27 @@ static void *auto_reclaim_worker(void *arg)
         }
 
         /* Scan all databases → schemas → tables */
-        DatabaseDesc dbs[8];
-        int ndb = cat_list_databases(dbs, 8);
+        DatabaseDesc *dbs = NULL;
+        int ndb = cat_list_databases_all(&dbs);
+        if (ndb < 0) ndb = 0;
 
         for (int di = 0; di < ndb; di++) {
-            SchemaDesc schemas[16];
-            int ns = cat_list_schemas(dbs[di].db_id, schemas, 16);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbs[di].db_id, &schemas);
+            if (ns < 0) ns = 0;
 
             for (int si = 0; si < ns; si++) {
-                TableDesc tables[64];
-                int nt = cat_list_tables(schemas[si].schema_id, tables, 64);
+                TableDesc *tables = NULL;
+                int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+                if (nt < 0) nt = 0;
 
                 for (int ti = 0; ti < nt; ti++) {
-                    if (!g_reclaim_running) goto done;
+                    if (!g_reclaim_running) {
+                        free(tables);
+                        free(schemas);
+                        free(dbs);
+                        goto done;
+                    }
                     if (tables[ti].is_temporary) continue;
 
                     if (should_auto_reclaim(tables[ti].table_id)) {
@@ -456,8 +478,11 @@ static void *auto_reclaim_worker(void *arg)
                         g_qctx = NULL;
                     }
                 }
+                free(tables);
             }
+            free(schemas);
         }
+        free(dbs);
     }
 
 done:

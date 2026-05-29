@@ -94,9 +94,9 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
         return -1;
     }
 
-    ConstraintDesc refConstraints[32];
-    int numRefs = cat_list_referencing_fks(parentTd->table_id, refConstraints, 32);
-    if (numRefs <= 0) return 0;
+    ConstraintDesc *refConstraints = NULL;
+    int numRefs = cat_list_referencing_fks_all(parentTd->table_id, &refConstraints);
+    if (numRefs <= 0) { free(refConstraints); return numRefs < 0 ? -1 : 0; }
 
     /* Extract parent record fields once */
     char parentFields[CAT_MAX_COLUMNS][256];
@@ -104,7 +104,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
     int parentExtracted = tup_extract_fields(deletedRecord, deletedRecLen,
                                               parentCols, parentNCols,
                                               parentFields, parentIsNull, CAT_MAX_COLUMNS);
-    if (parentExtracted < 0) return -1;
+    if (parentExtracted < 0) { free(refConstraints); return -1; }
 
     for (int ri = 0; ri < numRefs; ri++) {
         if (!refConstraints[ri].is_enabled) continue;
@@ -243,6 +243,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
             for (int m = 0; m < matchCount; m++) free(matchingChildKeys[m]);
             free(matchingChildKeys);
+            free(refConstraints);
             return -1;
         }
 
@@ -264,6 +265,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                                                        depth + 1) < 0) {
                             for (int mm = m; mm < matchCount; mm++) free(matchingChildKeys[mm]);
                             free(matchingChildKeys);
+                            free(refConstraints);
                             return -1;
                         }
                     }
@@ -345,6 +347,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
         free(matchingChildKeys);
     }
 
+    free(refConstraints);
     return 0;
 }
 
@@ -650,6 +653,13 @@ int DeleteProcess(void)
                             if (DML_PROF_EXPR("trigger_before",
                                               evo_fire_triggers(g_del.tblName, 'B', 'D',
                                                                 tcols, tvals, NULL, ncols)) < 0) {
+                                /* Free the match buffer like the other error
+                                 * exits (lock/FK paths) — this path previously
+                                 * leaked `matches` + its remaining keys. */
+                                for (int mi = i; mi < matchCount; mi++)
+                                    free(matches[mi].key);
+                                free(matches);
+                                g_del.rowCount = deleted;
                                 TruncateDelete();
                                 return -1;
                             }

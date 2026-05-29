@@ -1887,9 +1887,9 @@ static int find_hnsw_index_for_column(uint32_t table_id, const char *colname,
                                       char *out_name, size_t out_sz)
 {
     if (!colname || !colname[0] || !out_name || out_sz == 0) return 0;
-    IndexDesc *indexes = (IndexDesc *)malloc(sizeof(IndexDesc) * 64);
-    if (!indexes) return 0;
-    int n = cat_list_indexes(table_id, indexes, 64);
+    IndexDesc *indexes = NULL;
+    int n = cat_list_indexes_all(table_id, &indexes);
+    if (n < 0) n = 0;
     int found = 0;
     for (int i = 0; i < n; i++) {
         if (indexes[i].index_type != 'A') continue;     /* not HNSW */
@@ -7091,13 +7091,15 @@ void session_drop_temp_tables(SessionCtx *ctx)
         tapi_free_heap_pages(&td);
 
         /* Destroy secondary index B+ trees */
-        IndexDesc indexes[16];
-        int nIdx = cat_list_indexes(td.table_id, indexes, 16);
+        IndexDesc *indexes = NULL;
+        int nIdx = cat_list_indexes_all(td.table_id, &indexes);
+        if (nIdx < 0) nIdx = 0;
         for (int ix = 0; ix < nIdx; ix++) {
             if (indexes[ix].index_type == 'P') continue;
             BTree2 idx_tree = { .root_page = indexes[ix].root_page };
             bt2_destroy(&idx_tree);
         }
+        free(indexes);
 
         /* Drop from catalog */
         cat_drop_table(tid);

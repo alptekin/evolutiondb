@@ -267,16 +267,20 @@ int DropDatabaseProcess(const char *name, int if_exists)
     }
 
     /* Cascade: drop all schemas and their tables */
-    SchemaDesc schemas[16];
-    int ns = cat_list_schemas(dbDesc.db_id, schemas, 16);
+    SchemaDesc *schemas = NULL;
+    int ns = cat_list_schemas_all(dbDesc.db_id, &schemas);
+    if (ns < 0) ns = 0;
     for (int si = 0; si < ns; si++) {
-        TableDesc tables[64];
-        int nt = cat_list_tables(schemas[si].schema_id, tables, 64);
+        TableDesc *tables = NULL;
+        int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+        if (nt < 0) nt = 0;
         for (int ti = 0; ti < nt; ti++) {
             cat_drop_table(tables[ti].table_id);
         }
+        free(tables);
         cat_drop_schema(dbDesc.db_id, schemas[si].schema_name);
     }
+    free(schemas);
     cat_drop_database(name);
 
     printf("DROP DATABASE\n");
@@ -310,11 +314,13 @@ int DropSchemaProcess(const char *name, int if_exists)
     }
 
     /* Cascade: drop all tables in schema */
-    TableDesc tables[64];
-    int nt = cat_list_tables(schDesc.schema_id, tables, 64);
+    TableDesc *tables = NULL;
+    int nt = cat_list_tables_all(schDesc.schema_id, &tables);
+    if (nt < 0) nt = 0;
     for (int ti = 0; ti < nt; ti++) {
         cat_drop_table(tables[ti].table_id);
     }
+    free(tables);
     cat_drop_schema(dbDesc.db_id, name);
 
     printf("DROP SCHEMA\n");

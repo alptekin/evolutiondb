@@ -520,8 +520,9 @@ int AnalyzeTableProcess(void)
 
     /* Collect and store index statistics */
     {
-        IndexDesc indexes[32];
-        int nIdx = cat_list_indexes(td.table_id, indexes, 32);
+        IndexDesc *indexes = NULL;
+        int nIdx = cat_list_indexes_all(td.table_id, &indexes);
+        if (nIdx < 0) nIdx = 0;
         for (int i = 0; i < nIdx; i++) {
             BTree2 idxTree = {0};
             idxTree.root_page = indexes[i].root_page;
@@ -539,6 +540,7 @@ int AnalyzeTableProcess(void)
                 cat_store_index_stats(&ist);
             }
         }
+        free(indexes);
     }
 
     /* Cleanup */

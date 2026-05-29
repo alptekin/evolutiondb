@@ -302,9 +302,9 @@ void subscription_publish(const char *channel, const char *payload)
 {
     if (!channel || !*channel) return;
 
-    SubscriptionDesc subs[64];
-    int n = cat_list_subscriptions(subs, 64);
-    if (n <= 0) return;
+    SubscriptionDesc *subs = NULL;
+    int n = cat_list_subscriptions_all(&subs);
+    if (n <= 0) { free(subs); return; }
 
     char ts_buf[32];
     make_iso_timestamp(ts_buf, sizeof(ts_buf));
@@ -352,4 +352,5 @@ void subscription_publish(const char *channel, const char *payload)
         subs[i].next_seq++;
         cat_update_subscription(&subs[i]);
     }
+    free(subs);
 }
