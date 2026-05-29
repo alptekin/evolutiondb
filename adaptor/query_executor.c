@@ -19,6 +19,7 @@
 #include "util.h"
 #include "notify.h"   /* Task 91 — registry + pending-list helpers */
 #include "../evolution/db/mvcc.h"
+#include "../evolution/db/hnsw.h"   /* ORDER BY <col> <=> 'vec' ANN fast path */
 
 /* Flex/Bison externs (reentrant parser) */
 typedef void *yyscan_t;
@@ -620,6 +621,9 @@ static int can_stream_results(void)
             return 0;
     }
     if (g_sel.orderByCount > 0 || g_sel.orderByColumn[0] != '\0') return 0;
+    /* `ORDER BY <col> <=> 'vec'` needs the rows ranked by distance, so it
+     * must buffer + sort (or take the HNSW fast path) — never stream. */
+    if (g_sel.orderByVecColumn[0] != '\0') return 0;
     if (g_expr.groupByCount > 0) return 0;
     if (g_sel.distinct) return 0;
     if (g_expr.havingExpr) return 0;
@@ -1873,6 +1877,34 @@ static void collect_with_inheritance(const char *tableName, ResultSet *rs,
                                 visited, &nvisited, 0);
 }
 
+/* Locate a READY HNSW index ('A') whose single indexed column matches
+ * `colname` (case-insensitive). On success writes the index name into
+ * out_name (out_sz >= CAT_MAX_NAME_LEN) and returns 1; returns 0 if no
+ * such index exists. Drives the ORDER BY <col> <=> 'vec' ANN fast path.
+ * The index array is heap-allocated to keep this off the (already deep)
+ * SELECT call stack. */
+static int find_hnsw_index_for_column(uint32_t table_id, const char *colname,
+                                      char *out_name, size_t out_sz)
+{
+    if (!colname || !colname[0] || !out_name || out_sz == 0) return 0;
+    IndexDesc *indexes = (IndexDesc *)malloc(sizeof(IndexDesc) * 64);
+    if (!indexes) return 0;
+    int n = cat_list_indexes(table_id, indexes, 64);
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (indexes[i].index_type != 'A') continue;     /* not HNSW */
+        if (indexes[i].is_ready != IDX_READY) continue;  /* still building */
+        /* HNSW is single-column in v1, so col_list has no comma. */
+        if (strcasecmp(indexes[i].col_list, colname) != 0) continue;
+        strncpy(out_name, indexes[i].index_name, out_sz - 1);
+        out_name[out_sz - 1] = '\0';
+        found = 1;
+        break;
+    }
+    free(indexes);
+    return found;
+}
+
 static void collect_select_results(const char *tableName, ResultSet *rs,
                                    const Snapshot *snap,
                                    int forUpdate, uint32_t lock_xid)
@@ -2106,6 +2138,83 @@ static void collect_select_results(const char *tableName, ResultSet *rs,
                     }
                     used_index = 1;
                 }
+            }
+        }
+    }
+
+    /* --- HNSW ANN fast path for `ORDER BY <col> <=> 'vec' [ASC] LIMIT k` ---
+     * When the ORDER BY column carries a READY HNSW index and the query is
+     * the simple top-k shape, probe the graph for the k nearest PKs and
+     * hydrate only those rows — skipping the full scan AND the brute-force
+     * cosine sort below. Every guard that fails (DESC, WHERE/RLS, OFFSET,
+     * JOIN, extra ORDER BY keys, DISTINCT, streaming, no LIMIT, LIMIT > 256)
+     * falls through untouched to the existing brute-force path, which stays
+     * correct for those shapes. A missing/empty/stale graph (nh <= 0, e.g.
+     * after a restart — graphs are in-memory and rebuilt only at CREATE
+     * INDEX) also falls back, so results are always correct; HNSW only adds
+     * speed when the graph is present. */
+    if (!used_index &&
+        g_sel.orderByVecColumn[0] != '\0' &&
+        !g_sel.orderByVecDesc &&            /* HNSW yields nearest-first; DESC (farthest) needs full sort */
+        g_sel.orderByCount == 0 &&          /* no other ORDER BY keys */
+        g_sel.joinTableCount <= 1 &&        /* single-table only (1 = base table, no JOIN) */
+        !g_sel.distinct &&                  /* DISTINCT handled by brute path */
+        !td.rls_enabled &&                  /* RLS tables → brute path applies the policy overlay */
+        !forUpdate &&                       /* FOR UPDATE/SHARE needs the scan to take row locks */
+        lock_xid == 0 &&                    /* SERIALIZABLE needs the scan to record predicate/gap locks */
+        g_expr.whereExpr == NULL &&         /* incl. RLS overlay applied above */
+        g_expr.offsetExpr == NULL &&        /* OFFSET → brute force (v1) */
+        g_expr.limitExpr != NULL &&         /* KNN needs a bound */
+        !(rs->stream_conn != NULL && can_stream_results())) {  /* buffered execution only */
+        int k = -1;
+        char lbuf[64];
+        if (expr_evaluate(g_expr.limitExpr, NULL, NULL, 0, lbuf, sizeof(lbuf)))
+            k = atoi(lbuf);
+        char idx_name[CAT_MAX_NAME_LEN];
+        if (k > 0 && k <= 256 &&
+            find_hnsw_index_for_column(td.table_id, g_sel.orderByVecColumn,
+                                       idx_name, sizeof(idx_name))) {
+            HnswHit *hits = (HnswHit *)malloc(sizeof(HnswHit) * (size_t)k);
+            if (hits) {
+                /* orderByVecLiteral is already the quote-stripped raw
+                 * "[f1,...]" or "b64i8:..." form hnsw_search_knn parses. */
+                int nh = hnsw_search_knn(td.table_id, idx_name,
+                                         g_sel.orderByVecLiteral, k, hits);
+                if (nh > 0) {
+                    /* hits[] is sorted ascending by distance == ORDER BY ASC. */
+                    for (int hi = 0; hi < nh; hi++) {
+                        RowID rid;
+                        if (bt2_search(&pk_tree, hits[hi].pk_value, &rid) != 0)
+                            continue;
+                        char recBuf[RECORD_BUF_SIZE];
+                        int recLen = tapi_heap_read(rid, recBuf, sizeof(recBuf));
+                        if (recLen <= 0) continue;
+                        /* Follow HOT chain if PK points to an old version. */
+                        if (snap && !mvcc_is_visible(recBuf, recLen, snap) &&
+                            tup_is_hot_updated(recBuf, recLen)) {
+                            RowID hot_rid;
+                            int hot_len = tapi_follow_hot_chain(rid, recBuf, recLen,
+                                                                snap, recBuf,
+                                                                sizeof(recBuf), &hot_rid);
+                            if (hot_len > 0) recLen = hot_len;
+                        }
+                        if (snap && !mvcc_is_visible(recBuf, recLen, snap))
+                            continue;
+                        if (vcc.has_virtual)
+                            recLen = eval_virtual_columns(recBuf, sizeof(recBuf),
+                                                          td.table_id, allCols,
+                                                          ncols, &vcc);
+                        int row = result_add_row(rs);
+                        if (row < 0) break;
+                        populate_result_row(rs, row, recBuf, recLen, allCols, ncols);
+                        count++;
+                    }
+                    used_index = 1;   /* skip full scan + post-WHERE filter */
+                    /* Rows are already in nearest-first order; clearing the
+                     * column makes the brute-force sort guard below false. */
+                    g_sel.orderByVecColumn[0] = '\0';
+                }
+                free(hits);
             }
         }
     }
