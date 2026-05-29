@@ -118,23 +118,14 @@ void AddMultiUpdateSet(const char *table, const char *col, ExprNode *expr)
 static int update_resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
                                       ColumnDesc *outCols, int *outNCols)
 {
-    DatabaseDesc dbDesc;
-    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) return -1;
-    SchemaDesc schemas[16];
-    int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
-    for (int si = 0; si < numSchemas; si++) {
-        TableDesc tables[64];
-        int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
-        for (int ti = 0; ti < numTables; ti++) {
-            if (tables[ti].table_id == table_id) {
-                *outTd = tables[ti];
-                if (outCols && outNCols)
-                    *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
-                return 0;
-            }
-        }
-    }
-    return -1;
+    /* Direct id lookup. The prior code listed every table of every schema
+     * into a fixed `TableDesc tables[64]` while passing CAT_MAX_COLUMNS (256)
+     * as the cap — a stack buffer overflow once a schema held more than 64
+     * tables. table_id is globally unique, so resolve it directly. */
+    if (cat_find_table_by_id(table_id, outTd) != 0) return -1;
+    if (outCols && outNCols)
+        *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
+    return 0;
 }
 
 /* Enforce referential integrity when a parent row's PK is updated.
@@ -767,24 +758,11 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             /* Resolve referenced table by ID */
             TableDesc refTd;
             {
-                DatabaseDesc dbDesc;
-                if (cat_find_database(g_currentDatabase, &dbDesc) < 0) continue;
-                SchemaDesc schemas[16];
-                int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
-                int foundRef = 0;
-                for (int si = 0; si < numSchemas; si++) {
-                    TableDesc tables[64];
-                    int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
-                    for (int ti = 0; ti < numTables; ti++) {
-                        if (tables[ti].table_id == fkConstraints[fi].ref_table_id) {
-                            refTd = tables[ti];
-                            foundRef = 1;
-                            break;
-                        }
-                    }
-                    if (foundRef) break;
-                }
-                if (!foundRef) continue;
+                /* Direct id lookup — the prior list-into-tables[64] with a
+                 * CAT_MAX_COLUMNS (256) cap overflowed the stack once a schema
+                 * held more than 64 tables. table_id is globally unique. */
+                if (cat_find_table_by_id(fkConstraints[fi].ref_table_id, &refTd) != 0)
+                    continue;
             }
 
             /* Check value exists in referenced table PK */

@@ -60,23 +60,16 @@ void SetMultiDelete(void)
 static int resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
                                 ColumnDesc *outCols, int *outNCols)
 {
-    DatabaseDesc dbDesc;
-    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) return -1;
-    SchemaDesc schemas[16];
-    int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
-    for (int si = 0; si < numSchemas; si++) {
-        TableDesc tables[64];
-        int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
-        for (int ti = 0; ti < numTables; ti++) {
-            if (tables[ti].table_id == table_id) {
-                *outTd = tables[ti];
-                if (outCols && outNCols)
-                    *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
-                return 0;
-            }
-        }
-    }
-    return -1;
+    /* Resolve directly by id. The previous implementation listed every table
+     * of every schema into a fixed `TableDesc tables[64]` while passing
+     * CAT_MAX_COLUMNS (256) as the capacity — a stack buffer overflow as soon
+     * as a schema held more than 64 tables, which smashed the stack canary
+     * (__stack_chk_fail → SIGABRT) during FK cascade once enough tables had
+     * accumulated. table_id is globally unique, so look it up directly. */
+    if (cat_find_table_by_id(table_id, outTd) != 0) return -1;
+    if (outCols && outNCols)
+        *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
+    return 0;
 }
 
 /* Enforce referential integrity before deleting a record.

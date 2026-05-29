@@ -897,25 +897,14 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
         ColumnDesc refCols[CAT_MAX_COLUMNS];
         int refColCount;
         {
-            DatabaseDesc dbDesc;
-            if (cat_find_database(g_currentDatabase, &dbDesc) < 0) continue;
-            SchemaDesc schemas[16];
-            int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
-            int foundRef = 0;
-            for (int si = 0; si < numSchemas; si++) {
-                TableDesc tables[64];
-                int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
-                for (int ti = 0; ti < numTables; ti++) {
-                    if (tables[ti].table_id == constraints[ci].ref_table_id) {
-                        refTd = tables[ti];
-                        refColCount = cat_find_columns(refTd.table_id, refCols, CAT_MAX_COLUMNS);
-                        foundRef = 1;
-                        break;
-                    }
-                }
-                if (foundRef) break;
-            }
-            if (!foundRef) continue;
+            /* Direct id lookup. The prior code listed every table of every
+             * schema into a fixed `TableDesc tables[64]` while passing
+             * CAT_MAX_COLUMNS (256) as the cap — a stack buffer overflow once
+             * a schema held more than 64 tables (smashed the canary →
+             * SIGABRT). table_id is globally unique, so resolve it directly. */
+            if (cat_find_table_by_id(constraints[ci].ref_table_id, &refTd) != 0)
+                continue;
+            refColCount = cat_find_columns(refTd.table_id, refCols, CAT_MAX_COLUMNS);
         }
 
         /* Check if referenced columns form the PK — enables direct B+ tree lookup */
