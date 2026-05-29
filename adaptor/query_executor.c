@@ -8833,8 +8833,14 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
     /* ── Pre-parse subquery materialization ── */
     /* Scan for (SELECT ...) patterns, execute inner SELECT, replace with result.
      * Skip for CREATE PROCEDURE/FUNCTION — body subqueries must not be materialized. */
+    /* `mat` must outlive this block: when a subquery is materialized below,
+     * `sql` is repointed at `mat` and then read by the rest of the function
+     * (set-op detection, EXPLAIN, main execution). Declaring it inside the
+     * block left `sql` dangling at a popped stack slot — undefined behavior
+     * that ASan flags as stack-use-after-scope and that can corrupt later
+     * query execution. Hoist it to function scope. */
+    char mat[8192];
     if (!is_create_procedure_query(sql) && !is_create_trigger_query(sql)) {
-        char mat[8192];
         strncpy(mat, sql, sizeof(mat) - 1);
         mat[sizeof(mat) - 1] = '\0';
         int changed = 1;
