@@ -240,6 +240,10 @@ void SetIndexExpression(struct ExprNode *expr);
 void SetIndexUsingHash(void);
 void SetIndexUsingHnsw(int distance_kind, int m, int ef_construction);
 void SetIndexConcurrent(void);
+/* Startup recovery: rebuild every in-memory HNSW ('A') index graph from
+ * the catalog. Graphs are not persisted, so the ANN fast path relies on
+ * this after a restart. Best-effort; safe to call once after cat_init. */
+void hnsw_rebuild_all_from_catalog(void);
 int  CreateIndexConcurrentlyPhase2(void *mutex_ptr);
 int  CreateIndexConcurrentlyPhase3(void *mutex_ptr);
 
