@@ -213,6 +213,60 @@ static void conc_mod_log_dedup(void)
 }
 
 /* ── Secondary index helper: build composite key ── */
+/* ----------------------------------------------------------------
+ *  hnsw_rebuild_all_from_catalog — startup recovery for ANN indexes.
+ *
+ *  HNSW graphs live only in memory: built at CREATE INDEX, freed at
+ *  shutdown, and never persisted. After a restart every 'A' index is
+ *  therefore empty until rebuilt. Walk the catalog
+ *  (databases -> schemas -> tables -> indexes) and rebuild each HNSW
+ *  graph from the build params stored in its expr_def
+ *  ("HNSW:d=<dist>,m=<m>,ef=<ef_construction>"). Best-effort: a failed
+ *  rebuild is skipped, leaving queries to fall back to brute force.
+ *  Runs once at startup, after pgm_init + cat_init.
+ * ---------------------------------------------------------------- */
+void hnsw_rebuild_all_from_catalog(void)
+{
+    hnsw_init();   /* idempotent: clears the in-memory graph registry */
+
+    DatabaseDesc *dbs = NULL;
+    int ndb = cat_list_databases_all(&dbs);
+    if (ndb < 0) ndb = 0;
+    int rebuilt = 0;
+
+    for (int di = 0; di < ndb; di++) {
+        SchemaDesc *schemas = NULL;
+        int nsch = cat_list_schemas_all(dbs[di].db_id, &schemas);
+        if (nsch < 0) nsch = 0;
+        for (int si = 0; si < nsch; si++) {
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+            if (nt < 0) nt = 0;
+            for (int ti = 0; ti < nt; ti++) {
+                IndexDesc *idxs = NULL;
+                int nidx = cat_list_indexes_all(tables[ti].table_id, &idxs);
+                if (nidx < 0) nidx = 0;
+                for (int ii = 0; ii < nidx; ii++) {
+                    if (idxs[ii].index_type != 'A') continue;   /* HNSW only */
+                    int d = HNSW_DIST_COSINE, m = 16, ef = 200;
+                    sscanf(idxs[ii].expr_def, "HNSW:d=%d,m=%d,ef=%d",
+                           &d, &m, &ef);
+                    if (hnsw_build(tables[ti].table_id, idxs[ii].index_name,
+                                   idxs[ii].col_list, d, m, ef) == 0)
+                        rebuilt++;
+                }
+                free(idxs);
+            }
+            free(tables);
+        }
+        free(schemas);
+    }
+    free(dbs);
+
+    if (rebuilt > 0)
+        printf("[HNSW] rebuilt %d ANN index graph(s) from catalog\n", rebuilt);
+}
+
 static void sec_idx_make_key(const char *indexed_val, const char *pk,
                               char *out, int outSize)
 {
@@ -771,22 +825,26 @@ int CreateIndexProcess(void)
 
     /* Check if index already exists on these columns */
     {
-        IndexDesc existing[16];
-        int n = cat_list_indexes(td.table_id, existing, 16);
+        IndexDesc *existing = NULL;
+        int n = cat_list_indexes_all(td.table_id, &existing);
+        if (n < 0) n = 0;
         for (int i = 0; i < n; i++) {
             if (strcasecmp(existing[i].col_list, g_idx.columnName) == 0 &&
                 existing[i].index_type != 'P') {
                 if (g_idx.ifNotExists) {
                     g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0;
+                    free(existing);
                     return 0;
                 }
                 snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "index already exists on column '%s'", g_idx.columnName);
                 g_err.error = 1;
                 g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0';
+                free(existing);
                 return -1;
             }
         }
+        free(existing);
     }
 
     /* HNSW ANN (Task 202 — Feature #202) — no on-disk btree, graph lives

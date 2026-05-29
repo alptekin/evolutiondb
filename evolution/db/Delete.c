@@ -60,23 +60,16 @@ void SetMultiDelete(void)
 static int resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
                                 ColumnDesc *outCols, int *outNCols)
 {
-    DatabaseDesc dbDesc;
-    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) return -1;
-    SchemaDesc schemas[16];
-    int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
-    for (int si = 0; si < numSchemas; si++) {
-        TableDesc tables[64];
-        int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
-        for (int ti = 0; ti < numTables; ti++) {
-            if (tables[ti].table_id == table_id) {
-                *outTd = tables[ti];
-                if (outCols && outNCols)
-                    *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
-                return 0;
-            }
-        }
-    }
-    return -1;
+    /* Resolve directly by id. The previous implementation listed every table
+     * of every schema into a fixed `TableDesc tables[64]` while passing
+     * CAT_MAX_COLUMNS (256) as the capacity — a stack buffer overflow as soon
+     * as a schema held more than 64 tables, which smashed the stack canary
+     * (__stack_chk_fail → SIGABRT) during FK cascade once enough tables had
+     * accumulated. table_id is globally unique, so look it up directly. */
+    if (cat_find_table_by_id(table_id, outTd) != 0) return -1;
+    if (outCols && outNCols)
+        *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
+    return 0;
 }
 
 /* Enforce referential integrity before deleting a record.
@@ -101,9 +94,9 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
         return -1;
     }
 
-    ConstraintDesc refConstraints[32];
-    int numRefs = cat_list_referencing_fks(parentTd->table_id, refConstraints, 32);
-    if (numRefs <= 0) return 0;
+    ConstraintDesc *refConstraints = NULL;
+    int numRefs = cat_list_referencing_fks_all(parentTd->table_id, &refConstraints);
+    if (numRefs <= 0) { free(refConstraints); return numRefs < 0 ? -1 : 0; }
 
     /* Extract parent record fields once */
     char parentFields[CAT_MAX_COLUMNS][256];
@@ -111,7 +104,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
     int parentExtracted = tup_extract_fields(deletedRecord, deletedRecLen,
                                               parentCols, parentNCols,
                                               parentFields, parentIsNull, CAT_MAX_COLUMNS);
-    if (parentExtracted < 0) return -1;
+    if (parentExtracted < 0) { free(refConstraints); return -1; }
 
     for (int ri = 0; ri < numRefs; ri++) {
         if (!refConstraints[ri].is_enabled) continue;
@@ -250,6 +243,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
             for (int m = 0; m < matchCount; m++) free(matchingChildKeys[m]);
             free(matchingChildKeys);
+            free(refConstraints);
             return -1;
         }
 
@@ -271,6 +265,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
                                                        depth + 1) < 0) {
                             for (int mm = m; mm < matchCount; mm++) free(matchingChildKeys[mm]);
                             free(matchingChildKeys);
+                            free(refConstraints);
                             return -1;
                         }
                     }
@@ -352,6 +347,7 @@ static int enforce_fk_on_delete_depth(const TableDesc *parentTd,
         free(matchingChildKeys);
     }
 
+    free(refConstraints);
     return 0;
 }
 
@@ -657,6 +653,13 @@ int DeleteProcess(void)
                             if (DML_PROF_EXPR("trigger_before",
                                               evo_fire_triggers(g_del.tblName, 'B', 'D',
                                                                 tcols, tvals, NULL, ncols)) < 0) {
+                                /* Free the match buffer like the other error
+                                 * exits (lock/FK paths) — this path previously
+                                 * leaked `matches` + its remaining keys. */
+                                for (int mi = i; mi < matchCount; mi++)
+                                    free(matches[mi].key);
+                                free(matches);
+                                g_del.rowCount = deleted;
                                 TruncateDelete();
                                 return -1;
                             }

@@ -118,23 +118,14 @@ void AddMultiUpdateSet(const char *table, const char *col, ExprNode *expr)
 static int update_resolve_table_by_id(uint32_t table_id, TableDesc *outTd,
                                       ColumnDesc *outCols, int *outNCols)
 {
-    DatabaseDesc dbDesc;
-    if (cat_find_database(g_currentDatabase, &dbDesc) < 0) return -1;
-    SchemaDesc schemas[16];
-    int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
-    for (int si = 0; si < numSchemas; si++) {
-        TableDesc tables[64];
-        int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
-        for (int ti = 0; ti < numTables; ti++) {
-            if (tables[ti].table_id == table_id) {
-                *outTd = tables[ti];
-                if (outCols && outNCols)
-                    *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
-                return 0;
-            }
-        }
-    }
-    return -1;
+    /* Direct id lookup. The prior code listed every table of every schema
+     * into a fixed `TableDesc tables[64]` while passing CAT_MAX_COLUMNS (256)
+     * as the cap — a stack buffer overflow once a schema held more than 64
+     * tables. table_id is globally unique, so resolve it directly. */
+    if (cat_find_table_by_id(table_id, outTd) != 0) return -1;
+    if (outCols && outNCols)
+        *outNCols = cat_find_columns(table_id, outCols, CAT_MAX_COLUMNS);
+    return 0;
 }
 
 /* Enforce referential integrity when a parent row's PK is updated.
@@ -147,9 +138,9 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
                                 const ColumnDesc *parentCols, int parentNCols,
                                 const char *oldPkValue, const char *newPkValue)
 {
-    ConstraintDesc refConstraints[32];
-    int numRefs = cat_list_referencing_fks(parentTd->table_id, refConstraints, 32);
-    if (numRefs <= 0) return 0;
+    ConstraintDesc *refConstraints = NULL;
+    int numRefs = cat_list_referencing_fks_all(parentTd->table_id, &refConstraints);
+    if (numRefs <= 0) { free(refConstraints); return 0; }
 
     for (int ri = 0; ri < numRefs; ri++) {
         if (!refConstraints[ri].is_enabled) continue;
@@ -260,6 +251,7 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
             for (int m = 0; m < matchCount; m++) free(matchingChildKeys[m]);
             free(matchingChildKeys);
+            free(refConstraints);
             return -1;
         }
 
@@ -352,6 +344,7 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
         free(matchingChildKeys);
     }
 
+    free(refConstraints);
     return 0;
 }
 
@@ -677,8 +670,9 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
     /* Validate FOREIGN KEY constraints against updated row — skip
      * when the table has no local FK constraints. */
     if (td->has_fk_constraints_local && tblName && tblName[0]) {
-        ConstraintDesc fkConstraints[32];
-        int numFkCon = cat_list_constraints(td->table_id, fkConstraints, 32);
+        ConstraintDesc *fkConstraints = NULL;
+        int numFkCon = cat_list_constraints_all(td->table_id, &fkConstraints);
+        if (numFkCon < 0) numFkCon = 0;
         for (int fi = 0; fi < numFkCon; fi++) {
             if (fkConstraints[fi].constraint_type != 'F') continue;
             if (!fkConstraints[fi].is_enabled) continue;
@@ -759,6 +753,7 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                          fkConstraints[fi].constraint_name);
                 g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                free(fkConstraints);
                 return -1;
             }
             if (allNull) continue;
@@ -767,24 +762,11 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
             /* Resolve referenced table by ID */
             TableDesc refTd;
             {
-                DatabaseDesc dbDesc;
-                if (cat_find_database(g_currentDatabase, &dbDesc) < 0) continue;
-                SchemaDesc schemas[16];
-                int numSchemas = cat_list_schemas(dbDesc.db_id, schemas, 16);
-                int foundRef = 0;
-                for (int si = 0; si < numSchemas; si++) {
-                    TableDesc tables[64];
-                    int numTables = cat_list_tables(schemas[si].schema_id, tables, CAT_MAX_COLUMNS);
-                    for (int ti = 0; ti < numTables; ti++) {
-                        if (tables[ti].table_id == fkConstraints[fi].ref_table_id) {
-                            refTd = tables[ti];
-                            foundRef = 1;
-                            break;
-                        }
-                    }
-                    if (foundRef) break;
-                }
-                if (!foundRef) continue;
+                /* Direct id lookup — the prior list-into-tables[64] with a
+                 * CAT_MAX_COLUMNS (256) cap overflowed the stack once a schema
+                 * held more than 64 tables. table_id is globally unique. */
+                if (cat_find_table_by_id(fkConstraints[fi].ref_table_id, &refTd) != 0)
+                    continue;
             }
 
             /* Check value exists in referenced table PK */
@@ -797,16 +779,19 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                          fkConstraints[fi].constraint_name, fkValue, refTd.table_name);
                 g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                free(fkConstraints);
                 return -1;
             }
         }
+        free(fkConstraints);
     }
 
     /* Validate UNIQUE constraints (catalog 'U' type) against updated
      * row — skip catalog scan when the table has none. */
     if (td->has_unique_constraints && tblName && tblName[0]) {
-        ConstraintDesc uqCons[32];
-        int numUqCon = cat_list_constraints(td->table_id, uqCons, 32);
+        ConstraintDesc *uqCons = NULL;
+        int numUqCon = cat_list_constraints_all(td->table_id, &uqCons);
+        if (numUqCon < 0) numUqCon = 0;
         for (int ui = 0; ui < numUqCon; ui++) {
             if (uqCons[ui].constraint_type != 'U') continue;
             if (!uqCons[ui].is_enabled) continue;
@@ -886,11 +871,13 @@ static int ApplyUpdateToRow(TableDesc *td, const ColumnDesc *allCols, int allNCo
                                  uqCons[ui].constraint_name);
                         g_err.error = 1;
                         EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_UNIQUE_VIOLATION);
+                        free(uqCons);
                         return -1;
                     }
                 }
             }
         }
+        free(uqCons);
     }
 
     /* Enforce ON UPDATE referential actions when PK columns are modified */

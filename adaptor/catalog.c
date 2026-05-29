@@ -172,14 +172,17 @@ static int schema_name_to_oid(const char *name, char *oid_out, int out_size)
 
     DatabaseDesc dbDesc;
     if (cat_find_database(db_get_current_database(), &dbDesc) != 0) return 0;
-    SchemaDesc schemas[32];
-    int n = cat_list_schemas(dbDesc.db_id, schemas, 32);
+    SchemaDesc *schemas = NULL;
+    int n = cat_list_schemas_all(dbDesc.db_id, &schemas);
+    if (n < 0) n = 0;
     for (int i = 0; i < n; i++) {
         if (strcasecmp(schemas[i].schema_name, name) == 0) {
             snprintf(oid_out, out_size, "%d", 2200 + i);
+            free(schemas);
             return 1;
         }
     }
+    free(schemas);
     return 0;
 }
 
@@ -195,13 +198,16 @@ static int oid_to_schema_name(const char *oid_str, char *schema_out, int out_siz
     int idx = oid_val - 2200;  /* 0-based index into schema list */
     DatabaseDesc dbDesc;
     if (cat_find_database(db_get_current_database(), &dbDesc) != 0) return 0;
-    SchemaDesc schemas[32];
-    int n = cat_list_schemas(dbDesc.db_id, schemas, 32);
+    SchemaDesc *schemas = NULL;
+    int n = cat_list_schemas_all(dbDesc.db_id, &schemas);
+    if (n < 0) n = 0;
     if (idx >= 0 && idx < n) {
         strncpy(schema_out, schemas[idx].schema_name, out_size - 1);
         schema_out[out_size - 1] = '\0';
+        free(schemas);
         return 1;
     }
+    free(schemas);
     return 0;
 }
 
@@ -519,12 +525,14 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         rs->is_select = 1;
         result_add_column(rs, "database", PG_OID_TEXT);
 
-        DatabaseDesc dbs[64];
-        int ndb = cat_list_databases(dbs, 64);
+        DatabaseDesc *dbs = NULL;
+        int ndb = cat_list_databases_all(&dbs);
+        if (ndb < 0) ndb = 0;
         for (int i = 0; i < ndb; i++) {
             int row = result_add_row(rs);
             result_set_field(rs, row, 0, dbs[i].db_name);
         }
+        free(dbs);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
@@ -736,8 +744,9 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         result_add_column(rs, "last_ack_seq",  PG_OID_INT8);
         result_add_column(rs, "next_seq",      PG_OID_INT8);
         result_add_column(rs, "ttl_days",      PG_OID_INT4);
-        SubscriptionDesc subs[64];
-        int n = cat_list_subscriptions(subs, 64);
+        SubscriptionDesc *subs = NULL;
+        int n = cat_list_subscriptions_all(&subs);
+        if (n < 0) n = 0;
         for (int i = 0; i < n; i++) {
             int row = result_add_row(rs);
             result_set_field(rs, row, 0, subs[i].name);
@@ -750,6 +759,7 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
             snprintf(buf, sizeof(buf), "%d", subs[i].ttl_days);
             result_set_field(rs, row, 4, buf);
         }
+        free(subs);
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
     }
@@ -762,12 +772,14 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
         DatabaseDesc dbDesc;
         if (cat_find_database(db_get_current_database(), &dbDesc) == 0) {
-            SchemaDesc schemas[32];
-            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDesc.db_id, &schemas);
+            if (ns < 0) ns = 0;
             for (int i = 0; i < ns; i++) {
                 int row = result_add_row(rs);
                 result_set_field(rs, row, 0, schemas[i].schema_name);
             }
+            free(schemas);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
@@ -783,8 +795,9 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
         SchemaDesc schDesc;
         if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
             cat_find_schema(dbDesc.db_id, g_currentSchema, &schDesc) == 0) {
-            TableDesc tables[256];
-            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schDesc.schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int i = 0; i < nt; i++) {
                 /* Skip temp tables not owned by this session */
                 if (tables[i].is_temporary) {
@@ -802,6 +815,7 @@ static int handle_show(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 int row = result_add_row(rs);
                 result_set_field(rs, row, 0, tables[i].table_name);
             }
+            free(tables);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
@@ -2165,8 +2179,9 @@ int catalog_list_tables(ResultSet *rs)
     SchemaDesc schDesc;
     if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
         cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
-        TableDesc tables[256];
-        int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+        TableDesc *tables = NULL;
+        int nt = cat_list_tables_all(schDesc.schema_id, &tables);
+        if (nt < 0) nt = 0;
         for (int i = 0; i < nt; i++) {
             int row = result_add_row(rs);
             if (row < 0) break;
@@ -2176,6 +2191,7 @@ int catalog_list_tables(ResultSet *rs)
             result_set_field(rs, row, 3, "BASE TABLE");
             count++;
         }
+        free(tables);
     }
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
@@ -2262,8 +2278,9 @@ static int catalog_list_all_columns(ResultSet *rs)
         return 1;
     }
 
-    TableDesc tables[256];
-    int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+    TableDesc *tables = NULL;
+    int nt = cat_list_tables_all(schDesc.schema_id, &tables);
+    if (nt < 0) nt = 0;
     for (int t = 0; t < nt; t++) {
         ColumnDesc cols[CAT_MAX_COLUMNS];
         int ncols = cat_find_columns(tables[t].table_id, cols, CAT_MAX_COLUMNS);
@@ -2287,6 +2304,7 @@ static int catalog_list_all_columns(ResultSet *rs)
             total++;
         }
     }
+    free(tables);
 
     snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", total);
     return 1;
@@ -2353,8 +2371,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
             }
         }
 
-        DatabaseDesc dbs[64];
-        int ndb = cat_list_databases(dbs, 64);
+        DatabaseDesc *dbs = NULL;
+        int ndb = cat_list_databases_all(&dbs);
+        if (ndb < 0) ndb = 0;
         int count = 0;
         int oid_counter = 16384;
         for (int i = 0; i < ndb; i++) {
@@ -2381,6 +2400,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
             /* daticulocale, daticurules, datcollversion, datacl → NULL */
             count++;
         }
+        free(dbs);
         if (count == 0 && datname_filter[0] == '\0') {
             int r = result_add_row(rs);
             result_set_field(rs, r, 0, "16384");
@@ -2439,8 +2459,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         /* Database schemas from catalog */
         DatabaseDesc dbDescNs;
         if (cat_find_database(db_get_current_database(), &dbDescNs) == 0) {
-            SchemaDesc schemas[32];
-            int ns = cat_list_schemas(dbDescNs.db_id, schemas, 32);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDescNs.db_id, &schemas);
+            if (ns < 0) ns = 0;
             int oid_counter = 2200;
             for (int i = 0; i < ns; i++) {
                 char oid_str[32];
@@ -2451,6 +2472,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 result_set_field(rs, r, 2, "10");
                 count++;
             }
+            free(schemas);
         }
 
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
@@ -2710,8 +2732,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         SchemaDesc schDescAttr;
         if (cat_find_database(db_get_current_database(), &dbDescAttr) == 0 &&
             cat_find_schema(dbDescAttr.db_id, db_get_current_schema(), &schDescAttr) == 0) {
-            TableDesc tables[256];
-            int nt = cat_list_tables(schDescAttr.schema_id, tables, 256);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schDescAttr.schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int t = 0; t < nt; t++) {
                 char oidStr[16];
                 snprintf(oidStr, sizeof(oidStr), "%u", stable_table_oid(tables[t].table_name));
@@ -2769,6 +2792,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     count++;
                 }
             }
+            free(tables);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
@@ -2847,8 +2871,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         SchemaDesc schDescCls;
         if (cat_find_database(db_get_current_database(), &dbDescCls) == 0 &&
             cat_find_schema(dbDescCls.db_id, schemaName, &schDescCls) == 0) {
-            TableDesc tables[256];
-            int nt = cat_list_tables(schDescCls.schema_id, tables, 256);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schDescCls.schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int i = 0; i < nt; i++) {
                 /* Skip temporary tables not owned by this session */
                 if (tables[i].is_temporary) {
@@ -2910,6 +2935,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 result_set_null(rs, row, 30);                 /* partition_expr */
                 count++;
             }
+            free(tables);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
@@ -3045,8 +3071,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         int total = 0;
         if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
             cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
-            TableDesc tables[256];
-            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schDesc.schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int t = 0; t < nt; t++) {
                 if (tables[t].is_temporary) continue;
                 if (filter_table[0] &&
@@ -3149,6 +3176,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     total++;
                 }
             }
+            free(tables);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag),
                  "SELECT %d", total);
@@ -3176,8 +3204,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         int total = 0;
         if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
             cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
-            TableDesc tables[256];
-            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schDesc.schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int t = 0; t < nt; t++) {
                 if (tables[t].is_temporary) continue;
                 if (filter_table[0] &&
@@ -3224,6 +3253,7 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 result_set_null(rs, row, 7);
                 total++;
             }
+            free(tables);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag),
                  "SELECT %d", total);
@@ -3254,17 +3284,18 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         int total = 0;
         if (cat_find_database(db_get_current_database(), &dbDesc) == 0 &&
             cat_find_schema(dbDesc.db_id, db_get_current_schema(), &schDesc) == 0) {
-            TableDesc tables[256];
-            int nt = cat_list_tables(schDesc.schema_id, tables, 256);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schDesc.schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int t = 0; t < nt; t++) {
                 if (tables[t].is_temporary) continue;
                 if (filter_table[0] &&
                     strcasecmp(tables[t].table_name, filter_table) != 0)
                     continue;
 
-                IndexStatsDesc is[32];
-                int nis = cat_list_index_stats(tables[t].table_id, is,
-                                               32);
+                IndexStatsDesc *is = NULL;
+                int nis = cat_list_index_stats_all(tables[t].table_id, &is);
+                if (nis < 0) nis = 0;
                 for (int i = 0; i < nis; i++) {
                     if (filter_index[0] &&
                         strcasecmp(is[i].index_name, filter_index) != 0)
@@ -3287,7 +3318,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     result_set_field(rs, row, 8, b);
                     total++;
                 }
+                free(is);
             }
+            free(tables);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag),
                  "SELECT %d", total);
@@ -3344,15 +3377,17 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
         SchemaDesc schDescCon;
         if (cat_find_database(db_get_current_database(), &dbDescCon) == 0 &&
             cat_find_schema(dbDescCon.db_id, db_get_current_schema(), &schDescCon) == 0) {
-            TableDesc tables[256];
-            int nt = cat_list_tables(schDescCon.schema_id, tables, 256);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schDescCon.schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int t = 0; t < nt; t++) {
                 /* Apply conrelid filter if DBeaver sent WHERE */
                 if (filter_conrelid != 0 &&
                     stable_table_oid(tables[t].table_name) != filter_conrelid)
                     continue;
-                ConstraintDesc cons[64];
-                int ncons = cat_list_constraints(tables[t].table_id, cons, 64);
+                ConstraintDesc *cons = NULL;
+                int ncons = cat_list_constraints_all(tables[t].table_id, &cons);
+                if (ncons < 0) ncons = 0;
                 for (int ci = 0; ci < ncons; ci++) {
                     /* Map constraint type: catalog uses 'P','U','C','F' */
                     char contype[2] = {0};
@@ -3449,25 +3484,12 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         TableDesc refTd;
                         ColumnDesc refCols[CAT_MAX_COLUMNS];
                         int refNcols = 0;
-                        /* Find ref table by ID across all schemas */
-                        {
-                            SchemaDesc schemas[32];
-                            int ns = cat_list_schemas(dbDescCon.db_id, schemas, 32);
-                            for (int si = 0; si < ns; si++) {
-                                TableDesc allTbls[256];
-                                int ntbls = cat_list_tables(schemas[si].schema_id, allTbls, 256);
-                                for (int ti2 = 0; ti2 < ntbls; ti2++) {
-                                    if (allTbls[ti2].table_id == cons[ci].ref_table_id) {
-                                        snprintf(confrelStr, sizeof(confrelStr), "%u",
-                                                 stable_table_oid(allTbls[ti2].table_name));
-                                        refTd = allTbls[ti2];
-                                        refNcols = cat_find_columns(refTd.table_id, refCols, CAT_MAX_COLUMNS);
-                                        goto ref_found;
-                                    }
-                                }
-                            }
+                        /* Find ref table directly by ID (no list+scan) */
+                        if (cat_find_table_by_id(cons[ci].ref_table_id, &refTd) == 0) {
+                            snprintf(confrelStr, sizeof(confrelStr), "%u",
+                                     stable_table_oid(refTd.table_name));
+                            refNcols = cat_find_columns(refTd.table_id, refCols, CAT_MAX_COLUMNS);
                         }
-                        ref_found:
                         /* Build confkey from ref_columns */
                         if (cons[ci].ref_columns[0] && refNcols > 0) {
                             char rc_buf[256];
@@ -3521,7 +3543,9 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     result_set_null(rs, row, 20);               /* consrc_copy */
                     count++;
                 }
+                free(cons);
             }
+            free(tables);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", count);
         return 1;
@@ -3567,14 +3591,17 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
         DatabaseDesc dbDesc;
         if (cat_find_database(db_get_current_database(), &dbDesc) == 0) {
-            SchemaDesc schemas[32];
-            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDesc.db_id, &schemas);
+            if (ns < 0) ns = 0;
             for (int si = 0; si < ns; si++) {
-                TableDesc tables[256];
-                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                TableDesc *tables = NULL;
+                int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+                if (nt < 0) nt = 0;
                 for (int ti = 0; ti < nt; ti++) {
-                    TriggerDesc trigs[16];
-                    int ntr = cat_list_triggers_for_table(tables[ti].table_id, trigs, 16);
+                    TriggerDesc *trigs = NULL;
+                    int ntr = cat_list_triggers_for_table_all(tables[ti].table_id, &trigs);
+                    if (ntr < 0) ntr = 0;
                     for (int tri = 0; tri < ntr; tri++) {
                         int row = result_add_row(rs);
                         result_set_field(rs, row, 0, trigs[tri].trigger_name);
@@ -3587,8 +3614,11 @@ static int handle_pg_catalog(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         result_set_field(rs, row, 2, tt);
                         result_set_field(rs, row, 3, trigs[tri].enabled ? "O" : "D");
                     }
+                    free(trigs);
                 }
+                free(tables);
             }
+            free(schemas);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
         return 1;
@@ -3721,14 +3751,17 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
 
         DatabaseDesc dbDesc;
         if (cat_find_database(db_get_current_database(), &dbDesc) == 0) {
-            SchemaDesc schemas[32];
-            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDesc.db_id, &schemas);
+            if (ns < 0) ns = 0;
             for (int si = 0; si < ns; si++) {
-                TableDesc tables[256];
-                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                TableDesc *tables = NULL;
+                int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+                if (nt < 0) nt = 0;
                 for (int ti = 0; ti < nt; ti++) {
-                    TriggerDesc trigs[16];
-                    int ntr = cat_list_triggers_for_table(tables[ti].table_id, trigs, 16);
+                    TriggerDesc *trigs = NULL;
+                    int ntr = cat_list_triggers_for_table_all(tables[ti].table_id, &trigs);
+                    if (ntr < 0) ntr = 0;
                     for (int tri = 0; tri < ntr; tri++) {
                         int row = result_add_row(rs);
                         result_set_field(rs, row, 0, trigs[tri].trigger_name);
@@ -3740,8 +3773,11 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
                         result_set_field(rs, row, 3, timing);
                         result_set_field(rs, row, 4, trigs[tri].enabled ? "YES" : "NO");
                     }
+                    free(trigs);
                 }
+                free(tables);
             }
+            free(schemas);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", rs->num_rows);
         return 1;
@@ -3772,8 +3808,9 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
         /* User schemas from catalog */
         DatabaseDesc dbDescSch;
         if (cat_find_database(db_get_current_database(), &dbDescSch) == 0) {
-            SchemaDesc schemas[32];
-            int ns = cat_list_schemas(dbDescSch.db_id, schemas, 32);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDescSch.db_id, &schemas);
+            if (ns < 0) ns = 0;
             for (int i = 0; i < ns; i++) {
                 int r = result_add_row(rs);
                 result_set_field(rs, r, 0, "evosql");
@@ -3781,6 +3818,7 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
                 result_set_field(rs, r, 2, "evosql");
                 schcount++;
             }
+            free(schemas);
         }
 
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", schcount);
@@ -3804,14 +3842,17 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
         int tccount = 0;
         DatabaseDesc dbDescTC;
         if (cat_find_database(db_get_current_database(), &dbDescTC) == 0) {
-            SchemaDesc schemas[32];
-            int ns = cat_list_schemas(dbDescTC.db_id, schemas, 32);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDescTC.db_id, &schemas);
+            if (ns < 0) ns = 0;
             for (int si = 0; si < ns; si++) {
-                TableDesc tables[256];
-                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                TableDesc *tables = NULL;
+                int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+                if (nt < 0) nt = 0;
                 for (int ti = 0; ti < nt; ti++) {
-                    ConstraintDesc cons[64];
-                    int ncons = cat_list_constraints(tables[ti].table_id, cons, 64);
+                    ConstraintDesc *cons = NULL;
+                    int ncons = cat_list_constraints_all(tables[ti].table_id, &cons);
+                    if (ncons < 0) ncons = 0;
                     for (int ci = 0; ci < ncons; ci++) {
                         char conname[256];
                         const char *contype_str = "CHECK";
@@ -3849,8 +3890,11 @@ static int handle_information_schema(const char *sql, ResultSet *rs)
                         result_set_field(rs, r, 8, "NO");
                         tccount++;
                     }
+                    free(cons);
                 }
+                free(tables);
             }
+            free(schemas);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SELECT %d", tccount);
         return 1;
@@ -4315,11 +4359,13 @@ static int handle_distributed(const char *sql, ResultSet *rs, SessionCtx *ctx)
         const char *db = ctx ? ctx->database : "evosql";
         if (cat_find_database(db, &dbDesc) == 0) {
             /* List all schemas in this database */
-            SchemaDesc schemas[32];
-            int ns = cat_list_schemas(dbDesc.db_id, schemas, 32);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDesc.db_id, &schemas);
+            if (ns < 0) ns = 0;
             for (int si = 0; si < ns; si++) {
-                TableDesc tables[256];
-                int nt = cat_list_tables(schemas[si].schema_id, tables, 256);
+                TableDesc *tables = NULL;
+                int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+                if (nt < 0) nt = 0;
                 for (int ti = 0; ti < nt; ti++) {
                     if (tables[ti].is_temporary) continue;
                     int row = result_add_row(rs);
@@ -4334,7 +4380,9 @@ static int handle_distributed(const char *sql, ResultSet *rs, SessionCtx *ctx)
                     else
                         result_set_field(rs, row, 3, "REMOTE");
                 }
+                free(tables);
             }
+            free(schemas);
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");
         return 1;
@@ -4447,8 +4495,9 @@ static int handle_distributed(const char *sql, ResultSet *rs, SessionCtx *ctx)
             TableDesc td;
             int rc = cat_resolve_table(db, sch, tname, &td);
             if (rc == 0 && td.shard_type != 0) {
-                ShardDesc shards[7];
-                int ns = cat_list_shards(td.table_id, shards, 7);
+                ShardDesc *shards = NULL;
+                int ns = cat_list_shards_all(td.table_id, &shards);
+                if (ns < 0) ns = 0;
                 for (int si = 0; si < ns; si++) {
                     int row = result_add_row(rs);
                     result_set_field(rs, row, 0, shards[si].shard_name);
@@ -4463,6 +4512,7 @@ static int handle_distributed(const char *sql, ResultSet *rs, SessionCtx *ctx)
                         td.shard_type == 1 ? "HASH" : "RANGE");
                     result_set_field(rs, row, 5, td.shard_key);
                 }
+                free(shards);
             }
         }
         snprintf(rs->command_tag, sizeof(rs->command_tag), "SHOW");

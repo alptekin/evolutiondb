@@ -659,14 +659,16 @@ int dist_move_table(const char *table_name, int dest_node_id,
             bt2_destroy(&pk_tree);
 
             /* Free secondary indexes */
-            IndexDesc idxs[32];
-            int nidx = cat_list_indexes(td.table_id, idxs, 32);
+            IndexDesc *idxs = NULL;
+            int nidx = cat_list_indexes_all(td.table_id, &idxs);
+            if (nidx < 0) nidx = 0;
             for (int i = 0; i < nidx; i++) {
                 if (idxs[i].root_page > 0) {
                     BTree2 idx_tree = { idxs[i].root_page };
                     bt2_destroy(&idx_tree);
                 }
             }
+            free(idxs);
 
             tapi_free_heap_pages(&td);
         }

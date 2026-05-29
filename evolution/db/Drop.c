@@ -72,8 +72,9 @@ int DropTableProcess(void)
     {
         DatabaseDesc dbDesc;
         if (cat_find_database(g_currentDatabase, &dbDesc) == 0) {
-            SchemaDesc schemas[16];
-            int ns = cat_list_schemas(dbDesc.db_id, schemas, 16);
+            SchemaDesc *schemas = NULL;
+            int ns = cat_list_schemas_all(dbDesc.db_id, &schemas);
+            if (ns < 0) ns = 0;
             for (int si = 0; si < ns; si++) {
                 ViewDesc views[32];
                 int nv = cat_list_views(schemas[si].schema_id, views, 32);
@@ -84,11 +85,13 @@ int DropTableProcess(void)
                                  td.table_name, views[vi].view_name);
                         g_err.error = 1;
                         EVOSQL_SET_SQLSTATE("2BP01");
+                        free(schemas);
                         TruncateDrop();
                         return -1;
                     }
                 }
             }
+            free(schemas);
         }
     }
 
@@ -101,8 +104,9 @@ int DropTableProcess(void)
 
     /* Destroy secondary index B+ trees */
     {
-        IndexDesc indexes[16];
-        int nIdx = cat_list_indexes(td.table_id, indexes, 16);
+        IndexDesc *indexes = NULL;
+        int nIdx = cat_list_indexes_all(td.table_id, &indexes);
+        if (nIdx < 0) nIdx = 0;
         for (int ix = 0; ix < nIdx; ix++) {
             if (indexes[ix].index_type == 'P') continue; /* PK handled above */
             if (indexes[ix].index_type == 'H' || indexes[ix].index_type == 'V') {
@@ -113,6 +117,7 @@ int DropTableProcess(void)
                 bt2_destroy(&idx_tree);
             }
         }
+        free(indexes);
     }
 
     /* Drop table from catalog (removes table, columns, indexes, constraints) */
@@ -151,8 +156,9 @@ static int truncate_single_table(const char *tblName, int cascade, int continueI
 
     /* FK referential integrity check */
     {
-        ConstraintDesc refs[32];
-        int nrefs = cat_list_referencing_fks(td.table_id, refs, 32);
+        ConstraintDesc *refs = NULL;
+        int nrefs = cat_list_referencing_fks_all(td.table_id, &refs);
+        if (nrefs < 0) nrefs = 0;
         for (int i = 0; i < nrefs; i++) {
             TableDesc ref_td;
             if (cat_find_table_by_id(refs[i].table_id, &ref_td) == 0 &&
@@ -166,7 +172,7 @@ static int truncate_single_table(const char *tblName, int cascade, int continueI
                                 /* CASCADE: truncate referencing table first */
                                 int rc = truncate_single_table(ref_td.table_name,
                                                                 cascade, continueIdentity);
-                                if (rc < 0) return rc;
+                                if (rc < 0) { free(refs); return rc; }
                             } else {
                                 snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                                          "cannot truncate table \"%s\": "
@@ -174,6 +180,7 @@ static int truncate_single_table(const char *tblName, int cascade, int continueI
                                          tblName, ref_td.table_name);
                                 g_err.error = 1;
                                 EVOSQL_SET_SQLSTATE("23503");
+                                free(refs);
                                 return -1;
                             }
                         }
@@ -181,12 +188,14 @@ static int truncate_single_table(const char *tblName, int cascade, int continueI
                 }
             }
         }
+        free(refs);
     }
 
     /* Destroy all secondary indexes and recreate empty */
     {
-        IndexDesc indexes[32];
-        int nIdx = cat_list_indexes(td.table_id, indexes, 32);
+        IndexDesc *indexes = NULL;
+        int nIdx = cat_list_indexes_all(td.table_id, &indexes);
+        if (nIdx < 0) nIdx = 0;
         for (int ix = 0; ix < nIdx; ix++) {
             if (indexes[ix].index_type == 'P') continue;
             if (indexes[ix].root_page == 0) continue;
@@ -207,6 +216,7 @@ static int truncate_single_table(const char *tblName, int cascade, int continueI
                                        new_tree.root_page);
             }
         }
+        free(indexes);
     }
 
     /* Destroy PK B+ tree and recreate empty */
