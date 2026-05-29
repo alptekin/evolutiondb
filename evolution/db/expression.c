@@ -1340,14 +1340,61 @@ double expr_evaluate_num(const ExprNode *e,
  *  array, compute, and return a numeric string.
  * ---------------------------------------------------------------- */
 
-/* Returns 1 if s is a vector text literal — i.e., starts with '[' or
- * '{' and contains comma-separated numeric values. Lightweight sniff
- * (first non-space char only). */
+/* Map one base64 character to its 6-bit value, or -1 if not a base64
+ * symbol. Standard alphabet (A-Za-z0-9+/). */
+static int b64_sym(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+/* Decode standard base64 (with or without '=' padding) into `out`.
+ * Whitespace is skipped; the first '=' ends the stream. On success
+ * sets *outlen and returns 1; any non-alphabet byte fails. The caller
+ * must size `out` to at least inlen bytes (decoded output is smaller). */
+static int b64_decode(const char *in, size_t inlen,
+                      unsigned char *out, size_t *outlen)
+{
+    size_t o = 0;
+    int quad[4], qn = 0;
+    for (size_t i = 0; i < inlen; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '=') break;
+        if (isspace(c)) continue;
+        int v = b64_sym(c);
+        if (v < 0) return 0;
+        quad[qn++] = v;
+        if (qn == 4) {
+            out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+            out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+            out[o++] = (unsigned char)((quad[2] << 6) | quad[3]);
+            qn = 0;
+        }
+    }
+    if (qn == 2) {
+        out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+    } else if (qn == 3) {
+        out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+        out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+    } else if (qn != 0) {
+        return 0;  /* a lone trailing symbol is malformed */
+    }
+    *outlen = o;
+    return 1;
+}
+
+/* Returns 1 if s is a vector literal — bracketed text ("[..]"/"{..}")
+ * or the MCP's compact quantized form ("b64i8:<base64>"). Lightweight
+ * sniff (first non-space token only). */
 static int vec_looks_like(const char *s)
 {
     if (!s) return 0;
     while (*s && isspace((unsigned char)*s)) s++;
-    return (*s == '[' || *s == '{');
+    return (*s == '[' || *s == '{' || strncmp(s, "b64i8:", 6) == 0);
 }
 
 /* Parse "[f1,f2,...]" or "{f1,f2,...}" into a freshly malloc'd float
@@ -1360,6 +1407,43 @@ static int vec_parse_to_floats(const char *text, float **out_arr, int *out_n)
     if (!text) return 0;
     const char *p = text;
     while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Compact quantized form written by the MCP layer:
+     * "b64i8:" + base64( float32 LE scale | int8[] ). Decode back to
+     * floats so server-side ORDER BY <=> ranks the stored format with
+     * no re-ingest and no 8 KB statement overflow (a 1024-d literal is
+     * ~1.4 KB here vs ~10 KB bracketed). Reconstruction mirrors
+     * embeddings.py decode_vec: f[i] = int8[i] * (scale / 127). Cosine
+     * is scale-invariant, so the uniform factor doesn't shift ranking. */
+    if (strncmp(p, "b64i8:", 6) == 0) {
+        const char *b64 = p + 6;
+        size_t b64len = strlen(b64);
+        while (b64len > 0 && isspace((unsigned char)b64[b64len - 1])) b64len--;
+        unsigned char *raw = (unsigned char *)malloc(b64len + 4);
+        if (!raw) return 0;
+        size_t rawlen = 0;
+        if (!b64_decode(b64, b64len, raw, &rawlen) || rawlen < 5) {
+            free(raw);
+            return 0;
+        }
+        /* Read the 4-byte little-endian float32 scale portably (don't
+         * assume host endianness), then bit-cast to float. */
+        uint32_t bits = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) |
+                        ((uint32_t)raw[2] << 16) | ((uint32_t)raw[3] << 24);
+        float scale;
+        memcpy(&scale, &bits, sizeof(scale));
+        float inv = scale / 127.0f;
+        size_t nb = rawlen - 4;
+        float *arr = (float *)malloc(sizeof(float) * nb);
+        if (!arr) { free(raw); return 0; }
+        for (size_t i = 0; i < nb; i++)
+            arr[i] = (float)((signed char)raw[4 + i]) * inv;
+        free(raw);
+        *out_arr = arr;
+        *out_n = (int)nb;
+        return 1;
+    }
+
     char open = *p;
     if (open != '[' && open != '{') return 0;
     char close = (open == '[') ? ']' : '}';
