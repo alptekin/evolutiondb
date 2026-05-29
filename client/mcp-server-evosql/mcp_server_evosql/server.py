@@ -34,7 +34,7 @@ import sys
 import time
 import traceback
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 
 from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env, embedder2_from_env
@@ -151,6 +151,16 @@ class MemoryBackend:
         # cross-source query↔doc gap. Default no-op = identity.
         from .query_transform import _NoOpTransform
         self.query_transform = query_transform or _NoOpTransform()
+        # Server-side ANN candidate pool: when a query vector exists,
+        # search() asks the engine for the top-N nearest rows per
+        # (variant, model) via `ORDER BY <vec> <=> 'b64i8:…' LIMIT N`
+        # instead of pulling the whole namespace and scoring in Python.
+        # The union of these pools is the candidate set the RRF/keyword
+        # fusion runs over. 0 disables (forces the legacy full scan).
+        try:
+            self._ann_pool = int(os.environ.get("EVOSQL_ANN_POOL", "80"))
+        except ValueError:
+            self._ann_pool = 80
         self.tagger   = tagger
         self.reranker = reranker
         # Lexical scorer: "simple" = legacy binary term-presence
@@ -320,15 +330,114 @@ class MemoryBackend:
                     pass  # emb2 is best-effort; main row already saved
         return key
 
+    # -- server-side ANN candidate gathering (Step 6) ----------------
+    def _ann_query(self, store: str, user_id: str, field: str,
+                    q_b64: str, limit: int) -> List[Any]:
+        """Top-`limit` nearest rows in `store` by `field` cosine to the
+        b64i8 query vector. Returns (mem_key, mem_value) tuples. The
+        engine decodes the stored b64i8 `emb`/`emb2` and ranks server-
+        side; rows without the vector sort last and fall out of LIMIT."""
+        try:
+            return self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' "
+                f"ORDER BY {field} <=> '{q_b64}' LIMIT {int(limit)}"
+            ) or []
+        except Exception:
+            return []  # engine without b64i8 ORDER BY → caller falls back
+
+    def _fetch_by_keys(self, store: str, user_id: str,
+                        keys: Sequence[str]) -> List[Any]:
+        """Fetch (mem_key, mem_value) for specific keys, batched by SQL
+        size so a large `IN (...)` list never trips the 8 KB statement
+        cap (mem_keys vary from short to ~150 chars)."""
+        out: List[Any] = []
+        base = (f"SELECT mem_key, mem_value FROM __mem_{store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' AND mem_key IN (")
+        budget = 7000
+        batch: List[str] = []
+        size = len(base) + 2
+        for k in keys:
+            tok = len("'" + _e(k) + "',")
+            if batch and size + tok > budget:
+                out += self._query(
+                    base + ",".join("'" + _e(x) + "'" for x in batch)
+                    + ")") or []
+                batch, size = [], len(base) + 2
+            batch.append(k)
+            size += tok
+        if batch:
+            out += self._query(
+                base + ",".join("'" + _e(x) + "'" for x in batch)
+                + ")") or []
+        return out
+
+    @staticmethod
+    def _decode_emb2(val: Any) -> Optional[List[float]]:
+        try:
+            er = json.loads(val) if isinstance(val, str) else val
+        except Exception:
+            return None
+        return decode_vec((er or {}).get("emb2"))
+
+    def _gather_ann_candidates(self, user_id: str,
+                                q_vecs: List[List[float]],
+                                q_vecs2: List[List[float]],
+                                use_rrf: bool):
+        """Build the candidate set via engine-side ANN. bge nearest
+        rows (per variant) come back with their full value; e5 nearest
+        keys (per variant) extend coverage with docs bge missed. Then
+        backfill: main records for e5-only keys, and the e5 vector for
+        every candidate that lacks one. Returns (rows, emb2_by_key)
+        where rows match the legacy (ns, key, value) shape so the
+        scoring loop is unchanged."""
+        N = self._ann_pool
+        cand: Dict[str, Any] = {}            # key -> (ns, key, value)
+        emb2_by_key: Dict[str, Any] = {}
+
+        for qv in q_vecs:
+            qb = encode_vec(qv)
+            for row in self._ann_query(self.memory, user_id, "emb", qb, N):
+                key, val = row[0], row[1]
+                if key not in cand:
+                    cand[key] = (user_id, key, val)
+
+        if use_rrf:
+            e5_only: List[str] = []
+            for qv2 in q_vecs2:
+                qb2 = encode_vec(qv2)
+                for row in self._ann_query(self.emb2_store, user_id,
+                                            "emb2", qb2, N):
+                    key, val = row[0], row[1]
+                    dv = self._decode_emb2(val)
+                    if dv:
+                        emb2_by_key[key] = dv
+                    if key not in cand:
+                        e5_only.append(key)
+            # main records for e5-surfaced keys bge didn't return
+            seen: set = set()
+            need_main = [k for k in e5_only
+                         if not (k in seen or seen.add(k))
+                         and k not in cand]
+            for row in self._fetch_by_keys(self.memory, user_id, need_main):
+                key, val = row[0], row[1]
+                if key not in cand:
+                    cand[key] = (user_id, key, val)
+            # e5 vector for bge candidates that don't have one yet
+            need_emb2 = [k for k in cand if k not in emb2_by_key]
+            for row in self._fetch_by_keys(self.emb2_store, user_id,
+                                            need_emb2):
+                key, val = row[0], row[1]
+                dv = self._decode_emb2(val)
+                if dv:
+                    emb2_by_key[key] = dv
+
+        return list(cand.values()), emb2_by_key
+
     def search(self, user_id: str, query: str,
                 limit: int = 5,
                 tag: Optional[str] = None,
                 sender: Optional[str] = None) -> List[Dict[str, Any]]:
-        rows = self._query(
-            f"SELECT mem_namespace, mem_key, mem_value FROM "
-            f"__mem_{self.memory} WHERE mem_namespace = "
-            f"'{_e(user_id)}' LIMIT 10000"
-        )
         q_terms = [w for w in query.lower().split() if len(w) > 1]
 
         # Query-side transform: rewrite the raw query into variants that
@@ -355,32 +464,29 @@ class MemoryBackend:
         q_vecs2: List[List[float]] = []
         use_rrf = (self.embedder2 is not None
                    and self.embedder2.kind != "none")
-        emb2_by_key: Dict[str, Any] = {}
         if use_rrf:
             for v in variants:
                 qv2 = self.embedder2.embed_query(v)
                 if qv2:
                     q_vecs2.append(qv2)
-            # Pull the second vectors from the separate emb2 store and
-            # map them by key. Older rows may still carry emb2 inline on
-            # the main record (pre-split backfill) — the candidate loop
-            # falls back to that, so both layouts are supported.
-            try:
-                e2rows = self._query(
-                    f"SELECT mem_key, mem_value FROM "
-                    f"__mem_{self.emb2_store} WHERE mem_namespace = "
-                    f"'{_e(user_id)}' LIMIT 20000"
-                )
-                for ek, ev in e2rows:
-                    try:
-                        er = json.loads(ev) if isinstance(ev, str) else ev
-                    except Exception:
-                        continue
-                    dv = decode_vec((er or {}).get("emb2"))
-                    if dv:
-                        emb2_by_key[ek] = dv
-            except Exception:
-                pass  # emb2 store may not exist yet — RRF degrades to bge+kw
+
+        # Candidate gathering. With at least one query vector we ask the
+        # ENGINE for the nearest rows per (variant, model) via server-
+        # side ANN (`ORDER BY emb <=> 'b64i8:…' LIMIT N`) and fuse over
+        # that small union — no full-namespace pull, no Python-side scan
+        # of 10 K+ rows. Without a query vector (embedder off / failed)
+        # we keep the legacy keyword scan so pure-lexical search still
+        # works. emb2_by_key holds the e5 vector for each candidate.
+        emb2_by_key: Dict[str, Any] = {}
+        if self._ann_pool > 0 and (q_vecs or q_vecs2):
+            rows, emb2_by_key = self._gather_ann_candidates(
+                user_id, q_vecs, q_vecs2, use_rrf)
+        else:
+            rows = self._query(
+                f"SELECT mem_namespace, mem_key, mem_value FROM "
+                f"__mem_{self.memory} WHERE mem_namespace = "
+                f"'{_e(user_id)}' LIMIT 10000"
+            )
 
         # Resolve the sender filter through the identity catalog so
         # "Onur" expands to every alias of the right human (and only
