@@ -49,6 +49,12 @@ void db_ensure_root(void)
 
     /* Create initial grants with admin superuser grant */
     db_ensure_grants();
+
+    /* Rebuild in-memory HNSW (ANN) index graphs from the catalog. They are
+     * not persisted, so the ORDER BY <=> / hnsw_knn fast paths depend on
+     * this to survive a restart (without it they fall back to brute force
+     * until each index is recreated). */
+    hnsw_rebuild_all_from_catalog();
 }
 
 /* ----------------------------------------------------------------

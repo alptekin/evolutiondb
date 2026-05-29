@@ -213,6 +213,60 @@ static void conc_mod_log_dedup(void)
 }
 
 /* ── Secondary index helper: build composite key ── */
+/* ----------------------------------------------------------------
+ *  hnsw_rebuild_all_from_catalog — startup recovery for ANN indexes.
+ *
+ *  HNSW graphs live only in memory: built at CREATE INDEX, freed at
+ *  shutdown, and never persisted. After a restart every 'A' index is
+ *  therefore empty until rebuilt. Walk the catalog
+ *  (databases -> schemas -> tables -> indexes) and rebuild each HNSW
+ *  graph from the build params stored in its expr_def
+ *  ("HNSW:d=<dist>,m=<m>,ef=<ef_construction>"). Best-effort: a failed
+ *  rebuild is skipped, leaving queries to fall back to brute force.
+ *  Runs once at startup, after pgm_init + cat_init.
+ * ---------------------------------------------------------------- */
+void hnsw_rebuild_all_from_catalog(void)
+{
+    hnsw_init();   /* idempotent: clears the in-memory graph registry */
+
+    DatabaseDesc *dbs = (DatabaseDesc *)malloc(sizeof(DatabaseDesc) * 256);
+    if (!dbs) return;
+    int ndb = cat_list_databases(dbs, 256);
+    int rebuilt = 0;
+
+    for (int di = 0; di < ndb; di++) {
+        SchemaDesc *schemas = (SchemaDesc *)malloc(sizeof(SchemaDesc) * 256);
+        if (!schemas) break;
+        int nsch = cat_list_schemas(dbs[di].db_id, schemas, 256);
+        for (int si = 0; si < nsch; si++) {
+            TableDesc *tables = (TableDesc *)malloc(sizeof(TableDesc) * 512);
+            if (!tables) break;
+            int nt = cat_list_tables(schemas[si].schema_id, tables, 512);
+            for (int ti = 0; ti < nt; ti++) {
+                IndexDesc *idxs = (IndexDesc *)malloc(sizeof(IndexDesc) * 64);
+                if (!idxs) break;
+                int nidx = cat_list_indexes(tables[ti].table_id, idxs, 64);
+                for (int ii = 0; ii < nidx; ii++) {
+                    if (idxs[ii].index_type != 'A') continue;   /* HNSW only */
+                    int d = HNSW_DIST_COSINE, m = 16, ef = 200;
+                    sscanf(idxs[ii].expr_def, "HNSW:d=%d,m=%d,ef=%d",
+                           &d, &m, &ef);
+                    if (hnsw_build(tables[ti].table_id, idxs[ii].index_name,
+                                   idxs[ii].col_list, d, m, ef) == 0)
+                        rebuilt++;
+                }
+                free(idxs);
+            }
+            free(tables);
+        }
+        free(schemas);
+    }
+    free(dbs);
+
+    if (rebuilt > 0)
+        printf("[HNSW] rebuilt %d ANN index graph(s) from catalog\n", rebuilt);
+}
+
 static void sec_idx_make_key(const char *indexed_val, const char *pk,
                               char *out, int outSize)
 {

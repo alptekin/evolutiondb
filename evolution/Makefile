@@ -54,6 +54,7 @@ SRCS = main.c \
        db/tuple_format.c \
        db/toast.c \
        db/hash_idx.c \
+       db/hnsw.c \
        db/page_crypt.c \
        db/mvcc.c \
        db/vmap.c \
