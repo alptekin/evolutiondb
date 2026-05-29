@@ -36,11 +36,28 @@ typedef struct HnswGraph {
     int      m;
     int      ef_construction;
 
-    /* Dense vector store (v1 brute-force backing). */
+    /* Dense vector store — backs distance evaluation for both the
+     * graph traversal and the brute-force fallback. */
     int      count;
     int      cap;
     float   *vectors;      /* cap * dim floats, row-major */
     char   (*pk_keys)[HNSW_MAX_PK_LEN];
+
+    /* HNSW graph (v1.1). Built over the dense store after the scan.
+     * Each node carries one neighbor list per level it reaches; node i
+     * shares index i with vectors[i*dim] / pk_keys[i]. */
+    int      ef_search;        /* beam width at layer 0 for queries */
+    int      graph_built;      /* 0 = fall back to brute force */
+    int      entry;            /* entry-point node id (top of graph) */
+    int      max_level;        /* highest level any node currently holds */
+    int     *node_level;       /* [cap] top level per node */
+    int   ***nbr;              /* nbr[node][level] -> malloc'd id array */
+    int    **nbr_cnt;          /* nbr_cnt[node][level] -> neighbor count */
+    uint64_t rng;              /* xorshift state for level assignment */
+
+    /* Per-search scratch, reused under g_mu (avoids re-malloc each query). */
+    int     *visited;          /* [cap] stamp-marked visited set */
+    int      visit_stamp;
 } HnswGraph;
 
 static HnswGraph        g_graphs[HNSW_MAX_GRAPHS];
@@ -54,9 +71,34 @@ void hnsw_init(void)
     pthread_mutex_unlock(&g_mu);
 }
 
+/* Release the HNSW graph layer (neighbor lists) but keep the dense
+ * vector store. Caller holds g_mu. */
+static void graph_drop_links_locked(HnswGraph *g)
+{
+    if (g->nbr) {
+        for (int i = 0; i < g->count; i++) {
+            if (g->nbr[i]) {
+                int lv = g->node_level ? g->node_level[i] : 0;
+                for (int l = 0; l <= lv; l++) free(g->nbr[i][l]);
+                free(g->nbr[i]);
+            }
+            if (g->nbr_cnt && g->nbr_cnt[i]) free(g->nbr_cnt[i]);
+        }
+    }
+    free(g->nbr);        g->nbr = NULL;
+    free(g->nbr_cnt);    g->nbr_cnt = NULL;
+    free(g->node_level); g->node_level = NULL;
+    free(g->visited);    g->visited = NULL;
+    g->visit_stamp = 0;
+    g->graph_built = 0;
+    g->entry = -1;
+    g->max_level = 0;
+}
+
 static void graph_free_locked(HnswGraph *g)
 {
     if (!g || !g->in_use) return;
+    graph_drop_links_locked(g);
     free(g->vectors);   g->vectors = NULL;
     free(g->pk_keys);   g->pk_keys = NULL;
     g->count = g->cap = 0;
@@ -191,6 +233,233 @@ static int graph_ensure_cap_locked(HnswGraph *g, int needed)
     return 0;
 }
 
+/* ---------------------------------------------------------------- *
+ *  HNSW graph (v1.1) — multi-layer greedy index over the dense store.
+ *  Sub-linear search replaces the brute-force scan; node id i shares
+ *  index i with vectors[i*dim] / pk_keys[i]. In-memory only (rebuilt
+ *  from the table scan at CREATE INDEX); on-disk persistence is future.
+ * ---------------------------------------------------------------- */
+
+typedef struct DN { double d; int node; } DN;
+
+static void heap_swap(DN *h, int a, int b) { DN t = h[a]; h[a] = h[b]; h[b] = t; }
+
+/* Min-heap: smallest distance at root (candidate frontier). */
+static void min_push(DN *h, int *n, double d, int node)
+{
+    int i = (*n)++; h[i].d = d; h[i].node = node;
+    while (i > 0) { int p = (i - 1) / 2; if (h[p].d <= h[i].d) break;
+                    heap_swap(h, p, i); i = p; }
+}
+static DN min_pop(DN *h, int *n)
+{
+    DN top = h[0]; h[0] = h[--(*n)]; int i = 0;
+    for (;;) { int l = 2*i+1, r = 2*i+2, s = i;
+        if (l < *n && h[l].d < h[s].d) s = l;
+        if (r < *n && h[r].d < h[s].d) s = r;
+        if (s == i) break; heap_swap(h, s, i); i = s; }
+    return top;
+}
+/* Max-heap: largest distance at root (result set, so we can evict the
+ * current furthest when a closer candidate arrives). */
+static void max_push(DN *h, int *n, double d, int node)
+{
+    int i = (*n)++; h[i].d = d; h[i].node = node;
+    while (i > 0) { int p = (i - 1) / 2; if (h[p].d >= h[i].d) break;
+                    heap_swap(h, p, i); i = p; }
+}
+static DN max_pop(DN *h, int *n)
+{
+    DN top = h[0]; h[0] = h[--(*n)]; int i = 0;
+    for (;;) { int l = 2*i+1, r = 2*i+2, s = i;
+        if (l < *n && h[l].d > h[s].d) s = l;
+        if (r < *n && h[r].d > h[s].d) s = r;
+        if (s == i) break; heap_swap(h, s, i); i = s; }
+    return top;
+}
+
+static int dn_cmp_asc(const void *a, const void *b)
+{
+    double da = ((const DN *)a)->d, db = ((const DN *)b)->d;
+    return (da < db) ? -1 : (da > db) ? 1 : 0;
+}
+
+static double g_dist_node(HnswGraph *g, const float *q, int node)
+{
+    return compute_distance(g->distance_kind,
+                            g->vectors + (size_t)node * g->dim, q, g->dim);
+}
+
+/* xorshift64* → uniform (0,1]; deterministic per-graph seed keeps builds
+ * reproducible (tests rely on stable recall). */
+static double rng_uniform(HnswGraph *g)
+{
+    uint64_t x = g->rng ? g->rng : 0x9e3779b97f4a7c15ULL;
+    x ^= x << 13; x ^= x >> 7; x ^= x << 17; g->rng = x;
+    return ((x >> 11) + 1.0) / 9007199254740993.0;
+}
+static int random_level(HnswGraph *g)
+{
+    double mL = 1.0 / log((double)(g->m > 1 ? g->m : 2));
+    int lvl = (int)(-log(rng_uniform(g)) * mL);
+    if (lvl < 0) lvl = 0;
+    if (lvl > 31) lvl = 31;
+    return lvl;
+}
+
+/* Greedy beam search at one layer. Seeds from entry points eps[], walks
+ * neighbors best-first, keeps the ef closest in W (max-heap). C/W are
+ * caller scratch (C sized >= count, W sized >= ef+1). Visited tracked by
+ * stamp so no per-call memset. */
+static void search_layer(HnswGraph *g, const float *q,
+                         const int *eps, int n_eps, int level, int ef,
+                         DN *C, DN *W, int *W_n)
+{
+    g->visit_stamp++;
+    int stamp = g->visit_stamp;
+    int C_n = 0; *W_n = 0;
+    for (int i = 0; i < n_eps; i++) {
+        int e = eps[i];
+        if (e < 0 || g->visited[e] == stamp) continue;
+        g->visited[e] = stamp;
+        double d = g_dist_node(g, q, e);
+        min_push(C, &C_n, d, e);
+        max_push(W, W_n, d, e);
+        if (*W_n > ef) max_pop(W, W_n);
+    }
+    while (C_n > 0) {
+        DN c = min_pop(C, &C_n);
+        if (*W_n >= ef && c.d > W[0].d) break;
+        int *nb = g->nbr[c.node] ? g->nbr[c.node][level] : NULL;
+        int nc = nb ? g->nbr_cnt[c.node][level] : 0;
+        for (int i = 0; i < nc; i++) {
+            int e = nb[i];
+            if (g->visited[e] == stamp) continue;
+            g->visited[e] = stamp;
+            double d = g_dist_node(g, q, e);
+            if (*W_n < ef || d < W[0].d) {
+                min_push(C, &C_n, d, e);
+                max_push(W, W_n, d, e);
+                if (*W_n > ef) max_pop(W, W_n);
+            }
+        }
+    }
+}
+
+static int graph_alloc_node_locked(HnswGraph *g, int node, int level)
+{
+    g->node_level[node] = level;
+    g->nbr[node]     = (int **)calloc((size_t)level + 1, sizeof(int *));
+    g->nbr_cnt[node] = (int *)calloc((size_t)level + 1, sizeof(int));
+    if (!g->nbr[node] || !g->nbr_cnt[node]) return -1;
+    for (int l = 0; l <= level; l++) {
+        int mmax = (l == 0) ? (2 * g->m) : g->m;
+        g->nbr[node][l] = (int *)malloc(sizeof(int) * (size_t)mmax);
+        if (!g->nbr[node][l]) return -1;
+        g->nbr_cnt[node][l] = 0;
+    }
+    return 0;
+}
+
+/* Add b to a's neighbor list at `level`; if full, keep the mmax closest
+ * to a (simple distance-based pruning). */
+static void connect_locked(HnswGraph *g, int a, int b, int level)
+{
+    if (a == b) return;
+    int mmax = (level == 0) ? (2 * g->m) : g->m;
+    int *list = g->nbr[a][level];
+    int *cnt  = &g->nbr_cnt[a][level];
+    for (int i = 0; i < *cnt; i++) if (list[i] == b) return;
+    if (*cnt < mmax) { list[(*cnt)++] = b; return; }
+    const float *va = g->vectors + (size_t)a * g->dim;
+    double db = compute_distance(g->distance_kind, va,
+                                 g->vectors + (size_t)b * g->dim, g->dim);
+    int worst = -1; double worst_d = -1.0;
+    for (int i = 0; i < *cnt; i++) {
+        double di = compute_distance(g->distance_kind, va,
+                        g->vectors + (size_t)list[i] * g->dim, g->dim);
+        if (di > worst_d) { worst_d = di; worst = i; }
+    }
+    if (worst >= 0 && db < worst_d) list[worst] = b;
+}
+
+/* Insert node `node` into the graph. Scratch (C,W,eps,sel) preallocated
+ * by the build so we don't malloc per insert. */
+static int graph_insert_locked(HnswGraph *g, int node,
+                               DN *C, DN *W, int *eps, DN *sel)
+{
+    int level = random_level(g);
+    if (graph_alloc_node_locked(g, node, level) != 0) return -1;
+    const float *q = g->vectors + (size_t)node * g->dim;
+
+    if (g->entry < 0) { g->entry = node; g->max_level = level; return 0; }
+
+    int cur = g->entry;
+    for (int l = g->max_level; l > level; l--) {
+        int wn = 0; int e0 = cur;
+        search_layer(g, q, &e0, 1, l, 1, C, W, &wn);
+        if (wn > 0) cur = W[0].node;
+    }
+    int top = (level < g->max_level) ? level : g->max_level;
+    int n_eps = 1; eps[0] = cur;
+    for (int l = top; l >= 0; l--) {
+        int wn = 0;
+        search_layer(g, q, eps, n_eps, l, g->ef_construction, C, W, &wn);
+        /* W is a heap; sort ascending and take the closest as neighbors
+         * + carry them as entry points to the next-lower layer. */
+        for (int i = 0; i < wn; i++) sel[i] = W[i];
+        qsort(sel, (size_t)wn, sizeof(DN), dn_cmp_asc);
+        int mmax = (l == 0) ? (2 * g->m) : g->m;
+        int linked = 0;
+        for (int i = 0; i < wn && linked < mmax; i++) {
+            if (sel[i].node == node) continue;
+            connect_locked(g, node, sel[i].node, l);
+            connect_locked(g, sel[i].node, node, l);
+            linked++;
+        }
+        n_eps = 0;
+        for (int i = 0; i < wn && n_eps < g->ef_construction; i++)
+            eps[n_eps++] = sel[i].node;
+        if (n_eps == 0) { eps[0] = cur; n_eps = 1; }
+    }
+    if (level > g->max_level) { g->max_level = level; g->entry = node; }
+    return 0;
+}
+
+/* Build the graph over the dense store. Caller holds g_mu. On any
+ * allocation failure the links are dropped and the search path falls
+ * back to brute force (graph_built stays 0). */
+static void graph_build_locked(HnswGraph *g)
+{
+    graph_drop_links_locked(g);
+    if (g->count <= 0) { g->graph_built = 1; return; }
+
+    g->node_level = (int *)calloc((size_t)g->count, sizeof(int));
+    g->nbr        = (int ***)calloc((size_t)g->count, sizeof(int **));
+    g->nbr_cnt    = (int **)calloc((size_t)g->count, sizeof(int *));
+    g->visited    = (int *)calloc((size_t)g->count, sizeof(int));
+    DN  *C   = (DN *)malloc(sizeof(DN) * ((size_t)g->count + 1));
+    DN  *W   = (DN *)malloc(sizeof(DN) * ((size_t)g->ef_construction + 2));
+    DN  *sel = (DN *)malloc(sizeof(DN) * ((size_t)g->ef_construction + 2));
+    int *eps = (int *)malloc(sizeof(int) * ((size_t)g->ef_construction + 2));
+    if (!g->node_level || !g->nbr || !g->nbr_cnt || !g->visited ||
+        !C || !W || !sel || !eps) {
+        free(C); free(W); free(sel); free(eps);
+        graph_drop_links_locked(g);
+        return;  /* brute-force fallback */
+    }
+    g->entry = -1; g->max_level = 0; g->visit_stamp = 0;
+    g->rng = 0x9e3779b97f4a7c15ULL ^ ((uint64_t)g->count << 1);
+
+    int ok = 1;
+    for (int i = 0; i < g->count; i++) {
+        if (graph_insert_locked(g, i, C, W, eps, sel) != 0) { ok = 0; break; }
+    }
+    free(C); free(W); free(sel); free(eps);
+    if (ok) g->graph_built = 1;
+    else    graph_drop_links_locked(g);
+}
+
 int hnsw_build(uint32_t table_id, const char *index_name,
                const char *col_name,
                int distance_kind, int m, int ef_construction)
@@ -223,7 +492,10 @@ int hnsw_build(uint32_t table_id, const char *index_name,
     g->dim             = dim;
     g->distance_kind   = distance_kind;
     g->m               = m > 0 ? m : 16;
-    g->ef_construction = ef_construction > 0 ? ef_construction : 64;
+    g->ef_construction = ef_construction > 0 ? ef_construction : 200;
+    g->ef_search       = 64;   /* beam width for queries; tunable later */
+    g->graph_built     = 0;
+    g->entry           = -1;
     pthread_mutex_unlock(&g_mu);
 
     /* Scan the table (outside the lock so we don't block other searches). */
@@ -261,6 +533,12 @@ int hnsw_build(uint32_t table_id, const char *index_name,
 
         free(vec);
     }
+
+    /* Build the graph over the loaded vectors. Failure leaves
+     * graph_built=0, so search transparently uses brute force. */
+    pthread_mutex_lock(&g_mu);
+    graph_build_locked(g);
+    pthread_mutex_unlock(&g_mu);
     return 0;
 }
 
@@ -291,11 +569,47 @@ int hnsw_search_knn(uint32_t table_id, const char *index_name,
         return -1;
     }
 
-    /* Brute-force top-k: rank every vector. A future v1.1 swaps in
-     * greedy-graph search; callers stay on the same interface. */
     int n = g->count;
     if (n == 0) { pthread_mutex_unlock(&g_mu); free(query); return 0; }
 
+    /* Graph traversal — sub-linear path. Skip it for tiny sets (brute
+     * force is exact and just as cheap there) or if the graph didn't
+     * build (alloc failure → graceful fallback). Held under g_mu so the
+     * graph stays stable during the walk. */
+    if (g->graph_built && g->entry >= 0 && n > 2 * g->ef_search) {
+        int ef = (g->ef_search < k) ? k : g->ef_search;
+        DN *C = (DN *)malloc(sizeof(DN) * ((size_t)n + 1));
+        DN *W = (DN *)malloc(sizeof(DN) * ((size_t)ef + 2));
+        if (C && W) {
+            int cur = g->entry;
+            for (int l = g->max_level; l > 0; l--) {
+                int wn = 0;
+                search_layer(g, query, &cur, 1, l, 1, C, W, &wn);
+                if (wn > 0) cur = W[0].node;
+            }
+            int wn = 0;
+            search_layer(g, query, &cur, 1, 0, ef, C, W, &wn);
+            DN *res = (DN *)malloc(sizeof(DN) * ((size_t)wn + 1));
+            if (res) {
+                for (int i = 0; i < wn; i++) res[i] = W[i];
+                qsort(res, (size_t)wn, sizeof(DN), dn_cmp_asc);
+                int out_n = (k < wn) ? k : wn;
+                for (int i = 0; i < out_n; i++) {
+                    out_hits[i].distance = res[i].d;
+                    strncpy(out_hits[i].pk_value, g->pk_keys[res[i].node],
+                            sizeof(out_hits[i].pk_value) - 1);
+                    out_hits[i].pk_value[sizeof(out_hits[i].pk_value)-1] = '\0';
+                }
+                free(res); free(C); free(W);
+                pthread_mutex_unlock(&g_mu);
+                free(query);
+                return out_n;
+            }
+        }
+        free(C); free(W);   /* alloc failure → brute-force fallback below */
+    }
+
+    /* Brute-force top-k fallback. */
     HnswHit *all = (HnswHit *)malloc(sizeof(HnswHit) * (size_t)n);
     if (!all) { pthread_mutex_unlock(&g_mu); free(query); return -1; }
 
