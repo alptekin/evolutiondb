@@ -393,6 +393,37 @@ void AddOrderByColumn(const char *name, int desc)
     }
 }
 
+/* Task 204 — Adım 5: capture the vector ORDER BY shape so the
+ * Select planner can switch into a cosine-sort path. The literal
+ * is the bracketed "[f1,f2,...]" form a VECTOR(N) column carries;
+ * Document.c writes the same shape, so the planner can compare row
+ * vs query without parsing two formats. Only one vector ORDER BY
+ * is supported per query (matches the typical "nearest neighbor"
+ * shape); a second call overwrites the previous capture. */
+void AddOrderByVecExpr(const char *col, const char *vec_literal, int desc)
+{
+    if (!col || !vec_literal) return;
+    strncpy(g_sel.orderByVecColumn, col,
+            sizeof(g_sel.orderByVecColumn) - 1);
+    g_sel.orderByVecColumn[sizeof(g_sel.orderByVecColumn) - 1] = '\0';
+    /* STRING token yytext keeps its surrounding quotes ('[...]'). The
+     * vec parser wants raw `[…]` form, so peel one matching quote pair
+     * off the ends before storing. */
+    const char *vs = vec_literal;
+    size_t vlen = strlen(vs);
+    if (vlen >= 2 &&
+        ((vs[0] == '\'' && vs[vlen - 1] == '\'') ||
+         (vs[0] == '"'  && vs[vlen - 1] == '"'))) {
+        vs += 1;
+        vlen -= 2;
+    }
+    if (vlen >= sizeof(g_sel.orderByVecLiteral))
+        vlen = sizeof(g_sel.orderByVecLiteral) - 1;
+    memcpy(g_sel.orderByVecLiteral, vs, vlen);
+    g_sel.orderByVecLiteral[vlen] = '\0';
+    g_sel.orderByVecDesc = desc ? 1 : 0;
+}
+
 /* ================================================================
  *  Window function parser helpers
  * ================================================================ */

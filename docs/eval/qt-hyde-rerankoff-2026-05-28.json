@@ -1,0 +1,603 @@
+{
+  "config": {
+    "gold_set": "tests/eval/gold_set_v0.yaml",
+    "memory_prefix": "mcp",
+    "embedding_provider": "local",
+    "embedding_model": "BAAI/bge-m3",
+    "rerank": "none",
+    "rerank_model": "n/a",
+    "lexical": "simple",
+    "embedder2": "e5",
+    "embedder2_model": "intfloat/multilingual-e5-large",
+    "query_transform": "hyde",
+    "query_transform_model": "qwen2.5:7b",
+    "search_limit": 10,
+    "warmup": true,
+    "ts": "2026-05-28T19:21:14"
+  },
+  "aggregate": {
+    "query_count": 17,
+    "skipped_unfilled": 12,
+    "skipped_unbounded_k": 3,
+    "recall_at_5": 0.2353,
+    "recall_at_10": 0.2353,
+    "mrr": 0.2647,
+    "ndcg_at_10": 0.2149,
+    "latency_ms_p50": 9921.43,
+    "latency_ms_p95": 15159.78,
+    "latency_ms_mean": 10377.7,
+    "pii_gate": {
+      "total": 5,
+      "passed": 5,
+      "clean": true,
+      "isolation": {
+        "clean": true,
+        "details": [
+          {
+            "probe": "pii keystore",
+            "status": "clean",
+            "returned_keys_count": 20
+          },
+          {
+            "probe": "private key passphrase",
+            "status": "clean",
+            "returned_keys_count": 20
+          },
+          {
+            "probe": "credit_card rule pattern",
+            "status": "clean",
+            "returned_keys_count": 20
+          },
+          {
+            "probe": "evolutiondb-pii rules",
+            "status": "clean",
+            "returned_keys_count": 20
+          },
+          {
+            "probe": "encrypted token wrapped key",
+            "status": "clean",
+            "returned_keys_count": 20
+          }
+        ],
+        "probes": [
+          "pii keystore",
+          "private key passphrase",
+          "credit_card rule pattern",
+          "evolutiondb-pii rules",
+          "encrypted token wrapped key"
+        ]
+      },
+      "failures": []
+    }
+  },
+  "by_category": {
+    "aggregation": {
+      "count": 7,
+      "recall_at_5": 0.2381,
+      "recall_at_10": 0.2381,
+      "mrr": 0.3214,
+      "ndcg_at_10": 0.2506,
+      "latency_ms_p50": 11076.55
+    },
+    "relational": {
+      "count": 1,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "latency_ms_p50": 12533.29
+    },
+    "synthesis": {
+      "count": 1,
+      "recall_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "latency_ms_p50": 4995.94
+    },
+    "recent": {
+      "count": 1,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "latency_ms_p50": 9020.55
+    },
+    "simple_fact": {
+      "count": 2,
+      "recall_at_5": 0.6667,
+      "recall_at_10": 0.6667,
+      "mrr": 0.625,
+      "ndcg_at_10": 0.45,
+      "latency_ms_p50": 8961.71
+    },
+    "pii": {
+      "count": 5,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "latency_ms_p50": 10159.21
+    }
+  },
+  "per_query": [
+    {
+      "id": "q011",
+      "category": "aggregation",
+      "query": "bauhaus da ne kadar para harcadım?",
+      "ideal_keys": [
+        "gmail_msg_19e323d569c2c5ab"
+      ],
+      "returned_keys": [
+        "gmail_msg_19e323d569c2c5ab",
+        "gmail_msg_19e3660008e434f2",
+        "imessage_799856292560310016_0_AKBANK_AKBANK",
+        "imessage_800264117559835008_0_AKBANK_AKBANK",
+        "gmail_msg_19e4b04505cff5f9",
+        "imessage_798881865852075008_0_AKBANK_AKBANK",
+        "gmail_msg_19e63afc08207bbf",
+        "gmail_msg_19e35631f1d9e5ce",
+        "imessage_799691389535648000_0_AXESS_AXESS",
+        "gmail_msg_19e1c7daf4dcf3c7"
+      ],
+      "latency_ms": 4798.32,
+      "recall_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "error": null
+    },
+    {
+      "id": "q010",
+      "category": "relational",
+      "query": "Süreyya son ay kimle yazışıyor",
+      "ideal_keys": [
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4ziTQAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4zidwAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwAChR4vjQAAAA=="
+      ],
+      "returned_keys": [
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4ziZQAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4ziUgAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4ziZAAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACi9Wj_AAAAA==",
+        "browser_visit_chrome_Chrome_Default_3bcbb86b1513fab9",
+        "browser_visit_chrome_Chrome_Default_bf71f569258f1bd9",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gsYwAAAA==",
+        "browser_visit_chrome_Chrome_Default_2ae9bb033b5ab2fe",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACiOePkwAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACfk8_TQAAAA=="
+      ],
+      "latency_ms": 12533.29,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null
+    },
+    {
+      "id": "q011_synth",
+      "category": "synthesis",
+      "query": "bauhaus da ne kadar para harcadım?",
+      "ideal_keys": [
+        "gmail_msg_19e323d569c2c5ab"
+      ],
+      "returned_keys": [
+        "gmail_msg_19e323d569c2c5ab",
+        "gmail_msg_19e3660008e434f2",
+        "imessage_799856292560310016_0_AKBANK_AKBANK",
+        "imessage_800264117559835008_0_AKBANK_AKBANK",
+        "gmail_msg_19e4b04505cff5f9",
+        "imessage_798881865852075008_0_AKBANK_AKBANK",
+        "gmail_msg_19e63afc08207bbf",
+        "gmail_msg_19e35631f1d9e5ce",
+        "imessage_799691389535648000_0_AXESS_AXESS",
+        "gmail_msg_19e1c7daf4dcf3c7"
+      ],
+      "latency_ms": 4995.94,
+      "recall_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "error": null
+    },
+    {
+      "id": "q015",
+      "category": "aggregation",
+      "query": "son production release ne zaman çıkıldı ve hangi servisler güncellendi",
+      "ideal_keys": [
+        "browser_visit_chrome_Chrome_Default_0a954bf9c24d0c75",
+        "browser_visit_chrome_Chrome_Default_1d8c8eeb7f0c28c4",
+        "browser_visit_chrome_Chrome_Default_1f1ec74494be3fa8",
+        "browser_visit_chrome_Chrome_Default_16b167e5c48344b7",
+        "browser_visit_chrome_Chrome_Default_01744fa23b2660de",
+        "browser_visit_chrome_Chrome_Default_5343a4d6b6909d13"
+      ],
+      "returned_keys": [
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE6EQAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4ziaAAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4zicwAAAA==",
+        "browser_visit_chrome_Chrome_Default_16b167e5c48344b7",
+        "browser_visit_chrome_Chrome_Default_67d1e528709c2c92",
+        "browser_visit_chrome_Chrome_Default_ef57f35d991158c8",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACh0gr7gAAAA==",
+        "gmail_msg_19e4484347b06f9c",
+        "gmail_msg_19e3c29ada939d5e",
+        "browser_visit_chrome_Chrome_Default_bf71f569258f1bd9"
+      ],
+      "latency_ms": 9485.81,
+      "recall_at_5": 0.16666666666666666,
+      "recall_at_10": 0.16666666666666666,
+      "mrr": 0.25,
+      "ndcg_at_10": 0.13032376591037065,
+      "error": null
+    },
+    {
+      "id": "q016",
+      "category": "recent",
+      "query": "yakın zamanlarda oynadığım bilgisayar oyununun ismi nedir",
+      "ideal_keys": [
+        "browser_visit_chrome_Chrome_Default_063a84e9724486d8",
+        "browser_visit_chrome_Chrome_Default_161907e1931bbc1f",
+        "browser_visit_chrome_Chrome_Default_0585d12cb0c54837",
+        "browser_visit_chrome_Chrome_Default_2c2b78fbeb814e82",
+        "browser_visit_chrome_Chrome_Default_20431f5b5aa00194"
+      ],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_3ce8db98768d2abe",
+        "browser_visit_chrome_Chrome_Default_2fdaad7d32ac0a8e",
+        "browser_visit_chrome_Chrome_Default_4053bf1c3b4d6dd5",
+        "browser_visit_chrome_Chrome_Default_7959e5332cb62664",
+        "browser_visit_chrome_Chrome_Default_d4776a87a063212c",
+        "browser_visit_chrome_Chrome_Default_5d22153f9563201c",
+        "browser_visit_chrome_Chrome_Default_ba707844d98f99dd",
+        "browser_visit_chrome_Chrome_Default_8c71ed547bf116fd",
+        "browser_visit_chrome_Chrome_Default_67d1e528709c2c92",
+        "browser_visit_chrome_Chrome_Default_44e6f16d8bc89836"
+      ],
+      "latency_ms": 9020.55,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null
+    },
+    {
+      "id": "q017",
+      "category": "aggregation",
+      "query": "benim sevdiğim müzik türü nedir",
+      "ideal_keys": [
+        "youtube_liked_8SbUC-UaAxE",
+        "youtube_liked_Lo2qQmj0_h4",
+        "youtube_liked_lDK9QqIzhwk",
+        "youtube_liked_B84ms7dz3tQ",
+        "youtube_liked_6W2uxVE8vtQ",
+        "youtube_liked_KMRWe-zNAi8"
+      ],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_06c6460e5867d0d5",
+        "gmail_msg_19e1ceb901865358",
+        "browser_visit_chrome_Chrome_Default_93b1319431b399c2",
+        "gmail_msg_19e59de5b6eb4f87",
+        "gmail_msg_19e3a43b82a435de",
+        "browser_visit_chrome_Chrome_Default_904b599aff700175",
+        "browser_visit_chrome_Chrome_Default_ab871d03b8636c33",
+        "browser_visit_chrome_Chrome_Default_3fb6068f05575828",
+        "browser_visit_chrome_Chrome_Default_878a1e6d16617ddb",
+        "browser_visit_chrome_Chrome_Default_caf68241a8a48d94"
+      ],
+      "latency_ms": 14328.07,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null
+    },
+    {
+      "id": "q019",
+      "category": "aggregation",
+      "query": "yeni aldığım evde doğalgazın ilk aboneliğini suyu ve elektriği başlattım mı",
+      "ideal_keys": [
+        "imessage_800558221437283968_0_EDRNEBLD_EDRNEBLD",
+        "imessage_800558189386482944_0_EDRNEBLD_EDRNEBLD"
+      ],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_3784967b8edfc70c",
+        "browser_visit_chrome_Chrome_Default_bf051a547431a434",
+        "browser_visit_chrome_Chrome_Default_c6bf1edfd865d3c6",
+        "browser_visit_chrome_Chrome_Default_94cc811709758f55",
+        "browser_visit_chrome_Chrome_Default_9d69fa28b758b520",
+        "browser_visit_chrome_Chrome_Default_9e31f2db63b302f1",
+        "browser_visit_chrome_Chrome_Default_1e592cdc7e05b8f8",
+        "browser_visit_chrome_Chrome_Default_dc86e074f7c017e1",
+        "browser_visit_chrome_Chrome_Default_d1b8cd88d116c5fb",
+        "browser_visit_chrome_Chrome_Default_52c4225080cca60a"
+      ],
+      "latency_ms": 13801.67,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null
+    },
+    {
+      "id": "q020",
+      "category": "simple_fact",
+      "query": "son mezun olduğum okul hangisi",
+      "ideal_keys": [
+        "gmail_msg_19e2619106acea85",
+        "imessage_800180888226588032_0_HALICUNI_HALICUNI",
+        "imessage_800281268298312960_0_HALICUNI_HALICUNI"
+      ],
+      "returned_keys": [
+        "gmail_msg_19e2619106acea85",
+        "browser_visit_chrome_Chrome_Default_bf71f569258f1bd9",
+        "browser_visit_chrome_Chrome_Default_5e00b730240211e1",
+        "browser_visit_chrome_Chrome_Default_3bcbb86b1513fab9",
+        "gmail_msg_19e2683d14b63e9a",
+        "browser_visit_chrome_Chrome_Default_47b28da19e40d79e",
+        "browser_visit_chrome_Chrome_Default_0814c1a3a08711b4",
+        "browser_visit_chrome_Chrome_Default_8fe07d83e97fd407",
+        "browser_visit_chrome_Chrome_Default_e14e29a720e7982d",
+        "browser_visit_chrome_Chrome_Default_03eeb1c1cbf446e0"
+      ],
+      "latency_ms": 9921.43,
+      "recall_at_5": 0.3333333333333333,
+      "recall_at_10": 0.3333333333333333,
+      "mrr": 1.0,
+      "ndcg_at_10": 0.46927872602275644,
+      "error": null
+    },
+    {
+      "id": "q021",
+      "category": "aggregation",
+      "query": "internet geçmişime göre bende hangi hastalık olabilir",
+      "ideal_keys": [
+        "browser_visit_chrome_Chrome_Default_2c79e641ccaceae1",
+        "youtube_liked_6xQbfrlzD3g",
+        "youtube_sub_UCS7TO_Z-lxSIFjTdCbnwk_A",
+        "browser_visit_chrome_Chrome_Default_02a1e6257da7dd7d",
+        "imessage_799929600682963968_0_MEMORIAL_MEMORIAL",
+        "imessage_800792444388043008_0_MEDICANA_MEDICANA"
+      ],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_5974dd62fb5a2181",
+        "browser_visit_chrome_Chrome_Default_0e0e206110edc7d9",
+        "browser_visit_chrome_Chrome_Default_0e4e2e591c3930c1",
+        "browser_visit_chrome_Chrome_Default_5b90248f64bbb0cd",
+        "browser_visit_chrome_Chrome_Default_5d9377012d56b38d",
+        "browser_visit_chrome_Chrome_Default_f32f14742e400d9b",
+        "browser_visit_chrome_Chrome_Default_7772ef0a2abe595a",
+        "browser_visit_chrome_Chrome_Default_1518538086ad27c5",
+        "browser_visit_chrome_Chrome_Default_464f1311e7bf3d0d",
+        "browser_visit_chrome_Chrome_Default_b56a23620f88c126"
+      ],
+      "latency_ms": 9416.07,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null
+    },
+    {
+      "id": "q022",
+      "category": "aggregation",
+      "query": "hangi bisikleti alacağımı düşünüyorsun",
+      "ideal_keys": [
+        "browser_visit_chrome_Chrome_Default_fdac13d9f39fc995",
+        "browser_visit_chrome_Chrome_Default_1d3fe3365d6c6311",
+        "browser_visit_chrome_Chrome_Default_436075af61a00f11",
+        "browser_visit_chrome_Chrome_Default_a237caa9da4c3396",
+        "browser_visit_chrome_Chrome_Default_809ec5c18c540f3a",
+        "browser_visit_chrome_Chrome_Default_19ce4aeae8965829"
+      ],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_fdac13d9f39fc995",
+        "browser_visit_chrome_Chrome_Default_809ec5c18c540f3a",
+        "imessage_799328007098543104_0_AKBANK_AKBANK",
+        "browser_visit_chrome_Chrome_Default_436075af61a00f11",
+        "browser_visit_chrome_Chrome_Default_f5729f56f94cc748",
+        "browser_visit_chrome_Chrome_Default_e4330f1b35750506",
+        "browser_visit_chrome_Chrome_Default_2d679f76406a4183",
+        "browser_visit_chrome_Chrome_Default_b276c6399bf7d9a8",
+        "browser_visit_chrome_Chrome_Default_13e0c66f757f0a9c",
+        "browser_visit_chrome_Chrome_Default_68de56dfaa4dfeb5"
+      ],
+      "latency_ms": 15159.78,
+      "recall_at_5": 0.5,
+      "recall_at_10": 0.5,
+      "mrr": 1.0,
+      "ndcg_at_10": 0.6238470455881189,
+      "error": null
+    },
+    {
+      "id": "q023",
+      "category": "simple_fact",
+      "query": "şirketin adresi nedir",
+      "ideal_keys": [
+        "note_x-coredata:__4422D44F-73BD-4CE0-9ECC-A8EA483D5AE9_ICNote_p364"
+      ],
+      "returned_keys": [
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE6fgAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE6DQAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE6cQAAAA==",
+        "note_x-coredata:__4422D44F-73BD-4CE0-9ECC-A8EA483D5AE9_ICNote_p364",
+        "imessage_798981223395484032_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_798981764667351936_0_ZIRAATBANK_ZIRAATBANK",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE6hQAAAA==",
+        "browser_visit_chrome_Chrome_Default_8297bd0c63bae453",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACf4ziewAAAA==",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE6hgAAAA=="
+      ],
+      "latency_ms": 8961.71,
+      "recall_at_5": 1.0,
+      "recall_at_10": 1.0,
+      "mrr": 0.25,
+      "ndcg_at_10": 0.43067655807339306,
+      "error": null
+    },
+    {
+      "id": "q024",
+      "category": "aggregation",
+      "query": "yeni satın aldığım evin adresi nedir",
+      "ideal_keys": [
+        "browser_visit_chrome_Chrome_Default_055a2efb08acfc97",
+        "imessage_800558221437283968_0_EDRNEBLD_EDRNEBLD",
+        "imessage_800558189386482944_0_EDRNEBLD_EDRNEBLD"
+      ],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_f62c1371522b509e",
+        "browser_visit_chrome_Chrome_Default_164bb760970362ef",
+        "browser_visit_chrome_Chrome_Default_90a5626a4fb02f04",
+        "browser_visit_chrome_Chrome_Default_bf051a547431a434",
+        "browser_visit_chrome_Chrome_Default_23b7da62779833e9",
+        "browser_visit_chrome_Chrome_Default_5552aa20fd5e5226",
+        "browser_visit_chrome_Chrome_Default_dd0cf697adf7aa5d",
+        "imessage_800534346746258944_0_EDRNEBLD_EDRNEBLD",
+        "browser_visit_chrome_Chrome_Default_dd438bc9c3c73671",
+        "imessage_798718365157217920_0_AXESS_AXESS"
+      ],
+      "latency_ms": 11076.55,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null
+    },
+    {
+      "id": "q027",
+      "category": "pii",
+      "query": "kredi kart numaram nedir",
+      "ideal_keys": [],
+      "returned_keys": [
+        "outlook_msg_AAMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAAAAAC6NLYjcTx3SZpv5IA870bzBwCz6LvPy7VMSblJvbkL1blLAAJXeYoBAACz6LvPy7VMSblJvbkL1blLAAKQs1tJAAA=",
+        "imessage_799146804677981952_0_Juzdan_Juzdan",
+        "imessage_799138161482724992_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_799747287520852992_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_799138426944138112_0_ZIRAATBANK_ZIRAATBANK",
+        "outlook_msg_AAMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAAAAAC6NLYjcTx3SZpv5IA870bzBwCz6LvPy7VMSblJvbkL1blLAAJXeYoBAACz6LvPy7VMSblJvbkL1blLAAKNWnzaAAA=",
+        "note_x-coredata:__4422D44F-73BD-4CE0-9ECC-A8EA483D5AE9_ICNote_p281",
+        "imessage_799411685712947072_0_AKBANK_AKBANK",
+        "imessage_798799409233207936_0_AKBANK_AKBANK",
+        "imessage_801232736604604928_0_AKBANK_AKBANK"
+      ],
+      "latency_ms": 16501.01,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null,
+      "pii_check": true,
+      "pii_leaks": [],
+      "pii_clean": true
+    },
+    {
+      "id": "q028",
+      "category": "pii",
+      "query": "TC kimlik numaram nedir",
+      "ideal_keys": [],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_17964cd4b23a1799",
+        "browser_visit_chrome_Chrome_Default_75fa92015479ad04",
+        "browser_visit_chrome_Chrome_Default_2db15f108679d650",
+        "browser_visit_chrome_Chrome_Default_a3cd07786fac207f",
+        "browser_visit_chrome_Chrome_Default_dda9d324e0e56b63",
+        "browser_visit_chrome_Chrome_Default_8fe07d83e97fd407",
+        "note_x-coredata:__4422D44F-73BD-4CE0-9ECC-A8EA483D5AE9_ICNote_p280",
+        "browser_visit_chrome_Chrome_Default_281d804de0b89c2e",
+        "gmail_msg_19e463f650ac07dd",
+        "browser_visit_chrome_Chrome_Default_9630a739fa09c330"
+      ],
+      "latency_ms": 10304.52,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null,
+      "pii_check": true,
+      "pii_leaks": [],
+      "pii_clean": true
+    },
+    {
+      "id": "q029",
+      "category": "pii",
+      "query": "iban numaram nedir",
+      "ideal_keys": [],
+      "returned_keys": [
+        "imessage_799138161482724992_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_799138426944138112_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_800797216764567936_0_ZIRAATBANK_ZIRAATBANK",
+        "note_x-coredata:__4422D44F-73BD-4CE0-9ECC-A8EA483D5AE9_ICNote_p61",
+        "imessage_798974823087310976_0_ZIRAATBANK_ZIRAATBANK",
+        "note_x-coredata:__4422D44F-73BD-4CE0-9ECC-A8EA483D5AE9_ICNote_p174",
+        "imessage_799930987440916992_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_800533869254029056_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_798976582812706048_0_ZIRAATBANK_ZIRAATBANK",
+        "outlook_msg_AAMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAAAAAC6NLYjcTx3SZpv5IA870bzBwCz6LvPy7VMSblJvbkL1blLAAJXeYoBAACz6LvPy7VMSblJvbkL1blLAAKHSBhPAAA="
+      ],
+      "latency_ms": 10159.21,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null,
+      "pii_check": true,
+      "pii_leaks": [],
+      "pii_clean": true
+    },
+    {
+      "id": "q030",
+      "category": "pii",
+      "query": "kayıtlı e-posta adresim nedir",
+      "ideal_keys": [],
+      "returned_keys": [
+        "browser_visit_chrome_Chrome_Default_76a821f112bfe53f",
+        "browser_visit_chrome_Chrome_Default_3e6e0a93eac78006",
+        "browser_visit_chrome_Chrome_Default_67c22ef1f31a752a",
+        "browser_visit_chrome_Chrome_Default_34bc300c32833532",
+        "browser_visit_chrome_Chrome_Default_f62c1371522b509e",
+        "browser_visit_chrome_Chrome_Default_765e4b0a62d9a89a",
+        "browser_visit_chrome_Chrome_Default_cad6a75512f8dd0b",
+        "browser_visit_chrome_Chrome_Default_cb7378ff62edbd36",
+        "browser_visit_chrome_Chrome_Default_1274d06aa1ccae13",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE6hQAAAA=="
+      ],
+      "latency_ms": 8148.27,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null,
+      "pii_check": true,
+      "pii_leaks": [],
+      "pii_clean": true
+    },
+    {
+      "id": "q031",
+      "category": "pii",
+      "query": "telefon numaram nedir",
+      "ideal_keys": [],
+      "returned_keys": [
+        "imessage_799138161482724992_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_799138426944138112_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_798974827502717056_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_798974828789828992_0_ZIRAATBANK_ZIRAATBANK",
+        "imessage_800534346746258944_0_EDRNEBLD_EDRNEBLD",
+        "imessage_800370434276379008_0_BSH_BSH",
+        "imessage_799361506319497984_0_SAGLIKBKNLG_SAGLIKBKNLG",
+        "outlook_msg_AQMkADZjN2QzYTAxLTc4NGItNDc0OS04MTZiLWNlMjQwZTVlMjdhNwBGAAADujS2I3E8d0mab_SAPO9G8wcAs_i7z8u1TEm5Sb25C9W5SwAAAgEMAAAAs_i7z8u1TEm5Sb25C9W5SwACgvE5qwAAAA==",
+        "browser_visit_chrome_Chrome_Default_bf051a547431a434",
+        "browser_visit_chrome_Chrome_Default_6ca56fdff18d2563"
+      ],
+      "latency_ms": 7808.64,
+      "recall_at_5": 0.0,
+      "recall_at_10": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_10": 0.0,
+      "error": null,
+      "pii_check": true,
+      "pii_leaks": [],
+      "pii_clean": true
+    }
+  ]
+}

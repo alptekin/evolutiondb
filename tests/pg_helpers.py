@@ -5,14 +5,15 @@ Provides auth-aware connection functions that handle the new
 CleartextPassword authentication flow.
 """
 
+import os
 import socket
 import struct
 
-HOST = "127.0.0.1"
-PORT = 5433
+HOST = os.environ.get("EVOSQL_PG_HOST", "127.0.0.1")
+PORT = int(os.environ.get("EVOSQL_PG_PORT", "5433"))
 
-DEFAULT_USER = "admin"
-DEFAULT_PASS = "admin"
+DEFAULT_USER = os.environ.get("EVOSQL_USER", "admin")
+DEFAULT_PASS = os.environ.get("EVOSQL_PASS", "admin")
 
 
 def _send(sock, data):
