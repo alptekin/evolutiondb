@@ -127,9 +127,9 @@ int ReadCheckConstraintsWithNames(const char *tblName, char constraints[][1024],
     if (tapi_resolve(tblName, &td, NULL, NULL) < 0)
         return 0;
 
-    ConstraintDesc descs[32];
-    int total = cat_list_constraints(td.table_id, descs, 32);
-    if (total <= 0) return 0;
+    ConstraintDesc *descs = NULL;
+    int total = cat_list_constraints_all(td.table_id, &descs);
+    if (total <= 0) { free(descs); return 0; }
 
     int count = 0;
     for (int i = 0; i < total && count < maxConstraints; i++) {
@@ -143,6 +143,7 @@ int ReadCheckConstraintsWithNames(const char *tblName, char constraints[][1024],
             count++;
         }
     }
+    free(descs);
     return count;
 }
 
@@ -2206,8 +2207,9 @@ int AlterTableDropColumn(const char *tableName, const char *colName)
     }
 
     /* Reject if column has secondary index */
-    IndexDesc indexes[16];
-    int nidx = cat_list_indexes(td.table_id, indexes, 16);
+    IndexDesc *indexes = NULL;
+    int nidx = cat_list_indexes_all(td.table_id, &indexes);
+    if (nidx < 0) nidx = 0;
     for (int i = 0; i < nidx; i++) {
         if (indexes[i].index_type == 'P') continue; /* skip PK index */
         /* Check if dropped column appears in index col_list */
@@ -2223,15 +2225,18 @@ int AlterTableDropColumn(const char *tableName, const char *colName)
                          colName, indexes[i].index_name);
                 g_err.error = 1;
                 EVOSQL_SET_SQLSTATE("2BP01");
+                free(indexes);
                 return -1;
             }
             tok = strtok_r(NULL, ",", &saveptr);
         }
     }
+    free(indexes);
 
     /* Reject if FK references this column */
-    ConstraintDesc constraints[32];
-    int ncon = cat_list_constraints(td.table_id, constraints, 32);
+    ConstraintDesc *constraints = NULL;
+    int ncon = cat_list_constraints_all(td.table_id, &constraints);
+    if (ncon < 0) ncon = 0;
     for (int i = 0; i < ncon; i++) {
         if (constraints[i].constraint_type == 'F') {
             /* Check local cols in definition */
@@ -2249,6 +2254,7 @@ int AlterTableDropColumn(const char *tableName, const char *colName)
                              colName, constraints[i].constraint_name);
                     g_err.error = 1;
                     EVOSQL_SET_SQLSTATE("2BP01");
+                    free(constraints);
                     return -1;
                 }
                 tok = strtok_r(NULL, ",", &saveptr);
@@ -2268,12 +2274,14 @@ int AlterTableDropColumn(const char *tableName, const char *colName)
                              colName, constraints[i].constraint_name);
                     g_err.error = 1;
                     EVOSQL_SET_SQLSTATE("2BP01");
+                    free(constraints);
                     return -1;
                 }
                 tok = strtok_r(NULL, ",", &saveptr);
             }
         }
     }
+    free(constraints);
 
     /* Mark column as dropped */
     if (cat_drop_column(td.table_id, cols[target].col_ordinal) < 0) {
@@ -2342,8 +2350,9 @@ int AlterTableRenameColumn(const char *tableName, const char *oldName, const cha
     cat_update_column(td.table_id, cols[target].col_ordinal, &cols[target]);
 
     /* Update secondary index col_list references */
-    IndexDesc indexes[16];
-    int nidx = cat_list_indexes(td.table_id, indexes, 16);
+    IndexDesc *indexes = NULL;
+    int nidx = cat_list_indexes_all(td.table_id, &indexes);
+    if (nidx < 0) nidx = 0;
     for (int i = 0; i < nidx; i++) {
         char colList[256];
         strncpy(colList, indexes[i].col_list, 255);
@@ -2369,6 +2378,7 @@ int AlterTableRenameColumn(const char *tableName, const char *oldName, const cha
                                       indexes[i].col_list);
         }
     }
+    free(indexes);
 
     /* Invalidate column cache */
     { extern void col_cache_invalidate(uint32_t);

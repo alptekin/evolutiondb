@@ -204,16 +204,19 @@ int DropTriggerProcess(void)
 
     /* Find trigger across all tables — scan by name suffix */
     /* For simplicity, iterate all tables' triggers to find by name */
-    TableDesc tables[256];
-    int ntables = cat_list_tables(schDesc.schema_id, tables, 256);
+    TableDesc *tables = NULL;
+    int ntables = cat_list_tables_all(schDesc.schema_id, &tables);
+    if (ntables < 0) ntables = 0;
     for (int t = 0; t < ntables; t++) {
         TriggerDesc td;
         if (cat_find_trigger(tables[t].table_id, g_trig.dropName, &td) == 0) {
             cat_drop_trigger(tables[t].table_id, g_trig.dropName);
+            free(tables);
             printf("DROP TRIGGER\n");
             return 0;
         }
     }
+    free(tables);
 
     if (g_trig.dropIfExists) {
         printf("DROP TRIGGER\n");
@@ -248,16 +251,19 @@ int AlterTriggerProcess(void)
     }
 
     /* Find trigger across tables */
-    TableDesc tables[256];
-    int ntables = cat_list_tables(schDesc.schema_id, tables, 256);
+    TableDesc *tables = NULL;
+    int ntables = cat_list_tables_all(schDesc.schema_id, &tables);
+    if (ntables < 0) ntables = 0;
     for (int i = 0; i < ntables; i++) {
         TriggerDesc td;
         if (cat_find_trigger(tables[i].table_id, g_trig.dropName, &td) == 0) {
             cat_update_trigger_enabled(tables[i].table_id, g_trig.dropName, enable);
+            free(tables);
             printf("ALTER TRIGGER\n");
             return 0;
         }
     }
+    free(tables);
 
     snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
              "trigger \"%s\" does not exist", g_trig.dropName);
@@ -393,9 +399,9 @@ int evo_fire_triggers(const char *table_name, char timing, char event,
         return 0; /* Table not found — skip silently */
 
     /* List triggers for this table */
-    TriggerDesc triggers[16];
-    int ntrig = cat_list_triggers_for_table(td.table_id, triggers, 16);
-    if (ntrig <= 0) return 0;
+    TriggerDesc *triggers = NULL;
+    int ntrig = cat_list_triggers_for_table_all(td.table_id, &triggers);
+    if (ntrig <= 0) { free(triggers); return 0; }
 
     /* Filter by timing and event */
     for (int t = 0; t < ntrig; t++) {
@@ -553,6 +559,7 @@ int evo_fire_triggers(const char *table_name, char timing, char event,
                 g_err.error = 1;
                 g_trigger_depth--;
                 free(stmts);
+                free(triggers);
                 return -1;
             }
         }
@@ -560,6 +567,7 @@ int evo_fire_triggers(const char *table_name, char timing, char event,
         g_trigger_depth--;
         free(stmts);
     }
+    free(triggers);
     return 0;
 }
 

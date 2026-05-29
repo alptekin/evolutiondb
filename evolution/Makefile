@@ -54,9 +54,16 @@ SRCS = main.c \
        db/tuple_format.c \
        db/toast.c \
        db/hash_idx.c \
+       db/hnsw.c \
        db/page_crypt.c \
        db/mvcc.c \
        db/vmap.c \
+       db/wal.c \
+       db/lock_mgr.c \
+       db/table_lock.c \
+       db/conflict_guard.c \
+       db/auto_reclaim.c \
+       db/Notify.c \
        db/Procedure.c \
        db/Trigger.c \
        db/Json.c \
@@ -71,7 +78,8 @@ SRCS = main.c \
        db/mongo_filter.c \
        db/Graph.c \
        db/Entity.c \
-       db/dml_profile.c
+       db/dml_profile.c \
+       db/standalone_stubs.c
 
 OBJS = $(SRCS:.c=.o)
 

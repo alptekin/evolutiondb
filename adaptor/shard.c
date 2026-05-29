@@ -31,20 +31,24 @@ int shard_resolve(const TableDesc *td, const char *key_value,
 
     if (td->shard_type == SHARD_RANGE) {
         /* Range: load shard descriptors, compare bounds */
-        ShardDesc shards[7];
-        int ns = cat_list_shards(td->table_id, shards, 7);
+        ShardDesc *shards = NULL;
+        int ns = cat_list_shards_all(td->table_id, &shards);
+        if (ns < 0) ns = 0;
         for (int i = 0; i < ns; i++) {
             if (shards[i].range_bound[0] == '\0') {
                 /* MAXVALUE — always matches */
                 shard_ordinals[0] = shards[i].shard_ordinal;
+                free(shards);
                 return 1;
             }
             if (strcmp(key_value, shards[i].range_bound) < 0) {
                 shard_ordinals[0] = shards[i].shard_ordinal;
+                free(shards);
                 return 1;
             }
         }
         /* Past all bounds — should not happen with MAXVALUE partition */
+        free(shards);
         return 0;
     }
 
@@ -276,9 +280,9 @@ int shard_scatter_gather(const TableDesc *td, const char *sql,
     extern int dist_get_my_id(void);
     extern void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx);
 
-    ShardDesc shards[7];
-    int ns = cat_list_shards(td->table_id, shards, 7);
-    if (ns <= 0) return -1;
+    ShardDesc *shards = NULL;
+    int ns = cat_list_shards_all(td->table_id, &shards);
+    if (ns <= 0) { free(shards); return -1; }
 
     int my_id = dist_is_enabled() ? dist_get_my_id() : 0;
     int first_result = 1;
@@ -301,6 +305,7 @@ int shard_scatter_gather(const TableDesc *td, const char *sql,
             result_set_error(merged_rs, shard_rs.error_sqlstate,
                              shard_rs.error_message);
             result_free(&shard_rs);
+            free(shards);
             return -1;
         }
 
@@ -330,6 +335,7 @@ int shard_scatter_gather(const TableDesc *td, const char *sql,
         result_free(&shard_rs);
     }
 
+    free(shards);
     snprintf(merged_rs->command_tag, sizeof(merged_rs->command_tag),
              "SELECT %d", total_rows);
     return 0;

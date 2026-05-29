@@ -3982,6 +3982,172 @@ int cat_list_subscriptions(SubscriptionDesc *out, int max)
     return count;
 }
 
+/* ----------------------------------------------------------------
+ *  Truncation-free list variants.
+ *
+ *  The capped cat_list_* functions above stop at `count < max` and return
+ *  the truncated count with no signal, so a schema/table that exceeds the
+ *  cap silently loses entries (incomplete pg_catalog views, un-reclaimed or
+ *  orphaned tables, missed constraints/FKs/triggers). These *_all variants
+ *  walk the catalog twice (count, then fill) and hand back a heap array
+ *  sized to the exact count. Return value = count (>= 0), or -1 on OOM. On
+ *  success the caller owns *out and must free() it; on count 0, *out is set
+ *  to NULL (free(NULL) is safe). Safe because a statement's two passes run
+ *  under g_parse_lock, so the catalog can't mutate between them.
+ *
+ *  `keep` (optional) filters entries in both passes — used by the
+ *  referencing-FK variant; NULL keeps every entry.
+ * ---------------------------------------------------------------- */
+static int cat_list_all_generic(int tree_slot, const char *prefix,
+                                size_t elem_size,
+                                void (*deser)(const char *rec, const char *key,
+                                              void *slot),
+                                int (*keep)(const void *slot),
+                                void **out)
+{
+    *out = NULL;
+    size_t plen = prefix ? strlen(prefix) : 0;
+    BTree2Cursor cur;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    char record[CAT_MAX_RECORD_LEN];
+    /* scratch slot for the filter pass, sized to the largest descriptor */
+    char scratch[sizeof(TableDesc) > sizeof(ConstraintDesc)
+                 ? sizeof(TableDesc) : sizeof(ConstraintDesc)];
+
+    /* pass 1: count matching entries */
+    int n = 0;
+    int rc = prefix ? bt2_cursor_seek(&g_cat_trees[tree_slot], prefix, &cur)
+                    : bt2_cursor_first(&g_cat_trees[tree_slot], &cur);
+    if (rc == 0) {
+        while (bt2_cursor_next(&cur, key, &rid) == 0) {
+            if (prefix && strncmp(key, prefix, plen) != 0) break;
+            if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+            if (keep) {
+                deser(record, key, scratch);
+                if (!keep(scratch)) continue;
+            }
+            n++;
+        }
+    }
+    if (n <= 0) return 0;
+
+    char *arr = (char *)malloc((size_t)n * elem_size);
+    if (!arr) return -1;
+
+    /* pass 2: fill (bounded by n, so it can never overrun the array) */
+    int c = 0;
+    rc = prefix ? bt2_cursor_seek(&g_cat_trees[tree_slot], prefix, &cur)
+                : bt2_cursor_first(&g_cat_trees[tree_slot], &cur);
+    if (rc == 0) {
+        while (c < n && bt2_cursor_next(&cur, key, &rid) == 0) {
+            if (prefix && strncmp(key, prefix, plen) != 0) break;
+            if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+            void *slot = arr + (size_t)c * elem_size;
+            deser(record, key, slot);
+            if (keep && !keep(slot)) continue;   /* skip filtered; reuse slot */
+            c++;
+        }
+    }
+    *out = arr;
+    return c;
+}
+
+/* deser adapters — uniform (rec,key,slot) signature over the varied
+ * deserialize_* prototypes. */
+static void deser_table_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_table(r, (TableDesc *)s); }
+static void deser_schema_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_schema(r, (SchemaDesc *)s); }
+static void deser_database_cb(const char *r, const char *k, void *s)
+{ deserialize_database(r, k, (DatabaseDesc *)s); }
+static void deser_index_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_index(r, (IndexDesc *)s); }
+static void deser_constraint_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_constraint(r, (ConstraintDesc *)s); }
+static void deser_index_stats_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_index_stats(r, (IndexStatsDesc *)s); }
+static void deser_trigger_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_trigger(r, (TriggerDesc *)s); }
+static void deser_subscription_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_subscription(r, (SubscriptionDesc *)s); }
+static void deser_shard_cb(const char *r, const char *k, void *s)
+{ (void)k; deserialize_shard(r, (ShardDesc *)s); }
+
+static __thread uint32_t g_ref_fk_filter_id;
+static int keep_referencing_fk(const void *slot)
+{
+    const ConstraintDesc *c = (const ConstraintDesc *)slot;
+    return c->constraint_type == 'F' && c->ref_table_id == g_ref_fk_filter_id;
+}
+
+int cat_list_tables_all(uint32_t schema_id, TableDesc **out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(schema_id, prefix, sizeof(prefix));
+    return cat_list_all_generic(CAT_SYS_TABLES, prefix, sizeof(TableDesc),
+                                deser_table_cb, NULL, (void **)out);
+}
+int cat_list_schemas_all(uint32_t db_id, SchemaDesc **out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(db_id, prefix, sizeof(prefix));
+    return cat_list_all_generic(CAT_SYS_SCHEMAS, prefix, sizeof(SchemaDesc),
+                                deser_schema_cb, NULL, (void **)out);
+}
+int cat_list_databases_all(DatabaseDesc **out)
+{
+    return cat_list_all_generic(CAT_SYS_DATABASES, NULL, sizeof(DatabaseDesc),
+                                deser_database_cb, NULL, (void **)out);
+}
+int cat_list_indexes_all(uint32_t table_id, IndexDesc **out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+    return cat_list_all_generic(CAT_SYS_INDEXES, prefix, sizeof(IndexDesc),
+                                deser_index_cb, NULL, (void **)out);
+}
+int cat_list_constraints_all(uint32_t table_id, ConstraintDesc **out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+    return cat_list_all_generic(CAT_SYS_CONSTRAINTS, prefix, sizeof(ConstraintDesc),
+                                deser_constraint_cb, NULL, (void **)out);
+}
+int cat_list_referencing_fks_all(uint32_t ref_table_id, ConstraintDesc **out)
+{
+    g_ref_fk_filter_id = ref_table_id;
+    return cat_list_all_generic(CAT_SYS_CONSTRAINTS, NULL, sizeof(ConstraintDesc),
+                                deser_constraint_cb, keep_referencing_fk,
+                                (void **)out);
+}
+int cat_list_index_stats_all(uint32_t table_id, IndexStatsDesc **out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    snprintf(prefix, sizeof(prefix), "%010u:I:", table_id);
+    return cat_list_all_generic(CAT_SYS_TABLE_STATS, prefix, sizeof(IndexStatsDesc),
+                                deser_index_stats_cb, NULL, (void **)out);
+}
+int cat_list_triggers_for_table_all(uint32_t table_id, TriggerDesc **out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+    return cat_list_all_generic(CAT_SYS_TRIGGERS, prefix, sizeof(TriggerDesc),
+                                deser_trigger_cb, NULL, (void **)out);
+}
+int cat_list_subscriptions_all(SubscriptionDesc **out)
+{
+    return cat_list_all_generic(CAT_SYS_SUBSCRIPTIONS, NULL, sizeof(SubscriptionDesc),
+                                deser_subscription_cb, NULL, (void **)out);
+}
+int cat_list_shards_all(uint32_t table_id, ShardDesc **out)
+{
+    char prefix[CAT_MAX_KEY_LEN];
+    make_id_prefix(table_id, prefix, sizeof(prefix));
+    return cat_list_all_generic(CAT_SYS_SHARDS, prefix, sizeof(ShardDesc),
+                                deser_shard_cb, NULL, (void **)out);
+}
+
 /* The seq counters and last_ack_seq mutate on every NOTIFY / ACK, so
  * an in-place rewrite avoids the delete + re-insert round-trip on the
  * hot path. Falls back to delete+insert if slot_update can't widen the
