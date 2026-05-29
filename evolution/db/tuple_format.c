@@ -23,6 +23,41 @@ static inline int type_family(int type_code)
  *  Text form:  [f1,f2,...] or {f1,f2,...} (brace variant tolerated)
  *  Binary:     dim × 4 bytes float4 LE, dimension carried by type_code
  * ---------------------------------------------------------------- */
+static int tf_b64_sym(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+static int tf_b64_decode(const char *in, size_t inlen,
+                         unsigned char *out, size_t *outlen)
+{
+    size_t o = 0; int quad[4], qn = 0;
+    for (size_t i = 0; i < inlen; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '=') break;
+        if (isspace(c)) continue;
+        int v = tf_b64_sym(c);
+        if (v < 0) return 0;
+        quad[qn++] = v;
+        if (qn == 4) {
+            out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+            out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+            out[o++] = (unsigned char)((quad[2] << 6) | quad[3]);
+            qn = 0;
+        }
+    }
+    if (qn == 2) out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+    else if (qn == 3) {
+        out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+        out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+    } else if (qn != 0) return 0;
+    *outlen = o; return 1;
+}
+
 int vec_parse_text(const char *text, int expected_dim,
                    char *out, int out_size)
 {
@@ -31,6 +66,34 @@ int vec_parse_text(const char *text, int expected_dim,
 
     const char *p = text;
     while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Compact quantized literal "b64i8:<base64>" (float32 LE scale |
+     * int8[]) — lets a 1024-d INSERT/query fit the 8 KB statement cap
+     * (~1.4 KB vs ~10 KB bracketed). Mirrors embeddings.py decode_vec. */
+    if (strncmp(p, "b64i8:", 6) == 0) {
+        const char *b64 = p + 6;
+        size_t b64len = strlen(b64);
+        while (b64len > 0 && isspace((unsigned char)b64[b64len - 1])) b64len--;
+        unsigned char *raw = (unsigned char *)malloc(b64len + 4);
+        if (!raw) return -1;
+        size_t rawlen = 0;
+        if (!tf_b64_decode(b64, b64len, raw, &rawlen) || rawlen < 5) {
+            free(raw); return -1;
+        }
+        uint32_t bits = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) |
+                        ((uint32_t)raw[2] << 16) | ((uint32_t)raw[3] << 24);
+        float scale; memcpy(&scale, &bits, sizeof(scale));
+        float inv = scale / 127.0f;
+        size_t nb = rawlen - 4;
+        if ((int)nb != expected_dim) { free(raw); return -1; }
+        for (size_t i = 0; i < nb; i++) {
+            float fv = (float)((signed char)raw[4 + i]) * inv;
+            memcpy(out + i * 4, &fv, 4);
+        }
+        free(raw);
+        return 0;
+    }
+
     char open = *p;
     if (open != '[' && open != '{') return -1;
     char close = (open == '[') ? ']' : '}';
@@ -522,9 +585,10 @@ int tup_extract_fields(const char *bin_rec, int bin_len,
             if (pos + dim * 4 > body_len) return -1;
             int w = vec_format_text(body + pos, dim, fields[i], 256);
             if (w < 0) {
-                /* Truncation marker */
+                /* Truncation marker — keep n+4 (the "...]") plus the NUL
+                 * within the 256-byte field (indices 0..255). */
                 int n = (int)strlen(fields[i]);
-                if (n > 252) n = 252;
+                if (n > 251) n = 251;
                 memcpy(fields[i] + n, "...]", 4);
                 fields[i][n + 4] = '\0';
             }
@@ -548,6 +612,93 @@ int tup_extract_fields(const char *bin_rec, int bin_len,
     }
 
     return num;
+}
+
+/* Extract one VECTOR(N) column's float4 payload straight from the binary
+ * tuple, bypassing tup_extract_fields' text rendering (whose 256-byte
+ * per-field buffer truncates any vector past ~dim 36). Walks the same
+ * field layout to reach target_idx, then copies min(dim, want) float4
+ * LE values into out[]. Returns the count written, or -1 on
+ * missing/null/short/non-vector. */
+int tup_get_vector(const char *bin_rec, int bin_len,
+                   const ColumnDesc *cols, int ncols,
+                   int target_idx, float *out, int want)
+{
+    if (!bin_rec || !out || target_idx < 0 || target_idx >= ncols)
+        return -1;
+
+    /* TOAST stub → read the full tuple and recurse. */
+    if (bin_len >= 1 && (unsigned char)bin_rec[0] == TOAST_STUB_MAGIC) {
+        ToastRef ref;
+        if (toast_parse_stub(bin_rec, bin_len, NULL, &ref) != 0) return -1;
+        if (ref.original_len == 0 || ref.original_len > 64 * 1024 * 1024)
+            return -1;
+        char *full = (char *)malloc(ref.original_len);
+        if (!full) return -1;
+        int n = toast_read(&ref, full, ref.original_len);
+        if (n < 0) { free(full); return -1; }
+        int rc = tup_get_vector(full, n, cols, ncols, target_idx, out, want);
+        free(full);
+        return rc;
+    }
+
+    if (bin_len < TUPLE_PREFIX_SIZE + TUPLE_HEADER_SIZE) return -1;
+    if ((unsigned char)bin_rec[0] != TUPLE_MAGIC) return -1;
+
+    const char *body = bin_rec + TUPLE_PREFIX_SIZE;
+    uint8_t num_cols = (uint8_t)body[2];
+    uint8_t flags    = (uint8_t)body[3];
+    int num = num_cols;
+    if (num > ncols) num = ncols;
+    if (target_idx >= num) return -1;
+
+    int mvcc_size = (flags & TUPLE_FLAG_MVCC) ? TUPLE_MVCC_SIZE : 0;
+    int bm_bytes  = (num_cols + 7) / 8;
+    const uint8_t *bm = (const uint8_t *)(body + TUPLE_HEADER_SIZE + mvcc_size);
+    int pos = TUPLE_HEADER_SIZE + mvcc_size + bm_bytes;
+    int body_len = bin_len - TUPLE_PREFIX_SIZE;
+
+    for (int i = 0; i <= target_idx; i++) {
+        if ((flags & TUPLE_FLAG_HAS_NULLS) && (bm[i / 8] & (1 << (i % 8)))) {
+            if (i == target_idx) return -1;   /* target is NULL */
+            continue;                          /* null: 0 payload bytes */
+        }
+        int fam = type_family(cols[i].type_code);
+        int sz;                                /* fixed-width payload size */
+        switch (fam) {
+        case 1: case 2: case 3: case 4: case 5: sz = 4;  break;
+        case 6: case 7: case 8:                 sz = 8;  break;
+        case 9:                                 sz = 4;  break;
+        case 18:                                sz = 16; break;
+        case 22:                                sz = 1;  break;
+        case 26: {                              /* VECTOR(N) */
+            int dim = cols[i].type_code % 10000;
+            if (dim <= 0 || dim > VECTOR_MAX_DIM) return -1;
+            sz = dim * 4;
+            if (i == target_idx) {
+                if (pos + sz > body_len) return -1;
+                int n = (want < dim) ? want : dim;
+                memcpy(out, body + pos, (size_t)n * 4);  /* float4 LE */
+                return n;
+            }
+            break;
+        }
+        case 25:        /* ARRAY: uint16 len prefix + blob */
+        default: {      /* string types: uint16 len prefix + bytes */
+            if (pos + 2 > body_len) return -1;
+            uint16_t slen;
+            memcpy(&slen, body + pos, 2);
+            pos += 2 + slen;
+            if (pos > body_len) return -1;
+            if (i == target_idx) return -1;   /* target not a vector */
+            continue;
+        }
+        }
+        if (i == target_idx) return -1;       /* target not a vector */
+        pos += sz;
+        if (pos > body_len) return -1;
+    }
+    return -1;
 }
 
 /* ----------------------------------------------------------------
