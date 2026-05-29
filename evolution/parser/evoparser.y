@@ -568,19 +568,29 @@ expr: NAME
          * '' → ' and ANSI "" → ") before storing the literal value. */
         if (slen >= 2 && (sv[0] == '\'' || sv[0] == '"')) {
             char quote = sv[0];
-            char stripped[1024];
-            int j = 0;
-            for (int i = 1; i < slen - 1 && j < (int)sizeof(stripped) - 1; i++) {
-                if (sv[i] == quote && i + 1 < slen - 1 && sv[i + 1] == quote) {
-                    stripped[j++] = quote;
-                    i++;  /* skip the paired quote */
-                } else {
-                    stripped[j++] = sv[i];
+            /* Heap-size the buffer to the literal so long values (e.g. a
+             * 1024-d vector as a "b64i8:" / "[...]" literal, ~1.4-10 KB)
+             * aren't truncated; the old fixed 1024 buffer silently cut
+             * them, which surfaced downstream as a bogus duplicate-key. */
+            char *stripped = (char *)malloc((size_t)slen + 1);
+            if (!stripped) {
+                GetInsertions(sv);
+                $$ = expr_make_string(sv);
+            } else {
+                int j = 0;
+                for (int i = 1; i < slen - 1; i++) {
+                    if (sv[i] == quote && i + 1 < slen - 1 && sv[i + 1] == quote) {
+                        stripped[j++] = quote;
+                        i++;  /* skip the paired quote */
+                    } else {
+                        stripped[j++] = sv[i];
+                    }
                 }
+                stripped[j] = '\0';
+                GetInsertions(stripped);
+                $$ = expr_make_string(stripped);
+                free(stripped);
             }
-            stripped[j] = '\0';
-            GetInsertions(stripped);
-            $$ = expr_make_string(stripped);
         } else {
             GetInsertions(sv);
             $$ = expr_make_string(sv);
