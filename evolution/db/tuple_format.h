@@ -118,6 +118,15 @@ int vec_parse_text(const char *text, int expected_dim,
 int vec_format_text(const char *payload, int dim,
                     char *out_buf, int out_size);
 
+/* Extract one VECTOR(N) column's float4 payload directly from the
+ * binary tuple (bypasses tup_extract_fields' 256-byte text buffer that
+ * truncates high-dim vectors). Writes min(N, want) float4 LE values
+ * into out[]. Returns the count written, or -1 on missing/null/short/
+ * non-vector column. */
+int tup_get_vector(const char *bin_rec, int bin_len,
+                   const ColumnDesc *cols, int ncols,
+                   int target_idx, float *out, int want);
+
 static inline int tup_is_array(int type_code)
 {
     return (type_code / 10000) == TYPE_FAMILY_ARRAY;

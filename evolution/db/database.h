@@ -156,6 +156,17 @@ int GetColumnSize(int typeVal);
 int GetOrderByColumn(char *name);
 void SetOrderByDirection(int desc);
 void AddOrderByColumn(const char *name, int desc);
+/* Task 204 — Adım 5: ORDER BY <col> <=> '<vec_literal>' [ASC|DESC].
+ * vec_literal is the bracketed "[f1,f2,...]" form an embedding column
+ * carries (same shape Document.c writes for VECTOR(N) typed cols). */
+void AddOrderByVecExpr(const char *col, const char *vec_literal, int desc);
+
+/* Vector primitives exported from expression.c so the SELECT planner
+ * can sort by cosine distance without duplicating the WHERE-clause
+ * code path. Caller owns the returned array on success. */
+int    evo_vec_parse_to_floats(const char *text, float **out_arr, int *out_n);
+double evo_vec_cosine_distance(const float *a, int na,
+                                const float *b, int nb);
 
 /* Window function parser helpers */
 void AddWindowSpec(int funcType, struct ExprNode *arg);

@@ -228,7 +228,10 @@ typedef struct ExprNode {
         char   col_name[128];   /* EXPR_COLUMN */
         int    intval;          /* EXPR_LITERAL_INT, EXPR_LITERAL_BOOL */
         double floatval;        /* EXPR_LITERAL_FLOAT */
-        char   strval[256];     /* EXPR_LITERAL_STR */
+        char   strval[4096];    /* EXPR_LITERAL_STR — sized to hold a
+                                 * 1024-d vector as a "b64i8:" literal
+                                 * (~1.4 KB) so hnsw_knn() / WHERE vector
+                                 * args aren't truncated. */
     } val;
     struct ExprNode *left;      /* left operand (binary ops) or sole operand (NEG) */
     struct ExprNode *right;     /* right operand (binary ops) */
