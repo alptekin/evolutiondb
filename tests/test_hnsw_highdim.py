@@ -3,7 +3,7 @@ tests/test_hnsw_highdim.py — HNSW over high-dimension vectors, the
 combination the old code couldn't handle: tup_extract_fields rendered
 the vector into a 256-char field buffer (truncating past ~dim 36) and a
 bracketed literal blows the 8 KB statement cap. Validates the full
-chain at dim 512:
+chain at dim 1024:
   - INSERT VECTOR(512) via the compact 'b64i8:' literal (under 8 KB),
   - hnsw_build reads the float4 payload straight from the tuple
     (tup_get_vector, no text rendering),
@@ -32,7 +32,7 @@ from pg_helpers import conn, simple_query
 from mcp_server_evosql.embeddings import encode_vec, decode_vec
 
 N = 800
-DIM = 512
+DIM = 1024
 Q = 12
 K = 10
 
@@ -92,7 +92,7 @@ def main():
     print(f"corpus={N} dim={DIM} queries={Q} K={K}")
     print(f"mean Recall@{K} = {mean:.4f}")
     assert mean >= 0.95, f"recall gate not met: {mean:.4f}"
-    print("OK — 512-d HNSW (b64i8 insert + binary build + b64i8 query) "
+    print("OK — 1024-d HNSW (b64i8 insert + binary build + b64i8 query) "
           "recall@10 >= 0.95")
     s.close()
 
