@@ -817,6 +817,20 @@ int cat_drop_trigger(uint32_t table_id, const char *trigger_name);
 int cat_list_triggers_for_table(uint32_t table_id, TriggerDesc *out, int max);
 int cat_update_trigger_enabled(uint32_t table_id, const char *trigger_name, int enabled);
 
+/* ── Truncation-free list variants ──
+ * Allocate *out to the exact entry count (no silent cap). Return count
+ * (>= 0) or -1 on OOM; caller must free(*out). *out is NULL when count 0. */
+int cat_list_tables_all(uint32_t schema_id, TableDesc **out);
+int cat_list_schemas_all(uint32_t db_id, SchemaDesc **out);
+int cat_list_databases_all(DatabaseDesc **out);
+int cat_list_indexes_all(uint32_t table_id, IndexDesc **out);
+int cat_list_constraints_all(uint32_t table_id, ConstraintDesc **out);
+int cat_list_referencing_fks_all(uint32_t ref_table_id, ConstraintDesc **out);
+int cat_list_index_stats_all(uint32_t table_id, IndexStatsDesc **out);
+int cat_list_triggers_for_table_all(uint32_t table_id, TriggerDesc **out);
+int cat_list_subscriptions_all(SubscriptionDesc **out);
+int cat_list_shards_all(uint32_t table_id, ShardDesc **out);
+
 /* ── Sequences ── */
 int cat_create_sequence(const SequenceDesc *seq);
 int cat_find_sequence(uint32_t schema_id, const char *seq_name, SequenceDesc *out);

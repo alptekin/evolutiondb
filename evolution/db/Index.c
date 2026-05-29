@@ -229,23 +229,23 @@ void hnsw_rebuild_all_from_catalog(void)
 {
     hnsw_init();   /* idempotent: clears the in-memory graph registry */
 
-    DatabaseDesc *dbs = (DatabaseDesc *)malloc(sizeof(DatabaseDesc) * 256);
-    if (!dbs) return;
-    int ndb = cat_list_databases(dbs, 256);
+    DatabaseDesc *dbs = NULL;
+    int ndb = cat_list_databases_all(&dbs);
+    if (ndb < 0) ndb = 0;
     int rebuilt = 0;
 
     for (int di = 0; di < ndb; di++) {
-        SchemaDesc *schemas = (SchemaDesc *)malloc(sizeof(SchemaDesc) * 256);
-        if (!schemas) break;
-        int nsch = cat_list_schemas(dbs[di].db_id, schemas, 256);
+        SchemaDesc *schemas = NULL;
+        int nsch = cat_list_schemas_all(dbs[di].db_id, &schemas);
+        if (nsch < 0) nsch = 0;
         for (int si = 0; si < nsch; si++) {
-            TableDesc *tables = (TableDesc *)malloc(sizeof(TableDesc) * 512);
-            if (!tables) break;
-            int nt = cat_list_tables(schemas[si].schema_id, tables, 512);
+            TableDesc *tables = NULL;
+            int nt = cat_list_tables_all(schemas[si].schema_id, &tables);
+            if (nt < 0) nt = 0;
             for (int ti = 0; ti < nt; ti++) {
-                IndexDesc *idxs = (IndexDesc *)malloc(sizeof(IndexDesc) * 64);
-                if (!idxs) break;
-                int nidx = cat_list_indexes(tables[ti].table_id, idxs, 64);
+                IndexDesc *idxs = NULL;
+                int nidx = cat_list_indexes_all(tables[ti].table_id, &idxs);
+                if (nidx < 0) nidx = 0;
                 for (int ii = 0; ii < nidx; ii++) {
                     if (idxs[ii].index_type != 'A') continue;   /* HNSW only */
                     int d = HNSW_DIST_COSINE, m = 16, ef = 200;
@@ -825,22 +825,26 @@ int CreateIndexProcess(void)
 
     /* Check if index already exists on these columns */
     {
-        IndexDesc existing[16];
-        int n = cat_list_indexes(td.table_id, existing, 16);
+        IndexDesc *existing = NULL;
+        int n = cat_list_indexes_all(td.table_id, &existing);
+        if (n < 0) n = 0;
         for (int i = 0; i < n; i++) {
             if (strcasecmp(existing[i].col_list, g_idx.columnName) == 0 &&
                 existing[i].index_type != 'P') {
                 if (g_idx.ifNotExists) {
                     g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0'; g_idx.usingHash = 0;
+                    free(existing);
                     return 0;
                 }
                 snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                          "index already exists on column '%s'", g_idx.columnName);
                 g_err.error = 1;
                 g_idx.unique = 0; g_idx.ifNotExists = 0; g_idx.exprDef[0] = '\0';
+                free(existing);
                 return -1;
             }
         }
+        free(existing);
     }
 
     /* HNSW ANN (Task 202 — Feature #202) — no on-disk btree, graph lives

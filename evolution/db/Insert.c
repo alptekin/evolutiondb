@@ -618,8 +618,9 @@ static int validate_unique(const char *tblName,
     }
 
     /* Load catalog 'U' constraints */
-    ConstraintDesc uqDescs[32];
-    int numUq = cat_list_constraints(td.table_id, uqDescs, 32);
+    ConstraintDesc *uqDescs = NULL;
+    int numUq = cat_list_constraints_all(td.table_id, &uqDescs);
+    if (numUq < 0) numUq = 0;
     int hasCompositeUnique = 0;
 
     /* Filter to only 'U' type enabled constraints, resolve column indices */
@@ -658,6 +659,10 @@ static int validate_unique(const char *tblName,
             hasCompositeUnique = 1;
         }
     }
+    /* uqDescs fully consumed into uqInfos above; free before the scan loop,
+     * which has many early-return / error-unwind paths. */
+    free(uqDescs);
+    uqDescs = NULL;
 
     if (!hasColumnUnique && !hasCompositeUnique) return 0;
 
@@ -804,9 +809,9 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
     if (tapi_resolve(tblName, &td, cols, &ncols) < 0)
         return 0;
 
-    ConstraintDesc constraints[32];
-    int numCon = cat_list_constraints(td.table_id, constraints, 32);
-    if (numCon <= 0) return 0;
+    ConstraintDesc *constraints = NULL;
+    int numCon = cat_list_constraints_all(td.table_id, &constraints);
+    if (numCon <= 0) { free(constraints); return 0; }
 
     char colNames[CAT_MAX_COLUMNS][128];
     int numColNames = InsertReadColumnNames(tblName, colNames, CAT_MAX_COLUMNS);
@@ -885,6 +890,7 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                      constraints[ci].constraint_name);
             g_err.error = 1;
             EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+            free(constraints);
             return -1;
         }
 
@@ -939,6 +945,7 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                          constraints[ci].constraint_name, fkValue, refTd.table_name);
                 g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                free(constraints);
                 return -1;
             }
         } else {
@@ -991,10 +998,12 @@ static int validate_foreign_keys(const char *tblName, char **vals, int numValues
                          constraints[ci].constraint_name, fkValue, refTd.table_name);
                 g_err.error = 1;
                 EVOSQL_SET_SQLSTATE(EVOSQL_ERRCODE_FOREIGN_KEY_VIOLATION);
+                free(constraints);
                 return -1;
             }
         }
     }
+    free(constraints);
     return 0;
 }
 
