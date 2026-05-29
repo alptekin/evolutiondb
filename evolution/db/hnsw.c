@@ -136,14 +136,81 @@ static HnswGraph *graph_find_or_alloc_locked(uint32_t table_id,
     return g;
 }
 
-/* Parse "[f1,f2,...]" into a freshly malloc'd float array. Returns 0 on
- * success with arr_out and n_out filled; -1 on parse error. */
+static int hnsw_b64_sym(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+/* Standard base64 decode (skips whitespace, stops at '='). out sized
+ * >= inlen. Returns 1 / sets *outlen on success, 0 on a bad symbol. */
+static int hnsw_b64_decode(const char *in, size_t inlen,
+                           unsigned char *out, size_t *outlen)
+{
+    size_t o = 0; int quad[4], qn = 0;
+    for (size_t i = 0; i < inlen; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '=') break;
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        int v = hnsw_b64_sym(c);
+        if (v < 0) return 0;
+        quad[qn++] = v;
+        if (qn == 4) {
+            out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+            out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+            out[o++] = (unsigned char)((quad[2] << 6) | quad[3]);
+            qn = 0;
+        }
+    }
+    if (qn == 2) out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+    else if (qn == 3) {
+        out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+        out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+    } else if (qn != 0) return 0;
+    *outlen = o; return 1;
+}
+
+/* Parse a vector literal into a freshly malloc'd float array. Accepts
+ * bracketed "[f1,f2,...]" text and the MCP's compact "b64i8:<base64>"
+ * (float32 LE scale | int8[]) — the compact form keeps a 1024-d query
+ * literal ~1.4 KB, well under the 8 KB statement cap. Returns 0 on
+ * success with arr_out/n_out filled; -1 on parse error. */
 static int parse_vec_text(const char *text, float **arr_out, int *n_out)
 {
     *arr_out = NULL; *n_out = 0;
     if (!text) return -1;
     const char *p = text;
     while (*p == ' ' || *p == '\t') p++;
+
+    if (strncmp(p, "b64i8:", 6) == 0) {
+        const char *b64 = p + 6;
+        size_t b64len = strlen(b64);
+        while (b64len > 0 &&
+               (b64[b64len-1]==' '||b64[b64len-1]=='\t'||
+                b64[b64len-1]=='\n'||b64[b64len-1]=='\r')) b64len--;
+        unsigned char *raw = (unsigned char *)malloc(b64len + 4);
+        if (!raw) return -1;
+        size_t rawlen = 0;
+        if (!hnsw_b64_decode(b64, b64len, raw, &rawlen) || rawlen < 5) {
+            free(raw); return -1;
+        }
+        uint32_t bits = (uint32_t)raw[0] | ((uint32_t)raw[1] << 8) |
+                        ((uint32_t)raw[2] << 16) | ((uint32_t)raw[3] << 24);
+        float scale; memcpy(&scale, &bits, sizeof(scale));
+        float inv = scale / 127.0f;
+        size_t nb = rawlen - 4;
+        float *arr = (float *)malloc(sizeof(float) * nb);
+        if (!arr) { free(raw); return -1; }
+        for (size_t i = 0; i < nb; i++)
+            arr[i] = (float)((signed char)raw[4 + i]) * inv;
+        free(raw);
+        *arr_out = arr; *n_out = (int)nb;
+        return 0;
+    }
+
     char open = *p;
     if (open != '[' && open != '{') return -1;
     char close = (open == '[') ? ']' : '}';
@@ -507,19 +574,19 @@ int hnsw_build(uint32_t table_id, const char *index_name,
 
     char pk_buf[HNSW_MAX_PK_LEN];
     char rec_buf[8192];
-    char fields[CAT_MAX_COLUMNS][256];
-    int  nulls[CAT_MAX_COLUMNS];
 
     while (tapi_scan_next(&cursor, pk_buf, rec_buf, sizeof(rec_buf)) == 0) {
         int rec_len = tup_record_len(rec_buf, sizeof(rec_buf));
         if (rec_len <= 0) continue;
-        int nf = tup_extract_fields(rec_buf, rec_len, cols, ncols,
-                                    fields, nulls, CAT_MAX_COLUMNS);
-        if (nf <= col_idx || nulls[col_idx]) continue;
 
-        float *vec = NULL; int vdim = 0;
-        if (parse_vec_text(fields[col_idx], &vec, &vdim) != 0) continue;
-        if (vdim != dim) { free(vec); continue; }
+        /* Read the vector column's float4 payload straight from the
+         * tuple — no text rendering, so dim is unbounded by the old
+         * 256-byte field buffer (handles 1024-d embeddings). */
+        float *vec = (float *)malloc(sizeof(float) * (size_t)dim);
+        if (!vec) continue;
+        int got = tup_get_vector(rec_buf, rec_len, cols, ncols,
+                                 col_idx, vec, dim);
+        if (got != dim) { free(vec); continue; }
 
         pthread_mutex_lock(&g_mu);
         if (graph_ensure_cap_locked(g, g->count + 1) == 0) {
