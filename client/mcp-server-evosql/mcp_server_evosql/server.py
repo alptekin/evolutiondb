@@ -1063,9 +1063,14 @@ class MemoryBackend:
 
     def _attach_evidence(self, user_id: str,
                           rows: List[Dict[str, Any]]) -> None:
-        """For each synthesized row, resolve its derived_from keys to
-        {key, fact, present} so the caller can trace the memory back to its
-        sources. One batched fetch for the whole page."""
+        """For each synthesized row, resolve its derived_from keys to evidence.
+
+        Adım 13: evidence_chain = [{key, fact, present}] — full traceability.
+        Adım 19 (co-presented evidence policy): also attach
+          evidence_excerpts = [{key, snippet}]  — a 1-2 sentence quote per
+          source, the citation-ready short form, and citation_required = true
+          so the model is told to co-cite the sources when it uses the row.
+        One batched fetch for the whole page."""
         need = set()
         for x in rows:
             if x.get("synthesized") and x.get("derived_from"):
@@ -1085,6 +1090,14 @@ class MemoryBackend:
                     {"key": k, "fact": srcmap.get(k, ""), "present": k in srcmap}
                     for k in x["derived_from"]
                 ]
+                # Co-presented evidence: a short quote from each PRESENT
+                # source. Anti-confabulation — the row never travels without
+                # the evidence the model must cite.
+                x["evidence_excerpts"] = [
+                    {"key": k, "snippet": _snippet(srcmap[k])}
+                    for k in x["derived_from"] if k in srcmap and srcmap[k]
+                ]
+                x["citation_required"] = True
 
     def recent(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         rows = self._query(
@@ -1197,6 +1210,21 @@ class MemoryBackend:
                 "ignored_not_returned": dropped}
 
 
+def _snippet(text: str, max_sentences: int = 2, max_chars: int = 200) -> str:
+    """A 1-2 sentence quote from a source fact, for co-presented evidence
+    (Adım 19). Trims on sentence boundaries, then on a word boundary if still
+    too long, so the cited excerpt stays short but readable."""
+    import re as _re
+    s = " ".join((text or "").split())
+    if not s:
+        return ""
+    parts = _re.split(r"(?<=[.!?])\s+", s)
+    out = " ".join(parts[:max_sentences]).strip()
+    if len(out) > max_chars:
+        out = out[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return out
+
+
 def _to_str(v: Any) -> str:
     if v is None:
         return ""
@@ -1264,7 +1292,15 @@ TOOLS = [
             "leak through. Pass `tag` to narrow by topic. The response "
             "includes a `query_id`; after you finish answering, call "
             "`feedback` with that query_id and the keys you actually used "
-            "so the memory ranking improves over time."
+            "so the memory ranking improves over time. "
+            "IMPORTANT — co-presented evidence: a result with "
+            "`synthesized: true` is a summary the system derived from other "
+            "rows, not a raw fact. When you use such a row you MUST cite its "
+            "sources: it carries `citation_required: true` and "
+            "`evidence_excerpts` (a short quote per source). Mention or quote "
+            "that evidence in your answer instead of stating the synthesized "
+            "claim on its own. If the evidence does not actually support the "
+            "claim, trust the evidence, not the summary."
         ),
         "inputSchema": {
             "type": "object",
