@@ -122,6 +122,60 @@ def _as_rec(val) -> Optional[dict]:
         return None
 
 
+def recompute(backend, user_id: str, *, window_days: int = 90,
+              dry_run: bool = False) -> int:
+    """Recompute the salience score for every row in a namespace, using the
+    backend's connection. Returns the number of rows whose score changed.
+    Shared by the CLI and the Adım 18 scheduler."""
+    from .server import _e
+    now = time.time()
+    window = window_days * 86400.0
+
+    rows = backend._query(
+        f"SELECT mem_key, mem_value FROM __mem_{backend.memory} "
+        f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []
+    recs: Dict[str, dict] = {}
+    sender_counts: Dict[str, int] = {}
+    for key, val in rows:
+        rec = _as_rec(val)
+        if not rec:
+            continue
+        recs[key] = rec
+        s = _sender(rec)
+        if s:
+            ts = _row_ts(rec)
+            if ts is None or (now - ts) <= window:
+                sender_counts[s] = sender_counts.get(s, 0) + 1
+    max_count = max(sender_counts.values(), default=0)
+
+    feedback_used: Dict[str, int] = {}
+    try:
+        for fv in backend._query(
+                f"SELECT mem_value FROM __mem_{backend.feedback_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []:
+            fr = _as_rec(fv[0])
+            for k in ((fr or {}).get("used_keys") or []):
+                feedback_used[k] = feedback_used.get(k, 0) + 1
+    except Exception:
+        pass
+
+    changed = 0
+    for key, rec in recs.items():
+        sal = round(compute_salience(rec, key, now=now,
+                                     sender_counts=sender_counts,
+                                     max_count=max_count,
+                                     feedback_used=feedback_used), 4)
+        if rec.get("salience") == sal:
+            continue
+        rec["salience"] = sal
+        changed += 1
+        if not dry_run:
+            backend._exec(
+                f"MEMORY PUT INTO {backend.memory} VALUES "
+                f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+    return changed
+
+
 def _connect():
     import psycopg
     return psycopg.connect(
