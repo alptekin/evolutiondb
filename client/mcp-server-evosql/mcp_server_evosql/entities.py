@@ -300,13 +300,20 @@ class EntityStore:
         return eid
 
     def process(self, mem_key: str, text: str, ts: float,
-                write: bool = True) -> List[str]:
-        ids = []
+                write: bool = True) -> List[Mention]:
+        """Extract, resolve, and (optionally) persist every mention in the
+        row. Returns the mentions enriched with their resolved `entity_id`
+        so a caller (the knowledge graph) can wire edges between co-occurring
+        entities without re-extracting."""
+        out: List[Mention] = []
         for m in extract_entities(text or ""):
-            ids.append(self.upsert(mem_key, m["surface"], m["type"],
-                                   m["start"], m["end"], m["confidence"],
-                                   ts, write=write))
-        return ids
+            eid = self.upsert(mem_key, m["surface"], m["type"],
+                              m["start"], m["end"], m["confidence"],
+                              ts, write=write)
+            m = dict(m)
+            m["entity_id"] = eid
+            out.append(m)
+        return out
 
 
 # ---------------------------------------------------------------- #
