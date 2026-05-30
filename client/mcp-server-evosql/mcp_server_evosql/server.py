@@ -224,13 +224,26 @@ class MemoryBackend:
         # EVOSQL_ENTITY_EXTRACT=0 to disable (or run entities.py as backfill).
         self.entity_extract = os.environ.get("EVOSQL_ENTITY_EXTRACT", "1") != "0"
         self._entity_stores: Dict[str, Any] = {}   # user_id -> EntityStore
+        # Knowledge graph (Adım 15): co-occurring entities in a row are wired
+        # into `graph_store` so a relational query can reach rows by 1-2 hop
+        # spreading activation. Building edges on save is cheap and keeps the
+        # graph ready (EVOSQL_GRAPH_BUILD=0 to disable); the *retrieval* boost
+        # is opt-in via EVOSQL_GRAPH_BOOST>0 (latency-sensitive hot path).
+        self.graph_store = f"{prefix}_graph_edges"
+        self.graph_build = os.environ.get("EVOSQL_GRAPH_BUILD", "1") != "0"
+        try:
+            self.graph_boost = float(os.environ.get("EVOSQL_GRAPH_BOOST", "0"))
+        except ValueError:
+            self.graph_boost = 0.0
+        self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
                   ("ENTITY STORE", self.entities),
                   ("MEMORY STORE", self.feedback_store),
                   ("MEMORY STORE", self.entity_store),
-                  ("MEMORY STORE", self.mention_store)]
+                  ("MEMORY STORE", self.mention_store),
+                  ("MEMORY STORE", self.graph_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -379,10 +392,16 @@ class MemoryBackend:
                     )
                 except Exception:
                     pass  # emb2 is best-effort; main row already saved
-        # Entity extraction (Adım 14) — best-effort, never blocks the save.
+        # Entity extraction (Adım 14) + graph edges (Adım 15) — best-effort,
+        # never blocks the save. Extraction returns the mentions enriched with
+        # their resolved entity ids, which the graph wires into co-occurrence
+        # edges in the same pass (no re-extraction).
         if self.entity_extract:
             try:
-                self._entities(user_id).process(key, fact, created)
+                ext = self._entities(user_id).process(key, fact, created)
+                if self.graph_build and ext:
+                    self._graph(user_id).add_edges_from_row(
+                        key, ext, fact, created)
             except Exception:
                 pass
         return key
@@ -397,6 +416,35 @@ class MemoryBackend:
                                 self.entity_store, self.mention_store)
             self._entity_stores[user_id] = store
         return store
+
+    def _graph(self, user_id: str):
+        """Per-namespace GraphStore (edge adjacency cached warm)."""
+        store = self._graph_stores.get(user_id)
+        if store is None:
+            from .graph import GraphStore
+            store = GraphStore(self._exec, self._query, user_id,
+                               self.graph_store, self.mention_store)
+            self._graph_stores[user_id] = store
+        return store
+
+    def _graph_row_boost(self, user_id: str, query: str) -> Dict[str, float]:
+        """Resolve the query's entities, spread activation 2 hops over the
+        knowledge graph, and return {mem_key: boost} for the reached rows.
+        Empty when the query names no known entity (so non-relational queries
+        pay nothing beyond one cheap extraction)."""
+        from .entities import extract_entities
+        es = self._entities(user_id)
+        seeds, seen = [], set()
+        for m in extract_entities(query or ""):
+            eid, is_new = es.resolve(m["surface"], m["type"])
+            if not is_new and eid not in seen:   # only entities we actually know
+                seeds.append(eid)
+                seen.add(eid)
+        if not seeds:
+            return {}
+        g = self._graph(user_id)
+        act = g.spreading_activation(seeds, depth=2)
+        return g.rows_for_entities(act, seeds=seeds)
 
     # -- server-side ANN candidate gathering (Step 6) ----------------
     def _ann_query(self, store: str, user_id: str, field: str,
@@ -556,6 +604,23 @@ class MemoryBackend:
                 f"'{_e(user_id)}' LIMIT 10000"
             )
 
+        # Knowledge-graph spreading activation (Adım 15). Resolve the query's
+        # entities, spread two hops, and pull in any reached rows the lexical/
+        # dense gather missed so they can compete — this is the actual recall
+        # lift for relational queries. Gated on EVOSQL_GRAPH_BOOST>0; the
+        # default config and any query naming no known entity skip it.
+        graph_boost_map: Dict[str, float] = {}
+        if self.graph_boost > 0:
+            try:
+                graph_boost_map = self._graph_row_boost(user_id, query)
+            except Exception:
+                graph_boost_map = {}
+            if graph_boost_map:
+                have = {r[1] for r in rows}
+                missing = [k for k in graph_boost_map if k not in have]
+                for k, v in self._fetch_by_keys(self.memory, user_id, missing):
+                    rows.append([user_id, k, v])
+
         # Resolve the sender filter through the identity catalog so
         # "Onur" expands to every alias of the right human (and only
         # that human). If the catalog has no match we fall back to a
@@ -679,7 +744,8 @@ class MemoryBackend:
             # itself is the relevance signal. Under RRF, "has signal"
             # means any of the three rankers scored it.
             has_signal = (final > 0 or sem_score > 0
-                          or sem2_score > 0 or kw_score > 0)
+                          or sem2_score > 0 or kw_score > 0
+                          or graph_boost_map.get(c["key"], 0.0) > 0)
             if not has_signal and not tag and sender_alias_set is None \
                     and sender_literal is None:
                 continue
@@ -766,6 +832,22 @@ class MemoryBackend:
                         0.5 * rr + 0.5 * x["score"] if fuse else rr, 4)
                 pool.sort(key=lambda x: (-x["score"], x.get("key", "")))
                 out = pool + out[pool_size:]
+
+        # Adım 15 — knowledge-graph boost. Rows reached by spreading
+        # activation from the query's entities get an additive lift, so a
+        # relational query ("who is active on X") surfaces rows that never
+        # contain the query keyword — they were reached through the entity
+        # graph. Same min-max-base + weighted-boost shape as salience; a row
+        # with no activation contributes 0, so it never invents signal.
+        if self.graph_boost > 0 and graph_boost_map and out:
+            w = self.graph_boost
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            gmax = max(graph_boost_map.values()) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                gb = graph_boost_map.get(x["key"], 0.0) / gmax
+                x["score"] = round((1.0 - w) * base + w * gb, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
         # Adım 12 — salience re-ranking. Blend the precomputed per-row
         # `salience` (recency × sender-activity × thread-depth × feedback)
