@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env, embedder2_from_env
 from .query_transform import QueryTransform, query_transform_from_env
 from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
+from .episodes   import SUMMARY_TAG, build_episodes as _build_episodes
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
@@ -236,6 +237,11 @@ class MemoryBackend:
         except ValueError:
             self.graph_boost = 0.0
         self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
+        # Episodes (Adım 16): a weekly job groups recent rows into episodes
+        # and writes one summary per episode (tagged `episode`, synthesized
+        # with derived_from = source keys). The episode record links the
+        # summary back to its sources for hierarchical drill-down.
+        self.episodes_store = f"{prefix}_episodes"
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
@@ -243,7 +249,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.feedback_store),
                   ("MEMORY STORE", self.entity_store),
                   ("MEMORY STORE", self.mention_store),
-                  ("MEMORY STORE", self.graph_store)]
+                  ("MEMORY STORE", self.graph_store),
+                  ("MEMORY STORE", self.episodes_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -446,6 +453,61 @@ class MemoryBackend:
         act = g.spreading_activation(seeds, depth=2)
         return g.rows_for_entities(act, seeds=seeds)
 
+    # -- episodes (Adım 16) ------------------------------------------
+    def build_episodes(self, user_id: str, *, window_days: int = 7,
+                       dry_run: bool = False) -> List[Dict[str, Any]]:
+        """Segment recent rows into episodes and write one summary each.
+        Thin wrapper so the tool and CLI share one implementation."""
+        return _build_episodes(self, user_id, window_days=window_days,
+                               dry_run=dry_run)
+
+    def _patch_episode_summary(self, user_id: str, summary_key: str,
+                               episode_id: str,
+                               source_row_keys: List[str]) -> None:
+        """Mark a freshly-saved summary row as an episode and carry its
+        episode_id + sources, so a hierarchical search result can drill down
+        without a reverse lookup."""
+        rows = self._fetch_by_keys(self.memory, user_id, [summary_key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return
+        rec["is_episode"]       = True
+        rec["episode_id"]       = episode_id
+        rec["source_row_keys"]  = source_row_keys
+        self._exec(
+            f"MEMORY PUT INTO {self.memory} VALUES "
+            f"('{_e(user_id)}','{_e(summary_key)}','{_e(json.dumps(rec))}')")
+
+    def expand_episode(self, user_id: str,
+                       episode_id: str) -> Dict[str, Any]:
+        """Drill-down: return the source rows behind an episode summary."""
+        rows = self._query(
+            f"SELECT mem_value FROM __mem_{self.episodes_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' "
+            f"AND mem_key = '{_e(episode_id)}'")
+        if not rows or not rows[0] or not rows[0][0]:
+            return {"error": f"unknown episode_id: {episode_id}"}
+        try:
+            ep = json.loads(rows[0][0])
+        except Exception:
+            return {"error": "corrupt episode record"}
+        src = ep.get("source_row_keys") or []
+        out = []
+        for r in self._fetch_by_keys(self.memory, user_id, src):
+            try:
+                rec = json.loads(r[1]) if r[1] else {}
+            except Exception:
+                rec = {}
+            rec = {k: v for k, v in rec.items() if k not in ("emb", "emb2")}
+            out.append({"key": r[0], **rec})
+        return {"ok": True, "episode_id": episode_id,
+                "time_start": ep.get("time_start"),
+                "time_end": ep.get("time_end"),
+                "rows": out}
+
     # -- server-side ANN candidate gathering (Step 6) ----------------
     def _ann_query(self, store: str, user_id: str, field: str,
                     q_b64: str, limit: int) -> List[Any]:
@@ -553,7 +615,14 @@ class MemoryBackend:
     def search(self, user_id: str, query: str,
                 limit: int = 5,
                 tag: Optional[str] = None,
-                sender: Optional[str] = None) -> List[Dict[str, Any]]:
+                sender: Optional[str] = None,
+                mode: str = "flat") -> List[Dict[str, Any]]:
+        # Hierarchical mode (Adım 16): rank only the episode summaries, so an
+        # aggregation query returns a few paragraph summaries with drill-down
+        # instead of every raw row. Unlike a tag filter this keeps the normal
+        # keyword/dense signal requirement, so only episodes relevant to the
+        # query come back — not the whole episode set.
+        episode_only = (mode == "hierarchical")
         q_terms = [w for w in query.lower().split() if len(w) > 1]
 
         # Query-side transform: rewrite the raw query into variants that
@@ -652,6 +721,12 @@ class MemoryBackend:
             except Exception:
                 rec = {"fact": r[2]}
             if not rec or not rec.get("fact"):
+                continue
+            # Hierarchical mode ranks episode summaries only; flat mode skips
+            # them so a normal search isn't polluted by synthesized overviews.
+            if episode_only and not rec.get("is_episode"):
+                continue
+            if not episode_only and rec.get("is_episode"):
                 continue
             # Match across every text field a connector might use, not
             # only `fact`. Teams uses `text`, gmail uses `subject` +
@@ -1089,9 +1164,28 @@ TOOLS = [
                             "description": "Filter by one human. "
                                 "Aliases are expanded through the "
                                 "identity catalog when present."},
+                "mode":   {"type": "string", "enum": ["flat", "hierarchical"],
+                            "default": "flat",
+                            "description": "hierarchical searches episode "
+                                "summaries first (compact overview of a "
+                                "burst of activity); call expand_episode on "
+                                "a result's episode_id to drill into its "
+                                "source rows."},
                 "limit":  {"type": "integer", "default": 5},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "expand_episode",
+        "description": ("Return the source rows behind an episode summary. "
+                        "Pass the `episode_id` from a hierarchical "
+                        "search_memory result to drill down from the "
+                        "one-line summary to the underlying facts."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"episode_id": {"type": "string"}},
+            "required": ["episode_id"],
         },
     },
     {
@@ -1206,9 +1300,10 @@ class MCPServer:
                 return {"error": "search_memory requires non-empty `query`"}
             tag    = args.get("tag")
             sender = args.get("sender")
+            mode   = (args.get("mode") or "flat").lower()
             limit  = int(args.get("limit") or 5)
             results = b.search(self.user_id, q,
-                               limit=limit, tag=tag, sender=sender)
+                               limit=limit, tag=tag, sender=sender, mode=mode)
             # Implicit-feedback hook (Adım 11): tag the response with a
             # query_id and log (query -> returned keys) so the caller can
             # later report which keys it used via the feedback tool.
@@ -1232,6 +1327,12 @@ class MCPServer:
             return b.feedback(self.user_id, query_id,
                               used_keys=used, unused_keys=unused,
                               rating=args.get("rating"))
+
+        if name == "expand_episode":
+            episode_id = args.get("episode_id") or ""
+            if not episode_id:
+                return {"error": "expand_episode requires `episode_id`"}
+            return b.expand_episode(self.user_id, episode_id)
 
         if name == "recent_memories":
             limit = int(args.get("limit") or 10)
