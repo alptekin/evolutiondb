@@ -213,11 +213,24 @@ class MemoryBackend:
         # used. Self-improving-memory training signal; kept in its own store
         # so it never touches the primary memory rows.
         self.feedback_store = f"{prefix}_feedback"
+        # Entity catalog (Adım 14): extracted named entities and their
+        # canonical ids live in `entity_store`; each surface-form occurrence
+        # in a memory row is recorded in `mention_store`. Both are plain
+        # MEMORY STOREs keyed by the entity/mention id (see entities.py).
+        self.entity_store  = f"{prefix}_entities"
+        self.mention_store = f"{prefix}_entity_mentions"
+        # Inline entity extraction after each save (best-effort, regex-fast).
+        # Until the Adım 18 scheduler exists this runs synchronously; set
+        # EVOSQL_ENTITY_EXTRACT=0 to disable (or run entities.py as backfill).
+        self.entity_extract = os.environ.get("EVOSQL_ENTITY_EXTRACT", "1") != "0"
+        self._entity_stores: Dict[str, Any] = {}   # user_id -> EntityStore
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
                   ("ENTITY STORE", self.entities),
-                  ("MEMORY STORE", self.feedback_store)]
+                  ("MEMORY STORE", self.feedback_store),
+                  ("MEMORY STORE", self.entity_store),
+                  ("MEMORY STORE", self.mention_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -366,7 +379,24 @@ class MemoryBackend:
                     )
                 except Exception:
                     pass  # emb2 is best-effort; main row already saved
+        # Entity extraction (Adım 14) — best-effort, never blocks the save.
+        if self.entity_extract:
+            try:
+                self._entities(user_id).process(key, fact, created)
+            except Exception:
+                pass
         return key
+
+    def _entities(self, user_id: str):
+        """Per-namespace EntityStore, cached so its canonical-id index stays
+        warm across saves in this process."""
+        store = self._entity_stores.get(user_id)
+        if store is None:
+            from .entities import EntityStore
+            store = EntityStore(self._exec, self._query, user_id,
+                                self.entity_store, self.mention_store)
+            self._entity_stores[user_id] = store
+        return store
 
     # -- server-side ANN candidate gathering (Step 6) ----------------
     def _ann_query(self, store: str, user_id: str, field: str,
