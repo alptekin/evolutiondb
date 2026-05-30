@@ -41,10 +41,17 @@ from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode
 from .query_transform import QueryTransform, query_transform_from_env
 from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
 from .episodes   import SUMMARY_TAG, build_episodes as _build_episodes
+from .profile    import build_profile as _build_profile
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
 SERVER_VERSION   = "1.7.0"
+
+# Adım 17: a row whose profile-cluster similarity clears this counts as
+# "in the user's interest" and survives the signal filter even with no direct
+# query match — that is how a query in your interest area surfaces your
+# related items. Only active when the profile boost is on.
+PROFILE_SIGNAL_MIN = float(os.environ.get("EVOSQL_PROFILE_SIGNAL_MIN", "0.35"))
 
 
 # ---------------------------------------------------------------- #
@@ -242,6 +249,17 @@ class MemoryBackend:
         # with derived_from = source keys). The episode record links the
         # summary back to its sources for hierarchical drill-down.
         self.episodes_store = f"{prefix}_episodes"
+        # User interest profile (Adım 17): a daily job clusters the user's
+        # row embeddings into interest clusters (<prefix>_profile_clusters);
+        # the retrieval boost biases results toward the clusters the query
+        # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
+        # it only engages when an embedder is configured). Default 0.
+        self.profile_store = f"{prefix}_profile_clusters"
+        try:
+            self.profile_boost = float(os.environ.get("EVOSQL_PROFILE_BOOST", "0"))
+        except ValueError:
+            self.profile_boost = 0.0
+        self._profile_cache: Dict[str, List[Dict[str, Any]]] = {}
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
@@ -250,7 +268,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.entity_store),
                   ("MEMORY STORE", self.mention_store),
                   ("MEMORY STORE", self.graph_store),
-                  ("MEMORY STORE", self.episodes_store)]
+                  ("MEMORY STORE", self.episodes_store),
+                  ("MEMORY STORE", self.profile_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -508,6 +527,59 @@ class MemoryBackend:
                 "time_end": ep.get("time_end"),
                 "rows": out}
 
+    # -- user profile (Adım 17) --------------------------------------
+    def build_profile(self, user_id: str, *, window_days: int = 90,
+                      k: Optional[int] = None,
+                      dry_run: bool = False) -> List[Dict[str, Any]]:
+        cl = _build_profile(self, user_id, window_days=window_days,
+                            k=k, dry_run=dry_run)
+        self._profile_cache.pop(user_id, None)   # invalidate cache
+        return cl
+
+    def _load_profile(self, user_id: str) -> List[Dict[str, Any]]:
+        """Profile clusters with decoded centroids, cached per process."""
+        cached = self._profile_cache.get(user_id)
+        if cached is not None:
+            return cached
+        out: List[Dict[str, Any]] = []
+        for r in self._query(
+                f"SELECT mem_value FROM __mem_{self.profile_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000") or []:
+            try:
+                c = json.loads(r[0])
+                cen = decode_vec(c.get("centroid"))
+                if cen:
+                    out.append({"centroid": cen, "label": c.get("label"),
+                                "weight": float(c.get("weight") or 0.0),
+                                "size": c.get("size")})
+            except Exception:
+                pass
+        self._profile_cache[user_id] = out
+        return out
+
+    def show_profile(self, user_id: str) -> List[Dict[str, Any]]:
+        """Transparency: the user's interest clusters (label + weight)."""
+        cls = self._load_profile(user_id)
+        return sorted(
+            [{"label": c["label"], "weight": round(c["weight"], 4),
+              "size": c.get("size")} for c in cls],
+            key=lambda c: -c["weight"])
+
+    def _active_profile_centroids(self, user_id: str,
+                                  q_vec: Optional[List[float]],
+                                  top: int = 2) -> List[List[float]]:
+        """The 1-2 interest clusters the query points at — rows near these
+        get the profile boost. Empty on cold start (no clusters) or with no
+        query vector, so the boost stays passive."""
+        if not q_vec:
+            return []
+        cls = self._load_profile(user_id)
+        if not cls:
+            return []
+        from .embeddings import cosine
+        ranked = sorted(cls, key=lambda c: -cosine(q_vec, c["centroid"]))
+        return [c["centroid"] for c in ranked[:top]]
+
     # -- server-side ANN candidate gathering (Step 6) ----------------
     def _ann_query(self, store: str, user_id: str, field: str,
                     q_b64: str, limit: int) -> List[Any]:
@@ -690,6 +762,18 @@ class MemoryBackend:
                 for k, v in self._fetch_by_keys(self.memory, user_id, missing):
                     rows.append([user_id, k, v])
 
+        # User-profile bias (Adım 17): the 1-2 interest clusters the query
+        # points at. Rows near these centroids get a boost downstream, so
+        # results lean toward what the user actually cares about. Needs a
+        # query vector; empty on cold start so the boost stays passive.
+        profile_centroids: List[List[float]] = []
+        if self.profile_boost > 0 and q_vecs:
+            try:
+                profile_centroids = self._active_profile_centroids(
+                    user_id, q_vecs[0])
+            except Exception:
+                profile_centroids = []
+
         # Resolve the sender filter through the identity catalog so
         # "Onur" expands to every alias of the right human (and only
         # that human). If the catalog has no match we fall back to a
@@ -779,6 +863,13 @@ class MemoryBackend:
                 sem_score = max((max(0.0, cosine(qv, row_vec))
                                  for qv in q_vecs), default=0.0)
 
+            # Profile similarity (Adım 17): how close this row sits to the
+            # interest clusters the query points at. Reuses row_vec.
+            psim = 0.0
+            if profile_centroids and row_vec:
+                psim = max((max(0.0, cosine(row_vec, pc))
+                            for pc in profile_centroids), default=0.0)
+
             sem2_score = 0.0
             if use_rrf and q_vecs2:
                 # Prefer the separate emb2 store; fall back to an inline
@@ -820,7 +911,8 @@ class MemoryBackend:
             # means any of the three rankers scored it.
             has_signal = (final > 0 or sem_score > 0
                           or sem2_score > 0 or kw_score > 0
-                          or graph_boost_map.get(c["key"], 0.0) > 0)
+                          or graph_boost_map.get(c["key"], 0.0) > 0
+                          or psim >= PROFILE_SIGNAL_MIN)
             if not has_signal and not tag and sender_alias_set is None \
                     and sender_literal is None:
                 continue
@@ -830,7 +922,7 @@ class MemoryBackend:
             rec_out = {k: v for k, v in rec.items()
                        if k not in ("emb", "emb2")}
             out.append({"key": c["key"], "score": round(final, 4),
-                         "_haystack": haystack,
+                         "_haystack": haystack, "_psim": psim,
                          "_bge": sem_score, "_e5": sem2_score,
                          "_kw": kw_score, **rec_out})
 
@@ -908,6 +1000,21 @@ class MemoryBackend:
                 pool.sort(key=lambda x: (-x["score"], x.get("key", "")))
                 out = pool + out[pool_size:]
 
+        # Adım 17 — user-profile boost. final = (1-β)·base + β·profile_sim,
+        # where profile_sim is the row's cosine to the interest clusters the
+        # query points at. Biases results toward what the user cares about;
+        # passive on cold start (no centroids) and for rows without an
+        # embedding (psim 0). Same min-max-base shape as the other blends.
+        if self.profile_boost > 0 and profile_centroids and out:
+            w = self.profile_boost
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            pmax = max((x.get("_psim", 0.0) for x in out), default=0.0) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                ps = x.get("_psim", 0.0) / pmax
+                x["score"] = round((1.0 - w) * base + w * ps, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
         # Adım 15 — knowledge-graph boost. Rows reached by spreading
         # activation from the query's entities get an additive lift, so a
         # relational query ("who is active on X") surfaces rows that never
@@ -943,6 +1050,7 @@ class MemoryBackend:
 
         for x in out:
             x.pop("_haystack", None)
+            x.pop("_psim", None)
         page = out[:limit]
         # Provenance (Adım 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
@@ -1214,6 +1322,14 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "show_profile",
+        "description": ("Show the user's interest profile — the clusters of "
+                        "topics they care about, each with a label and a "
+                        "weight (its share of their memory). Transparent view "
+                        "of what personalizes their retrieval."),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "feedback",
         "description": (
             "Report which search_memory results you actually used to "
@@ -1349,6 +1465,10 @@ class MCPServer:
         if name == "list_tags":
             return {"ok": True, "user_id": self.user_id,
                     "tags": b.list_tags(self.user_id)}
+
+        if name == "show_profile":
+            return {"ok": True, "user_id": self.user_id,
+                    "profile": b.show_profile(self.user_id)}
 
         return {"error": f"unknown tool: {name}"}
 
