@@ -161,6 +161,16 @@ class MemoryBackend:
             self._ann_pool = int(os.environ.get("EVOSQL_ANN_POOL", "80"))
         except ValueError:
             self._ann_pool = 80
+        # Salience boost (Adım 12): blend the precomputed per-row `salience`
+        # (recency × sender-activity × thread-depth × feedback, written by the
+        # salience job) into the final ranking. 0 = off (default), so the
+        # ranking is unchanged until an operator opts in; rows without a
+        # salience field contribute 0 either way, so enabling it is safe even
+        # before the compute job has run.
+        try:
+            self.salience_boost = float(os.environ.get("EVOSQL_SALIENCE_BOOST", "0"))
+        except ValueError:
+            self.salience_boost = 0.0
         self.tagger   = tagger
         self.reranker = reranker
         # Lexical scorer: "simple" = legacy binary term-presence
@@ -705,6 +715,24 @@ class MemoryBackend:
                         0.5 * rr + 0.5 * x["score"] if fuse else rr, 4)
                 pool.sort(key=lambda x: (-x["score"], x.get("key", "")))
                 out = pool + out[pool_size:]
+
+        # Adım 12 — salience re-ranking. Blend the precomputed per-row
+        # `salience` (recency × sender-activity × thread-depth × feedback)
+        # into the base score so important rows surface first. The plan
+        # phrases it as reducing a high-salience row's effective distance;
+        # in score space that is an additive boost. The base score is min-max
+        # normalized within the pool first so one weight works across the
+        # RRF / rerank / hybrid score scales. Off by default (boost 0); rows
+        # without a salience field contribute 0, so it never invents signal.
+        if self.salience_boost > 0 and len(out) > 1:
+            w = self.salience_boost
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                sal = float(x.get("salience") or 0.0)
+                x["score"] = round((1.0 - w) * base + w * sal, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
         for x in out:
             x.pop("_haystack", None)
         return out[:limit]
