@@ -192,10 +192,17 @@ class MemoryBackend:
         # statement cap, and keeping emb2 out of the main store means a
         # backfill never rewrites — and so never risks — the primary data.
         self.emb2_store = f"{prefix}_emb2"
+        # Implicit-feedback log (Adım 11): one record per search keyed by a
+        # query_id UUID, holding the query, its returned keys, and — once the
+        # caller reports back via the feedback tool — which keys it actually
+        # used. Self-improving-memory training signal; kept in its own store
+        # so it never touches the primary memory rows.
+        self.feedback_store = f"{prefix}_feedback"
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
-                  ("ENTITY STORE", self.entities)]
+                  ("ENTITY STORE", self.entities),
+                  ("MEMORY STORE", self.feedback_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -746,6 +753,72 @@ class MemoryBackend:
         out.sort(key=lambda x: -x["count"])
         return out
 
+    # -- implicit feedback (Adım 11) ---------------------------------
+    def log_query(self, user_id: str, query_id: str, query_text: str,
+                  returned_keys: List[str]) -> None:
+        """Record a search for later feedback. Stored under query_id with
+        used_keys empty until the caller reports back. Best-effort: a
+        logging failure must never break the search response."""
+        rec: Dict[str, Any] = {
+            "query_text":    query_text,
+            "returned_keys": returned_keys,
+            "used_keys":     [],
+            "rating":        None,
+            "ts":            time.time(),
+            "user_id":       user_id,
+        }
+        # Query embedding (b64i8) for future offline training. Optional.
+        if self.embedder is not None:
+            try:
+                qv = self.embedder.embed_query(query_text) \
+                     if hasattr(self.embedder, "embed_query") \
+                     else self.embedder.embed(query_text)
+                if qv:
+                    rec["query_emb"] = encode_vec(qv)
+            except Exception:
+                pass
+        try:
+            self._exec(
+                f"MEMORY PUT INTO {self.feedback_store} VALUES "
+                f"('{_e(user_id)}','{_e(query_id)}','{_e(json.dumps(rec))}')"
+            )
+        except Exception:
+            pass
+
+    def feedback(self, user_id: str, query_id: str,
+                 used_keys: Optional[List[str]] = None,
+                 unused_keys: Optional[List[str]] = None,
+                 rating: Optional[int] = None) -> Dict[str, Any]:
+        """Attach which returned keys the caller actually used to a logged
+        search. Validates used_keys ⊆ returned_keys (data-quality gate from
+        the eval criteria) and upserts the feedback record."""
+        rows = self._query(
+            f"SELECT mem_value FROM __mem_{self.feedback_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' "
+            f"AND mem_key = '{_e(query_id)}'"
+        )
+        if not rows or not rows[0] or not rows[0][0]:
+            return {"error": f"unknown query_id: {query_id}"}
+        try:
+            rec = json.loads(rows[0][0])
+        except Exception:
+            return {"error": "corrupt feedback record"}
+        returned = set(rec.get("returned_keys") or [])
+        used = [k for k in (used_keys or []) if k in returned]
+        dropped = [k for k in (used_keys or []) if k not in returned]
+        rec["used_keys"]   = used
+        rec["unused_keys"] = [k for k in (unused_keys or []) if k in returned]
+        if rating is not None:
+            rec["rating"] = int(rating)
+        rec["feedback_ts"] = time.time()
+        self._exec(
+            f"MEMORY PUT INTO {self.feedback_store} VALUES "
+            f"('{_e(user_id)}','{_e(query_id)}','{_e(json.dumps(rec))}')"
+        )
+        return {"ok": True, "query_id": query_id,
+                "recorded_used": len(used),
+                "ignored_not_returned": dropped}
+
 
 def _to_str(v: Any) -> str:
     if v is None:
@@ -801,7 +874,10 @@ TOOLS = [
             "limit results to one person — aliases of that person are "
             "auto-resolved from the identity catalog, so a different "
             "human whose name happens to share a substring will not "
-            "leak through. Pass `tag` to narrow by topic."
+            "leak through. Pass `tag` to narrow by topic. The response "
+            "includes a `query_id`; after you finish answering, call "
+            "`feedback` with that query_id and the keys you actually used "
+            "so the memory ranking improves over time."
         ),
         "inputSchema": {
             "type": "object",
@@ -842,6 +918,30 @@ TOOLS = [
         "name": "list_tags",
         "description": "List all distinct tags used so far, with counts.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "feedback",
+        "description": (
+            "Report which search_memory results you actually used to "
+            "answer, so the memory system learns over time. Call after a "
+            "search_memory whose results informed your reply. Pass the "
+            "`query_id` from that search and the keys you used; keys not "
+            "in the original result set are ignored."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query_id": {"type": "string",
+                             "description": "From the search_memory response."},
+                "used_keys": {"type": "array", "items": {"type": "string"},
+                              "description": "Result keys you used."},
+                "unused_keys": {"type": "array", "items": {"type": "string"},
+                                "description": "Returned keys you did not use. Optional."},
+                "rating": {"type": "integer",
+                           "description": "Optional 1-5 quality rating of the result set."},
+            },
+            "required": ["query_id"],
+        },
     },
 ]
 
@@ -904,11 +1004,31 @@ class MCPServer:
             tag    = args.get("tag")
             sender = args.get("sender")
             limit  = int(args.get("limit") or 5)
+            results = b.search(self.user_id, q,
+                               limit=limit, tag=tag, sender=sender)
+            # Implicit-feedback hook (Adım 11): tag the response with a
+            # query_id and log (query -> returned keys) so the caller can
+            # later report which keys it used via the feedback tool.
+            query_id = uuid.uuid4().hex
+            b.log_query(self.user_id, query_id, q,
+                        [r.get("key", "") for r in results])
             return {"ok": True,
                     "user_id": self.user_id,
-                    "results": b.search(self.user_id, q,
-                                          limit=limit, tag=tag,
-                                          sender=sender)}
+                    "query_id": query_id,
+                    "results": results}
+
+        if name == "feedback":
+            query_id = args.get("query_id") or ""
+            if not query_id:
+                return {"error": "feedback requires `query_id` "
+                                 "(from a search_memory response)"}
+            used   = args.get("used_keys") or []
+            unused = args.get("unused_keys") or []
+            if isinstance(used, str):   used = [used]
+            if isinstance(unused, str): unused = [unused]
+            return b.feedback(self.user_id, query_id,
+                              used_keys=used, unused_keys=unused,
+                              rating=args.get("rating"))
 
         if name == "recent_memories":
             limit = int(args.get("limit") or 10)
