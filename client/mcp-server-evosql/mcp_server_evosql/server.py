@@ -263,6 +263,13 @@ class MemoryBackend:
         # Sleep-time scheduler (Adım 18): per-job state + audit log so the
         # background jobs run idempotently and survive restarts.
         self.job_runs_store = f"{prefix}_job_runs"
+        # Decay & archival (Adım 20): row access times in a small side store
+        # (so a search never rewrites the main record just to record a read);
+        # the daily decay pass flags faded rows archived=true. Opt-in via
+        # EVOSQL_DECAY>0 — default off keeps search byte-for-byte. When on,
+        # search refreshes last_accessed and skips archived rows.
+        self.access_store = f"{prefix}_access"
+        self.decay_enabled = os.environ.get("EVOSQL_DECAY", "0") != "0"
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
@@ -273,7 +280,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.graph_store),
                   ("MEMORY STORE", self.episodes_store),
                   ("MEMORY STORE", self.profile_store),
-                  ("MEMORY STORE", self.job_runs_store)]
+                  ("MEMORY STORE", self.job_runs_store),
+                  ("MEMORY STORE", self.access_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -692,7 +700,8 @@ class MemoryBackend:
                 limit: int = 5,
                 tag: Optional[str] = None,
                 sender: Optional[str] = None,
-                mode: str = "flat") -> List[Dict[str, Any]]:
+                mode: str = "flat",
+                include_archived: bool = False) -> List[Dict[str, Any]]:
         # Hierarchical mode (Adım 16): rank only the episode summaries, so an
         # aggregation query returns a few paragraph summaries with drill-down
         # instead of every raw row. Unlike a tag filter this keeps the normal
@@ -815,6 +824,10 @@ class MemoryBackend:
             if episode_only and not rec.get("is_episode"):
                 continue
             if not episode_only and rec.get("is_episode"):
+                continue
+            # Decay (Adım 20): faded rows are archived, not deleted — skip them
+            # unless the caller asked to include archived.
+            if self.decay_enabled and not include_archived and rec.get("archived"):
                 continue
             # Match across every text field a connector might use, not
             # only `fact`. Teams uses `text`, gmail uses `subject` +
@@ -1059,7 +1072,38 @@ class MemoryBackend:
         # Provenance (Adım 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
         self._attach_evidence(user_id, page)
+        # Decay (Adım 20): a read refreshes the row's access time so accessed
+        # memories resist archival (Ebbinghaus). Best-effort, side store only.
+        if self.decay_enabled and page:
+            self._touch_access(user_id, [r["key"] for r in page])
         return page
+
+    def _touch_access(self, user_id: str, keys: List[str]) -> None:
+        now = time.time()
+        for k in keys:
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.access_store} VALUES "
+                    f"('{_e(user_id)}','{_e(k)}',"
+                    f"'{_e(json.dumps({'last_accessed': now}))}')")
+            except Exception:
+                pass
+
+    def restore(self, user_id: str, key: str) -> bool:
+        """Bring an archived memory back: clear the flag and refresh its
+        access time so the next decay pass keeps it active."""
+        rows = self._fetch_by_keys(self.memory, user_id, [key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return False
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return False
+        rec["archived"] = False
+        self._exec(f"MEMORY PUT INTO {self.memory} VALUES "
+                   f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        self._touch_access(user_id, [key])
+        return True
 
     def _attach_evidence(self, user_id: str,
                           rows: List[Dict[str, Any]]) -> None:
@@ -1319,6 +1363,11 @@ TOOLS = [
                                 "burst of activity); call expand_episode on "
                                 "a result's episode_id to drill into its "
                                 "source rows."},
+                "include_archived": {"type": "boolean", "default": False,
+                            "description": "Include faded/archived memories "
+                                "(old and long unused). Off by default so "
+                                "stale rows do not clutter results; turn on "
+                                "to dig up something forgotten."},
                 "limit":  {"type": "integer", "default": 5},
             },
             "required": ["query"],
@@ -1368,6 +1417,17 @@ TOOLS = [
                         "weight (its share of their memory). Transparent view "
                         "of what personalizes their retrieval."),
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "restore_memory",
+        "description": ("Un-archive a faded memory by its `key`, bringing it "
+                        "back into normal search. Nothing is ever deleted by "
+                        "decay, only archived; this reverses that."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
     },
     {
         "name": "feedback",
@@ -1458,8 +1518,10 @@ class MCPServer:
             sender = args.get("sender")
             mode   = (args.get("mode") or "flat").lower()
             limit  = int(args.get("limit") or 5)
+            inc_arch = bool(args.get("include_archived"))
             results = b.search(self.user_id, q,
-                               limit=limit, tag=tag, sender=sender, mode=mode)
+                               limit=limit, tag=tag, sender=sender, mode=mode,
+                               include_archived=inc_arch)
             # Implicit-feedback hook (Adım 11): tag the response with a
             # query_id and log (query -> returned keys) so the caller can
             # later report which keys it used via the feedback tool.
@@ -1509,6 +1571,12 @@ class MCPServer:
         if name == "show_profile":
             return {"ok": True, "user_id": self.user_id,
                     "profile": b.show_profile(self.user_id)}
+
+        if name == "restore_memory":
+            key = args.get("key") or ""
+            if not key:
+                return {"error": "restore_memory requires `key`"}
+            return {"ok": b.restore(self.user_id, key), "key": key}
 
         return {"error": f"unknown tool: {name}"}
 

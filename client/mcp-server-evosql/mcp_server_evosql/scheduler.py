@@ -165,13 +165,19 @@ def job_episodes(backend, ns: str) -> int:
     return len(backend.build_episodes(ns))
 
 
+def job_decay(backend, ns: str) -> int:
+    from . import decay
+    res = decay.decay_pass(backend, ns)
+    return res["archived"] + res["unarchived"]
+
+
 JOBS: List[Job] = [
     Job("embed_missing",    "hourly",            job_embed_missing),
     Job("extract_entities", "hourly",            job_extract_entities),
     Job("salience",         "daily@03:00",       job_salience),
     Job("profile",          "daily@04:00",       job_profile),
+    Job("decay",            "daily@05:00",       job_decay),
     Job("episodes",         "weekly@sun 02:00",  job_episodes),
-    # decay pass (Adım 20) registered once that step lands.
 ]
 
 
