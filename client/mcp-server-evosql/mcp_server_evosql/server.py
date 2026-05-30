@@ -122,6 +122,11 @@ def _bm25_scores(q_terms: List[str],
     return scores
 
 
+# Provenance schema version (Adım 13). Bump when the derived_from / evidence
+# shape changes so synthesized rows can be regenerated against the new schema.
+SYNTHESIS_SCHEMA_VERSION = 1
+
+
 class MemoryBackend:
     # Long-running MCP server processes outlive the database container
     # they connect to (docker compose restart, server upgrade, network
@@ -282,7 +287,8 @@ class MemoryBackend:
 
     # -- DML wrappers -------------------------------------------------
     def save(self, user_id: str, fact: str,
-              tags: Optional[List[str]] = None) -> str:
+              tags: Optional[List[str]] = None,
+              derived_from: Optional[Sequence[str]] = None) -> str:
         created = time.time()
         key = f"mem_{int(created*1000)}_{uuid.uuid4().hex[:6]}"
         # Topic tags are merged into the regular `tags` list so the
@@ -302,6 +308,21 @@ class MemoryBackend:
         if topic_tags:
             record["topic_tags"]  = topic_tags
             record["topic_model"] = self.tagger.kind
+        # Provenance (Adım 13): a fact synthesized from other memories
+        # records its source keys so it stays traceable to evidence. The
+        # source keys are validated foreign-key style — only keys that
+        # actually exist in this namespace are kept, and `regenerable` is
+        # true only when every requested source is still present (so a
+        # later regeneration has the full evidence).
+        if derived_from:
+            requested = [k for k in derived_from if k]
+            present = {r[0] for r in
+                       self._fetch_by_keys(self.memory, user_id, requested)}
+            valid = [k for k in requested if k in present]
+            record["derived_from"]      = valid
+            record["synthesized"]       = True
+            record["regenerable"]       = bool(valid) and len(valid) == len(requested)
+            record["synthesis_version"] = SYNTHESIS_SCHEMA_VERSION
         # Concatenate tags so a save like "fact='likes Go'"
         # tags=['language'] still ranks for the query "programming
         # languages" via the embedding model. Shared by both embedders.
@@ -735,7 +756,36 @@ class MemoryBackend:
 
         for x in out:
             x.pop("_haystack", None)
-        return out[:limit]
+        page = out[:limit]
+        # Provenance (Adım 13): synthesized rows in the returned page carry
+        # an evidence_chain resolving each source key to its fact.
+        self._attach_evidence(user_id, page)
+        return page
+
+    def _attach_evidence(self, user_id: str,
+                          rows: List[Dict[str, Any]]) -> None:
+        """For each synthesized row, resolve its derived_from keys to
+        {key, fact, present} so the caller can trace the memory back to its
+        sources. One batched fetch for the whole page."""
+        need = set()
+        for x in rows:
+            if x.get("synthesized") and x.get("derived_from"):
+                need.update(x["derived_from"])
+        if not need:
+            return
+        srcmap: Dict[str, str] = {}
+        for r in self._fetch_by_keys(self.memory, user_id, list(need)):
+            try:
+                sr = json.loads(r[1]) if r[1] else {}
+            except Exception:
+                sr = {}
+            srcmap[r[0]] = (sr.get("fact") or "") if isinstance(sr, dict) else ""
+        for x in rows:
+            if x.get("synthesized") and x.get("derived_from"):
+                x["evidence_chain"] = [
+                    {"key": k, "fact": srcmap.get(k, ""), "present": k in srcmap}
+                    for k in x["derived_from"]
+                ]
 
     def recent(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         rows = self._query(
@@ -887,6 +937,16 @@ TOOLS = [
                     "description": "Categorisation labels (e.g. work, "
                                        "preference, family). Optional."
                 },
+                "derived_from": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "If this fact is SYNTHESIZED from other "
+                                   "stored memories (e.g. a summary or "
+                                   "inference), list their keys here. The row "
+                                   "is then marked synthesized and traceable "
+                                   "back to those sources; search_memory "
+                                   "returns an evidence_chain for it. Optional."
+                },
             },
             "required": ["fact"],
         },
@@ -1022,7 +1082,10 @@ class MCPServer:
             tags = args.get("tags") or []
             if isinstance(tags, str):
                 tags = [tags]
-            key = b.save(self.user_id, fact, tags)
+            derived_from = args.get("derived_from") or []
+            if isinstance(derived_from, str):
+                derived_from = [derived_from]
+            key = b.save(self.user_id, fact, tags, derived_from=derived_from)
             return {"ok": True, "key": key, "user_id": self.user_id}
 
         if name == "search_memory":
