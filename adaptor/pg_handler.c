@@ -256,6 +256,74 @@ static int pg_copy_out_stream(conn_t *conn, ResultSet *rs, SessionCtx *session,
 }
 
 /* ----------------------------------------------------------------
+ *  Named prepared-statement store (Extended Query Protocol).
+ *
+ *  A client that re-uses a named prepared statement (e.g. psycopg's
+ *  auto-prepare, or JDBC) sends Parse ONCE, then Bind+Execute for every
+ *  later run with no further Parse. We must therefore retain the parsed
+ *  query keyed by its statement name; otherwise the re-used Bind finds no
+ *  query and Execute returns an empty result with no RowDescription.
+ *  Unnamed statements are stored under the empty name and replaced freely.
+ * ---------------------------------------------------------------- */
+#define PG_MAX_PREP_STMTS 64
+
+typedef struct {
+    char  name[64];
+    char *query;
+} PgPrepStmt;
+
+static char *pg_prep_find(PgPrepStmt *tbl, const char *name)
+{
+    int i;
+    for (i = 0; i < PG_MAX_PREP_STMTS; i++)
+        if (tbl[i].query && strcmp(tbl[i].name, name) == 0)
+            return tbl[i].query;
+    return NULL;
+}
+
+static void pg_prep_set(PgPrepStmt *tbl, const char *name, const char *query)
+{
+    int i;
+    for (i = 0; i < PG_MAX_PREP_STMTS; i++)        /* replace same name */
+        if (tbl[i].query && strcmp(tbl[i].name, name) == 0) {
+            free(tbl[i].query);
+            tbl[i].query = strdup(query);
+            return;
+        }
+    for (i = 0; i < PG_MAX_PREP_STMTS; i++)        /* take a free slot */
+        if (!tbl[i].query) {
+            snprintf(tbl[i].name, sizeof(tbl[i].name), "%s", name);
+            tbl[i].query = strdup(query);
+            return;
+        }
+    free(tbl[0].query);                            /* table full: evict 0 */
+    snprintf(tbl[0].name, sizeof(tbl[0].name), "%s", name);
+    tbl[0].query = strdup(query);
+}
+
+static void pg_prep_remove(PgPrepStmt *tbl, const char *name)
+{
+    int i;
+    for (i = 0; i < PG_MAX_PREP_STMTS; i++)
+        if (tbl[i].query && strcmp(tbl[i].name, name) == 0) {
+            free(tbl[i].query);
+            tbl[i].query = NULL;
+            tbl[i].name[0] = '\0';
+            return;
+        }
+}
+
+static void pg_prep_clear_all(PgPrepStmt *tbl)
+{
+    int i;
+    for (i = 0; i < PG_MAX_PREP_STMTS; i++) {
+        free(tbl[i].query);
+        tbl[i].query = NULL;
+        tbl[i].name[0] = '\0';
+    }
+}
+
+/* ----------------------------------------------------------------
  *  pg_handle_client — full PG v3 session for one connection
  *
  *  The server infrastructure (server.c) calls this in a dedicated
@@ -272,6 +340,9 @@ void pg_handle_client(socket_t client_sock)
     /* Pending query for Extended Query Protocol */
     char *pending_query = NULL;
     int pending_described = 0;
+    /* Named prepared statements, retained across Bind/Execute re-use. */
+    PgPrepStmt prep_stmts[PG_MAX_PREP_STMTS];
+    memset(prep_stmts, 0, sizeof(prep_stmts));
 
     /* Per-connection session context */
     SessionCtx session = { "evosql", "default", "" };
@@ -526,6 +597,9 @@ void pg_handle_client(socket_t client_sock)
             if (pending_query) free(pending_query);
             pending_query = strdup(query);
             pending_described = 0;
+            /* Retain by statement name so a later Bind+Execute that re-uses
+             * this prepared statement (sent with no Parse) can find it. */
+            pg_prep_set(prep_stmts, stmt_name, query);
 
             PgBuf b;
             pg_buf_init(&b, PG_RESP_PARSE_COMPLETE);
@@ -536,8 +610,22 @@ void pg_handle_client(socket_t client_sock)
         case PG_MSG_BIND: {
             {
                 char *ptr = msg_buf;
-                ptr += strlen(ptr) + 1;   /* skip portal name */
-                ptr += strlen(ptr) + 1;   /* skip statement name */
+                ptr += strlen(ptr) + 1;            /* skip portal name */
+                char *bind_stmt = ptr;             /* statement name */
+                ptr += strlen(ptr) + 1;
+
+                /* Re-used prepared statement: the client sent Bind+Execute
+                 * with no preceding Parse, so Execute already freed
+                 * pending_query. Rebuild it from the retained template so
+                 * the query runs again. The normal Parse path leaves
+                 * pending_query set, so this only fires on re-use. */
+                if (!pending_query) {
+                    char *bind_tmpl = pg_prep_find(prep_stmts, bind_stmt);
+                    if (bind_tmpl) {
+                        pending_query = strdup(bind_tmpl);
+                        pending_described = 0;
+                    }
+                }
 
                 /* Read parameter format codes (0=text, 1=binary) */
                 int16_t num_fmt;
@@ -782,6 +870,10 @@ void pg_handle_client(socket_t client_sock)
         }
 
         case PG_MSG_CLOSE: {
+            /* Close('S', name) deallocates a prepared statement; drop its
+             * retained template. ('P' closes a portal — nothing retained.) */
+            if (msg_len >= 1 && msg_buf[0] == 'S')
+                pg_prep_remove(prep_stmts, msg_buf + 1);
             PgBuf b;
             pg_buf_init(&b, PG_RESP_CLOSE_COMPLETE);
             pg_buf_send(&b, &conn);
@@ -844,6 +936,7 @@ cleanup:
     conn_tls_shutdown(&conn);
     conn_lock_destroy(&conn);
     if (pending_query) free(pending_query);
+    pg_prep_clear_all(prep_stmts);
     free(msg_buf);
     result_free(rs); free(rs);
     /* NOTE: do NOT close socket — server.c does it */
