@@ -260,6 +260,9 @@ class MemoryBackend:
         except ValueError:
             self.profile_boost = 0.0
         self._profile_cache: Dict[str, List[Dict[str, Any]]] = {}
+        # Sleep-time scheduler (Adım 18): per-job state + audit log so the
+        # background jobs run idempotently and survive restarts.
+        self.job_runs_store = f"{prefix}_job_runs"
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
@@ -269,7 +272,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.mention_store),
                   ("MEMORY STORE", self.graph_store),
                   ("MEMORY STORE", self.episodes_store),
-                  ("MEMORY STORE", self.profile_store)]
+                  ("MEMORY STORE", self.profile_store),
+                  ("MEMORY STORE", self.job_runs_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
