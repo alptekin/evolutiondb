@@ -231,6 +231,31 @@ transports at once because both go through the same `MCPServer.handle`.
 | `EVOSQL_EMBEDDING_MODEL`    | provider default | Override embedding model (e.g. `text-embedding-3-large`) |
 | `OPENAI_API_KEY`            | —             | Required when provider is `openai` |
 
+### Context-layer boosts (all opt-in)
+
+These layer extra signal onto retrieval. Each is off by default so the plain
+hybrid search is unchanged; turn them on per deployment.
+
+| Env var                  | Default | Purpose |
+|--------------------------|---------|---------|
+| `EVOSQL_SALIENCE_BOOST`  | `0`     | Weight (0-1) for the per-row salience score (recency × sender activity × thread depth × feedback) |
+| `EVOSQL_GRAPH_BOOST`     | `0`     | Weight (0-1) for knowledge-graph spreading activation — relational queries reach rows that never name the queried entity |
+| `EVOSQL_PROFILE_BOOST`   | `0`     | Weight (0-1) for the user interest profile — biases results toward the cluster the query points at |
+| `EVOSQL_DECAY`           | `0`     | `1` to fade old, unused rows (archived, never deleted; `include_archived` digs them back up) |
+| `EVOSQL_GRAPH_BUILD`     | `1`     | Build graph edges inline on save (cheap; needed before the graph boost helps) |
+| `EVOSQL_ENTITY_EXTRACT`  | `1`     | Extract entities inline on save |
+
+`salience`, `profile`, and `decay` read data the background scheduler
+maintains, so run it for them to have any effect:
+
+```bash
+python -m mcp_server_evosql.scheduler run     # hourly/daily/weekly jobs
+python -m mcp_server_evosql.scheduler status  # last run + failure ratio
+```
+
+It also embeds + entity-extracts new rows, recomputes salience, refreshes the
+interest profile, regenerates episode summaries, and runs the decay pass.
+
 ## Semantic search
 
 `search_memory` runs in keyword mode by default. Setting

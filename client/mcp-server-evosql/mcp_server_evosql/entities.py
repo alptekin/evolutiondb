@@ -1,0 +1,391 @@
+"""
+entities — entity extraction + canonical-id resolution (Adım 14).
+
+Two-stage extraction:
+  1. regex + heuristic — email / phone / IBAN / TC kimlik / organization /
+     person-name patterns (TR + EN). Deterministic, no deps.
+  2. optional local-LLM second pass (EVOSQL_ENTITY_LLM = "ollama" | "anthropic")
+     to catch what the regex misses; best-effort, off by default.
+
+Canonicalization folds surface forms that refer to the same thing into one
+entity id: normalized edit-distance < 2 (or a first-name + last-initial match
+for people) merges the new mention into an existing entity as an alias.
+
+Storage (per MCP store prefix):
+  <prefix>_entities         key=entity_id  -> {id, canonical, aliases[], type,
+                                               first_seen, last_seen, mention_count}
+  <prefix>_entity_mentions  key=mem_key|entity_id|start
+                                          -> {mem_key, entity_id, start, end,
+                                              confidence, surface}
+
+Extraction runs inline (best-effort) after save_memory and as a backfill CLI:
+  python -m mcp_server_evosql.entities --namespace alptekin_topal [--dry-run]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import unicodedata
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# ---------------------------------------------------------------- #
+#  regex patterns                                                   #
+# ---------------------------------------------------------------- #
+_RE_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+_RE_IBAN  = re.compile(r"\bTR\d{2}(?:[ ]?\d{2,4}){5,6}\b", re.I)
+_RE_PHONE = re.compile(
+    r"(?<!\d)(?:\+90|0090|0)?[ ]?\(?5\d{2}\)?[ ]?\d{3}[ ]?\d{2}[ ]?\d{2}(?!\d)")
+_RE_TCKN  = re.compile(r"(?<!\d)[1-9]\d{10}(?!\d)")
+# Org: a Title-case run that ends in a corporate suffix.
+_ORG_SUFFIX = (r"(?:A\.?\s?Ş\.?|Ltd\.?(?:\s?Şti\.?)?|San\.?|Tic\.?|Holding|"
+               r"Group|Grup|Inc\.?|LLC|Corp\.?|Co\.?|GmbH|Kurumsal)")
+_RE_ORG = re.compile(
+    r"\b([A-ZÇĞİÖŞÜ][\wÇĞİÖŞÜçğıöşü&]*(?:[ ][A-ZÇĞİÖŞÜ][\wÇĞİÖŞÜçğıöşü&]*){0,4}"
+    r"[ ]" + _ORG_SUFFIX + r")")
+# Honorifics that flag the adjacent Title-case token(s) as a person.
+_HONORIFIC_POST = r"(?:bey|hanım|hanim|bey'?\w*|han\w*)"
+_HONORIFIC_PRE  = r"(?:Dr|Prof|Doç|Av|Sayın|Bay|Bayan|Mr|Ms|Mrs|Miss)\.?"
+_TITLE = r"[A-ZÇĞİÖŞÜ][a-zçğıöşü]+"
+# person: pre-honorific + Name(s), OR Name(s) + post-honorific, OR 2-3 Title words
+_RE_PERSON_PRE  = re.compile(_HONORIFIC_PRE + r"\s+(" + _TITLE + r"(?:\s+" + _TITLE + r"){0,2})")
+_RE_PERSON_POST = re.compile(r"\b(" + _TITLE + r"(?:\s+" + _TITLE + r"){0,1})\s+" + _HONORIFIC_POST + r"\b")
+_RE_PERSON_FULL = re.compile(r"\b(" + _TITLE + r"(?:\s+" + _TITLE + r"){1,2})\b")
+# Name + abbreviated surname: "Süreyya G." — the case canonicalization must
+# fold back onto the full "Süreyya Gül".
+_RE_PERSON_INITIAL = re.compile(r"\b(" + _TITLE + r"\s+[A-ZÇĞİÖŞÜ])\.(?!\w)")
+
+# Title-case words that are usually not people (months, weekdays, common
+# sentence openers). Keeps the bare-2-word person rule from over-firing.
+_STOP_TITLE = {
+    "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar",
+    "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos",
+    "Eylül", "Ekim", "Kasım", "Aralık", "Bu", "Şu", "Bir", "The", "This",
+    "That", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    "Sunday", "January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December",
+}
+
+Mention = Dict[str, Any]   # {surface, type, start, end, confidence}
+
+
+# ---------------------------------------------------------------- #
+#  helpers                                                          #
+# ---------------------------------------------------------------- #
+def _norm(s: str) -> str:
+    """Lowercase + strip diacritics + collapse non-alnum to single spaces.
+    Used for canonical matching so 'Süreyya G.' and 'sureyya g' compare equal."""
+    s = unicodedata.normalize("NFKD", s.lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^a-z0-9]+", " ", s).strip()
+    return s
+
+
+def _edit_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _person_keys(canon: str) -> List[str]:
+    """Loose person match keys: normalized full name AND first+last-initial
+    (so 'Süreyya Gül' and 'Süreyya G.' collapse)."""
+    n = _norm(canon)
+    parts = n.split()
+    keys = [n]
+    if len(parts) >= 2:
+        keys.append(parts[0] + " " + parts[-1][0])      # first + last initial
+        keys.append(parts[0])                            # bare first name
+    return keys
+
+
+# ---------------------------------------------------------------- #
+#  stage 1 — regex + heuristic extraction                           #
+# ---------------------------------------------------------------- #
+def _add(out: List[Mention], seen: List[Tuple[int, int]], surface: str,
+         typ: str, start: int, end: int, conf: float) -> None:
+    # drop spans that overlap an already-accepted (higher-priority) mention
+    for s, e in seen:
+        if start < e and end > s:
+            return
+    out.append({"surface": surface.strip(), "type": typ,
+                "start": start, "end": end, "confidence": conf})
+    seen.append((start, end))
+
+
+def extract_regex(text: str) -> List[Mention]:
+    out: List[Mention] = []
+    seen: List[Tuple[int, int]] = []
+    # priority order: structured ids first, then org, then person
+    for rx, typ, conf in ((_RE_EMAIL, "email", 0.99), (_RE_IBAN, "iban", 0.98),
+                          (_RE_TCKN, "tckn", 0.9), (_RE_PHONE, "phone", 0.9)):
+        for m in rx.finditer(text):
+            _add(out, seen, m.group(0), typ, m.start(), m.end(), conf)
+    for m in _RE_ORG.finditer(text):
+        _add(out, seen, m.group(1), "org", m.start(1), m.end(1), 0.8)
+    for rx, conf in ((_RE_PERSON_PRE, 0.85), (_RE_PERSON_POST, 0.85)):
+        for m in rx.finditer(text):
+            name = m.group(1)
+            _add(out, seen, name, "person", m.start(1), m.end(1), conf)
+    for m in _RE_PERSON_FULL.finditer(text):
+        name = m.group(1)
+        if any(w in _STOP_TITLE for w in name.split()):
+            continue
+        _add(out, seen, name, "person", m.start(1), m.end(1), 0.7)
+    for m in _RE_PERSON_INITIAL.finditer(text):
+        name = m.group(1)
+        if name.split()[0] in _STOP_TITLE:
+            continue
+        _add(out, seen, name, "person", m.start(1), m.end(1), 0.65)
+    out.sort(key=lambda x: x["start"])
+    return out
+
+
+# ---------------------------------------------------------------- #
+#  stage 2 — optional local-LLM refine (off unless EVOSQL_ENTITY_LLM)
+# ---------------------------------------------------------------- #
+def llm_refine(text: str, mentions: List[Mention]) -> List[Mention]:
+    backend = os.environ.get("EVOSQL_ENTITY_LLM", "").strip().lower()
+    if not backend:
+        return mentions
+    try:
+        extra = _llm_extract(text, backend)
+    except Exception:
+        return mentions
+    # merge LLM spans that don't overlap regex ones
+    seen = [(m["start"], m["end"]) for m in mentions]
+    for e in extra:
+        s, en = e.get("start", -1), e.get("end", -1)
+        if s < 0 or en <= s:
+            continue
+        if any(s < pe and en > ps for ps, pe in seen):
+            continue
+        mentions.append({"surface": e.get("surface", text[s:en]),
+                         "type": e.get("type", "person"),
+                         "start": s, "end": en,
+                         "confidence": float(e.get("confidence", 0.6))})
+        seen.append((s, en))
+    mentions.sort(key=lambda x: x["start"])
+    return mentions
+
+
+def _llm_extract(text: str, backend: str) -> List[Mention]:
+    prompt = ("Extract named entities (person, org, email, phone, iban, tckn) "
+              "from the text. Return JSON list of {surface,type,start,end}. "
+              "Text:\n" + text)
+    if backend == "ollama":
+        import urllib.request
+        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+        model = os.environ.get("EVOSQL_ENTITY_LLM_MODEL", "llama3.1")
+        body = json.dumps({"model": model, "prompt": prompt, "stream": False,
+                           "format": "json"}).encode()
+        req = urllib.request.Request(host + "/api/generate", body,
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read().decode())
+        parsed = json.loads(data.get("response", "[]"))
+        return parsed if isinstance(parsed, list) else parsed.get("entities", [])
+    if backend in ("anthropic", "sonnet"):
+        import anthropic
+        c = anthropic.Anthropic()
+        msg = c.messages.create(
+            model=os.environ.get("EVOSQL_ENTITY_LLM_MODEL", "claude-sonnet-4-6"),
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}])
+        return json.loads(msg.content[0].text)
+    return []
+
+
+def extract_entities(text: str) -> List[Mention]:
+    return llm_refine(text, extract_regex(text))
+
+
+# ---------------------------------------------------------------- #
+#  canonical-id resolution + storage                                #
+# ---------------------------------------------------------------- #
+class EntityStore:
+    def __init__(self, exec_fn: Callable[[str], None],
+                 query_fn: Callable[[str], List[List[str]]],
+                 ns: str, ent_store: str, men_store: str):
+        self._exec = exec_fn
+        self._query = query_fn
+        self.ns = ns
+        self.ent_store = ent_store
+        self.men_store = men_store
+        self._cache: Optional[Dict[str, dict]] = None   # entity_id -> entity
+        self._index: Dict[Tuple[str, str], str] = {}    # (type, match_key) -> entity_id
+
+    def _load(self) -> None:
+        if self._cache is not None:
+            return
+        self._cache, self._index = {}, {}
+        from .server import _e
+        rows = self._query(
+            f"SELECT mem_key, mem_value FROM __mem_{self.ent_store} "
+            f"WHERE mem_namespace = '{_e(self.ns)}' LIMIT 100000") or []
+        for k, v in rows:
+            try:
+                ent = json.loads(v) if not isinstance(v, dict) else v
+            except Exception:
+                continue
+            self._cache[k] = ent
+            self._index_entity(ent)
+
+    def _index_entity(self, ent: dict) -> None:
+        typ = ent["type"]
+        names = [ent["canonical"]] + list(ent.get("aliases") or [])
+        for nm in names:
+            for mk in (_person_keys(nm) if typ == "person" else [_norm(nm)]):
+                self._index[(typ, mk)] = ent["id"]
+
+    def resolve(self, surface: str, typ: str) -> Tuple[str, bool]:
+        """Return (entity_id, is_new). Folds the surface into an existing
+        entity by exact normalized match, person key match, or edit-distance
+        < 2; otherwise mints a new entity."""
+        self._load()
+        keys = _person_keys(surface) if typ == "person" else [_norm(surface)]
+        for mk in keys:
+            hit = self._index.get((typ, mk))
+            if hit:
+                return hit, False
+        # fuzzy: edit-distance < 2 against same-type canonicals/aliases
+        nsurf = _norm(surface)
+        for (t, mk), eid in self._index.items():
+            if t == typ and abs(len(mk) - len(nsurf)) <= 2 \
+                    and _edit_distance(mk, nsurf) < 2:
+                return eid, False
+        eid = f"ent_{typ}_{len(self._cache) + 1}_{int(time.time()*1000)%100000}"
+        return eid, True
+
+    def upsert(self, mem_key: str, surface: str, typ: str,
+               start: int, end: int, conf: float, ts: float,
+               write: bool = True) -> str:
+        from .server import _e
+        eid, is_new = self.resolve(surface, typ)
+        if is_new:
+            ent = {"id": eid, "canonical": surface.strip(), "type": typ,
+                   "aliases": [], "first_seen": ts, "last_seen": ts,
+                   "mention_count": 0}
+            self._cache[eid] = ent
+        else:
+            ent = self._cache[eid]
+            if _norm(surface) != _norm(ent["canonical"]) \
+                    and surface.strip() not in (ent.get("aliases") or []):
+                ent.setdefault("aliases", []).append(surface.strip())
+        ent["last_seen"] = ts
+        ent["mention_count"] = int(ent.get("mention_count", 0)) + 1
+        self._index_entity(ent)
+        if write:
+            self._exec(f"MEMORY PUT INTO {self.ent_store} VALUES "
+                       f"('{_e(self.ns)}','{_e(eid)}','{_e(json.dumps(ent))}')")
+            men_key = f"{mem_key}|{eid}|{start}"
+            men = {"mem_key": mem_key, "entity_id": eid, "start": start,
+                   "end": end, "confidence": conf, "surface": surface.strip()}
+            self._exec(f"MEMORY PUT INTO {self.men_store} VALUES "
+                       f"('{_e(self.ns)}','{_e(men_key)}','{_e(json.dumps(men))}')")
+        return eid
+
+    def process(self, mem_key: str, text: str, ts: float,
+                write: bool = True) -> List[Mention]:
+        """Extract, resolve, and (optionally) persist every mention in the
+        row. Returns the mentions enriched with their resolved `entity_id`
+        so a caller (the knowledge graph) can wire edges between co-occurring
+        entities without re-extracting."""
+        out: List[Mention] = []
+        for m in extract_entities(text or ""):
+            eid = self.upsert(mem_key, m["surface"], m["type"],
+                              m["start"], m["end"], m["confidence"],
+                              ts, write=write)
+            m = dict(m)
+            m["entity_id"] = eid
+            out.append(m)
+        return out
+
+
+# ---------------------------------------------------------------- #
+#  backfill CLI                                                     #
+# ---------------------------------------------------------------- #
+def _connect():
+    import psycopg
+    return psycopg.connect(
+        host=os.environ.get("EVOSQL_HOST", "127.0.0.1"),
+        port=int(os.environ.get("EVOSQL_PORT", "5433")),
+        user=os.environ.get("EVOSQL_USER", "admin"),
+        password=os.environ.get("EVOSQL_PASSWORD", "admin"),
+        dbname=os.environ.get("EVOSQL_DATABASE", "evosql"),
+        autocommit=True,
+    )
+
+
+def main() -> int:
+    from .server import _e, _to_str
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--namespace", required=True)
+    ap.add_argument("--prefix", default=os.environ.get("MCP_STORE_PREFIX", "mcp"))
+    ap.add_argument("--limit", type=int, default=100000)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    ent_store = f"{args.prefix}_entities"
+    men_store = f"{args.prefix}_entity_mentions"
+    conn = _connect()
+    with conn.cursor() as cur:
+        for s in (ent_store, men_store):
+            try:
+                cur.execute(f"CREATE MEMORY STORE {s}")
+            except Exception:
+                pass
+
+    def q(sql):
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            try:
+                return [[_to_str(x) for x in row] for row in cur.fetchall()]
+            except Exception:
+                return []
+
+    def ex(sql):
+        with conn.cursor() as cur:
+            cur.execute(sql)
+
+    store = EntityStore(ex, q, args.namespace, ent_store, men_store)
+    rows = q(f"SELECT mem_key, mem_value FROM __mem_{args.prefix}_mem "
+             f"WHERE mem_namespace = '{_e(args.namespace)}' LIMIT {args.limit}")
+    total_mentions = 0
+    for key, val in rows:
+        try:
+            rec = json.loads(val) if val else {}
+        except Exception:
+            rec = {}
+        text = " ".join(str(rec.get(k) or "") for k in
+                        ("fact", "text", "body", "subject", "snippet", "from"))
+        ts = rec.get("created") or rec.get("ts") or time.time()
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            ts = time.time()
+        ids = store.process(key, text, ts, write=not args.dry_run)
+        total_mentions += len(ids)
+    print(f"ns={args.namespace}: {len(rows)} rows, {total_mentions} mentions, "
+          f"{len(store._cache or {})} entities"
+          + (" (dry-run)" if args.dry_run else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
