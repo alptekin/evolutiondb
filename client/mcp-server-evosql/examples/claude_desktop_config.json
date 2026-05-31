@@ -21,7 +21,19 @@
         "EVOSQL_USER": "admin",
         "EVOSQL_PASSWORD": "admin",
         "MCP_USER_ID": "alptekin",
-        "MCP_STORE_PREFIX": "claude_desktop"
+        "MCP_STORE_PREFIX": "claude_desktop",
+
+        "_comment_context_layer": [
+          "Context-layer retrieval boosts + decay. All opt-in; remove or set",
+          "to 0 to keep the plain hybrid search. salience/profile/decay need",
+          "the background scheduler to have run (python -m",
+          "mcp_server_evosql.scheduler run) so the data they read exists;",
+          "graph edges and entity extraction build inline on save."
+        ],
+        "EVOSQL_SALIENCE_BOOST": "0.25",
+        "EVOSQL_GRAPH_BOOST": "0.3",
+        "EVOSQL_PROFILE_BOOST": "0.25",
+        "EVOSQL_DECAY": "1"
       }
     }
   }
