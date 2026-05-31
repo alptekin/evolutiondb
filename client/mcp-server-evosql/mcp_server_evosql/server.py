@@ -40,10 +40,18 @@ from typing import Any, Dict, List, Optional, Sequence
 from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env, embedder2_from_env
 from .query_transform import QueryTransform, query_transform_from_env
 from .tagger     import TopicTagger, provider_from_env as tagger_provider_from_env
+from .episodes   import SUMMARY_TAG, build_episodes as _build_episodes
+from .profile    import build_profile as _build_profile
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
 SERVER_VERSION   = "1.7.0"
+
+# Adım 17: a row whose profile-cluster similarity clears this counts as
+# "in the user's interest" and survives the signal filter even with no direct
+# query match — that is how a query in your interest area surfaces your
+# related items. Only active when the profile boost is on.
+PROFILE_SIGNAL_MIN = float(os.environ.get("EVOSQL_PROFILE_SIGNAL_MIN", "0.35"))
 
 
 # ---------------------------------------------------------------- #
@@ -122,6 +130,11 @@ def _bm25_scores(q_terms: List[str],
     return scores
 
 
+# Provenance schema version (Adım 13). Bump when the derived_from / evidence
+# shape changes so synthesized rows can be regenerated against the new schema.
+SYNTHESIS_SCHEMA_VERSION = 1
+
+
 class MemoryBackend:
     # Long-running MCP server processes outlive the database container
     # they connect to (docker compose restart, server upgrade, network
@@ -161,6 +174,16 @@ class MemoryBackend:
             self._ann_pool = int(os.environ.get("EVOSQL_ANN_POOL", "80"))
         except ValueError:
             self._ann_pool = 80
+        # Salience boost (Adım 12): blend the precomputed per-row `salience`
+        # (recency × sender-activity × thread-depth × feedback, written by the
+        # salience job) into the final ranking. 0 = off (default), so the
+        # ranking is unchanged until an operator opts in; rows without a
+        # salience field contribute 0 either way, so enabling it is safe even
+        # before the compute job has run.
+        try:
+            self.salience_boost = float(os.environ.get("EVOSQL_SALIENCE_BOOST", "0"))
+        except ValueError:
+            self.salience_boost = 0.0
         self.tagger   = tagger
         self.reranker = reranker
         # Lexical scorer: "simple" = legacy binary term-presence
@@ -192,10 +215,73 @@ class MemoryBackend:
         # statement cap, and keeping emb2 out of the main store means a
         # backfill never rewrites — and so never risks — the primary data.
         self.emb2_store = f"{prefix}_emb2"
+        # Implicit-feedback log (Adım 11): one record per search keyed by a
+        # query_id UUID, holding the query, its returned keys, and — once the
+        # caller reports back via the feedback tool — which keys it actually
+        # used. Self-improving-memory training signal; kept in its own store
+        # so it never touches the primary memory rows.
+        self.feedback_store = f"{prefix}_feedback"
+        # Entity catalog (Adım 14): extracted named entities and their
+        # canonical ids live in `entity_store`; each surface-form occurrence
+        # in a memory row is recorded in `mention_store`. Both are plain
+        # MEMORY STOREs keyed by the entity/mention id (see entities.py).
+        self.entity_store  = f"{prefix}_entities"
+        self.mention_store = f"{prefix}_entity_mentions"
+        # Inline entity extraction after each save (best-effort, regex-fast).
+        # Until the Adım 18 scheduler exists this runs synchronously; set
+        # EVOSQL_ENTITY_EXTRACT=0 to disable (or run entities.py as backfill).
+        self.entity_extract = os.environ.get("EVOSQL_ENTITY_EXTRACT", "1") != "0"
+        self._entity_stores: Dict[str, Any] = {}   # user_id -> EntityStore
+        # Knowledge graph (Adım 15): co-occurring entities in a row are wired
+        # into `graph_store` so a relational query can reach rows by 1-2 hop
+        # spreading activation. Building edges on save is cheap and keeps the
+        # graph ready (EVOSQL_GRAPH_BUILD=0 to disable); the *retrieval* boost
+        # is opt-in via EVOSQL_GRAPH_BOOST>0 (latency-sensitive hot path).
+        self.graph_store = f"{prefix}_graph_edges"
+        self.graph_build = os.environ.get("EVOSQL_GRAPH_BUILD", "1") != "0"
+        try:
+            self.graph_boost = float(os.environ.get("EVOSQL_GRAPH_BOOST", "0"))
+        except ValueError:
+            self.graph_boost = 0.0
+        self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
+        # Episodes (Adım 16): a weekly job groups recent rows into episodes
+        # and writes one summary per episode (tagged `episode`, synthesized
+        # with derived_from = source keys). The episode record links the
+        # summary back to its sources for hierarchical drill-down.
+        self.episodes_store = f"{prefix}_episodes"
+        # User interest profile (Adım 17): a daily job clusters the user's
+        # row embeddings into interest clusters (<prefix>_profile_clusters);
+        # the retrieval boost biases results toward the clusters the query
+        # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
+        # it only engages when an embedder is configured). Default 0.
+        self.profile_store = f"{prefix}_profile_clusters"
+        try:
+            self.profile_boost = float(os.environ.get("EVOSQL_PROFILE_BOOST", "0"))
+        except ValueError:
+            self.profile_boost = 0.0
+        self._profile_cache: Dict[str, List[Dict[str, Any]]] = {}
+        # Sleep-time scheduler (Adım 18): per-job state + audit log so the
+        # background jobs run idempotently and survive restarts.
+        self.job_runs_store = f"{prefix}_job_runs"
+        # Decay & archival (Adım 20): row access times in a small side store
+        # (so a search never rewrites the main record just to record a read);
+        # the daily decay pass flags faded rows archived=true. Opt-in via
+        # EVOSQL_DECAY>0 — default off keeps search byte-for-byte. When on,
+        # search refreshes last_accessed and skips archived rows.
+        self.access_store = f"{prefix}_access"
+        self.decay_enabled = os.environ.get("EVOSQL_DECAY", "0") != "0"
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
-                  ("ENTITY STORE", self.entities)]
+                  ("ENTITY STORE", self.entities),
+                  ("MEMORY STORE", self.feedback_store),
+                  ("MEMORY STORE", self.entity_store),
+                  ("MEMORY STORE", self.mention_store),
+                  ("MEMORY STORE", self.graph_store),
+                  ("MEMORY STORE", self.episodes_store),
+                  ("MEMORY STORE", self.profile_store),
+                  ("MEMORY STORE", self.job_runs_store),
+                  ("MEMORY STORE", self.access_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -265,7 +351,8 @@ class MemoryBackend:
 
     # -- DML wrappers -------------------------------------------------
     def save(self, user_id: str, fact: str,
-              tags: Optional[List[str]] = None) -> str:
+              tags: Optional[List[str]] = None,
+              derived_from: Optional[Sequence[str]] = None) -> str:
         created = time.time()
         key = f"mem_{int(created*1000)}_{uuid.uuid4().hex[:6]}"
         # Topic tags are merged into the regular `tags` list so the
@@ -285,6 +372,21 @@ class MemoryBackend:
         if topic_tags:
             record["topic_tags"]  = topic_tags
             record["topic_model"] = self.tagger.kind
+        # Provenance (Adım 13): a fact synthesized from other memories
+        # records its source keys so it stays traceable to evidence. The
+        # source keys are validated foreign-key style — only keys that
+        # actually exist in this namespace are kept, and `regenerable` is
+        # true only when every requested source is still present (so a
+        # later regeneration has the full evidence).
+        if derived_from:
+            requested = [k for k in derived_from if k]
+            present = {r[0] for r in
+                       self._fetch_by_keys(self.memory, user_id, requested)}
+            valid = [k for k in requested if k in present]
+            record["derived_from"]      = valid
+            record["synthesized"]       = True
+            record["regenerable"]       = bool(valid) and len(valid) == len(requested)
+            record["synthesis_version"] = SYNTHESIS_SCHEMA_VERSION
         # Concatenate tags so a save like "fact='likes Go'"
         # tags=['language'] still ranks for the query "programming
         # languages" via the embedding model. Shared by both embedders.
@@ -328,7 +430,167 @@ class MemoryBackend:
                     )
                 except Exception:
                     pass  # emb2 is best-effort; main row already saved
+        # Entity extraction (Adım 14) + graph edges (Adım 15) — best-effort,
+        # never blocks the save. Extraction returns the mentions enriched with
+        # their resolved entity ids, which the graph wires into co-occurrence
+        # edges in the same pass (no re-extraction).
+        if self.entity_extract:
+            try:
+                ext = self._entities(user_id).process(key, fact, created)
+                if self.graph_build and ext:
+                    self._graph(user_id).add_edges_from_row(
+                        key, ext, fact, created)
+            except Exception:
+                pass
         return key
+
+    def _entities(self, user_id: str):
+        """Per-namespace EntityStore, cached so its canonical-id index stays
+        warm across saves in this process."""
+        store = self._entity_stores.get(user_id)
+        if store is None:
+            from .entities import EntityStore
+            store = EntityStore(self._exec, self._query, user_id,
+                                self.entity_store, self.mention_store)
+            self._entity_stores[user_id] = store
+        return store
+
+    def _graph(self, user_id: str):
+        """Per-namespace GraphStore (edge adjacency cached warm)."""
+        store = self._graph_stores.get(user_id)
+        if store is None:
+            from .graph import GraphStore
+            store = GraphStore(self._exec, self._query, user_id,
+                               self.graph_store, self.mention_store)
+            self._graph_stores[user_id] = store
+        return store
+
+    def _graph_row_boost(self, user_id: str, query: str) -> Dict[str, float]:
+        """Resolve the query's entities, spread activation 2 hops over the
+        knowledge graph, and return {mem_key: boost} for the reached rows.
+        Empty when the query names no known entity (so non-relational queries
+        pay nothing beyond one cheap extraction)."""
+        from .entities import extract_entities
+        es = self._entities(user_id)
+        seeds, seen = [], set()
+        for m in extract_entities(query or ""):
+            eid, is_new = es.resolve(m["surface"], m["type"])
+            if not is_new and eid not in seen:   # only entities we actually know
+                seeds.append(eid)
+                seen.add(eid)
+        if not seeds:
+            return {}
+        g = self._graph(user_id)
+        act = g.spreading_activation(seeds, depth=2)
+        return g.rows_for_entities(act, seeds=seeds)
+
+    # -- episodes (Adım 16) ------------------------------------------
+    def build_episodes(self, user_id: str, *, window_days: int = 7,
+                       dry_run: bool = False) -> List[Dict[str, Any]]:
+        """Segment recent rows into episodes and write one summary each.
+        Thin wrapper so the tool and CLI share one implementation."""
+        return _build_episodes(self, user_id, window_days=window_days,
+                               dry_run=dry_run)
+
+    def _patch_episode_summary(self, user_id: str, summary_key: str,
+                               episode_id: str,
+                               source_row_keys: List[str]) -> None:
+        """Mark a freshly-saved summary row as an episode and carry its
+        episode_id + sources, so a hierarchical search result can drill down
+        without a reverse lookup."""
+        rows = self._fetch_by_keys(self.memory, user_id, [summary_key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return
+        rec["is_episode"]       = True
+        rec["episode_id"]       = episode_id
+        rec["source_row_keys"]  = source_row_keys
+        self._exec(
+            f"MEMORY PUT INTO {self.memory} VALUES "
+            f"('{_e(user_id)}','{_e(summary_key)}','{_e(json.dumps(rec))}')")
+
+    def expand_episode(self, user_id: str,
+                       episode_id: str) -> Dict[str, Any]:
+        """Drill-down: return the source rows behind an episode summary."""
+        rows = self._query(
+            f"SELECT mem_value FROM __mem_{self.episodes_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' "
+            f"AND mem_key = '{_e(episode_id)}'")
+        if not rows or not rows[0] or not rows[0][0]:
+            return {"error": f"unknown episode_id: {episode_id}"}
+        try:
+            ep = json.loads(rows[0][0])
+        except Exception:
+            return {"error": "corrupt episode record"}
+        src = ep.get("source_row_keys") or []
+        out = []
+        for r in self._fetch_by_keys(self.memory, user_id, src):
+            try:
+                rec = json.loads(r[1]) if r[1] else {}
+            except Exception:
+                rec = {}
+            rec = {k: v for k, v in rec.items() if k not in ("emb", "emb2")}
+            out.append({"key": r[0], **rec})
+        return {"ok": True, "episode_id": episode_id,
+                "time_start": ep.get("time_start"),
+                "time_end": ep.get("time_end"),
+                "rows": out}
+
+    # -- user profile (Adım 17) --------------------------------------
+    def build_profile(self, user_id: str, *, window_days: int = 90,
+                      k: Optional[int] = None,
+                      dry_run: bool = False) -> List[Dict[str, Any]]:
+        cl = _build_profile(self, user_id, window_days=window_days,
+                            k=k, dry_run=dry_run)
+        self._profile_cache.pop(user_id, None)   # invalidate cache
+        return cl
+
+    def _load_profile(self, user_id: str) -> List[Dict[str, Any]]:
+        """Profile clusters with decoded centroids, cached per process."""
+        cached = self._profile_cache.get(user_id)
+        if cached is not None:
+            return cached
+        out: List[Dict[str, Any]] = []
+        for r in self._query(
+                f"SELECT mem_value FROM __mem_{self.profile_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000") or []:
+            try:
+                c = json.loads(r[0])
+                cen = decode_vec(c.get("centroid"))
+                if cen:
+                    out.append({"centroid": cen, "label": c.get("label"),
+                                "weight": float(c.get("weight") or 0.0),
+                                "size": c.get("size")})
+            except Exception:
+                pass
+        self._profile_cache[user_id] = out
+        return out
+
+    def show_profile(self, user_id: str) -> List[Dict[str, Any]]:
+        """Transparency: the user's interest clusters (label + weight)."""
+        cls = self._load_profile(user_id)
+        return sorted(
+            [{"label": c["label"], "weight": round(c["weight"], 4),
+              "size": c.get("size")} for c in cls],
+            key=lambda c: -c["weight"])
+
+    def _active_profile_centroids(self, user_id: str,
+                                  q_vec: Optional[List[float]],
+                                  top: int = 2) -> List[List[float]]:
+        """The 1-2 interest clusters the query points at — rows near these
+        get the profile boost. Empty on cold start (no clusters) or with no
+        query vector, so the boost stays passive."""
+        if not q_vec:
+            return []
+        cls = self._load_profile(user_id)
+        if not cls:
+            return []
+        from .embeddings import cosine
+        ranked = sorted(cls, key=lambda c: -cosine(q_vec, c["centroid"]))
+        return [c["centroid"] for c in ranked[:top]]
 
     # -- server-side ANN candidate gathering (Step 6) ----------------
     def _ann_query(self, store: str, user_id: str, field: str,
@@ -437,7 +699,15 @@ class MemoryBackend:
     def search(self, user_id: str, query: str,
                 limit: int = 5,
                 tag: Optional[str] = None,
-                sender: Optional[str] = None) -> List[Dict[str, Any]]:
+                sender: Optional[str] = None,
+                mode: str = "flat",
+                include_archived: bool = False) -> List[Dict[str, Any]]:
+        # Hierarchical mode (Adım 16): rank only the episode summaries, so an
+        # aggregation query returns a few paragraph summaries with drill-down
+        # instead of every raw row. Unlike a tag filter this keeps the normal
+        # keyword/dense signal requirement, so only episodes relevant to the
+        # query come back — not the whole episode set.
+        episode_only = (mode == "hierarchical")
         q_terms = [w for w in query.lower().split() if len(w) > 1]
 
         # Query-side transform: rewrite the raw query into variants that
@@ -488,6 +758,35 @@ class MemoryBackend:
                 f"'{_e(user_id)}' LIMIT 10000"
             )
 
+        # Knowledge-graph spreading activation (Adım 15). Resolve the query's
+        # entities, spread two hops, and pull in any reached rows the lexical/
+        # dense gather missed so they can compete — this is the actual recall
+        # lift for relational queries. Gated on EVOSQL_GRAPH_BOOST>0; the
+        # default config and any query naming no known entity skip it.
+        graph_boost_map: Dict[str, float] = {}
+        if self.graph_boost > 0:
+            try:
+                graph_boost_map = self._graph_row_boost(user_id, query)
+            except Exception:
+                graph_boost_map = {}
+            if graph_boost_map:
+                have = {r[1] for r in rows}
+                missing = [k for k in graph_boost_map if k not in have]
+                for k, v in self._fetch_by_keys(self.memory, user_id, missing):
+                    rows.append([user_id, k, v])
+
+        # User-profile bias (Adım 17): the 1-2 interest clusters the query
+        # points at. Rows near these centroids get a boost downstream, so
+        # results lean toward what the user actually cares about. Needs a
+        # query vector; empty on cold start so the boost stays passive.
+        profile_centroids: List[List[float]] = []
+        if self.profile_boost > 0 and q_vecs:
+            try:
+                profile_centroids = self._active_profile_centroids(
+                    user_id, q_vecs[0])
+            except Exception:
+                profile_centroids = []
+
         # Resolve the sender filter through the identity catalog so
         # "Onur" expands to every alias of the right human (and only
         # that human). If the catalog has no match we fall back to a
@@ -519,6 +818,16 @@ class MemoryBackend:
             except Exception:
                 rec = {"fact": r[2]}
             if not rec or not rec.get("fact"):
+                continue
+            # Hierarchical mode ranks episode summaries only; flat mode skips
+            # them so a normal search isn't polluted by synthesized overviews.
+            if episode_only and not rec.get("is_episode"):
+                continue
+            if not episode_only and rec.get("is_episode"):
+                continue
+            # Decay (Adım 20): faded rows are archived, not deleted — skip them
+            # unless the caller asked to include archived.
+            if self.decay_enabled and not include_archived and rec.get("archived"):
                 continue
             # Match across every text field a connector might use, not
             # only `fact`. Teams uses `text`, gmail uses `subject` +
@@ -571,6 +880,13 @@ class MemoryBackend:
                 sem_score = max((max(0.0, cosine(qv, row_vec))
                                  for qv in q_vecs), default=0.0)
 
+            # Profile similarity (Adım 17): how close this row sits to the
+            # interest clusters the query points at. Reuses row_vec.
+            psim = 0.0
+            if profile_centroids and row_vec:
+                psim = max((max(0.0, cosine(row_vec, pc))
+                            for pc in profile_centroids), default=0.0)
+
             sem2_score = 0.0
             if use_rrf and q_vecs2:
                 # Prefer the separate emb2 store; fall back to an inline
@@ -611,7 +927,9 @@ class MemoryBackend:
             # itself is the relevance signal. Under RRF, "has signal"
             # means any of the three rankers scored it.
             has_signal = (final > 0 or sem_score > 0
-                          or sem2_score > 0 or kw_score > 0)
+                          or sem2_score > 0 or kw_score > 0
+                          or graph_boost_map.get(c["key"], 0.0) > 0
+                          or psim >= PROFILE_SIGNAL_MIN)
             if not has_signal and not tag and sender_alias_set is None \
                     and sender_literal is None:
                 continue
@@ -621,7 +939,7 @@ class MemoryBackend:
             rec_out = {k: v for k, v in rec.items()
                        if k not in ("emb", "emb2")}
             out.append({"key": c["key"], "score": round(final, 4),
-                         "_haystack": haystack,
+                         "_haystack": haystack, "_psim": psim,
                          "_bge": sem_score, "_e5": sem2_score,
                          "_kw": kw_score, **rec_out})
 
@@ -698,9 +1016,132 @@ class MemoryBackend:
                         0.5 * rr + 0.5 * x["score"] if fuse else rr, 4)
                 pool.sort(key=lambda x: (-x["score"], x.get("key", "")))
                 out = pool + out[pool_size:]
+
+        # Adım 17 — user-profile boost. final = (1-β)·base + β·profile_sim,
+        # where profile_sim is the row's cosine to the interest clusters the
+        # query points at. Biases results toward what the user cares about;
+        # passive on cold start (no centroids) and for rows without an
+        # embedding (psim 0). Same min-max-base shape as the other blends.
+        if self.profile_boost > 0 and profile_centroids and out:
+            w = self.profile_boost
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            pmax = max((x.get("_psim", 0.0) for x in out), default=0.0) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                ps = x.get("_psim", 0.0) / pmax
+                x["score"] = round((1.0 - w) * base + w * ps, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
+        # Adım 15 — knowledge-graph boost. Rows reached by spreading
+        # activation from the query's entities get an additive lift, so a
+        # relational query ("who is active on X") surfaces rows that never
+        # contain the query keyword — they were reached through the entity
+        # graph. Same min-max-base + weighted-boost shape as salience; a row
+        # with no activation contributes 0, so it never invents signal.
+        if self.graph_boost > 0 and graph_boost_map and out:
+            w = self.graph_boost
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            gmax = max(graph_boost_map.values()) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                gb = graph_boost_map.get(x["key"], 0.0) / gmax
+                x["score"] = round((1.0 - w) * base + w * gb, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
+        # Adım 12 — salience re-ranking. Blend the precomputed per-row
+        # `salience` (recency × sender-activity × thread-depth × feedback)
+        # into the base score so important rows surface first. The plan
+        # phrases it as reducing a high-salience row's effective distance;
+        # in score space that is an additive boost. The base score is min-max
+        # normalized within the pool first so one weight works across the
+        # RRF / rerank / hybrid score scales. Off by default (boost 0); rows
+        # without a salience field contribute 0, so it never invents signal.
+        if self.salience_boost > 0 and len(out) > 1:
+            w = self.salience_boost
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                sal = float(x.get("salience") or 0.0)
+                x["score"] = round((1.0 - w) * base + w * sal, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
         for x in out:
             x.pop("_haystack", None)
-        return out[:limit]
+            x.pop("_psim", None)
+        page = out[:limit]
+        # Provenance (Adım 13): synthesized rows in the returned page carry
+        # an evidence_chain resolving each source key to its fact.
+        self._attach_evidence(user_id, page)
+        # Decay (Adım 20): a read refreshes the row's access time so accessed
+        # memories resist archival (Ebbinghaus). Best-effort, side store only.
+        if self.decay_enabled and page:
+            self._touch_access(user_id, [r["key"] for r in page])
+        return page
+
+    def _touch_access(self, user_id: str, keys: List[str]) -> None:
+        now = time.time()
+        for k in keys:
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.access_store} VALUES "
+                    f"('{_e(user_id)}','{_e(k)}',"
+                    f"'{_e(json.dumps({'last_accessed': now}))}')")
+            except Exception:
+                pass
+
+    def restore(self, user_id: str, key: str) -> bool:
+        """Bring an archived memory back: clear the flag and refresh its
+        access time so the next decay pass keeps it active."""
+        rows = self._fetch_by_keys(self.memory, user_id, [key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return False
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return False
+        rec["archived"] = False
+        self._exec(f"MEMORY PUT INTO {self.memory} VALUES "
+                   f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        self._touch_access(user_id, [key])
+        return True
+
+    def _attach_evidence(self, user_id: str,
+                          rows: List[Dict[str, Any]]) -> None:
+        """For each synthesized row, resolve its derived_from keys to evidence.
+
+        Adım 13: evidence_chain = [{key, fact, present}] — full traceability.
+        Adım 19 (co-presented evidence policy): also attach
+          evidence_excerpts = [{key, snippet}]  — a 1-2 sentence quote per
+          source, the citation-ready short form, and citation_required = true
+          so the model is told to co-cite the sources when it uses the row.
+        One batched fetch for the whole page."""
+        need = set()
+        for x in rows:
+            if x.get("synthesized") and x.get("derived_from"):
+                need.update(x["derived_from"])
+        if not need:
+            return
+        srcmap: Dict[str, str] = {}
+        for r in self._fetch_by_keys(self.memory, user_id, list(need)):
+            try:
+                sr = json.loads(r[1]) if r[1] else {}
+            except Exception:
+                sr = {}
+            srcmap[r[0]] = (sr.get("fact") or "") if isinstance(sr, dict) else ""
+        for x in rows:
+            if x.get("synthesized") and x.get("derived_from"):
+                x["evidence_chain"] = [
+                    {"key": k, "fact": srcmap.get(k, ""), "present": k in srcmap}
+                    for k in x["derived_from"]
+                ]
+                # Co-presented evidence: a short quote from each PRESENT
+                # source. Anti-confabulation — the row never travels without
+                # the evidence the model must cite.
+                x["evidence_excerpts"] = [
+                    {"key": k, "snippet": _snippet(srcmap[k])}
+                    for k in x["derived_from"] if k in srcmap and srcmap[k]
+                ]
+                x["citation_required"] = True
 
     def recent(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         rows = self._query(
@@ -746,6 +1187,87 @@ class MemoryBackend:
         out.sort(key=lambda x: -x["count"])
         return out
 
+    # -- implicit feedback (Adım 11) ---------------------------------
+    def log_query(self, user_id: str, query_id: str, query_text: str,
+                  returned_keys: List[str]) -> None:
+        """Record a search for later feedback. Stored under query_id with
+        used_keys empty until the caller reports back. Best-effort: a
+        logging failure must never break the search response."""
+        rec: Dict[str, Any] = {
+            "query_text":    query_text,
+            "returned_keys": returned_keys,
+            "used_keys":     [],
+            "rating":        None,
+            "ts":            time.time(),
+            "user_id":       user_id,
+        }
+        # Query embedding (b64i8) for future offline training. Optional.
+        if self.embedder is not None:
+            try:
+                qv = self.embedder.embed_query(query_text) \
+                     if hasattr(self.embedder, "embed_query") \
+                     else self.embedder.embed(query_text)
+                if qv:
+                    rec["query_emb"] = encode_vec(qv)
+            except Exception:
+                pass
+        try:
+            self._exec(
+                f"MEMORY PUT INTO {self.feedback_store} VALUES "
+                f"('{_e(user_id)}','{_e(query_id)}','{_e(json.dumps(rec))}')"
+            )
+        except Exception:
+            pass
+
+    def feedback(self, user_id: str, query_id: str,
+                 used_keys: Optional[List[str]] = None,
+                 unused_keys: Optional[List[str]] = None,
+                 rating: Optional[int] = None) -> Dict[str, Any]:
+        """Attach which returned keys the caller actually used to a logged
+        search. Validates used_keys ⊆ returned_keys (data-quality gate from
+        the eval criteria) and upserts the feedback record."""
+        rows = self._query(
+            f"SELECT mem_value FROM __mem_{self.feedback_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' "
+            f"AND mem_key = '{_e(query_id)}'"
+        )
+        if not rows or not rows[0] or not rows[0][0]:
+            return {"error": f"unknown query_id: {query_id}"}
+        try:
+            rec = json.loads(rows[0][0])
+        except Exception:
+            return {"error": "corrupt feedback record"}
+        returned = set(rec.get("returned_keys") or [])
+        used = [k for k in (used_keys or []) if k in returned]
+        dropped = [k for k in (used_keys or []) if k not in returned]
+        rec["used_keys"]   = used
+        rec["unused_keys"] = [k for k in (unused_keys or []) if k in returned]
+        if rating is not None:
+            rec["rating"] = int(rating)
+        rec["feedback_ts"] = time.time()
+        self._exec(
+            f"MEMORY PUT INTO {self.feedback_store} VALUES "
+            f"('{_e(user_id)}','{_e(query_id)}','{_e(json.dumps(rec))}')"
+        )
+        return {"ok": True, "query_id": query_id,
+                "recorded_used": len(used),
+                "ignored_not_returned": dropped}
+
+
+def _snippet(text: str, max_sentences: int = 2, max_chars: int = 200) -> str:
+    """A 1-2 sentence quote from a source fact, for co-presented evidence
+    (Adım 19). Trims on sentence boundaries, then on a word boundary if still
+    too long, so the cited excerpt stays short but readable."""
+    import re as _re
+    s = " ".join((text or "").split())
+    if not s:
+        return ""
+    parts = _re.split(r"(?<=[.!?])\s+", s)
+    out = " ".join(parts[:max_sentences]).strip()
+    if len(out) > max_chars:
+        out = out[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return out
+
 
 def _to_str(v: Any) -> str:
     if v is None:
@@ -786,6 +1308,16 @@ TOOLS = [
                     "description": "Categorisation labels (e.g. work, "
                                        "preference, family). Optional."
                 },
+                "derived_from": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "If this fact is SYNTHESIZED from other "
+                                   "stored memories (e.g. a summary or "
+                                   "inference), list their keys here. The row "
+                                   "is then marked synthesized and traceable "
+                                   "back to those sources; search_memory "
+                                   "returns an evidence_chain for it. Optional."
+                },
             },
             "required": ["fact"],
         },
@@ -801,7 +1333,18 @@ TOOLS = [
             "limit results to one person — aliases of that person are "
             "auto-resolved from the identity catalog, so a different "
             "human whose name happens to share a substring will not "
-            "leak through. Pass `tag` to narrow by topic."
+            "leak through. Pass `tag` to narrow by topic. The response "
+            "includes a `query_id`; after you finish answering, call "
+            "`feedback` with that query_id and the keys you actually used "
+            "so the memory ranking improves over time. "
+            "IMPORTANT — co-presented evidence: a result with "
+            "`synthesized: true` is a summary the system derived from other "
+            "rows, not a raw fact. When you use such a row you MUST cite its "
+            "sources: it carries `citation_required: true` and "
+            "`evidence_excerpts` (a short quote per source). Mention or quote "
+            "that evidence in your answer instead of stating the synthesized "
+            "claim on its own. If the evidence does not actually support the "
+            "claim, trust the evidence, not the summary."
         ),
         "inputSchema": {
             "type": "object",
@@ -813,9 +1356,33 @@ TOOLS = [
                             "description": "Filter by one human. "
                                 "Aliases are expanded through the "
                                 "identity catalog when present."},
+                "mode":   {"type": "string", "enum": ["flat", "hierarchical"],
+                            "default": "flat",
+                            "description": "hierarchical searches episode "
+                                "summaries first (compact overview of a "
+                                "burst of activity); call expand_episode on "
+                                "a result's episode_id to drill into its "
+                                "source rows."},
+                "include_archived": {"type": "boolean", "default": False,
+                            "description": "Include faded/archived memories "
+                                "(old and long unused). Off by default so "
+                                "stale rows do not clutter results; turn on "
+                                "to dig up something forgotten."},
                 "limit":  {"type": "integer", "default": 5},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "expand_episode",
+        "description": ("Return the source rows behind an episode summary. "
+                        "Pass the `episode_id` from a hierarchical "
+                        "search_memory result to drill down from the "
+                        "one-line summary to the underlying facts."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"episode_id": {"type": "string"}},
+            "required": ["episode_id"],
         },
     },
     {
@@ -842,6 +1409,49 @@ TOOLS = [
         "name": "list_tags",
         "description": "List all distinct tags used so far, with counts.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "show_profile",
+        "description": ("Show the user's interest profile — the clusters of "
+                        "topics they care about, each with a label and a "
+                        "weight (its share of their memory). Transparent view "
+                        "of what personalizes their retrieval."),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "restore_memory",
+        "description": ("Un-archive a faded memory by its `key`, bringing it "
+                        "back into normal search. Nothing is ever deleted by "
+                        "decay, only archived; this reverses that."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "feedback",
+        "description": (
+            "Report which search_memory results you actually used to "
+            "answer, so the memory system learns over time. Call after a "
+            "search_memory whose results informed your reply. Pass the "
+            "`query_id` from that search and the keys you used; keys not "
+            "in the original result set are ignored."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query_id": {"type": "string",
+                             "description": "From the search_memory response."},
+                "used_keys": {"type": "array", "items": {"type": "string"},
+                              "description": "Result keys you used."},
+                "unused_keys": {"type": "array", "items": {"type": "string"},
+                                "description": "Returned keys you did not use. Optional."},
+                "rating": {"type": "integer",
+                           "description": "Optional 1-5 quality rating of the result set."},
+            },
+            "required": ["query_id"],
+        },
     },
 ]
 
@@ -894,7 +1504,10 @@ class MCPServer:
             tags = args.get("tags") or []
             if isinstance(tags, str):
                 tags = [tags]
-            key = b.save(self.user_id, fact, tags)
+            derived_from = args.get("derived_from") or []
+            if isinstance(derived_from, str):
+                derived_from = [derived_from]
+            key = b.save(self.user_id, fact, tags, derived_from=derived_from)
             return {"ok": True, "key": key, "user_id": self.user_id}
 
         if name == "search_memory":
@@ -903,12 +1516,41 @@ class MCPServer:
                 return {"error": "search_memory requires non-empty `query`"}
             tag    = args.get("tag")
             sender = args.get("sender")
+            mode   = (args.get("mode") or "flat").lower()
             limit  = int(args.get("limit") or 5)
+            inc_arch = bool(args.get("include_archived"))
+            results = b.search(self.user_id, q,
+                               limit=limit, tag=tag, sender=sender, mode=mode,
+                               include_archived=inc_arch)
+            # Implicit-feedback hook (Adım 11): tag the response with a
+            # query_id and log (query -> returned keys) so the caller can
+            # later report which keys it used via the feedback tool.
+            query_id = uuid.uuid4().hex
+            b.log_query(self.user_id, query_id, q,
+                        [r.get("key", "") for r in results])
             return {"ok": True,
                     "user_id": self.user_id,
-                    "results": b.search(self.user_id, q,
-                                          limit=limit, tag=tag,
-                                          sender=sender)}
+                    "query_id": query_id,
+                    "results": results}
+
+        if name == "feedback":
+            query_id = args.get("query_id") or ""
+            if not query_id:
+                return {"error": "feedback requires `query_id` "
+                                 "(from a search_memory response)"}
+            used   = args.get("used_keys") or []
+            unused = args.get("unused_keys") or []
+            if isinstance(used, str):   used = [used]
+            if isinstance(unused, str): unused = [unused]
+            return b.feedback(self.user_id, query_id,
+                              used_keys=used, unused_keys=unused,
+                              rating=args.get("rating"))
+
+        if name == "expand_episode":
+            episode_id = args.get("episode_id") or ""
+            if not episode_id:
+                return {"error": "expand_episode requires `episode_id`"}
+            return b.expand_episode(self.user_id, episode_id)
 
         if name == "recent_memories":
             limit = int(args.get("limit") or 10)
@@ -925,6 +1567,16 @@ class MCPServer:
         if name == "list_tags":
             return {"ok": True, "user_id": self.user_id,
                     "tags": b.list_tags(self.user_id)}
+
+        if name == "show_profile":
+            return {"ok": True, "user_id": self.user_id,
+                    "profile": b.show_profile(self.user_id)}
+
+        if name == "restore_memory":
+            key = args.get("key") or ""
+            if not key:
+                return {"error": "restore_memory requires `key`"}
+            return {"ok": b.restore(self.user_id, key), "key": key}
 
         return {"error": f"unknown tool: {name}"}
 
