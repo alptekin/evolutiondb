@@ -266,6 +266,43 @@ class GraphStore:
                 break
         return spread
 
+    def personalized_pagerank(self, seeds: Sequence[str], *,
+                              damping: float = 0.85, iters: int = 20,
+                              eps: float = 1e-6) -> Dict[str, float]:
+        """Personalised PageRank over the entity graph (HippoRAG, roadmap step
+        12): the restart vector is the resolved query entities, so the
+        stationary distribution r = (1-d)·p + d·M·r is each entity's
+        query-conditioned associative relevance — a principled multi-hop signal
+        replacing the fixed 2-hop halving. Edge weights (already recency-decayed)
+        define the column-stochastic transition; power-iterated to convergence.
+        Returns {entity_id: stationary mass}. Kept separate from the legacy boost
+        path; the cutover (step 14) chooses which feeds A_i."""
+        self._load()
+        adj = self._adj or {}
+        seeds_in = [s for s in seeds if s and s in adj]
+        if not seeds_in:
+            return {}
+        p = {s: 1.0 / len(seeds_in) for s in seeds_in}     # restart vector
+        wsum = {j: sum(nbrs.values()) for j, nbrs in adj.items()}
+        r = dict(p)
+        for _ in range(iters):
+            nr: Dict[str, float] = {}
+            for s, pv in p.items():                        # teleport
+                nr[s] = nr.get(s, 0.0) + (1.0 - damping) * pv
+            for j, rj in r.items():                        # propagate
+                ws = wsum.get(j, 0.0)
+                if ws <= 0.0:
+                    continue                               # dangling: leak (ok)
+                share = damping * rj
+                for i, w in adj.get(j, {}).items():
+                    nr[i] = nr.get(i, 0.0) + share * (w / ws)
+            diff = sum(abs(nr.get(k, 0.0) - r.get(k, 0.0))
+                       for k in set(nr) | set(r))
+            r = nr
+            if diff < eps:
+                break
+        return r
+
     def _mention_index(self) -> Dict[str, List[str]]:
         if self._mentions_by_entity is not None:
             return self._mentions_by_entity
