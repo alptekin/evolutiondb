@@ -244,7 +244,11 @@ def run_due(backend, *, now: Optional[datetime] = None,
             continue
         st = _state(backend, job.name)
         last_run = (st or {}).get("last_run")
-        if not force and not job.schedule.due(now, last_run):
+        # A job whose last run errored is due again on the next tick — a
+        # failure must not count as "ran this period" (otherwise a daily job
+        # that failed sits idle until tomorrow). It retries until it succeeds.
+        last_failed = bool(st and st.get("last_status") == "error")
+        if not force and not last_failed and not job.schedule.due(now, last_run):
             continue
         start = time.time()
         rows, errors, errmsg = 0, 0, None
