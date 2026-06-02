@@ -59,6 +59,31 @@ PROFILE_SIGNAL_MIN = float(os.environ.get("EVOSQL_PROFILE_SIGNAL_MIN", "0.35"))
 MAX_IN_KEYS = int(os.environ.get("EVOSQL_MAX_IN_KEYS", "20"))
 
 
+def _boosts_master_on() -> bool:
+    """EVOSQL_MEMORY_BOOSTS is the single switch that turns the whole derived
+    "memory" layer (salience / graph / profile / decay) on at sensible levels."""
+    return os.environ.get("EVOSQL_MEMORY_BOOSTS", "").strip().lower() in (
+        "1", "on", "true", "yes")
+
+
+def _resolve_boost(env_key: str, default_when_on: float,
+                   master_on: Optional[bool] = None) -> float:
+    """Resolve a boost weight. An explicit EVOSQL_<X>_BOOST always wins — so it
+    doubles as a per-boost kill-switch (set it to 0 to force a boost off even
+    when the master is on). Otherwise the EVOSQL_MEMORY_BOOSTS master chooses
+    between `default_when_on` and 0. Default (master off, no override) is 0, so
+    ranking stays byte-for-byte until an operator opts in."""
+    raw = os.environ.get(env_key)
+    if raw is not None:
+        try:
+            return float(raw)
+        except ValueError:
+            return 0.0
+    if master_on is None:
+        master_on = _boosts_master_on()
+    return default_when_on if master_on else 0.0
+
+
 # ---------------------------------------------------------------- #
 #  Memory backend — speaks EvolutionDB over psycopg / PG wire.       #
 # ---------------------------------------------------------------- #
@@ -185,10 +210,9 @@ class MemoryBackend:
         # ranking is unchanged until an operator opts in; rows without a
         # salience field contribute 0 either way, so enabling it is safe even
         # before the compute job has run.
-        try:
-            self.salience_boost = float(os.environ.get("EVOSQL_SALIENCE_BOOST", "0"))
-        except ValueError:
-            self.salience_boost = 0.0
+        # An explicit EVOSQL_SALIENCE_BOOST overrides; otherwise the
+        # EVOSQL_MEMORY_BOOSTS master switch (roadmap step 2) enables it.
+        self.salience_boost = _resolve_boost("EVOSQL_SALIENCE_BOOST", 0.25)
         self.tagger   = tagger
         self.reranker = reranker
         # Lexical scorer: "simple" = legacy binary term-presence
@@ -244,10 +268,7 @@ class MemoryBackend:
         # is opt-in via EVOSQL_GRAPH_BOOST>0 (latency-sensitive hot path).
         self.graph_store = f"{prefix}_graph_edges"
         self.graph_build = os.environ.get("EVOSQL_GRAPH_BUILD", "1") != "0"
-        try:
-            self.graph_boost = float(os.environ.get("EVOSQL_GRAPH_BOOST", "0"))
-        except ValueError:
-            self.graph_boost = 0.0
+        self.graph_boost = _resolve_boost("EVOSQL_GRAPH_BOOST", 0.30)
         self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
         # Episodes (Adım 16): a weekly job groups recent rows into episodes
         # and writes one summary per episode (tagged `episode`, synthesized
@@ -260,10 +281,7 @@ class MemoryBackend:
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
         # it only engages when an embedder is configured). Default 0.
         self.profile_store = f"{prefix}_profile_clusters"
-        try:
-            self.profile_boost = float(os.environ.get("EVOSQL_PROFILE_BOOST", "0"))
-        except ValueError:
-            self.profile_boost = 0.0
+        self.profile_boost = _resolve_boost("EVOSQL_PROFILE_BOOST", 0.25)
         self._profile_cache: Dict[str, List[Dict[str, Any]]] = {}
         # Sleep-time scheduler (Adım 18): per-job state + audit log so the
         # background jobs run idempotently and survive restarts.
@@ -274,7 +292,10 @@ class MemoryBackend:
         # EVOSQL_DECAY>0 — default off keeps search byte-for-byte. When on,
         # search refreshes last_accessed and skips archived rows.
         self.access_store = f"{prefix}_access"
-        self.decay_enabled = os.environ.get("EVOSQL_DECAY", "0") != "0"
+        # Explicit EVOSQL_DECAY wins (kill-switch); else the master enables it.
+        _decay_env = os.environ.get("EVOSQL_DECAY")
+        self.decay_enabled = (_decay_env != "0" and _decay_env is not None) \
+            or (_decay_env is None and _boosts_master_on())
         # Salience (Adım 12) lives in its OWN side store, not on the main
         # record. Stamping a number onto a multi-KB row would rewrite the whole
         # record and trip the engine's 8 KB statement cap; a tiny {salience}
