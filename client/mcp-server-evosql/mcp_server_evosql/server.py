@@ -1161,6 +1161,27 @@ class MemoryBackend:
                 continue
         return out
 
+    def _base_level_map(self, user_id: str, keys: Sequence[str], *,
+                        created: Optional[Dict[str, float]] = None,
+                        now: Optional[float] = None) -> Dict[str, float]:
+        """{mem_key: base-level activation B_i} from the access history (ACT-R,
+        roadmap step 9). `created` maps key -> creation epoch so Petrov's tail
+        approximation can account for retrievals older than the kept `uses`
+        history. Keys never retrieved are absent (the unified score treats a
+        missing B_i as the floor)."""
+        from .activation import base_level
+        if now is None:
+            now = time.time()
+        out: Dict[str, float] = {}
+        for k, rec in self._access_records(user_id, keys).items():
+            uses = rec.get("uses") or []
+            if not uses:
+                continue
+            cnt = int(rec.get("retrieval_count", len(uses)) or 0)
+            ls = (created or {}).get(k)
+            out[k] = base_level(uses, cnt, now, lifetime_start=ls)
+        return out
+
     def _touch_access(self, user_id: str, keys: List[str]) -> None:
         """Record a read in the unified access side store. A read increments the
         row's retrieval_count and appends to its `uses` epoch history (capped),
