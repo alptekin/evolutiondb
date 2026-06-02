@@ -223,6 +223,49 @@ class GraphStore:
                 break
         return act
 
+    def spreading_activation_fan(self, seeds: Sequence[str], depth: int = 2,
+                                 hop_decay: float = _HOP_DECAY
+                                 ) -> Dict[str, float]:
+        """Fan-normalised spreading activation (ACT-R fan effect, roadmap step
+        11). The strength a cue j passes to an associated item i is
+        S_ji = max(0, S - ln(fan_j)) with S = ln(total entities), so a HUB cue
+        (high fan) self-damps: each of its many neighbours receives less than the
+        sole neighbour of a narrow cue. Source weight W = 1/|seeds| is split over
+        the resolved query entities. Returns {entity_id: accumulated strength} in
+        log-additive space — the +Spread term of A_i (step 10). Distinct from
+        spreading_activation (kept for the legacy graph boost); this one removes
+        the need for the MAX_BOOST_ROWS flood cap because hubs no longer flood."""
+        self._load()
+        adj = self._adj or {}
+        seeds_in = [s for s in seeds if s and s in adj]
+        if not seeds_in:
+            return {}
+        S = math.log(max(len(adj), 2))
+        W = 1.0 / len(seeds_in)
+        seedset = set(seeds_in)
+        spread: Dict[str, float] = {}
+        frontier: Dict[str, float] = {s: W for s in seeds_in}
+        for _hop in range(depth):
+            nxt: Dict[str, float] = {}
+            for j, aj in frontier.items():
+                fan_j = len(adj.get(j, {})) or 1
+                s_ji = S - math.log(fan_j)
+                if s_ji <= 0.0:                  # cue too connected to inform
+                    continue
+                for i in adj.get(j, {}):
+                    if i in seedset:
+                        continue
+                    flow = aj * s_ji * hop_decay
+                    if flow <= 1e-9:
+                        continue
+                    spread[i] = spread.get(i, 0.0) + flow
+                    if flow > nxt.get(i, 0.0):
+                        nxt[i] = flow
+            frontier = nxt
+            if not frontier:
+                break
+        return spread
+
     def _mention_index(self) -> Dict[str, List[str]]:
         if self._mentions_by_entity is not None:
             return self._mentions_by_entity
