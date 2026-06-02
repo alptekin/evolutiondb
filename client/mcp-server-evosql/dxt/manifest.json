@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "evolutiondb-memory",
   "display_name": "EvolutionDB Long-Term Memory",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "Persistent long-term memory for Claude. Backed by EvolutionDB; what you tell Claude in one chat is recallable in every future chat.",
   "long_description": "Drops in a `save_memory` / `search_memory` / `recent_memories` / `forget` / `list_tags` tool surface so Claude can remember preferences, decisions, biographical details, and project context across sessions. Backed by EvolutionDB (open source, runs in one Docker container) over the PostgreSQL wire protocol — no opaque blob storage, every fact is a real row you can `SELECT` against. Namespace-pinned server-side from the `MCP_USER_ID` env var to keep the LLM from fragmenting the namespace across sessions.",
   "author": {

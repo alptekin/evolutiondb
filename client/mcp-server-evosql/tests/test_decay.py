@@ -39,6 +39,12 @@ def _put(b, ns, key, rec):
     from mcp_server_evosql.server import _e
     b._exec(f"MEMORY PUT INTO {b.memory} VALUES "
             f"('{_e(ns)}','{_e(key)}','{_e(json.dumps(rec))}')")
+    # salience lives in its own side store now (Adım 12 / 8KB fix); decay
+    # reads it from there, so seed it there too.
+    if "salience" in rec:
+        b._exec(f"MEMORY PUT INTO {b.salience_store} VALUES "
+                f"('{_e(ns)}','{_e(key)}',"
+                f"'{_e(json.dumps({'salience': rec['salience']}))}')")
 
 
 def test_eval_gate() -> bool:

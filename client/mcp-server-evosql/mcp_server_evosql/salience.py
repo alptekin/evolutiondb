@@ -38,9 +38,11 @@ DEFAULT_WEIGHTS = {"recency": 0.30, "activity": 0.25, "depth": 0.20, "feedback":
 
 def _row_ts(rec: dict) -> Optional[float]:
     """Best-effort epoch seconds from whichever timestamp field a connector
-    wrote: save_memory uses `created`; emails use `received_at` (ISO); some
-    rows carry `ts`."""
-    for k in ("created", "ts", "received_at", "date"):
+    wrote: save_memory uses `created`; emails use `received_at` (ISO); browser
+    rows use `saved_at` (epoch) / `last_visited_at` (ISO); some rows carry
+    `ts`."""
+    for k in ("created", "saved_at", "ts", "received_at",
+              "last_visited_at", "date"):
         v = rec.get(k)
         if v is None:
             continue
@@ -159,20 +161,33 @@ def recompute(backend, user_id: str, *, window_days: int = 90,
     except Exception:
         pass
 
+    # Salience lives in its own side store, NOT on the main record. Rewriting
+    # the main record (fact + embedding, often several KB) just to stamp a
+    # number trips the engine's 8 KB statement cap on large rows; a tiny
+    # {salience} value never does. Load the current side-store values to skip
+    # unchanged rows.
+    prev: Dict[str, float] = {}
+    for k, v in backend._query(
+            f"SELECT mem_key, mem_value FROM __mem_{backend.salience_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
+        r = _as_rec(v)
+        if r and isinstance(r.get("salience"), (int, float)):
+            prev[k] = float(r["salience"])
+
     changed = 0
     for key, rec in recs.items():
         sal = round(compute_salience(rec, key, now=now,
                                      sender_counts=sender_counts,
                                      max_count=max_count,
                                      feedback_used=feedback_used), 4)
-        if rec.get("salience") == sal:
+        if prev.get(key) == sal:
             continue
-        rec["salience"] = sal
         changed += 1
         if not dry_run:
             backend._exec(
-                f"MEMORY PUT INTO {backend.memory} VALUES "
-                f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+                f"MEMORY PUT INTO {backend.salience_store} VALUES "
+                f"('{_e(user_id)}','{_e(key)}',"
+                f"'{_e(json.dumps({'salience': sal}))}')")
     return changed
 
 
@@ -189,81 +204,27 @@ def _connect():
 
 
 def main() -> int:
-    from .server import _e
+    from .server import MemoryBackend
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--namespace", required=True)
     ap.add_argument("--prefix", default=os.environ.get("MCP_STORE_PREFIX", "mcp"))
-    ap.add_argument("--limit", type=int, default=100000)
     ap.add_argument("--window-days", type=int, default=90,
                     help="Sender-activity window.")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    memory = f"{args.prefix}_mem"
-    feedback_store = f"{args.prefix}_feedback"
-    ns = args.namespace
-    now = time.time()
-    window = args.window_days * 86400.0
-    conn = _connect()
-
-    with conn.cursor() as cur:
-        cur.execute(
-            f"SELECT mem_key, mem_value FROM __mem_{memory} "
-            f"WHERE mem_namespace = '{_e(ns)}' LIMIT {args.limit}"
-        )
-        rows = cur.fetchall()
-
-    # sender activity within the window
-    sender_counts: Dict[str, int] = {}
-    recs: Dict[str, dict] = {}
-    for key, val in rows:
-        rec = _as_rec(val)
-        if not rec:
-            continue
-        recs[key] = rec
-        s = _sender(rec)
-        if s:
-            ts = _row_ts(rec)
-            if ts is None or (now - ts) <= window:
-                sender_counts[s] = sender_counts.get(s, 0) + 1
-    max_count = max(sender_counts.values(), default=0)
-
-    # feedback usage counts (Adım 11): how often each key was actually used
-    feedback_used: Dict[str, int] = {}
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT mem_value FROM __mem_{feedback_store} "
-                f"WHERE mem_namespace = '{_e(ns)}' LIMIT {args.limit}"
-            )
-            for (fv,) in cur.fetchall():
-                fr = _as_rec(fv)
-                for k in ((fr or {}).get("used_keys") or []):
-                    feedback_used[k] = feedback_used.get(k, 0) + 1
-    except Exception:
-        pass  # feedback store may not exist yet
-
-    print(f"ns={ns}: {len(recs)} rows, {len(sender_counts)} senders "
-          f"(max {max_count}), {len(feedback_used)} keys with feedback")
-
-    changed = 0
-    with conn.cursor() as cur:
-        for key, rec in recs.items():
-            sal = round(compute_salience(
-                rec, key, now=now, sender_counts=sender_counts,
-                max_count=max_count, feedback_used=feedback_used), 4)
-            if rec.get("salience") == sal:
-                continue
-            rec["salience"] = sal
-            changed += 1
-            if not args.dry_run:
-                cur.execute(
-                    f"MEMORY PUT INTO {memory} VALUES "
-                    f"('{_e(ns)}','{_e(key)}','{_e(json.dumps(rec))}')"
-                )
-    print(f"{'would update' if args.dry_run else 'updated'} salience on "
-          f"{changed} row(s)")
+    b = MemoryBackend(
+        os.environ.get("EVOSQL_HOST", "127.0.0.1"),
+        int(os.environ.get("EVOSQL_PORT", "5433")),
+        os.environ.get("EVOSQL_USER", "admin"),
+        os.environ.get("EVOSQL_PASSWORD", "admin"),
+        os.environ.get("EVOSQL_DATABASE", "evosql"),
+        args.prefix)
+    changed = recompute(b, args.namespace, window_days=args.window_days,
+                        dry_run=args.dry_run)
+    print(f"ns={args.namespace}: {'would update' if args.dry_run else 'updated'} "
+          f"salience on {changed} row(s) (side store)")
     return 0
 
 
