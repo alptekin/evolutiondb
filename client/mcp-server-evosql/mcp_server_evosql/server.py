@@ -292,6 +292,22 @@ class MemoryBackend:
         # with derived_from = source keys). The episode record links the
         # summary back to its sources for hierarchical drill-down.
         self.episodes_store = f"{prefix}_episodes"
+        # Semantic tier (roadmap step 15): timeless generalizations distilled
+        # ACROSS many episodic rows (episodic -> semantic), not within-episode
+        # summaries. Each carries tier='semantic' + abstraction_level and is
+        # written through save_semantic with derived_from provenance, so it is
+        # retrievable + traceable. search() fuses these alongside episodic
+        # candidates (step 17).
+        self.semantic_store = f"{prefix}_semantic"
+        # Fuse semantic candidates into search (roadmap step 17). Opt-in like the
+        # other derived layers: an explicit EVOSQL_SEMANTIC_SEARCH wins (and is
+        # the kill-switch); otherwise the EVOSQL_MEMORY_BOOSTS master decides.
+        # Default off, so a deployment not running job_semanticize never pays the
+        # per-search semantic fetch against a permanently-empty store.
+        _ss = os.environ.get("EVOSQL_SEMANTIC_SEARCH")
+        self.semantic_search = (_ss not in ("0", "", "off", "false", "no")
+                                if _ss is not None else _boosts_master_on())
+        self.semantic_pool = int(os.environ.get("EVOSQL_SEMANTIC_POOL", "50"))
         # User interest profile (Adım 17): a daily job clusters the user's
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
@@ -342,7 +358,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.profile_store),
                   ("MEMORY STORE", self.job_runs_store),
                   ("MEMORY STORE", self.access_store),
-                  ("MEMORY STORE", self.salience_store)]
+                  ("MEMORY STORE", self.salience_store),
+                  ("MEMORY STORE", self.semantic_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -504,6 +521,62 @@ class MemoryBackend:
                     g.flush()   # edges are deferred; persist this row's now
             except Exception:
                 pass
+        return key
+
+    def save_semantic(self, user_id: str, proposition: str, *,
+                      derived_from: Sequence[str],
+                      abstraction_level: int = 1,
+                      tags: Optional[List[str]] = None) -> str:
+        """Write a semantic-tier memory (roadmap step 15): a timeless
+        generalization distilled across several episodic rows. Stored in the
+        separate `_semantic` store (not the main memory), tagged tier='semantic'
+        with an abstraction_level and derived_from provenance, and embedded so it
+        is similarity-retrievable. The source keys are NOT foreign-key validated
+        here (they may live in the main store, episodes, or other semantic rows);
+        job_semanticize passes already-resolved keys. Returns the new key."""
+        created = time.time()
+        key = f"sem_{int(created * 1000)}_{uuid.uuid4().hex[:6]}"
+        record: Dict[str, Any] = {
+            "fact":              proposition,
+            "tags":              sorted(set((tags or []) + ["semantic"])),
+            "created":           created,
+            "tier":              "semantic",
+            "abstraction_level": int(abstraction_level),
+            "synthesized":       True,
+            "derived_from":      [k for k in derived_from if k],
+            "synthesis_version": SYNTHESIS_SCHEMA_VERSION,
+        }
+        if self.embedder is not None:
+            vec = self.embedder.embed(proposition)
+            if vec:
+                record["emb"] = encode_vec(vec)
+                mn = getattr(self.embedder, "model_name", "")
+                record["emb_model"] = (f"{self.embedder.kind}:{mn}"
+                                       if mn else self.embedder.kind)
+        # Keep the record under the engine's ~8 KB statement cap: the embedding
+        # plus a large provenance list could exceed it, which the engine rejects
+        # (and would abort the caller). Trim provenance to fit, flagging it.
+        payload = json.dumps(record)
+        while (len(payload) + len(key) + len(user_id) > 7000
+               and record.get("derived_from")):
+            record["derived_from"] = record["derived_from"][:-1]
+            record["derived_truncated"] = True
+            payload = json.dumps(record)
+        self._exec(
+            f"MEMORY PUT INTO {self.semantic_store} VALUES "
+            f"('{_e(user_id)}','{_e(key)}','{_e(payload)}')")
+        if self.embedder2 is not None and self.embedder2.kind != "none":
+            vec2 = self.embedder2.embed_passage(proposition)
+            if vec2:
+                mn2 = getattr(self.embedder2, "model_name", "")
+                e2 = {"emb2": encode_vec(vec2),
+                      "emb2_model": f"{self.embedder2.kind}:{mn2}"
+                                    if mn2 else self.embedder2.kind}
+                try:
+                    self._exec(f"MEMORY PUT INTO {self.emb2_store} VALUES "
+                               f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(e2))}')")
+                except Exception:
+                    pass
         return key
 
     def _entities(self, user_id: str):
@@ -838,6 +911,25 @@ class MemoryBackend:
                 missing = [k for k in graph_boost_map if k not in have]
                 for k, v in self._fetch_by_keys(self.memory, user_id, missing):
                     rows.append([user_id, k, v])
+
+        # Semantic-tier fusion (roadmap step 17): pull the namespace's semantic
+        # generalizations into the candidate pool so a query gets both "what
+        # happened" (episodic) and "what is generally true" (semantic). They are
+        # parsed + scored + RRF-fused exactly like episodic rows. Empty until
+        # job_semanticize runs, so it is a no-op by default; the store is small
+        # (one row per cluster), so a bounded scan suffices.
+        if self.semantic_search:
+            try:
+                rows = rows or []
+                have = {r[1] for r in rows}
+                for sr in self._query(
+                        f"SELECT mem_namespace, mem_key, mem_value FROM "
+                        f"__mem_{self.semantic_store} WHERE mem_namespace = "
+                        f"'{_e(user_id)}' LIMIT {self.semantic_pool}") or []:
+                    if sr[1] not in have:
+                        rows.append([user_id, sr[1], sr[2]])
+            except Exception:
+                pass
 
         # User-profile bias (Adım 17): the 1-2 interest clusters the query
         # points at. Rows near these centroids get a boost downstream, so
