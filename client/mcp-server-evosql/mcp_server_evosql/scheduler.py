@@ -142,13 +142,25 @@ def job_extract_entities(backend, ns: str) -> int:
             rec = json.loads(v) if v else {}
         except Exception:
             continue
-        if rec.get("is_episode") or not rec.get("fact"):
+        if rec.get("is_episode"):
             continue
-        ts = rec.get("created") or time.time()
-        ext = es.process(k, rec["fact"], float(ts))
+        # extract over whatever text field a connector wrote, not only `fact`
+        text = " ".join(str(rec.get(f) or "") for f in
+                        ("fact", "text", "subject", "snippet", "body"))
+        if not text.strip():
+            continue
+        ts = rec.get("created") or rec.get("saved_at") or rec.get("ts")
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            ts = time.time()
+        # flush=False batches the entity writes for the whole job (one write
+        # per entity at the end) instead of rewriting per mention.
+        ext = es.process(k, text, ts, flush=False)
         if ext:
-            g.add_edges_from_row(k, ext, rec["fact"], float(ts))
+            g.add_edges_from_row(k, ext, text, ts)
         done += 1
+    es.flush()
     return done
 
 

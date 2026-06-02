@@ -139,11 +139,57 @@ def test_run() -> bool:
     return True
 
 
+def test_large_record() -> bool:
+    """A row too big to rewrite (over the engine's 8 KB statement cap) must
+    not kill any job. Salience goes to a side store (never rewrites the big
+    row); entity/edge records are size-bounded; decay skips the oversized row
+    rather than erroring."""
+    try:
+        import psycopg
+        from mcp_server_evosql.server import MemoryBackend
+        psycopg.connect(host="127.0.0.1", port=PORT, user="admin",
+                        password="admin", dbname="evosql",
+                        autocommit=True, connect_timeout=3).close()
+    except Exception as exc:
+        print(f"  SKIP large-record (no server on :{PORT}: {exc})")
+        return True
+
+    os.environ.update({"EVOSQL_HOST": "127.0.0.1", "EVOSQL_PORT": str(PORT),
+                       "EVOSQL_USER": "admin", "EVOSQL_PASSWORD": "admin",
+                       "EVOSQL_DATABASE": "evosql",
+                       "EVOSQL_EMBEDDING_PROVIDER": "none",
+                       "EVOSQL_ENTITY_EXTRACT": "0"})
+    prefix = f"mcp_big{int(time.time())}"
+    ns = f"bigtest_{int(time.time())}"
+    b = MemoryBackend("127.0.0.1", PORT, "admin", "admin", "evosql", prefix)
+    now = time.time()
+    # a row near the 8 KB cap: seedable as-is, but adding a salience field (the
+    # pre-fix behaviour) would have tipped it over and killed the job. ~7.2 KB.
+    huge = "Acme A.Ş. " + "veri " * 1440
+    _put(b, ns, "huge", {"fact": huge, "saved_at": now - 400 * 86400})
+    for i in range(6):
+        _put(b, ns, f"ok{i}", {"fact": f"Acme A.Ş. gorusme {i}", "saved_at": now})
+
+    ran = {r["job"]: r for r in SCH.run_due(b, force=True)}
+    for j in ("extract_entities", "salience", "decay"):
+        assert ran[j]["last_status"] == "ok" and ran[j]["errors"] == 0, \
+            f"{j} should not error on the oversized row: {ran[j]}"
+    # the big row was NOT rewritten by salience (salience lives in side store)
+    from mcp_server_evosql.server import _e
+    s = b._query(f"SELECT mem_value FROM __mem_{prefix}_salience "
+                 f"WHERE mem_namespace='{_e(ns)}' AND mem_key='ok0'")
+    assert s and s[0] and s[0][0], "salience must be written to the side store"
+    print(f"  ok  >8KB record handled: extract/salience/decay all ok "
+          f"(decay skipped={ran['decay'].get('last_rows')})")
+    return True
+
+
 def main() -> int:
     test_schedule()
     test_run()
+    test_large_record()
     print("OK — Adım 18 scheduler: schedules + idempotent runs + audit log "
-          "+ error isolation + failure ratio")
+          "+ error isolation + failure ratio + 8KB-safe writes")
     return 0
 
 

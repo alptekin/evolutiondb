@@ -45,6 +45,8 @@ _VERB_LEXICON: List[Tuple[str, Tuple[str, ...]]] = [
 DEFAULT_PREDICATE = "related_to"
 _DECAY_HALFLIFE_DAYS = 30.0   # edge-weight recency decay
 _HOP_DECAY = 0.5              # activation passed on per hop
+MAX_SOURCE_ROWS = 50          # cap an edge's source_rows so it can't bloat
+                              # past the 8 KB statement cap (weight still grows)
 
 
 def _recency(ts: float, now: float) -> float:
@@ -100,29 +102,49 @@ class GraphStore:
         self.men_store = mention_store
         self._adj: Optional[Dict[str, Dict[str, float]]] = None  # undirected
         self._mentions_by_entity: Optional[Dict[str, List[str]]] = None
+        self._edges: Optional[Dict[str, dict]] = None   # edge cache (write path)
 
     # -- write path ---------------------------------------------------
+    def _edge_cache(self) -> Dict[str, dict]:
+        """All edges by key, loaded once. Replaces a per-edge SELECT in the
+        hot write loop (the round-trips were the cold-start bottleneck)."""
+        if self._edges is not None:
+            return self._edges
+        from .server import _e
+        self._edges = {}
+        for k, v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.edge_store} "
+                f"WHERE mem_namespace = '{_e(self.ns)}' LIMIT 500000") or []:
+            try:
+                self._edges[k] = json.loads(v)
+            except Exception:
+                continue
+        return self._edges
+
     def add_edges_from_row(self, mem_key: str, mentions: List[dict],
                            text: str, ts: float, write: bool = True) -> int:
-        from .server import _e
+        from .entities import _safe_put
+        cache = self._edge_cache()
         triples = extract_triples(text, mentions)
         now = time.time()
         for subj, pred, obj in triples:
             key = f"{subj}|{pred}|{obj}"
-            edge = self._get_edge(key)
+            edge = cache.get(key)
             if edge is None:
                 edge = {"subject_id": subj, "predicate": pred,
                         "object_id": obj, "weight": 0.0,
                         "source_rows": [], "ts": ts}
+                cache[key] = edge
             edge["weight"] = round(
                 float(edge.get("weight", 0.0)) + _recency(ts, now), 4)
-            if mem_key not in edge["source_rows"]:
+            # weight keeps growing with co-occurrence; the source_rows sample
+            # is capped so the record can't bloat past the statement cap.
+            if mem_key not in edge["source_rows"] \
+                    and len(edge["source_rows"]) < MAX_SOURCE_ROWS:
                 edge["source_rows"].append(mem_key)
             edge["ts"] = max(float(edge.get("ts", ts)), ts)
             if write:
-                self._exec(f"MEMORY PUT INTO {self.edge_store} VALUES "
-                           f"('{_e(self.ns)}','{_e(key)}',"
-                           f"'{_e(json.dumps(edge))}')")
+                _safe_put(self._exec, self.edge_store, self.ns, key, edge)
             # keep the in-memory adjacency warm if it was already built
             if self._adj is not None:
                 self._adj.setdefault(subj, {})
@@ -130,19 +152,6 @@ class GraphStore:
                 self._adj[subj][obj] = edge["weight"]
                 self._adj[obj][subj] = edge["weight"]
         return len(triples)
-
-    def _get_edge(self, key: str) -> Optional[dict]:
-        from .server import _e
-        rows = self._query(
-            f"SELECT mem_value FROM __mem_{self.edge_store} "
-            f"WHERE mem_namespace = '{_e(self.ns)}' "
-            f"AND mem_key = '{_e(key)}'") or []
-        if not rows or not rows[0] or not rows[0][0]:
-            return None
-        try:
-            return json.loads(rows[0][0])
-        except Exception:
-            return None
 
     # -- read path ----------------------------------------------------
     def _load(self) -> None:
