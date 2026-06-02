@@ -58,6 +58,12 @@ PROFILE_SIGNAL_MIN = float(os.environ.get("EVOSQL_PROFILE_SIGNAL_MIN", "0.35"))
 # IN(...) batch comfortably under that.
 MAX_IN_KEYS = int(os.environ.get("EVOSQL_MAX_IN_KEYS", "20"))
 
+# Cap the per-row access-history (`uses`) epoch array. ACT-R base-level
+# activation (roadmap step 9) needs the recent access timestamps; a small cap
+# keeps the side-store record well under the engine's 8 KB statement limit while
+# still giving recency + frequency.
+ACCESS_USES_CAP = 16
+
 
 def _boosts_master_on() -> bool:
     """EVOSQL_MEMORY_BOOSTS is the single switch that turns the whole derived
@@ -1117,14 +1123,50 @@ class MemoryBackend:
             self._touch_access(user_id, [r["key"] for r in page])
         return page
 
+    def _access_records(self, user_id: str,
+                        keys: Sequence[str]) -> Dict[str, dict]:
+        """{mem_key: access_record} from the side store for the given keys.
+        The record is the unified access state (roadmap step 3):
+          {last_accessed, retrieval_count, uses[], stability, rif_penalty}.
+        Missing keys are simply absent. Best-effort; empty on any read error."""
+        out: Dict[str, dict] = {}
+        if not keys:
+            return out
+        try:
+            rows = self._fetch_by_keys(self.access_store, user_id, list(keys))
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                rec = json.loads(r[1]) if r[1] else {}
+                if isinstance(rec, dict):
+                    out[r[0]] = rec
+            except Exception:
+                continue
+        return out
+
     def _touch_access(self, user_id: str, keys: List[str]) -> None:
+        """Record a read in the unified access side store. A read increments the
+        row's retrieval_count and appends to its `uses` epoch history (capped),
+        on top of refreshing last_accessed — so later steps get recency AND
+        frequency (base-level activation, spaced-repetition) without ever
+        rewriting the main record. Other fields (stability, rif_penalty) written
+        by the decay/forgetting passes are preserved."""
         now = time.time()
+        cur = self._access_records(user_id, keys)
         for k in keys:
+            rec = cur.get(k) or {}
+            rec["last_accessed"] = now
+            rec["retrieval_count"] = int(rec.get("retrieval_count", 0)) + 1
+            uses = rec.get("uses") or []
+            uses.append(round(now, 3))
+            if len(uses) > ACCESS_USES_CAP:
+                uses = uses[-ACCESS_USES_CAP:]
+            rec["uses"] = uses
             try:
                 self._exec(
                     f"MEMORY PUT INTO {self.access_store} VALUES "
-                    f"('{_e(user_id)}','{_e(k)}',"
-                    f"'{_e(json.dumps({'last_accessed': now}))}')")
+                    f"('{_e(user_id)}','{_e(k)}','{_e(json.dumps(rec))}')")
             except Exception:
                 pass
 
