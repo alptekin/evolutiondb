@@ -748,24 +748,43 @@ ExprNode *expr_make_not_between(ExprNode *expr, ExprNode *low, ExprNode *high)
     return result;
 }
 
+/* Combine `count` comparison nodes into a BALANCED binary tree of `op`
+ * (EXPR_OR for IN, EXPR_AND for NOT IN). A left-deep chain has depth `count`,
+ * which overflows the recursive evaluator/free at ~30 values; a balanced tree
+ * has depth ~log2(count), tiny for any list. Consumes `nodes`. */
+static ExprNode *combine_balanced(ExprNode **nodes, int count,
+                                  ExprNode *(*join)(ExprNode *, ExprNode *))
+{
+    int n = count;
+    while (n > 1) {
+        int w = 0, j;
+        for (j = 0; j + 1 < n; j += 2)
+            nodes[w++] = join(nodes[j], nodes[j + 1]);
+        if (n & 1)                     /* carry the odd tail node up a level */
+            nodes[w++] = nodes[n - 1];
+        n = w;
+    }
+    return nodes[0];
+}
+
 ExprNode *expr_make_in(ExprNode *expr, ExprNode **list, int count)
 {
-    /* Desugar: expr IN (a, b, c) → (expr=a) OR (expr=b) OR (expr=c) */
+    /* Desugar: expr IN (a, b, c) → (expr=a) OR (expr=b) OR (expr=c),
+     * combined into a balanced OR tree (see combine_balanced). */
     if (count <= 0 || !list) return expr_make_bool(0);
-    ExprNode *result = NULL;
+    ExprNode **nodes = (ExprNode **)malloc((size_t)count * sizeof(ExprNode *));
+    if (!nodes) return NULL;
     int i;
     for (i = 0; i < count; i++) {
         ExprNode *eq = expr_alloc();
-        if (!eq) return NULL;
+        if (!eq) { free(nodes); return NULL; }
         eq->type = EXPR_CMP_EQ;
         eq->left = expr;
         eq->right = list[i];
-        if (!result) {
-            result = eq;
-        } else {
-            result = expr_make_or(result, eq);
-        }
+        nodes[i] = eq;
     }
+    ExprNode *result = combine_balanced(nodes, count, expr_make_or);
+    free(nodes);
     if (result) {
         snprintf(result->display, sizeof(result->display), "%s IN (...)",
                  expr ? expr->display : "?");
@@ -775,22 +794,22 @@ ExprNode *expr_make_in(ExprNode *expr, ExprNode **list, int count)
 
 ExprNode *expr_make_not_in(ExprNode *expr, ExprNode **list, int count)
 {
-    /* Desugar: expr NOT IN (a, b, c) → (expr<>a) AND (expr<>b) AND (expr<>c) */
+    /* Desugar: expr NOT IN (a, b, c) → (expr<>a) AND (expr<>b) AND (expr<>c),
+     * combined into a balanced AND tree (see combine_balanced). */
     if (count <= 0 || !list) return expr_make_bool(1);
-    ExprNode *result = NULL;
+    ExprNode **nodes = (ExprNode **)malloc((size_t)count * sizeof(ExprNode *));
+    if (!nodes) return NULL;
     int i;
     for (i = 0; i < count; i++) {
         ExprNode *ne = expr_alloc();
-        if (!ne) return NULL;
+        if (!ne) { free(nodes); return NULL; }
         ne->type = EXPR_CMP_NE;
         ne->left = expr;
         ne->right = list[i];
-        if (!result) {
-            result = ne;
-        } else {
-            result = expr_make_and(result, ne);
-        }
+        nodes[i] = ne;
     }
+    ExprNode *result = combine_balanced(nodes, count, expr_make_and);
+    free(nodes);
     if (result) {
         snprintf(result->display, sizeof(result->display), "%s NOT IN (...)",
                  expr ? expr->display : "?");
