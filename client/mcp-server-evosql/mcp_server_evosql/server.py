@@ -299,6 +299,12 @@ class MemoryBackend:
         # retrievable + traceable. search() fuses these alongside episodic
         # candidates (step 17).
         self.semantic_store = f"{prefix}_semantic"
+        # Fuse semantic candidates into search (roadmap step 17). On by default,
+        # but the store is empty until job_semanticize runs, so it is a no-op
+        # until then; EVOSQL_SEMANTIC_SEARCH=0 is the kill-switch.
+        self.semantic_search = os.environ.get("EVOSQL_SEMANTIC_SEARCH", "1") \
+            not in ("0", "", "off", "false", "no")
+        self.semantic_pool = int(os.environ.get("EVOSQL_SEMANTIC_POOL", "50"))
         # User interest profile (Adım 17): a daily job clusters the user's
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
@@ -893,6 +899,25 @@ class MemoryBackend:
                 missing = [k for k in graph_boost_map if k not in have]
                 for k, v in self._fetch_by_keys(self.memory, user_id, missing):
                     rows.append([user_id, k, v])
+
+        # Semantic-tier fusion (roadmap step 17): pull the namespace's semantic
+        # generalizations into the candidate pool so a query gets both "what
+        # happened" (episodic) and "what is generally true" (semantic). They are
+        # parsed + scored + RRF-fused exactly like episodic rows. Empty until
+        # job_semanticize runs, so it is a no-op by default; the store is small
+        # (one row per cluster), so a bounded scan suffices.
+        if self.semantic_search:
+            try:
+                rows = rows or []
+                have = {r[1] for r in rows}
+                for sr in self._query(
+                        f"SELECT mem_namespace, mem_key, mem_value FROM "
+                        f"__mem_{self.semantic_store} WHERE mem_namespace = "
+                        f"'{_e(user_id)}' LIMIT {self.semantic_pool}") or []:
+                    if sr[1] not in have:
+                        rows.append([user_id, sr[1], sr[2]])
+            except Exception:
+                pass
 
         # User-profile bias (Adım 17): the 1-2 interest clusters the query
         # points at. Rows near these centroids get a boost downstream, so
