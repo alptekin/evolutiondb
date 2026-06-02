@@ -292,6 +292,13 @@ class MemoryBackend:
         # with derived_from = source keys). The episode record links the
         # summary back to its sources for hierarchical drill-down.
         self.episodes_store = f"{prefix}_episodes"
+        # Semantic tier (roadmap step 15): timeless generalizations distilled
+        # ACROSS many episodic rows (episodic -> semantic), not within-episode
+        # summaries. Each carries tier='semantic' + abstraction_level and is
+        # written through save_semantic with derived_from provenance, so it is
+        # retrievable + traceable. search() fuses these alongside episodic
+        # candidates (step 17).
+        self.semantic_store = f"{prefix}_semantic"
         # User interest profile (Adım 17): a daily job clusters the user's
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
@@ -342,7 +349,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.profile_store),
                   ("MEMORY STORE", self.job_runs_store),
                   ("MEMORY STORE", self.access_store),
-                  ("MEMORY STORE", self.salience_store)]
+                  ("MEMORY STORE", self.salience_store),
+                  ("MEMORY STORE", self.semantic_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -504,6 +512,53 @@ class MemoryBackend:
                     g.flush()   # edges are deferred; persist this row's now
             except Exception:
                 pass
+        return key
+
+    def save_semantic(self, user_id: str, proposition: str, *,
+                      derived_from: Sequence[str],
+                      abstraction_level: int = 1,
+                      tags: Optional[List[str]] = None) -> str:
+        """Write a semantic-tier memory (roadmap step 15): a timeless
+        generalization distilled across several episodic rows. Stored in the
+        separate `_semantic` store (not the main memory), tagged tier='semantic'
+        with an abstraction_level and derived_from provenance, and embedded so it
+        is similarity-retrievable. The source keys are NOT foreign-key validated
+        here (they may live in the main store, episodes, or other semantic rows);
+        job_semanticize passes already-resolved keys. Returns the new key."""
+        created = time.time()
+        key = f"sem_{int(created * 1000)}_{uuid.uuid4().hex[:6]}"
+        record: Dict[str, Any] = {
+            "fact":              proposition,
+            "tags":              sorted(set((tags or []) + ["semantic"])),
+            "created":           created,
+            "tier":              "semantic",
+            "abstraction_level": int(abstraction_level),
+            "synthesized":       True,
+            "derived_from":      [k for k in derived_from if k],
+            "synthesis_version": SYNTHESIS_SCHEMA_VERSION,
+        }
+        if self.embedder is not None:
+            vec = self.embedder.embed(proposition)
+            if vec:
+                record["emb"] = encode_vec(vec)
+                mn = getattr(self.embedder, "model_name", "")
+                record["emb_model"] = (f"{self.embedder.kind}:{mn}"
+                                       if mn else self.embedder.kind)
+        self._exec(
+            f"MEMORY PUT INTO {self.semantic_store} VALUES "
+            f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(record))}')")
+        if self.embedder2 is not None and self.embedder2.kind != "none":
+            vec2 = self.embedder2.embed_passage(proposition)
+            if vec2:
+                mn2 = getattr(self.embedder2, "model_name", "")
+                e2 = {"emb2": encode_vec(vec2),
+                      "emb2_model": f"{self.embedder2.kind}:{mn2}"
+                                    if mn2 else self.embedder2.kind}
+                try:
+                    self._exec(f"MEMORY PUT INTO {self.emb2_store} VALUES "
+                               f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(e2))}')")
+                except Exception:
+                    pass
         return key
 
     def _entities(self, user_id: str):
