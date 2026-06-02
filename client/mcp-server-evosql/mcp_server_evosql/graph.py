@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 # Predicate vocabulary (~14 verbs). Each maps a set of surface verb stems
 # (TR + EN) to a canonical predicate. Order matters: first match wins.
-PREDICATES = "worked_on mentioned replied_to assigned escalated_to owns manages related_to".split()
+PREDICATES = "worked_on mentioned replied_to assigned escalated_to owns manages supersedes contradicts related_to".split()
 _VERB_LEXICON: List[Tuple[str, Tuple[str, ...]]] = [
     ("worked_on",    ("worked on", "working on", "worked", "çalıştı", "çalışıyor",
                       "üzerinde", "geliştirdi", "developed", "built")),

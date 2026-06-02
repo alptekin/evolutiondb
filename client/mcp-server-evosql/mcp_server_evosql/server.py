@@ -322,6 +322,14 @@ class MemoryBackend:
         # superseded row stale. Pure append stays the default.
         self.reconcile_enabled = os.environ.get("EVOSQL_RECONCILE", "0") \
             not in ("0", "", "off", "false", "no")
+        # Active-record gate (roadmap step 21): drop rows the validity store
+        # marks stale/retracted so a superseded fact stops out-ranking the truth.
+        # Auto-on when reconciliation is on (you want the gate if you revise);
+        # an explicit EVOSQL_VALIDITY_GATE overrides. No-op when the validity
+        # store is empty (default), so default ranking is unchanged.
+        _vg = os.environ.get("EVOSQL_VALIDITY_GATE")
+        self.validity_gate = (_vg not in ("0", "", "off", "false", "no")
+                              if _vg is not None else self.reconcile_enabled)
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
@@ -860,7 +868,8 @@ class MemoryBackend:
                 tag: Optional[str] = None,
                 sender: Optional[str] = None,
                 mode: str = "flat",
-                include_archived: bool = False) -> List[Dict[str, Any]]:
+                include_archived: bool = False,
+                as_of: Optional[float] = None) -> List[Dict[str, Any]]:
         # Hierarchical mode (Adım 16): rank only the episode summaries, so an
         # aggregation query returns a few paragraph summaries with drill-down
         # instead of every raw row. Unlike a tag filter this keeps the normal
@@ -1271,6 +1280,10 @@ class MemoryBackend:
         # so the line above leaves `out` exactly as the legacy ranking produced.
         if self.activation_enabled:
             out = self._rank_by_activation(user_id, out, graph_boost_map)
+        # Active-record gate (step 21): drop superseded (stale/retracted) rows so
+        # the current fact wins. No-op when the validity store is empty.
+        if self.validity_gate:
+            out = self._apply_validity_gate(user_id, out, as_of=as_of)
         page = out[:limit]
         # Provenance (Adım 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
@@ -1432,6 +1445,33 @@ class MemoryBackend:
             except Exception:
                 continue
         return out
+
+    def _apply_validity_gate(self, user_id: str, out: List[Dict[str, Any]], *,
+                             as_of: Optional[float] = None
+                             ) -> List[Dict[str, Any]]:
+        """Drop rows the validity store marks stale/retracted (roadmap step 21):
+        a multiplicative gate (zero, i.e. removed), NOT another additive boost,
+        so a superseded fact stops out-ranking the current one. A row with no
+        validity record is active (append-only default). With an `as_of`
+        timestamp (step 22), a row that was valid AT that time is kept (time
+        travel). No-op when no validity records exist for the candidates."""
+        if not out:
+            return out
+        vmap = self._validity_map(user_id, [x["key"] for x in out])
+        if not vmap:
+            return out
+        kept: List[Dict[str, Any]] = []
+        for x in out:
+            v = vmap.get(x["key"])
+            if v is None or v.get("status", "active") == "active":
+                kept.append(x)
+                continue
+            if as_of is not None:                 # time travel
+                vf, vt = v.get("valid_from"), v.get("valid_to")
+                if (vf is None or as_of >= vf) and (vt is None or as_of < vt):
+                    kept.append(x)
+            # else: stale/retracted, present-time query -> dropped
+        return kept
 
     def _set_validity(self, user_id: str, mem_key: str, *,
                       valid_from: Optional[float] = None,
