@@ -58,6 +58,37 @@ PROFILE_SIGNAL_MIN = float(os.environ.get("EVOSQL_PROFILE_SIGNAL_MIN", "0.35"))
 # IN(...) batch comfortably under that.
 MAX_IN_KEYS = int(os.environ.get("EVOSQL_MAX_IN_KEYS", "20"))
 
+# Cap the per-row access-history (`uses`) epoch array. ACT-R base-level
+# activation (roadmap step 9) needs the recent access timestamps; a small cap
+# keeps the side-store record well under the engine's 8 KB statement limit while
+# still giving recency + frequency.
+ACCESS_USES_CAP = 16
+
+
+def _boosts_master_on() -> bool:
+    """EVOSQL_MEMORY_BOOSTS is the single switch that turns the whole derived
+    "memory" layer (salience / graph / profile / decay) on at sensible levels."""
+    return os.environ.get("EVOSQL_MEMORY_BOOSTS", "").strip().lower() in (
+        "1", "on", "true", "yes")
+
+
+def _resolve_boost(env_key: str, default_when_on: float,
+                   master_on: Optional[bool] = None) -> float:
+    """Resolve a boost weight. An explicit EVOSQL_<X>_BOOST always wins — so it
+    doubles as a per-boost kill-switch (set it to 0 to force a boost off even
+    when the master is on). Otherwise the EVOSQL_MEMORY_BOOSTS master chooses
+    between `default_when_on` and 0. Default (master off, no override) is 0, so
+    ranking stays byte-for-byte until an operator opts in."""
+    raw = os.environ.get(env_key)
+    if raw is not None:
+        try:
+            return float(raw)
+        except ValueError:
+            return 0.0
+    if master_on is None:
+        master_on = _boosts_master_on()
+    return default_when_on if master_on else 0.0
+
 
 # ---------------------------------------------------------------- #
 #  Memory backend — speaks EvolutionDB over psycopg / PG wire.       #
@@ -185,10 +216,9 @@ class MemoryBackend:
         # ranking is unchanged until an operator opts in; rows without a
         # salience field contribute 0 either way, so enabling it is safe even
         # before the compute job has run.
-        try:
-            self.salience_boost = float(os.environ.get("EVOSQL_SALIENCE_BOOST", "0"))
-        except ValueError:
-            self.salience_boost = 0.0
+        # An explicit EVOSQL_SALIENCE_BOOST overrides; otherwise the
+        # EVOSQL_MEMORY_BOOSTS master switch (roadmap step 2) enables it.
+        self.salience_boost = _resolve_boost("EVOSQL_SALIENCE_BOOST", 0.25)
         self.tagger   = tagger
         self.reranker = reranker
         # Lexical scorer: "simple" = legacy binary term-presence
@@ -244,10 +274,7 @@ class MemoryBackend:
         # is opt-in via EVOSQL_GRAPH_BOOST>0 (latency-sensitive hot path).
         self.graph_store = f"{prefix}_graph_edges"
         self.graph_build = os.environ.get("EVOSQL_GRAPH_BUILD", "1") != "0"
-        try:
-            self.graph_boost = float(os.environ.get("EVOSQL_GRAPH_BOOST", "0"))
-        except ValueError:
-            self.graph_boost = 0.0
+        self.graph_boost = _resolve_boost("EVOSQL_GRAPH_BOOST", 0.30)
         self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
         # Episodes (Adım 16): a weekly job groups recent rows into episodes
         # and writes one summary per episode (tagged `episode`, synthesized
@@ -260,10 +287,7 @@ class MemoryBackend:
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
         # it only engages when an embedder is configured). Default 0.
         self.profile_store = f"{prefix}_profile_clusters"
-        try:
-            self.profile_boost = float(os.environ.get("EVOSQL_PROFILE_BOOST", "0"))
-        except ValueError:
-            self.profile_boost = 0.0
+        self.profile_boost = _resolve_boost("EVOSQL_PROFILE_BOOST", 0.25)
         self._profile_cache: Dict[str, List[Dict[str, Any]]] = {}
         # Sleep-time scheduler (Adım 18): per-job state + audit log so the
         # background jobs run idempotently and survive restarts.
@@ -274,7 +298,10 @@ class MemoryBackend:
         # EVOSQL_DECAY>0 — default off keeps search byte-for-byte. When on,
         # search refreshes last_accessed and skips archived rows.
         self.access_store = f"{prefix}_access"
-        self.decay_enabled = os.environ.get("EVOSQL_DECAY", "0") != "0"
+        # Explicit EVOSQL_DECAY wins (kill-switch); else the master enables it.
+        _decay_env = os.environ.get("EVOSQL_DECAY")
+        self.decay_enabled = (_decay_env != "0" and _decay_env is not None) \
+            or (_decay_env is None and _boosts_master_on())
         # Salience (Adım 12) lives in its OWN side store, not on the main
         # record. Stamping a number onto a multi-KB row would rewrite the whole
         # record and trip the engine's 8 KB statement cap; a tiny {salience}
@@ -980,7 +1007,18 @@ class MemoryBackend:
                 fused = (1.0 / (K + rb[i]) + 1.0 / (K + re5[i])
                          + 1.0 / (K + rkw[i]))
                 x["score"] = round(fused, 6)
+        # Retrieval-trace capture (roadmap step 4): stash each candidate's
+        # ranker components keyed by mem_key BEFORE they are stripped, so the
+        # per-query feature log (the training/eval backbone) has them. The
+        # final score + boost contributions are added below, after the boosts.
+        self._last_scores = {}
         for x in out:
+            self._last_scores[x["key"]] = {
+                "bge": round(x.get("_bge", 0.0), 4),
+                "e5": round(x.get("_e5", 0.0), 4),
+                "kw": round(x.get("_kw", 0.0), 4),
+                "hybrid": round(x.get("score", 0.0), 6),
+            }
             for f in ("_bge", "_e5", "_kw"):
                 x.pop(f, None)
         # Secondary sort by key keeps the ranking stable across
@@ -1084,6 +1122,11 @@ class MemoryBackend:
                 out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
         for x in out:
+            sc = self._last_scores.get(x["key"])
+            if sc is not None:                       # finalize the trace row
+                sc["psim"] = round(x.get("_psim", 0.0), 4)
+                sc["graph"] = round(graph_boost_map.get(x["key"], 0.0), 4)
+                sc["final"] = round(x.get("score", 0.0), 6)
             x.pop("_haystack", None)
             x.pop("_psim", None)
         page = out[:limit]
@@ -1096,14 +1139,50 @@ class MemoryBackend:
             self._touch_access(user_id, [r["key"] for r in page])
         return page
 
+    def _access_records(self, user_id: str,
+                        keys: Sequence[str]) -> Dict[str, dict]:
+        """{mem_key: access_record} from the side store for the given keys.
+        The record is the unified access state (roadmap step 3):
+          {last_accessed, retrieval_count, uses[], stability, rif_penalty}.
+        Missing keys are simply absent. Best-effort; empty on any read error."""
+        out: Dict[str, dict] = {}
+        if not keys:
+            return out
+        try:
+            rows = self._fetch_by_keys(self.access_store, user_id, list(keys))
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                rec = json.loads(r[1]) if r[1] else {}
+                if isinstance(rec, dict):
+                    out[r[0]] = rec
+            except Exception:
+                continue
+        return out
+
     def _touch_access(self, user_id: str, keys: List[str]) -> None:
+        """Record a read in the unified access side store. A read increments the
+        row's retrieval_count and appends to its `uses` epoch history (capped),
+        on top of refreshing last_accessed — so later steps get recency AND
+        frequency (base-level activation, spaced-repetition) without ever
+        rewriting the main record. Other fields (stability, rif_penalty) written
+        by the decay/forgetting passes are preserved."""
         now = time.time()
+        cur = self._access_records(user_id, keys)
         for k in keys:
+            rec = cur.get(k) or {}
+            rec["last_accessed"] = now
+            rec["retrieval_count"] = int(rec.get("retrieval_count", 0)) + 1
+            uses = rec.get("uses") or []
+            uses.append(round(now, 3))
+            if len(uses) > ACCESS_USES_CAP:
+                uses = uses[-ACCESS_USES_CAP:]
+            rec["uses"] = uses
             try:
                 self._exec(
                     f"MEMORY PUT INTO {self.access_store} VALUES "
-                    f"('{_e(user_id)}','{_e(k)}',"
-                    f"'{_e(json.dumps({'last_accessed': now}))}')")
+                    f"('{_e(user_id)}','{_e(k)}','{_e(json.dumps(rec))}')")
             except Exception:
                 pass
 
@@ -1229,9 +1308,18 @@ class MemoryBackend:
         """Record a search for later feedback. Stored under query_id with
         used_keys empty until the caller reports back. Best-effort: a
         logging failure must never break the search response."""
+        # Retrieval trace (roadmap step 4): the per-candidate feature scores the
+        # last search() stashed, aligned to the returned keys + their rank. This
+        # is the labelled-feature backbone the closed-loop learned controller
+        # (steps 24-26) and the eval harness train on. Best-effort; absent when
+        # search() wasn't the immediately preceding call.
+        scores = getattr(self, "_last_scores", {}) or {}
+        trace = [{"key": k, "rank": i, "scores": scores.get(k, {})}
+                 for i, k in enumerate(returned_keys)]
         rec: Dict[str, Any] = {
             "query_text":    query_text,
             "returned_keys": returned_keys,
+            "trace":         trace,
             "used_keys":     [],
             "rating":        None,
             "ts":            time.time(),
