@@ -19,9 +19,11 @@ PORT = int(os.environ.get("EVOSQL_PG_PORT", "5520"))
 def test_parse():
     assert _parse_as_of(None) is None and _parse_as_of("") is None
     assert _parse_as_of(1700000000) == 1700000000.0
+    assert _parse_as_of("1700000000") == 1700000000.0       # epoch as string
     assert _parse_as_of("2023-11-14T22:13:20Z") == 1700000000.0
     assert _parse_as_of("not a date") is None
-    print("  ok  _parse_as_of: epoch / ISO-8601 / junk")
+    assert _parse_as_of(True) is None                        # bool not epoch
+    print("  ok  _parse_as_of: epoch / epoch-string / ISO-8601 / junk")
 
 
 def test_time_travel() -> bool:
@@ -44,20 +46,24 @@ def test_time_travel() -> bool:
     k2 = b.save(ns, "the user lives in seattle city")
 
     now = time.time()
-    t0, t1 = now - 1000, now - 100        # k1 was valid in [t0, t1)
+    t0, t1 = now - 1000, now - 100        # k1 valid in [t0,t1), k2 from t1 on
     b._set_validity(ns, k1, valid_from=t0, valid_to=t1, status="stale",
                     superseded_by=[k2])
+    b._set_validity(ns, k2, valid_from=t1, status="active", supersedes=[k1])
 
     def keys(as_of=None):
         return [r["key"] for r in b.search(ns, "user lives city",
                                            limit=10, as_of=as_of)]
 
-    assert k1 not in keys(), "present-time query must drop the superseded fact"
-    assert k1 in keys(as_of=t0 + 1), "as-of inside the window must keep it"
-    assert k1 not in keys(as_of=t1 + 1), "as-of after valid_to must drop it"
-    assert k2 in keys() and k2 in keys(as_of=t0 + 1), "current fact always present"
-    print("  ok  present drops superseded; as-of inside window keeps it; "
-          "after window drops it")
+    # present time: the current fact wins, the superseded one is hidden
+    assert k1 not in keys() and k2 in keys(), "present: stale hidden, current shown"
+    # inside k1's window: k1 was valid, k2 did not hold yet
+    inside = keys(as_of=t0 + 500)
+    assert k1 in inside and k2 not in inside, f"as-of in [t0,t1): only k1 — {inside}"
+    # after the switch: k2 holds, k1 no longer valid
+    after = keys(as_of=t1 + 50)
+    assert k2 in after and k1 not in after, f"as-of in [t1,now): only k2 — {after}"
+    print("  ok  bitemporal: present=current; in-window=old fact; after=new fact")
 
     os.environ.pop("EVOSQL_VALIDITY_GATE", None)
     return True
