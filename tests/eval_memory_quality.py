@@ -53,12 +53,9 @@ _PII_PKG = _REPO_ROOT / "client" / "evolutiondb-pii"
 if str(_PII_PKG) not in sys.path:
     sys.path.insert(0, str(_PII_PKG))
 
-try:
-    import yaml
-except ImportError:
-    print("[eval] PyYAML required — install with: pip install PyYAML",
-          file=sys.stderr)
-    sys.exit(2)
+# PyYAML is imported lazily inside run_eval (full-eval mode only) so the pure
+# metric functions stay importable without it (unit tests, the longitudinal
+# harness).
 
 from mcp_server_evosql.server import MemoryBackend  # noqa: E402
 from mcp_server_evosql.embeddings import provider_from_env, reranker_from_env, embedder2_from_env  # noqa: E402
@@ -117,6 +114,77 @@ def percentile(values: List[float], pct: float) -> float:
     s = sorted(values)
     idx = max(0, min(len(s) - 1, int(round(pct / 100.0 * (len(s) - 1)))))
     return s[idx]
+
+
+# ---------------------------------------------------------------- #
+#  Memory-competence metrics (roadmap step 5)                       #
+#  knowledge_update / abstention / temporal — the categories that   #
+#  separate a memory from a search index (LongMemEval).             #
+# ---------------------------------------------------------------- #
+# Until an abstention gate exists (roadmap step 32) the system always returns
+# top-K; this threshold lets the harness score "should have stayed quiet".
+ABSTAIN_SCORE_MAX = float(os.environ.get("EVOSQL_EVAL_ABSTAIN_MAX", "0.0"))
+
+
+def forbidden_hit(returned: List[str], forbidden: List[str], k: int) -> bool:
+    """True if any stale/forbidden key appears in the top-k. After a
+    knowledge update the OLD fact must not resurface."""
+    if not forbidden:
+        return False
+    top = set(returned[:k])
+    return any(f in top for f in forbidden)
+
+
+def update_correct(returned: List[str], ideal: List[str],
+                   forbidden: List[str], k: int = 5) -> float:
+    """A knowledge-update query is correct when the NEW fact is recalled (full
+    recall of ideal) AND the OLD (forbidden) fact is absent from the top-k."""
+    good = (recall_at_k(returned, ideal, k) >= 1.0) if ideal else True
+    return 1.0 if (good and not forbidden_hit(returned, forbidden, k)) else 0.0
+
+
+def abstain_correct(results: List[Dict[str, Any]],
+                    threshold: float = ABSTAIN_SCORE_MAX) -> float:
+    """An abstention query has no relevant memory; the system is correct when it
+    returns nothing (or only rows scoring <= threshold). Honest baseline until
+    the step-32 abstention gate lands (today the system always returns top-K)."""
+    if not results:
+        return 1.0
+    top = max((float(r.get("score", 0.0)) for r in results), default=0.0)
+    return 1.0 if top <= threshold else 0.0
+
+
+# ---------------------------------------------------------------- #
+#  Regression gate (roadmap step 8)                                 #
+#  "No improvement claim ships without a delta from here."          #
+# ---------------------------------------------------------------- #
+GATE_METRICS = ["recall_at_5", "recall_at_10", "mrr", "ndcg_at_10",
+                "update_accuracy", "abstain_accuracy"]
+
+
+def compare_reports(base: Dict[str, Any], new: Dict[str, Any],
+                    tol: float = 0.0) -> Dict[str, Any]:
+    """Delta between two eval reports (or bare aggregates). A metric regresses
+    when it drops by more than `tol`; gate_pass is False if any tracked metric
+    regressed. Metrics absent from either side are reported as None (skipped)."""
+    ba = base.get("aggregate", base)
+    na = new.get("aggregate", new)
+    deltas: Dict[str, Any] = {}
+    regressed: List[str] = []
+    improved: List[str] = []
+    for m in GATE_METRICS:
+        bv, nv = ba.get(m), na.get(m)
+        if bv is None or nv is None:
+            deltas[m] = None
+            continue
+        d = round(float(nv) - float(bv), 4)
+        deltas[m] = d
+        if d < -tol:
+            regressed.append(m)
+        elif d > tol:
+            improved.append(m)
+    return {"deltas": deltas, "regressed": regressed, "improved": improved,
+            "gate_pass": not regressed}
 
 
 # ---------------------------------------------------------------- #
@@ -272,6 +340,12 @@ def resolve_embed_meta(backend: MemoryBackend) -> Dict[str, str]:
 # ---------------------------------------------------------------- #
 def run_eval(gold_path: Path, out_base: Path, *,
               search_limit: int = 10, warmup: bool = True) -> Dict[str, Any]:
+    try:
+        import yaml
+    except ImportError:
+        print("[eval] PyYAML required — install with: pip install PyYAML",
+              file=sys.stderr)
+        sys.exit(2)
     with gold_path.open() as f:
         gold = yaml.safe_load(f) or {}
 
@@ -291,12 +365,13 @@ def run_eval(gold_path: Path, out_base: Path, *,
     # honest read — we are not asking the system to retrieve PII).
     queries = [
         q for q in all_queries
-        if (q.get("ideal_keys") or q.get("pii_check"))
+        if (q.get("ideal_keys") or q.get("pii_check") or q.get("must_abstain"))
         and not q.get("requires_unbounded_k")
     ]
     skipped_unfilled = sum(
         1 for q in all_queries
         if not q.get("ideal_keys") and not q.get("pii_check")
+        and not q.get("must_abstain")
     )
     skipped_unbounded = sum(1 for q in all_queries
                               if q.get("requires_unbounded_k"))
@@ -365,6 +440,15 @@ def run_eval(gold_path: Path, out_base: Path, *,
             "ndcg_at_10": ndcg_at_k(returned, ideal, 10),
             "error": error,
         }
+        # Memory-competence categories (step 5).
+        forbidden = q.get("forbidden_keys") or []
+        if forbidden or category == "knowledge_update":
+            row["forbidden_keys"] = forbidden
+            row["forbidden_hit"] = forbidden_hit(returned, forbidden, 5)
+            row["update_correct"] = update_correct(returned, ideal, forbidden, 5)
+        if q.get("must_abstain"):
+            row["must_abstain"] = True
+            row["abstain_correct"] = abstain_correct(results)
         if pii_check_on:
             pii_gate_total += 1
             leaks = pii_scan_results(results)
@@ -382,6 +466,11 @@ def run_eval(gold_path: Path, out_base: Path, *,
         if not rows:
             return 0.0
         return round(sum(r[field] for r in rows) / len(rows), 4)
+
+    def avg_present(rows, field):
+        """Average a field over only the rows that carry it (None if none do)."""
+        vals = [r[field] for r in rows if field in r]
+        return round(sum(vals) / len(vals), 4) if vals else None
 
     latencies = [r["latency_ms"] for r in per_query]
     isolation = pii_isolation_check(backend, user_id) if _PII_OK else {
@@ -402,6 +491,10 @@ def run_eval(gold_path: Path, out_base: Path, *,
         "recall_at_10": avg(per_query, "recall_at_10"),
         "mrr": avg(per_query, "mrr"),
         "ndcg_at_10": avg(per_query, "ndcg_at_10"),
+        # Memory-competence aggregates (step 5): averaged over only the queries
+        # that carry the field; None when the gold set has no such query yet.
+        "update_accuracy": avg_present(per_query, "update_correct"),
+        "abstain_accuracy": avg_present(per_query, "abstain_correct"),
         "latency_ms_p50": round(percentile(latencies, 50), 2),
         "latency_ms_p95": round(percentile(latencies, 95), 2),
         "latency_ms_mean": round(statistics.mean(latencies), 2),
@@ -511,6 +604,8 @@ def render_markdown(report: Dict[str, Any]) -> str:
         f"| Recall@10    | {agg['recall_at_10']} |",
         f"| MRR          | {agg['mrr']} |",
         f"| nDCG@10      | {agg['ndcg_at_10']} |",
+        f"| Update accuracy | {agg.get('update_accuracy') if agg.get('update_accuracy') is not None else 'n/a'} |",
+        f"| Abstain accuracy | {agg.get('abstain_accuracy') if agg.get('abstain_accuracy') is not None else 'n/a'} |",
         f"| Latency p50  | {agg['latency_ms_p50']} ms |",
         f"| Latency p95  | {agg['latency_ms_p95']} ms |",
         f"| Latency mean | {agg['latency_ms_mean']} ms |",
@@ -726,7 +821,30 @@ def main() -> None:
     p.add_argument("--yaml", type=Path, default=DEFAULT_YAML,
                    help=f"Gold YAML to edit when --label is used "
                         f"(default: {DEFAULT_YAML.relative_to(_REPO_ROOT)}).")
+    p.add_argument("--compare", nargs=2, type=Path,
+                   metavar=("BASE.json", "NEW.json"),
+                   help="Regression gate: print the metric delta between two "
+                        "eval report JSONs and exit non-zero on a regression.")
+    p.add_argument("--tol", type=float, default=0.0,
+                   help="Allowed drop per metric before --compare fails "
+                        "(default 0.0).")
     args = p.parse_args()
+
+    if args.compare:
+        base = json.loads(args.compare[0].read_text())
+        new = json.loads(args.compare[1].read_text())
+        cmp = compare_reports(base, new, tol=args.tol)
+        print(f"[eval] delta {args.compare[0].name} -> {args.compare[1].name} "
+              f"(tol {args.tol}):")
+        for m, d in cmp["deltas"].items():
+            mark = "" if d is None else ("  REGRESSION" if d < -args.tol
+                                          else ("  +" if d > args.tol else ""))
+            print(f"    {m:<18} {('n/a' if d is None else f'{d:+.4f}')}{mark}")
+        verdict = "PASS" if cmp["gate_pass"] else "FAIL"
+        print(f"[eval] regression gate {verdict}"
+              + (f" — regressed: {', '.join(cmp['regressed'])}"
+                 if cmp["regressed"] else ""))
+        sys.exit(0 if cmp["gate_pass"] else 4)
 
     if args.collect:
         user_id = os.environ.get("MCP_USER_ID")
