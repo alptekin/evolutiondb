@@ -66,3 +66,36 @@ def base_level(uses: Sequence[float], total_count: int, now: float, *,
                 exact += tail
 
     return math.log(exact) if exact > 0 else B_FLOOR
+
+
+# ---------------------------------------------------------------- #
+#  Unified activation A_i (roadmap step 10)                         #
+# ---------------------------------------------------------------- #
+def logit(p: float, eps: float = 1e-6) -> float:
+    """Map a probability/similarity in [0,1] to log-odds, so it can be added to
+    the other log-space activation terms."""
+    p = min(1.0 - eps, max(eps, float(p)))
+    return math.log(p / (1.0 - p))
+
+
+def activation(*, base: float = B_FLOOR, cos: Optional[float] = None,
+               spread: float = 0.0, salience: Optional[float] = None,
+               w_cos: float = 1.0, w_spread: float = 1.0, w_sal: float = 1.0,
+               noise: float = 0.0) -> float:
+    """Unified ACT-R-style activation, combined LOG-ADDITIVELY:
+
+        A_i = base + w_cos*logit(cos) + w_spread*spread + w_sal*ln(salience) + noise
+
+    Every evidence channel enters in log / log-odds space, so summation is
+    principled rather than a hand-tuned linear blend of incommensurable scales.
+    A missing channel contributes nothing: `cos=None` (no embedding) and
+    `salience=None` are skipped; `spread` defaults to 0 (no graph reach).
+    """
+    a = float(base)
+    if cos is not None and cos > 0.0:
+        a += w_cos * logit(cos)
+    a += w_spread * float(spread)
+    if salience is not None and salience > 0.0:
+        a += w_sal * math.log(float(salience))
+    a += float(noise)
+    return a
