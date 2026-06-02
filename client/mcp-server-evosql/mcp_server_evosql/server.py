@@ -83,6 +83,24 @@ def _env_float(key: str, default):
         return default
 
 
+def _parse_as_of(v):
+    """Parse an as-of timestamp (epoch number or ISO-8601 string) to epoch
+    seconds, or None. Used for time-travel queries (roadmap step 22)."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        from datetime import datetime, timezone
+        s = str(v).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
 def _resolve_boost(env_key: str, default_when_on: float,
                    master_on: Optional[bool] = None) -> float:
     """Resolve a boost weight. An explicit EVOSQL_<X>_BOOST always wins — so it
@@ -1849,6 +1867,11 @@ TOOLS = [
                                 "(old and long unused). Off by default so "
                                 "stale rows do not clutter results; turn on "
                                 "to dig up something forgotten."},
+                "as_of": {"type": "string",
+                            "description": "Time-travel: an epoch or ISO-8601 "
+                                "timestamp. Returns what was believed AT that "
+                                "time — a fact later superseded is kept if it "
+                                "was still valid then."},
                 "limit":  {"type": "integer", "default": 5},
             },
             "required": ["query"],
@@ -2000,9 +2023,12 @@ class MCPServer:
             mode   = (args.get("mode") or "flat").lower()
             limit  = int(args.get("limit") or 5)
             inc_arch = bool(args.get("include_archived"))
+            # As-of time travel (step 22): an epoch or ISO-8601 timestamp;
+            # superseded rows that were valid AT that time are kept.
+            as_of = _parse_as_of(args.get("as_of"))
             results = b.search(self.user_id, q,
                                limit=limit, tag=tag, sender=sender, mode=mode,
-                               include_archived=inc_arch)
+                               include_archived=inc_arch, as_of=as_of)
             # Implicit-feedback hook (Adım 11): tag the response with a
             # query_id and log (query -> returned keys) so the caller can
             # later report which keys it used via the feedback tool.
