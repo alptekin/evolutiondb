@@ -103,6 +103,7 @@ class GraphStore:
         self._adj: Optional[Dict[str, Dict[str, float]]] = None  # undirected
         self._mentions_by_entity: Optional[Dict[str, List[str]]] = None
         self._edges: Optional[Dict[str, dict]] = None   # edge cache (write path)
+        self._dirty_edges: set = set()                  # edge keys to flush
 
     # -- write path ---------------------------------------------------
     def _edge_cache(self) -> Dict[str, dict]:
@@ -123,7 +124,6 @@ class GraphStore:
 
     def add_edges_from_row(self, mem_key: str, mentions: List[dict],
                            text: str, ts: float, write: bool = True) -> int:
-        from .entities import _safe_put
         cache = self._edge_cache()
         triples = extract_triples(text, mentions)
         now = time.time()
@@ -143,8 +143,11 @@ class GraphStore:
                     and len(edge["source_rows"]) < MAX_SOURCE_ROWS:
                 edge["source_rows"].append(mem_key)
             edge["ts"] = max(float(edge.get("ts", ts)), ts)
+            # Defer the write: a popular edge is touched on every co-occurrence,
+            # so writing through here meant re-writing it hundreds of times.
+            # Mark it dirty and flush each unique edge once.
             if write:
-                _safe_put(self._exec, self.edge_store, self.ns, key, edge)
+                self._dirty_edges.add(key)
             # keep the in-memory adjacency warm if it was already built
             if self._adj is not None:
                 self._adj.setdefault(subj, {})
@@ -152,6 +155,18 @@ class GraphStore:
                 self._adj[subj][obj] = edge["weight"]
                 self._adj[obj][subj] = edge["weight"]
         return len(triples)
+
+    def flush(self) -> int:
+        """Persist every edge touched since the last flush (one write each)."""
+        from .entities import _safe_put
+        cache = self._edges or {}
+        n = 0
+        for key in self._dirty_edges:
+            edge = cache.get(key)
+            if edge and _safe_put(self._exec, self.edge_store, self.ns, key, edge):
+                n += 1
+        self._dirty_edges.clear()
+        return n
 
     # -- read path ----------------------------------------------------
     def _load(self) -> None:
