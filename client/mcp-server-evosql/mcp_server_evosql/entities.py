@@ -32,6 +32,26 @@ import time
 import unicodedata
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+# Size bounds so a single record never approaches the engine's 8 KB statement
+# cap (which, when exceeded, makes the engine reject the write and drop the
+# connection — killing a whole batch job).
+MAX_NAME_LEN = 200      # stored surface / canonical length
+MAX_ALIASES = 25        # alias list per entity
+MAX_PUT_BYTES = 7000    # skip a write whose value would risk the cap
+
+
+def _safe_put(exec_fn, store, ns, key, value) -> bool:
+    """MEMORY PUT that skips an over-large value instead of letting the engine
+    reject it and drop the connection. Returns True if written."""
+    from .server import _e
+    s = json.dumps(value)
+    if len(s) + len(key) + len(ns) > MAX_PUT_BYTES:
+        return False
+    exec_fn(f"MEMORY PUT INTO {store} VALUES "
+            f"('{_e(ns)}','{_e(key)}','{_e(s)}')")
+    return True
+
+
 # ---------------------------------------------------------------- #
 #  regex patterns                                                   #
 # ---------------------------------------------------------------- #
@@ -228,6 +248,7 @@ class EntityStore:
         self.men_store = men_store
         self._cache: Optional[Dict[str, dict]] = None   # entity_id -> entity
         self._index: Dict[Tuple[str, str], str] = {}    # (type, match_key) -> entity_id
+        self._dirty: set = set()                        # entity ids to flush
 
     def _load(self) -> None:
         if self._cache is not None:
@@ -275,36 +296,55 @@ class EntityStore:
                start: int, end: int, conf: float, ts: float,
                write: bool = True) -> str:
         from .server import _e
+        # Bound the stored surface: a runaway regex match must not bloat the
+        # entity/mention record toward the engine's 8 KB statement cap.
+        surface = (surface or "").strip()[:MAX_NAME_LEN]
         eid, is_new = self.resolve(surface, typ)
         if is_new:
-            ent = {"id": eid, "canonical": surface.strip(), "type": typ,
+            ent = {"id": eid, "canonical": surface, "type": typ,
                    "aliases": [], "first_seen": ts, "last_seen": ts,
                    "mention_count": 0}
             self._cache[eid] = ent
         else:
             ent = self._cache[eid]
+            # Cap the alias list: a popular entity could otherwise accumulate
+            # thousands of surface forms and blow past the statement cap.
             if _norm(surface) != _norm(ent["canonical"]) \
-                    and surface.strip() not in (ent.get("aliases") or []):
-                ent.setdefault("aliases", []).append(surface.strip())
+                    and surface not in (ent.get("aliases") or []) \
+                    and len(ent.get("aliases") or []) < MAX_ALIASES:
+                ent.setdefault("aliases", []).append(surface)
         ent["last_seen"] = ts
         ent["mention_count"] = int(ent.get("mention_count", 0)) + 1
         self._index_entity(ent)
         if write:
-            self._exec(f"MEMORY PUT INTO {self.ent_store} VALUES "
-                       f"('{_e(self.ns)}','{_e(eid)}','{_e(json.dumps(ent))}')")
+            # The mention is unique per occurrence, so write it inline. The
+            # entity record changes on every mention, so just mark it dirty
+            # and flush once — rewriting it per mention was the cold-start
+            # bottleneck (and the write count).
             men_key = f"{mem_key}|{eid}|{start}"
             men = {"mem_key": mem_key, "entity_id": eid, "start": start,
-                   "end": end, "confidence": conf, "surface": surface.strip()}
-            self._exec(f"MEMORY PUT INTO {self.men_store} VALUES "
-                       f"('{_e(self.ns)}','{_e(men_key)}','{_e(json.dumps(men))}')")
+                   "end": end, "confidence": conf, "surface": surface}
+            _safe_put(self._exec, self.men_store, self.ns, men_key, men)
+            self._dirty.add(eid)
         return eid
 
+    def flush(self) -> int:
+        """Persist every entity touched since the last flush (one write each)."""
+        n = 0
+        for eid in self._dirty:
+            ent = (self._cache or {}).get(eid)
+            if ent and _safe_put(self._exec, self.ent_store, self.ns, eid, ent):
+                n += 1
+        self._dirty.clear()
+        return n
+
     def process(self, mem_key: str, text: str, ts: float,
-                write: bool = True) -> List[Mention]:
+                write: bool = True, flush: bool = True) -> List[Mention]:
         """Extract, resolve, and (optionally) persist every mention in the
         row. Returns the mentions enriched with their resolved `entity_id`
         so a caller (the knowledge graph) can wire edges between co-occurring
-        entities without re-extracting."""
+        entities without re-extracting. Pass flush=False to batch a whole job
+        and call flush() once at the end."""
         out: List[Mention] = []
         for m in extract_entities(text or ""):
             eid = self.upsert(mem_key, m["surface"], m["type"],
@@ -313,6 +353,8 @@ class EntityStore:
             m = dict(m)
             m["entity_id"] = eid
             out.append(m)
+        if write and flush:
+            self.flush()
         return out
 
 

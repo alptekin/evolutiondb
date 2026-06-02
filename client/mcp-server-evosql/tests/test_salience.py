@@ -44,6 +44,17 @@ def _get(cur, key):
     return row[0] if isinstance(row[0], dict) else json.loads(row[0])
 
 
+def _get_salience(cur, key):
+    # salience lives in its own side store now (not on the main record)
+    cur.execute(f"SELECT mem_value FROM __mem_{PREFIX}_salience "
+                f"WHERE mem_namespace='{_e(NS)}' AND mem_key='{_e(key)}'")
+    row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    v = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+    return v.get("salience")
+
+
 def test_formula():
     now = time.time()
     assert abs(SAL.recency_score({"created": now}, now) - 1.0) < 1e-6
@@ -90,8 +101,9 @@ def test_compute_and_boost():
     # compute salience
     _run_compute(["--namespace", NS, "--prefix", PREFIX])
     with conn.cursor() as cur:
-        hot = _get(cur, "hot")["salience"]
-        cold = _get(cur, "cold")["salience"]
+        hot = _get_salience(cur, "hot")
+        cold = _get_salience(cur, "cold")
+    assert hot is not None and cold is not None, (hot, cold)
     assert hot > cold + 0.3, f"hot {hot} should dominate cold {cold}"
     print(f"  ok  compute: salience hot={hot} >> cold={cold}")
 

@@ -270,6 +270,11 @@ class MemoryBackend:
         # search refreshes last_accessed and skips archived rows.
         self.access_store = f"{prefix}_access"
         self.decay_enabled = os.environ.get("EVOSQL_DECAY", "0") != "0"
+        # Salience (Adım 12) lives in its OWN side store, not on the main
+        # record. Stamping a number onto a multi-KB row would rewrite the whole
+        # record and trip the engine's 8 KB statement cap; a tiny {salience}
+        # value never does. search() and the decay pass read salience here.
+        self.salience_store = f"{prefix}_salience"
         # Idempotent CREATE — the server must not lose data across
         # restarts. Stores already exist on second start, error swallowed.
         stores = [("MEMORY STORE", self.memory),
@@ -281,7 +286,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.episodes_store),
                   ("MEMORY STORE", self.profile_store),
                   ("MEMORY STORE", self.job_runs_store),
-                  ("MEMORY STORE", self.access_store)]
+                  ("MEMORY STORE", self.access_store),
+                  ("MEMORY STORE", self.salience_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -1055,15 +1061,19 @@ class MemoryBackend:
         # in score space that is an additive boost. The base score is min-max
         # normalized within the pool first so one weight works across the
         # RRF / rerank / hybrid score scales. Off by default (boost 0); rows
-        # without a salience field contribute 0, so it never invents signal.
+        # without a salience score contribute 0, so it never invents signal.
+        # Salience is read from the side store (the daily job writes it there,
+        # never onto the main record — see __init__).
         if self.salience_boost > 0 and len(out) > 1:
             w = self.salience_boost
-            smax = max((x["score"] for x in out), default=0.0) or 1.0
-            for x in out:
-                base = x["score"] / smax
-                sal = float(x.get("salience") or 0.0)
-                x["score"] = round((1.0 - w) * base + w * sal, 6)
-            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+            sal_map = self._salience_map(user_id, [x["key"] for x in out])
+            if sal_map:
+                smax = max((x["score"] for x in out), default=0.0) or 1.0
+                for x in out:
+                    base = x["score"] / smax
+                    sal = float(sal_map.get(x["key"], 0.0))
+                    x["score"] = round((1.0 - w) * base + w * sal, 6)
+                out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
         for x in out:
             x.pop("_haystack", None)
@@ -1088,6 +1098,24 @@ class MemoryBackend:
                     f"'{_e(json.dumps({'last_accessed': now}))}')")
             except Exception:
                 pass
+
+    def _salience_map(self, user_id: str,
+                      keys: Sequence[str]) -> Dict[str, float]:
+        """{mem_key: salience} from the side store, for the candidate keys.
+        Empty when the salience job hasn't run, so the boost stays inert."""
+        out: Dict[str, float] = {}
+        try:
+            rows = self._fetch_by_keys(self.salience_store, user_id, list(keys))
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                v = json.loads(r[1]) if r[1] else {}
+                if isinstance(v.get("salience"), (int, float)):
+                    out[r[0]] = float(v["salience"])
+            except Exception:
+                continue
+        return out
 
     def restore(self, user_id: str, key: str) -> bool:
         """Bring an archived memory back: clear the flag and refresh its

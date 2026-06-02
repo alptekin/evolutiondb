@@ -42,11 +42,41 @@ def decay_score(salience: float, last_accessed: float, now: float,
 
 
 def _row_ts(rec: dict) -> float:
-    for k in ("created", "ts"):
+    """Epoch seconds from whichever timestamp a connector wrote: save_memory
+    `created`; browser `saved_at` (epoch) / `last_visited_at` (ISO); email
+    `received_at` (ISO); some rows `ts`."""
+    for k in ("created", "saved_at", "ts", "received_at",
+              "last_visited_at", "date"):
         v = rec.get(k)
+        if v is None:
+            continue
         if isinstance(v, (int, float)):
             return float(v)
+        try:
+            s = str(v).strip().replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except Exception:
+            continue
     return 0.0
+
+
+def _salience_map(backend, user_id: str) -> Dict[str, float]:
+    """{mem_key: salience} from the side store (Adım 12 writes it there)."""
+    from .server import _e
+    out: Dict[str, float] = {}
+    for r in backend._query(
+            f"SELECT mem_key, mem_value FROM __mem_{backend.salience_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
+        try:
+            v = json.loads(r[1]) if r[1] else {}
+            if isinstance(v.get("salience"), (int, float)):
+                out[r[0]] = float(v["salience"])
+        except Exception:
+            continue
+    return out
 
 
 def _access_map(backend, user_id: str) -> Dict[str, float]:
@@ -70,7 +100,8 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
     from .server import _e
     now = time.time()
     access = _access_map(backend, user_id)
-    archived = unarchived = active = 0
+    salience = _salience_map(backend, user_id)   # side store, not main record
+    archived = unarchived = active = skipped = 0
     for k, v in backend._query(
             f"SELECT mem_key, mem_value FROM __mem_{backend.memory} "
             f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
@@ -80,8 +111,7 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
             continue
         if not rec:
             continue
-        sal = rec.get("salience")
-        sal = float(sal) if isinstance(sal, (int, float)) else DEFAULT_SALIENCE
+        sal = salience.get(k, DEFAULT_SALIENCE)
         la = access.get(k) or _row_ts(rec) or now
         ds = decay_score(sal, la, now, lam)
         want = ds < threshold
@@ -97,9 +127,21 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
                 active += 1
             continue
         if not dry_run:
+            value = json.dumps(rec)
+            # Guard the 8 KB statement cap: a record too big to rewrite is
+            # left as-is rather than killing the connection. Rare (only very
+            # large rows), and decay is a soft signal.
+            if len(value) + len(k) + len(user_id) > 7000:
+                skipped += 1
+                if want:
+                    archived -= 1
+                else:
+                    unarchived -= 1
+                continue
             backend._exec(f"MEMORY PUT INTO {backend.memory} VALUES "
-                          f"('{_e(user_id)}','{_e(k)}','{_e(json.dumps(rec))}')")
-    return {"archived": archived, "unarchived": unarchived, "active": active}
+                          f"('{_e(user_id)}','{_e(k)}','{_e(value)}')")
+    return {"archived": archived, "unarchived": unarchived,
+            "active": active, "skipped": skipped}
 
 
 def show_archived(backend, user_id: str,
