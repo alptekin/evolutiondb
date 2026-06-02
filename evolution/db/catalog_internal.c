@@ -75,6 +75,29 @@ static void make_constraint_key(uint32_t table_id, int ordinal,
     snprintf(out, size, "%010u:%010d", table_id, ordinal);
 }
 
+/* Catalog B+ tree insert that keeps the persistent root pointer in sync.
+ *
+ * bt2_insert can move a tree's root on a split, but it only updates the
+ * in-memory handle (g_cat_trees[id].root_page). The data catalog trees never
+ * re-persisted that to the FileHeader, so after a restart — and decisively a
+ * crash + WAL replay, which reloads the header's catalog_roots — cat_init
+ * reloaded the STALE (pre-split) root and the whole median-split upper subtree
+ * (a contiguous key range) became unreachable, silently dropping column /
+ * table / index metadata for a contiguous range of ids. Persisting on every
+ * root change closes the window. (CAT_SYS_CLOG and CAT_SYS_VMAP already do
+ * this for their own trees; the data catalog trees were missing it.)
+ *
+ * All catalog-tree inserts must go through this. bt2_delete is a lazy tombstone
+ * and bt2_update overwrites a RowID in place, so neither moves the root. */
+static int cat_tree_insert(CatalogID id, const char *key, RowID rid)
+{
+    uint32_t before = g_cat_trees[id].root_page;
+    int rc = bt2_insert(&g_cat_trees[id], key, rid);
+    if (g_cat_trees[id].root_page != before)
+        pgm_set_catalog_root(id, g_cat_trees[id].root_page);
+    return rc;
+}
+
 static void make_grant_key(const char *username, int scope_type,
                            const char *scope_name, char *out, int size)
 {
@@ -515,6 +538,13 @@ int cat_init(void)
 void cat_shutdown(void)
 {
     if (!g_cat_initialized) return;
+    /* Defensive: persist every catalog tree's current in-memory root before
+     * dropping the handles. cat_tree_insert already does this on each split,
+     * so this only guards a future code path that mutates a catalog tree
+     * without going through it. */
+    for (int i = 0; i < CAT_MAX; i++)
+        if (g_cat_trees[i].root_page)
+            pgm_set_catalog_root((CatalogID)i, g_cat_trees[i].root_page);
     pgm_flush();
     g_cat_initialized = 0;
     memset(g_cat_trees, 0, sizeof(g_cat_trees));
@@ -544,7 +574,7 @@ int cat_create_database(const char *name)
     RowID rid = cat_store_record(CAT_SYS_DATABASES, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    if (bt2_insert(&g_cat_trees[CAT_SYS_DATABASES], name, rid) != 0)
+    if (cat_tree_insert(CAT_SYS_DATABASES, name, rid) != 0)
         return -1;
 
     return (int)d.db_id;
@@ -624,7 +654,7 @@ int cat_create_schema(uint32_t db_id, const char *name)
     RowID rid = cat_store_record(CAT_SYS_SCHEMAS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    if (bt2_insert(&g_cat_trees[CAT_SYS_SCHEMAS], key, rid) != 0)
+    if (cat_tree_insert(CAT_SYS_SCHEMAS, key, rid) != 0)
         return -1;
 
     return (int)s.schema_id;
@@ -734,7 +764,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
     RowID rid = cat_store_record(CAT_SYS_TABLES, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    if (bt2_insert(&g_cat_trees[CAT_SYS_TABLES], key, rid) != 0)
+    if (cat_tree_insert(CAT_SYS_TABLES, key, rid) != 0)
         return -1;
 
     /* Store columns */
@@ -753,7 +783,7 @@ int cat_create_table(uint32_t schema_id, const char *name,
         RowID col_rid = cat_store_record(CAT_SYS_COLUMNS, col_record, col_len);
         if (col_rid.page_no == 0) return -1;
 
-        if (bt2_insert(&g_cat_trees[CAT_SYS_COLUMNS], col_key, col_rid) != 0)
+        if (cat_tree_insert(CAT_SYS_COLUMNS, col_key, col_rid) != 0)
             return -1;
     }
 
@@ -831,7 +861,7 @@ int cat_rename_table(uint32_t table_id, uint32_t schema_id,
 
     RowID new_rid = cat_store_record(CAT_SYS_TABLES, new_record, rec_len);
     if (new_rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_TABLES], new_key, new_rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_TABLES, new_key, new_rid) == 0 ? 0 : -1;
 }
 
 int cat_drop_table(uint32_t table_id)
@@ -1288,6 +1318,71 @@ int cat_list_tables(uint32_t schema_id, TableDesc *out, int max)
  *  Column operations
  * ---------------------------------------------------------------- */
 
+/* Self-heal: if a CAT_SYS_COLUMNS leaf for a memory-store backing table is
+ * lost (a crash / page-level fault can drop a B+ tree leaf while the table
+ * record and the heap tuples survive), reconstruct the store's deterministic
+ * column set in-memory so the existing rows still decode. mem_store_backing_dim
+ * returns the store's embedding_dim if `table_id` is a registered memory-store
+ * backing table, else -1. Defined after the memory-store section. */
+static int mem_store_backing_dim(uint32_t table_id);
+
+/* Rebuild the column descriptors of a memory-store backing table. Must mirror
+ * Memory.c create_backing_table exactly (same names, type_codes, ordinals). */
+static int synthesize_mem_columns(uint32_t table_id, int embedding_dim,
+                                  ColumnDesc *out, int max)
+{
+    static const struct { const char *name; int type; int nn; int pk; } base[] = {
+        { "mem_namespace", 130255, 1, 0 },
+        { "mem_key",       130255, 1, 0 },
+        { "pk",            130512, 1, 1 },
+        { "mem_value",     230000, 0, 0 },
+    };
+    int n = 0;
+    for (int i = 0; i < 4 && n < max; i++) {
+        ColumnDesc *c = &out[n];
+        memset(c, 0, sizeof(*c));
+        c->table_id = table_id;
+        c->col_ordinal = n;
+        snprintf(c->col_name, CAT_MAX_NAME_LEN, "%s", base[i].name);
+        c->type_code = base[i].type;
+        c->is_not_null = base[i].nn;
+        c->is_pk = base[i].pk;
+        n++;
+    }
+    if (embedding_dim > 0 && n < max) {
+        ColumnDesc *c = &out[n];
+        memset(c, 0, sizeof(*c));
+        c->table_id = table_id;
+        c->col_ordinal = n;
+        snprintf(c->col_name, CAT_MAX_NAME_LEN, "embedding");
+        c->type_code = 260000 + embedding_dim;
+        n++;
+    }
+    static const char *tcols[] = { "created_at", "ttl_at" };
+    for (int i = 0; i < 2 && n < max; i++) {
+        ColumnDesc *c = &out[n];
+        memset(c, 0, sizeof(*c));
+        c->table_id = table_id;
+        c->col_ordinal = n;
+        snprintf(c->col_name, CAT_MAX_NAME_LEN, "%s", tcols[i]);
+        c->type_code = 100003;
+        n++;
+    }
+    return n;
+}
+
+/* If the columns-tree lookup produced no rows (`count` == 0) but `table_id`
+ * is a memory-store backing table, return its reconstructed columns; else
+ * pass `count` through unchanged. */
+static int cat_find_columns_mem_heal(uint32_t table_id, ColumnDesc *out,
+                                     int max, int count)
+{
+    if (count > 0) return count;
+    int dim = mem_store_backing_dim(table_id);
+    if (dim < 0) return count;            /* not a memory-store backing table */
+    return synthesize_mem_columns(table_id, dim, out, max);
+}
+
 int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max)
 {
     char prefix[CAT_MAX_KEY_LEN];
@@ -1295,7 +1390,7 @@ int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max)
 
     BTree2Cursor cur;
     if (bt2_cursor_seek(&g_cat_trees[CAT_SYS_COLUMNS], prefix, &cur) < 0)
-        return 0;
+        return cat_find_columns_mem_heal(table_id, out, max, 0);
 
     int count = 0;
     char key[BT2_MAX_KEY_LEN + 1];
@@ -1309,7 +1404,7 @@ int cat_find_columns(uint32_t table_id, ColumnDesc *out, int max)
             count++;
         }
     }
-    return count;
+    return cat_find_columns_mem_heal(table_id, out, max, count);
 }
 
 int cat_add_column(uint32_t table_id, const ColumnDesc *col)
@@ -1329,7 +1424,7 @@ int cat_add_column(uint32_t table_id, const ColumnDesc *col)
     RowID rid = cat_store_record(CAT_SYS_COLUMNS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_COLUMNS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_COLUMNS, key, rid) == 0 ? 0 : -1;
 }
 
 /* Mark a column as dropped (lazy). Preserves type_code for binary decoding. */
@@ -1360,7 +1455,7 @@ int cat_drop_column(uint32_t table_id, int col_ordinal)
 
     RowID new_rid = cat_store_record(CAT_SYS_COLUMNS, record, rec_len);
     if (new_rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_COLUMNS], key, new_rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_COLUMNS, key, new_rid) == 0 ? 0 : -1;
 }
 
 /* Physically remove all dropped columns and renumber ordinals (Phase 2). */
@@ -1588,7 +1683,7 @@ int cat_create_index_ex(uint32_t table_id, const char *name,
     RowID rid = cat_store_record(CAT_SYS_INDEXES, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_INDEXES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_INDEXES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_create_index(uint32_t table_id, const char *name,
@@ -1796,7 +1891,7 @@ int cat_add_constraint_ex(uint32_t table_id, char type, const char *name,
     RowID rid = cat_store_record(CAT_SYS_CONSTRAINTS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_CONSTRAINTS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_CONSTRAINTS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_list_constraints(uint32_t table_id, ConstraintDesc *out, int max)
@@ -1936,7 +2031,7 @@ int cat_create_user(const char *username, const char *password_hash)
     RowID rid = cat_store_record(CAT_SYS_USERS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_USERS], username, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_USERS, username, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_user(const char *username, UserDesc *out)
@@ -2051,7 +2146,7 @@ int cat_create_role(const char *rolename)
     rid = cat_store_record(CAT_SYS_USERS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_USERS], rolename, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_USERS, rolename, rid) == 0 ? 0 : -1;
 }
 
 int cat_list_roles(UserDesc *out, int max)
@@ -2104,7 +2199,7 @@ int cat_create_grant(const char *username, int scope_type,
     RowID rid = cat_store_record(CAT_SYS_GRANTS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_GRANTS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_GRANTS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_grant(const char *username, int scope_type,
@@ -2284,7 +2379,7 @@ static int cat_upsert_stats(const char *key, const char *record, int rec_len)
     RowID rid = cat_store_record(CAT_SYS_TABLE_STATS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_TABLE_STATS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_TABLE_STATS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_store_table_stats(const TableStatsDesc *ts)
@@ -2562,7 +2657,7 @@ int cat_store_histogram(const HistogramDesc *h)
     RowID rid = cat_store_record(CAT_SYS_TABLE_STATS, record, rec_len + 1);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_TABLE_STATS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_TABLE_STATS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_get_histogram(uint32_t table_id, const char *col_name,
@@ -2708,7 +2803,7 @@ int cat_create_shard(const ShardDesc *sd)
     RowID rid = cat_store_record(CAT_SYS_SHARDS, record, rec_len);
     if (rid.page_no == 0) return -1;
 
-    return bt2_insert(&g_cat_trees[CAT_SYS_SHARDS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_SHARDS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_list_shards(uint32_t table_id, ShardDesc *out, int max)
@@ -2981,7 +3076,7 @@ static int cat_create_view_ex(uint32_t db_id, uint32_t schema_id,
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_VIEWS, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_VIEWS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_VIEWS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_create_view(uint32_t db_id, uint32_t schema_id,
@@ -3110,7 +3205,7 @@ int cat_create_procedure(uint32_t db_id, uint32_t schema_id,
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_PROCEDURES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_PROCEDURES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_PROCEDURES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_procedure(uint32_t db_id, uint32_t schema_id,
@@ -3235,7 +3330,7 @@ int cat_create_trigger(uint32_t db_id, uint32_t schema_id,
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_TRIGGERS, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_TRIGGERS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_TRIGGERS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_trigger(uint32_t table_id, const char *trigger_name,
@@ -3306,7 +3401,7 @@ int cat_update_trigger_enabled(uint32_t table_id, const char *trigger_name, int 
     bt2_delete(&g_cat_trees[CAT_SYS_TRIGGERS], key);
     RowID new_rid = cat_store_record(CAT_SYS_TRIGGERS, new_record, new_len);
     if (new_rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_TRIGGERS], key, new_rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_TRIGGERS, key, new_rid) == 0 ? 0 : -1;
 }
 
 /* ================================================================
@@ -3354,7 +3449,7 @@ int cat_create_sequence(const SequenceDesc *seq)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_SEQUENCES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_SEQUENCES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_SEQUENCES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_sequence(uint32_t schema_id, const char *seq_name, SequenceDesc *out)
@@ -3383,7 +3478,7 @@ int cat_update_sequence(const SequenceDesc *seq)
     int rec_len = (int)strlen(record) + 1;
     RowID new_rid = cat_store_record(CAT_SYS_SEQUENCES, record, rec_len);
     if (new_rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_SEQUENCES], key, new_rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_SEQUENCES, key, new_rid) == 0 ? 0 : -1;
 }
 
 int cat_drop_sequence(uint32_t schema_id, const char *seq_name)
@@ -3443,7 +3538,7 @@ int cat_add_inheritance(uint32_t child_table_id, uint32_t parent_table_id)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_INHERITANCE, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_INHERITANCE], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_INHERITANCE, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_parent(uint32_t child_table_id, uint32_t *parent_id_out)
@@ -3639,7 +3734,7 @@ int cat_create_policy(const PolicyDesc *pd)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_POLICIES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_POLICIES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_POLICIES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_policy(uint32_t table_id, const char *policy_name, PolicyDesc *out)
@@ -3745,7 +3840,7 @@ int cat_create_checkpoint_store(const CheckpointStoreDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_CHECKPOINT_STORES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_CHECKPOINT_STORES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_CHECKPOINT_STORES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_checkpoint_store(const char *name, CheckpointStoreDesc *out)
@@ -3839,7 +3934,7 @@ int cat_create_memory_store(const MemoryStoreDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_MEMORY_STORES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_MEMORY_STORES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_MEMORY_STORES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_memory_store(const char *name, MemoryStoreDesc *out)
@@ -3885,6 +3980,29 @@ int cat_list_memory_stores(MemoryStoreDesc *out, int max)
         }
     }
     return count;
+}
+
+/* Reverse lookup for the cat_find_columns self-heal: is `table_id` the
+ * backing table of some registered memory store? Returns its embedding_dim
+ * (>= 0) if so, else -1. Scans CAT_SYS_MEMORY_STORES (small: one row per
+ * store). Does not call cat_find_columns, so the self-heal can't recurse. */
+static int mem_store_backing_dim(uint32_t table_id)
+{
+    BTree2Cursor cur;
+    if (bt2_cursor_first(&g_cat_trees[CAT_SYS_MEMORY_STORES], &cur) < 0)
+        return -1;
+    char key[BT2_MAX_KEY_LEN + 1];
+    RowID rid;
+    while (bt2_cursor_next(&cur, key, &rid) == 0) {
+        char record[512];
+        if (cat_read_record(rid, record, sizeof(record)) < 0) continue;
+        MemoryStoreDesc d;
+        memset(&d, 0, sizeof(d));
+        deserialize_memory_store(record, &d);
+        if (d.backing_table_id == table_id)
+            return d.embedding_dim >= 0 ? d.embedding_dim : 0;
+    }
+    return -1;
 }
 
 /* ================================================================
@@ -3934,7 +4052,7 @@ int cat_create_subscription(const SubscriptionDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_SUBSCRIPTIONS, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_SUBSCRIPTIONS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_SUBSCRIPTIONS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_subscription(const char *name, SubscriptionDesc *out)
@@ -4223,7 +4341,7 @@ int cat_create_scheduled_job(const ScheduledJobDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_SCHEDULED_JOBS, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_SCHEDULED_JOBS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_SCHEDULED_JOBS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_scheduled_job(const char *name, ScheduledJobDesc *out)
@@ -4334,7 +4452,7 @@ int cat_create_message_log(const MessageLogDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_MESSAGE_LOGS, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_MESSAGE_LOGS], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_MESSAGE_LOGS, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_message_log(const char *name, MessageLogDesc *out)
@@ -4424,7 +4542,7 @@ int cat_create_document_store(const DocumentStoreDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_DOCUMENT_STORES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_DOCUMENT_STORES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_DOCUMENT_STORES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_document_store(const char *name, DocumentStoreDesc *out)
@@ -4511,7 +4629,7 @@ int cat_create_graph_store(const GraphStoreDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_GRAPH_STORES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_GRAPH_STORES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_GRAPH_STORES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_graph_store(const char *name, GraphStoreDesc *out)
@@ -4598,7 +4716,7 @@ int cat_create_entity_store(const EntityStoreDesc *desc)
     int rec_len = (int)strlen(record) + 1;
     RowID rid = cat_store_record(CAT_SYS_ENTITY_STORES, record, rec_len);
     if (rid.page_no == 0) return -1;
-    return bt2_insert(&g_cat_trees[CAT_SYS_ENTITY_STORES], key, rid) == 0 ? 0 : -1;
+    return cat_tree_insert(CAT_SYS_ENTITY_STORES, key, rid) == 0 ? 0 : -1;
 }
 
 int cat_find_entity_store(const char *name, EntityStoreDesc *out)
