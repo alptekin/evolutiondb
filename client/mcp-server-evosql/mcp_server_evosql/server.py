@@ -316,6 +316,12 @@ class MemoryBackend:
         # stale so it stops out-ranking the truth, and an as-of query can still
         # time-travel. Reads gate on status; writes set it.
         self.validity_store = f"{prefix}_validity"
+        # Write-time contradiction reconciliation (roadmap step 20). Off by
+        # default; when EVOSQL_RECONCILE is on AND an EVOSQL_RECONCILE_LLM is
+        # configured, save() detects a co-referential conflict and marks the
+        # superseded row stale. Pure append stays the default.
+        self.reconcile_enabled = os.environ.get("EVOSQL_RECONCILE", "0") \
+            not in ("0", "", "off", "false", "no")
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
@@ -523,6 +529,14 @@ class MemoryBackend:
         if self.entity_extract:
             try:
                 ext = self._entities(user_id).process(key, fact, created)
+                # Belief revision (step 20): reconcile BEFORE adding this row's
+                # edges, so the conflict check compares the new fact against the
+                # EXISTING graph, not against itself. No-op unless enabled.
+                if self.reconcile_enabled and ext:
+                    try:
+                        self.reconcile_on_save(user_id, key, fact, ext)
+                    except Exception:
+                        pass
                 if self.graph_build and ext:
                     g = self._graph(user_id)
                     g.add_edges_from_row(key, ext, fact, created)
@@ -1456,6 +1470,56 @@ class MemoryBackend:
         except Exception:
             pass
         return rec
+
+    def reconcile_on_save(self, user_id: str, new_key: str, text: str,
+                          mentions: Sequence[dict], *,
+                          adjudicate: Optional[Callable[[str, str], str]] = None
+                          ) -> int:
+        """Detect + revise a write-time Type-I contradiction (roadmap step 20).
+        Extracts the new row's (subject, predicate, object) triples, finds
+        existing graph edges with the same (subject, predicate) but a different
+        object, and asks the adjudicator (injected, or the opt-in
+        EVOSQL_RECONCILE_LLM) for a Mem0 verdict. On UPDATE/DELETE the superseded
+        rows are marked stale/retracted in the validity store and the new row
+        records what it supersedes. Returns the number of rows marked stale.
+        No-op when reconciliation is off or no adjudicator is available."""
+        from .reconcile import find_conflicts, llm_adjudicate
+        from .graph import extract_triples
+        triples = extract_triples(text, list(mentions or []))
+        if not triples:
+            return 0
+        try:
+            cache = self._graph(user_id)._edge_cache()
+        except Exception:
+            return 0
+        conflicts = find_conflicts(cache, triples)
+        if not conflicts:
+            return 0
+        if adjudicate is None:
+            be = os.environ.get("EVOSQL_RECONCILE_LLM", "").strip().lower()
+            if not be:
+                return 0                  # opt-in: no adjudicator -> no revision
+            adjudicate = lambda new_t, old_o: llm_adjudicate(new_t, old_o, be)
+
+        now = time.time()
+        stale = 0
+        for c in conflicts:
+            try:
+                verdict = (adjudicate(text, c["old_object"]) or "NOOP").upper()
+            except Exception:
+                continue
+            if verdict not in ("UPDATE", "DELETE"):
+                continue
+            status = "retracted" if verdict == "DELETE" else "stale"
+            superseded = [k for k in set(c["old_source_rows"]) if k != new_key]
+            for ok in superseded:
+                self._set_validity(user_id, ok, valid_to=now, status=status,
+                                   superseded_by=[new_key])
+                stale += 1
+            if superseded:
+                self._set_validity(user_id, new_key, supersedes=superseded,
+                                   status="active")
+        return stale
 
     def restore(self, user_id: str, key: str) -> bool:
         """Bring an archived memory back: clear the flag and refresh its
