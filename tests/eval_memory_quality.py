@@ -154,12 +154,20 @@ def abstain_correct(results: List[Dict[str, Any]],
     return 1.0 if top <= threshold else 0.0
 
 
+def semantic_hit(results: List[Dict[str, Any]]) -> float:
+    """Did a semantic-tier generalization (step 15) surface in the results? For
+    'general_knowledge' / implication queries — answerable by what is generally
+    true, not by any single episodic row — this measures whether the semantic
+    tier is actually contributing. 1.0 if any returned row is tier='semantic'."""
+    return 1.0 if any(r.get("tier") == "semantic" for r in results) else 0.0
+
+
 # ---------------------------------------------------------------- #
 #  Regression gate (roadmap step 8)                                 #
 #  "No improvement claim ships without a delta from here."          #
 # ---------------------------------------------------------------- #
 GATE_METRICS = ["recall_at_5", "recall_at_10", "mrr", "ndcg_at_10",
-                "update_accuracy", "abstain_accuracy"]
+                "update_accuracy", "abstain_accuracy", "semantic_hit_rate"]
 
 
 def compare_reports(base: Dict[str, Any], new: Dict[str, Any],
@@ -449,6 +457,9 @@ def run_eval(gold_path: Path, out_base: Path, *,
         if q.get("must_abstain"):
             row["must_abstain"] = True
             row["abstain_correct"] = abstain_correct(results)
+        # general-knowledge / implication queries: did the semantic tier help?
+        if category in ("general_knowledge", "implication", "semantic"):
+            row["semantic_hit"] = semantic_hit(results)
         if pii_check_on:
             pii_gate_total += 1
             leaks = pii_scan_results(results)
@@ -495,6 +506,7 @@ def run_eval(gold_path: Path, out_base: Path, *,
         # that carry the field; None when the gold set has no such query yet.
         "update_accuracy": avg_present(per_query, "update_correct"),
         "abstain_accuracy": avg_present(per_query, "abstain_correct"),
+        "semantic_hit_rate": avg_present(per_query, "semantic_hit"),
         "latency_ms_p50": round(percentile(latencies, 50), 2),
         "latency_ms_p95": round(percentile(latencies, 95), 2),
         "latency_ms_mean": round(statistics.mean(latencies), 2),
@@ -606,6 +618,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
         f"| nDCG@10      | {agg['ndcg_at_10']} |",
         f"| Update accuracy | {agg.get('update_accuracy') if agg.get('update_accuracy') is not None else 'n/a'} |",
         f"| Abstain accuracy | {agg.get('abstain_accuracy') if agg.get('abstain_accuracy') is not None else 'n/a'} |",
+        f"| Semantic hit rate | {agg.get('semantic_hit_rate') if agg.get('semantic_hit_rate') is not None else 'n/a'} |",
         f"| Latency p50  | {agg['latency_ms_p50']} ms |",
         f"| Latency p95  | {agg['latency_ms_p95']} ms |",
         f"| Latency mean | {agg['latency_ms_mean']} ms |",
