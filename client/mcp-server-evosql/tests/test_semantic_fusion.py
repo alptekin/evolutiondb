@@ -30,7 +30,7 @@ def main() -> int:
         return 0
     os.environ["EVOSQL_EMBEDDING_PROVIDER"] = "none"
     os.environ["EVOSQL_EMBEDDING_MODEL_2"] = ""
-    os.environ.pop("EVOSQL_SEMANTIC_SEARCH", None)
+    os.environ["EVOSQL_SEMANTIC_SEARCH"] = "1"     # opt-in (default off)
 
     ns = f"sfx_{int(time.time())}"
     b = _backend(f"mcp_sfx{int(time.time())}")
@@ -49,14 +49,14 @@ def main() -> int:
     assert any(k in keys for k in ep), "episodic rows missing"
     print(f"  ok  search fuses semantic ({sem_key}) alongside episodic rows")
 
-    # kill-switch
-    os.environ["EVOSQL_SEMANTIC_SEARCH"] = "0"
-    b2 = _backend(f"mcp_sfx2{int(time.time())}")
-    assert b2.semantic_search is False
-    res2 = b2.search(ns, "payment gateway", limit=10)
+    # kill-switch: flip the flag on the SAME populated store, so the assertion
+    # actually exercises gating (not cross-prefix table isolation).
+    b.semantic_search = False
+    res2 = b.search(ns, "payment gateway", limit=10)
     assert sem_key not in [r["key"] for r in res2], "kill-switch did not disable fusion"
+    b.semantic_search = True
     os.environ.pop("EVOSQL_SEMANTIC_SEARCH", None)
-    print("  ok  EVOSQL_SEMANTIC_SEARCH=0 disables fusion")
+    print("  ok  kill-switch disables fusion on the same populated store")
 
     print("OK — step 17 semantic+episodic RRF fusion")
     return 0

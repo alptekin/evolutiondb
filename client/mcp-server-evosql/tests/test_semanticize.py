@@ -67,6 +67,13 @@ def main() -> int:
     assert semanticize(b, ns, llm_fn=stub, min_cluster=4) == 0, "not idempotent"
     print("  ok  idempotent on re-run")
 
+    # growth must NOT re-mint: a new row joins cluster a; the grown cluster still
+    # overlaps the existing semantic row's provenance -> covered -> no duplicate
+    put("a5", "alpha note 5", [1.0, 0.0, 0.0, 0.12, 0, 0, 0, 0])
+    assert semanticize(b, ns, llm_fn=stub, min_cluster=4) == 0, \
+        "cluster growth re-minted a duplicate generalization"
+    print("  ok  cluster growth does not re-mint (containment-overlap dedup)")
+
     # opt-in: no LLM (env unset, no injected fn) -> no-op
     assert semanticize(b, ns, llm_fn=None, min_cluster=4) == 0
     print("  ok  no LLM configured -> no abstraction (opt-in)")

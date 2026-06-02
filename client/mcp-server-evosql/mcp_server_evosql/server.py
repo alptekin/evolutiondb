@@ -299,11 +299,14 @@ class MemoryBackend:
         # retrievable + traceable. search() fuses these alongside episodic
         # candidates (step 17).
         self.semantic_store = f"{prefix}_semantic"
-        # Fuse semantic candidates into search (roadmap step 17). On by default,
-        # but the store is empty until job_semanticize runs, so it is a no-op
-        # until then; EVOSQL_SEMANTIC_SEARCH=0 is the kill-switch.
-        self.semantic_search = os.environ.get("EVOSQL_SEMANTIC_SEARCH", "1") \
-            not in ("0", "", "off", "false", "no")
+        # Fuse semantic candidates into search (roadmap step 17). Opt-in like the
+        # other derived layers: an explicit EVOSQL_SEMANTIC_SEARCH wins (and is
+        # the kill-switch); otherwise the EVOSQL_MEMORY_BOOSTS master decides.
+        # Default off, so a deployment not running job_semanticize never pays the
+        # per-search semantic fetch against a permanently-empty store.
+        _ss = os.environ.get("EVOSQL_SEMANTIC_SEARCH")
+        self.semantic_search = (_ss not in ("0", "", "off", "false", "no")
+                                if _ss is not None else _boosts_master_on())
         self.semantic_pool = int(os.environ.get("EVOSQL_SEMANTIC_POOL", "50"))
         # User interest profile (Adım 17): a daily job clusters the user's
         # row embeddings into interest clusters (<prefix>_profile_clusters);
@@ -550,9 +553,18 @@ class MemoryBackend:
                 mn = getattr(self.embedder, "model_name", "")
                 record["emb_model"] = (f"{self.embedder.kind}:{mn}"
                                        if mn else self.embedder.kind)
+        # Keep the record under the engine's ~8 KB statement cap: the embedding
+        # plus a large provenance list could exceed it, which the engine rejects
+        # (and would abort the caller). Trim provenance to fit, flagging it.
+        payload = json.dumps(record)
+        while (len(payload) + len(key) + len(user_id) > 7000
+               and record.get("derived_from")):
+            record["derived_from"] = record["derived_from"][:-1]
+            record["derived_truncated"] = True
+            payload = json.dumps(record)
         self._exec(
             f"MEMORY PUT INTO {self.semantic_store} VALUES "
-            f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(record))}')")
+            f"('{_e(user_id)}','{_e(key)}','{_e(payload)}')")
         if self.embedder2 is not None and self.embedder2.kind != "none":
             vec2 = self.embedder2.embed_passage(proposition)
             if vec2:
