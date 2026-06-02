@@ -166,8 +166,12 @@ def semantic_hit(results: List[Dict[str, Any]]) -> float:
 #  Regression gate (roadmap step 8)                                 #
 #  "No improvement claim ships without a delta from here."          #
 # ---------------------------------------------------------------- #
+# semantic_hit_rate is intentionally NOT a gate metric: it depends on the opt-in
+# daily LLM job having populated the semantic store, so a base-vs-new comparison
+# across differing EVOSQL_SEMANTIC_LLM state would false-regress. It is reported
+# in the markdown as informational only.
 GATE_METRICS = ["recall_at_5", "recall_at_10", "mrr", "ndcg_at_10",
-                "update_accuracy", "abstain_accuracy", "semantic_hit_rate"]
+                "update_accuracy", "abstain_accuracy"]
 
 
 def compare_reports(base: Dict[str, Any], new: Dict[str, Any],

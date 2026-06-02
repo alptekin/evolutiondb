@@ -26,6 +26,28 @@ from .profile import kmeans
 MIN_CLUSTER = int(os.environ.get("EVOSQL_SEMANTIC_MIN_CLUSTER", "4"))
 MAX_ROWS_PER = 12          # rows fed to the LLM per cluster (token budget)
 MAX_K = 16
+# Cap the source keys stored as provenance. A cluster on a mature namespace can
+# hold hundreds of rows; the whole list plus the embedding would blow the
+# engine's 8 KB record cap. A deterministic first-N sample (by key) keeps the
+# record small AND keeps the dedup stable as a topic grows (new rows append at
+# the high-key end, so the first-N core is unchanged -> a re-run is a no-op).
+MAX_PROVENANCE = 64
+# A cluster is considered "already covered" when it shares at least this
+# fraction (containment overlap) with an existing semantic row's provenance.
+# Strict subset was unsound: as a topic grows, the new cluster is a SUPERSET of
+# the old derived_from, so a subset test fails and re-mints a near-duplicate
+# every run. Containment overlap absorbs growth + minor reclustering drift.
+COVER_OVERLAP = 0.6
+
+
+def _covered(cluster: set, seen: List[set], thresh: float = COVER_OVERLAP) -> bool:
+    for s in seen:
+        if not s:
+            continue
+        inter = len(cluster & s)
+        if inter and inter / min(len(cluster), len(s)) >= thresh:
+            return True
+    return False
 
 
 def _llm_generalize(facts: Sequence[str], backend: str) -> str:
@@ -61,15 +83,21 @@ def semanticize(backend, user_id: str, *,
     namespace's embedded rows. Returns the number of semantic rows written."""
     from .server import _e
 
+    min_cluster = max(2, int(min_cluster or 0))     # guard 0/1/negative configs
+
     if llm_fn is None:
         be = os.environ.get("EVOSQL_SEMANTIC_LLM", "").strip().lower()
         if not be:
             return 0                      # opt-in: no LLM -> no abstraction
         llm_fn = lambda facts: _llm_generalize(facts, be)
 
+    # ORDER BY mem_key makes the clustering input order reproducible (heap-scan
+    # order is connection-dependent), which the idempotency design depends on:
+    # k-means is deterministic only for a fixed seed AND a fixed input order.
     rows = backend._query(
         f"SELECT mem_key, mem_value FROM __mem_{backend.memory} "
-        f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []
+        f"WHERE mem_namespace = '{_e(user_id)}' ORDER BY mem_key "
+        f"LIMIT 100000") or []
     keys: List[str] = []
     vecs: List[List[float]] = []
     facts: List[str] = []
@@ -111,9 +139,12 @@ def semanticize(backend, user_id: str, *,
     for _lab, idxs in clusters.items():
         if len(idxs) < min_cluster:
             continue
-        ckeys = [keys[i] for i in idxs]
+        # Provenance = a deterministic, capped first-N sample (by key). Building
+        # the dedup set from the SAME capped list keeps a re-run a no-op even as
+        # the cluster grows, and keeps the stored record under the 8 KB cap.
+        ckeys = sorted(keys[i] for i in idxs)[:MAX_PROVENANCE]
         ckeyset = set(ckeys)
-        if any(ckeyset <= s for s in seen):
+        if _covered(ckeyset, seen):
             continue
         cfacts = [facts[i] for i in idxs][:MAX_ROWS_PER]
         try:
@@ -123,7 +154,11 @@ def semanticize(backend, user_id: str, *,
         if not prop:
             continue
         if not dry_run:
-            backend.save_semantic(user_id, prop, derived_from=ckeys,
-                                  abstraction_level=1)
+            try:
+                backend.save_semantic(user_id, prop, derived_from=ckeys,
+                                      abstraction_level=1)
+            except Exception:
+                continue           # one cluster's write must not abort the rest
+        seen.append(ckeyset)       # within-run dedup too (don't re-mint a cluster)
         written += 1
     return written
