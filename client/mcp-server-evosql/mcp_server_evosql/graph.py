@@ -47,6 +47,8 @@ _DECAY_HALFLIFE_DAYS = 30.0   # edge-weight recency decay
 _HOP_DECAY = 0.5              # activation passed on per hop
 MAX_SOURCE_ROWS = 50          # cap an edge's source_rows so it can't bloat
                               # past the 8 KB statement cap (weight still grows)
+MAX_BOOST_ROWS = 100          # cap rows the boost injects (a hub entity could
+                              # otherwise return thousands → huge IN() fetch)
 
 
 def _recency(ts: float, now: float) -> float:
@@ -241,12 +243,17 @@ class GraphStore:
         return idx
 
     def rows_for_entities(self, activations: Dict[str, float],
-                          seeds: Sequence[str] = ()) -> Dict[str, float]:
+                          seeds: Sequence[str] = (),
+                          limit: int = MAX_BOOST_ROWS) -> Dict[str, float]:
         """Map activated entities to the rows that mention them. A row's boost
         is the max activation among the entities it mentions. Seed entities
         contribute their own rows too (so the query's own entity still ranks),
         but those carry no extra lift beyond what keyword/embedding already
-        gives — only the *reached* (non-seed) entities add recall."""
+        gives — only the *reached* (non-seed) entities add recall.
+
+        Returns at most `limit` rows (the highest-boost ones). A hub entity
+        can mention thousands of rows; injecting them all would balloon the
+        downstream IN(...) fetch and add noise, so we keep only the top slice."""
         idx = self._mention_index()
         seedset = set(seeds)
         boost: Dict[str, float] = {}
@@ -258,4 +265,7 @@ class GraphStore:
             scale = 0.3 if eid in seedset else 1.0
             for mk in idx.get(eid, ()):
                 boost[mk] = max(boost.get(mk, 0.0), a * scale)
+        if len(boost) > limit:
+            top = sorted(boost.items(), key=lambda kv: -kv[1])[:limit]
+            boost = dict(top)
         return boost
