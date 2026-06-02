@@ -155,6 +155,39 @@ def abstain_correct(results: List[Dict[str, Any]],
 
 
 # ---------------------------------------------------------------- #
+#  Regression gate (roadmap step 8)                                 #
+#  "No improvement claim ships without a delta from here."          #
+# ---------------------------------------------------------------- #
+GATE_METRICS = ["recall_at_5", "recall_at_10", "mrr", "ndcg_at_10",
+                "update_accuracy", "abstain_accuracy"]
+
+
+def compare_reports(base: Dict[str, Any], new: Dict[str, Any],
+                    tol: float = 0.0) -> Dict[str, Any]:
+    """Delta between two eval reports (or bare aggregates). A metric regresses
+    when it drops by more than `tol`; gate_pass is False if any tracked metric
+    regressed. Metrics absent from either side are reported as None (skipped)."""
+    ba = base.get("aggregate", base)
+    na = new.get("aggregate", new)
+    deltas: Dict[str, Any] = {}
+    regressed: List[str] = []
+    improved: List[str] = []
+    for m in GATE_METRICS:
+        bv, nv = ba.get(m), na.get(m)
+        if bv is None or nv is None:
+            deltas[m] = None
+            continue
+        d = round(float(nv) - float(bv), 4)
+        deltas[m] = d
+        if d < -tol:
+            regressed.append(m)
+        elif d > tol:
+            improved.append(m)
+    return {"deltas": deltas, "regressed": regressed, "improved": improved,
+            "gate_pass": not regressed}
+
+
+# ---------------------------------------------------------------- #
 #  PII gate — Adım 3                                                 #
 # ---------------------------------------------------------------- #
 def pii_scan_results(results: List[Dict[str, Any]]
@@ -788,7 +821,30 @@ def main() -> None:
     p.add_argument("--yaml", type=Path, default=DEFAULT_YAML,
                    help=f"Gold YAML to edit when --label is used "
                         f"(default: {DEFAULT_YAML.relative_to(_REPO_ROOT)}).")
+    p.add_argument("--compare", nargs=2, type=Path,
+                   metavar=("BASE.json", "NEW.json"),
+                   help="Regression gate: print the metric delta between two "
+                        "eval report JSONs and exit non-zero on a regression.")
+    p.add_argument("--tol", type=float, default=0.0,
+                   help="Allowed drop per metric before --compare fails "
+                        "(default 0.0).")
     args = p.parse_args()
+
+    if args.compare:
+        base = json.loads(args.compare[0].read_text())
+        new = json.loads(args.compare[1].read_text())
+        cmp = compare_reports(base, new, tol=args.tol)
+        print(f"[eval] delta {args.compare[0].name} -> {args.compare[1].name} "
+              f"(tol {args.tol}):")
+        for m, d in cmp["deltas"].items():
+            mark = "" if d is None else ("  REGRESSION" if d < -args.tol
+                                          else ("  +" if d > args.tol else ""))
+            print(f"    {m:<18} {('n/a' if d is None else f'{d:+.4f}')}{mark}")
+        verdict = "PASS" if cmp["gate_pass"] else "FAIL"
+        print(f"[eval] regression gate {verdict}"
+              + (f" — regressed: {', '.join(cmp['regressed'])}"
+                 if cmp["regressed"] else ""))
+        sys.exit(0 if cmp["gate_pass"] else 4)
 
     if args.collect:
         user_id = os.environ.get("MCP_USER_ID")
