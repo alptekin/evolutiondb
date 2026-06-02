@@ -136,6 +136,16 @@ def test_run() -> bool:
     assert st["episodes"]["last_status"] == "ok"
     print(f"  ok  error isolation: salience=error, others ok, "
           f"failure_ratio={fr*100:.1f}%")
+
+    # retry-on-fail: salience is a daily job that just "ran" (with an error),
+    # so the schedule alone would skip it — but a failed run must retry on the
+    # next (un-forced) tick. The fn is restored now, so it succeeds.
+    retry = SCH.run_due(b)
+    rsal = next((r for r in retry if r["job"] == "salience"), None)
+    assert rsal is not None, f"failed salience must be due again: {[r['job'] for r in retry]}"
+    assert rsal["last_status"] == "ok", rsal
+    assert SCH.failure_ratio(b) == 0.0, "retry should clear the failure"
+    print("  ok  retry-on-fail: errored daily job re-ran next tick + succeeded")
     return True
 
 
