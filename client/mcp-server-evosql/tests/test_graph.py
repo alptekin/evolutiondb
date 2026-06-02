@@ -154,12 +154,61 @@ def test_eval_gate() -> bool:
     return True
 
 
+def test_hub_safe() -> bool:
+    """A hub entity that co-occurs with many rows must not make the graph
+    boost build a giant IN(...) fetch — the engine crashes on a WHERE x IN
+    (...) of ~30+ values. rows_for_entities caps the injected rows, and
+    _fetch_by_keys batches the IN list small, so a hub query stays alive."""
+    try:
+        import psycopg
+        from mcp_server_evosql.server import MemoryBackend
+        from mcp_server_evosql.graph import MAX_BOOST_ROWS
+        psycopg.connect(host="127.0.0.1", port=PORT, user="admin",
+                        password="admin", dbname="evosql",
+                        autocommit=True, connect_timeout=3).close()
+    except Exception as exc:
+        print(f"  SKIP hub-safe (no server on :{PORT}: {exc})")
+        return True
+    os.environ.update({"EVOSQL_HOST": "127.0.0.1", "EVOSQL_PORT": str(PORT),
+                       "EVOSQL_USER": "admin", "EVOSQL_PASSWORD": "admin",
+                       "EVOSQL_DATABASE": "evosql",
+                       "EVOSQL_EMBEDDING_PROVIDER": "none",
+                       "EVOSQL_ENTITY_EXTRACT": "0", "EVOSQL_GRAPH_BOOST": "0.4"})
+    from mcp_server_evosql.server import _e
+    prefix = f"mcp_hub{int(time.time())}"
+    ns = f"hub_{int(time.time())}"
+    b = MemoryBackend("127.0.0.1", PORT, "admin", "admin", "evosql", prefix)
+    es, g = b._entities(ns), b._graph(ns)
+    now = time.time()
+    for i in range(250):                      # one org co-occurs in 250 rows
+        txt = f"Mehmet Kaya, Acme A.Ş. ile gorustu kayit {i}"
+        b._exec(f"MEMORY PUT INTO {prefix}_mem VALUES "
+                f"('{_e(ns)}','hub{i}','{_e(json.dumps({'fact': txt}))}')")
+        ext = es.process(f"hub{i}", txt, now, flush=False)
+        if ext:
+            g.add_edges_from_row(f"hub{i}", ext, txt, now)
+    es.flush(); g.flush()
+    boost = b._graph_row_boost(ns, "Acme A.Ş.")
+    assert len(boost) <= MAX_BOOST_ROWS, f"boost rows not capped: {len(boost)}"
+    res = b.search(ns, "Acme A.Ş.", limit=10)   # the query that crashed prod
+    # server still alive? a follow-up query must succeed
+    chk = b._query(f"SELECT COUNT(*) FROM __mem_{prefix}_mem")
+    assert chk and chk[0], "server must survive a hub-entity graph-boost query"
+    # large _fetch_by_keys (> the 30-value crash threshold) returns all
+    got = b._fetch_by_keys(b.memory, ns, [f"hub{i}" for i in range(120)])
+    assert len(got) == 120, f"_fetch_by_keys(120) lost rows: {len(got)}"
+    print(f"  ok  hub entity: boost rows {len(boost)} (<= {MAX_BOOST_ROWS}), "
+          f"search {len(res)} results, _fetch_by_keys(120)=ok, server alive")
+    return True
+
+
 def main() -> int:
     test_triples()
     test_spreading()
     test_eval_gate()
+    test_hub_safe()
     print("OK — Adım 15 knowledge graph: triples + 2-hop spreading + "
-          "relational Recall@5 +30%")
+          "relational Recall@5 +30% + hub-entity IN-list safety")
     return 0
 
 
