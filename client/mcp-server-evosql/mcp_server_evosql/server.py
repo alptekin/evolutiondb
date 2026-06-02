@@ -308,7 +308,14 @@ class MemoryBackend:
         self.semantic_search = (_ss not in ("0", "", "off", "false", "no")
                                 if _ss is not None else _boosts_master_on())
         self.semantic_pool = int(os.environ.get("EVOSQL_SEMANTIC_POOL", "50"))
-        # User interest profile (Adım 17): a daily job clusters the user's
+        # Bitemporal validity + belief revision (roadmap steps 19-22). A side
+        # store, keyed by the governed mem_key, records when a fact was valid and
+        # its supersession chain: {valid_from, valid_to, tx_from, supersedes[],
+        # superseded_by[], status: active|stale|retracted}. Append-only memory
+        # becomes RECONCILABLE: a newer fact can mark an older co-referential one
+        # stale so it stops out-ranking the truth, and an as-of query can still
+        # time-travel. Reads gate on status; writes set it.
+        self.validity_store = f"{prefix}_validity"
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
@@ -359,7 +366,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.job_runs_store),
                   ("MEMORY STORE", self.access_store),
                   ("MEMORY STORE", self.salience_store),
-                  ("MEMORY STORE", self.semantic_store)]
+                  ("MEMORY STORE", self.semantic_store),
+                  ("MEMORY STORE", self.validity_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -1389,6 +1397,65 @@ class MemoryBackend:
             except Exception:
                 continue
         return out
+
+    def _validity_map(self, user_id: str,
+                      keys: Sequence[str]) -> Dict[str, dict]:
+        """{mem_key: validity_record} from the side store (roadmap step 19).
+        Empty when no validity has been recorded — a row with no validity record
+        is treated as active (append-only default)."""
+        out: Dict[str, dict] = {}
+        if not keys:
+            return out
+        try:
+            rows = self._fetch_by_keys(self.validity_store, user_id, list(keys))
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                v = json.loads(r[1]) if r[1] else {}
+                if isinstance(v, dict):
+                    out[r[0]] = v
+            except Exception:
+                continue
+        return out
+
+    def _set_validity(self, user_id: str, mem_key: str, *,
+                      valid_from: Optional[float] = None,
+                      valid_to: Optional[float] = None,
+                      supersedes: Optional[Sequence[str]] = None,
+                      superseded_by: Optional[Sequence[str]] = None,
+                      status: str = "active") -> dict:
+        """Write/merge the validity record for `mem_key` (roadmap step 19).
+        valid_from defaults to now on first write and is preserved on update;
+        the supersedes / superseded_by lists are unioned; status is set each
+        call. Returns the written record. Best-effort."""
+        now = time.time()
+        cur = self._validity_map(user_id, [mem_key]).get(mem_key, {}) or {}
+
+        def _union(a, b):
+            out = list(a or [])
+            for x in (b or []):
+                if x not in out:
+                    out.append(x)
+            return out
+
+        rec = {
+            "valid_from": (valid_from if valid_from is not None
+                           else cur.get("valid_from", now)),
+            "valid_to":   (valid_to if valid_to is not None
+                           else cur.get("valid_to")),
+            "tx_from":    cur.get("tx_from", now),
+            "status":     status,
+            "supersedes":    _union(cur.get("supersedes"), supersedes),
+            "superseded_by": _union(cur.get("superseded_by"), superseded_by),
+        }
+        try:
+            self._exec(
+                f"MEMORY PUT INTO {self.validity_store} VALUES "
+                f"('{_e(user_id)}','{_e(mem_key)}','{_e(json.dumps(rec))}')")
+        except Exception:
+            pass
+        return rec
 
     def restore(self, user_id: str, key: str) -> bool:
         """Bring an archived memory back: clear the flag and refresh its
