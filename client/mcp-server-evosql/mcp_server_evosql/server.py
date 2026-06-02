@@ -63,6 +63,9 @@ MAX_IN_KEYS = int(os.environ.get("EVOSQL_MAX_IN_KEYS", "20"))
 # keeps the side-store record well under the engine's 8 KB statement limit while
 # still giving recency + frequency.
 ACCESS_USES_CAP = 16
+# Cap the supersedes / superseded_by chains in a validity record so a
+# frequently-revised key can't union an unbounded list and breach the 8 KB cap.
+VALIDITY_CHAIN_CAP = 50
 
 
 def _boosts_master_on() -> bool:
@@ -81,6 +84,28 @@ def _env_float(key: str, default):
         return float(v)
     except ValueError:
         return default
+
+
+def _parse_as_of(v):
+    """Parse an as-of timestamp (epoch number or ISO-8601 string) to epoch
+    seconds, or None. Used for time-travel queries (roadmap step 22)."""
+    if v is None or v == "" or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip()
+    try:
+        return float(s)                  # bare epoch passed as a string
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
 
 
 def _resolve_boost(env_key: str, default_when_on: float,
@@ -308,7 +333,28 @@ class MemoryBackend:
         self.semantic_search = (_ss not in ("0", "", "off", "false", "no")
                                 if _ss is not None else _boosts_master_on())
         self.semantic_pool = int(os.environ.get("EVOSQL_SEMANTIC_POOL", "50"))
-        # User interest profile (Adım 17): a daily job clusters the user's
+        # Bitemporal validity + belief revision (roadmap steps 19-22). A side
+        # store, keyed by the governed mem_key, records when a fact was valid and
+        # its supersession chain: {valid_from, valid_to, tx_from, supersedes[],
+        # superseded_by[], status: active|stale|retracted}. Append-only memory
+        # becomes RECONCILABLE: a newer fact can mark an older co-referential one
+        # stale so it stops out-ranking the truth, and an as-of query can still
+        # time-travel. Reads gate on status; writes set it.
+        self.validity_store = f"{prefix}_validity"
+        # Write-time contradiction reconciliation (roadmap step 20). Off by
+        # default; when EVOSQL_RECONCILE is on AND an EVOSQL_RECONCILE_LLM is
+        # configured, save() detects a co-referential conflict and marks the
+        # superseded row stale. Pure append stays the default.
+        self.reconcile_enabled = os.environ.get("EVOSQL_RECONCILE", "0") \
+            not in ("0", "", "off", "false", "no")
+        # Active-record gate (roadmap step 21): drop rows the validity store
+        # marks stale/retracted so a superseded fact stops out-ranking the truth.
+        # Auto-on when reconciliation is on (you want the gate if you revise);
+        # an explicit EVOSQL_VALIDITY_GATE overrides. No-op when the validity
+        # store is empty (default), so default ranking is unchanged.
+        _vg = os.environ.get("EVOSQL_VALIDITY_GATE")
+        self.validity_gate = (_vg not in ("0", "", "off", "false", "no")
+                              if _vg is not None else self.reconcile_enabled)
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
@@ -359,7 +405,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.job_runs_store),
                   ("MEMORY STORE", self.access_store),
                   ("MEMORY STORE", self.salience_store),
-                  ("MEMORY STORE", self.semantic_store)]
+                  ("MEMORY STORE", self.semantic_store),
+                  ("MEMORY STORE", self.validity_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -515,6 +562,14 @@ class MemoryBackend:
         if self.entity_extract:
             try:
                 ext = self._entities(user_id).process(key, fact, created)
+                # Belief revision (step 20): reconcile BEFORE adding this row's
+                # edges, so the conflict check compares the new fact against the
+                # EXISTING graph, not against itself. No-op unless enabled.
+                if self.reconcile_enabled and ext:
+                    try:
+                        self.reconcile_on_save(user_id, key, fact, ext)
+                    except Exception:
+                        pass
                 if self.graph_build and ext:
                     g = self._graph(user_id)
                     g.add_edges_from_row(key, ext, fact, created)
@@ -838,7 +893,8 @@ class MemoryBackend:
                 tag: Optional[str] = None,
                 sender: Optional[str] = None,
                 mode: str = "flat",
-                include_archived: bool = False) -> List[Dict[str, Any]]:
+                include_archived: bool = False,
+                as_of: Optional[float] = None) -> List[Dict[str, Any]]:
         # Hierarchical mode (Adım 16): rank only the episode summaries, so an
         # aggregation query returns a few paragraph summaries with drill-down
         # instead of every raw row. Unlike a tag filter this keeps the normal
@@ -1249,6 +1305,12 @@ class MemoryBackend:
         # so the line above leaves `out` exactly as the legacy ranking produced.
         if self.activation_enabled:
             out = self._rank_by_activation(user_id, out, graph_boost_map)
+        # Active-record gate (step 21) + as-of time travel (step 22). Runs when
+        # the gate is on OR the caller asked for time travel (an as_of query
+        # must apply the validity window regardless of the default flag); a
+        # no-op on a clean/empty validity store at present time.
+        if self.validity_gate or as_of is not None:
+            out = self._apply_validity_gate(user_id, out, as_of=as_of)
         page = out[:limit]
         # Provenance (Adım 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
@@ -1389,6 +1451,186 @@ class MemoryBackend:
             except Exception:
                 continue
         return out
+
+    def _validity_map(self, user_id: str,
+                      keys: Sequence[str]) -> Dict[str, dict]:
+        """{mem_key: validity_record} from the side store (roadmap step 19).
+        Empty when no validity has been recorded — a row with no validity record
+        is treated as active (append-only default)."""
+        out: Dict[str, dict] = {}
+        if not keys:
+            return out
+        try:
+            rows = self._fetch_by_keys(self.validity_store, user_id, list(keys))
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                v = json.loads(r[1]) if r[1] else {}
+                if isinstance(v, dict):
+                    out[r[0]] = v
+            except Exception:
+                continue
+        return out
+
+    @staticmethod
+    def _created_ts(x: Dict[str, Any]) -> Optional[float]:
+        for f in ("created", "saved_at", "ts"):
+            try:
+                return float(x[f])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return None
+
+    def _apply_validity_gate(self, user_id: str, out: List[Dict[str, Any]], *,
+                             as_of: Optional[float] = None
+                             ) -> List[Dict[str, Any]]:
+        """Validity gate (roadmap steps 21-22).
+
+        PRESENT-TIME (as_of=None): drop rows the validity store marks
+        stale/retracted — a multiplicative gate (removed, not an additive boost)
+        so a superseded fact stops out-ranking the current one. A row with no
+        record is active. No-op when no validity records exist.
+
+        AS-OF (time travel): a row is kept iff it was valid AT that time. A row
+        WITH a validity record honors its [valid_from, valid_to) window (the
+        window is authoritative). A row WITHOUT a record is kept only if it had
+        already been created by then (its own created timestamp <= as_of), so a
+        not-yet-existing fact is not leaked into a past-time query."""
+        if not out:
+            return out
+        vmap = self._validity_map(user_id, [x["key"] for x in out])
+        if not vmap and as_of is None:
+            return out                       # present-time + nothing recorded
+        kept: List[Dict[str, Any]] = []
+        for x in out:
+            v = vmap.get(x["key"]) or {}
+            if as_of is not None:
+                if v:                        # recorded window is authoritative
+                    vf, vt = v.get("valid_from"), v.get("valid_to")
+                    if (vf is None or as_of >= vf) and (vt is None or as_of < vt):
+                        kept.append(x)
+                else:                        # no record -> exists iff created by then
+                    cts = self._created_ts(x)
+                    if cts is None or cts <= as_of:
+                        kept.append(x)
+                continue
+            # present-time: keep active / unrecorded, drop stale/retracted
+            if v.get("status", "active") == "active":
+                kept.append(x)
+        return kept
+
+    def _set_validity(self, user_id: str, mem_key: str, *,
+                      valid_from: Optional[float] = None,
+                      valid_to: Optional[float] = None,
+                      supersedes: Optional[Sequence[str]] = None,
+                      superseded_by: Optional[Sequence[str]] = None,
+                      status: str = "active") -> dict:
+        """Write/merge the validity record for `mem_key` (roadmap step 19).
+        valid_from defaults to now on first write and is preserved on update;
+        the supersedes / superseded_by lists are unioned; status is set each
+        call. Returns the written record. Best-effort."""
+        now = time.time()
+        cur = self._validity_map(user_id, [mem_key]).get(mem_key, {}) or {}
+
+        def _union(a, b):
+            out = list(a or [])
+            for x in (b or []):
+                if x not in out:
+                    out.append(x)
+            return out
+
+        # Cap the supersession chains so the record can't grow past the engine's
+        # 8 KB statement cap (superseded_by on a frequently-revised "hub" key
+        # would otherwise union a new entry forever, eventually failing the PUT
+        # silently and freezing the row's status). Keep the most recent.
+        sup = _union(cur.get("supersedes"), supersedes)[-VALIDITY_CHAIN_CAP:]
+        sup_by = _union(cur.get("superseded_by"), superseded_by)[-VALIDITY_CHAIN_CAP:]
+        rec = {
+            "valid_from": (valid_from if valid_from is not None
+                           else cur.get("valid_from", now)),
+            "valid_to":   (valid_to if valid_to is not None
+                           else cur.get("valid_to")),
+            "tx_from":    cur.get("tx_from", now),
+            "status":     status,
+            "supersedes":    sup,
+            "superseded_by": sup_by,
+        }
+        try:
+            self._exec(
+                f"MEMORY PUT INTO {self.validity_store} VALUES "
+                f"('{_e(user_id)}','{_e(mem_key)}','{_e(json.dumps(rec))}')")
+        except Exception:
+            pass
+        return rec
+
+    def reconcile_on_save(self, user_id: str, new_key: str, text: str,
+                          mentions: Sequence[dict], *,
+                          adjudicate: Optional[Callable[[str, str], str]] = None
+                          ) -> int:
+        """Detect + revise a write-time Type-I contradiction (roadmap step 20).
+        Extracts the new row's (subject, predicate, object) triples, finds
+        existing graph edges with the same (subject, predicate) but a different
+        object, and asks the adjudicator (injected, or the opt-in
+        EVOSQL_RECONCILE_LLM) for a Mem0 verdict. On UPDATE/DELETE the superseded
+        rows are marked stale/retracted in the validity store and the new row
+        records what it supersedes. Returns the number of rows marked stale.
+        No-op when reconciliation is off or no adjudicator is available."""
+        from .reconcile import find_conflicts, llm_adjudicate
+        from .graph import extract_triples
+        triples = extract_triples(text, list(mentions or []))
+        if not triples:
+            return 0
+        try:
+            cache = self._graph(user_id)._edge_cache()
+        except Exception:
+            return 0
+        conflicts = find_conflicts(cache, triples)
+        if not conflicts:
+            return 0
+        if adjudicate is None:
+            be = os.environ.get("EVOSQL_RECONCILE_LLM", "").strip().lower()
+            if not be:
+                return 0                  # opt-in: no adjudicator -> no revision
+            adjudicate = lambda new_t, old_o: llm_adjudicate(new_t, old_o, be)
+
+        now = time.time()
+        stale = 0
+        for c in conflicts:
+            superseded = [k for k in set(c["old_source_rows"]) if k != new_key]
+            # Only revise rows that are still ACTIVE — re-marking an
+            # already-stale row would re-union into its (capped) chain forever
+            # and waste an LLM call.
+            vstat = self._validity_map(user_id, superseded)
+            superseded = [k for k in superseded
+                          if vstat.get(k, {}).get("status", "active") == "active"]
+            if not superseded:
+                continue
+            # Give the adjudicator the OLD FACT TEXT, not the opaque object id,
+            # so it can judge a real contradiction (the catch-all related_to
+            # predicate over-triggers; the LLM is the precision gate).
+            old_fact = c.get("old_object", "")
+            try:
+                orows = self._fetch_by_keys(self.memory, user_id, superseded[:1])
+                if orows and orows[0] and orows[0][1]:
+                    old_fact = (json.loads(orows[0][1]).get("fact")
+                                or old_fact)
+            except Exception:
+                pass
+            try:
+                verdict = (adjudicate(text, old_fact) or "NOOP").upper()
+            except Exception:
+                continue
+            if verdict not in ("UPDATE", "DELETE"):
+                continue
+            status = "retracted" if verdict == "DELETE" else "stale"
+            for ok in superseded:
+                self._set_validity(user_id, ok, valid_to=now, status=status,
+                                   superseded_by=[new_key])
+                stale += 1
+            self._set_validity(user_id, new_key, supersedes=superseded,
+                               status="active")
+        return stale
 
     def restore(self, user_id: str, key: str) -> bool:
         """Bring an archived memory back: clear the flag and refresh its
@@ -1678,6 +1920,13 @@ TOOLS = [
                                 "(old and long unused). Off by default so "
                                 "stale rows do not clutter results; turn on "
                                 "to dig up something forgotten."},
+                "as_of": {"type": "string",
+                            "description": "Time-travel: an epoch or ISO-8601 "
+                                "timestamp. Returns what was valid AT that "
+                                "time — a fact later superseded is shown if it "
+                                "was still valid then, and a fact not yet "
+                                "created by then is hidden. Needs the validity "
+                                "gate (set by reconciliation)."},
                 "limit":  {"type": "integer", "default": 5},
             },
             "required": ["query"],
@@ -1829,9 +2078,12 @@ class MCPServer:
             mode   = (args.get("mode") or "flat").lower()
             limit  = int(args.get("limit") or 5)
             inc_arch = bool(args.get("include_archived"))
+            # As-of time travel (step 22): an epoch or ISO-8601 timestamp;
+            # superseded rows that were valid AT that time are kept.
+            as_of = _parse_as_of(args.get("as_of"))
             results = b.search(self.user_id, q,
                                limit=limit, tag=tag, sender=sender, mode=mode,
-                               include_archived=inc_arch)
+                               include_archived=inc_arch, as_of=as_of)
             # Implicit-feedback hook (Adım 11): tag the response with a
             # query_id and log (query -> returned keys) so the caller can
             # later report which keys it used via the feedback tool.
