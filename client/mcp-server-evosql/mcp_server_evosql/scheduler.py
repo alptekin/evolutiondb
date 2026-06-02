@@ -161,6 +161,7 @@ def job_extract_entities(backend, ns: str) -> int:
             g.add_edges_from_row(k, ext, text, ts)
         done += 1
     es.flush()
+    g.flush()       # one write per unique edge (was per co-occurrence)
     return done
 
 
