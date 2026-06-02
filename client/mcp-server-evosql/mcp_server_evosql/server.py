@@ -45,13 +45,18 @@ from .profile    import build_profile as _build_profile
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.9.1"
+SERVER_VERSION   = "1.9.2"
 
 # Adım 17: a row whose profile-cluster similarity clears this counts as
 # "in the user's interest" and survives the signal filter even with no direct
 # query match — that is how a query in your interest area surfaces your
 # related items. Only active when the profile boost is on.
 PROFILE_SIGNAL_MIN = float(os.environ.get("EVOSQL_PROFILE_SIGNAL_MIN", "0.35"))
+
+# The engine crashes on a `WHERE x IN (...)` list of 30+ values (stack
+# overflow in expression evaluation — measured: 29 ok, 30 crashes). Keep every
+# IN(...) batch comfortably under that.
+MAX_IN_KEYS = int(os.environ.get("EVOSQL_MAX_IN_KEYS", "20"))
 
 
 # ---------------------------------------------------------------- #
@@ -617,9 +622,11 @@ class MemoryBackend:
 
     def _fetch_by_keys(self, store: str, user_id: str,
                         keys: Sequence[str]) -> List[Any]:
-        """Fetch (mem_key, mem_value) for specific keys, batched by SQL
-        size so a large `IN (...)` list never trips the 8 KB statement
-        cap (mem_keys vary from short to ~150 chars)."""
+        """Fetch (mem_key, mem_value) for specific keys, batched so the
+        IN(...) list stays SMALL. The engine crashes on a `WHERE x IN (...)`
+        with roughly 50+ values (a stack overflow evaluating the list), so
+        each batch is capped at MAX_IN_KEYS — well below that — in addition
+        to the 8 KB statement-size budget."""
         out: List[Any] = []
         base = (f"SELECT mem_key, mem_value FROM __mem_{store} "
                 f"WHERE mem_namespace = '{_e(user_id)}' AND mem_key IN (")
@@ -628,7 +635,7 @@ class MemoryBackend:
         size = len(base) + 2
         for k in keys:
             tok = len("'" + _e(k) + "',")
-            if batch and size + tok > budget:
+            if batch and (len(batch) >= MAX_IN_KEYS or size + tok > budget):
                 out += self._query(
                     base + ",".join("'" + _e(x) + "'" for x in batch)
                     + ")") or []
