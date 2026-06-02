@@ -97,8 +97,118 @@ def lexical_top_k(conn, store: str, question: str, k: int) -> List[str]:
 
 
 # --------------------------------------------------------------------
+# Answer judge (roadmap step 6): pluggable, substring floor + LLM hook
+# --------------------------------------------------------------------
+def _substring_hit(question: str, gold: str, candidates: Sequence[str]) -> bool:
+    g = (gold or "").lower()
+    return bool(g) and any(g in (c or "").lower() for c in candidates)
+
+
+def make_judge(kind: str) -> Callable[[str, str, Sequence[str]], bool]:
+    """A judge decides whether the retrieved candidates support the gold answer.
+      'substring' (default) — the LongMemEval recall floor: gold appears in a
+                              candidate.
+      'llm'                 — opt-in LLM judge (LongMemEval's official style);
+                              best-effort, falls back to substring when no LLM
+                              backend is configured or the call fails."""
+    if kind != "llm":
+        return _substring_hit
+
+    def _llm_hit(question: str, gold: str, candidates: Sequence[str]) -> bool:
+        try:
+            from longmemeval._judge import llm_judge        # optional backend
+            verdict = llm_judge(question, gold, list(candidates))
+            if verdict is not None:
+                return bool(verdict)
+        except Exception:
+            pass
+        return _substring_hit(question, gold, candidates)    # graceful floor
+
+    return _llm_hit
+
+
+# --------------------------------------------------------------------
+# Real retriever (roadmap step 6): the actual MemoryBackend.search path
+# --------------------------------------------------------------------
+class RealRetriever:
+    """Ingest every haystack message through MemoryBackend.save (so it is
+    embedded + entity-extracted like production) and retrieve via
+    MemoryBackend.search — the real code path, not the lexical floor."""
+
+    def __init__(self, host: str, pg_port: int, user: str, password: str,
+                 database: str, prefix: str):
+        mcp = os.path.join(os.path.dirname(os.path.dirname(HERE)),
+                           "client", "mcp-server-evosql")
+        if mcp not in sys.path:
+            sys.path.insert(0, mcp)
+        from mcp_server_evosql.server import MemoryBackend
+        from mcp_server_evosql.embeddings import provider_from_env
+        self.ns = "lme"
+        self.b = MemoryBackend(host, pg_port, user, password, database,
+                               prefix, embedder=provider_from_env())
+
+    def ingest(self, records: Sequence[dict]) -> int:
+        n = 0
+        for rec in records:
+            for sess in rec.get("haystack_sessions") or []:
+                for msg in sess.get("messages") or []:
+                    content = msg.get("content") or ""
+                    if content.strip():
+                        self.b.save(self.ns, content)
+                        n += 1
+        return n
+
+    def top_k(self, question: str, k: int) -> List[str]:
+        rows = self.b.search(self.ns, question, limit=k)
+        return [r.get("fact") or r.get("text") or "" for r in rows]
+
+
+# --------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------
+def run_real(args) -> int:
+    """LongMemEval through the real MemoryBackend.search path (roadmap step 6)."""
+    records = list(iter_records(args.dataset)) if args.dataset else SYNTH
+    source = args.dataset or "<built-in synthetic fixture>"
+    prefix = f"bm_lme{int(time.time())}"
+    print(f"=== longmemeval recall@{args.k} on {source} (real search) ===")
+    print(f"loaded {len(records)} questions\n")
+
+    r = RealRetriever(args.host, args.pg_port, args.user, args.password,
+                      args.database, prefix)
+    n_msgs = r.ingest(records)
+    print(f"ingested {n_msgs} messages via MemoryBackend.save "
+          f"(prefix __mem_{prefix}_mem)")
+
+    judge = make_judge(args.judge)
+    hits = 0
+    latencies_ms: List[float] = []
+    for rec in records:
+        qstr = rec.get("question") or ""
+        gold = rec.get("answer") or ""
+        t0 = time.perf_counter()
+        cands = r.top_k(qstr, args.k)
+        latencies_ms.append((time.perf_counter() - t0) * 1000.0)
+        if judge(qstr, gold, cands):
+            hits += 1
+
+    n = max(1, len(records))
+    recall = hits / n
+    p50 = statistics.median(latencies_ms) if latencies_ms else 0
+    md = (f"### LongMemEval (real search, judge={args.judge})\n\n"
+          f"- dataset: `{source}`\n"
+          f"- questions: {len(records)}\n"
+          f"- ingested messages: {n_msgs}\n"
+          f"- recall@{args.k}: **{recall:.3f}** ({hits}/{n})\n"
+          f"- retrieval p50: {p50:.3f} ms\n")
+    print(md)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(md)
+        print(f"wrote {args.out}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -111,7 +221,20 @@ def main() -> int:
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--store", default="bm_lme")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--retriever", choices=["lexical", "real"],
+                    default="lexical",
+                    help="lexical = substring floor (default); "
+                         "real = the actual MemoryBackend.search path.")
+    ap.add_argument("--judge", choices=["substring", "llm"],
+                    default="substring",
+                    help="answer judge: substring floor or opt-in LLM judge.")
+    ap.add_argument("--pg-port", type=int, default=5433,
+                    help="PG port for the real retriever (MemoryBackend).")
+    ap.add_argument("--database", default="evosql")
     args = ap.parse_args()
+
+    if args.retriever == "real":
+        return run_real(args)
 
     from evosql_memory import connect
 
@@ -129,15 +252,16 @@ def main() -> int:
         n_msgs = ingest_records(conn, args.store, records)
         print(f"ingested {n_msgs} messages into MEMORY STORE {args.store}")
 
+        judge = make_judge(args.judge)
         hits = 0
         latencies_ms: List[float] = []
         for rec in records:
             qstr = rec.get("question") or ""
-            gold = (rec.get("answer") or "").lower()
+            gold = rec.get("answer") or ""
             t0 = time.perf_counter()
             cands = lexical_top_k(conn, args.store, qstr, args.k)
             latencies_ms.append((time.perf_counter() - t0) * 1000.0)
-            if any(gold in (c or "").lower() for c in cands):
+            if judge(qstr, gold, cands):
                 hits += 1
 
         conn.exec_(f"DROP MEMORY STORE {args.store}")
