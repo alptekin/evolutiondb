@@ -1007,7 +1007,18 @@ class MemoryBackend:
                 fused = (1.0 / (K + rb[i]) + 1.0 / (K + re5[i])
                          + 1.0 / (K + rkw[i]))
                 x["score"] = round(fused, 6)
+        # Retrieval-trace capture (roadmap step 4): stash each candidate's
+        # ranker components keyed by mem_key BEFORE they are stripped, so the
+        # per-query feature log (the training/eval backbone) has them. The
+        # final score + boost contributions are added below, after the boosts.
+        self._last_scores = {}
         for x in out:
+            self._last_scores[x["key"]] = {
+                "bge": round(x.get("_bge", 0.0), 4),
+                "e5": round(x.get("_e5", 0.0), 4),
+                "kw": round(x.get("_kw", 0.0), 4),
+                "hybrid": round(x.get("score", 0.0), 6),
+            }
             for f in ("_bge", "_e5", "_kw"):
                 x.pop(f, None)
         # Secondary sort by key keeps the ranking stable across
@@ -1111,6 +1122,11 @@ class MemoryBackend:
                 out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
         for x in out:
+            sc = self._last_scores.get(x["key"])
+            if sc is not None:                       # finalize the trace row
+                sc["psim"] = round(x.get("_psim", 0.0), 4)
+                sc["graph"] = round(graph_boost_map.get(x["key"], 0.0), 4)
+                sc["final"] = round(x.get("score", 0.0), 6)
             x.pop("_haystack", None)
             x.pop("_psim", None)
         page = out[:limit]
@@ -1292,9 +1308,18 @@ class MemoryBackend:
         """Record a search for later feedback. Stored under query_id with
         used_keys empty until the caller reports back. Best-effort: a
         logging failure must never break the search response."""
+        # Retrieval trace (roadmap step 4): the per-candidate feature scores the
+        # last search() stashed, aligned to the returned keys + their rank. This
+        # is the labelled-feature backbone the closed-loop learned controller
+        # (steps 24-26) and the eval harness train on. Best-effort; absent when
+        # search() wasn't the immediately preceding call.
+        scores = getattr(self, "_last_scores", {}) or {}
+        trace = [{"key": k, "rank": i, "scores": scores.get(k, {})}
+                 for i, k in enumerate(returned_keys)]
         rec: Dict[str, Any] = {
             "query_text":    query_text,
             "returned_keys": returned_keys,
+            "trace":         trace,
             "used_keys":     [],
             "rating":        None,
             "ts":            time.time(),
