@@ -72,6 +72,17 @@ def _boosts_master_on() -> bool:
         "1", "on", "true", "yes")
 
 
+def _env_float(key: str, default):
+    """Float env var with a default (which may be None for 'unset')."""
+    v = os.environ.get(key)
+    if v is None or v == "":
+        return default
+    try:
+        return float(v)
+    except ValueError:
+        return default
+
+
 def _resolve_boost(env_key: str, default_when_on: float,
                    master_on: Optional[bool] = None) -> float:
     """Resolve a boost weight. An explicit EVOSQL_<X>_BOOST always wins — so it
@@ -302,6 +313,18 @@ class MemoryBackend:
         _decay_env = os.environ.get("EVOSQL_DECAY")
         self.decay_enabled = (_decay_env != "0" and _decay_env is not None) \
             or (_decay_env is None and _boosts_master_on())
+        # Unified ACT-R activation ranking (roadmap steps 9-14). Off by default,
+        # so the ranking stays byte-for-byte until an operator opts in. When on,
+        # candidates are re-scored by A_i = B_i + w_cos*logit(cos) +
+        # w_spread*spread + w_sal*ln(salience) (+ retrieval noise) and gated by
+        # a retrieval threshold tau (None = keep all, the no-abstain default).
+        self.activation_enabled = os.environ.get("EVOSQL_ACTIVATION", "0") \
+            not in ("0", "", "off", "false", "no")
+        self.act_tau = _env_float("EVOSQL_ACTIVATION_TAU", None)
+        self.act_noise = _env_float("EVOSQL_ACTIVATION_NOISE", 0.0)
+        self.act_w_cos = _env_float("EVOSQL_ACTIVATION_W_COS", 1.0)
+        self.act_w_spread = _env_float("EVOSQL_ACTIVATION_W_SPREAD", 1.0)
+        self.act_w_sal = _env_float("EVOSQL_ACTIVATION_W_SAL", 1.0)
         # Salience (Adım 12) lives in its OWN side store, not on the main
         # record. Stamping a number onto a multi-KB row would rewrite the whole
         # record and trip the engine's 8 KB statement cap; a tiny {salience}
@@ -1129,6 +1152,11 @@ class MemoryBackend:
                 sc["final"] = round(x.get("score", 0.0), 6)
             x.pop("_haystack", None)
             x.pop("_psim", None)
+        # Unified ACT-R activation cutover (roadmap step 14): when enabled,
+        # re-score + gate by A_i instead of the hand-mixed blend. Off by default,
+        # so the line above leaves `out` exactly as the legacy ranking produced.
+        if self.activation_enabled:
+            out = self._rank_by_activation(user_id, out, graph_boost_map)
         page = out[:limit]
         # Provenance (Adım 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
@@ -1181,6 +1209,51 @@ class MemoryBackend:
             ls = (created or {}).get(k)
             out[k] = base_level(uses, cnt, now, lifetime_start=ls)
         return out
+
+    def _rank_by_activation(self, user_id: str, out: List[Dict[str, Any]],
+                            graph_boost_map: Dict[str, float]
+                            ) -> List[Dict[str, Any]]:
+        """Re-rank candidates by the unified ACT-R activation A_i (roadmap step
+        14 cutover). Combines base-level (the row's own use history), the best
+        dense similarity as logit(cos), the graph spread, and ln(salience) in
+        log-additive space, then gates by the retrieval threshold + noise. Only
+        engaged when EVOSQL_ACTIVATION is on; otherwise search ranking is
+        untouched."""
+        from .activation import activation, threshold_filter, B_FLOOR
+        if not out:
+            return out
+        keys = [x["key"] for x in out]
+        created: Dict[str, float] = {}
+        for x in out:
+            ts = x.get("created") or x.get("saved_at") or x.get("ts")
+            try:
+                created[x["key"]] = float(ts)
+            except (TypeError, ValueError):
+                continue
+        base_map = self._base_level_map(user_id, keys, created=created)
+        sal_map = self._salience_map(user_id, keys)
+        for x in out:
+            k = x["key"]
+            sc = self._last_scores.get(k, {}) if hasattr(self, "_last_scores") else {}
+            cos = max(float(sc.get("bge", 0.0)), float(sc.get("e5", 0.0)))
+            a = activation(
+                base=base_map.get(k, B_FLOOR),
+                cos=cos if cos > 0.0 else None,
+                spread=float(graph_boost_map.get(k, 0.0)),
+                salience=sal_map.get(k),
+                w_cos=self.act_w_cos, w_spread=self.act_w_spread,
+                w_sal=self.act_w_sal)
+            x["score"] = round(a, 6)
+            if isinstance(sc, dict) and k in getattr(self, "_last_scores", {}):
+                self._last_scores[k]["activation"] = round(a, 6)
+        # retrieval threshold + noise: drop rows that don't clear tau (when set)
+        kept = dict(threshold_filter([(x["key"], x["score"]) for x in out],
+                                     self.act_tau, noise_scale=self.act_noise))
+        survivors = [x for x in out if x["key"] in kept]
+        for x in survivors:
+            x["score"] = round(kept[x["key"]], 6)
+        survivors.sort(key=lambda x: (-x["score"], x.get("key", "")))
+        return survivors
 
     def _touch_access(self, user_id: str, keys: List[str]) -> None:
         """Record a read in the unified access side store. A read increments the
