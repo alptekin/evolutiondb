@@ -184,6 +184,13 @@ def job_decay(backend, ns: str) -> int:
     return res["archived"] + res["unarchived"]
 
 
+def job_health(backend, ns: str) -> int:
+    """Audit the derived stores' integrity (rows present vs rows that decode)
+    and record it under job_runs. Returns the count of unhealthy stores."""
+    from . import health
+    return health.job_health(backend, ns)
+
+
 JOBS: List[Job] = [
     Job("embed_missing",    "hourly",            job_embed_missing),
     Job("extract_entities", "hourly",            job_extract_entities),
@@ -191,6 +198,7 @@ JOBS: List[Job] = [
     Job("profile",          "daily@04:00",       job_profile),
     Job("decay",            "daily@05:00",       job_decay),
     Job("episodes",         "weekly@sun 02:00",  job_episodes),
+    Job("health",           "daily@06:00",       job_health),
 ]
 
 
