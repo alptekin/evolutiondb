@@ -191,6 +191,13 @@ def job_health(backend, ns: str) -> int:
     return health.job_health(backend, ns)
 
 
+def job_semanticize(backend, ns: str) -> int:
+    """Episodic -> semantic abstraction: distill timeless generalizations across
+    clusters of rows (opt-in LLM). No-op without EVOSQL_SEMANTIC_LLM."""
+    from . import semanticize
+    return semanticize.semanticize(backend, ns)
+
+
 JOBS: List[Job] = [
     Job("embed_missing",    "hourly",            job_embed_missing),
     Job("extract_entities", "hourly",            job_extract_entities),
@@ -199,6 +206,7 @@ JOBS: List[Job] = [
     Job("decay",            "daily@05:00",       job_decay),
     Job("episodes",         "weekly@sun 02:00",  job_episodes),
     Job("health",           "daily@06:00",       job_health),
+    Job("semanticize",      "daily@06:30",       job_semanticize),
 ]
 
 
