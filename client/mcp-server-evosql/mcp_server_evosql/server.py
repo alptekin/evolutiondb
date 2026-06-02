@@ -444,8 +444,9 @@ class MemoryBackend:
             try:
                 ext = self._entities(user_id).process(key, fact, created)
                 if self.graph_build and ext:
-                    self._graph(user_id).add_edges_from_row(
-                        key, ext, fact, created)
+                    g = self._graph(user_id)
+                    g.add_edges_from_row(key, ext, fact, created)
+                    g.flush()   # edges are deferred; persist this row's now
             except Exception:
                 pass
         return key
