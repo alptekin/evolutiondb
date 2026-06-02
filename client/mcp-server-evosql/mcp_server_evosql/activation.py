@@ -99,3 +99,33 @@ def activation(*, base: float = B_FLOOR, cos: Optional[float] = None,
         a += w_sal * math.log(float(salience))
     a += float(noise)
     return a
+
+
+# ---------------------------------------------------------------- #
+#  Retrieval threshold + noise (roadmap step 13)                   #
+# ---------------------------------------------------------------- #
+def logistic_noise(scale: float, rng=None) -> float:
+    """ACT-R retrieval noise: eps ~ Logistic(0, scale). scale<=0 -> 0 (off)."""
+    if scale <= 0.0:
+        return 0.0
+    import random as _random
+    r = rng or _random
+    u = min(1.0 - 1e-9, max(1e-9, r.random()))
+    return scale * math.log(u / (1.0 - u))
+
+
+def threshold_filter(scored, tau: Optional[float], *,
+                     noise_scale: float = 0.0, rng=None):
+    """Gate candidates by activation (roadmap step 13). Each (key, A_i) gets a
+    per-candidate logistic noise sample, and only those with A_i + eps >= tau
+    survive — so when nothing is activated enough the memory returns NOTHING
+    ("I can't recall that right now") instead of a fixed top-K of weak rows.
+    tau=None disables the gate (keeps everything), so it is backward-compatible.
+    Returns the surviving [(key, noisy_score)] sorted by score descending."""
+    out = []
+    for key, a in scored:
+        s = float(a) + logistic_noise(noise_scale, rng)
+        if tau is None or s >= tau:
+            out.append((key, s))
+    out.sort(key=lambda kv: -kv[1])
+    return out
