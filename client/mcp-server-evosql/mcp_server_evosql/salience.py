@@ -93,6 +93,29 @@ def feedback_score(key: str, feedback_used: Dict[str, int]) -> float:
     return min(feedback_used.get(key, 0), FEEDBACK_CAP) / FEEDBACK_CAP
 
 
+# Arousal / affective salience (roadmap step 33): a rare, high-stakes one-off
+# (e.g. "allergic to penicillin") should resist archival even with no recency,
+# sender activity, or feedback — the amygdala-modulation analogue. An explicit
+# pin or urgency/health/safety vocabulary raises the floor.
+_AROUSAL_TERMS = (
+    "allergic", "allergy", "emergency", "urgent", "asap", "critical", "danger",
+    "warning", "deadline", "important", "must ", "never ", "always ", "fatal",
+    "blood type", "medication", "dose", "password", "ssn", "passport",
+    "acil", "önemli", "tehlike", "uyarı", "alerji", "asla", "mutlaka")
+
+
+def arousal_score(rec: dict) -> float:
+    """0-1 affective salience from an explicit pin/important flag and urgency /
+    safety vocabulary in the fact text."""
+    if rec.get("pinned") or rec.get("important"):
+        return 1.0
+    text = str(rec.get("fact") or rec.get("text") or "").lower()
+    if not text:
+        return 0.0
+    hits = sum(1 for t in _AROUSAL_TERMS if t in text)
+    return min(1.0, 0.5 * hits)            # 1 hit -> 0.5, 2+ -> capped 1.0
+
+
 def compute_salience(rec: dict, key: str, *, now: float,
                      sender_counts: Dict[str, int], max_count: int,
                      feedback_used: Dict[str, int],
@@ -109,7 +132,11 @@ def compute_salience(rec: dict, key: str, *, now: float,
                  "depth": w["depth"] / tot, "feedback": 0.0}
     s = (w["recency"] * r + w["activity"] * a +
          w["depth"] * d + w["feedback"] * f)
-    return max(0.0, min(1.0, s))
+    s = max(0.0, min(1.0, s))
+    # Affective floor: an emotionally/safety-salient row keeps a high salience
+    # regardless of the other (decayed) signals, so it resists archival and
+    # surfaces when relevant. Neutral rows (arousal 0) are unchanged.
+    return max(s, arousal_score(rec))
 
 
 # ---------------------------------------------------------------- #
