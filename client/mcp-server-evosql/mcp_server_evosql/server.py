@@ -360,6 +360,10 @@ class MemoryBackend:
         # folded from the feedback corpus, keyed "<centroid>:<mem_key>", and the
         # fitted ranker weights — both side stores. The memory improves from USE.
         self.utility_store = f"{prefix}_utility"
+        # Procedural / skill memory (roadmap step 34): reusable how-tos indexed by
+        # description, with success/fail counters. Declarative-vs-procedural is a
+        # foundational memory distinction.
+        self.skill_store = f"{prefix}_skills"
         # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
         # ranker has been fit (fit_ranker), search re-scores candidates with the
         # learned logistic weights instead of the hand-tuned blend. Cold start
@@ -441,7 +445,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.salience_store),
                   ("MEMORY STORE", self.semantic_store),
                   ("MEMORY STORE", self.validity_store),
-                  ("MEMORY STORE", self.utility_store)]
+                  ("MEMORY STORE", self.utility_store),
+                  ("MEMORY STORE", self.skill_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -1706,6 +1711,78 @@ class MemoryBackend:
             self._set_validity(user_id, new_key, supersedes=superseded,
                                status="active")
         return stale
+
+    def save_skill(self, user_id: str, name: str, description: str, *,
+                   steps: Optional[List[str]] = None,
+                   trigger: str = "", derived_from: Optional[Sequence[str]] = None
+                   ) -> str:
+        """Record a reusable how-to (roadmap step 34). Indexed by name +
+        description + trigger (embedded) so find_skill can retrieve it for a
+        matching task; success/fail counters start at 0."""
+        created = time.time()
+        key = f"skill_{int(created * 1000)}_{uuid.uuid4().hex[:6]}"
+        rec = {"name": name, "description": description, "trigger": trigger,
+               "steps": list(steps or []), "success_count": 0, "fail_count": 0,
+               "derived_from": [k for k in (derived_from or []) if k],
+               "created": created}
+        idx = " ".join([name, description, trigger]).strip()
+        if self.embedder is not None:
+            v = self.embedder.embed(idx)
+            if v:
+                rec["emb"] = encode_vec(v)
+        self._exec(f"MEMORY PUT INTO {self.skill_store} VALUES "
+                   f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        return key
+
+    def find_skill(self, user_id: str, task: str,
+                   limit: int = 3) -> List[Dict[str, Any]]:
+        """Retrieve the skills most relevant to `task` (roadmap step 34): cosine
+        when an embedder is configured, else keyword overlap over name +
+        description + trigger. Ties broken toward a higher success rate."""
+        from .embeddings import cosine, decode_vec
+        qv = self.embedder.embed(task) if self.embedder is not None else None
+        terms = [w.lower() for w in task.split() if len(w) > 2]
+        scored: List[tuple] = []
+        for k, v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.skill_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []:
+            try:
+                rec = json.loads(v) if v else {}
+            except Exception:
+                continue
+            hay = " ".join([rec.get("name", ""), rec.get("description", ""),
+                            rec.get("trigger", "")]).lower()
+            if qv and decode_vec(rec.get("emb")):
+                sc = cosine(qv, decode_vec(rec.get("emb")))
+            else:
+                sc = sum(1 for t in terms if t in hay) / (len(terms) or 1)
+            if sc <= 0:
+                continue
+            succ = int(rec.get("success_count", 0)); fail = int(rec.get("fail_count", 0))
+            rate = (succ + 1) / (succ + fail + 2)        # Laplace-smoothed
+            rec["key"] = k
+            scored.append((sc, rate, rec))
+        scored.sort(key=lambda t: (-t[0], -t[1]))
+        return [r for _s, _r, r in scored[:limit]]
+
+    def record_skill_outcome(self, user_id: str, skill_key: str,
+                             success: bool) -> None:
+        """Increment a skill's success/fail counter (roadmap step 34) so a
+        failing skill ranks lower and eventually decays out."""
+        rows = self._fetch_by_keys(self.skill_store, user_id, [skill_key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return
+        field = "success_count" if success else "fail_count"
+        rec[field] = int(rec.get(field, 0)) + 1
+        try:
+            self._exec(f"MEMORY PUT INTO {self.skill_store} VALUES "
+                       f"('{_e(user_id)}','{_e(skill_key)}','{_e(json.dumps(rec))}')")
+        except Exception:
+            pass
 
     def reconsolidate(self, user_id: str, key: str, correction: str, *,
                       judge: Optional[Callable[[str, str], str]] = None
