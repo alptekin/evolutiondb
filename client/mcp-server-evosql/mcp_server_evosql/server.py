@@ -1461,6 +1461,27 @@ class MemoryBackend:
             except Exception:
                 pass
 
+    def _bump_rif(self, user_id: str, keys: Sequence[str],
+                  delta: float = 0.1) -> None:
+        """Add a retrieval-induced-forgetting penalty to rows out-competed by a
+        retrieval (roadmap step 30). Accumulates in the access side store
+        (capped <1) WITHOUT touching last_accessed, so a penalized near-duplicate
+        fades faster in the decay pass while the winner stays. Preserves the
+        row's other access fields."""
+        if not keys:
+            return
+        cur = self._access_records(user_id, keys)
+        for k in keys:
+            rec = cur.get(k) or {}
+            rec["rif_penalty"] = round(
+                min(0.95, float(rec.get("rif_penalty", 0.0)) + delta), 4)
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.access_store} VALUES "
+                    f"('{_e(user_id)}','{_e(k)}','{_e(json.dumps(rec))}')")
+            except Exception:
+                pass
+
     def _salience_map(self, user_id: str,
                       keys: Sequence[str]) -> Dict[str, float]:
         """{mem_key: salience} from the side store, for the candidate keys.

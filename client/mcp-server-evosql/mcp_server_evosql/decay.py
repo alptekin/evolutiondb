@@ -36,9 +36,13 @@ DEFAULT_SALIENCE = 0.5   # rows the salience job has not scored yet
 
 
 def decay_score(salience: float, last_accessed: float, now: float,
-                lam: float = LAMBDA) -> float:
+                lam: float = LAMBDA, rif_penalty: float = 0.0) -> float:
+    """Decay score = salience * recency-decay * (1 - rif_penalty). The
+    retrieval-induced-forgetting penalty (roadmap step 30) pushes a repeatedly
+    out-competed near-duplicate down so it fades while the winner stays."""
     idle_days = max(0.0, (now - last_accessed) / 86400.0)
-    return float(salience) * math.exp(-lam * idle_days)
+    rif = min(max(float(rif_penalty), 0.0), 0.95)
+    return float(salience) * math.exp(-lam * idle_days) * (1.0 - rif)
 
 
 def _row_ts(rec: dict) -> float:
@@ -92,6 +96,40 @@ def _access_map(backend, user_id: str) -> Dict[str, float]:
     return out
 
 
+def _rif_map(backend, user_id: str) -> Dict[str, float]:
+    """{mem_key: rif_penalty} from the access side store (roadmap step 30)."""
+    from .server import _e
+    out: Dict[str, float] = {}
+    for r in backend._query(
+            f"SELECT mem_key, mem_value FROM __mem_{backend.access_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
+        try:
+            rp = json.loads(r[1]).get("rif_penalty")
+            if isinstance(rp, (int, float)):
+                out[r[0]] = float(rp)
+        except Exception:
+            continue
+    return out
+
+
+def near_dup_competitors(winner_vec, cand_vecs: Dict[str, list],
+                         thresh: float = 0.92) -> list:
+    """Keys whose embedding is a near-duplicate of the winner (cosine > thresh)
+    — the out-competed rows a retrieval should push down (roadmap step 30).
+    Pure; the caller supplies decoded vectors."""
+    from .embeddings import cosine
+    if not winner_vec:
+        return []
+    out = []
+    for k, v in (cand_vecs or {}).items():
+        try:
+            if v and cosine(winner_vec, v) > thresh:
+                out.append(k)
+        except Exception:
+            continue
+    return out
+
+
 def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
                lam: float = LAMBDA, dry_run: bool = False) -> Dict[str, int]:
     """Re-evaluate every row's decay_score and flip the archived flag when it
@@ -101,6 +139,7 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
     now = time.time()
     access = _access_map(backend, user_id)
     salience = _salience_map(backend, user_id)   # side store, not main record
+    rif = _rif_map(backend, user_id)             # retrieval-induced forgetting
     archived = unarchived = active = skipped = 0
     for k, v in backend._query(
             f"SELECT mem_key, mem_value FROM __mem_{backend.memory} "
@@ -113,7 +152,7 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
             continue
         sal = salience.get(k, DEFAULT_SALIENCE)
         la = access.get(k) or _row_ts(rec) or now
-        ds = decay_score(sal, la, now, lam)
+        ds = decay_score(sal, la, now, lam, rif.get(k, 0.0))
         want = ds < threshold
         have = bool(rec.get("archived"))
         if want and not have:
