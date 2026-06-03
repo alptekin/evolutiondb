@@ -150,3 +150,26 @@ def predict(model: Dict[str, Any], features: Dict[str, Any]) -> float:
     z = float(model.get("bias", 0.0)) + sum(
         float(w.get(f, 0.0)) * float(features.get(f, 0.0)) for f in FEATURES)
     return _sigmoid(z)
+
+
+# ---------------------------------------------------------------- #
+#  Closed-loop guardrails (roadmap step 27)                        #
+# ---------------------------------------------------------------- #
+def guarded_score(learned: float, base_norm: float, *, trust: float = 1.0,
+                  epsilon: float = 0.0, rng=None) -> float:
+    """Apply the closed-loop guardrails to a learned score.
+
+    trust   feedback-loop DAMPENING: blend the learned score with the
+            (min-max normalized) base score, trust*learned + (1-trust)*base, so a
+            mis-fit ranker can't fully take over (trust=1 = pure learned).
+    epsilon EXPLORATION: add uniform[0,epsilon) noise so the system occasionally
+            surfaces rows outside the learned top-K and gathers feedback on them,
+            breaking the self-reinforcing 'only what I already show gets used'
+            loop. epsilon=0 = exploit only.
+    (IPS weight clipping — the variance cap — happens in ips_weight.)"""
+    s = trust * learned + (1.0 - trust) * base_norm
+    if epsilon > 0.0:
+        import random as _random
+        r = rng or _random
+        s += r.uniform(0.0, epsilon)
+    return s
