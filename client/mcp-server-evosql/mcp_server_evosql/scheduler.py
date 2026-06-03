@@ -198,6 +198,14 @@ def job_semanticize(backend, ns: str) -> int:
     return semanticize.semanticize(backend, ns)
 
 
+def job_intentions(backend, ns: str) -> int:
+    """Prospective memory: fire time-based intentions whose due time has passed."""
+    due = backend.due_intentions(ns)
+    for it in due:
+        backend.fire_intention(ns, it["key"])
+    return len(due)
+
+
 JOBS: List[Job] = [
     Job("embed_missing",    "hourly",            job_embed_missing),
     Job("extract_entities", "hourly",            job_extract_entities),
@@ -207,6 +215,7 @@ JOBS: List[Job] = [
     Job("episodes",         "weekly@sun 02:00",  job_episodes),
     Job("health",           "daily@06:00",       job_health),
     Job("semanticize",      "daily@06:30",       job_semanticize),
+    Job("intentions",       "every:300",         job_intentions),
 ]
 
 
