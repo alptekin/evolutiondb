@@ -148,7 +148,45 @@ def _e(s: str) -> str:
     if not isinstance(s, str):
         s = str(s)
     s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    # NOTE: we deliberately do NOT escape backslashes here. The main save path
+    # serializes via json.dumps first, which already escapes backslashes (and
+    # \n/\t/quotes) into the \\. form the EVO lexer expects; re-escaping in _e()
+    # would double them and break the json.loads round-trip (a literal "\n"
+    # instead of a newline). The raw (non-json) side-store inlines carry a
+    # latent lone-backslash quirk, but they take only trusted internal text, so
+    # it is not an injection vector. Keep _e symmetric with the json path.
     return s.replace("'", "''")
+
+
+def _fit_payload(record: Dict[str, Any], key: str, user_id: str,
+                 budget: int = 7000) -> str:
+    """Serialize a record to JSON kept under the engine's ~8 KB statement cap.
+
+    The C side stores a value in a fixed value_json[8192] buffer and silently
+    truncates beyond it, which corrupts the JSON so the row is dropped on read.
+    Trim the embedding first (recomputable from the id on read), then any
+    provenance/steps lists, flagging the truncation, until the payload fits."""
+    payload = json.dumps(record)
+    if len(payload) + len(key) + len(user_id) <= budget:
+        return payload
+    rec = dict(record)
+    rec.pop("emb", None)
+    rec["payload_truncated"] = True
+    payload = json.dumps(rec)
+    for field in ("derived_from", "provenance", "steps"):
+        while (len(payload) + len(key) + len(user_id) > budget
+               and isinstance(rec.get(field), list) and rec[field]):
+            rec[field] = rec[field][:-1]
+            payload = json.dumps(rec)
+    # last resort: clamp the largest free-text field
+    for field in ("fact", "description", "text", "value"):
+        if len(payload) + len(key) + len(user_id) <= budget:
+            break
+        if isinstance(rec.get(field), str) and len(rec[field]) > 200:
+            over = len(payload) + len(key) + len(user_id) - budget
+            rec[field] = rec[field][:max(200, len(rec[field]) - over - 16)]
+            payload = json.dumps(rec)
+    return payload
 
 
 # ---------------------------------------------------------------- #
@@ -382,6 +420,12 @@ class MemoryBackend:
         self.gist_store = f"{prefix}_gist"
         self.gist_search = os.environ.get("EVOSQL_GIST", "0") \
             not in ("0", "", "off", "false", "no")
+        # Bound the opt-in gist channel so a common-stem query can't scan/inject
+        # the whole namespace: cap the scan and keep only the top-overlap misses
+        # (defaults to the ANN-pool scale).
+        self.gist_scan = int(os.environ.get("EVOSQL_GIST_SCAN", "20000"))
+        self.gist_inject_max = int(os.environ.get(
+            "EVOSQL_GIST_INJECT_MAX", str(self._ann_pool or 80)))
         # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
         # ranker has been fit (fit_ranker), search re-scores candidates with the
         # learned logistic weights instead of the hand-tuned blend. Cold start
@@ -1055,10 +1099,11 @@ class MemoryBackend:
                 from .gist import gist_overlap
                 rows = rows or []
                 have = {r[1] for r in rows}
-                inject = []
+                cands = []
                 for gk, gv in self._query(
                         f"SELECT mem_key, mem_value FROM __mem_{self.gist_store} "
-                        f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []:
+                        f"WHERE mem_namespace = '{_e(user_id)}' "
+                        f"LIMIT {self.gist_scan}") or []:
                     try:
                         ov = gist_overlap(query, json.loads(gv).get("gist", ""))
                     except Exception:
@@ -1066,7 +1111,12 @@ class MemoryBackend:
                     if ov >= 0.5:
                         gist_boost_map[gk] = ov
                         if gk not in have:
-                            inject.append(gk)
+                            cands.append((ov, gk))
+                # cap the injected rows to the ANN-pool scale so a common-stem
+                # query can't balloon the per-row scoring pool: keep the
+                # highest-overlap misses only.
+                inject = [k for _, k in
+                          sorted(cands, key=lambda t: -t[0])[:self.gist_inject_max]]
                 for k, v in self._fetch_by_keys(self.memory, user_id, inject):
                     rows.append([user_id, k, v])
             except Exception:
@@ -1569,7 +1619,14 @@ class MemoryBackend:
         retrieval (roadmap step 30). Accumulates in the access side store
         (capped <1) WITHOUT touching last_accessed, so a penalized near-duplicate
         fades faster in the decay pass while the winner stays. Preserves the
-        row's other access fields."""
+        row's other access fields.
+
+        NOTE: this is the RIF writer; the decay pass already consumes
+        rif_penalty (decay.decay_score / _rif_map). Auto-triggering it from the
+        hot search() path (near_dup_competitors over the candidate vectors after
+        the winner is chosen) is deferred to keep search byte-for-byte unchanged
+        on the default path — RIF stays opt-in/explicit until that wiring lands
+        behind its own env flag. Callable directly today (tests, scheduler)."""
         if not keys:
             return
         cur = self._access_records(user_id, keys)
@@ -1910,8 +1967,12 @@ class MemoryBackend:
             v = self.embedder.embed(idx)
             if v:
                 rec["emb"] = encode_vec(v)
-        self._exec(f"MEMORY PUT INTO {self.skill_store} VALUES "
-                   f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        payload = _fit_payload(rec, key, user_id)
+        try:
+            self._exec(f"MEMORY PUT INTO {self.skill_store} VALUES "
+                       f"('{_e(user_id)}','{_e(key)}','{_e(payload)}')")
+        except Exception:
+            return key
         return key
 
     def find_skill(self, user_id: str, task: str,
@@ -1995,22 +2056,50 @@ class MemoryBackend:
         if "REFINE" not in verdict and "CONTRADICT" not in verdict:
             return None                           # CONFIRM -> trace unchanged
 
-        base = key.split("#", 1)[0]
-        ver = int(rec.get("version", 1)) + 1
+        # Resolve to the CURRENT head of the version chain before minting a new
+        # version, so a second reconsolidate on the same (now-superseded) base
+        # key versions off the head (k -> k#v2 -> k#v3) instead of recomputing
+        # k#v2 and clobbering the first correction (atomic upsert = silent loss).
+        head_key, head_rec = key, rec
+        seen = {key}
+        while True:
+            sb = (self._validity_map(user_id, [head_key]).get(head_key) or {}
+                  ).get("superseded_by")
+            nxt = sb[0] if isinstance(sb, (list, tuple)) and sb else None
+            if not nxt or nxt in seen:
+                break
+            nrows = self._fetch_by_keys(self.memory, user_id, [nxt])
+            if not nrows or not nrows[0] or not nrows[0][1]:
+                break
+            try:
+                head_rec = json.loads(nrows[0][1])
+            except Exception:
+                break
+            seen.add(nxt)
+            head_key = nxt
+        base = head_key.split("#", 1)[0]
+        ver = int(head_rec.get("version", 1)) + 1
         new_key = f"{base}#v{ver}"
-        new_rec = dict(rec)
-        new_rec.update({"fact": correction, "version": ver, "supersedes": key,
-                        "reconsolidated_from": key, "created": time.time()})
+        # belt-and-suspenders against any chain gap: never reuse an existing key
+        while self._fetch_by_keys(self.memory, user_id, [new_key]) and \
+                new_key not in seen:
+            ver += 1
+            new_key = f"{base}#v{ver}"
+            seen.add(new_key)
+        new_rec = dict(head_rec)
+        new_rec.update({"fact": correction, "version": ver, "supersedes": head_key,
+                        "reconsolidated_from": head_key, "created": time.time()})
         if self.embedder is not None:
             v = self.embedder.embed(correction)
             if v:
                 new_rec["emb"] = encode_vec(v)
+        payload = _fit_payload(new_rec, new_key, user_id)
         self._exec(f"MEMORY PUT INTO {self.memory} VALUES "
-                   f"('{_e(user_id)}','{_e(new_key)}','{_e(json.dumps(new_rec))}')")
+                   f"('{_e(user_id)}','{_e(new_key)}','{_e(payload)}')")
         now = time.time()
-        self._set_validity(user_id, key, valid_to=now, status="stale",
+        self._set_validity(user_id, head_key, valid_to=now, status="stale",
                            superseded_by=[new_key])
-        self._set_validity(user_id, new_key, supersedes=[key], status="active")
+        self._set_validity(user_id, new_key, supersedes=[head_key], status="active")
         return new_key
 
     def restore(self, user_id: str, key: str) -> bool:

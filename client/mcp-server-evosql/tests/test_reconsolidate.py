@@ -58,6 +58,24 @@ def main() -> int:
     assert b._fetch_by_keys(b.memory, ns, [k])[0][1], "old version must be kept"
     print("  ok  REFINE -> #v2 supersedes, old stale + kept for audit")
 
+    # reconsolidate the SAME base key a SECOND time: must resolve to the head
+    # (k#v2) and mint k#v3, NOT clobber k#v2 (atomic upsert = silent data loss)
+    nk3 = b.reconsolidate(ns, k, "actually the deploy window is wednesdays",
+                          judge=lambda o, c: "REFINE")
+    assert nk3 == f"{k}#v3", nk3
+    # both corrections survive, distinct and readable
+    v2 = b._fetch_by_keys(b.memory, ns, [nk])
+    v3 = b._fetch_by_keys(b.memory, ns, [nk3])
+    assert v2 and v2[0][1] and v3 and v3[0][1], (v2, v3)
+    r2, r3 = json.loads(v2[0][1]), json.loads(v3[0][1])
+    assert r2["fact"].startswith("the deploy window is now mondays"), r2["fact"]
+    assert r3["fact"].startswith("actually the deploy window is wednesdays"), r3["fact"]
+    assert r3["version"] == 3 and r3["supersedes"] == nk, r3
+    # the head chain advanced: v2 now stale, v3 active
+    assert b._validity_map(ns, [nk]).get(nk, {}).get("status") == "stale"
+    assert b._validity_map(ns, [nk3]).get(nk3, {}).get("status") == "active"
+    print("  ok  second REFINE on base key -> #v3 (no clobber, both kept)")
+
     print("OK — step 29 reconsolidation")
     return 0
 

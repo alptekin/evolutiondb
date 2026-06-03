@@ -26,6 +26,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -99,9 +100,16 @@ def feedback_score(key: str, feedback_used: Dict[str, int]) -> float:
 # pin or urgency/health/safety vocabulary raises the floor.
 _AROUSAL_TERMS = (
     "allergic", "allergy", "emergency", "urgent", "asap", "critical", "danger",
-    "warning", "deadline", "important", "must ", "never ", "always ", "fatal",
+    "warning", "deadline", "important", "must", "never", "always", "fatal",
     "blood type", "medication", "dose", "password", "ssn", "passport",
     "acil", "önemli", "tehlike", "uyarı", "alerji", "asla", "mutlaka")
+
+# Word-boundary match (Unicode-aware \b covers Turkish letters) so a term only
+# fires as a whole word — "unimportant" must not match "important", "overdose"
+# must not match "dose".
+_AROUSAL_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(t) for t in _AROUSAL_TERMS) + r")\b",
+    re.IGNORECASE)
 
 
 def arousal_score(rec: dict) -> float:
@@ -112,7 +120,7 @@ def arousal_score(rec: dict) -> float:
     text = str(rec.get("fact") or rec.get("text") or "").lower()
     if not text:
         return 0.0
-    hits = sum(1 for t in _AROUSAL_TERMS if t in text)
+    hits = len(_AROUSAL_RE.findall(text))
     return min(1.0, 0.5 * hits)            # 1 hit -> 0.5, 2+ -> capped 1.0
 
 

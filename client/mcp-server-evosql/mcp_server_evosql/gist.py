@@ -34,10 +34,15 @@ def _stem(w: str) -> str:
     while changed and len(w) > 4:
         changed = False
         for suf in _SUFFIXES:
-            if len(w) > len(suf) + 2 and w.endswith(suf):
-                w = w[:-len(suf)]
-                changed = True
-                break
+            if not w.endswith(suf):
+                continue
+            if suf == "s" and w.endswith("ss"):
+                continue                       # process/address/class, not a plural
+            if len(w) - len(suf) < 4:
+                continue                       # keep a real stem (caring !-> car)
+            w = w[:-len(suf)]
+            changed = True
+            break
     return w
 
 
@@ -57,10 +62,20 @@ def gist_text(text: str) -> str:
 
 
 def gist_overlap(query: str, gist: str) -> float:
-    """Jaccard-style overlap of the query's gist tokens against a stored gist —
-    the gist channel's match score (paraphrase/morphology robust)."""
+    """Symmetric overlap of the query's gist tokens against a stored gist — the
+    gist channel's match score (paraphrase/morphology robust).
+
+    Length-aware so a single coincidentally-shared common stem can't flood the
+    channel: a multi-token query must share at least two content words, and the
+    score is min(inter/|q|, inter/|g|) so a long stored gist is not "carried" by
+    one query word the way a one-sided inter/|q| ratio would allow."""
     q = gist_tokens(query)
     g = set((gist or "").split())
     if not q or not g:
         return 0.0
-    return len(q & g) / len(q)
+    inter = len(q & g)
+    if inter == 0:
+        return 0.0
+    if len(q) >= 2 and inter < 2:
+        return 0.0
+    return min(inter / len(q), inter / len(g))
