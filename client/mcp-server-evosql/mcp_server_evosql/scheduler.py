@@ -197,6 +197,14 @@ def job_consolidation_health(backend, ns: str) -> int:
     return consolidation.job_consolidation_health(backend, ns)
 
 
+def job_tms(backend, ns: str) -> int:
+    """Truth-maintenance: Type-II dependent retraction (roadmap step 39).
+    Re-adjudicate the derived_from closure of retracted facts, marking rows that
+    have lost all support 'unsupported'. No-op unless EVOSQL_TMS is enabled."""
+    from . import tms
+    return tms.job_tms(backend, ns)
+
+
 def job_health(backend, ns: str) -> int:
     """Audit the derived stores' integrity (rows present vs rows that decode)
     and record it under job_runs. Returns the count of unhealthy stores."""
@@ -229,6 +237,7 @@ JOBS: List[Job] = [
     Job("health",           "daily@06:00",       job_health),
     Job("semanticize",      "daily@06:30",       job_semanticize),
     Job("consolidation",    "daily@06:45",       job_consolidation_health),
+    Job("tms",              "daily@07:00",       job_tms),
     Job("intentions",       "every:300",         job_intentions),
 ]
 
