@@ -86,6 +86,15 @@ def _env_float(key: str, default):
         return default
 
 
+SOURCE_RELIABILITY = {"asserted": 1.0, "observed": 0.7, "inferred": 0.4}
+
+
+def source_reliability(source_class: Optional[str]) -> float:
+    """Confidence a memory deserves by how it was acquired (roadmap step 32):
+    asserted (user said) > observed (ingested) > inferred (derived)."""
+    return SOURCE_RELIABILITY.get(source_class or "observed", 0.5)
+
+
 def _parse_as_of(v):
     """Parse an as-of timestamp (epoch number or ISO-8601 string) to epoch
     seconds, or None. Used for time-travel queries (roadmap step 22)."""
@@ -139,7 +148,45 @@ def _e(s: str) -> str:
     if not isinstance(s, str):
         s = str(s)
     s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    # NOTE: we deliberately do NOT escape backslashes here. The main save path
+    # serializes via json.dumps first, which already escapes backslashes (and
+    # \n/\t/quotes) into the \\. form the EVO lexer expects; re-escaping in _e()
+    # would double them and break the json.loads round-trip (a literal "\n"
+    # instead of a newline). The raw (non-json) side-store inlines carry a
+    # latent lone-backslash quirk, but they take only trusted internal text, so
+    # it is not an injection vector. Keep _e symmetric with the json path.
     return s.replace("'", "''")
+
+
+def _fit_payload(record: Dict[str, Any], key: str, user_id: str,
+                 budget: int = 7000) -> str:
+    """Serialize a record to JSON kept under the engine's ~8 KB statement cap.
+
+    The C side stores a value in a fixed value_json[8192] buffer and silently
+    truncates beyond it, which corrupts the JSON so the row is dropped on read.
+    Trim the embedding first (recomputable from the id on read), then any
+    provenance/steps lists, flagging the truncation, until the payload fits."""
+    payload = json.dumps(record)
+    if len(payload) + len(key) + len(user_id) <= budget:
+        return payload
+    rec = dict(record)
+    rec.pop("emb", None)
+    rec["payload_truncated"] = True
+    payload = json.dumps(rec)
+    for field in ("derived_from", "provenance", "steps"):
+        while (len(payload) + len(key) + len(user_id) > budget
+               and isinstance(rec.get(field), list) and rec[field]):
+            rec[field] = rec[field][:-1]
+            payload = json.dumps(rec)
+    # last resort: clamp the largest free-text field
+    for field in ("fact", "description", "text", "value"):
+        if len(payload) + len(key) + len(user_id) <= budget:
+            break
+        if isinstance(rec.get(field), str) and len(rec[field]) > 200:
+            over = len(payload) + len(key) + len(user_id) - budget
+            rec[field] = rec[field][:max(200, len(rec[field]) - over - 16)]
+            payload = json.dumps(rec)
+    return payload
 
 
 # ---------------------------------------------------------------- #
@@ -351,6 +398,34 @@ class MemoryBackend:
         # folded from the feedback corpus, keyed "<centroid>:<mem_key>", and the
         # fitted ranker weights — both side stores. The memory improves from USE.
         self.utility_store = f"{prefix}_utility"
+        # Procedural / skill memory (roadmap step 34): reusable how-tos indexed by
+        # description, with success/fail counters. Declarative-vs-procedural is a
+        # foundational memory distinction.
+        self.skill_store = f"{prefix}_skills"
+        # Prospective memory (roadmap step 35): remembering to DO something later
+        # — time-based (due at an epoch) or event-based (when a cue entity is
+        # next mentioned). The scheduler fires the due ones; the rest of the
+        # system only ever recomputes the PAST, this looks forward.
+        self.intentions_store = f"{prefix}_intentions"
+        # Core / working-memory tier (roadmap step 36, MemGPT/Letta): a few named
+        # mutable blocks the agent keeps always-in-context and self-edits (human,
+        # persona, pinned facts), bounded by max_chars so overflow forces a
+        # rewrite. The archival/recall tiers are the existing mem/recent stores.
+        self.core_store = f"{prefix}_core"
+        self.core_max_chars = int(os.environ.get("EVOSQL_CORE_MAX_CHARS", "1500"))
+        # Gist vs verbatim (roadmap step 37): a meaning trace per row so a
+        # paraphrased query matches when the surface words differ. A 4th
+        # retrieval channel + a slower-decaying trace. Opt-in via EVOSQL_GIST;
+        # the gist is written on every save (cheap) but only consulted when on.
+        self.gist_store = f"{prefix}_gist"
+        self.gist_search = os.environ.get("EVOSQL_GIST", "0") \
+            not in ("0", "", "off", "false", "no")
+        # Bound the opt-in gist channel so a common-stem query can't scan/inject
+        # the whole namespace: cap the scan and keep only the top-overlap misses
+        # (defaults to the ANN-pool scale).
+        self.gist_scan = int(os.environ.get("EVOSQL_GIST_SCAN", "20000"))
+        self.gist_inject_max = int(os.environ.get(
+            "EVOSQL_GIST_INJECT_MAX", str(self._ann_pool or 80)))
         # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
         # ranker has been fit (fit_ranker), search re-scores candidates with the
         # learned logistic weights instead of the hand-tuned blend. Cold start
@@ -375,6 +450,11 @@ class MemoryBackend:
         _vg = os.environ.get("EVOSQL_VALIDITY_GATE")
         self.validity_gate = (_vg not in ("0", "", "off", "false", "no")
                               if _vg is not None else self.reconcile_enabled)
+        # Confidence-based abstention (roadmap step 32). When set, search returns
+        # NOTHING ("no reliable memory") if even the best candidate's source
+        # confidence is below this threshold, rather than a confidently-wrong
+        # low-source row. None (default) = never abstain.
+        self.abstain_conf = _env_float("EVOSQL_ABSTAIN_CONF", None)
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
@@ -427,7 +507,11 @@ class MemoryBackend:
                   ("MEMORY STORE", self.salience_store),
                   ("MEMORY STORE", self.semantic_store),
                   ("MEMORY STORE", self.validity_store),
-                  ("MEMORY STORE", self.utility_store)]
+                  ("MEMORY STORE", self.utility_store),
+                  ("MEMORY STORE", self.skill_store),
+                  ("MEMORY STORE", self.intentions_store),
+                  ("MEMORY STORE", self.core_store),
+                  ("MEMORY STORE", self.gist_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -498,7 +582,8 @@ class MemoryBackend:
     # -- DML wrappers -------------------------------------------------
     def save(self, user_id: str, fact: str,
               tags: Optional[List[str]] = None,
-              derived_from: Optional[Sequence[str]] = None) -> str:
+              derived_from: Optional[Sequence[str]] = None,
+              source_class: Optional[str] = None) -> str:
         created = time.time()
         key = f"mem_{int(created*1000)}_{uuid.uuid4().hex[:6]}"
         # Topic tags are merged into the regular `tags` list so the
@@ -514,6 +599,12 @@ class MemoryBackend:
             "fact":    fact,
             "tags":    merged_tags,
             "created": created,
+            # Source / reality monitoring (roadmap step 32): how this memory was
+            # acquired. asserted = the user stated it; observed = ingested from a
+            # connector; inferred = derived from other memories. Drives the
+            # confidence used by the abstention gate.
+            "source_class": source_class or ("inferred" if derived_from
+                                             else "observed"),
         }
         if topic_tags:
             record["topic_tags"]  = topic_tags
@@ -597,6 +688,16 @@ class MemoryBackend:
                     g.flush()   # edges are deferred; persist this row's now
             except Exception:
                 pass
+        # Gist trace (step 37): a normalized meaning representation so a
+        # paraphrased query can still match. Best-effort, side store.
+        try:
+            from .gist import gist_text
+            g = gist_text(fact)
+            if g:
+                self._exec(f"MEMORY PUT INTO {self.gist_store} VALUES "
+                           f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps({'gist': g}))}')")
+        except Exception:
+            pass
         return key
 
     def save_semantic(self, user_id: str, proposition: str, *,
@@ -989,6 +1090,38 @@ class MemoryBackend:
                 for k, v in self._fetch_by_keys(self.memory, user_id, missing):
                     rows.append([user_id, k, v])
 
+        # Gist channel (roadmap step 37): rows whose meaning trace overlaps the
+        # query — surfacing a paraphrased / morphologically-varied match the
+        # surface words miss. Opt-in (EVOSQL_GIST); a no-op otherwise.
+        gist_boost_map: Dict[str, float] = {}
+        if self.gist_search:
+            try:
+                from .gist import gist_overlap
+                rows = rows or []
+                have = {r[1] for r in rows}
+                cands = []
+                for gk, gv in self._query(
+                        f"SELECT mem_key, mem_value FROM __mem_{self.gist_store} "
+                        f"WHERE mem_namespace = '{_e(user_id)}' "
+                        f"LIMIT {self.gist_scan}") or []:
+                    try:
+                        ov = gist_overlap(query, json.loads(gv).get("gist", ""))
+                    except Exception:
+                        continue
+                    if ov >= 0.5:
+                        gist_boost_map[gk] = ov
+                        if gk not in have:
+                            cands.append((ov, gk))
+                # cap the injected rows to the ANN-pool scale so a common-stem
+                # query can't balloon the per-row scoring pool: keep the
+                # highest-overlap misses only.
+                inject = [k for _, k in
+                          sorted(cands, key=lambda t: -t[0])[:self.gist_inject_max]]
+                for k, v in self._fetch_by_keys(self.memory, user_id, inject):
+                    rows.append([user_id, k, v])
+            except Exception:
+                gist_boost_map = {}
+
         # Semantic-tier fusion (roadmap step 17): pull the namespace's semantic
         # generalizations into the candidate pool so a query gets both "what
         # happened" (episodic) and "what is generally true" (semantic). They are
@@ -1162,6 +1295,7 @@ class MemoryBackend:
             has_signal = (final > 0 or sem_score > 0
                           or sem2_score > 0 or kw_score > 0
                           or graph_boost_map.get(c["key"], 0.0) > 0
+                          or gist_boost_map.get(c["key"], 0.0) > 0
                           or psim >= PROFILE_SIGNAL_MIN)
             if not has_signal and not tag and sender_alias_set is None \
                     and sender_literal is None:
@@ -1292,6 +1426,18 @@ class MemoryBackend:
                 x["score"] = round((1.0 - w) * base + w * gb, 6)
             out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
+        # Gist channel (step 37): lift rows whose meaning trace matched the
+        # query, so a paraphrased recall surfaces. Same min-max-base blend shape.
+        if self.gist_search and gist_boost_map and out:
+            w = 0.4
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            gmax = max(gist_boost_map.values()) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                gb = gist_boost_map.get(x["key"], 0.0) / gmax
+                x["score"] = round((1.0 - w) * base + w * gb, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
         # Adım 12 — salience re-ranking. Blend the precomputed per-row
         # `salience` (recency × sender-activity × thread-depth × feedback)
         # into the base score so important rows surface first. The plan
@@ -1338,6 +1484,12 @@ class MemoryBackend:
         # no-op on a clean/empty validity store at present time.
         if self.validity_gate or as_of is not None:
             out = self._apply_validity_gate(user_id, out, as_of=as_of)
+        # Confidence abstention (step 32): if even the best candidate is too
+        # low-confidence by source, return nothing rather than a confident wrong.
+        if self.abstain_conf is not None and out:
+            best = max(source_reliability(x.get("source_class")) for x in out)
+            if best < self.abstain_conf:
+                out = []
         page = out[:limit]
         # Provenance (Adım 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
@@ -1454,6 +1606,34 @@ class MemoryBackend:
             if len(uses) > ACCESS_USES_CAP:
                 uses = uses[-ACCESS_USES_CAP:]
             rec["uses"] = uses
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.access_store} VALUES "
+                    f"('{_e(user_id)}','{_e(k)}','{_e(json.dumps(rec))}')")
+            except Exception:
+                pass
+
+    def _bump_rif(self, user_id: str, keys: Sequence[str],
+                  delta: float = 0.1) -> None:
+        """Add a retrieval-induced-forgetting penalty to rows out-competed by a
+        retrieval (roadmap step 30). Accumulates in the access side store
+        (capped <1) WITHOUT touching last_accessed, so a penalized near-duplicate
+        fades faster in the decay pass while the winner stays. Preserves the
+        row's other access fields.
+
+        NOTE: this is the RIF writer; the decay pass already consumes
+        rif_penalty (decay.decay_score / _rif_map). Auto-triggering it from the
+        hot search() path (near_dup_competitors over the candidate vectors after
+        the winner is chosen) is deferred to keep search byte-for-byte unchanged
+        on the default path — RIF stays opt-in/explicit until that wiring lands
+        behind its own env flag. Callable directly today (tests, scheduler)."""
+        if not keys:
+            return
+        cur = self._access_records(user_id, keys)
+        for k in keys:
+            rec = cur.get(k) or {}
+            rec["rif_penalty"] = round(
+                min(0.95, float(rec.get("rif_penalty", 0.0)) + delta), 4)
             try:
                 self._exec(
                     f"MEMORY PUT INTO {self.access_store} VALUES "
@@ -1658,6 +1838,269 @@ class MemoryBackend:
             self._set_validity(user_id, new_key, supersedes=superseded,
                                status="active")
         return stale
+
+    def core_memory_get(self, user_id: str,
+                        label: Optional[str] = None) -> Dict[str, str]:
+        """Return the always-in-context core blocks (roadmap step 36):
+        {label: text}. One label or all. Injected every turn — no query."""
+        out: Dict[str, str] = {}
+        for k, v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.core_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000") or []:
+            try:
+                rec = json.loads(v) if v else {}
+                out[k] = rec.get("text", "")
+            except Exception:
+                continue
+        if label is not None:
+            return {label: out.get(label, "")}
+        return out
+
+    def _core_put(self, user_id: str, label: str, text: str) -> str:
+        # Enforce the block budget: overflow keeps the most recent tail (the
+        # agent is expected to summarize-and-replace before it gets here).
+        if len(text) > self.core_max_chars:
+            text = text[-self.core_max_chars:]
+        rec = {"label": label, "text": text, "updated_at": time.time(),
+               "max_chars": self.core_max_chars}
+        self._exec(f"MEMORY PUT INTO {self.core_store} VALUES "
+                   f"('{_e(user_id)}','{_e(label)}','{_e(json.dumps(rec))}')")
+        return text
+
+    def core_memory_replace(self, user_id: str, label: str, text: str) -> str:
+        """Overwrite a core block (roadmap step 36). Returns the stored text
+        (truncated to max_chars)."""
+        return self._core_put(user_id, label, text)
+
+    def core_memory_append(self, user_id: str, label: str, text: str) -> str:
+        """Append to a core block (newline-joined), enforcing max_chars."""
+        cur = self.core_memory_get(user_id, label).get(label, "")
+        joined = (cur + "\n" + text) if cur else text
+        return self._core_put(user_id, label, joined)
+
+    def add_intention(self, user_id: str, action: str, *,
+                      due_ts: Optional[float] = None,
+                      cue_entity: Optional[str] = None) -> str:
+        """Store a future intention (roadmap step 35): time-based (due_ts) or
+        event-based (fire when cue_entity is next mentioned). Returns the key.
+        The due epoch is mirrored in the key (zero-padded) so a B+ tree range
+        scan can find due ones in order."""
+        now = time.time()
+        due_tag = f"{int(due_ts):020d}" if due_ts is not None else "00000000000000000000"
+        key = f"intent_{due_tag}_{uuid.uuid4().hex[:6]}"
+        rec = {"action": action, "due_ts": due_ts, "cue_entity": cue_entity,
+               "trigger": "time" if due_ts is not None else "event",
+               "status": "pending", "created": now}
+        self._exec(f"MEMORY PUT INTO {self.intentions_store} VALUES "
+                   f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        return key
+
+    def _pending_intentions(self, user_id: str) -> List[tuple]:
+        out = []
+        for k, v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.intentions_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []:
+            try:
+                rec = json.loads(v) if v else {}
+            except Exception:
+                continue
+            if rec.get("status") == "pending":
+                out.append((k, rec))
+        return out
+
+    def due_intentions(self, user_id: str,
+                       now: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Pending time-based intentions whose due time has passed."""
+        now = now if now is not None else time.time()
+        out = []
+        for k, rec in self._pending_intentions(user_id):
+            dt = rec.get("due_ts")
+            if rec.get("trigger") == "time" and dt is not None and dt <= now:
+                rec = dict(rec); rec["key"] = k
+                out.append(rec)
+        return out
+
+    def fire_intention(self, user_id: str, key: str) -> None:
+        rows = self._fetch_by_keys(self.intentions_store, user_id, [key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return
+        rec["status"] = "fired"
+        rec["fired_at"] = time.time()
+        try:
+            self._exec(f"MEMORY PUT INTO {self.intentions_store} VALUES "
+                       f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        except Exception:
+            pass
+
+    def fire_event_intentions(self, user_id: str,
+                              entity_ids: Sequence[str]) -> List[Dict[str, Any]]:
+        """Fire event-based intentions whose cue entity is among `entity_ids`
+        (called when a new row mentions them)."""
+        ids = set(entity_ids or [])
+        fired = []
+        for k, rec in self._pending_intentions(user_id):
+            if rec.get("trigger") == "event" and rec.get("cue_entity") in ids:
+                self.fire_intention(user_id, k)
+                rec = dict(rec); rec["key"] = k
+                fired.append(rec)
+        return fired
+
+    def save_skill(self, user_id: str, name: str, description: str, *,
+                   steps: Optional[List[str]] = None,
+                   trigger: str = "", derived_from: Optional[Sequence[str]] = None
+                   ) -> str:
+        """Record a reusable how-to (roadmap step 34). Indexed by name +
+        description + trigger (embedded) so find_skill can retrieve it for a
+        matching task; success/fail counters start at 0."""
+        created = time.time()
+        key = f"skill_{int(created * 1000)}_{uuid.uuid4().hex[:6]}"
+        rec = {"name": name, "description": description, "trigger": trigger,
+               "steps": list(steps or []), "success_count": 0, "fail_count": 0,
+               "derived_from": [k for k in (derived_from or []) if k],
+               "created": created}
+        idx = " ".join([name, description, trigger]).strip()
+        if self.embedder is not None:
+            v = self.embedder.embed(idx)
+            if v:
+                rec["emb"] = encode_vec(v)
+        payload = _fit_payload(rec, key, user_id)
+        try:
+            self._exec(f"MEMORY PUT INTO {self.skill_store} VALUES "
+                       f"('{_e(user_id)}','{_e(key)}','{_e(payload)}')")
+        except Exception:
+            return key
+        return key
+
+    def find_skill(self, user_id: str, task: str,
+                   limit: int = 3) -> List[Dict[str, Any]]:
+        """Retrieve the skills most relevant to `task` (roadmap step 34): cosine
+        when an embedder is configured, else keyword overlap over name +
+        description + trigger. Ties broken toward a higher success rate."""
+        from .embeddings import cosine, decode_vec
+        qv = self.embedder.embed(task) if self.embedder is not None else None
+        terms = [w.lower() for w in task.split() if len(w) > 2]
+        scored: List[tuple] = []
+        for k, v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.skill_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []:
+            try:
+                rec = json.loads(v) if v else {}
+            except Exception:
+                continue
+            hay = " ".join([rec.get("name", ""), rec.get("description", ""),
+                            rec.get("trigger", "")]).lower()
+            if qv and decode_vec(rec.get("emb")):
+                sc = cosine(qv, decode_vec(rec.get("emb")))
+            else:
+                sc = sum(1 for t in terms if t in hay) / (len(terms) or 1)
+            if sc <= 0:
+                continue
+            succ = int(rec.get("success_count", 0)); fail = int(rec.get("fail_count", 0))
+            rate = (succ + 1) / (succ + fail + 2)        # Laplace-smoothed
+            rec["key"] = k
+            scored.append((sc, rate, rec))
+        scored.sort(key=lambda t: (-t[0], -t[1]))
+        return [r for _s, _r, r in scored[:limit]]
+
+    def record_skill_outcome(self, user_id: str, skill_key: str,
+                             success: bool) -> None:
+        """Increment a skill's success/fail counter (roadmap step 34) so a
+        failing skill ranks lower and eventually decays out."""
+        rows = self._fetch_by_keys(self.skill_store, user_id, [skill_key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return
+        field = "success_count" if success else "fail_count"
+        rec[field] = int(rec.get(field, 0)) + 1
+        try:
+            self._exec(f"MEMORY PUT INTO {self.skill_store} VALUES "
+                       f"('{_e(user_id)}','{_e(skill_key)}','{_e(json.dumps(rec))}')")
+        except Exception:
+            pass
+
+    def reconsolidate(self, user_id: str, key: str, correction: str, *,
+                      judge: Optional[Callable[[str, str], str]] = None
+                      ) -> Optional[str]:
+        """Recall-time reconsolidation (roadmap step 29). A retrieved row,
+        recalled with new context/correction, is re-stabilized in an altered
+        form: a judge (opt-in LLM or injected) returns CONFIRM/REFINE/CONTRADICT;
+        on REFINE/CONTRADICT a NEW version (key#vN) carrying the correction is
+        written with supersedes, and the old row is marked stale (kept for audit
+        — labile != deleted). Returns the new key, or None (CONFIRM / off / not
+        found). Only reactivated traces are labile, so this is keyed on recall."""
+        rows = self._fetch_by_keys(self.memory, user_id, [key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return None
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return None
+        old_fact = rec.get("fact") or ""
+        if judge is None:
+            from .reconcile import llm_reconsolidate
+            be = os.environ.get("EVOSQL_RECONSOLIDATE_LLM", "").strip().lower()
+            if not be:
+                return None                       # opt-in
+            judge = lambda o, c: llm_reconsolidate(o, c, be)
+        try:
+            verdict = (judge(old_fact, correction) or "CONFIRM").upper()
+        except Exception:
+            return None
+        if "REFINE" not in verdict and "CONTRADICT" not in verdict:
+            return None                           # CONFIRM -> trace unchanged
+
+        # Resolve to the CURRENT head of the version chain before minting a new
+        # version, so a second reconsolidate on the same (now-superseded) base
+        # key versions off the head (k -> k#v2 -> k#v3) instead of recomputing
+        # k#v2 and clobbering the first correction (atomic upsert = silent loss).
+        head_key, head_rec = key, rec
+        seen = {key}
+        while True:
+            sb = (self._validity_map(user_id, [head_key]).get(head_key) or {}
+                  ).get("superseded_by")
+            nxt = sb[0] if isinstance(sb, (list, tuple)) and sb else None
+            if not nxt or nxt in seen:
+                break
+            nrows = self._fetch_by_keys(self.memory, user_id, [nxt])
+            if not nrows or not nrows[0] or not nrows[0][1]:
+                break
+            try:
+                head_rec = json.loads(nrows[0][1])
+            except Exception:
+                break
+            seen.add(nxt)
+            head_key = nxt
+        base = head_key.split("#", 1)[0]
+        ver = int(head_rec.get("version", 1)) + 1
+        new_key = f"{base}#v{ver}"
+        # belt-and-suspenders against any chain gap: never reuse an existing key
+        while self._fetch_by_keys(self.memory, user_id, [new_key]) and \
+                new_key not in seen:
+            ver += 1
+            new_key = f"{base}#v{ver}"
+            seen.add(new_key)
+        new_rec = dict(head_rec)
+        new_rec.update({"fact": correction, "version": ver, "supersedes": head_key,
+                        "reconsolidated_from": head_key, "created": time.time()})
+        if self.embedder is not None:
+            v = self.embedder.embed(correction)
+            if v:
+                new_rec["emb"] = encode_vec(v)
+        payload = _fit_payload(new_rec, new_key, user_id)
+        self._exec(f"MEMORY PUT INTO {self.memory} VALUES "
+                   f"('{_e(user_id)}','{_e(new_key)}','{_e(payload)}')")
+        now = time.time()
+        self._set_validity(user_id, head_key, valid_to=now, status="stale",
+                           superseded_by=[new_key])
+        self._set_validity(user_id, new_key, supersedes=[head_key], status="active")
+        return new_key
 
     def restore(self, user_id: str, key: str) -> bool:
         """Bring an archived memory back: clear the flag and refresh its

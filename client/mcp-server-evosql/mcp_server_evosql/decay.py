@@ -33,12 +33,26 @@ from typing import Any, Dict, List, Optional
 LAMBDA = 0.01            # ~100-day half-life
 THRESHOLD = 0.05
 DEFAULT_SALIENCE = 0.5   # rows the salience job has not scored yet
+STABILITY_K = 0.5        # spaced-repetition: how much each retrieval slows decay
+
+
+def effective_lambda(retrieval_count: int, base_lam: float = LAMBDA,
+                     k: float = STABILITY_K) -> float:
+    """Per-row decay rate (roadmap step 31). Each retrieval raises the row's
+    stability (1 + k*ln(1+count)) and so divides the decay rate down — a
+    well-rehearsed memory decays slower (FSRS / testing effect)."""
+    stability = 1.0 + k * math.log1p(max(0, int(retrieval_count or 0)))
+    return base_lam / stability
 
 
 def decay_score(salience: float, last_accessed: float, now: float,
-                lam: float = LAMBDA) -> float:
+                lam: float = LAMBDA, rif_penalty: float = 0.0) -> float:
+    """Decay score = salience * recency-decay * (1 - rif_penalty). The
+    retrieval-induced-forgetting penalty (roadmap step 30) pushes a repeatedly
+    out-competed near-duplicate down so it fades while the winner stays."""
     idle_days = max(0.0, (now - last_accessed) / 86400.0)
-    return float(salience) * math.exp(-lam * idle_days)
+    rif = min(max(float(rif_penalty), 0.0), 0.95)
+    return float(salience) * math.exp(-lam * idle_days) * (1.0 - rif)
 
 
 def _row_ts(rec: dict) -> float:
@@ -92,6 +106,56 @@ def _access_map(backend, user_id: str) -> Dict[str, float]:
     return out
 
 
+def _rif_map(backend, user_id: str) -> Dict[str, float]:
+    """{mem_key: rif_penalty} from the access side store (roadmap step 30)."""
+    from .server import _e
+    out: Dict[str, float] = {}
+    for r in backend._query(
+            f"SELECT mem_key, mem_value FROM __mem_{backend.access_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
+        try:
+            rp = json.loads(r[1]).get("rif_penalty")
+            if isinstance(rp, (int, float)):
+                out[r[0]] = float(rp)
+        except Exception:
+            continue
+    return out
+
+
+def _strength_map(backend, user_id: str) -> Dict[str, int]:
+    """{mem_key: retrieval_count} from the access side store (roadmap step 31)."""
+    from .server import _e
+    out: Dict[str, int] = {}
+    for r in backend._query(
+            f"SELECT mem_key, mem_value FROM __mem_{backend.access_store} "
+            f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
+        try:
+            c = json.loads(r[1]).get("retrieval_count")
+            if isinstance(c, (int, float)):
+                out[r[0]] = int(c)
+        except Exception:
+            continue
+    return out
+
+
+def near_dup_competitors(winner_vec, cand_vecs: Dict[str, list],
+                         thresh: float = 0.92) -> list:
+    """Keys whose embedding is a near-duplicate of the winner (cosine > thresh)
+    — the out-competed rows a retrieval should push down (roadmap step 30).
+    Pure; the caller supplies decoded vectors."""
+    from .embeddings import cosine
+    if not winner_vec:
+        return []
+    out = []
+    for k, v in (cand_vecs or {}).items():
+        try:
+            if v and cosine(winner_vec, v) > thresh:
+                out.append(k)
+        except Exception:
+            continue
+    return out
+
+
 def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
                lam: float = LAMBDA, dry_run: bool = False) -> Dict[str, int]:
     """Re-evaluate every row's decay_score and flip the archived flag when it
@@ -101,6 +165,8 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
     now = time.time()
     access = _access_map(backend, user_id)
     salience = _salience_map(backend, user_id)   # side store, not main record
+    rif = _rif_map(backend, user_id)             # retrieval-induced forgetting
+    strength = _strength_map(backend, user_id)   # spaced-repetition stability
     archived = unarchived = active = skipped = 0
     for k, v in backend._query(
             f"SELECT mem_key, mem_value FROM __mem_{backend.memory} "
@@ -113,7 +179,8 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
             continue
         sal = salience.get(k, DEFAULT_SALIENCE)
         la = access.get(k) or _row_ts(rec) or now
-        ds = decay_score(sal, la, now, lam)
+        lam_k = effective_lambda(strength.get(k, 0), lam)   # rehearsed -> slower
+        ds = decay_score(sal, la, now, lam_k, rif.get(k, 0.0))
         want = ds < threshold
         have = bool(rec.get("archived"))
         if want and not have:
