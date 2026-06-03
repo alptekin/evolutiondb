@@ -351,6 +351,13 @@ class MemoryBackend:
         # folded from the feedback corpus, keyed "<centroid>:<mem_key>", and the
         # fitted ranker weights — both side stores. The memory improves from USE.
         self.utility_store = f"{prefix}_utility"
+        # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
+        # ranker has been fit (fit_ranker), search re-scores candidates with the
+        # learned logistic weights instead of the hand-tuned blend. Cold start
+        # (no ranker) falls back to the existing ranking, so it is safe to enable
+        # before any feedback exists.
+        self.learned_rank = os.environ.get("EVOSQL_LEARNED_RANK", "0") \
+            not in ("0", "", "off", "false", "no")
         # Active-record gate (roadmap step 21): drop rows the validity store
         # marks stale/retracted so a superseded fact stops out-ranking the truth.
         # Auto-on when reconciliation is on (you want the gate if you revise);
@@ -1310,6 +1317,11 @@ class MemoryBackend:
         # so the line above leaves `out` exactly as the legacy ranking produced.
         if self.activation_enabled:
             out = self._rank_by_activation(user_id, out, graph_boost_map)
+        # Learned-ranker cutover (step 26): re-score with the fitted logistic
+        # weights instead of the hand-tuned blend. Off by default; cold start
+        # (no fitted ranker) is a no-op, so the default ranking is unchanged.
+        if self.learned_rank:
+            out = self._rank_by_learned(user_id, out)
         # Active-record gate (step 21) + as-of time travel (step 22). Runs when
         # the gate is on OR the caller asked for time travel (an as_of query
         # must apply the validity window regardless of the default flag); a
@@ -1836,6 +1848,58 @@ class MemoryBackend:
             except Exception:
                 continue
         return written
+
+    _RANKER_KEY = "__ranker__"          # reserved key in the utility store
+
+    def fit_ranker(self, user_id: str) -> Dict[str, Any]:
+        """Fit + persist the learned logistic ranker from the feedback corpus
+        (roadmap step 26). Returns the model {weights, bias, n}. A no-op (n=0)
+        when there is no labelled feedback yet."""
+        from . import learn
+        examples = learn.build_examples(self._feedback_records(user_id))
+        model = learn.fit_logistic(examples)
+        if model.get("n"):
+            model["ts"] = time.time()
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.utility_store} VALUES "
+                    f"('{_e(user_id)}','{_e(self._RANKER_KEY)}',"
+                    f"'{_e(json.dumps(model))}')")
+            except Exception:
+                pass
+        return model
+
+    def _load_ranker(self, user_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            rows = self._fetch_by_keys(self.utility_store, user_id,
+                                       [self._RANKER_KEY])
+        except Exception:
+            return None
+        for r in rows:
+            try:
+                m = json.loads(r[1]) if r[1] else None
+                if isinstance(m, dict) and m.get("n"):
+                    return m
+            except Exception:
+                continue
+        return None
+
+    def _rank_by_learned(self, user_id: str,
+                         out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Re-score candidates with the learned ranker (roadmap step 26).
+        Cold start (no fitted ranker) returns the input unchanged, so enabling
+        EVOSQL_LEARNED_RANK before any feedback is a no-op."""
+        if not out:
+            return out
+        model = self._load_ranker(user_id)
+        if not model:
+            return out
+        from .learn import predict
+        scores = getattr(self, "_last_scores", {}) or {}
+        for x in out:
+            x["score"] = round(predict(model, scores.get(x["key"], {})), 6)
+        out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+        return out
 
     def log_query(self, user_id: str, query_id: str, query_text: str,
                   returned_keys: List[str]) -> None:

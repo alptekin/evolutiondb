@@ -106,3 +106,47 @@ def accumulate_utilities(records: Sequence[Dict[str, Any]], *,
             uk = f"{cid}:{key}"
             U[uk] = round(update_utility(U.get(uk, UTILITY_PRIOR), r, alpha), 4)
     return U
+
+
+# ---------------------------------------------------------------- #
+#  Learned ranker (roadmap step 26)                                #
+# ---------------------------------------------------------------- #
+def _sigmoid(z: float) -> float:
+    if z >= 0:
+        return 1.0 / (1.0 + math.exp(-z))
+    e = math.exp(z)
+    return e / (1.0 + e)
+
+
+def fit_logistic(examples: Sequence[Dict[str, Any]], *, iters: int = 300,
+                 lr: float = 0.1, l2: float = 1e-3) -> Dict[str, Any]:
+    """Fit a tiny logistic ranker on the IPS-weighted examples (roadmap step 26).
+    Minimizes weighted log-loss by SGD; returns {weights:{feature:w}, bias, n}.
+    The learned weights replace the hand-tuned 0.7/0.3 blend + the EVOSQL_*_BOOST
+    constants — the only mechanism that makes the system improve from USE."""
+    w = {f: 0.0 for f in FEATURES}
+    b = 0.0
+    exs = [e for e in (examples or []) if e.get("features") is not None]
+    if not exs:
+        return {"weights": w, "bias": 0.0, "n": 0}
+    for _ in range(iters):
+        for ex in exs:
+            x = ex["features"]; y = float(ex["label"])
+            sw = float(ex.get("weight", 1.0))
+            z = b + sum(w[f] * float(x.get(f, 0.0)) for f in FEATURES)
+            g = sw * (_sigmoid(z) - y)               # weighted log-loss gradient
+            for f in FEATURES:
+                w[f] -= lr * (g * float(x.get(f, 0.0)) + l2 * w[f])
+            b -= lr * g
+    return {"weights": {f: round(w[f], 6) for f in FEATURES},
+            "bias": round(b, 6), "n": len(exs)}
+
+
+def predict(model: Dict[str, Any], features: Dict[str, Any]) -> float:
+    """Learned-ranker score in (0,1) for a candidate's feature vector."""
+    if not model:
+        return 0.0
+    w = model.get("weights") or {}
+    z = float(model.get("bias", 0.0)) + sum(
+        float(w.get(f, 0.0)) * float(features.get(f, 0.0)) for f in FEATURES)
+    return _sigmoid(z)
