@@ -164,8 +164,11 @@ def reexamine(backend, ns: str, *, require_all: bool = True,
                 pass                             # judge failure -> conservative mark
         if mark:
             try:
+                # record evidence in unsupported_by (a SEPARATE field), never
+                # superseded_by — that chain is walked by reconsolidate's
+                # head-resolution and must keep pointing only at real successors.
                 backend._set_validity(ns, dep, valid_to=now, status="unsupported",
-                                      superseded_by=gone)
+                                      unsupported_by=gone)
             except Exception:
                 continue
         affected.append(dep)

@@ -192,7 +192,8 @@ def decay_gate_open(backend) -> bool:
                 rec = json.loads(r[0]) if r[0] else {}
             except Exception:
                 continue
-            if rec.get("forgetting", {}).get("runaway"):
+            fg = rec.get("forgetting") if isinstance(rec, dict) else None
+            if isinstance(fg, dict) and fg.get("runaway"):
                 return False
     except Exception:
         return True

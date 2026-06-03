@@ -79,6 +79,10 @@ def test_integration() -> bool:
     assert affected == [sk], affected
     vs = b._validity_map(ns, [sk]).get(sk)
     assert vs and vs["status"] == "unsupported", vs
+    # evidence goes in unsupported_by, NOT the superseded_by chain that
+    # reconsolidate's head-walk follows (must not point at a source key)
+    assert set(vs.get("unsupported_by") or []) == {s1, s2}, vs
+    assert not vs.get("superseded_by"), vs
     print("  ok  all sources retracted -> derived fact marked unsupported")
 
     # the validity gate now hides the unsupported semantic row
