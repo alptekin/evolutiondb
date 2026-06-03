@@ -1659,6 +1659,55 @@ class MemoryBackend:
                                status="active")
         return stale
 
+    def reconsolidate(self, user_id: str, key: str, correction: str, *,
+                      judge: Optional[Callable[[str, str], str]] = None
+                      ) -> Optional[str]:
+        """Recall-time reconsolidation (roadmap step 29). A retrieved row,
+        recalled with new context/correction, is re-stabilized in an altered
+        form: a judge (opt-in LLM or injected) returns CONFIRM/REFINE/CONTRADICT;
+        on REFINE/CONTRADICT a NEW version (key#vN) carrying the correction is
+        written with supersedes, and the old row is marked stale (kept for audit
+        — labile != deleted). Returns the new key, or None (CONFIRM / off / not
+        found). Only reactivated traces are labile, so this is keyed on recall."""
+        rows = self._fetch_by_keys(self.memory, user_id, [key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return None
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return None
+        old_fact = rec.get("fact") or ""
+        if judge is None:
+            from .reconcile import llm_reconsolidate
+            be = os.environ.get("EVOSQL_RECONSOLIDATE_LLM", "").strip().lower()
+            if not be:
+                return None                       # opt-in
+            judge = lambda o, c: llm_reconsolidate(o, c, be)
+        try:
+            verdict = (judge(old_fact, correction) or "CONFIRM").upper()
+        except Exception:
+            return None
+        if "REFINE" not in verdict and "CONTRADICT" not in verdict:
+            return None                           # CONFIRM -> trace unchanged
+
+        base = key.split("#", 1)[0]
+        ver = int(rec.get("version", 1)) + 1
+        new_key = f"{base}#v{ver}"
+        new_rec = dict(rec)
+        new_rec.update({"fact": correction, "version": ver, "supersedes": key,
+                        "reconsolidated_from": key, "created": time.time()})
+        if self.embedder is not None:
+            v = self.embedder.embed(correction)
+            if v:
+                new_rec["emb"] = encode_vec(v)
+        self._exec(f"MEMORY PUT INTO {self.memory} VALUES "
+                   f"('{_e(user_id)}','{_e(new_key)}','{_e(json.dumps(new_rec))}')")
+        now = time.time()
+        self._set_validity(user_id, key, valid_to=now, status="stale",
+                           superseded_by=[new_key])
+        self._set_validity(user_id, new_key, supersedes=[key], status="active")
+        return new_key
+
     def restore(self, user_id: str, key: str) -> bool:
         """Bring an archived memory back: clear the flag and refresh its
         access time so the next decay pass keeps it active."""
