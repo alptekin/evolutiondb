@@ -375,6 +375,13 @@ class MemoryBackend:
         # rewrite. The archival/recall tiers are the existing mem/recent stores.
         self.core_store = f"{prefix}_core"
         self.core_max_chars = int(os.environ.get("EVOSQL_CORE_MAX_CHARS", "1500"))
+        # Gist vs verbatim (roadmap step 37): a meaning trace per row so a
+        # paraphrased query matches when the surface words differ. A 4th
+        # retrieval channel + a slower-decaying trace. Opt-in via EVOSQL_GIST;
+        # the gist is written on every save (cheap) but only consulted when on.
+        self.gist_store = f"{prefix}_gist"
+        self.gist_search = os.environ.get("EVOSQL_GIST", "0") \
+            not in ("0", "", "off", "false", "no")
         # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
         # ranker has been fit (fit_ranker), search re-scores candidates with the
         # learned logistic weights instead of the hand-tuned blend. Cold start
@@ -459,7 +466,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.utility_store),
                   ("MEMORY STORE", self.skill_store),
                   ("MEMORY STORE", self.intentions_store),
-                  ("MEMORY STORE", self.core_store)]
+                  ("MEMORY STORE", self.core_store),
+                  ("MEMORY STORE", self.gist_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -636,6 +644,16 @@ class MemoryBackend:
                     g.flush()   # edges are deferred; persist this row's now
             except Exception:
                 pass
+        # Gist trace (step 37): a normalized meaning representation so a
+        # paraphrased query can still match. Best-effort, side store.
+        try:
+            from .gist import gist_text
+            g = gist_text(fact)
+            if g:
+                self._exec(f"MEMORY PUT INTO {self.gist_store} VALUES "
+                           f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps({'gist': g}))}')")
+        except Exception:
+            pass
         return key
 
     def save_semantic(self, user_id: str, proposition: str, *,
@@ -1028,6 +1046,32 @@ class MemoryBackend:
                 for k, v in self._fetch_by_keys(self.memory, user_id, missing):
                     rows.append([user_id, k, v])
 
+        # Gist channel (roadmap step 37): rows whose meaning trace overlaps the
+        # query — surfacing a paraphrased / morphologically-varied match the
+        # surface words miss. Opt-in (EVOSQL_GIST); a no-op otherwise.
+        gist_boost_map: Dict[str, float] = {}
+        if self.gist_search:
+            try:
+                from .gist import gist_overlap
+                rows = rows or []
+                have = {r[1] for r in rows}
+                inject = []
+                for gk, gv in self._query(
+                        f"SELECT mem_key, mem_value FROM __mem_{self.gist_store} "
+                        f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []:
+                    try:
+                        ov = gist_overlap(query, json.loads(gv).get("gist", ""))
+                    except Exception:
+                        continue
+                    if ov >= 0.5:
+                        gist_boost_map[gk] = ov
+                        if gk not in have:
+                            inject.append(gk)
+                for k, v in self._fetch_by_keys(self.memory, user_id, inject):
+                    rows.append([user_id, k, v])
+            except Exception:
+                gist_boost_map = {}
+
         # Semantic-tier fusion (roadmap step 17): pull the namespace's semantic
         # generalizations into the candidate pool so a query gets both "what
         # happened" (episodic) and "what is generally true" (semantic). They are
@@ -1201,6 +1245,7 @@ class MemoryBackend:
             has_signal = (final > 0 or sem_score > 0
                           or sem2_score > 0 or kw_score > 0
                           or graph_boost_map.get(c["key"], 0.0) > 0
+                          or gist_boost_map.get(c["key"], 0.0) > 0
                           or psim >= PROFILE_SIGNAL_MIN)
             if not has_signal and not tag and sender_alias_set is None \
                     and sender_literal is None:
@@ -1328,6 +1373,18 @@ class MemoryBackend:
             for x in out:
                 base = x["score"] / smax
                 gb = graph_boost_map.get(x["key"], 0.0) / gmax
+                x["score"] = round((1.0 - w) * base + w * gb, 6)
+            out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+
+        # Gist channel (step 37): lift rows whose meaning trace matched the
+        # query, so a paraphrased recall surfaces. Same min-max-base blend shape.
+        if self.gist_search and gist_boost_map and out:
+            w = 0.4
+            smax = max((x["score"] for x in out), default=0.0) or 1.0
+            gmax = max(gist_boost_map.values()) or 1.0
+            for x in out:
+                base = x["score"] / smax
+                gb = gist_boost_map.get(x["key"], 0.0) / gmax
                 x["score"] = round((1.0 - w) * base + w * gb, 6)
             out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
