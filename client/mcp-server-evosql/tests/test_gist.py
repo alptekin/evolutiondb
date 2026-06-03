@@ -11,9 +11,46 @@ import os
 import sys
 import time
 
+from mcp_server_evosql import gist as _gist
 from mcp_server_evosql.gist import gist_text, gist_overlap, gist_tokens
 
 PORT = int(os.environ.get("EVOSQL_PG_PORT", "5520"))
+
+
+def test_turkish():
+    """Optional real Turkish stemmer (roadmap step 37 follow-up). When a Turkish
+    stemmer is installed, Turkish inflections collapse (ertelendi, erteleme ->
+    ertele; projeler, projeyi -> proje) so a morphologically-varied Turkish query
+    matches — the English-light fallback cannot. Skipped without the library."""
+    try:
+        import snowballstemmer            # noqa: F401
+    except Exception:
+        print("  SKIP turkish (snowballstemmer not installed)")
+        return
+    prev = os.environ.get("EVOSQL_GIST_STEMMER")
+    try:
+        # TR stemmer ON: verb + noun inflections collapse to one stem
+        os.environ["EVOSQL_GIST_STEMMER"] = "auto"
+        _gist._TR_CACHE.clear()
+        assert _gist._stem("ertelendi") == _gist._stem("erteleme"), \
+            (_gist._stem("ertelendi"), _gist._stem("erteleme"))
+        # both content words differ only by inflection -> full overlap
+        q, d = "projeyi raporlar", "projeler raporu"
+        assert gist_overlap(q, gist_text(d)) >= 0.99, gist_overlap(q, gist_text(d))
+        # English still works (the light pass runs first, snowball-TR no-ops on it)
+        assert "meet" in gist_tokens("the meetings were rescheduled")
+
+        # TR stemmer OFF (en): Turkish inflections do NOT collapse -> no match
+        os.environ["EVOSQL_GIST_STEMMER"] = "en"
+        _gist._TR_CACHE.clear()
+        assert gist_overlap(q, gist_text(d)) == 0.0, gist_overlap(q, gist_text(d))
+        print("  ok  turkish stemmer collapses inflections (on); en-fallback does not (off)")
+    finally:
+        if prev is None:
+            os.environ.pop("EVOSQL_GIST_STEMMER", None)
+        else:
+            os.environ["EVOSQL_GIST_STEMMER"] = prev
+        _gist._TR_CACHE.clear()
 
 
 def test_unit():
@@ -68,6 +105,7 @@ def test_integration() -> bool:
 
 def main() -> int:
     test_unit()
+    test_turkish()
     test_integration()
     print("OK — step 37 gist vs verbatim")
     return 0
