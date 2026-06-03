@@ -364,6 +364,11 @@ class MemoryBackend:
         # description, with success/fail counters. Declarative-vs-procedural is a
         # foundational memory distinction.
         self.skill_store = f"{prefix}_skills"
+        # Prospective memory (roadmap step 35): remembering to DO something later
+        # — time-based (due at an epoch) or event-based (when a cue entity is
+        # next mentioned). The scheduler fires the due ones; the rest of the
+        # system only ever recomputes the PAST, this looks forward.
+        self.intentions_store = f"{prefix}_intentions"
         # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
         # ranker has been fit (fit_ranker), search re-scores candidates with the
         # learned logistic weights instead of the hand-tuned blend. Cold start
@@ -446,7 +451,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.semantic_store),
                   ("MEMORY STORE", self.validity_store),
                   ("MEMORY STORE", self.utility_store),
-                  ("MEMORY STORE", self.skill_store)]
+                  ("MEMORY STORE", self.skill_store),
+                  ("MEMORY STORE", self.intentions_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -1711,6 +1717,77 @@ class MemoryBackend:
             self._set_validity(user_id, new_key, supersedes=superseded,
                                status="active")
         return stale
+
+    def add_intention(self, user_id: str, action: str, *,
+                      due_ts: Optional[float] = None,
+                      cue_entity: Optional[str] = None) -> str:
+        """Store a future intention (roadmap step 35): time-based (due_ts) or
+        event-based (fire when cue_entity is next mentioned). Returns the key.
+        The due epoch is mirrored in the key (zero-padded) so a B+ tree range
+        scan can find due ones in order."""
+        now = time.time()
+        due_tag = f"{int(due_ts):020d}" if due_ts is not None else "00000000000000000000"
+        key = f"intent_{due_tag}_{uuid.uuid4().hex[:6]}"
+        rec = {"action": action, "due_ts": due_ts, "cue_entity": cue_entity,
+               "trigger": "time" if due_ts is not None else "event",
+               "status": "pending", "created": now}
+        self._exec(f"MEMORY PUT INTO {self.intentions_store} VALUES "
+                   f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        return key
+
+    def _pending_intentions(self, user_id: str) -> List[tuple]:
+        out = []
+        for k, v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.intentions_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 100000") or []:
+            try:
+                rec = json.loads(v) if v else {}
+            except Exception:
+                continue
+            if rec.get("status") == "pending":
+                out.append((k, rec))
+        return out
+
+    def due_intentions(self, user_id: str,
+                       now: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Pending time-based intentions whose due time has passed."""
+        now = now if now is not None else time.time()
+        out = []
+        for k, rec in self._pending_intentions(user_id):
+            dt = rec.get("due_ts")
+            if rec.get("trigger") == "time" and dt is not None and dt <= now:
+                rec = dict(rec); rec["key"] = k
+                out.append(rec)
+        return out
+
+    def fire_intention(self, user_id: str, key: str) -> None:
+        rows = self._fetch_by_keys(self.intentions_store, user_id, [key])
+        if not rows or not rows[0] or not rows[0][1]:
+            return
+        try:
+            rec = json.loads(rows[0][1])
+        except Exception:
+            return
+        rec["status"] = "fired"
+        rec["fired_at"] = time.time()
+        try:
+            self._exec(f"MEMORY PUT INTO {self.intentions_store} VALUES "
+                       f"('{_e(user_id)}','{_e(key)}','{_e(json.dumps(rec))}')")
+        except Exception:
+            pass
+
+    def fire_event_intentions(self, user_id: str,
+                              entity_ids: Sequence[str]) -> List[Dict[str, Any]]:
+        """Fire event-based intentions whose cue entity is among `entity_ids`
+        (called when a new row mentions them)."""
+        ids = set(entity_ids or [])
+        fired = []
+        for k, rec in self._pending_intentions(user_id):
+            if rec.get("trigger") == "event" and rec.get("cue_entity") in ids:
+                self.fire_intention(user_id, k)
+                rec = dict(rec); rec["key"] = k
+                fired.append(rec)
+        return fired
 
     def save_skill(self, user_id: str, name: str, description: str, *,
                    steps: Optional[List[str]] = None,
