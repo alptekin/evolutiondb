@@ -86,6 +86,15 @@ def _env_float(key: str, default):
         return default
 
 
+SOURCE_RELIABILITY = {"asserted": 1.0, "observed": 0.7, "inferred": 0.4}
+
+
+def source_reliability(source_class: Optional[str]) -> float:
+    """Confidence a memory deserves by how it was acquired (roadmap step 32):
+    asserted (user said) > observed (ingested) > inferred (derived)."""
+    return SOURCE_RELIABILITY.get(source_class or "observed", 0.5)
+
+
 def _parse_as_of(v):
     """Parse an as-of timestamp (epoch number or ISO-8601 string) to epoch
     seconds, or None. Used for time-travel queries (roadmap step 22)."""
@@ -375,6 +384,11 @@ class MemoryBackend:
         _vg = os.environ.get("EVOSQL_VALIDITY_GATE")
         self.validity_gate = (_vg not in ("0", "", "off", "false", "no")
                               if _vg is not None else self.reconcile_enabled)
+        # Confidence-based abstention (roadmap step 32). When set, search returns
+        # NOTHING ("no reliable memory") if even the best candidate's source
+        # confidence is below this threshold, rather than a confidently-wrong
+        # low-source row. None (default) = never abstain.
+        self.abstain_conf = _env_float("EVOSQL_ABSTAIN_CONF", None)
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
@@ -498,7 +512,8 @@ class MemoryBackend:
     # -- DML wrappers -------------------------------------------------
     def save(self, user_id: str, fact: str,
               tags: Optional[List[str]] = None,
-              derived_from: Optional[Sequence[str]] = None) -> str:
+              derived_from: Optional[Sequence[str]] = None,
+              source_class: Optional[str] = None) -> str:
         created = time.time()
         key = f"mem_{int(created*1000)}_{uuid.uuid4().hex[:6]}"
         # Topic tags are merged into the regular `tags` list so the
@@ -514,6 +529,12 @@ class MemoryBackend:
             "fact":    fact,
             "tags":    merged_tags,
             "created": created,
+            # Source / reality monitoring (roadmap step 32): how this memory was
+            # acquired. asserted = the user stated it; observed = ingested from a
+            # connector; inferred = derived from other memories. Drives the
+            # confidence used by the abstention gate.
+            "source_class": source_class or ("inferred" if derived_from
+                                             else "observed"),
         }
         if topic_tags:
             record["topic_tags"]  = topic_tags
@@ -1338,6 +1359,12 @@ class MemoryBackend:
         # no-op on a clean/empty validity store at present time.
         if self.validity_gate or as_of is not None:
             out = self._apply_validity_gate(user_id, out, as_of=as_of)
+        # Confidence abstention (step 32): if even the best candidate is too
+        # low-confidence by source, return nothing rather than a confident wrong.
+        if self.abstain_conf is not None and out:
+            best = max(source_reliability(x.get("source_class")) for x in out)
+            if best < self.abstain_conf:
+                out = []
         page = out[:limit]
         # Provenance (Adım 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
