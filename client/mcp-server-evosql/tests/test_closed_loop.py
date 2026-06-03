@@ -50,8 +50,10 @@ def main() -> int:
     print(f"  control rank: before={cb} after={ca}")
     assert ra < rb, f"closed loop did not improve the fed-back row: {rb}->{ra}"
     assert ra < ca, f"target {ra} not above no-feedback control {ca}"
-    print("  ok  closed-loop learning lifts the used row above the control "
-          "(held-out longitudinal gate)")
+    # NB: gates TARGETED lift (the fed-back row rises, a non-fed control does
+    # not) — not held-out-query generalization; a paraphrase/temporal-split gate
+    # is a fast-follow.
+    print("  ok  closed-loop learning lifts the used row above the unfed control")
 
     os.environ.pop("EVOSQL_LEARNED_RANK", None)
     print("OK — step 28 closed loop passes the longitudinal gate")

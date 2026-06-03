@@ -1330,7 +1330,8 @@ class MemoryBackend:
         # weights instead of the hand-tuned blend. Off by default; cold start
         # (no fitted ranker) is a no-op, so the default ranking is unchanged.
         if self.learned_rank:
-            out = self._rank_by_learned(user_id, out)
+            out = self._rank_by_learned(
+                user_id, out, q_vecs[0] if q_vecs else None)
         # Active-record gate (step 21) + as-of time travel (step 22). Runs when
         # the gate is on OR the caller asked for time travel (an as_of query
         # must apply the validity window regardless of the default flag); a
@@ -1801,18 +1802,14 @@ class MemoryBackend:
                 continue
         return out
 
-    def recompute_utilities(self, user_id: str, *,
-                            alpha: Optional[float] = None) -> int:
-        """Fold the feedback corpus into per-(centroid, row) utilities and
-        persist them (roadmap step 25). The query centroid is the nearest
-        profile cluster of the record's query_emb (global 'g' on cold start).
-        Returns the number of utility entries written."""
-        from . import learn
+    def _query_centroid(self, user_id: str, q_vec, *, min_cos: float = 0.3):
+        """Nearest profile-cluster id for a query vector ('g' = global fallback).
+        Shared by the utility WRITE (recompute_utilities) and READ
+        (_rank_by_learned) paths so the conditioned key can't drift between them."""
         from .embeddings import decode_vec, cosine
-        records = self._feedback_records(user_id)
-        if not records:
-            return 0
-        cents = []
+        if not q_vec:
+            return "g"
+        best_id, best = "g", float(min_cos)
         try:
             for v in self._query(
                     f"SELECT mem_key, mem_value FROM __mem_{self.profile_store} "
@@ -1820,33 +1817,34 @@ class MemoryBackend:
                 try:
                     c = decode_vec((json.loads(v[1]) or {}).get("centroid"))
                     if c:
-                        cents.append((str(v[0]), c))
+                        s = cosine(q_vec, c)
+                        if s >= best:
+                            best, best_id = s, str(v[0])
                 except Exception:
                     continue
         except Exception:
             pass
+        return best_id
+
+    def recompute_utilities(self, user_id: str, *,
+                            alpha: Optional[float] = None) -> int:
+        """Fold the feedback corpus into per-(centroid, row) utilities and
+        persist them (roadmap step 25). The query centroid is the nearest
+        profile cluster of the record's query_emb (global 'g' on cold start).
+        Idempotent: each run folds the whole corpus from the neutral prior, so a
+        static corpus yields the same utilities (carrying the persisted values
+        forward and re-folding would drift toward 0/1). Returns the count written."""
+        from . import learn
+        from .embeddings import decode_vec
+        records = self._feedback_records(user_id)
+        if not records:
+            return 0
 
         def centroid_of(rec):
-            qv = decode_vec(rec.get("query_emb"))
-            if not qv or not cents:
-                return "g"
-            bid, bc = max(cents, key=lambda c: cosine(qv, c[1]))
-            return bid if cosine(qv, bc) >= 0.3 else "g"
-
-        prior: Dict[str, float] = {}
-        for v in self._query(
-                f"SELECT mem_key, mem_value FROM __mem_{self.utility_store} "
-                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
-            try:
-                u = (json.loads(v[1]) or {}).get("u")
-                if isinstance(u, (int, float)):
-                    prior[v[0]] = float(u)
-            except Exception:
-                continue
+            return self._query_centroid(user_id, decode_vec(rec.get("query_emb")))
 
         a = alpha if alpha is not None else learn.UTILITY_ALPHA
-        U = learn.accumulate_utilities(records, alpha=a, prior=prior,
-                                       centroid_fn=centroid_of)
+        U = learn.accumulate_utilities(records, alpha=a, centroid_fn=centroid_of)
         written = 0
         for uk, u in U.items():
             try:
@@ -1879,6 +1877,9 @@ class MemoryBackend:
         return model
 
     def _load_ranker(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Load the fitted ranker, or None on cold start / a corrupt model —
+        so a hand-edited or truncated __ranker__ degrades to the base ranking
+        instead of crashing search."""
         try:
             rows = self._fetch_by_keys(self.utility_store, user_id,
                                        [self._RANKER_KEY])
@@ -1887,14 +1888,24 @@ class MemoryBackend:
         for r in rows:
             try:
                 m = json.loads(r[1]) if r[1] else None
-                if isinstance(m, dict) and m.get("n"):
-                    return m
             except Exception:
                 continue
+            if not (isinstance(m, dict) and m.get("n")):
+                continue
+            w = m.get("weights")
+            b = m.get("bias", 0.0)
+            if not isinstance(w, dict):
+                continue
+            try:
+                vals = [float(v) for v in w.values()] + [float(b)]
+            except (TypeError, ValueError):
+                continue
+            if all(math.isfinite(v) for v in vals):
+                return m
         return None
 
-    def _rank_by_learned(self, user_id: str,
-                         out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _rank_by_learned(self, user_id: str, out: List[Dict[str, Any]],
+                         q_vec=None) -> List[Dict[str, Any]]:
         """Re-score candidates with the learned ranker (roadmap step 26).
         Cold start (no fitted ranker) returns the input unchanged, so enabling
         EVOSQL_LEARNED_RANK before any feedback is a no-op."""
@@ -1906,8 +1917,17 @@ class MemoryBackend:
         from .learn import predict, guarded_score, UTILITY_PRIOR
         scores = getattr(self, "_last_scores", {}) or {}
         base_max = max((x["score"] for x in out), default=1.0) or 1.0
-        umap = (self._utility_map(user_id, [x["key"] for x in out])
-                if self.learned_util_weight else {})
+        umap: Dict[str, float] = {}
+        if self.learned_util_weight:
+            keys = [x["key"] for x in out]
+            # Read the query-conditioned utility (same centroid the write path
+            # used) and fall back to the global bucket — fixes the read/write key
+            # mismatch that left cluster-conditioned utilities inert.
+            cid = self._query_centroid(user_id, q_vec)
+            umap = self._utility_map(user_id, keys, centroid=cid)
+            if cid != "g":
+                for k, u in self._utility_map(user_id, keys, "g").items():
+                    umap.setdefault(k, u)
         for x in out:
             base_norm = (x["score"] / base_max) if base_max else 0.0
             learned = predict(model, scores.get(x["key"], {}))
@@ -1916,7 +1936,7 @@ class MemoryBackend:
             u = umap.get(x["key"])           # row-identity: used before -> useful
             if u is not None:
                 s += self.learned_util_weight * (u - UTILITY_PRIOR)
-            x["score"] = round(s, 6)
+            x["score"] = round(max(0.0, min(1.0, s)), 6)   # keep in [0,1]
         out.sort(key=lambda x: (-x["score"], x.get("key", "")))
         return out
 

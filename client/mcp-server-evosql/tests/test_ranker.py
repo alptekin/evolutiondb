@@ -84,6 +84,16 @@ def test_integration() -> bool:
         f"learned scores out of range: {[r['score'] for r in res]}"
     print(f"  ok  fit_ranker persists (n={model['n']}); learned_rank engages "
           f"in search; cold-start + off-default safe")
+
+    # a corrupt/hand-edited model must degrade to the base ranking, not crash
+    import json as _json
+    from mcp_server_evosql.server import _e
+    b._exec(f"MEMORY PUT INTO {b.utility_store} VALUES "
+            f"('{_e(ns)}','__ranker__','{_e(_json.dumps({'n': 5, 'weights': 'oops', 'bias': 0}))}')")
+    assert b._load_ranker(ns) is None, "corrupt model must be rejected"
+    assert b.search(ns, "incident postmortem timeline", limit=5), \
+        "search must survive a corrupt ranker (fall back to base)"
+    print("  ok  corrupt ranker model rejected -> search degrades, not crashes")
     os.environ.pop("EVOSQL_LEARNED_RANK", None)
     return True
 

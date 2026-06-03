@@ -146,7 +146,8 @@ def predict(model: Dict[str, Any], features: Dict[str, Any]) -> float:
     """Learned-ranker score in (0,1) for a candidate's feature vector."""
     if not model:
         return 0.0
-    w = model.get("weights") or {}
+    w = model.get("weights")
+    w = w if isinstance(w, dict) else {}
     z = float(model.get("bias", 0.0)) + sum(
         float(w.get(f, 0.0)) * float(features.get(f, 0.0)) for f in FEATURES)
     return _sigmoid(z)
