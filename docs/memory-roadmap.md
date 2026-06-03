@@ -1,5 +1,9 @@
 # EvolutionDB Memory Roadmap — 40 Steps
 
+> **Status: 40/40 complete.** Phases 0-7 are implemented, each behind a default-
+> off flag, test-covered, and merged. With every flag off the default
+> save()/search() path is byte-for-byte unchanged.
+
 From "a strong neuro-flavoured retrieval index" to an **artificial memory** that
 *transforms*, *reconciles*, and *learns from use*. Each step is roughly one PR:
 it ships behind a flag, is covered by a test, and is committed + pushed before
@@ -107,10 +111,20 @@ Research.
 ---
 
 ### Milestones
-- After **Phase 0-1**: we can measure.
-- After **Phase 2**: one principled score.
-- After **Phase 3-5**: genuinely a memory (transforms + reconciles + learns).
-- **Phase 6**: human-brain tiers. **Phase 7**: the frontier.
+- After **Phase 0-1**: we can measure. ✓
+- After **Phase 2**: one principled score. ✓
+- After **Phase 3-5**: genuinely a memory (transforms + reconciles + learns). ✓
+- **Phase 6**: human-brain tiers. ✓ **Phase 7**: the frontier. ✓
 
 Critical dependencies: **9-10-12 (activation)** feed most later steps; **7 (the
 longitudinal test)** gates **24-28**.
+
+### Phase 7 — research-frontier flags (all default off)
+- `EVOSQL_FORGET_GATE` (step 38): pause the decay job when the forgetting
+  detector reports a runaway archival spike. Detector + `consolidation` job
+  always record (read-only) for observability.
+- `EVOSQL_TMS` (step 39): Type-II dependent retraction — mark derived facts that
+  have lost all support `unsupported`.
+- `EVOSQL_CALIBRATE` (step 40): map source confidence through the fitted
+  calibrator before the abstain gate. `calibration` job always records the
+  reliability diagram + ECE/MCE.

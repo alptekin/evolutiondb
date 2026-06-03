@@ -1745,11 +1745,14 @@ class MemoryBackend:
                       valid_to: Optional[float] = None,
                       supersedes: Optional[Sequence[str]] = None,
                       superseded_by: Optional[Sequence[str]] = None,
+                      unsupported_by: Optional[Sequence[str]] = None,
                       status: str = "active") -> dict:
         """Write/merge the validity record for `mem_key` (roadmap step 19).
         valid_from defaults to now on first write and is preserved on update;
         the supersedes / superseded_by lists are unioned; status is set each
-        call. Returns the written record. Best-effort."""
+        call. `unsupported_by` records TMS retraction evidence in a SEPARATE
+        field so it never pollutes the superseded_by version chain that
+        reconsolidate walks. Returns the written record. Best-effort."""
         now = time.time()
         cur = self._validity_map(user_id, [mem_key]).get(mem_key, {}) or {}
 
@@ -1776,6 +1779,11 @@ class MemoryBackend:
             "supersedes":    sup,
             "superseded_by": sup_by,
         }
+        # TMS evidence (step 39) lives in its own field, not the chain
+        usb = (list(unsupported_by) if unsupported_by is not None
+               else cur.get("unsupported_by"))
+        if usb:
+            rec["unsupported_by"] = usb[-VALIDITY_CHAIN_CAP:]
         try:
             self._exec(
                 f"MEMORY PUT INTO {self.validity_store} VALUES "
