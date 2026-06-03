@@ -358,6 +358,11 @@ class MemoryBackend:
         # before any feedback exists.
         self.learned_rank = os.environ.get("EVOSQL_LEARNED_RANK", "0") \
             not in ("0", "", "off", "false", "no")
+        # Closed-loop guardrails (roadmap step 27). trust dampens the learned
+        # score against the base (1.0 = pure learned); epsilon adds exploration
+        # noise so the loop doesn't only ever reinforce what it already shows.
+        self.learned_trust = _env_float("EVOSQL_LEARNED_TRUST", 1.0)
+        self.learned_epsilon = _env_float("EVOSQL_LEARNED_EPSILON", 0.0)
         # Active-record gate (roadmap step 21): drop rows the validity store
         # marks stale/retracted so a superseded fact stops out-ranking the truth.
         # Auto-on when reconciliation is on (you want the gate if you revise);
@@ -1894,10 +1899,15 @@ class MemoryBackend:
         model = self._load_ranker(user_id)
         if not model:
             return out
-        from .learn import predict
+        from .learn import predict, guarded_score
         scores = getattr(self, "_last_scores", {}) or {}
+        base_max = max((x["score"] for x in out), default=1.0) or 1.0
         for x in out:
-            x["score"] = round(predict(model, scores.get(x["key"], {})), 6)
+            base_norm = (x["score"] / base_max) if base_max else 0.0
+            learned = predict(model, scores.get(x["key"], {}))
+            x["score"] = round(guarded_score(
+                learned, base_norm, trust=self.learned_trust,
+                epsilon=self.learned_epsilon), 6)
         out.sort(key=lambda x: (-x["score"], x.get("key", "")))
         return out
 
