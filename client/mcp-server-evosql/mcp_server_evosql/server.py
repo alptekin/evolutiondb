@@ -369,6 +369,12 @@ class MemoryBackend:
         # next mentioned). The scheduler fires the due ones; the rest of the
         # system only ever recomputes the PAST, this looks forward.
         self.intentions_store = f"{prefix}_intentions"
+        # Core / working-memory tier (roadmap step 36, MemGPT/Letta): a few named
+        # mutable blocks the agent keeps always-in-context and self-edits (human,
+        # persona, pinned facts), bounded by max_chars so overflow forces a
+        # rewrite. The archival/recall tiers are the existing mem/recent stores.
+        self.core_store = f"{prefix}_core"
+        self.core_max_chars = int(os.environ.get("EVOSQL_CORE_MAX_CHARS", "1500"))
         # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
         # ranker has been fit (fit_ranker), search re-scores candidates with the
         # learned logistic weights instead of the hand-tuned blend. Cold start
@@ -452,7 +458,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.validity_store),
                   ("MEMORY STORE", self.utility_store),
                   ("MEMORY STORE", self.skill_store),
-                  ("MEMORY STORE", self.intentions_store)]
+                  ("MEMORY STORE", self.intentions_store),
+                  ("MEMORY STORE", self.core_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -1717,6 +1724,45 @@ class MemoryBackend:
             self._set_validity(user_id, new_key, supersedes=superseded,
                                status="active")
         return stale
+
+    def core_memory_get(self, user_id: str,
+                        label: Optional[str] = None) -> Dict[str, str]:
+        """Return the always-in-context core blocks (roadmap step 36):
+        {label: text}. One label or all. Injected every turn — no query."""
+        out: Dict[str, str] = {}
+        for k, v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.core_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000") or []:
+            try:
+                rec = json.loads(v) if v else {}
+                out[k] = rec.get("text", "")
+            except Exception:
+                continue
+        if label is not None:
+            return {label: out.get(label, "")}
+        return out
+
+    def _core_put(self, user_id: str, label: str, text: str) -> str:
+        # Enforce the block budget: overflow keeps the most recent tail (the
+        # agent is expected to summarize-and-replace before it gets here).
+        if len(text) > self.core_max_chars:
+            text = text[-self.core_max_chars:]
+        rec = {"label": label, "text": text, "updated_at": time.time(),
+               "max_chars": self.core_max_chars}
+        self._exec(f"MEMORY PUT INTO {self.core_store} VALUES "
+                   f"('{_e(user_id)}','{_e(label)}','{_e(json.dumps(rec))}')")
+        return text
+
+    def core_memory_replace(self, user_id: str, label: str, text: str) -> str:
+        """Overwrite a core block (roadmap step 36). Returns the stored text
+        (truncated to max_chars)."""
+        return self._core_put(user_id, label, text)
+
+    def core_memory_append(self, user_id: str, label: str, text: str) -> str:
+        """Append to a core block (newline-joined), enforcing max_chars."""
+        cur = self.core_memory_get(user_id, label).get(label, "")
+        joined = (cur + "\n" + text) if cur else text
+        return self._core_put(user_id, label, joined)
 
     def add_intention(self, user_id: str, action: str, *,
                       due_ts: Optional[float] = None,
