@@ -363,6 +363,10 @@ class MemoryBackend:
         # noise so the loop doesn't only ever reinforce what it already shows.
         self.learned_trust = _env_float("EVOSQL_LEARNED_TRUST", 1.0)
         self.learned_epsilon = _env_float("EVOSQL_LEARNED_EPSILON", 0.0)
+        # Weight of the per-row utility (step 25) blended into the learned score
+        # — the row-identity signal (a row used before is more likely useful),
+        # centered at the neutral prior so unseen rows are unaffected.
+        self.learned_util_weight = _env_float("EVOSQL_LEARNED_UTIL", 0.5)
         # Active-record gate (roadmap step 21): drop rows the validity store
         # marks stale/retracted so a superseded fact stops out-ranking the truth.
         # Auto-on when reconciliation is on (you want the gate if you revise);
@@ -1899,15 +1903,20 @@ class MemoryBackend:
         model = self._load_ranker(user_id)
         if not model:
             return out
-        from .learn import predict, guarded_score
+        from .learn import predict, guarded_score, UTILITY_PRIOR
         scores = getattr(self, "_last_scores", {}) or {}
         base_max = max((x["score"] for x in out), default=1.0) or 1.0
+        umap = (self._utility_map(user_id, [x["key"] for x in out])
+                if self.learned_util_weight else {})
         for x in out:
             base_norm = (x["score"] / base_max) if base_max else 0.0
             learned = predict(model, scores.get(x["key"], {}))
-            x["score"] = round(guarded_score(
-                learned, base_norm, trust=self.learned_trust,
-                epsilon=self.learned_epsilon), 6)
+            s = guarded_score(learned, base_norm, trust=self.learned_trust,
+                              epsilon=self.learned_epsilon)
+            u = umap.get(x["key"])           # row-identity: used before -> useful
+            if u is not None:
+                s += self.learned_util_weight * (u - UTILITY_PRIOR)
+            x["score"] = round(s, 6)
         out.sort(key=lambda x: (-x["score"], x.get("key", "")))
         return out
 
