@@ -77,3 +77,38 @@ def llm_adjudicate(new_fact: str, old_fact: str, backend: str) -> str:
         if v in word:
             return v
     return "NOOP"
+
+
+RECONSOLIDATE_VERDICTS = ("CONFIRM", "REFINE", "CONTRADICT")
+
+
+def llm_reconsolidate(old_fact: str, correction: str, backend: str) -> str:
+    """Judge whether a correction REFINEs / CONTRADICTs / CONFIRMs an old fact
+    on recall (roadmap step 29). Returns one of RECONSOLIDATE_VERDICTS."""
+    prompt = ("A remembered fact was just recalled with new context.\nOLD: " +
+              old_fact + "\nNEW CONTEXT: " + correction + "\nIf the new context "
+              "corrects/sharpens OLD answer REFINE; if it makes OLD wrong answer "
+              "CONTRADICT; if it just agrees answer CONFIRM. One word: CONFIRM, "
+              "REFINE, or CONTRADICT.")
+    backend = backend.lower()
+    if backend == "ollama":
+        import requests
+        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+        model = os.environ.get("EVOSQL_RECONSOLIDATE_LLM_MODEL", "llama3.1")
+        r = requests.post(f"{host}/api/generate",
+                          json={"model": model, "prompt": prompt,
+                                "stream": False}, timeout=60)
+        word = (r.json().get("response") or "").strip().upper()
+    elif backend in ("anthropic", "sonnet"):
+        import anthropic
+        c = anthropic.Anthropic()
+        m = c.messages.create(
+            model=os.environ.get("EVOSQL_RECONSOLIDATE_LLM_MODEL", "claude-sonnet-4-6"),
+            max_tokens=8, messages=[{"role": "user", "content": prompt}])
+        word = m.content[0].text.strip().upper()
+    else:
+        raise RuntimeError(f"unknown EVOSQL_RECONSOLIDATE_LLM backend: {backend}")
+    for v in RECONSOLIDATE_VERDICTS:
+        if v in word:
+            return v
+    return "CONFIRM"
