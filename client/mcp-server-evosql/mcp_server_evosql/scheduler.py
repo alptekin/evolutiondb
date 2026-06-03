@@ -205,6 +205,14 @@ def job_tms(backend, ns: str) -> int:
     return tms.job_tms(backend, ns)
 
 
+def job_calibration(backend, ns: str) -> int:
+    """Confidence calibration study (roadmap step 40): bin predicted source
+    confidence against observed usage, score ECE/MCE, fit the calibrator, record
+    under job_runs. Returns the count of labelled pairs (0 without feedback)."""
+    from . import calibration
+    return calibration.job_calibration(backend, ns)
+
+
 def job_health(backend, ns: str) -> int:
     """Audit the derived stores' integrity (rows present vs rows that decode)
     and record it under job_runs. Returns the count of unhealthy stores."""
@@ -238,6 +246,7 @@ JOBS: List[Job] = [
     Job("semanticize",      "daily@06:30",       job_semanticize),
     Job("consolidation",    "daily@06:45",       job_consolidation_health),
     Job("tms",              "daily@07:00",       job_tms),
+    Job("calibration",      "daily@07:15",       job_calibration),
     Job("intentions",       "every:300",         job_intentions),
 ]
 
