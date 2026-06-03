@@ -1731,6 +1731,27 @@ class MemoryBackend:
         return out
 
     # -- implicit feedback (Adım 11) ---------------------------------
+    def _feedback_records(self, user_id: str,
+                          limit: int = 100000) -> List[Dict[str, Any]]:
+        """Every feedback record for a namespace (query text, per-candidate
+        trace, used_keys) — the training corpus for the learned controller
+        (roadmap steps 24-26)."""
+        out: List[Dict[str, Any]] = []
+        try:
+            rows = self._query(
+                f"SELECT mem_value FROM __mem_{self.feedback_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT {limit}") or []
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                rec = json.loads(r[0]) if r[0] else None
+                if isinstance(rec, dict):
+                    out.append(rec)
+            except Exception:
+                continue
+        return out
+
     def log_query(self, user_id: str, query_id: str, query_text: str,
                   returned_keys: List[str]) -> None:
         """Record a search for later feedback. Stored under query_id with
