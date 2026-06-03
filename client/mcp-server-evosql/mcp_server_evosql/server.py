@@ -347,6 +347,26 @@ class MemoryBackend:
         # superseded row stale. Pure append stays the default.
         self.reconcile_enabled = os.environ.get("EVOSQL_RECONCILE", "0") \
             not in ("0", "", "off", "false", "no")
+        # Learned controller (roadmap steps 24-26): per-(centroid, row) utility
+        # folded from the feedback corpus, keyed "<centroid>:<mem_key>", and the
+        # fitted ranker weights — both side stores. The memory improves from USE.
+        self.utility_store = f"{prefix}_utility"
+        # Learned-ranker cutover (roadmap step 26). Off by default; when on AND a
+        # ranker has been fit (fit_ranker), search re-scores candidates with the
+        # learned logistic weights instead of the hand-tuned blend. Cold start
+        # (no ranker) falls back to the existing ranking, so it is safe to enable
+        # before any feedback exists.
+        self.learned_rank = os.environ.get("EVOSQL_LEARNED_RANK", "0") \
+            not in ("0", "", "off", "false", "no")
+        # Closed-loop guardrails (roadmap step 27). trust dampens the learned
+        # score against the base (1.0 = pure learned); epsilon adds exploration
+        # noise so the loop doesn't only ever reinforce what it already shows.
+        self.learned_trust = _env_float("EVOSQL_LEARNED_TRUST", 1.0)
+        self.learned_epsilon = _env_float("EVOSQL_LEARNED_EPSILON", 0.0)
+        # Weight of the per-row utility (step 25) blended into the learned score
+        # — the row-identity signal (a row used before is more likely useful),
+        # centered at the neutral prior so unseen rows are unaffected.
+        self.learned_util_weight = _env_float("EVOSQL_LEARNED_UTIL", 0.5)
         # Active-record gate (roadmap step 21): drop rows the validity store
         # marks stale/retracted so a superseded fact stops out-ranking the truth.
         # Auto-on when reconciliation is on (you want the gate if you revise);
@@ -406,7 +426,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.access_store),
                   ("MEMORY STORE", self.salience_store),
                   ("MEMORY STORE", self.semantic_store),
-                  ("MEMORY STORE", self.validity_store)]
+                  ("MEMORY STORE", self.validity_store),
+                  ("MEMORY STORE", self.utility_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -1305,6 +1326,12 @@ class MemoryBackend:
         # so the line above leaves `out` exactly as the legacy ranking produced.
         if self.activation_enabled:
             out = self._rank_by_activation(user_id, out, graph_boost_map)
+        # Learned-ranker cutover (step 26): re-score with the fitted logistic
+        # weights instead of the hand-tuned blend. Off by default; cold start
+        # (no fitted ranker) is a no-op, so the default ranking is unchanged.
+        if self.learned_rank:
+            out = self._rank_by_learned(
+                user_id, out, q_vecs[0] if q_vecs else None)
         # Active-record gate (step 21) + as-of time travel (step 22). Runs when
         # the gate is on OR the caller asked for time travel (an as_of query
         # must apply the validity window regardless of the default flag); a
@@ -1731,6 +1758,188 @@ class MemoryBackend:
         return out
 
     # -- implicit feedback (Adım 11) ---------------------------------
+    def _feedback_records(self, user_id: str,
+                          limit: int = 100000) -> List[Dict[str, Any]]:
+        """Every feedback record for a namespace (query text, per-candidate
+        trace, used_keys) — the training corpus for the learned controller
+        (roadmap steps 24-26)."""
+        out: List[Dict[str, Any]] = []
+        try:
+            rows = self._query(
+                f"SELECT mem_value FROM __mem_{self.feedback_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT {limit}") or []
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                rec = json.loads(r[0]) if r[0] else None
+                if isinstance(rec, dict):
+                    out.append(rec)
+            except Exception:
+                continue
+        return out
+
+    def _utility_map(self, user_id: str, keys: Sequence[str],
+                     centroid: str = "g") -> Dict[str, float]:
+        """{mem_key: utility} for the query's centroid context (roadmap step 25).
+        Empty until recompute_utilities has folded feedback into utilities."""
+        if not keys:
+            return {}
+        util_keys = [f"{centroid}:{k}" for k in keys]
+        out: Dict[str, float] = {}
+        try:
+            rows = self._fetch_by_keys(self.utility_store, user_id, util_keys)
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                v = json.loads(r[1]) if r[1] else {}
+                u = v.get("u") if isinstance(v, dict) else None
+                if isinstance(u, (int, float)):
+                    mk = r[0].split(":", 1)[1] if ":" in r[0] else r[0]
+                    out[mk] = float(u)
+            except Exception:
+                continue
+        return out
+
+    def _query_centroid(self, user_id: str, q_vec, *, min_cos: float = 0.3):
+        """Nearest profile-cluster id for a query vector ('g' = global fallback).
+        Shared by the utility WRITE (recompute_utilities) and READ
+        (_rank_by_learned) paths so the conditioned key can't drift between them."""
+        from .embeddings import decode_vec, cosine
+        if not q_vec:
+            return "g"
+        best_id, best = "g", float(min_cos)
+        try:
+            for v in self._query(
+                    f"SELECT mem_key, mem_value FROM __mem_{self.profile_store} "
+                    f"WHERE mem_namespace = '{_e(user_id)}'") or []:
+                try:
+                    c = decode_vec((json.loads(v[1]) or {}).get("centroid"))
+                    if c:
+                        s = cosine(q_vec, c)
+                        if s >= best:
+                            best, best_id = s, str(v[0])
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return best_id
+
+    def recompute_utilities(self, user_id: str, *,
+                            alpha: Optional[float] = None) -> int:
+        """Fold the feedback corpus into per-(centroid, row) utilities and
+        persist them (roadmap step 25). The query centroid is the nearest
+        profile cluster of the record's query_emb (global 'g' on cold start).
+        Idempotent: each run folds the whole corpus from the neutral prior, so a
+        static corpus yields the same utilities (carrying the persisted values
+        forward and re-folding would drift toward 0/1). Returns the count written."""
+        from . import learn
+        from .embeddings import decode_vec
+        records = self._feedback_records(user_id)
+        if not records:
+            return 0
+
+        def centroid_of(rec):
+            return self._query_centroid(user_id, decode_vec(rec.get("query_emb")))
+
+        a = alpha if alpha is not None else learn.UTILITY_ALPHA
+        U = learn.accumulate_utilities(records, alpha=a, centroid_fn=centroid_of)
+        written = 0
+        for uk, u in U.items():
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.utility_store} VALUES "
+                    f"('{_e(user_id)}','{_e(uk)}','{_e(json.dumps({'u': u}))}')")
+                written += 1
+            except Exception:
+                continue
+        return written
+
+    _RANKER_KEY = "__ranker__"          # reserved key in the utility store
+
+    def fit_ranker(self, user_id: str) -> Dict[str, Any]:
+        """Fit + persist the learned logistic ranker from the feedback corpus
+        (roadmap step 26). Returns the model {weights, bias, n}. A no-op (n=0)
+        when there is no labelled feedback yet."""
+        from . import learn
+        examples = learn.build_examples(self._feedback_records(user_id))
+        model = learn.fit_logistic(examples)
+        if model.get("n"):
+            model["ts"] = time.time()
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.utility_store} VALUES "
+                    f"('{_e(user_id)}','{_e(self._RANKER_KEY)}',"
+                    f"'{_e(json.dumps(model))}')")
+            except Exception:
+                pass
+        return model
+
+    def _load_ranker(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Load the fitted ranker, or None on cold start / a corrupt model —
+        so a hand-edited or truncated __ranker__ degrades to the base ranking
+        instead of crashing search."""
+        try:
+            rows = self._fetch_by_keys(self.utility_store, user_id,
+                                       [self._RANKER_KEY])
+        except Exception:
+            return None
+        for r in rows:
+            try:
+                m = json.loads(r[1]) if r[1] else None
+            except Exception:
+                continue
+            if not (isinstance(m, dict) and m.get("n")):
+                continue
+            w = m.get("weights")
+            b = m.get("bias", 0.0)
+            if not isinstance(w, dict):
+                continue
+            try:
+                vals = [float(v) for v in w.values()] + [float(b)]
+            except (TypeError, ValueError):
+                continue
+            if all(math.isfinite(v) for v in vals):
+                return m
+        return None
+
+    def _rank_by_learned(self, user_id: str, out: List[Dict[str, Any]],
+                         q_vec=None) -> List[Dict[str, Any]]:
+        """Re-score candidates with the learned ranker (roadmap step 26).
+        Cold start (no fitted ranker) returns the input unchanged, so enabling
+        EVOSQL_LEARNED_RANK before any feedback is a no-op."""
+        if not out:
+            return out
+        model = self._load_ranker(user_id)
+        if not model:
+            return out
+        from .learn import predict, guarded_score, UTILITY_PRIOR
+        scores = getattr(self, "_last_scores", {}) or {}
+        base_max = max((x["score"] for x in out), default=1.0) or 1.0
+        umap: Dict[str, float] = {}
+        if self.learned_util_weight:
+            keys = [x["key"] for x in out]
+            # Read the query-conditioned utility (same centroid the write path
+            # used) and fall back to the global bucket — fixes the read/write key
+            # mismatch that left cluster-conditioned utilities inert.
+            cid = self._query_centroid(user_id, q_vec)
+            umap = self._utility_map(user_id, keys, centroid=cid)
+            if cid != "g":
+                for k, u in self._utility_map(user_id, keys, "g").items():
+                    umap.setdefault(k, u)
+        for x in out:
+            base_norm = (x["score"] / base_max) if base_max else 0.0
+            learned = predict(model, scores.get(x["key"], {}))
+            s = guarded_score(learned, base_norm, trust=self.learned_trust,
+                              epsilon=self.learned_epsilon)
+            u = umap.get(x["key"])           # row-identity: used before -> useful
+            if u is not None:
+                s += self.learned_util_weight * (u - UTILITY_PRIOR)
+            x["score"] = round(max(0.0, min(1.0, s)), 6)   # keep in [0,1]
+        out.sort(key=lambda x: (-x["score"], x.get("key", "")))
+        return out
+
     def log_query(self, user_id: str, query_id: str, query_text: str,
                   returned_keys: List[str]) -> None:
         """Record a search for later feedback. Stored under query_id with
