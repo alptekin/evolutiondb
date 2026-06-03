@@ -48,6 +48,14 @@ dependencies = [
 embeddings-local = [
     "sentence-transformers>=2.5",
 ]
+# Real Turkish stemming for the gist channel (roadmap step 37). Without it
+# the gist stemmer is English-only and Turkish inflections never collapse;
+# with it, EVOSQL_GIST_STEMMER=auto (default) chains a morphological Turkish
+# stemmer after the English-light pass so both languages collapse. Optional —
+# the gist channel falls back to English-light when absent.
+turkish = [
+    "snowballstemmer>=2.2",
+]
 
 [project.urls]
 Homepage      = "https://github.com/alptekin/evolutiondb"
