@@ -179,9 +179,22 @@ def job_episodes(backend, ns: str) -> int:
 
 
 def job_decay(backend, ns: str) -> int:
-    from . import decay
+    from . import decay, consolidation
+    # Conservative forgetting brake (roadmap step 38): default-off; when
+    # EVOSQL_FORGET_GATE is on and the last verdict says forgetting is running
+    # away, skip the decay pass so it doesn't keep burying memory unattended.
+    if not consolidation.decay_gate_open(backend):
+        return 0
     res = decay.decay_pass(backend, ns)
     return res["archived"] + res["unarchived"]
+
+
+def job_consolidation_health(backend, ns: str) -> int:
+    """Consolidation health-gate + forgetting detector (roadmap step 38):
+    snapshot the namespace, flag runaway forgetting / stalled abstraction
+    against the recorded trend, record under job_runs. Returns unhealthy count."""
+    from . import consolidation
+    return consolidation.job_consolidation_health(backend, ns)
 
 
 def job_health(backend, ns: str) -> int:
@@ -215,6 +228,7 @@ JOBS: List[Job] = [
     Job("episodes",         "weekly@sun 02:00",  job_episodes),
     Job("health",           "daily@06:00",       job_health),
     Job("semanticize",      "daily@06:30",       job_semanticize),
+    Job("consolidation",    "daily@06:45",       job_consolidation_health),
     Job("intentions",       "every:300",         job_intentions),
 ]
 
