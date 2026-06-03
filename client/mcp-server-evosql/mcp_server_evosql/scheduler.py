@@ -179,9 +179,38 @@ def job_episodes(backend, ns: str) -> int:
 
 
 def job_decay(backend, ns: str) -> int:
-    from . import decay
+    from . import decay, consolidation
+    # Conservative forgetting brake (roadmap step 38): default-off; when
+    # EVOSQL_FORGET_GATE is on and the last verdict says forgetting is running
+    # away, skip the decay pass so it doesn't keep burying memory unattended.
+    if not consolidation.decay_gate_open(backend):
+        return 0
     res = decay.decay_pass(backend, ns)
     return res["archived"] + res["unarchived"]
+
+
+def job_consolidation_health(backend, ns: str) -> int:
+    """Consolidation health-gate + forgetting detector (roadmap step 38):
+    snapshot the namespace, flag runaway forgetting / stalled abstraction
+    against the recorded trend, record under job_runs. Returns unhealthy count."""
+    from . import consolidation
+    return consolidation.job_consolidation_health(backend, ns)
+
+
+def job_tms(backend, ns: str) -> int:
+    """Truth-maintenance: Type-II dependent retraction (roadmap step 39).
+    Re-adjudicate the derived_from closure of retracted facts, marking rows that
+    have lost all support 'unsupported'. No-op unless EVOSQL_TMS is enabled."""
+    from . import tms
+    return tms.job_tms(backend, ns)
+
+
+def job_calibration(backend, ns: str) -> int:
+    """Confidence calibration study (roadmap step 40): bin predicted source
+    confidence against observed usage, score ECE/MCE, fit the calibrator, record
+    under job_runs. Returns the count of labelled pairs (0 without feedback)."""
+    from . import calibration
+    return calibration.job_calibration(backend, ns)
 
 
 def job_health(backend, ns: str) -> int:
@@ -215,6 +244,9 @@ JOBS: List[Job] = [
     Job("episodes",         "weekly@sun 02:00",  job_episodes),
     Job("health",           "daily@06:00",       job_health),
     Job("semanticize",      "daily@06:30",       job_semanticize),
+    Job("consolidation",    "daily@06:45",       job_consolidation_health),
+    Job("tms",              "daily@07:00",       job_tms),
+    Job("calibration",      "daily@07:15",       job_calibration),
     Job("intentions",       "every:300",         job_intentions),
 ]
 
