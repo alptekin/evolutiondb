@@ -455,6 +455,14 @@ class MemoryBackend:
         # confidence is below this threshold, rather than a confidently-wrong
         # low-source row. None (default) = never abstain.
         self.abstain_conf = _env_float("EVOSQL_ABSTAIN_CONF", None)
+        # Confidence calibration layer (roadmap step 40). Opt-in
+        # (EVOSQL_CALIBRATE, default off): when on, source_reliability is mapped
+        # through the fitted calibrator before the abstain gate, so abstention
+        # is driven by empirically-observed correctness, not the hard-coded
+        # prior. The calibrator is loaded lazily and cached.
+        self.calibrate = os.environ.get("EVOSQL_CALIBRATE", "0") not in (
+            "0", "", "off", "false", "no")
+        self._calibrator_cache: Dict[str, Any] = {}      # per-namespace, lazy
         # row embeddings into interest clusters (<prefix>_profile_clusters);
         # the retrieval boost biases results toward the clusters the query
         # points at. Opt-in via EVOSQL_PROFILE_BOOST>0 (needs embeddings, so
@@ -1486,9 +1494,14 @@ class MemoryBackend:
             out = self._apply_validity_gate(user_id, out, as_of=as_of)
         # Confidence abstention (step 32): if even the best candidate is too
         # low-confidence by source, return nothing rather than a confident wrong.
+        # The confidence is the raw source prior by default; with EVOSQL_CALIBRATE
+        # (step 40) it is mapped through the fitted calibrator first, so the gate
+        # abstains on empirically-observed unreliability, not the prior.
         if self.abstain_conf is not None and out:
-            best = max(source_reliability(x.get("source_class")) for x in out)
-            if best < self.abstain_conf:
+            confs = [source_reliability(x.get("source_class")) for x in out]
+            if self.calibrate:
+                confs = [self._calibrate_conf(user_id, c) for c in confs]
+            if max(confs) < self.abstain_conf:
                 out = []
         page = out[:limit]
         # Provenance (Adım 13): synthesized rows in the returned page carry
@@ -2201,6 +2214,19 @@ class MemoryBackend:
         return out
 
     # -- implicit feedback (Adım 11) ---------------------------------
+    def _calibrate_conf(self, user_id: str, conf: float) -> float:
+        """Map a raw source-confidence through the namespace's fitted calibrator
+        (roadmap step 40), lazily loading + caching it. Identity when no
+        calibration has been recorded, so an un-fitted namespace is unchanged."""
+        if user_id not in self._calibrator_cache:
+            from .calibration import load_calibrator
+            try:
+                self._calibrator_cache[user_id] = load_calibrator(self, user_id)
+            except Exception:
+                self._calibrator_cache[user_id] = None
+        from .calibration import apply_calibration
+        return apply_calibration(self._calibrator_cache.get(user_id), conf)
+
     def _feedback_records(self, user_id: str,
                           limit: int = 100000) -> List[Dict[str, Any]]:
         """Every feedback record for a namespace (query text, per-candidate
