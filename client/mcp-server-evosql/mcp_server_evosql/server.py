@@ -347,6 +347,10 @@ class MemoryBackend:
         # superseded row stale. Pure append stays the default.
         self.reconcile_enabled = os.environ.get("EVOSQL_RECONCILE", "0") \
             not in ("0", "", "off", "false", "no")
+        # Learned controller (roadmap steps 24-26): per-(centroid, row) utility
+        # folded from the feedback corpus, keyed "<centroid>:<mem_key>", and the
+        # fitted ranker weights — both side stores. The memory improves from USE.
+        self.utility_store = f"{prefix}_utility"
         # Active-record gate (roadmap step 21): drop rows the validity store
         # marks stale/retracted so a superseded fact stops out-ranking the truth.
         # Auto-on when reconciliation is on (you want the gate if you revise);
@@ -406,7 +410,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.access_store),
                   ("MEMORY STORE", self.salience_store),
                   ("MEMORY STORE", self.semantic_store),
-                  ("MEMORY STORE", self.validity_store)]
+                  ("MEMORY STORE", self.validity_store),
+                  ("MEMORY STORE", self.utility_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -1751,6 +1756,86 @@ class MemoryBackend:
             except Exception:
                 continue
         return out
+
+    def _utility_map(self, user_id: str, keys: Sequence[str],
+                     centroid: str = "g") -> Dict[str, float]:
+        """{mem_key: utility} for the query's centroid context (roadmap step 25).
+        Empty until recompute_utilities has folded feedback into utilities."""
+        if not keys:
+            return {}
+        util_keys = [f"{centroid}:{k}" for k in keys]
+        out: Dict[str, float] = {}
+        try:
+            rows = self._fetch_by_keys(self.utility_store, user_id, util_keys)
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                v = json.loads(r[1]) if r[1] else {}
+                u = v.get("u") if isinstance(v, dict) else None
+                if isinstance(u, (int, float)):
+                    mk = r[0].split(":", 1)[1] if ":" in r[0] else r[0]
+                    out[mk] = float(u)
+            except Exception:
+                continue
+        return out
+
+    def recompute_utilities(self, user_id: str, *,
+                            alpha: Optional[float] = None) -> int:
+        """Fold the feedback corpus into per-(centroid, row) utilities and
+        persist them (roadmap step 25). The query centroid is the nearest
+        profile cluster of the record's query_emb (global 'g' on cold start).
+        Returns the number of utility entries written."""
+        from . import learn
+        from .embeddings import decode_vec, cosine
+        records = self._feedback_records(user_id)
+        if not records:
+            return 0
+        cents = []
+        try:
+            for v in self._query(
+                    f"SELECT mem_key, mem_value FROM __mem_{self.profile_store} "
+                    f"WHERE mem_namespace = '{_e(user_id)}'") or []:
+                try:
+                    c = decode_vec((json.loads(v[1]) or {}).get("centroid"))
+                    if c:
+                        cents.append((str(v[0]), c))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        def centroid_of(rec):
+            qv = decode_vec(rec.get("query_emb"))
+            if not qv or not cents:
+                return "g"
+            bid, bc = max(cents, key=lambda c: cosine(qv, c[1]))
+            return bid if cosine(qv, bc) >= 0.3 else "g"
+
+        prior: Dict[str, float] = {}
+        for v in self._query(
+                f"SELECT mem_key, mem_value FROM __mem_{self.utility_store} "
+                f"WHERE mem_namespace = '{_e(user_id)}' LIMIT 1000000") or []:
+            try:
+                u = (json.loads(v[1]) or {}).get("u")
+                if isinstance(u, (int, float)):
+                    prior[v[0]] = float(u)
+            except Exception:
+                continue
+
+        a = alpha if alpha is not None else learn.UTILITY_ALPHA
+        U = learn.accumulate_utilities(records, alpha=a, prior=prior,
+                                       centroid_fn=centroid_of)
+        written = 0
+        for uk, u in U.items():
+            try:
+                self._exec(
+                    f"MEMORY PUT INTO {self.utility_store} VALUES "
+                    f"('{_e(user_id)}','{_e(uk)}','{_e(json.dumps({'u': u}))}')")
+                written += 1
+            except Exception:
+                continue
+        return written
 
     def log_query(self, user_id: str, query_id: str, query_text: str,
                   returned_keys: List[str]) -> None:

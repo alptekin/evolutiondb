@@ -67,3 +67,42 @@ def build_examples(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "rank": rank,
             })
     return examples
+
+
+# ---------------------------------------------------------------- #
+#  Per-row utility (roadmap step 25)                                #
+# ---------------------------------------------------------------- #
+UTILITY_ALPHA = 0.2       # ACT-R utility learning rate
+UTILITY_PRIOR = 0.5       # neutral starting utility
+
+
+def update_utility(u_prev: float, reward: float,
+                   alpha: float = UTILITY_ALPHA) -> float:
+    """ACT-R utility delta rule: U <- U + alpha*(R - U). R=1 for a used row,
+    0 for a returned-but-unused row. Converges to the row's hit rate."""
+    return float(u_prev) + alpha * (float(reward) - float(u_prev))
+
+
+def accumulate_utilities(records: Sequence[Dict[str, Any]], *,
+                         alpha: float = UTILITY_ALPHA,
+                         prior: Dict[str, float] = None,
+                         centroid_fn=None) -> Dict[str, float]:
+    """Fold a feedback corpus into per-(context, row) utilities. The utility key
+    is `<centroid>:<mem_key>`, so credit is QUERY-CONDITIONED by the query's
+    nearest interest centroid (centroid_fn(record) -> id; "g" = global when no
+    profile). Returns {utility_key: U in [0,1]}. Repeated use drives U -> 1,
+    repeated skip -> 0; an unseen row is neutral at UTILITY_PRIOR."""
+    U: Dict[str, float] = dict(prior or {})
+    for rec in records or []:
+        used = set(rec.get("used_keys") or [])
+        if not used:
+            continue
+        cid = (centroid_fn(rec) if centroid_fn else "g") or "g"
+        for t in rec.get("trace") or []:
+            key = t.get("key")
+            if not key:
+                continue
+            r = 1.0 if key in used else 0.0
+            uk = f"{cid}:{key}"
+            U[uk] = round(update_utility(U.get(uk, UTILITY_PRIOR), r, alpha), 4)
+    return U
