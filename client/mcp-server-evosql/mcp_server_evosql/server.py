@@ -954,7 +954,34 @@ class MemoryBackend:
             out += self._query(
                 base + ",".join("'" + _e(x) + "'" for x in batch)
                 + ")") or []
+        # A memory key can map to MORE than one physical row: the real record
+        # plus connector-written annotation sidecars (gist / salience / PII-token
+        # spans) stored under the SAME key. A raw IN(...) returns all of them in
+        # arbitrary order, so a by-key fetch could hand back a sidecar twin —
+        # which shadows the real memory in the e5-only candidate path (it has no
+        # `fact`, so the parse loop drops it) and corrupts evidence / episode /
+        # reconcile look-ups. Collapse duplicates to the content-bearing row
+        # (one with a `fact`, else the longest value). The guard makes this a
+        # no-op for the unique-key side stores, so the default path is unchanged.
+        if out and len(out) > len({r[0] for r in out}):
+            best: Dict[str, Any] = {}
+            for r in out:
+                k = r[0]
+                if k not in best or self._row_rank(r[1]) > self._row_rank(best[k][1]):
+                    best[k] = r
+            out = list(best.values())
         return out
+
+    @staticmethod
+    def _row_rank(v: Any):
+        """Pick order for duplicate-key rows: a content-bearing row (has `fact`)
+        outranks a sidecar; among equals the longer value wins."""
+        try:
+            d = json.loads(v) if v else {}
+            hf = 1 if isinstance(d, dict) and d.get("fact") else 0
+        except Exception:
+            hf = 0
+        return (hf, len(v) if v else 0)
 
     @staticmethod
     def _decode_emb2(val: Any) -> Optional[List[float]]:
