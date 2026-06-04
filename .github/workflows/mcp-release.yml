@@ -47,7 +47,7 @@ jobs:
       - name: Verify version matches the tag
         working-directory: client/mcp-server-evosql
         run: |
-          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
           ver="${tag#v}"
           py_ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
           if [ "$ver" != "$py_ver" ]; then
@@ -91,7 +91,7 @@ jobs:
       - name: Verify server.json version matches the tag
         working-directory: client/mcp-server-evosql
         run: |
-          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
           ver="${tag#v}"
           json_ver=$(python3 -c "import json;d=json.load(open('server.json'));print(d['version'])")
           pkg_ver=$(python3 -c "import json;d=json.load(open('server.json'));print(d['packages'][0]['version'])")
@@ -103,7 +103,7 @@ jobs:
 
       - name: Wait for PyPI to index the new release
         run: |
-          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
           ver="${tag#v}"
           for i in $(seq 1 30); do
             if curl -sf "https://pypi.org/pypi/mcp-server-evolutiondb/${ver}/json" >/dev/null; then
