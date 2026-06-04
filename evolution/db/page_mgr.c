@@ -402,6 +402,19 @@ void pgm_free_page(uint32_t page_no)
     pthread_mutex_lock(&g_pgm_lock);
 
     char page_buf[EVO_PAGE_SIZE];
+    off_t offset = (off_t)page_no * EVO_PAGE_SIZE;
+
+    /* Double-free guard: a page already on the free list must NOT be linked
+     * again — re-adding it would hand the SAME physical page to two different
+     * tables on the next two allocations (the cross-table corruption vector).
+     * Read its current header (same path pgm_alloc_page uses) and bail out if
+     * it is already PAGE_FREE. */
+    if (bp_read(g_global_fd, page_buf, EVO_PAGE_SIZE, offset) >= 0 &&
+        ((PageHeader *)page_buf)->page_type == PAGE_FREE) {
+        pthread_mutex_unlock(&g_pgm_lock);
+        return;
+    }
+
     memset(page_buf, 0, EVO_PAGE_SIZE);
 
     PageHeader *ph = (PageHeader *)page_buf;
@@ -412,7 +425,6 @@ void pgm_free_page(uint32_t page_no)
     ph->next_page  = g_header.free_list_head;
     ph->prev_page  = 0;
 
-    off_t offset = (off_t)page_no * EVO_PAGE_SIZE;
     bp_write(g_global_fd, page_buf, EVO_PAGE_SIZE, offset);
 
     g_header.free_list_head = page_no;
