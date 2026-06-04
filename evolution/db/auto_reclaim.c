@@ -468,11 +468,24 @@ static void *auto_reclaim_worker(void *arg)
                                 dbs[di].db_name, schemas[si].schema_name,
                                 tables[ti].table_name);
 
-                        /* Acquire write lock (serialize with DML) */
+                        /* Serialize against BOTH writers and readers.
+                         * DML serializes on g_dml_mutex (NOT g_parse_lock),
+                         * SELECT on rdlock(g_parse_lock). RECLAIM frees heap
+                         * pages to the single shared free list and rewrites
+                         * pages from an in-memory snapshot, so it MUST be
+                         * mutually exclusive with concurrent DML too — taking
+                         * only the parse wrlock left DML running concurrently,
+                         * which freed/realloc'd live pages across tables and
+                         * corrupted cross-table RowIDs. Lock order is
+                         * g_dml_mutex THEN g_parse_lock (no other path nests
+                         * them, so no ABBA). */
                         extern rwlock_t g_parse_lock;
+                        extern mutex_t  g_dml_mutex;
+                        mutex_lock(&g_dml_mutex);
                         rwlock_wrlock(&g_parse_lock);
                         ReclaimTableProcess();
                         rwlock_wrunlock(&g_parse_lock);
+                        mutex_unlock(&g_dml_mutex);
 
                         qctx_free(qctx);
                         g_qctx = NULL;
