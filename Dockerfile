@@ -2,7 +2,7 @@
 FROM gcc:13 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bison flex make libssl-dev \
+    bison flex make libssl-dev liblz4-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -16,7 +16,7 @@ RUN make -C evolution clean; make -C adaptor clean; make generate && make adapto
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libc6 libssl3 openssl \
+    libc6 libssl3 openssl liblz4-1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Binary goes in /app, data lives in /data (volume mount)
