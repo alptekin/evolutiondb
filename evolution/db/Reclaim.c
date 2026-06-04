@@ -101,19 +101,33 @@ static int move_records(uint32_t src_page_no, char *src_buf,
         int rec_len = slot_read(src_buf, i, rec, sizeof(rec));
         if (rec_len <= 0) continue;
 
-        /* Try to insert into destination page */
-        int dst_slot = slot_insert(dst_buf, rec, (uint16_t)rec_len);
-        if (dst_slot < 0) break; /* destination full */
-
-        /* Build PK key to update B+ tree */
+        /* Only relocate a record whose PK entry CURRENTLY points at THIS
+         * (src_page, slot) — the live version. A record whose PK points
+         * elsewhere is a dead/old MVCC version or a duplicate; the previous
+         * code moved it anyway (mis-repointing the PK to a stale copy) and
+         * unconditionally slot_deleted the source even when the PK build /
+         * repoint failed — orphaning the entry and, after the page was freed
+         * to the shared free list and re-handed to another table, producing
+         * the observed cross-table RowID corruption. Leave such records in
+         * place (the source page keeps them, so Phase 4 will not free it). */
         char pkKey[1024];
-        if (tapi_build_pk_key(cols, ncols, rec, rec_len, pkKey, sizeof(pkKey)) == 0 &&
-            pkKey[0] != '\0') {
-            RowID newRid = {dst_page_no, (uint16_t)dst_slot};
-            bt2_update(pk_tree, pkKey, newRid);
-        }
+        if (tapi_build_pk_key(cols, ncols, rec, rec_len, pkKey, sizeof(pkKey)) != 0 ||
+            pkKey[0] == '\0')
+            continue;                       /* no resolvable PK: never move/drop */
+        RowID cur;
+        if (bt2_search(pk_tree, pkKey, &cur) != 0 ||
+            cur.page_no != src_page_no || cur.slot_idx != i)
+            continue;                       /* PK points elsewhere: not the live row */
 
-        /* Delete from source */
+        /* Insert into dst, repoint the PK, then (only on success) delete the
+         * source — a failure at any step leaves the live row intact. */
+        int dst_slot = slot_insert(dst_buf, rec, (uint16_t)rec_len);
+        if (dst_slot < 0) break;            /* destination full */
+        RowID newRid = {dst_page_no, (uint16_t)dst_slot};
+        if (bt2_update(pk_tree, pkKey, newRid) != 0) {
+            slot_delete(dst_buf, (uint16_t)dst_slot);  /* undo the dst insert */
+            continue;                       /* leave the live row on the source */
+        }
         slot_delete(src_buf, i);
         moved++;
     }
