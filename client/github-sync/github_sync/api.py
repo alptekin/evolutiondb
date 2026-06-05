@@ -19,7 +19,10 @@ honours `Retry-After` (search secondary-rate-limit signal).
 """
 from __future__ import annotations
 
+import http.client
 import json
+import socket
+import ssl
 import sys
 import time
 import urllib.error
@@ -29,6 +32,31 @@ from typing import Dict, Iterator, List, Optional
 
 
 GITHUB_API = "https://api.github.com"
+
+# Per-request socket timeout. Bumped from 30s — GitHub's /search can be
+# slow under load and a tight timeout turns a slow page into a crash.
+_REQUEST_TIMEOUT = 90
+
+# Transient transport failures that should be retried with backoff rather
+# than propagated out of the paginator (which would crash the whole pass).
+# urllib wraps SSL EOF / read-timeout in URLError; ConnectionError covers
+# ConnectionResetError; the http.client trio shows up on dropped keep-alives.
+_TRANSIENT = (
+    socket.timeout,
+    TimeoutError,
+    urllib.error.URLError,
+    ssl.SSLError,
+    ConnectionError,
+    http.client.RemoteDisconnected,
+    http.client.IncompleteRead,
+    http.client.BadStatusLine,
+)
+# Exponential backoff: 1, 2, 4, 8, 16s — cap at 5 attempts then re-raise.
+_RETRY_BACKOFF = (1, 2, 4, 8, 16)
+
+# Maximum number of 403 secondary-rate-limit `Retry-After` waits before we
+# give up and raise. A persistent 403 must not recurse/spin forever.
+_MAX_RATE_LIMIT_RETRIES = 5
 
 
 class GitHubError(Exception):
@@ -50,7 +78,8 @@ class GitHubClient:
     # ---------------------------------------------------------------- #
     #  Low-level GET — wraps urllib + rate-limit handling.              #
     # ---------------------------------------------------------------- #
-    def _get(self, path: str, params: Optional[Dict[str, str]] = None) -> Dict:
+    def _get(self, path: str, params: Optional[Dict[str, str]] = None,
+             _rl_attempt: int = 0) -> Dict:
         url = path if path.startswith("http") else f"{GITHUB_API}{path}"
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
@@ -65,30 +94,55 @@ class GitHubClient:
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent":           self.ua,
         })
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                self._capture_rate_window(resp.headers)
-                body = resp.read()
-                return {
-                    "status":  resp.status,
-                    "headers": dict(resp.headers),
-                    "data":    json.loads(body) if body else None,
-                }
-        except urllib.error.HTTPError as e:
-            self._capture_rate_window(e.headers)
-            if e.code == 403 and e.headers.get("Retry-After"):
-                # Secondary rate limit — wait and retry once.
-                wait = int(e.headers.get("Retry-After") or "30")
-                print(f"[github-sync] secondary rate limit; "
-                      f"sleeping {wait}s", file=sys.stderr, flush=True)
-                time.sleep(wait)
-                return self._get(path, params)
+        # Retry transient transport failures with exponential backoff. The
+        # rate-limit (HTTPError) handling below is left untouched — an
+        # HTTPError is never transient, so it short-circuits the loop.
+        for attempt in range(len(_RETRY_BACKOFF) + 1):
             try:
-                payload = json.loads(e.read().decode() or "{}")
-                msg = payload.get("message", str(e))
-            except Exception:
-                msg = str(e)
-            raise GitHubError(e.code, msg, url) from None
+                with urllib.request.urlopen(
+                        req, timeout=_REQUEST_TIMEOUT) as resp:
+                    self._capture_rate_window(resp.headers)
+                    body = resp.read()
+                    return {
+                        "status":  resp.status,
+                        "headers": dict(resp.headers),
+                        "data":    json.loads(body) if body else None,
+                    }
+            except urllib.error.HTTPError as e:
+                self._capture_rate_window(e.headers)
+                if e.code == 403 and e.headers.get("Retry-After"):
+                    # Secondary rate limit — wait and retry, but bound the
+                    # number of waits so a persistent 403 cannot recurse or
+                    # spin forever.
+                    if _rl_attempt >= _MAX_RATE_LIMIT_RETRIES:
+                        raise GitHubError(
+                            403,
+                            f"secondary rate limit not cleared after "
+                            f"{_MAX_RATE_LIMIT_RETRIES} Retry-After waits",
+                            url,
+                        ) from None
+                    wait = int(e.headers.get("Retry-After") or "30")
+                    print(f"[github-sync] secondary rate limit; sleeping "
+                          f"{wait}s (attempt {_rl_attempt + 1}/"
+                          f"{_MAX_RATE_LIMIT_RETRIES})",
+                          file=sys.stderr, flush=True)
+                    time.sleep(wait)
+                    return self._get(path, params,
+                                     _rl_attempt=_rl_attempt + 1)
+                try:
+                    payload = json.loads(e.read().decode() or "{}")
+                    msg = payload.get("message", str(e))
+                except Exception:
+                    msg = str(e)
+                raise GitHubError(e.code, msg, url) from None
+            except _TRANSIENT as e:
+                if attempt >= len(_RETRY_BACKOFF):
+                    raise
+                wait = _RETRY_BACKOFF[attempt]
+                print(f"[github-sync] transient {e}; "
+                      f"retry {attempt + 1}/{len(_RETRY_BACKOFF)} in {wait}s",
+                      file=sys.stderr, flush=True)
+                time.sleep(wait)
 
     def _capture_rate_window(self, headers) -> None:
         try:
