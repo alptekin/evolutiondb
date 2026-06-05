@@ -6993,16 +6993,34 @@ static int resolve_qualified_table(char *sql,
                             snprintf(db_name, sizeof(db_name), "%.*s", seg1_len, seg1_start);
                             snprintf(schema_name, sizeof(schema_name), "%.*s", seg2_len, seg2_start);
 
-                            /* Switch db + schema context */
-                            db_set_current_database(db_name);
-                            db_set_current_schema(schema_name);
+                            /* Only switch context when db.schema actually
+                             * resolve in the catalog. A three-part dotted
+                             * token can also appear inside string DATA (e.g.
+                             * a Teams chat id "...@unq.gbl.spaces..."); without
+                             * this guard it is mis-read as db.schema.table and
+                             * overwrites the global current-database/schema, so
+                             * a later db_ext_path() builds a bogus
+                             * "root/<db>/<schema>/<tbl>" path and the operation
+                             * fails with "could not open table". Mirrors the
+                             * two-segment validation below. */
+                            DatabaseDesc _dbDesc;
+                            SchemaDesc   _schDesc;
+                            if (cat_find_database(db_name, &_dbDesc) == 0 &&
+                                cat_find_schema(_dbDesc.db_id, schema_name,
+                                                &_schDesc) == 0) {
+                                /* Switch db + schema context */
+                                db_set_current_database(db_name);
+                                db_set_current_schema(schema_name);
 
-                            /* Remove "db.schema." prefix — shift SQL left */
-                            int prefix_len = (int)(seg3_start - seg1_start);
-                            memmove(seg1_start, seg3_start, strlen(seg3_start) + 1);
-                            /* Adjust p pointer */
-                            p = seg1_start + seg3_len;
-                            return 1;
+                                /* Remove "db.schema." prefix — shift SQL left */
+                                memmove(seg1_start, seg3_start,
+                                        strlen(seg3_start) + 1);
+                                /* Adjust p pointer */
+                                p = seg1_start + seg3_len;
+                                return 1;
+                            }
+                            /* Not a real db.schema — treat as data; keep
+                             * scanning from just past this token. */
                         }
                     } else {
                         /* Two segments: could be schema.table or alias.column
