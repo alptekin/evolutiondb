@@ -385,6 +385,14 @@ int ReclaimTableProcess(void)
         }
 
         /* Update PK root in case it changed during deletions */
+        /* Reclaim dead index space: physically drop the tombstones left by
+         * the deletions above and by prior lazy DELETEs, then borrow/merge
+         * across underflowing B+ tree nodes and free emptied pages. This may
+         * move the root, which the two lines below persist. Safe here: RECLAIM
+         * holds the global lock (no concurrent cursors/hints) and the later
+         * move phase only bt2_update()s the PK tree (never splits), so the
+         * compacted root stays valid. */
+        bt2_compact(&pk_tree_p0);
         td.pk_root_page = pk_tree_p0.root_page;
         cat_update_pk_root(td.table_id, td.table_name,
                            td.schema_id, td.pk_root_page);
