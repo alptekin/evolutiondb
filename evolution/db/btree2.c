@@ -1300,7 +1300,7 @@ static int bt2c_compact_rec(uint32_t page_no, int *out_uf, int is_root)
         if (bt2c_compact_rec(children[i], &cu, 0) != 0) {
             free(children); free(keys); return -1;
         }
-        if (cu && nk + 1 > 1) {
+        if (cu && nk > 0) {     /* more than one child (children == nk + 1) */
             int ni = bt2c_rebalance(children, keys, &nk, i);
             if (ni < 0) { free(children); free(keys); return -1; }
             i = ni;
