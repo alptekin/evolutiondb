@@ -12,6 +12,9 @@ to a small budget; longer outages bubble up to the sync loop.
 """
 from __future__ import annotations
 
+import socket
+import ssl
+import sys
 import time
 from typing import Callable, Dict, Iterable, Iterator, List, Optional
 
@@ -19,7 +22,26 @@ import httpx
 
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-HTTP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+# 90s read budget: a 365-day first-run backfill walks deep message
+# history and the read leg occasionally stalls behind Graph throttling
+# before the 429 even lands — 30s was too tight and surfaced as
+# "read operation timed out".
+HTTP_TIMEOUT = httpx.Timeout(90.0, connect=10.0)
+
+# Transient transport failures we retry with exponential backoff
+# (read/connect timeouts, SSL EOF, connection resets, RemoteDisconnected /
+# IncompleteRead / BadStatusLine). httpx.TransportError is the common base
+# for all of these; the stdlib names are belt-and-suspenders for anything
+# that leaks through unwrapped.
+_TRANSIENT_ERRORS = (
+    httpx.TransportError,
+    socket.timeout,
+    TimeoutError,
+    ssl.SSLError,
+    ConnectionError,
+)
+# Backoff schedule in seconds — 1,2,4,8,16 across at most 5 attempts.
+_TRANSIENT_BACKOFF = (1, 2, 4, 8, 16)
 
 
 class GraphError(RuntimeError):
@@ -101,7 +123,7 @@ class GraphClient:
     def _get_with_retry(self, url: str, retries: int) -> httpx.Response:
         attempt = 0
         while True:
-            resp = self._client.get(url, headers=self._headers())
+            resp = self._request_with_transient_retry(url)
             if resp.status_code == 200:
                 return resp
             if resp.status_code in (429, 503) and attempt < retries:
@@ -112,6 +134,30 @@ class GraphClient:
             raise GraphError(
                 f"GET {url} -> {resp.status_code}: {resp.text[:300]}",
                 status=resp.status_code)
+
+    def _request_with_transient_retry(self, url: str) -> httpx.Response:
+        """Issue one GET, retrying transient transport failures with
+        exponential backoff. A read/connect timeout, SSL EOF, connection
+        reset, or RemoteDisconnected mid-page used to propagate out of the
+        paginator and kill the whole sync pass before any watermark was
+        written. Retrying here keeps a flaky page from restarting the
+        entire 365-day window; only an outage past the budget re-raises.
+        HTTP status handling (429/503 Retry-After, other codes) stays in
+        the caller — this layer only concerns itself with the transport."""
+        for i, backoff in enumerate(_TRANSIENT_BACKOFF):
+            try:
+                return self._client.get(url, headers=self._headers())
+            except _TRANSIENT_ERRORS as exc:
+                # Final attempt exhausted the budget — let it propagate.
+                if i + 1 >= len(_TRANSIENT_BACKOFF):
+                    raise
+                print(f"[teams-sync] transient {type(exc).__name__}: {exc}; "
+                      f"retry {i + 1}/{len(_TRANSIENT_BACKOFF)} in {backoff}s",
+                      file=sys.stderr, flush=True)
+                time.sleep(backoff)
+        # Unreachable: the loop either returns or re-raises on the last
+        # attempt. Assert rather than issue a second un-retried GET.
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _retry_after_seconds(resp: httpx.Response) -> float:

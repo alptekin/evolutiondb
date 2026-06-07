@@ -13,7 +13,10 @@ we cache for the duration of the sync pass.
 """
 from __future__ import annotations
 
+import http.client
 import json
+import socket
+import ssl
 import sys
 import time
 import urllib.error
@@ -23,6 +26,31 @@ from typing import Callable, Dict, Iterator, List, Optional
 
 
 GRAPH_API = "https://graph.microsoft.com/v1.0"
+
+# Per-request socket timeout. Graph occasionally takes >30s to return a
+# fat 50-message page on a cold 365d backfill, so the read times out
+# mid-pagination. 90s gives the slow pages room before we treat the
+# request as transient and retry it.
+REQUEST_TIMEOUT = 90
+
+# Transport-level failures that are worth retrying. These are *not*
+# HTTPError (those carry an HTTP status and are handled separately for
+# 401 re-auth / 429 rate-limit); they are mid-flight network errors —
+# read timeout, SSL EOF, reset connection, server hanging up — that
+# previously escaped the paginator and killed the whole sync pass.
+_TRANSIENT_ERRORS = (
+    socket.timeout,
+    TimeoutError,
+    ssl.SSLError,
+    ConnectionError,
+    http.client.RemoteDisconnected,
+    http.client.IncompleteRead,
+    http.client.BadStatusLine,
+)
+
+# Exponential backoff between transient retries (seconds). Length of
+# the schedule is the retry budget; on the last failure we re-raise.
+_RETRY_BACKOFF = (1, 2, 4, 8, 16)
 
 # Fields we ask Graph to return per message. Keeping this list
 # explicit means we never silently start storing fields users didn't
@@ -74,24 +102,56 @@ class OutlookClient:
             # HTML on our side.
             "Prefer":        "outlook.body-content-type=\"text\"",
         })
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode() or "{}")
-        except urllib.error.HTTPError as e:
-            if e.code == 401 and not retried:
-                return self._get(url, None, retried=True)
-            if e.code == 429 and not retried:
-                wait = int(e.headers.get("Retry-After") or "30")
-                print(f"[outlook-sync] rate limited; sleeping {wait}s",
-                      file=sys.stderr, flush=True)
-                time.sleep(wait)
-                return self._get(url, None, retried=True)
+        # Transient transport failures (read timeout, SSL EOF, reset,
+        # server hang-up) are retried with exponential backoff. HTTPError
+        # carries an HTTP status and is handled below — never retried
+        # here — so 401 re-auth and 429 Retry-After semantics are kept
+        # exactly. URLError that merely *wraps* a transient reason (e.g.
+        # socket.timeout / ssl.SSLError surfaced as URLError.reason) is
+        # also retried; a URLError with a non-transient reason re-raises.
+        attempts = len(_RETRY_BACKOFF) + 1
+        for attempt in range(1, attempts + 1):
             try:
-                payload = json.loads(e.read().decode() or "{}")
-                msg = (payload.get("error") or {}).get("message", str(e))
-            except Exception:
-                msg = str(e)
-            raise GraphError(e.code, msg, url) from None
+                with urllib.request.urlopen(
+                        req, timeout=REQUEST_TIMEOUT) as resp:
+                    return json.loads(resp.read().decode() or "{}")
+            except urllib.error.HTTPError as e:
+                if e.code == 401 and not retried:
+                    return self._get(url, None, retried=True)
+                if e.code == 429 and not retried:
+                    wait = int(e.headers.get("Retry-After") or "30")
+                    print(f"[outlook-sync] rate limited; sleeping {wait}s",
+                          file=sys.stderr, flush=True)
+                    time.sleep(wait)
+                    return self._get(url, None, retried=True)
+                try:
+                    payload = json.loads(e.read().decode() or "{}")
+                    msg = (payload.get("error") or {}).get("message", str(e))
+                except Exception:
+                    msg = str(e)
+                raise GraphError(e.code, msg, url) from None
+            except urllib.error.URLError as e:
+                # URLError is the parent of HTTPError; reaching here means
+                # it is a plain transport error. Retry only when the
+                # wrapped reason is itself transient, else re-raise.
+                if not isinstance(e.reason, _TRANSIENT_ERRORS):
+                    raise
+                err = e
+            except _TRANSIENT_ERRORS as e:
+                err = e
+            # Reached only on a transient failure. Back off and retry
+            # while we still have budget; on the last attempt re-raise.
+            if attempt >= attempts:
+                raise
+            wait = _RETRY_BACKOFF[attempt - 1]
+            print(f"[outlook-sync] transient {err!r}; "
+                  f"retry {attempt}/{len(_RETRY_BACKOFF)} in {wait}s",
+                  file=sys.stderr, flush=True)
+            time.sleep(wait)
+        # Defensive: every loop iteration either returns or raises, so the
+        # loop cannot fall through. This guards against _get ever silently
+        # returning None if that invariant is broken by a future edit.
+        raise RuntimeError("unreachable: retry loop exhausted")
 
     # ---------------------------------------------------------------- #
     #  Pagination                                                       #
