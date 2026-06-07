@@ -43,6 +43,13 @@ _TRANSIENT_ERRORS = (
 # Backoff schedule in seconds — 1,2,4,8,16 across at most 5 attempts.
 _TRANSIENT_BACKOFF = (1, 2, 4, 8, 16)
 
+# Retryable HTTP statuses. 429/503 carry a Retry-After we honour; 502/504 are
+# transient gateway errors (Microsoft-side) that usually omit Retry-After, so
+# they get exponential backoff instead. A bare 502 used to abort the whole
+# 365-day backfill before any watermark was written.
+_RETRYABLE_STATUS = (429, 502, 503, 504)
+_RETRY_AFTER_STATUS = (429, 503)
+
 
 class GraphError(RuntimeError):
     def __init__(self, message: str, status: Optional[int] = None):
@@ -110,8 +117,9 @@ class GraphClient:
         """Walk the @odata.nextLink chain and yield each value row.
 
         Graph's pagination is tail-recursive: each page carries the
-        next URL until the final page omits the field. We honour
-        Retry-After on 429 and 503 with bounded retry budget."""
+        next URL until the final page omits the field. Transient HTTP
+        statuses (429/503 Retry-After, 502/504 gateway) are retried within
+        a bounded budget by _get_with_retry."""
         budget = 5
         while url:
             resp = self._get_with_retry(url, retries=budget)
@@ -126,8 +134,14 @@ class GraphClient:
             resp = self._request_with_transient_retry(url)
             if resp.status_code == 200:
                 return resp
-            if resp.status_code in (429, 503) and attempt < retries:
-                wait = self._retry_after_seconds(resp)
+            if resp.status_code in _RETRYABLE_STATUS and attempt < retries:
+                if resp.status_code in _RETRY_AFTER_STATUS:
+                    wait = self._retry_after_seconds(resp)
+                else:                       # 502/504 gateway: exponential backoff
+                    wait = min(2 ** attempt, 16)
+                print(f"[teams-sync] transient HTTP {resp.status_code} on "
+                      f"{url[:80]}; retry {attempt + 1}/{retries} in {wait}s",
+                      file=sys.stderr, flush=True)
                 time.sleep(wait)
                 attempt += 1
                 continue
