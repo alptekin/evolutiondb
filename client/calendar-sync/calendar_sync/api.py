@@ -11,7 +11,10 @@ very first run we pass `updatedMin` instead, then keep the
 """
 from __future__ import annotations
 
+import http.client
 import json
+import socket
+import ssl
 import sys
 import time
 import urllib.error
@@ -21,6 +24,31 @@ from typing import Callable, Dict, Iterator, List, Optional
 
 
 CAL_API = "https://www.googleapis.com/calendar/v3"
+
+# Transport-level hiccups that are worth retrying: read timeouts, SSL
+# EOF / resets, dropped keep-alive connections, truncated reads. These
+# are distinct from HTTPError (an HTTP response we did get) and must not
+# crash a 365-day backfill — a single flaky page would otherwise lose
+# the whole pass.
+_TRANSIENT = (
+    socket.timeout,
+    TimeoutError,
+    urllib.error.URLError,   # wraps ssl.SSLError / SSL EOF in .reason
+    ssl.SSLError,
+    ConnectionError,         # ConnectionResetError, etc.
+    http.client.RemoteDisconnected,
+    http.client.IncompleteRead,
+    http.client.BadStatusLine,
+)
+_RETRY_BACKOFF = (1, 2, 4, 8, 16)   # seconds; ~5 attempts then re-raise
+_HTTP_TIMEOUT = 90                  # per-request read timeout (seconds)
+
+# Transient HTTP server errors (a real response, so HTTPError, not a
+# transport hiccup) that Google occasionally returns under load. Retry
+# them a bounded number of times with backoff before giving up — a 5xx
+# blip on one page must not fail a whole calendar.
+_SERVER_ERRORS = (500, 502, 503, 504)
+_SERVER_RETRY_BACKOFF = (1, 2, 4, 8)   # seconds; ~4 attempts then raise
 
 
 class CalendarError(Exception):
@@ -35,8 +63,29 @@ class CalendarClient:
         self._token_provider = token_provider
         self.ua = user_agent
 
+    def _urlopen_json(self, req: urllib.request.Request) -> Dict:
+        """Issue the request, retrying transient transport failures with
+        exponential backoff. HTTPError is *not* retried here — it carries
+        a real HTTP response (401/429/410/…) that _get() handles itself —
+        so we let it propagate untouched."""
+        for attempt, wait in enumerate(_RETRY_BACKOFF, start=1):
+            try:
+                with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+                    return json.loads(resp.read().decode() or "{}")
+            except urllib.error.HTTPError:
+                raise  # real HTTP response — caller's except handles it
+            except _TRANSIENT as e:
+                if attempt >= len(_RETRY_BACKOFF):
+                    raise  # out of attempts — surface the transport error
+                print(f"[calendar-sync] transient {e}; "
+                      f"retry {attempt}/{len(_RETRY_BACKOFF)} in {wait}s",
+                      file=sys.stderr, flush=True)
+                time.sleep(wait)
+        # unreachable: the loop either returns or re-raises
+        raise RuntimeError("retry loop exhausted")
+
     def _get(self, path: str, params: Optional[Dict[str, str]] = None,
-              retried: bool = False) -> Dict:
+              retried: bool = False, server_attempt: int = 0) -> Dict:
         url = f"{CAL_API}{path}"
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
@@ -46,8 +95,7 @@ class CalendarClient:
             "User-Agent":    self.ua,
         })
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode() or "{}")
+            return self._urlopen_json(req)
         except urllib.error.HTTPError as e:
             if e.code == 401 and not retried:
                 # Access token expired between provider-call and
@@ -65,6 +113,20 @@ class CalendarClient:
                 # this as a typed exception so the sync loop can
                 # handle it cleanly.
                 raise SyncTokenExpired() from None
+            if e.code in _SERVER_ERRORS and server_attempt < len(
+                    _SERVER_RETRY_BACKOFF):
+                # Transient Google 5xx. Back off and retry a bounded
+                # number of times before falling through to raising
+                # CalendarError, so a momentary blip on one page does
+                # not fail the whole calendar.
+                wait = _SERVER_RETRY_BACKOFF[server_attempt]
+                print(f"[calendar-sync] server error {e.code}; "
+                      f"retry {server_attempt + 1}/"
+                      f"{len(_SERVER_RETRY_BACKOFF)} in {wait}s",
+                      file=sys.stderr, flush=True)
+                time.sleep(wait)
+                return self._get(path, params, retried=retried,
+                                 server_attempt=server_attempt + 1)
             try:
                 payload = json.loads(e.read().decode() or "{}")
                 msg = (payload.get("error") or {}).get("message", str(e))
@@ -133,3 +195,6 @@ class CalendarClient:
 class SyncTokenExpired(Exception):
     """Raised when Google returns 410 Gone — the syncToken is older
     than 30 days and a full re-sync is required."""
+    def __init__(self, msg: str = "syncToken expired (410 Gone); "
+                                   "full re-sync required"):
+        super().__init__(msg)

@@ -223,7 +223,8 @@ def sync_once(cfg: Config, *, since_iso: Optional[str],
                 updated_min_iso=None if sync_token else since_iso,
             )
         except api_mod.SyncTokenExpired:
-            # 410 Gone — drop the stale token and bootstrap fresh.
+            # 410 Gone — drop the stale token and bootstrap fresh from
+            # the --since window (time-windowed full re-sync).
             print(f"[calendar-sync] {cal_id}: syncToken expired, "
                   "doing full re-sync", file=sys.stderr, flush=True)
             if store:
@@ -232,6 +233,17 @@ def sync_once(cfg: Config, *, since_iso: Optional[str],
                 page = client.list_events(
                     cal_id, sync_token=None,
                     updated_min_iso=since_iso)
+            except api_mod.SyncTokenExpired as exc:
+                # The updatedMin bootstrap can itself hit Google's
+                # exact-30-day ceiling and answer 410. Without a
+                # syncToken to drop there's nothing left to retry —
+                # report it instead of letting a bare (empty-string)
+                # SyncTokenExpired bubble out as {"error": ""}.
+                print(f"[calendar-sync] {cal_id} re-sync hit the "
+                      f"updatedMin ceiling: {exc} — narrow --since "
+                      "below 30d", file=sys.stderr, flush=True)
+                counters["errors"] += 1
+                continue
             except api_mod.CalendarError as exc:
                 print(f"[calendar-sync] {cal_id} re-sync failed: {exc}",
                       file=sys.stderr, flush=True)
