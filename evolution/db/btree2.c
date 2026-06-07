@@ -1023,6 +1023,329 @@ void bt2_destroy(BTree2 *tree)
 }
 
 /* ----------------------------------------------------------------
+ *  Compaction / rebalancing (RECLAIM-time only)
+ *
+ *  bt2_delete stays a lazy tombstone so the system catalog and every
+ *  hot-path caller keep a structurally stable tree (root never moves,
+ *  pages never freed). bt2_compact is the offline maintenance pass that
+ *  reclaims space: drop tombstones, then borrow/merge across underflowing
+ *  siblings (full B+ rebalancing), free emptied pages, collapse the root.
+ *
+ *  Nodes are deserialized into local arrays, rebalanced, then reserialized
+ *  — this keeps the borrow/merge bookkeeping far less error-prone than
+ *  in-place byte shuffling. Min-fill is a heuristic (better space usage),
+ *  NOT a correctness invariant; the only hard invariant is that a node's
+ *  bytes never exceed NODE_CAPACITY, which merge/borrow both preserve.
+ * ---------------------------------------------------------------- */
+#define BT2_MIN_FILL   (NODE_CAPACITY / 2)
+#define BT2_MAX_SLOTS  1024
+
+typedef struct { uint8_t klen; char key[BT2_MAX_KEY_LEN]; RowID rid; } LeafSlot;
+typedef struct { uint8_t klen; char key[BT2_MAX_KEY_LEN]; } IntKey;
+
+/* Load a leaf page's entries into slots[]. When drop_tombstones is set,
+ * {0,0} entries are skipped. Returns entry count, or -1 on overflow. */
+static int bt2c_leaf_load(const void *page, LeafSlot *slots, int max,
+                          int drop_tombstones)
+{
+    const NodeHeader *nh = node_hdr((void *)page);
+    int pos = 0, n = 0;
+    for (int i = 0; i < nh->num_keys; i++) {
+        const char *k; int kl; RowID rid;
+        int consumed = leaf_read_entry(page, pos, &k, &kl, &rid);
+        pos += consumed;
+        if (drop_tombstones && rid.page_no == 0 && rid.slot_idx == 0)
+            continue;
+        if (n >= max) return -1;
+        slots[n].klen = (uint8_t)kl;
+        memcpy(slots[n].key, k, kl);
+        slots[n].rid = rid;
+        n++;
+    }
+    return n;
+}
+
+static int bt2c_leaf_bytes(const LeafSlot *s, int n)
+{
+    int b = 0;
+    for (int i = 0; i < n; i++) b += 1 + s[i].klen + ROWID_SIZE;
+    return b;
+}
+
+static void bt2c_leaf_store(uint32_t page_no, uint32_t prev, uint32_t next,
+                            const LeafSlot *s, int n)
+{
+    char page[EVO_PAGE_SIZE];
+    memset(page, 0, EVO_PAGE_SIZE);
+    PageHeader *ph = (PageHeader *)page;
+    ph->page_type = PAGE_BTREE_LEAF;
+    ph->page_id   = page_no;
+    ph->prev_page = prev;
+    ph->next_page = next;
+    node_hdr(page)->num_keys = (uint16_t)n;
+    int pos = 0;
+    for (int i = 0; i < n; i++)
+        pos += leaf_write_entry(page, pos, s[i].key, s[i].klen, s[i].rid);
+    pgm_write_page(page_no, page);
+}
+
+/* Load an internal page into children[] (nk+1) and keys[] (nk).
+ * Returns nk, or -1 on overflow. */
+static int bt2c_int_load(const void *page, uint32_t *children, IntKey *keys,
+                         int max)
+{
+    const NodeHeader *nh = node_hdr((void *)page);
+    int nk = nh->num_keys;
+    if (nk > max) return -1;
+    for (int i = 0; i <= nk; i++)
+        children[i] = (uint32_t)internal_read_child(page, i);
+    for (int i = 0; i < nk; i++) {
+        const char *k; int kl;
+        internal_read_key(page, i, &k, &kl);
+        keys[i].klen = (uint8_t)kl;
+        memcpy(keys[i].key, k, kl);
+    }
+    return nk;
+}
+
+static int bt2c_int_bytes(const IntKey *keys, int nk)
+{
+    int b = 4 * (nk + 1);
+    for (int i = 0; i < nk; i++) b += 1 + keys[i].klen;
+    return b;
+}
+
+static void bt2c_int_store(uint32_t page_no, const uint32_t *children,
+                           const IntKey *keys, int nk)
+{
+    char page[EVO_PAGE_SIZE];
+    memset(page, 0, EVO_PAGE_SIZE);
+    PageHeader *ph = (PageHeader *)page;
+    ph->page_type = PAGE_BTREE_INT;
+    ph->page_id   = page_no;
+    node_hdr(page)->num_keys = (uint16_t)nk;
+    uint8_t *data = (uint8_t *)page + NODE_DATA_OFF;
+    int pos = 0;
+    for (int i = 0; i < nk; i++) {
+        memcpy(data + pos, &children[i], 4); pos += 4;
+        data[pos] = keys[i].klen; pos++;
+        memcpy(data + pos, keys[i].key, keys[i].klen); pos += keys[i].klen;
+    }
+    memcpy(data + pos, &children[nk], 4);
+    pgm_write_page(page_no, page);
+}
+
+/* Drop separator key `sep` and child pointer `right` from a parent's in-memory
+ * arrays after the right sibling was merged away. Centralizes the delicate
+ * index shuffling shared by the leaf and internal merge paths. */
+static void bt2c_parent_drop(uint32_t *children, IntKey *keys, int *nkp,
+                             int sep, int right)
+{
+    int nk = *nkp;
+    for (int j = sep; j < nk - 1; j++) keys[j] = keys[j + 1];
+    for (int j = right; j < nk; j++)   children[j] = children[j + 1];
+    *nkp = nk - 1;
+}
+
+/* Rebalance the underflowing child at parent index `ci`, using an adjacent
+ * sibling. Operates on the parent's in-memory children/keys/nkp arrays
+ * and performs page I/O on the two siblings (merge frees one page).
+ * Returns the next parent child-index to process, or -1 on error. */
+static int bt2c_rebalance(uint32_t *children, IntKey *keys, int *nkp, int ci)
+{
+    int nk = *nkp;
+    int left, right;
+    if (ci > 0) { left = ci - 1; right = ci; }
+    else        { left = ci;     right = ci + 1; }
+    if (right > nk) return ci + 1;   /* no sibling available */
+    int sep = left;                  /* parent separator between left & right */
+    uint32_t lp = children[left], rp = children[right];
+
+    char lpage[EVO_PAGE_SIZE], rpage[EVO_PAGE_SIZE];
+    pgm_read_page(lp, lpage);
+    pgm_read_page(rp, rpage);
+    int is_leaf = (node_type(lpage) == PAGE_BTREE_LEAF);
+
+    if (is_leaf) {
+        LeafSlot *L = malloc(sizeof(LeafSlot) * (size_t)(BT2_MAX_SLOTS * 2));
+        LeafSlot *R = malloc(sizeof(LeafSlot) * (size_t)BT2_MAX_SLOTS);
+        if (!L || !R) { free(L); free(R); return -1; }
+        int nL = bt2c_leaf_load(lpage, L, BT2_MAX_SLOTS * 2, 0);
+        int nR = bt2c_leaf_load(rpage, R, BT2_MAX_SLOTS, 0);
+        uint32_t Lprev = ((PageHeader *)lpage)->prev_page;
+        uint32_t Rnext = ((PageHeader *)rpage)->next_page;
+        if (nL < 0 || nR < 0) { free(L); free(R); return -1; }
+
+        if (bt2c_leaf_bytes(L, nL) + bt2c_leaf_bytes(R, nR) <= NODE_CAPACITY) {
+            /* MERGE right into left */
+            for (int j = 0; j < nR; j++) L[nL++] = R[j];
+            bt2c_leaf_store(lp, Lprev, Rnext, L, nL);
+            if (Rnext != 0) {
+                char nb[EVO_PAGE_SIZE];
+                pgm_read_page(Rnext, nb);
+                ((PageHeader *)nb)->prev_page = lp;
+                pgm_write_page(Rnext, nb);
+            }
+            pgm_free_page(rp);
+            bt2c_parent_drop(children, keys, nkp, sep, right);
+            free(L); free(R);
+            return (ci > 0) ? ci : ci + 1;
+        }
+        /* BORROW — combined exceeds a page, so both stay non-empty */
+        if (ci > 0) {                 /* right (ci) underflows: pull from left */
+            while (bt2c_leaf_bytes(R, nR) < BT2_MIN_FILL && nL > 1) {
+                for (int j = nR; j > 0; j--) R[j] = R[j - 1];
+                R[0] = L[nL - 1];
+                nR++; nL--;
+                if (bt2c_leaf_bytes(L, nL) < BT2_MIN_FILL) break;
+            }
+        } else {                      /* left (ci) underflows: pull from right */
+            while (bt2c_leaf_bytes(L, nL) < BT2_MIN_FILL && nR > 1) {
+                L[nL++] = R[0];
+                for (int j = 0; j < nR - 1; j++) R[j] = R[j + 1];
+                nR--;
+                if (bt2c_leaf_bytes(R, nR) < BT2_MIN_FILL) break;
+            }
+        }
+        bt2c_leaf_store(lp, Lprev, rp, L, nL);   /* L.next = rp */
+        bt2c_leaf_store(rp, lp, Rnext, R, nR);   /* R.prev = lp */
+        keys[sep].klen = R[0].klen;              /* separator = first key of R */
+        memcpy(keys[sep].key, R[0].key, R[0].klen);
+        free(L); free(R);
+        return ci + 1;
+    }
+
+    /* INTERNAL siblings */
+    uint32_t *Lc = malloc(sizeof(uint32_t) * (size_t)(BT2_MAX_SLOTS * 2 + 2));
+    IntKey   *Lk = malloc(sizeof(IntKey)   * (size_t)(BT2_MAX_SLOTS * 2 + 1));
+    uint32_t *Rc = malloc(sizeof(uint32_t) * (size_t)(BT2_MAX_SLOTS + 1));
+    IntKey   *Rk = malloc(sizeof(IntKey)   * (size_t)BT2_MAX_SLOTS);
+    if (!Lc || !Lk || !Rc || !Rk) { free(Lc); free(Lk); free(Rc); free(Rk); return -1; }
+    int nL = bt2c_int_load(lpage, Lc, Lk, BT2_MAX_SLOTS * 2);
+    int nR = bt2c_int_load(rpage, Rc, Rk, BT2_MAX_SLOTS);
+    if (nL < 0 || nR < 0) { free(Lc); free(Lk); free(Rc); free(Rk); return -1; }
+
+    /* Merged size: children (nL+1)+(nR+1), keys = Lk + sep + Rk */
+    int merged_keys = nL + 1 + nR;
+    int mb = 4 * (merged_keys + 1);
+    for (int j = 0; j < nL; j++) mb += 1 + Lk[j].klen;
+    mb += 1 + keys[sep].klen;
+    for (int j = 0; j < nR; j++) mb += 1 + Rk[j].klen;
+
+    if (mb <= NODE_CAPACITY) {
+        /* MERGE: pull the parent separator down between the two child sets */
+        Lk[nL] = keys[sep];
+        for (int j = 0; j < nR; j++)  Lk[nL + 1 + j] = Rk[j];
+        for (int j = 0; j <= nR; j++) Lc[nL + 1 + j] = Rc[j];
+        bt2c_int_store(lp, Lc, Lk, merged_keys);
+        pgm_free_page(rp);
+        bt2c_parent_drop(children, keys, nkp, sep, right);
+        free(Lc); free(Lk); free(Rc); free(Rk);
+        return (ci > 0) ? ci : ci + 1;
+    }
+    /* BORROW — rotate one child+key through the parent separator */
+    if (ci > 0) {                 /* right (ci) underflows: rotate from left */
+        for (int j = nR; j > 0; j--)      Rk[j] = Rk[j - 1];
+        for (int j = nR + 1; j > 0; j--)  Rc[j] = Rc[j - 1];
+        Rk[0] = keys[sep];
+        Rc[0] = Lc[nL];
+        nR++;
+        keys[sep] = Lk[nL - 1];
+        nL--;
+    } else {                      /* left (ci) underflows: rotate from right */
+        Lk[nL] = keys[sep];
+        Lc[nL + 1] = Rc[0];
+        nL++;
+        keys[sep] = Rk[0];
+        for (int j = 0; j < nR - 1; j++) Rk[j] = Rk[j + 1];
+        for (int j = 0; j < nR; j++)     Rc[j] = Rc[j + 1];
+        nR--;
+    }
+    bt2c_int_store(lp, Lc, Lk, nL);
+    bt2c_int_store(rp, Rc, Rk, nR);
+    free(Lc); free(Lk); free(Rc); free(Rk);
+    return ci + 1;
+}
+
+/* Recursively compact a subtree. Sets *out_uf if this (non-root) node ends up
+ * below min-fill, so the parent can rebalance it. Returns 0 / -1. */
+static int bt2c_compact_rec(uint32_t page_no, int *out_uf, int is_root)
+{
+    char page[EVO_PAGE_SIZE];
+    pgm_read_page(page_no, page);
+
+    if (node_type(page) == PAGE_BTREE_LEAF) {
+        uint32_t prev = ((PageHeader *)page)->prev_page;
+        uint32_t next = ((PageHeader *)page)->next_page;
+        LeafSlot *s = malloc(sizeof(LeafSlot) * (size_t)BT2_MAX_SLOTS);
+        if (!s) return -1;
+        int n = bt2c_leaf_load(page, s, BT2_MAX_SLOTS, 1);
+        if (n < 0) { free(s); return -1; }
+        bt2c_leaf_store(page_no, prev, next, s, n);
+        int bytes = bt2c_leaf_bytes(s, n);
+        free(s);
+        if (out_uf) *out_uf = (!is_root) && (bytes < BT2_MIN_FILL);
+        return 0;
+    }
+
+    uint32_t *children = malloc(sizeof(uint32_t) * (size_t)(BT2_MAX_SLOTS + 1));
+    IntKey   *keys     = malloc(sizeof(IntKey)   * (size_t)BT2_MAX_SLOTS);
+    if (!children || !keys) { free(children); free(keys); return -1; }
+    int nk = bt2c_int_load(page, children, keys, BT2_MAX_SLOTS);
+    if (nk < 0) { free(children); free(keys); return -1; }
+
+    int i = 0;
+    while (i <= nk) {            /* children are indices 0..nk */
+        int cu = 0;
+        if (bt2c_compact_rec(children[i], &cu, 0) != 0) {
+            free(children); free(keys); return -1;
+        }
+        if (cu && nk + 1 > 1) {
+            int ni = bt2c_rebalance(children, keys, &nk, i);
+            if (ni < 0) { free(children); free(keys); return -1; }
+            i = ni;
+        } else {
+            i++;
+        }
+    }
+
+    bt2c_int_store(page_no, children, keys, nk);
+    int bytes = bt2c_int_bytes(keys, nk);
+    if (out_uf) *out_uf = (!is_root) && (bytes < BT2_MIN_FILL);
+    free(children); free(keys);
+    return 0;
+}
+
+int bt2_compact(BTree2 *tree)
+{
+    if (!tree || tree->root_page == 0) return -1;
+
+    char page[EVO_PAGE_SIZE];
+    pgm_read_page(tree->root_page, page);
+
+    if (node_type(page) == PAGE_BTREE_LEAF) {
+        /* Single-leaf tree: compact tombstones in place, never freed. */
+        int uf = 0;
+        return bt2c_compact_rec(tree->root_page, &uf, 1);
+    }
+
+    if (bt2c_compact_rec(tree->root_page, NULL, 1) != 0) return -1;
+
+    /* Collapse a chain of single-child roots. */
+    for (;;) {
+        pgm_read_page(tree->root_page, page);
+        if (node_type(page) != PAGE_BTREE_INT) break;
+        if (node_hdr(page)->num_keys > 0) break;
+        uint32_t only = (uint32_t)internal_read_child(page, 0);
+        if (only == 0) break;
+        uint32_t old_root = tree->root_page;
+        tree->root_page = only;
+        pgm_free_page(old_root);
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------
  *  bt2_stats — compute tree depth, leaf page count, entry count
  * ---------------------------------------------------------------- */
 int bt2_stats(BTree2 *tree, BTree2Stats *out)

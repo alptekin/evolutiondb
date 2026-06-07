@@ -106,6 +106,20 @@ int bt2_cursor_seek(BTree2 *tree, const char *key, BTree2Cursor *cur);
 /* Free all pages belonging to the tree (for DROP TABLE). */
 void bt2_destroy(BTree2 *tree);
 
+/* RECLAIM-time space reclamation. Physically removes tombstoned entries,
+ * merges/borrows across underflowing sibling nodes, frees emptied pages and
+ * collapses the root when it drops to a single child. tree->root_page MAY
+ * change — the caller MUST persist it afterwards (cat_update_pk_root /
+ * cat_update_index_root).
+ *
+ * bt2_delete deliberately stays a lazy tombstone (root never moves, no page
+ * freed) so the system catalog and every hot-path caller keep a structurally
+ * stable tree; this pass is the only place that rebalances. It MUST run under
+ * the global DML/parse lock with no concurrent readers holding leaf page-number
+ * hints or live cursors — the RECLAIM path satisfies that.
+ * Returns 0 on success, -1 on error. */
+int bt2_compact(BTree2 *tree);
+
 /* Compute tree statistics: depth, leaf/entry counts.
  * Returns 0 on success, -1 if tree is empty. */
 int bt2_stats(BTree2 *tree, BTree2Stats *out);
