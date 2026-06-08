@@ -55,6 +55,7 @@ class FakeBackend:
         self.entity_store = f"{prefix}_entities"
         self.loops_store = f"{prefix}_loops"
         self.selfmodel_store = f"{prefix}_self"
+        self.outbox_store = f"{prefix}_outbox"
         self.profile_store = f"{prefix}_profile_clusters"
         # store(str) -> {(ns, key): value_str}
         self._rows = {}
