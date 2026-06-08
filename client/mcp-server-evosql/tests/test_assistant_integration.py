@@ -46,7 +46,7 @@ def main():
         print(f"  SKIP (no server on :{PORT}: {exc})")
         return 0
 
-    from mcp_server_evosql import open_loops, self_model, brief, suggest
+    from mcp_server_evosql import open_loops, self_model, brief, suggest, outbox
 
     prefix = f"mcpit{int(NOW)}"
     ns = "alp_it"
@@ -114,6 +114,23 @@ def main():
     assert "Ulaş" in speakers and any(s != "Ulaş" for s in speakers)
     assert isinstance(top["draft"], str) and top["draft"]
     print("  ok  suggest_reply: grounded draft for the awaiting_me loop")
+
+    # --- action loop: queue -> approve (dry-run) -> reject, on the real store --
+    os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    outbox.TRANSPORTS.clear()                            # no transport -> dry-run
+    qi = outbox.queue(b, ns, top["loop_key"], "Tabii, dosya ekte.",
+                      channel=top["source"], source=top["source"],
+                      to=top["counterparty"])
+    assert qi["status"] == "pending"
+    assert [it["id"] for it in outbox.list_pending(b, ns)] == [qi["id"]]
+    appr = outbox.approve_send(b, ns, qi["id"])
+    assert appr["ok"] and not appr["sent"] and appr["dry_run"]   # nothing sent
+    assert outbox._load(b, ns, qi["id"])["status"] == "approved"
+    qi2 = outbox.queue(b, ns, "loop_drop", "iptal", channel="gmail",
+                       source="gmail", to="X")
+    assert outbox.reject(b, ns, qi2["id"])["ok"]
+    assert outbox._load(b, ns, qi2["id"])["status"] == "rejected"
+    print("  ok  outbox: queue -> approve(dry-run) -> reject on live store")
 
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
