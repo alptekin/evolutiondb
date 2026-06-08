@@ -362,6 +362,11 @@ class MemoryBackend:
         # team list prioritises loops; the loops feed the self-model commitments.
         self.loops_store = f"{prefix}_loops"
         self.selfmodel_store = f"{prefix}_self"
+        # Action loop (read -> suggest -> APPROVE -> send): drafted replies are
+        # queued here as pending items; nothing leaves the machine without an
+        # explicit approve_send, and delivery is a dry-run unless a real
+        # transport is wired and EVOSQL_SEND_ENABLED is set.
+        self.outbox_store = f"{prefix}_outbox"
         self.graph_boost = _resolve_boost("EVOSQL_GRAPH_BOOST", 0.30)
         self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
         # Episodes (Adım 16): a weekly job groups recent rows into episodes
@@ -526,7 +531,8 @@ class MemoryBackend:
                   ("MEMORY STORE", self.core_store),
                   ("MEMORY STORE", self.gist_store),
                   ("MEMORY STORE", self.loops_store),
-                  ("MEMORY STORE", self.selfmodel_store)]
+                  ("MEMORY STORE", self.selfmodel_store),
+                  ("MEMORY STORE", self.outbox_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:
@@ -2785,6 +2791,71 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "queue_reply",
+        "description": (
+            "Queue a reply for sending — the APPROVE step of the action loop. "
+            "Pass the loop_key (from daily_brief / suggest_reply) and the final "
+            "body text (the user's edited/approved wording). This creates a "
+            "PENDING item only; it does NOT send. The user must then call "
+            "approve_send. Re-queuing the same loop replaces its pending draft."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "loop_key": {"type": "string",
+                             "description": "The loop this reply answers."},
+                "body": {"type": "string",
+                         "description": "The reply text to queue for approval."},
+                "to": {"type": "string",
+                       "description": "Recipient override; defaults to the "
+                                      "loop's counterparty."},
+            },
+            "required": ["loop_key", "body"],
+        },
+    },
+    {
+        "name": "list_pending_replies",
+        "description": (
+            "List replies queued and awaiting approval (nothing here has been "
+            "sent). Call this to review the outbox before approving."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "approve_send",
+        "description": (
+            "Approve and send a queued reply — the ONLY tool that delivers. "
+            "Requires the item_id from queue_reply / list_pending_replies. "
+            "Delivery is a DRY-RUN unless a real transport is wired and "
+            "EVOSQL_SEND_ENABLED is set, so today this records intent without "
+            "sending. Idempotent: approving an already-sent item does not "
+            "re-send. Only call this with the user's explicit go-ahead."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string",
+                            "description": "The outbox item to approve and send."},
+            },
+            "required": ["item_id"],
+        },
+    },
+    {
+        "name": "reject_reply",
+        "description": (
+            "Cancel a queued reply so it will not be sent. Requires the item_id. "
+            "Errors if the item was already sent."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string",
+                            "description": "The outbox item to reject."},
+            },
+            "required": ["item_id"],
+        },
+    },
 ]
 
 
@@ -2942,6 +3013,44 @@ class MCPServer:
             res = suggest.suggest_replies(b, self.user_id, top=top,
                                           loop_key=args.get("loop_key"))
             return {"ok": True, "user_id": self.user_id, **res}
+
+        if name == "queue_reply":
+            from . import outbox, suggest
+            loop_key = args.get("loop_key") or ""
+            body = args.get("body") or ""
+            if not loop_key or not body.strip():
+                return {"error": "queue_reply requires `loop_key` and `body`"}
+            loop = suggest._load_loops(b, self.user_id).get(loop_key, {})
+            try:
+                item = outbox.queue(b, self.user_id, loop_key, body,
+                                    channel=loop.get("source"),
+                                    source=loop.get("source"),
+                                    to=args.get("to") or loop.get("counterparty"),
+                                    subject=loop.get("subject"))
+            except ValueError as exc:
+                return {"error": str(exc)}
+            return {"ok": True, "id": item["id"], "queued": item,
+                    "note": "pending approval — nothing sent. Call approve_send "
+                            "with this id to deliver."}
+
+        if name == "list_pending_replies":
+            from . import outbox
+            return {"ok": True, "user_id": self.user_id,
+                    "pending": outbox.list_pending(b, self.user_id)}
+
+        if name == "approve_send":
+            from . import outbox
+            item_id = args.get("item_id") or ""
+            if not item_id:
+                return {"error": "approve_send requires `item_id`"}
+            return outbox.approve_send(b, self.user_id, item_id)
+
+        if name == "reject_reply":
+            from . import outbox
+            item_id = args.get("item_id") or ""
+            if not item_id:
+                return {"error": "reject_reply requires `item_id`"}
+            return outbox.reject(b, self.user_id, item_id)
 
         return {"error": f"unknown tool: {name}"}
 
