@@ -27,7 +27,14 @@ from datetime import datetime, timezone
 
 SOURCES = (("gmail", "gmail"), ("teams", "teams_chat"), ("outlook", "outlook"))
 ACTIONABLE_DAYS = 90          # older than this = stale, kept but deprioritised
+PROMISE_DAYS = 45             # a promise older than this is probably moot
 _QUESTION = re.compile(r'\?|\bmi\b|\bmu\b|\bmı\b|\bmü\b|misin|musun|edebilir', re.I)
+# things YOU said you'd do, in your OUTBOUND messages -> "promises I made"
+_PROMISE = re.compile(
+    r'(yapacağ|yapıca|gönderece|hallede|halledece|bakacağ|bakıca|ayarlayaca|'
+    r'ekleyece|dönece|dönerim|iletece|yollayaca|yollarım|çözece|tamamlaya|'
+    r'hazırlaya|paylaşaca|kontrol edece|halledeyim|bakayım|yapayım|'
+    r"i will\b|i'll\b|going to|will do|will send|will check|let me)", re.I)
 
 _CLOSE = re.compile(
     r'(çözüldü|düzelt|tamamd|teşekkür|halloldu|sağ ?ol|thank|done|eyvallah|'
@@ -226,6 +233,32 @@ def job_open_loops(backend, ns: str) -> int:
             continue                                   # short ack -> closed
         base["direction"] = "awaiting_me"
         open_now[loop_key] = base
+
+    # --- promises: things YOU said you'd do, not obviously closed since -----
+    for (source, key), msgs in threads.items():
+        mine = [m for m in msgs if m[1] and _PROMISE.search(m[4] or "")]
+        if not mine:
+            continue
+        t, out, who, subj, text, auto = mine[-1]      # your most recent promise
+        age = int((now - t) / 86400)
+        if age > PROMISE_DAYS:
+            continue
+        # a later inbound "thanks/done" implies it got handled
+        if any(m[0] > t and (not m[1]) and _CLOSE.search(m[4] or "") for m in msgs):
+            continue
+        inbound_who = [m[2] for m in msgs if not m[1]]
+        cp = inbound_who[-1] if inbound_who else who    # the other party, not me
+        pk = "loop_iowe_%s_%s" % (source, abs(hash(key)) % (10 ** 12))
+        open_now[pk] = {
+            "kind": "open_loop", "direction": "i_owe_them", "source": source,
+            "counterparty": cp, "thread_key": str(key),
+            "last_ts": datetime.fromtimestamp(t, timezone.utc).isoformat(),
+            "age_days": age, "subject": "", "snippet": (text or "")[:200],
+            "what": (text or "")[:120], "status": "open", "loop_type": "promise",
+            "actionable": age <= ACTIONABLE_DAYS,
+            "priority": "high" if cp.lower() in team else "normal",
+            "refreshed_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+        }
 
     # --- LLM classifier: request vs question vs FYI/closure (opt-in, 1 call) ---
     from . import prefs

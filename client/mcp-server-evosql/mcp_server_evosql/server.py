@@ -2732,6 +2732,34 @@ TOOLS = [
             "required": ["query_id"],
         },
     },
+    {
+        "name": "set_language",
+        "description": (
+            "Set the language the assistant writes its summaries in (open-loop "
+            "'what' lines and the about-me dossier). Call this when the user "
+            "says e.g. '/language türkçe' or 'reply in Turkish from now on'. "
+            "Persists until changed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "language": {"type": "string",
+                             "description": "e.g. türkçe, english, deutsch"},
+            },
+            "required": ["language"],
+        },
+    },
+    {
+        "name": "daily_brief",
+        "description": (
+            "Return the user's morning brief: who is waiting on them (with the "
+            "thing owed), what they're waiting on others for, and the promises "
+            "they made — derived from their mail/teams/calendar. Call this when "
+            "the user asks what's on their plate, who's waiting, or for a "
+            "catch-up / standup summary."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -2859,6 +2887,25 @@ class MCPServer:
             if not key:
                 return {"error": "restore_memory requires `key`"}
             return {"ok": b.restore(self.user_id, key), "key": key}
+
+        if name == "set_language":
+            from . import prefs
+            lang = args.get("language") or ""
+            if not lang.strip():
+                return {"error": "set_language requires `language`"}
+            lang = prefs.set_language(b, self.user_id, lang)
+            return {"ok": True, "language": lang,
+                    "note": f"Summaries will be written in {lang} from the next "
+                            f"open_loops/self_model run."}
+
+        if name == "daily_brief":
+            from . import brief, prefs
+            data = brief.collect(b, self.user_id)
+            _lang, was_set = prefs.get_language(b, self.user_id)
+            text = brief.render(data, name=self.user_id.split("_")[0],
+                                lang_set=was_set)
+            return {"ok": True, "brief": text,
+                    "waiting_on_you": len(data["waiting_me"])}
 
         return {"error": f"unknown tool: {name}"}
 
