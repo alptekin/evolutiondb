@@ -357,6 +357,11 @@ class MemoryBackend:
         # is opt-in via EVOSQL_GRAPH_BOOST>0 (latency-sensitive hot path).
         self.graph_store = f"{prefix}_graph_edges"
         self.graph_build = os.environ.get("EVOSQL_GRAPH_BUILD", "1") != "0"
+        # Assistant layer: open commitments ("who's waiting on me") and the
+        # structured self-model ("about me"). They cross-feed — the self-model's
+        # team list prioritises loops; the loops feed the self-model commitments.
+        self.loops_store = f"{prefix}_loops"
+        self.selfmodel_store = f"{prefix}_self"
         self.graph_boost = _resolve_boost("EVOSQL_GRAPH_BOOST", 0.30)
         self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
         # Episodes (Adım 16): a weekly job groups recent rows into episodes
@@ -519,7 +524,9 @@ class MemoryBackend:
                   ("MEMORY STORE", self.skill_store),
                   ("MEMORY STORE", self.intentions_store),
                   ("MEMORY STORE", self.core_store),
-                  ("MEMORY STORE", self.gist_store)]
+                  ("MEMORY STORE", self.gist_store),
+                  ("MEMORY STORE", self.loops_store),
+                  ("MEMORY STORE", self.selfmodel_store)]
         if self.embedder2 is not None and self.embedder2.kind != "none":
             stores.append(("MEMORY STORE", self.emb2_store))
         for kind, name in stores:

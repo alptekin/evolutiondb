@@ -112,6 +112,21 @@ def job_embed_missing(backend, ns: str) -> int:
         if not vec:
             continue
         rec["emb"] = encode_vec(vec)
+        # Keep the PUT statement under the engine's ~8 KB per-statement cap. A
+        # handful of records have a body that, once the packed embedding and SQL
+        # escaping are added, pushes the statement over — and a single oversized
+        # PUT drops the connection and aborts the whole pass (rows=0). Truncate
+        # the STORED fact for just those records; the embedding was already
+        # computed from the full fact above, so semantic recall is preserved.
+        def _stmt_len(r):
+            return len(_e(json.dumps(r))) + len(_e(ns)) + len(_e(k)) + 64
+        if _stmt_len(rec) > 7600:
+            f = rec.get("fact", "")
+            while _stmt_len(rec) > 7600 and len(f) > 200:
+                f = f[: max(200, int(len(f) * 0.85))]
+                rec["fact"] = f + " …[truncated]"
+            if _stmt_len(rec) > 7600:
+                continue  # still too big (pathological) — skip rather than break
         backend._exec(f"MEMORY PUT INTO {backend.memory} VALUES "
                       f"('{_e(ns)}','{_e(k)}','{_e(json.dumps(rec))}')")
         done += 1
@@ -235,6 +250,21 @@ def job_intentions(backend, ns: str) -> int:
     return len(due)
 
 
+def job_open_loops(backend, ns: str) -> int:
+    """Assistant: track open commitments — threads whose last message is inbound
+    and unanswered ('who is waiting on me'). Deterministic, LLM-free."""
+    from . import open_loops
+    return open_loops.job_open_loops(backend, ns)
+
+
+def job_self_model(backend, ns: str) -> int:
+    """Assistant: synthesize the structured 'about me' dossier from the
+    high-signal derived stores (+ open loops). Runs AFTER open_loops so its
+    commitments section is fresh; its team list feeds the next open_loops run."""
+    from . import self_model
+    return self_model.job_self_model(backend, ns)
+
+
 JOBS: List[Job] = [
     Job("embed_missing",    "hourly",            job_embed_missing),
     Job("extract_entities", "hourly",            job_extract_entities),
@@ -248,6 +278,10 @@ JOBS: List[Job] = [
     Job("tms",              "daily@07:00",       job_tms),
     Job("calibration",      "daily@07:15",       job_calibration),
     Job("intentions",       "every:300",         job_intentions),
+    # assistant layer — open_loops BEFORE self_model so the dossier sees fresh
+    # commitments; self_model's team list feeds the next open_loops run.
+    Job("open_loops",       "every:1800",        job_open_loops),
+    Job("self_model",       "daily@05:30",       job_self_model),
 ]
 
 
