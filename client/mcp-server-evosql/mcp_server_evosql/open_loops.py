@@ -223,6 +223,12 @@ def job_open_loops(backend, ns: str) -> int:
         if out:
             # I sent last — only a loop if I ASKED something and they haven't replied
             if had_their_msg and _QUESTION.search(text or ""):
+                # counterparty is the person I'm waiting on, not me. For mail the
+                # last (outbound) message's "from" is my own address; pick the
+                # other party from the inbound side (same fix as the promise path).
+                inbound_who = [m[2] for m in msgs if not m[1]]
+                if inbound_who:
+                    base["counterparty"] = inbound_who[-1]
                 base["direction"] = "awaiting_them"
                 open_now[loop_key] = base
             continue
