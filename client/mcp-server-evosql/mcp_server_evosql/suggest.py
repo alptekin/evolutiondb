@@ -92,69 +92,105 @@ def draft_reply(thread_msgs, loop, self_role, name, language) -> str:
         return f"(taslak üretilemedi: {str(exc)[:100]})"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--top", type=int, default=3)
-    ap.add_argument("--loop", help="a specific loop key")
-    args = ap.parse_args()
-    from . import scheduler, prefs
-    prefix = os.environ.get("MCP_STORE_PREFIX", "mcp")
-    backend = scheduler._backend(prefix)
-    ns = os.environ.get("MCP_USER_ID") or (
-        scheduler.discover_namespaces(backend) or ["default"])[0]
-    name = ns.split("_")[0].capitalize()
-    language, _ = prefs.get_language(backend, ns)
-
+def _load_loops(backend, ns):
     from .server import _e
-    loops = {}
+    out = {}
     for row in backend._query(
             f"SELECT mem_key, mem_value FROM __mem_{backend.loops_store} "
             f"WHERE mem_namespace = '{_e(ns)}'") or []:
         try:
-            loops[row[0]] = json.loads(row[1])
+            out[row[0]] = json.loads(row[1])
         except Exception:
             pass
+    return out
 
-    # who am I, for grounding
-    role = ""
+
+def _self_role(backend, ns):
+    """The user's role summary from the self-model, for grounding the draft."""
+    from .server import _e
     for row in backend._query(
             f"SELECT mem_value FROM __mem_{backend.selfmodel_store} "
             f"WHERE mem_namespace = '{_e(ns)}' AND mem_key = 'self_role'") or []:
         try:
             c = json.loads(row[0]).get("content")
-            role = c.get("summary") if isinstance(c, dict) else str(c)
+            return c.get("summary") if isinstance(c, dict) else str(c)
         except Exception:
             pass
+    return ""
 
-    want = []
-    if args.loop:
-        if args.loop in loops:
-            want = [(args.loop, loops[args.loop])]
-    else:
-        cand = [(k, r) for k, r in loops.items()
-                if r.get("status") == "open"
-                and r.get("direction") == "awaiting_me"
-                and r.get("actionable", True)
-                and r.get("loop_type", "request") in ("request", "question")]
-        cand.sort(key=lambda kr: (0 if kr[1].get("priority") == "high" else 1,
-                                  kr[1].get("age_days", 999)))
-        want = cand[:args.top]
 
+def _select(loops, *, top=3, loop_key=None):
+    """Open loops worth drafting for: awaiting_me, actionable, a real
+    request/question — ranked high-priority first then oldest. A specific
+    loop_key (e.g. from daily_brief) overrides the ranked top-N."""
+    if loop_key:
+        return [(loop_key, loops[loop_key])] if loop_key in loops else []
+    cand = [(k, r) for k, r in loops.items()
+            if r.get("status") == "open"
+            and r.get("direction") == "awaiting_me"
+            and r.get("actionable", True)
+            and r.get("loop_type", "request") in ("request", "question")]
+    cand.sort(key=lambda kr: (0 if kr[1].get("priority") == "high" else 1,
+                              kr[1].get("age_days", 999)))
+    return cand[:max(1, top)]
+
+
+def suggest_replies(backend, ns, *, top=3, loop_key=None, name=None):
+    """Draft replies for the open loops waiting on the user (read -> suggest).
+
+    Returns {"language", "role", "suggestions": [...]} where each suggestion is
+    {loop_key, counterparty, age_days, what, source, thread, draft}. `thread` is
+    the grounding transcript (speaker/text, last 8 turns) so a caller that would
+    rather draft the reply itself — e.g. the MCP host model — has exactly the
+    context the in-process drafter used. `draft` is that in-process draft (or the
+    LLM-off note when no drafting backend is configured). Sends nothing."""
+    from . import prefs
+    language, _ = prefs.get_language(backend, ns)
+    name = name or ns.split("_")[0].capitalize()
+    role = _self_role(backend, ns)
+    want = _select(_load_loops(backend, ns), top=top, loop_key=loop_key)
     if not want:
+        return {"language": language, "role": role, "suggestions": []}
+    threads = _index_threads(backend, ns)
+    out = []
+    for k, r in want:
+        msgs = threads.get((r["source"], r["thread_key"]), [])
+        out.append({
+            "loop_key": k,
+            "counterparty": r.get("counterparty"),
+            "age_days": r.get("age_days"),
+            "what": r.get("what") or (r.get("snippet") or "")[:120],
+            "source": r.get("source"),
+            "thread": [{"speaker": (name if o else who),
+                        "text": (t or "").strip()[:300]}
+                       for _t, o, who, t in msgs[-8:]],
+            "draft": draft_reply(msgs, r, role, name, language),
+        })
+    return {"language": language, "role": role, "suggestions": out}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--top", type=int, default=3)
+    ap.add_argument("--loop", help="a specific loop key")
+    args = ap.parse_args()
+    from . import scheduler
+    prefix = os.environ.get("MCP_STORE_PREFIX", "mcp")
+    backend = scheduler._backend(prefix)
+    ns = os.environ.get("MCP_USER_ID") or (
+        scheduler.discover_namespaces(backend) or ["default"])[0]
+
+    res = suggest_replies(backend, ns, top=args.top, loop_key=args.loop)
+    if not res["suggestions"]:
         print("Taslak için açık döngü bulunamadı.")
         return 0
-
-    threads = _index_threads(backend, ns)
-    for k, r in want:
-        tk = (r["source"], r["thread_key"])
-        msgs = threads.get(tk, [])
-        draft = draft_reply(msgs, r, role, name, language)
+    for s in res["suggestions"]:
         print(f"\n{'='*68}")
-        print(f"🔴 {r['counterparty']} · {r.get('age_days','?')}g · "
-              f"{r.get('what') or r.get('snippet','')[:60]}")
+        print(f"🔴 {s['counterparty']} · {s.get('age_days','?')}g · "
+              f"{s['what'][:60]}")
         print(f"{'-'*68}")
         print("✍️  ÖNERİLEN CEVAP:\n")
-        print(draft)
+        print(s["draft"])
     print(f"\n{'='*68}")
     print("(öneri — gönderilmedi; kopyala/düzenle/gönder sende)")
     return 0
