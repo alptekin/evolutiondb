@@ -2882,6 +2882,10 @@ class MCPServer:
                                           "override").lower()
         self.query_transform = query_transform_from_env()
         self.backend: Optional[MemoryBackend] = None
+        # Action loop: wire opt-in send transports. No-op unless the operator set
+        # EVOSQL_SEND_ENABLED + EVOSQL_SEND_CHANNELS — outbox stays dry-run by default.
+        from . import transports
+        transports.register_from_env()
 
     def _connect(self) -> MemoryBackend:
         if self.backend is None:
@@ -3021,11 +3025,16 @@ class MCPServer:
             if not loop_key or not body.strip():
                 return {"error": "queue_reply requires `loop_key` and `body`"}
             loop = suggest._load_loops(b, self.user_id).get(loop_key, {})
+            to_arg = args.get("to") or ""
+            to_email = to_arg if "@" in to_arg else \
+                outbox.resolve_recipient(b, self.user_id, loop)
             try:
                 item = outbox.queue(b, self.user_id, loop_key, body,
                                     channel=loop.get("source"),
                                     source=loop.get("source"),
-                                    to=args.get("to") or loop.get("counterparty"),
+                                    to=to_arg or loop.get("counterparty"),
+                                    to_email=to_email,
+                                    thread_id=loop.get("thread_key"),
                                     subject=loop.get("subject"))
             except ValueError as exc:
                 return {"error": str(exc)}
