@@ -45,14 +45,17 @@ def collect(backend, ns):
                   and d.get("actionable", True) and needs_reply(d)]
     waiting_them = [d for d in openl if d.get("direction") == "awaiting_them"
                     and d.get("actionable", True)]
+    promises = [d for d in openl if d.get("direction") == "i_owe_them"
+                and d.get("actionable", True)]
     stale = [d for d in openl if not d.get("actionable", True)]
 
     # priority high first, then most recent
     waiting_me.sort(key=lambda d: (0 if d.get("priority") == "high" else 1,
                                    d.get("age_days", 999)))
     waiting_them.sort(key=lambda d: d.get("age_days", 999))
-    return {"self": selfm, "waiting_me": waiting_me,
-            "waiting_them": waiting_them, "stale": stale}
+    promises.sort(key=lambda d: d.get("age_days", 999))
+    return {"self": selfm, "waiting_me": waiting_me, "waiting_them": waiting_them,
+            "promises": promises, "stale": stale}
 
 
 def _line(d):
@@ -84,6 +87,12 @@ def render(data, name="", lang_set=True) -> str:
         L.append(_line(d))
     if not data["waiting_them"]:
         L.append("   —")
+    L.append("")
+    L.append(f"🟢 SÖZ VERDİKLERİN ({len(data.get('promises', []))})")
+    for d in data.get("promises", [])[:8]:
+        L.append(_line(d))
+    if not data.get("promises"):
+        L.append("   —")
     com = sm.get("commitments") or {}
     oc = com.get("open_count") if isinstance(com, dict) else None
     L.append("")
@@ -103,6 +112,8 @@ def main() -> int:
     ap.add_argument("--language", metavar="LANG",
                     help="set the summary language (the /language command), "
                          "e.g. türkçe / english")
+    ap.add_argument("--draft", type=int, nargs="?", const=3, metavar="N",
+                    help="also draft a reply for the top N waiting-on-you loops")
     args = ap.parse_args()
     from . import scheduler, prefs
     prefix = os.environ.get("MCP_STORE_PREFIX", "mcp")
@@ -116,12 +127,28 @@ def main() -> int:
               f"Sonraki open_loops/self_model çalışmasında özetler {lang} olacak.")
         return 0
 
-    _lang, was_set = prefs.get_language(backend, ns)
+    lang, was_set = prefs.get_language(backend, ns)
     data = collect(backend, ns)
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
-    else:
-        print(render(data, name=ns.split("_")[0], lang_set=was_set))
+        return 0
+    print(render(data, name=ns.split("_")[0], lang_set=was_set))
+
+    if args.draft:
+        from . import suggest
+        name = ns.split("_")[0].capitalize()
+        role = ""
+        r = data["self"].get("role")
+        if isinstance(r, dict):
+            role = r.get("summary", "")
+        threads = suggest._index_threads(backend, ns)
+        print("\n" + "=" * 68 + "\n✍️  TASLAK CEVAPLAR")
+        for d in data["waiting_me"][:args.draft]:
+            msgs = threads.get((d["source"], d["thread_key"]), [])
+            draft = suggest.draft_reply(msgs, d, role, name, lang)
+            print(f"\n🔴 {d['counterparty']} · {d.get('age_days','?')}g · "
+                  f"{d.get('what') or d.get('snippet','')[:50]}\n   ↳ {draft}")
+        print("\n(öneri — gönderilmedi)")
     return 0
 
 
