@@ -2760,6 +2760,31 @@ TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "suggest_reply",
+        "description": (
+            "Draft a reply for an open loop someone is waiting on the user for "
+            "(the read -> suggest step after daily_brief). Grounds each draft in "
+            "the actual thread, the user's self-model, and their language "
+            "preference, and returns BOTH the draft and the thread transcript so "
+            "you can refine or rewrite it. Strictly a suggestion — it sends "
+            "nothing. Call this when the user asks 'what should I reply', 'draft "
+            "a response', or wants to act on the waiting-on-you list. Defaults to "
+            "the top open loops; pass loop_key to target a specific one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "loop_key": {"type": "string",
+                             "description": "Draft for one specific loop (the "
+                                            "loop_key from daily_brief); omit for "
+                                            "the top open loops."},
+                "top": {"type": "integer",
+                        "description": "How many open loops to draft for "
+                                       "(default 3)."},
+            },
+        },
+    },
 ]
 
 
@@ -2906,6 +2931,17 @@ class MCPServer:
                                 lang_set=was_set)
             return {"ok": True, "brief": text,
                     "waiting_on_you": len(data["waiting_me"])}
+
+        if name == "suggest_reply":
+            from . import suggest
+            top = args.get("top")
+            try:
+                top = int(top) if top is not None else 3
+            except (TypeError, ValueError):
+                top = 3
+            res = suggest.suggest_replies(b, self.user_id, top=top,
+                                          loop_key=args.get("loop_key"))
+            return {"ok": True, "user_id": self.user_id, **res}
 
         return {"error": f"unknown tool: {name}"}
 
