@@ -59,9 +59,79 @@ def test_index_threads_buckets_and_sorts():
     assert msgs[1][2] == "Ulaş"                          # counterparty display
 
 
+def _loop(**kw):
+    base = {"status": "open", "direction": "awaiting_me", "actionable": True,
+            "loop_type": "request", "counterparty": "X", "source": "gmail",
+            "thread_key": "T1", "snippet": "bir şey", "age_days": 1}
+    base.update(kw)
+    return base
+
+
+def test_select_filters_and_ranks():
+    loops = {
+        "a": _loop(counterparty="Ulaş", priority="high", age_days=10),
+        "b": _loop(counterparty="Ece", age_days=1),
+        "fyi": _loop(counterparty="Bot", loop_type="fyi"),          # dropped
+        "them": _loop(counterparty="Boss", direction="awaiting_them"),  # dropped
+        "old": _loop(counterparty="Eski", actionable=False),        # dropped
+        "done": _loop(counterparty="Done", status="resolved"),      # dropped
+    }
+    picked = [k for k, _ in suggest._select(loops, top=3)]
+    assert picked == ["a", "b"]                       # high-priority first, fyi/them/stale/done gone
+
+
+def test_select_top_and_specific_loop():
+    loops = {"a": _loop(age_days=1), "b": _loop(age_days=2), "c": _loop(age_days=3)}
+    assert [k for k, _ in suggest._select(loops, top=2)] == ["a", "b"]
+    assert [k for k, _ in suggest._select(loops, loop_key="c")] == ["c"]
+    assert suggest._select(loops, loop_key="nope") == []    # unknown key -> nothing
+
+
+def test_suggest_replies_grounds_thread_and_role():
+    os.environ.pop("EVOSQL_LOOP_LLM", None)
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "loop_1",
+          _loop(counterparty="Ulaş", snippet="dosyayı gönderir misin", age_days=2))
+    b.put(b.selfmodel_store, NS, "self_role", {"content": {"summary": "kurucu"}})
+    b.put(b.memory, NS, "gmail_0",
+          {"source": "gmail", "thread_id": "T1", "from": "me@x.com",
+           "subject": "P", "snippet": "selam", "labels": "SENT",
+           "internal_date_ms": 1000})
+    b.put(b.memory, NS, "gmail_1",
+          {"source": "gmail", "thread_id": "T1", "from": "Ulaş <u@x.com>",
+           "subject": "Re: P", "snippet": "dosyayı gönderir misin",
+           "labels": "INBOX", "internal_date_ms": 2000})
+
+    res = suggest.suggest_replies(b, NS, top=3, name="Alp")
+    assert res["role"] == "kurucu"
+    s = res["suggestions"][0]
+    assert s["counterparty"] == "Ulaş" and s["loop_key"] == "loop_1"
+    # the grounding transcript marks me vs them, in time order
+    assert [t["speaker"] for t in s["thread"]] == ["Alp", "Ulaş"]
+    assert "LLM" in s["draft"]                          # off-note, no crash, no send
+
+
+def test_suggest_replies_empty_when_no_loops():
+    res = suggest.suggest_replies(FakeBackend(), NS, top=3)
+    assert res["suggestions"] == []
+
+
+def test_suggest_reply_registered_as_mcp_tool():
+    from mcp_server_evosql import server
+    tool = next((t for t in server.TOOLS if t["name"] == "suggest_reply"), None)
+    assert tool is not None
+    props = tool["inputSchema"]["properties"]
+    assert "loop_key" in props and "top" in props
+    assert "required" not in tool["inputSchema"]        # both optional
+
+
 def main():
     for fn in (test_render_thread_marks_speakers, test_render_thread_keeps_last_eight,
-               test_draft_reply_safe_without_llm, test_index_threads_buckets_and_sorts):
+               test_draft_reply_safe_without_llm, test_index_threads_buckets_and_sorts,
+               test_select_filters_and_ranks, test_select_top_and_specific_loop,
+               test_suggest_replies_grounds_thread_and_role,
+               test_suggest_replies_empty_when_no_loops,
+               test_suggest_reply_registered_as_mcp_tool):
         fn()
         print(f"  ok  {fn.__name__}")
     print("OK — suggest draft grounding")

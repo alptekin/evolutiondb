@@ -46,7 +46,7 @@ def main():
         print(f"  SKIP (no server on :{PORT}: {exc})")
         return 0
 
-    from mcp_server_evosql import open_loops, self_model, brief
+    from mcp_server_evosql import open_loops, self_model, brief, suggest
 
     prefix = f"mcpit{int(NOW)}"
     ns = "alp_it"
@@ -102,6 +102,18 @@ def main():
     text = brief.render(data, name="alp", lang_set=True)
     assert "Ulaş" in text and "Boss" in text
     print("  ok  brief: renders live loops correctly")
+
+    # --- suggest_reply: read -> SUGGEST over the live loops ------------------
+    os.environ.pop("EVOSQL_LOOP_LLM", None)              # no drafting backend here
+    sug = suggest.suggest_replies(b, ns, top=3)
+    assert sug["suggestions"], sug
+    top = sug["suggestions"][0]
+    assert top["counterparty"] == "Ulaş"                 # the waiting-on-you loop
+    # the draft is grounded in the real thread (transcript present), sends nothing
+    speakers = [t["speaker"] for t in top["thread"]]
+    assert "Ulaş" in speakers and any(s != "Ulaş" for s in speakers)
+    assert isinstance(top["draft"], str) and top["draft"]
+    print("  ok  suggest_reply: grounded draft for the awaiting_me loop")
 
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
