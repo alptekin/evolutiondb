@@ -132,6 +132,25 @@ def main():
     assert outbox._load(b, ns, qi2["id"])["status"] == "rejected"
     print("  ok  outbox: queue -> approve(dry-run) -> reject on live store")
 
+    # --- with a transport wired + send enabled, approve actually delivers -----
+    sent_box = []
+    outbox.TRANSPORTS["gmail"] = lambda it: (sent_box.append(it) or {"id": "ok"})
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    try:
+        qi3 = outbox.queue(b, ns, "loop_send", "Gönderiliyor.", channel="gmail",
+                           source="gmail", to="Z", to_email="z@x.com")
+        r3 = outbox.approve_send(b, ns, qi3["id"])
+        assert r3["sent"] and not r3["dry_run"], r3
+        assert outbox._load(b, ns, qi3["id"])["status"] == "sent"
+        assert len(sent_box) == 1
+        # idempotent: a second approve does not re-deliver
+        outbox.approve_send(b, ns, qi3["id"])
+        assert len(sent_box) == 1
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    print("  ok  outbox: approve delivers via transport, idempotent, on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

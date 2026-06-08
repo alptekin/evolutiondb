@@ -190,6 +190,52 @@ def test_action_tools_registered():
     assert approve["inputSchema"]["required"] == ["item_id"]
 
 
+# ---------------------------------------------------------------- enrichment
+def test_queue_carries_to_email_and_thread():
+    _clean()
+    b = FakeBackend()
+    it = outbox.queue(b, NS, "loop_1", "cevap", channel="gmail", source="gmail",
+                      to="Ulaş", to_email="ulas@corp.com", thread_id="T9")
+    assert it["to_email"] == "ulas@corp.com" and it["thread_id"] == "T9"
+    # upsert keeps prior to_email/thread when re-queued without them
+    it2 = outbox.queue(b, NS, "loop_1", "düzeltme", channel="gmail", source="gmail")
+    assert it2["to_email"] == "ulas@corp.com" and it2["thread_id"] == "T9"
+
+
+def test_resolve_recipient_picks_inbound_address():
+    _clean()
+    b = FakeBackend()
+    b.put(b.memory, NS, "gmail_0",
+          {"source": "gmail", "thread_id": "T9", "from": "me@x.com",
+           "labels": "SENT"})                            # outbound — skip
+    b.put(b.memory, NS, "gmail_1",
+          {"source": "gmail", "thread_id": "T9",
+           "from": "Ulaş <ulas@corp.com>", "labels": "INBOX"})
+    addr = outbox.resolve_recipient(b, NS, {"source": "gmail", "thread_key": "T9"})
+    assert addr == "ulas@corp.com"
+    # non-gmail -> None (transport will refuse a display name)
+    assert outbox.resolve_recipient(b, NS, {"source": "teams"}) is None
+
+
+# ---------------------------------------------------------------- CLI
+def test_cli_list_and_dry_run_approve():
+    _clean()
+    b = FakeBackend()
+    it = _q(b)
+    assert outbox._cli(b, NS, ["list"]) == 0
+    assert outbox._cli(b, NS, ["approve", it["id"]]) == 0      # dry-run, ok
+    assert outbox._load(b, NS, it["id"])["status"] == "approved"
+
+
+def test_cli_reject_and_errors():
+    _clean()
+    b = FakeBackend()
+    it = _q(b)
+    assert outbox._cli(b, NS, ["reject", it["id"]]) == 0
+    assert outbox._cli(b, NS, ["approve", "nope"]) == 1        # unknown -> nonzero
+    assert outbox._cli(b, NS, ["bogus"]) == 2                  # usage -> 2
+
+
 def main():
     tests = [test_queue_creates_pending_and_sends_nothing, test_queue_requires_body,
              test_queue_upserts_by_loop_key,
@@ -200,7 +246,10 @@ def main():
              test_approve_transport_failure_holds_item,
              test_approve_unknown_and_rejected_error,
              test_reject_pending_then_cannot_send, test_reject_sent_item_errors,
-             test_reject_unknown_errors, test_action_tools_registered]
+             test_reject_unknown_errors, test_action_tools_registered,
+             test_queue_carries_to_email_and_thread,
+             test_resolve_recipient_picks_inbound_address,
+             test_cli_list_and_dry_run_approve, test_cli_reject_and_errors]
     try:
         for fn in tests:
             fn()

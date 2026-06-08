@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -120,29 +122,34 @@ def _deliver(item) -> dict:
 
 # ---------------------------------------------------------------- operations
 def queue(backend, ns, loop_key, body, *, channel=None, to=None,
-          source=None, subject=None):
+          to_email=None, source=None, subject=None, thread_id=None):
     """Queue a drafted reply for approval. Upserts by loop_key so re-drafting the
-    same loop replaces its pending item. Returns the pending item. Sends nothing."""
+    same loop replaces its pending item. Returns the pending item. Sends nothing.
+
+    to        — recipient display (shown in the outbox);
+    to_email  — deliverable address the transport sends to (resolved upstream);
+    thread_id — channel thread to reply within (e.g. gmail threadId)."""
     body = (body or "").strip()
     if not body:
         raise ValueError("queue requires a non-empty body")
+    fields = {"body": body, "to": to, "to_email": to_email,
+              "channel": channel or source, "source": source,
+              "subject": subject, "thread_id": thread_id}
     # upsert: reuse the pending item for this loop if one exists
     existing = next((it for it in _all(backend, ns)
                      if it.get("loop_key") == loop_key
                      and it.get("status") in (_PENDING, _APPROVED)), None)
     if existing:
-        existing.update({"body": body, "to": to or existing.get("to"),
-                         "channel": channel or existing.get("channel"),
-                         "source": source or existing.get("source"),
-                         "subject": subject or existing.get("subject"),
-                         "updated_at": _now()})
+        for k, v in fields.items():
+            if v is not None:
+                existing[k] = v
+        existing["updated_at"] = _now()
         _record(existing, _PENDING)            # editing re-arms approval
         _save(backend, ns, existing)
         return existing
-    item = {"id": _new_id(), "loop_key": loop_key, "body": body,
-            "to": to, "channel": channel or source, "source": source,
-            "subject": subject, "status": _PENDING, "created_at": _now(),
-            "history": [{"status": _PENDING, "at": _now()}]}
+    item = {"id": _new_id(), "loop_key": loop_key, "status": _PENDING,
+            "created_at": _now(), "history": [{"status": _PENDING, "at": _now()}]}
+    item.update(fields)
     _save(backend, ns, item)
     return item
 
@@ -191,3 +198,88 @@ def reject(backend, ns, item_id):
     _record(item, _REJECTED)
     _save(backend, ns, item)
     return {"ok": True, "item": item}
+
+
+_EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+
+
+def resolve_recipient(backend, ns, loop):
+    """Best-effort deliverable address for a loop: the email of the last inbound
+    message in its gmail thread. Returns None for non-gmail or when unresolved —
+    the caller then falls back to the counterparty display name (and the gmail
+    transport will refuse a non-address)."""
+    if (loop or {}).get("source") != "gmail":
+        return None
+    from .server import _e
+    found = None
+    for (v,) in backend._query(
+            f"SELECT mem_value FROM __mem_{backend.memory} "
+            f"WHERE mem_namespace = '{_e(ns)}' AND mem_key LIKE 'gmail%' "
+            f"LIMIT 1000000") or []:
+        try:
+            d = json.loads(v)
+        except Exception:
+            continue
+        if d.get("thread_id") != loop.get("thread_key"):
+            continue
+        if "SENT" in str(d.get("labels") or ""):
+            continue                          # inbound only — that's who we reply to
+        m = _EMAIL.search(d.get("from") or "")
+        if m:
+            found = m.group(0)
+    return found
+
+
+# ---------------------------------------------------------------- CLI
+def _fmt(it):
+    st = it.get("status", "?")
+    icon = {"pending": "🟡", "approved": "🟠", "sent": "🟢",
+            "rejected": "⚪"}.get(st, "·")
+    body = (it.get("body") or "").replace("\n", " ")
+    return (f"{icon} {it['id']}  [{st}]  →{it.get('to') or '?'}\n"
+            f"     {body[:80]}")
+
+
+def _cli(backend, ns, argv) -> int:
+    cmd = argv[0] if argv else "list"
+    if cmd == "list":
+        pend = list_pending(backend, ns)
+        if not pend:
+            print("Onay bekleyen yanıt yok.")
+            return 0
+        print(f"Onay bekleyen {len(pend)} yanıt:\n")
+        for it in pend:
+            print(_fmt(it))
+        print("\nGöndermek için:  approve <id>   ·   iptal için:  reject <id>")
+        return 0
+    if cmd in ("approve", "reject") and len(argv) >= 2:
+        fn = approve_send if cmd == "approve" else reject
+        res = fn(backend, ns, argv[1])
+        if not res.get("ok"):
+            print(f"✗ {res.get('error')}")
+            return 1
+        if cmd == "approve":
+            sent = res.get("sent")
+            print(f"{'✓ gönderildi' if sent else '◐ onaylandı (dry-run — '
+                  'gönderilmedi)'}: {argv[1]}"
+                  + (f"  [{res.get('detail')}]" if not sent and res.get('detail')
+                     else ""))
+        else:
+            print(f"⚪ iptal edildi: {argv[1]}")
+        return 0
+    print("kullanım: python -m mcp_server_evosql.outbox "
+          "list | approve <id> | reject <id>", file=sys.stderr)
+    return 2
+
+
+def main() -> int:
+    from . import scheduler
+    prefix = os.environ.get("MCP_STORE_PREFIX", "mcp")
+    backend = scheduler._backend(prefix)
+    ns = os.environ.get("MCP_USER_ID") or (
+        scheduler.discover_namespaces(backend) or ["default"])[0]
+    return _cli(backend, ns, sys.argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
