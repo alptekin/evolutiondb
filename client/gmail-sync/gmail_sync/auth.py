@@ -39,6 +39,17 @@ from typing import Dict, Optional
 AUTH_URL  = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPES    = ["https://www.googleapis.com/auth/gmail.readonly"]
+# gmail.send is OPT-IN and off by default — the package stays read-only unless
+# the operator deliberately enables sending for the outbox action loop. See
+# ADR-004. Setting EVOSQL_GMAIL_SEND adds the send scope at consent time.
+SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+
+
+def _scopes():
+    if os.environ.get("EVOSQL_GMAIL_SEND", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return SCOPES + [SEND_SCOPE]
+    return SCOPES
 
 
 class AuthError(Exception):
@@ -206,7 +217,7 @@ class GmailAuth:
             "client_id":     self.client_id,
             "redirect_uri":  redirect,
             "response_type": "code",
-            "scope":         " ".join(SCOPES),
+            "scope":         " ".join(_scopes()),
             "access_type":   "offline",
             "prompt":        "consent",
             "state":         state,

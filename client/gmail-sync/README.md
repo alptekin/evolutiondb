@@ -23,8 +23,11 @@ OAuth client in your own Google Cloud project. Five-minute setup:
 4. Copy the generated **Client ID** and **Client secret** into your
    `.env` (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`).
 
-The package only requests `gmail.readonly` — it cannot send mail,
-mark messages, or modify labels.
+By default the package only requests `gmail.readonly` — it cannot send mail,
+mark messages, or modify labels. Sending is **opt-in**: setting
+`EVOSQL_GMAIL_SEND=1` adds the `gmail.send` scope at consent time, used only by
+the outbox action loop's approve_send (see ADR-004). The default is unchanged
+and read-only.
 
 ## Install
 
