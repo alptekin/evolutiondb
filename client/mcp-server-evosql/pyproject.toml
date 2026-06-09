@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-server-evolutiondb"
-version = "1.10.0"
-description = "MCP (Model Context Protocol) server backed by EvolutionDB — gives Claude Desktop / Claude Code persistent long-term memory."
+version = "1.11.0"
+description = "MCP (Model Context Protocol) server backed by EvolutionDB — long-term memory plus a personal-assistant action loop (open loops, drafts, human-approved send across gmail/teams/outlook/slack/imessage) for Claude Desktop / Claude Code."
 requires-python = ">=3.9"
 license = {text = "MIT"}
 readme = "README.md"
@@ -18,6 +18,9 @@ keywords = [
     "claude-code",
     "long-term-memory",
     "agent-memory",
+    "personal-assistant",
+    "open-loops",
+    "ai-agent",
 ]
 authors = [
     {name = "alptekin topal", email = "topal.alptekin@gmail.com"},
@@ -55,6 +58,13 @@ embeddings-local = [
 # the gist channel falls back to English-light when absent.
 turkish = [
     "snowballstemmer>=2.2",
+]
+# Action loop send transports (read -> suggest -> approve -> SEND). Off by
+# default; sending only happens with EVOSQL_SEND_ENABLED=1 + a per-channel send
+# scope (see ADR-004). `msal` is needed for the Teams transport; gmail/outlook
+# reuse their sibling sync packages, and imessage/slack need no extra package.
+send = [
+    "msal>=1.20",
 ]
 
 [project.urls]
