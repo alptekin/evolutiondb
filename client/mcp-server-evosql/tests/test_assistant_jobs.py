@@ -35,6 +35,24 @@ def test_open_loops_runs_before_self_model():
     assert n.index("open_loops") < n.index("self_model"), n
 
 
+def test_outbox_flush_job_registered_and_delivers_due():
+    assert "outbox_flush" in _names()
+    import os
+    from mcp_server_evosql import outbox
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    outbox.TRANSPORTS["gmail"] = lambda it: {"id": "x"}
+    try:
+        b = FakeBackend()
+        it = outbox.queue(b, NS, "loop_1", "cevap", channel="gmail",
+                          source="gmail", to="Ulaş", to_email="u@x.com")
+        outbox.approve_send(b, NS, it["id"], undo_seconds=0)   # sent immediately
+        # a due scheduled item is delivered by the job; none here -> 0 delivered
+        assert SCH.job_outbox_flush(b, NS) == 0
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+
+
 def test_wrappers_delegate_to_modules():
     # scheduler.job_open_loops -> open_loops.job_open_loops, over a real (fake) DB
     b = FakeBackend()
@@ -75,6 +93,7 @@ def test_self_model_team_feeds_open_loops_priority():
 def main():
     for fn in (test_both_assistant_jobs_registered,
                test_open_loops_runs_before_self_model,
+               test_outbox_flush_job_registered_and_delivers_due,
                test_wrappers_delegate_to_modules,
                test_self_model_team_feeds_open_loops_priority):
         fn()

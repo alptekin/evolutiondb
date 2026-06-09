@@ -265,6 +265,14 @@ def job_self_model(backend, ns: str) -> int:
     return self_model.job_self_model(backend, ns)
 
 
+def job_outbox_flush(backend, ns: str) -> int:
+    """Assistant action loop: deliver outbox replies whose undo window has
+    elapsed (approve_send with EVOSQL_SEND_UNDO_SECONDS schedules instead of
+    sending immediately). Frequent + cheap; a no-op when nothing is due."""
+    from . import outbox
+    return len(outbox.flush_scheduled(backend, ns))
+
+
 JOBS: List[Job] = [
     Job("embed_missing",    "hourly",            job_embed_missing),
     Job("extract_entities", "hourly",            job_extract_entities),
@@ -282,6 +290,8 @@ JOBS: List[Job] = [
     # commitments; self_model's team list feeds the next open_loops run.
     Job("open_loops",       "every:1800",        job_open_loops),
     Job("self_model",       "daily@05:30",       job_self_model),
+    # action loop: deliver scheduled sends past their undo window, frequently.
+    Job("outbox_flush",     "every:30",          job_outbox_flush),
 ]
 
 
