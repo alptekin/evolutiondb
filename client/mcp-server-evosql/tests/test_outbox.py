@@ -22,8 +22,9 @@ NS = "alp_test"
 
 
 def _clean():
-    os.environ.pop("EVOSQL_SEND_ENABLED", None)
-    os.environ.pop("EVOSQL_SEND_UNDO_SECONDS", None)
+    for k in ("EVOSQL_SEND_ENABLED", "EVOSQL_SEND_UNDO_SECONDS",
+              "EVOSQL_SEND_RATE_PER_HOUR"):
+        os.environ.pop(k, None)
     outbox.TRANSPORTS.clear()
 
 
@@ -291,6 +292,56 @@ def test_preview_shows_what_goes_out():
     assert p["channel"] == "gmail" and p["status"] == "pending"
 
 
+# ---------------------------------------------------------------- rate limit
+def test_rate_limit_holds_excess_sends():
+    _clean()
+    os.environ["EVOSQL_SEND_RATE_PER_HOUR"] = "1"
+    _enable()
+    b = FakeBackend()
+    r1 = outbox.approve_send(b, NS, _q(b, loop="l1")["id"])
+    r2 = outbox.approve_send(b, NS, _q(b, loop="l2")["id"])
+    assert r1["sent"] and not r2["sent"] and r2["rate_limited"]
+    assert outbox._load(b, NS, r2["item"]["id"])["status"] == "approved"   # held
+    _clean()
+
+
+def test_rate_window_counts_only_recent():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    outbox.approve_send(b, NS, _q(b)["id"])
+    assert outbox._sent_in_window(b, NS) == 1
+    assert outbox._sent_in_window(b, NS, now=time.time() + 7200) == 0   # aged out
+    _clean()
+
+
+def test_no_rate_limit_by_default():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    for i in range(5):
+        assert outbox.approve_send(b, NS, _q(b, loop=f"l{i}")["id"])["sent"]
+    _clean()
+
+
+# ---------------------------------------------------------------- audit
+def test_audit_and_stats():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    s = outbox.approve_send(b, NS, _q(b, loop="a")["id"])      # -> sent
+    rej = _q(b, loop="b")
+    outbox.reject(b, NS, rej["id"])                            # -> rejected
+    rows = {r["id"]: r for r in outbox.audit(b, NS)}
+    assert rows[s["item"]["id"]]["status"] == "sent"
+    assert rows[s["item"]["id"]]["result"] == "delivered"
+    assert rows[rej["id"]]["status"] == "rejected"
+    st = outbox.stats(b, NS)
+    assert st["by_status"].get("sent") == 1 and st["by_status"].get("rejected") == 1
+    assert st["sent_last_hour"] == 1
+    _clean()
+
+
 # ---------------------------------------------------------------- MCP wiring
 def test_action_tools_registered():
     from mcp_server_evosql import server
@@ -394,6 +445,7 @@ def test_cli_show_and_flush():
     # schedule then flush via CLI
     outbox.approve_send(b, NS, it["id"], undo_seconds=0)       # immediate (no window)
     assert outbox._cli(b, NS, ["flush"]) == 0                  # nothing scheduled
+    assert outbox._cli(b, NS, ["audit"]) == 0
     _clean()
 
 
@@ -417,6 +469,8 @@ def main():
              test_flush_delivers_only_after_window, test_reject_cancels_a_scheduled_send,
              test_approve_scheduled_again_sends_now, test_list_pending_includes_scheduled,
              test_preview_shows_what_goes_out,
+             test_rate_limit_holds_excess_sends, test_rate_window_counts_only_recent,
+             test_no_rate_limit_by_default, test_audit_and_stats,
              test_cli_list_and_dry_run_approve, test_cli_reject_and_errors,
              test_cli_show_and_flush]
     try:

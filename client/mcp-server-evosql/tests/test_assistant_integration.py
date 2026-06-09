@@ -249,6 +249,27 @@ def main():
         os.environ.pop("EVOSQL_SEND_ENABLED", None)
     print("  ok  outbox: undo window schedules, reject cancels, flush delivers due")
 
+    # --- rate limit: the namespace cap holds excess real sends (backpressure) -
+    outbox.TRANSPORTS["gmail"] = lambda it: {"id": "ok"}
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    os.environ["EVOSQL_SEND_RATE_PER_HOUR"] = "1"
+    try:
+        rl_ns = ns + "_rl"   # isolated ns so earlier sends don't count
+        x1 = outbox.queue(b, rl_ns, "rl1", "bir", channel="gmail", source="gmail",
+                          to="A", to_email="a@x.com")
+        x2 = outbox.queue(b, rl_ns, "rl2", "iki", channel="gmail", source="gmail",
+                          to="B", to_email="b@x.com")
+        assert outbox.approve_send(b, rl_ns, x1["id"])["sent"]
+        held = outbox.approve_send(b, rl_ns, x2["id"])
+        assert not held["sent"] and held["rate_limited"]
+        assert outbox.stats(b, rl_ns)["sent_last_hour"] == 1
+        assert len(outbox.audit(b, rl_ns)) == 2
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+        os.environ.pop("EVOSQL_SEND_RATE_PER_HOUR", None)
+    print("  ok  outbox: rate limit holds excess sends + audit on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",
