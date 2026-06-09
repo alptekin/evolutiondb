@@ -88,6 +88,12 @@ body, recipient, channel, status, and a `history` of timestamped transitions
    replaces its pending item instead of stacking a second send for the same thread.
 6. **Audit.** Every transition is timestamped in the item's `history`; the store
    is queryable like any other (`SELECT … FROM __mem_<prefix>_outbox`).
+   `outbox.audit()` / `outbox stats` surface the full trail and a per-hour
+   health view (`outbox audit` CLI).
+7. **Rate limit (backpressure).** `EVOSQL_SEND_RATE_PER_HOUR > 0` caps real sends
+   per namespace per rolling hour. Over the cap, a send is HELD (not dropped, not
+   doubled) and retried later — a runaway loop can't blast a mailbox. Default 0 =
+   unlimited.
 
 ### MCP surface
 
