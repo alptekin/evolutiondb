@@ -58,19 +58,71 @@ context fidelity.
 
 ## What's exposed to Claude
 
-Five tools, all under one `evolutiondb-memory` MCP server:
+All under one `evolutiondb-memory` MCP server. **Memory** (the core):
 
 | Tool                | Purpose                                          |
 |---------------------|--------------------------------------------------|
 | `save_memory`        | Persist a fact + optional tags                   |
-| `search_memory`      | Substring + tag search (use before answering)    |
+| `search_memory`      | Hybrid semantic + keyword search (before answering) |
 | `recent_memories`    | Last N saved facts (most-recent-first)           |
 | `forget`             | Delete by key                                    |
 | `list_tags`          | All distinct tags in use, with counts            |
+| `show_profile` · `expand_episode` · `feedback` · `restore_memory` · `set_language` | retrieval/profile extras |
+
+**Personal assistant + action loop** (over your synced mail/chat — see below):
+
+| Tool                  | Purpose                                        |
+|-----------------------|------------------------------------------------|
+| `daily_brief`          | Who's waiting on you, what you owe, your day   |
+| `suggest_reply`        | Draft a reply for an open loop (grounded)      |
+| `queue_reply`          | Queue a drafted reply for approval (sends nothing) |
+| `list_pending_replies` | Review the outbox                              |
+| `approve_send`         | The **only** tool that delivers (opt-in, gated) |
+| `reject_reply`         | Cancel a queued reply                          |
+| `outbox_audit` · `send_scheduled` | the send trail + flush due scheduled sends |
 
 Each call's `user_id` is overridden server-side from the
 `MCP_USER_ID` env var — stops the model from drifting the namespace
 across "user" / "default_user" / your name etc.
+
+## The assistant action loop
+
+Beyond memory, the server runs a human-in-the-loop **action loop** over the
+sources you sync in (gmail / teams / outlook / slack / imessage, via the sibling
+`*-sync` connectors):
+
+```
+read (your mail/chat) → understand (open loops, self-model)
+   → suggest (draft a reply) → queue → APPROVE → send → loop resolved
+```
+
+It is **read + suggest by default** — nothing is ever sent until you opt in *and*
+approve each reply. Drive it from Claude (the tools above) or from one CLI:
+
+```bash
+evolutiondb-brief                 # who's waiting on you, what you owe
+evolutiondb-brief --queue 3       # draft + queue replies for the top 3 (nothing sent)
+evolutiondb-outbox list           # review what's queued
+evolutiondb-outbox show <id>      # preview exactly what would go out
+evolutiondb-brief --approve       # deliver (dry-run unless sending is enabled)
+```
+
+### Turning on sending (deliberately)
+
+Sending is off by default and the sync connectors stay read-only. To enable it,
+ask the onboarding helper what a channel needs — it prints the exact env + the
+one-time consent step, and **writes nothing**:
+
+```bash
+evolutiondb-send-setup                  # status: enabled? channels? guards?
+evolutiondb-send-setup --channel gmail  # the env to enable gmail + its auth step
+```
+
+Sending only happens when **both** `EVOSQL_SEND_ENABLED=1` and a per-channel send
+scope (`gmail.send` / `Mail.Send` / `ChatMessage.Send` / `chat:write`) are set,
+and is wrapped in safe-default guards: an **undo window**, a **rate cap**, **dedup**
+(no double-reply), and a queryable **audit** trail. Full design + the invariants:
+[`docs/adr/ADR-004-action-loop-send-approval.md`](../../docs/adr/ADR-004-action-loop-send-approval.md).
 
 ## Install + run
 
