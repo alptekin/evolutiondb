@@ -54,6 +54,14 @@ def _undo_seconds():
         return 0
 
 
+def _rate_cap():
+    """Max real sends per rolling hour per namespace. 0 (default) = unlimited."""
+    try:
+        return max(0, int(os.environ.get("EVOSQL_SEND_RATE_PER_HOUR", "0")))
+    except ValueError:
+        return 0
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -181,14 +189,66 @@ def preview(item):
             "status": item.get("status"), "send_after": item.get("send_after")}
 
 
-def _deliver_and_record(backend, ns, item):
+def _last_at(it):
+    h = it.get("history") or [{}]
+    return h[-1].get("at", it.get("created_at", ""))
+
+
+def audit(backend, ns, *, limit=50):
+    """The full send trail — every item incl. sent/rejected, newest transition
+    first. Read-only accountability for what the assistant did or was asked to do."""
+    items = sorted(_all(backend, ns), key=_last_at, reverse=True)
+    out = []
+    for it in items[:limit]:
+        sr = it.get("send_result") or {}
+        out.append({"id": it.get("id"), "channel": it.get("channel"),
+                    "to": it.get("to_email") or it.get("to"),
+                    "status": it.get("status"), "loop_key": it.get("loop_key"),
+                    "created_at": it.get("created_at"), "sent_at": it.get("sent_at"),
+                    "result": ("delivered" if it.get("status") == _SENT
+                               else sr.get("reason") or sr.get("error"))})
+    return out
+
+
+def stats(backend, ns):
+    """A one-line health view: counts by status + real sends in the last hour."""
+    by = {}
+    for it in _all(backend, ns):
+        by[it.get("status", "?")] = by.get(it.get("status", "?"), 0) + 1
+    return {"by_status": by, "sent_last_hour": _sent_in_window(backend, ns),
+            "rate_cap": _rate_cap()}
+
+
+def _sent_in_window(backend, ns, *, window=3600, now=None):
+    now = time.time() if now is None else now
+    return sum(1 for it in _all(backend, ns)
+               if it.get("status") == _SENT
+               and (it.get("sent_ts") or 0) >= now - window)
+
+
+def _deliver_and_record(backend, ns, item, *, now=None):
     """Deliver an approved item, record the outcome, and close its loop on a real
-    send (dry-runs/failures leave it held). Shared by approve_send + flush."""
+    send (dry-runs/failures leave it held). Shared by approve_send + flush.
+
+    Rate guard: if the namespace already hit EVOSQL_SEND_RATE_PER_HOUR real sends
+    this hour, the item is HELD (not delivered) and retried later — backpressure,
+    never a dropped or doubled send."""
+    cap = _rate_cap()
+    if cap and _sent_in_window(backend, ns, now=now) >= cap:
+        reason = f"rate limit {cap}/h reached — held, will retry"
+        item["send_result"] = {"delivered": False, "rate_limited": True,
+                               "reason": reason}
+        if item.get("status") != _SCHEDULED:   # scheduled items stay due for flush
+            _record(item, _APPROVED)
+        _save(backend, ns, item)
+        return {"ok": True, "item": item, "sent": False, "dry_run": False,
+                "rate_limited": True, "loop_resolved": False, "detail": reason}
     result = _deliver(item)
     item["send_result"] = result
     loop_closed = False
     if result.get("delivered"):
         item["sent_at"] = _now()
+        item["sent_ts"] = time.time()
         _record(item, _SENT)
         # the reply actually went out -> close the open loop it answered so the
         # brief stops showing it immediately. A close failure must not undo a send.
@@ -205,6 +265,7 @@ def _deliver_and_record(backend, ns, item):
     return {"ok": True, "item": item,
             "sent": bool(result.get("delivered")),
             "dry_run": bool(result.get("dry_run")),
+            "rate_limited": False,
             "loop_resolved": loop_closed,
             "detail": result.get("reason") or result.get("error")}
 
@@ -244,7 +305,7 @@ def flush_scheduled(backend, ns, *, now=None):
     out = []
     for it in _all(backend, ns):
         if it.get("status") == _SCHEDULED and (it.get("send_after") or 0) <= now:
-            out.append(_deliver_and_record(backend, ns, it))
+            out.append(_deliver_and_record(backend, ns, it, now=now))
     return out
 
 
@@ -399,6 +460,21 @@ def _cli(backend, ns, argv) -> int:
         for r in results:
             print(_approve_line(r.get("item", {}).get("id", "?"), r))
         return 0
+    if cmd == "audit":
+        rows = audit(backend, ns)
+        s = stats(backend, ns)
+        cap = f"{s['rate_cap']}/h" if s["rate_cap"] else "∞"
+        print(f"Durum: {s['by_status']} · son 1 saatte gönderim: "
+              f"{s['sent_last_hour']} (limit {cap})\n")
+        icon = {"pending": "🟡", "approved": "🟠", "scheduled": "⏳", "sent": "🟢",
+                "rejected": "⚪"}
+        for r in rows:
+            line = (f"{icon.get(r['status'], '·')} {r['id']}  [{r['status']}]  "
+                    f"→{r['to'] or '?'}")
+            if r["result"]:
+                line += f"  · {r['result']}"
+            print(line)
+        return 0
     if cmd in ("approve", "reject") and len(argv) >= 2:
         res = (approve_send if cmd == "approve" else reject)(backend, ns, argv[1])
         if not res.get("ok"):
@@ -408,7 +484,8 @@ def _cli(backend, ns, argv) -> int:
               else f"⚪ iptal edildi: {argv[1]}")
         return 0
     print("kullanım: python -m mcp_server_evosql.outbox "
-          "list | show <id> | approve <id> | reject <id> | flush", file=sys.stderr)
+          "list | show <id> | approve <id> | reject <id> | flush | audit",
+          file=sys.stderr)
     return 2
 
 
