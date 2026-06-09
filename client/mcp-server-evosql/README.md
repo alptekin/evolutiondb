@@ -135,9 +135,13 @@ docker compose up -d
 
 *Zero-Docker alternative:* set `EVOSQL_EMBEDDED=1` and the MCP server spawns its
 own EvolutionDB on first connect (against a per-user data dir, reaped on exit) —
-no `docker compose` step. It uses the `evosql-server` binary from
-`EVOSQL_SERVER_BINARY`, the `[embedded]` wheel, `PATH`, or a dev checkout. An
-already-running instance still wins, so this is safe to leave on.
+no `docker compose` step. If no `evosql-server` binary is found
+(`EVOSQL_SERVER_BINARY` / PATH / dev checkout), it **auto-fetches** the prebuilt
+one for your platform from the GitHub release (checksum-verified, cached) — so a
+plain `pip install` + `EVOSQL_EMBEDDED=1` needs neither Docker nor a binary.
+Pre-fetch with `evolutiondb-embedded-fetch`; disable auto-fetch with
+`EVOSQL_EMBEDDED_AUTOFETCH=0`. An already-running instance still wins, so it's
+safe to leave on.
 
 **2. Build the SDK once**
 
