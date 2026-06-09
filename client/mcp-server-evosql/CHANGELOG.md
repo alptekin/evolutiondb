@@ -2,6 +2,20 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.12.0 — Embedded mode auto-fetches its binary
+
+### Added
+- **Zero-download embedded mode**: when `EVOSQL_EMBEDDED=1` and no `evosql-server`
+  binary is found, the server now **auto-fetches** the prebuilt binary for this
+  OS/arch from the `server-v*` GitHub release, verifying its `.sha256`, and caches
+  it per-user. So `pip install mcp-server-evolutiondb` + `EVOSQL_EMBEDDED=1` is a
+  truly Docker-free, binary-free start. Disable with `EVOSQL_EMBEDDED_AUTOFETCH=0`;
+  pin the version with `EVOSQL_SERVER_VERSION`.
+- **`evolutiondb-embedded-fetch`** console script to pre-download the binary.
+
+Verified end-to-end: the real `evosql-server-macos-arm64` asset fetched from the
+`server-v3.0.0` release, checksum-verified, spawned, queried, and closed.
+
 ## 1.11.0 — Personal-assistant action loop
 
 The server grows from read-only memory + suggestions into a full, human-in-the-loop
