@@ -203,26 +203,39 @@ def reject(backend, ns, item_id):
 _EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 
 
+def _is_outbound(d, source):
+    if source == "gmail":
+        return "SENT" in str(d.get("labels") or "")
+    if source == "outlook":
+        return "sent" in (d.get("folder") or "").lower()
+    return False
+
+
 def resolve_recipient(backend, ns, loop):
-    """Best-effort deliverable address for a loop: the email of the last inbound
-    message in its gmail thread. Returns None for non-gmail or when unresolved —
-    the caller then falls back to the counterparty display name (and the gmail
-    transport will refuse a non-address)."""
-    if (loop or {}).get("source") != "gmail":
+    """Best-effort deliverable address for a mail loop: the email of the last
+    inbound message in its thread. Works for gmail (thread keyed by thread_id)
+    and outlook (keyed by normalised subject); returns None for chat channels
+    (teams replies route by chat_id, not an address) or when unresolved — the
+    caller then falls back to the counterparty display name (and the transport
+    refuses a non-address)."""
+    source = (loop or {}).get("source")
+    if source not in ("gmail", "outlook"):
         return None
+    from . import open_loops as _ol
     from .server import _e
+    prefix = "gmail%" if source == "gmail" else "outlook%"
     found = None
     for (v,) in backend._query(
             f"SELECT mem_value FROM __mem_{backend.memory} "
-            f"WHERE mem_namespace = '{_e(ns)}' AND mem_key LIKE 'gmail%' "
+            f"WHERE mem_namespace = '{_e(ns)}' AND mem_key LIKE '{prefix}' "
             f"LIMIT 1000000") or []:
         try:
             d = json.loads(v)
         except Exception:
             continue
-        if d.get("thread_id") != loop.get("thread_key"):
+        if _ol._thread_key(d, source) != loop.get("thread_key"):
             continue
-        if "SENT" in str(d.get("labels") or ""):
+        if _is_outbound(d, source):
             continue                          # inbound only — that's who we reply to
         m = _EMAIL.search(d.get("from") or "")
         if m:
