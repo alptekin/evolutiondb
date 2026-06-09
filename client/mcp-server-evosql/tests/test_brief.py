@@ -78,12 +78,44 @@ def test_render_lists_waiting_lines():
     assert "⭐" in out                                   # high-priority marker
 
 
+def test_queue_drafts_creates_pending():
+    os.environ.pop("EVOSQL_LOOP_LLM", None)              # draft is the off-note
+    from mcp_server_evosql import outbox
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "loop_1",
+          {"status": "open", "direction": "awaiting_me", "actionable": True,
+           "loop_type": "request", "counterparty": "Ulaş", "source": "gmail",
+           "thread_key": "T1", "snippet": "dosya?", "age_days": 1})
+    b.put(b.memory, NS, "gmail_1",
+          {"source": "gmail", "thread_id": "T1", "from": "Ulaş <ulas@x.com>",
+           "labels": "INBOX", "snippet": "dosya?"})
+    items = brief.queue_drafts(b, NS, top=3)
+    assert len(items) == 1
+    it = items[0]
+    assert it["loop_key"] == "loop_1" and it["status"] == "pending"
+    assert it["to_email"] == "ulas@x.com" and it["thread_id"] == "T1"  # routed
+    assert [x["id"] for x in outbox.list_pending(b, NS)] == [it["id"]]
+
+
+def test_approve_queued_all_dry_runs_without_send():
+    os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    from mcp_server_evosql import outbox
+    b = FakeBackend()
+    it = outbox.queue(b, NS, "loop_1", "cevap", channel="gmail", source="gmail",
+                      to="Ulaş")
+    res = brief.approve_queued(b, NS)                    # approve all pending
+    assert len(res) == 1 and res[0]["sent"] is False and res[0]["dry_run"] is True
+    assert outbox._load(b, NS, it["id"])["status"] == "approved"
+
+
 def main():
     for fn in (test_collect_buckets_and_filters,
                test_collect_orders_high_priority_first,
                test_render_shows_counts_and_sections,
                test_render_language_nag_only_when_unset,
-               test_render_lists_waiting_lines):
+               test_render_lists_waiting_lines,
+               test_queue_drafts_creates_pending,
+               test_approve_queued_all_dry_runs_without_send):
         fn()
         print(f"  ok  {fn.__name__}")
     print("OK — brief render + collect")
