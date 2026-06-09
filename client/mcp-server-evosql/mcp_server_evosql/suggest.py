@@ -86,10 +86,18 @@ def draft_reply(thread_msgs, loop, self_role, name, language) -> str:
     prompt = (
         f"You are drafting a reply that {name} ({self_role or 'the user'}) will "
         f"send. Below is a conversation; the other person is waiting for {name} "
-        f"to respond. Draft a natural, concise reply in {language} that {name} "
-        f"could send as-is, matching the thread's tone. If there isn't enough "
-        f"information to answer substantively, draft a short holding reply "
-        f"(acknowledge + say when you'll follow up). Return ONLY the reply text.\n\n"
+        f"to respond. Draft a natural, concise reply that {name} could send as-is, "
+        f"matching the thread's tone.\n"
+        f"RULES:\n"
+        f"1. NEVER invent concrete facts you don't have — times, dates, links, "
+        f"numbers, names, or commitments to specifics. If answering needs "
+        f"information you don't possess, write a short HOLDING reply: acknowledge "
+        f"the ask and say you'll check and follow up (do NOT fabricate the answer "
+        f"or claim you're attaching/sending something you don't have).\n"
+        f"2. Write in the language the OTHER PERSON writes in (match their "
+        f"messages). Only if their messages contain no real words, use "
+        f"{language}. Never mix languages within the reply.\n"
+        f"Return ONLY the reply text.\n\n"
         f"Conversation (most recent last):\n{convo}")
     try:
         import anthropic
