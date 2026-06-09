@@ -132,24 +132,31 @@ def main():
     assert outbox._load(b, ns, qi2["id"])["status"] == "rejected"
     print("  ok  outbox: queue -> approve(dry-run) -> reject on live store")
 
-    # --- with a transport wired + send enabled, approve actually delivers -----
+    # --- transport wired + send enabled: approve delivers AND closes the loop -
     sent_box = []
     outbox.TRANSPORTS["gmail"] = lambda it: (sent_box.append(it) or {"id": "ok"})
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
     try:
-        qi3 = outbox.queue(b, ns, "loop_send", "Gönderiliyor.", channel="gmail",
-                           source="gmail", to="Z", to_email="z@x.com")
+        # reply to the REAL awaiting_me loop so its closure is exercised end-to-end
+        qi3 = outbox.queue(b, ns, top["loop_key"], "Tabii, dosya ekte.",
+                           channel="gmail", source="gmail",
+                           to=top["counterparty"], to_email="ulas@x.com")
         r3 = outbox.approve_send(b, ns, qi3["id"])
         assert r3["sent"] and not r3["dry_run"], r3
         assert outbox._load(b, ns, qi3["id"])["status"] == "sent"
         assert len(sent_box) == 1
+        # the loop it answered is now resolved on the live store (brief stops nagging)
+        assert r3["loop_resolved"] is True
+        lr = b._query(f"SELECT mem_value FROM __mem_{b.loops_store} WHERE "
+                      f"mem_namespace = '{ns}' AND mem_key = '{top['loop_key']}'")
+        assert json.loads(lr[0][0])["status"] == "resolved"
         # idempotent: a second approve does not re-deliver
         outbox.approve_send(b, ns, qi3["id"])
         assert len(sent_box) == 1
     finally:
         outbox.TRANSPORTS.clear()
         os.environ.pop("EVOSQL_SEND_ENABLED", None)
-    print("  ok  outbox: approve delivers via transport, idempotent, on live store")
+    print("  ok  outbox: approve delivers, closes the loop, idempotent, on live store")
 
     # --- teams channel: reply lands in the chat (thread_id), no address needed -
     chats = []

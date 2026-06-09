@@ -175,15 +175,27 @@ def approve_send(backend, ns, item_id):
     item["approved_at"] = _now()
     result = _deliver(item)
     item["send_result"] = result
+    loop_closed = False
     if result.get("delivered"):
         item["sent_at"] = _now()
         _record(item, _SENT)
+        # the reply actually went out -> close the open loop it answered, so the
+        # brief stops showing it immediately (dry-runs do NOT close it: nothing
+        # was sent). A close failure must not undo a successful send.
+        if item.get("loop_key"):
+            try:
+                from . import open_loops
+                loop_closed = open_loops.mark_resolved(
+                    backend, ns, item["loop_key"], reason="sent_reply")
+            except Exception:
+                loop_closed = False
     else:
         _record(item, _APPROVED)               # approved but held (dry-run/failure)
     _save(backend, ns, item)
     return {"ok": True, "item": item,
             "sent": bool(result.get("delivered")),
             "dry_run": bool(result.get("dry_run")),
+            "loop_resolved": loop_closed,
             "detail": result.get("reason") or result.get("error")}
 
 
