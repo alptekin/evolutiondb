@@ -141,6 +141,21 @@ def test_slack_transport_maps_api_failure():
     assert r["error"] == "not_in_channel"
 
 
+def test_imessage_transport_sends_to_handle():
+    captured = {}
+    t = transports.ImessageSendTransport(
+        sender=lambda h, txt: (captured.update(h=h, txt=txt) or {"id": None}))
+    r = t({"to": "+905551112233", "body": "tabii"})
+    assert r["delivered"] and r["to"] == "+905551112233"
+    assert captured == {"h": "+905551112233", "txt": "tabii"}
+
+
+def test_imessage_transport_needs_handle():
+    t = transports.ImessageSendTransport(sender=lambda h, b: {"id": None})
+    r = t({"body": "hi"})
+    assert not r["delivered"] and "handle" in r["error"]
+
+
 def _clear():
     os.environ.pop("EVOSQL_SEND_ENABLED", None)
     os.environ.pop("EVOSQL_SEND_CHANNELS", None)
@@ -169,10 +184,11 @@ def test_register_needs_both_locks():
 def test_register_wires_known_channels_only():
     _clear()
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
-    os.environ["EVOSQL_SEND_CHANNELS"] = "gmail,teams,outlook,slack,carrierpigeon"
+    os.environ["EVOSQL_SEND_CHANNELS"] = \
+        "gmail,teams,outlook,slack,imessage,carrierpigeon"
     wired = transports.register_from_env()               # real builders
-    assert set(wired) == {"gmail", "teams", "outlook", "slack"}   # unknown skipped
-    assert {"gmail", "teams", "outlook", "slack"} <= set(outbox.TRANSPORTS)
+    assert set(wired) == {"gmail", "teams", "outlook", "slack", "imessage"}
+    assert {"gmail", "teams", "outlook", "slack", "imessage"} <= set(outbox.TRANSPORTS)
     _clear()
 
 
@@ -185,6 +201,7 @@ def main():
              test_outlook_transport_sends_mail, test_outlook_transport_refuses_non_address,
              test_slack_transport_posts_to_channel, test_slack_transport_needs_channel,
              test_slack_transport_maps_api_failure,
+             test_imessage_transport_sends_to_handle, test_imessage_transport_needs_handle,
              test_register_is_noop_by_default,
              test_register_needs_both_locks, test_register_wires_known_channels_only]
     try:

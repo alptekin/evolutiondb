@@ -207,6 +207,22 @@ def main():
         os.environ.pop("EVOSQL_SEND_ENABLED", None)
     print("  ok  outbox: slack transport posts into the DM on live store")
 
+    # --- imessage channel: reply goes to the resolved handle (phone/email) ----
+    handles = []
+    outbox.TRANSPORTS["imessage"] = lambda it: (
+        handles.append(it.get("to")) or {"id": None})
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    try:
+        ii = outbox.queue(b, ns, "loop_imsg", "tabii, yarın olur", channel="imessage",
+                          source="imessage", to="+905551112233")
+        ir = outbox.approve_send(b, ns, ii["id"])
+        assert ir["sent"] and handles == ["+905551112233"]
+        assert outbox._load(b, ns, ii["id"])["status"] == "sent"
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    print("  ok  outbox: imessage transport sends to the handle on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

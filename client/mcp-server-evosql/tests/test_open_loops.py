@@ -209,6 +209,40 @@ def test_slack_group_channel_is_skipped():
     assert ol.job_open_loops(b, NS) == 0
 
 
+def _imsg(chat_id, chat, handle, from_me, text, secs_ago):
+    return {"source": "imessage", "chat_id": chat_id, "chat": chat,
+            "handle": handle, "is_from_me": from_me, "text": text,
+            "modified_at": datetime.fromtimestamp(NOW - secs_ago, timezone.utc)
+            .isoformat()}
+
+
+def test_imessage_inbound_awaiting_me():
+    b = FakeBackend()
+    b.put(b.memory, NS, "imessage_1",
+          _imsg("C1", "Deniz", "+905551112233", True, "selam", 7200))
+    b.put(b.memory, NS, "imessage_2",
+          _imsg("C1", "Deniz", "+905551112233", False,
+                "yarın görüşebilir miyiz?", 3600))
+    ol.job_open_loops(b, NS)
+    me = [d for d in _loops(b)
+          if d["source"] == "imessage" and d["direction"] == "awaiting_me"]
+    assert len(me) == 1 and me[0]["counterparty"] == "Deniz"
+    assert me[0]["thread_key"] == "C1"                   # keyed by chat_id
+
+
+def test_imessage_uses_is_from_me_for_direction():
+    # I sent the last message asking a question -> awaiting_them, no reply yet
+    b = FakeBackend()
+    b.put(b.memory, NS, "imessage_1",
+          _imsg("C2", "Can", "can@x.com", False, "selam", 7200))
+    b.put(b.memory, NS, "imessage_2",
+          _imsg("C2", "Can", "can@x.com", True, "ne zaman uygun olursun?", 3600))
+    ol.job_open_loops(b, NS)
+    them = [d for d in _loops(b) if d["source"] == "imessage"]
+    assert len(them) == 1 and them[0]["direction"] == "awaiting_them"
+    assert them[0]["counterparty"] == "Can"              # the other party, not "me"
+
+
 def test_detect_my_id_generic():
     msgs = [{"sender_id": "me", "channel_id": "D1"},
             {"sender_id": "deniz", "channel_id": "D1"},
@@ -255,7 +289,9 @@ def main():
              test_one_way_inbound_is_not_a_loop, test_short_ack_closes_the_loop,
              test_outbound_question_is_awaiting_them, test_promise_is_i_owe_them,
              test_teams_inbound_awaiting_me, test_slack_dm_inbound_awaiting_me,
-             test_slack_group_channel_is_skipped, test_detect_my_id_generic,
+             test_slack_group_channel_is_skipped,
+             test_imessage_inbound_awaiting_me,
+             test_imessage_uses_is_from_me_for_direction, test_detect_my_id_generic,
              test_core_team_counterparty_is_high_priority,
              test_mark_resolved_closes_and_is_idempotent,
              test_resolution_flips_stale_open_loop]

@@ -255,6 +255,45 @@ def resolve_recipient(backend, ns, loop):
     return found
 
 
+def _resolve_imessage_handle(backend, ns, loop):
+    """The handle (phone/email) of the inbound side of an imessage chat — that's
+    where a reply is addressed (osascript sends to a buddy by handle, not chat_id)."""
+    from . import open_loops as _ol
+    from .server import _e
+    found = None
+    for (v,) in backend._query(
+            f"SELECT mem_value FROM __mem_{backend.memory} "
+            f"WHERE mem_namespace = '{_e(ns)}' AND mem_key LIKE 'imessage%' "
+            f"LIMIT 1000000") or []:
+        try:
+            d = json.loads(v)
+        except Exception:
+            continue
+        if _ol._thread_key(d, "imessage") != loop.get("thread_key"):
+            continue
+        if d.get("is_from_me"):
+            continue                                  # inbound only
+        if d.get("handle"):
+            found = d["handle"]
+    return found
+
+
+def recipient_for(backend, ns, loop):
+    """Resolve how a reply to this loop is addressed, per channel:
+      * gmail/outlook → {to: display, to_email: <resolved address>}  (sendMail)
+      * imessage      → {to: <handle>, to_email: None}               (osascript buddy)
+      * teams/slack   → {to: display, to_email: None}                (routed by thread_id)
+    Centralises the channel routing knowledge so queue_reply stays channel-agnostic."""
+    src = (loop or {}).get("source")
+    cp = (loop or {}).get("counterparty")
+    if src in ("gmail", "outlook"):
+        return {"to": cp, "to_email": resolve_recipient(backend, ns, loop)}
+    if src == "imessage":
+        return {"to": _resolve_imessage_handle(backend, ns, loop) or cp,
+                "to_email": None}
+    return {"to": cp, "to_email": None}               # teams / slack route by thread_id
+
+
 # ---------------------------------------------------------------- CLI
 def _fmt(it):
     st = it.get("status", "?")
