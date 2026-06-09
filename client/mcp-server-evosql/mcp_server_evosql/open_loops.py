@@ -25,7 +25,8 @@ import os
 import re
 from datetime import datetime, timezone
 
-SOURCES = (("gmail", "gmail"), ("teams", "teams_chat"), ("outlook", "outlook"))
+SOURCES = (("gmail", "gmail"), ("teams", "teams_chat"), ("outlook", "outlook"),
+           ("slack", "slack"))
 ACTIONABLE_DAYS = 90          # older than this = stale, kept but deprioritised
 PROMISE_DAYS = 45             # a promise older than this is probably moot
 _QUESTION = re.compile(r'\?|\bmi\b|\bmu\b|\bmı\b|\bmü\b|misin|musun|edebilir', re.I)
@@ -78,21 +79,29 @@ def _thread_key(d, source):
         return d.get("thread_id") or d.get("message_id")
     if source == "teams":
         return d.get("chat_id")
+    if source == "slack":
+        return d.get("channel_id")
     subj = re.sub(r'(?i)^\s*(re|fwd|fw)\s*:\s*', '', d.get("subject") or "").strip()
     return subj or d.get("message_id")
 
 
-def _detect_my_teams_id(teams_msgs):
-    """'Me' is the sender_id present across the most distinct 1:1 chats — every
-    counterparty appears in just their own chat, but you appear in all of yours."""
+def _detect_my_id(msgs, key_field):
+    """'Me' is the sender_id present across the most distinct 1:1 conversations —
+    every counterparty appears in just their own chat, but you appear in all of
+    yours. key_field is the per-conversation id (chat_id for teams, channel_id
+    for slack DMs)."""
     from collections import defaultdict
-    chats = defaultdict(set)
-    for d in teams_msgs:
-        if d.get("sender_id") and d.get("chat_id"):
-            chats[d["sender_id"]].add(d["chat_id"])
-    if not chats:
+    convos = defaultdict(set)
+    for d in msgs:
+        if d.get("sender_id") and d.get(key_field):
+            convos[d["sender_id"]].add(d[key_field])
+    if not convos:
         return None
-    return max(chats.items(), key=lambda kv: len(kv[1]))[0]
+    return max(convos.items(), key=lambda kv: len(kv[1]))[0]
+
+
+def _detect_my_teams_id(teams_msgs):
+    return _detect_my_id(teams_msgs, "chat_id")
 
 
 def _team_names(backend, ns):
@@ -181,12 +190,13 @@ def job_open_loops(backend, ns: str) -> int:
     team = _team_names(backend, ns)
 
     # --- load conversational records, bucket into threads -----------------
-    raw = {"gmail": [], "teams": [], "outlook": []}
+    raw = {"gmail": [], "teams": [], "outlook": [], "slack": []}
     rows = backend._query(
         f"SELECT mem_value FROM __mem_{backend.memory} "
         f"WHERE mem_namespace = '{_e(ns)}' AND ("
         f"mem_key LIKE 'gmail%' OR mem_key LIKE 'teams_chat%' "
-        f"OR mem_key LIKE 'outlook%') LIMIT 1000000") or []
+        f"OR mem_key LIKE 'outlook%' OR mem_key LIKE 'slack%') "
+        f"LIMIT 1000000") or []
     for (v,) in rows:
         try:
             d = json.loads(v)
@@ -197,15 +207,23 @@ def job_open_loops(backend, ns: str) -> int:
             raw[src].append(d)
 
     my_id = _detect_my_teams_id(raw["teams"])
+    my_slack_id = _detect_my_id(raw["slack"], "channel_id")
 
     threads = {}   # (source, key) -> list[(ts, outbound, who, text)]
-    for source in ("gmail", "teams", "outlook"):
+    for source in ("gmail", "teams", "outlook", "slack"):
         for d in raw[source]:
             if source == "teams":
                 if d.get("chat_type") != "oneOnOne":
                     continue   # v0: 1:1 only; group "@-me" detection needs an LLM
                 out = d.get("sender_id") == my_id
                 who = _disp(d.get("chat_name"))
+                text = d.get("text") or d.get("fact", "")
+                subj = ""
+            elif source == "slack":
+                if d.get("channel_type") != "im":
+                    continue   # v0: DMs only; channel "@-me" detection needs an LLM
+                out = d.get("sender_id") == my_slack_id
+                who = _disp(d.get("channel_name"))
                 text = d.get("text") or d.get("fact", "")
                 subj = ""
             elif source == "gmail":
@@ -259,7 +277,7 @@ def job_open_loops(backend, ns: str) -> int:
                 open_now[loop_key] = base
             continue
         # last message inbound -> someone is waiting on me
-        if source != "teams" and not had_my_reply:
+        if source not in ("teams", "slack") and not had_my_reply:
             continue                                   # one-way mail (newsletter)
         if bool(_CLOSE.search(text or "")) and len((text or "")) < 70:
             continue                                   # short ack -> closed
