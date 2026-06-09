@@ -98,7 +98,55 @@ def _default_gmail_sender(raw: str, thread_id):
         return json.loads(resp.read().decode() or "{}")
 
 
-_BUILDERS = {"gmail": GmailSendTransport}
+class TeamsSendTransport:
+    """Sends a queued reply into a Teams chat. The loop's thread_id IS the
+    chat_id (open_loops keys teams threads by chat_id), so there is no recipient
+    address to resolve — the chat identifies the conversation. `sender(chat_id,
+    body) -> dict` does the Graph call; injected for tests."""
+
+    channel = "teams"
+
+    def __init__(self, sender=None):
+        self._sender = sender or _default_teams_sender
+
+    def __call__(self, item) -> dict:
+        chat_id = (item.get("thread_id") or "").strip()
+        if not chat_id:
+            return {"delivered": False, "dry_run": False,
+                    "error": "no chat id (thread_id) to reply into"}
+        res = self._sender(chat_id, item.get("body", "")) or {}
+        return {"delivered": True, "id": res.get("id"), "chat_id": chat_id}
+
+
+def _default_teams_sender(chat_id: str, body: str):
+    """Real Graph POST /chats/{chat_id}/messages. Lazily imports teams-sync
+    (optional dep) and posts with a ChatMessage.Send-scoped token. Raises if
+    teams-sync isn't installed or the token lacks the send scope."""
+    import json
+    import urllib.request
+
+    try:
+        from teams_sync.auth import TeamsAuth   # type: ignore
+    except Exception as exc:  # pragma: no cover - exercised only with real send
+        raise RuntimeError(
+            "teams send transport needs the teams-sync package with a "
+            "ChatMessage.Send-scoped token") from exc
+
+    cache = os.environ.get("EVOSQL_TEAMS_TOKEN_CACHE",
+                           os.path.expanduser("~/.evosql/teams_token.json"))
+    auth = TeamsAuth(tenant_id=os.environ.get("AZURE_TENANT_ID", "common"),
+                     client_id=os.environ["AZURE_CLIENT_ID"], cache_path=cache)
+    token = auth.get_token()
+    req = urllib.request.Request(
+        f"https://graph.microsoft.com/v1.0/chats/{chat_id}/messages",
+        data=json.dumps({"body": {"content": body or ""}}).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode() or "{}")
+
+
+_BUILDERS = {"gmail": GmailSendTransport, "teams": TeamsSendTransport}
 
 
 def register_from_env(*, builders=None):

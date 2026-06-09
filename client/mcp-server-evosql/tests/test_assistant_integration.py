@@ -151,6 +151,22 @@ def main():
         os.environ.pop("EVOSQL_SEND_ENABLED", None)
     print("  ok  outbox: approve delivers via transport, idempotent, on live store")
 
+    # --- teams channel: reply lands in the chat (thread_id), no address needed -
+    chats = []
+    outbox.TRANSPORTS["teams"] = lambda it: (
+        chats.append(it.get("thread_id")) or {"id": "1700000000000"})
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    try:
+        ti = outbox.queue(b, ns, "loop_teams", "tamamdır 👍", channel="teams",
+                          source="teams", to="Deniz", thread_id="19:abc@thread.v2")
+        tr = outbox.approve_send(b, ns, ti["id"])
+        assert tr["sent"] and chats == ["19:abc@thread.v2"]   # delivered into the chat
+        assert outbox._load(b, ns, ti["id"])["status"] == "sent"
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    print("  ok  outbox: teams transport delivers into the chat on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

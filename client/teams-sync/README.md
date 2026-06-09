@@ -52,6 +52,9 @@ If those are fine in your environment, continue.
    - `Chat.Read`
    - `User.Read`
    - `offline_access`
+   - `ChatMessage.Send` — **only if** you intend to enable sending for the
+     outbox action loop (`EVOSQL_TEAMS_SEND=1`); omit to stay read-only (the
+     default; see ADR-004).
 7. Copy the **Application (client) ID** and the **Directory (tenant)
    ID** from the app's Overview page.
 

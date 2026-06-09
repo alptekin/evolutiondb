@@ -116,6 +116,17 @@ SCOPES: List[str] = [
 ]
 # offline_access is added by MSAL automatically and would be rejected if
 # duplicated in SCOPES.
+# ChatMessage.Send is OPT-IN and off by default — teams-sync stays read-only
+# unless the operator enables sending for the outbox action loop (ADR-004).
+# Setting EVOSQL_TEAMS_SEND adds the send scope at consent time.
+SEND_SCOPE = "ChatMessage.Send"
+
+
+def _scopes() -> List[str]:
+    if os.environ.get("EVOSQL_TEAMS_SEND", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return SCOPES + [SEND_SCOPE]
+    return SCOPES
 
 
 def _expand(path: str) -> Path:
@@ -168,7 +179,7 @@ class TeamsAuth:
         notification + native dialog, clipboard copy, default-browser
         auto-launch), then blocks until the user completes login or
         MSAL times out. Returns the access token."""
-        flow = self.app.initiate_device_flow(scopes=SCOPES)
+        flow = self.app.initiate_device_flow(scopes=_scopes())
         if "user_code" not in flow:
             raise RuntimeError(f"device flow init failed: {flow}")
         # Print to stderr so --once piped output stays clean.
@@ -183,7 +194,7 @@ class TeamsAuth:
         cached account is found or the refresh token has been revoked."""
         accounts = self.app.get_accounts()
         if accounts:
-            result = self.app.acquire_token_silent(SCOPES, account=accounts[0])
+            result = self.app.acquire_token_silent(_scopes(), account=accounts[0])
             if result and "access_token" in result:
                 self.store.flush()
                 return result["access_token"]
