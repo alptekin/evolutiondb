@@ -133,6 +133,12 @@ cd /path/to/evolutiondb
 docker compose up -d
 ```
 
+*Zero-Docker alternative:* set `EVOSQL_EMBEDDED=1` and the MCP server spawns its
+own EvolutionDB on first connect (against a per-user data dir, reaped on exit) —
+no `docker compose` step. It uses the `evosql-server` binary from
+`EVOSQL_SERVER_BINARY`, the `[embedded]` wheel, `PATH`, or a dev checkout. An
+already-running instance still wins, so this is safe to leave on.
+
 **2. Build the SDK once**
 
 ```bash

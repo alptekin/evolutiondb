@@ -35,6 +35,11 @@ The server grows from read-only memory + suggestions into a full, human-in-the-l
   (`list | show | approve | reject | flush | audit`).
 - `send` optional dependency group (`pip install mcp-server-evolutiondb[send]`) for
   the Teams transport's `msal`.
+- **Zero-Docker embedded mode** (`EVOSQL_EMBEDDED=1`): on first connect, if nothing
+  is serving `EVOSQL_HOST:PORT`, the server spawns a local EvolutionDB against a
+  per-user data dir and reaps it on exit (an external/shared instance still wins).
+  Binary resolved from `EVOSQL_SERVER_BINARY` → bundled (`[embedded]` wheel) →
+  PATH → dev checkout. See ADR-003.
 
 ### Safety
 Connectors stay read-only by default; sending is a per-channel opt-in scope
