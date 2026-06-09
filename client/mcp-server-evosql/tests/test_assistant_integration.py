@@ -270,6 +270,20 @@ def main():
         os.environ.pop("EVOSQL_SEND_RATE_PER_HOUR", None)
     print("  ok  outbox: rate limit holds excess sends + audit on live store")
 
+    # --- MCP dispatch: the host can drive audit + scheduled flush over the wire -
+    os.environ["MCP_USER_ID"] = ns
+    os.environ["MCP_STORE_PREFIX"] = prefix
+    os.environ["EVOSQL_PORT"] = str(PORT)
+    from mcp_server_evosql.server import MCPServer
+    mcp = MCPServer()
+    a = mcp._call_tool("outbox_audit", {"limit": 10})
+    assert a["ok"] and "by_status" in a["stats"] and isinstance(a["trail"], list)
+    f = mcp._call_tool("send_scheduled", {})
+    assert f["ok"] and "delivered" in f
+    for k in ("MCP_USER_ID", "MCP_STORE_PREFIX", "EVOSQL_PORT"):
+        os.environ.pop(k, None)
+    print("  ok  mcp: outbox_audit + send_scheduled dispatch on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

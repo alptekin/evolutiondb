@@ -2856,6 +2856,33 @@ TOOLS = [
             "required": ["item_id"],
         },
     },
+    {
+        "name": "outbox_audit",
+        "description": (
+            "Show the send history and outbox health: every queued / sent / "
+            "rejected reply (newest first) with its result, plus counts by status "
+            "and how many real sends happened in the last hour vs the rate cap. "
+            "Read-only — call this to answer 'what have you sent', 'what's waiting "
+            "to send', or 'are we near the send limit'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "Max trail entries (default 50)."},
+            },
+        },
+    },
+    {
+        "name": "send_scheduled",
+        "description": (
+            "Deliver any replies whose undo window has elapsed (replies approved "
+            "with an undo delay sit in 'scheduled' until then). A background job "
+            "normally does this; call it to push due ones out now. Delivers only "
+            "when sending is enabled, otherwise a dry-run."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -3060,6 +3087,24 @@ class MCPServer:
             if not item_id:
                 return {"error": "reject_reply requires `item_id`"}
             return outbox.reject(b, self.user_id, item_id)
+
+        if name == "outbox_audit":
+            from . import outbox
+            limit = args.get("limit")
+            try:
+                limit = int(limit) if limit is not None else 50
+            except (TypeError, ValueError):
+                limit = 50
+            return {"ok": True, "user_id": self.user_id,
+                    "stats": outbox.stats(b, self.user_id),
+                    "trail": outbox.audit(b, self.user_id, limit=limit)}
+
+        if name == "send_scheduled":
+            from . import outbox
+            results = outbox.flush_scheduled(b, self.user_id)
+            return {"ok": True, "user_id": self.user_id,
+                    "delivered": sum(1 for r in results if r.get("sent")),
+                    "results": results}
 
         return {"error": f"unknown tool: {name}"}
 
