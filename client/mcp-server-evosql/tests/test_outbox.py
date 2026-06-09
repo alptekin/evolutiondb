@@ -213,8 +213,23 @@ def test_resolve_recipient_picks_inbound_address():
            "from": "Ulaş <ulas@corp.com>", "labels": "INBOX"})
     addr = outbox.resolve_recipient(b, NS, {"source": "gmail", "thread_key": "T9"})
     assert addr == "ulas@corp.com"
-    # non-gmail -> None (transport will refuse a display name)
+    # teams routes by chat_id, not an address -> None
     assert outbox.resolve_recipient(b, NS, {"source": "teams"}) is None
+
+
+def test_resolve_recipient_outlook_matches_subject():
+    _clean()
+    b = FakeBackend()
+    b.put(b.memory, NS, "outlook_0",
+          {"source": "outlook", "subject": "Bütçe", "from": "me@x.com",
+           "folder": "Sent Items"})                      # outbound — skip
+    b.put(b.memory, NS, "outlook_1",
+          {"source": "outlook", "subject": "Re: Bütçe",
+           "from": "Boss <boss@corp.com>", "folder": "Inbox"})
+    # the loop's thread_key is the normalised subject
+    addr = outbox.resolve_recipient(b, NS, {"source": "outlook",
+                                            "thread_key": "Bütçe"})
+    assert addr == "boss@corp.com"
 
 
 # ---------------------------------------------------------------- CLI
@@ -249,6 +264,7 @@ def main():
              test_reject_unknown_errors, test_action_tools_registered,
              test_queue_carries_to_email_and_thread,
              test_resolve_recipient_picks_inbound_address,
+             test_resolve_recipient_outlook_matches_subject,
              test_cli_list_and_dry_run_approve, test_cli_reject_and_errors]
     try:
         for fn in tests:

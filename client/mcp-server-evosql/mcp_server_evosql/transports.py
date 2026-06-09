@@ -146,7 +146,60 @@ def _default_teams_sender(chat_id: str, body: str):
         return json.loads(resp.read().decode() or "{}")
 
 
-_BUILDERS = {"gmail": GmailSendTransport, "teams": TeamsSendTransport}
+class OutlookSendTransport:
+    """Sends a queued reply via Outlook / Graph sendMail. Like Gmail it needs a
+    deliverable recipient address (resolved upstream from the thread).
+    `sender(to, subject, body) -> dict` does the Graph call; injected for tests."""
+
+    channel = "outlook"
+
+    def __init__(self, sender=None):
+        self._sender = sender or _default_outlook_sender
+
+    def __call__(self, item) -> dict:
+        to = (item.get("to_email") or item.get("to") or "").strip()
+        if "@" not in to:
+            return {"delivered": False, "dry_run": False,
+                    "error": f"no recipient email address (got {to!r})"}
+        res = self._sender(to, _reply_subject(item), item.get("body", "")) or {}
+        return {"delivered": True, "id": res.get("id"), "to": to}
+
+
+def _default_outlook_sender(to: str, subject: str, body: str):
+    """Real Graph POST /me/sendMail. Lazily imports outlook-sync (optional dep)
+    and posts with a Mail.Send-scoped token. Raises if outlook-sync isn't
+    installed or the token lacks the send scope."""
+    import json
+    import urllib.request
+
+    try:
+        from outlook_sync.auth import OutlookAuth   # type: ignore
+    except Exception as exc:  # pragma: no cover - exercised only with real send
+        raise RuntimeError(
+            "outlook send transport needs the outlook-sync package with a "
+            "Mail.Send-scoped token") from exc
+
+    cache = os.environ.get("EVOSQL_OUTLOOK_TOKEN_CACHE",
+                           os.path.expanduser("~/.evosql/outlook_token.json"))
+    auth = OutlookAuth(client_id=os.environ["AZURE_CLIENT_ID"],
+                       tenant=os.environ.get("AZURE_TENANT_ID", "common"),
+                       cache_path=cache)
+    token = auth.ensure_token(interactive=False)
+    payload = {"message": {"subject": subject,
+                           "body": {"contentType": "Text", "content": body or ""},
+                           "toRecipients": [{"emailAddress": {"address": to}}]},
+               "saveToSentItems": True}
+    req = urllib.request.Request(
+        "https://graph.microsoft.com/v1.0/me/sendMail",
+        data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode() or "{}")    # 202, empty body
+
+
+_BUILDERS = {"gmail": GmailSendTransport, "teams": TeamsSendTransport,
+             "outlook": OutlookSendTransport}
 
 
 def register_from_env(*, builders=None):

@@ -46,6 +46,17 @@ SCOPES = [
     "https://graph.microsoft.com/User.Read",
     "offline_access",
 ]
+# Mail.Send is OPT-IN and off by default — outlook-sync stays read-only unless
+# the operator enables sending for the outbox action loop (ADR-004). Setting
+# EVOSQL_OUTLOOK_SEND adds the send scope at consent time.
+SEND_SCOPE = "https://graph.microsoft.com/Mail.Send"
+
+
+def _scopes():
+    if os.environ.get("EVOSQL_OUTLOOK_SEND", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return SCOPES + [SEND_SCOPE]
+    return SCOPES
 
 
 class AuthError(Exception):
@@ -164,7 +175,7 @@ class OutlookAuth:
             "client_id":     self.client_id,
             "refresh_token": refresh_token,
             "grant_type":    "refresh_token",
-            "scope":         " ".join(SCOPES),
+            "scope":         " ".join(_scopes()),
         })
         return {
             "access_token":  payload["access_token"],
@@ -176,7 +187,7 @@ class OutlookAuth:
     def _interactive(self) -> Dict:
         start = _post(self._device_url, {
             "client_id": self.client_id,
-            "scope":     " ".join(SCOPES),
+            "scope":     " ".join(_scopes()),
         })
         for k in ("device_code", "user_code", "verification_uri",
                   "expires_in", "interval"):
