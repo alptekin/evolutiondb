@@ -25,8 +25,8 @@ The server grows from read-only memory + suggestions into a full, human-in-the-l
   (`EVOSQL_SEND_DEDUP_SECONDS`), and a queryable audit trail.
 - **Slack and iMessage** added as open-loop sources (alongside gmail/teams/outlook);
   a sent reply now closes its open loop immediately.
-- One-command brief flow: `brief --queue [N]` drafts + queues, `brief --approve`
-  delivers (dry-run unless sending is enabled).
+- One-command brief flow via the `evolutiondb-brief` console script:
+  `--queue [N]` drafts + queues, `--approve` delivers (dry-run unless enabled).
 - **`evolutiondb-send-setup`** onboarding command — reports the current send
   config and, for the channels you pick, prints the exact env block (with safe
   default undo/rate/dedup guards) plus the per-channel auth step. Writes nothing;
