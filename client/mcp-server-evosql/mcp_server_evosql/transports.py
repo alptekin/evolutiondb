@@ -79,12 +79,22 @@ def _default_gmail_sender(raw: str, thread_id):
             "gmail send transport needs the gmail-sync package with a "
             "gmail.send-scoped token") from exc
 
-    cache = os.environ.get("EVOSQL_GMAIL_TOKEN_CACHE",
-                           os.path.expanduser("~/.evosql/gmail_token.json"))
-    auth = GmailAuth(
-        client_id=os.environ["EVOSQL_GMAIL_CLIENT_ID"],
-        client_secret=os.environ.get("EVOSQL_GMAIL_CLIENT_SECRET", ""),
-        cache_path=cache)
+    # Use the same env vars gmail-sync does (GOOGLE_CLIENT_ID/SECRET,
+    # GMAIL_TOKEN_CACHE), with EVOSQL_GMAIL_* as fallback. The token must carry
+    # gmail.send — re-auth with EVOSQL_GMAIL_SEND=1 (a read-only sync token won't
+    # do); point GMAIL_TOKEN_CACHE at a send-scoped cache to avoid clobbering it.
+    cid = (os.environ.get("GOOGLE_CLIENT_ID")
+           or os.environ.get("EVOSQL_GMAIL_CLIENT_ID"))
+    csec = (os.environ.get("GOOGLE_CLIENT_SECRET")
+            or os.environ.get("EVOSQL_GMAIL_CLIENT_SECRET", ""))
+    cache = (os.environ.get("GMAIL_TOKEN_CACHE")
+             or os.environ.get("EVOSQL_GMAIL_TOKEN_CACHE")
+             or "~/.evosql/gmail_token.json")
+    if not cid:
+        raise RuntimeError("gmail send transport needs GOOGLE_CLIENT_ID "
+                           "(+ GOOGLE_CLIENT_SECRET)")
+    auth = GmailAuth(client_id=cid, client_secret=csec,
+                     cache_path=os.path.expanduser(cache))
     token = auth.ensure_token(interactive=False)
     payload = {"raw": raw}
     if thread_id:
