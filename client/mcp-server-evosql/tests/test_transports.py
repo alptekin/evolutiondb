@@ -76,6 +76,28 @@ def test_transport_refuses_non_address():
     assert "recipient" in r["error"]
 
 
+def test_teams_transport_delivers_into_chat():
+    captured = {}
+
+    def _fake(chat_id, body):
+        captured["chat_id"] = chat_id
+        captured["body"] = body
+        return {"id": "1700000000000"}
+
+    t = transports.TeamsSendTransport(sender=_fake)
+    r = t({"thread_id": "19:abc@thread.v2", "body": "tamamdır 👍"})
+    assert r["delivered"] and r["id"] == "1700000000000"
+    assert r["chat_id"] == "19:abc@thread.v2"
+    assert captured["body"] == "tamamdır 👍"            # no MIME — raw chat text
+
+
+def test_teams_transport_needs_chat_id():
+    t = transports.TeamsSendTransport(sender=lambda c, b: {"id": "x"})
+    r = t({"body": "hi"})                                # no thread_id
+    assert not r["delivered"] and not r["dry_run"]
+    assert "chat id" in r["error"]
+
+
 def _clear():
     os.environ.pop("EVOSQL_SEND_ENABLED", None)
     os.environ.pop("EVOSQL_SEND_CHANNELS", None)
@@ -101,14 +123,13 @@ def test_register_needs_both_locks():
     _clear()
 
 
-def test_register_wires_channel_when_enabled():
+def test_register_wires_known_channels_only():
     _clear()
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
-    os.environ["EVOSQL_SEND_CHANNELS"] = "gmail,teams"   # teams has no builder
-    wired = transports.register_from_env(
-        builders={"gmail": lambda: (lambda item: {"delivered": True})})
-    assert wired == ["gmail"]                            # only the known channel
-    assert "gmail" in outbox.TRANSPORTS
+    os.environ["EVOSQL_SEND_CHANNELS"] = "gmail,teams,slack"   # slack has no builder
+    wired = transports.register_from_env()               # real builders
+    assert set(wired) == {"gmail", "teams"}              # slack skipped
+    assert "gmail" in outbox.TRANSPORTS and "teams" in outbox.TRANSPORTS
     _clear()
 
 
@@ -116,8 +137,10 @@ def main():
     tests = [test_build_raw_email_round_trips, test_build_raw_email_blank_subject,
              test_reply_subject_normalises, test_transport_delivers_and_passes_thread,
              test_transport_prefers_to_email_then_to,
-             test_transport_refuses_non_address, test_register_is_noop_by_default,
-             test_register_needs_both_locks, test_register_wires_channel_when_enabled]
+             test_transport_refuses_non_address,
+             test_teams_transport_delivers_into_chat, test_teams_transport_needs_chat_id,
+             test_register_is_noop_by_default,
+             test_register_needs_both_locks, test_register_wires_known_channels_only]
     try:
         for fn in tests:
             fn()
