@@ -106,6 +106,35 @@ def render(data, name="", lang_set=True) -> str:
     return "\n".join(L)
 
 
+def queue_drafts(backend, ns, *, top, name=None):
+    """Draft replies for the top waiting-on-you loops and QUEUE them as pending
+    outbox items — the brief's one-command bridge into the action loop. Returns
+    the queued items. Sends nothing; each still needs approve_send."""
+    from . import suggest, outbox
+    loops = suggest._load_loops(backend, ns)
+    res = suggest.suggest_replies(backend, ns, top=top, name=name)
+    queued = []
+    for s in res["suggestions"]:
+        loop = loops.get(s["loop_key"], {})
+        rcpt = outbox.recipient_for(backend, ns, loop)
+        queued.append(outbox.queue(
+            backend, ns, s["loop_key"], s["draft"],
+            channel=loop.get("source"), source=loop.get("source"),
+            to=rcpt["to"], to_email=rcpt["to_email"],
+            thread_id=loop.get("thread_key"), subject=loop.get("subject")))
+    return queued
+
+
+def approve_queued(backend, ns, item_id=None):
+    """Approve a queued reply by id, or every pending one when id is None.
+    Returns the approve_send results (delivery dry-runs unless sending is on)."""
+    from . import outbox
+    if item_id:
+        return [outbox.approve_send(backend, ns, item_id)]
+    return [outbox.approve_send(backend, ns, it["id"])
+            for it in outbox.list_pending(backend, ns)]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -114,6 +143,12 @@ def main() -> int:
                          "e.g. türkçe / english")
     ap.add_argument("--draft", type=int, nargs="?", const=3, metavar="N",
                     help="also draft a reply for the top N waiting-on-you loops")
+    ap.add_argument("--queue", type=int, nargs="?", const=3, metavar="N",
+                    help="draft AND queue replies for the top N waiting-on-you "
+                         "loops (pending approval — nothing is sent)")
+    ap.add_argument("--approve", nargs="?", const="all", metavar="ID",
+                    help="approve a queued reply by id (or all pending if no id); "
+                         "delivers only when sending is enabled, else dry-run")
     args = ap.parse_args()
     from . import scheduler, prefs
     prefix = os.environ.get("MCP_STORE_PREFIX", "mcp")
@@ -125,6 +160,37 @@ def main() -> int:
         lang = prefs.set_language(backend, ns, args.language)
         print(f"✓ Özet dili ayarlandı: {lang}. "
               f"Sonraki open_loops/self_model çalışmasında özetler {lang} olacak.")
+        return 0
+
+    if args.approve is not None:
+        results = approve_queued(backend, ns,
+                                 None if args.approve == "all" else args.approve)
+        if not results:
+            print("Onay bekleyen yanıt yok.")
+            return 0
+        for r in results:
+            if not r.get("ok"):
+                print(f"✗ {r.get('error')}")
+                continue
+            it = r.get("item", {})
+            tag = "✓ gönderildi" if r.get("sent") else "◐ onaylandı (dry-run)"
+            extra = ("  · loop kapandı" if r.get("loop_resolved") else "")
+            detail = (f"  [{r.get('detail')}]"
+                      if not r.get("sent") and r.get("detail") else "")
+            print(f"{tag}: {it.get('id')} →{it.get('to') or '?'}{detail}{extra}")
+        return 0
+
+    if args.queue is not None:
+        name = ns.split("_")[0].capitalize()
+        items = queue_drafts(backend, ns, top=args.queue, name=name)
+        if not items:
+            print("Sıraya alınacak açık döngü yok.")
+            return 0
+        print(f"{'='*68}\n📤 SIRAYA ALINDI ({len(items)} — onay bekliyor)")
+        for it in items:
+            print(f"   {it['id']}  →{it.get('to') or '?'}\n"
+                  f"     {(it.get('body') or '')[:80]}")
+        print("\nGöndermek için:  brief --approve <id>   ·   hepsi:  brief --approve")
         return 0
 
     lang, was_set = prefs.get_language(backend, ns)
