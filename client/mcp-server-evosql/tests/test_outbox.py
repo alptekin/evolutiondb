@@ -256,6 +256,28 @@ def test_resolve_recipient_outlook_matches_subject():
     assert addr == "boss@corp.com"
 
 
+def test_recipient_for_routes_per_channel():
+    _clean()
+    b = FakeBackend()
+    b.put(b.memory, NS, "gmail_1",
+          {"source": "gmail", "thread_id": "T1", "from": "Ulaş <ulas@x.com>",
+           "labels": "INBOX"})
+    b.put(b.memory, NS, "imessage_1",
+          {"source": "imessage", "chat_id": "C1", "chat": "Deniz",
+           "handle": "+90555", "is_from_me": False})
+    # gmail -> email in to_email
+    g = outbox.recipient_for(b, NS, {"source": "gmail", "thread_key": "T1",
+                                     "counterparty": "Ulaş"})
+    assert g["to_email"] == "ulas@x.com" and g["to"] == "Ulaş"
+    # imessage -> handle in `to`, no email
+    im = outbox.recipient_for(b, NS, {"source": "imessage", "thread_key": "C1",
+                                      "counterparty": "Deniz"})
+    assert im["to"] == "+90555" and im["to_email"] is None
+    # teams/slack -> display name, routed by thread_id (no address)
+    tm = outbox.recipient_for(b, NS, {"source": "teams", "counterparty": "Can"})
+    assert tm == {"to": "Can", "to_email": None}
+
+
 # ---------------------------------------------------------------- CLI
 def test_cli_list_and_dry_run_approve():
     _clean()
@@ -290,6 +312,7 @@ def main():
              test_queue_carries_to_email_and_thread,
              test_resolve_recipient_picks_inbound_address,
              test_resolve_recipient_outlook_matches_subject,
+             test_recipient_for_routes_per_channel,
              test_cli_list_and_dry_run_approve, test_cli_reject_and_errors]
     try:
         for fn in tests:

@@ -26,7 +26,7 @@ import re
 from datetime import datetime, timezone
 
 SOURCES = (("gmail", "gmail"), ("teams", "teams_chat"), ("outlook", "outlook"),
-           ("slack", "slack"))
+           ("slack", "slack"), ("imessage", "imessage"))
 ACTIONABLE_DAYS = 90          # older than this = stale, kept but deprioritised
 PROMISE_DAYS = 45             # a promise older than this is probably moot
 _QUESTION = re.compile(r'\?|\bmi\b|\bmu\b|\bmı\b|\bmü\b|misin|musun|edebilir', re.I)
@@ -81,6 +81,8 @@ def _thread_key(d, source):
         return d.get("chat_id")
     if source == "slack":
         return d.get("channel_id")
+    if source == "imessage":
+        return d.get("chat_id") or d.get("handle")
     subj = re.sub(r'(?i)^\s*(re|fwd|fw)\s*:\s*', '', d.get("subject") or "").strip()
     return subj or d.get("message_id")
 
@@ -190,13 +192,13 @@ def job_open_loops(backend, ns: str) -> int:
     team = _team_names(backend, ns)
 
     # --- load conversational records, bucket into threads -----------------
-    raw = {"gmail": [], "teams": [], "outlook": [], "slack": []}
+    raw = {"gmail": [], "teams": [], "outlook": [], "slack": [], "imessage": []}
     rows = backend._query(
         f"SELECT mem_value FROM __mem_{backend.memory} "
         f"WHERE mem_namespace = '{_e(ns)}' AND ("
         f"mem_key LIKE 'gmail%' OR mem_key LIKE 'teams_chat%' "
-        f"OR mem_key LIKE 'outlook%' OR mem_key LIKE 'slack%') "
-        f"LIMIT 1000000") or []
+        f"OR mem_key LIKE 'outlook%' OR mem_key LIKE 'slack%' "
+        f"OR mem_key LIKE 'imessage%') LIMIT 1000000") or []
     for (v,) in rows:
         try:
             d = json.loads(v)
@@ -210,7 +212,7 @@ def job_open_loops(backend, ns: str) -> int:
     my_slack_id = _detect_my_id(raw["slack"], "channel_id")
 
     threads = {}   # (source, key) -> list[(ts, outbound, who, text)]
-    for source in ("gmail", "teams", "outlook", "slack"):
+    for source in ("gmail", "teams", "outlook", "slack", "imessage"):
         for d in raw[source]:
             if source == "teams":
                 if d.get("chat_type") != "oneOnOne":
@@ -224,6 +226,11 @@ def job_open_loops(backend, ns: str) -> int:
                     continue   # v0: DMs only; channel "@-me" detection needs an LLM
                 out = d.get("sender_id") == my_slack_id
                 who = _disp(d.get("channel_name"))
+                text = d.get("text") or d.get("fact", "")
+                subj = ""
+            elif source == "imessage":
+                out = bool(d.get("is_from_me"))   # the DB flags direction directly
+                who = _disp(d.get("chat"))
                 text = d.get("text") or d.get("fact", "")
                 subj = ""
             elif source == "gmail":
@@ -277,7 +284,7 @@ def job_open_loops(backend, ns: str) -> int:
                 open_now[loop_key] = base
             continue
         # last message inbound -> someone is waiting on me
-        if source not in ("teams", "slack") and not had_my_reply:
+        if source not in ("teams", "slack", "imessage") and not had_my_reply:
             continue                                   # one-way mail (newsletter)
         if bool(_CLOSE.search(text or "")) and len((text or "")) < 70:
             continue                                   # short ack -> closed

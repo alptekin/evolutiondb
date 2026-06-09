@@ -29,9 +29,9 @@ def _index_threads(backend, ns):
         f"SELECT mem_value FROM __mem_{backend.memory} "
         f"WHERE mem_namespace = '{_e(ns)}' AND ("
         f"mem_key LIKE 'gmail%' OR mem_key LIKE 'teams_chat%' "
-        f"OR mem_key LIKE 'outlook%' OR mem_key LIKE 'slack%') "
-        f"LIMIT 1000000") or []
-    parsed = {"gmail": [], "teams": [], "outlook": [], "slack": []}
+        f"OR mem_key LIKE 'outlook%' OR mem_key LIKE 'slack%' "
+        f"OR mem_key LIKE 'imessage%') LIMIT 1000000") or []
+    parsed = {"gmail": [], "teams": [], "outlook": [], "slack": [], "imessage": []}
     for (v,) in rows:
         try:
             d = json.loads(v)
@@ -41,7 +41,7 @@ def _index_threads(backend, ns):
             parsed[d["source"]].append(d)
     my_id = ol._detect_my_teams_id(parsed["teams"])
     my_slack_id = ol._detect_my_id(parsed["slack"], "channel_id")
-    for source in ("gmail", "teams", "outlook", "slack"):
+    for source in ("gmail", "teams", "outlook", "slack", "imessage"):
         for d in parsed[source]:
             if source == "teams":
                 out = d.get("sender_id") == my_id
@@ -51,6 +51,10 @@ def _index_threads(backend, ns):
                 out = d.get("sender_id") == my_slack_id
                 text = d.get("text") or d.get("fact", "")
                 who = ol._disp(d.get("channel_name"))
+            elif source == "imessage":
+                out = bool(d.get("is_from_me"))
+                text = d.get("text") or d.get("fact", "")
+                who = ol._disp(d.get("chat"))
             elif source == "gmail":
                 out = "SENT" in str(d.get("labels") or "")
                 text = (d.get("subject") or "") + " — " + (d.get("snippet") or "")
