@@ -86,6 +86,9 @@ body, recipient, channel, status, and a `history` of timestamped transitions
    double-sending.
 5. **No duplicate sends.** `queue_reply` upserts by `loop_key`: re-drafting a loop
    replaces its pending item instead of stacking a second send for the same thread.
+   Additionally `EVOSQL_SEND_DEDUP_SECONDS > 0` refuses to queue a reply to a loop
+   already answered within that window (raised at queue time, so no retry loop) —
+   a re-run can't double-reply. Default 0 = off.
 6. **Audit.** Every transition is timestamped in the item's `history`; the store
    is queryable like any other (`SELECT … FROM __mem_<prefix>_outbox`).
    `outbox.audit()` / `outbox stats` surface the full trail and a per-hour
