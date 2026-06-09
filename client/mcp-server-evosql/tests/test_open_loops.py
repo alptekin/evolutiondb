@@ -190,6 +190,17 @@ def test_core_team_counterparty_is_high_priority():
     assert _loops(b)[0]["priority"] == "high"
 
 
+def test_mark_resolved_closes_and_is_idempotent():
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "loop_x",
+          {"status": "open", "direction": "awaiting_me", "counterparty": "Ulaş"})
+    assert ol.mark_resolved(b, NS, "loop_x") is True
+    rec = b.rows(b.loops_store, NS)["loop_x"]
+    assert rec["status"] == "resolved" and rec["resolved_by"] == "sent_reply"
+    assert ol.mark_resolved(b, NS, "loop_x") is False     # already resolved -> no-op
+    assert ol.mark_resolved(b, NS, "missing") is False    # unknown key -> no-op
+
+
 def test_resolution_flips_stale_open_loop():
     b = FakeBackend()
     # a previously-open loop that this run will NOT regenerate (no source rows)
@@ -208,6 +219,7 @@ def main():
              test_outbound_question_is_awaiting_them, test_promise_is_i_owe_them,
              test_teams_inbound_awaiting_me,
              test_core_team_counterparty_is_high_priority,
+             test_mark_resolved_closes_and_is_idempotent,
              test_resolution_flips_stale_open_loop]
     for fn in tests:
         fn()
