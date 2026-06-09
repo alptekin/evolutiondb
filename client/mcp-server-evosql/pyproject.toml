@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-server-evolutiondb"
-version = "1.11.0"
+version = "1.12.0"
 description = "MCP (Model Context Protocol) server backed by EvolutionDB — long-term memory plus a personal-assistant action loop (open loops, drafts, human-approved send across gmail/teams/outlook/slack/imessage) for Claude Desktop / Claude Code."
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -81,6 +81,7 @@ evolutiondb-mcp-setup  = "mcp_server_evosql.setup:main"
 evolutiondb-send-setup = "mcp_server_evosql.send_setup:main"
 evolutiondb-brief      = "mcp_server_evosql.brief:main"
 evolutiondb-outbox     = "mcp_server_evosql.outbox:main"
+evolutiondb-embedded-fetch = "mcp_server_evosql.embedded:main"
 evolutiondb-identity   = "mcp_server_evosql.identity_cli:main"
 evolutiondb-inspector  = "mcp_server_evosql.inspector:main"
 evolutiondb-tags       = "mcp_server_evosql.tagger_cli:main"

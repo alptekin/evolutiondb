@@ -14,14 +14,24 @@ directory for storage (no --data-dir flag), so we run it inside the data dir.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import platform
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from typing import Optional
+
+# Default prebuilt-binary release. The server-v* releases attach raw
+# evosql-server-<os>-<arch> assets (+ .sha256); see server-build.yml.
+SERVER_VERSION = os.environ.get("EVOSQL_SERVER_VERSION", "3.0.0")
+RELEASE_BASE = os.environ.get(
+    "EVOSQL_SERVER_RELEASE_BASE",
+    "https://github.com/alptekin/evolutiondb/releases/download")
 
 
 def _truthy(v) -> bool:
@@ -43,24 +53,79 @@ def default_data_dir() -> Path:
     return base / "data"
 
 
+def _exe(name="evosql-server"):
+    return name + ".exe" if sys.platform.startswith("win") else name
+
+
+def fetched_binary_path() -> Path:
+    """Where an auto-fetched binary is cached (next to the data dir)."""
+    return default_data_dir().parent / "bin" / _exe()
+
+
+def asset_name() -> str:
+    """The release asset for this OS/arch. Raises if no prebuilt is published."""
+    m = platform.machine().lower()
+    if sys.platform == "darwin":
+        if m in ("arm64", "aarch64"):
+            return "evosql-server-macos-arm64"
+        raise RuntimeError(f"no prebuilt evosql-server for macOS {m} — build it "
+                           "and set EVOSQL_SERVER_BINARY")
+    if sys.platform.startswith("win"):
+        return "evosql-server-windows-x86_64.exe"
+    if m in ("x86_64", "amd64"):
+        return "evosql-server-linux-x86_64"
+    if m in ("aarch64", "arm64"):
+        return "evosql-server-linux-arm64"
+    raise RuntimeError(f"no prebuilt evosql-server for {sys.platform}/{m}")
+
+
 def resolve_binary() -> Optional[str]:
     """Find the evosql-server binary, in precedence order. None if not found."""
     env = os.environ.get("EVOSQL_SERVER_BINARY")
     if env and os.path.exists(env):
         return env
     # bundled in the package (the [embedded] wheel ships one under bin/)
-    bundled = Path(__file__).resolve().parent / "bin" / (
-        "evosql-server.exe" if sys.platform.startswith("win") else "evosql-server")
+    bundled = Path(__file__).resolve().parent / "bin" / _exe()
     if bundled.exists():
         return str(bundled)
     on_path = shutil.which("evosql-server")
     if on_path:
         return on_path
+    # previously auto-fetched into the per-user cache
+    fetched = fetched_binary_path()
+    if fetched.exists():
+        return str(fetched)
     # dev checkout: client/mcp-server-evosql/mcp_server_evosql/ -> repo/adaptor
     repo = Path(__file__).resolve().parents[3]
-    dev = repo / "adaptor" / ("evosql-server.exe" if sys.platform.startswith("win")
-                              else "evosql-server")
+    dev = repo / "adaptor" / _exe()
     return str(dev) if dev.exists() else None
+
+
+def fetch_binary(*, version=None, dest=None, base=None, _open=None) -> str:
+    """Download the prebuilt evosql-server for this platform into `dest` (default
+    the per-user cache), verifying the published .sha256. Returns the path.
+    `_open` is injectable for tests (defaults to urllib)."""
+    version = version or SERVER_VERSION
+    base = base or RELEASE_BASE
+    opener = _open or (lambda url: urllib.request.urlopen(url, timeout=180))
+    asset = asset_name()
+    url = f"{base}/server-v{version}/{asset}"
+    dest = Path(dest) if dest else fetched_binary_path()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    with opener(url) as r:
+        data = r.read()
+    with opener(url + ".sha256") as r:               # integrity is mandatory
+        expected = r.read().decode().split()[0].strip()
+    got = hashlib.sha256(data).hexdigest()
+    if expected != got:
+        raise RuntimeError(f"checksum mismatch for {asset}: got {got}, "
+                           f"expected {expected}")
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.write_bytes(data)
+    os.chmod(tmp, 0o755)
+    tmp.replace(dest)
+    return str(dest)
 
 
 def _port_in_use(host: str, port: int, timeout=0.5) -> bool:
@@ -94,10 +159,15 @@ class EmbeddedEvolutionDB:
         if _port_in_use(self.host, self.port):
             return False                              # external instance serves
         if not self.binary or not os.path.exists(self.binary):
-            raise RuntimeError(
-                "embedded mode is on but no evosql-server binary was found — set "
-                "EVOSQL_SERVER_BINARY, install the [embedded] wheel, or put "
-                "evosql-server on PATH")
+            # auto-fetch the prebuilt binary once (on by default under embedded;
+            # disable with EVOSQL_EMBEDDED_AUTOFETCH=0)
+            if _truthy(os.environ.get("EVOSQL_EMBEDDED_AUTOFETCH", "1")):
+                self.binary = fetch_binary()
+            else:
+                raise RuntimeError(
+                    "embedded mode is on but no evosql-server binary was found — "
+                    "set EVOSQL_SERVER_BINARY, put evosql-server on PATH, or allow "
+                    "auto-fetch (EVOSQL_EMBEDDED_AUTOFETCH=1)")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, EVOSQL_USER_NAME=self.user,
                    EVOSQL_PASSWORD=self.password)
@@ -143,3 +213,27 @@ def maybe_start(host: str, port: int) -> Optional[EmbeddedEvolutionDB]:
     if emb.ensure_running():
         atexit.register(emb.close)   # reap the spawned instance on exit
     return emb
+
+
+def main(argv=None) -> int:
+    """`evolutiondb-embedded-fetch` — download the prebuilt evosql-server for this
+    platform into the per-user cache (the binary embedded mode would auto-fetch)."""
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="evolutiondb-embedded-fetch",
+        description="Fetch the prebuilt evosql-server binary for embedded mode.")
+    ap.add_argument("--version", default=SERVER_VERSION,
+                    help=f"server release version (default {SERVER_VERSION})")
+    args = ap.parse_args(argv)
+    try:
+        print(f"Fetching {asset_name()} (server-v{args.version}) …")
+        path = fetch_binary(version=args.version)
+        print(f"✓ {path}")
+        return 0
+    except Exception as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
