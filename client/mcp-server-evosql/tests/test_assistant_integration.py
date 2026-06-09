@@ -167,6 +167,23 @@ def main():
         os.environ.pop("EVOSQL_SEND_ENABLED", None)
     print("  ok  outbox: teams transport delivers into the chat on live store")
 
+    # --- outlook channel: sendMail to a resolved address ---------------------
+    mails = []
+    outbox.TRANSPORTS["outlook"] = lambda it: (
+        mails.append(it.get("to_email")) or {"id": "AAMk"})
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    try:
+        oi = outbox.queue(b, ns, "loop_outlook", "Onaylandı.", channel="outlook",
+                          source="outlook", to="Boss", to_email="boss@corp.com",
+                          subject="Bütçe")
+        orr = outbox.approve_send(b, ns, oi["id"])
+        assert orr["sent"] and mails == ["boss@corp.com"]
+        assert outbox._load(b, ns, oi["id"])["status"] == "sent"
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    print("  ok  outbox: outlook transport sends to the resolved address on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

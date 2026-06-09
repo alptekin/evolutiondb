@@ -98,6 +98,25 @@ def test_teams_transport_needs_chat_id():
     assert "chat id" in r["error"]
 
 
+def test_outlook_transport_sends_mail():
+    captured = {}
+
+    def _fake(to, subject, body):
+        captured.update(to=to, subject=subject, body=body)
+        return {"id": "AAMk"}
+
+    t = transports.OutlookSendTransport(sender=_fake)
+    r = t({"to_email": "boss@corp.com", "subject": "Bütçe", "body": "onaylandı"})
+    assert r["delivered"] and r["to"] == "boss@corp.com"
+    assert captured["subject"] == "Re: Bütçe"            # reply-subject normalised
+
+
+def test_outlook_transport_refuses_non_address():
+    t = transports.OutlookSendTransport(sender=lambda *a: {"id": "x"})
+    r = t({"to": "Boss", "body": "x"})
+    assert not r["delivered"] and not r["dry_run"] and "recipient" in r["error"]
+
+
 def _clear():
     os.environ.pop("EVOSQL_SEND_ENABLED", None)
     os.environ.pop("EVOSQL_SEND_CHANNELS", None)
@@ -126,10 +145,10 @@ def test_register_needs_both_locks():
 def test_register_wires_known_channels_only():
     _clear()
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
-    os.environ["EVOSQL_SEND_CHANNELS"] = "gmail,teams,slack"   # slack has no builder
+    os.environ["EVOSQL_SEND_CHANNELS"] = "gmail,teams,outlook,slack"  # slack: no builder
     wired = transports.register_from_env()               # real builders
-    assert set(wired) == {"gmail", "teams"}              # slack skipped
-    assert "gmail" in outbox.TRANSPORTS and "teams" in outbox.TRANSPORTS
+    assert set(wired) == {"gmail", "teams", "outlook"}   # slack skipped
+    assert {"gmail", "teams", "outlook"} <= set(outbox.TRANSPORTS)
     _clear()
 
 
@@ -139,6 +158,7 @@ def main():
              test_transport_prefers_to_email_then_to,
              test_transport_refuses_non_address,
              test_teams_transport_delivers_into_chat, test_teams_transport_needs_chat_id,
+             test_outlook_transport_sends_mail, test_outlook_transport_refuses_non_address,
              test_register_is_noop_by_default,
              test_register_needs_both_locks, test_register_wires_known_channels_only]
     try:

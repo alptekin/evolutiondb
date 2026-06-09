@@ -32,8 +32,11 @@ Azure tenant. Three-minute setup:
    as `AZURE_TENANT_ID`. Use `common` for `AZURE_TENANT_ID` if you
    want to support personal Microsoft accounts.
 
-The package only requests `Mail.Read` — it cannot send mail, mark
-messages, or modify the mailbox.
+By default the package only requests `Mail.Read` — it cannot send mail, mark
+messages, or modify the mailbox. Sending is **opt-in**: setting
+`EVOSQL_OUTLOOK_SEND=1` adds the `Mail.Send` scope at consent time, used only by
+the outbox action loop's approve_send (see ADR-004). The default is unchanged
+and read-only.
 
 ## Install
 
