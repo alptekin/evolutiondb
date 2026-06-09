@@ -241,8 +241,49 @@ def _default_slack_sender(channel: str, text: str):
         return json.loads(resp.read().decode() or "{}")
 
 
+class ImessageSendTransport:
+    """Sends a reply over iMessage on macOS via the Messages app (osascript).
+    The recipient is a handle (phone/email) resolved from the chat's inbound side,
+    not the chat_id. `sender(handle, text) -> dict` runs the AppleScript; injected
+    for tests so nothing is sent and no osascript runs."""
+
+    channel = "imessage"
+
+    def __init__(self, sender=None):
+        self._sender = sender or _default_imessage_sender
+
+    def __call__(self, item) -> dict:
+        to = (item.get("to") or "").strip()
+        if not to:
+            return {"delivered": False, "dry_run": False,
+                    "error": "no imessage handle (phone/email) to send to"}
+        res = self._sender(to, item.get("body", "")) or {}
+        return {"delivered": True, "id": res.get("id"), "to": to}
+
+
+def _default_imessage_sender(handle: str, body: str):
+    """Drive Messages.app via osascript (macOS only). No API, no token — it acts
+    as the logged-in user, so it's gated by the same EVOSQL_SEND_ENABLED lock."""
+    import subprocess
+
+    script = (
+        'on run {targetHandle, targetBody}\n'
+        '  tell application "Messages"\n'
+        '    set svc to 1st account whose service type = iMessage\n'
+        '    set buddy to participant targetHandle of svc\n'
+        '    send targetBody to buddy\n'
+        '  end tell\n'
+        'end run')
+    proc = subprocess.run(["osascript", "-e", script, handle, body or ""],
+                          capture_output=True, text=True, timeout=30)
+    if proc.returncode != 0:
+        raise RuntimeError(f"osascript failed: {proc.stderr.strip()[:200]}")
+    return {"id": None}
+
+
 _BUILDERS = {"gmail": GmailSendTransport, "teams": TeamsSendTransport,
-             "outlook": OutlookSendTransport, "slack": SlackSendTransport}
+             "outlook": OutlookSendTransport, "slack": SlackSendTransport,
+             "imessage": ImessageSendTransport}
 
 
 def register_from_env(*, builders=None):
