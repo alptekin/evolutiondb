@@ -19,6 +19,11 @@ Ahmet say about the database migration last week?" weeks later.
 
 No workspace-admin approval is needed for user-scope tokens.
 
+Sending is **opt-in** and off by default. The outbox action loop's approve_send
+only posts a Slack reply when sending is enabled (`EVOSQL_SEND_ENABLED=1`,
+`EVOSQL_SEND_CHANNELS=slack`) AND the `SLACK_USER_TOKEN` additionally carries the
+`chat:write` scope (see ADR-004). Omit `chat:write` to stay strictly read-only.
+
 ## Install
 
 ```
