@@ -346,10 +346,13 @@ def test_audit_and_stats():
 def test_action_tools_registered():
     from mcp_server_evosql import server
     names = {t["name"] for t in server.TOOLS}
-    assert {"queue_reply", "list_pending_replies", "approve_send",
-            "reject_reply"} <= names
+    assert {"queue_reply", "list_pending_replies", "approve_send", "reject_reply",
+            "outbox_audit", "send_scheduled"} <= names
     approve = next(t for t in server.TOOLS if t["name"] == "approve_send")
     assert approve["inputSchema"]["required"] == ["item_id"]
+    # the read-only audit + flush tools take no required args
+    audit = next(t for t in server.TOOLS if t["name"] == "outbox_audit")
+    assert "required" not in audit["inputSchema"]
 
 
 # ---------------------------------------------------------------- enrichment
