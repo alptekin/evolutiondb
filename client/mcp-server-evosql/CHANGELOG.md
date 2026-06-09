@@ -27,6 +27,12 @@ The server grows from read-only memory + suggestions into a full, human-in-the-l
   a sent reply now closes its open loop immediately.
 - One-command brief flow: `brief --queue [N]` drafts + queues, `brief --approve`
   delivers (dry-run unless sending is enabled).
+- **`evolutiondb-send-setup`** onboarding command — reports the current send
+  config and, for the channels you pick, prints the exact env block (with safe
+  default undo/rate/dedup guards) plus the per-channel auth step. Writes nothing;
+  sending stays off until you set the env and approve each reply.
+- **`evolutiondb-outbox`** console script for the outbox CLI
+  (`list | show | approve | reject | flush | audit`).
 - `send` optional dependency group (`pip install mcp-server-evolutiondb[send]`) for
   the Teams transport's `msal`.
 
