@@ -117,11 +117,14 @@ def queue_drafts(backend, ns, *, top, name=None):
     for s in res["suggestions"]:
         loop = loops.get(s["loop_key"], {})
         rcpt = outbox.recipient_for(backend, ns, loop)
-        queued.append(outbox.queue(
-            backend, ns, s["loop_key"], s["draft"],
-            channel=loop.get("source"), source=loop.get("source"),
-            to=rcpt["to"], to_email=rcpt["to_email"],
-            thread_id=loop.get("thread_key"), subject=loop.get("subject")))
+        try:
+            queued.append(outbox.queue(
+                backend, ns, s["loop_key"], s["draft"],
+                channel=loop.get("source"), source=loop.get("source"),
+                to=rcpt["to"], to_email=rcpt["to_email"],
+                thread_id=loop.get("thread_key"), subject=loop.get("subject")))
+        except ValueError:
+            continue            # e.g. dedup-suppressed (already replied recently)
     return queued
 
 

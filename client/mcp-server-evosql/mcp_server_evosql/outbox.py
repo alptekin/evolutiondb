@@ -62,6 +62,15 @@ def _rate_cap():
         return 0
 
 
+def _dedup_seconds():
+    """Suppress a 2nd reply to the same loop within this window. 0 (default) =
+    off. Guards against accidentally answering the same thread twice."""
+    try:
+        return max(0, int(os.environ.get("EVOSQL_SEND_DEDUP_SECONDS", "0")))
+    except ValueError:
+        return 0
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -150,6 +159,17 @@ def queue(backend, ns, loop_key, body, *, channel=None, to=None,
     body = (body or "").strip()
     if not body:
         raise ValueError("queue requires a non-empty body")
+    # dedup guard: refuse a fresh reply to a loop already answered recently, so a
+    # re-run (or a retried suggestion) can't double-reply the same thread.
+    dedup = _dedup_seconds()
+    if dedup:
+        for it in _all(backend, ns):
+            if (it.get("loop_key") == loop_key and it.get("status") == _SENT
+                    and (it.get("sent_ts") or 0) >= time.time() - dedup):
+                ago = int(time.time() - it["sent_ts"])
+                raise ValueError(
+                    f"a reply to this loop was already sent {ago}s ago — "
+                    f"duplicate suppressed (within the {dedup}s dedup window)")
     fields = {"body": body, "to": to, "to_email": to_email,
               "channel": channel or source, "source": source,
               "subject": subject, "thread_id": thread_id}
