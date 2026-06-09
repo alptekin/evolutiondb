@@ -2909,6 +2909,7 @@ class MCPServer:
                                           "override").lower()
         self.query_transform = query_transform_from_env()
         self.backend: Optional[MemoryBackend] = None
+        self.embedded = None      # EmbeddedEvolutionDB handle, if EVOSQL_EMBEDDED
         # Action loop: wire opt-in send transports. No-op unless the operator set
         # EVOSQL_SEND_ENABLED + EVOSQL_SEND_CHANNELS — outbox stays dry-run by default.
         from . import transports
@@ -2916,6 +2917,11 @@ class MCPServer:
 
     def _connect(self) -> MemoryBackend:
         if self.backend is None:
+            # Zero-Docker: with EVOSQL_EMBEDDED set, spawn a local EvolutionDB if
+            # nothing is already serving the port (no-op + harmless otherwise).
+            if self.embedded is None:
+                from . import embedded
+                self.embedded = embedded.maybe_start(self.host, self.port)
             self.backend = MemoryBackend(self.host, self.port,
                                             self.user, self.pw,
                                             self.db, self.prefix,
