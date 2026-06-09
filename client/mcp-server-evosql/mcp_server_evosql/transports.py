@@ -198,8 +198,51 @@ def _default_outlook_sender(to: str, subject: str, body: str):
         return json.loads(resp.read().decode() or "{}")    # 202, empty body
 
 
+class SlackSendTransport:
+    """Sends a queued reply into a Slack conversation. Like Teams there is no
+    recipient address — the loop's thread_id IS the channel_id (open_loops keys
+    slack DMs by channel_id), so it posts the text into that channel via
+    chat.postMessage. `sender(channel, text) -> dict` does the call; injected for
+    tests."""
+
+    channel = "slack"
+
+    def __init__(self, sender=None):
+        self._sender = sender or _default_slack_sender
+
+    def __call__(self, item) -> dict:
+        chan = (item.get("thread_id") or "").strip()
+        if not chan:
+            return {"delivered": False, "dry_run": False,
+                    "error": "no channel id (thread_id) to reply into"}
+        res = self._sender(chan, item.get("body", "")) or {}
+        if res.get("ok") is False:                       # Slack API-level failure
+            return {"delivered": False, "dry_run": False,
+                    "error": res.get("error", "slack post failed")}
+        return {"delivered": True, "id": res.get("ts"), "channel": chan}
+
+
+def _default_slack_sender(channel: str, text: str):
+    """Real Slack chat.postMessage with the SLACK_USER_TOKEN (needs the chat:write
+    scope — the read-side sync token is read-only). urllib only, no slack_sdk."""
+    import json
+    import urllib.request
+
+    token = os.environ.get("SLACK_USER_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("slack send transport needs SLACK_USER_TOKEN with "
+                           "the chat:write scope")
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage",
+        data=json.dumps({"channel": channel, "text": text or ""}).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json; charset=utf-8"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode() or "{}")
+
+
 _BUILDERS = {"gmail": GmailSendTransport, "teams": TeamsSendTransport,
-             "outlook": OutlookSendTransport}
+             "outlook": OutlookSendTransport, "slack": SlackSendTransport}
 
 
 def register_from_env(*, builders=None):

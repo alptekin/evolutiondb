@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _assistant_fakes import FakeBackend
@@ -179,6 +180,42 @@ def test_teams_inbound_awaiting_me():
     assert len(me_loops) == 1, _loops(b)
 
 
+def _slack(channel, name, sender_id, text, secs_ago):
+    return {"source": "slack", "channel_type": "im", "channel_id": channel,
+            "channel_name": name, "sender_id": sender_id, "text": text,
+            "created_at": datetime.fromtimestamp(NOW - secs_ago, timezone.utc)
+            .isoformat()}
+
+
+def test_slack_dm_inbound_awaiting_me():
+    b = FakeBackend()
+    # two DMs so 'me' (in both) is distinguished from each counterparty (in one)
+    b.put(b.memory, NS, "slack_msg_D1_1", _slack("D1", "Deniz", "me", "selam", 7200))
+    b.put(b.memory, NS, "slack_msg_D1_2",
+          _slack("D1", "Deniz", "deniz", "yarın müsait misin?", 3600))
+    b.put(b.memory, NS, "slack_msg_D2_1", _slack("D2", "Can", "me", "ok", 5000))
+    ol.job_open_loops(b, NS)
+    me = [d for d in _loops(b)
+          if d["source"] == "slack" and d["direction"] == "awaiting_me"]
+    assert len(me) == 1 and me[0]["counterparty"] == "Deniz"
+    assert me[0]["thread_key"] == "D1"                    # keyed by channel_id
+
+
+def test_slack_group_channel_is_skipped():
+    b = FakeBackend()
+    msg = _slack("C9", "general", "someone", "deploy ne zaman?", 3600)
+    msg["channel_type"] = "public_channel"                # not a DM -> ignored (v0)
+    b.put(b.memory, NS, "slack_msg_C9_1", msg)
+    assert ol.job_open_loops(b, NS) == 0
+
+
+def test_detect_my_id_generic():
+    msgs = [{"sender_id": "me", "channel_id": "D1"},
+            {"sender_id": "deniz", "channel_id": "D1"},
+            {"sender_id": "me", "channel_id": "D2"}]
+    assert ol._detect_my_id(msgs, "channel_id") == "me"
+
+
 def test_core_team_counterparty_is_high_priority():
     b = FakeBackend()
     b.put(b.selfmodel_store, NS, "self_team",
@@ -217,7 +254,8 @@ def main():
              test_awaiting_me_inbound_after_my_reply,
              test_one_way_inbound_is_not_a_loop, test_short_ack_closes_the_loop,
              test_outbound_question_is_awaiting_them, test_promise_is_i_owe_them,
-             test_teams_inbound_awaiting_me,
+             test_teams_inbound_awaiting_me, test_slack_dm_inbound_awaiting_me,
+             test_slack_group_channel_is_skipped, test_detect_my_id_generic,
              test_core_team_counterparty_is_high_priority,
              test_mark_resolved_closes_and_is_idempotent,
              test_resolution_flips_stale_open_loop]
