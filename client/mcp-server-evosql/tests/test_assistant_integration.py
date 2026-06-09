@@ -284,6 +284,27 @@ def main():
         os.environ.pop(k, None)
     print("  ok  mcp: outbox_audit + send_scheduled dispatch on live store")
 
+    # --- dedup guard: a second reply to an already-answered loop is refused -----
+    outbox.TRANSPORTS["gmail"] = lambda it: {"id": "ok"}
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    os.environ["EVOSQL_SEND_DEDUP_SECONDS"] = "3600"
+    try:
+        dd_ns = ns + "_dd"
+        d1 = outbox.queue(b, dd_ns, "loop_dd", "ilk yanıt", channel="gmail",
+                          source="gmail", to="A", to_email="a@x.com")
+        assert outbox.approve_send(b, dd_ns, d1["id"])["sent"]
+        try:
+            outbox.queue(b, dd_ns, "loop_dd", "ikinci yanıt", channel="gmail",
+                         source="gmail", to="A", to_email="a@x.com")
+            assert False, "expected dedup refusal"
+        except ValueError as exc:
+            assert "duplicate" in str(exc)
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+        os.environ.pop("EVOSQL_SEND_DEDUP_SECONDS", None)
+    print("  ok  outbox: dedup refuses a second reply to the same loop on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

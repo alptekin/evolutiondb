@@ -23,7 +23,7 @@ NS = "alp_test"
 
 def _clean():
     for k in ("EVOSQL_SEND_ENABLED", "EVOSQL_SEND_UNDO_SECONDS",
-              "EVOSQL_SEND_RATE_PER_HOUR"):
+              "EVOSQL_SEND_RATE_PER_HOUR", "EVOSQL_SEND_DEDUP_SECONDS"):
         os.environ.pop(k, None)
     outbox.TRANSPORTS.clear()
 
@@ -324,6 +324,45 @@ def test_no_rate_limit_by_default():
     _clean()
 
 
+# ---------------------------------------------------------------- dedup guard
+def test_dedup_blocks_second_reply_to_same_loop():
+    _clean()
+    os.environ["EVOSQL_SEND_DEDUP_SECONDS"] = "3600"
+    _enable()
+    b = FakeBackend()
+    outbox.approve_send(b, NS, _q(b, loop="loop_1")["id"])     # first reply -> sent
+    try:
+        _q(b, loop="loop_1")                                   # re-queue same loop
+        assert False, "expected dedup ValueError"
+    except ValueError as exc:
+        assert "duplicate" in str(exc)
+    # a DIFFERENT loop is unaffected
+    assert _q(b, loop="loop_2")["status"] == "pending"
+    _clean()
+
+
+def test_dedup_allows_after_window():
+    _clean()
+    os.environ["EVOSQL_SEND_DEDUP_SECONDS"] = "3600"
+    _enable()
+    b = FakeBackend()
+    r = outbox.approve_send(b, NS, _q(b, loop="loop_1")["id"])
+    sent = outbox._load(b, NS, r["item"]["id"])
+    sent["sent_ts"] = time.time() - 7200                        # age the send out
+    outbox._save(b, NS, sent)
+    assert _q(b, loop="loop_1")["status"] == "pending"          # now allowed again
+    _clean()
+
+
+def test_no_dedup_by_default():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    outbox.approve_send(b, NS, _q(b, loop="loop_1")["id"])
+    assert _q(b, loop="loop_1")["status"] == "pending"          # default off
+    _clean()
+
+
 # ---------------------------------------------------------------- audit
 def test_audit_and_stats():
     _clean()
@@ -473,7 +512,9 @@ def main():
              test_approve_scheduled_again_sends_now, test_list_pending_includes_scheduled,
              test_preview_shows_what_goes_out,
              test_rate_limit_holds_excess_sends, test_rate_window_counts_only_recent,
-             test_no_rate_limit_by_default, test_audit_and_stats,
+             test_no_rate_limit_by_default,
+             test_dedup_blocks_second_reply_to_same_loop, test_dedup_allows_after_window,
+             test_no_dedup_by_default, test_audit_and_stats,
              test_cli_list_and_dry_run_approve, test_cli_reject_and_errors,
              test_cli_show_and_flush]
     try:
