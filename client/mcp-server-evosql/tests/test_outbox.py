@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _assistant_fakes import FakeBackend
@@ -22,7 +23,13 @@ NS = "alp_test"
 
 def _clean():
     os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    os.environ.pop("EVOSQL_SEND_UNDO_SECONDS", None)
     outbox.TRANSPORTS.clear()
+
+
+def _enable(transport=None):
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    outbox.TRANSPORTS["gmail"] = transport or (lambda it: {"id": "x"})
 
 
 def _q(b, loop="loop_1", body="Merhaba, ekte.", **kw):
@@ -204,6 +211,86 @@ def test_reject_unknown_errors():
     assert not outbox.reject(FakeBackend(), NS, "nope")["ok"]
 
 
+# ---------------------------------------------------------------- undo window
+def test_undo_window_schedules_instead_of_sending():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    r = outbox.approve_send(b, NS, _q(b)["id"], undo_seconds=60)
+    assert r["scheduled"] is True and r["sent"] is False
+    it = outbox._load(b, NS, list(b.rows(b.outbox_store, NS))[0])
+    assert it["status"] == "scheduled" and it["send_after"] > 0
+    _clean()
+
+
+def test_undo_window_from_env():
+    _clean()
+    os.environ["EVOSQL_SEND_UNDO_SECONDS"] = "45"
+    _enable()
+    b = FakeBackend()
+    r = outbox.approve_send(b, NS, _q(b)["id"])           # no explicit arg -> env
+    assert r.get("scheduled") and r["undo_seconds"] == 45
+    _clean()
+
+
+def test_flush_delivers_only_after_window():
+    _clean()
+    sent = {"n": 0}
+    _enable(lambda it: (sent.__setitem__("n", sent["n"] + 1) or {"id": "x"}))
+    b = FakeBackend()
+    it = _q(b)
+    outbox.approve_send(b, NS, it["id"], undo_seconds=60)
+    assert outbox.flush_scheduled(b, NS) == []            # window not elapsed
+    assert sent["n"] == 0
+    res = outbox.flush_scheduled(b, NS, now=time.time() + 120)   # window passed
+    assert len(res) == 1 and res[0]["sent"] and sent["n"] == 1
+    assert outbox._load(b, NS, it["id"])["status"] == "sent"
+    _clean()
+
+
+def test_reject_cancels_a_scheduled_send():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    it = _q(b)
+    outbox.approve_send(b, NS, it["id"], undo_seconds=60)
+    assert outbox.reject(b, NS, it["id"])["ok"]
+    assert outbox._load(b, NS, it["id"])["status"] == "rejected"
+    assert outbox.flush_scheduled(b, NS, now=time.time() + 120) == []  # never sent
+    _clean()
+
+
+def test_approve_scheduled_again_sends_now():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    it = _q(b)
+    outbox.approve_send(b, NS, it["id"], undo_seconds=60)   # scheduled
+    r = outbox.approve_send(b, NS, it["id"], undo_seconds=60)  # skip the wait
+    assert r["sent"] and outbox._load(b, NS, it["id"])["status"] == "sent"
+    _clean()
+
+
+def test_list_pending_includes_scheduled():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    it = _q(b)
+    outbox.approve_send(b, NS, it["id"], undo_seconds=60)
+    assert [x["id"] for x in outbox.list_pending(b, NS)] == [it["id"]]
+    _clean()
+
+
+def test_preview_shows_what_goes_out():
+    _clean()
+    b = FakeBackend()
+    it = _q(b, body="merhaba", to="Ulaş")
+    it["to_email"] = "ulas@x.com"
+    p = outbox.preview(it)
+    assert p["to"] == "ulas@x.com" and p["body"] == "merhaba"
+    assert p["channel"] == "gmail" and p["status"] == "pending"
+
+
 # ---------------------------------------------------------------- MCP wiring
 def test_action_tools_registered():
     from mcp_server_evosql import server
@@ -297,6 +384,19 @@ def test_cli_reject_and_errors():
     assert outbox._cli(b, NS, ["bogus"]) == 2                  # usage -> 2
 
 
+def test_cli_show_and_flush():
+    _clean()
+    _enable()
+    b = FakeBackend()
+    it = _q(b)
+    assert outbox._cli(b, NS, ["show", it["id"]]) == 0
+    assert outbox._cli(b, NS, ["show", "missing"]) == 1
+    # schedule then flush via CLI
+    outbox.approve_send(b, NS, it["id"], undo_seconds=0)       # immediate (no window)
+    assert outbox._cli(b, NS, ["flush"]) == 0                  # nothing scheduled
+    _clean()
+
+
 def main():
     tests = [test_queue_creates_pending_and_sends_nothing, test_queue_requires_body,
              test_queue_upserts_by_loop_key,
@@ -313,7 +413,12 @@ def main():
              test_resolve_recipient_picks_inbound_address,
              test_resolve_recipient_outlook_matches_subject,
              test_recipient_for_routes_per_channel,
-             test_cli_list_and_dry_run_approve, test_cli_reject_and_errors]
+             test_undo_window_schedules_instead_of_sending, test_undo_window_from_env,
+             test_flush_delivers_only_after_window, test_reject_cancels_a_scheduled_send,
+             test_approve_scheduled_again_sends_now, test_list_pending_includes_scheduled,
+             test_preview_shows_what_goes_out,
+             test_cli_list_and_dry_run_approve, test_cli_reject_and_errors,
+             test_cli_show_and_flush]
     try:
         for fn in tests:
             fn()
