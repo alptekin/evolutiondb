@@ -266,12 +266,15 @@ def _default_imessage_sender(handle: str, body: str):
     as the logged-in user, so it's gated by the same EVOSQL_SEND_ENABLED lock."""
     import subprocess
 
+    # NB: 'buddy' / 'service' are reserved class names in the Messages dictionary,
+    # so they cannot be used as variable names (that triggers a parse error). Use
+    # neutral names and reference the class via `participant ... of <account>`.
     script = (
         'on run {targetHandle, targetBody}\n'
         '  tell application "Messages"\n'
-        '    set svc to 1st account whose service type = iMessage\n'
-        '    set buddy to participant targetHandle of svc\n'
-        '    send targetBody to buddy\n'
+        '    set theService to 1st account whose service type = iMessage\n'
+        '    set theRecipient to participant targetHandle of theService\n'
+        '    send targetBody to theRecipient\n'
         '  end tell\n'
         'end run')
     proc = subprocess.run(["osascript", "-e", script, handle, body or ""],
