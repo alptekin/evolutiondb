@@ -191,6 +191,22 @@ def main():
         os.environ.pop("EVOSQL_SEND_ENABLED", None)
     print("  ok  outbox: outlook transport sends to the resolved address on live store")
 
+    # --- slack channel: reply posts into the DM (channel_id), no address -----
+    posts = []
+    outbox.TRANSPORTS["slack"] = lambda it: (
+        posts.append(it.get("thread_id")) or {"ok": True, "ts": "1700.9"})
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    try:
+        si = outbox.queue(b, ns, "loop_slack", "tabii, hallederim", channel="slack",
+                          source="slack", to="Deniz", thread_id="D123")
+        sr = outbox.approve_send(b, ns, si["id"])
+        assert sr["sent"] and posts == ["D123"]
+        assert outbox._load(b, ns, si["id"])["status"] == "sent"
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    print("  ok  outbox: slack transport posts into the DM on live store")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

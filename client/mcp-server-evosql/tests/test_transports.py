@@ -117,6 +117,30 @@ def test_outlook_transport_refuses_non_address():
     assert not r["delivered"] and not r["dry_run"] and "recipient" in r["error"]
 
 
+def test_slack_transport_posts_to_channel():
+    captured = {}
+    t = transports.SlackSendTransport(
+        sender=lambda ch, txt: (captured.update(ch=ch, txt=txt)
+                                or {"ok": True, "ts": "1700.5"}))
+    r = t({"thread_id": "D123", "body": "tabii"})
+    assert r["delivered"] and r["id"] == "1700.5" and r["channel"] == "D123"
+    assert captured == {"ch": "D123", "txt": "tabii"}
+
+
+def test_slack_transport_needs_channel():
+    t = transports.SlackSendTransport(sender=lambda c, b: {"ok": True, "ts": "1"})
+    r = t({"body": "hi"})
+    assert not r["delivered"] and "channel id" in r["error"]
+
+
+def test_slack_transport_maps_api_failure():
+    t = transports.SlackSendTransport(
+        sender=lambda c, b: {"ok": False, "error": "not_in_channel"})
+    r = t({"thread_id": "D1", "body": "x"})
+    assert not r["delivered"] and not r["dry_run"]       # API error, not dry-run
+    assert r["error"] == "not_in_channel"
+
+
 def _clear():
     os.environ.pop("EVOSQL_SEND_ENABLED", None)
     os.environ.pop("EVOSQL_SEND_CHANNELS", None)
@@ -145,10 +169,10 @@ def test_register_needs_both_locks():
 def test_register_wires_known_channels_only():
     _clear()
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
-    os.environ["EVOSQL_SEND_CHANNELS"] = "gmail,teams,outlook,slack"  # slack: no builder
+    os.environ["EVOSQL_SEND_CHANNELS"] = "gmail,teams,outlook,slack,carrierpigeon"
     wired = transports.register_from_env()               # real builders
-    assert set(wired) == {"gmail", "teams", "outlook"}   # slack skipped
-    assert {"gmail", "teams", "outlook"} <= set(outbox.TRANSPORTS)
+    assert set(wired) == {"gmail", "teams", "outlook", "slack"}   # unknown skipped
+    assert {"gmail", "teams", "outlook", "slack"} <= set(outbox.TRANSPORTS)
     _clear()
 
 
@@ -159,6 +183,8 @@ def main():
              test_transport_refuses_non_address,
              test_teams_transport_delivers_into_chat, test_teams_transport_needs_chat_id,
              test_outlook_transport_sends_mail, test_outlook_transport_refuses_non_address,
+             test_slack_transport_posts_to_channel, test_slack_transport_needs_channel,
+             test_slack_transport_maps_api_failure,
              test_register_is_noop_by_default,
              test_register_needs_both_locks, test_register_wires_known_channels_only]
     try:
