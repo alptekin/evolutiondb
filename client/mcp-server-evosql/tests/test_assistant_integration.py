@@ -223,6 +223,32 @@ def main():
         os.environ.pop("EVOSQL_SEND_ENABLED", None)
     print("  ok  outbox: imessage transport sends to the handle on live store")
 
+    # --- undo window: approve schedules; reject cancels; flush delivers due ----
+    sent2 = []
+    outbox.TRANSPORTS["gmail"] = lambda it: (sent2.append(it["id"]) or {"id": "ok"})
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    try:
+        u1 = outbox.queue(b, ns, "loop_undo1", "gidecek", channel="gmail",
+                          source="gmail", to="A", to_email="a@x.com")
+        a1 = outbox.approve_send(b, ns, u1["id"], undo_seconds=60)
+        assert a1.get("scheduled") and not a1["sent"]         # held in the window
+        assert outbox.flush_scheduled(b, ns) == []            # not due -> nothing sent
+        assert sent2 == []
+        # a second item rejected during its window never goes out
+        u2 = outbox.queue(b, ns, "loop_undo2", "iptal", channel="gmail",
+                          source="gmail", to="B", to_email="b@x.com")
+        outbox.approve_send(b, ns, u2["id"], undo_seconds=60)
+        outbox.reject(b, ns, u2["id"])
+        # window elapses -> only the un-rejected one flushes
+        import time as _t
+        flushed = outbox.flush_scheduled(b, ns, now=_t.time() + 120)
+        assert len(flushed) == 1 and sent2 == [u1["id"]]
+        assert outbox._load(b, ns, u2["id"])["status"] == "rejected"
+    finally:
+        outbox.TRANSPORTS.clear()
+        os.environ.pop("EVOSQL_SEND_ENABLED", None)
+    print("  ok  outbox: undo window schedules, reject cancels, flush delivers due")
+
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
                             "from": "me@x.com", "subject": "Re: Proje",

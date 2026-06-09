@@ -38,10 +38,20 @@ TRANSPORTS: dict = {}
 
 _PENDING = "pending"
 _APPROVED = "approved"
+_SCHEDULED = "scheduled"
 _SENT = "sent"
 _REJECTED = "rejected"
 
 _seq = 0
+
+
+def _undo_seconds():
+    """The undo/grace window before a scheduled send actually goes out. 0 (the
+    default) means approve_send delivers immediately — unchanged behavior."""
+    try:
+        return max(0, int(os.environ.get("EVOSQL_SEND_UNDO_SECONDS", "0")))
+    except ValueError:
+        return 0
 
 
 def _now():
@@ -155,33 +165,33 @@ def queue(backend, ns, loop_key, body, *, channel=None, to=None,
 
 
 def list_pending(backend, ns):
-    """Items awaiting approval (pending or dry-run-held approved), newest first."""
+    """Items not yet delivered — pending, dry-run-held approved, or scheduled
+    (in their undo window). Newest first; these are the cancelable ones."""
     items = [it for it in _all(backend, ns)
-             if it.get("status") in (_PENDING, _APPROVED)]
+             if it.get("status") in (_PENDING, _APPROVED, _SCHEDULED)]
     items.sort(key=lambda it: it.get("created_at", ""), reverse=True)
     return items
 
 
-def approve_send(backend, ns, item_id):
-    """Approve a queued item and deliver it. The ONLY path that can send.
-    Idempotent on an already-sent item (returns it, no second delivery)."""
-    item = _load(backend, ns, item_id)
-    if item is None:
-        return {"ok": False, "error": f"no outbox item '{item_id}'"}
-    if item["status"] == _SENT:
-        return {"ok": True, "item": item, "note": "already sent (no re-send)"}
-    if item["status"] == _REJECTED:
-        return {"ok": False, "error": "item was rejected; re-queue to send"}
-    item["approved_at"] = _now()
+def preview(item):
+    """What an approve_send would actually put on the wire — for a confirm step."""
+    return {"id": item.get("id"), "channel": item.get("channel"),
+            "to": item.get("to_email") or item.get("to"),
+            "subject": item.get("subject"), "body": item.get("body"),
+            "status": item.get("status"), "send_after": item.get("send_after")}
+
+
+def _deliver_and_record(backend, ns, item):
+    """Deliver an approved item, record the outcome, and close its loop on a real
+    send (dry-runs/failures leave it held). Shared by approve_send + flush."""
     result = _deliver(item)
     item["send_result"] = result
     loop_closed = False
     if result.get("delivered"):
         item["sent_at"] = _now()
         _record(item, _SENT)
-        # the reply actually went out -> close the open loop it answered, so the
-        # brief stops showing it immediately (dry-runs do NOT close it: nothing
-        # was sent). A close failure must not undo a successful send.
+        # the reply actually went out -> close the open loop it answered so the
+        # brief stops showing it immediately. A close failure must not undo a send.
         if item.get("loop_key"):
             try:
                 from . import open_loops
@@ -199,8 +209,48 @@ def approve_send(backend, ns, item_id):
             "detail": result.get("reason") or result.get("error")}
 
 
+def approve_send(backend, ns, item_id, *, undo_seconds=None):
+    """Approve a queued item. The ONLY path that can send. With an undo window
+    (EVOSQL_SEND_UNDO_SECONDS or undo_seconds>0) it SCHEDULES the send instead of
+    delivering now — the item sits in `scheduled` until the window elapses (a
+    flush delivers it) or a reject cancels it. Idempotent on an already-sent item."""
+    item = _load(backend, ns, item_id)
+    if item is None:
+        return {"ok": False, "error": f"no outbox item '{item_id}'"}
+    if item["status"] == _SENT:
+        return {"ok": True, "item": item, "note": "already sent (no re-send)"}
+    if item["status"] == _REJECTED:
+        return {"ok": False, "error": "item was rejected; re-queue to send"}
+    undo = _undo_seconds() if undo_seconds is None else max(0, int(undo_seconds))
+    # Open the undo window on first approval; approving an already-scheduled item
+    # means "send it now" (skip the remaining wait).
+    if undo > 0 and item["status"] != _SCHEDULED:
+        item["approved_at"] = _now()
+        item["send_after"] = time.time() + undo
+        _record(item, _SCHEDULED)
+        _save(backend, ns, item)
+        return {"ok": True, "scheduled": True, "sent": False,
+                "send_after": item["send_after"], "undo_seconds": undo, "item": item,
+                "note": f"scheduled — sends in {undo}s unless you reject {item_id}"}
+    item.setdefault("approved_at", _now())
+    return _deliver_and_record(backend, ns, item)
+
+
+def flush_scheduled(backend, ns, *, now=None):
+    """Deliver every scheduled item whose undo window has elapsed. Run by the
+    scheduler (job_outbox_flush) and available as `outbox flush`. Returns the
+    delivery results."""
+    now = time.time() if now is None else now
+    out = []
+    for it in _all(backend, ns):
+        if it.get("status") == _SCHEDULED and (it.get("send_after") or 0) <= now:
+            out.append(_deliver_and_record(backend, ns, it))
+    return out
+
+
 def reject(backend, ns, item_id):
-    """Cancel a queued item. Errors if it was already sent."""
+    """Cancel a queued item (incl. one scheduled in its undo window). Errors if it
+    was already sent."""
     item = _load(backend, ns, item_id)
     if item is None:
         return {"ok": False, "error": f"no outbox item '{item_id}'"}
@@ -297,11 +347,24 @@ def recipient_for(backend, ns, loop):
 # ---------------------------------------------------------------- CLI
 def _fmt(it):
     st = it.get("status", "?")
-    icon = {"pending": "🟡", "approved": "🟠", "sent": "🟢",
+    icon = {"pending": "🟡", "approved": "🟠", "scheduled": "⏳", "sent": "🟢",
             "rejected": "⚪"}.get(st, "·")
     body = (it.get("body") or "").replace("\n", " ")
-    return (f"{icon} {it['id']}  [{st}]  →{it.get('to') or '?'}\n"
+    when = ""
+    if st == _SCHEDULED and it.get("send_after"):
+        left = int(it["send_after"] - time.time())
+        when = f"  (sends in {left}s — reject to cancel)" if left > 0 else "  (due)"
+    return (f"{icon} {it['id']}  [{st}]{when}  →{it.get('to') or '?'}\n"
             f"     {body[:80]}")
+
+
+def _approve_line(item_id, res):
+    if res.get("scheduled"):
+        return f"⏳ planlandı: {item_id} — {res.get('note', '')}"
+    if res.get("sent"):
+        return f"✓ gönderildi: {item_id}"
+    return (f"◐ onaylandı (dry-run — gönderilmedi): {item_id}"
+            + (f"  [{res.get('detail')}]" if res.get("detail") else ""))
 
 
 def _cli(backend, ns, argv) -> int:
@@ -314,25 +377,38 @@ def _cli(backend, ns, argv) -> int:
         print(f"Onay bekleyen {len(pend)} yanıt:\n")
         for it in pend:
             print(_fmt(it))
-        print("\nGöndermek için:  approve <id>   ·   iptal için:  reject <id>")
+        print("\nGöster: show <id> · gönder: approve <id> · iptal: reject <id>")
+        return 0
+    if cmd == "show" and len(argv) >= 2:
+        it = _load(backend, ns, argv[1])
+        if it is None:
+            print(f"✗ no outbox item '{argv[1]}'")
+            return 1
+        p = preview(it)
+        print(f"{'='*60}\nGÖNDERİLECEK (onay öncesi önizleme)\n{'-'*60}")
+        print(f"kanal : {p['channel']}\nkime  : {p['to']}")
+        if p.get("subject"):
+            print(f"konu  : {p['subject']}")
+        print(f"durum : {p['status']}\n{'-'*60}\n{p['body']}\n{'='*60}")
+        return 0
+    if cmd == "flush":
+        results = flush_scheduled(backend, ns)
+        if not results:
+            print("Penceresi dolan planlı gönderim yok.")
+            return 0
+        for r in results:
+            print(_approve_line(r.get("item", {}).get("id", "?"), r))
         return 0
     if cmd in ("approve", "reject") and len(argv) >= 2:
-        fn = approve_send if cmd == "approve" else reject
-        res = fn(backend, ns, argv[1])
+        res = (approve_send if cmd == "approve" else reject)(backend, ns, argv[1])
         if not res.get("ok"):
             print(f"✗ {res.get('error')}")
             return 1
-        if cmd == "approve":
-            sent = res.get("sent")
-            print(f"{'✓ gönderildi' if sent else '◐ onaylandı (dry-run — '
-                  'gönderilmedi)'}: {argv[1]}"
-                  + (f"  [{res.get('detail')}]" if not sent and res.get('detail')
-                     else ""))
-        else:
-            print(f"⚪ iptal edildi: {argv[1]}")
+        print(_approve_line(argv[1], res) if cmd == "approve"
+              else f"⚪ iptal edildi: {argv[1]}")
         return 0
     print("kullanım: python -m mcp_server_evosql.outbox "
-          "list | approve <id> | reject <id>", file=sys.stderr)
+          "list | show <id> | approve <id> | reject <id> | flush", file=sys.stderr)
     return 2
 
 
