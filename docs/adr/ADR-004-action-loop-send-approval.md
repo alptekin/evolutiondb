@@ -46,10 +46,20 @@ read ─▶ understand ─▶ suggest_reply ─▶ queue_reply ─▶ approve_se
 
 ```
 pending ──approve_send──▶ sent       (a transport delivered it)
+    │              └─scheduled──▶ sent   (undo window elapsed, flush delivered)
     │                 └─▶ approved   (dry-run / no transport — held, retriable)
     ├──reject────────────▶ rejected
 approved ──approve_send──▶ sent       (retry once a transport exists)
+scheduled ──reject──▶ rejected        (cancelled inside the undo window)
 ```
+
+**Undo window (trust layer).** With `EVOSQL_SEND_UNDO_SECONDS > 0`, `approve_send`
+does not deliver immediately — it moves the item to `scheduled` with a
+`send_after` timestamp and returns. A `reject` inside the window cancels it; once
+the window elapses, `flush_scheduled` (the `outbox_flush` scheduler job, every
+30s) delivers it. This is the one practical guard against an irreversible
+mistake: a few seconds to take it back. Default is 0 (immediate), preserving the
+original behavior. A pre-send `preview(item)` exposes exactly what will go out.
 
 Items live in a per-namespace `<prefix>_outbox` MEMORY STORE, each carrying its
 body, recipient, channel, status, and a `history` of timestamped transitions
