@@ -149,6 +149,32 @@ def _classify(open_now, language="english"):
             r["classify_error"] = str(exc)[:120]
 
 
+def mark_resolved(backend, ns: str, loop_key: str, *, reason: str = "sent_reply"):
+    """Close an open loop because the user acted on it (e.g. approve_send
+    delivered a reply). Flips the stored record to status='resolved' so the brief
+    stops nagging immediately, rather than waiting for the next open_loops run to
+    notice the thread moved. No-op (returns False) if the key isn't a stored loop
+    or it's already resolved."""
+    from .server import _e
+    rows = backend._query(
+        f"SELECT mem_value FROM __mem_{backend.loops_store} "
+        f"WHERE mem_namespace = '{_e(ns)}' AND mem_key = '{_e(loop_key)}'") or []
+    if not rows or not rows[0] or not rows[0][0]:
+        return False
+    try:
+        rec = json.loads(rows[0][0])
+    except Exception:
+        return False
+    if rec.get("status") == "resolved":
+        return False
+    rec["status"] = "resolved"
+    rec["resolved_by"] = reason
+    rec["refreshed_at"] = datetime.now(timezone.utc).isoformat()
+    backend._exec(f"MEMORY PUT INTO {backend.loops_store} VALUES "
+                  f"('{_e(ns)}','{_e(loop_key)}','{_e(json.dumps(rec))}')")
+    return True
+
+
 def job_open_loops(backend, ns: str) -> int:
     from .server import _e
     now = datetime.now(timezone.utc).timestamp()

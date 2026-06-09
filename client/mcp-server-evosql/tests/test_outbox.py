@@ -109,6 +109,30 @@ def test_approve_delivers_with_transport():
     _clean()
 
 
+def test_send_closes_the_open_loop():
+    _clean()
+    os.environ["EVOSQL_SEND_ENABLED"] = "1"
+    outbox.TRANSPORTS["gmail"] = lambda item: {"id": "x"}
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "loop_1",
+          {"status": "open", "direction": "awaiting_me", "counterparty": "Ulaş"})
+    r = outbox.approve_send(b, NS, _q(b, loop="loop_1")["id"])
+    assert r["sent"] and r["loop_resolved"] is True
+    loop = b.rows(b.loops_store, NS)["loop_1"]
+    assert loop["status"] == "resolved" and loop["resolved_by"] == "sent_reply"
+    _clean()
+
+
+def test_dry_run_does_not_close_the_loop():
+    _clean()                                              # send disabled -> dry-run
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "loop_1",
+          {"status": "open", "direction": "awaiting_me", "counterparty": "Ulaş"})
+    r = outbox.approve_send(b, NS, _q(b, loop="loop_1")["id"])
+    assert not r["sent"] and r["loop_resolved"] is False
+    assert b.rows(b.loops_store, NS)["loop_1"]["status"] == "open"   # untouched
+
+
 def test_approve_is_idempotent_on_sent():
     _clean()
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
@@ -257,7 +281,8 @@ def main():
              test_list_pending_excludes_sent_and_rejected,
              test_approve_dry_runs_when_send_disabled,
              test_approve_no_transport_dry_runs_even_when_enabled,
-             test_approve_delivers_with_transport, test_approve_is_idempotent_on_sent,
+             test_approve_delivers_with_transport, test_send_closes_the_open_loop,
+             test_dry_run_does_not_close_the_loop, test_approve_is_idempotent_on_sent,
              test_approve_transport_failure_holds_item,
              test_approve_unknown_and_rejected_error,
              test_reject_pending_then_cannot_send, test_reject_sent_item_errors,
