@@ -1,0 +1,40 @@
+{
+  "ui": {
+    "good_morning": "GOOD MORNING",
+    "waiting_on_you": "WAITING ON YOU",
+    "waiting_on_you_empty": "   — all clear, nobody's waiting 🎉",
+    "you_are_waiting": "YOU'RE WAITING ON",
+    "promises": "YOUR PROMISES",
+    "none": "   —",
+    "open_commitments": "open commitments",
+    "stale_suffix": "old (>90d, deferred)",
+    "lang_hint": "ℹ️  Summaries are in English. For another language:  /language <language>",
+    "lang_set": "✓ Summary language set: {lang}. Summaries will use {lang} from the next open_loops/self_model run.",
+    "no_pending_approval": "No replies awaiting approval.",
+    "sent": "✓ sent",
+    "approved_dryrun": "◐ approved (dry-run)",
+    "loop_closed": "  · loop closed",
+    "no_loop_to_queue": "No open loop to queue.",
+    "queued_header": "📤 QUEUED ({n} — awaiting approval)",
+    "queue_send_hint": "To send:  brief --approve <id>   ·   all:  brief --approve",
+    "draft_replies": "✍️  DRAFT REPLIES",
+    "draft_note": "(suggestion — not sent)",
+    "llm_off": "(LLM disabled — set EVOSQL_LOOP_LLM=anthropic)",
+    "no_loop_for_draft": "No open loop to draft for.",
+    "suggested_reply": "✍️  SUGGESTED REPLY:"
+  },
+  "heuristics": {
+    "question": ["\\?"],
+    "promise": ["i will\\b", "i'll\\b", "going to", "will do", "will send", "will check", "let me"],
+    "close": ["thanks", "thank you", "done", "resolved", "got it", "appreciate", "👍", "🙏", "🙌", "✅"],
+    "auto_from": ["noreply", "no-reply", "donotreply", "notification", "mailer", "newsletter", "bounce", "support@", "info@", "news@"],
+    "honorific_pre": ["Dr", "Prof", "Mr", "Ms", "Mrs", "Miss"],
+    "honorific_post": [],
+    "honorific_tokens": ["mr", "ms", "mrs", "miss", "dr", "prof", "sir", "madam"],
+    "org_suffix": ["Inc\\.?", "LLC", "Corp\\.?", "Co\\.?", "GmbH", "Ltd\\.?", "Group", "Holding"],
+    "title_upper_extra": "",
+    "title_lower_extra": "",
+    "stop_title": ["The", "This", "That", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    "id_patterns": []
+  }
+}
