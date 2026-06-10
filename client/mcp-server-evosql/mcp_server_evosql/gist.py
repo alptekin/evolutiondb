@@ -26,32 +26,35 @@ _STOP = set((
 _SUFFIXES = ("ization", "isation", "ingly", "edly", "ing", "ied", "ies",
              "ed", "es", "ly", "s")
 
-# Optional real Turkish stemmer. The dependency-free light stemmer below only
-# knows English suffixes, so Turkish inflections (ertelendi / erteleme,
-# projeler / proje) never collapse on their own. When a morphological Turkish
-# stemmer is installed it is chained AFTER the English-light pass — each
-# language strips its own suffixes, so English keeps working (meeting -> meet)
-# and Turkish verb/noun inflections finally collapse (ertelendi, erteleme ->
-# ertele). Controlled by EVOSQL_GIST_STEMMER:
-#   auto (default) — use the Turkish stemmer if the library is importable
+# Optional morphological stemmer for the active non-English input locale. The
+# dependency-free light stemmer below only knows English suffixes, so other
+# languages' inflections never collapse on their own. When the active locale
+# declares a snowball stemmer (locale "stemmer" field) and the library is
+# installed, it is chained AFTER the English-light pass — each language strips
+# its own suffixes, so English keeps working (meeting -> meet) and the other
+# language's inflections finally collapse too. Controlled by EVOSQL_GIST_STEMMER:
+#   auto (default) — use the locale stemmer if the library is importable
 #   en             — force the dependency-free English-light stemmer only
-#   tr             — same as auto (falls back to en if the library is absent)
 _TR_CACHE: dict = {}
 
 
-def _tr_stemmer():
-    """A Turkish stem(word) callable when enabled + available, else None.
-    Lazily resolves snowballstemmer's Turkish stemmer once and caches it."""
+def _locale_stemmer():
+    """A stem(word) callable for the active locale's snowball stemmer when
+    enabled + available, else None. Lazily resolved once and cached. The
+    stemmer language comes from the locale data, not a literal here."""
     mode = os.environ.get("EVOSQL_GIST_STEMMER", "auto").lower()
     if mode in ("en", "english", "off", "0", "none"):
         return None
     if "fn" not in _TR_CACHE:
         fn = None
-        try:
-            import snowballstemmer
-            fn = snowballstemmer.stemmer("turkish").stemWord
-        except Exception:
-            fn = None
+        from . import locales
+        names = locales.heuristics().stemmers
+        if names:
+            try:
+                import snowballstemmer
+                fn = snowballstemmer.stemmer(names[0]).stemWord
+            except Exception:
+                fn = None
         _TR_CACHE["fn"] = fn
     return _TR_CACHE["fn"]
 
@@ -78,15 +81,15 @@ def _light_stem(w: str) -> str:
 
 def _stem(w: str) -> str:
     """Collapse a word to its root. English suffixes are stripped first by the
-    dependency-free light stemmer; if a Turkish stemmer is enabled + installed
-    it then strips Turkish suffixes off that result, so both languages collapse
-    (meeting -> meet; ertelendi, erteleme -> ertele). Pure English-light when no
-    Turkish stemmer is available, so the default behavior is unchanged."""
+    dependency-free light stemmer; if the active locale's stemmer is enabled +
+    installed it then strips that language's suffixes off the result, so both
+    collapse (meeting -> meet). Pure English-light when no locale stemmer is
+    available, so the default behavior is unchanged."""
     base = _light_stem(w)
-    tr = _tr_stemmer()
-    if tr is not None:
+    extra = _locale_stemmer()
+    if extra is not None:
         try:
-            return tr(base)
+            return extra(base)
         except Exception:
             return base
     return base
@@ -95,7 +98,7 @@ def _stem(w: str) -> str:
 def gist_tokens(text: str) -> Set[str]:
     """The set of stemmed content tokens — the meaning trace."""
     out: Set[str] = set()
-    for w in re.findall(r"[a-zA-ZçğıöşüÇĞİÖŞÜ0-9]+", (text or "").lower()):
+    for w in re.findall(r"\w+", (text or "").lower()):   # \w is Unicode-aware
         if len(w) <= 2 or w in _STOP:
             continue
         out.add(_stem(w))

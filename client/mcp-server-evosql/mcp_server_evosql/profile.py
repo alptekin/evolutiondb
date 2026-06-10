@@ -1,5 +1,5 @@
 """
-profile — user interest profile as a K-cluster mixture (Adım 17).
+profile — user interest profile as a K-cluster mixture (Step 17).
 
 A daily job clusters the user's recent row embeddings into 5-10 interest
 clusters; each cluster keeps a centroid, a human-readable label, and a weight
@@ -37,12 +37,12 @@ import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .embeddings import cosine, decode_vec, encode_vec
+from . import locales
 
 MIN_ROWS = 20          # cold-start threshold
 K_MIN, K_MAX = 2, 10
 TARGET_PER_CLUSTER = 4
-_STOP = set("ve ile bir bu şu the a an of to and or for in on at is are was "
-            "ne oldu için çok daha en de da ki mi mı".split())
+# Stopwords are language-specific -> from the active locales (not literals here).
 
 
 def _norm_vec(v: Sequence[float]) -> List[float]:
@@ -124,8 +124,9 @@ def _label(rows: List[dict], names: Dict[str, str]) -> str:
             freq[nm] = freq.get(nm, 0) + 3      # entities weigh more
         for t in r.get("tags", ()):
             freq[t.lower()] = freq.get(t.lower(), 0) + 2
-        for w in re.findall(r"[\wçğıöşüÇĞİÖŞÜ]+", (r.get("text") or "").lower()):
-            if len(w) > 2 and w not in _STOP and not w.isdigit():
+        h = locales.heuristics()
+        for w in h.word_re.findall((r.get("text") or "").lower()):
+            if len(w) > 2 and w not in h.stopwords and not w.isdigit():
                 freq[w] = freq.get(w, 0) + 1
     top = sorted(freq, key=lambda w: -freq[w])[:5]
     return ", ".join(top) if top else "—"

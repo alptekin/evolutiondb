@@ -21,7 +21,22 @@
     "draft_note": "(suggestion — not sent)",
     "llm_off": "(LLM disabled — set EVOSQL_LOOP_LLM=anthropic)",
     "no_loop_for_draft": "No open loop to draft for.",
-    "suggested_reply": "✍️  SUGGESTED REPLY:"
+    "suggested_reply": "✍️  SUGGESTED REPLY:",
+    "episode_summary": "{span} · {n} related records ({who}). {snippet}",
+    "outbox_sent": "✓ sent: {id}",
+    "outbox_scheduled": "⏳ scheduled: {id} — {note}",
+    "outbox_approved_dryrun": "◐ approved (dry-run — not sent): {id}",
+    "outbox_rejected": "⚪ cancelled: {id}",
+    "outbox_pending_header": "{n} replies awaiting approval:",
+    "outbox_list_hint": "show: show <id> · send: approve <id> · cancel: reject <id>",
+    "outbox_preview_header": "TO SEND (pre-approval preview)",
+    "outbox_lbl_channel": "channel",
+    "outbox_lbl_to": "to",
+    "outbox_lbl_subject": "subject",
+    "outbox_lbl_status": "status",
+    "outbox_no_scheduled_due": "No scheduled sends past their window.",
+    "outbox_audit_header": "Status: {by_status} · sent in the last hour: {n} (limit {cap})",
+    "outbox_usage": "usage: python -m mcp_server_evosql.outbox <list|show|approve|reject|flush|audit> [args]"
   },
   "heuristics": {
     "question": ["\\?"],
@@ -35,6 +50,17 @@
     "title_upper_extra": "",
     "title_lower_extra": "",
     "stop_title": ["The", "This", "That", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
-    "id_patterns": []
+    "id_patterns": [],
+    "stopwords": ["the", "a", "an", "of", "to", "and", "or", "for", "in", "on", "at", "is", "are", "was"],
+    "arousal": ["allergic", "allergy", "emergency", "urgent", "asap", "critical", "danger", "warning", "deadline", "important", "must", "never", "always", "fatal", "blood type", "medication", "dose", "password", "ssn", "passport"],
+    "predicate_keywords": {
+      "worked_on": ["worked on", "working on", "worked", "developed", "built"],
+      "replied_to": ["replied to", "replied", "responded"],
+      "escalated_to": ["escalated to", "escalated", "escalate"],
+      "assigned": ["assigned to", "assigned"],
+      "manages": ["manages", "managed", "lead", "leads", "led"],
+      "owns": ["owns", "owner"],
+      "mentioned": ["mentioned"]
+    }
   }
 }

@@ -15,8 +15,8 @@ each record:
 
   key   = identity_<slug>
   value = {
-    "canonical_name": "Orhan Özdoğan",
-    "aliases":        ["Orhan Özdoğan", "Orhan Özdoğan | Wechip"],
+    "canonical_name": "Jane Doe",
+    "aliases":        ["Jane Doe", "Jane Doe | Acme"],
     "sources":        {"teams": [...], "slack": [...], ...},
     "tags":           ["wechip", "team:backend"],
     "updated_at":     unix_seconds,
