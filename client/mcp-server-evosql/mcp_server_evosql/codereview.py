@@ -153,6 +153,8 @@ def review_pr(backend, ns: str, pr_ref: str, *,
         "ok": True, "id": item["id"], "pr": f"{repo}#{number}",
         "url": rec.get("url"), "review": review, "queued": True,
         "note": "Draft queued for approval — NOTHING was posted to GitHub. "
-                "Inspect it with list_pending_replies; approve_send dry-runs "
-                "(no github_pr transport is wired — posting is a separate step).",
+                "Inspect it with list_pending_replies. approve_send dry-runs "
+                "unless the operator opted in to real posting "
+                "(EVOSQL_SEND_ENABLED=1 + EVOSQL_SEND_CHANNELS=github_pr + a "
+                "write-scoped GITHUB_TOKEN).",
     }
