@@ -276,19 +276,25 @@ def _default_imessage_sender(handle: str, body: str):
     as the logged-in user, so it's gated by the same EVOSQL_SEND_ENABLED lock."""
     import subprocess
 
-    # NB: 'buddy' / 'service' are reserved class names in the Messages dictionary,
-    # so they cannot be used as variable names (that triggers a parse error). Use
-    # neutral names and reference the class via `participant ... of <account>`.
+    # Pass the recipient + body via the child's ENVIRONMENT, not argv. Command
+    # arguments are world-readable (`ps -ww` / proc cmdline) for the lifetime of
+    # the osascript process, which would leak the message body and handle to any
+    # local user; the environment is only visible to the same user. AppleScript
+    # reads them with `system attribute`. (NB: 'buddy'/'service' are reserved
+    # Messages class names, so neutral variable names are used.)
     script = (
-        'on run {targetHandle, targetBody}\n'
+        'on run\n'
+        '  set targetHandle to system attribute "EVOSQL_IM_HANDLE"\n'
+        '  set targetBody to system attribute "EVOSQL_IM_BODY"\n'
         '  tell application "Messages"\n'
         '    set theService to 1st account whose service type = iMessage\n'
         '    set theRecipient to participant targetHandle of theService\n'
         '    send targetBody to theRecipient\n'
         '  end tell\n'
         'end run')
-    proc = subprocess.run(["osascript", "-e", script, handle, body or ""],
-                          capture_output=True, text=True, timeout=30)
+    env = dict(os.environ, EVOSQL_IM_HANDLE=handle, EVOSQL_IM_BODY=body or "")
+    proc = subprocess.run(["osascript", "-e", script],
+                          capture_output=True, text=True, timeout=30, env=env)
     if proc.returncode != 0:
         raise RuntimeError(f"osascript failed: {proc.stderr.strip()[:200]}")
     return {"id": None}

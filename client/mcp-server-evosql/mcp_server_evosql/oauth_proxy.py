@@ -52,7 +52,11 @@ UPSTREAM_URL   = os.environ.get("EVOSQL_MCP_UPSTREAM",
 UPSTREAM_TOKEN = os.environ.get("EVOSQL_MCP_AUTH_TOKEN", "")
 LISTEN_PORT    = int(os.environ.get("EVOSQL_OAUTH_PROXY_PORT", "8972"))
 
-ACCESS_TOKEN_TTL_SEC = 365 * 24 * 3600   # 1 year — refresh story is out of scope
+# Access-token lifetime. A bearer token has no refresh/revocation here, so a
+# leaked token is valid until expiry — keep it bounded (90 days default) and
+# operator-tunable rather than the old 1-year. Re-auth is a one-click re-consent.
+ACCESS_TOKEN_TTL_SEC = int(os.environ.get(
+    "EVOSQL_OAUTH_TOKEN_TTL_DAYS", "90")) * 24 * 3600
 CODE_TTL_SEC         = 600               # 10 min — RFC-recommended max
 CLIENT_MAX_AGE_SEC   = 30 * 24 * 3600    # prune stale client registrations
 MAX_MEM_ENTRIES      = 5000              # cap the in-memory cache (DoS guard)
@@ -288,14 +292,29 @@ def _pkce_s256_verify(verifier: str, challenge: str) -> bool:
 
 
 def _self_origin(headers) -> str:
-    """Reconstruct our externally-visible origin from request headers.
+    """Our externally-visible origin, used to build the OAuth discovery
+    documents and redirect base.
 
-    Cloudflared sets `X-Forwarded-Proto: https` and forwards the public
-    hostname in `Host`. When invoked locally (no proxy header), default
-    to https because that's what the OAuth flow realistically uses."""
-    host  = headers.get("Host", "localhost")
+    SECURITY: prefer the operator-configured EVOSQL_PUBLIC_ORIGIN. The client
+    `Host` / `X-Forwarded-Proto` headers are attacker-controllable, so reflecting
+    them lets someone reaching the proxy directly poison the discovery docs
+    (issuer / authorize / token endpoints) and steer a victim client to
+    attacker-controlled endpoints. Only trust the Host header when it matches the
+    EVOSQL_OAUTH_ALLOWED_HOSTS allowlist; otherwise fall back to the configured
+    origin (or loopback)."""
+    configured = os.environ.get("EVOSQL_PUBLIC_ORIGIN", "").strip().rstrip("/")
+    if configured:
+        return configured
+    host = headers.get("Host", "")
     proto = headers.get("X-Forwarded-Proto", "https")
-    return f"{proto}://{host}"
+    allowed = {h.strip() for h in
+               os.environ.get("EVOSQL_OAUTH_ALLOWED_HOSTS", "").split(",")
+               if h.strip()}
+    if host and host in allowed:
+        return f"{proto}://{host}"
+    # No trusted source for the public hostname — fall back to loopback rather
+    # than echo an unverified Host into signed/discovery surfaces.
+    return f"http://127.0.0.1:{LISTEN_PORT}"
 
 
 # ---------------------------------------------------------------- #

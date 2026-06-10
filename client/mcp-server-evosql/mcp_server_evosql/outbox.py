@@ -343,7 +343,12 @@ def reject(backend, ns, item_id):
     return {"ok": True, "item": item}
 
 
-_EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+# De-ambiguated: the old `[\w.-]+\.\w+` domain had two adjacent classes both
+# matching '.', causing O(n^2) backtracking on a long non-matching `from`
+# (attacker-controlled header) — ~21s for 80 KB, and the global execution mutex
+# means that stalls every request. The domain is now label(.label)+, so '.' is
+# only ever consumed by the explicit `\.`.
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 
 def _is_outbound(d, source):
@@ -380,7 +385,7 @@ def resolve_recipient(backend, ns, loop):
             continue
         if _is_outbound(d, source):
             continue                          # inbound only — that's who we reply to
-        m = _EMAIL.search(d.get("from") or "")
+        m = _EMAIL.search((d.get("from") or "")[:320])   # RFC max addr length
         if m:
             found = m.group(0)
     return found
