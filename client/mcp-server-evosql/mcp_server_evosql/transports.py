@@ -300,9 +300,58 @@ def _default_imessage_sender(handle: str, body: str):
     return {"id": None}
 
 
+class GitHubPRTransport:
+    """Posts an approved code-review draft onto its GitHub pull request as a
+    PR review (event=COMMENT — never approves or requests changes; the human
+    judgement stays human). The item's thread_id is 'owner/repo#number' as set
+    by codereview.review_pr. `sender(repo, number, body) -> dict` does the API
+    call; injected for tests so nothing real is ever posted from the suite."""
+
+    channel = "github_pr"
+
+    def __init__(self, sender=None):
+        self._sender = sender or _default_github_pr_sender
+
+    def __call__(self, item) -> dict:
+        import re as _re
+        ref = (item.get("thread_id") or item.get("to") or "").strip()
+        m = _re.match(r"^([\w.\-]+/[\w.\-]+)#(\d+)$", ref)
+        if not m:
+            return {"delivered": False, "dry_run": False,
+                    "error": f"no PR reference on the item (got {ref!r})"}
+        repo, number = m.group(1), int(m.group(2))
+        res = self._sender(repo, number, item.get("body", "")) or {}
+        return {"delivered": True, "id": res.get("id"),
+                "url": res.get("html_url"), "pr": f"{repo}#{number}"}
+
+
+def _default_github_pr_sender(repo: str, number: int, body: str):
+    """Real POST /repos/{repo}/pulls/{number}/reviews with event=COMMENT.
+    Needs a write-scoped GITHUB_TOKEN; raises without one (never silently
+    degrades — the outbox records the failure)."""
+    import json
+    import urllib.request
+
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not token:
+        raise RuntimeError("github_pr transport needs a write-scoped "
+                           "GITHUB_TOKEN to post the review")
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/pulls/{number}/reviews",
+        data=json.dumps({"body": body or "", "event": "COMMENT"}).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Accept": "application/vnd.github+json",
+                 "User-Agent": "evosql-mcp-outbox",
+                 "X-GitHub-Api-Version": "2022-11-28",
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (https, pinned host)
+        return json.loads(resp.read().decode() or "{}")
+
+
 _BUILDERS = {"gmail": GmailSendTransport, "teams": TeamsSendTransport,
              "outlook": OutlookSendTransport, "slack": SlackSendTransport,
-             "imessage": ImessageSendTransport}
+             "imessage": ImessageSendTransport,
+             "github_pr": GitHubPRTransport}
 
 
 def register_from_env(*, builders=None):
