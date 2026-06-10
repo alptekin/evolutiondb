@@ -57,6 +57,17 @@ class FakeBackend:
         self.selfmodel_store = f"{prefix}_self"
         self.outbox_store = f"{prefix}_outbox"
         self.profile_store = f"{prefix}_profile_clusters"
+        # governance / derived-knowledge stores (audit, retention, tms)
+        self.audit_store = f"{prefix}_audit"
+        self.job_runs_store = f"{prefix}_job_runs"
+        self.semantic_store = f"{prefix}_semantic"
+        self.skill_store = f"{prefix}_skills"
+        self.episodes_store = f"{prefix}_episodes"
+        self.validity_store = f"{prefix}_validity"
+        self.access_store = f"{prefix}_access"
+        self.salience_store = f"{prefix}_salience"
+        self.emb2_store = f"{prefix}_emb2"
+        self.gist_store = f"{prefix}_gist"
         # store(str) -> {(ns, key): value_str}
         self._rows = {}
 
@@ -88,6 +99,15 @@ class FakeBackend:
             self._rows.setdefault(store, {})[(ns, key)] = value
         elif head.startswith("MEMORY DELETE"):
             store = re.search(r"FROM\s+(\w+)", sql, re.I).group(1)
+            # Enforce the REAL engine grammar (evoparser.y:2350): literal
+            # NS/KEY tokens, NOT the mem_namespace/mem_key column names. The
+            # old permissive parse masked two production callers whose deletes
+            # were silent parse errors on the real engine.
+            if not re.search(r"WHERE\s+NS\s*=\s*'", sql, re.I) or \
+                    not re.search(r"AND\s+KEY\s*=\s*'", sql, re.I):
+                raise ValueError(
+                    "MEMORY DELETE must use the engine grammar "
+                    "WHERE NS='..' AND KEY='..' (got: %s)" % sql[:120])
             lits = _sql_literals(sql)
             ns, key = lits[0], lits[1]
             self._rows.get(store, {}).pop((ns, key), None)
