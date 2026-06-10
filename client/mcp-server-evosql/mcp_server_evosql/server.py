@@ -2855,6 +2855,28 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "meeting_brief",
+        "description": (
+            "Summarise the user's meetings for a day — each meeting's time, "
+            "attendees, and the open loops the user has with those attendees "
+            "(what they owe / are owed), derived from their calendar + "
+            "conversations. Call when the user asks about their meetings, "
+            "agenda, schedule, or how to prep for who they're seeing. Defaults "
+            "to today; pass `when` for another day."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "when": {
+                    "type": "string",
+                    "description": "Day to brief — an ISO-8601 date "
+                                   "(YYYY-MM-DD) or 'today'/'tomorrow'/"
+                                   "'yesterday'. Optional; defaults to today.",
+                },
+            },
+        },
+    },
+    {
         "name": "suggest_reply",
         "description": (
             "Draft a reply for an open loop someone is waiting on the user for "
@@ -3218,6 +3240,14 @@ class MCPServer:
                                 lang_set=was_set)
             return {"ok": True, "brief": text,
                     "waiting_on_you": len(data["waiting_me"])}
+
+        if name == "meeting_brief":
+            from . import meeting, prefs
+            data = meeting.collect(b, uid, when=args.get("when"))
+            lang, _was_set = prefs.get_language(b, uid)
+            text = meeting.render(data, name=uid.split("_")[0], lang=lang)
+            return {"ok": True, "user_id": uid, "brief": text,
+                    "day": data["day"], "meetings": data["count"]}
 
         if name == "suggest_reply":
             from . import suggest

@@ -36,7 +36,11 @@
     "outbox_lbl_status": "status",
     "outbox_no_scheduled_due": "No scheduled sends past their window.",
     "outbox_audit_header": "Status: {by_status} · sent in the last hour: {n} (limit {cap})",
-    "outbox_usage": "usage: python -m mcp_server_evosql.outbox <list|show|approve|reject|flush|audit> [args]"
+    "outbox_usage": "usage: python -m mcp_server_evosql.outbox <list|show|approve|reject|flush|audit> [args]",
+    "meetings_header": "Meetings",
+    "meetings_none": "No meetings scheduled.",
+    "all_day": "all day",
+    "related_open": "open loops with attendees"
   },
   "heuristics": {
     "question": ["\\?"],
