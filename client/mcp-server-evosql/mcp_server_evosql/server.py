@@ -46,9 +46,9 @@ from .profile    import build_profile as _build_profile
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.13.0"
+SERVER_VERSION   = "1.13.1"
 
-# Adım 17: a row whose profile-cluster similarity clears this counts as
+# Step 17: a row whose profile-cluster similarity clears this counts as
 # "in the user's interest" and survives the signal filter even with no direct
 # query match — that is how a query in your interest area surfaces your
 # related items. Only active when the profile boost is on.
@@ -273,7 +273,7 @@ def _bm25_scores(q_terms: List[str],
     return scores
 
 
-# Provenance schema version (Adım 13). Bump when the derived_from / evidence
+# Provenance schema version (Step 13). Bump when the derived_from / evidence
 # shape changes so synthesized rows can be regenerated against the new schema.
 SYNTHESIS_SCHEMA_VERSION = 1
 
@@ -317,7 +317,7 @@ class MemoryBackend:
             self._ann_pool = int(os.environ.get("EVOSQL_ANN_POOL", "80"))
         except ValueError:
             self._ann_pool = 80
-        # Salience boost (Adım 12): blend the precomputed per-row `salience`
+        # Salience boost (Step 12): blend the precomputed per-row `salience`
         # (recency × sender-activity × thread-depth × feedback, written by the
         # salience job) into the final ranking. 0 = off (default), so the
         # ranking is unchanged until an operator opts in; rows without a
@@ -357,24 +357,24 @@ class MemoryBackend:
         # statement cap, and keeping emb2 out of the main store means a
         # backfill never rewrites — and so never risks — the primary data.
         self.emb2_store = f"{prefix}_emb2"
-        # Implicit-feedback log (Adım 11): one record per search keyed by a
+        # Implicit-feedback log (Step 11): one record per search keyed by a
         # query_id UUID, holding the query, its returned keys, and — once the
         # caller reports back via the feedback tool — which keys it actually
         # used. Self-improving-memory training signal; kept in its own store
         # so it never touches the primary memory rows.
         self.feedback_store = f"{prefix}_feedback"
-        # Entity catalog (Adım 14): extracted named entities and their
+        # Entity catalog (Step 14): extracted named entities and their
         # canonical ids live in `entity_store`; each surface-form occurrence
         # in a memory row is recorded in `mention_store`. Both are plain
         # MEMORY STOREs keyed by the entity/mention id (see entities.py).
         self.entity_store  = f"{prefix}_entities"
         self.mention_store = f"{prefix}_entity_mentions"
         # Inline entity extraction after each save (best-effort, regex-fast).
-        # Until the Adım 18 scheduler exists this runs synchronously; set
+        # Until the Step 18 scheduler exists this runs synchronously; set
         # EVOSQL_ENTITY_EXTRACT=0 to disable (or run entities.py as backfill).
         self.entity_extract = os.environ.get("EVOSQL_ENTITY_EXTRACT", "1") != "0"
         self._entity_stores: Dict[str, Any] = {}   # user_id -> EntityStore
-        # Knowledge graph (Adım 15): co-occurring entities in a row are wired
+        # Knowledge graph (Step 15): co-occurring entities in a row are wired
         # into `graph_store` so a relational query can reach rows by 1-2 hop
         # spreading activation. Building edges on save is cheap and keeps the
         # graph ready (EVOSQL_GRAPH_BUILD=0 to disable); the *retrieval* boost
@@ -393,7 +393,7 @@ class MemoryBackend:
         self.outbox_store = f"{prefix}_outbox"
         self.graph_boost = _resolve_boost("EVOSQL_GRAPH_BOOST", 0.30)
         self._graph_stores: Dict[str, Any] = {}    # user_id -> GraphStore
-        # Episodes (Adım 16): a weekly job groups recent rows into episodes
+        # Episodes (Step 16): a weekly job groups recent rows into episodes
         # and writes one summary per episode (tagged `episode`, synthesized
         # with derived_from = source keys). The episode record links the
         # summary back to its sources for hierarchical drill-down.
@@ -504,10 +504,10 @@ class MemoryBackend:
         self.profile_store = f"{prefix}_profile_clusters"
         self.profile_boost = _resolve_boost("EVOSQL_PROFILE_BOOST", 0.25)
         self._profile_cache: Dict[str, List[Dict[str, Any]]] = {}
-        # Sleep-time scheduler (Adım 18): per-job state + audit log so the
+        # Sleep-time scheduler (Step 18): per-job state + audit log so the
         # background jobs run idempotently and survive restarts.
         self.job_runs_store = f"{prefix}_job_runs"
-        # Decay & archival (Adım 20): row access times in a small side store
+        # Decay & archival (Step 20): row access times in a small side store
         # (so a search never rewrites the main record just to record a read);
         # the daily decay pass flags faded rows archived=true. Opt-in via
         # EVOSQL_DECAY>0 — default off keeps search byte-for-byte. When on,
@@ -529,7 +529,7 @@ class MemoryBackend:
         self.act_w_cos = _env_float("EVOSQL_ACTIVATION_W_COS", 1.0)
         self.act_w_spread = _env_float("EVOSQL_ACTIVATION_W_SPREAD", 1.0)
         self.act_w_sal = _env_float("EVOSQL_ACTIVATION_W_SAL", 1.0)
-        # Salience (Adım 12) lives in its OWN side store, not on the main
+        # Salience (Step 12) lives in its OWN side store, not on the main
         # record. Stamping a number onto a multi-KB row would rewrite the whole
         # record and trip the engine's 8 KB statement cap; a tiny {salience}
         # value never does. search() and the decay pass read salience here.
@@ -654,7 +654,7 @@ class MemoryBackend:
         if topic_tags:
             record["topic_tags"]  = topic_tags
             record["topic_model"] = self.tagger.kind
-        # Provenance (Adım 13): a fact synthesized from other memories
+        # Provenance (Step 13): a fact synthesized from other memories
         # records its source keys so it stays traceable to evidence. The
         # source keys are validated foreign-key style — only keys that
         # actually exist in this namespace are kept, and `regenerable` is
@@ -719,7 +719,7 @@ class MemoryBackend:
                     )
                 except Exception:
                     pass  # emb2 is best-effort; main row already saved
-        # Entity extraction (Adım 14) + graph edges (Adım 15) — best-effort,
+        # Entity extraction (Step 14) + graph edges (Step 15) — best-effort,
         # never blocks the save. Extraction returns the mentions enriched with
         # their resolved entity ids, which the graph wires into co-occurrence
         # edges in the same pass (no re-extraction).
@@ -849,7 +849,7 @@ class MemoryBackend:
         act = g.spreading_activation(seeds, depth=2)
         return g.rows_for_entities(act, seeds=seeds)
 
-    # -- episodes (Adım 16) ------------------------------------------
+    # -- episodes (Step 16) ------------------------------------------
     def build_episodes(self, user_id: str, *, window_days: int = 7,
                        dry_run: bool = False) -> List[Dict[str, Any]]:
         """Segment recent rows into episodes and write one summary each.
@@ -906,7 +906,7 @@ class MemoryBackend:
                 "time_end": ep.get("time_end"),
                 "rows": out}
 
-    # -- user profile (Adım 17) --------------------------------------
+    # -- user profile (Step 17) --------------------------------------
     def build_profile(self, user_id: str, *, window_days: int = 90,
                       k: Optional[int] = None,
                       dry_run: bool = False) -> List[Dict[str, Any]]:
@@ -1105,7 +1105,7 @@ class MemoryBackend:
                 mode: str = "flat",
                 include_archived: bool = False,
                 as_of: Optional[float] = None) -> List[Dict[str, Any]]:
-        # Hierarchical mode (Adım 16): rank only the episode summaries, so an
+        # Hierarchical mode (Step 16): rank only the episode summaries, so an
         # aggregation query returns a few paragraph summaries with drill-down
         # instead of every raw row. Unlike a tag filter this keeps the normal
         # keyword/dense signal requirement, so only episodes relevant to the
@@ -1166,7 +1166,7 @@ class MemoryBackend:
                 f"'{_e(user_id)}' LIMIT 10000"
             )
 
-        # Knowledge-graph spreading activation (Adım 15). Resolve the query's
+        # Knowledge-graph spreading activation (Step 15). Resolve the query's
         # entities, spread two hops, and pull in any reached rows the lexical/
         # dense gather missed so they can compete — this is the actual recall
         # lift for relational queries. Gated on EVOSQL_GRAPH_BOOST>0; the
@@ -1234,7 +1234,7 @@ class MemoryBackend:
             except Exception:
                 pass
 
-        # User-profile bias (Adım 17): the 1-2 interest clusters the query
+        # User-profile bias (Step 17): the 1-2 interest clusters the query
         # points at. Rows near these centroids get a boost downstream, so
         # results lean toward what the user actually cares about. Needs a
         # query vector; empty on cold start so the boost stays passive.
@@ -1284,7 +1284,7 @@ class MemoryBackend:
                 continue
             if not episode_only and rec.get("is_episode"):
                 continue
-            # Decay (Adım 20): faded rows are archived, not deleted — skip them
+            # Decay (Step 20): faded rows are archived, not deleted — skip them
             # unless the caller asked to include archived.
             if self.decay_enabled and not include_archived and rec.get("archived"):
                 continue
@@ -1339,7 +1339,7 @@ class MemoryBackend:
                 sem_score = max((max(0.0, cosine(qv, row_vec))
                                  for qv in q_vecs), default=0.0)
 
-            # Profile similarity (Adım 17): how close this row sits to the
+            # Profile similarity (Step 17): how close this row sits to the
             # interest clusters the query points at. Reuses row_vec.
             psim = 0.0
             if profile_centroids and row_vec:
@@ -1446,7 +1446,7 @@ class MemoryBackend:
         # so the same query can yield different top-K between calls.
         out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
-        # Adım 7 — cross-encoder rerank over the top-K of the hybrid
+        # Step 7 — cross-encoder rerank over the top-K of the hybrid
         # ranking. Pool size is adaptive: a short query carries less
         # disambiguating signal so a wider pool risks more noise,
         # while a longer query benefits from re-judging more
@@ -1488,7 +1488,7 @@ class MemoryBackend:
                 pool.sort(key=lambda x: (-x["score"], x.get("key", "")))
                 out = pool + out[pool_size:]
 
-        # Adım 17 — user-profile boost. final = (1-β)·base + β·profile_sim,
+        # Step 17 — user-profile boost. final = (1-β)·base + β·profile_sim,
         # where profile_sim is the row's cosine to the interest clusters the
         # query points at. Biases results toward what the user cares about;
         # passive on cold start (no centroids) and for rows without an
@@ -1503,7 +1503,7 @@ class MemoryBackend:
                 x["score"] = round((1.0 - w) * base + w * ps, 6)
             out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
-        # Adım 15 — knowledge-graph boost. Rows reached by spreading
+        # Step 15 — knowledge-graph boost. Rows reached by spreading
         # activation from the query's entities get an additive lift, so a
         # relational query ("who is active on X") surfaces rows that never
         # contain the query keyword — they were reached through the entity
@@ -1531,7 +1531,7 @@ class MemoryBackend:
                 x["score"] = round((1.0 - w) * base + w * gb, 6)
             out.sort(key=lambda x: (-x["score"], x.get("key", "")))
 
-        # Adım 12 — salience re-ranking. Blend the precomputed per-row
+        # Step 12 — salience re-ranking. Blend the precomputed per-row
         # `salience` (recency × sender-activity × thread-depth × feedback)
         # into the base score so important rows surface first. The plan
         # phrases it as reducing a high-salience row's effective distance;
@@ -1589,10 +1589,10 @@ class MemoryBackend:
             if max(confs) < self.abstain_conf:
                 out = []
         page = out[:limit]
-        # Provenance (Adım 13): synthesized rows in the returned page carry
+        # Provenance (Step 13): synthesized rows in the returned page carry
         # an evidence_chain resolving each source key to its fact.
         self._attach_evidence(user_id, page)
-        # Decay (Adım 20): a read refreshes the row's access time so accessed
+        # Decay (Step 20): a read refreshes the row's access time so accessed
         # memories resist archival (Ebbinghaus). Best-effort, side store only.
         if self.decay_enabled and page:
             self._touch_access(user_id, [r["key"] for r in page])
@@ -2235,8 +2235,8 @@ class MemoryBackend:
                           rows: List[Dict[str, Any]]) -> None:
         """For each synthesized row, resolve its derived_from keys to evidence.
 
-        Adım 13: evidence_chain = [{key, fact, present}] — full traceability.
-        Adım 19 (co-presented evidence policy): also attach
+        Step 13: evidence_chain = [{key, fact, present}] — full traceability.
+        Step 19 (co-presented evidence policy): also attach
           evidence_excerpts = [{key, snippet}]  — a 1-2 sentence quote per
           source, the citation-ready short form, and citation_required = true
           so the model is told to co-cite the sources when it uses the row.
@@ -2315,7 +2315,7 @@ class MemoryBackend:
         out.sort(key=lambda x: -x["count"])
         return out
 
-    # -- implicit feedback (Adım 11) ---------------------------------
+    # -- implicit feedback (Step 11) ---------------------------------
     def _calibrate_conf(self, user_id: str, conf: float) -> float:
         """Map a raw source-confidence through the namespace's fitted calibrator
         (roadmap step 40), lazily loading + caching it. Identity when no
@@ -2590,7 +2590,7 @@ class MemoryBackend:
 
 def _snippet(text: str, max_sentences: int = 2, max_chars: int = 200) -> str:
     """A 1-2 sentence quote from a source fact, for co-presented evidence
-    (Adım 19). Trims on sentence boundaries, then on a word boundary if still
+    (Step 19). Trims on sentence boundaries, then on a word boundary if still
     too long, so the cited excerpt stays short but readable."""
     import re as _re
     s = " ".join((text or "").split())
@@ -3033,7 +3033,7 @@ class MCPServer:
             results = b.search(self.user_id, q,
                                limit=limit, tag=tag, sender=sender, mode=mode,
                                include_archived=inc_arch, as_of=as_of)
-            # Implicit-feedback hook (Adım 11): tag the response with a
+            # Implicit-feedback hook (Step 11): tag the response with a
             # query_id and log (query -> returned keys) so the caller can
             # later report which keys it used via the feedback tool.
             query_id = uuid.uuid4().hex

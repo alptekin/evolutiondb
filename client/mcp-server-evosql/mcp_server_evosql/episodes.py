@@ -1,5 +1,5 @@
 """
-episodes — segmentation + hierarchical summaries (Adım 16).
+episodes — segmentation + hierarchical summaries (Step 16).
 
 A weekly job groups recent rows into episodes (a burst of related activity)
 and writes one short summary per episode, so an aggregation query ("what
@@ -14,13 +14,13 @@ Segmentation (dependency-free, deterministic):
      real HDBSCAN pass is an optional refinement when the lib is installed).
 
 Each episode's summary is written through the normal save path with
-derived_from = source row keys and synthesized = true (Adım 13 provenance),
+derived_from = source row keys and synthesized = true (Step 13 provenance),
 tagged `episode`. An episode record in <prefix>_episodes links the summary to
 its sources for expand_episode() drill-down.
 
 Summary text is extractive by default (no LLM); set EVOSQL_EPISODE_LLM =
 ollama | anthropic for a real generated summary — same opt-in shape as the
-Adım 14 entity LLM.
+Step 14 entity LLM.
 
 CLI (the weekly job):
   python -m mcp_server_evosql.episodes --namespace alptekin_topal [--dry-run]
@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from .embeddings import cosine, decode_vec
+from . import locales
 
 GAP_HOURS = 24.0
 SIM_THRESHOLD = 0.7
@@ -133,9 +134,10 @@ def _top_names(rows: List[dict], names: Dict[str, str], k: int = 3) -> List[str]
     return out
 
 
-def summarize(rows: List[dict], names: Dict[str, str]) -> str:
+def summarize(rows: List[dict], names: Dict[str, str], lang=None) -> str:
     """Extractive template by default; EVOSQL_EPISODE_LLM swaps in a real
-    generated summary. Kept to ~one sentence (~50 tokens)."""
+    generated summary. Kept to ~one sentence (~50 tokens). `lang` selects the
+    template locale (default English)."""
     rows = sorted(rows, key=lambda r: r.get("ts", 0.0))
     who = _top_names(rows, names)
     backend = os.environ.get("EVOSQL_EPISODE_LLM", "").strip().lower()
@@ -150,7 +152,8 @@ def summarize(rows: List[dict], names: Dict[str, str]) -> str:
     if len(snippet) > 90:
         snippet = snippet[:90].rsplit(" ", 1)[0] + "…"
     whos = ", ".join(who) if who else "—"
-    return f"{span} · {len(rows)} ilgili kayıt ({whos}). {snippet}"
+    return locales.t("episode_summary", lang, span=span, n=len(rows),
+                     who=whos, snippet=snippet)
 
 
 def _llm_summary(rows: List[dict], who: List[str], backend: str) -> str:
@@ -190,7 +193,9 @@ def build_episodes(backend, user_id: str, *, window_days: int = 7,
     existing episode (or that are themselves episode summaries) are skipped,
     so a re-run only episodizes new activity."""
     from .server import _e
+    from . import prefs
 
+    lang, _ = prefs.get_language(backend, user_id)   # summary template locale
     now = time.time()
     horizon = now - window_days * 86400.0 if window_days > 0 else 0.0
 
@@ -252,7 +257,7 @@ def build_episodes(backend, user_id: str, *, window_days: int = 7,
     for i, ep in enumerate(episodes):
         src_keys = [r["key"] for r in ep]
         ent_ids = sorted({e for r in ep for e in (r.get("entity_ids") or ())})
-        summary = summarize(ep, names)
+        summary = summarize(ep, names, lang)
         eid = f"ep_{int(now*1000)}_{i}"
         rec = {"episode_id": eid,
                "time_start": min(r["ts"] for r in ep),

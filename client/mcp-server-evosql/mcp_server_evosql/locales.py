@@ -121,6 +121,31 @@ class Heuristics:
         self.close = _alt(h("close"))
         self.auto_from = _alt(h("auto_from"))
 
+        # content-word tokenization + filtering (profile / gist). \w is already
+        # Unicode-aware, so no per-language letter class is needed; only the
+        # stopword vocabulary varies by language.
+        self.word_re = re.compile(r"\w+", re.UNICODE)
+        self.stopwords = frozenset(w.lower() for w in h("stopwords"))
+        # arousal/urgency vocabulary (salience), whole-word match
+        arousal = h("arousal")
+        self.arousal_re = (re.compile(
+            r"\b(?:" + "|".join(re.escape(a) for a in arousal) + r")\b", re.I)
+            if arousal else _NEVER)
+        # predicate keyword lexicon (graph): {predicate: [surface stems...]},
+        # merged across locales (predicate ORDER is owned by the caller)
+        self.predicate_keywords: Dict[str, List[str]] = {}
+        for c in codes:
+            for pred, kws in ((_raw(c).get("heuristics") or {})
+                              .get("predicate_keywords", {}) or {}).items():
+                cur = self.predicate_keywords.setdefault(pred, [])
+                for kw in kws:
+                    if kw not in cur:
+                        cur.append(kw)
+        # snowball stemmer language names for the active locales (gist), if any
+        self.stemmers = [name for name in
+                         ((_raw(c).get("heuristics") or {}).get("stemmer")
+                          for c in codes) if name]
+
         # entity extraction building blocks
         up = "A-Z" + "".join(
             (_raw(c).get("heuristics") or {}).get("title_upper_extra", "")

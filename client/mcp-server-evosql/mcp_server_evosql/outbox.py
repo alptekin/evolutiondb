@@ -32,6 +32,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from . import locales
+
 # channel -> callable(item) -> dict; empty by design (connectors are read-only).
 # A real sender registers here behind its own write-scope OAuth + consent.
 TRANSPORTS: dict = {}
@@ -444,26 +446,29 @@ def _fmt(it):
             f"     {body[:80]}")
 
 
-def _approve_line(item_id, res):
+def _approve_line(item_id, res, lang=None):
     if res.get("scheduled"):
-        return f"⏳ planlandı: {item_id} — {res.get('note', '')}"
+        return locales.t("outbox_scheduled", lang, id=item_id,
+                         note=res.get("note", ""))
     if res.get("sent"):
-        return f"✓ gönderildi: {item_id}"
-    return (f"◐ onaylandı (dry-run — gönderilmedi): {item_id}"
+        return locales.t("outbox_sent", lang, id=item_id)
+    return (locales.t("outbox_approved_dryrun", lang, id=item_id)
             + (f"  [{res.get('detail')}]" if res.get("detail") else ""))
 
 
 def _cli(backend, ns, argv) -> int:
+    from . import prefs
+    lang, _ = prefs.get_language(backend, ns)
     cmd = argv[0] if argv else "list"
     if cmd == "list":
         pend = list_pending(backend, ns)
         if not pend:
-            print("Onay bekleyen yanıt yok.")
+            print(locales.t("no_pending_approval", lang))
             return 0
-        print(f"Onay bekleyen {len(pend)} yanıt:\n")
+        print(locales.t("outbox_pending_header", lang, n=len(pend)) + "\n")
         for it in pend:
             print(_fmt(it))
-        print("\nGöster: show <id> · gönder: approve <id> · iptal: reject <id>")
+        print("\n" + locales.t("outbox_list_hint", lang))
         return 0
     if cmd == "show" and len(argv) >= 2:
         it = _load(backend, ns, argv[1])
@@ -471,26 +476,28 @@ def _cli(backend, ns, argv) -> int:
             print(f"✗ no outbox item '{argv[1]}'")
             return 1
         p = preview(it)
-        print(f"{'='*60}\nGÖNDERİLECEK (onay öncesi önizleme)\n{'-'*60}")
-        print(f"kanal : {p['channel']}\nkime  : {p['to']}")
+        print(f"{'='*60}\n{locales.t('outbox_preview_header', lang)}\n{'-'*60}")
+        print(f"{locales.t('outbox_lbl_channel', lang)} : {p['channel']}\n"
+              f"{locales.t('outbox_lbl_to', lang)} : {p['to']}")
         if p.get("subject"):
-            print(f"konu  : {p['subject']}")
-        print(f"durum : {p['status']}\n{'-'*60}\n{p['body']}\n{'='*60}")
+            print(f"{locales.t('outbox_lbl_subject', lang)} : {p['subject']}")
+        print(f"{locales.t('outbox_lbl_status', lang)} : {p['status']}\n"
+              f"{'-'*60}\n{p['body']}\n{'='*60}")
         return 0
     if cmd == "flush":
         results = flush_scheduled(backend, ns)
         if not results:
-            print("Penceresi dolan planlı gönderim yok.")
+            print(locales.t("outbox_no_scheduled_due", lang))
             return 0
         for r in results:
-            print(_approve_line(r.get("item", {}).get("id", "?"), r))
+            print(_approve_line(r.get("item", {}).get("id", "?"), r, lang))
         return 0
     if cmd == "audit":
         rows = audit(backend, ns)
         s = stats(backend, ns)
         cap = f"{s['rate_cap']}/h" if s["rate_cap"] else "∞"
-        print(f"Durum: {s['by_status']} · son 1 saatte gönderim: "
-              f"{s['sent_last_hour']} (limit {cap})\n")
+        print(locales.t("outbox_audit_header", lang, by_status=s["by_status"],
+                        n=s["sent_last_hour"], cap=cap) + "\n")
         icon = {"pending": "🟡", "approved": "🟠", "scheduled": "⏳", "sent": "🟢",
                 "rejected": "⚪"}
         for r in rows:
@@ -505,12 +512,10 @@ def _cli(backend, ns, argv) -> int:
         if not res.get("ok"):
             print(f"✗ {res.get('error')}")
             return 1
-        print(_approve_line(argv[1], res) if cmd == "approve"
-              else f"⚪ iptal edildi: {argv[1]}")
+        print(_approve_line(argv[1], res, lang) if cmd == "approve"
+              else locales.t("outbox_rejected", lang, id=argv[1]))
         return 0
-    print("kullanım: python -m mcp_server_evosql.outbox "
-          "list | show <id> | approve <id> | reject <id> | flush | audit",
-          file=sys.stderr)
+    print(locales.t("outbox_usage", lang), file=sys.stderr)
     return 2
 
 

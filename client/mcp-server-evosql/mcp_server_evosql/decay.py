@@ -1,5 +1,5 @@
 """
-decay — Ebbinghaus decay + archival policy (Adım 20).
+decay — Ebbinghaus decay + archival policy (Step 20).
 
 Old, unused memories should fade from retrieval without being deleted, so the
 system stays usable for years instead of drowning in its own history.
@@ -78,7 +78,7 @@ def _row_ts(rec: dict) -> float:
 
 
 def _salience_map(backend, user_id: str) -> Dict[str, float]:
-    """{mem_key: salience} from the side store (Adım 12 writes it there)."""
+    """{mem_key: salience} from the side store (Step 12 writes it there)."""
     from .server import _e
     out: Dict[str, float] = {}
     for r in backend._query(

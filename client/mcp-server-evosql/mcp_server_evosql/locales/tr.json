@@ -21,7 +21,22 @@
     "draft_note": "(öneri — gönderilmedi)",
     "llm_off": "(LLM kapalı — EVOSQL_LOOP_LLM=anthropic ayarla)",
     "no_loop_for_draft": "Taslak için açık döngü bulunamadı.",
-    "suggested_reply": "✍️  ÖNERİLEN CEVAP:"
+    "suggested_reply": "✍️  ÖNERİLEN CEVAP:",
+    "episode_summary": "{span} · {n} ilgili kayıt ({who}). {snippet}",
+    "outbox_sent": "✓ gönderildi: {id}",
+    "outbox_scheduled": "⏳ planlandı: {id} — {note}",
+    "outbox_approved_dryrun": "◐ onaylandı (dry-run — gönderilmedi): {id}",
+    "outbox_rejected": "⚪ iptal edildi: {id}",
+    "outbox_pending_header": "Onay bekleyen {n} yanıt:",
+    "outbox_list_hint": "Göster: show <id> · gönder: approve <id> · iptal: reject <id>",
+    "outbox_preview_header": "GÖNDERİLECEK (onay öncesi önizleme)",
+    "outbox_lbl_channel": "kanal",
+    "outbox_lbl_to": "kime",
+    "outbox_lbl_subject": "konu",
+    "outbox_lbl_status": "durum",
+    "outbox_no_scheduled_due": "Penceresi dolan planlı gönderim yok.",
+    "outbox_audit_header": "Durum: {by_status} · son 1 saatte gönderim: {n} (limit {cap})",
+    "outbox_usage": "kullanım: python -m mcp_server_evosql.outbox <list|show|approve|reject|flush|audit> [args]"
   },
   "heuristics": {
     "question": ["\\bmi\\b", "\\bmu\\b", "\\bmı\\b", "\\bmü\\b", "misin", "musun", "edebilir"],
@@ -39,6 +54,18 @@
       {"type": "iban", "re": "\\bTR\\d{2}(?:[ ]?\\d{2,4}){5,6}\\b", "flags": "i", "conf": 0.98},
       {"type": "phone", "re": "(?<!\\d)(?:\\+90|0090|0)?[ ]?\\(?5\\d{2}\\)?[ ]?\\d{3}[ ]?\\d{2}[ ]?\\d{2}(?!\\d)", "conf": 0.9},
       {"type": "tckn", "re": "(?<!\\d)[1-9]\\d{10}(?!\\d)", "conf": 0.9}
-    ]
+    ],
+    "stemmer": "turkish",
+    "stopwords": ["ve", "ile", "bir", "bu", "şu", "ne", "oldu", "için", "çok", "daha", "en", "de", "da", "ki", "mi", "mı"],
+    "arousal": ["acil", "önemli", "tehlike", "uyarı", "alerji", "asla", "mutlaka"],
+    "predicate_keywords": {
+      "worked_on": ["çalıştı", "çalışıyor", "üzerinde", "geliştirdi"],
+      "replied_to": ["yanıt", "cevap", "döndü"],
+      "escalated_to": ["yükseltildi", "iletildi"],
+      "assigned": ["atandı", "atadı", "görevlendirildi", "verildi"],
+      "manages": ["yönetiyor", "yönetti", "yönetir"],
+      "owns": ["sahibi", "ait"],
+      "mentioned": ["bahsetti", "söz etti", "andı", "dedi"]
+    }
   }
 }
