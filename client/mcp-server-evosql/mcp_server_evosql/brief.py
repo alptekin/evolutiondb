@@ -14,6 +14,8 @@ import os
 import sys
 from datetime import datetime, timezone
 
+from . import locales
+
 
 def _load(backend, store, ns):
     from .server import _e
@@ -64,7 +66,8 @@ def _line(d):
     return f"   {star} {d['counterparty'][:22]:22} · {d.get('age_days','?'):>3}g · {what[:60]}"
 
 
-def render(data, name="", lang_set=True) -> str:
+def render(data, name="", lang_set=True, lang="english") -> str:
+    U = locales.ui(lang)
     sm = data["self"]
     role = ""
     r = sm.get("role")
@@ -72,37 +75,37 @@ def render(data, name="", lang_set=True) -> str:
         role = r.get("summary", "")
     today = datetime.now(timezone.utc).strftime("%d %b %Y")
     L = []
-    L.append(f"☀️  GÜNAYDIN{(' ' + name.upper()) if name else ''} — {today}")
+    L.append(f"☀️  {U['good_morning']}{(' ' + name.upper()) if name else ''} — {today}")
     if role:
         L.append(f"    {role[:96]}")
     L.append("")
-    L.append(f"🔴 SENİ BEKLEYENLER ({len(data['waiting_me'])})")
+    L.append(f"🔴 {U['waiting_on_you']} ({len(data['waiting_me'])})")
     if not data["waiting_me"]:
-        L.append("   — temiz, kimse beklemiyor 🎉")
+        L.append(U["waiting_on_you_empty"])
     for d in data["waiting_me"][:15]:
         L.append(_line(d))
     L.append("")
-    L.append(f"🟡 SEN BEKLİYORSUN ({len(data['waiting_them'])})")
+    L.append(f"🟡 {U['you_are_waiting']} ({len(data['waiting_them'])})")
     for d in data["waiting_them"][:8]:
         L.append(_line(d))
     if not data["waiting_them"]:
-        L.append("   —")
+        L.append(U["none"])
     L.append("")
-    L.append(f"🟢 SÖZ VERDİKLERİN ({len(data.get('promises', []))})")
+    L.append(f"🟢 {U['promises']} ({len(data.get('promises', []))})")
     for d in data.get("promises", [])[:8]:
         L.append(_line(d))
     if not data.get("promises"):
-        L.append("   —")
+        L.append(U["none"])
     com = sm.get("commitments") or {}
     oc = com.get("open_count") if isinstance(com, dict) else None
     L.append("")
-    tail = f"📋 açık taahhüt: {oc if oc is not None else len(data['waiting_me'])}"
+    tail = f"📋 {U['open_commitments']}: {oc if oc is not None else len(data['waiting_me'])}"
     if data["stale"]:
-        tail += f"  ·  {len(data['stale'])} eski (>90g, bekletilenler)"
+        tail += f"  ·  {len(data['stale'])} {U['stale_suffix']}"
     L.append(tail)
     if not lang_set:
         L.append("")
-        L.append("ℹ️  Özetler şu an İngilizce. Türkçe için:  /language türkçe")
+        L.append(U["lang_hint"])
     return "\n".join(L)
 
 
@@ -158,26 +161,28 @@ def main() -> int:
     backend = scheduler._backend(prefix)
     ns = os.environ.get("MCP_USER_ID") or (
         scheduler.discover_namespaces(backend) or ["default"])[0]
+    lang, was_set = prefs.get_language(backend, ns)
 
     if args.language:
         lang = prefs.set_language(backend, ns, args.language)
-        print(f"✓ Özet dili ayarlandı: {lang}. "
-              f"Sonraki open_loops/self_model çalışmasında özetler {lang} olacak.")
+        print(locales.t("lang_set", lang, lang=lang))
         return 0
 
     if args.approve is not None:
         results = approve_queued(backend, ns,
                                  None if args.approve == "all" else args.approve)
         if not results:
-            print("Onay bekleyen yanıt yok.")
+            print(locales.t("no_pending_approval", lang))
             return 0
         for r in results:
             if not r.get("ok"):
                 print(f"✗ {r.get('error')}")
                 continue
             it = r.get("item", {})
-            tag = "✓ gönderildi" if r.get("sent") else "◐ onaylandı (dry-run)"
-            extra = ("  · loop kapandı" if r.get("loop_resolved") else "")
+            tag = (locales.t("sent", lang) if r.get("sent")
+                   else locales.t("approved_dryrun", lang))
+            extra = (locales.t("loop_closed", lang) if r.get("loop_resolved")
+                     else "")
             detail = (f"  [{r.get('detail')}]"
                       if not r.get("sent") and r.get("detail") else "")
             print(f"{tag}: {it.get('id')} →{it.get('to') or '?'}{detail}{extra}")
@@ -187,21 +192,20 @@ def main() -> int:
         name = ns.split("_")[0].capitalize()
         items = queue_drafts(backend, ns, top=args.queue, name=name)
         if not items:
-            print("Sıraya alınacak açık döngü yok.")
+            print(locales.t("no_loop_to_queue", lang))
             return 0
-        print(f"{'='*68}\n📤 SIRAYA ALINDI ({len(items)} — onay bekliyor)")
+        print(f"{'='*68}\n{locales.t('queued_header', lang, n=len(items))}")
         for it in items:
             print(f"   {it['id']}  →{it.get('to') or '?'}\n"
                   f"     {(it.get('body') or '')[:80]}")
-        print("\nGöndermek için:  brief --approve <id>   ·   hepsi:  brief --approve")
+        print("\n" + locales.t("queue_send_hint", lang))
         return 0
 
-    lang, was_set = prefs.get_language(backend, ns)
     data = collect(backend, ns)
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return 0
-    print(render(data, name=ns.split("_")[0], lang_set=was_set))
+    print(render(data, name=ns.split("_")[0], lang_set=was_set, lang=lang))
 
     if args.draft:
         from . import suggest
@@ -211,13 +215,13 @@ def main() -> int:
         if isinstance(r, dict):
             role = r.get("summary", "")
         threads = suggest._index_threads(backend, ns)
-        print("\n" + "=" * 68 + "\n✍️  TASLAK CEVAPLAR")
+        print("\n" + "=" * 68 + "\n" + locales.t("draft_replies", lang))
         for d in data["waiting_me"][:args.draft]:
             msgs = threads.get((d["source"], d["thread_key"]), [])
             draft = suggest.draft_reply(msgs, d, role, name, lang)
             print(f"\n🔴 {d['counterparty']} · {d.get('age_days','?')}g · "
                   f"{d.get('what') or d.get('snippet','')[:50]}\n   ↳ {draft}")
-        print("\n(öneri — gönderilmedi)")
+        print("\n" + locales.t("draft_note", lang))
     return 0
 
 

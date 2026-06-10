@@ -1,5 +1,5 @@
 """
-entities — entity extraction + canonical-id resolution (Adım 14).
+entities — entity extraction + canonical-id resolution (Step 14).
 
 Two-stage extraction:
   1. regex + heuristic — email / phone / IBAN / TC kimlik / organization /
@@ -31,6 +31,8 @@ import sys
 import time
 import unicodedata
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from . import locales
 
 # Size bounds so a single record never approaches the engine's 8 KB statement
 # cap (which, when exceeded, makes the engine reject the write and drop the
@@ -66,38 +68,11 @@ _RE_EMAIL = re.compile(
 # Cap the text fed to regex extraction — NER needs only the first few KB, and an
 # uncapped fact (no length limit on save_memory) is attacker-reachable DoS fuel.
 MAX_EXTRACT_CHARS = 20000
-_RE_IBAN  = re.compile(r"\bTR\d{2}(?:[ ]?\d{2,4}){5,6}\b", re.I)
-_RE_PHONE = re.compile(
-    r"(?<!\d)(?:\+90|0090|0)?[ ]?\(?5\d{2}\)?[ ]?\d{3}[ ]?\d{2}[ ]?\d{2}(?!\d)")
-_RE_TCKN  = re.compile(r"(?<!\d)[1-9]\d{10}(?!\d)")
-# Org: a Title-case run that ends in a corporate suffix.
-_ORG_SUFFIX = (r"(?:A\.?\s?Ş\.?|Ltd\.?(?:\s?Şti\.?)?|San\.?|Tic\.?|Holding|"
-               r"Group|Grup|Inc\.?|LLC|Corp\.?|Co\.?|GmbH|Kurumsal)")
-_RE_ORG = re.compile(
-    r"\b([A-ZÇĞİÖŞÜ][\wÇĞİÖŞÜçğıöşü&]*(?:[ ][A-ZÇĞİÖŞÜ][\wÇĞİÖŞÜçğıöşü&]*){0,4}"
-    r"[ ]" + _ORG_SUFFIX + r")")
-# Honorifics that flag the adjacent Title-case token(s) as a person.
-_HONORIFIC_POST = r"(?:bey|hanım|hanim|bey'?\w*|han\w*)"
-_HONORIFIC_PRE  = r"(?:Dr|Prof|Doç|Av|Sayın|Bay|Bayan|Mr|Ms|Mrs|Miss)\.?"
-_TITLE = r"[A-ZÇĞİÖŞÜ][a-zçğıöşü]+"
-# person: pre-honorific + Name(s), OR Name(s) + post-honorific, OR 2-3 Title words
-_RE_PERSON_PRE  = re.compile(_HONORIFIC_PRE + r"\s+(" + _TITLE + r"(?:\s+" + _TITLE + r"){0,2})")
-_RE_PERSON_POST = re.compile(r"\b(" + _TITLE + r"(?:\s+" + _TITLE + r"){0,1})\s+" + _HONORIFIC_POST + r"\b")
-_RE_PERSON_FULL = re.compile(r"\b(" + _TITLE + r"(?:\s+" + _TITLE + r"){1,2})\b")
-# Name + abbreviated surname: "Süreyya G." — the case canonicalization must
-# fold back onto the full "Süreyya Gül".
-_RE_PERSON_INITIAL = re.compile(r"\b(" + _TITLE + r"\s+[A-ZÇĞİÖŞÜ])\.(?!\w)")
-
-# Title-case words that are usually not people (months, weekdays, common
-# sentence openers). Keeps the bare-2-word person rule from over-firing.
-_STOP_TITLE = {
-    "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar",
-    "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos",
-    "Eylül", "Ekim", "Kasım", "Aralık", "Bu", "Şu", "Bir", "The", "This",
-    "That", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-    "Sunday", "January", "February", "March", "April", "May", "June", "July",
-    "August", "September", "October", "November", "December",
-}
+# The structured-id detectors (IBAN / phone / national id), the org-suffix and
+# person/honorific patterns, the Title-case letter class and the stop-title set
+# are all LANGUAGE-SPECIFIC, so they live in the locale resources (runtime data)
+# and are compiled from the union of the active input locales — see
+# locales.heuristics(). The email pattern above is language-neutral and stays.
 
 Mention = Dict[str, Any]   # {surface, type, start, end, confidence}
 
@@ -107,7 +82,7 @@ Mention = Dict[str, Any]   # {surface, type, start, end, confidence}
 # ---------------------------------------------------------------- #
 def _norm(s: str) -> str:
     """Lowercase + strip diacritics + collapse non-alnum to single spaces.
-    Used for canonical matching so 'Süreyya G.' and 'sureyya g' compare equal."""
+    Used for canonical matching so 'Jane G.' and 'jane g' compare equal."""
     # U+0131 (dotless i) has no NFKD decomposition, so it would survive
     # lowercasing and then be deleted by the [^a-z] collapse below, fragmenting
     # a word into pieces. Fold it to 'i' first so such names normalize whole
@@ -136,15 +111,11 @@ def _edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
-# Courtesy titles that are NOT surnames, so they must be ignored when deciding
-# whether a surface is a bare first-name reference. The list is reference
-# vocabulary for whichever languages the connector data is in (this deployment
-# includes the post-name titles common in its message corpus).
-_HONORIFIC_TOKENS = frozenset({
-    "bey", "hanim", "hanimefendi", "beyefendi", "bay", "bayan",
-    "abla", "abi", "agabey", "agabi", "hoca", "hocam", "kardes",
-    "mr", "ms", "mrs", "miss", "sayin", "dr", "prof", "doc", "av",
-})
+def _honorifics() -> frozenset:
+    """Courtesy titles that are NOT surnames (so they're ignored when deciding
+    whether a surface is a bare first-name reference). Reference vocabulary from
+    the active input locales — already in the normalized form `_norm` produces."""
+    return locales.heuristics().honorific_tokens
 
 
 def _person_keys(canon: str) -> List[str]:
@@ -169,7 +140,8 @@ def _person_keys(canon: str) -> List[str]:
 def _first_token(canon: str) -> Optional[str]:
     """First non-honorific token of a normalized person name (the 'first
     name'), used to populate/query the asymmetric first-name index."""
-    parts = [p for p in _norm(canon).split() if p not in _HONORIFIC_TOKENS]
+    hon = _honorifics()
+    parts = [p for p in _norm(canon).split() if p not in hon]
     return parts[0] if parts else None
 
 
@@ -180,7 +152,8 @@ def _first_name_ref(canon: str) -> Optional[str]:
     it never folds onto a same-first-name person. This is what makes the
     first-name fold safe (asymmetric): only a bare reference *queries* the
     index; full names only *populate* it."""
-    parts = [p for p in _norm(canon).split() if p not in _HONORIFIC_TOKENS]
+    hon = _honorifics()
+    parts = [p for p in _norm(canon).split() if p not in hon]
     return parts[0] if len(parts) == 1 else None
 
 
@@ -202,25 +175,28 @@ def extract_regex(text: str) -> List[Mention]:
     out: List[Mention] = []
     seen: List[Tuple[int, int]] = []
     text = (text or "")[:MAX_EXTRACT_CHARS]   # bound regex work (DoS guard)
-    # priority order: structured ids first, then org, then person
-    for rx, typ, conf in ((_RE_EMAIL, "email", 0.99), (_RE_IBAN, "iban", 0.98),
-                          (_RE_TCKN, "tckn", 0.9), (_RE_PHONE, "phone", 0.9)):
+    h = locales.heuristics()
+    # priority order: structured ids first, then org, then person. Email is the
+    # one language-neutral pattern; the rest come from the active input locales.
+    for m in _RE_EMAIL.finditer(text):
+        _add(out, seen, m.group(0), "email", m.start(), m.end(), 0.99)
+    for typ, rx, conf in h.id_patterns:
         for m in rx.finditer(text):
             _add(out, seen, m.group(0), typ, m.start(), m.end(), conf)
-    for m in _RE_ORG.finditer(text):
+    for m in h.re_org.finditer(text):
         _add(out, seen, m.group(1), "org", m.start(1), m.end(1), 0.8)
-    for rx, conf in ((_RE_PERSON_PRE, 0.85), (_RE_PERSON_POST, 0.85)):
+    for rx, conf in ((h.re_person_pre, 0.85), (h.re_person_post, 0.85)):
         for m in rx.finditer(text):
             name = m.group(1)
             _add(out, seen, name, "person", m.start(1), m.end(1), conf)
-    for m in _RE_PERSON_FULL.finditer(text):
+    for m in h.re_person_full.finditer(text):
         name = m.group(1)
-        if any(w in _STOP_TITLE for w in name.split()):
+        if any(w in h.stop_title for w in name.split()):
             continue
         _add(out, seen, name, "person", m.start(1), m.end(1), 0.7)
-    for m in _RE_PERSON_INITIAL.finditer(text):
+    for m in h.re_person_initial.finditer(text):
         name = m.group(1)
-        if name.split()[0] in _STOP_TITLE:
+        if name.split()[0] in h.stop_title:
             continue
         _add(out, seen, name, "person", m.start(1), m.end(1), 0.65)
     out.sort(key=lambda x: x["start"])

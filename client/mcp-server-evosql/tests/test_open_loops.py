@@ -106,22 +106,22 @@ def test_thread_key():
 
 
 def test_regexes():
-    assert ol._QUESTION.search("dosyayı gönderir misin?")
-    assert ol._QUESTION.search("müsait misin")
-    assert ol._QUESTION.search("can you check this?")   # english relies on the '?'
-    # english bare questions without a '?' are NOT detected (known limitation)
-    assert not ol._QUESTION.search("let me know what you think")
-    assert not ol._QUESTION.search("tamam teşekkürler")
-
-    assert ol._PROMISE.search("yarın göndereceğim")
-    assert ol._PROMISE.search("I'll send it tomorrow")
-    assert ol._PROMISE.search("bakacağım buna")
-    assert not ol._PROMISE.search("nasılsın bugün")
-
-    assert ol._CLOSE.search("çok teşekkürler 🙏")
-    assert ol._CLOSE.search("tamamdır, halloldu")
-    assert ol._CLOSE.search("done, thanks")
-    assert not ol._CLOSE.search("hâlâ bekliyorum")
+    # Question / promise / closure detection is locale-driven (no literals in
+    # the code): locales.heuristics() compiles the union of the active input
+    # locales. Verify the MECHANISM here with English input; each locale's own
+    # vocabulary lives in its JSON resource, not in this test.
+    h = ol.locales.heuristics()
+    assert h.question.search("can you check this?")
+    assert not h.question.search("let me know what you think")   # no '?'
+    assert h.promise.search("I'll send it tomorrow")
+    assert h.promise.search("going to handle it")
+    assert not h.promise.search("how are you today")
+    assert h.close.search("done, thanks")
+    assert h.close.search("appreciate it 🙏")
+    assert not h.close.search("still waiting on this")
+    # the non-English input locale is active by default and supplies its own
+    # vocabulary from its JSON resource (validated in test_entities).
+    assert "tr" in ol.locales.available()
 
 
 def test_detect_my_teams_id():

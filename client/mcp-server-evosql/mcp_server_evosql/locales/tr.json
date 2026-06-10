@@ -1,0 +1,44 @@
+{
+  "ui": {
+    "good_morning": "GÜNAYDIN",
+    "waiting_on_you": "SENİ BEKLEYENLER",
+    "waiting_on_you_empty": "   — temiz, kimse beklemiyor 🎉",
+    "you_are_waiting": "SEN BEKLİYORSUN",
+    "promises": "SÖZ VERDİKLERİN",
+    "none": "   —",
+    "open_commitments": "açık taahhüt",
+    "stale_suffix": "eski (>90g, bekletilenler)",
+    "lang_hint": "ℹ️  Özetler şu an İngilizce. Türkçe için:  /language türkçe",
+    "lang_set": "✓ Özet dili ayarlandı: {lang}. Sonraki open_loops/self_model çalışmasında özetler {lang} olacak.",
+    "no_pending_approval": "Onay bekleyen yanıt yok.",
+    "sent": "✓ gönderildi",
+    "approved_dryrun": "◐ onaylandı (dry-run)",
+    "loop_closed": "  · loop kapandı",
+    "no_loop_to_queue": "Sıraya alınacak açık döngü yok.",
+    "queued_header": "📤 SIRAYA ALINDI ({n} — onay bekliyor)",
+    "queue_send_hint": "Göndermek için:  brief --approve <id>   ·   hepsi:  brief --approve",
+    "draft_replies": "✍️  TASLAK CEVAPLAR",
+    "draft_note": "(öneri — gönderilmedi)",
+    "llm_off": "(LLM kapalı — EVOSQL_LOOP_LLM=anthropic ayarla)",
+    "no_loop_for_draft": "Taslak için açık döngü bulunamadı.",
+    "suggested_reply": "✍️  ÖNERİLEN CEVAP:"
+  },
+  "heuristics": {
+    "question": ["\\bmi\\b", "\\bmu\\b", "\\bmı\\b", "\\bmü\\b", "misin", "musun", "edebilir"],
+    "promise": ["yapacağ", "yapıca", "gönderece", "hallede", "halledece", "bakacağ", "bakıca", "ayarlayaca", "ekleyece", "dönece", "dönerim", "iletece", "yollayaca", "yollarım", "çözece", "tamamlaya", "hazırlaya", "paylaşaca", "kontrol edece", "halledeyim", "bakayım", "yapayım"],
+    "close": ["çözüldü", "düzelt", "tamamd", "teşekkür", "halloldu", "sağ ?ol", "eyvallah", "süper", "harika", "tamam abi", "ok abi"],
+    "auto_from": ["bülten", "destek@"],
+    "honorific_pre": ["Doç", "Av", "Sayın", "Bay", "Bayan"],
+    "honorific_post": ["bey", "hanım", "hanim", "bey'?\\w*", "han\\w*"],
+    "honorific_tokens": ["bey", "hanim", "hanimefendi", "beyefendi", "bay", "bayan", "abla", "abi", "agabey", "agabi", "hoca", "hocam", "kardes", "sayin", "doc", "av"],
+    "org_suffix": ["A\\.?\\s?Ş\\.?", "Ltd\\.?(?:\\s?Şti\\.?)?", "San\\.?", "Tic\\.?", "Grup", "Kurumsal"],
+    "title_upper_extra": "ÇĞİÖŞÜ",
+    "title_lower_extra": "çğıöşü",
+    "stop_title": ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık", "Bu", "Şu", "Bir"],
+    "id_patterns": [
+      {"type": "iban", "re": "\\bTR\\d{2}(?:[ ]?\\d{2,4}){5,6}\\b", "flags": "i", "conf": 0.98},
+      {"type": "phone", "re": "(?<!\\d)(?:\\+90|0090|0)?[ ]?\\(?5\\d{2}\\)?[ ]?\\d{3}[ ]?\\d{2}[ ]?\\d{2}(?!\\d)", "conf": 0.9},
+      {"type": "tckn", "re": "(?<!\\d)[1-9]\\d{10}(?!\\d)", "conf": 0.9}
+    ]
+  }
+}

@@ -25,24 +25,15 @@ import os
 import re
 from datetime import datetime, timezone
 
+from . import locales
+
 SOURCES = (("gmail", "gmail"), ("teams", "teams_chat"), ("outlook", "outlook"),
            ("slack", "slack"), ("imessage", "imessage"))
 ACTIONABLE_DAYS = 90          # older than this = stale, kept but deprioritised
 PROMISE_DAYS = 45             # a promise older than this is probably moot
-_QUESTION = re.compile(r'\?|\bmi\b|\bmu\b|\bmı\b|\bmü\b|misin|musun|edebilir', re.I)
-# things YOU said you'd do, in your OUTBOUND messages -> "promises I made"
-_PROMISE = re.compile(
-    r'(yapacağ|yapıca|gönderece|hallede|halledece|bakacağ|bakıca|ayarlayaca|'
-    r'ekleyece|dönece|dönerim|iletece|yollayaca|yollarım|çözece|tamamlaya|'
-    r'hazırlaya|paylaşaca|kontrol edece|halledeyim|bakayım|yapayım|'
-    r"i will\b|i'll\b|going to|will do|will send|will check|let me)", re.I)
-
-_CLOSE = re.compile(
-    r'(çözüldü|düzelt|tamamd|teşekkür|halloldu|sağ ?ol|thank|done|eyvallah|'
-    r'süper|harika|tamam abi|ok abi|abandon|👍|🙏|🙌|✅)', re.I)
-_AUTO_FROM = re.compile(
-    r'(noreply|no-reply|donotreply|notification|mailer|newsletter|bounce|'
-    r'bülten|destek@|support@|info@|news@)', re.I)
+# Language-specific detectors — questions, "promises I made", closure acks, and
+# automated-sender markers — are runtime data, NOT literals here: they come from
+# the union of the active input locales (locales.heuristics(), default en+tr).
 _AUTO_LABELS = ("CATEGORY_PROMOTIONS", "CATEGORY_UPDATES",
                 "CATEGORY_FORUMS", "CATEGORY_SOCIAL")
 # Language-neutral automated/notification CONTENT markers: one-time / OTP /
@@ -105,7 +96,7 @@ def _is_auto(d):
     # counts), which is exactly why automated SMS senders leaked into the brief
     # as "waiting on you" — this filter is what stops them.
     sender = d.get("from") or d.get("chat") or d.get("handle") or ""
-    if _AUTO_FROM.search(sender):
+    if locales.heuristics().auto_from.search(sender):
         return True
     lab = str(d.get("labels") or "")
     if any(x in lab for x in _AUTO_LABELS):
@@ -332,7 +323,7 @@ def job_open_loops(backend, ns: str) -> int:
         }
         if out:
             # I sent last — only a loop if I ASKED something and they haven't replied
-            if had_their_msg and _QUESTION.search(text or ""):
+            if had_their_msg and locales.heuristics().question.search(text or ""):
                 # counterparty is the person I'm waiting on, not me. For mail the
                 # last (outbound) message's "from" is my own address; pick the
                 # other party from the inbound side (same fix as the promise path).
@@ -345,14 +336,15 @@ def job_open_loops(backend, ns: str) -> int:
         # last message inbound -> someone is waiting on me
         if source not in ("teams", "slack", "imessage") and not had_my_reply:
             continue                                   # one-way mail (newsletter)
-        if bool(_CLOSE.search(text or "")) and len((text or "")) < 70:
+        if bool(locales.heuristics().close.search(text or "")) and len((text or "")) < 70:
             continue                                   # short ack -> closed
         base["direction"] = "awaiting_me"
         open_now[loop_key] = base
 
     # --- promises: things YOU said you'd do, not obviously closed since -----
     for (source, key), msgs in threads.items():
-        mine = [m for m in msgs if m[1] and _PROMISE.search(m[4] or "")]
+        mine = [m for m in msgs if m[1]
+                and locales.heuristics().promise.search(m[4] or "")]
         if not mine:
             continue
         t, out, who, subj, text, auto = mine[-1]      # your most recent promise
@@ -360,7 +352,8 @@ def job_open_loops(backend, ns: str) -> int:
         if age > PROMISE_DAYS:
             continue
         # a later inbound "thanks/done" implies it got handled
-        if any(m[0] > t and (not m[1]) and _CLOSE.search(m[4] or "") for m in msgs):
+        if any(m[0] > t and (not m[1])
+               and locales.heuristics().close.search(m[4] or "") for m in msgs):
             continue
         inbound_who = [m[2] for m in msgs if not m[1]]
         cp = inbound_who[-1] if inbound_who else who    # the other party, not me

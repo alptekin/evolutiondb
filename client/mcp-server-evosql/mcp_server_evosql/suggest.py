@@ -1,6 +1,6 @@
 """
 suggest — read -> SUGGEST: draft a reply for an open loop. The next step past the
-brief: not just "Ulaş is waiting on you", but "here's a reply you could send".
+brief: not just "Ada is waiting on you", but "here's a reply you could send".
 
 Strictly a draft. It writes nothing back to anyone and sends nothing — it prints
 a suggestion the user copies, edits, sends. Grounds the draft in the actual
@@ -19,6 +19,7 @@ import os
 import sys
 
 from . import open_loops as ol
+from . import locales
 
 
 def _index_threads(backend, ns):
@@ -81,7 +82,7 @@ def _render_thread(msgs, name):
 def draft_reply(thread_msgs, loop, self_role, name, language) -> str:
     be = os.environ.get("EVOSQL_LOOP_LLM", os.environ.get("EVOSQL_PROFILE_LLM", "")).strip().lower()
     if be not in ("anthropic", "sonnet"):
-        return "(LLM kapalı — EVOSQL_LOOP_LLM=anthropic ayarla)"
+        return locales.t("llm_off", language)
     convo = _render_thread(thread_msgs, name)
     prompt = (
         f"You are drafting a reply that {name} ({self_role or 'the user'}) will "
@@ -199,18 +200,19 @@ def main() -> int:
         scheduler.discover_namespaces(backend) or ["default"])[0]
 
     res = suggest_replies(backend, ns, top=args.top, loop_key=args.loop)
+    lang = res.get("language")
     if not res["suggestions"]:
-        print("Taslak için açık döngü bulunamadı.")
+        print(locales.t("no_loop_for_draft", lang))
         return 0
     for s in res["suggestions"]:
         print(f"\n{'='*68}")
         print(f"🔴 {s['counterparty']} · {s.get('age_days','?')}g · "
               f"{s['what'][:60]}")
         print(f"{'-'*68}")
-        print("✍️  ÖNERİLEN CEVAP:\n")
+        print(locales.t("suggested_reply", lang) + "\n")
         print(s["draft"])
     print(f"\n{'='*68}")
-    print("(öneri — gönderilmedi; kopyala/düzenle/gönder sende)")
+    print(locales.t("draft_note", lang))
     return 0
 
 
