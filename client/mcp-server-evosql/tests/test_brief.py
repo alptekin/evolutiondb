@@ -21,7 +21,7 @@ NS = "alp_test"
 
 def _loop(**kw):
     base = {"kind": "open_loop", "status": "open", "direction": "awaiting_me",
-            "counterparty": "X", "snippet": "bir şey", "age_days": 1,
+            "counterparty": "X", "snippet": "something", "age_days": 1,
             "actionable": True}
     base.update(kw)
     return base
@@ -29,18 +29,18 @@ def _loop(**kw):
 
 def test_collect_buckets_and_filters():
     b = FakeBackend()
-    b.put(b.loops_store, NS, "l1", _loop(counterparty="Ulaş", loop_type="request"))
+    b.put(b.loops_store, NS, "l1", _loop(counterparty="Ada", loop_type="request"))
     b.put(b.loops_store, NS, "l2", _loop(counterparty="Spam", loop_type="fyi"))  # dropped
     b.put(b.loops_store, NS, "l3", _loop(direction="awaiting_them", counterparty="Boss"))
-    b.put(b.loops_store, NS, "l4", _loop(direction="i_owe_them", counterparty="Faruk"))
-    b.put(b.loops_store, NS, "l5", _loop(counterparty="Eski", actionable=False))     # stale
+    b.put(b.loops_store, NS, "l4", _loop(direction="i_owe_them", counterparty="Frank"))
+    b.put(b.loops_store, NS, "l5", _loop(counterparty="Stale", actionable=False))     # stale
     b.put(b.loops_store, NS, "l6", _loop(counterparty="Done", status="resolved"))    # ignored
 
     data = brief.collect(b, NS)
-    assert [d["counterparty"] for d in data["waiting_me"]] == ["Ulaş"]   # fyi dropped
+    assert [d["counterparty"] for d in data["waiting_me"]] == ["Ada"]   # fyi dropped
     assert [d["counterparty"] for d in data["waiting_them"]] == ["Boss"]
-    assert [d["counterparty"] for d in data["promises"]] == ["Faruk"]
-    assert [d["counterparty"] for d in data["stale"]] == ["Eski"]
+    assert [d["counterparty"] for d in data["promises"]] == ["Frank"]
+    assert [d["counterparty"] for d in data["stale"]] == ["Stale"]
 
 
 def test_collect_orders_high_priority_first():
@@ -52,13 +52,23 @@ def test_collect_orders_high_priority_first():
 
 
 def test_render_shows_counts_and_sections():
-    data = {"self": {"role": {"summary": "Kurucu"}}, "waiting_me": [],
+    # default render is English (language-neutral default)
+    data = {"self": {"role": {"summary": "Founder"}}, "waiting_me": [],
             "waiting_them": [], "promises": [], "stale": []}
     out = brief.render(data, name="alp", lang_set=True)
-    assert "GÜNAYDIN ALP" in out
-    assert "Kurucu" in out
-    assert "SENİ BEKLEYENLER (0)" in out
-    assert "kimse beklemiyor" in out
+    assert "GOOD MORNING ALP" in out
+    assert "Founder" in out
+    assert "WAITING ON YOU (0)" in out
+    assert "all clear" in out
+
+
+def test_render_localizes_to_turkish_preference():
+    # when the user's language preference is Turkish, the brief renders in
+    # Turkish — driven by runtime data (the locale resource), not code literals
+    data = {"self": {}, "waiting_me": [], "waiting_them": [], "promises": [],
+            "stale": []}
+    out = brief.render(data, name="alp", lang_set=True, lang="türkçe")
+    assert "GÜNAYDIN" in out and "SENİ BEKLEYENLER" in out
 
 
 def test_render_language_nag_only_when_unset():
@@ -70,11 +80,11 @@ def test_render_language_nag_only_when_unset():
 
 def test_render_lists_waiting_lines():
     data = {"self": {}, "waiting_me": [
-        {"counterparty": "Ulaş", "age_days": 3, "what": "raporu gönder",
+        {"counterparty": "Ada", "age_days": 3, "what": "send the report",
          "priority": "high"}],
         "waiting_them": [], "promises": [], "stale": []}
     out = brief.render(data, name="alp", lang_set=True)
-    assert "Ulaş" in out and "raporu gönder" in out
+    assert "Ada" in out and "send the report" in out
     assert "⭐" in out                                   # high-priority marker
 
 
