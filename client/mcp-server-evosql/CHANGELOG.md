@@ -2,6 +2,38 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.12.1 — Code-review hardening (19 fixes)
+
+Adversarially-verified, bug-focused review of the personal-assistant agent. No
+SQL injection was found; all fixes are test-gated (full server-free suite green,
+7 new regression tests).
+
+### Fixed
+- **Entity catalog corruption (critical)**: two different people sharing a first
+  name (`Ali Veli` / `Ali Can`) were fused into one entity, corrupting the graph,
+  episode and salience layers built on it. Honorific folding (`Ahmet bey` →
+  `Ahmet Yılmaz`) is preserved via an asymmetric, ambiguity-aware first-name
+  index; `_norm` also no longer mangles Turkish dotless-ı.
+- **Silent memory truncation**: a long `save_memory` fact is now trimmed-and-
+  flagged via `_fit_payload` instead of being silently cut by the engine's 8 KB
+  value buffer (which corrupted the row while `save_memory` reported success).
+- **OAuth proxy**: rejects public clients with empty / non-https `redirect_uris`
+  and requires an exact registered-URI match (open-redirect / auth-code leak);
+  caps + sweeps in-memory and persisted state; blocks auth-code replay.
+- **Embedded mode**: the spawned `evosql-server` is now reaped on SIGTERM/SIGINT
+  (no orphan on `docker stop` / systemd stop); the lazy first-connect is locked
+  so concurrent first HTTP requests can't double-spawn it.
+- **Decay** no longer clobbers a concurrent `save()` (re-reads before patching).
+- **Graph boost** reaches rows saved after the mention index first warms.
+- **Embedding migration** between two OpenAI models is no longer a silent no-op.
+- **Identity merge** folds all matched identities instead of orphaning some.
+- **Open-loop direction** isn't inverted when a single conversation makes the
+  "me" detection ambiguous.
+- **Setup** writes the operator's real connection settings (not admin/admin).
+- Plus minor fixes: UTC-naive timestamps, graph weight accumulation, `www.`
+  prefix stripping, search query tokenization, scheduler audit-log growth, and
+  reconcile no longer passing an opaque entity id to the LLM adjudicator.
+
 ## 1.12.0 — Embedded mode auto-fetches its binary
 
 ### Added
