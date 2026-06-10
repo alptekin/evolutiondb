@@ -278,6 +278,13 @@ def job_audit_prune(backend, ns: str) -> int:
     return audit.prune(backend, ns)
 
 
+def job_rules(backend, ns: str) -> int:
+    """Phase-4 automation: evaluate the user's rules — queue drafts for
+    approval, never send. Inherently opt-in (no enabled rules -> no-op)."""
+    from . import rules
+    return rules.job_rules(backend, ns)
+
+
 def job_outbox_flush(backend, ns: str) -> int:
     """Assistant action loop: deliver outbox replies whose undo window has
     elapsed (approve_send with EVOSQL_SEND_UNDO_SECONDS schedules instead of
@@ -309,6 +316,9 @@ JOBS: List[Job] = [
     # audit pruning bounds the tool-audit trail per namespace.
     Job("retention",        "daily@05:45",       job_retention),
     Job("audit_prune",      "daily@06:15",       job_audit_prune),
+    # automation (Phase 4): rules queue drafts for approval; no rules = no-op.
+    # Hourly, AFTER the half-hourly open_loops refresh so ages are current.
+    Job("rules",            "hourly",            job_rules),
 ]
 
 
