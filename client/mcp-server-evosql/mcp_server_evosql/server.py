@@ -523,6 +523,11 @@ class MemoryBackend:
         # Sleep-time scheduler (Step 18): per-job state + audit log so the
         # background jobs run idempotently and survive restarts.
         self.job_runs_store = f"{prefix}_job_runs"
+        # Governance (Phase 3): tenant-scoped append-only audit of mutating
+        # tool calls — who/which-tool/when/outcome, identifiers only, no
+        # bodies/PII. Lives in the tenant's own DB so it inherits the engine's
+        # isolation and dies with the tenant. See audit.py.
+        self.audit_store = f"{prefix}_audit"
         # Decay & archival (Step 20): row access times in a small side store
         # (so a search never rewrites the main record just to record a read);
         # the daily decay pass flags faded rows archived=true. Opt-in via
@@ -561,6 +566,7 @@ class MemoryBackend:
                   ("MEMORY STORE", self.episodes_store),
                   ("MEMORY STORE", self.profile_store),
                   ("MEMORY STORE", self.job_runs_store),
+                  ("MEMORY STORE", self.audit_store),
                   ("MEMORY STORE", self.access_store),
                   ("MEMORY STORE", self.salience_store),
                   ("MEMORY STORE", self.semantic_store),
@@ -3197,9 +3203,43 @@ class MCPServer:
         ident = identity or self.default_identity
         deny = self._rbac_error(name, ident)
         if deny is not None:
+            # Audit the denied attempt — a viewer probing mutating tools must
+            # leave a tenant-visible trace. Best-effort: never block the reply.
+            try:
+                from . import audit
+                audit.record(self._backend_for(ident), ident, name, "denied",
+                             args=args)
+            except Exception:
+                pass
             return deny
         b = self._backend_for(ident)
         uid = ident.user_id
+        if name not in self._MUTATING_TOOLS:
+            return self._dispatch_tool(name, args, ident, b, uid)
+        # Mutating tools: audit who/what/when + the outcome (after execution,
+        # so the outcome is known). The audit write is best-effort by design.
+        from . import audit
+        t0 = time.time()
+        try:
+            result = self._dispatch_tool(name, args, ident, b, uid)
+        except Exception:
+            try:
+                audit.record(b, ident, name, "exception", args=args,
+                             duration_ms=int((time.time() - t0) * 1000))
+            except Exception:
+                pass
+            raise
+        try:
+            outcome = ("error" if isinstance(result, dict)
+                       and result.get("error") else "ok")
+            audit.record(b, ident, name, outcome, args=args, result=result,
+                         duration_ms=int((time.time() - t0) * 1000))
+        except Exception:
+            pass
+        return result
+
+    def _dispatch_tool(self, name: str, args: Dict[str, Any], ident,
+                        b: MemoryBackend, uid: str) -> Dict[str, Any]:
         if name == "save_memory":
             fact = args.get("fact") or ""
             if not fact.strip():
