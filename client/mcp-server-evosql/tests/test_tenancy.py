@@ -335,3 +335,23 @@ def test_rbac_viewer_token_denied_end_to_end(live):
     assert "error" in denied and "permission denied" in denied["error"]
     allowed = srv._call_tool("search_memory", {"query": "anything"}, ident)
     assert allowed.get("ok") is True
+
+
+@liveonly
+def test_scheduler_runs_each_tenant_isolated(live):
+    # the scheduler discovers tenants from the registry and runs each tenant's
+    # jobs in the tenant's own database; job state lands in the tenant DB, not
+    # the control plane.
+    from mcp_server_evosql import scheduler
+    srv, admin = live
+    by_tenant = scheduler.run_due_all(admin, only="outbox_flush", force=True)
+    assert set(by_tenant) >= {"acme", "globex"}
+    for tid in ("acme", "globex"):
+        recs = by_tenant[tid]
+        assert any(r["job"] == "outbox_flush" and r["last_status"] == "ok"
+                   for r in recs), (tid, recs)
+    # state was written into each tenant's OWN job_runs store...
+    acme_b = scheduler._tenant_backend({"tenant_id": "acme"})
+    assert scheduler._state(acme_b, "outbox_flush") is not None
+    # ...and NOT into the control-plane (admin/evosql) backend
+    assert scheduler._state(admin, "outbox_flush") is None
