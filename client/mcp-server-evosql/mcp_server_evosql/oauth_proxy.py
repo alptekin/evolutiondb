@@ -212,9 +212,12 @@ class _Store:
         self._mem.pop(key, None)
         ns, k = _e(self._namespace), _e(key)
         def run(cur):
+            # engine grammar wants literal NS/KEY tokens (evoparser.y:2350) —
+            # the old mem_namespace/mem_key form was a silent parse error, so
+            # expired codes/tokens were never actually removed from the DB.
             cur.execute(
                 f"MEMORY DELETE FROM {self._STORE_NAME} "
-                f"WHERE mem_namespace = '{ns}' AND mem_key = '{k}'")
+                f"WHERE NS = '{ns}' AND KEY = '{k}'")
         self._run(run)
 
     def sweep_expired(self) -> int:

@@ -265,6 +265,19 @@ def job_self_model(backend, ns: str) -> int:
     return self_model.job_self_model(backend, ns)
 
 
+def job_retention(backend, ns: str) -> int:
+    """Phase-3 governance: TTL hard-delete over the primary store. No-op
+    unless EVOSQL_RETENTION_DAYS is set (the default)."""
+    from . import retention
+    return retention.job_retention(backend, ns)
+
+
+def job_audit_prune(backend, ns: str) -> int:
+    """Phase-3 governance: bound the per-namespace tool-audit trail."""
+    from . import audit
+    return audit.prune(backend, ns)
+
+
 def job_outbox_flush(backend, ns: str) -> int:
     """Assistant action loop: deliver outbox replies whose undo window has
     elapsed (approve_send with EVOSQL_SEND_UNDO_SECONDS schedules instead of
@@ -292,6 +305,10 @@ JOBS: List[Job] = [
     Job("self_model",       "daily@05:30",       job_self_model),
     # action loop: deliver scheduled sends past their undo window, frequently.
     Job("outbox_flush",     "every:30",          job_outbox_flush),
+    # governance (Phase 3): retention is a no-op without EVOSQL_RETENTION_DAYS;
+    # audit pruning bounds the tool-audit trail per namespace.
+    Job("retention",        "daily@05:45",       job_retention),
+    Job("audit_prune",      "daily@06:15",       job_audit_prune),
 ]
 
 
@@ -352,9 +369,12 @@ def _prune_audit(backend, job: str, keep: int = AUDIT_KEEP_PER_JOB) -> None:
     mine.sort()   # oldest ts first
     for _, k in mine[:len(mine) - keep]:
         try:
+            # engine grammar wants literal NS/KEY tokens (evoparser.y:2350) —
+            # the old mem_namespace/mem_key form was a silent parse error, so
+            # audit rows were never actually pruned against a real engine.
             backend._exec(
                 f"MEMORY DELETE FROM {backend.job_runs_store} "
-                f"WHERE mem_namespace = 'audit' AND mem_key = '{_e(k)}'")
+                f"WHERE NS = 'audit' AND KEY = '{_e(k)}'")
         except Exception:
             pass
 
