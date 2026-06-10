@@ -47,6 +47,14 @@ _ARG_FIELDS = {
     "send_scheduled": lambda a: {},
     "review_pr":      lambda a: {"pr": a.get("pr"),
                                  "diff_len": len(a.get("diff") or "")},
+    "create_template": lambda a: {"name": a.get("name"),
+                                  "body_len": len(a.get("body") or ""),
+                                  "channel": a.get("channel")},
+    "apply_template":  lambda a: {"name": a.get("name"),
+                                  "loop_key": a.get("loop_key"),
+                                  "has_to": bool(a.get("to")),
+                                  "var_count": len(a.get("variables") or {})},
+    "delete_template": lambda a: {"name": a.get("name")},
 }
 
 
