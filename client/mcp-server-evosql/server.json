@@ -3,7 +3,7 @@
   "name": "io.github.alptekin/evolutiondb-memory",
   "title": "EvolutionDB Long-Term Memory",
   "description": "Persistent long-term memory for Claude Desktop / Claude Code, backed by EvolutionDB.",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "repository": {
     "url": "https://github.com/alptekin/evolutiondb",
     "source": "github",
@@ -15,7 +15,7 @@
     {
       "registryType": "pypi",
       "identifier": "mcp-server-evolutiondb",
-      "version": "1.14.0",
+      "version": "1.15.0",
       "runtimeHint": "python3",
       "transport": {
         "type": "stdio"
