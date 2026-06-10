@@ -46,7 +46,7 @@ from .profile    import build_profile as _build_profile
 
 PROTOCOL_VERSION = "2024-11-05"          # MCP version we speak
 SERVER_NAME      = "evolutiondb-memory"
-SERVER_VERSION   = "1.13.1"
+SERVER_VERSION   = "1.14.0"
 
 # Step 17: a row whose profile-cluster similarity clears this counts as
 # "in the user's interest" and survives the signal filter even with no direct
