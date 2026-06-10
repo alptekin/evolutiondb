@@ -1,5 +1,5 @@
 """
-test_evidence — Adım 19 co-presented evidence policy (anti-confabulation).
+test_evidence — Step 19 co-presented evidence policy (anti-confabulation).
 
 A synthesized row must never travel without the evidence the model has to
 cite. The policy is enforced as a data contract:
@@ -63,30 +63,30 @@ def test_policy() -> bool:
     # auto-prepare path (the prepared-statement re-use the engine fix covers).
     topics = []
     for t in range(10):
-        srcs = [b.save(ns, f"Konu{t} kaynak {j}: ilk cumle burada. Ikinci "
-                           f"cumle de var. Ucuncu cumle fazlalik {t}{j}.")
+        srcs = [b.save(ns, f"Topic{t} source {j}: first sentence here. Second "
+                           f"sentence too. Third sentence extra {t}{j}.")
                 for j in range(3)]
-        syn_key = b.save(ns, f"OZET konu{t} musteri gorusmesi sonucu",
+        syn_key = b.save(ns, f"SUMMARY topic{t} customer meeting result",
                          tags=["summary"], derived_from=srcs)
         topics.append((t, syn_key, srcs))
-    plain_key = b.save(ns, "duz bir kayit, sentez degil")
+    plain_key = b.save(ns, "a plain record, not a synthesis")
 
     ok = 0
     for t, syn_key, srcs in topics:
-        row = next((r for r in b.search(ns, f"OZET konu{t} musteri", limit=5)
+        row = next((r for r in b.search(ns, f"SUMMARY topic{t} customer", limit=5)
                     if r["key"] == syn_key), None)
         assert row is not None, f"synthesized row {t} not found"
         assert row.get("synthesized") and row.get("citation_required") is True, row
         exc = {e["key"]: e["snippet"] for e in (row.get("evidence_excerpts") or [])}
         assert set(exc) == set(srcs), f"excerpts must cover all sources: {list(exc)}"
         for k, sn in exc.items():       # each excerpt: real, short, ≤2 sentences
-            assert sn and sn.count(".") <= 2 and "ilk cumle burada" in sn, (k, sn)
+            assert sn and sn.count(".") <= 2 and "first sentence here" in sn, (k, sn)
         ok += 1
     print(f"  ok  co-citation contract: {ok}/10 synthesized rows carry "
           f"complete evidence_excerpts")
 
     # plain rows carry no citation fields
-    plain = next(r for r in b.search(ns, "duz bir kayit", limit=5)
+    plain = next(r for r in b.search(ns, "a plain record", limit=5)
                  if r["key"] == plain_key)
     assert not plain.get("synthesized") and "evidence_excerpts" not in plain \
         and "citation_required" not in plain, plain
@@ -98,7 +98,7 @@ def main() -> int:
     test_snippet_unit()
     test_tool_rule()
     test_policy()
-    print("OK — Adım 19 co-presented evidence: excerpts + citation_required + "
+    print("OK — Step 19 co-presented evidence: excerpts + citation_required + "
           "tool rule + 10/10 co-citable")
     return 0
 

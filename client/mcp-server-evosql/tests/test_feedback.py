@@ -1,5 +1,5 @@
 """
-test_feedback — Adım 11 implicit-feedback wiring, end-to-end through the
+test_feedback — Step 11 implicit-feedback wiring, end-to-end through the
 MCP server over JSON-RPC stdio (no embedding provider needed; substring
 search returns results and the feedback log is captured regardless).
 
@@ -97,7 +97,7 @@ def main() -> int:
         bad = _call(p, 40, "feedback", {"query_id": "deadbeef", "used_keys": []})
         assert bad.get("error"), f"unknown query_id should error: {bad}"
 
-        print("OK — Adım 11 feedback: query_id + feedback recording + "
+        print("OK — Step 11 feedback: query_id + feedback recording + "
               "used⊆returned validation + unknown-id error")
         return 0
     finally:

@@ -18,11 +18,11 @@ from mcp_server_evosql import identity as ident
 
 class SlugifyTests(unittest.TestCase):
     def test_basic(self):
-        self.assertEqual(ident.slugify("Orhan Özdoğan"), "orhan_ozdogan")
+        self.assertEqual(ident.slugify("John Doe"), "john_doe")
 
     def test_punctuation(self):
-        self.assertEqual(ident.slugify("Onur Çobanoğlu | Wechip"),
-                         "onur_cobanoglu_wechip")
+        self.assertEqual(ident.slugify("Alex Kim | Acme"),
+                         "alex_kim_acme")
 
     def test_only_emoji_falls_back_to_random(self):
         s = ident.slugify("🚀✨")
@@ -32,32 +32,32 @@ class SlugifyTests(unittest.TestCase):
 
 class FindByAliasTests(unittest.TestCase):
     records = [
-        {"_key": "identity_orhan_ozdogan",
-         "canonical_name": "Orhan Özdoğan",
-         "aliases": ["Orhan Özdoğan", "Orhan Özdoğan | Wechip"]},
-        {"_key": "identity_bugra_can_orhan",
-         "canonical_name": "Buğra Can Orhan",
-         "aliases": ["Buğra Can Orhan | Wechip"]},
+        {"_key": "identity_john_doe",
+         "canonical_name": "John Doe",
+         "aliases": ["John Doe", "John Doe | Acme"]},
+        {"_key": "identity_john_major",
+         "canonical_name": "John Major",
+         "aliases": ["John Major | Acme"]},
     ]
 
     def test_exact_match(self):
         out = ident.find_identity_by_alias(self.records,
-                                           "Orhan Özdoğan | Wechip")
-        self.assertEqual(out["_key"], "identity_orhan_ozdogan")
+                                           "John Doe | Acme")
+        self.assertEqual(out["_key"], "identity_john_doe")
 
     def test_whitespace_tolerant(self):
         out = ident.find_identity_by_alias(self.records,
-                                           "  Orhan   Özdoğan  ")
-        self.assertEqual(out["_key"], "identity_orhan_ozdogan")
+                                           "  John   Doe  ")
+        self.assertEqual(out["_key"], "identity_john_doe")
 
     def test_case_insensitive(self):
-        out = ident.find_identity_by_alias(self.records, "orhan özdoğan")
-        self.assertEqual(out["_key"], "identity_orhan_ozdogan")
+        out = ident.find_identity_by_alias(self.records, "john doe")
+        self.assertEqual(out["_key"], "identity_john_doe")
 
     def test_substring_does_not_match(self):
-        # "Orhan" alone is a substring of two different people — it
+        # "John" alone is a substring of two different people — it
         # must not collide with either via exact-alias matching.
-        out = ident.find_identity_by_alias(self.records, "Orhan")
+        out = ident.find_identity_by_alias(self.records, "John")
         self.assertIsNone(out)
 
     def test_no_records(self):
@@ -69,28 +69,28 @@ class FindByAliasTests(unittest.TestCase):
 
 class ResolveAliasesTests(unittest.TestCase):
     records = [
-        {"_key": "identity_orhan_ozdogan",
-         "canonical_name": "Orhan Özdoğan",
-         "aliases": ["Orhan Özdoğan", "Orhan Özdoğan | Wechip"]},
-        {"_key": "identity_bugra_can_orhan",
-         "canonical_name": "Buğra Can Orhan",
-         "aliases": ["Buğra Can Orhan | Wechip"]},
+        {"_key": "identity_john_doe",
+         "canonical_name": "John Doe",
+         "aliases": ["John Doe", "John Doe | Acme"]},
+        {"_key": "identity_john_major",
+         "canonical_name": "John Major",
+         "aliases": ["John Major | Acme"]},
     ]
 
     def test_full_name_returns_single_identity(self):
-        out = ident.resolve_aliases(self.records, "Orhan Özdoğan")
+        out = ident.resolve_aliases(self.records, "John Doe")
         self.assertEqual(set(out),
-                         {"Orhan Özdoğan", "Orhan Özdoğan | Wechip"})
+                         {"John Doe", "John Doe | Acme"})
 
     def test_substring_returns_both_when_ambiguous(self):
-        # "orhan" matches both records — caller has to disambiguate.
+        # "john" matches both records — caller has to disambiguate.
         # The function still returns aliases so the result is auditable.
-        out = ident.resolve_aliases(self.records, "orhan")
-        self.assertIn("Orhan Özdoğan", out)
-        self.assertIn("Buğra Can Orhan | Wechip", out)
+        out = ident.resolve_aliases(self.records, "john")
+        self.assertIn("John Doe", out)
+        self.assertIn("John Major | Acme", out)
 
     def test_no_match(self):
-        self.assertEqual(ident.resolve_aliases(self.records, "Alptekin"),
+        self.assertEqual(ident.resolve_aliases(self.records, "Nobody"),
                          [])
 
     def test_empty_query(self):
@@ -99,8 +99,8 @@ class ResolveAliasesTests(unittest.TestCase):
     def test_deterministic_order(self):
         # Identical inputs must always return identical lists so the
         # caller can fingerprint the expansion set in logs or tests.
-        a = ident.resolve_aliases(self.records, "wechip")
-        b = ident.resolve_aliases(self.records, "wechip")
+        a = ident.resolve_aliases(self.records, "acme")
+        b = ident.resolve_aliases(self.records, "acme")
         self.assertEqual(a, b)
         self.assertEqual(a, sorted(a))
 
@@ -108,31 +108,31 @@ class ResolveAliasesTests(unittest.TestCase):
 class PlanMergeTests(unittest.TestCase):
     def test_create_new_when_nothing_matches(self):
         plan = ident.plan_merge([],
-                                 ["Orhan Özdoğan", "Orhan Özdoğan | Wechip"])
+                                 ["John Doe", "John Doe | Acme"])
         self.assertEqual(plan["action"], "create")
         self.assertIsNone(plan["absorbed_key"])
-        self.assertEqual(plan["record"]["canonical_name"], "Orhan Özdoğan")
+        self.assertEqual(plan["record"]["canonical_name"], "John Doe")
         self.assertEqual(set(plan["record"]["aliases"]),
-                         {"Orhan Özdoğan", "Orhan Özdoğan | Wechip"})
+                         {"John Doe", "John Doe | Acme"})
 
     def test_extend_existing_when_one_alias_overlaps(self):
         existing = [{
-            "_key": "identity_orhan_ozdogan",
-            "canonical_name": "Orhan Özdoğan",
-            "aliases": ["Orhan Özdoğan"],
+            "_key": "identity_john_doe",
+            "canonical_name": "John Doe",
+            "aliases": ["John Doe"],
             "sources": {"teams": ["abc-123"]},
-            "tags": ["wechip"],
+            "tags": ["acme"],
         }]
         plan = ident.plan_merge(existing,
-                                 ["Orhan Özdoğan",
-                                  "Orhan Özdoğan | Wechip"])
+                                 ["John Doe",
+                                  "John Doe | Acme"])
         self.assertEqual(plan["action"], "extend")
-        self.assertEqual(plan["absorbed_key"], "identity_orhan_ozdogan")
+        self.assertEqual(plan["absorbed_key"], "identity_john_doe")
         # Original sources and tags survive.
         self.assertEqual(plan["record"]["sources"], {"teams": ["abc-123"]})
-        self.assertIn("wechip", plan["record"]["tags"])
+        self.assertIn("acme", plan["record"]["tags"])
         # New alias added.
-        self.assertIn("Orhan Özdoğan | Wechip", plan["record"]["aliases"])
+        self.assertIn("John Doe | Acme", plan["record"]["aliases"])
 
     def test_explicit_canonical_overrides(self):
         existing = [{

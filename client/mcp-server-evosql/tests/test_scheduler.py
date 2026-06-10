@@ -1,5 +1,5 @@
 """
-test_scheduler — Adım 18 sleep-time compute scheduler.
+test_scheduler — Step 18 sleep-time compute scheduler.
 
 Unit:
   - Schedule.due covers interval (hourly), time-of-day (daily), and weekly
@@ -92,7 +92,7 @@ def test_run() -> bool:
     # entities — exactly what the hourly jobs are supposed to backfill.
     for i in range(22):
         _put(b, ns, f"row{i}", {
-            "fact": f"Acme A.Ş. ile gorusme {i} yapildi",
+            "fact": f"Met with Acme Inc for meeting {i}",
             "created": now - i * 1800})
 
     # run every job once (forced)
@@ -175,10 +175,10 @@ def test_large_record() -> bool:
     now = time.time()
     # a row near the 8 KB cap: seedable as-is, but adding a salience field (the
     # pre-fix behaviour) would have tipped it over and killed the job. ~7.2 KB.
-    huge = "Acme A.Ş. " + "veri " * 1440
+    huge = "Acme Inc " + "data " * 1440
     _put(b, ns, "huge", {"fact": huge, "saved_at": now - 400 * 86400})
     for i in range(6):
-        _put(b, ns, f"ok{i}", {"fact": f"Acme A.Ş. gorusme {i}", "saved_at": now})
+        _put(b, ns, f"ok{i}", {"fact": f"Acme Inc meeting {i}", "saved_at": now})
 
     ran = {r["job"]: r for r in SCH.run_due(b, force=True)}
     for j in ("extract_entities", "salience", "decay"):
@@ -198,7 +198,7 @@ def main() -> int:
     test_schedule()
     test_run()
     test_large_record()
-    print("OK — Adım 18 scheduler: schedules + idempotent runs + audit log "
+    print("OK — Step 18 scheduler: schedules + idempotent runs + audit log "
           "+ error isolation + failure ratio + 8KB-safe writes")
     return 0
 

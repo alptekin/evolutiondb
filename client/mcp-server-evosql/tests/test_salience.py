@@ -1,5 +1,5 @@
 """
-test_salience — Adım 12 salience score + retrieval boost.
+test_salience — Step 12 salience score + retrieval boost.
 
 Covers the formula (recency decay, sender activity, thread depth, feedback
 weight handling), the compute-and-store CLI, and the search() re-ranking
@@ -124,7 +124,7 @@ def test_compute_and_boost():
 def main() -> int:
     test_formula()
     test_compute_and_boost()
-    print("OK — Adım 12 salience: formula + compute job + retrieval boost")
+    print("OK — Step 12 salience: formula + compute job + retrieval boost")
     return 0
 
 

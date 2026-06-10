@@ -1,5 +1,5 @@
 """
-test_episodes — Adım 16 episode segmentation + hierarchical summaries.
+test_episodes — Step 16 episode segmentation + hierarchical summaries.
 
 Unit:
   - segment() splits on a > gap_hours temporal gap, merges entity-overlapping
@@ -53,12 +53,12 @@ def test_segment():
 
 def test_summarize():
     base = 1_700_000_000.0
-    rows = [{"key": "a1", "ts": base, "text": "Acme A.Ş. ile kart entegrasyonu testi yapıldı",
+    rows = [{"key": "a1", "ts": base, "text": "Acme card integration test was run",
              "entity_ids": {"e_acme"}},
-            {"key": "a2", "ts": base + 3600, "text": "Acme A.Ş. ikinci tur test",
+            {"key": "a2", "ts": base + 3600, "text": "Acme second round test",
              "entity_ids": {"e_acme"}}]
-    s = summarize(rows, {"e_acme": "Acme A.Ş."})
-    assert "Acme A.Ş." in s, s
+    s = summarize(rows, {"e_acme": "Acme"})
+    assert "Acme" in s, s
     assert "2 " in s, s                 # row count surfaced
     assert len(s) < 220, f"summary too long: {len(s)}"
     print(f"  ok  summarize: {s!r}")
@@ -107,25 +107,25 @@ def test_eval_gate() -> bool:
     t_acme = now - 5 * DAY
     acme_gold = set()
     for i, f in enumerate([
-            "Acme A.Ş. ile kart entegrasyonu ilk tur testi yapıldı",
-            "Acme A.Ş. kart entegrasyonunda bir blocker bulundu",
-            "Acme A.Ş. blocker giderildi ve ikinci tur test başladı",
-            "Acme A.Ş. ikinci tur testte performans sorunu görüldü",
-            "Acme A.Ş. performans sorunu için yama uygulandı",
-            "Acme A.Ş. üçüncü tur regresyon testleri koşuldu",
-            "Acme A.Ş. müşteri kabul testi planlandı",
-            "Acme A.Ş. entegrasyon testleri tamamlandı"]):
+            "Acme card integration first round test was run",
+            "Acme card integration hit a blocker",
+            "Acme blocker resolved and second round test started",
+            "Acme second round test showed a performance issue",
+            "Acme performance issue patch applied",
+            "Acme third round regression tests run",
+            "Acme customer acceptance test planned",
+            "Acme integration tests completed"]):
         acme_gold.add(_save_at(b, ns, f, t_acme + i * 3600))
     t_glob = now - 1 * DAY
     for i, f in enumerate([
-            "Globex Inc. lansman planı gözden geçirildi",
-            "Globex Inc. lansman tarihi öne çekildi",
-            "Globex Inc. pazarlama bütçesi onaylandı",
-            "Globex Inc. lansman kontrol listesi tamamlandı"]):
+            "Widget Inc launch plan reviewed",
+            "Widget Inc launch date moved up",
+            "Widget Inc marketing budget approved",
+            "Widget Inc launch checklist completed"]):
         _save_at(b, ns, f, t_glob + i * 3600)
 
     # FLAT cost: the aggregation query returns every raw Acme row
-    flat = b.search(ns, "Acme A.Ş. ne oldu", limit=10)
+    flat = b.search(ns, "what happened with Acme", limit=10)
     flat_acme = [r for r in flat if r["key"] in acme_gold]
     flat_tok = _tokens(flat_acme)
     assert len(flat_acme) >= 3, f"flat should surface raw rows: {len(flat_acme)}"
@@ -140,7 +140,7 @@ def test_eval_gate() -> bool:
         "episode must cover all gold rows"
 
     # HIERARCHICAL cost: the same query returns the compact summary
-    hier = b.search(ns, "Acme A.Ş. ne oldu", limit=10, mode="hierarchical")
+    hier = b.search(ns, "what happened with Acme", limit=10, mode="hierarchical")
     assert hier and all(r.get("tags") and "episode" in r["tags"] for r in hier), \
         f"hierarchical must return episode summaries: {hier}"
     hier_tok = _tokens(hier)
@@ -160,7 +160,7 @@ def main() -> int:
     test_segment()
     test_summarize()
     test_eval_gate()
-    print("OK — Adım 16 episodes: segmentation + hierarchical summary "
+    print("OK — Step 16 episodes: segmentation + hierarchical summary "
           "(-60% tokens) + expand drill-down")
     return 0
 
