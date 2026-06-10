@@ -54,21 +54,21 @@ def main():
 
     # --- seed a gmail thread: I replied once, they asked the last question ----
     _put(b, ns, "gmail_0", {"source": "gmail", "thread_id": "T1",
-                            "from": "me@x.com", "subject": "Proje",
-                            "snippet": "merhaba", "labels": "SENT",
+                            "from": "me@x.com", "subject": "Project",
+                            "snippet": "hello", "labels": "SENT",
                             "internal_date_ms": _ms(7200)})
     _put(b, ns, "gmail_1", {"source": "gmail", "thread_id": "T1",
-                            "from": "Ulaş <ulas@x.com>", "subject": "Re: Proje",
-                            "snippet": "dosyayı gönderir misin?", "labels": "INBOX",
+                            "from": "Alex Kim <alex@example.com>", "subject": "Re: Project",
+                            "snippet": "could you send the file?", "labels": "INBOX",
                             "internal_date_ms": _ms(3600)})
     # an outbound question -> awaiting_them (exercises the counterparty fix live)
     _put(b, ns, "gmail_2", {"source": "gmail", "thread_id": "T2",
-                            "from": "Boss <boss@x.com>", "subject": "Bütçe",
-                            "snippet": "rakamlar ekte", "labels": "INBOX",
+                            "from": "Boss <boss@x.com>", "subject": "Budget",
+                            "snippet": "numbers attached", "labels": "INBOX",
                             "internal_date_ms": _ms(7200)})
     _put(b, ns, "gmail_3", {"source": "gmail", "thread_id": "T2",
-                            "from": "me@x.com", "subject": "Re: Bütçe",
-                            "snippet": "onay ne zaman gelir?", "labels": "SENT",
+                            "from": "me@x.com", "subject": "Re: Budget",
+                            "snippet": "when does approval come?", "labels": "SENT",
                             "internal_date_ms": _ms(3600)})
 
     # --- open_loops -----------------------------------------------------------
@@ -80,10 +80,10 @@ def main():
     me = [r for r in recs if r["direction"] == "awaiting_me"]
     them = [r for r in recs if r["direction"] == "awaiting_them"]
     assert n == 2, f"expected 2 loops, got {n}"
-    assert len(me) == 1 and me[0]["counterparty"] == "Ulaş", me
+    assert len(me) == 1 and me[0]["counterparty"] == "Alex Kim", me
     # the live proof of the bug fix: the awaiting_them peer is Boss, not "me@x.com"
     assert len(them) == 1 and them[0]["counterparty"] == "Boss", them
-    print("  ok  open_loops: awaiting_me=Ulaş, awaiting_them=Boss (counterparty fix)")
+    print("  ok  open_loops: awaiting_me=Alex Kim, awaiting_them=Boss (counterparty fix)")
 
     # --- self_model (LLM off) cross-reads the loops --------------------------
     os.environ.pop("EVOSQL_PROFILE_LLM", None)
@@ -97,10 +97,10 @@ def main():
 
     # --- brief collects from the live stores ---------------------------------
     data = brief.collect(b, ns)
-    assert [d["counterparty"] for d in data["waiting_me"]] == ["Ulaş"]
+    assert [d["counterparty"] for d in data["waiting_me"]] == ["Alex Kim"]
     assert [d["counterparty"] for d in data["waiting_them"]] == ["Boss"]
     text = brief.render(data, name="alp", lang_set=True)
-    assert "Ulaş" in text and "Boss" in text
+    assert "Alex Kim" in text and "Boss" in text
     print("  ok  brief: renders live loops correctly")
 
     # --- suggest_reply: read -> SUGGEST over the live loops ------------------
@@ -108,17 +108,17 @@ def main():
     sug = suggest.suggest_replies(b, ns, top=3)
     assert sug["suggestions"], sug
     top = sug["suggestions"][0]
-    assert top["counterparty"] == "Ulaş"                 # the waiting-on-you loop
+    assert top["counterparty"] == "Alex Kim"             # the waiting-on-you loop
     # the draft is grounded in the real thread (transcript present), sends nothing
     speakers = [t["speaker"] for t in top["thread"]]
-    assert "Ulaş" in speakers and any(s != "Ulaş" for s in speakers)
+    assert "Alex Kim" in speakers and any(s != "Alex Kim" for s in speakers)
     assert isinstance(top["draft"], str) and top["draft"]
     print("  ok  suggest_reply: grounded draft for the awaiting_me loop")
 
     # --- action loop: queue -> approve (dry-run) -> reject, on the real store --
     os.environ.pop("EVOSQL_SEND_ENABLED", None)
     outbox.TRANSPORTS.clear()                            # no transport -> dry-run
-    qi = outbox.queue(b, ns, top["loop_key"], "Tabii, dosya ekte.",
+    qi = outbox.queue(b, ns, top["loop_key"], "Sure, file attached.",
                       channel=top["source"], source=top["source"],
                       to=top["counterparty"])
     assert qi["status"] == "pending"
@@ -126,7 +126,7 @@ def main():
     appr = outbox.approve_send(b, ns, qi["id"])
     assert appr["ok"] and not appr["sent"] and appr["dry_run"]   # nothing sent
     assert outbox._load(b, ns, qi["id"])["status"] == "approved"
-    qi2 = outbox.queue(b, ns, "loop_drop", "iptal", channel="gmail",
+    qi2 = outbox.queue(b, ns, "loop_drop", "cancel", channel="gmail",
                        source="gmail", to="X")
     assert outbox.reject(b, ns, qi2["id"])["ok"]
     assert outbox._load(b, ns, qi2["id"])["status"] == "rejected"
@@ -138,9 +138,9 @@ def main():
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
     try:
         # reply to the REAL awaiting_me loop so its closure is exercised end-to-end
-        qi3 = outbox.queue(b, ns, top["loop_key"], "Tabii, dosya ekte.",
+        qi3 = outbox.queue(b, ns, top["loop_key"], "Sure, file attached.",
                            channel="gmail", source="gmail",
-                           to=top["counterparty"], to_email="ulas@x.com")
+                           to=top["counterparty"], to_email="alex@example.com")
         r3 = outbox.approve_send(b, ns, qi3["id"])
         assert r3["sent"] and not r3["dry_run"], r3
         assert outbox._load(b, ns, qi3["id"])["status"] == "sent"
@@ -164,8 +164,8 @@ def main():
         chats.append(it.get("thread_id")) or {"id": "1700000000000"})
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
     try:
-        ti = outbox.queue(b, ns, "loop_teams", "tamamdır 👍", channel="teams",
-                          source="teams", to="Deniz", thread_id="19:abc@thread.v2")
+        ti = outbox.queue(b, ns, "loop_teams", "all set 👍", channel="teams",
+                          source="teams", to="Jane Roe", thread_id="19:abc@thread.v2")
         tr = outbox.approve_send(b, ns, ti["id"])
         assert tr["sent"] and chats == ["19:abc@thread.v2"]   # delivered into the chat
         assert outbox._load(b, ns, ti["id"])["status"] == "sent"
@@ -180,9 +180,9 @@ def main():
         mails.append(it.get("to_email")) or {"id": "AAMk"})
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
     try:
-        oi = outbox.queue(b, ns, "loop_outlook", "Onaylandı.", channel="outlook",
+        oi = outbox.queue(b, ns, "loop_outlook", "Approved.", channel="outlook",
                           source="outlook", to="Boss", to_email="boss@corp.com",
-                          subject="Bütçe")
+                          subject="Budget")
         orr = outbox.approve_send(b, ns, oi["id"])
         assert orr["sent"] and mails == ["boss@corp.com"]
         assert outbox._load(b, ns, oi["id"])["status"] == "sent"
@@ -197,8 +197,8 @@ def main():
         posts.append(it.get("thread_id")) or {"ok": True, "ts": "1700.9"})
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
     try:
-        si = outbox.queue(b, ns, "loop_slack", "tabii, hallederim", channel="slack",
-                          source="slack", to="Deniz", thread_id="D123")
+        si = outbox.queue(b, ns, "loop_slack", "sure, I'll handle it", channel="slack",
+                          source="slack", to="Jane Roe", thread_id="D123")
         sr = outbox.approve_send(b, ns, si["id"])
         assert sr["sent"] and posts == ["D123"]
         assert outbox._load(b, ns, si["id"])["status"] == "sent"
@@ -213,10 +213,10 @@ def main():
         handles.append(it.get("to")) or {"id": None})
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
     try:
-        ii = outbox.queue(b, ns, "loop_imsg", "tabii, yarın olur", channel="imessage",
-                          source="imessage", to="+905551112233")
+        ii = outbox.queue(b, ns, "loop_imsg", "sure, tomorrow works", channel="imessage",
+                          source="imessage", to="+900000000000")
         ir = outbox.approve_send(b, ns, ii["id"])
-        assert ir["sent"] and handles == ["+905551112233"]
+        assert ir["sent"] and handles == ["+900000000000"]
         assert outbox._load(b, ns, ii["id"])["status"] == "sent"
     finally:
         outbox.TRANSPORTS.clear()
@@ -228,14 +228,14 @@ def main():
     outbox.TRANSPORTS["gmail"] = lambda it: (sent2.append(it["id"]) or {"id": "ok"})
     os.environ["EVOSQL_SEND_ENABLED"] = "1"
     try:
-        u1 = outbox.queue(b, ns, "loop_undo1", "gidecek", channel="gmail",
+        u1 = outbox.queue(b, ns, "loop_undo1", "outgoing", channel="gmail",
                           source="gmail", to="A", to_email="a@x.com")
         a1 = outbox.approve_send(b, ns, u1["id"], undo_seconds=60)
         assert a1.get("scheduled") and not a1["sent"]         # held in the window
         assert outbox.flush_scheduled(b, ns) == []            # not due -> nothing sent
         assert sent2 == []
         # a second item rejected during its window never goes out
-        u2 = outbox.queue(b, ns, "loop_undo2", "iptal", channel="gmail",
+        u2 = outbox.queue(b, ns, "loop_undo2", "cancel", channel="gmail",
                           source="gmail", to="B", to_email="b@x.com")
         outbox.approve_send(b, ns, u2["id"], undo_seconds=60)
         outbox.reject(b, ns, u2["id"])
@@ -255,9 +255,9 @@ def main():
     os.environ["EVOSQL_SEND_RATE_PER_HOUR"] = "1"
     try:
         rl_ns = ns + "_rl"   # isolated ns so earlier sends don't count
-        x1 = outbox.queue(b, rl_ns, "rl1", "bir", channel="gmail", source="gmail",
+        x1 = outbox.queue(b, rl_ns, "rl1", "one", channel="gmail", source="gmail",
                           to="A", to_email="a@x.com")
-        x2 = outbox.queue(b, rl_ns, "rl2", "iki", channel="gmail", source="gmail",
+        x2 = outbox.queue(b, rl_ns, "rl2", "two", channel="gmail", source="gmail",
                           to="B", to_email="b@x.com")
         assert outbox.approve_send(b, rl_ns, x1["id"])["sent"]
         held = outbox.approve_send(b, rl_ns, x2["id"])
@@ -290,11 +290,11 @@ def main():
     os.environ["EVOSQL_SEND_DEDUP_SECONDS"] = "3600"
     try:
         dd_ns = ns + "_dd"
-        d1 = outbox.queue(b, dd_ns, "loop_dd", "ilk yanıt", channel="gmail",
+        d1 = outbox.queue(b, dd_ns, "loop_dd", "first reply", channel="gmail",
                           source="gmail", to="A", to_email="a@x.com")
         assert outbox.approve_send(b, dd_ns, d1["id"])["sent"]
         try:
-            outbox.queue(b, dd_ns, "loop_dd", "ikinci yanıt", channel="gmail",
+            outbox.queue(b, dd_ns, "loop_dd", "second reply", channel="gmail",
                          source="gmail", to="A", to_email="a@x.com")
             assert False, "expected dedup refusal"
         except ValueError as exc:
@@ -307,8 +307,8 @@ def main():
 
     # --- resolution: a second run with the thread 'answered' closes the loop --
     _put(b, ns, "gmail_4", {"source": "gmail", "thread_id": "T1",
-                            "from": "me@x.com", "subject": "Re: Proje",
-                            "snippet": "tabii, ekte", "labels": "SENT",
+                            "from": "me@x.com", "subject": "Re: Project",
+                            "snippet": "sure, attached", "labels": "SENT",
                             "internal_date_ms": _ms(60)})
     open_loops.job_open_loops(b, ns)
     recs2 = {json.loads(v)["thread_key"]: json.loads(v)

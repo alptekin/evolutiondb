@@ -26,10 +26,10 @@ def _parse(raw):
 
 
 def test_build_raw_email_round_trips():
-    m = _parse(transports.build_raw_email("a@x.com", "Konu", "Merhaba\nsatır2"))
+    m = _parse(transports.build_raw_email("a@x.com", "Subject", "Hello\nline2"))
     assert m["To"] == "a@x.com"
-    assert m["Subject"] == "Konu"
-    assert m.get_content().strip() == "Merhaba\nsatır2"
+    assert m["Subject"] == "Subject"
+    assert m.get_content().strip() == "Hello\nline2"
 
 
 def test_build_raw_email_blank_subject():
@@ -38,8 +38,8 @@ def test_build_raw_email_blank_subject():
 
 
 def test_reply_subject_normalises():
-    assert transports._reply_subject({"subject": "Proje"}) == "Re: Proje"
-    assert transports._reply_subject({"subject": "Re: Proje"}) == "Re: Proje"
+    assert transports._reply_subject({"subject": "Project"}) == "Re: Project"
+    assert transports._reply_subject({"subject": "Re: Project"}) == "Re: Project"
     assert transports._reply_subject({"subject": "RE: x"}) == "RE: x"
     assert transports._reply_subject({}) == "Re: (no subject)"
 
@@ -53,11 +53,11 @@ def test_transport_delivers_and_passes_thread():
         return {"id": "M1", "threadId": "T1"}
 
     t = transports.GmailSendTransport(sender=_fake)
-    r = t({"to_email": "ulas@x.com", "subject": "Proje", "body": "ekte",
+    r = t({"to_email": "alex@example.com", "subject": "Project", "body": "attached",
            "thread_id": "TID9"})
     assert r["delivered"] and r["id"] == "M1" and r["thread_id"] == "T1"
     assert captured["thread_id"] == "TID9"               # reply stays in-thread
-    assert _parse(captured["raw"])["To"] == "ulas@x.com"
+    assert _parse(captured["raw"])["To"] == "alex@example.com"
 
 
 def test_transport_prefers_to_email_then_to():
@@ -71,7 +71,7 @@ def test_transport_prefers_to_email_then_to():
 
 def test_transport_refuses_non_address():
     t = transports.GmailSendTransport(sender=lambda raw, tid: {"id": "x"})
-    r = t({"to": "Ulaş", "body": "b"})                   # display name, not email
+    r = t({"to": "Alex Kim", "body": "b"})               # display name, not email
     assert not r["delivered"] and not r["dry_run"]       # a hard error, not a dry-run
     assert "recipient" in r["error"]
 
@@ -85,10 +85,10 @@ def test_teams_transport_delivers_into_chat():
         return {"id": "1700000000000"}
 
     t = transports.TeamsSendTransport(sender=_fake)
-    r = t({"thread_id": "19:abc@thread.v2", "body": "tamamdır 👍"})
+    r = t({"thread_id": "19:abc@thread.v2", "body": "all set 👍"})
     assert r["delivered"] and r["id"] == "1700000000000"
     assert r["chat_id"] == "19:abc@thread.v2"
-    assert captured["body"] == "tamamdır 👍"            # no MIME — raw chat text
+    assert captured["body"] == "all set 👍"             # no MIME — raw chat text
 
 
 def test_teams_transport_needs_chat_id():
@@ -106,9 +106,9 @@ def test_outlook_transport_sends_mail():
         return {"id": "AAMk"}
 
     t = transports.OutlookSendTransport(sender=_fake)
-    r = t({"to_email": "boss@corp.com", "subject": "Bütçe", "body": "onaylandı"})
+    r = t({"to_email": "boss@corp.com", "subject": "Budget", "body": "approved"})
     assert r["delivered"] and r["to"] == "boss@corp.com"
-    assert captured["subject"] == "Re: Bütçe"            # reply-subject normalised
+    assert captured["subject"] == "Re: Budget"           # reply-subject normalised
 
 
 def test_outlook_transport_refuses_non_address():
@@ -122,9 +122,9 @@ def test_slack_transport_posts_to_channel():
     t = transports.SlackSendTransport(
         sender=lambda ch, txt: (captured.update(ch=ch, txt=txt)
                                 or {"ok": True, "ts": "1700.5"}))
-    r = t({"thread_id": "D123", "body": "tabii"})
+    r = t({"thread_id": "D123", "body": "sure"})
     assert r["delivered"] and r["id"] == "1700.5" and r["channel"] == "D123"
-    assert captured == {"ch": "D123", "txt": "tabii"}
+    assert captured == {"ch": "D123", "txt": "sure"}
 
 
 def test_slack_transport_needs_channel():
@@ -145,9 +145,9 @@ def test_imessage_transport_sends_to_handle():
     captured = {}
     t = transports.ImessageSendTransport(
         sender=lambda h, txt: (captured.update(h=h, txt=txt) or {"id": None}))
-    r = t({"to": "+905551112233", "body": "tabii"})
-    assert r["delivered"] and r["to"] == "+905551112233"
-    assert captured == {"h": "+905551112233", "txt": "tabii"}
+    r = t({"to": "+900000000000", "body": "sure"})
+    assert r["delivered"] and r["to"] == "+900000000000"
+    assert captured == {"h": "+900000000000", "txt": "sure"}
 
 
 def test_imessage_transport_needs_handle():

@@ -47,7 +47,7 @@ def test_integration() -> bool:
     ns = f"health_{int(time.time())}"
     b = MemoryBackend("127.0.0.1", PORT, "admin", "admin", "evosql", prefix)
     for i in range(6):
-        b.save(ns, f"Ahmet Yilmaz worked on Globex Inc. note {i}")
+        b.save(ns, f"John Doe worked on Acme note {i}")
     from mcp_server_evosql.scheduler import job_extract_entities, job_salience
     job_extract_entities(b, ns)
     job_salience(b, ns)

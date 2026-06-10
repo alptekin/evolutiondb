@@ -62,13 +62,17 @@ def test_render_shows_counts_and_sections():
     assert "all clear" in out
 
 
-def test_render_localizes_to_turkish_preference():
-    # when the user's language preference is Turkish, the brief renders in
-    # Turkish — driven by runtime data (the locale resource), not code literals
+def test_render_localizes_to_non_english_preference():
+    # when the user's language preference is a non-English locale, the brief
+    # renders in that locale — driven entirely by runtime data (the locale
+    # resource), not code literals. We pick the locale code and assert against
+    # the resource's own strings so this test stays language-neutral.
+    from mcp_server_evosql import locales
+    other = locales.ui("tr")                              # any non-English locale
     data = {"self": {}, "waiting_me": [], "waiting_them": [], "promises": [],
             "stale": []}
-    out = brief.render(data, name="alp", lang_set=True, lang="türkçe")
-    assert "GÜNAYDIN" in out and "SENİ BEKLEYENLER" in out
+    out = brief.render(data, name="alp", lang_set=True, lang="tr")
+    assert other["good_morning"] in out and other["waiting_on_you"] in out
 
 
 def test_render_language_nag_only_when_unset():
@@ -94,16 +98,16 @@ def test_queue_drafts_creates_pending():
     b = FakeBackend()
     b.put(b.loops_store, NS, "loop_1",
           {"status": "open", "direction": "awaiting_me", "actionable": True,
-           "loop_type": "request", "counterparty": "Ulaş", "source": "gmail",
-           "thread_key": "T1", "snippet": "dosya?", "age_days": 1})
+           "loop_type": "request", "counterparty": "Alex", "source": "gmail",
+           "thread_key": "T1", "snippet": "the file?", "age_days": 1})
     b.put(b.memory, NS, "gmail_1",
-          {"source": "gmail", "thread_id": "T1", "from": "Ulaş <ulas@x.com>",
-           "labels": "INBOX", "snippet": "dosya?"})
+          {"source": "gmail", "thread_id": "T1", "from": "Alex <alex@example.com>",
+           "labels": "INBOX", "snippet": "the file?"})
     items = brief.queue_drafts(b, NS, top=3)
     assert len(items) == 1
     it = items[0]
     assert it["loop_key"] == "loop_1" and it["status"] == "pending"
-    assert it["to_email"] == "ulas@x.com" and it["thread_id"] == "T1"  # routed
+    assert it["to_email"] == "alex@example.com" and it["thread_id"] == "T1"  # routed
     assert [x["id"] for x in outbox.list_pending(b, NS)] == [it["id"]]
 
 
@@ -111,8 +115,8 @@ def test_approve_queued_all_dry_runs_without_send():
     os.environ.pop("EVOSQL_SEND_ENABLED", None)
     from mcp_server_evosql import outbox
     b = FakeBackend()
-    it = outbox.queue(b, NS, "loop_1", "cevap", channel="gmail", source="gmail",
-                      to="Ulaş")
+    it = outbox.queue(b, NS, "loop_1", "a reply", channel="gmail", source="gmail",
+                      to="Alex")
     res = brief.approve_queued(b, NS)                    # approve all pending
     assert len(res) == 1 and res[0]["sent"] is False and res[0]["dry_run"] is True
     assert outbox._load(b, NS, it["id"])["status"] == "approved"

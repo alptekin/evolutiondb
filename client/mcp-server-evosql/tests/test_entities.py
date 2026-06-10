@@ -1,11 +1,11 @@
 """
-test_entities — Adım 14 entity extraction + canonical-id resolution.
+test_entities — Step 14 entity extraction + canonical-id resolution.
 
 Two gates:
   1. Extraction quality on a hand-labeled set — micro-F1 >= 0.85, and
      wrong-canonicalization rate < 5% (the plan's eval criteria).
   2. DB round-trip: three memories naming the same person three different
-     ways ("Süreyya Gül" / "Süreyya G." / "Süreyya hanım") collapse to ONE
+     ways ("Jane Gardner" / "Jane G." / "Jane Gardener") collapse to ONE
      entity (mention_count 3, two aliases) through the inline save trigger.
 
 The DB section needs an EvoSQL server on EVOSQL_PG_PORT; it skips cleanly
@@ -24,37 +24,31 @@ PORT = int(os.environ.get("EVOSQL_PG_PORT", "5505"))
 # ---------------------------------------------------------------- #
 #  hand-labeled extraction set: (text, [(type, surface), ...])      #
 # ---------------------------------------------------------------- #
+# Fictional, English-only labeled set: it exercises the language-NEUTRAL email
+# pattern plus the EN input locale's person/org patterns. Locale-specific
+# detectors (structured ids, post-name honorifics, other-language org suffixes)
+# are validated against their own locale data in test_locales.py.
 LABELED = [
-    ("Süreyya Gül hanım ile Pazartesi toplantı, sg@widgetco.com",
-     [("person", "Süreyya Gül"), ("email", "sg@widgetco.com")]),
-    ("Ahmet Yılmaz, Acme A.Ş. firmasından aradı, 0532 123 45 67",
-     [("person", "Ahmet Yılmaz"), ("org", "Acme A.Ş."), ("phone", "0532 123 45 67")]),
-    ("IBAN TR33 0006 1005 1978 6457 8413 26 hesabına ödeme yapıldı",
-     [("iban", "TR33 0006 1005 1978 6457 8413 26")]),
-    ("Dr. Mehmet Demir raporu John Smith ile inceledi",
-     [("person", "Mehmet Demir"), ("person", "John Smith")]),
-    ("Globex Inc. ile sözleşme imzalandı",
-     [("org", "Globex Inc.")]),
-    ("TCKN 12345678950 doğrulandı",
-     [("tckn", "12345678950")]),
+    ("Dr Jane Roe met the team monday",
+     [("person", "Jane Roe")]),
     ("Mary Johnson from Initech LLC emailed mary@initech.com",
      [("person", "Mary Johnson"), ("org", "Initech LLC"), ("email", "mary@initech.com")]),
-    ("Prof. Zeynep Arslan yeni projeyi sundu",
-     [("person", "Zeynep Arslan")]),
+    ("contract signed with Globex Inc.",
+     [("org", "Globex Inc.")]),
+    ("Prof Alice Walker reviewed the report with John Smith",
+     [("person", "Alice Walker"), ("person", "John Smith")]),
+    ("Initech LLC and Globex Inc. announced a partnership",
+     [("org", "Initech LLC"), ("org", "Globex Inc.")]),
     ("competitor pricing discussed with Robert Brown",
      [("person", "Robert Brown")]),
-    ("Initech LLC ve Globex Inc. ortaklığı duyuruldu",
-     [("org", "Initech LLC"), ("org", "Globex Inc.")]),
-    ("Fatma Şahin ile görüştüm",
-     [("person", "Fatma Şahin")]),
-    ("support@example.org adresine yazın",
+    ("write to support@example.org for help",
      [("email", "support@example.org")]),
-    ("Mehmet bey toplantıya katıldı",
-     [("person", "Mehmet")]),
-    ("Acme Corp. quarterly report hazır",
+    ("Acme Corp. quarterly report is ready",
      [("org", "Acme Corp.")]),
-    ("ödeme +90 555 987 65 43 numarasından geldi",
-     [("phone", "+90 555 987 65 43")]),
+    ("Mr Sam Lee joined the call",
+     [("person", "Sam Lee")]),
+    ("the invoice from Widget Holding is paid",
+     [("org", "Widget Holding")]),
 ]
 
 
@@ -78,9 +72,9 @@ def test_canonicalization_rate():
     """Each surface form is routed; count how many land on the WRONG entity.
     Same-person variants must merge; different people must stay split."""
     forms = {
-        "p_sureyya": ["Süreyya Gül", "Süreyya G.", "Süreyya hanım", "Sureyya Gul"],
-        "p_ahmet":   ["Ahmet Yılmaz", "Ahmet Y.", "Ahmet bey"],
-        "p_john":    ["John Smith", "John Smith"],
+        "p_jane":  ["Jane Gardner", "Jane G.", "Jane"],
+        "p_alex":  ["Alex Turner", "Alex T.", "Alex"],
+        "p_john":  ["John Smith", "John Smith"],
     }
     es = EntityStore(lambda s: None, lambda s: [], "ns", "E", "M")
     wrong = total = 0
@@ -156,10 +150,12 @@ def test_db_roundtrip() -> bool:
     ns = f"enttest_{int(time.time())}"
     b = MemoryBackend("127.0.0.1", PORT, "admin", "admin", "evosql", prefix)
 
-    b.save(ns, "Süreyya Gül ile pazartesi toplantı yapıldı")
-    b.save(ns, "Süreyya G. raporu gönderdi")
-    b.save(ns, "Süreyya hanım teklifi onayladı")
-    b.save(ns, "Ahmet Yılmaz, Acme A.Ş. firmasından aradı")
+    # three mergeable variants of one person (full name, first+last-initial,
+    # and a 1-edit misspelling caught by the fuzzy match) collapse to one entity
+    b.save(ns, "Jane Gardner reviewed the report")
+    b.save(ns, "Jane G. sent the file")
+    b.save(ns, "met Jane Gardener about it")
+    b.save(ns, "Sam Lee from Widget Inc called")
 
     ents = b._query(
         f"SELECT mem_value FROM __mem_{prefix}_entities "
@@ -167,18 +163,18 @@ def test_db_roundtrip() -> bool:
     import json
     parsed = [json.loads(v[0]) for v in ents if v and v[0]]
     persons = [e for e in parsed if e["type"] == "person"]
-    sgs = [e for e in persons if _norm("süreyya") in _norm(e["canonical"])]
-    assert len(sgs) == 1, f"Süreyya variants must collapse to 1 entity: {sgs}"
-    sg = sgs[0]
-    assert sg["mention_count"] == 3, f"mention_count {sg['mention_count']} != 3"
-    assert len(sg.get("aliases") or []) == 2, f"aliases: {sg.get('aliases')}"
+    jgs = [e for e in persons if _norm("jane") in _norm(e["canonical"])]
+    assert len(jgs) == 1, f"Jane variants must collapse to 1 entity: {jgs}"
+    jg = jgs[0]
+    assert jg["mention_count"] == 3, f"mention_count {jg['mention_count']} != 3"
+    assert len(jg.get("aliases") or []) == 2, f"aliases: {jg.get('aliases')}"
 
     mentions = b._query(
         f"SELECT mem_value FROM __mem_{prefix}_entity_mentions "
         f"WHERE mem_namespace = '{ns}'")
     assert len(mentions) >= 4, f"expected >=4 mentions, got {len(mentions)}"
-    print(f"  ok  db round-trip: {len(persons)} people, Süreyya "
-          f"mention_count={sg['mention_count']} aliases={sg['aliases']}")
+    print(f"  ok  db round-trip: {len(persons)} people, Jane "
+          f"mention_count={jg['mention_count']} aliases={jg['aliases']}")
     return True
 
 
@@ -186,7 +182,7 @@ def main() -> int:
     test_extraction_f1()
     test_canonicalization_rate()
     test_db_roundtrip()
-    print("OK — Adım 14 entities: extraction F1>=0.85 + canonicalization "
+    print("OK — Step 14 entities: extraction F1>=0.85 + canonicalization "
           "+ cross-row id resolution")
     return 0
 

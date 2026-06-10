@@ -1,5 +1,5 @@
 """
-test_profile — Adım 17 user interest profile (K-cluster mixture).
+test_profile — Step 17 user interest profile (K-cluster mixture).
 
 Unit:
   - kmeans recovers clean clusters; _pick_k respects the 5-10 band; cold
@@ -27,12 +27,12 @@ PORT = int(os.environ.get("EVOSQL_PG_PORT", "5505"))
 # ---- deterministic stub embedder ------------------------------------ #
 # dims: 0 work  1 report 2 meeting 3 task  4 personal 5 vacation 6 hobby 7 errand
 _KW = {
-    "report": [(0, 0.5), (1, 1.0)], "rapor": [(0, 0.5), (1, 1.0)],
-    "meeting": [(0, 0.5), (2, 1.0)], "toplanti": [(0, 0.5), (2, 1.0)],
-    "task": [(0, 0.5), (3, 1.0)], "gorev": [(0, 0.5), (3, 1.0)],
-    "vacation": [(4, 0.5), (5, 1.0)], "tatil": [(4, 0.5), (5, 1.0)],
-    "hobby": [(4, 0.5), (6, 1.0)], "hobi": [(4, 0.5), (6, 1.0)],
-    "errand": [(4, 0.5), (7, 1.0)], "is": [(4, 0.5), (7, 1.0)],
+    "report": [(0, 0.5), (1, 1.0)],
+    "meeting": [(0, 0.5), (2, 1.0)],
+    "task": [(0, 0.5), (3, 1.0)],
+    "vacation": [(4, 0.5), (5, 1.0)],
+    "hobby": [(4, 0.5), (6, 1.0)],
+    "errand": [(4, 0.5), (7, 1.0)],
 }
 
 
@@ -107,19 +107,19 @@ def test_eval_gate() -> bool:
     # work cluster (dominant interest): one query-matching anchor + the gold
     # meeting rows the query does NOT mention (one carries the neutral query
     # word so the baseline isn't a flat zero).
-    b.save(ns, "haftalik report hazirladim")                      # anchor
-    gold.add(b.save(ns, "ekip meeting notlari"))
-    gold.add(b.save(ns, "musteri meeting ozeti"))
-    gold.add(b.save(ns, "sprint meeting kararlari"))
-    gold.add(b.save(ns, "meeting status guncellemesi"))          # has 'status'
+    b.save(ns, "prepared the weekly report")                      # anchor
+    gold.add(b.save(ns, "team meeting notes"))
+    gold.add(b.save(ns, "customer meeting summary"))
+    gold.add(b.save(ns, "sprint meeting decisions"))
+    gold.add(b.save(ns, "meeting status update"))                # has 'status'
     # personal cluster: 3 distractors carry the neutral query word `status`
     # (pure-keyword hits that crowd the baseline top-5 ahead of the gold).
-    for f in ["tatil status plani", "hobi status notu", "is status listesi"]:
+    for f in ["vacation status plan", "hobby status note", "errand status list"]:
         b.save(ns, f)
-    for f in ["tatil rezervasyonu", "hobi malzemeleri", "is takibi",
-              "tatil fotograflari", "hobi kursu", "is listesi",
-              "tatil rotasi", "hobi etkinligi", "is plani",
-              "tatil bavulu", "hobi grubu", "tatil sigortasi"]:
+    for f in ["vacation booking", "hobby supplies", "errand tracking",
+              "vacation photos", "hobby class", "errand list",
+              "vacation route", "hobby event", "errand plan",
+              "vacation luggage", "hobby group", "vacation insurance"]:
         b.save(ns, f)
 
     query = "report status"
@@ -141,7 +141,7 @@ def test_eval_gate() -> bool:
     # cold start: a fresh namespace with few rows yields no profile
     ns2 = ns + "_cold"
     for i in range(5):
-        b.save(ns2, f"tek tuk not {i}")
+        b.save(ns2, f"stray note {i}")
     assert b.build_profile(ns2, window_days=0) == [], "cold start must be passive"
     print("  ok  cold start passive (< MIN_ROWS)")
     return True
@@ -150,7 +150,7 @@ def test_eval_gate() -> bool:
 def main() -> int:
     test_kmeans_and_k()
     test_eval_gate()
-    print("OK — Adım 17 profile: kmeans + interest mixture + "
+    print("OK — Step 17 profile: kmeans + interest mixture + "
           "personalized Recall@5 +15% + cold-start guard")
     return 0
 

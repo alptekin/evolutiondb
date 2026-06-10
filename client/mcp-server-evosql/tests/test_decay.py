@@ -1,5 +1,5 @@
 """
-test_decay — Adım 20 Ebbinghaus decay + archival policy.
+test_decay — Step 20 Ebbinghaus decay + archival policy.
 
 Unit:
   - decay_score = salience · exp(-λ·idle_days); fresh = salience, ~69-day
@@ -39,7 +39,7 @@ def _put(b, ns, key, rec):
     from mcp_server_evosql.server import _e
     b._exec(f"MEMORY PUT INTO {b.memory} VALUES "
             f"('{_e(ns)}','{_e(key)}','{_e(json.dumps(rec))}')")
-    # salience lives in its own side store now (Adım 12 / 8KB fix); decay
+    # salience lives in its own side store now (Step 12 / 8KB fix); decay
     # reads it from there, so seed it there too.
     if "salience" in rec:
         b._exec(f"MEMORY PUT INTO {b.salience_store} VALUES "
@@ -73,10 +73,10 @@ def test_eval_gate() -> bool:
     for i in range(75):
         k = f"cold{i}"
         cold.add(k)
-        _put(b, ns, k, {"fact": f"eski kayit {i}", "salience": 0.3,
+        _put(b, ns, k, {"fact": f"old record {i}", "salience": 0.3,
                         "created": now - 250 * DAY})
     for i in range(25):
-        _put(b, ns, f"hot{i}", {"fact": f"taze onemli kayit {i}",
+        _put(b, ns, f"hot{i}", {"fact": f"fresh important record {i}",
                                 "salience": 0.6, "created": now - 10 * DAY})
 
     res = D.decay_pass(b, ns)
@@ -113,15 +113,15 @@ def test_search_integration() -> bool:
     ns = f"dk2_{int(time.time())}"
     b = MemoryBackend("127.0.0.1", PORT, "admin", "admin", "evosql", prefix)
     now = time.time()
-    _put(b, ns, "live", {"fact": "kart entegrasyonu canli kayit",
+    _put(b, ns, "live", {"fact": "card integration live record",
                          "salience": 0.6, "created": now})
-    _put(b, ns, "old", {"fact": "kart entegrasyonu eski kayit",
+    _put(b, ns, "old", {"fact": "card integration old record",
                         "salience": 0.3, "created": now - 300 * DAY})
     D.decay_pass(b, ns)
 
     keys = lambda res: {r["key"] for r in res}
-    default = keys(b.search(ns, "kart entegrasyonu", limit=10))
-    witharch = keys(b.search(ns, "kart entegrasyonu", limit=10,
+    default = keys(b.search(ns, "card integration", limit=10))
+    witharch = keys(b.search(ns, "card integration", limit=10,
                              include_archived=True))
     assert "old" not in default and "live" in default, default
     assert "old" in witharch, witharch
@@ -130,7 +130,7 @@ def test_search_integration() -> bool:
     assert acc.get("live"), "search must refresh last_accessed"
     # restore brings 'old' back into default search
     assert b.restore(ns, "old")
-    default2 = keys(b.search(ns, "kart entegrasyonu", limit=10))
+    default2 = keys(b.search(ns, "card integration", limit=10))
     assert "old" in default2, f"restored row must be searchable: {default2}"
     print("  ok  search: archived skipped, include_archived shows, "
           "last_accessed refreshed, restore re-activates")
@@ -141,7 +141,7 @@ def main() -> int:
     test_score()
     test_eval_gate()
     test_search_integration()
-    print("OK — Adım 20 decay: score + 6-month archival (<=30% active, "
+    print("OK — Step 20 decay: score + 6-month archival (<=30% active, "
           "100% restorable) + search skip/include/restore")
     return 0
 

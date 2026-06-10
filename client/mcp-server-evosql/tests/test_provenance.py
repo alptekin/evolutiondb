@@ -1,5 +1,5 @@
 """
-test_provenance — Adım 13 provenance schema, end-to-end via MCP JSON-RPC.
+test_provenance — Step 13 provenance schema, end-to-end via MCP JSON-RPC.
 
 Verifies:
   - save_memory(derived_from=[...]) marks the row synthesized and stores the
@@ -70,14 +70,14 @@ def main() -> int:
 
         # synthesized summary: one valid-source set + one bogus key
         syn = _call(p, 20, "save_memory", {
-            "fact": "SUMMARY widgetco pricing strategy needs a discount tier",
+            "fact": "SUMMARY Widget Inc pricing strategy needs a discount tier",
             "tags": ["summary"],
             "derived_from": src + ["mem_does_not_exist"]})
         assert syn.get("ok"), syn
         syn_key = syn["key"]
 
         # find the synthesized row and inspect provenance + evidence_chain
-        s = _call(p, 30, "search_memory", {"query": "widgetco pricing strategy", "limit": 5})
+        s = _call(p, 30, "search_memory", {"query": "Widget Inc pricing strategy", "limit": 5})
         row = next((x for x in s["results"] if x.get("key") == syn_key), None)
         assert row is not None, f"synthesized row not found: {[x['key'] for x in s['results']]}"
         assert row.get("synthesized") is True, row
@@ -92,12 +92,12 @@ def main() -> int:
 
         # all-valid sources -> regenerable True
         syn2 = _call(p, 40, "save_memory", {
-            "fact": "SUMMARY2 widgetco pricing recap", "derived_from": src})
-        s2 = _call(p, 50, "search_memory", {"query": "widgetco pricing recap", "limit": 5})
+            "fact": "SUMMARY2 Widget Inc pricing recap", "derived_from": src})
+        s2 = _call(p, 50, "search_memory", {"query": "Widget Inc pricing recap", "limit": 5})
         r2 = next(x for x in s2["results"] if x.get("key") == syn2["key"])
         assert r2.get("regenerable") is True, r2.get("regenerable")
 
-        print("OK — Adım 13 provenance: derived_from FK-validation + "
+        print("OK — Step 13 provenance: derived_from FK-validation + "
               "synthesized/regenerable flags + search evidence_chain round-trip")
         return 0
     finally:
