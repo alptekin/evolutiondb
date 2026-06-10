@@ -429,16 +429,79 @@ def failure_ratio(backend, limit_per_job: int = 1000) -> float:
     return (bad / total) if total else 0.0
 
 
+# ---------------------------------------------------------------- #
+#  multi-tenant orchestration                                      #
+# ---------------------------------------------------------------- #
+def discover_tenants(admin_backend) -> List[dict]:
+    """Active tenants from the control-plane registry (read on the admin
+    backend). Empty list when none provisioned."""
+    from . import tenancy
+    return [t for t in tenancy.Registry(admin_backend).list_tenants()
+            if t.get("status", "active") == "active"]
+
+
+def _tenant_backend(meta: dict):
+    """A MemoryBackend connected as the tenant's DB user, USE'd into its
+    database, with its store prefix — so run_due writes the tenant's job state
+    into the TENANT's own database (engine-isolated), never the control DB."""
+    from .server import MemoryBackend
+    from .embeddings import provider_from_env
+    from . import tenancy
+    tid = meta["tenant_id"]
+    ident = tenancy.for_tenant(tid, tid, ("admin",))
+    return MemoryBackend(
+        os.environ.get("EVOSQL_HOST", "127.0.0.1"),
+        int(os.environ.get("EVOSQL_PORT", "5433")),
+        ident.db_user, ident.db_password, ident.db_name, ident.prefix,
+        embedder=provider_from_env(),
+        use_database=ident.db_name if ident.issue_use else None)
+
+
+def run_due_all(admin_backend, *, now: Optional[datetime] = None,
+                only: Optional[str] = None, force: bool = False,
+                tenant_backends: Optional[Dict[str, Any]] = None
+                ) -> Dict[str, List[dict]]:
+    """Run due jobs for EVERY tenant when multi-tenant is enabled, else just for
+    the given (default/admin) backend. Returns {tenant_id|'default': records}.
+    Each tenant's jobs run in its own engine-isolated database. A pre-built
+    ``tenant_backends`` dict is reused as a per-tenant connection cache across
+    ticks. One tenant's failure is isolated and never stops the others."""
+    from . import tenancy
+    if not tenancy.multitenant_enabled():
+        return {"default": run_due(admin_backend, now=now, only=only, force=force)}
+    cache = tenant_backends if tenant_backends is not None else {}
+    out: Dict[str, List[dict]] = {}
+    for meta in discover_tenants(admin_backend):
+        tid = meta["tenant_id"]
+        try:
+            b = cache.get(tid)
+            if b is None:
+                b = _tenant_backend(meta)
+                cache[tid] = b
+            out[tid] = run_due(b, now=now, only=only, force=force)
+        except Exception as exc:           # isolate per-tenant failure
+            print(f"[scheduler] tenant {tid} tick error: {exc}",
+                  file=sys.stderr, flush=True)
+            out[tid] = []
+            cache.pop(tid, None)           # drop poisoned backend; rebuilt next tick
+    return out
+
+
 def run_forever(backend, *, tick: float = 60.0) -> None:
-    print(f"[scheduler] started; {len(JOBS)} jobs, tick {tick:.0f}s",
+    from . import tenancy
+    multi = tenancy.multitenant_enabled()
+    print(f"[scheduler] started; {len(JOBS)} jobs, tick {tick:.0f}s, "
+          f"mode={'multi-tenant' if multi else 'single'}",
           file=sys.stderr, flush=True)
+    cache: Dict[str, Any] = {}
     while True:
         try:
-            ran = run_due(backend)
-            for r in ran:
-                print(f"[scheduler] {r['job']}: {r['last_status']} "
-                      f"rows={r['last_rows']} ns={r['namespaces']} "
-                      f"{r['last_duration']}s", file=sys.stderr, flush=True)
+            by_tenant = run_due_all(backend, tenant_backends=cache)
+            for tid, ran in by_tenant.items():
+                for r in ran:
+                    print(f"[scheduler] [{tid}] {r['job']}: {r['last_status']} "
+                          f"rows={r['last_rows']} ns={r['namespaces']} "
+                          f"{r['last_duration']}s", file=sys.stderr, flush=True)
         except Exception as exc:
             print(f"[scheduler] tick error: {exc}", file=sys.stderr, flush=True)
         time.sleep(tick)
@@ -469,19 +532,35 @@ def main() -> int:
     args = ap.parse_args()
     b = _backend(args.prefix)
 
-    if args.mode == "status":
-        for s in status(b):
+    from . import tenancy
+    multi = tenancy.multitenant_enabled()
+
+    def _print_status(label, be):
+        if label:
+            print(f"[{label}]")
+        for s in status(be):
             ts = datetime.fromtimestamp(s["last_run"], timezone.utc).isoformat()
             print(f"  {s['job']:<16} {s['last_status']:<6} rows={s['last_rows']} "
                   f"errors={s.get('errors', 0)} {s['last_duration']}s  @ {ts}")
-        print(f"  failure ratio: {failure_ratio(b)*100:.2f}%")
+        print(f"  failure ratio: {failure_ratio(be)*100:.2f}%")
+
+    if args.mode == "status":
+        if multi:
+            for meta in discover_tenants(b):
+                _print_status(meta["tenant_id"], _tenant_backend(meta))
+        else:
+            _print_status("", b)
         return 0
     if args.mode == "once":
-        ran = run_due(b, only=args.job, force=args.force)
-        for r in ran:
-            print(f"  {r['job']}: {r['last_status']} rows={r['last_rows']} "
-                  f"ns={r['namespaces']} errors={r['errors']} {r['last_duration']}s")
-        if not ran:
+        by_tenant = run_due_all(b, only=args.job, force=args.force)
+        any_ran = False
+        for tid, ran in by_tenant.items():
+            for r in ran:
+                any_ran = True
+                tag = "" if tid == "default" else f"[{tid}] "
+                print(f"  {tag}{r['job']}: {r['last_status']} rows={r['last_rows']} "
+                      f"ns={r['namespaces']} errors={r['errors']} {r['last_duration']}s")
+        if not any_ran:
             print("  no jobs due")
         return 0
     run_forever(b, tick=args.tick)
