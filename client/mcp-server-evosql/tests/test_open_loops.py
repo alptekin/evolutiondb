@@ -31,8 +31,8 @@ def _ms(seconds_ago):
 
 # ---------------------------------------------------------------- pure helpers
 def test_disp():
-    assert ol._disp("Ulaş Demir <ulas@x.com>") == "Ulaş Demir"
-    assert ol._disp("Deniz | Acme") == "Deniz"
+    assert ol._disp("Alex Kim <alex@example.com>") == "Alex Kim"
+    assert ol._disp("Sam | Acme") == "Sam"
     assert ol._disp('"Quoted Name"') == "Quoted Name"
     assert ol._disp("") == "?"
     assert ol._disp(None) == "?"
@@ -42,7 +42,7 @@ def test_is_auto():
     assert ol._is_auto({"from": "noreply@github.com"})
     assert ol._is_auto({"from": "Acme <no-reply@acme.io>"})
     assert ol._is_auto({"from": "x@y.com", "labels": "CATEGORY_PROMOTIONS,INBOX"})
-    assert not ol._is_auto({"from": "Ulaş <ulas@x.com>", "labels": "INBOX"})
+    assert not ol._is_auto({"from": "Alex <alex@example.com>", "labels": "INBOX"})
 
 
 def test_is_auto_filters_sms_brand_shortcodes():
@@ -99,10 +99,10 @@ def test_thread_key():
     assert ol._thread_key({"message_id": "M9"}, "gmail") == "M9"
     assert ol._thread_key({"chat_id": "c1"}, "teams") == "c1"
     # outlook normalises Re:/Fwd: so a reply stays in the same thread
-    a = ol._thread_key({"subject": "Proje"}, "outlook")
-    b = ol._thread_key({"subject": "Re: Proje"}, "outlook")
-    c = ol._thread_key({"subject": "FWD: Proje"}, "outlook")
-    assert a == b == c == "Proje"
+    a = ol._thread_key({"subject": "Project"}, "outlook")
+    b = ol._thread_key({"subject": "Re: Project"}, "outlook")
+    c = ol._thread_key({"subject": "FWD: Project"}, "outlook")
+    assert a == b == c == "Project"
 
 
 def test_regexes():
@@ -128,9 +128,9 @@ def test_detect_my_teams_id():
     # 'me' is the sender present across the most distinct 1:1 chats
     msgs = [
         {"sender_id": "me", "chat_id": "c1"},
-        {"sender_id": "deniz", "chat_id": "c1"},
+        {"sender_id": "sam", "chat_id": "c1"},
         {"sender_id": "me", "chat_id": "c2"},
-        {"sender_id": "can", "chat_id": "c2"},
+        {"sender_id": "alex", "chat_id": "c2"},
     ]
     assert ol._detect_my_teams_id(msgs) == "me"
     assert ol._detect_my_teams_id([]) is None
@@ -164,21 +164,21 @@ def _loops(backend):
 def test_awaiting_me_inbound_after_my_reply():
     b = FakeBackend()
     _seed(b,
-          _gmail("T1", "me@x.com", "Proje", "merhaba", 7200, sent=True),
-          _gmail("T1", "Ulaş <ulas@x.com>", "Re: Proje",
-                 "dosyayı gönderir misin?", 3600))
+          _gmail("T1", "me@x.com", "Project", "hello", 7200, sent=True),
+          _gmail("T1", "Alex <alex@example.com>", "Re: Project",
+                 "can you send the file?", 3600))
     n = ol.job_open_loops(b, NS)
     loops = _loops(b)
     assert n == 1, n
     assert loops[0]["direction"] == "awaiting_me"
-    assert loops[0]["counterparty"] == "Ulaş"
+    assert loops[0]["counterparty"] == "Alex"
     assert loops[0]["status"] == "open"
 
 
 def test_one_way_inbound_is_not_a_loop():
     # gmail thread I never replied to (newsletter-shaped) -> ignored
     b = FakeBackend()
-    _seed(b, _gmail("T2", "Random <r@x.com>", "Duyuru", "yeni sürüm çıktı", 3600))
+    _seed(b, _gmail("T2", "Random <r@x.com>", "Announcement", "new version released", 3600))
     assert ol.job_open_loops(b, NS) == 0
     assert _loops(b) == []
 
@@ -186,16 +186,16 @@ def test_one_way_inbound_is_not_a_loop():
 def test_short_ack_closes_the_loop():
     b = FakeBackend()
     _seed(b,
-          _gmail("T3", "me@x.com", "İş", "tamamladım", 7200, sent=True),
-          _gmail("T3", "Ece <ece@x.com>", "Re: İş", "çok teşekkürler 🙏", 3600))
+          _gmail("T3", "me@x.com", "Task", "done", 7200, sent=True),
+          _gmail("T3", "Mary <mary@example.com>", "Re: Task", "thanks a lot 🙏", 3600))
     assert ol.job_open_loops(b, NS) == 0
 
 
 def test_outbound_question_is_awaiting_them():
     b = FakeBackend()
     _seed(b,
-          _gmail("T4", "Boss <boss@x.com>", "Bütçe", "rakamlar ekte", 7200),
-          _gmail("T4", "me@x.com", "Re: Bütçe", "onay ne zaman gelir?", 3600,
+          _gmail("T4", "Boss <boss@x.com>", "Budget", "numbers attached", 7200),
+          _gmail("T4", "me@x.com", "Re: Budget", "when will approval come?", 3600,
                  sent=True))
     ol.job_open_loops(b, NS)
     loops = _loops(b)
@@ -207,25 +207,25 @@ def test_outbound_question_is_awaiting_them():
 def test_promise_is_i_owe_them():
     b = FakeBackend()
     _seed(b,
-          _gmail("T5", "Faruk <f@x.com>", "Rapor", "rapor ne durumda", 7200),
-          _gmail("T5", "me@x.com", "Re: Rapor", "yarın göndereceğim", 3600,
+          _gmail("T5", "Sam <sam@example.com>", "Report", "what is the report status", 7200),
+          _gmail("T5", "me@x.com", "Re: Report", "I'll send it tomorrow", 3600,
                  sent=True))
     ol.job_open_loops(b, NS)
     owed = [d for d in _loops(b) if d["direction"] == "i_owe_them"]
     assert len(owed) == 1, _loops(b)
-    assert owed[0]["counterparty"] == "Faruk"
+    assert owed[0]["counterparty"] == "Sam"
     assert owed[0]["loop_type"] == "promise"
 
 
 def test_teams_inbound_awaiting_me():
     b = FakeBackend()
     _seed(b,
-          _teams("c1", "Deniz", "me", "selam", 7200),
-          _teams("c1", "Deniz", "deniz", "yarın müsait misin?", 3600),
-          _teams("c2", "Can", "me", "ok", 5000))   # second chat -> 'me' id detected
+          _teams("c1", "Sam", "me", "hi", 7200),
+          _teams("c1", "Sam", "sam", "are you free tomorrow?", 3600),
+          _teams("c2", "Alex", "me", "ok", 5000))   # second chat -> 'me' id detected
     ol.job_open_loops(b, NS)
     me_loops = [d for d in _loops(b)
-                if d["direction"] == "awaiting_me" and d["counterparty"] == "Deniz"]
+                if d["direction"] == "awaiting_me" and d["counterparty"] == "Sam"]
     assert len(me_loops) == 1, _loops(b)
 
 
@@ -239,20 +239,20 @@ def _slack(channel, name, sender_id, text, secs_ago):
 def test_slack_dm_inbound_awaiting_me():
     b = FakeBackend()
     # two DMs so 'me' (in both) is distinguished from each counterparty (in one)
-    b.put(b.memory, NS, "slack_msg_D1_1", _slack("D1", "Deniz", "me", "selam", 7200))
+    b.put(b.memory, NS, "slack_msg_D1_1", _slack("D1", "Sam", "me", "hi", 7200))
     b.put(b.memory, NS, "slack_msg_D1_2",
-          _slack("D1", "Deniz", "deniz", "yarın müsait misin?", 3600))
-    b.put(b.memory, NS, "slack_msg_D2_1", _slack("D2", "Can", "me", "ok", 5000))
+          _slack("D1", "Sam", "sam", "are you free tomorrow?", 3600))
+    b.put(b.memory, NS, "slack_msg_D2_1", _slack("D2", "Alex", "me", "ok", 5000))
     ol.job_open_loops(b, NS)
     me = [d for d in _loops(b)
           if d["source"] == "slack" and d["direction"] == "awaiting_me"]
-    assert len(me) == 1 and me[0]["counterparty"] == "Deniz"
+    assert len(me) == 1 and me[0]["counterparty"] == "Sam"
     assert me[0]["thread_key"] == "D1"                    # keyed by channel_id
 
 
 def test_slack_group_channel_is_skipped():
     b = FakeBackend()
-    msg = _slack("C9", "general", "someone", "deploy ne zaman?", 3600)
+    msg = _slack("C9", "general", "someone", "when is the deploy?", 3600)
     msg["channel_type"] = "public_channel"                # not a DM -> ignored (v0)
     b.put(b.memory, NS, "slack_msg_C9_1", msg)
     assert ol.job_open_loops(b, NS) == 0
@@ -268,14 +268,14 @@ def _imsg(chat_id, chat, handle, from_me, text, secs_ago):
 def test_imessage_inbound_awaiting_me():
     b = FakeBackend()
     b.put(b.memory, NS, "imessage_1",
-          _imsg("C1", "Deniz", "+905551112233", True, "selam", 7200))
+          _imsg("C1", "Sam", "+900000000000", True, "hi", 7200))
     b.put(b.memory, NS, "imessage_2",
-          _imsg("C1", "Deniz", "+905551112233", False,
-                "yarın görüşebilir miyiz?", 3600))
+          _imsg("C1", "Sam", "+900000000000", False,
+                "can we meet tomorrow?", 3600))
     ol.job_open_loops(b, NS)
     me = [d for d in _loops(b)
           if d["source"] == "imessage" and d["direction"] == "awaiting_me"]
-    assert len(me) == 1 and me[0]["counterparty"] == "Deniz"
+    assert len(me) == 1 and me[0]["counterparty"] == "Sam"
     assert me[0]["thread_key"] == "C1"                   # keyed by chat_id
 
 
@@ -283,18 +283,18 @@ def test_imessage_uses_is_from_me_for_direction():
     # I sent the last message asking a question -> awaiting_them, no reply yet
     b = FakeBackend()
     b.put(b.memory, NS, "imessage_1",
-          _imsg("C2", "Can", "can@x.com", False, "selam", 7200))
+          _imsg("C2", "Alex", "alex@example.com", False, "hi", 7200))
     b.put(b.memory, NS, "imessage_2",
-          _imsg("C2", "Can", "can@x.com", True, "ne zaman uygun olursun?", 3600))
+          _imsg("C2", "Alex", "alex@example.com", True, "when are you available?", 3600))
     ol.job_open_loops(b, NS)
     them = [d for d in _loops(b) if d["source"] == "imessage"]
     assert len(them) == 1 and them[0]["direction"] == "awaiting_them"
-    assert them[0]["counterparty"] == "Can"              # the other party, not "me"
+    assert them[0]["counterparty"] == "Alex"             # the other party, not "me"
 
 
 def test_detect_my_id_generic():
     msgs = [{"sender_id": "me", "channel_id": "D1"},
-            {"sender_id": "deniz", "channel_id": "D1"},
+            {"sender_id": "sam", "channel_id": "D1"},
             {"sender_id": "me", "channel_id": "D2"}]
     assert ol._detect_my_id(msgs, "channel_id") == "me"
 
@@ -302,10 +302,10 @@ def test_detect_my_id_generic():
 def test_core_team_counterparty_is_high_priority():
     b = FakeBackend()
     b.put(b.selfmodel_store, NS, "self_team",
-          {"section": "team", "content": ["Ulaş", "Deniz"]})
+          {"section": "team", "content": ["Alex", "Sam"]})
     _seed(b,
-          _gmail("T1", "me@x.com", "Proje", "merhaba", 7200, sent=True),
-          _gmail("T1", "Ulaş <ulas@x.com>", "Re: Proje", "kontrol eder misin?", 3600))
+          _gmail("T1", "me@x.com", "Project", "hello", 7200, sent=True),
+          _gmail("T1", "Alex <alex@example.com>", "Re: Project", "can you check this?", 3600))
     ol.job_open_loops(b, NS)
     assert _loops(b)[0]["priority"] == "high"
 
@@ -313,7 +313,7 @@ def test_core_team_counterparty_is_high_priority():
 def test_mark_resolved_closes_and_is_idempotent():
     b = FakeBackend()
     b.put(b.loops_store, NS, "loop_x",
-          {"status": "open", "direction": "awaiting_me", "counterparty": "Ulaş"})
+          {"status": "open", "direction": "awaiting_me", "counterparty": "Alex"})
     assert ol.mark_resolved(b, NS, "loop_x") is True
     rec = b.rows(b.loops_store, NS)["loop_x"]
     assert rec["status"] == "resolved" and rec["resolved_by"] == "sent_reply"
@@ -326,7 +326,7 @@ def test_resolution_flips_stale_open_loop():
     # a previously-open loop that this run will NOT regenerate (no source rows)
     b.put(b.loops_store, NS, "loop_gmail_ZZZ",
           {"kind": "open_loop", "direction": "awaiting_me", "status": "open",
-           "counterparty": "Eski", "thread_key": "old"})
+           "counterparty": "Former", "thread_key": "old"})
     ol.job_open_loops(b, NS)
     assert b.rows(b.loops_store, NS)["loop_gmail_ZZZ"]["status"] == "resolved"
 

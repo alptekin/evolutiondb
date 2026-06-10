@@ -31,13 +31,13 @@ class IsStateRowTests(unittest.TestCase):
 class FilterRecordsTests(unittest.TestCase):
     rows = [
         {"_key": "k1", "source": "teams",
-         "sender": "Orhan Özdoğan | Wechip",
-         "text": "fatura geldi", "modified_at": "2026-05-13T11:22:14Z"},
+         "sender": "John Doe | Acme",
+         "text": "invoice arrived", "modified_at": "2026-05-13T11:22:14Z"},
         {"_key": "k2", "source": "slack",
-         "sender": "Onur Çobanoğlu | Wechip",
-         "text": "release yarın", "modified_at": "2026-05-13T15:00:00Z"},
+         "sender": "Jane Roe | Acme",
+         "text": "release tomorrow", "modified_at": "2026-05-13T15:00:00Z"},
         {"_key": "k3", "source": "github",
-         "sender": "alptekin",
+         "sender": "alexkim",
          "text": "merged PR #142", "modified_at": "2026-05-12T09:00:00Z"},
         {"_key": "k4", "source": "manual",
          "fact":   "user prefers morning meetings",
@@ -54,11 +54,11 @@ class FilterRecordsTests(unittest.TestCase):
         self.assertEqual([r["_key"] for r in out], ["k1"])
 
     def test_sender_substring_match(self):
-        out = ins.filter_records(self.rows, sender="onur")
+        out = ins.filter_records(self.rows, sender="jane")
         self.assertEqual([r["_key"] for r in out], ["k2"])
 
     def test_query_searches_text_and_fact(self):
-        out = ins.filter_records(self.rows, q="fatura")
+        out = ins.filter_records(self.rows, q="invoice")
         self.assertEqual([r["_key"] for r in out], ["k1"])
 
         out = ins.filter_records(self.rows, q="morning")
@@ -76,7 +76,7 @@ class FilterRecordsTests(unittest.TestCase):
 
     def test_case_insensitive(self):
         out = ins.filter_records(self.rows, source="TEAMS",
-                                   sender="ORHAN", q="FATURA")
+                                   sender="JOHN", q="INVOICE")
         self.assertEqual([r["_key"] for r in out], ["k1"])
 
     def test_unmatched_returns_empty(self):

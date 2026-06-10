@@ -31,7 +31,7 @@ def test_clean_line_strips_markers():
 def test_noop_returns_query_unchanged():
     t = qt._NoOpTransform()
     assert t.kind == "off" and t.model == "n/a"
-    assert t.transform("son release ne zaman") == ["son release ne zaman"]
+    assert t.transform("when is the next release") == ["when is the next release"]
 
 
 # ---------------------------------------------------------------- env resolve
@@ -86,9 +86,9 @@ def test_env_overrides_model_and_n():
 # ---------------------------------------------------------------- prompts
 def test_messages_per_mode():
     tr = qt._LocalGenTransform("translate", "m")
-    msgs = tr._messages("son release ne zaman çıktı")
+    msgs = tr._messages("when did the last release ship")
     assert msgs[0]["role"] == "system" and "English" in msgs[0]["content"]
-    assert msgs[1]["content"] == "son release ne zaman çıktı"
+    assert msgs[1]["content"] == "when did the last release ship"
 
     hy = qt._LocalGenTransform("hyde", "m")
     assert "ANSWER" in hy._messages("q")[0]["content"]
@@ -114,8 +114,8 @@ def test_parse_single_line_modes():
 
 def test_parse_multi_one_per_line_capped():
     t = qt._LocalGenTransform("multi", "m", n_variants=2)
-    raw = "1. release date\n2. son sürüm tarihi\n3. version cut date"
-    assert t._parse(raw) == ["release date", "son sürüm tarihi"]   # capped at n=2
+    raw = "1. release date\n2. latest version date\n3. version cut date"
+    assert t._parse(raw) == ["release date", "latest version date"]   # capped at n=2
 
 
 # ---------------------------------------------------------------- transform()
@@ -130,17 +130,17 @@ class _StubGen(qt._LocalGenTransform):
 
 
 def test_transform_keeps_original_first_and_adds_variants():
-    t = _StubGen("multi", "release date\nson sürüm", n_variants=3)
-    out = t.transform("son sürüm ne zaman")
-    assert out[0] == "son sürüm ne zaman"                   # original always first
-    assert "release date" in out and "son sürüm" in out
+    t = _StubGen("multi", "release date\nlatest version", n_variants=3)
+    out = t.transform("when is the latest version")
+    assert out[0] == "when is the latest version"           # original always first
+    assert "release date" in out and "latest version" in out
 
 
 def test_transform_dedups_and_skips_echo_of_query():
     # model echoes the query (case-insensitively) and repeats a variant
-    t = _StubGen("multi", "Son Sürüm Ne Zaman\nfoo\nfoo", n_variants=3)
-    out = t.transform("son sürüm ne zaman")
-    assert out == ["son sürüm ne zaman", "foo"]             # echo + dup removed
+    t = _StubGen("multi", "When Is The Latest Version\nfoo\nfoo", n_variants=3)
+    out = t.transform("when is the latest version")
+    assert out == ["when is the latest version", "foo"]     # echo + dup removed
 
 
 def test_transform_failure_degrades_to_identity():

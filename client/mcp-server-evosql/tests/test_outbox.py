@@ -33,10 +33,10 @@ def _enable(transport=None):
     outbox.TRANSPORTS["gmail"] = transport or (lambda it: {"id": "x"})
 
 
-def _q(b, loop="loop_1", body="Merhaba, ekte.", **kw):
+def _q(b, loop="loop_1", body="here is the draft reply", **kw):
     kw.setdefault("channel", "gmail")
     kw.setdefault("source", "gmail")
-    kw.setdefault("to", "Ulaş")
+    kw.setdefault("to", "John Doe")
     return outbox.queue(b, NS, loop, body, **kw)
 
 
@@ -46,7 +46,7 @@ def test_queue_creates_pending_and_sends_nothing():
     b = FakeBackend()
     it = _q(b)
     assert it["status"] == "pending"
-    assert it["to"] == "Ulaş" and it["channel"] == "gmail"
+    assert it["to"] == "John Doe" and it["channel"] == "gmail"
     assert "sent_at" not in it
     assert [h["status"] for h in it["history"]] == ["pending"]
 
@@ -64,10 +64,10 @@ def test_queue_requires_body():
 def test_queue_upserts_by_loop_key():
     _clean()
     b = FakeBackend()
-    a = _q(b, body="ilk")
-    c = _q(b, body="düzeltilmiş")
+    a = _q(b, body="first draft")
+    c = _q(b, body="revised draft")
     assert a["id"] == c["id"]                       # same item, not a duplicate
-    assert c["body"] == "düzeltilmiş"
+    assert c["body"] == "revised draft"
     assert len(outbox.list_pending(b, NS)) == 1
 
 
@@ -123,7 +123,7 @@ def test_send_closes_the_open_loop():
     outbox.TRANSPORTS["gmail"] = lambda item: {"id": "x"}
     b = FakeBackend()
     b.put(b.loops_store, NS, "loop_1",
-          {"status": "open", "direction": "awaiting_me", "counterparty": "Ulaş"})
+          {"status": "open", "direction": "awaiting_me", "counterparty": "John Doe"})
     r = outbox.approve_send(b, NS, _q(b, loop="loop_1")["id"])
     assert r["sent"] and r["loop_resolved"] is True
     loop = b.rows(b.loops_store, NS)["loop_1"]
@@ -135,7 +135,7 @@ def test_dry_run_does_not_close_the_loop():
     _clean()                                              # send disabled -> dry-run
     b = FakeBackend()
     b.put(b.loops_store, NS, "loop_1",
-          {"status": "open", "direction": "awaiting_me", "counterparty": "Ulaş"})
+          {"status": "open", "direction": "awaiting_me", "counterparty": "John Doe"})
     r = outbox.approve_send(b, NS, _q(b, loop="loop_1")["id"])
     assert not r["sent"] and r["loop_resolved"] is False
     assert b.rows(b.loops_store, NS)["loop_1"]["status"] == "open"   # untouched
@@ -285,10 +285,10 @@ def test_list_pending_includes_scheduled():
 def test_preview_shows_what_goes_out():
     _clean()
     b = FakeBackend()
-    it = _q(b, body="merhaba", to="Ulaş")
-    it["to_email"] = "ulas@x.com"
+    it = _q(b, body="hello", to="John Doe")
+    it["to_email"] = "john@example.com"
     p = outbox.preview(it)
-    assert p["to"] == "ulas@x.com" and p["body"] == "merhaba"
+    assert p["to"] == "john@example.com" and p["body"] == "hello"
     assert p["channel"] == "gmail" and p["status"] == "pending"
 
 
@@ -398,12 +398,12 @@ def test_action_tools_registered():
 def test_queue_carries_to_email_and_thread():
     _clean()
     b = FakeBackend()
-    it = outbox.queue(b, NS, "loop_1", "cevap", channel="gmail", source="gmail",
-                      to="Ulaş", to_email="ulas@corp.com", thread_id="T9")
-    assert it["to_email"] == "ulas@corp.com" and it["thread_id"] == "T9"
+    it = outbox.queue(b, NS, "loop_1", "reply", channel="gmail", source="gmail",
+                      to="John Doe", to_email="john@example.com", thread_id="T9")
+    assert it["to_email"] == "john@example.com" and it["thread_id"] == "T9"
     # upsert keeps prior to_email/thread when re-queued without them
-    it2 = outbox.queue(b, NS, "loop_1", "düzeltme", channel="gmail", source="gmail")
-    assert it2["to_email"] == "ulas@corp.com" and it2["thread_id"] == "T9"
+    it2 = outbox.queue(b, NS, "loop_1", "revision", channel="gmail", source="gmail")
+    assert it2["to_email"] == "john@example.com" and it2["thread_id"] == "T9"
 
 
 def test_resolve_recipient_picks_inbound_address():
@@ -414,9 +414,9 @@ def test_resolve_recipient_picks_inbound_address():
            "labels": "SENT"})                            # outbound — skip
     b.put(b.memory, NS, "gmail_1",
           {"source": "gmail", "thread_id": "T9",
-           "from": "Ulaş <ulas@corp.com>", "labels": "INBOX"})
+           "from": "John Doe <john@example.com>", "labels": "INBOX"})
     addr = outbox.resolve_recipient(b, NS, {"source": "gmail", "thread_key": "T9"})
-    assert addr == "ulas@corp.com"
+    assert addr == "john@example.com"
     # teams routes by chat_id, not an address -> None
     assert outbox.resolve_recipient(b, NS, {"source": "teams"}) is None
 
@@ -425,37 +425,37 @@ def test_resolve_recipient_outlook_matches_subject():
     _clean()
     b = FakeBackend()
     b.put(b.memory, NS, "outlook_0",
-          {"source": "outlook", "subject": "Bütçe", "from": "me@x.com",
+          {"source": "outlook", "subject": "Budget", "from": "me@x.com",
            "folder": "Sent Items"})                      # outbound — skip
     b.put(b.memory, NS, "outlook_1",
-          {"source": "outlook", "subject": "Re: Bütçe",
-           "from": "Boss <boss@corp.com>", "folder": "Inbox"})
+          {"source": "outlook", "subject": "Re: Budget",
+           "from": "Boss <boss@example.com>", "folder": "Inbox"})
     # the loop's thread_key is the normalised subject
     addr = outbox.resolve_recipient(b, NS, {"source": "outlook",
-                                            "thread_key": "Bütçe"})
-    assert addr == "boss@corp.com"
+                                            "thread_key": "Budget"})
+    assert addr == "boss@example.com"
 
 
 def test_recipient_for_routes_per_channel():
     _clean()
     b = FakeBackend()
     b.put(b.memory, NS, "gmail_1",
-          {"source": "gmail", "thread_id": "T1", "from": "Ulaş <ulas@x.com>",
+          {"source": "gmail", "thread_id": "T1", "from": "John Doe <john@example.com>",
            "labels": "INBOX"})
     b.put(b.memory, NS, "imessage_1",
-          {"source": "imessage", "chat_id": "C1", "chat": "Deniz",
-           "handle": "+90555", "is_from_me": False})
+          {"source": "imessage", "chat_id": "C1", "chat": "Jane Roe",
+           "handle": "+900000000000", "is_from_me": False})
     # gmail -> email in to_email
     g = outbox.recipient_for(b, NS, {"source": "gmail", "thread_key": "T1",
-                                     "counterparty": "Ulaş"})
-    assert g["to_email"] == "ulas@x.com" and g["to"] == "Ulaş"
+                                     "counterparty": "John Doe"})
+    assert g["to_email"] == "john@example.com" and g["to"] == "John Doe"
     # imessage -> handle in `to`, no email
     im = outbox.recipient_for(b, NS, {"source": "imessage", "thread_key": "C1",
-                                      "counterparty": "Deniz"})
-    assert im["to"] == "+90555" and im["to_email"] is None
+                                      "counterparty": "Jane Roe"})
+    assert im["to"] == "+900000000000" and im["to_email"] is None
     # teams/slack -> display name, routed by thread_id (no address)
-    tm = outbox.recipient_for(b, NS, {"source": "teams", "counterparty": "Can"})
-    assert tm == {"to": "Can", "to_email": None}
+    tm = outbox.recipient_for(b, NS, {"source": "teams", "counterparty": "Alex Kim"})
+    assert tm == {"to": "Alex Kim", "to_email": None}
 
 
 # ---------------------------------------------------------------- CLI
