@@ -45,6 +45,33 @@ _AUTO_FROM = re.compile(
     r'bülten|destek@|support@|info@|news@)', re.I)
 _AUTO_LABELS = ("CATEGORY_PROMOTIONS", "CATEGORY_UPDATES",
                 "CATEGORY_FORUMS", "CATEGORY_SOCIAL")
+# High-precision automated/notification CONTENT markers (TR + EN, diacritic-
+# tolerant since SMS is often written without Turkish letters). These are
+# one-way machine messages — OTP codes, marketing, billing/utility notices,
+# unsubscribe/IYS footers — that a person never "replies" to, so they must not
+# open a loop. Kept specific enough not to fire on normal 1:1 conversation.
+_AUTO_CONTENT = re.compile(
+    r'(do[ğg]rulama kodu|g[üu]venlik kodu|aktivasyon kodu|verification code|'
+    r'one[\s-]?time|\botp\b|kod(unuz)?[:\s]+\d{3,8}|'
+    r'kampanya|f[ıi]rsat|indirim|%\s*\d|son g[üu]n|hediye [çc]ek|'
+    r'[üu]cretsiz kargo|sn\.?\s*m[üu][şs]ter|say[ıi]n m[üu][şs]ter|'
+    r'aboneli[ğg]in|planl[ıi].{0,4}kesint|elektrik kesint|hizmet talebi|'
+    r'abonelik.{0,3}[çc][ıi]k|unsubscribe|ticari ileti|\biys\b)', re.I)
+
+
+def _is_shortcode_sender(name: str) -> bool:
+    """An SMS/brand sender id, not a person: a short numeric short-code (a real
+    phone has >= 10 digits) or an ALL-CAPS alphabetic brand id (e.g.
+    'EXAMPLECO', 'WIDGET GAZ'). Real contacts are stored proper-case
+    (e.g. 'Ali Veli'), so this separates the two without an allow-list."""
+    n = (name or "").strip()
+    if len(n) < 3:
+        return False
+    has_alpha = any(c.isalpha() for c in n)
+    if not has_alpha:                       # purely numeric/symbol sender
+        digits = re.sub(r"\D", "", n)
+        return bool(digits) and len(digits) <= 6      # short-code, not a phone
+    return not any(c.islower() for c in n)            # ALL-CAPS brand id
 
 
 def _ts(d):
@@ -74,10 +101,22 @@ def _disp(name):
 
 
 def _is_auto(d):
-    if _AUTO_FROM.search(d.get("from") or ""):
+    # Channel-aware: gmail/outlook carry the sender in `from`; iMessage/SMS put
+    # the brand/short-code in `chat`/`handle`. The two-way "did I ever reply"
+    # filter is bypassed for teams/slack/imessage (so a first inbound still
+    # counts), which is exactly why automated SMS senders leaked into the brief
+    # as "waiting on you" — this filter is what stops them.
+    sender = d.get("from") or d.get("chat") or d.get("handle") or ""
+    if _AUTO_FROM.search(sender):
         return True
     lab = str(d.get("labels") or "")
-    return any(x in lab for x in _AUTO_LABELS)
+    if any(x in lab for x in _AUTO_LABELS):
+        return True
+    content = " ".join(str(d.get(k) or "")
+                       for k in ("text", "snippet", "fact", "subject"))
+    if _AUTO_CONTENT.search(content):
+        return True
+    return _is_shortcode_sender(_disp(sender))
 
 
 def _thread_key(d, source):
