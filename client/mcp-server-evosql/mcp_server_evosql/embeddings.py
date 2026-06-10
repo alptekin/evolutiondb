@@ -161,6 +161,14 @@ class _OpenAIProvider(EmbeddingProvider):
         self.api_key = api_key
         self.model   = model
 
+    @property
+    def model_name(self) -> str:
+        """Alias so callers that read `model_name` (the local/e5 providers'
+        attribute) get the OpenAI model id too. Without this, the stored
+        emb_model tag was just 'openai' with no model id, so a migration
+        between two OpenAI models looked identical and was silently skipped."""
+        return self.model
+
     def embed(self, text: str) -> Optional[List[float]]:
         if not text or not text.strip():
             return None

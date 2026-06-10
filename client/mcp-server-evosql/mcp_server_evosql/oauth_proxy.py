@@ -54,8 +54,18 @@ LISTEN_PORT    = int(os.environ.get("EVOSQL_OAUTH_PROXY_PORT", "8972"))
 
 ACCESS_TOKEN_TTL_SEC = 365 * 24 * 3600   # 1 year — refresh story is out of scope
 CODE_TTL_SEC         = 600               # 10 min — RFC-recommended max
+CLIENT_MAX_AGE_SEC   = 30 * 24 * 3600    # prune stale client registrations
+MAX_MEM_ENTRIES      = 5000              # cap the in-memory cache (DoS guard)
+SWEEP_EVERY          = 25                # sweep expired rows every N register/token
 
 _lock = threading.Lock()
+
+# Auth codes redeemed this process -> their expiry, so a code can't be replayed
+# even if the store-side delete silently fails (the _Store delete swallows
+# errors). Pruned by expiry during the periodic sweep; reset on restart (clients
+# re-auth). Guarded by _lock.
+_used_codes: Dict[str, int] = {}
+_op_counter = [0]   # register/token calls since last expired-row sweep
 
 
 # ---------------------------------------------------------------- #
@@ -149,6 +159,15 @@ class _Store:
                     return None
         return None
 
+    def _remember(self, key: str, value: Dict) -> None:
+        """Cache into _mem with a hard FIFO cap so an attacker spamming the
+        public /register and /authorize endpoints cannot grow it without
+        bound. Python dicts preserve insertion order, so popping the first key
+        evicts the oldest entry."""
+        self._mem[key] = value
+        while len(self._mem) > MAX_MEM_ENTRIES:
+            self._mem.pop(next(iter(self._mem)), None)
+
     def get(self, key: str) -> Optional[Dict]:
         if key in self._mem:
             return self._mem[key]
@@ -172,11 +191,11 @@ class _Store:
                 return None
         v = self._run(run)
         if v is not None:
-            self._mem[key] = v
+            self._remember(key, v)
         return v
 
     def put(self, key: str, value: Dict) -> None:
-        self._mem[key] = value
+        self._remember(key, value)
         ns, k = _e(self._namespace), _e(key)
         v = _e(json.dumps(value, separators=(",", ":")))
         def run(cur):
@@ -194,8 +213,58 @@ class _Store:
                 f"WHERE mem_namespace = '{ns}' AND mem_key = '{k}'")
         self._run(run)
 
+    def sweep_expired(self) -> int:
+        """Delete rows that can never be valid again: expired auth codes and
+        access tokens, and client registrations older than CLIENT_MAX_AGE_SEC.
+        Without this, the persisted store grows forever from the public
+        /register and /authorize endpoints (codes/tokens are otherwise removed
+        only on use, never on expiry). Best-effort; returns rows pruned."""
+        ns = _e(self._namespace)
+        def run(cur):
+            cur.execute(
+                f"SELECT mem_key, mem_value FROM __mem_{self._STORE_NAME} "
+                f"WHERE mem_namespace = '{ns}'")
+            return cur.fetchall() or []
+        rows = self._run(run)
+        if not rows:
+            return 0
+        now = _now()
+        pruned = 0
+        for key, raw in rows:
+            try:
+                val = raw if isinstance(raw, dict) else json.loads(raw)
+            except (TypeError, ValueError):
+                val = None
+            drop = False
+            if not isinstance(val, dict):
+                drop = True
+            elif key.startswith(("code:", "token:")):
+                drop = int(val.get("expires", 0)) < now
+            elif key.startswith("client:"):
+                drop = int(val.get("client_id_issued_at", now)) \
+                    < now - CLIENT_MAX_AGE_SEC
+            if drop:
+                self.delete(key)
+                pruned += 1
+        return pruned
+
 
 _store = _Store()
+
+
+def _maybe_sweep() -> None:
+    """Sweep expired rows roughly every SWEEP_EVERY register/token calls.
+    Caller must hold _lock."""
+    _op_counter[0] += 1
+    if _op_counter[0] >= SWEEP_EVERY:
+        _op_counter[0] = 0
+        try:
+            _store.sweep_expired()
+            now = _now()
+            for c in [c for c, exp in _used_codes.items() if exp < now]:
+                _used_codes.pop(c, None)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------- #
@@ -311,18 +380,44 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self._json(400, {"error": "invalid_client_metadata"})
 
+        # redirect_uris is REQUIRED for a public authorization_code client
+        # (RFC 7591 §2 / 7592). Accepting an empty list would later let the
+        # authorize endpoint approve ANY redirect_uri (open redirect / auth-code
+        # exfiltration), so reject registration without valid absolute https
+        # (or loopback http) redirect URIs up front.
+        raw_uris = payload.get("redirect_uris")
+        if not isinstance(raw_uris, list) or not raw_uris:
+            return self._json(400, {
+                "error": "invalid_redirect_uri",
+                "error_description": "redirect_uris is required and must be "
+                                     "a non-empty list"})
+        redirect_uris = []
+        for u in raw_uris:
+            if not isinstance(u, str):
+                continue
+            parts = urllib.parse.urlparse(u)
+            loopback = parts.hostname in ("127.0.0.1", "::1", "localhost")
+            if parts.scheme == "https" or (parts.scheme == "http" and loopback):
+                redirect_uris.append(u)
+        if not redirect_uris:
+            return self._json(400, {
+                "error": "invalid_redirect_uri",
+                "error_description": "redirect_uris must be absolute https URIs "
+                                     "(http allowed only for loopback)"})
+
         client_id = _rand(16)
         meta = {
             "client_id":                  client_id,
             "client_id_issued_at":        _now(),
             "client_name":                payload.get("client_name", "anonymous"),
-            "redirect_uris":              payload.get("redirect_uris") or [],
+            "redirect_uris":              redirect_uris,
             "token_endpoint_auth_method": "none",
             "grant_types":                ["authorization_code"],
             "response_types":             ["code"],
             "scope":                      "mcp",
         }
         with _lock:
+            _maybe_sweep()
             _store.put(f"client:{client_id}", meta)
         self._json(201, meta)
 
@@ -349,11 +444,17 @@ class _Handler(BaseHTTPRequestHandler):
                 "error_description": "client_id not registered",
             })
 
+        # Require an EXACT match against a registered redirect_uri,
+        # unconditionally. Previously the check was skipped when the registered
+        # list was empty, which let a client registered with no redirect_uris
+        # have the authorization code sent to any attacker-supplied URI. Empty
+        # registration is now rejected at /register, so this list is non-empty.
         registered_uris = client.get("redirect_uris") or []
-        if registered_uris and redirect_uri not in registered_uris:
+        if not redirect_uri or redirect_uri not in registered_uris:
             return self._json(400, {
                 "error":             "invalid_request",
-                "error_description": "redirect_uri does not match registration",
+                "error_description": "redirect_uri must exactly match a "
+                                     "registered redirect URI",
             })
 
         if response_type != "code":
@@ -407,9 +508,16 @@ class _Handler(BaseHTTPRequestHandler):
         client_id    = p.get("client_id", "")
 
         with _lock:
+            # Reject a code already redeemed this process even if its store row
+            # lingers (a swallowed delete failure would otherwise allow replay).
+            if code and code in _used_codes:
+                return self._json(400, {"error": "invalid_grant",
+                    "error_description": "code already used"})
             row = _store.get(f"code:{code}")
             if row is not None:
+                _used_codes[code] = int(row.get("expires", _now()))
                 _store.delete(f"code:{code}")
+            _maybe_sweep()
         if not row:
             return self._json(400, {"error": "invalid_grant",
                 "error_description": "code not found or already used"})
