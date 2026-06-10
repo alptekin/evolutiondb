@@ -20,6 +20,7 @@ status="resolved" so a closed thread stops nagging.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -236,6 +237,127 @@ def mark_resolved(backend, ns: str, loop_key: str, *, reason: str = "sent_reply"
     return True
 
 
+# ---------------------------------------------------------------- #
+#  GitHub PR/issue -> open loops (non-conversational)              #
+# ---------------------------------------------------------------- #
+def _github_me() -> str:
+    """The synced GitHub login ('me'), lower-cased. The connector matches
+    `involves:<GITHUB_USERNAME>` but stores no 'me' marker, so the reader must
+    be told out-of-band. Empty when unset -> no GitHub loops are derived."""
+    return (os.environ.get("GITHUB_USERNAME")
+            or os.environ.get("EVOSQL_GITHUB_LOGIN") or "").strip().lower()
+
+
+def _gh_age_days(iso: str, now: datetime) -> int:
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0, int((now - dt).total_seconds() // 86400))
+    except Exception:
+        return 0
+
+
+def _latest_other_review(reviews, me: str):
+    """Latest (state, author) review by someone other than `me`, or (None, None).
+    `reviews` is a list of (ts, author_lower, state)."""
+    best = None
+    for ts, author, state in reviews:
+        if author and author != me and (best is None or ts >= best[0]):
+            best = (ts, author, state)
+    return (best[2], best[1]) if best else (None, None)
+
+
+def _github_loops(backend, ns: str) -> dict:
+    """Derive open-loop records from synced GitHub PR/issue rows.
+
+    GitHub items are not message threads, so they map to loops by item state +
+    the user's involvement rather than by last-message direction. Reliable
+    signals only (the connector syncs search-issues objects, so there is no
+    requested_reviewers/draft/merged — "review requested from me" is NOT
+    derivable and is deliberately not faked):
+      * my open PR with a CHANGES_REQUESTED review  -> awaiting_me
+      * my open PR (otherwise)                       -> awaiting_them (review/merge)
+      * an open issue/PR assigned to me (not mine)   -> awaiting_me
+    Other "involved" items (commenter/mentioned only) are skipped — their
+    direction is unknowable from the stored data. Keys are a stable digest of
+    repo#number so the same item maps to the same loop every run (required for
+    resolve-on-disappear; merged/closed items drop out and auto-resolve).
+    """
+    me = _github_me()
+    if not me:
+        return {}
+    from .server import _e
+    rows = backend._query(
+        f"SELECT mem_value FROM __mem_{backend.memory} "
+        f"WHERE mem_namespace = '{_e(ns)}' AND mem_key LIKE 'gh_%'") or []
+    threads, reviews = [], {}
+    for r in rows:
+        try:
+            rec = json.loads(r[0])
+        except (ValueError, TypeError):
+            continue
+        if rec.get("source") != "github":
+            continue
+        kind = rec.get("kind")
+        if kind in ("pr", "issue") and rec.get("state") == "open":
+            threads.append(rec)
+        elif kind == "pr_review":
+            key = (rec.get("repo"), rec.get("number"))
+            reviews.setdefault(key, []).append((
+                rec.get("submitted_at") or rec.get("created_at") or "",
+                (rec.get("author") or "").lower(),
+                (rec.get("state") or "").upper()))
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    out: dict = {}
+    for rec in threads:
+        repo = rec.get("repo") or ""
+        number = rec.get("number")
+        if not repo or number is None:
+            continue
+        author = (rec.get("author") or "").lower()
+        assignees = [str(a).lower() for a in (rec.get("assignees") or [])]
+        kind = rec.get("kind")
+        title = rec.get("title") or ""
+        age = _gh_age_days(rec.get("updated_at") or rec.get("created_at") or "", now)
+
+        direction = counterparty = what = None
+        if author == me and kind == "pr":
+            state, reviewer = _latest_other_review(
+                reviews.get((repo, number)) or [], me)
+            if state == "CHANGES_REQUESTED":
+                direction, counterparty = "awaiting_me", reviewer or "reviewer"
+                what = f"address review on PR {repo}#{number}: {title}"
+            else:
+                direction = "awaiting_them"
+                counterparty = reviewer or (assignees[0] if assignees else "review")
+                what = f"PR {repo}#{number} awaiting review/merge: {title}"
+        elif me in assignees and author != me:
+            direction, counterparty = "awaiting_me", author or "author"
+            what = f"assigned {kind} {repo}#{number}: {title}"
+        if not direction:
+            continue   # involved but direction unknowable -> skip
+
+        loop = {
+            "kind": "open_loop", "source": "github", "status": "open",
+            "direction": direction, "counterparty": counterparty,
+            "what": what[:120],
+            "snippet": (title or rec.get("fact") or "")[:200],
+            "age_days": age, "actionable": age <= ACTIONABLE_DAYS,
+            "priority": "normal",
+            "thread_key": f"{repo}#{number}",
+            "url": rec.get("url"),
+            "last_ts": rec.get("updated_at") or rec.get("created_at") or now_iso,
+            "refreshed_at": now_iso,
+        }
+        lk = "loop_github_" + hashlib.sha1(
+            f"{repo}#{number}".encode("utf-8")).hexdigest()[:12]
+        out[lk] = loop
+    return out
+
+
 def job_open_loops(backend, ns: str) -> int:
     from .server import _e
     now = datetime.now(timezone.utc).timestamp()
@@ -373,6 +495,12 @@ def job_open_loops(backend, ns: str) -> int:
     from . import prefs
     lang, _set = prefs.get_language(backend, ns)
     _classify(open_now, lang)
+
+    # --- GitHub PR/issue loops (non-conversational) ----------------------
+    # Injected AFTER _classify so the LLM relabel (which could drop them via
+    # the needs_reply gate) never touches them, but BEFORE the resolution
+    # sweep so they still participate in cross-run resolve-on-disappear.
+    open_now.update(_github_loops(backend, ns))
 
     # --- close loops that are no longer open (cross-run resolution) -------
     existing = {}
