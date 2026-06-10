@@ -50,42 +50,46 @@ def test_is_auto_filters_sms_brand_shortcodes():
     # `chat`), where the two-way reply filter is bypassed — so without this they
     # leaked into the brief as "waiting on you". ALL-CAPS brand ids + a numeric
     # short-code + notification content must all be flagged automated.
-    # NB: all senders/content here are FICTIONAL — never put real contacts,
-    # numbers, brands or message text into the repo (personal-data hygiene).
+    # NB: all senders/content here are FICTIONAL and English — never put real
+    # contacts, numbers, brands or message text into the repo, and keep test
+    # data language-neutral (personal-data + no-Turkish-in-code hygiene).
     for brand, txt in (
-        ("EXAMPLE TELEKOM", "arama bilgilendirmesi"),
-        ("WIDGET GAZ", "Sn. Musterimiz, aboneliginize ait bilgilendirme"),
-        ("ACMEBANK", "kredi karti kampanya bilgilendirmesi"),
-        ("DEMO SIGORTA", "Dogrulama kodunuz: 123456"),
-        ("FOOBAR SERVIS", "hizmet talebiniz olusturuldu"),
-        ("MOCKEDAS", "PLANLI ELEKTRIK KESINTISI bildirimi"),
-        ("SAMPLE ASSN", "ozel firsat ve indirim"),
-        ("TESTCO MERKEZ", "Kampanya: ornek urun"),
+        ("EXAMPLE TELECOM", "call notification"),
+        ("WIDGET CORP", "dear customer, account notice"),
+        ("ACMEBANK", "credit card promo notice"),
+        ("DEMO INSURANCE", "your verification code is 123456"),
+        ("FOOBAR SERVICE", "service request created"),
+        ("MOCKEDISON", "planned power outage notice"),
+        ("SAMPLE ASSN", "special offer and discount"),
+        ("TESTCO CENTER", "promo: sample product"),
     ):
         assert ol._is_auto({"source": "imessage", "chat": brand, "text": txt}), brand
-    # numeric short-code, and OTP content regardless of sender
-    assert ol._is_auto({"source": "imessage", "chat": "4350", "text": "merhaba"})
+    # numeric short-code (flagged by the sender heuristic regardless of content)
+    assert ol._is_auto({"source": "imessage", "chat": "4350", "text": "hello"})
+    # and language-neutral OTP content even from an otherwise-plausible sender
+    assert ol._is_auto({"source": "imessage", "chat": "Verify",
+                        "text": "123456 is your code"})
 
 
 def test_is_auto_keeps_real_people():
     # Proper-case human contacts and a real-phone first text (no prior reply)
     # must NOT be flagged automated, so genuine loops still surface.
-    # Names/numbers below are placeholders, not real people.
+    # Names/numbers below are fictional placeholders.
     for who, txt in (
-        ("Ali Veli", "selam musait misin"),
-        ("Ayşe Kaya", "abi dosyayi gonderebilir misin"),
-        ("Mehmet Demir", "toplanti saat kacta"),
+        ("John Doe", "hey are you free"),
+        ("Jane Roe", "can you send the file"),
+        ("Alex Kim", "what time is the meeting"),
     ):
         assert not ol._is_auto({"source": "imessage", "chat": who, "text": txt}), who
     assert not ol._is_auto({"source": "imessage", "chat": "+900000000000",
-                            "text": "selam musait misin"})
+                            "text": "hey are you free"})
 
 
 def test_is_shortcode_sender():
-    assert ol._is_shortcode_sender("EXAMPLE TELEKOM")
-    assert ol._is_shortcode_sender("WIDGET GAZ")
+    assert ol._is_shortcode_sender("EXAMPLE TELECOM")
+    assert ol._is_shortcode_sender("WIDGET CORP")
     assert ol._is_shortcode_sender("4350")          # numeric short-code
-    assert not ol._is_shortcode_sender("Ali Veli")
+    assert not ol._is_shortcode_sender("John Doe")
     assert not ol._is_shortcode_sender("+900000000000")  # phone-length number
     assert not ol._is_shortcode_sender("ab")         # too short
 

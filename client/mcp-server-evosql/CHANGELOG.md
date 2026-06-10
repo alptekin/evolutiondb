@@ -2,6 +2,17 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.12.4 — Language-neutral code
+
+### Changed
+- Removed hardcoded natural-language (non-English) optimizations from the code:
+  the brief's automated-sender content filter is now language-neutral (one-time
+  / OTP / verification codes + unsubscribe footers); the heavy lifting stays in
+  the language-neutral sender heuristic (ALL-CAPS brand ids and numeric
+  short-codes). All test fixtures, code examples and comments use fictional,
+  English placeholders. Detected-language behavior continues to come from the
+  user's data at runtime, not from literals in the code.
+
 ## 1.12.3 — Brief: filter automated SMS/brand senders
 
 ### Fixed
@@ -10,11 +21,10 @@ All notable changes to `mcp-server-evolutiondb` are documented here.
   gmail/outlook, so automated senders arriving via iMessage (brand name or
   short-code in `chat`, never replied to) leaked in. `_is_auto` is now
   channel-aware: it reads the sender from `from`/`chat`/`handle`, flags ALL-CAPS
-  brand ids and short numeric SMS short-codes, and flags high-precision
-  notification content (OTP codes, kampanya/fırsat, "Sn. Müşterimiz", planlı
-  elektrik kesintisi, hizmet talebi, unsubscribe/IYS) — diacritic-tolerant since
-  SMS is often written without Turkish letters. Real proper-case contacts and
-  real-phone first texts are not affected, so genuine loops still surface.
+  brand ids and short numeric SMS short-codes, and flags automated notification
+  content (one-time / OTP / verification codes, unsubscribe footers). Real
+  proper-case contacts and real-phone first texts are not affected, so genuine
+  loops still surface. (Content markers were made language-neutral in 1.12.4.)
 
 ## 1.12.2 — Security hardening
 
@@ -58,9 +68,10 @@ SQL injection was found; all fixes are test-gated (full server-free suite green,
 
 ### Fixed
 - **Entity catalog corruption (critical)**: two different people sharing a first
-  name (`Ali Veli` / `Ali Can`) were fused into one entity, corrupting the graph,
-  episode and salience layers built on it. Honorific folding (`Ahmet bey` →
-  `Ahmet Yılmaz`) is preserved via an asymmetric, ambiguity-aware first-name
+  name (`John Doe` / `John Smith`) were fused into one entity, corrupting the
+  graph, episode and salience layers built on it. Folding a bare first-name
+  reference (`John` → `John Doe`) is preserved via an asymmetric, ambiguity-aware
+  first-name
   index; `_norm` also no longer mangles Turkish dotless-ı.
 - **Silent memory truncation**: a long `save_memory` fact is now trimmed-and-
   flagged via `_fit_payload` instead of being silently cut by the engine's 8 KB

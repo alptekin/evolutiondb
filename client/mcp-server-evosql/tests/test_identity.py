@@ -154,20 +154,21 @@ class PlanMergeTests(unittest.TestCase):
         # previously only the first was extended and the second was orphaned,
         # leaving overlapping aliases that resolved ambiguously.
         existing = [
-            {"_key": "identity_ali_work", "canonical_name": "Ali (work)",
-             "aliases": ["ali@work.com"], "sources": {"outlook": ["m1"]},
+            {"_key": "identity_john_work", "canonical_name": "John (work)",
+             "aliases": ["john@work.example"], "sources": {"outlook": ["m1"]},
              "tags": ["colleague"]},
-            {"_key": "identity_ali_home", "canonical_name": "Ali (home)",
-             "aliases": ["ali@home.com"], "sources": {"gmail": ["m2"]},
+            {"_key": "identity_john_home", "canonical_name": "John (home)",
+             "aliases": ["john@home.example"], "sources": {"gmail": ["m2"]},
              "tags": ["friend"]},
         ]
-        plan = ident.plan_merge(existing, ["ali@work.com", "ali@home.com"],
-                                canonical_name="Ali")
+        plan = ident.plan_merge(existing,
+                                ["john@work.example", "john@home.example"],
+                                canonical_name="John")
         self.assertEqual(plan["action"], "extend")
         self.assertEqual(set(plan["absorbed_keys"]),
-                         {"identity_ali_work", "identity_ali_home"})
+                         {"identity_john_work", "identity_john_home"})
         self.assertEqual(set(plan["record"]["aliases"]),
-                         {"ali@work.com", "ali@home.com"})
+                         {"john@work.example", "john@home.example"})
         self.assertEqual(plan["record"]["sources"],
                          {"outlook": ["m1"], "gmail": ["m2"]})
         self.assertEqual(set(plan["record"]["tags"]),

@@ -108,28 +108,28 @@ def test_canonicalization_rate():
 def test_distinct_people_sharing_first_name_do_not_merge():
     """Regression: two different people who share only a first name must NOT
     be fused into one entity (the bare-first-name match key did this and
-    corrupted the catalog). Honorific folding stays correct only when a single
-    person carries that first name."""
+    corrupted the catalog). A bare first-name reference folds in only when a
+    single known person carries that first name. (Fictional English names.)"""
     es = EntityStore(lambda s: None, lambda s: [], "ns", "E", "M")
-    es.upsert("k", "Ali Veli", "person", 0, 1, 0.8, 1.0, write=False)
-    veli = es.resolve("Ali Veli", "person")[0]
-    es.upsert("k", "Ali Can", "person", 0, 1, 0.8, 2.0, write=False)
-    can = es.resolve("Ali Can", "person")[0]
-    assert veli != can, "distinct surnames sharing a first name must not fuse"
+    es.upsert("k", "John Doe", "person", 0, 1, 0.8, 1.0, write=False)
+    doe = es.resolve("John Doe", "person")[0]
+    es.upsert("k", "John Smith", "person", 0, 1, 0.8, 2.0, write=False)
+    smith = es.resolve("John Smith", "person")[0]
+    assert doe != smith, "distinct surnames sharing a first name must not fuse"
     assert len({e["id"] for e in es._cache.values()}) == 2
 
-    # an ambiguous bare/honorific reference must NOT silently pick one of them
-    bey, is_new = es.resolve("Ali bey", "person")
-    assert is_new and bey not in (veli, can), \
+    # an ambiguous bare first-name reference must NOT silently pick one of them
+    bare, is_new = es.resolve("John", "person")
+    assert is_new and bare not in (doe, smith), \
         "ambiguous first-name reference must not fold onto a guessed person"
 
-    # but when only ONE person carries the first name, honorific folds in
+    # but when only ONE person carries the first name, a bare reference folds in
     es2 = EntityStore(lambda s: None, lambda s: [], "ns", "E", "M")
-    es2.upsert("k", "Mehmet Demir", "person", 0, 1, 0.8, 1.0, write=False)
-    md = es2.resolve("Mehmet Demir", "person")[0]
-    folded, is_new2 = es2.resolve("Mehmet bey", "person")
-    assert folded == md and not is_new2, \
-        "honorific reference should fold onto the single known Mehmet"
+    es2.upsert("k", "Mary Major", "person", 0, 1, 0.8, 1.0, write=False)
+    mm = es2.resolve("Mary Major", "person")[0]
+    folded, is_new2 = es2.resolve("Mary", "person")
+    assert folded == mm and not is_new2, \
+        "a bare first name should fold onto the single known person"
 
 
 # ---------------------------------------------------------------- #
