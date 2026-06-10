@@ -2,6 +2,40 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.12.2 — Security hardening
+
+A focused security audit of the personal-assistant agent. All fixes are
+test-gated (full server-free suite green, +11 security regressions).
+
+### Security
+- **SQL injection (critical)**: `_e()` doubles quotes but not backslashes, and
+  the EVO lexer treats `\'` as an escaped quote, so a caller-supplied memory
+  key/id ending in a backslash could escape its SQL string literal — via
+  `save_memory`'s `derived_from` (an IN-list of two keys) this enabled
+  cross-namespace reads, and `expand_episode` / `feedback` / `forget` /
+  `restore_memory` allowed predicate manipulation or statement DoS. Every
+  externally-supplied key/id is now allow-listed (`_valid_key`) against the
+  strict server-key charset before it is inlined.
+- **HTTP transport**: constant-time bearer comparison (`hmac.compare_digest`);
+  the server now refuses to bind a non-loopback address without
+  `EVOSQL_MCP_AUTH_TOKEN` (fail-closed, was a warning); CORS only reflects
+  allow-listed origins.
+- **Embedded auto-fetch**: the prebuilt-binary source is pinned to `https` on
+  the official GitHub host and the version format is validated, so a stray
+  `EVOSQL_SERVER_RELEASE_BASE` can no longer make the server fetch and execute
+  an arbitrary binary. (The sha256 is still verified before the binary is made
+  executable.)
+- **OAuth proxy**: the discovery / redirect origin is derived from
+  `EVOSQL_PUBLIC_ORIGIN` (or an `EVOSQL_OAUTH_ALLOWED_HOSTS` allow-list) instead
+  of the attacker-controllable `Host` / `X-Forwarded-Proto` headers; access
+  tokens now expire after `EVOSQL_OAUTH_TOKEN_TTL_DAYS` (default 90, was 1 year).
+- **ReDoS**: the email regexes (the inbound `from` header in the outbox, and
+  every saved fact during entity extraction) are de-ambiguated and
+  length-bounded, and extraction input is capped — an 80 KB adversarial value
+  went from tens of seconds (blocking the global execution lock) to under 50 ms.
+- **iMessage**: the recipient handle and message body are passed to `osascript`
+  via the child environment, not the command line (argv is world-readable).
+
 ## 1.12.1 — Code-review hardening (19 fixes)
 
 Adversarially-verified, bug-focused review of the personal-assistant agent. No
