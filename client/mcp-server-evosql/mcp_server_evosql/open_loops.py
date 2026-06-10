@@ -56,8 +56,14 @@ def _ts(d):
     for k in ("sent_at", "created_at", "received_at", "modified_at"):
         if d.get(k):
             try:
-                return datetime.fromisoformat(
-                    str(d[k]).replace("Z", "+00:00")).timestamp()
+                dt = datetime.fromisoformat(str(d[k]).replace("Z", "+00:00"))
+                # A timezone-less timestamp would otherwise be read by
+                # .timestamp() as LOCAL time, skewing age_days / staleness by
+                # the host's UTC offset. Connector timestamps are UTC, so pin
+                # naive values to UTC.
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
             except Exception:
                 pass
     return 0.0
@@ -88,18 +94,34 @@ def _thread_key(d, source):
 
 
 def _detect_my_id(msgs, key_field):
-    """'Me' is the sender_id present across the most distinct 1:1 conversations —
-    every counterparty appears in just their own chat, but you appear in all of
-    yours. key_field is the per-conversation id (chat_id for teams, channel_id
-    for slack DMs)."""
+    """Best-effort 'me' sender_id for a channel that doesn't flag direction
+    per-message. key_field is the per-conversation id (chat_id for teams,
+    channel_id for slack DMs).
+
+    1. If any message carries an explicit `is_from_me` flag, its sender_id IS
+       me — trust that over any heuristic.
+    2. Otherwise 'me' is the sender present across the most distinct 1:1
+       conversations (every counterparty appears in just their own chat, but
+       you appear in all of yours). Only trust this when the top sender is in
+       STRICTLY more conversations than the runner-up. With a single shared
+       conversation both sides tie at one, and guessing would INVERT every
+       loop's direction (awaiting_them <-> awaiting_me), so return None
+       (direction unknown) — callers then treat messages as inbound rather
+       than mislabel your own as the counterparty's."""
     from collections import defaultdict
+    for d in msgs:
+        if d.get("is_from_me") and d.get("sender_id"):
+            return d["sender_id"]
     convos = defaultdict(set)
     for d in msgs:
         if d.get("sender_id") and d.get(key_field):
             convos[d["sender_id"]].add(d[key_field])
     if not convos:
         return None
-    return max(convos.items(), key=lambda kv: len(kv[1]))[0]
+    ranked = sorted(convos.items(), key=lambda kv: len(kv[1]), reverse=True)
+    if len(ranked) >= 2 and len(ranked[0][1]) > len(ranked[1][1]):
+        return ranked[0][0]
+    return None
 
 
 def _detect_my_teams_id(teams_msgs):

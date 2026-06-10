@@ -313,6 +313,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     mcp_server = MCPServer()
 
+    # Warm up the backend on the MAIN thread before serving. The transport is
+    # multi-threaded, so a lazy first-connect would otherwise run on a worker
+    # thread — where the embedded-DB signal handlers cannot be installed (signals
+    # only register from the main thread) and concurrent first requests would
+    # race the connect. Best-effort: a DB that is briefly down at startup must
+    # not crash the server; the lazy path retries on the first request.
+    try:
+        mcp_server._connect()
+    except Exception as exc:
+        print(f"[mcp-http] backend not ready at startup, will retry on first "
+              f"request: {exc}", file=sys.stderr, flush=True)
+
     public_facing = args.host not in ("127.0.0.1", "::1", "localhost")
     token = _auth_token()
     if public_facing and not token:

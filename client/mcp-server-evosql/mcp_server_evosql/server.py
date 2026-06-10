@@ -31,6 +31,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -178,8 +179,12 @@ def _fit_payload(record: Dict[str, Any], key: str, user_id: str,
                and isinstance(rec.get(field), list) and rec[field]):
             rec[field] = rec[field][:-1]
             payload = json.dumps(rec)
-    # last resort: clamp the largest free-text field
-    for field in ("fact", "description", "text", "value"):
+    # last resort: clamp the largest free-text field. Include the connector
+    # free-text fields (body/snippet/subject) so a row whose bloat lives there
+    # — not in fact/description — still gets trimmed under budget instead of
+    # being silently truncated by the engine's 8 KB value buffer.
+    for field in ("fact", "description", "text", "value",
+                  "body", "snippet", "subject"):
         if len(payload) + len(key) + len(user_id) <= budget:
             break
         if isinstance(rec.get(field), str) and len(rec[field]) > 200:
@@ -664,7 +669,14 @@ class MemoryBackend:
                     f"{self.embedder.kind}:{model_name}"
                     if model_name else self.embedder.kind
                 )
-        value = json.dumps(record)
+        # Keep the serialized row under the engine's ~8 KB statement cap. The
+        # C side stores mem_value in a fixed value_json[8192] and SILENTLY
+        # truncates beyond it, corrupting the JSON so the row is dropped/garbled
+        # on read while save() still reports success. _fit_payload trims the
+        # emb vector first (recomputable on read), then provenance lists, then
+        # clamps the fact text — so a long note degrades gracefully instead of
+        # being silently lost. (save_semantic/save_skill already do this.)
+        value = _fit_payload(record, key, user_id)
         self._exec(
             f"MEMORY PUT INTO {self.memory} VALUES "
             f"('{_e(user_id)}','{_e(key)}','{_e(value)}')"
@@ -706,6 +718,7 @@ class MemoryBackend:
                 if self.graph_build and ext:
                     g = self._graph(user_id)
                     g.add_edges_from_row(key, ext, fact, created)
+                    g.note_mentions(key, ext)   # keep the warm boost index live
                     g.flush()   # edges are deferred; persist this row's now
             except Exception:
                 pass
@@ -1071,7 +1084,12 @@ class MemoryBackend:
         # keyword/dense signal requirement, so only episodes relevant to the
         # query come back — not the whole episode set.
         episode_only = (mode == "hierarchical")
-        q_terms = [w for w in query.lower().split() if len(w) > 1]
+        # Tokenize the query the SAME way as documents (_tokenize / \w+), not
+        # with str.split(): otherwise a punctuation-attached query term ("go!",
+        # "python,", "v1.2") keeps its punctuation and never equals the clean
+        # \w+ doc tokens, so it matches neither the BM25 term set nor the
+        # substring keyword check below.
+        q_terms = _tokenize(query)
 
         # Query-side transform: rewrite the raw query into variants that
         # sit closer to the documents' vocabulary (TR→EN translation,
@@ -1877,14 +1895,19 @@ class MemoryBackend:
             # Give the adjudicator the OLD FACT TEXT, not the opaque object id,
             # so it can judge a real contradiction (the catch-all related_to
             # predicate over-triggers; the LLM is the precision gate).
-            old_fact = c.get("old_object", "")
+            old_fact = ""
             try:
                 orows = self._fetch_by_keys(self.memory, user_id, superseded[:1])
                 if orows and orows[0] and orows[0][1]:
-                    old_fact = (json.loads(orows[0][1]).get("fact")
-                                or old_fact)
+                    old_fact = json.loads(orows[0][1]).get("fact") or ""
             except Exception:
-                pass
+                old_fact = ""
+            if not old_fact:
+                # Couldn't resolve the superseded row's real text. Never hand
+                # the adjudicator the opaque entity id (c["old_object"], e.g.
+                # 'ent_person_3_12345') as the 'old fact' — it can't judge a
+                # contradiction from an id, and would mostly NOOP or misfire.
+                continue
             try:
                 verdict = (adjudicate(text, old_fact) or "NOOP").upper()
             except Exception:
@@ -2910,28 +2933,40 @@ class MCPServer:
         self.query_transform = query_transform_from_env()
         self.backend: Optional[MemoryBackend] = None
         self.embedded = None      # EmbeddedEvolutionDB handle, if EVOSQL_EMBEDDED
+        # The HTTP transport serves requests on many threads (ThreadingHTTPServer),
+        # so the lazy first-connect must be serialized: without this lock two
+        # concurrent first requests both see backend is None and race —
+        # double-spawning the embedded DB and clobbering self.backend/self.embedded.
+        self._connect_lock = threading.Lock()
         # Action loop: wire opt-in send transports. No-op unless the operator set
         # EVOSQL_SEND_ENABLED + EVOSQL_SEND_CHANNELS — outbox stays dry-run by default.
         from . import transports
         transports.register_from_env()
 
     def _connect(self) -> MemoryBackend:
+        # Double-checked locking: the common case (already connected) stays
+        # lock-free; the first connect is serialized so only one thread spawns
+        # the embedded DB and builds the backend.
         if self.backend is None:
-            # Zero-Docker: with EVOSQL_EMBEDDED set, spawn a local EvolutionDB if
-            # nothing is already serving the port (no-op + harmless otherwise).
-            if self.embedded is None:
-                from . import embedded
-                self.embedded = embedded.maybe_start(self.host, self.port)
-            self.backend = MemoryBackend(self.host, self.port,
-                                            self.user, self.pw,
-                                            self.db, self.prefix,
-                                            embedder=self.embedder,
-                                            tagger=self.tagger,
-                                            reranker=self.reranker,
-                                            lexical=self.lexical,
-                                            rerank_mode=self.rerank_mode,
-                                            embedder2=self.embedder2,
-                                            query_transform=self.query_transform)
+            with self._connect_lock:
+                if self.backend is None:
+                    # Zero-Docker: with EVOSQL_EMBEDDED set, spawn a local
+                    # EvolutionDB if nothing is already serving the port (no-op
+                    # + harmless otherwise).
+                    if self.embedded is None:
+                        from . import embedded
+                        self.embedded = embedded.maybe_start(self.host,
+                                                             self.port)
+                    # Assign self.backend LAST, only once fully built, so a
+                    # racing reader never sees a half-initialized backend.
+                    self.backend = MemoryBackend(
+                        self.host, self.port, self.user, self.pw,
+                        self.db, self.prefix,
+                        embedder=self.embedder, tagger=self.tagger,
+                        reranker=self.reranker, lexical=self.lexical,
+                        rerank_mode=self.rerank_mode,
+                        embedder2=self.embedder2,
+                        query_transform=self.query_transform)
         return self.backend
 
     # -- tool dispatch ------------------------------------------------
