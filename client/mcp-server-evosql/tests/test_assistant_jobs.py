@@ -43,8 +43,8 @@ def test_outbox_flush_job_registered_and_delivers_due():
     outbox.TRANSPORTS["gmail"] = lambda it: {"id": "x"}
     try:
         b = FakeBackend()
-        it = outbox.queue(b, NS, "loop_1", "cevap", channel="gmail",
-                          source="gmail", to="Ulaş", to_email="u@x.com")
+        it = outbox.queue(b, NS, "loop_1", "reply", channel="gmail",
+                          source="gmail", to="John Doe", to_email="john@example.com")
         outbox.approve_send(b, NS, it["id"], undo_seconds=0)   # sent immediately
         # a due scheduled item is delivered by the job; none here -> 0 delivered
         assert SCH.job_outbox_flush(b, NS) == 0
@@ -61,8 +61,8 @@ def test_wrappers_delegate_to_modules():
            "subject": "P", "snippet": "hi", "labels": "SENT",
            "internal_date_ms": 2_000_000_000_000})
     b.put(b.memory, NS, "gmail_1",
-          {"source": "gmail", "thread_id": "T1", "from": "Ulaş <u@x.com>",
-           "subject": "Re: P", "snippet": "yapar mısın?", "labels": "INBOX",
+          {"source": "gmail", "thread_id": "T1", "from": "John Doe <john@example.com>",
+           "subject": "Re: P", "snippet": "can you do this?", "labels": "INBOX",
            "internal_date_ms": 2_000_000_100_000})
     assert SCH.job_open_loops(b, NS) == 1
     # self_model wrapper then reads those loops into a commitments section
@@ -76,14 +76,14 @@ def test_self_model_team_feeds_open_loops_priority():
     # the cross-feed: self_team written by self_model lifts a matching loop to high
     b = FakeBackend()
     b.put(b.selfmodel_store, NS, "self_team",
-          {"section": "team", "content": ["Ulaş"]})
+          {"section": "team", "content": ["John Doe"]})
     b.put(b.memory, NS, "gmail_0",
           {"source": "gmail", "thread_id": "T1", "from": "me@x.com",
            "subject": "P", "snippet": "hi", "labels": "SENT",
            "internal_date_ms": 2_000_000_000_000})
     b.put(b.memory, NS, "gmail_1",
-          {"source": "gmail", "thread_id": "T1", "from": "Ulaş <u@x.com>",
-           "subject": "Re: P", "snippet": "bakar mısın?", "labels": "INBOX",
+          {"source": "gmail", "thread_id": "T1", "from": "John Doe <john@example.com>",
+           "subject": "Re: P", "snippet": "could you take a look?", "labels": "INBOX",
            "internal_date_ms": 2_000_000_100_000})
     SCH.job_open_loops(b, NS)
     loop = next(iter(b.rows(b.loops_store, NS).values()))

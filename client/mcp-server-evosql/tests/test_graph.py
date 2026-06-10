@@ -1,5 +1,5 @@
 """
-test_graph — Adım 15 knowledge graph + 2-hop spreading activation.
+test_graph — Step 15 knowledge graph + 2-hop spreading activation.
 
 Unit:
   - extract_triples picks a typed predicate from the verb between two entity
@@ -29,19 +29,19 @@ PORT = int(os.environ.get("EVOSQL_PG_PORT", "5505"))
 #  unit                                                            #
 # ---------------------------------------------------------------- #
 def test_triples():
-    text = "Ahmet Yilmaz worked on Globex Inc. last quarter"
+    text = "John Doe worked on Globex Inc. last quarter"
     mentions = [
-        {"entity_id": "e_ahmet", "start": 0, "end": 11, "type": "person"},
-        {"entity_id": "e_globex", "start": 23, "end": 34, "type": "org"},
+        {"entity_id": "e_john", "start": 0, "end": 8, "type": "person"},
+        {"entity_id": "e_globex", "start": 19, "end": 30, "type": "org"},
     ]
     tr = extract_triples(text, mentions)
-    assert ("e_ahmet", "worked_on", "e_globex") in tr, tr
+    assert ("e_john", "worked_on", "e_globex") in tr, tr
     # no verb between -> related_to
-    text2 = "Ahmet Yilmaz, Globex Inc."
+    text2 = "John Doe, Globex Inc."
     tr2 = extract_triples(text2, [
-        {"entity_id": "e_ahmet", "start": 0, "end": 11, "type": "person"},
-        {"entity_id": "e_globex", "start": 14, "end": 25, "type": "org"}])
-    assert ("e_ahmet", DEFAULT_PREDICATE, "e_globex") in tr2, tr2
+        {"entity_id": "e_john", "start": 0, "end": 8, "type": "person"},
+        {"entity_id": "e_globex", "start": 10, "end": 21, "type": "org"}])
+    assert ("e_john", DEFAULT_PREDICATE, "e_globex") in tr2, tr2
     print("  ok  triples: typed predicate + co-occurrence default")
 
 
@@ -68,26 +68,26 @@ def test_spreading():
 #  eval gate — relational Recall@5, graph off vs on                #
 # ---------------------------------------------------------------- #
 HUBS = {
-    "Acme A.Ş.":        ["Ahmet Yılmaz", "Ayşe Kaya"],
-    "Globex Inc.":      ["Mehmet Demir", "Zeynep Arslan"],
-    "Initech LLC":      ["Fatma Şahin", "Ali Vural"],
-    "Umbrella Holding": ["Can Öztürk", "Deniz Aydın"],
+    "Acme Corp":        ["John Doe", "Jane Roe"],
+    "Globex Inc.":      ["Mary Major", "Alex Kim"],
+    "Initech LLC":      ["Sam Lee", "Pat Fox"],
+    "Umbrella Holding": ["Chris Bell", "Dana Cole"],
 }
 # per person: a verb so the hub-row gets a typed edge; the keyword-less
 # follow-up rows are what only the graph can reach.
 FOLLOWUPS = {
-    "Ahmet Yılmaz": "raporu tamamladı ve bütçeyi gönderdi",
-    "Ayşe Kaya": "müşteri görüşmesini bitirdi",
-    "Mehmet Demir": "test planını onayladı",
-    "Zeynep Arslan": "sunum taslağını hazırladı",
-    "Fatma Şahin": "sözleşme maddelerini gözden geçirdi",
-    "Ali Vural": "dağıtım takvimini güncelledi",
-    "Can Öztürk": "lansman kontrol listesini çıkardı",
-    "Deniz Aydın": "geri bildirimleri derledi",
+    "John Doe": "finished the report and sent the budget",
+    "Jane Roe": "wrapped up the client call",
+    "Mary Major": "approved the test plan",
+    "Alex Kim": "drafted the presentation outline",
+    "Sam Lee": "reviewed the contract clauses",
+    "Pat Fox": "updated the rollout schedule",
+    "Chris Bell": "produced the launch checklist",
+    "Dana Cole": "compiled the feedback notes",
 }
-NOISE = ["bugün hava çok güneşli", "öğle yemeği toplantısı iptal edildi",
-         "fatura geçen hafta ödendi", "ofis taşınması ertelendi",
-         "kahve makinesi tamir edildi", "yıllık izin planı duyuruldu"]
+NOISE = ["the weather is sunny today", "the lunch meeting was cancelled",
+         "the invoice was paid last week", "the office move was postponed",
+         "the coffee machine was repaired", "the annual leave plan was announced"]
 
 
 def _seed(b, ns):
@@ -95,7 +95,7 @@ def _seed(b, ns):
     for hub, people in HUBS.items():
         gold[hub] = set()
         for p in people:
-            k1 = b.save(ns, f"{p}, {hub} firmasında çalışıyor")
+            k1 = b.save(ns, f"{p} worked on {hub}")
             k2 = b.save(ns, f"{p} {FOLLOWUPS[p]}")   # no hub keyword
             gold[hub].update([k1, k2])
     for n in NOISE:
@@ -106,11 +106,11 @@ def _seed(b, ns):
 def _recall_at_5(b, ns, gold) -> float:
     queries = []
     for hub in HUBS:
-        queries.append((f"{hub} firmasında kimler aktif", gold[hub]))
-        queries.append((f"{hub} ekibinde kimler var", gold[hub]))
+        queries.append((f"who is active on {hub}", gold[hub]))
+        queries.append((f"who is on the {hub} team", gold[hub]))
     # two more to reach 10
-    queries.append(("Acme A.Ş. projesinde kim çalıştı", gold["Acme A.Ş."]))
-    queries.append(("Globex Inc. için kim sorumlu", gold["Globex Inc."]))
+    queries.append(("who worked on Acme Corp", gold["Acme Corp"]))
+    queries.append(("who is responsible for Globex Inc.", gold["Globex Inc."]))
     tot = 0.0
     for q, rel in queries:
         keys = {r["key"] for r in b.search(ns, q, limit=5)}
@@ -181,16 +181,16 @@ def test_hub_safe() -> bool:
     es, g = b._entities(ns), b._graph(ns)
     now = time.time()
     for i in range(250):                      # one org co-occurs in 250 rows
-        txt = f"Mehmet Kaya, Acme A.Ş. ile gorustu kayit {i}"
+        txt = f"John Doe mentioned Acme Corp in record {i}"
         b._exec(f"MEMORY PUT INTO {prefix}_mem VALUES "
                 f"('{_e(ns)}','hub{i}','{_e(json.dumps({'fact': txt}))}')")
         ext = es.process(f"hub{i}", txt, now, flush=False)
         if ext:
             g.add_edges_from_row(f"hub{i}", ext, txt, now)
     es.flush(); g.flush()
-    boost = b._graph_row_boost(ns, "Acme A.Ş.")
+    boost = b._graph_row_boost(ns, "Acme Corp")
     assert len(boost) <= MAX_BOOST_ROWS, f"boost rows not capped: {len(boost)}"
-    res = b.search(ns, "Acme A.Ş.", limit=10)   # the query that crashed prod
+    res = b.search(ns, "Acme Corp", limit=10)   # the query that crashed prod
     # server still alive? a follow-up query must succeed
     chk = b._query(f"SELECT COUNT(*) FROM __mem_{prefix}_mem")
     assert chk and chk[0], "server must survive a hub-entity graph-boost query"
@@ -207,7 +207,7 @@ def main() -> int:
     test_spreading()
     test_eval_gate()
     test_hub_safe()
-    print("OK — Adım 15 knowledge graph: triples + 2-hop spreading + "
+    print("OK — Step 15 knowledge graph: triples + 2-hop spreading + "
           "relational Recall@5 +30% + hub-entity IN-list safety")
     return 0
 

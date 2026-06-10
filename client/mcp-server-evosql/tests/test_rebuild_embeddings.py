@@ -1,5 +1,5 @@
 """
-test_rebuild_embeddings — Adım 10 downtime-free re-embedding migration.
+test_rebuild_embeddings — Step 10 downtime-free re-embedding migration.
 
 Verifies the stage -> commit / rollback lifecycle of rebuild_embeddings
 against an isolated EvoSQL server, using a stub embedder (no model deps):
@@ -123,7 +123,7 @@ def main() -> int:
         assert "emb_staging" not in rec, "rollback must drop staging"
         assert rec["emb"] == old_emb, "rollback must preserve emb"
 
-    print("OK — Adım 10 rebuild_embeddings: dry-run/stage(no-touch)/idempotent/"
+    print("OK — Step 10 rebuild_embeddings: dry-run/stage(no-touch)/idempotent/"
           "commit(swap)/rollback all correct")
     return 0
 
