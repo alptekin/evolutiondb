@@ -35,7 +35,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 from .embeddings import EmbeddingProvider, provider_from_env, encode_vec, decode_vec, Reranker, reranker_from_env, embedder2_from_env
@@ -295,7 +295,23 @@ class MemoryBackend:
                   lexical: str = "simple",
                   rerank_mode: str = "override",
                   embedder2: Optional["EmbeddingProvider"] = None,
-                  query_transform: Optional["QueryTransform"] = None):
+                  query_transform: Optional["QueryTransform"] = None,
+                  use_database: Optional[str] = None):
+        # Per-tenant routing: the engine ignores the PG-wire startup `database`
+        # parameter, so the ONLY way to land this connection on a tenant's
+        # database is to run `USE <db>` right after connecting. When set, both
+        # the initial connect and every reconnect issue it (see _connect). The
+        # legacy single-tenant path leaves this None → no USE → unchanged.
+        self._use_database = use_database
+        # Serialize all statements on this backend's single psycopg connection.
+        # The HTTP transport (ThreadingHTTPServer) dispatches concurrent
+        # requests for the same tenant onto worker threads that all share this
+        # one backend + connection; psycopg connections are NOT safe for
+        # concurrent use, so without this lock two in-flight statements corrupt
+        # the wire stream ("another operation in progress"). Reentrant because a
+        # few code paths nest backend calls. stdio is single-threaded so this is
+        # uncontended there.
+        self._lock = threading.RLock()
         self.embedder = embedder
         # Optional second dense embedder (e5) for RRF ensemble. When
         # present, search() fuses bge + e5 + keyword rankings via
@@ -568,7 +584,20 @@ class MemoryBackend:
 
     # -- connection lifecycle ----------------------------------------
     def _connect(self):
-        return self.psycopg.connect(**self._conn_kwargs)
+        conn = self.psycopg.connect(**self._conn_kwargs)
+        # Select the tenant's database. The startup `dbname` is ignored by the
+        # engine, so `USE` is the real switch. Runs on first connect AND on
+        # every reconnect (this method is the reconnect path in _with_retry),
+        # so a tenant connection never silently falls back to the default DB.
+        if self._use_database:
+            from . import tenancy
+            if not tenancy.is_valid_identifier(self._use_database):
+                raise RuntimeError(
+                    f"refusing to USE unsafe database name: "
+                    f"{self._use_database!r}")
+            with conn.cursor() as cur:
+                cur.execute(f"USE {self._use_database}")
+        return conn
 
     def _is_dead_connection_error(self, exc: BaseException) -> bool:
         """psycopg surfaces stale-connection failures via OperationalError
@@ -584,30 +613,33 @@ class MemoryBackend:
         OperationalError so the JSON-RPC dispatcher can return a
         meaningful tool error."""
         last_exc = None
-        for attempt in range(self._RECONNECT_ATTEMPTS):
-            try:
-                with self.conn.cursor() as cur:
-                    return fn(cur)
-            except Exception as exc:
-                if not self._is_dead_connection_error(exc):
-                    raise
-                last_exc = exc
-                print(f"[mcp-evosql] connection lost (attempt "
-                      f"{attempt + 1}/{self._RECONNECT_ATTEMPTS}): {exc}",
-                      file=sys.stderr, flush=True)
+        # Hold the per-backend lock for the whole execute+fetch so a concurrent
+        # worker thread can never interleave a statement on the same connection.
+        with self._lock:
+            for attempt in range(self._RECONNECT_ATTEMPTS):
                 try:
-                    self.conn.close()
-                except Exception:
-                    pass
-                if attempt + 1 < self._RECONNECT_ATTEMPTS:
-                    time.sleep(self._RECONNECT_BACKOFF_SEC * (attempt + 1))
+                    with self.conn.cursor() as cur:
+                        return fn(cur)
+                except Exception as exc:
+                    if not self._is_dead_connection_error(exc):
+                        raise
+                    last_exc = exc
+                    print(f"[mcp-evosql] connection lost (attempt "
+                          f"{attempt + 1}/{self._RECONNECT_ATTEMPTS}): {exc}",
+                          file=sys.stderr, flush=True)
                     try:
-                        self.conn = self._connect()
-                    except Exception as reconnect_exc:
-                        last_exc = reconnect_exc
-                        continue
-        # Out of attempts — re-raise the last error so the caller knows.
-        raise last_exc  # type: ignore[misc]
+                        self.conn.close()
+                    except Exception:
+                        pass
+                    if attempt + 1 < self._RECONNECT_ATTEMPTS:
+                        time.sleep(self._RECONNECT_BACKOFF_SEC * (attempt + 1))
+                        try:
+                            self.conn = self._connect()
+                        except Exception as reconnect_exc:
+                            last_exc = reconnect_exc
+                            continue
+            # Out of attempts — re-raise the last error so the caller knows.
+            raise last_exc  # type: ignore[misc]
 
     # -- helpers ------------------------------------------------------
     def _exec(self, sql: str) -> None:
@@ -2964,47 +2996,122 @@ class MCPServer:
         self.rerank_mode = os.environ.get("EVOSQL_RERANK_MODE",
                                           "override").lower()
         self.query_transform = query_transform_from_env()
+        # Request-scoped identity (multi-tenant). The legacy single-user
+        # attributes above (user_id/db/user/pw/prefix) mirror this default
+        # identity, which the stdio transport and any un-resolved request use
+        # — behaviour is byte-for-byte unchanged for the single-tenant case.
+        from . import tenancy
+        self.default_identity = tenancy.env_identity()
+        # One MemoryBackend per tenant connection, keyed by
+        # Identity.backend_key = (db_user, db_name, prefix). Lazily built and
+        # cached for the process lifetime. `self.backend` aliases the default
+        # tenant's backend once built (back-compat for introspection).
+        self._backends: Dict[Tuple[str, ...], MemoryBackend] = {}
         self.backend: Optional[MemoryBackend] = None
         self.embedded = None      # EmbeddedEvolutionDB handle, if EVOSQL_EMBEDDED
         # The HTTP transport serves requests on many threads (ThreadingHTTPServer),
         # so the lazy first-connect must be serialized: without this lock two
-        # concurrent first requests both see backend is None and race —
-        # double-spawning the embedded DB and clobbering self.backend/self.embedded.
+        # concurrent first requests both see a missing backend and race —
+        # double-spawning the embedded DB and clobbering the registry/self.embedded.
         self._connect_lock = threading.Lock()
         # Action loop: wire opt-in send transports. No-op unless the operator set
         # EVOSQL_SEND_ENABLED + EVOSQL_SEND_CHANNELS — outbox stays dry-run by default.
         from . import transports
         transports.register_from_env()
 
+    def _backend_for(self, identity: "tenancy.Identity") -> MemoryBackend:
+        """Return (lazily build + cache) the MemoryBackend for ``identity``.
+
+        Double-checked locking: the common case (tenant already connected)
+        stays lock-free; the first connect per tenant is serialized so only one
+        thread spawns the embedded DB and builds each backend. Each tenant
+        connects as its own DB user and (when issue_use) lands on its own
+        database via ``USE`` — the engine then enforces isolation.
+        """
+        key = identity.backend_key
+        b = self._backends.get(key)
+        if b is not None:
+            return b
+        with self._connect_lock:
+            b = self._backends.get(key)
+            if b is not None:
+                return b
+            # Zero-Docker: with EVOSQL_EMBEDDED set, spawn a local EvolutionDB
+            # once (shared by all tenants) if nothing is already serving the
+            # port (no-op + harmless otherwise).
+            if self.embedded is None:
+                from . import embedded
+                self.embedded = embedded.maybe_start(self.host, self.port)
+            # Build fully before publishing into the registry, so a racing
+            # reader never sees a half-initialized backend.
+            backend = MemoryBackend(
+                self.host, self.port, identity.db_user, identity.db_password,
+                identity.db_name, identity.prefix,
+                embedder=self.embedder, tagger=self.tagger,
+                reranker=self.reranker, lexical=self.lexical,
+                rerank_mode=self.rerank_mode,
+                embedder2=self.embedder2,
+                query_transform=self.query_transform,
+                use_database=(identity.db_name if identity.issue_use else None))
+            self._backends[key] = backend
+            if key == self.default_identity.backend_key:
+                self.backend = backend
+            return backend
+
     def _connect(self) -> MemoryBackend:
-        # Double-checked locking: the common case (already connected) stays
-        # lock-free; the first connect is serialized so only one thread spawns
-        # the embedded DB and builds the backend.
-        if self.backend is None:
-            with self._connect_lock:
-                if self.backend is None:
-                    # Zero-Docker: with EVOSQL_EMBEDDED set, spawn a local
-                    # EvolutionDB if nothing is already serving the port (no-op
-                    # + harmless otherwise).
-                    if self.embedded is None:
-                        from . import embedded
-                        self.embedded = embedded.maybe_start(self.host,
-                                                             self.port)
-                    # Assign self.backend LAST, only once fully built, so a
-                    # racing reader never sees a half-initialized backend.
-                    self.backend = MemoryBackend(
-                        self.host, self.port, self.user, self.pw,
-                        self.db, self.prefix,
-                        embedder=self.embedder, tagger=self.tagger,
-                        reranker=self.reranker, lexical=self.lexical,
-                        rerank_mode=self.rerank_mode,
-                        embedder2=self.embedder2,
-                        query_transform=self.query_transform)
-        return self.backend
+        """Back-compat shim: connect the default tenant's backend.
+
+        Used by the stdio warm-up and the HTTP transport's startup probe.
+        Per-request paths call ``_backend_for(identity)`` directly.
+        """
+        return self._backend_for(self.default_identity)
+
+    # -- multi-tenant token resolution -------------------------------
+    def multitenant_enabled(self) -> bool:
+        """Tenant resolution is active only when EVOSQL_TENANT_SECRET is set."""
+        from . import tenancy
+        return tenancy.multitenant_enabled()
+
+    def resolve_identity(self, token: str) -> "Optional[tenancy.Identity]":
+        """Resolve a bearer token to a tenant Identity via the control-plane
+        registry (read on the admin backend), or None if the token is not a
+        known/unexpired tenant token. The transport falls back to the legacy
+        shared-secret path / env default when this returns None."""
+        if not token or not self.multitenant_enabled():
+            return None
+        from . import tenancy
+        admin = self._backend_for(self.default_identity)
+        return tenancy.identity_for_token(token, admin)
+
+    # Tools that mutate tenant state or actually deliver a message. A `viewer`
+    # is read-only and is denied these; `member`/`admin` may run them. The
+    # cross-tenant boundary is enforced by the engine (per-tenant DB+GRANT);
+    # this is the in-tenant RBAC layer only.
+    _MUTATING_TOOLS = frozenset({
+        "save_memory", "forget", "restore_memory", "set_language", "feedback",
+        "queue_reply", "approve_send", "reject_reply", "send_scheduled",
+    })
+
+    def _rbac_error(self, name: str,
+                     identity: "tenancy.Identity") -> Optional[Dict[str, Any]]:
+        """Return an error dict if ``identity`` may not run tool ``name``,
+        else None. Fail-closed on writes: only admin/member may mutate."""
+        if name in self._MUTATING_TOOLS and not identity.has_role("admin", "member"):
+            return {"error": f"permission denied: role(s) {list(identity.roles)} "
+                             f"may not run '{name}' (read-only)"}
+        return None
 
     # -- tool dispatch ------------------------------------------------
-    def _call_tool(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        b = self._connect()
+    def _call_tool(self, name: str, args: Dict[str, Any],
+                    identity: "Optional[tenancy.Identity]" = None) -> Dict[str, Any]:
+        # Resolve the request-scoped principal. Stdio and any un-resolved
+        # request use the env-pinned default identity (single-tenant compat).
+        ident = identity or self.default_identity
+        deny = self._rbac_error(name, ident)
+        if deny is not None:
+            return deny
+        b = self._backend_for(ident)
+        uid = ident.user_id
         if name == "save_memory":
             fact = args.get("fact") or ""
             if not fact.strip():
@@ -3015,8 +3122,8 @@ class MCPServer:
             derived_from = args.get("derived_from") or []
             if isinstance(derived_from, str):
                 derived_from = [derived_from]
-            key = b.save(self.user_id, fact, tags, derived_from=derived_from)
-            return {"ok": True, "key": key, "user_id": self.user_id}
+            key = b.save(uid, fact, tags, derived_from=derived_from)
+            return {"ok": True, "key": key, "user_id": uid}
 
         if name == "search_memory":
             q = args.get("query") or ""
@@ -3030,17 +3137,21 @@ class MCPServer:
             # As-of time travel (step 22): an epoch or ISO-8601 timestamp;
             # superseded rows that were valid AT that time are kept.
             as_of = _parse_as_of(args.get("as_of"))
-            results = b.search(self.user_id, q,
+            results = b.search(uid, q,
                                limit=limit, tag=tag, sender=sender, mode=mode,
                                include_archived=inc_arch, as_of=as_of)
             # Implicit-feedback hook (Step 11): tag the response with a
             # query_id and log (query -> returned keys) so the caller can
-            # later report which keys it used via the feedback tool.
+            # later report which keys it used via the feedback tool. The log is
+            # a MEMORY PUT (a write), so a read-only `viewer` must NOT trigger
+            # it — gate by write role, not by tool name, so search stays
+            # genuinely side-effect-free for read-only principals.
             query_id = uuid.uuid4().hex
-            b.log_query(self.user_id, query_id, q,
-                        [r.get("key", "") for r in results])
+            if ident.has_role("admin", "member"):
+                b.log_query(uid, query_id, q,
+                            [r.get("key", "") for r in results])
             return {"ok": True,
-                    "user_id": self.user_id,
+                    "user_id": uid,
                     "query_id": query_id,
                     "results": results}
 
@@ -3053,7 +3164,7 @@ class MCPServer:
             unused = args.get("unused_keys") or []
             if isinstance(used, str):   used = [used]
             if isinstance(unused, str): unused = [unused]
-            return b.feedback(self.user_id, query_id,
+            return b.feedback(uid, query_id,
                               used_keys=used, unused_keys=unused,
                               rating=args.get("rating"))
 
@@ -3061,49 +3172,49 @@ class MCPServer:
             episode_id = args.get("episode_id") or ""
             if not episode_id:
                 return {"error": "expand_episode requires `episode_id`"}
-            return b.expand_episode(self.user_id, episode_id)
+            return b.expand_episode(uid, episode_id)
 
         if name == "recent_memories":
             limit = int(args.get("limit") or 10)
-            return {"ok": True, "user_id": self.user_id,
-                    "results": b.recent(self.user_id, limit)}
+            return {"ok": True, "user_id": uid,
+                    "results": b.recent(uid, limit)}
 
         if name == "forget":
             key = args.get("key") or ""
             if not key:
                 return {"error": "forget requires `key`"}
-            ok = b.forget(self.user_id, key)
+            ok = b.forget(uid, key)
             return {"ok": ok, "key": key}
 
         if name == "list_tags":
-            return {"ok": True, "user_id": self.user_id,
-                    "tags": b.list_tags(self.user_id)}
+            return {"ok": True, "user_id": uid,
+                    "tags": b.list_tags(uid)}
 
         if name == "show_profile":
-            return {"ok": True, "user_id": self.user_id,
-                    "profile": b.show_profile(self.user_id)}
+            return {"ok": True, "user_id": uid,
+                    "profile": b.show_profile(uid)}
 
         if name == "restore_memory":
             key = args.get("key") or ""
             if not key:
                 return {"error": "restore_memory requires `key`"}
-            return {"ok": b.restore(self.user_id, key), "key": key}
+            return {"ok": b.restore(uid, key), "key": key}
 
         if name == "set_language":
             from . import prefs
             lang = args.get("language") or ""
             if not lang.strip():
                 return {"error": "set_language requires `language`"}
-            lang = prefs.set_language(b, self.user_id, lang)
+            lang = prefs.set_language(b, uid, lang)
             return {"ok": True, "language": lang,
                     "note": f"Summaries will be written in {lang} from the next "
                             f"open_loops/self_model run."}
 
         if name == "daily_brief":
             from . import brief, prefs
-            data = brief.collect(b, self.user_id)
-            _lang, was_set = prefs.get_language(b, self.user_id)
-            text = brief.render(data, name=self.user_id.split("_")[0],
+            data = brief.collect(b, uid)
+            _lang, was_set = prefs.get_language(b, uid)
+            text = brief.render(data, name=uid.split("_")[0],
                                 lang_set=was_set)
             return {"ok": True, "brief": text,
                     "waiting_on_you": len(data["waiting_me"])}
@@ -3115,9 +3226,9 @@ class MCPServer:
                 top = int(top) if top is not None else 3
             except (TypeError, ValueError):
                 top = 3
-            res = suggest.suggest_replies(b, self.user_id, top=top,
+            res = suggest.suggest_replies(b, uid, top=top,
                                           loop_key=args.get("loop_key"))
-            return {"ok": True, "user_id": self.user_id, **res}
+            return {"ok": True, "user_id": uid, **res}
 
         if name == "queue_reply":
             from . import outbox, suggest
@@ -3125,13 +3236,13 @@ class MCPServer:
             body = args.get("body") or ""
             if not loop_key or not body.strip():
                 return {"error": "queue_reply requires `loop_key` and `body`"}
-            loop = suggest._load_loops(b, self.user_id).get(loop_key, {})
-            rcpt = outbox.recipient_for(b, self.user_id, loop)
+            loop = suggest._load_loops(b, uid).get(loop_key, {})
+            rcpt = outbox.recipient_for(b, uid, loop)
             to_arg = args.get("to") or ""
             to_val = to_arg or rcpt["to"]
             to_email = (to_arg if "@" in to_arg else None) or rcpt["to_email"]
             try:
-                item = outbox.queue(b, self.user_id, loop_key, body,
+                item = outbox.queue(b, uid, loop_key, body,
                                     channel=loop.get("source"),
                                     source=loop.get("source"),
                                     to=to_val, to_email=to_email,
@@ -3145,22 +3256,22 @@ class MCPServer:
 
         if name == "list_pending_replies":
             from . import outbox
-            return {"ok": True, "user_id": self.user_id,
-                    "pending": outbox.list_pending(b, self.user_id)}
+            return {"ok": True, "user_id": uid,
+                    "pending": outbox.list_pending(b, uid)}
 
         if name == "approve_send":
             from . import outbox
             item_id = args.get("item_id") or ""
             if not item_id:
                 return {"error": "approve_send requires `item_id`"}
-            return outbox.approve_send(b, self.user_id, item_id)
+            return outbox.approve_send(b, uid, item_id)
 
         if name == "reject_reply":
             from . import outbox
             item_id = args.get("item_id") or ""
             if not item_id:
                 return {"error": "reject_reply requires `item_id`"}
-            return outbox.reject(b, self.user_id, item_id)
+            return outbox.reject(b, uid, item_id)
 
         if name == "outbox_audit":
             from . import outbox
@@ -3169,21 +3280,26 @@ class MCPServer:
                 limit = int(limit) if limit is not None else 50
             except (TypeError, ValueError):
                 limit = 50
-            return {"ok": True, "user_id": self.user_id,
-                    "stats": outbox.stats(b, self.user_id),
-                    "trail": outbox.audit(b, self.user_id, limit=limit)}
+            return {"ok": True, "user_id": uid,
+                    "stats": outbox.stats(b, uid),
+                    "trail": outbox.audit(b, uid, limit=limit)}
 
         if name == "send_scheduled":
             from . import outbox
-            results = outbox.flush_scheduled(b, self.user_id)
-            return {"ok": True, "user_id": self.user_id,
+            results = outbox.flush_scheduled(b, uid)
+            return {"ok": True, "user_id": uid,
                     "delivered": sum(1 for r in results if r.get("sent")),
                     "results": results}
 
         return {"error": f"unknown tool: {name}"}
 
     # -- JSON-RPC dispatch -------------------------------------------
-    def handle(self, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def handle(self, msg: Dict[str, Any],
+                identity: "Optional[tenancy.Identity]" = None
+                ) -> Optional[Dict[str, Any]]:
+        # `identity` is the request-scoped principal resolved by the transport
+        # (HTTP bearer → tenant). stdio and un-resolved requests pass None and
+        # fall back to the env-pinned default identity (single-tenant compat).
         method = msg.get("method")
         params = msg.get("params") or {}
         msg_id = msg.get("id")
@@ -3207,12 +3323,19 @@ class MCPServer:
             name = params.get("name") or ""
             args = params.get("arguments") or {}
             try:
-                result = self._call_tool(name, args)
+                result = self._call_tool(name, args, identity)
             except Exception as e:
+                # Do NOT echo the raw exception to the client — engine error
+                # text can carry table/column names and fragments of the
+                # inlined SQL. Log the full traceback + a correlation ref
+                # server-side; return only the ref to the caller.
+                ref = uuid.uuid4().hex[:12]
+                print(f"[mcp-evosql] tool {name} failed (ref {ref}): {e}",
+                      file=sys.stderr, flush=True)
                 traceback.print_exc(file=sys.stderr)
                 return self._ok(msg_id, {
                     "content": [{"type": "text",
-                                    "text": f"tool {name} failed: {e}"}],
+                                    "text": f"tool {name} failed (ref {ref})"}],
                     "isError": True,
                 })
             text = json.dumps(result, ensure_ascii=False)
