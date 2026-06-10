@@ -59,6 +59,7 @@ class FakeBackend:
         self.profile_store = f"{prefix}_profile_clusters"
         # governance / derived-knowledge stores (audit, retention, tms)
         self.audit_store = f"{prefix}_audit"
+        self.templates_store = f"{prefix}_templates"
         self.job_runs_store = f"{prefix}_job_runs"
         self.semantic_store = f"{prefix}_semantic"
         self.skill_store = f"{prefix}_skills"
