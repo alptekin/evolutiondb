@@ -55,6 +55,13 @@ _ARG_FIELDS = {
                                   "has_to": bool(a.get("to")),
                                   "var_count": len(a.get("variables") or {})},
     "delete_template": lambda a: {"name": a.get("name")},
+    "create_rule":     lambda a: {"name": a.get("name"),
+                                  "template": a.get("template"),
+                                  "direction": a.get("direction"),
+                                  "min_age_days": a.get("min_age_days"),
+                                  "source": a.get("source")},
+    "delete_rule":     lambda a: {"name": a.get("name")},
+    "run_rules":       lambda a: {"dry_run": bool(a.get("dry_run"))},
 }
 
 
