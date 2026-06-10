@@ -35,6 +35,7 @@ at the same time.
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import os
 import sys
@@ -93,7 +94,9 @@ class _Handler(BaseHTTPRequestHandler):
         if not auth.lower().startswith("bearer "):
             self._send_json(401, {"error": "missing bearer token"})
             return False
-        if auth.split(" ", 1)[1].strip() != token:
+        # Constant-time compare so the token can't be recovered byte-by-byte
+        # via a timing oracle (this transport is meant to face a public tunnel).
+        if not hmac.compare_digest(auth.split(" ", 1)[1].strip(), token):
             self._send_json(401, {"error": "invalid bearer token"})
             return False
         return True
@@ -118,8 +121,15 @@ class _Handler(BaseHTTPRequestHandler):
     #  Response helpers                                                 #
     # ---------------------------------------------------------------- #
     def _cors_headers(self):
-        origin = self.headers.get("Origin", "*")
-        self.send_header("Access-Control-Allow-Origin",  origin)
+        # Only reflect an Origin we actually allow; never echo an arbitrary
+        # Origin back with Allow-Credentials-style headers. On a public bind an
+        # unknown Origin gets no ACAO header (browser blocks it); on loopback we
+        # fall back to "*" for the local-tool case where no Origin is sent.
+        origin = self.headers.get("Origin")
+        if origin and origin in self.server.allowed_origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        elif not self.server.public_facing:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods",
                           "POST, GET, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers",
@@ -328,10 +338,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     public_facing = args.host not in ("127.0.0.1", "::1", "localhost")
     token = _auth_token()
     if public_facing and not token:
-        print("[mcp-http] WARNING: binding to a non-loopback address "
-              "without EVOSQL_MCP_AUTH_TOKEN set. Anyone on the "
-              "network can call your memory tools.",
+        # REFUSE to serve unauthenticated on a non-loopback bind. The Origin
+        # check only constrains real browsers (a curl/native client omits
+        # Origin and `_check_origin` lets it through), so without a bearer
+        # token anyone on the network could call every memory tool. Fail
+        # closed instead of merely warning. Override only by setting
+        # EVOSQL_MCP_AUTH_TOKEN, or bind to loopback and front it with a tunnel.
+        print("[mcp-http] FATAL: refusing to bind a non-loopback address "
+              f"({args.host}) without EVOSQL_MCP_AUTH_TOKEN set — that would "
+              "expose your memory tools unauthenticated. Set a token, or bind "
+              "to 127.0.0.1 and front it with a TLS tunnel.",
               file=sys.stderr, flush=True)
+        return 2
 
     srv = _MCPThreadingHTTPServer(
         (args.host, args.port), _Handler,

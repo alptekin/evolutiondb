@@ -55,7 +55,17 @@ def _safe_put(exec_fn, store, ns, key, value) -> bool:
 # ---------------------------------------------------------------- #
 #  regex patterns                                                   #
 # ---------------------------------------------------------------- #
-_RE_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# De-ambiguated AND length-bounded to RFC limits so it is linear-time. The old
+# `[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}` had unbounded greedy runs +
+# two adjacent '.'-matching classes, giving O(n^2) backtracking on a long input
+# (~8.5s for 80 KB). Bounding the local part (<=64), each domain label (<=63)
+# and the TLD caps the work per start position, so a malicious long fact can't
+# stall the (globally-serialized) engine. Domain is now (label.)+TLD.
+_RE_EMAIL = re.compile(
+    r"[A-Za-z0-9._%+\-]{1,64}@(?:[A-Za-z0-9-]{1,63}\.){1,8}[A-Za-z]{2,24}")
+# Cap the text fed to regex extraction — NER needs only the first few KB, and an
+# uncapped fact (no length limit on save_memory) is attacker-reachable DoS fuel.
+MAX_EXTRACT_CHARS = 20000
 _RE_IBAN  = re.compile(r"\bTR\d{2}(?:[ ]?\d{2,4}){5,6}\b", re.I)
 _RE_PHONE = re.compile(
     r"(?<!\d)(?:\+90|0090|0)?[ ]?\(?5\d{2}\)?[ ]?\d{3}[ ]?\d{2}[ ]?\d{2}(?!\d)")
@@ -190,6 +200,7 @@ def _add(out: List[Mention], seen: List[Tuple[int, int]], surface: str,
 def extract_regex(text: str) -> List[Mention]:
     out: List[Mention] = []
     seen: List[Tuple[int, int]] = []
+    text = (text or "")[:MAX_EXTRACT_CHARS]   # bound regex work (DoS guard)
     # priority order: structured ids first, then org, then person
     for rx, typ, conf in ((_RE_EMAIL, "email", 0.99), (_RE_IBAN, "iban", 0.98),
                           (_RE_TCKN, "tckn", 0.9), (_RE_PHONE, "phone", 0.9)):

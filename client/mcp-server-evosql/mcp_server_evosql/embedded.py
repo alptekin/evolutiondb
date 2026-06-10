@@ -17,11 +17,13 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -32,6 +34,28 @@ SERVER_VERSION = os.environ.get("EVOSQL_SERVER_VERSION", "3.0.0")
 RELEASE_BASE = os.environ.get(
     "EVOSQL_SERVER_RELEASE_BASE",
     "https://github.com/alptekin/evolutiondb/releases/download")
+
+# Auto-fetch downloads + executes a binary, so the source must be pinned:
+# without this an attacker who can set EVOSQL_SERVER_RELEASE_BASE (a .env /
+# launchd / compose entry) makes the embedded server fetch+chmod+exec an
+# arbitrary binary — full RCE. The .sha256 is fetched from the same base, so it
+# only guards corruption, not a malicious mirror; pinning the host is what makes
+# the checksum meaningful. GitHub release downloads 302 to the second host.
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+_ALLOWED_RELEASE_HOSTS = ("github.com", "objects.githubusercontent.com")
+
+
+def _validate_release_source(base: str, version: str) -> None:
+    if not _VERSION_RE.match(version or ""):
+        raise RuntimeError(
+            f"refusing to auto-fetch: invalid server version {version!r} "
+            f"(expected N.N.N)")
+    parts = urllib.parse.urlparse(base or "")
+    if parts.scheme != "https" or parts.hostname not in _ALLOWED_RELEASE_HOSTS:
+        raise RuntimeError(
+            f"refusing to auto-fetch evosql-server from untrusted source "
+            f"{base!r} — only https://github.com is allowed. Set "
+            f"EVOSQL_SERVER_BINARY to use a local binary instead.")
 
 
 def _truthy(v) -> bool:
@@ -107,6 +131,10 @@ def fetch_binary(*, version=None, dest=None, base=None, _open=None) -> str:
     `_open` is injectable for tests (defaults to urllib)."""
     version = version or SERVER_VERSION
     base = base or RELEASE_BASE
+    # Pin the source for the real network path. Tests inject `_open` (and may
+    # use a file:// base), so the check applies only to the production opener.
+    if _open is None:
+        _validate_release_source(base, version)
     opener = _open or (lambda url: urllib.request.urlopen(url, timeout=180))
     asset = asset_name()
     url = f"{base}/server-v{version}/{asset}"
