@@ -358,6 +358,100 @@ def _github_loops(backend, ns: str) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- #
+#  Azure DevOps PRs -> open loops (non-conversational)             #
+# ---------------------------------------------------------------- #
+def _ado_me() -> str:
+    """The synced Azure DevOps login ('me' = the PAT owner's uniqueName),
+    lower-cased. Set out-of-band; empty -> no ADO loops are derived."""
+    return (os.environ.get("AZURE_DEVOPS_USERNAME")
+            or os.environ.get("EVOSQL_ADO_LOGIN") or "").strip().lower()
+
+
+def _ado_loops(backend, ns: str) -> dict:
+    """Derive open-loop records from synced Azure DevOps PR rows.
+
+    Unlike GitHub's search-issues feed, the ADO PR record carries review state
+    first-class (``reviewers[]`` with votes, ``is_draft``, ``status``), so the
+    mapping is direct — no guessing:
+      * I'm a reviewer on someone else's active PR and my vote == 0
+                                            -> awaiting_me (review requested)
+      * my active PR with a -5/-10 vote      -> awaiting_me (address review)
+      * my active PR otherwise               -> awaiting_them (review/merge)
+    Drafts are skipped (a draft asks nothing of anyone). Completed/abandoned
+    PRs drop out of the query and auto-resolve via the cross-run sweep. Keys
+    are a stable digest of repo#number, mirroring the github loops.
+    """
+    me = _ado_me()
+    if not me:
+        return {}
+    from .server import _e
+    rows = backend._query(
+        f"SELECT mem_value FROM __mem_{backend.memory} "
+        f"WHERE mem_namespace = '{_e(ns)}' AND mem_key LIKE 'ado_%'") or []
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    out: dict = {}
+    for r in rows:
+        try:
+            rec = json.loads(r[0])
+        except (ValueError, TypeError):
+            continue
+        if (rec.get("source") != "azure_devops" or rec.get("kind") != "pr"
+                or rec.get("status") != "active" or rec.get("is_draft")):
+            continue
+        repo = rec.get("repo") or ""
+        number = rec.get("number")
+        if not repo or number is None:
+            continue
+        author = (rec.get("author") or "").lower()
+        reviewers = rec.get("reviewers") or []
+        title = rec.get("title") or ""
+        age = _gh_age_days(rec.get("updated_at") or rec.get("created_at") or "", now)
+
+        direction = counterparty = what = None
+        priority = "normal"
+        my_review = next((rv for rv in reviewers
+                          if (rv.get("name") or "").lower() == me), None)
+        if author != me and my_review is not None:
+            if int(my_review.get("vote") or 0) == 0:
+                # review requested from me and I have not voted — first-class
+                direction, counterparty = "awaiting_me", author or "author"
+                what = f"review PR {repo}#{number}: {title}"
+                if my_review.get("is_required"):
+                    priority = "high"
+            # I already voted (approved or pushed back): ball is the author's.
+        elif author == me:
+            neg = [rv for rv in reviewers if int(rv.get("vote") or 0) < 0]
+            if neg:
+                direction = "awaiting_me"
+                counterparty = neg[0].get("name") or "reviewer"
+                what = f"address review on PR {repo}#{number}: {title}"
+            else:
+                req = next((rv for rv in reviewers if rv.get("is_required")),
+                           None) or (reviewers[0] if reviewers else None)
+                direction = "awaiting_them"
+                counterparty = (req or {}).get("name") or "review"
+                what = f"PR {repo}#{number} awaiting review/merge: {title}"
+        if not direction:
+            continue
+
+        out["loop_ado_" + hashlib.sha1(
+                f"{repo}#{number}".encode("utf-8")).hexdigest()[:12]] = {
+            "kind": "open_loop", "source": "azure_devops", "status": "open",
+            "direction": direction, "counterparty": counterparty,
+            "what": (what or "")[:120],
+            "snippet": (title or rec.get("fact") or "")[:200],
+            "age_days": age, "actionable": age <= ACTIONABLE_DAYS,
+            "priority": priority,
+            "thread_key": f"{repo}#{number}",
+            "url": rec.get("url"),
+            "last_ts": rec.get("updated_at") or rec.get("created_at") or now_iso,
+            "refreshed_at": now_iso,
+        }
+    return out
+
+
 def job_open_loops(backend, ns: str) -> int:
     from .server import _e
     now = datetime.now(timezone.utc).timestamp()
@@ -501,6 +595,7 @@ def job_open_loops(backend, ns: str) -> int:
     # the needs_reply gate) never touches them, but BEFORE the resolution
     # sweep so they still participate in cross-run resolve-on-disappear.
     open_now.update(_github_loops(backend, ns))
+    open_now.update(_ado_loops(backend, ns))
 
     # --- close loops that are no longer open (cross-run resolution) -------
     existing = {}
