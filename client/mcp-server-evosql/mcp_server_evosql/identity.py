@@ -94,6 +94,22 @@ def resolve_aliases(records: Iterable[Dict[str, Any]],
     return sorted(set(hits))
 
 
+def _merge_sources(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+    """Union a source map into `dst` in place. Values are per-channel id lists
+    ({'teams': [...], 'slack': [...]}); overlapping channels union their lists,
+    preserving order and dropping duplicates. Non-list values are kept if not
+    already present."""
+    for k, v in (src or {}).items():
+        if isinstance(v, list):
+            cur = dst.setdefault(k, [])
+            for item in v:
+                if item not in cur:
+                    cur.append(item)
+        else:
+            dst.setdefault(k, v)
+    return dst
+
+
 def plan_merge(records: Iterable[Dict[str, Any]],
                 aliases: List[str],
                 canonical_name: Optional[str] = None
@@ -119,26 +135,44 @@ def plan_merge(records: Iterable[Dict[str, Any]],
     if not cleaned:
         raise ValueError("plan_merge() requires at least one non-empty alias")
 
-    absorbed: Optional[Dict[str, Any]] = None
+    # Collect EVERY existing identity matched by ANY alias, not just the first.
+    # When the aliases span two different identities (e.g. a work + a personal
+    # address that turn out to be the same person), extending only the first
+    # would orphan the second — leaving two records with overlapping aliases
+    # that resolve ambiguously. Fold them all into one.
+    absorbed_list: List[Dict[str, Any]] = []
+    seen_keys: set = set()
     for a in cleaned:
-        ident = find_identity_by_alias(records, a)
-        if ident:
-            absorbed = ident
-            break
+        found = find_identity_by_alias(records, a)
+        if found:
+            fk = found.get("_key")
+            # dedup by _key (or by identity object when keys are absent)
+            marker = fk if fk is not None else id(found)
+            if marker not in seen_keys:
+                seen_keys.add(marker)
+                absorbed_list.append(found)
 
-    if absorbed:
-        all_aliases = set(absorbed.get("aliases") or []) | set(cleaned)
-        name        = canonical_name or absorbed["canonical_name"]
+    if absorbed_list:
+        all_aliases = set(cleaned)
+        merged_sources: Dict[str, Any] = {}
+        all_tags: set = set()
+        for ident in absorbed_list:
+            all_aliases |= set(ident.get("aliases") or [])
+            _merge_sources(merged_sources, ident.get("sources") or {})
+            all_tags |= set(ident.get("tags") or [])
+        name = canonical_name or absorbed_list[0]["canonical_name"]
         new_rec = {
             "canonical_name": name,
             "aliases":        sorted(all_aliases),
-            "sources":        absorbed.get("sources") or {},
-            "tags":           sorted(set(absorbed.get("tags") or [])),
+            "sources":        merged_sources,
+            "tags":           sorted(all_tags),
             "updated_at":     time.time(),
         }
+        keys = [i.get("_key") for i in absorbed_list if i.get("_key")]
         return {"action": "extend",
                 "record": new_rec,
-                "absorbed_key": absorbed.get("_key")}
+                "absorbed_key": keys[0] if keys else None,
+                "absorbed_keys": keys}
 
     new_rec = {
         "canonical_name": canonical_name or cleaned[0],
@@ -147,7 +181,8 @@ def plan_merge(records: Iterable[Dict[str, Any]],
         "tags":           [],
         "updated_at":     time.time(),
     }
-    return {"action": "create", "record": new_rec, "absorbed_key": None}
+    return {"action": "create", "record": new_rec,
+            "absorbed_key": None, "absorbed_keys": []}
 
 
 # ---------------------------------------------------------------- #
@@ -249,15 +284,21 @@ class IdentityStore:
         plan = plan_merge(self.list_records(),
                           list(aliases),
                           canonical_name=canonical_name)
-        if plan["action"] == "extend" and plan["absorbed_key"]:
-            # The canonical_name might change the slug — delete the
-            # old row before writing the new one to avoid a stray
-            # duplicate.
-            old_key  = plan["absorbed_key"]
+        if plan["action"] == "extend":
+            # Delete EVERY absorbed identity whose key differs from the new
+            # one, not just the first. The merged record is written under
+            # new_key; any other matched identity must be removed or it would
+            # linger with overlapping aliases (ambiguous resolution). The slug
+            # may also change with a new canonical_name, so the primary's old
+            # key can differ from new_key too.
             new_slug = slugify(plan["record"]["canonical_name"])
             new_key  = f"{KEY_PREFIX}{new_slug}"
-            if old_key != new_key:
-                self.delete(old_key)
+            absorbed_keys = plan.get("absorbed_keys")
+            if not absorbed_keys and plan.get("absorbed_key"):
+                absorbed_keys = [plan["absorbed_key"]]
+            for old_key in absorbed_keys or []:
+                if old_key and old_key != new_key:
+                    self.delete(old_key)
         return self._put(plan["record"])
 
     def split(self, alias: str) -> Optional[Dict[str, Any]]:

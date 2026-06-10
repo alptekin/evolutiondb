@@ -335,7 +335,16 @@ def configure_client(spec: ClientSpec, *,
     if path is None:
         return {"client": spec.name, "status": "unsupported", "path": None}
 
-    block = build_block(user_id, evosql_port)
+    # Honor the operator's real connection settings (same env vars + defaults
+    # the server reads). Previously build_block fell back to its admin/admin
+    # defaults, so a non-default password/host/db was silently ignored and the
+    # written config could not connect.
+    block = build_block(
+        user_id, evosql_port,
+        evosql_host=os.environ.get("EVOSQL_HOST", "127.0.0.1"),
+        evosql_user=os.environ.get("EVOSQL_USER", "admin"),
+        evosql_password=os.environ.get("EVOSQL_PASSWORD", "admin"),
+        evosql_database=os.environ.get("EVOSQL_DATABASE", "evosql"))
     try:
         changed = merge_config(path, block)
     except (OSError, ValueError) as exc:

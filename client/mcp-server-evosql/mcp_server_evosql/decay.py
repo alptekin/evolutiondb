@@ -156,6 +156,23 @@ def near_dup_competitors(winner_vec, cand_vecs: Dict[str, list],
     return out
 
 
+def _fetch_current(backend, user_id: str, k: str, esc) -> Optional[dict]:
+    """Re-read a single memory row's current value, so a decay rewrite patches
+    the live record instead of a stale scan snapshot. Returns the parsed record
+    or None if the row is gone / unreadable."""
+    rows = backend._query(
+        f"SELECT mem_value FROM __mem_{backend.memory} "
+        f"WHERE mem_namespace = '{esc(user_id)}' AND mem_key = '{esc(k)}' "
+        f"LIMIT 1") or []
+    if not rows or not rows[0] or rows[0][0] is None:
+        return None
+    try:
+        v = rows[0][0]
+        return v if isinstance(v, dict) else json.loads(v)
+    except Exception:
+        return None
+
+
 def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
                lam: float = LAMBDA, dry_run: bool = False) -> Dict[str, int]:
     """Re-evaluate every row's decay_score and flip the archived flag when it
@@ -194,7 +211,25 @@ def decay_pass(backend, user_id: str, *, threshold: float = THRESHOLD,
                 active += 1
             continue
         if not dry_run:
-            value = json.dumps(rec)
+            # Re-read the row immediately before writing and patch ONLY the
+            # archived flag onto the CURRENT record. decay runs in the
+            # scheduler process while save()/reconsolidate run in the MCP
+            # server process; the row snapshot taken by the SELECT above can be
+            # stale by now. Rewriting the whole stale `rec` would clobber a
+            # concurrent fact/tags/emb update (silent data loss). Re-reading
+            # narrows the read-modify-write window to a single statement.
+            fresh = _fetch_current(backend, user_id, k, _e)
+            if fresh is None:
+                # row vanished or unreadable since the scan — do not resurrect a
+                # stale copy; just drop this decay update.
+                skipped += 1
+                if want:
+                    archived -= 1
+                else:
+                    unarchived -= 1
+                continue
+            fresh["archived"] = rec["archived"]
+            value = json.dumps(fresh)
             # Guard the 8 KB statement cap: a record too big to rewrite is
             # left as-is rather than killing the connection. Rare (only very
             # large rows), and decay is a soft signal.

@@ -98,7 +98,12 @@ Mention = Dict[str, Any]   # {surface, type, start, end, confidence}
 def _norm(s: str) -> str:
     """Lowercase + strip diacritics + collapse non-alnum to single spaces.
     Used for canonical matching so 'Süreyya G.' and 'sureyya g' compare equal."""
-    s = unicodedata.normalize("NFKD", s.lower())
+    # Turkish dotless-ı (U+0131) has no NFKD decomposition, so it would survive
+    # lowercasing and then be deleted by the [^a-z] collapse below — splitting
+    # 'Yılmaz' into 'y lmaz' and 'hanım' into 'han m'. Fold it to 'i' first so
+    # Turkish names normalize whole (NFKD already handles ç/ş/ğ/ö/ü/İ).
+    s = s.lower().replace("ı", "i")
+    s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = re.sub(r"[^a-z0-9]+", " ", s).strip()
     return s
@@ -121,16 +126,51 @@ def _edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
+# Post-name titles (TR + EN) that are NOT surnames: 'Süreyya hanım' / 'Ahmet
+# bey' / 'Mr Smith' refer to a person by first name + courtesy title, so the
+# title token must be ignored when deciding whether a surface is a bare
+# first-name reference. Stored normalized (lowercase, diacritics stripped).
+_HONORIFIC_TOKENS = frozenset({
+    "bey", "hanim", "hanimefendi", "beyefendi", "bay", "bayan",
+    "abla", "abi", "agabey", "agabi", "hoca", "hocam", "kardes",
+    "mr", "ms", "mrs", "miss", "sayin", "dr", "prof", "doc", "av",
+})
+
+
 def _person_keys(canon: str) -> List[str]:
-    """Loose person match keys: normalized full name AND first+last-initial
-    (so 'Süreyya Gül' and 'Süreyya G.' collapse)."""
+    """Strong person match keys: normalized full name AND first+last-initial
+    (so 'Süreyya Gül' and 'Süreyya G.' collapse).
+
+    NB: deliberately NO bare-first-name key here. Indexing/querying on the
+    first name alone fused any two people sharing a first name ('Ali Veli' and
+    'Ali Can') into one entity_id, corrupting the catalog and everything built
+    on it (graph edges, episode 'who', salience). Honorific folding
+    ('Süreyya hanım' -> 'Süreyya Gül') is handled separately and asymmetrically
+    via the first-name index — see EntityStore._fname / resolve()."""
     n = _norm(canon)
     parts = n.split()
     keys = [n]
     if len(parts) >= 2:
         keys.append(parts[0] + " " + parts[-1][0])      # first + last initial
-        keys.append(parts[0])                            # bare first name
     return keys
+
+
+def _first_token(canon: str) -> Optional[str]:
+    """First non-honorific token of a normalized person name (the 'first
+    name'), used to populate/query the asymmetric first-name index."""
+    parts = [p for p in _norm(canon).split() if p not in _HONORIFIC_TOKENS]
+    return parts[0] if parts else None
+
+
+def _first_name_ref(canon: str) -> Optional[str]:
+    """If `canon` is a *bare* first-name reference — just a first name, or a
+    first name + courtesy title ('Ahmet bey', 'Süreyya hanım') — return the
+    normalized first name; otherwise None. A genuine first+surname has >=2
+    non-title tokens and returns None, so it never folds onto a same-first-name
+    person. This is what makes the first-name fold safe (asymmetric): only a
+    bare reference *queries* the index; full names only *populate* it."""
+    parts = [p for p in _norm(canon).split() if p not in _HONORIFIC_TOKENS]
+    return parts[0] if len(parts) == 1 else None
 
 
 # ---------------------------------------------------------------- #
@@ -248,12 +288,17 @@ class EntityStore:
         self.men_store = men_store
         self._cache: Optional[Dict[str, dict]] = None   # entity_id -> entity
         self._index: Dict[Tuple[str, str], str] = {}    # (type, match_key) -> entity_id
+        # Asymmetric first-name index: (type, first_name) -> {entity_id, ...}.
+        # Full names POPULATE it; only bare first-name references QUERY it, and
+        # only when exactly one candidate exists — so two distinct people who
+        # share a first name are never fused (see resolve()).
+        self._fname: Dict[Tuple[str, str], set] = {}
         self._dirty: set = set()                        # entity ids to flush
 
     def _load(self) -> None:
         if self._cache is not None:
             return
-        self._cache, self._index = {}, {}
+        self._cache, self._index, self._fname = {}, {}, {}
         from .server import _e
         rows = self._query(
             f"SELECT mem_key, mem_value FROM __mem_{self.ent_store} "
@@ -272,6 +317,10 @@ class EntityStore:
         for nm in names:
             for mk in (_person_keys(nm) if typ == "person" else [_norm(nm)]):
                 self._index[(typ, mk)] = ent["id"]
+            if typ == "person":
+                ft = _first_token(nm)
+                if ft:
+                    self._fname.setdefault((typ, ft), set()).add(ent["id"])
 
     def resolve(self, surface: str, typ: str) -> Tuple[str, bool]:
         """Return (entity_id, is_new). Folds the surface into an existing
@@ -289,6 +338,16 @@ class EntityStore:
             if t == typ and abs(len(mk) - len(nsurf)) <= 2 \
                     and _edit_distance(mk, nsurf) < 2:
                 return eid, False
+        # bare first-name / honorific reference ('Ahmet bey' -> 'Ahmet Yılmaz'):
+        # fold ONLY when exactly one known person has that first name. With two
+        # ('Ali Veli' + 'Ali Can') it is genuinely ambiguous, so we mint a new
+        # entity rather than guess and fuse them.
+        if typ == "person":
+            ref = _first_name_ref(surface)
+            if ref is not None:
+                cands = self._fname.get((typ, ref))
+                if cands and len(cands) == 1:
+                    return next(iter(cands)), False
         eid = f"ent_{typ}_{len(self._cache) + 1}_{int(time.time()*1000)%100000}"
         return eid, True
 

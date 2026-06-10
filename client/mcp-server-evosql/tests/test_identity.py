@@ -148,6 +148,31 @@ class PlanMergeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ident.plan_merge([], ["", "   "])
 
+    def test_merging_two_existing_identities_folds_both(self):
+        # Regression: aliases spanning TWO existing identities must fold both
+        # into one (union aliases/sources/tags) and report both absorbed keys —
+        # previously only the first was extended and the second was orphaned,
+        # leaving overlapping aliases that resolved ambiguously.
+        existing = [
+            {"_key": "identity_ali_work", "canonical_name": "Ali (work)",
+             "aliases": ["ali@work.com"], "sources": {"outlook": ["m1"]},
+             "tags": ["colleague"]},
+            {"_key": "identity_ali_home", "canonical_name": "Ali (home)",
+             "aliases": ["ali@home.com"], "sources": {"gmail": ["m2"]},
+             "tags": ["friend"]},
+        ]
+        plan = ident.plan_merge(existing, ["ali@work.com", "ali@home.com"],
+                                canonical_name="Ali")
+        self.assertEqual(plan["action"], "extend")
+        self.assertEqual(set(plan["absorbed_keys"]),
+                         {"identity_ali_work", "identity_ali_home"})
+        self.assertEqual(set(plan["record"]["aliases"]),
+                         {"ali@work.com", "ali@home.com"})
+        self.assertEqual(plan["record"]["sources"],
+                         {"outlook": ["m1"], "gmail": ["m2"]})
+        self.assertEqual(set(plan["record"]["tags"]),
+                         {"colleague", "friend"})
+
 
 if __name__ == "__main__":
     unittest.main()
