@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-server-evolutiondb"
-version = "1.12.3"
+version = "1.12.4"
 description = "MCP (Model Context Protocol) server backed by EvolutionDB — long-term memory plus a personal-assistant action loop (open loops, drafts, human-approved send across gmail/teams/outlook/slack/imessage) for Claude Desktop / Claude Code."
 requires-python = ">=3.9"
 license = {text = "MIT"}

@@ -108,10 +108,10 @@ Mention = Dict[str, Any]   # {surface, type, start, end, confidence}
 def _norm(s: str) -> str:
     """Lowercase + strip diacritics + collapse non-alnum to single spaces.
     Used for canonical matching so 'Süreyya G.' and 'sureyya g' compare equal."""
-    # Turkish dotless-ı (U+0131) has no NFKD decomposition, so it would survive
-    # lowercasing and then be deleted by the [^a-z] collapse below — splitting
-    # 'Yılmaz' into 'y lmaz' and 'hanım' into 'han m'. Fold it to 'i' first so
-    # Turkish names normalize whole (NFKD already handles ç/ş/ğ/ö/ü/İ).
+    # U+0131 (dotless i) has no NFKD decomposition, so it would survive
+    # lowercasing and then be deleted by the [^a-z] collapse below, fragmenting
+    # a word into pieces. Fold it to 'i' first so such names normalize whole
+    # (NFKD already handles the other accented letters via combining-mark strip).
     s = s.lower().replace("ı", "i")
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
@@ -136,10 +136,10 @@ def _edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
-# Post-name titles (TR + EN) that are NOT surnames: 'Süreyya hanım' / 'Ahmet
-# bey' / 'Mr Smith' refer to a person by first name + courtesy title, so the
-# title token must be ignored when deciding whether a surface is a bare
-# first-name reference. Stored normalized (lowercase, diacritics stripped).
+# Courtesy titles that are NOT surnames, so they must be ignored when deciding
+# whether a surface is a bare first-name reference. The list is reference
+# vocabulary for whichever languages the connector data is in (this deployment
+# includes the post-name titles common in its message corpus).
 _HONORIFIC_TOKENS = frozenset({
     "bey", "hanim", "hanimefendi", "beyefendi", "bay", "bayan",
     "abla", "abi", "agabey", "agabi", "hoca", "hocam", "kardes",
@@ -149,14 +149,15 @@ _HONORIFIC_TOKENS = frozenset({
 
 def _person_keys(canon: str) -> List[str]:
     """Strong person match keys: normalized full name AND first+last-initial
-    (so 'Süreyya Gül' and 'Süreyya G.' collapse).
+    (so 'Jane Gardner' and 'Jane G.' collapse).
 
     NB: deliberately NO bare-first-name key here. Indexing/querying on the
-    first name alone fused any two people sharing a first name ('Ali Veli' and
-    'Ali Can') into one entity_id, corrupting the catalog and everything built
-    on it (graph edges, episode 'who', salience). Honorific folding
-    ('Süreyya hanım' -> 'Süreyya Gül') is handled separately and asymmetrically
-    via the first-name index — see EntityStore._fname / resolve()."""
+    first name alone fused any two people sharing a first name ('John Doe' and
+    'John Smith') into one entity_id, corrupting the catalog and everything
+    built on it (graph edges, episode 'who', salience). Folding a bare
+    first-name / courtesy-title reference onto a full name is handled separately
+    and asymmetrically via the first-name index — see EntityStore._fname /
+    resolve()."""
     n = _norm(canon)
     parts = n.split()
     keys = [n]
@@ -174,11 +175,11 @@ def _first_token(canon: str) -> Optional[str]:
 
 def _first_name_ref(canon: str) -> Optional[str]:
     """If `canon` is a *bare* first-name reference — just a first name, or a
-    first name + courtesy title ('Ahmet bey', 'Süreyya hanım') — return the
-    normalized first name; otherwise None. A genuine first+surname has >=2
-    non-title tokens and returns None, so it never folds onto a same-first-name
-    person. This is what makes the first-name fold safe (asymmetric): only a
-    bare reference *queries* the index; full names only *populate* it."""
+    first name + courtesy title — return the normalized first name; otherwise
+    None. A genuine first+surname has >=2 non-title tokens and returns None, so
+    it never folds onto a same-first-name person. This is what makes the
+    first-name fold safe (asymmetric): only a bare reference *queries* the
+    index; full names only *populate* it."""
     parts = [p for p in _norm(canon).split() if p not in _HONORIFIC_TOKENS]
     return parts[0] if len(parts) == 1 else None
 
@@ -349,10 +350,10 @@ class EntityStore:
             if t == typ and abs(len(mk) - len(nsurf)) <= 2 \
                     and _edit_distance(mk, nsurf) < 2:
                 return eid, False
-        # bare first-name / honorific reference ('Ahmet bey' -> 'Ahmet Yılmaz'):
+        # bare first-name / courtesy-title reference (e.g. 'John' -> 'John Doe'):
         # fold ONLY when exactly one known person has that first name. With two
-        # ('Ali Veli' + 'Ali Can') it is genuinely ambiguous, so we mint a new
-        # entity rather than guess and fuse them.
+        # ('John Doe' + 'John Smith') it is genuinely ambiguous, so we mint a
+        # new entity rather than guess and fuse them.
         if typ == "person":
             ref = _first_name_ref(surface)
             if ref is not None:
