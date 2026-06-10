@@ -2,6 +2,24 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.13.1 — Locale layer phase 2 (language-neutral source)
+
+### Changed
+- Extended the runtime locale layer to the remaining modules, so **no source
+  `.py` file contains any natural-language literal** any more (the only
+  language data is in `locales/*.json`):
+  - **salience** arousal/urgency vocabulary, **profile** stopwords, **graph**
+    predicate verb stems, and **gist** tokenization + the optional morphological
+    stemmer are now driven by the active input locales (`locales.heuristics()`);
+    Unicode-aware `\w` replaced the per-language letter classes.
+  - **episodes** extractive summary template and the **outbox** CLI output are
+    locale-driven (rendered in the user's language preference, default English).
+  - Replaced the Turkish "Adım N" roadmap-step comments with "Step N" and
+    anglicized the remaining docstring example names.
+
+Behavior is unchanged for a Turkish user (the Turkish data lives in `tr.json`,
+active by default via `EVOSQL_LOCALES=en,tr`); the code is simply language-neutral.
+
 ## 1.13.0 — Runtime i18n locale layer (phase 1)
 
 ### Added

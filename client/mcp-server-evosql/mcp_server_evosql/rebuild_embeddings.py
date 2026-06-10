@@ -1,6 +1,6 @@
 """
 rebuild_embeddings — downtime-free re-embedding / model migration for the
-primary memory store's `emb` vector (Adım 10).
+primary memory store's `emb` vector (Step 10).
 
 Re-embeds rows whose stored `emb_model` differs from the target model. To
 avoid touching live data mid-run, the new vector is written to a STAGING
