@@ -86,19 +86,50 @@ class _Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------------- #
     #  Auth + origin gating                                             #
     # ---------------------------------------------------------------- #
+    # Request-scoped principal resolved from the bearer (None = legacy/env
+    # default identity). Set by _check_auth before any handle() call.
+    identity = None
+
     def _check_auth(self) -> bool:
-        token = _auth_token()
-        if not token:
-            return True
+        expected = _auth_token()
         auth = self.headers.get("Authorization", "")
-        if not auth.lower().startswith("bearer "):
-            self._send_json(401, {"error": "missing bearer token"})
-            return False
-        # Constant-time compare so the token can't be recovered byte-by-byte
-        # via a timing oracle (this transport is meant to face a public tunnel).
-        if not hmac.compare_digest(auth.split(" ", 1)[1].strip(), token):
+        token = None
+        if auth.lower().startswith("bearer "):
+            token = auth.split(" ", 1)[1].strip()
+
+        # 1) Multi-tenant: a registry-bound tenant token resolves to its own
+        #    Identity (own DB user + USE <tenant_db>; engine enforces isolation).
+        if token:
+            try:
+                ident = self.server.mcp_server.resolve_identity(token)
+            except Exception:           # a registry hiccup must not 500 auth
+                ident = None
+            if ident is not None:
+                self.identity = ident
+                return True
+
+        # 2) Legacy shared-secret mode: one EVOSQL_MCP_AUTH_TOKEN for the whole
+        #    process -> the env-pinned default identity (single-tenant compat).
+        if expected:
+            if not token:
+                self._send_json(401, {"error": "missing bearer token"})
+                return False
+            # Constant-time compare so the token can't be recovered byte-by-byte
+            # via a timing oracle (this transport may face a public tunnel).
+            if hmac.compare_digest(token, expected):
+                self.identity = None
+                return True
             self._send_json(401, {"error": "invalid bearer token"})
             return False
+
+        # 3) No shared secret configured. In multi-tenant mode an unknown
+        #    *provided* token is rejected (never silently grant the admin/env
+        #    default); with no token at all this stays the loopback/dev open
+        #    path that yields the env default identity.
+        if token and self.server.mcp_server.multitenant_enabled():
+            self._send_json(401, {"error": "invalid bearer token"})
+            return False
+        self.identity = None
         return True
 
     def _check_origin(self) -> bool:
@@ -226,23 +257,32 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send_json(400,
                                     {"error": f"bad JSON: {exc}"})
 
-        # Dispatch through the shared MCPServer.
+        # Dispatch through the shared MCPServer. The bearer was resolved to a
+        # tenant principal in _check_auth (None = env default); thread it so
+        # every tool call acts on the right tenant's database.
         mcp = self.server.mcp_server
+        identity = self.identity
         try:
             if isinstance(msg, list):
                 # Batched request — handle each, drop None (notifications).
                 replies = []
                 for m in msg:
-                    r = mcp.handle(m)
+                    r = mcp.handle(m, identity=identity)
                     if r is not None:
                         replies.append(r)
                 response = replies if replies else None
             else:
-                response = mcp.handle(msg)
+                response = mcp.handle(msg, identity=identity)
         except Exception as exc:
+            # Don't leak raw exception text (engine diagnostics / SQL fragments)
+            # to the network client; log it with a ref and return only the ref.
             import traceback
+            import uuid as _uuid
+            ref = _uuid.uuid4().hex[:12]
+            print(f"[mcp-evosql] request failed (ref {ref}): {exc}",
+                  file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
-            return self._send_json(500, {"error": str(exc)})
+            return self._send_json(500, {"error": "internal error", "ref": ref})
 
         if response is None:
             # Notification with no reply — 202 Accepted.

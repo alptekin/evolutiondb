@@ -44,7 +44,14 @@ class _FakeMCPServer:
     """Minimal stand-in for the real MCPServer. Avoids pulling in
     psycopg / network dependencies for the transport tests."""
 
-    def handle(self, msg):
+    # multi-tenant resolution hooks the transport calls in _check_auth
+    def multitenant_enabled(self):
+        return False
+
+    def resolve_identity(self, token):
+        return None
+
+    def handle(self, msg, identity=None):
         if msg.get("id") is None:
             return None
         method = msg.get("method")
