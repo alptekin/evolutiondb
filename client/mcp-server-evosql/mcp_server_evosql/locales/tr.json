@@ -36,7 +36,11 @@
     "outbox_lbl_status": "durum",
     "outbox_no_scheduled_due": "Penceresi dolan planlı gönderim yok.",
     "outbox_audit_header": "Durum: {by_status} · son 1 saatte gönderim: {n} (limit {cap})",
-    "outbox_usage": "kullanım: python -m mcp_server_evosql.outbox <list|show|approve|reject|flush|audit> [args]"
+    "outbox_usage": "kullanım: python -m mcp_server_evosql.outbox <list|show|approve|reject|flush|audit> [args]",
+    "meetings_header": "Toplantılar",
+    "meetings_none": "Planlı toplantı yok.",
+    "all_day": "tüm gün",
+    "related_open": "katılımcılarla açık döngüler"
   },
   "heuristics": {
     "question": ["\\bmi\\b", "\\bmu\\b", "\\bmı\\b", "\\bmü\\b", "misin", "musun", "edebilir"],
