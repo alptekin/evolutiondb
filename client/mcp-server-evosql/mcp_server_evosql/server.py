@@ -2903,6 +2903,45 @@ TOOLS = [
         },
     },
     {
+        "name": "release_status",
+        "description": (
+            "Where a GitHub repo stands release-wise: the latest release/tag, "
+            "the commits landed since it, and the most recent CI/workflow runs "
+            "(the deploy signal). Read-only, fetched live from the GitHub API. "
+            "Call when the user asks about a repo's release state, what's "
+            "shipped vs pending, or whether CI/deploys are green."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string",
+                         "description": "The repository as 'owner/name'."},
+            },
+            "required": ["repo"],
+        },
+    },
+    {
+        "name": "draft_changelog",
+        "description": (
+            "Draft a changelog for a GitHub repo from the commits since a tag "
+            "(default: the latest release/tag), grouped by conventional-commit "
+            "type with PR references kept. Returns text only — nothing is "
+            "published anywhere. Call when the user asks for release notes or "
+            "a changelog draft."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string",
+                         "description": "The repository as 'owner/name'."},
+                "since": {"type": "string",
+                          "description": "Tag/ref to diff from. Optional; "
+                                         "defaults to the latest release/tag."},
+            },
+            "required": ["repo"],
+        },
+    },
+    {
         "name": "suggest_reply",
         "description": (
             "Draft a reply for an open loop someone is waiting on the user for "
@@ -3282,6 +3321,15 @@ class MCPServer:
             lang, _was_set = prefs.get_language(b, uid)
             return codereview.review_pr(b, uid, pr,
                                         diff=args.get("diff"), language=lang)
+
+        if name == "release_status":
+            from . import release
+            return release.release_status(args.get("repo") or "")
+
+        if name == "draft_changelog":
+            from . import release
+            return release.draft_changelog(args.get("repo") or "",
+                                           since=args.get("since"))
 
         if name == "suggest_reply":
             from . import suggest
