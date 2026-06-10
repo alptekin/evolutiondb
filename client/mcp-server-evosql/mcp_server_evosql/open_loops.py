@@ -45,25 +45,23 @@ _AUTO_FROM = re.compile(
     r'bülten|destek@|support@|info@|news@)', re.I)
 _AUTO_LABELS = ("CATEGORY_PROMOTIONS", "CATEGORY_UPDATES",
                 "CATEGORY_FORUMS", "CATEGORY_SOCIAL")
-# High-precision automated/notification CONTENT markers (TR + EN, diacritic-
-# tolerant since SMS is often written without Turkish letters). These are
-# one-way machine messages — OTP codes, marketing, billing/utility notices,
-# unsubscribe/IYS footers — that a person never "replies" to, so they must not
-# open a loop. Kept specific enough not to fire on normal 1:1 conversation.
+# Language-neutral automated/notification CONTENT markers: one-time / OTP /
+# verification codes and unsubscribe footers that a machine sends and a person
+# never "replies" to, so they must not open a loop. Deliberately NOT keyed on
+# any single human language — the heavy lifting is the language-neutral sender
+# heuristic (_is_shortcode_sender); this only adds the obvious cross-language
+# machine markers. Kept specific enough not to fire on normal 1:1 conversation.
 _AUTO_CONTENT = re.compile(
-    r'(do[ğg]rulama kodu|g[üu]venlik kodu|aktivasyon kodu|verification code|'
-    r'one[\s-]?time|\botp\b|kod(unuz)?[:\s]+\d{3,8}|'
-    r'kampanya|f[ıi]rsat|indirim|%\s*\d|son g[üu]n|hediye [çc]ek|'
-    r'[üu]cretsiz kargo|sn\.?\s*m[üu][şs]ter|say[ıi]n m[üu][şs]ter|'
-    r'aboneli[ğg]in|planl[ıi].{0,4}kesint|elektrik kesint|hizmet talebi|'
-    r'abonelik.{0,3}[çc][ıi]k|unsubscribe|ticari ileti|\biys\b)', re.I)
+    r'(verification code|one[\s-]?time (?:code|password|pin|passcode)|\botp\b|'
+    r'\bunsubscribe\b|do[\s-]?not[\s-]?reply|'
+    r'\b(?:code|otp|pin)\b[:\s]+\d{3,8}\b|\b\d{4,8}\b\s+is your\b)', re.I)
 
 
 def _is_shortcode_sender(name: str) -> bool:
     """An SMS/brand sender id, not a person: a short numeric short-code (a real
     phone has >= 10 digits) or an ALL-CAPS alphabetic brand id (e.g.
-    'EXAMPLECO', 'WIDGET GAZ'). Real contacts are stored proper-case
-    (e.g. 'Ali Veli'), so this separates the two without an allow-list."""
+    'EXAMPLECO', 'WIDGET CORP'). Real contacts are stored proper-case
+    (e.g. 'John Doe'), so this separates the two without an allow-list."""
     n = (name or "").strip()
     if len(n) < 3:
         return False
