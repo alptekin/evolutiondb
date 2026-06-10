@@ -2,10 +2,11 @@
 mcp_server_evosql.query_transform — query-side recall experiment.
 
 The retrieval forensics (docs/eval, step-7 analysis) pinned the
-recall ceiling on a CROSS-SOURCE semantic gap: a Turkish natural-
-language query ("son production release ne zaman çıktı") and the
-document that answers it (a technical, English browser-visit title
-like "PR 5280 Issuer.Customer") sit far apart in embedding space, so
+recall ceiling on a CROSS-SOURCE semantic gap: a non-English natural-
+language query (e.g. asking, in the user's own language, when the last
+production release shipped) and the document that answers it (a
+technical, English browser-visit title like "PR 5280 Issuer.Customer")
+sit far apart in embedding space, so
 the gold row never enters the candidate ranking at all. Doc-side
 enrichment (LLM summaries, deterministic prefixes) and rerank both
 failed because they operate AFTER retrieval — they can only reorder a

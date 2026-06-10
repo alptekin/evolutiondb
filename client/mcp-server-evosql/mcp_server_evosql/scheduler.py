@@ -1,5 +1,5 @@
 """
-scheduler — sleep-time compute scheduler (Adım 18).
+scheduler — sleep-time compute scheduler (Step 18).
 
 Runs the background jobs that keep the memory's derived layers fresh, so the
 system "learns while you sleep": new rows get embedded and entity-extracted,

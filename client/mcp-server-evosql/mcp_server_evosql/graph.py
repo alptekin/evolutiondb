@@ -1,7 +1,7 @@
 """
-graph — knowledge graph + 2-hop spreading activation (Adım 15).
+graph — knowledge graph + 2-hop spreading activation (Step 15).
 
-Built on the Adım 14 entity catalog: every memory row links the entities it
+Built on the Step 14 entity catalog: every memory row links the entities it
 mentions into a small typed graph, so a relational query ("who is active on
 project X") can reach rows that never contain the query keyword — they're
 reached by following edges out of the query's entities.
@@ -25,23 +25,15 @@ import math
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-# Predicate vocabulary (~14 verbs). Each maps a set of surface verb stems
-# (TR + EN) to a canonical predicate. Order matters: first match wins.
+from . import locales
+
+# Canonical predicate taxonomy (language-neutral ids). The surface verb stems
+# that map onto each are LANGUAGE-SPECIFIC and live in the locale resources
+# (locales.heuristics().predicate_keywords, merged across active locales). The
+# order below is the match precedence — first predicate whose stems hit wins.
 PREDICATES = "worked_on mentioned replied_to assigned escalated_to owns manages supersedes contradicts related_to".split()
-_VERB_LEXICON: List[Tuple[str, Tuple[str, ...]]] = [
-    ("worked_on",    ("worked on", "working on", "worked", "çalıştı", "çalışıyor",
-                      "üzerinde", "geliştirdi", "developed", "built")),
-    ("replied_to",   ("replied to", "replied", "responded", "yanıt", "cevap",
-                      "döndü")),
-    ("escalated_to", ("escalated to", "escalated", "yükseltildi", "iletildi",
-                      "escalate")),
-    ("assigned",     ("assigned to", "assigned", "atandı", "atadı",
-                      "görevlendirildi", "verildi")),
-    ("manages",      ("manages", "managed", "yönetiyor", "yönetti", "yönetir",
-                      "lead", "leads", "led")),
-    ("owns",         ("owns", "owner", "sahibi", "ait")),
-    ("mentioned",    ("mentioned", "bahsetti", "söz etti", "andı", "dedi")),
-]
+_VERB_ORDER = ("worked_on", "replied_to", "escalated_to", "assigned",
+               "manages", "owns", "mentioned")
 DEFAULT_PREDICATE = "related_to"
 _DECAY_HALFLIFE_DAYS = 30.0   # edge-weight recency decay
 _HOP_DECAY = 0.5              # activation passed on per hop
@@ -64,8 +56,9 @@ def _predicate_between(text: str, a_end: int, b_start: int) -> str:
     gap = text[a_end:b_start].lower()
     if len(gap) > 60:                       # too far apart to be one relation
         return DEFAULT_PREDICATE
-    for pred, stems in _VERB_LEXICON:
-        if any(s in gap for s in stems):
+    pk = locales.heuristics().predicate_keywords
+    for pred in _VERB_ORDER:
+        if any(s in gap for s in pk.get(pred, ())):
             return pred
     return DEFAULT_PREDICATE
 

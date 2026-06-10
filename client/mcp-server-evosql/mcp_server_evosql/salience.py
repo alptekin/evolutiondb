@@ -1,12 +1,12 @@
 """
-salience — per-memory importance score (Adım 12).
+salience — per-memory importance score (Step 12).
 
     salience = α·recency + β·sender_activity + γ·thread_depth + δ·feedback
 
   - recency        = exp(-λ·age_days)                      (λ=0.05, half-life ~14d)
   - sender_activity= log1p(sender_count_90d)/log1p(max)    (0 when no sender)
   - thread_depth   = min(reply_count, 20)/20               (0 when not threaded)
-  - feedback       = min(used_count, cap)/cap              (Adım 11 signal)
+  - feedback       = min(used_count, cap)/cap              (Step 11 signal)
 
 Weights default to α=0.3, β=0.25, γ=0.2, δ=0.25. δ only contributes once
 feedback data exists; with an empty feedback corpus the δ weight is dropped
@@ -14,7 +14,7 @@ and α/β/γ are renormalized to sum 1, so undated/unsourced rows still get a
 meaningful 0-1 score instead of being capped at 0.75.
 
 The score is precomputed into each record's `salience` field by the
-`compute` CLI (run daily, before the Adım 18 scheduler exists), and read by
+`compute` CLI (run daily, before the Step 18 scheduler exists), and read by
 the retrieval boost in server.search() — keeping the hot path allocation-free.
 
 CLI:
@@ -97,19 +97,10 @@ def feedback_score(key: str, feedback_used: Dict[str, int]) -> float:
 # Arousal / affective salience (roadmap step 33): a rare, high-stakes one-off
 # (e.g. "allergic to penicillin") should resist archival even with no recency,
 # sender activity, or feedback — the amygdala-modulation analogue. An explicit
-# pin or urgency/health/safety vocabulary raises the floor.
-_AROUSAL_TERMS = (
-    "allergic", "allergy", "emergency", "urgent", "asap", "critical", "danger",
-    "warning", "deadline", "important", "must", "never", "always", "fatal",
-    "blood type", "medication", "dose", "password", "ssn", "passport",
-    "acil", "önemli", "tehlike", "uyarı", "alerji", "asla", "mutlaka")
-
-# Word-boundary match (Unicode-aware \b covers Turkish letters) so a term only
-# fires as a whole word — "unimportant" must not match "important", "overdose"
-# must not match "dose".
-_AROUSAL_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(t) for t in _AROUSAL_TERMS) + r")\b",
-    re.IGNORECASE)
+# pin or urgency/health/safety vocabulary raises the floor. The vocabulary is
+# language-specific, so it lives in the locale resources (combined across the
+# active input locales) — not as literals here. Whole-word match (Unicode-aware
+# \b) so "unimportant" doesn't match "important".
 
 
 def arousal_score(rec: dict) -> float:
@@ -120,7 +111,8 @@ def arousal_score(rec: dict) -> float:
     text = str(rec.get("fact") or rec.get("text") or "").lower()
     if not text:
         return 0.0
-    hits = len(_AROUSAL_RE.findall(text))
+    from . import locales
+    hits = len(locales.heuristics().arousal_re.findall(text))
     return min(1.0, 0.5 * hits)            # 1 hit -> 0.5, 2+ -> capped 1.0
 
 
@@ -133,7 +125,7 @@ def compute_salience(rec: dict, key: str, *, now: float,
     d = depth_score(rec)
     f = feedback_score(key, feedback_used)
     w = dict(weights)
-    if not feedback_used:                       # δ inactive until Adım 11 data lands
+    if not feedback_used:                       # δ inactive until Step 11 data lands
         tot = w["recency"] + w["activity"] + w["depth"]
         if tot > 0:
             w = {"recency": w["recency"] / tot, "activity": w["activity"] / tot,
@@ -163,7 +155,7 @@ def recompute(backend, user_id: str, *, window_days: int = 90,
               dry_run: bool = False) -> int:
     """Recompute the salience score for every row in a namespace, using the
     backend's connection. Returns the number of rows whose score changed.
-    Shared by the CLI and the Adım 18 scheduler."""
+    Shared by the CLI and the Step 18 scheduler."""
     from .server import _e
     now = time.time()
     window = window_days * 86400.0
