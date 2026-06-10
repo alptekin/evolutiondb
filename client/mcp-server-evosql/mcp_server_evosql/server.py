@@ -3142,9 +3142,18 @@ TOOLS = [
         "name": "list_pending_replies",
         "description": (
             "List replies queued and awaiting approval (nothing here has been "
-            "sent). Call this to review the outbox before approving."
+            "sent). Call this to review the outbox before approving. Admins "
+            "may pass all=true to see every team member's pending drafts "
+            "(team approval)."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "all": {"type": "boolean",
+                        "description": "Admin only: list pending drafts across "
+                                       "the whole tenant. Default false."},
+            },
+        },
     },
     {
         "name": "approve_send",
@@ -3423,6 +3432,13 @@ class MCPServer:
             if ident.has_role("admin", "member"):
                 b.log_query(uid, query_id, q,
                             [r.get("key", "") for r in results])
+            # PII gate (Phase 3): role-based masking of outgoing content.
+            # Fail-closed — an enabled gate with no masker errors the read.
+            from . import pii_gate
+            try:
+                results = pii_gate.gate(ident, results)
+            except RuntimeError as exc:
+                return {"error": str(exc)}
             return {"ok": True,
                     "user_id": uid,
                     "query_id": query_id,
@@ -3445,12 +3461,24 @@ class MCPServer:
             episode_id = args.get("episode_id") or ""
             if not episode_id:
                 return {"error": "expand_episode requires `episode_id`"}
-            return b.expand_episode(uid, episode_id)
+            res = b.expand_episode(uid, episode_id)
+            from . import pii_gate
+            try:
+                for k in ("rows", "results"):
+                    if isinstance(res.get(k), list):
+                        res[k] = pii_gate.gate(ident, res[k])
+            except RuntimeError as exc:
+                return {"error": str(exc)}
+            return res
 
         if name == "recent_memories":
             limit = int(args.get("limit") or 10)
-            return {"ok": True, "user_id": uid,
-                    "results": b.recent(uid, limit)}
+            from . import pii_gate
+            try:
+                results = pii_gate.gate(ident, b.recent(uid, limit))
+            except RuntimeError as exc:
+                return {"error": str(exc)}
+            return {"ok": True, "user_id": uid, "results": results}
 
         if name == "forget":
             key = args.get("key") or ""
@@ -3612,6 +3640,14 @@ class MCPServer:
 
         if name == "list_pending_replies":
             from . import outbox
+            # team approval: an admin may list every namespace's pending drafts
+            # in the tenant (`all=true`); members see their own only.
+            if args.get("all"):
+                if not ident.has_role("admin"):
+                    return {"error": "permission denied: `all` requires the "
+                                     "admin role"}
+                return {"ok": True, "user_id": uid, "all": True,
+                        "pending": outbox.list_pending_all(b)}
             return {"ok": True, "user_id": uid,
                     "pending": outbox.list_pending(b, uid)}
 
@@ -3620,14 +3656,29 @@ class MCPServer:
             item_id = args.get("item_id") or ""
             if not item_id:
                 return {"error": "approve_send requires `item_id`"}
-            return outbox.approve_send(b, uid, item_id)
+            res = outbox.approve_send(b, uid, item_id, approver=uid)
+            # team approval: an admin may approve another member's draft (the
+            # item lives in the member's namespace within the SAME tenant DB —
+            # the engine's per-tenant boundary still applies).
+            if (not res.get("ok") and "no outbox item" in (res.get("error") or "")
+                    and ident.has_role("admin")):
+                other_ns = outbox.find_namespace(b, item_id)
+                if other_ns and other_ns != uid:
+                    res = outbox.approve_send(b, other_ns, item_id, approver=uid)
+            return res
 
         if name == "reject_reply":
             from . import outbox
             item_id = args.get("item_id") or ""
             if not item_id:
                 return {"error": "reject_reply requires `item_id`"}
-            return outbox.reject(b, uid, item_id)
+            res = outbox.reject(b, uid, item_id)
+            if (not res.get("ok") and "no outbox item" in (res.get("error") or "")
+                    and ident.has_role("admin")):
+                other_ns = outbox.find_namespace(b, item_id)
+                if other_ns and other_ns != uid:
+                    res = outbox.reject(b, other_ns, item_id)
+            return res
 
         if name == "outbox_audit":
             from . import outbox
