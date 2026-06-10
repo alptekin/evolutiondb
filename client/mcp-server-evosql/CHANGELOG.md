@@ -2,6 +2,20 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.12.3 — Brief: filter automated SMS/brand senders
+
+### Fixed
+- The daily brief surfaced automated SMS / notification senders as "waiting on
+  you". The two-way *"did I ever reply"* filter was applied only to
+  gmail/outlook, so automated senders arriving via iMessage (brand name or
+  short-code in `chat`, never replied to) leaked in. `_is_auto` is now
+  channel-aware: it reads the sender from `from`/`chat`/`handle`, flags ALL-CAPS
+  brand ids and short numeric SMS short-codes, and flags high-precision
+  notification content (OTP codes, kampanya/fırsat, "Sn. Müşterimiz", planlı
+  elektrik kesintisi, hizmet talebi, unsubscribe/IYS) — diacritic-tolerant since
+  SMS is often written without Turkish letters. Real proper-case contacts and
+  real-phone first texts are not affected, so genuine loops still surface.
+
 ## 1.12.2 — Security hardening
 
 A focused security audit of the personal-assistant agent. All fixes are
