@@ -531,6 +531,9 @@ class MemoryBackend:
         # Templates (Phase 4): per-tenant message templates; apply_template
         # renders one and queues an outbox DRAFT (human-approved, ADR-004).
         self.templates_store = f"{prefix}_templates"
+        # Rules (Phase 4): trigger -> template -> queued draft. Rules only
+        # queue; the approval gate is unchanged. See rules.py.
+        self.rules_store = f"{prefix}_rules"
         # Decay & archival (Step 20): row access times in a small side store
         # (so a search never rewrites the main record just to record a read);
         # the daily decay pass flags faded rows archived=true. Opt-in via
@@ -571,6 +574,7 @@ class MemoryBackend:
                   ("MEMORY STORE", self.job_runs_store),
                   ("MEMORY STORE", self.audit_store),
                   ("MEMORY STORE", self.templates_store),
+                  ("MEMORY STORE", self.rules_store),
                   ("MEMORY STORE", self.access_store),
                   ("MEMORY STORE", self.salience_store),
                   ("MEMORY STORE", self.semantic_store),
@@ -3019,6 +3023,74 @@ TOOLS = [
         },
     },
     {
+        "name": "create_rule",
+        "description": (
+            "Create or update an automation rule: when an open loop matches "
+            "the trigger, the named template is applied to it and a DRAFT is "
+            "queued for the user's approval — rules never send. One trigger "
+            "kind: loop_idle (an open loop in `direction` at least "
+            "`min_age_days` old, optionally filtered by `source`). A loop "
+            "whose draft was sent/rejected recently is left alone for "
+            "`cooldown_days`. Call when the user wants automatic follow-ups "
+            "or SLA nudges."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Rule id."},
+                "template": {"type": "string",
+                             "description": "Template to apply (must exist)."},
+                "direction": {"type": "string",
+                              "enum": ["awaiting_me", "awaiting_them",
+                                       "i_owe_them"],
+                              "description": "Which loops the rule watches."},
+                "min_age_days": {"type": "number",
+                                 "description": "Fire once a loop is at least "
+                                                "this many days old."},
+                "source": {"type": "string",
+                           "description": "Only loops from this channel "
+                                          "(gmail/teams/...). Optional."},
+                "cooldown_days": {"type": "number",
+                                  "description": "Quiet period after a sent/"
+                                                 "rejected draft. Default 7."},
+                "enabled": {"type": "boolean",
+                            "description": "Default true."},
+            },
+            "required": ["name", "template", "direction", "min_age_days"],
+        },
+    },
+    {
+        "name": "list_rules",
+        "description": "List the user's automation rules.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "delete_rule",
+        "description": "Delete an automation rule by name.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Rule id."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "run_rules",
+        "description": (
+            "Evaluate the user's automation rules now (the scheduler also "
+            "runs them hourly). Queues drafts for approval; sends nothing. "
+            "Pass dry_run to preview what would fire without queueing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run": {"type": "boolean",
+                            "description": "Preview only. Default false."},
+            },
+        },
+    },
+    {
         "name": "suggest_reply",
         "description": (
             "Draft a reply for an open loop someone is waiting on the user for "
@@ -3256,6 +3328,7 @@ class MCPServer:
         "queue_reply", "approve_send", "reject_reply", "send_scheduled",
         "review_pr",   # drafts + queues an outbox item -> write; viewers denied
         "create_template", "apply_template", "delete_template",
+        "create_rule", "delete_rule", "run_rules",
     })
 
     def _rbac_error(self, name: str,
@@ -3468,6 +3541,39 @@ class MCPServer:
             ok = templates.delete(b, uid, tname)
             return ({"ok": True, "name": tname} if ok else
                     {"error": f"no template named {tname!r}"})
+
+        if name == "create_rule":
+            from . import rules
+            trigger = {"kind": "loop_idle",
+                       "direction": args.get("direction"),
+                       "min_age_days": args.get("min_age_days")}
+            if args.get("source"):
+                trigger["source"] = args.get("source")
+            kw = {}
+            if args.get("cooldown_days") is not None:
+                kw["cooldown_days"] = float(args["cooldown_days"])
+            if args.get("enabled") is not None:
+                kw["enabled"] = bool(args["enabled"])
+            return rules.create(b, uid, args.get("name") or "",
+                                args.get("template") or "", trigger, **kw)
+
+        if name == "list_rules":
+            from . import rules
+            return {"ok": True, "user_id": uid,
+                    "rules": rules.list_all(b, uid)}
+
+        if name == "delete_rule":
+            from . import rules
+            rname = args.get("name") or ""
+            ok = rules.delete(b, uid, rname)
+            return ({"ok": True, "name": rname} if ok else
+                    {"error": f"no rule named {rname!r}"})
+
+        if name == "run_rules":
+            from . import rules
+            res = rules.evaluate(b, uid, dry_run=bool(args.get("dry_run")))
+            return {"ok": True, "user_id": uid, **res,
+                    "note": "drafts queue for approval — nothing is sent."}
 
         if name == "suggest_reply":
             from . import suggest
