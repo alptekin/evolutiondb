@@ -2,6 +2,33 @@
 
 All notable changes to `mcp-server-evolutiondb` are documented here.
 
+## 1.13.0 — Runtime i18n locale layer (phase 1)
+
+### Added
+- **`locales/` resource layer + `locales.py` loader.** All natural-language
+  data — UI strings and detection heuristics — now lives in per-language JSON
+  resources (`en.json`, `tr.json`), loaded at runtime. The Python code is
+  language-neutral. Two axes are separated: the OUTPUT language (the brief is
+  rendered in the user's language preference, default English) and the INPUT
+  languages whose heuristics parse incoming messages (union of the active input
+  locales, default `en,tr`, override with `EVOSQL_LOCALES`).
+
+### Changed
+- **brief / suggest**: all output strings are now locale-driven (default
+  English). The brief renders in the user's `/language` preference — so a
+  Turkish user still gets a Turkish brief, driven by runtime data rather than
+  literals in the code.
+- **open_loops / entities**: the question / promise / closure / automated-sender
+  detectors and the person / org / honorific / id patterns are compiled from the
+  active input locales instead of being hardcoded — Turkish message parsing is
+  unchanged, but no language literals remain in these modules.
+
+### Note
+This is phase 1 (the assistant brief + open-loop pipeline). Remaining
+language-specific data in other modules (profile stopwords, salience arousal
+terms, graph predicate keywords, gist tokenization, episodes/outbox CLI output)
+will move to the same locale layer in follow-ups.
+
 ## 1.12.4 — Language-neutral code
 
 ### Changed
