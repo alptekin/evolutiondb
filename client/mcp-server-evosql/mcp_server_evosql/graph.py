@@ -137,8 +137,8 @@ class GraphStore:
                         "object_id": obj, "weight": 0.0,
                         "source_rows": [], "ts": ts}
                 cache[key] = edge
-            edge["weight"] = round(
-                float(edge.get("weight", 0.0)) + _recency(ts, now), 4)
+            delta = _recency(ts, now)
+            edge["weight"] = round(float(edge.get("weight", 0.0)) + delta, 4)
             # weight keeps growing with co-occurrence; the source_rows sample
             # is capped so the record can't bloat past the statement cap.
             if mem_key not in edge["source_rows"] \
@@ -150,12 +150,19 @@ class GraphStore:
             # Mark it dirty and flush each unique edge once.
             if write:
                 self._dirty_edges.add(key)
-            # keep the in-memory adjacency warm if it was already built
+            # Keep the in-memory adjacency warm if it was already built. ADD the
+            # delta (not assign edge["weight"]): the load path SUMS the weights
+            # of all predicate edges between a pair, so a single edge's running
+            # weight would undercount when two predicates link the same pair.
+            # Accumulating the same delta keeps the warm adjacency identical to
+            # a fresh reload.
             if self._adj is not None:
                 self._adj.setdefault(subj, {})
                 self._adj.setdefault(obj, {})
-                self._adj[subj][obj] = edge["weight"]
-                self._adj[obj][subj] = edge["weight"]
+                self._adj[subj][obj] = round(
+                    self._adj[subj].get(obj, 0.0) + delta, 4)
+                self._adj[obj][subj] = round(
+                    self._adj[obj].get(subj, 0.0) + delta, 4)
         return len(triples)
 
     def flush(self) -> int:
@@ -321,6 +328,23 @@ class GraphStore:
             idx.setdefault(m["entity_id"], []).append(m["mem_key"])
         self._mentions_by_entity = idx
         return idx
+
+    def note_mentions(self, mem_key: str, mentions: List[dict]) -> None:
+        """Keep the warm mention index current after a new row is saved in this
+        long-lived process. The GraphStore is cached per-namespace for the
+        process lifetime, so without this the index — built once on the first
+        search — never sees rows saved afterward, and the graph boost can never
+        reach them. No-op until the index is first built (the next search builds
+        it fresh, including this row)."""
+        if self._mentions_by_entity is None:
+            return
+        for m in mentions or ():
+            eid = m.get("entity_id")
+            if not eid:
+                continue
+            lst = self._mentions_by_entity.setdefault(eid, [])
+            if mem_key not in lst:
+                lst.append(mem_key)
 
     def rows_for_entities(self, activations: Dict[str, float],
                           seeds: Sequence[str] = (),

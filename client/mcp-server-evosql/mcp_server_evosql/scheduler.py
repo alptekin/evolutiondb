@@ -323,12 +323,49 @@ def _state(backend, job: str) -> Optional[dict]:
         return None
 
 
+AUDIT_KEEP_PER_JOB = 200   # bound the per-run audit history per job
+
+
+def _prune_audit(backend, job: str, keep: int = AUDIT_KEEP_PER_JOB) -> None:
+    """Keep only the most recent `keep` audit rows for `job`. _record writes one
+    audit:{job}:{ts} row every run (every 30s for outbox_flush), which would
+    otherwise grow without bound and force failure_ratio into an ever-larger
+    full scan. The 'audit' namespace is owned solely by the scheduler, so this
+    is safe. Best-effort — a prune failure must not break the run record."""
+    from .server import _e
+    try:
+        rows = backend._query(
+            f"SELECT mem_key FROM __mem_{backend.job_runs_store} "
+            f"WHERE mem_namespace = 'audit' LIMIT 1000000") or []
+    except Exception:
+        return
+    pfx = f"{job}:"
+    mine = []
+    for r in rows:
+        k = str(r[0])
+        if k.startswith(pfx):
+            suf = k[len(pfx):]
+            if suf.isdigit():
+                mine.append((int(suf), k))
+    if len(mine) <= keep:
+        return
+    mine.sort()   # oldest ts first
+    for _, k in mine[:len(mine) - keep]:
+        try:
+            backend._exec(
+                f"MEMORY DELETE FROM {backend.job_runs_store} "
+                f"WHERE mem_namespace = 'audit' AND mem_key = '{_e(k)}'")
+        except Exception:
+            pass
+
+
 def _record(backend, job: str, rec: dict, ts: float) -> None:
     from .server import _e
     backend._exec(f"MEMORY PUT INTO {backend.job_runs_store} VALUES "
                   f"('state','{_e(job)}','{_e(json.dumps(rec))}')")
     backend._exec(f"MEMORY PUT INTO {backend.job_runs_store} VALUES "
                   f"('audit','{_e(job)}:{int(ts)}','{_e(json.dumps(rec))}')")
+    _prune_audit(backend, job)
 
 
 def run_due(backend, *, now: Optional[datetime] = None,

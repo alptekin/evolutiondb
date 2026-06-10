@@ -97,7 +97,13 @@ def _gather_signals(backend, ns: str):
             f = json.loads(v).get("fact", "")
             m = re.search(r'https?://([A-Za-z0-9.\-]+)', f)
             if m:
-                dom[m.group(1).lower().lstrip("www.")] += 1
+                # NB: a literal "www." prefix strip — NOT str.lstrip("www."),
+                # which strips the CHARACTER SET {w, .} and would mangle
+                # 'wize.com' -> 'ize.com' or 'www.wwf.org' -> 'f.org'.
+                d = m.group(1).lower()
+                if d.startswith("www."):
+                    d = d[4:]
+                dom[d] += 1
         except Exception:
             pass
     sig["top_domains"] = [d for d, _ in dom.most_common(15)]

@@ -203,15 +203,52 @@ class EmbeddedEvolutionDB:
         self.proc = None
 
 
+def _install_reaper(emb: "EmbeddedEvolutionDB") -> None:
+    """Reap the spawned DB on process termination.
+
+    atexit alone is NOT enough: the default disposition for SIGTERM/SIGINT
+    terminates the interpreter WITHOUT running atexit handlers, so `docker stop`
+    / `systemctl stop` / `kill` would orphan the spawned evosql-server. Chain a
+    handler for each that closes the DB, then restores the previous disposition
+    and re-raises the signal so normal shutdown still happens. signal.signal
+    only works on the main thread; off-thread we silently fall back to atexit."""
+    import atexit
+    import signal
+    atexit.register(emb.close)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            prev = signal.getsignal(sig)
+        except (ValueError, OSError):
+            continue
+
+        def _handler(signum, frame, _prev=prev):
+            emb.close()
+            # Restore the prior handler and re-raise so the original shutdown
+            # behavior (default terminate, or an app handler) still runs.
+            try:
+                signal.signal(signum, _prev if callable(_prev)
+                              or _prev in (signal.SIG_DFL, signal.SIG_IGN)
+                              else signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+            except Exception:
+                os._exit(0)
+
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError):
+            # Not the main thread — atexit (registered above) remains the
+            # best-effort reaper.
+            pass
+
+
 def maybe_start(host: str, port: int) -> Optional[EmbeddedEvolutionDB]:
     """If EVOSQL_EMBEDDED is set, ensure a local instance is running and return
     its handle (so the caller can close it on shutdown). No-op otherwise."""
     if not _truthy(os.environ.get("EVOSQL_EMBEDDED")):
         return None
-    import atexit
     emb = EmbeddedEvolutionDB(host=host, port=port)
     if emb.ensure_running():
-        atexit.register(emb.close)   # reap the spawned instance on exit
+        _install_reaper(emb)   # reap the spawned instance on exit / signal
     return emb
 
 

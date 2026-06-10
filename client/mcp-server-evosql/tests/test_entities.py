@@ -105,6 +105,33 @@ def test_canonicalization_rate():
     assert rate < 0.05, f"wrong-canonicalization rate {rate:.3f} >= 0.05"
 
 
+def test_distinct_people_sharing_first_name_do_not_merge():
+    """Regression: two different people who share only a first name must NOT
+    be fused into one entity (the bare-first-name match key did this and
+    corrupted the catalog). Honorific folding stays correct only when a single
+    person carries that first name."""
+    es = EntityStore(lambda s: None, lambda s: [], "ns", "E", "M")
+    es.upsert("k", "Ali Veli", "person", 0, 1, 0.8, 1.0, write=False)
+    veli = es.resolve("Ali Veli", "person")[0]
+    es.upsert("k", "Ali Can", "person", 0, 1, 0.8, 2.0, write=False)
+    can = es.resolve("Ali Can", "person")[0]
+    assert veli != can, "distinct surnames sharing a first name must not fuse"
+    assert len({e["id"] for e in es._cache.values()}) == 2
+
+    # an ambiguous bare/honorific reference must NOT silently pick one of them
+    bey, is_new = es.resolve("Ali bey", "person")
+    assert is_new and bey not in (veli, can), \
+        "ambiguous first-name reference must not fold onto a guessed person"
+
+    # but when only ONE person carries the first name, honorific folds in
+    es2 = EntityStore(lambda s: None, lambda s: [], "ns", "E", "M")
+    es2.upsert("k", "Mehmet Demir", "person", 0, 1, 0.8, 1.0, write=False)
+    md = es2.resolve("Mehmet Demir", "person")[0]
+    folded, is_new2 = es2.resolve("Mehmet bey", "person")
+    assert folded == md and not is_new2, \
+        "honorific reference should fold onto the single known Mehmet"
+
+
 # ---------------------------------------------------------------- #
 #  DB round-trip (optional)                                         #
 # ---------------------------------------------------------------- #
