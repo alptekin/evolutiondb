@@ -209,6 +209,25 @@ def _tokenize(text: str) -> List[str]:
     return [t for t in _TOKEN_RE.findall(text.lower()) if len(t) > 1]
 
 
+_KEY_RE = _re.compile(r"^[A-Za-z0-9_:|.\-]{1,256}$")
+
+
+def _valid_key(k: Any) -> bool:
+    """True if `k` is a safe memory key/id to inline into SQL.
+
+    Memory keys/ids are ALWAYS server-generated — mem_/sem_/ep_/ent_/intent_/
+    skill_ + timestamp/hex, UUID query ids, and pipe-composite mention keys — so
+    every legitimate key matches this charset. A tool argument carrying a quote,
+    backslash, space or comma (i.e. a SQL-injection attempt through `forget` /
+    `expand_episode` / `feedback` / `restore_memory` / `save_memory`'s
+    `derived_from`) does NOT match and is rejected. This is the guard for the
+    raw (non-json-wrapped) inline sites: `_e()` doubles quotes but deliberately
+    does NOT escape backslashes, and the EVO lexer treats `\\'` as an escaped
+    quote, so an unvalidated key ending in a backslash could break out of its
+    string literal (an IN-list of two such keys yields cross-namespace reads)."""
+    return isinstance(k, str) and _KEY_RE.match(k) is not None
+
+
 def _bm25_scores(q_terms: List[str],
                   docs_tokens: List[List[str]],
                   k1: float = 1.5, b: float = 0.75) -> List[float]:
@@ -861,6 +880,8 @@ class MemoryBackend:
     def expand_episode(self, user_id: str,
                        episode_id: str) -> Dict[str, Any]:
         """Drill-down: return the source rows behind an episode summary."""
+        if not _valid_key(episode_id):
+            return {"error": f"unknown episode_id: {episode_id}"}
         rows = self._query(
             f"SELECT mem_value FROM __mem_{self.episodes_store} "
             f"WHERE mem_namespace = '{_e(user_id)}' "
@@ -961,6 +982,12 @@ class MemoryBackend:
         with roughly 50+ values (a stack overflow evaluating the list), so
         each batch is capped at MAX_IN_KEYS — well below that — in addition
         to the 8 KB statement-size budget."""
+        # SECURITY: keys are inlined raw (not json-wrapped) into the IN-list, so
+        # drop anything that isn't a well-formed server key. A caller-supplied
+        # key (e.g. save_memory's `derived_from`) ending in a backslash would
+        # otherwise escape its closing quote and inject SQL — a real key never
+        # contains the offending characters, so this filter is non-breaking.
+        keys = [k for k in keys if _valid_key(k)]
         out: List[Any] = []
         base = (f"SELECT mem_key, mem_value FROM __mem_{store} "
                 f"WHERE mem_namespace = '{_e(user_id)}' AND mem_key IN (")
@@ -2189,6 +2216,8 @@ class MemoryBackend:
     def restore(self, user_id: str, key: str) -> bool:
         """Bring an archived memory back: clear the flag and refresh its
         access time so the next decay pass keeps it active."""
+        if not _valid_key(key):
+            return False   # reject malformed/injection keys before inlining
         rows = self._fetch_by_keys(self.memory, user_id, [key])
         if not rows or not rows[0] or not rows[0][1]:
             return False
@@ -2257,6 +2286,8 @@ class MemoryBackend:
         return out[:limit]
 
     def forget(self, user_id: str, key: str) -> bool:
+        if not _valid_key(key):
+            return False   # reject malformed/injection keys before inlining
         try:
             self._exec(
                 f"MEMORY DELETE FROM {self.memory} "
@@ -2527,6 +2558,8 @@ class MemoryBackend:
         """Attach which returned keys the caller actually used to a logged
         search. Validates used_keys ⊆ returned_keys (data-quality gate from
         the eval criteria) and upserts the feedback record."""
+        if not _valid_key(query_id):
+            return {"error": f"unknown query_id: {query_id}"}
         rows = self._query(
             f"SELECT mem_value FROM __mem_{self.feedback_store} "
             f"WHERE mem_namespace = '{_e(user_id)}' "
