@@ -126,6 +126,42 @@ def _record(item, status):
     item.setdefault("history", []).append({"status": status, "at": _now()})
 
 
+# ------------------------------------------------ team approval (cross-ns)
+def find_namespace(backend, item_id):
+    """The namespace holding outbox item ``item_id``, or None. Items are keyed
+    by their id, so this is a direct key lookup across the (tenant-scoped)
+    outbox store — used by admins approving another member's draft. The store
+    lives in the tenant's own database, so the engine's per-tenant isolation
+    still bounds what an admin can ever see."""
+    from .server import _e, _valid_key
+    if not _valid_key(item_id):
+        return None
+    rows = backend._query(
+        f"SELECT mem_namespace FROM __mem_{backend.outbox_store} "
+        f"WHERE mem_key = '{_e(item_id)}'") or []
+    for r in rows:
+        return str(r[0])
+    return None
+
+
+def list_pending_all(backend):
+    """Every pending/approved/scheduled item across ALL namespaces in the
+    tenant's outbox store, each tagged with its namespace — the admin view for
+    team approval."""
+    out = []
+    for row in backend._query(
+            f"SELECT mem_namespace, mem_value FROM "
+            f"__mem_{backend.outbox_store}") or []:
+        try:
+            it = json.loads(row[1])
+        except Exception:
+            continue
+        if it.get("status") in (_PENDING, _APPROVED, _SCHEDULED):
+            out.append({**it, "namespace": str(row[0])})
+    out.sort(key=lambda it: it.get("created_at", ""), reverse=True)
+    return out
+
+
 # ---------------------------------------------------------------- delivery
 def _deliver(item) -> dict:
     """Hand the item to a registered transport. Dry-runs (delivers nothing) when
@@ -292,11 +328,28 @@ def _deliver_and_record(backend, ns, item, *, now=None):
             "detail": result.get("reason") or result.get("error")}
 
 
-def approve_send(backend, ns, item_id, *, undo_seconds=None):
+def _approvals_required():
+    """Distinct approvals an item needs before it may send (team approval,
+    the ADR-004 N-approver extension). Default 1 = today's single-approver
+    behaviour, byte-for-byte."""
+    try:
+        n = int(os.environ.get("EVOSQL_APPROVALS_REQUIRED", "1"))
+    except ValueError:
+        n = 1
+    return max(1, n)
+
+
+def approve_send(backend, ns, item_id, *, undo_seconds=None, approver=None):
     """Approve a queued item. The ONLY path that can send. With an undo window
     (EVOSQL_SEND_UNDO_SECONDS or undo_seconds>0) it SCHEDULES the send instead of
     delivering now — the item sits in `scheduled` until the window elapses (a
-    flush delivers it) or a reject cancels it. Idempotent on an already-sent item."""
+    flush delivers it) or a reject cancels it. Idempotent on an already-sent item.
+
+    Team approval (EVOSQL_APPROVALS_REQUIRED=N>1): each call records the acting
+    identity (`approver`, defaulting to the namespace owner); the item only
+    proceeds once N DISTINCT identities have approved — the same identity
+    cannot approve twice, so a single person genuinely cannot push a draft out
+    alone (four-eyes). Approvals are kept on the item for the audit trail."""
     item = _load(backend, ns, item_id)
     if item is None:
         return {"ok": False, "error": f"no outbox item '{item_id}'"}
@@ -304,6 +357,29 @@ def approve_send(backend, ns, item_id, *, undo_seconds=None):
         return {"ok": True, "item": item, "note": "already sent (no re-send)"}
     if item["status"] == _REJECTED:
         return {"ok": False, "error": "item was rejected; re-queue to send"}
+
+    need = _approvals_required()
+    if need > 1:
+        who = (approver or ns)
+        approvals = item.get("approvals") or []
+        if any(a.get("by") == who for a in approvals):
+            remaining = need - len(approvals)
+            if remaining > 0:
+                return {"ok": False, "approvals": len(approvals),
+                        "approvals_required": need,
+                        "error": f"already approved by {who!r} — needs "
+                                 f"{remaining} more distinct approver(s)"}
+        else:
+            approvals = approvals + [{"by": who, "at": _now()}]
+            item["approvals"] = approvals
+        if len(approvals) < need:
+            _save(backend, ns, item)        # status stays pending; progress kept
+            return {"ok": True, "sent": False, "item": item,
+                    "approvals": len(approvals), "approvals_required": need,
+                    "note": f"approval {len(approvals)}/{need} recorded — needs "
+                            f"{need - len(approvals)} more distinct approver(s); "
+                            f"nothing sent"}
+
     undo = _undo_seconds() if undo_seconds is None else max(0, int(undo_seconds))
     # Open the undo window on first approval; approving an already-scheduled item
     # means "send it now" (skip the remaining wait).

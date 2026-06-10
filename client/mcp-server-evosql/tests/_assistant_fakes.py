@@ -142,7 +142,9 @@ class FakeBackend:
                 continue
             row = []
             for c in cols:
-                if "mem_key" in c:
+                if "mem_namespace" in c:
+                    row.append(rns)
+                elif "mem_key" in c:
                     row.append(rkey)
                 elif "mem_value" in c:
                     row.append(val)
