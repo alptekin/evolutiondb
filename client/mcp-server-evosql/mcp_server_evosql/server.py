@@ -528,6 +528,9 @@ class MemoryBackend:
         # bodies/PII. Lives in the tenant's own DB so it inherits the engine's
         # isolation and dies with the tenant. See audit.py.
         self.audit_store = f"{prefix}_audit"
+        # Templates (Phase 4): per-tenant message templates; apply_template
+        # renders one and queues an outbox DRAFT (human-approved, ADR-004).
+        self.templates_store = f"{prefix}_templates"
         # Decay & archival (Step 20): row access times in a small side store
         # (so a search never rewrites the main record just to record a read);
         # the daily decay pass flags faded rows archived=true. Opt-in via
@@ -567,6 +570,7 @@ class MemoryBackend:
                   ("MEMORY STORE", self.profile_store),
                   ("MEMORY STORE", self.job_runs_store),
                   ("MEMORY STORE", self.audit_store),
+                  ("MEMORY STORE", self.templates_store),
                   ("MEMORY STORE", self.access_store),
                   ("MEMORY STORE", self.salience_store),
                   ("MEMORY STORE", self.semantic_store),
@@ -2948,6 +2952,73 @@ TOOLS = [
         },
     },
     {
+        "name": "create_template",
+        "description": (
+            "Create or update a reusable message template for this user. The "
+            "body may contain {placeholders} filled at apply time (loop-applied "
+            "templates also get {counterparty}/{subject}/{what} for free). Call "
+            "when the user wants to save a standard reply, follow-up, or nudge."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "Template id (alphanumeric/dash/underscore)."},
+                "body": {"type": "string",
+                         "description": "Template text with {placeholders}."},
+                "channel": {"type": "string",
+                            "description": "Default channel (gmail/teams/...) "
+                                           "for applying without a loop. Optional."},
+                "subject": {"type": "string",
+                            "description": "Default subject for mail channels. "
+                                           "Optional."},
+            },
+            "required": ["name", "body"],
+        },
+    },
+    {
+        "name": "apply_template",
+        "description": (
+            "Render a saved template and queue the result as a DRAFT for the "
+            "user's approval — nothing is sent (same approval flow as "
+            "queue_reply). Apply to an open loop via `loop_key` (recipient/"
+            "channel/thread resolved automatically) or pass `to` + a template "
+            "with a channel. Missing {placeholders} are an error, never a "
+            "blank message."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Template id."},
+                "loop_key": {"type": "string",
+                             "description": "Open loop to target. Optional."},
+                "to": {"type": "string",
+                       "description": "Recipient when no loop_key. Optional."},
+                "variables": {"type": "object",
+                              "description": "Values for the template's "
+                                             "{placeholders}. Optional."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "list_templates",
+        "description": ("List the user's saved message templates with their "
+                        "placeholders and channels."),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "delete_template",
+        "description": "Delete a saved message template by name.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Template id."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "suggest_reply",
         "description": (
             "Draft a reply for an open loop someone is waiting on the user for "
@@ -3184,6 +3255,7 @@ class MCPServer:
         "save_memory", "forget", "restore_memory", "set_language", "feedback",
         "queue_reply", "approve_send", "reject_reply", "send_scheduled",
         "review_pr",   # drafts + queues an outbox item -> write; viewers denied
+        "create_template", "apply_template", "delete_template",
     })
 
     def _rbac_error(self, name: str,
@@ -3370,6 +3442,32 @@ class MCPServer:
             from . import release
             return release.draft_changelog(args.get("repo") or "",
                                            since=args.get("since"))
+
+        if name == "create_template":
+            from . import templates
+            return templates.create(b, uid, args.get("name") or "",
+                                    args.get("body") or "",
+                                    channel=args.get("channel"),
+                                    subject=args.get("subject"))
+
+        if name == "apply_template":
+            from . import templates
+            return templates.apply(b, uid, args.get("name") or "",
+                                   loop_key=args.get("loop_key"),
+                                   to=args.get("to"),
+                                   variables=args.get("variables") or {})
+
+        if name == "list_templates":
+            from . import templates
+            return {"ok": True, "user_id": uid,
+                    "templates": templates.list_all(b, uid)}
+
+        if name == "delete_template":
+            from . import templates
+            tname = args.get("name") or ""
+            ok = templates.delete(b, uid, tname)
+            return ({"ok": True, "name": tname} if ok else
+                    {"error": f"no template named {tname!r}"})
 
         if name == "suggest_reply":
             from . import suggest
