@@ -45,6 +45,51 @@ def test_is_auto():
     assert not ol._is_auto({"from": "Ulaş <ulas@x.com>", "labels": "INBOX"})
 
 
+def test_is_auto_filters_sms_brand_shortcodes():
+    # Regression: SMS brand/short-code senders arrive via iMessage (sender in
+    # `chat`), where the two-way reply filter is bypassed — so without this they
+    # leaked into the brief as "waiting on you". ALL-CAPS brand ids + a numeric
+    # short-code + notification content must all be flagged automated.
+    # NB: all senders/content here are FICTIONAL — never put real contacts,
+    # numbers, brands or message text into the repo (personal-data hygiene).
+    for brand, txt in (
+        ("EXAMPLE TELEKOM", "arama bilgilendirmesi"),
+        ("WIDGET GAZ", "Sn. Musterimiz, aboneliginize ait bilgilendirme"),
+        ("ACMEBANK", "kredi karti kampanya bilgilendirmesi"),
+        ("DEMO SIGORTA", "Dogrulama kodunuz: 123456"),
+        ("FOOBAR SERVIS", "hizmet talebiniz olusturuldu"),
+        ("MOCKEDAS", "PLANLI ELEKTRIK KESINTISI bildirimi"),
+        ("SAMPLE ASSN", "ozel firsat ve indirim"),
+        ("TESTCO MERKEZ", "Kampanya: ornek urun"),
+    ):
+        assert ol._is_auto({"source": "imessage", "chat": brand, "text": txt}), brand
+    # numeric short-code, and OTP content regardless of sender
+    assert ol._is_auto({"source": "imessage", "chat": "4350", "text": "merhaba"})
+
+
+def test_is_auto_keeps_real_people():
+    # Proper-case human contacts and a real-phone first text (no prior reply)
+    # must NOT be flagged automated, so genuine loops still surface.
+    # Names/numbers below are placeholders, not real people.
+    for who, txt in (
+        ("Ali Veli", "selam musait misin"),
+        ("Ayşe Kaya", "abi dosyayi gonderebilir misin"),
+        ("Mehmet Demir", "toplanti saat kacta"),
+    ):
+        assert not ol._is_auto({"source": "imessage", "chat": who, "text": txt}), who
+    assert not ol._is_auto({"source": "imessage", "chat": "+900000000000",
+                            "text": "selam musait misin"})
+
+
+def test_is_shortcode_sender():
+    assert ol._is_shortcode_sender("EXAMPLE TELEKOM")
+    assert ol._is_shortcode_sender("WIDGET GAZ")
+    assert ol._is_shortcode_sender("4350")          # numeric short-code
+    assert not ol._is_shortcode_sender("Ali Veli")
+    assert not ol._is_shortcode_sender("+900000000000")  # phone-length number
+    assert not ol._is_shortcode_sender("ab")         # too short
+
+
 def test_thread_key():
     assert ol._thread_key({"thread_id": "T1", "message_id": "M9"}, "gmail") == "T1"
     assert ol._thread_key({"message_id": "M9"}, "gmail") == "M9"
