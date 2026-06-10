@@ -2877,6 +2877,32 @@ TOOLS = [
         },
     },
     {
+        "name": "review_pr",
+        "description": (
+            "Draft a Claude code review for a synced GitHub pull request and "
+            "queue it for the user's approval. NOTHING is posted to GitHub — "
+            "the draft lands in the outbox; the user inspects it "
+            "(list_pending_replies) and approves it, and even then it dry-runs "
+            "(no PR-posting transport is wired). Call when the user asks to "
+            "review / get feedback on / look over a PR. Needs the reviewer LLM "
+            "(EVOSQL_REVIEW_LLM=anthropic) and the PR's diff (fetched from "
+            "GitHub when GITHUB_TOKEN is set, or pass `diff`)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pr": {"type": "string",
+                       "description": "The PR to review: 'owner/repo#123' or a "
+                                      "github.com pull-request URL."},
+                "diff": {"type": "string",
+                         "description": "Optional unified diff. If omitted, it "
+                                        "is fetched from the GitHub API when "
+                                        "GITHUB_TOKEN is set."},
+            },
+            "required": ["pr"],
+        },
+    },
+    {
         "name": "suggest_reply",
         "description": (
             "Draft a reply for an open loop someone is waiting on the user for "
@@ -3112,6 +3138,7 @@ class MCPServer:
     _MUTATING_TOOLS = frozenset({
         "save_memory", "forget", "restore_memory", "set_language", "feedback",
         "queue_reply", "approve_send", "reject_reply", "send_scheduled",
+        "review_pr",   # drafts + queues an outbox item -> write; viewers denied
     })
 
     def _rbac_error(self, name: str,
@@ -3248,6 +3275,13 @@ class MCPServer:
             text = meeting.render(data, name=uid.split("_")[0], lang=lang)
             return {"ok": True, "user_id": uid, "brief": text,
                     "day": data["day"], "meetings": data["count"]}
+
+        if name == "review_pr":
+            from . import codereview, prefs
+            pr = args.get("pr") or ""
+            lang, _was_set = prefs.get_language(b, uid)
+            return codereview.review_pr(b, uid, pr,
+                                        diff=args.get("diff"), language=lang)
 
         if name == "suggest_reply":
             from . import suggest
