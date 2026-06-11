@@ -42,6 +42,18 @@ evolution-agent -v "draft a reply to Alice about the Q3 report"   # show tool I/
 
 Tool calls stream to stderr; the final answer goes to stdout.
 
+### Browser chat
+
+```bash
+evolution-agent-web                       # http://127.0.0.1:8800
+```
+
+A dependency-free (stdlib `http.server` + SSE) single-page chat: the agent's
+tool timeline streams live, and a **Pending approvals** panel surfaces every
+draft the agent queued — clicking *Approve* calls `approve_send`, which stays
+dry-run unless the operator enabled real delivery. Needs `anthropic` +
+`ANTHROPIC_API_KEY`; connect to EvolutionDB via env or `EVOSQL_EMBEDDED=1`.
+
 | Env var | Default | Purpose |
 |---|---|---|
 | `EVOSQL_AGENT_MODEL` | `claude-opus-4-8` | Model id (use `claude-sonnet-4-6` for lower cost) |
