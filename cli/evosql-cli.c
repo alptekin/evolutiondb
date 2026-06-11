@@ -10,8 +10,14 @@
  * Features:
  *   • Persistent command history (saved to ~/.evosql_history)
  *   • Arrow-key navigation and line editing
- *   • Tabular result display with column alignment
- *   • Multi-line SQL (type \ at line end to continue)
+ *   • Tabular result display with column alignment + color (on a TTY)
+ *   • Multi-line SQL terminated by ';' (continuation prompt) — or '\' at EOL
+ *   • Backslash meta-commands: \d \dt \l \du \dn \timing \x \format \i \e \! \?
+ *   • Tab completion for SQL keywords + table names (GNU readline)
+ *   • Output formats: table (default), CSV, JSON  (\format or --format)
+ *   • Ctrl-C cancels the running query (reconnects transparently); at the
+ *     prompt it just clears the current line — the client never exits
+ *   • Scriptable: -c "SQL", -f FILE, or piped stdin (non-interactive)
  *   • \q or exit/quit to disconnect
  *
  * Cross-platform:
@@ -23,6 +29,35 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <signal.h>
+#include <setjmp.h>
+#include <time.h>
+
+/* ----------------------------------------------------------------
+ *  Session display/runtime options (set by flags + \meta-commands)
+ * ---------------------------------------------------------------- */
+typedef enum { FMT_TABLE = 0, FMT_CSV, FMT_JSON } out_format_t;
+static out_format_t g_format    = FMT_TABLE;
+static int          g_timing    = 0;   /* \timing — print query duration   */
+static int          g_expanded  = 0;   /* \x — one "col: value" per line   */
+static int          g_color     = 0;   /* ANSI color (auto: stdout is a tty)*/
+static int          g_interactive = 1; /* prompt + history (off for scripts)*/
+
+/* SIGINT during a query: set a flag, drain-and-discard the rest of the
+ * server's reply so the protocol stays in sync, then return to the prompt
+ * — never tear down the connection. */
+static volatile sig_atomic_t g_interrupted = 0;
+
+/* Set when the server returns an ERR for any statement; lets non-interactive
+ * runs (-c/-f/pipe) exit non-zero so scripts can detect a failed query. */
+static int g_error_seen = 0;
+
+/* ANSI helpers — emit nothing unless color is on (a real terminal). */
+#define C_RESET (g_color ? "\033[0m"  : "")
+#define C_HDR   (g_color ? "\033[1m"  : "")   /* bold header            */
+#define C_DIM   (g_color ? "\033[2m"  : "")   /* dim separators/counts  */
+#define C_ERR   (g_color ? "\033[31m" : "")   /* red errors             */
+#define C_NULL  (g_color ? "\033[2m"  : "")   /* dim NULL               */
 
 /* ----------------------------------------------------------------
  *  Optional TLS support (compile with -DEVOSQL_CLI_TLS -lssl -lcrypto)
@@ -317,6 +352,14 @@ typedef struct {
 
 static cli_conn_t g_conn;  /* global connection state */
 
+/* Connection parameters, stashed at startup so a Ctrl-C cancel can transparently
+ * reconnect (the EVO protocol has no in-band query-cancel, so the only prompt
+ * way to abandon a running query is to drop the socket and reopen it). */
+static const char *g_host_s = "localhost";
+static int         g_port_s = 9967;
+static const char *g_user_s = "admin";
+static const char *g_pass_s = NULL;
+
 static void cli_conn_init(cli_conn_t *c, socket_t sock)
 {
     c->sock   = sock;
@@ -507,51 +550,144 @@ static void result_free(EvoResult *r) {
     }
 }
 
-static void result_print(const EvoResult *r) {
-    if (r->num_cols == 0) return;
-
-    int c, row;
-    /* Calculate column widths */
-    int *widths = (int *)calloc(r->num_cols, sizeof(int));
-    for (c = 0; c < r->num_cols; c++) {
-        widths[c] = (int)strlen(r->cols[c]);
+/* The EVO protocol's COL line is "<name> <pg_type_oid> <type_modifier>".
+ * Recover the bare column name by dropping the two trailing integer fields
+ * (the name itself may contain spaces, so drop by count, not by first token). */
+static void strip_col_meta(char *s) {
+    char *end = s + strlen(s);
+    for (int drop = 0; drop < 2; drop++) {
+        while (end > s && isspace((unsigned char)end[-1])) end--;   /* trailing ws */
+        while (end > s && !isspace((unsigned char)end[-1])) end--;  /* the token   */
     }
-    for (row = 0; row < r->num_rows; row++) {
-        for (c = 0; c < r->num_cols; c++) {
-            const char *val = r->cells[row * r->num_cols + c];
-            int len = val ? (int)strlen(val) : 4; /* "NULL" */
-            if (len > widths[c]) widths[c] = len;
+    while (end > s && isspace((unsigned char)end[-1])) end--;       /* gap before  */
+    *end = '\0';
+}
+
+/* --- one CSV field: quote if it contains , " or newline (RFC-4180) --- */
+static void csv_field(const char *v) {
+    if (!v) return;                       /* NULL -> empty field */
+    int needq = 0;
+    for (const char *p = v; *p; p++)
+        if (*p == ',' || *p == '"' || *p == '\n' || *p == '\r') { needq = 1; break; }
+    if (!needq) { fputs(v, stdout); return; }
+    putchar('"');
+    for (const char *p = v; *p; p++) { if (*p == '"') putchar('"'); putchar(*p); }
+    putchar('"');
+}
+
+/* --- one JSON string (minimal escaping) --- */
+static void json_str(const char *v) {
+    putchar('"');
+    for (const char *p = v; p && *p; p++) {
+        switch (*p) {
+            case '"':  fputs("\\\"", stdout); break;
+            case '\\': fputs("\\\\", stdout); break;
+            case '\n': fputs("\\n", stdout); break;
+            case '\r': fputs("\\r", stdout); break;
+            case '\t': fputs("\\t", stdout); break;
+            default:
+                if ((unsigned char)*p < 0x20) printf("\\u%04x", *p);
+                else putchar(*p);
         }
     }
+    putchar('"');
+}
 
-    /* Print header */
+static void result_print_table(const EvoResult *r) {
+    int c, row;
+    int *widths = (int *)calloc(r->num_cols, sizeof(int));
+    for (c = 0; c < r->num_cols; c++) widths[c] = (int)strlen(r->cols[c]);
+    for (row = 0; row < r->num_rows; row++)
+        for (c = 0; c < r->num_cols; c++) {
+            const char *val = r->cells[row * r->num_cols + c];
+            int len = val ? (int)strlen(val) : 4;
+            if (len > widths[c]) widths[c] = len;
+        }
+
+    if (g_expanded) {
+        /* \x: one "column: value" line per field, records separated by a rule */
+        int label = 0;
+        for (c = 0; c < r->num_cols; c++)
+            if ((int)strlen(r->cols[c]) > label) label = (int)strlen(r->cols[c]);
+        for (row = 0; row < r->num_rows; row++) {
+            printf("%s-[ RECORD %d ]-%s\n", C_DIM, row + 1, C_RESET);
+            for (c = 0; c < r->num_cols; c++) {
+                const char *val = r->cells[row * r->num_cols + c];
+                printf("%s%-*s%s | %s\n", C_HDR, label, r->cols[c], C_RESET,
+                       val ? val : "NULL");
+            }
+        }
+        free(widths);
+        return;
+    }
+
+    printf("%s", C_HDR);
     for (c = 0; c < r->num_cols; c++) {
         if (c > 0) printf(" | ");
         printf("%-*s", widths[c], r->cols[c]);
     }
-    printf("\n");
+    printf("%s\n", C_RESET);
 
-    /* Separator */
+    printf("%s", C_DIM);
     for (c = 0; c < r->num_cols; c++) {
         if (c > 0) printf("-+-");
         for (int j = 0; j < widths[c]; j++) printf("-");
     }
-    printf("\n");
+    printf("%s\n", C_RESET);
 
-    /* Rows */
     for (row = 0; row < r->num_rows; row++) {
         for (c = 0; c < r->num_cols; c++) {
             if (c > 0) printf(" | ");
             const char *val = r->cells[row * r->num_cols + c];
-            if (!val)
-                printf("%-*s", widths[c], "NULL");
-            else
-                printf("%-*s", widths[c], val);
+            if (!val) printf("%s%-*s%s", C_NULL, widths[c], "NULL", C_RESET);
+            else      printf("%-*s", widths[c], val);
         }
         printf("\n");
     }
-
     free(widths);
+}
+
+static void result_print_csv(const EvoResult *r) {
+    int c, row;
+    for (c = 0; c < r->num_cols; c++) {
+        if (c > 0) putchar(',');
+        csv_field(r->cols[c]);
+    }
+    putchar('\n');
+    for (row = 0; row < r->num_rows; row++) {
+        for (c = 0; c < r->num_cols; c++) {
+            if (c > 0) putchar(',');
+            csv_field(r->cells[row * r->num_cols + c]);
+        }
+        putchar('\n');
+    }
+}
+
+static void result_print_json(const EvoResult *r) {
+    int c, row;
+    printf("[");
+    for (row = 0; row < r->num_rows; row++) {
+        printf(row ? ",\n " : "\n ");
+        printf("{");
+        for (c = 0; c < r->num_cols; c++) {
+            if (c > 0) printf(", ");
+            json_str(r->cols[c]);
+            printf(": ");
+            const char *val = r->cells[row * r->num_cols + c];
+            if (!val) printf("null"); else json_str(val);
+        }
+        printf("}");
+    }
+    printf(r->num_rows ? "\n]\n" : "]\n");
+}
+
+static void result_print(const EvoResult *r) {
+    if (r->num_cols == 0) return;
+    switch (g_format) {
+        case FMT_CSV:  result_print_csv(r);  break;
+        case FMT_JSON: result_print_json(r); break;
+        default:       result_print_table(r); break;
+    }
 }
 
 /* ================================================================
@@ -735,6 +871,15 @@ static int evo_connect(const char *host, int port, const char *username,
     return 0;  /* success */
 }
 
+/* Drop the current (possibly mid-stream) socket and reopen a fresh session.
+ * Used after a Ctrl-C cancel, where leftover result data makes the old socket
+ * unusable. Returns 0 on success, -1 if the server can't be reached. */
+static int evo_reconnect(void)
+{
+    cli_conn_shutdown(&g_conn);
+    return evo_connect(g_host_s, g_port_s, g_user_s, g_pass_s);
+}
+
 static int evo_execute(cli_conn_t *c, const char *sql)
 {
     char line[65536];
@@ -746,17 +891,27 @@ static int evo_execute(cli_conn_t *c, const char *sql)
     if (cli_send_line(c, header) < 0) return -1;
     if (cli_send_line(c, sql)    < 0) return -1;
 
-    /* Read response lines until READY */
+    g_interrupted = 0;
+    clock_t t0 = clock();
+
+    /* Read response lines until READY. A Ctrl-C sets g_interrupted; because the
+     * EVO protocol has no in-band cancel, we abandon the socket and return -2
+     * (the caller reconnects). Returns -1 only on a genuine connection loss.
+     * Machine formats (CSV/JSON) send only data to stdout; status/counts/errors
+     * go to stderr. */
     while (1) {
-        if (cli_recv_line(c, line, sizeof(line)) < 0) return -1;
+        if (g_interrupted) return -2;                       /* canceled */
+        if (cli_recv_line(c, line, sizeof(line)) < 0)
+            return g_interrupted ? -2 : -1;
 
         if (strcmp(line, "READY") == 0) {
             break;
         }
 
         if (strncmp(line, "ERR ", 4) == 0) {
-            fprintf(stderr, "ERROR: %s\n", line + 4);
-            /* Keep reading until READY */
+            g_error_seen = 1;
+            if (!g_interrupted)
+                fprintf(stderr, "%sERROR: %s%s\n", C_ERR, line + 4, C_RESET);
             continue;
         }
 
@@ -766,7 +921,9 @@ static int evo_execute(cli_conn_t *c, const char *sql)
         }
 
         if (strncmp(line, "TAG ", 4) == 0) {
-            printf("%s\n", line + 4);
+            if (!g_interrupted)
+                fprintf(g_format == FMT_TABLE ? stdout : stderr,
+                        "%s\n", line + 4);
             continue;
         }
 
@@ -776,16 +933,19 @@ static int evo_execute(cli_conn_t *c, const char *sql)
             result_init_evo(&res);
 
             /* COLS n */
-            if (cli_recv_line(c, line, sizeof(line)) < 0) return -1;
+            if (cli_recv_line(c, line, sizeof(line)) < 0) {
+                result_free(&res); return g_interrupted ? -2 : -1;
+            }
             if (strncmp(line, "COLS ", 5) == 0) {
                 res.num_cols = atoi(line + 5);
                 res.cols = (char **)calloc(res.num_cols, sizeof(char *));
 
                 /* Read column names */
                 for (int col = 0; col < res.num_cols; col++) {
-                    if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return -1; }
+                    if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return g_interrupted ? -2 : -1; }
                     if (strncmp(line, "COL ", 4) == 0) {
                         res.cols[col] = strdup(line + 4);
+                        strip_col_meta(res.cols[col]);
                     } else {
                         res.cols[col] = strdup("?");
                     }
@@ -797,7 +957,8 @@ static int evo_execute(cli_conn_t *c, const char *sql)
             res.cells = (char **)calloc(cells_cap, sizeof(char *));
 
             while (1) {
-                if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return -1; }
+                if (g_interrupted) { result_free(&res); return -2; }
+                if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return g_interrupted ? -2 : -1; }
 
                 if (strcmp(line, "END") == 0) break;
 
@@ -809,7 +970,7 @@ static int evo_execute(cli_conn_t *c, const char *sql)
                     }
 
                     for (int col = 0; col < res.num_cols; col++) {
-                        if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return -1; }
+                        if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return g_interrupted ? -2 : -1; }
                         int idx = res.num_rows * res.num_cols + col;
                         if (strncmp(line, "FIELD NULL", 10) == 0 && line[10] == '\0') {
                             res.cells[idx] = NULL;
@@ -828,25 +989,372 @@ static int evo_execute(cli_conn_t *c, const char *sql)
                 strncpy(res.tag, line + 4, sizeof(res.tag) - 1);
             }
 
-            result_print(&res);
-            printf("(%d row%s)\n", res.num_rows, res.num_rows == 1 ? "" : "s");
+            if (!g_interrupted) {
+                result_print(&res);
+                fprintf(g_format == FMT_TABLE ? stdout : stderr,
+                        "%s(%d row%s)%s\n", C_DIM, res.num_rows,
+                        res.num_rows == 1 ? "" : "s", C_RESET);
+            }
             result_free(&res);
             continue;
         }
     }
 
+    if (g_interrupted) {
+        fprintf(stderr, "%squery canceled%s\n", C_DIM, C_RESET);
+        g_interrupted = 0;
+    } else if (g_timing) {
+        double ms = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC;
+        fprintf(stderr, "%sTime: %.1f ms%s\n", C_DIM, ms, C_RESET);
+    }
     return 0;
+}
+
+/* ================================================================
+ *  Ctrl-C handling — flag the running query, never kill the client
+ * ================================================================ */
+/* Non-zero only while readline owns the terminal (at the prompt). A Ctrl-C
+ * then long-jumps out of readline to a fresh prompt; during a query it is 0,
+ * so the handler only flags g_interrupted and the recv loop drains to READY. */
+static volatile sig_atomic_t g_at_prompt = 0;
+#ifndef _WIN32
+static sigjmp_buf g_prompt_jmp;
+#endif
+
+static void on_sigint(int signo) {
+    (void)signo;
+    g_interrupted = 1;
+#ifndef _WIN32
+    if (g_at_prompt) {
+        /* Restore the terminal readline put into raw mode, then jump back to
+         * the prompt — the client is never terminated. */
+        rl_free_line_state();
+        rl_cleanup_after_signal();
+        siglongjmp(g_prompt_jmp, 1);
+    }
+#endif
+}
+
+/* One global handler for the whole interactive session (we own SIGINT;
+ * rl_catch_signals is off so readline neither re-raises nor terminates). */
+static void install_sigint(void) {
+#ifndef _WIN32
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_sigint;
+    sa.sa_flags = 0;                 /* no SA_RESTART: interrupt blocking recv */
+    sigaction(SIGINT, &sa, NULL);
+#else
+    signal(SIGINT, on_sigint);
+#endif
+}
+
+/* ================================================================
+ *  Silent single-column fetch (for tab-completion's table cache)
+ * ================================================================ */
+static char **g_tables = NULL;     /* cached table names for completion */
+static int    g_ntables = 0;
+
+/* Forward declaration — handle_meta() and run_script() are mutually recursive
+ * (\i FILE runs a script; a script may contain meta-commands). */
+static int run_script(cli_conn_t *c, const char *text);
+
+/* Read all of a stream into a heap buffer (caller frees). NULL on OOM/empty. */
+static char *slurp_stream(FILE *f) {
+    char *buf = NULL; size_t cap = 0, n = 0; int ch;
+    while ((ch = fgetc(f)) != EOF) {
+        if (n + 1 >= cap) { cap = cap ? cap * 2 : 4096;
+                            buf = (char *)realloc(buf, cap); if (!buf) return NULL; }
+        buf[n++] = (char)ch;
+    }
+    if (buf) buf[n] = '\0';
+    return buf;
+}
+
+static void fetch_first_column(cli_conn_t *c, const char *sql,
+                               char ***out, int *n) {
+    *out = NULL; *n = 0;
+    char line[65536], header[64];
+    snprintf(header, sizeof(header), "SQL %d", (int)strlen(sql));
+    if (cli_send_line(c, header) < 0) return;
+    if (cli_send_line(c, sql) < 0) return;
+    int cap = 0, cnt = 0; char **arr = NULL; int ncols = 0;
+    while (1) {
+        if (cli_recv_line(c, line, sizeof(line)) < 0) break;
+        if (strcmp(line, "READY") == 0) break;
+        if (strcmp(line, "RESULT") != 0) continue;     /* skip OK/TAG/ERR */
+        /* COLS n, then one COL per column */
+        if (cli_recv_line(c, line, sizeof(line)) < 0) break;
+        if (strncmp(line, "COLS ", 5) == 0) {
+            ncols = atoi(line + 5);
+            for (int col = 0; col < ncols; col++)
+                if (cli_recv_line(c, line, sizeof(line)) < 0) break;
+        }
+        /* rows: ROW then one FIELD per column, until END */
+        while (1) {
+            if (cli_recv_line(c, line, sizeof(line)) < 0) break;
+            if (strcmp(line, "END") == 0) break;
+            if (strcmp(line, "ROW") != 0) continue;
+            for (int col = 0; col < ncols; col++) {
+                if (cli_recv_line(c, line, sizeof(line)) < 0) break;
+                if (col == 0 && strncmp(line, "FIELD ", 6) == 0
+                        && strcmp(line, "FIELD NULL") != 0) {
+                    if (cnt >= cap) { cap = cap ? cap * 2 : 32;
+                        arr = (char **)realloc(arr, cap * sizeof(char *)); }
+                    arr[cnt++] = strdup(line + 6);
+                }
+            }
+        }
+        /* trailing TAG after END is consumed by the outer loop (until READY) */
+    }
+    *out = arr; *n = cnt;
+}
+
+static void refresh_table_cache(cli_conn_t *c) {
+    for (int i = 0; i < g_ntables; i++) free(g_tables[i]);
+    free(g_tables);
+    fetch_first_column(c, "SHOW TABLES", &g_tables, &g_ntables);
+}
+
+/* ================================================================
+ *  Tab completion (GNU readline only) — SQL keywords + table names
+ * ================================================================ */
+#ifndef _WIN32
+static const char *const SQL_KEYWORDS[] = {
+    "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET",
+    "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "INDEX", "JOIN", "LEFT",
+    "RIGHT", "INNER", "OUTER", "ON", "GROUP", "BY", "ORDER", "HAVING",
+    "LIMIT", "OFFSET", "DISTINCT", "AS", "AND", "OR", "NOT", "NULL", "LIKE",
+    "IN", "BETWEEN", "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "DEFAULT",
+    "UNIQUE", "CHECK", "BEGIN", "COMMIT", "ROLLBACK", "DATABASE", "SCHEMA",
+    "USER", "GRANT", "REVOKE", "SHOW", "TABLES", "DATABASES", "USERS",
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "VARCHAR", "INT", "INTEGER",
+    "TIMESTAMP", "BOOLEAN", "TEXT", NULL,
+};
+
+static char *completion_generator(const char *text, int state) {
+    static int kw_i, tbl_i, len;
+    if (state == 0) { kw_i = 0; tbl_i = 0; len = (int)strlen(text); }
+    /* keywords (case-insensitive prefix) */
+    for (; SQL_KEYWORDS[kw_i]; ) {
+        const char *kw = SQL_KEYWORDS[kw_i++];
+        if (strncasecmp(kw, text, len) == 0) return strdup(kw);
+    }
+    /* table names */
+    for (; tbl_i < g_ntables; ) {
+        const char *t = g_tables[tbl_i++];
+        if (t && strncasecmp(t, text, len) == 0) return strdup(t);
+    }
+    return NULL;
+}
+
+static char **cli_completion(const char *text, int start, int end) {
+    (void)start; (void)end;
+    rl_attempted_completion_over = 1;   /* don't fall back to filenames */
+    return rl_completion_matches(text, completion_generator);
+}
+#endif
+
+/* ================================================================
+ *  Backslash meta-commands. Returns: 0 = not a meta-command,
+ *  1 = handled, 2 = quit requested.
+ * ================================================================ */
+static int handle_meta(cli_conn_t *c, const char *cmd) {
+    if (cmd[0] != '\\') return 0;
+    /* split into verb + rest */
+    char verb[32] = "";
+    int i = 0;
+    const char *p = cmd + 1;
+    while (*p && !isspace((unsigned char)*p) && i < (int)sizeof(verb) - 1)
+        verb[i++] = *p++;
+    verb[i] = '\0';
+    while (*p && isspace((unsigned char)*p)) p++;   /* p -> argument */
+
+    if (!strcmp(verb, "q") || !strcmp(verb, "quit")) return 2;
+
+    if (!strcmp(verb, "?") || !strcmp(verb, "h") || !strcmp(verb, "help")) {
+        printf("Meta-commands:\n"
+               "  \\d            list tables        \\l    list databases\n"
+               "  \\d NAME       describe table     \\du   list users\n"
+               "  \\dt           list tables        \\dn   list schemas\n"
+               "  \\x            toggle expanded display\n"
+               "  \\timing       toggle query timing\n"
+               "  \\format F     output format: table | csv | json\n"
+               "  \\i FILE       run SQL from a file\n"
+               "  \\e            edit a statement in $EDITOR, then run it\n"
+               "  \\! CMD        run a shell command\n"
+               "  \\q            quit\n"
+               "End SQL statements with ';'.\n");
+        return 1;
+    }
+    if (!strcmp(verb, "d") || !strcmp(verb, "dt")) {
+        if (*p) {           /* \d NAME -> describe columns */
+            char sql[512];
+            snprintf(sql, sizeof(sql),
+                     "SELECT column_name, data_type, is_nullable "
+                     "FROM information_schema.columns WHERE table_name='%s'", p);
+            evo_execute(c, sql);
+        } else {
+            evo_execute(c, "SHOW TABLES");
+        }
+        return 1;
+    }
+    if (!strcmp(verb, "l"))  { evo_execute(c, "SHOW DATABASES"); return 1; }
+    if (!strcmp(verb, "du")) { evo_execute(c, "SHOW USERS");     return 1; }
+    if (!strcmp(verb, "dn")) { evo_execute(c, "SHOW SCHEMAS");   return 1; }
+
+    if (!strcmp(verb, "x")) {
+        g_expanded = !g_expanded;
+        printf("Expanded display %s.\n", g_expanded ? "on" : "off");
+        return 1;
+    }
+    if (!strcmp(verb, "timing")) {
+        g_timing = !g_timing;
+        printf("Timing %s.\n", g_timing ? "on" : "off");
+        return 1;
+    }
+    if (!strcmp(verb, "format")) {
+        if (!strcasecmp(p, "csv"))       g_format = FMT_CSV;
+        else if (!strcasecmp(p, "json")) g_format = FMT_JSON;
+        else if (!strcasecmp(p, "table")) g_format = FMT_TABLE;
+        else { printf("Usage: \\format table|csv|json\n"); return 1; }
+        printf("Output format: %s\n", p);
+        return 1;
+    }
+    if (!strcmp(verb, "i")) {            /* run a SQL file */
+        if (!*p) { printf("Usage: \\i FILE\n"); return 1; }
+        FILE *f = fopen(p, "r");
+        if (!f) { fprintf(stderr, "%scannot open %s%s\n", C_ERR, p, C_RESET);
+                  return 1; }
+        char *buf = slurp_stream(f);
+        fclose(f);
+        if (buf) { run_script(c, buf); free(buf); }
+        return 1;
+    }
+    if (!strcmp(verb, "e")) {            /* edit a statement in $EDITOR, run it */
+#ifndef _WIN32
+        const char *ed = getenv("EDITOR");
+        if (!ed) ed = "vi";
+        /* mkstemp gives a unique, private temp file — no predictable-path race. */
+        char path[] = "/tmp/evosql_edit_XXXXXX";
+        int tfd = mkstemp(path);
+        if (tfd < 0) { fprintf(stderr, "%scannot create temp file%s\n",
+                               C_ERR, C_RESET); return 1; }
+        close(tfd);
+        char syscmd[512];
+        snprintf(syscmd, sizeof(syscmd), "%s %s", ed, path);
+        if (system(syscmd) == 0) {
+            FILE *f = fopen(path, "r");
+            if (f) { char *buf = slurp_stream(f); fclose(f);
+                     if (buf) { run_script(c, buf); free(buf); } }
+        }
+        unlink(path);
+#else
+        printf("\\e is not supported on this platform.\n");
+#endif
+        return 1;
+    }
+    if (!strcmp(verb, "!")) {            /* shell escape */
+        if (*p) { int rc = system(p); (void)rc; }
+        return 1;
+    }
+    fprintf(stderr, "Unknown command: \\%s  (try \\?)\n", verb);
+    return 1;
+}
+
+/* ================================================================
+ *  Script runner — split text into ';'-terminated statements
+ *  (quote- and --comment-aware) and run each.
+ * ================================================================ */
+static int run_script(cli_conn_t *c, const char *text) {
+    size_t cap = strlen(text) + 1;
+    char *stmt = (char *)malloc(cap);
+    size_t n = 0;
+    int sq = 0, dq = 0, rc = 0;
+    for (const char *p = text; *p && rc == 0; p++) {
+        char ch = *p;
+        /* line comment -- ... to EOL (only outside quotes) */
+        if (!sq && !dq && ch == '-' && p[1] == '-') {
+            while (*p && *p != '\n') p++;
+            if (!*p) break;
+            continue;
+        }
+        if (ch == '\'' && !dq) sq = !sq;
+        else if (ch == '"' && !sq) dq = !dq;
+        if (ch == ';' && !sq && !dq) {
+            stmt[n] = '\0';
+            /* trim */
+            char *s = stmt; while (*s && isspace((unsigned char)*s)) s++;
+            if (*s && handle_meta(c, s) == 0) { int er = evo_execute(c, s);
+                                                if (er < 0) rc = er; }  /* -1 loss / -2 cancel */
+            n = 0;
+            continue;
+        }
+        /* The EVO protocol frames the query as a single line, so embedded
+         * newlines would desync it — fold them (and CR) to spaces. */
+        if (ch == '\n' || ch == '\r') ch = ' ';
+        stmt[n++] = ch;
+    }
+    if (rc == 0) {
+        stmt[n] = '\0';
+        char *s = stmt; while (*s && isspace((unsigned char)*s)) s++;
+        if (*s && handle_meta(c, s) == 0) { int er = evo_execute(c, s);
+                                            if (er < 0) rc = er; }
+    }
+    free(stmt);
+    return rc;
 }
 
 /* ================================================================
  *  Main
  * ================================================================ */
+/* Does an SQL fragment contain a bare PASSWORD keyword? Such statements are
+ * kept out of the on-disk history so cleartext passwords never hit the file. */
+static int contains_password_kw(const char *sql) {
+    for (const char *s = sql; *s; s++) {
+        if (strncasecmp(s, "PASSWORD", 8) == 0 &&
+            (s == sql || isspace((unsigned char)s[-1])) &&
+            (s[8] == '\0' || isspace((unsigned char)s[8])))
+            return 1;
+    }
+    return 0;
+}
+
+/* Portable case-insensitive substring test (strcasestr is non-standard). */
+static int ci_contains(const char *hay, const char *needle) {
+    size_t nl = strlen(needle);
+    for (const char *p = hay; *p; p++)
+        if (strncasecmp(p, needle, nl) == 0) return 1;
+    return 0;
+}
+
+static void usage(void) {
+    printf("Usage: evosql-cli [OPTIONS] [-c SQL | -f FILE]\n"
+           "  -h, --host HOST    Server hostname        (default: localhost)\n"
+           "  -p, --port PORT    Server port            (default: 9967)\n"
+           "  -u, --user USER    Username               (default: admin)\n"
+           "  -W, --password PW  Password               (or set EVOSQL_PASSWORD)\n"
+           "  -c, --command SQL  Run SQL and exit (non-interactive)\n"
+           "  -f, --file FILE    Run SQL from FILE and exit\n"
+           "  -F, --format FMT   Output format: table | csv | json (default: table)\n"
+           "  -x, --expanded     Expanded (one column per line) display\n"
+           "      --timing       Print query execution time\n"
+           "      --color        Force ANSI colors (default: auto when a TTY)\n"
+           "      --no-color     Disable ANSI colors\n"
+           "      --help         Show this help and exit\n"
+           "\nWith no -c/-f and a TTY on stdin, starts an interactive shell.\n"
+           "Piped stdin (e.g. `evosql-cli < file.sql`) runs as a script.\n");
+}
+
 int main(int argc, char *argv[])
 {
     const char *host = "localhost";
     int port = 9967;
     const char *username = "admin";
     const char *password = NULL;
+    const char *command = NULL;     /* -c */
+    const char *file = NULL;        /* -f */
+    int color_mode = -1;            /* -1 auto, 0 off, 1 force */
     int i;
 
     for (i = 1; i < argc; i++) {
@@ -858,12 +1366,26 @@ int main(int argc, char *argv[])
             username = argv[++i];
         else if ((strcmp(argv[i], "-W") == 0 || strcmp(argv[i], "--password") == 0) && i + 1 < argc)
             password = argv[++i];
+        else if ((strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--command") == 0) && i + 1 < argc)
+            command = argv[++i];
+        else if ((strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--file") == 0) && i + 1 < argc)
+            file = argv[++i];
+        else if ((strcmp(argv[i], "-F") == 0 || strcmp(argv[i], "--format") == 0) && i + 1 < argc) {
+            const char *f = argv[++i];
+            if (!strcasecmp(f, "csv"))       g_format = FMT_CSV;
+            else if (!strcasecmp(f, "json")) g_format = FMT_JSON;
+            else                             g_format = FMT_TABLE;
+        }
+        else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--expanded") == 0)
+            g_expanded = 1;
+        else if (strcmp(argv[i], "--timing") == 0)
+            g_timing = 1;
+        else if (strcmp(argv[i], "--color") == 0)
+            color_mode = 1;
+        else if (strcmp(argv[i], "--no-color") == 0)
+            color_mode = 0;
         else if (strcmp(argv[i], "--help") == 0) {
-            printf("Usage: evosql-cli [-h HOST] [-p PORT] [-u USER] [-W PASSWORD]\n");
-            printf("  -h, --host       Server hostname  (default: localhost)\n");
-            printf("  -p, --port       Server port      (default: 9967)\n");
-            printf("  -u, --user       Username         (default: admin)\n");
-            printf("  -W, --password   Password         (or set EVOSQL_PASSWORD)\n");
+            usage();
             return 0;
         }
     }
@@ -873,94 +1395,149 @@ int main(int argc, char *argv[])
         password = getenv("EVOSQL_PASSWORD");
     }
 
+    /* Non-interactive when given -c/-f, or when stdin is not a terminal
+     * (piped/redirected). Otherwise an interactive shell. */
+    g_interactive = !command && !file;
+#ifndef _WIN32
+    if (g_interactive && !isatty(STDIN_FILENO)) g_interactive = 0;
+#endif
+
+    /* Colors: forced, off, or auto (only a table on a real terminal). */
+    if (color_mode == 1)      g_color = 1;
+    else if (color_mode == 0) g_color = 0;
+    else
+#ifndef _WIN32
+        g_color = (g_format == FMT_TABLE) && isatty(STDOUT_FILENO);
+#else
+        g_color = 0;
+#endif
+
+    /* Stash params so a Ctrl-C cancel can transparently reconnect. */
+    g_host_s = host; g_port_s = port; g_user_s = username; g_pass_s = password;
+
     /* Connect */
     if (evo_connect(host, port, username, password) < 0) return 1;
 
+    int rc = 0;
+
+    /* ---- Non-interactive paths: run a command/file/stdin, then exit ---- */
+    if (!g_interactive) {
+        char *script = NULL;
+        if (command) {
+            rc = run_script(&g_conn, command);
+        } else if (file) {
+            FILE *f = fopen(file, "r");
+            if (!f) { fprintf(stderr, "%scannot open %s%s\n",
+                              C_ERR, file, C_RESET); rc = 1; }
+            else { script = slurp_stream(f); fclose(f);
+                   if (script) rc = run_script(&g_conn, script); }
+        } else {                 /* piped stdin */
+            script = slurp_stream(stdin);
+            if (script) rc = run_script(&g_conn, script);
+        }
+        free(script);
+        cli_send_line(&g_conn, "QUIT");
+        cli_conn_shutdown(&g_conn);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return (rc < 0 || g_error_seen) ? 1 : 0;
+    }
+
+    /* ---- Interactive shell ---- */
     printf("Connected to EvoSQL at %s:%d%s\n", host, port,
            g_conn.is_tls ? " (TLS)" : "");
-    printf("Type SQL queries, or \\q to quit.\n\n");
+    printf("Type SQL (end with ';'), or \\? for help, \\q to quit.\n\n");
 
-    /* Load history */
     init_history_file();
     load_history();
+    refresh_table_cache(&g_conn);
+#ifndef _WIN32
+    rl_attempted_completion_function = cli_completion;
+    rl_catch_signals = 0;   /* we own SIGINT; readline must not re-raise it */
+#endif
+    install_sigint();
 
-    /* Main REPL */
+    /* Statement buffer accumulates lines until a ';' terminator. */
+    char buf[65536];
+    size_t blen = 0;
+    buf[0] = '\0';
+
     while (1) {
-        char *line = cli_readline("evosql> ");
-        if (!line) {
-            /* EOF (Ctrl+D) */
+#ifndef _WIN32
+        /* Ctrl-C while typing long-jumps here: drop the line and any pending
+         * multiline buffer, then re-prompt — shell-like, never terminate. */
+        if (sigsetjmp(g_prompt_jmp, 1) != 0) {
+            g_interrupted = 0;
+            blen = 0; buf[0] = '\0';
+            printf("\n");
+        }
+#endif
+        const char *prompt = (blen == 0) ? "evosql> " : "   ...> ";
+        g_at_prompt = 1;
+        char *line = cli_readline(prompt);
+        g_at_prompt = 0;
+
+        if (!line) {                         /* Ctrl-D / EOF */
+            if (blen > 0) { printf("\n"); blen = 0; buf[0] = '\0'; continue; }
             printf("\n");
             break;
         }
 
-        /* Skip empty lines */
-        char *trimmed = line;
-        while (*trimmed && isspace((unsigned char)*trimmed)) trimmed++;
-        if (!*trimmed) {
-            free(line);
-            continue;
-        }
+        if (blen == 0) {
+            char *t = line;
+            while (*t && isspace((unsigned char)*t)) t++;
+            if (!*t) { free(line); continue; }   /* blank */
 
-        /* Quit commands */
-        if (strcmp(trimmed, "\\q") == 0 ||
-            strncasecmp(trimmed, "quit", 4) == 0 ||
-            strncasecmp(trimmed, "exit", 4) == 0) {
-            cli_send_line(&g_conn, "QUIT");
-            free(line);
-            break;
-        }
-
-        /* Multi-line support: if line ends with '\', continue reading */
-        char sql[65536];
-        strncpy(sql, trimmed, sizeof(sql) - 1);
-        sql[sizeof(sql) - 1] = '\0';
-
-        while (1) {
-            int slen = (int)strlen(sql);
-            if (slen > 0 && sql[slen - 1] == '\\') {
-                sql[slen - 1] = ' ';  /* replace \ with space */
-                char *cont = cli_readline("     -> ");
-                if (!cont) break;
-                char *ct = cont;
-                while (*ct && isspace((unsigned char)*ct)) ct++;
-                if (*ct) {
-                    strncat(sql, ct, sizeof(sql) - strlen(sql) - 1);
-                }
-                free(cont);
-            } else {
-                break;
+            /* Bare quit words (kept for familiarity) */
+            if (!strcasecmp(t, "quit") || !strcasecmp(t, "exit")) {
+                free(line); break;
+            }
+            /* Meta-command on its own line — runs immediately */
+            if (t[0] == '\\') {
+                int m = handle_meta(&g_conn, t);
+                free(line);
+                if (m == 2) break;               /* \q */
+                refresh_table_cache(&g_conn);    /* schema may have changed */
+                continue;
             }
         }
 
-        /* Strip trailing semicolons for history neatness.
-         * Do NOT record SQL containing PASSWORD clauses to history
-         * file — prevents cleartext passwords leaking to disk. */
-        {
-            const char *s = sql;
-            int has_password = 0;
-            while (*s) {
-                if (strncasecmp(s, "PASSWORD", 8) == 0 &&
-                    (s == sql || isspace((unsigned char)s[-1])) &&
-                    (s[8] == '\0' || isspace((unsigned char)s[8]))) {
-                    has_password = 1;
-                    break;
-                }
-                s++;
-            }
-            if (!has_password) {
-                add_history_entry(sql);
-            }
+        /* Append the line to the statement buffer. */
+        size_t llen = strlen(line);
+        if (blen + llen + 2 < sizeof(buf)) {
+            if (blen > 0) buf[blen++] = '\n';
+            memcpy(buf + blen, line, llen + 1);
+            blen += llen;
         }
-
-        /* Execute */
-        if (evo_execute(&g_conn, sql) < 0) {
-            fprintf(stderr, "Connection lost.\n");
-            free(line);
-            break;
-        }
-
-        printf("\n");
         free(line);
+
+        /* Complete when the trimmed buffer ends with ';'. */
+        size_t e = blen;
+        while (e > 0 && isspace((unsigned char)buf[e - 1])) e--;
+        if (e > 0 && buf[e - 1] == ';') {
+            if (!contains_password_kw(buf)) add_history_entry(buf);
+            /* Refresh the completion cache only when the schema may have
+             * changed (DDL), to avoid a SHOW TABLES round-trip per query. */
+            int ddl = ci_contains(buf, "CREATE") || ci_contains(buf, "DROP")
+                   || ci_contains(buf, "ALTER");
+            int r = run_script(&g_conn, buf);  /* g_at_prompt==0: Ctrl-C cancels */
+            blen = 0; buf[0] = '\0';
+            if (r == -2) {
+                /* Ctrl-C during the query: socket abandoned mid-stream —
+                 * reconnect transparently so the prompt stays usable. */
+                fprintf(stderr, "%squery canceled%s\n", C_DIM, C_RESET);
+                g_interrupted = 0;
+                if (evo_reconnect() < 0) {
+                    fprintf(stderr, "Reconnect failed.\n"); rc = 1; break;
+                }
+                if (ddl) refresh_table_cache(&g_conn);
+                continue;
+            }
+            if (r < 0) { fprintf(stderr, "Connection lost.\n"); rc = 1; break; }
+            printf("\n");
+            if (ddl) refresh_table_cache(&g_conn);
+        }
     }
 
     save_history();
@@ -970,5 +1547,5 @@ int main(int argc, char *argv[])
     WSACleanup();
 #endif
 
-    return 0;
+    return rc < 0 ? 1 : 0;
 }
