@@ -30,9 +30,10 @@ def _tool_use(id_, name, inp):
 
 
 class _Resp:
-    def __init__(self, content, stop_reason):
+    def __init__(self, content, stop_reason, usage=None):
         self.content = content
         self.stop_reason = stop_reason
+        self.usage = usage   # SimpleNamespace(input_tokens=, output_tokens=) or None
 
 
 class FakeClient:
@@ -48,8 +49,14 @@ class FakeClient:
         # place across turns (the real SDK serializes per call, so that's fine),
         # but the test inspects each turn's state, which needs a copy.
         self.calls.append({**kw, "messages": copy.deepcopy(kw.get("messages"))})
-        content, stop = self._scripted.pop(0)
-        return _Resp(content, stop)
+        item = self._scripted.pop(0)
+        content, stop = item[0], item[1]
+        usage = item[2] if len(item) > 2 else None
+        return _Resp(content, stop, usage)
+
+
+def _usage(i, o):
+    return types.SimpleNamespace(input_tokens=i, output_tokens=o)
 
 
 class FakeServer:
@@ -166,6 +173,41 @@ def test_system_prompt_states_the_send_invariant():
     low = DEFAULT_SYSTEM.lower()
     assert "approve_send" in low
     assert "never" in low and "send" in low   # the hard no-auto-send rule
+
+
+def test_usage_is_accumulated_across_turns():
+    client = FakeClient([
+        ([_tool_use("t1", "daily_brief", {})], "tool_use", _usage(100, 30)),
+        ([_text("done")], "end_turn", _usage(50, 20)),
+    ])
+    out = AgentLoop(FakeServer(), client=client, tools=[]).run("go")
+    assert out["usage"] == {"input_tokens": 150, "output_tokens": 50,
+                            "total_tokens": 200}
+    assert out["stop_reason"] == "end_turn"
+
+
+def test_token_budget_stops_the_run():
+    # turn 1 spends 10k (over the 6k budget); the loop must NOT make a 2nd call
+    client = FakeClient([
+        ([_tool_use("t1", "search_memory", {})], "tool_use", _usage(5000, 5000)),
+        ([_text("should never run")], "end_turn", _usage(1, 1)),
+    ])
+    server = FakeServer()
+    out = AgentLoop(server, client=client, tools=[], token_budget=6000).run("go")
+    assert out["stop_reason"] == "budget"
+    assert out["turns"] == 1
+    assert len(client.calls) == 1          # second model call was prevented
+    assert len(server.calls) == 1          # turn 1's tool still ran
+    assert out["usage"]["total_tokens"] == 10000
+
+
+def test_no_budget_never_stops_on_cost():
+    client = FakeClient([
+        ([_tool_use("t1", "daily_brief", {})], "tool_use", _usage(9999, 9999)),
+        ([_text("ok")], "end_turn", _usage(9999, 9999)),
+    ])
+    out = AgentLoop(FakeServer(), client=client, tools=[]).run("go")  # budget=None
+    assert out["stop_reason"] == "end_turn"   # huge usage, but no ceiling
 
 
 def test_blocks_to_dicts_drops_unknown_types():
