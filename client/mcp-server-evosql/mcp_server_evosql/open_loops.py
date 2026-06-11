@@ -178,9 +178,10 @@ def _classify(open_now, language="english"):
     The deterministic pass over-includes (FYI/emotional messages); this trims to
     what actually needs an answer. Opt-in via EVOSQL_LOOP_LLM=anthropic; on any
     error the deterministic records stand unchanged."""
+    from . import llm
     be = os.environ.get("EVOSQL_LOOP_LLM", "").strip().lower()
     items = [(k, r) for k, r in open_now.items() if r.get("direction") == "awaiting_me"]
-    if be not in ("anthropic", "sonnet") or not items:
+    if not llm.available(be) or not items:
         return
     payload = [{"id": k, "from": r["counterparty"], "msg": r["snippet"]}
                for k, r in items]
@@ -194,12 +195,11 @@ def _classify(open_now, language="english"):
         "Return STRICT JSON: [{\"id\":\"...\",\"type\":\"...\",\"what\":\"...\"}]\n\n"
         + json.dumps(payload, ensure_ascii=False))
     try:
-        import anthropic
-        c = anthropic.Anthropic()
-        msg = c.messages.create(
-            model=os.environ.get("EVOSQL_LOOP_LLM_MODEL", "claude-haiku-4-5-20251001"),
-            max_tokens=2000, messages=[{"role": "user", "content": prompt}])
-        m = re.search(r'\[.*\]', msg.content[0].text, re.S)
+        text = llm.chat(prompt, provider=be,
+                        model=os.environ.get("EVOSQL_LOOP_LLM_MODEL",
+                                             "claude-haiku-4-5-20251001"),
+                        max_tokens=2000) or ""
+        m = re.search(r'\[.*\]', text, re.S)
         for d in (json.loads(m.group(0)) if m else []):
             r = open_now.get(d.get("id"))
             if r:

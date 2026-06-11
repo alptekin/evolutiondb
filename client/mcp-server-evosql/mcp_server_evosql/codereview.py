@@ -101,20 +101,21 @@ def _review_prompt(rec: Dict[str, Any], diff: str, language: str) -> str:
 
 
 def _call_llm(prompt: str, model: str) -> str:
-    """Single anthropic call. Isolated so tests can stub it."""
-    import anthropic
-    c = anthropic.Anthropic()
-    msg = c.messages.create(model=model, max_tokens=4000,
-                            messages=[{"role": "user", "content": prompt}])
-    return (msg.content[0].text or "").strip()
+    """Single chat call via the shared resolver. Isolated so tests can stub it.
+    Provider comes from EVOSQL_REVIEW_LLM (anthropic by default — unchanged)."""
+    from . import llm
+    provider = (os.environ.get("EVOSQL_REVIEW_LLM") or "anthropic").strip().lower()
+    return llm.chat(prompt, provider=provider, model=model, max_tokens=4000) or ""
 
 
 def draft_review(rec: Dict[str, Any], diff: str,
                  language: str = "english") -> Optional[str]:
-    """Claude code-review text for the PR, or None when the reviewer LLM is not
-    configured (opt-in via EVOSQL_REVIEW_LLM=anthropic)."""
+    """Code-review text for the PR, or None when the reviewer LLM is not
+    configured (opt-in via EVOSQL_REVIEW_LLM=anthropic|openai|openrouter|
+    ollama|custom)."""
+    from . import llm
     be = os.environ.get("EVOSQL_REVIEW_LLM", "").strip().lower()
-    if be not in ("anthropic", "claude"):
+    if not llm.available(be):
         return None
     model = os.environ.get("EVOSQL_REVIEW_MODEL", "claude-sonnet-4-6")
     return _call_llm(_review_prompt(rec, diff, language), model)
