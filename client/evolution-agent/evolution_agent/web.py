@@ -135,11 +135,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             srv = _mcp_server()
-            agent = AgentLoop(srv, on_event=lambda k, p: self._sse(k, p))
+            # Bound a single chat's model cost — a public port must never allow
+            # an unbounded LLM bill. Override with EVOSQL_AGENT_TOKEN_BUDGET=0
+            # for unlimited (not recommended when exposed).
+            budget = int(os.environ.get("EVOSQL_AGENT_TOKEN_BUDGET", "60000"))
+            agent = AgentLoop(srv, on_event=lambda k, p: self._sse(k, p),
+                              token_budget=(budget or None))
             out = agent.run(q)
             self._sse("final", {"text": out.get("final_text", ""),
                                 "turns": out.get("turns"),
-                                "stop_reason": out.get("stop_reason")})
+                                "stop_reason": out.get("stop_reason"),
+                                "usage": out.get("usage")})
         except (BrokenPipeError, ConnectionResetError):
             return  # client navigated away mid-stream
         except Exception as e:  # pragma: no cover
