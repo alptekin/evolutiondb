@@ -1,0 +1,85 @@
+name: Claude Session Sync Release — PyPI
+
+# Triggers on tag push `claude-session-sync-v*`. Distinct prefix so it does
+# not collide with the other connector tags or the engine's `server-v*` /
+# `v*` tags.
+#
+# What runs on the tag push:
+#   1. Build sdist + wheel from client/claude-session-sync
+#   2. Upload to PyPI under the project name
+#      `evolutiondb-claude-session-sync` (Trusted Publishing via OIDC; falls
+#      back to PYPI_API_TOKEN if the OIDC publisher is not yet configured).
+
+on:
+  push:
+    tags: ["claude-session-sync-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to re-publish (e.g. claude-session-sync-v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write   # PyPI Trusted Publishing needs this
+
+jobs:
+  pypi:
+    name: Publish evolutiondb-claude-session-sync to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi-claude-session-sync
+      url: https://pypi.org/project/evolutiondb-claude-session-sync/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Verify version matches the tag
+        working-directory: client/claude-session-sync
+        run: |
+          input_tag="${{ github.event.inputs.tag }}"
+          if [ -n "$input_tag" ]; then
+            tag="$input_tag"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          ver="${tag#claude-session-sync-v}"
+          py_ver=$(python3 -c "import tomllib;print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          if [ "$ver" != "$py_ver" ]; then
+            echo "::error::tag ${tag} (=> ${ver}) does not match pyproject version ${py_ver}"
+            exit 1
+          fi
+          echo "tag and pyproject agree on ${ver}"
+
+      - name: Build sdist + wheel
+        working-directory: client/claude-session-sync
+        run: |
+          python3 -m pip install --upgrade pip build
+          rm -rf dist build *.egg-info
+          python3 -m build --sdist --wheel
+          ls -lh dist/
+
+      - name: Verify the wheel installs and the entry point runs
+        working-directory: client/claude-session-sync
+        run: |
+          python3 -m venv /tmp/install-check
+          /tmp/install-check/bin/pip install --upgrade pip
+          /tmp/install-check/bin/pip install dist/evolutiondb_claude_session_sync-*.whl
+          /tmp/install-check/bin/evolutiondb-claude-session-sync --help
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: client/claude-session-sync/dist
+          # If PYPI_API_TOKEN is set as a repo secret, use it; otherwise
+          # the action falls back to PyPI Trusted Publishing via the
+          # workflow's OIDC token (configure the pending publisher at
+          # https://pypi.org/manage/account/publishing/).
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
