@@ -285,6 +285,39 @@ def job_rules(backend, ns: str) -> int:
     return rules.job_rules(backend, ns)
 
 
+def job_brief_delivery(backend, ns: str) -> int:
+    """Hermes-inspired: deliver the morning brief to the user's OWN address so
+    they see what's on their plate without opening the host. Opt-in via
+    EVOSQL_BRIEF_DELIVERY='channel:recipient' (e.g. 'gmail:me@example.com').
+
+    Queues the brief as an outbox draft addressed to self (stable key, so a
+    re-run upserts one pending brief, never a pile). The recipient IS the user,
+    so ADR-004's 'a human approves before it reaches others' has no third party
+    to protect — EVOSQL_BRIEF_AUTOSEND=1 lets the scheduler approve it for true
+    unattended delivery, still bounded by the normal send gate (nothing leaves
+    unless EVOSQL_SEND_ENABLED + a transport for the channel are wired)."""
+    spec = (os.environ.get("EVOSQL_BRIEF_DELIVERY") or "").strip()
+    if not spec or ":" not in spec:
+        return 0
+    channel, _, recipient = spec.partition(":")
+    channel, recipient = channel.strip(), recipient.strip()
+    if not channel or not recipient:
+        return 0
+    from . import brief, prefs, outbox
+    data = brief.collect(backend, ns)
+    lang, _was = prefs.get_language(backend, ns)
+    text = brief.render(data, name=ns.split("_")[0], lang=lang)
+    item = outbox.queue(backend, ns, "brief_delivery", text,
+                        channel=channel, source=channel, to=recipient,
+                        to_email=(recipient if "@" in recipient else None),
+                        subject="Your daily brief")
+    if (os.environ.get("EVOSQL_BRIEF_AUTOSEND") or "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        res = outbox.approve_send(backend, ns, item["id"], approver="scheduler")
+        return 1 if res.get("sent") else 0
+    return 1
+
+
 def job_outbox_flush(backend, ns: str) -> int:
     """Assistant action loop: deliver outbox replies whose undo window has
     elapsed (approve_send with EVOSQL_SEND_UNDO_SECONDS schedules instead of
@@ -319,6 +352,8 @@ JOBS: List[Job] = [
     # automation (Phase 4): rules queue drafts for approval; no rules = no-op.
     # Hourly, AFTER the half-hourly open_loops refresh so ages are current.
     Job("rules",            "hourly",            job_rules),
+    # morning brief delivery to self (no-op unless EVOSQL_BRIEF_DELIVERY set).
+    Job("brief_delivery",   "daily@07:30",       job_brief_delivery),
 ]
 
 
