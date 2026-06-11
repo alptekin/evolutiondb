@@ -47,6 +47,11 @@ Issues = "https://github.com/alptekin/evolutiondb/issues"
 
 [project.scripts]
 evolution-agent = "evolution_agent.__main__:main"
+evolution-agent-web = "evolution_agent.web:main"
 
 [tool.setuptools.packages.find]
 include = ["evolution_agent*"]
+
+[tool.setuptools.package-data]
+# Ship the single-file web chat UI served by `evolution-agent-web`.
+evolution_agent = ["../web/index.html"]
