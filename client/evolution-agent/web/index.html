@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>evolution-agent</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#121723; --panel2:#0e131d; --line:#1e2738;
+    --txt:#e6edf3; --dim:#8b98ab; --accent:#5ad1c2; --accent2:#7aa2ff;
+    --user:#1b2742; --tool:#15202e; --warn:#f0b429; --ok:#3fb950;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--txt);height:100vh;display:flex;flex-direction:column}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  header .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px}
+  header .sub{color:var(--dim);font-size:12.5px}
+  header .gate{margin-left:auto;color:var(--dim);font-size:12px;border:1px solid var(--line);
+       padding:4px 10px;border-radius:999px}
+  .wrap{flex:1;display:flex;min-height:0}
+  .chat{flex:1;display:flex;flex-direction:column;min-width:0}
+  #log{flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px}
+  .msg{max-width:760px}
+  .msg.user{align-self:flex-end}
+  .bubble{padding:11px 15px;border-radius:14px;white-space:pre-wrap;word-wrap:break-word}
+  .user .bubble{background:var(--user);border:1px solid #25365c}
+  .bot  .bubble{background:var(--panel);border:1px solid var(--line)}
+  .role{font-size:11px;color:var(--dim);margin:0 4px 5px;text-transform:uppercase;letter-spacing:.6px}
+  .timeline{margin:8px 2px 0;display:flex;flex-direction:column;gap:6px}
+  .step{font-size:12.5px;color:var(--dim);background:var(--tool);border:1px solid var(--line);
+        border-radius:9px;padding:7px 11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .step b{color:var(--accent2);font-weight:600}
+  .step .ok{color:var(--ok)}
+  .thinking{color:var(--dim);font-style:italic}
+  form{display:flex;gap:10px;padding:16px 20px;border-top:1px solid var(--line);background:var(--panel2)}
+  #q{flex:1;background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:11px;
+     padding:12px 14px;font-size:15px;outline:none}
+  #q:focus{border-color:var(--accent2)}
+  button{background:var(--accent);color:#04201c;border:0;border-radius:11px;padding:0 20px;
+         font-weight:700;cursor:pointer;font-size:14px}
+  button:disabled{opacity:.5;cursor:default}
+  aside{width:330px;border-left:1px solid var(--line);background:var(--panel2);display:flex;
+        flex-direction:column;min-width:0}
+  aside h2{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);
+           margin:0;padding:16px 18px 10px;border-bottom:1px solid var(--line)}
+  #pending{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+  .draft{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .draft .meta{font-size:11.5px;color:var(--dim);margin-bottom:6px;display:flex;gap:8px;align-items:center}
+  .pill{background:#3a2f10;color:var(--warn);border:1px solid #5a4a18;border-radius:999px;padding:1px 8px;font-size:11px}
+  .draft .body{font-size:13.5px;white-space:pre-wrap;margin-bottom:10px}
+  .draft button{width:100%;padding:8px;border-radius:9px}
+  .empty{color:var(--dim);font-size:13px;padding:6px 4px}
+  .note{padding:10px 18px;color:var(--dim);font-size:11.5px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot"></span>
+    <div><h1>evolution-agent</h1>
+      <div class="sub">standalone agent · EvolutionDB long-term memory</div></div>
+    <span class="gate">✦ human-approved sends (ADR-004)</span>
+  </header>
+  <div class="wrap">
+    <div class="chat">
+      <div id="log">
+        <div class="msg bot"><div class="role">agent</div>
+          <div class="bubble">Hi — I can recall and save memory, brief your day,
+            track who's waiting on you, and draft replies. I never send anything
+            myself: drafts queue for your approval on the right.</div></div>
+      </div>
+      <form id="f">
+        <input id="q" autocomplete="off" placeholder="e.g. remember Alice needs the Q3 report by Friday, then draft a reply and queue it">
+        <button id="send" type="submit">Send</button>
+      </form>
+    </div>
+    <aside>
+      <h2>Pending approvals</h2>
+      <div id="pending"><div class="empty">No drafts awaiting approval.</div></div>
+      <div class="note">Approving calls <code>approve_send</code> — dry-run unless the
+        operator enabled real delivery.</div>
+    </aside>
+  </div>
+
+<script>
+const log = document.getElementById('log');
+const form = document.getElementById('f');
+const q = document.getElementById('q');
+const sendBtn = document.getElementById('send');
+const pending = document.getElementById('pending');
+
+function el(cls, html){const d=document.createElement('div'); d.className=cls; if(html!=null)d.innerHTML=html; return d;}
+function scroll(){log.scrollTop = log.scrollHeight;}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+function addUser(text){
+  const m=el('msg user'); m.appendChild(el('role',null)).textContent='you';
+  m.appendChild(el('bubble')).textContent=text; log.appendChild(m); scroll();
+}
+function startBot(){
+  const m=el('msg bot'); m.appendChild(el('role',null)).textContent='agent';
+  const tl=el('timeline'); m.appendChild(tl);
+  const b=el('bubble thinking'); b.textContent='working…'; m.appendChild(b);
+  log.appendChild(m); scroll();
+  return {tl,b};
+}
+
+form.addEventListener('submit', e=>{
+  e.preventDefault();
+  const text=q.value.trim(); if(!text) return;
+  q.value=''; sendBtn.disabled=true; addUser(text);
+  const {tl,b}=startBot();
+  const es=new EventSource('/api/chat?q='+encodeURIComponent(text));
+  es.onmessage=ev=>{
+    const m=JSON.parse(ev.data);
+    if(m.kind==='text'){ const s=el('step thinking'); s.textContent='💭 '+m.text; tl.appendChild(s); scroll(); }
+    else if(m.kind==='tool_call'){ const s=el('step','→ <b>'+esc(m.tool)+'</b> <span style="opacity:.7">'+esc(JSON.stringify(m.input))+'</span>'); tl.appendChild(s); scroll(); }
+    else if(m.kind==='tool_result'){ const ok=(m.result&&m.result.ok); const s=el('step','&nbsp;&nbsp;<span class="ok">✓</span> '+(ok?'ok':'done')+(m.result&&(m.result.key||m.result.id)?(' · '+esc(m.result.key||m.result.id)):'')); tl.appendChild(s); scroll(); }
+    else if(m.kind==='final'){ b.className='bubble'; b.textContent=m.text||'(no answer)'; scroll(); refreshPending(); }
+    else if(m.kind==='error'){ b.className='bubble'; b.style.color='var(--warn)'; b.textContent='⚠ '+m.message; }
+    else if(m.kind==='done'){ es.close(); sendBtn.disabled=false; q.focus(); refreshPending(); }
+  };
+  es.onerror=()=>{ es.close(); sendBtn.disabled=false; if(b.classList.contains('thinking')){b.className='bubble';b.style.color='var(--warn)';b.textContent='⚠ connection lost';} };
+});
+
+async function refreshPending(){
+  try{
+    const r=await fetch('/api/pending'); const d=await r.json();
+    const items=(d.pending)||[];
+    pending.innerHTML='';
+    if(!items.length){ pending.appendChild(el('empty')).textContent='No drafts awaiting approval.'; return; }
+    for(const it of items){
+      const card=el('draft');
+      card.appendChild(el('meta','<span class="pill">'+esc(it.status)+'</span> '+esc(it.loop_key||'')));
+      card.appendChild(el('body')).textContent=it.body||'';
+      const btn=document.createElement('button'); btn.textContent='Approve';
+      btn.onclick=async()=>{ btn.disabled=true; btn.textContent='approving…';
+        await fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:it.id})});
+        refreshPending(); };
+      card.appendChild(btn); pending.appendChild(card);
+    }
+  }catch(e){}
+}
+refreshPending();
+q.focus();
+</script>
+</body>
+</html>
