@@ -524,6 +524,7 @@ static int send_line(socket_t s, const char *line)
 
 typedef struct {
     char **cols;       /* column names */
+    int   *col_oids;   /* pg_type_oid per column (for JSON type fidelity) */
     int    num_cols;
     char **cells;      /* row_idx * num_cols + col_idx */
     int    num_rows;
@@ -532,6 +533,7 @@ typedef struct {
 
 static void result_init_evo(EvoResult *r) {
     r->cols = NULL;
+    r->col_oids = NULL;
     r->num_cols = 0;
     r->cells = NULL;
     r->num_rows = 0;
@@ -544,6 +546,7 @@ static void result_free(EvoResult *r) {
         for (i = 0; i < r->num_cols; i++) free(r->cols[i]);
         free(r->cols);
     }
+    free(r->col_oids);
     if (r->cells) {
         for (i = 0; i < r->num_rows * r->num_cols; i++) free(r->cells[i]);
         free(r->cells);
@@ -552,15 +555,44 @@ static void result_free(EvoResult *r) {
 
 /* The EVO protocol's COL line is "<name> <pg_type_oid> <type_modifier>".
  * Recover the bare column name by dropping the two trailing integer fields
- * (the name itself may contain spaces, so drop by count, not by first token). */
-static void strip_col_meta(char *s) {
+ * (the name itself may contain spaces, so drop by count, not by first token)
+ * and return the pg_type_oid (the second-from-last token), or 0. */
+static int strip_col_meta(char *s) {
     char *end = s + strlen(s);
+    int oid = 0;
     for (int drop = 0; drop < 2; drop++) {
         while (end > s && isspace((unsigned char)end[-1])) end--;   /* trailing ws */
         while (end > s && !isspace((unsigned char)end[-1])) end--;  /* the token   */
+        if (drop == 1) oid = atoi(end);   /* token before typmod = pg_type_oid */
     }
     while (end > s && isspace((unsigned char)end[-1])) end--;       /* gap before  */
     *end = '\0';
+    return oid;
+}
+
+/* JSON: emit values of these PG numeric type-oids unquoted (when the value is
+ * a strict JSON number); everything else stays a quoted string. */
+static int oid_is_numeric(int oid) {
+    switch (oid) {
+        case 20: case 21: case 23: case 26:   /* int8 / int2 / int4 / oid */
+        case 700: case 701: case 1700:        /* float4 / float8 / numeric */
+            return 1;
+        default: return 0;
+    }
+}
+static int looks_like_json_number(const char *v) {
+    const char *p = v;
+    if (!p || !*p) return 0;
+    if (*p == '-') p++;
+    if (*p == '0') p++;
+    else if (*p >= '1' && *p <= '9') { while (isdigit((unsigned char)*p)) p++; }
+    else return 0;
+    if (*p == '.') { p++; if (!isdigit((unsigned char)*p)) return 0;
+                     while (isdigit((unsigned char)*p)) p++; }
+    if (*p == 'e' || *p == 'E') { p++; if (*p == '+' || *p == '-') p++;
+                                  if (!isdigit((unsigned char)*p)) return 0;
+                                  while (isdigit((unsigned char)*p)) p++; }
+    return *p == '\0';
 }
 
 /* --- one CSV field: quote if it contains , " or newline (RFC-4180) --- */
@@ -674,7 +706,11 @@ static void result_print_json(const EvoResult *r) {
             json_str(r->cols[c]);
             printf(": ");
             const char *val = r->cells[row * r->num_cols + c];
-            if (!val) printf("null"); else json_str(val);
+            int oid = r->col_oids ? r->col_oids[c] : 0;
+            if (!val) printf("null");
+            else if (oid_is_numeric(oid) && looks_like_json_number(val))
+                fputs(val, stdout);            /* unquoted JSON number */
+            else json_str(val);
         }
         printf("}");
     }
@@ -939,13 +975,14 @@ static int evo_execute(cli_conn_t *c, const char *sql)
             if (strncmp(line, "COLS ", 5) == 0) {
                 res.num_cols = atoi(line + 5);
                 res.cols = (char **)calloc(res.num_cols, sizeof(char *));
+                res.col_oids = (int *)calloc(res.num_cols, sizeof(int));
 
                 /* Read column names */
                 for (int col = 0; col < res.num_cols; col++) {
                     if (cli_recv_line(c, line, sizeof(line)) < 0) { result_free(&res); return g_interrupted ? -2 : -1; }
                     if (strncmp(line, "COL ", 4) == 0) {
                         res.cols[col] = strdup(line + 4);
-                        strip_col_meta(res.cols[col]);
+                        res.col_oids[col] = strip_col_meta(res.cols[col]);
                     } else {
                         res.cols[col] = strdup("?");
                     }
@@ -1266,28 +1303,68 @@ static int handle_meta(cli_conn_t *c, const char *cmd) {
  *  Script runner — split text into ';'-terminated statements
  *  (quote- and --comment-aware) and run each.
  * ================================================================ */
+/* Run one finalized statement buffer: a backslash meta-command (terminated by
+ * newline) or an SQL statement (terminated by ';'). A trailing ';' on a meta
+ * is tolerated. Returns evo_execute's code (<0) for SQL, 0 otherwise. */
+static int run_one(cli_conn_t *c, char *s, int meta) {
+    while (*s && isspace((unsigned char)*s)) s++;           /* ltrim */
+    if (!*s) return 0;
+    if (meta) {
+        size_t L = strlen(s);                               /* drop trailing ;/ws */
+        while (L && (isspace((unsigned char)s[L-1]) || s[L-1] == ';')) s[--L] = '\0';
+        if (*s) handle_meta(c, s);
+        return 0;
+    }
+    return evo_execute(c, s);
+}
+
 static int run_script(cli_conn_t *c, const char *text) {
     size_t cap = strlen(text) + 1;
     char *stmt = (char *)malloc(cap);
     size_t n = 0;
     int sq = 0, dq = 0, rc = 0;
+    int started = 0;       /* seen first non-space char of the current statement */
+    int meta = 0;          /* current statement is a backslash meta-command      */
+
     for (const char *p = text; *p && rc == 0; p++) {
         char ch = *p;
+
+        /* Determine statement kind at its first non-blank character. A line
+         * starting with '\' is a meta-command (terminated by newline, psql
+         * style); everything else is SQL (terminated by ';'). */
+        if (!started) {
+            if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+            started = 1;
+            meta = (ch == '\\');
+        }
+
+        if (meta) {
+            if (ch == '\n') {                /* meta-command ends at newline */
+                stmt[n] = '\0';
+                run_one(c, stmt, 1);
+                n = 0; started = 0; meta = 0;
+                continue;
+            }
+            stmt[n++] = ch;
+            continue;
+        }
+
+        /* --- SQL statement --- */
         /* line comment -- ... to EOL (only outside quotes) */
         if (!sq && !dq && ch == '-' && p[1] == '-') {
             while (*p && *p != '\n') p++;
-            if (!*p) break;
+            if (!*p) break;                  /* p at '\n'; for-loop's p++ skips it */
+            if (n == 0) started = 0;          /* a standalone comment line */
+            else if (stmt[n-1] != ' ') stmt[n++] = ' ';
             continue;
         }
         if (ch == '\'' && !dq) sq = !sq;
         else if (ch == '"' && !sq) dq = !dq;
         if (ch == ';' && !sq && !dq) {
             stmt[n] = '\0';
-            /* trim */
-            char *s = stmt; while (*s && isspace((unsigned char)*s)) s++;
-            if (*s && handle_meta(c, s) == 0) { int er = evo_execute(c, s);
-                                                if (er < 0) rc = er; }  /* -1 loss / -2 cancel */
-            n = 0;
+            int er = run_one(c, stmt, 0);
+            if (er < 0) rc = er;             /* -1 loss / -2 cancel */
+            n = 0; started = 0;
             continue;
         }
         /* The EVO protocol frames the query as a single line, so embedded
@@ -1295,26 +1372,53 @@ static int run_script(cli_conn_t *c, const char *text) {
         if (ch == '\n' || ch == '\r') ch = ' ';
         stmt[n++] = ch;
     }
-    if (rc == 0) {
+
+    /* trailing unterminated statement (no final ';' / newline) */
+    if (rc == 0 && started) {
         stmt[n] = '\0';
-        char *s = stmt; while (*s && isspace((unsigned char)*s)) s++;
-        if (*s && handle_meta(c, s) == 0) { int er = evo_execute(c, s);
-                                            if (er < 0) rc = er; }
+        int er = run_one(c, stmt, meta);
+        if (er < 0) rc = er;
     }
     free(stmt);
     return rc;
+}
+
+/* Is an accumulated interactive buffer a complete statement? True iff its last
+ * significant (non-whitespace, non-comment) character is a ';' that lies
+ * OUTSIDE any quote — so a ';' inside a string literal keeps the continuation
+ * prompt rather than submitting a half-typed statement. */
+static int buffer_complete(const char *buf) {
+    int sq = 0, dq = 0, last_was_semi = 0;
+    for (const char *p = buf; *p; p++) {
+        char ch = *p;
+        if (!sq && !dq && ch == '-' && p[1] == '-') {       /* line comment */
+            while (*p && *p != '\n') p++;
+            if (!*p) break;
+            continue;
+        }
+        if (ch == '\'' && !dq) sq = !sq;
+        else if (ch == '"' && !sq) dq = !dq;
+        if (isspace((unsigned char)ch)) continue;
+        last_was_semi = (!sq && !dq && ch == ';');
+    }
+    return last_was_semi && !sq && !dq;
 }
 
 /* ================================================================
  *  Main
  * ================================================================ */
 /* Does an SQL fragment contain a bare PASSWORD keyword? Such statements are
- * kept out of the on-disk history so cleartext passwords never hit the file. */
+ * kept out of the on-disk history so cleartext passwords never hit the file.
+ * The boundary is any non-identifier char (not just whitespace) so forms like
+ * PASSWORD'secret' — which the server accepts — are also caught. */
+static int is_ident_char(int c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
 static int contains_password_kw(const char *sql) {
     for (const char *s = sql; *s; s++) {
         if (strncasecmp(s, "PASSWORD", 8) == 0 &&
-            (s == sql || isspace((unsigned char)s[-1])) &&
-            (s[8] == '\0' || isspace((unsigned char)s[8])))
+            (s == sql || !is_ident_char(s[-1])) &&
+            (s[8] == '\0' || !is_ident_char(s[8])))
             return 1;
     }
     return 0;
@@ -1372,9 +1476,11 @@ int main(int argc, char *argv[])
             file = argv[++i];
         else if ((strcmp(argv[i], "-F") == 0 || strcmp(argv[i], "--format") == 0) && i + 1 < argc) {
             const char *f = argv[++i];
-            if (!strcasecmp(f, "csv"))       g_format = FMT_CSV;
-            else if (!strcasecmp(f, "json")) g_format = FMT_JSON;
-            else                             g_format = FMT_TABLE;
+            if (!strcasecmp(f, "csv"))        g_format = FMT_CSV;
+            else if (!strcasecmp(f, "json"))  g_format = FMT_JSON;
+            else if (!strcasecmp(f, "table")) g_format = FMT_TABLE;
+            else { fprintf(stderr, "unknown --format '%s' (use table|csv|json)\n", f);
+                   return 2; }
         }
         else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--expanded") == 0)
             g_expanded = 1;
@@ -1441,7 +1547,9 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
         WSACleanup();
 #endif
-        return (rc < 0 || g_error_seen) ? 1 : 0;
+        /* Any non-zero rc (unreadable file = 1, connection loss = -1, cancel =
+         * -2) OR a server ERR makes the run fail, so scripts/CI see it. */
+        return (rc != 0 || g_error_seen) ? 1 : 0;
     }
 
     /* ---- Interactive shell ---- */
@@ -1512,10 +1620,9 @@ int main(int argc, char *argv[])
         }
         free(line);
 
-        /* Complete when the trimmed buffer ends with ';'. */
-        size_t e = blen;
-        while (e > 0 && isspace((unsigned char)buf[e - 1])) e--;
-        if (e > 0 && buf[e - 1] == ';') {
+        /* Complete when the buffer ends with an unquoted ';' (a ';' inside a
+         * string literal keeps the continuation prompt). */
+        if (buffer_complete(buf)) {
             if (!contains_password_kw(buf)) add_history_entry(buf);
             /* Refresh the completion cache only when the schema may have
              * changed (DDL), to avoid a SHOW TABLES round-trip per query. */
