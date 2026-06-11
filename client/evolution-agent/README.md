@@ -57,6 +57,7 @@ dry-run unless the operator enabled real delivery. Needs `anthropic` +
 | Env var | Default | Purpose |
 |---|---|---|
 | `EVOSQL_AGENT_MODEL` | `claude-opus-4-8` | Model id (use `claude-sonnet-4-6` for lower cost) |
+| `EVOSQL_AGENT_TOKEN_BUDGET` | `60000` (web) | Hard ceiling on input+output tokens per chat; `0` = unlimited (not advised when exposed) |
 | `ANTHROPIC_API_KEY` | — | Required for the default Anthropic model |
 | `EVOSQL_EMBEDDED` | — | `1` → spawn a local EvolutionDB (zero-Docker) |
 | `EVOSQL_HOST/PORT/USER/PASSWORD` | `127.0.0.1:5433/admin/admin` | EvolutionDB connection (PG wire) |

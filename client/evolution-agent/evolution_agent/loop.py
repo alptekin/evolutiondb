@@ -116,6 +116,7 @@ class AgentLoop:
                  identity: Any = None,
                  max_turns: int = 12,
                  max_tokens: int = 4096,
+                 token_budget: Optional[int] = None,
                  on_event: Optional[Callable[[str, Dict[str, Any]], None]] = None):
         self.server = server if server is not None else _default_server()
         self.client = client if client is not None else _default_client()
@@ -125,6 +126,11 @@ class AgentLoop:
         self.identity = identity
         self.max_turns = max_turns
         self.max_tokens = max_tokens
+        # Hard ceiling on cumulative input+output tokens for a single run, so a
+        # runaway or adversarial conversation can't rack up unbounded model
+        # cost (the #1 risk once the loop is exposed on a web port). None =
+        # unlimited; the turn cap still bounds the call count regardless.
+        self.token_budget = token_budget
         self.on_event = on_event
 
     def _emit(self, kind: str, payload: Dict[str, Any]) -> None:
@@ -142,12 +148,32 @@ class AgentLoop:
         steps: List[Dict[str, Any]] = []
         final_text = ""
         stop_reason = "max_turns"
+        used_in = used_out = 0
+
+        def _result(turns, reason):
+            return {"final_text": final_text, "steps": steps, "turns": turns,
+                    "stop_reason": reason,
+                    "usage": {"input_tokens": used_in, "output_tokens": used_out,
+                              "total_tokens": used_in + used_out}}
 
         for turn in range(self.max_turns):
+            # Stop before spending more if the cumulative token budget is gone.
+            if self.token_budget is not None and used_in + used_out >= self.token_budget:
+                self._emit("budget", {"used": used_in + used_out,
+                                      "budget": self.token_budget})
+                self._emit("done", {"final_text": final_text, "turns": turn,
+                                    "stop_reason": "budget"})
+                return _result(turn, "budget")
+
             resp = self.client.messages.create(
                 model=self.model, max_tokens=self.max_tokens,
                 system=self.system, tools=self.tools, messages=messages)
             stop_reason = getattr(resp, "stop_reason", None) or ""
+
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                used_in += int(getattr(usage, "input_tokens", 0) or 0)
+                used_out += int(getattr(usage, "output_tokens", 0) or 0)
 
             messages.append({"role": "assistant",
                              "content": _blocks_to_dicts(resp.content)})
@@ -167,8 +193,7 @@ class AgentLoop:
                     continue
                 final_text = text
                 self._emit("done", {"final_text": final_text, "turns": turn + 1})
-                return {"final_text": final_text, "steps": steps,
-                        "turns": turn + 1, "stop_reason": stop_reason}
+                return _result(turn + 1, stop_reason)
 
             # Execute every requested tool and feed the results back as one
             # user turn of tool_result blocks.
@@ -192,5 +217,4 @@ class AgentLoop:
         # runaway tool loop can't spin forever.
         self._emit("done", {"final_text": final_text, "turns": self.max_turns,
                             "stop_reason": "max_turns"})
-        return {"final_text": final_text, "steps": steps,
-                "turns": self.max_turns, "stop_reason": "max_turns"}
+        return _result(self.max_turns, "max_turns")
