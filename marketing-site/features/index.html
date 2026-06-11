@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Features — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary": "#ffd6a3",
+                        "on-surface-variant": "#bbc9cd",
+                        "on-secondary": "#1000a9",
+                        "on-secondary-fixed": "#07006c",
+                        "tertiary-fixed-dim": "#ffb957",
+                        "surface-container-highest": "#31353f",
+                        "glass-fill": "rgba(30, 41, 59, 0.6)",
+                        "surface-tint": "#2fd9f4",
+                        "error": "#ffb4ab",
+                        "on-primary-fixed-variant": "#004e5a",
+                        "surface-base": "#1E293B",
+                        "surface-container-lowest": "#0a0e17",
+                        "background": "#0f131c",
+                        "secondary-container": "#3131c0",
+                        "error-container": "#93000a",
+                        "on-secondary-container": "#b0b2ff",
+                        "surface-variant": "#31353f",
+                        "surface-container": "#1c1f29",
+                        "on-tertiary-container": "#6e4600",
+                        "tertiary-container": "#ffb13b",
+                        "surface-bright": "#353943",
+                        "tertiary-fixed": "#ffddb5",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-high": "#262a34",
+                        "neon-cyan": "#22D3EE",
+                        "on-primary-fixed": "#001f25",
+                        "secondary-fixed": "#e1e0ff",
+                        "on-primary": "#00363e",
+                        "on-primary-container": "#005763",
+                        "glass-border": "rgba(255, 255, 255, 0.1)",
+                        "on-tertiary": "#462b00",
+                        "pure-white": "#FFFFFF",
+                        "inverse-on-surface": "#2c303a",
+                        "deep-indigo": "#6366F1",
+                        "primary-container": "#22d3ee",
+                        "on-tertiary-fixed-variant": "#643f00",
+                        "surface": "#0f131c",
+                        "secondary": "#c0c1ff",
+                        "inverse-primary": "#006877",
+                        "outline-variant": "#3c494c",
+                        "primary-fixed": "#a2eeff",
+                        "surface-container-low": "#181b25",
+                        "outline": "#859397",
+                        "on-surface": "#dfe2ef",
+                        "on-secondary-fixed-variant": "#2f2ebe",
+                        "on-tertiary-fixed": "#2a1800",
+                        "on-error": "#690005",
+                        "inverse-surface": "#dfe2ef",
+                        "primary-fixed-dim": "#2fd9f4",
+                        "primary": "#8aebff",
+                        "on-background": "#dfe2ef",
+                        "secondary-fixed-dim": "#c0c1ff",
+                        "surface-dim": "#0f131c"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "1rem",
+                        "lg": "2rem",
+                        "xl": "3rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-sm": "16px",
+                        "gutter": "24px",
+                        "margin-md": "32px",
+                        "container-max": "1280px",
+                        "unit": "8px",
+                        "margin-lg": "64px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Hanken Grotesk"],
+                        "body-lg": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "code-sm": ["JetBrains Mono"],
+                        "label-caps": ["JetBrains Mono"]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .text-glow {
+            text-shadow: 0 0 15px rgba(34, 211, 238, 0.5);
+        }
+
+        /* Keyframes */
+        @keyframes float {
+            0% { transform: translateY(0px) rotateX(0deg) rotateY(0deg); }
+            50% { transform: translateY(-20px) rotateX(2deg) rotateY(2deg); }
+            100% { transform: translateY(0px) rotateX(0deg) rotateY(0deg); }
+        }
+        .animate-float {
+            animation: float 6s ease-in-out infinite;
+        }
+        .animate-float-delayed {
+            animation: float 8s ease-in-out infinite;
+            animation-delay: -2s;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(34, 211, 238, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+        }
+        .pulse-cyan {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        .shimmer-effect {
+            position: relative;
+            overflow: hidden;
+        }
+        .shimmer-effect::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(255, 255, 255, 0.2),
+                transparent
+            );
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes lava-lamp {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .lava-bg {
+            background: radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.1) 0%, rgba(15, 19, 28, 1) 70%);
+            background-size: 200% 200%;
+            animation: lava-lamp 15s ease infinite;
+        }
+
+        /* Entrance Animations */
+        .reveal {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .reveal.active {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .stagger-1 { transition-delay: 0.1s; }
+        .stagger-2 { transition-delay: 0.2s; }
+        .stagger-3 { transition-delay: 0.3s; }
+        .stagger-4 { transition-delay: 0.4s; }
+
+        /* Pulsing Icon Glow */
+        @keyframes icon-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4); }
+            50% { box-shadow: 0 0 20px 4px rgba(34, 211, 238, 0.2); }
+        }
+        .icon-glow-pulse {
+            animation: icon-pulse 3s infinite ease-in-out;
+        }
+
+        /* Glass card hover */
+        .glass-card {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.4s ease, border-color 0.4s ease, opacity 0.6s ease;
+        }
+        .glass-card:hover {
+            transform: translateY(-8px) scale(1.01);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 20px rgba(34, 211, 238, 0.15);
+            border-color: rgba(34, 211, 238, 0.4);
+        }
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* Cursor Animation */
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .cursor-blink::after {
+            content: '|';
+            margin-left: 2px;
+            animation: blink 1s step-end infinite;
+            color: currentColor;
+        }
+
+        button, a {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .reveal, .animate-float, .animate-float-delayed, .shimmer-effect::after, .lava-bg, .icon-glow-pulse {
+                animation: none !important;
+                transition: none !important;
+                transform: none !important;
+                opacity: 1 !important;
+            }
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-surface-container-lowest text-on-surface font-body-md selection:bg-neon-cyan/30 lava-bg antialiased">
+<!-- Background Elements -->
+<div class="fixed inset-0 z-0 pointer-events-none overflow-hidden">
+<div class="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-deep-indigo/10 blur-[120px] rounded-full" id="glow-1"></div>
+<div class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-cyan/10 blur-[120px] rounded-full" id="glow-2"></div>
+<div class="absolute top-1/2 left-1/3 w-64 h-64 bg-tertiary/10 blur-[120px] rounded-full" id="glow-3"></div>
+</div>
+<!-- Top Navigation -->
+<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-secondary/20 h-16 flex items-center justify-between px-margin-sm md:px-margin-lg">
+<a class="flex items-center gap-2" href="/">
+<span class="material-symbols-outlined text-neon-cyan text-[32px]">database</span>
+<span class="font-headline-md text-headline-md font-bold text-neon-cyan tracking-tight">EvolutionDB</span>
+</a>
+<nav class="hidden md:flex gap-8 items-center">
+<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/">HOME</a>
+<a class="text-neon-cyan font-label-caps text-label-caps tracking-widest" href="/features/">FEATURES</a>
+<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/comparison/">COMPARISON</a>
+<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="https://github.com/alptekin/evolutiondb">GITHUB</a>
+</nav>
+<div class="flex items-center gap-4">
+<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all active:scale-90" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
+</div>
+</header>
+<!-- Main Content -->
+<main class="relative z-10 pt-32 pb-40 px-margin-sm container mx-auto max-w-container-max">
+<!-- Hero Section -->
+<div class="text-center mb-24 reveal active">
+<div class="inline-flex items-center gap-2 px-4 py-1 rounded-full glass-panel border-neon-cyan/20 mb-8">
+<span class="w-2 h-2 rounded-full bg-neon-cyan pulse-cyan"></span>
+<span class="text-neon-cyan font-label-caps text-[10px] tracking-[0.2em] uppercase">v3.0 · Open Source</span>
+</div>
+<h1 class="font-display-lg text-display-lg text-pure-white mb-6 tracking-tight">
+                What's <span class="text-neon-cyan text-glow">In the Box?</span>
+</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">
+                EvolutionDB is a single C binary purpose-built to be long-term memory for AI agents — with in-engine memory primitives, native vectors, and time-travel queries, all behind the PostgreSQL wire protocol.
+            </p>
+</div>
+<!-- Features Bento Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-gutter">
+<!-- Feature 1: Agent-Memory Primitives -->
+<div class="lg:col-span-2 glass-card rounded-lg p-margin-md group reveal stagger-1">
+<div class="flex flex-col h-full justify-between gap-6">
+<div>
+<div class="w-12 h-12 rounded-full bg-neon-cyan/10 border border-neon-cyan/20 flex items-center justify-center mb-6 text-neon-cyan group-hover:scale-110 transition-transform icon-glow-pulse">
+<span class="material-symbols-outlined text-[28px]">psychology</span>
+</div>
+<h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-neon-cyan transition-colors">Agent-Memory Primitives</h3>
+<p class="text-on-surface-variant mb-6">First-class SQL primitives for agent long-term memory. Storing what an agent knows is a core feature of the storage engine, not a bolt-on layer or a sidecar service.</p>
+<div class="grid grid-cols-2 gap-4">
+<div class="bg-surface-container-low border border-glass-border rounded p-3 font-code-sm text-code-sm text-neon-cyan hover:border-neon-cyan/40 transition-colors">
+                                MEMORY STORE
+                            </div>
+<div class="bg-surface-container-low border border-glass-border rounded p-3 font-code-sm text-code-sm text-neon-cyan hover:border-neon-cyan/40 transition-colors">
+                                ENTITY STORE
+                            </div>
+<div class="bg-surface-container-low border border-glass-border rounded p-3 font-code-sm text-code-sm text-neon-cyan hover:border-neon-cyan/40 transition-colors">
+                                VECTOR(N)
+                            </div>
+<div class="bg-surface-container-low border border-glass-border rounded p-3 font-code-sm text-code-sm text-neon-cyan hover:border-neon-cyan/40 transition-colors">
+                                AS OF
+                            </div>
+</div>
+</div>
+<a class="mt-4 flex items-center text-neon-cyan gap-2 font-label-caps text-label-caps cursor-pointer hover:gap-4 transition-all w-max" href="https://github.com/alptekin/evolutiondb">
+                        READ THE DOCS <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</a>
+</div>
+</div>
+<!-- Feature 2: Vectors & HNSW -->
+<div class="glass-card rounded-lg p-margin-md group flex flex-col justify-between reveal stagger-2">
+<div>
+<div class="w-12 h-12 rounded-full bg-deep-indigo/10 border border-deep-indigo/20 flex items-center justify-center mb-6 text-deep-indigo group-hover:scale-110 transition-transform icon-glow-pulse" style="animation-delay: 0.5s;">
+<span class="material-symbols-outlined text-[28px]">polyline</span>
+</div>
+<h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-deep-indigo transition-colors">Native Vectors &amp; HNSW</h3>
+<p class="text-on-surface-variant">A built-in <code>VECTOR(N)</code> type with an HNSW index in the core — semantic and lexical hybrid search without a separate vector service.</p>
+</div>
+<div class="relative h-32 mt-6 bg-surface-container-lowest/50 rounded-lg overflow-hidden border border-glass-border">
+<div class="absolute inset-0 flex items-center justify-center font-code-sm text-code-sm text-on-surface-variant/50 cursor-blink">HYBRID SEARCH IN SQL</div>
+<div class="absolute inset-0 bg-gradient-to-r from-transparent via-deep-indigo/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+</div>
+</div>
+<!-- Feature 3: Time-travel Queries -->
+<div class="glass-card rounded-lg p-margin-md group reveal stagger-3">
+<div class="w-12 h-12 rounded-full bg-tertiary/10 border border-tertiary/20 flex items-center justify-center mb-6 text-tertiary group-hover:scale-110 transition-transform icon-glow-pulse" style="animation-delay: 1s;">
+<span class="material-symbols-outlined text-[28px]">history</span>
+</div>
+<h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-tertiary transition-colors">Time-travel Queries</h3>
+<p class="text-on-surface-variant mb-6">An MVCC engine keeps prior versions, so you can run historical queries with <code>AS OF</code>. Ask what an agent knew at any point in the past.</p>
+<div class="p-4 bg-surface-container-highest rounded-lg border border-glass-border group-hover:border-tertiary/30 transition-colors">
+<pre class="font-code-sm text-code-sm text-tertiary overflow-x-auto scrollbar-hide cursor-blink">SELECT * FROM memories
+AS OF '2026-01-01';</pre>
+</div>
+</div>
+<!-- Feature 4: Dual Protocol -->
+<div class="lg:col-span-2 glass-card rounded-lg p-margin-md group flex flex-col md:flex-row gap-8 reveal stagger-1">
+<div class="flex-1">
+<div class="w-12 h-12 rounded-full bg-neon-cyan/10 border border-neon-cyan/20 flex items-center justify-center mb-6 text-neon-cyan group-hover:scale-110 transition-transform icon-glow-pulse" style="animation-delay: 1.5s;">
+<span class="material-symbols-outlined text-[28px]">hub</span>
+</div>
+<h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-neon-cyan transition-colors">One Binary, Dual Protocol</h3>
+<p class="text-on-surface-variant">A single server speaks the PostgreSQL wire protocol on port 5433 and a native EVO text protocol on port 9967. Connect with psql or DBeaver — or run the zero-Docker embedded mode.</p>
+<div class="mt-8 flex gap-3 flex-wrap">
+<span class="px-3 py-1 rounded-full bg-secondary-container/30 border border-secondary-container/50 text-secondary text-label-caps text-[10px] hover:bg-secondary-container transition-colors">PG WIRE :5433</span>
+<span class="px-3 py-1 rounded-full bg-secondary-container/30 border border-secondary-container/50 text-secondary text-label-caps text-[10px] hover:bg-secondary-container transition-colors">EVO :9967</span>
+<span class="px-3 py-1 rounded-full bg-secondary-container/30 border border-secondary-container/50 text-secondary text-label-caps text-[10px] hover:bg-secondary-container transition-colors">EMBEDDED MODE</span>
+</div>
+</div>
+<div class="flex-1 min-h-[200px] relative rounded-lg border border-glass-border overflow-hidden bg-surface-container-lowest/30">
+<div class="absolute inset-0 flex flex-col p-4 font-code-sm text-xs space-y-2">
+<div class="flex items-center gap-2 text-neon-cyan/60"><span class="w-1.5 h-1.5 rounded-full bg-neon-cyan animate-ping"></span> Server up · dual protocol</div>
+<div class="text-on-surface-variant/40 animate-pulse">$ psql -h 127.0.0.1 -p 5433 -U admin -d testdb</div>
+<div class="text-on-surface-variant/40 animate-pulse" style="animation-delay: 0.2s">$ evosql-cli  # native EVO on :9967</div>
+</div>
+</div>
+</div>
+<!-- Single Binary Highlight -->
+<div class="lg:col-span-3 glass-card rounded-lg p-margin-md border-neon-cyan/20 overflow-hidden relative reveal stagger-2">
+<div class="absolute -right-20 -top-20 w-64 h-64 bg-neon-cyan/5 rounded-full blur-3xl"></div>
+<div class="relative flex flex-col md:flex-row items-center gap-8">
+<div class="text-center md:text-left flex-1">
+<h3 class="font-headline-md text-headline-md text-pure-white mb-2">A Single C Binary</h3>
+<p class="text-on-surface-variant">Replace a complex side-stack with one application. Unified page storage — 4KB pages, slotted pages, B+ tree indexes, a Clock-Sweep buffer pool, and a write-ahead log with crash recovery — all in the engine.</p>
+</div>
+<div class="bg-surface-container-highest p-6 rounded-lg border border-glass-border font-code-sm text-neon-cyan flex items-center gap-4 hover:border-neon-cyan/50 transition-colors group/cmd cursor-pointer">
+<span class="material-symbols-outlined group-hover/cmd:translate-x-1 transition-transform">terminal</span>
+<code class="cursor-blink">./evosql-server</code>
+</div>
+</div>
+</div>
+</div>
+<!-- More Features Grid -->
+<section class="mt-32">
+<h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-16">Built for Production</h2>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<div class="reveal stagger-1 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500">
+<span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">groups</span>
+<h3 class="font-headline-md text-[24px] text-pure-white mb-4">Multi-tenant Isolation</h3>
+<p class="text-on-surface-variant text-body-md">Per-tenant DATABASE, USER, and GRANT, enforced by the engine with a waterfall privilege check: table, then schema, then database.</p>
+</div>
+<div class="reveal stagger-2 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500">
+<span class="material-symbols-outlined text-secondary text-4xl mb-4">lock</span>
+<h3 class="font-headline-md text-[24px] text-pure-white mb-4">Security Built In</h3>
+<p class="text-on-surface-variant text-body-md">Transparent data encryption (AES-256) for pages and PBKDF2-SHA256 password authentication — security as a storage-layer property.</p>
+</div>
+<div class="reveal stagger-3 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500">
+<span class="material-symbols-outlined text-tertiary text-4xl mb-4">smart_toy</span>
+<h3 class="font-headline-md text-[24px] text-pure-white mb-4">Agent-native</h3>
+<p class="text-on-surface-variant text-body-md">Ships an MCP server and a standalone agent. Actions stay human-approved: drafts queue first, and a human approves before anything is sent.</p>
+</div>
+</div>
+</section>
+<!-- Tooling Section -->
+<section class="mt-32">
+<div class="glass-card rounded-lg p-margin-md reveal">
+<h3 class="font-headline-md text-headline-md text-pure-white mb-8 text-center">A Complete Toolchain</h3>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
+<div class="flex items-start gap-3">
+<span class="material-symbols-outlined text-neon-cyan mt-1">data_object</span>
+<div>
+<h4 class="text-pure-white font-bold mb-1">SQL Parser</h4>
+<p class="text-on-surface-variant text-body-md">A Flex/Bison parser for the SQL grammar.</p>
+</div>
+</div>
+<div class="flex items-start gap-3">
+<span class="material-symbols-outlined text-neon-cyan mt-1">terminal</span>
+<div>
+<h4 class="text-pure-white font-bold mb-1">CLI Client</h4>
+<p class="text-on-surface-variant text-body-md">A native command-line client for the EVO protocol.</p>
+</div>
+</div>
+<div class="flex items-start gap-3">
+<span class="material-symbols-outlined text-neon-cyan mt-1">cable</span>
+<div>
+<h4 class="text-pure-white font-bold mb-1">Python Connectors</h4>
+<p class="text-on-surface-variant text-body-md">Connectors for GitHub, Azure DevOps, calendar, and more.</p>
+</div>
+</div>
+<div class="flex items-start gap-3">
+<span class="material-symbols-outlined text-neon-cyan mt-1">memory</span>
+<div>
+<h4 class="text-pure-white font-bold mb-1">MCP Server</h4>
+<p class="text-on-surface-variant text-body-md">An MCP server so agents can use EvolutionDB as memory.</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Quick Start -->
+<section class="mt-32 reveal">
+<div class="glass-card rounded-lg p-margin-md">
+<h3 class="font-headline-md text-headline-md text-pure-white mb-8 text-center">Clone and Run</h3>
+<div class="bg-background/80 rounded-lg p-6 border border-glass-border font-code-sm text-sm text-on-surface overflow-x-auto relative group">
+<div class="flex items-center gap-2 mb-4 opacity-50">
+<span class="w-3 h-3 rounded-full bg-red-500"></span>
+<span class="w-3 h-3 rounded-full bg-yellow-500"></span>
+<span class="w-3 h-3 rounded-full bg-green-500"></span>
+</div>
+<div id="typing-container">
+<p class="text-neon-cyan mb-2"># Clone the repo and start the server</p>
+<p class="mb-1 text-on-secondary-container">git clone https://github.com/alptekin/evolutiondb</p>
+<p class="mb-1 text-on-secondary-container">cd evolutiondb</p>
+<p class="mb-4 text-on-secondary-container">docker compose up -d</p>
+<p class="text-neon-cyan mb-2"># Connect with any PostgreSQL client</p>
+<p class="text-on-secondary-container cursor-blink">psql -h 127.0.0.1 -p 5433 -U admin -d testdb</p>
+</div>
+</div>
+<div class="flex flex-col sm:flex-row gap-4 justify-center mt-8">
+<a class="px-8 py-4 rounded-lg bg-gradient-to-r from-neon-cyan to-deep-indigo text-on-primary font-bold transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(34,211,238,0.3)] shimmer-effect text-center" href="https://github.com/alptekin/evolutiondb">
+                        View on GitHub
+                    </a>
+<a class="px-8 py-4 rounded-lg glass-panel hover:bg-white/10 text-pure-white transition-all hover:scale-105 active:scale-95 text-center" href="/comparison/">
+                        See the Comparison
+                    </a>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer -->
+<footer class="relative z-10 w-full bg-surface-container-lowest/50 backdrop-blur-lg border-t border-glass-border py-margin-md px-margin-sm flex flex-col items-center gap-6 text-center">
+<div class="flex items-center gap-2 mb-2">
+<span class="material-symbols-outlined text-neon-cyan">database</span>
+<span class="font-headline-md text-headline-md text-neon-cyan font-bold">EvolutionDB</span>
+</div>
+<div class="flex flex-wrap justify-center gap-8">
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://github.com/alptekin/evolutiondb">GitHub</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="/features/">Features</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="/comparison/">Comparison</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://github.com/alptekin/evolutiondb/issues">Community</a>
+</div>
+<p class="text-on-surface-variant text-body-md opacity-50 mt-4">© 2026 EvolutionDB · Open Source (MIT)</p>
+</footer>
+<!-- Bottom Nav (Mobile) -->
+<nav class="md:hidden fixed bottom-0 w-full z-50 rounded-t-lg bg-glass-fill backdrop-blur-xl border-t border-glass-border flex justify-around items-center h-20 pb-safe px-4 shadow-[0_-10px_30px_rgba(0,0,0,0.3)] transition-transform duration-300">
+<a class="flex flex-col items-center justify-center text-on-surface-variant/70 hover:text-neon-cyan active:scale-95 transition-transform" href="/">
+<span class="material-symbols-outlined">database</span>
+<span class="font-label-caps text-[10px] mt-1">Home</span>
+</a>
+<a class="flex flex-col items-center justify-center text-neon-cyan scale-105 active:scale-95 transition-transform" href="/features/">
+<span class="material-symbols-outlined">bolt</span>
+<span class="font-label-caps text-[10px] mt-1">Features</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant/70 hover:text-neon-cyan active:scale-95 transition-transform" href="/comparison/">
+<span class="material-symbols-outlined">balance</span>
+<span class="font-label-caps text-[10px] mt-1">Compare</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant/70 hover:text-neon-cyan active:scale-95 transition-transform" href="https://github.com/alptekin/evolutiondb">
+<span class="material-symbols-outlined">code</span>
+<span class="font-label-caps text-[10px] mt-1">GitHub</span>
+</a>
+</nav>
+<script>
+        // Intersection Observer for scroll reveal animations
+        const revealCallback = (entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('active');
+                    revealObserver.unobserve(entry.target);
+                }
+            });
+        };
+
+        const revealObserver = new IntersectionObserver(revealCallback, {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        });
+
+        document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+        // Parallax effect for the background glow spheres on scroll
+        window.addEventListener('scroll', () => {
+            const scrolled = window.pageYOffset;
+            const g1 = document.getElementById('glow-1');
+            const g2 = document.getElementById('glow-2');
+            const g3 = document.getElementById('glow-3');
+            if (g1) g1.style.transform = `translateY(${scrolled * 0.1}px)`;
+            if (g2) g2.style.transform = `translateY(${scrolled * -0.15}px)`;
+            if (g3) g3.style.transform = `translate(${scrolled * 0.05}px, ${scrolled * 0.05}px)`;
+        });
+
+        // Subtle gradient-follow interaction for glass cards
+        document.querySelectorAll('.glass-card').forEach(card => {
+            card.addEventListener('mousemove', e => {
+                const rect = card.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                card.style.background = `radial-gradient(circle at ${x}px ${y}px, rgba(34, 211, 238, 0.08) 0%, rgba(30, 41, 59, 0.4) 50%)`;
+            });
+            card.addEventListener('mouseleave', () => {
+                card.style.background = 'rgba(30, 41, 59, 0.4)';
+            });
+        });
+
+        // Code typing simulation for the quick start block
+        const typingBlock = document.getElementById('typing-container');
+        if (typingBlock) {
+            const lines = typingBlock.querySelectorAll('p');
+            lines.forEach((line) => {
+                line.style.opacity = '0';
+                line.style.transform = 'translateX(-10px)';
+                line.style.transition = 'all 0.4s ease';
+            });
+            const typeObserver = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting) {
+                    lines.forEach((line, i) => {
+                        setTimeout(() => {
+                            line.style.opacity = '1';
+                            line.style.transform = 'translateX(0)';
+                        }, i * 150);
+                    });
+                    typeObserver.unobserve(entries[0].target);
+                }
+            }, { threshold: 0.5 });
+            typeObserver.observe(typingBlock);
+        }
+
+        // Header hide/show on scroll for more immersion
+        let lastScroll = 0;
+        const header = document.querySelector('header');
+        window.addEventListener('scroll', () => {
+            const currentScroll = window.pageYOffset;
+            if (currentScroll <= 0) {
+                header.classList.remove('-translate-y-full');
+                return;
+            }
+            if (currentScroll > lastScroll && !header.classList.contains('-translate-y-full')) {
+                header.classList.add('-translate-y-full');
+            } else if (currentScroll < lastScroll && header.classList.contains('-translate-y-full')) {
+                header.classList.remove('-translate-y-full');
+            }
+            lastScroll = currentScroll;
+        });
+    </script>
+</body></html>
