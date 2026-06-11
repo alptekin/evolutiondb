@@ -49,10 +49,17 @@
   .draft{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
   .draft .meta{font-size:11.5px;color:var(--dim);margin-bottom:6px;display:flex;gap:8px;align-items:center}
   .pill{background:#3a2f10;color:var(--warn);border:1px solid #5a4a18;border-radius:999px;padding:1px 8px;font-size:11px}
+  .pill.done{background:#0f2a18;color:var(--ok);border-color:#1c4a2e}
   .draft .body{font-size:13.5px;white-space:pre-wrap;margin-bottom:10px}
   .draft button{width:100%;padding:8px;border-radius:9px}
+  .draft .approved{font-size:12.5px;color:var(--ok);background:#0f2a18;border:1px solid #1c4a2e;
+        border-radius:9px;padding:8px 10px;text-align:center}
   .empty{color:var(--dim);font-size:13px;padding:6px 4px}
   .note{padding:10px 18px;color:var(--dim);font-size:11.5px;border-top:1px solid var(--line)}
+  #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#0f2a18;
+        color:var(--ok);border:1px solid #1c4a2e;padding:10px 16px;border-radius:11px;font-size:13px;
+        opacity:0;transition:opacity .25s;pointer-events:none;z-index:9}
+  #toast.show{opacity:1}
 </style>
 </head>
 <body>
@@ -82,6 +89,7 @@
         operator enabled real delivery.</div>
     </aside>
   </div>
+  <div id="toast"></div>
 
 <script>
 const log = document.getElementById('log');
@@ -124,6 +132,23 @@ form.addEventListener('submit', e=>{
   es.onerror=()=>{ es.close(); sendBtn.disabled=false; if(b.classList.contains('thinking')){b.className='bubble';b.style.color='var(--warn)';b.textContent='⚠ connection lost';} };
 });
 
+function toast(msg){
+  const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),3200);
+}
+
+async function approve(id){
+  const r=await fetch('/api/approve',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  const d=await r.json().catch(()=>({}));
+  if(d && d.ok!==false){
+    toast(d.sent ? '✓ Approved and sent' : '✓ Approved — dry-run (nothing sent)');
+  }else{
+    toast('⚠ '+((d&&d.error)||'approve failed'));
+  }
+  refreshPending();
+}
+
 async function refreshPending(){
   try{
     const r=await fetch('/api/pending'); const d=await r.json();
@@ -132,13 +157,23 @@ async function refreshPending(){
     if(!items.length){ pending.appendChild(el('empty')).textContent='No drafts awaiting approval.'; return; }
     for(const it of items){
       const card=el('draft');
-      card.appendChild(el('meta','<span class="pill">'+esc(it.status)+'</span> '+esc(it.loop_key||'')));
+      const done = it.status!=='pending';            // approved / sent
+      const cls = done ? 'pill done' : 'pill';
+      card.appendChild(el('meta','<span class="'+cls+'">'+esc(it.status)+'</span> '+esc(it.loop_key||'')));
       card.appendChild(el('body')).textContent=it.body||'';
-      const btn=document.createElement('button'); btn.textContent='Approve';
-      btn.onclick=async()=>{ btn.disabled=true; btn.textContent='approving…';
-        await fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:it.id})});
-        refreshPending(); };
-      card.appendChild(btn); pending.appendChild(card);
+      if(done){
+        // Already approved — list_pending also returns approved-but-not-sent
+        // items (they stay dry-run until a transport is enabled), so show the
+        // outcome instead of an Approve button.
+        const s=el('approved'); s.textContent = it.sent ? '✓ approved · sent'
+            : '✓ approved · dry-run (not sent — sending disabled)';
+        card.appendChild(s);
+      }else{
+        const btn=document.createElement('button'); btn.textContent='Approve';
+        btn.onclick=async()=>{ btn.disabled=true; btn.textContent='approving…'; await approve(it.id); };
+        card.appendChild(btn);
+      }
+      pending.appendChild(card);
     }
   }catch(e){}
 }
