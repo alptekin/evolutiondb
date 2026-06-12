@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>iMessage connector — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>iMessage connector</h1>
+<p class="lede">A local-only, read-only <code>*-sync</code> connector that reads the macOS Messages.app SQLite database (<code>chat.db</code>) directly and pours your iMessage and SMS history into EvolutionDB long-term memory, so an AI assistant can recall it later through <code>search_memory</code>.</p>
+
+<h2 id="what-it-does">What it does</h2>
+<p>The package <code>evolutiondb-imessage-sync</code> opens the local Messages.app store at <code>~/Library/Messages/chat.db</code>, reads new messages incrementally, and persists each one into an EvolutionDB <a href="/platform/mcp-server/">MCP memory store</a>. The <a href="/platform/mcp-server/">MCP server</a> then surfaces those messages through <code>search_memory</code>. Unlike the API-based connectors (Slack, Gmail), there is <em>no network API and no OAuth token</em> — the data comes straight off disk, so the connector only runs on the same Mac whose Messages history you want to sync.</p>
+<p>Concretely, each pass:</p>
+<ul>
+<li>Snapshots <code>chat.db</code> (plus its <code>-wal</code> / <code>-shm</code> sidecars) to a temp file with <code>shutil.copy</code>, because Messages.app holds an exclusive WAL lock on the live file.</li>
+<li>Runs one SQL <code>SELECT</code> joining <code>message</code> → <code>handle</code> → <code>chat_message_join</code> → <code>chat</code>, filtered to <code>m.date &gt; ?</code> and ordered ascending by date.</li>
+<li>Decodes each row's body — using the plain <code>text</code> column when present, otherwise extracting the string out of the <code>attributedBody</code> blob (see below).</li>
+<li>Writes one record per message, keyed <code>imessage_&lt;apple_date&gt;_&lt;is_from_me&gt;_&lt;handle&gt;_&lt;chat_id&gt;</code>. The key is deterministic, so re-sync UPSERTs rather than duplicating.</li>
+<li>Advances a single watermark (the highest Apple-epoch date seen) so the next pass only reads newer messages.</li>
+</ul>
+<p>Records carry the service (<code>iMessage</code>/<code>SMS</code>), sender label, handle, chat label, direction, and the message's ISO timestamp, so downstream <code>search_memory</code> queries can filter on them.</p>
+
+<h3 id="attributedbody">Reading the attributedBody blob</h3>
+<p>From macOS 11 onward, Messages.app silently moved many newer messages — replies, link previews, mentions, SMS link cards, edited variants — out of the plain <code>text</code> column and into <code>attributedBody</code>, leaving <code>text</code> NULL. The connector decodes two formats so those rows don't all surface as <code>(rich message)</code> placeholders:</p>
+<ul>
+<li><strong>Legacy NSArchiver <code>typedstream</code></strong> (magic <code>\x04\x0bstreamtyped</code>) — the format Messages.app still uses for almost every message. The decoder locates the <code>NSString</code>/<code>NSMutableString</code> class tag, then reads typedstream's compact length marker (single byte, <code>0x81</code>+uint16, or <code>0x82</code>+uint32) and the UTF-8 payload.</li>
+<li><strong>NSKeyedArchiver bplist</strong> (magic <code>bplist00</code>) — used for some rich payloads on newer releases. Parsed via <code>plistlib</code>, resolving the <code>$top.root</code> UID, with a longest-non-class-string fallback.</li>
+</ul>
+<p>The module's own docstring notes that roughly 95% of <code>attributedBody</code> messages decode cleanly; the remainder (tap-back reactions, sticker payloads, Apple Pay receipts, etc.) carry no plain-text equivalent and stay as the <code>(rich message)</code> placeholder.</p>
+
+<h2 id="install">Install</h2>
+<p>The distribution name is <code>evolutiondb-imessage-sync</code>; the importable package is <code>imessage_sync</code>. It requires Python 3.9+ and depends on <code>psycopg[binary]&gt;=3.1</code> and <code>evolutiondb-pii&gt;=0.1.1</code>. It is macOS-only (it reads a macOS-specific file path and SQLite schema).</p>
+<pre><code><span class="c-com"># From PyPI</span>
+pip install evolutiondb-imessage-sync
+
+<span class="c-com"># Or editable, from this repo</span>
+pip install -e client/imessage-sync
+</code></pre>
+<p>Installing exposes a single console script, <code>evolutiondb-imessage-sync</code> (entry point <code>imessage_sync.__main__:main</code>).</p>
+
+<h3 id="full-disk-access">Full Disk Access (required)</h3>
+<p>There is no API key and no login. Instead, the shell or process that runs the connector must be granted <strong>Full Disk Access</strong>, or macOS will deny the read of <code>~/Library/Messages/chat.db</code>. Grant it under <em>System Settings → Privacy &amp; Security → Full Disk Access</em> for the terminal app (or the launchd/agent process) that invokes the sync. If the snapshot copy raises <code>PermissionError</code>, the connector falls back to opening the live file read-only and immutable (<code>file:…?mode=ro&amp;immutable=1</code>), but Full Disk Access is still required to read it at all.</p>
+
+<h2 id="configure">Configure (env vars / auth)</h2>
+<p>Configuration is entirely through environment variables. The CLI loads a dotenv file before reading them — by default <code>.env</code> in the working directory, overridable with <code>--env-file</code>. Existing process environment values win (the loader uses <code>setdefault</code>, so it never overwrites what is already set).</p>
+
+<h3 id="env-vars">Environment variables</h3>
+<p>Every variable read by <code>Config</code> is listed below. Note there is <em>no</em> token or credential variable for iMessage itself — access is governed entirely by Full Disk Access on the host.</p>
+<table>
+<thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>EVOSQL_HOST</code></td><td><code>127.0.0.1</code></td><td>EvolutionDB host (PostgreSQL wire protocol).</td></tr>
+<tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>EvolutionDB PG-protocol port.</td></tr>
+<tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>Database user.</td></tr>
+<tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>Database password.</td></tr>
+<tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>Database name.</td></tr>
+<tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace — records are written under this namespace and recalled per <code>MCP_USER_ID</code>.</td></tr>
+<tr><td><code>IMESSAGE_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>Name of the EvolutionDB memory store to write into.</td></tr>
+<tr><td><code>IMESSAGE_POLL_INTERVAL</code></td><td><code>600</code></td><td>Read into <code>Config.poll_secs</code>. Note: the CLI's daemon loop actually uses the <code>--interval</code> flag, not this value (see Notes).</td></tr>
+</tbody>
+</table>
+
+<h3 id="pii">Optional PII protection</h3>
+<p>If the sibling package <code>evolutiondb-pii</code> is importable, each record is passed through its <code>protect_record</code> (detect → mask → encrypt) over the fields <code>fact</code>, <code>text</code>, <code>sender</code>, <code>handle</code>, and <code>chat</code> before it is stored, keyed under <code>&lt;msg_key&gt;_pii</code>. Per the inline comment, with no public key on disk this is a <em>transparent passthrough</em>. If the import fails, protection is skipped entirely (<code>_pii_protect</code> is <code>None</code> and records are stored as-is).</p>
+
+<h2 id="usage">Usage</h2>
+<p>The CLI has five flags: <code>--once</code>, <code>--interval &lt;seconds&gt;</code>, <code>--since &lt;duration&gt;</code> (default <code>30d</code>), <code>--dry-run</code>, and <code>--env-file &lt;path&gt;</code> (default <code>.env</code>).</p>
+<pre><code><span class="c-com"># First run — pull the last 30 days, then exit.</span>
+evolutiondb-imessage-sync <span class="c-key">--once</span> <span class="c-key">--since</span> 30d
+
+<span class="c-com"># Daemon mode: pass, then sleep --interval seconds, repeat.</span>
+evolutiondb-imessage-sync <span class="c-key">--interval</span> 600
+
+<span class="c-com"># Read + decode only — no DB writes, no MemoryStore is constructed.</span>
+evolutiondb-imessage-sync <span class="c-key">--once</span> <span class="c-key">--dry-run</span>
+</code></pre>
+<p>If <code>--once</code> is given, or no <code>--interval</code> is supplied, exactly one pass runs. In daemon mode the interval is clamped to a minimum of 60 seconds, and <code>SIGTERM</code>/<code>SIGINT</code> request a graceful stop after the current pass finishes (the loop sleeps in 1-second steps and checks the stop flag between them).</p>
+<p>Each pass prints a one-line JSON summary to stdout. On success it reports the two counters that the pass tracks:</p>
+<pre><code>{<span class="c-str">"ok"</span>: true, <span class="c-str">"messages"</span>: 137, <span class="c-str">"errors"</span>: 0}
+</code></pre>
+<p>On failure the line is <code>{"ok": false, "error": "&lt;message&gt;"}</code>. (The figures above are illustrative, not guaranteed counts.) A read failure inside a pass is caught, logged to stderr, and counted as one <code>error</code> rather than aborting the process.</p>
+
+<h3 id="since-syntax">--since syntax</h3>
+<p><code>--since</code> takes a duration of the form <code>&lt;n&gt;&lt;unit&gt;</code>, where unit is one of <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code> (e.g. <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>7d</code>, <code>2w</code>). It is converted to an <strong>Apple-epoch nanoseconds</strong> floor (Apple counts time from 2001-01-01 UTC), which becomes the lower bound on <code>message.date</code>. A garbage value exits with code <code>2</code>. Note: <code>--since</code> is only the <em>default</em> floor — once a watermark has been stored, the watermark takes precedence over <code>--since</code>.</p>
+
+<h3 id="record-shape">Record shape</h3>
+<p>Each message is stored as a JSON record under the key <code>imessage_&lt;apple_date&gt;_&lt;is_from_me&gt;_&lt;handle&gt;_&lt;chat_id&gt;</code> (spaces stripped from <code>handle</code> and <code>chat_id</code>). Fields written by <code>_build_record</code>:</p>
+<pre><code>{
+  <span class="c-str">"fact"</span>:        <span class="c-str">"iMessage from +1555…: see you at 6"</span>,
+  <span class="c-str">"source"</span>:      <span class="c-str">"imessage"</span>,
+  <span class="c-str">"kind"</span>:        <span class="c-str">"message"</span>,
+  <span class="c-str">"service"</span>:     <span class="c-str">"iMessage"</span>,        <span class="c-com">// or "SMS"</span>
+  <span class="c-str">"text"</span>:        <span class="c-str">"see you at 6"</span>,
+  <span class="c-str">"sender"</span>:      <span class="c-str">"+1555…"</span>,          <span class="c-com">// "me" when is_from_me</span>
+  <span class="c-str">"handle"</span>:      <span class="c-str">"+1555…"</span>,
+  <span class="c-str">"chat"</span>:        <span class="c-str">"Family"</span>,
+  <span class="c-str">"chat_id"</span>:     <span class="c-str">"chat123…"</span>,
+  <span class="c-str">"is_from_me"</span>:  false,
+  <span class="c-str">"modified_at"</span>: <span class="c-str">"2024-05-13T08:33:20Z"</span>,
+  <span class="c-str">"apple_date"</span>:  734567600000000000,
+  <span class="c-str">"tags"</span>:        [<span class="c-str">"imessage"</span>, <span class="c-str">"chat"</span>, <span class="c-str">"incoming"</span>]
+}
+</code></pre>
+<p>The <code>fact</code> field is a one-line human summary and its body is clipped to ~240 characters; the full body is kept in <code>text</code> (clipped to ~200 chars by <code>_short</code>'s default elsewhere). Outgoing messages set <code>sender</code> to <code>"me"</code>, <code>is_from_me</code> to <code>true</code>, and tag <code>"outgoing"</code>; incoming messages tag <code>"incoming"</code>. Rows whose body resolves to empty are skipped entirely; rows with a non-decodable <code>attributedBody</code> are stored with <code>text</code> = <code>"(rich message)"</code>.</p>
+
+<h2 id="reference">Reference</h2>
+<p>The package is four small modules: <code>imessage_sync.sync</code> (config, key building, sync loop, CLI), <code>imessage_sync.extract</code> (chat.db reader + attributedBody decoders), <code>imessage_sync.state</code> (EvolutionDB memory backend), and <code>imessage_sync.__main__</code> (a one-line wrapper that calls <code>sync.main</code>).</p>
+
+<h3 id="ref-sync">imessage_sync.sync</h3>
+<div class="sig">def main(argv: Optional[List[str]] = None) -&gt; int</div>
+<p>CLI entry point (the <code>evolutiondb-imessage-sync</code> console script). Parses arguments, loads the dotenv file, parses <code>--since</code>, builds <code>Config</code>, installs signal handlers, then runs one pass or loops on <code>--interval</code>. Returns a process exit code: <code>2</code> for a bad <code>--since</code>, <code>4</code> if a pass raises, otherwise the result of the last pass (<code>0</code> on success).</p>
+
+<div class="sig">def sync_once(cfg: Config, *, since_ns_floor: int, dry_run: bool = False) -&gt; dict</div>
+<p>Runs a single sync pass. Unless <code>dry_run</code>, constructs a <code>MemoryStore</code> and reads its watermark; the effective floor is the watermark if present, else <code>since_ns_floor</code>. Iterates <code>extract.iter_messages</code>, skips rows at or below the floor, optionally PII-protects each record, writes it (and any PII companion records), and advances the watermark to the highest date seen. Returns the counter dict <code>{"messages": …, "errors": …}</code>. A read exception is caught, logged, and counted as one <code>error</code>.</p>
+
+<div class="sig">def parse_since(text: str) -&gt; int</div>
+<p>Parses a <code>&lt;n&gt;&lt;s|m|h|d|w&gt;</code> duration and returns the corresponding <strong>Apple-epoch nanoseconds</strong> value (seconds since 2001-01-01 UTC × 1e9). Raises <code>ValueError</code> on anything else.</p>
+
+<div class="sig">class Config</div>
+<p>Reads all environment variables into typed attributes (<code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code>, <code>store</code>, <code>poll_secs</code>). Constructed after the dotenv file is loaded.</p>
+
+<p>Internal helpers: <code>_msg_key(record)</code> builds the deterministic record key; <code>_protect(rec, main_key)</code> applies <code>evolutiondb_pii</code> when available (else returns the record unchanged with no companions); <code>_load_dotenv(path)</code> populates the environment without overwriting existing values; <code>_install_signal_handlers()</code> wires <code>SIGTERM</code>/<code>SIGINT</code> to a graceful stop flag.</p>
+
+<h3 id="ref-extract">imessage_sync.extract</h3>
+<div class="sig">def iter_messages(since_apple_date: int = 0) -&gt; Iterator[Dict]</div>
+<p>Yields normalised message records newer than <code>since_apple_date</code> (Apple's nanoseconds-since-2001 epoch; pass <code>0</code> to bootstrap). Locates <code>chat.db</code>, snapshots and connects, runs the join query, converts each date to ISO, builds a record, and yields the non-<code>None</code> ones. If <code>chat.db</code> is missing or a SQLite error occurs, it logs to stderr and returns without yielding.</p>
+<div class="sig">def chat_db_path() -&gt; Path</div>
+<p>Returns the default store path, <code>~/Library/Messages/chat.db</code> (expanded).</p>
+<div class="sig">def _decode_attributed_body(blob: Optional[bytes]) -&gt; str</div>
+<p>Dispatches an <code>attributedBody</code> blob to the right decoder by magic bytes: <code>_decode_typedstream</code> for <code>\x04\x0bstreamtyped</code>, <code>_decode_keyed_archive</code> for <code>bplist00</code>. Returns the plain string, or <code>""</code> when neither path finds a body (callers then fall back to the <code>(rich message)</code> placeholder).</p>
+<div class="sig">def _decode_typedstream(blob: bytes) -&gt; str</div>
+<p>Extracts the <code>NSString</code> payload out of Apple's legacy NSArchiver <code>typedstream</code> serialisation, decoding the compact length marker and UTF-8 bytes.</p>
+<div class="sig">def _decode_keyed_archive(blob: bytes) -&gt; str</div>
+<p>Parses an NSKeyedArchiver <code>bplist00</code> blob via <code>plistlib</code>, resolving the root object's string (with a longest-non-class-string fallback).</p>
+<p>Internal helpers: <code>_snapshot(src)</code> copies <code>chat.db</code> + <code>-wal</code>/<code>-shm</code> to a temp file; <code>_connect(src)</code> connects to the snapshot, falling back to a read-only immutable URI on <code>PermissionError</code>; <code>_apple_to_iso(date_value)</code> converts an Apple date to an ISO-8601 <code>Z</code> string (guarding nanoseconds-vs-seconds by magnitude — values above <code>1e12</code> are treated as nanoseconds); <code>_build_record(row, iso)</code> assembles the record dict shown above; <code>_short(s, n=200)</code> clips long text with an ellipsis.</p>
+
+<h3 id="ref-state">imessage_sync.state</h3>
+<div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+<p>The EvolutionDB memory backend, described in its own docstring as a "mirror of the sibling connector packages." Connects via <code>psycopg</code> (autocommit) and best-effort issues <code>CREATE MEMORY STORE &lt;store&gt;</code> on init (errors swallowed). All operations run through a reconnect-with-backoff wrapper (<code>_retry</code>): up to 3 attempts with a 0.5s × attempt backoff, recovering only from <code>OperationalError</code>/<code>InterfaceError</code>. If <code>psycopg</code> is not installed, the constructor raises <code>RuntimeError</code> with an install hint.</p>
+<div class="sig">MemoryStore.get_watermark() -&gt; Optional[int]</div>
+<p>Reads the single stored watermark (key <code>imessage_state_latest</code>) for the namespace and returns its <code>apple_date_ns</code> integer, or <code>None</code> if not yet seen. Note this is a single global watermark — not per-chat.</p>
+<div class="sig">MemoryStore.set_watermark(apple_date_ns: int) -&gt; None</div>
+<p>Writes the watermark as JSON (<code>{"apple_date_ns": …, "saved_at": …}</code>) with <code>MEMORY PUT INTO &lt;store&gt;</code> under the configured namespace.</p>
+<div class="sig">MemoryStore.put_record(key: str, record: Dict) -&gt; None</div>
+<p>Serializes a record dict to JSON (<code>ensure_ascii=False</code>) and writes it with <code>MEMORY PUT INTO &lt;store&gt;</code> under the namespace.</p>
+
+<h2 id="notes">Notes and limitations</h2>
+<ul>
+<li><strong>Beta, and the version metadata is inconsistent.</strong> <code>pyproject.toml</code> declares version <code>0.1.2</code> (Development Status 4 - Beta), while <code>imessage_sync/__init__.py</code> still hard-codes <code>__version__ = "0.1.0"</code>. There is no README shipped with the package; this page is sourced directly from the code and packaging metadata.</li>
+<li><strong>macOS-only and local-only.</strong> There is no API and no token. The connector reads <code>~/Library/Messages/chat.db</code> on the same machine, so it must run on the Mac whose history you want, with Full Disk Access granted.</li>
+<li><strong>Read-only.</strong> The package only reads <code>chat.db</code> and writes to EvolutionDB. There is no code that sends iMessages.</li>
+<li><strong>Single watermark, not per-chat.</strong> Unlike the Slack connector's per-channel watermark, this one stores one global high-water mark (<code>imessage_state_latest</code>) — the maximum Apple-date seen across all messages.</li>
+<li><strong><code>IMESSAGE_POLL_INTERVAL</code> is read but not used for the loop.</strong> <code>Config.poll_secs</code> reads it, but <code>main</code>'s daemon loop sleeps on the <code>--interval</code> CLI flag instead. To run on a schedule, pass <code>--interval</code> (or wrap a <code>--once</code> run in cron/launchd).</li>
+<li><strong>Not all rich messages decode.</strong> Per <code>extract.py</code>, ~95% of <code>attributedBody</code> messages decode to plain text; tap-backs, stickers, Apple Pay receipts and similar carry no plain-text body and are stored as <code>"(rich message)"</code>.</li>
+<li><strong>SQL building uses string interpolation.</strong> <code>state.py</code> escapes values with a local <code>_e()</code> helper (newline/tab stripping + single-quote doubling) and interpolates them into the <code>MEMORY PUT</code> / <code>SELECT</code> statements rather than using parameter binding.</li>
+<li><strong>Privacy.</strong> This pipes personal message history into a memory store. Optional <code>evolutiondb-pii</code> protection is a transparent passthrough unless a key is configured on disk, and once a message lands in EvolutionDB anyone with the matching <code>MCP_USER_ID</code> namespace can recall it via <code>search_memory</code>. Confirm this is acceptable before enabling.</li>
+<li><strong>Tests.</strong> No test files are shipped inside this package.</li>
+</ul>
+<p>Related: <a href="/platform/mcp-server/">MCP server</a> · <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a>.</p>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

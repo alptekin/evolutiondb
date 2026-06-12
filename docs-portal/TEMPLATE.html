@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!-- EvolutionDB docs page contract. Every developer.* / wiki.* content page
+     follows this skeleton EXACTLY: shared head (Tailwind CDN + fonts + /tw.js +
+     /style.css), an empty #topbar + #sidebar filled by /nav-data.js + /nav.js,
+     and a <main class="docs-content prose"> with the page body. Only the
+     <title> and the <main> content change per page. Links are root-relative
+     within a site (e.g. /sdk/python/). Use the .prose, .sig, .callout,
+     .card-grid, and pre>code .c-key/.c-str/.c-com/.c-fn classes from style.css. -->
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PAGE TITLE — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+  <!-- ============ PAGE CONTENT START ============ -->
+  <h1>Page title</h1>
+  <p class="lede">One-sentence summary of the page.</p>
+
+  <h2 id="section">Section</h2>
+  <p>Body text. Inline <code>code</code>, links to <a href="/other/">other pages</a>.</p>
+  <div class="sig">function_signature(args) -&gt; ReturnType</div>
+  <pre><code><span class="c-com">// commented code example</span>
+<span class="c-key">SELECT</span> * <span class="c-key">FROM</span> memories;</code></pre>
+  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>A note.</div></div>
+  <!-- ============ PAGE CONTENT END ============ -->
+
+</main>
+</div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

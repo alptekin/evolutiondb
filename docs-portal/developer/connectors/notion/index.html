@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Notion connector — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+  <h1>Notion connector</h1>
+  <p class="lede">Pull every Notion page shared with an integration token into EvolutionDB long-term memory, one page per memory record.</p>
+
+  <h2 id="what-it-does">What it does</h2>
+  <p>
+    <code>evolutiondb-notion-sync</code> is a one-way connector that walks every page a Notion
+    integration can see, flattens each page's body text, and writes one record per page into an
+    EvolutionDB <em>memory store</em>. It is the same record-into-memory pattern used by the other
+    <code>*-sync</code> connectors, and the records it writes are the kind the
+    <a href="/platform/mcp-server/">MCP server</a> reads back as agent long-term memory.
+  </p>
+  <p>The flow for each sync pass:</p>
+  <ul>
+    <li>Call the Notion <code>/search</code> endpoint to list pages, newest first.</li>
+    <li>Fetch each page's top-level child blocks via <code>/blocks/{id}/children</code> and join their plain text.</li>
+    <li>Build a JSON record (<code>fact</code>, <code>title</code>, <code>text</code>, <code>page_id</code>, <code>url</code>, timestamps, <code>tags</code>) and store it under a per-page key.</li>
+    <li>Track a <em>watermark</em> (the newest <code>last_edited_time</code> seen) so the next pass stops as soon as it reaches already-synced pages — making repeated runs incremental.</li>
+  </ul>
+  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>
+    The connector only fetches <strong>top-level child blocks</strong> of each page. Nested children (toggles, sub-lists, columns) are not recursively expanded, and non-text blocks (images, embeds, tables) contribute no body text.
+  </div></div>
+
+  <h2 id="install">Install</h2>
+  <p>Distribution name on PyPI metadata is <code>evolutiondb-notion-sync</code>; the import package is <code>notion_sync</code>. Requires Python 3.9+.</p>
+  <pre><code><span class="c-com"># installs the console script `evolutiondb-notion-sync`</span>
+pip install evolutiondb-notion-sync</code></pre>
+  <p>Runtime dependencies (declared in <code>pyproject.toml</code>):</p>
+  <ul>
+    <li><code>psycopg[binary]&gt;=3.1</code> — connects to EvolutionDB over the PostgreSQL wire protocol.</li>
+    <li><code>evolutiondb-pii&gt;=0.1.1</code> — optional PII masking; the connector degrades gracefully if it cannot be imported (see <a href="#notes">Notes</a>).</li>
+  </ul>
+  <p>The Notion HTTP client itself uses only the Python standard library (<code>urllib</code>) — no third-party Notion SDK.</p>
+
+  <h2 id="configure">Configure (env vars / auth)</h2>
+  <p>
+    Configuration is read entirely from environment variables by the <code>Config</code> class. A
+    <code>.env</code> file (path set by <code>--env-file</code>, default <code>.env</code> in the working
+    directory) is loaded first with <code>os.environ.setdefault</code>, so real environment variables
+    always win over <code>.env</code> entries.
+  </p>
+  <table>
+    <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>NOTION_TOKEN</code></td><td><em>(required)</em></td><td>Notion internal-integration secret. Empty value raises an error.</td></tr>
+      <tr><td><code>EVOSQL_HOST</code></td><td><code>127.0.0.1</code></td><td>EvolutionDB host.</td></tr>
+      <tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>EvolutionDB PG-wire port.</td></tr>
+      <tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>Database user.</td></tr>
+      <tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>Database password.</td></tr>
+      <tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>Database name.</td></tr>
+      <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace records are written under.</td></tr>
+      <tr><td><code>NOTION_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>Target memory store name.</td></tr>
+    </tbody>
+  </table>
+  <p>To set up Notion access (from the package docstring):</p>
+  <ol>
+    <li>Create an internal integration at <code>https://www.notion.so/my-integrations</code> and copy its secret.</li>
+    <li>Export it as <code>NOTION_TOKEN</code> in <code>.env</code> or the calling shell.</li>
+    <li>On each Notion page or database you want indexed, open the share menu and add the integration. The sync only sees pages explicitly shared with it.</li>
+  </ol>
+  <pre><code><span class="c-com"># .env</span>
+NOTION_TOKEN=<span class="c-str">secret_xxxxxxxxxxxxxxxxxxxx</span>
+EVOSQL_HOST=<span class="c-str">127.0.0.1</span>
+EVOSQL_PORT=<span class="c-str">5433</span>
+EVOSQL_DATABASE=<span class="c-str">evosql</span>
+MCP_USER_ID=<span class="c-str">default_user</span>
+NOTION_MEMORY_STORE=<span class="c-str">mcp_mem</span></code></pre>
+
+  <h2 id="usage">Usage</h2>
+  <p>The console script is the primary entry point. It supports four flags, parsed in <code>main()</code>:</p>
+  <table>
+    <thead><tr><th>Flag</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><code>--once</code></td><td>Run a single sync pass and exit.</td></tr>
+      <tr><td><code>--interval N</code></td><td>Loop forever, sleeping <code>N</code> seconds between passes (floored to a minimum of 60).</td></tr>
+      <tr><td><code>--dry-run</code></td><td>Walk Notion and count pages without opening a DB connection or writing any records.</td></tr>
+      <tr><td><code>--env-file PATH</code></td><td><code>.env</code> path to load (default <code>.env</code>).</td></tr>
+    </tbody>
+  </table>
+  <p>If neither <code>--once</code> nor <code>--interval</code> is given, a single pass runs (the same as <code>--once</code>).</p>
+  <pre><code><span class="c-com"># one pass, write to memory</span>
+evolutiondb-notion-sync --once
+
+<span class="c-com"># walk Notion but write nothing — useful to verify the token works</span>
+evolutiondb-notion-sync --dry-run
+
+<span class="c-com"># continuous daemon: a pass every 5 minutes</span>
+evolutiondb-notion-sync --interval 300
+
+<span class="c-com"># load a non-default env file</span>
+evolutiondb-notion-sync --once --env-file /etc/evosql/notion.env</code></pre>
+  <p>
+    Each pass prints a single JSON line to stdout. On success it reports the counters
+    (<code>pages</code>, <code>skipped</code>, <code>errors</code>); on failure it reports the error and
+    the process returns exit code <code>4</code>.
+  </p>
+  <pre><code><span class="c-com"># success</span>
+{<span class="c-str">"ok"</span>: true, <span class="c-str">"pages"</span>: 12, <span class="c-str">"skipped"</span>: 0, <span class="c-str">"errors"</span>: 0}
+
+<span class="c-com"># failure (e.g. NOTION_TOKEN unset) — exit code 4</span>
+{<span class="c-str">"ok"</span>: false, <span class="c-str">"error"</span>: <span class="c-str">"NOTION_TOKEN is not set. ..."</span>}</code></pre>
+  <p>
+    <code>SIGINT</code> and <code>SIGTERM</code> are handled: in interval mode they set a stop flag so the
+    current sleep is interrupted and the loop exits cleanly after the in-flight pass.
+  </p>
+
+  <h3 id="usage-library">As a library</h3>
+  <p>You can drive a pass directly without the CLI:</p>
+  <pre><code><span class="c-key">from</span> notion_sync.sync <span class="c-key">import</span> Config, sync_once
+
+cfg = Config()                  <span class="c-com"># reads env vars</span>
+counts = sync_once(cfg, dry_run=<span class="c-key">False</span>)
+<span class="c-key">print</span>(counts)                    <span class="c-com"># {"pages": .., "skipped": .., "errors": ..}</span></code></pre>
+
+  <h2 id="reference">Reference</h2>
+
+  <h3>sync module</h3>
+  <div class="sig">class Config()</div>
+  <p>Reads all settings from environment variables on construction. Attributes: <code>token</code>, <code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code>, <code>store</code>.</p>
+
+  <div class="sig">sync_once(cfg: Config, *, dry_run: bool = False) -&gt; Dict[str, int]</div>
+  <p>
+    Runs a single sync pass. Raises <code>RuntimeError</code> if <code>cfg.token</code> is empty.
+    Iterates <code>NotionClient.search_pages()</code>, stops once it reaches the stored watermark, fetches
+    each page's blocks, builds a record, optionally PII-protects it, and writes it to the memory store.
+    Advances the watermark to the newest <code>last_edited_time</code> seen. Returns counters
+    <code>{"pages", "skipped", "errors"}</code>. With <code>dry_run=True</code> no DB connection is opened
+    and nothing is written.
+  </p>
+
+  <div class="sig">main(argv: Optional[List[str]] = None) -&gt; int</div>
+  <p>CLI entry point (console script <code>evolutiondb-notion-sync</code>). Parses flags, loads the env file, installs signal handlers, and runs one pass or an interval loop. Returns the process exit code.</p>
+
+  <p>Internal helpers in the module: <code>_load_dotenv(path)</code> (minimal <code>.env</code> reader), <code>_build_record(page, body_text)</code> (assembles the stored record; returns <code>None</code> if the page has no <code>last_edited_time</code>), <code>_page_key(page_id)</code> (record key <code>notion_page_&lt;id-without-dashes&gt;</code>), <code>_short(s, n=240)</code> (truncates the <code>fact</code> preview), and <code>_protect(rec, main_key)</code> (PII masking, see <a href="#notes">Notes</a>).</p>
+
+  <h3>api module</h3>
+  <div class="sig">class NotionClient(token: str, user_agent: str = "evolutiondb-notion-sync")</div>
+  <p>Tiny Notion REST client built on <code>urllib</code>. Talks to <code>https://api.notion.com/v1</code> with <code>Notion-Version: 2022-06-28</code>. Retries once on HTTP <code>429</code>, honoring the <code>Retry-After</code> header.</p>
+
+  <div class="sig">NotionClient.search_pages() -&gt; Iterator[Dict]</div>
+  <p>Yields every page the integration can see, newest first, by paging through <code>POST /search</code> (filtered to <code>object = page</code>, sorted descending by <code>last_edited_time</code>, page size 100) and following <code>next_cursor</code>.</p>
+
+  <div class="sig">NotionClient.page_blocks(page_id: str, page_size: int = 100) -&gt; List[Dict]</div>
+  <p>Returns the top-level child blocks of a page via <code>GET /blocks/{page_id}/children</code>, following pagination cursors.</p>
+
+  <div class="sig">page_title(page: Dict) -&gt; str</div>
+  <p>Extracts a human title from a page object by finding the property of type <code>title</code>. Returns <code>"(untitled)"</code> when none is present.</p>
+
+  <div class="sig">block_plain(block: Dict) -&gt; str</div>
+  <p>Returns the plain text of a single block for the supported rich-text block types (<code>paragraph</code>, <code>heading_1/2/3</code>, <code>bulleted_list_item</code>, <code>numbered_list_item</code>, <code>to_do</code>, <code>quote</code>, <code>callout</code>, <code>toggle</code>, and <code>code</code>). Any other block type yields an empty string.</p>
+
+  <div class="sig">rich_text_plain(items: Optional[List[Dict]]) -&gt; str</div>
+  <p>Concatenates the <code>plain_text</code> of a Notion rich-text array.</p>
+
+  <p><code>NotionError(status, msg, url)</code> is raised for non-retryable HTTP errors and carries the HTTP <code>status</code>.</p>
+
+  <h3>state module</h3>
+  <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+  <p>
+    EvolutionDB memory backend (a mirror of the sibling connectors' backend). Connects via
+    <code>psycopg</code> in autocommit mode and best-effort runs <code>CREATE MEMORY STORE</code> on init.
+    All operations go through a small reconnect-with-backoff retry (3 attempts) that re-establishes the
+    connection on <code>OperationalError</code>/<code>InterfaceError</code>.
+  </p>
+  <div class="sig">MemoryStore.get_watermark_iso() -&gt; Optional[str]</div>
+  <p>Reads the stored <code>last_edited_time</code> watermark for this namespace (key <code>notion_state_latest</code>).</p>
+  <div class="sig">MemoryStore.set_watermark_iso(iso: str) -&gt; None</div>
+  <p>Persists the watermark using <code>MEMORY PUT INTO &lt;store&gt;</code>.</p>
+  <div class="sig">MemoryStore.put_record(key: str, record: Dict) -&gt; None</div>
+  <p>Serializes <code>record</code> to JSON and writes it under <code>(namespace, key)</code> with <code>MEMORY PUT INTO &lt;store&gt;</code>.</p>
+
+  <h2 id="notes">Notes &amp; limitations</h2>
+  <ul>
+    <li><strong>One-way, page-level only.</strong> The connector reads from Notion and writes to EvolutionDB; it never writes back to Notion. It indexes <em>pages</em> (objects of type <code>page</code>) — databases are not enumerated as records, and only top-level page blocks are flattened into the body text.</li>
+    <li><strong>Incremental via watermark.</strong> Because <code>/search</code> returns newest-first and the loop breaks at the stored watermark, an interrupted or repeated run resumes from the last synced page rather than re-walking everything. The first run against a populated workspace walks all visible pages.</li>
+    <li><strong>PII masking is optional.</strong> If <code>evolutiondb-pii</code> is installed, the fields <code>fact</code>, <code>title</code>, and <code>text</code> are passed through <code>protect_record</code> before storage and any companion records are written too. If the import fails, records are stored unmasked — there is no warning, the masking step is simply skipped.</li>
+    <li><strong>SQL value escaping.</strong> <code>state.py</code> builds <code>MEMORY PUT</code>/<code>SELECT</code> statements by string interpolation with a local <code>_e()</code> helper that strips control characters and doubles single quotes. Namespace/store/key values flow through it; treat <code>NOTION_MEMORY_STORE</code> and <code>MCP_USER_ID</code> as trusted configuration, not untrusted input.</li>
+    <li><strong>Interval floor.</strong> <code>--interval</code> values below 60 are clamped to 60 seconds.</li>
+    <li><strong>Version note.</strong> <code>pyproject.toml</code> declares version <code>0.1.1</code> while <code>notion_sync/__init__.py</code> still reports <code>__version__ = "0.1.0"</code>.</li>
+  </ul>
+
+  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>
+    The integration only sees pages explicitly shared with it. If a sync pass reports <code>"pages": 0</code> and your token is valid, the most common cause is that no pages have been shared with the integration in Notion's share menu.
+  </div></div>
+
+  <p>See also the <a href="/platform/mcp-server/">MCP server</a> that consumes these memory records, and the broader <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a>.</p>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

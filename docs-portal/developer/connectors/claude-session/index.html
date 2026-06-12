@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Claude sessions connector — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>Claude sessions connector</h1>
+<p class="lede">Index your Claude Code session transcripts into EvolutionDB long-term memory so the assistant can search past conversations — a local-file connector, no API and no token.</p>
+
+<h2 id="what-it-does">What it does</h2>
+<p>
+The package <code>evolutiondb-claude-session-sync</code> reads the JSONL transcript files
+Claude Code writes under <code>~/.claude/projects/&lt;slug&gt;/&lt;sessionId&gt;.jsonl</code> and
+turns each session into <strong>one searchable digest record</strong> in EvolutionDB
+memory. Once indexed, the digests are recallable through the
+<a href="/platform/mcp-server/">MCP server</a>'s <code>search_memory</code> tool
+(e.g. <em>"what did we decide about the storage migration last week?"</em>).
+</p>
+<p>Each session produces two memory keys:</p>
+<ul>
+<li><code>claude_session_&lt;sessionId&gt;</code> — the digest: an AI title (when present),
+trimmed user/assistant turns, project, git branch, turn count, and start/end timestamps.</li>
+<li><code>claude_session_state_&lt;sessionId&gt;</code> — a per-session watermark holding the
+last seen timestamp.</li>
+</ul>
+<p>
+Keys are deterministic, so re-syncing a session that grew <strong>upserts</strong> the same
+record instead of duplicating it. The connector keeps only genuine conversation: real user
+prompts (slash-command, hook, caveat wrappers and <code>tool_result</code> blocks are filtered
+out) and the assistant's prose (tool calls and thinking blocks are skipped). The digest is
+clipped to stay under the engine's value cap.
+</p>
+
+<h2 id="install">Install</h2>
+<pre><code><span class="c-com"># editable install from the repo</span>
+pip install -e client/claude-session-sync</code></pre>
+<p>
+Requires Python <code>&gt;=3.9</code>. The only runtime dependency is
+<code>psycopg[binary]&gt;=3.1</code> (the connector talks to EvolutionDB over the
+PostgreSQL wire protocol). PII masking is optional — see
+<a href="#notes">Notes</a>.
+</p>
+
+<h2 id="configure">Configure (env vars / auth)</h2>
+<p>
+No secrets are required — the connector reads local transcript files. Connection
+and namespace settings are read from environment variables (a <code>.env</code> file
+in the working directory is loaded automatically; pass <code>--env-file</code> to
+point elsewhere). The shipped <code>.env.example</code> lists every variable:
+</p>
+<pre><code><span class="c-com"># Where Claude Code stores session transcripts (one JSONL per session)</span>
+CLAUDE_PROJECTS_DIR=<span class="c-str">~/.claude/projects</span>
+
+<span class="c-com"># --- EvolutionDB connection ---</span>
+EVOSQL_HOST=<span class="c-str">127.0.0.1</span>
+EVOSQL_PORT=<span class="c-str">5433</span>
+EVOSQL_USER=<span class="c-str">admin</span>
+EVOSQL_PASSWORD=<span class="c-str">admin</span>
+EVOSQL_DATABASE=<span class="c-str">evosql</span>
+
+<span class="c-com"># Namespace shared with the MCP server (its MCP_USER_ID)</span>
+MCP_USER_ID=<span class="c-str">default_user</span>
+
+<span class="c-com"># Memory store the session records land in (the MCP server's primary store)</span>
+CLAUDE_SESSION_STORE=<span class="c-str">mcp_mem</span>
+
+CLAUDE_SESSION_POLL_INTERVAL=<span class="c-str">900</span></code></pre>
+<table>
+<thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>CLAUDE_PROJECTS_DIR</code></td><td><code>~/.claude/projects</code></td><td>Root scanned recursively for <code>*.jsonl</code> transcripts.</td></tr>
+<tr><td><code>EVOSQL_HOST</code></td><td><code>127.0.0.1</code></td><td>EvolutionDB host (PG wire protocol).</td></tr>
+<tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>PG protocol port.</td></tr>
+<tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>DB user.</td></tr>
+<tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>DB password.</td></tr>
+<tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>Database name.</td></tr>
+<tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace — match the MCP server so records are recallable.</td></tr>
+<tr><td><code>CLAUDE_SESSION_STORE</code></td><td><code>mcp_mem</code></td><td>Target memory store. Created if missing via <code>CREATE MEMORY STORE</code>.</td></tr>
+<tr><td><code>CLAUDE_SESSION_POLL_INTERVAL</code></td><td><code>900</code></td><td>Default daemon poll interval, in seconds.</td></tr>
+</tbody>
+</table>
+
+<h2 id="usage">Usage</h2>
+<p>The installed entry script is <code>evolutiondb-claude-session-sync</code>:</p>
+<pre><code>evolutiondb-claude-session-sync --once             <span class="c-com"># one pass</span>
+evolutiondb-claude-session-sync --once --dry-run   <span class="c-com"># parse, persist nothing</span>
+evolutiondb-claude-session-sync --interval 900     <span class="c-com"># daemon</span>
+evolutiondb-claude-session-sync --dir ~/.claude/projects/&lt;one-project&gt;</code></pre>
+<p>
+Each pass prints one JSON line to stdout, for example
+<code>{"ok": true, "sessions": N, "skipped": N, "errors": N}</code>. On failure it
+prints <code>{"ok": false, "error": "…"}</code>. Exit codes: <code>0</code> ok ·
+<code>4</code> pass failed.
+</p>
+<p>Flags accepted by the CLI:</p>
+<table>
+<thead><tr><th>Flag</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>--once</code></td><td>Run a single pass and exit.</td></tr>
+<tr><td><code>--interval N</code></td><td>Daemon mode: repeat every <code>N</code> seconds (floored to 60).</td></tr>
+<tr><td><code>--dir PATH</code></td><td>Override <code>CLAUDE_PROJECTS_DIR</code> for this run.</td></tr>
+<tr><td><code>--dry-run</code></td><td>Parse transcripts but persist nothing (no DB connection).</td></tr>
+<tr><td><code>--env-file PATH</code></td><td>Dotenv path; defaults to <code>.env</code>, ignored if missing.</td></tr>
+</tbody>
+</table>
+<p>
+With neither <code>--once</code> nor <code>--interval</code>, the connector runs a single
+pass (same as <code>--once</code>). In daemon mode it installs <code>SIGTERM</code>/<code>SIGINT</code>
+handlers that finish the current pass before stopping.
+</p>
+
+<h2 id="reference">Reference</h2>
+<p>Public surface lives in <code>claude_session_sync.sync</code> and <code>claude_session_sync.state</code>.</p>
+
+<div class="sig">def parse_session(path: Path) -&gt; Optional[Dict]</div>
+<p>
+Parses one transcript file into a session record, or returns <code>None</code> if the
+file has no usable conversation (no session id, or zero user and assistant turns).
+It reads <code>type=user</code> lines (genuine string prompts only), <code>type=assistant</code>
+lines (<code>text</code> blocks only), and picks up <code>aiTitle</code> from an
+<code>ai-title</code> line. Sidechain (subagent) lines are excluded. The returned dict
+includes <code>fact</code>, <code>source</code> (<code>"claude_session"</code>),
+<code>kind</code> (<code>"session"</code>), <code>session_id</code>, <code>title</code>,
+<code>project</code>, <code>cwd</code>, <code>git_branch</code>, <code>turns</code>,
+<code>text</code> (the digest), <code>started_at</code>, <code>ended_at</code>, and
+<code>tags</code>.
+</p>
+
+<div class="sig">def sync_once(cfg: Config, *, dry_run: bool = False) -&gt; Dict[str, int]</div>
+<p>
+Globs <code>**/*.jsonl</code> under the configured projects dir, parses each, and upserts
+new/grown sessions. Skips a session when its <code>ended_at</code> is at or before the
+stored watermark. Returns counters <code>{"sessions", "skipped", "errors"}</code>. Raises
+<code>RuntimeError</code> if the projects dir does not exist. When <code>dry_run=True</code>
+it never opens a DB connection.
+</p>
+
+<div class="sig">class Config</div>
+<p>
+Reads all settings from environment variables (see
+<a href="#configure">Configure</a>): <code>projects_dir</code>, <code>evosql_host</code>,
+<code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>,
+<code>evosql_db</code>, <code>user_id</code> (from <code>MCP_USER_ID</code>),
+<code>store</code>, and <code>poll_secs</code>.
+</p>
+
+<div class="sig">def main() -&gt; int</div>
+<p>
+CLI entry point (registered as the <code>evolutiondb-claude-session-sync</code> console
+script). Parses args, loads the dotenv file, builds a <code>Config</code>, installs signal
+handlers, and runs once or loops on the interval. Returns the process exit code.
+</p>
+
+<div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+<p>
+The DB backend in <code>claude_session_sync.state</code>. Connects with <code>psycopg</code>
+in autocommit mode and issues <code>CREATE MEMORY STORE</code> (ignoring failure if it already
+exists). It auto-reconnects up to 3 times with backoff on dropped connections. Methods:
+</p>
+<ul>
+<li><code>get_watermark(session_id) -&gt; Optional[str]</code> — reads the stored
+<code>updated_at</code> for a session from <code>__mem_&lt;store&gt;</code>.</li>
+<li><code>set_watermark(session_id, updated_at)</code> — writes the
+<code>claude_session_state_&lt;sessionId&gt;</code> row via <code>MEMORY PUT INTO</code>.</li>
+<li><code>put_record(key, record)</code> — JSON-encodes the record and writes it with
+<code>MEMORY PUT INTO</code>.</li>
+</ul>
+
+<h2 id="notes">Notes &amp; limitations</h2>
+<ul>
+<li><strong>Local files only.</strong> The connector never calls an API; it reads
+the transcript JSONL files Claude Code already writes on disk.</li>
+<li><strong>Digest is bounded.</strong> The digest text is capped at 5000 characters
+(an internal <code>_DIGEST_CAP</code>) and suffixed with <code>…[clipped]</code> when
+truncated, to keep the record JSON under the engine's ~8&nbsp;KB value cap.</li>
+<li><strong>Watermark granularity.</strong> A session is re-indexed only when its latest
+turn timestamp is newer than the stored watermark; equal-or-older sessions count as
+<em>skipped</em>.</li>
+<li><strong>Privacy / cleartext.</strong> Transcripts are real work — prompts, code, and
+assistant output land in EvolutionDB in cleartext under your namespace. Anyone with DB
+access and the namespace can recall them via <code>search_memory</code>. Scope what gets
+indexed by pointing <code>--dir</code> / <code>CLAUDE_PROJECTS_DIR</code> at a single
+project subfolder.</li>
+<li><strong>Optional PII masking.</strong> If <code>evolutiondb-pii</code> is installed, the
+connector runs the <code>fact</code>, <code>title</code>, and <code>text</code> fields through
+its masker and writes encrypted companion rows (key prefix
+<code>&lt;key&gt;_pii</code>). When it is not installed, records are written unmasked.</li>
+<li><strong>Status.</strong> Version <code>0.1.0</code>, classified Beta. The included tests
+(<code>tests/test_sync.py</code>) cover pure parsing/extraction with hand-built fixtures and
+do not touch the database.</li>
+</ul>
+<p>
+See also the <a href="/platform/mcp-server/">MCP server</a> for how these records are recalled,
+and the project <a href="https://wiki.evolutiondb.org">wiki</a> for memory-store internals.
+</p>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>
