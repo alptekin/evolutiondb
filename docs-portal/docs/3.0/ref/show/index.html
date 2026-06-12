@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>SHOW — EvolutionDB 3.0</title>
+<title>SHOW | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -163,7 +163,7 @@
 <h2 id="compatibility">Compatibility</h2>
 <p>There is no <code>SHOW</code> statement in the SQL standard. EvolutionDB's run-time-parameter form (<code>SHOW configuration_parameter</code>) follows the PostgreSQL convention and exposes several PostgreSQL-compatible names such as <code>server_version</code>, <code>max_connections</code>, <code>standard_conforming_strings</code>, <code>search_path</code>, and <code>shared_buffers</code>. For interoperability, <code>SHOW server_version</code> reports a PostgreSQL-style string (<code>15.0 (EvoSQL)</code>).</p>
 
-<p>The object-listing and store-listing forms (<code>SHOW DATABASES</code>, <code>SHOW TABLES</code>, <code>SHOW SCHEMAS</code>, <code>SHOW GRANTS</code>, and the various <code>... STORES</code> forms) are EvolutionDB extensions; their shape is closer to MySQL-style <code>SHOW</code> listings than to PostgreSQL, but the exact keywords and result columns are EvolutionDB-specific. PostgreSQL's <code>SHOW ALL</code> and the <code>SHOW SESSION</code> / <code>SHOW LOCAL</code> qualifiers are not implemented; matching is substring-based, so qualifiers are simply ignored. EvolutionDB does not raise an error for an unknown parameter — it returns an empty <code>setting</code> value — whereas PostgreSQL raises an error.</p>
+<p>The object-listing and store-listing forms (<code>SHOW DATABASES</code>, <code>SHOW TABLES</code>, <code>SHOW SCHEMAS</code>, <code>SHOW GRANTS</code>, and the various <code>... STORES</code> forms) are EvolutionDB extensions; their shape is closer to MySQL-style <code>SHOW</code> listings than to PostgreSQL, but the exact keywords and result columns are EvolutionDB-specific. PostgreSQL's <code>SHOW ALL</code> and the <code>SHOW SESSION</code> / <code>SHOW LOCAL</code> qualifiers are not implemented; matching is substring-based, so qualifiers are simply ignored. EvolutionDB does not raise an error for an unknown parameter, it returns an empty <code>setting</code> value, whereas PostgreSQL raises an error.</p>
 
 <h2 id="see-also">See Also</h2>
 <ul>

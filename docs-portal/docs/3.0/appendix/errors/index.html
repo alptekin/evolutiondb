@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>A. Error Codes (SQLSTATE) — EvolutionDB 3.0</title>
+<title>A. Error Codes (SQLSTATE) | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -50,21 +50,21 @@ The macro copies the five characters of the named code and writes the trailing N
 <dt><code>E</code> vendor subclass within a standard class</dt>
 <dd>For conditions the standard does not assign a subclass to, EvolutionDB places an <code>E</code> in the third position of a recognized class. For example, "undefined table" is <code>42E01</code> (class <code>42</code>, the standard's "syntax error or access rule violation"), which is the EvolutionDB analogue of PostgreSQL's <code>42P01</code>.</dd>
 <dt><code>E0</code>–<code>EZ</code> vendor classes</dt>
-<dd>For conditions with no standard class at all — storage engine, buffer pool, garbage collection, ID generation — EvolutionDB owns the entire class range <code>E0</code> through <code>EZ</code>. These codes have no SQL-standard or PostgreSQL equivalent.</dd>
+<dd>For conditions with no standard class at all: storage engine, buffer pool, garbage collection, ID generation, EvolutionDB owns the entire class range <code>E0</code> through <code>EZ</code>. These codes have no SQL-standard or PostgreSQL equivalent.</dd>
 </dl>
 
 <div class="callout">
-<strong>Honest caveat: legacy literals.</strong> A few code paths that predate the central header still emit hard-coded literals that follow PostgreSQL's <code>P</code> convention rather than the <code>E</code> scheme — notably <code>42P01</code> (undefined table) in some <a href="/3.0/ref/create-table/">CREATE</a> paths and the PG protocol fallback, <code>08P01</code> (protocol violation) in the connection handler, and <code>45000</code> (the SQL-standard "unhandled user-defined exception" class <code>45</code>) as the default for the <code>SIGNAL</code> statement. These are intentionally PostgreSQL-compatible so existing drivers recognize them, and they coexist with the canonical <code>E</code>-scheme codes in <code>evosql_errcodes.h</code>.
+<strong>Honest caveat: legacy literals.</strong> A few code paths that predate the central header still emit hard-coded literals that follow PostgreSQL's <code>P</code> convention rather than the <code>E</code> scheme, notably <code>42P01</code> (undefined table) in some <a href="/3.0/ref/create-table/">CREATE</a> paths and the PG protocol fallback, <code>08P01</code> (protocol violation) in the connection handler, and <code>45000</code> (the SQL-standard "unhandled user-defined exception" class <code>45</code>) as the default for the <code>SIGNAL</code> statement. These are intentionally PostgreSQL-compatible so existing drivers recognize them, and they coexist with the canonical <code>E</code>-scheme codes in <code>evosql_errcodes.h</code>.
 </div>
 
 <h2 id="defaults">A.3. Default and fallback codes</h2>
 <p>If an operation raises an error but does not set a specific SQLSTATE, the adaptor substitutes a class-level default rather than sending an empty code:</p>
 <dl class="params">
-<dt><code>42000</code> — Syntax Error or Access Rule Violation (generic)</dt>
+<dt><code>42000</code>, Syntax Error or Access Rule Violation (generic)</dt>
 <dd>The general fallback used by the query executor and the EVO protocol when <code>g_err.sqlstate</code> is empty. Many EVO protocol framing errors (bad command, missing arguments, invalid SQL length) report <code>42000</code> directly.</dd>
-<dt><code>22000</code> — Data Exception (generic)</dt>
+<dt><code>22000</code>, Data Exception (generic)</dt>
 <dd>The fallback used inside <a href="/3.0/ref/copy/">COPY</a> row parsing when no more specific data-exception code is available.</dd>
-<dt><code>00000</code> — Successful Completion</dt>
+<dt><code>00000</code>, Successful Completion</dt>
 <dd>The initial value of a result set's SQLSTATE before any error occurs.</dd>
 </dl>
 
@@ -256,29 +256,29 @@ The macro copies the five characters of the named code and writes the trailing N
 <table>
 <thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
 <tbody>
-<tr><td colspan="3"><strong>Class E0 — Storage engine</strong></td></tr>
+<tr><td colspan="3"><strong>Class E0, Storage engine</strong></td></tr>
 <tr><td><code>E0001</code></td><td>PATH_NAME_TRUNCATED</td><td><em>Emitted</em> when a file path is too long and was truncated.</td></tr>
 <tr><td><code>E0002</code></td><td>STORAGE_ENGINE_ERROR</td><td>Generic storage-layer error.</td></tr>
 <tr><td><code>E0003</code></td><td>RECORD_TOO_LARGE</td><td>A record exceeds what a 4 KB page can hold.</td></tr>
 <tr><td><code>E0004</code></td><td>TABLE_FILE_CORRUPTED</td><td>On-disk table data failed validation.</td></tr>
 <tr><td><code>E0005</code></td><td>META_FILE_NOT_FOUND</td><td>A required metadata file is missing.</td></tr>
-<tr><td colspan="3"><strong>Class E1 — Buffer pool</strong></td></tr>
+<tr><td colspan="3"><strong>Class E1, Buffer pool</strong></td></tr>
 <tr><td><code>E1001</code></td><td>BUFFER_POOL_EVICTION_FAILED</td><td>Clock-Sweep could not evict a page.</td></tr>
 <tr><td><code>E1002</code></td><td>BUFFER_POOL_FULL</td><td>No free or evictable frame available.</td></tr>
-<tr><td colspan="3"><strong>Class E2 — RECLAIM / garbage collection</strong></td></tr>
+<tr><td colspan="3"><strong>Class E2, RECLAIM / garbage collection</strong></td></tr>
 <tr><td><code>E2001</code></td><td>RECLAIM_IN_PROGRESS</td><td>A <a href="/3.0/ref/reclaim/">RECLAIM</a> is already running.</td></tr>
 <tr><td><code>E2002</code></td><td>RECLAIM_IO_ERROR</td><td>I/O failure during reclamation.</td></tr>
-<tr><td colspan="3"><strong>Class E3 — Temporary tables</strong></td></tr>
+<tr><td colspan="3"><strong>Class E3, Temporary tables</strong></td></tr>
 <tr><td><code>E3001</code></td><td>TEMP_TABLE_LIMIT</td><td>Temporary-table limit exceeded.</td></tr>
-<tr><td colspan="3"><strong>Class E4 — UUID generation</strong></td></tr>
+<tr><td colspan="3"><strong>Class E4, UUID generation</strong></td></tr>
 <tr><td><code>E4001</code></td><td>UUID_GENERATION_FAILED</td><td>UUID could not be generated.</td></tr>
-<tr><td colspan="3"><strong>Class E5 — Snowflake ID</strong></td></tr>
+<tr><td colspan="3"><strong>Class E5, Snowflake ID</strong></td></tr>
 <tr><td><code>E5001</code></td><td>SNOWFLAKE_SEQ_EXHAUSTED</td><td>Per-millisecond sequence exhausted.</td></tr>
 <tr><td><code>E5002</code></td><td>SNOWFLAKE_CLOCK_REGRESSION</td><td>System clock moved backwards.</td></tr>
-<tr><td colspan="3"><strong>Class E6 — Query timeout / cancellation</strong></td></tr>
+<tr><td colspan="3"><strong>Class E6, Query timeout / cancellation</strong></td></tr>
 <tr><td><code>E6001</code></td><td>QUERY_TIMEOUT</td><td>Statement exceeded its time budget.</td></tr>
 <tr><td><code>E6002</code></td><td>STATEMENT_CANCELLED</td><td>Statement was cancelled.</td></tr>
-<tr><td colspan="3"><strong>Class EX — Internal error ("should never happen")</strong></td></tr>
+<tr><td colspan="3"><strong>Class EX, Internal error ("should never happen")</strong></td></tr>
 <tr><td><code>EX000</code></td><td>INTERNAL_ERROR</td><td><em>Emitted</em> for unexpected internal conditions and software bugs; also set by the fatal-error handlers in <code>error.c</code> (<code>err_exit</code>, <code>err_quit</code>).</td></tr>
 <tr><td><code>EX001</code></td><td>DATA_CORRUPTED</td><td>In-memory or on-disk data corruption detected.</td></tr>
 <tr><td><code>EX002</code></td><td>INDEX_CORRUPTED</td><td>A B+ tree index failed an integrity check.</td></tr>
@@ -286,7 +286,7 @@ The macro copies the five characters of the named code and writes the trailing N
 </table>
 
 <div class="callout">
-<strong>The internal error handlers.</strong> <code>evolution/db/error.c</code> provides the family of <code>err_*</code> functions. In server (GUI) mode they do not call <code>exit()</code>; instead they set a SQLSTATE and <code>longjmp</code> back to the executor so the connection survives. System-call failures (<code>err_sys</code>, <code>err_dump</code>) set <code>58000</code> (SYSTEM_ERROR); generic fatal errors (<code>err_exit</code>, <code>err_quit</code>) set <code>EX000</code> (INTERNAL_ERROR). If you see <code>EX000</code> in a client, it indicates a condition the engine considers a bug — please report it.
+<strong>The internal error handlers.</strong> <code>evolution/db/error.c</code> provides the family of <code>err_*</code> functions. In server (GUI) mode they do not call <code>exit()</code>; instead they set a SQLSTATE and <code>longjmp</code> back to the executor so the connection survives. System-call failures (<code>err_sys</code>, <code>err_dump</code>) set <code>58000</code> (SYSTEM_ERROR); generic fatal errors (<code>err_exit</code>, <code>err_quit</code>) set <code>EX000</code> (INTERNAL_ERROR). If you see <code>EX000</code> in a client, it indicates a condition the engine considers a bug, please report it.
 </div>
 
 <h2 id="differences">A.6. Differences from PostgreSQL and the SQL standard</h2>
@@ -301,9 +301,9 @@ The macro copies the five characters of the named code and writes the trailing N
 <div class="callout">
 <strong>Notes and limitations.</strong>
 <ul>
-<li>Several codes in <code>evosql_errcodes.h</code> are <em>reserved</em> — defined for completeness and forward compatibility but not yet set anywhere in the engine. Treat the "emitted" annotations above as the practical, current behavior; the reserved codes may begin appearing in future releases.</li>
+<li>Several codes in <code>evosql_errcodes.h</code> are <em>reserved</em>, defined for completeness and forward compatibility but not yet set anywhere in the engine. Treat the "emitted" annotations above as the practical, current behavior; the reserved codes may begin appearing in future releases.</li>
 <li>The active code is stored in a single global (<code>g_err.sqlstate</code>) guarded by the executor mutex, and is cleared at the start of each statement. It reflects only the most recent error on that connection.</li>
-<li>When no specific code is set, clients see <code>42000</code> (general) or, within COPY, <code>22000</code> — not an empty string.</li>
+<li>When no specific code is set, clients see <code>42000</code> (general) or, within COPY, <code>22000</code>, not an empty string.</li>
 <li>The PostgreSQL wire protocol always includes the code in the <code>C</code> field; the EVO protocol always prefixes it as the first token of <code>ERR …</code> / <code>BATCH_ERR …</code> lines.</li>
 </ul>
 </div>

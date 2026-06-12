@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>RECLAIM — EvolutionDB 3.0</title>
+<title>RECLAIM | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>RECLAIM</h1>
-<p class="lede">RECLAIM — remove dead row versions and defragment a table's heap storage</p>
+<p class="lede">RECLAIM, remove dead row versions and defragment a table's heap storage</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -37,7 +37,7 @@
 <p>If the table has never received any data (it has no heap pages), <code>RECLAIM</code> reports that there is nothing to do and returns successfully.</p>
 
 <div class="callout">
-<p><strong>Automatic RECLAIM.</strong> EvolutionDB can run the same procedure automatically. A background path triggers <code>RECLAIM</code> for a table once its dead-tuple count crosses a threshold — more than 20% of the row count when statistics are available, or more than 50 dead tuples in absolute terms when no statistics have been gathered. Issuing <code>RECLAIM TABLE</code> manually performs exactly the same work on demand.</p>
+<p><strong>Automatic RECLAIM.</strong> EvolutionDB can run the same procedure automatically. A background path triggers <code>RECLAIM</code> for a table once its dead-tuple count crosses a threshold: more than 20% of the row count when statistics are available, or more than 50 dead tuples in absolute terms when no statistics have been gathered. Issuing <code>RECLAIM TABLE</code> manually performs exactly the same work on demand.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
@@ -50,7 +50,7 @@
 <p>Reclaim a single table after a large batch of deletes and updates:</p>
 <pre><code><span class="c-key">RECLAIM TABLE</span> orders<span class="c-com">;</span></code></pre>
 
-<p>A typical maintenance cycle — delete obsolete rows, then reclaim the space they occupied:</p>
+<p>A typical maintenance cycle: delete obsolete rows, then reclaim the space they occupied:</p>
 <pre><code><span class="c-key">DELETE FROM</span> sessions <span class="c-key">WHERE</span> last_seen <span class="c-key">&lt;</span> <span class="c-str">'2026-01-01'</span><span class="c-com">;</span>
 <span class="c-key">RECLAIM TABLE</span> sessions<span class="c-com">;</span></code></pre>
 
@@ -64,7 +64,7 @@
 <ul>
 <li>The keyword is <code>RECLAIM TABLE</code>, not <code>VACUUM</code>. EvolutionDB does not accept the <code>VACUUM</code> keyword.</li>
 <li>EvolutionDB's grammar accepts only the bare form <code>RECLAIM TABLE table_name</code>. It does not support a parenthesized option list (such as PostgreSQL's <code>(FULL, ANALYZE, VERBOSE, FREEZE)</code>), it does not accept multiple table names, and it does not accept a column list.</li>
-<li>Unlike PostgreSQL's ordinary <code>VACUUM</code>, which reclaims space lazily and rarely returns pages to the operating system, <code>RECLAIM TABLE</code> always compacts and merges heap pages and frees emptied pages — behavior closer to <code>VACUUM FULL</code>. Freezing is performed as part of the same pass rather than requiring a separate <code>FREEZE</code> option.</li>
+<li>Unlike PostgreSQL's ordinary <code>VACUUM</code>, which reclaims space lazily and rarely returns pages to the operating system, <code>RECLAIM TABLE</code> always compacts and merges heap pages and frees emptied pages, behavior closer to <code>VACUUM FULL</code>. Freezing is performed as part of the same pass rather than requiring a separate <code>FREEZE</code> option.</li>
 <li>There is no equivalent of <code>ANALYZE</code> built into <code>RECLAIM</code>; statistics collection is a separate concern.</li>
 </ul>
 

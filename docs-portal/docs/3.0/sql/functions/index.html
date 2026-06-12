@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>9. Functions &amp; Operators — EvolutionDB 3.0</title>
+<title>9. Functions &amp; Operators | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -16,12 +16,12 @@
 <main class="docs-content prose reveal">
 
 <h1>9. Functions &amp; Operators</h1>
-<p class="lede">The operators, built-in functions, conditional expressions, type coercion, and <code>NULL</code> handling that EvolutionDB 3.0 evaluates in <code>WHERE</code>, <code>SELECT</code>, <code>HAVING</code>, <code>SET</code>, <code>DEFAULT</code>, and <code>CHECK</code> — exactly as implemented by the engine's single expression evaluator.</p>
+<p class="lede">The operators, built-in functions, conditional expressions, type coercion, and <code>NULL</code> handling that EvolutionDB 3.0 evaluates in <code>WHERE</code>, <code>SELECT</code>, <code>HAVING</code>, <code>SET</code>, <code>DEFAULT</code>, and <code>CHECK</code>, exactly as implemented by the engine's single expression evaluator.</p>
 
 <p>Every scalar expression in EvolutionDB is built into an expression tree by the Bison parser and evaluated by one function, <code>expr_evaluate</code>, in <code>evolution/db/expression.c</code>. There is no separate type system threaded through the tree: each node is evaluated to a string (its rendered value), and the evaluator returns a second flag indicating whether that value is <code>NULL</code>. A companion routine, <code>expr_evaluate_num</code>, evaluates the same tree to a C <code>double</code> for arithmetic. Understanding this string-plus-NULL-flag model explains most of the type-coercion and comparison behavior described in this chapter.</p>
 
 <div class="callout">
-<p><strong>Scope of this chapter.</strong> Only functions and operators that the expression evaluator actually implements are documented here, with their real argument counts, return shapes, and edge behavior. Where EvolutionDB borrows surface syntax from MySQL or PostgreSQL but evaluates it differently — for example, integer-only <code>%</code>, a non-collating <code>LIKE</code>, or MySQL-style <code>NULL</code>-propagating <code>CONCAT</code> — the difference is called out. Functions that are parsed but only meaningful in other clauses (aggregates resolved by the query executor, window functions, set-returning <code>unnest</code> in <code>FROM</code>) are noted where they touch the evaluator.</p>
+<p><strong>Scope of this chapter.</strong> Only functions and operators that the expression evaluator actually implements are documented here, with their real argument counts, return shapes, and edge behavior. Where EvolutionDB borrows surface syntax from MySQL or PostgreSQL but evaluates it differently, for example, integer-only <code>%</code>, a non-collating <code>LIKE</code>, or MySQL-style <code>NULL</code>-propagating <code>CONCAT</code>, the difference is called out. Functions that are parsed but only meaningful in other clauses (aggregates resolved by the query executor, window functions, set-returning <code>unnest</code> in <code>FROM</code>) are noted where they touch the evaluator.</p>
 </div>
 
 <h2 id="evaluation-model">9.1. The Evaluation Model</h2>
@@ -76,7 +76,7 @@
 <pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> orders <span class="c-key">WHERE</span> total &gt;= 100 <span class="c-key">AND</span> status &lt;&gt; <span class="c-str">'cancelled'</span>;</code></pre>
 
 <div class="callout">
-<p><strong>The <code>&lt;=&gt;</code> operator.</strong> EvolutionDB parses <code>&lt;=&gt;</code> as a vector cosine-distance operator (<a href="#vector">Section 9.6.7</a>). When its operands are not vector literals it falls back to a plain equality test that returns <code>t</code>/<code>f</code> — so <code>SELECT 1 &lt;=&gt; 1</code> returns <code>t</code>. It is not MySQL's null-safe equals in the general case.</p>
+<p><strong>The <code>&lt;=&gt;</code> operator.</strong> EvolutionDB parses <code>&lt;=&gt;</code> as a vector cosine-distance operator (<a href="#vector">Section 9.6.7</a>). When its operands are not vector literals it falls back to a plain equality test that returns <code>t</code>/<code>f</code>, so <code>SELECT 1 &lt;=&gt; 1</code> returns <code>t</code>. It is not MySQL's null-safe equals in the general case.</p>
 </div>
 
 <h3 id="logical">9.2.3. Logical Operators</h3>
@@ -114,7 +114,7 @@
 
 <p><code>IS NULL</code> and <code>IS NOT NULL</code> test whether their operand is <code>NULL</code>. A column counts as null when its stored value is the engine's null marker or when the named column is not present in the row at all; any literal (integer, float, string, boolean) is never null.</p>
 
-<p><code>BETWEEN</code>, <code>NOT BETWEEN</code>, <code>IN</code>, and <code>NOT IN</code> are not evaluated as distinct node types — the parser <em>desugars</em> them into combinations of the operators above:</p>
+<p><code>BETWEEN</code>, <code>NOT BETWEEN</code>, <code>IN</code>, and <code>NOT IN</code> are not evaluated as distinct node types, the parser <em>desugars</em> them into combinations of the operators above:</p>
 
 <dl class="params">
 <dt><code>x BETWEEN a AND b</code></dt><dd>rewritten as <code>(x &gt;= a) AND (x &lt;= b)</code>.</dd>
@@ -299,7 +299,7 @@
 
 <h3 id="fulltext">9.6.6. Full-Text Match</h3>
 
-<p><code>MATCH(col) AGAINST('query')</code> tokenizes both the row's column value and the query literal and returns the count of query terms that appear in the row (used as a boolean in <code>WHERE</code> and as a relevance score in <code>ORDER BY</code>). It is a simple "any-term" match — a positive count means a match — not a ranked full-text engine.</p>
+<p><code>MATCH(col) AGAINST('query')</code> tokenizes both the row's column value and the query literal and returns the count of query terms that appear in the row (used as a boolean in <code>WHERE</code> and as a relevance score in <code>ORDER BY</code>). It is a simple "any-term" match, a positive count means a match, not a ranked full-text engine.</p>
 
 <h3 id="vector">9.6.7. Vector Distance Functions and Operators</h3>
 
@@ -368,7 +368,7 @@
 <tr><td>String functions</td><td><code>NULL</code> input generally &#8594; <code>NULL</code>.</td></tr>
 <tr><td><code>CONCAT</code></td><td>Any <code>NULL</code> argument &#8594; <code>NULL</code> (MySQL style, not PostgreSQL ignore-null).</td></tr>
 <tr><td>Most math functions</td><td><code>NULL</code> input &#8594; <code>NULL</code>; <code>MOD(a,0)</code> &#8594; <code>NULL</code>.</td></tr>
-<tr><td>Arithmetic operators (numeric path)</td><td><code>NULL</code> / non-numeric operand treated as <code>0</code> — does <em>not</em> propagate.</td></tr>
+<tr><td>Arithmetic operators (numeric path)</td><td><code>NULL</code> / non-numeric operand treated as <code>0</code>, does <em>not</em> propagate.</td></tr>
 <tr><td><code>CASE</code> branch with <code>NULL</code> condition</td><td>Treated as not matched; falls through.</td></tr>
 <tr><td><code>COALESCE</code> / <code>IFNULL</code></td><td>Return the first non-null argument.</td></tr>
 <tr><td>Array subscript out of range</td><td><code>NULL</code>.</td></tr>
@@ -386,7 +386,7 @@ String functions are byte-oriented and ASCII-only for case folding, and <code>LI
 
 <h2 id="check-constraints">9.9. Expressions in CHECK Constraints</h2>
 
-<p>A subset of the expression language can be persisted in a table's metadata for use in <code>CHECK</code> constraints. The expression is serialized to a compact reverse-Polish (postfix) token stream and re-parsed when the constraint is evaluated. The serializable node set is: column references, the four literal kinds plus <code>NULL</code>; the comparison, logical (<code>AND</code>/<code>OR</code>/<code>NOT</code>/<code>XOR</code>), and arithmetic operators; <code>IS NULL</code>/<code>IS NOT NULL</code>; <code>LIKE</code>/<code>NOT LIKE</code>; the functions <code>UPPER</code>, <code>LOWER</code>, <code>LENGTH</code>, <code>TOKEN_LENGTH</code>, <code>CONCAT</code>, <code>COALESCE</code>, the JSON arrow operators; and the session functions <code>CURRENT_USER</code>, <code>CURRENT_TIMESTAMP</code>, <code>CURRENT_DATE</code>, <code>CURRENT_TIME</code>. Node types outside this set are dropped during serialization, so a <code>CHECK</code> built from unsupported functions will not round-trip faithfully — keep <code>CHECK</code> expressions within the list above. See <a href="/3.0/ref/create-table">CREATE TABLE</a> for constraint syntax.</p>
+<p>A subset of the expression language can be persisted in a table's metadata for use in <code>CHECK</code> constraints. The expression is serialized to a compact reverse-Polish (postfix) token stream and re-parsed when the constraint is evaluated. The serializable node set is: column references, the four literal kinds plus <code>NULL</code>; the comparison, logical (<code>AND</code>/<code>OR</code>/<code>NOT</code>/<code>XOR</code>), and arithmetic operators; <code>IS NULL</code>/<code>IS NOT NULL</code>; <code>LIKE</code>/<code>NOT LIKE</code>; the functions <code>UPPER</code>, <code>LOWER</code>, <code>LENGTH</code>, <code>TOKEN_LENGTH</code>, <code>CONCAT</code>, <code>COALESCE</code>, the JSON arrow operators; and the session functions <code>CURRENT_USER</code>, <code>CURRENT_TIMESTAMP</code>, <code>CURRENT_DATE</code>, <code>CURRENT_TIME</code>. Node types outside this set are dropped during serialization, so a <code>CHECK</code> built from unsupported functions will not round-trip faithfully, keep <code>CHECK</code> expressions within the list above. See <a href="/3.0/ref/create-table">CREATE TABLE</a> for constraint syntax.</p>
 
 <pre><code><span class="c-key">CREATE TABLE</span> accounts (
     id       <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,

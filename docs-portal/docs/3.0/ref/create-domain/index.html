@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE DOMAIN — EvolutionDB 3.0</title>
+<title>CREATE DOMAIN | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -33,11 +33,11 @@ EvolutionDB's system catalog so that it can be referred to by name.</p>
 shared <em>constraints</em> B+ tree under the system namespace (<code>table_id = 0</code>) with a
 constraint type of <code>'D'</code>. The catalog row packs three fields into a single
 definition string of the form <code>"type_val|not_null|check_serialized"</code>: the numeric
-type code of the base type, a <code>0</code>/<code>1</code> flag for <code>NOT NULL</code>, and — when a
-<code>CHECK</code> clause is given — the serialized check expression. The domain name is unique
+type code of the base type, a <code>0</code>/<code>1</code> flag for <code>NOT NULL</code>, and, when a
+<code>CHECK</code> clause is given, the serialized check expression. The domain name is unique
 within that system namespace; creating a domain whose name already exists fails with
 SQLSTATE <code>42710</code> (<em>duplicate object</em>).</p>
-<p>The base type is any type accepted by EvolutionDB's <code>data_type</code> grammar — for example
+<p>The base type is any type accepted by EvolutionDB's <code>data_type</code> grammar, for example
 <code>INTEGER</code>, <code>BIGINT</code>, <code>DECIMAL(p,s)</code>, <code>VARCHAR(n)</code>, <code>CHAR(n)</code>,
 <code>TEXT</code>, <code>BOOLEAN</code>, <code>DATE</code>, <code>TIMESTAMP</code>, <code>UUID</code>, <code>JSON</code>,
 <code>ENUM(...)</code>, array types written <code>type[]</code>, and so on.</p>
@@ -47,7 +47,7 @@ SQLSTATE <code>42710</code> (<em>duplicate object</em>).</p>
 have limited effect in the current release, and you should not rely on them:</p>
 <ul>
 <li><strong><code>DEFAULT default_expr</code> is parsed but not stored.</strong> The grammar accepts the
-clause, but the value is discarded — the catalog row records only the base type, the
+clause, but the value is discarded: the catalog row records only the base type, the
 <code>NOT NULL</code> flag, and the <code>CHECK</code> expression. No default is persisted with the domain.</li>
 <li><strong>Domains are recorded, not yet enforced as column types.</strong> A domain is written to the
 catalog, but the engine does not currently resolve a domain name when it appears as a column
@@ -107,7 +107,7 @@ deliberately narrow subset:</p>
 <li>EvolutionDB accepts <code>DEFAULT</code>, a single <code>NOT NULL</code>, and a single unnamed
 <code>CHECK (expression)</code>. The standard and PostgreSQL also allow named constraints
 (<code>CONSTRAINT name CHECK ...</code>), multiple constraints, <code>NULL</code> (explicitly nullable),
-and <code>COLLATE</code> — none of these are part of EvolutionDB's grammar.</li>
+and <code>COLLATE</code>, none of these are part of EvolutionDB's grammar.</li>
 <li>Unlike PostgreSQL, EvolutionDB does not require or accept a schema-qualified domain name in
 this command; the domain is registered in a single system namespace.</li>
 <li><code>DEFAULT</code> is syntactically accepted but, in the current release, the default value is

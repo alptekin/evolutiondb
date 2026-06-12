@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE GRAPH STORE — EvolutionDB 3.0</title>
+<title>CREATE GRAPH STORE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -26,10 +26,10 @@
 <p><code>CREATE GRAPH STORE</code> registers a new knowledge-graph store under <code>store_name</code> and provisions the two relational tables that hold its data. It is part of EvolutionDB's bitemporal knowledge-graph surface (Feature&nbsp;224), alongside <code>GRAPH UPSERT NODE</code>, <code>GRAPH UPSERT EDGE</code>, and <code>GRAPH NEIGHBORS</code>.</p>
 <p>For a store named <code>store_name</code>, the command creates:</p>
 <ul>
-<li><strong><code>kg_&lt;store_name&gt;_nodes</code></strong> — columns <code>id VARCHAR(255) PRIMARY KEY NOT NULL</code>, <code>type VARCHAR(64)</code>, <code>props VARCHAR(8000)</code> (JSON-shaped), and <code>valid_from TIMESTAMP NOT NULL</code>.</li>
-<li><strong><code>kg_&lt;store_name&gt;_edges</code></strong> — columns <code>id BIGINT PRIMARY KEY AUTO_INCREMENT</code>, <code>src VARCHAR(255) NOT NULL</code>, <code>rel VARCHAR(128) NOT NULL</code>, <code>dst VARCHAR(255) NOT NULL</code>, <code>props VARCHAR(8000)</code>, <code>valid_from TIMESTAMP NOT NULL</code>, and <code>invalid_at TIMESTAMP</code> (where <code>NULL</code> marks a currently-active edge).</li>
+<li><strong><code>kg_&lt;store_name&gt;_nodes</code></strong>, columns <code>id VARCHAR(255) PRIMARY KEY NOT NULL</code>, <code>type VARCHAR(64)</code>, <code>props VARCHAR(8000)</code> (JSON-shaped), and <code>valid_from TIMESTAMP NOT NULL</code>.</li>
+<li><strong><code>kg_&lt;store_name&gt;_edges</code></strong>, columns <code>id BIGINT PRIMARY KEY AUTO_INCREMENT</code>, <code>src VARCHAR(255) NOT NULL</code>, <code>rel VARCHAR(128) NOT NULL</code>, <code>dst VARCHAR(255) NOT NULL</code>, <code>props VARCHAR(8000)</code>, <code>valid_from TIMESTAMP NOT NULL</code>, and <code>invalid_at TIMESTAMP</code> (where <code>NULL</code> marks a currently-active edge).</li>
 </ul>
-<p>Both tables are created in the current schema (the schema resolved from the current database/schema context). The store itself is recorded as one row in the system catalog (<code>CAT_SYS_GRAPH_STORES</code>), holding the store name plus the table ids of its nodes and edges tables. The store name is global to the catalog — it is not schema-qualified.</p>
+<p>Both tables are created in the current schema (the schema resolved from the current database/schema context). The store itself is recorded as one row in the system catalog (<code>CAT_SYS_GRAPH_STORES</code>), holding the store name plus the table ids of its nodes and edges tables. The store name is global to the catalog, it is not schema-qualified.</p>
 <p>The <code>invalid_at</code> column on edges is what makes the store <em>bitemporal</em>: an <code>UPSERT EDGE</code> on an existing <code>(src, rel, dst)</code> triple stamps the prior live row's <code>invalid_at</code> to <code>NOW()</code> and appends a fresh row, so a <code>GRAPH NEIGHBORS … AS OF</code> query can reconstruct the graph as it stood at any past timestamp.</p>
 <div class="callout">
 <p><strong>Idempotency.</strong> Without the optional clause, creating a store whose name already exists raises an error (SQLSTATE <code>42710</code>, <em>duplicate object</em>). With the clause present, an already-existing store is left untouched and the command succeeds silently.</p>
@@ -76,7 +76,7 @@
 <span class="c-key">DROP GRAPH STORE</span> <span class="c-key">IF EXISTS</span> kb;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE GRAPH STORE</code> is an EvolutionDB extension. There is no such statement in the SQL standard (SQL:2016), and PostgreSQL has no <code>CREATE GRAPH STORE</code> command — graph workloads on PostgreSQL are handled by external extensions (for example Apache AGE's <code>create_graph()</code> function), not by core DDL. EvolutionDB instead exposes a first-class, fixed-shape store: the node and edge schemas are defined by the engine and cannot be customized at creation time, and a store has exactly one nodes table and one edges table.</p>
+<p><code>CREATE GRAPH STORE</code> is an EvolutionDB extension. There is no such statement in the SQL standard (SQL:2016), and PostgreSQL has no <code>CREATE GRAPH STORE</code> command, graph workloads on PostgreSQL are handled by external extensions (for example Apache AGE's <code>create_graph()</code> function), not by core DDL. EvolutionDB instead exposes a first-class, fixed-shape store: the node and edge schemas are defined by the engine and cannot be customized at creation time, and a store has exactly one nodes table and one edges table.</p>
 <p>The optional clause is spelled <code>IF EXISTS</code> (not <code>IF NOT EXISTS</code>) but carries if-not-exists semantics; this is specific to the graph-store and entity-store grammar and is not how the SQL standard or PostgreSQL spell conditional <code>CREATE</code>.</p>
 <p>The model is bitemporal in the spirit of Zep Graphiti rather than the SQL standard's system-versioned tables: edges are never deleted on update but are closed by stamping <code>invalid_at</code>, enabling point-in-time <code>AS OF</code> reads. EvolutionDB does not implement SQL standard <code>FOR SYSTEM_TIME</code> syntax for these stores.</p>
 

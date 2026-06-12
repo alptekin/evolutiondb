@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE SUBSCRIPTION — EvolutionDB 3.0</title>
+<title>CREATE SUBSCRIPTION | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -40,7 +40,7 @@
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>IF NOT EXISTS</dt>
-<dd>Do nothing (rather than raising an error) if a subscription with the same name already exists. Note that this does not guarantee the existing subscription is bound to the same channel — it only suppresses the duplicate-name error. The phrase is recognized as a single <code>NOT EXISTS</code> token by the lexer, so the spelling is fixed.</dd>
+<dd>Do nothing (rather than raising an error) if a subscription with the same name already exists. Note that this does not guarantee the existing subscription is bound to the same channel, it only suppresses the duplicate-name error. The phrase is recognized as a single <code>NOT EXISTS</code> token by the lexer, so the spelling is fixed.</dd>
 
 <dt>subscription_name</dt>
 <dd>The name of the new subscription. The name must be unique among subscriptions; attempting to create a duplicate without <code>IF NOT EXISTS</code> raises SQLSTATE <code>42710</code> (<em>duplicate object</em>). The name is also used to derive the backing table name <code>sub_&lt;subscription_name&gt;</code>.</dd>
@@ -73,7 +73,7 @@
 
 <h2 id="compatibility">Compatibility</h2>
 <p><code>CREATE SUBSCRIPTION</code> is not part of the SQL standard.</p>
-<p>PostgreSQL has a <code>CREATE SUBSCRIPTION</code> statement, but it serves an entirely different purpose: it is part of logical replication and subscribes to a <em>publication</em> on a remote server via a <code>CONNECTION</code> string. EvolutionDB's command shares only the keyword. Here it is a local, single-server feature that layers durability onto <code>LISTEN</code>/<code>NOTIFY</code> — there is no remote connection, no publication, and no replication slot. The PostgreSQL <code>CONNECTION</code>, <code>PUBLICATION</code>, and <code>WITH</code> options are not accepted by EvolutionDB's grammar.</p>
+<p>PostgreSQL has a <code>CREATE SUBSCRIPTION</code> statement, but it serves an entirely different purpose: it is part of logical replication and subscribes to a <em>publication</em> on a remote server via a <code>CONNECTION</code> string. EvolutionDB's command shares only the keyword. Here it is a local, single-server feature that layers durability onto <code>LISTEN</code>/<code>NOTIFY</code>: there is no remote connection, no publication, and no replication slot. The PostgreSQL <code>CONNECTION</code>, <code>PUBLICATION</code>, and <code>WITH</code> options are not accepted by EvolutionDB's grammar.</p>
 <p>The companion verbs <code>RESUME SUBSCRIPTION</code> and <code>ACK SUBSCRIPTION ... UPTO</code>, used to drain and acknowledge the mailbox, are EvolutionDB extensions with no PostgreSQL equivalent.</p>
 
 <h2 id="see-also">See Also</h2>

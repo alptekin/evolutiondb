@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>16. Document, Graph &amp; Log Stores — EvolutionDB 3.0</title>
+<title>16. Document, Graph &amp; Log Stores | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>16. Document, Graph &amp; Log Stores</h1>
-<p class="lede">EvolutionDB exposes four purpose-built stores — document, graph, message-log, and checkpoint — each a thin verb surface over an ordinary engine table, so MVCC visibility, row-level security, and the standard error path all carry through unchanged.</p>
+<p class="lede">EvolutionDB exposes four purpose-built stores, document, graph, message-log, and checkpoint, each a thin verb surface over an ordinary engine table, so MVCC visibility, row-level security, and the standard error path all carry through unchanged.</p>
 
 <h2 id="overview">16.1. Overview</h2>
 <p>The stores described in this chapter are not separate storage engines. Each one is a small layer of <em>staging and wiring</em> on top of the same SELECT / INSERT / UPDATE / DELETE machinery that powers ordinary SQL. When you create a store, EvolutionDB creates one or more regular backing tables in the current schema, with a fixed column layout, and registers the store in the system catalog. The store-specific verbs (<code>DOCUMENT WRITE</code>, <code>GRAPH UPSERT NODE</code>, <code>LOG APPEND</code>, and so on) translate their arguments into the same internal request structures a hand-written DML statement would build, then call the regular processor.</p>
@@ -48,10 +48,10 @@
 
 <dl class="params">
 <dt><code>id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>, primary key.</dd>
-<dt><code>content</code></dt><dd><code>VARCHAR(8000)</code> — the document body.</dd>
-<dt><code>meta</code></dt><dd><code>VARCHAR(8000)</code> — a JSON-shaped metadata string; may be <code>NULL</code>.</dd>
-<dt><code>embedding</code></dt><dd><code>VECTOR(N)</code> — created <strong>only</strong> when <code>embedding_dim &gt; 0</code>.</dd>
-<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, <code>NOT NULL</code> — set to the UTC time of each write.</dd>
+<dt><code>content</code></dt><dd><code>VARCHAR(8000)</code>, the document body.</dd>
+<dt><code>meta</code></dt><dd><code>VARCHAR(8000)</code>, a JSON-shaped metadata string; may be <code>NULL</code>.</dd>
+<dt><code>embedding</code></dt><dd><code>VECTOR(N)</code>, created <strong>only</strong> when <code>embedding_dim &gt; 0</code>.</dd>
+<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, <code>NOT NULL</code>, set to the UTC time of each write.</dd>
 </dl>
 
 <p>The store also records a <em>distance kind</em> chosen at creation time, used later to rank vector searches. The accepted values are case-insensitive:</p>
@@ -96,11 +96,11 @@
     <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
 
 <div class="callout">
-<strong>Note — client-side ordering.</strong> In this release <code>DOCUMENT SEARCH</code> emits the <code>score</code> column but does not apply a server-side <code>ORDER BY</code> on it; the caller is expected to sort on the score column client-side. A server-side <code>ORDER BY</code> on the score expression is planned. The <code>LIMIT</code>, if any, therefore caps the candidate rows that are scored, not the top-K by distance.
+<strong>Note, client-side ordering.</strong> In this release <code>DOCUMENT SEARCH</code> emits the <code>score</code> column but does not apply a server-side <code>ORDER BY</code> on it; the caller is expected to sort on the score column client-side. A server-side <code>ORDER BY</code> on the score expression is planned. The <code>LIMIT</code>, if any, therefore caps the candidate rows that are scored, not the top-K by distance.
 </div>
 
 <h3 id="document-delete">16.2.4. Deleting documents</h3>
-<p><code>DOCUMENT DELETE</code> routes through <a href="/3.0/ref/delete/">DELETE</a> and <strong>requires</strong> a filter argument — omitting it raises SQLSTATE <code>42601</code>. This is a deliberate guardrail: to wipe an entire store you must explicitly pass the wildcard <code>'{}'</code>, which the engine expands into a <code>1 = 1</code> sentinel predicate so the delete path can distinguish "delete all (intentional)" from "missing WHERE clause".</p>
+<p><code>DOCUMENT DELETE</code> routes through <a href="/3.0/ref/delete/">DELETE</a> and <strong>requires</strong> a filter argument, omitting it raises SQLSTATE <code>42601</code>. This is a deliberate guardrail: to wipe an entire store you must explicitly pass the wildcard <code>'{}'</code>, which the engine expands into a <code>1 = 1</code> sentinel predicate so the delete path can distinguish "delete all (intentional)" from "missing WHERE clause".</p>
 
 <pre><code><span class="c-com">-- delete one matching document</span>
 <span class="c-key">DOCUMENT DELETE FROM</span> articles <span class="c-key">WHERE</span> <span class="c-str">'{"lang":"de"}'</span>;
@@ -131,7 +131,7 @@
 <h3 id="graph-upsert-edge">16.3.2. Upserting edges</h3>
 <p><code>GRAPH UPSERT EDGE</code> records a directed, typed relationship as a bitemporal triple <code>(src, rel, dst)</code>. It performs two steps:</p>
 <ol>
-<li>It runs an <a href="/3.0/ref/update/">UPDATE</a> that stamps <code>invalid_at = NOW()</code> on any <em>still-live</em> row matching the same <code>(src, rel, dst)</code> — that is, rows where <code>invalid_at IS NULL</code>. This closes the prior version of the fact.</li>
+<li>It runs an <a href="/3.0/ref/update/">UPDATE</a> that stamps <code>invalid_at = NOW()</code> on any <em>still-live</em> row matching the same <code>(src, rel, dst)</code>, that is, rows where <code>invalid_at IS NULL</code>. This closes the prior version of the fact.</li>
 <li>It then <a href="/3.0/ref/insert/">INSERT</a>s a fresh edge row with <code>valid_from = NOW()</code> and <code>invalid_at = NULL</code>. The edge <code>id</code> is auto-incremented and is not user-supplied.</li>
 </ol>
 
@@ -159,7 +159,7 @@
     <span class="c-key">AS OF</span> <span class="c-str">'2024-01-01 00:00:00'</span>;</code></pre>
 
 <div class="callout">
-<strong>Note — depth is single-hop in this release.</strong> The grammar accepts a <code>DEPTH N</code> clause (default 1), but the implementation currently executes only depth-1 traversal as a single <code>SELECT</code>. Multi-hop BFS expansion is planned; until then, depth-2 traversals are built by issuing two <code>NEIGHBORS</code> calls and unioning the results client-side.
+<strong>Note, depth is single-hop in this release.</strong> The grammar accepts a <code>DEPTH N</code> clause (default 1), but the implementation currently executes only depth-1 traversal as a single <code>SELECT</code>. Multi-hop BFS expansion is planned; until then, depth-2 traversals are built by issuing two <code>NEIGHBORS</code> calls and unioning the results client-side.
 </div>
 
 <p>A graph store and both of its backing tables are removed with <code>DROP GRAPH STORE</code>.</p>
@@ -168,12 +168,12 @@
 <p>A message log is an <strong>append-only chat-history</strong> structure created by <a href="/3.0/ref/create-message-log/">CREATE MESSAGE LOG</a>. It is backed by a table named <code>ml_&lt;name&gt;</code>:</p>
 
 <dl class="params">
-<dt><code>seq</code></dt><dd><code>BIGINT</code> PRIMARY KEY AUTO_INCREMENT — the monotonic sequence number.</dd>
+<dt><code>seq</code></dt><dd><code>BIGINT</code> PRIMARY KEY AUTO_INCREMENT, the monotonic sequence number.</dd>
 <dt><code>session_id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>.</dd>
-<dt><code>role</code></dt><dd><code>VARCHAR(64)</code> — for example <code>user</code> or <code>assistant</code>.</dd>
+<dt><code>role</code></dt><dd><code>VARCHAR(64)</code>, for example <code>user</code> or <code>assistant</code>.</dd>
 <dt><code>content</code></dt><dd><code>VARCHAR(8000)</code>.</dd>
-<dt><code>meta</code></dt><dd><code>VARCHAR(8000)</code> — JSON-shaped, may be <code>NULL</code>.</dd>
-<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, <code>NOT NULL</code> — UTC write time.</dd>
+<dt><code>meta</code></dt><dd><code>VARCHAR(8000)</code>, JSON-shaped, may be <code>NULL</code>.</dd>
+<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, <code>NOT NULL</code>, UTC write time.</dd>
 </dl>
 
 <p>The store also records an optional <code>ttl_days</code> retention hint at creation time. The <code>content</code> column is intentionally <code>VARCHAR(8000)</code> rather than an unbounded type, which keeps each row inline-friendly for the slotted-page format; callers needing larger payloads are expected to shard the content on the client side.</p>
@@ -205,7 +205,7 @@
 <pre><code><span class="c-key">LOG COUNT FROM</span> chat <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span>;</code></pre>
 
 <div class="callout">
-<strong>Note — append-only by convention.</strong> The log is "append-only" in the sense that the verbs only add (<code>LOG APPEND</code>) or bulk-prune (<code>LOG TRUNCATE</code>); there is no in-place update verb. Because the backing table is a regular table, the <code>ttl_days</code> retention hint is recorded but is not enforced automatically by these verbs — pruning is performed explicitly via <code>LOG TRUNCATE</code>.
+<strong>Note, append-only by convention.</strong> The log is "append-only" in the sense that the verbs only add (<code>LOG APPEND</code>) or bulk-prune (<code>LOG TRUNCATE</code>); there is no in-place update verb. Because the backing table is a regular table, the <code>ttl_days</code> retention hint is recorded but is not enforced automatically by these verbs, pruning is performed explicitly via <code>LOG TRUNCATE</code>.
 </div>
 
 <h2 id="checkpoint-store">16.5. Checkpoint Store</h2>
@@ -213,19 +213,19 @@
 
 <dl class="params">
 <dt><code>thread_id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>.</dd>
-<dt><code>checkpoint_ns</code></dt><dd><code>VARCHAR(255)</code> — namespace (nullable; an empty string maps to NULL in this engine).</dd>
+<dt><code>checkpoint_ns</code></dt><dd><code>VARCHAR(255)</code>, namespace (nullable; an empty string maps to NULL in this engine).</dd>
 <dt><code>checkpoint_id</code></dt><dd><code>VARCHAR(255)</code>, <code>NOT NULL</code>, primary key.</dd>
 <dt><code>parent_id</code></dt><dd><code>VARCHAR(255)</code>.</dd>
-<dt><code>ck_values</code></dt><dd><code>JSON</code> — the serialized checkpoint state. Named <code>ck_values</code> rather than <code>values</code> to avoid the SQL reserved word.</dd>
+<dt><code>ck_values</code></dt><dd><code>JSON</code>, the serialized checkpoint state. Named <code>ck_values</code> rather than <code>values</code> to avoid the SQL reserved word.</dd>
 <dt><code>metadata</code></dt><dd><code>JSON</code>.</dd>
 <dt><code>parent_config</code></dt><dd><code>JSON</code>.</dd>
-<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code> — set by the engine on each PUT.</dd>
+<dt><code>created_at</code></dt><dd><code>TIMESTAMP</code>, set by the engine on each PUT.</dd>
 </dl>
 
 <p><code>CREATE CHECKPOINT STORE</code> accepts an optional <code>WITH (retention = '...')</code> clause; the retention string is recorded with the store. <code>DROP CHECKPOINT STORE</code> accepts <code>CASCADE</code>; in this release the drop always removes the backing table along with the registry entry.</p>
 
 <h3 id="checkpoint-put">16.5.1. Writing checkpoints (PUT)</h3>
-<p><code>CHECKPOINT PUT</code> writes a single eight-column row through <a href="/3.0/ref/insert/">INSERT</a>. Seven fields are user-supplied — <code>thread_id</code>, <code>checkpoint_ns</code>, <code>checkpoint_id</code>, <code>parent_id</code>, <code>ck_values</code>, <code>metadata</code>, <code>parent_config</code> — and the eighth, <code>created_at</code>, is stamped by the engine. Any field may be sent as NULL. A <code>PUT WRITES</code> variant exists; in this release the distinction between PUT and PUT WRITES is handled at the application level.</p>
+<p><code>CHECKPOINT PUT</code> writes a single eight-column row through <a href="/3.0/ref/insert/">INSERT</a>. Seven fields are user-supplied, <code>thread_id</code>, <code>checkpoint_ns</code>, <code>checkpoint_id</code>, <code>parent_id</code>, <code>ck_values</code>, <code>metadata</code>, <code>parent_config</code>, and the eighth, <code>created_at</code>, is stamped by the engine. Any field may be sent as NULL. A <code>PUT WRITES</code> variant exists; in this release the distinction between PUT and PUT WRITES is handled at the application level.</p>
 
 <pre><code><span class="c-key">CHECKPOINT PUT INTO</span> agent_state
     <span class="c-key">VALUES</span> (<span class="c-str">'thread-1'</span>, <span class="c-str">''</span>, <span class="c-str">'ckpt-001'</span>, <span class="c-key">NULL</span>,
@@ -250,7 +250,7 @@
     <span class="c-key">LIMIT</span> <span class="c-str">50</span>;</code></pre>
 
 <div class="callout">
-<strong>Note — direct table access.</strong> The DDL surface (<code>CREATE</code> / <code>DROP CHECKPOINT STORE</code>) and the PUT / GET / LIST verbs all operate on the same <code>ck_&lt;name&gt;</code> table. The backing table is deliberately named with a <code>ck_</code> prefix (rather than a leading-underscore form) because the lexer's identifier pattern is <code>[A-Za-z][A-Za-z0-9_]*</code> and does not permit a leading underscore — which also means you can address the table directly with plain <a href="/3.0/ref/insert/">INSERT</a> and <a href="/3.0/ref/select/">SELECT</a>. See also the <a href="/3.0/ref/checkpoint/">CHECKPOINT</a> reference page.
+<strong>Note, direct table access.</strong> The DDL surface (<code>CREATE</code> / <code>DROP CHECKPOINT STORE</code>) and the PUT / GET / LIST verbs all operate on the same <code>ck_&lt;name&gt;</code> table. The backing table is deliberately named with a <code>ck_</code> prefix (rather than a leading-underscore form) because the lexer's identifier pattern is <code>[A-Za-z][A-Za-z0-9_]*</code> and does not permit a leading underscore, which also means you can address the table directly with plain <a href="/3.0/ref/insert/">INSERT</a> and <a href="/3.0/ref/select/">SELECT</a>. See also the <a href="/3.0/ref/checkpoint/">CHECKPOINT</a> reference page.
 </div>
 
 <h2 id="errors">16.6. Common Errors</h2>

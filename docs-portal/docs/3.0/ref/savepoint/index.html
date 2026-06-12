@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>SAVEPOINT — EvolutionDB 3.0</title>
+<title>SAVEPOINT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -23,10 +23,10 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>SAVEPOINT</code> establishes a named marker inside the currently open transaction. Once a savepoint is set, you can use <code>ROLLBACK TO SAVEPOINT</code> to undo every change made after the savepoint was created — leaving the savepoint itself and any work done before it intact — or <code>RELEASE SAVEPOINT</code> to discard the marker and merge its work into the surrounding transaction.</p>
+<p><code>SAVEPOINT</code> establishes a named marker inside the currently open transaction. Once a savepoint is set, you can use <code>ROLLBACK TO SAVEPOINT</code> to undo every change made after the savepoint was created, leaving the savepoint itself and any work done before it intact, or <code>RELEASE SAVEPOINT</code> to discard the marker and merge its work into the surrounding transaction.</p>
 <p>In EvolutionDB, transaction control statements are interpreted by the protocol adaptor rather than by the SQL grammar parser. The adaptor maintains a per-session <em>undo log</em> of the changes made since the transaction began. Creating a savepoint records the current length of that undo log; rolling back to the savepoint replays the undo entries in reverse until the log is back at the recorded length. This means a savepoint is essentially a saved position in the undo stack, not a nested sub-transaction with its own transaction id.</p>
 <p>A savepoint can only be defined while a transaction is open. If no transaction is in progress, the command fails with SQLSTATE <code>25P01</code> ("SAVEPOINT can only be used in a transaction"). A savepoint name is required; issuing <code>SAVEPOINT</code> with no name fails with SQLSTATE <code>42601</code>.</p>
-<p>If you create a savepoint with the same name as an existing savepoint in the current transaction, EvolutionDB <strong>overwrites</strong> the existing one in place, re-pointing it at the current position in the undo log. (See <a href="#compatibility">Compatibility</a> — this differs from the SQL standard and PostgreSQL, which keep both and shadow the older one.)</p>
+<p>If you create a savepoint with the same name as an existing savepoint in the current transaction, EvolutionDB <strong>overwrites</strong> the existing one in place, re-pointing it at the current position in the undo log. (See <a href="#compatibility">Compatibility</a>: this differs from the SQL standard and PostgreSQL, which keep both and shadow the older one.)</p>
 <p>Savepoint names are compared case-insensitively and are truncated to 127 characters. A single transaction can hold up to 64 active savepoints; attempting to create more fails with SQLSTATE <code>53000</code> ("too many savepoints").</p>
 
 <div class="callout">

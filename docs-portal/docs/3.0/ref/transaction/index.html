@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>BEGIN / COMMIT / ROLLBACK — EvolutionDB 3.0</title>
+<title>BEGIN / COMMIT / ROLLBACK | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -85,8 +85,8 @@ back and the command reports <code>ROLLBACK</code>.</p>
 <h3 id="savepoints">Savepoints</h3>
 <p>Within an open transaction you may set named savepoints. <code>SAVEPOINT name</code>
 marks the current position in the undo log. <code>ROLLBACK TO [SAVEPOINT] name</code>
-replays the undo log back to that mark — undoing everything done since the savepoint while
-leaving earlier work and the transaction itself intact — and clears the aborted state so
+replays the undo log back to that mark, undoing everything done since the savepoint while
+leaving earlier work and the transaction itself intact, and clears the aborted state so
 the transaction can continue. <code>RELEASE [SAVEPOINT] name</code> forgets the savepoint
 (and all newer ones) without undoing any work. Defining a savepoint with the name of an
 existing one overwrites it. Savepoint commands outside a transaction fail with SQLSTATE
@@ -179,7 +179,7 @@ accepted and behave identically. <code>END</code> is accepted as a synonym for
 <li>Optional noise words PostgreSQL allows on these statements (<code>WORK</code>,
 <code>TRANSACTION</code>, <code>AND CHAIN</code>, etc.) are not parsed as distinct clauses.
 EvolutionDB matches the leading keyword and ignores any trailing text, so writing
-<code>COMMIT WORK</code> behaves the same as <code>COMMIT</code> — but the extra words have
+<code>COMMIT WORK</code> behaves the same as <code>COMMIT</code>, but the extra words have
 no effect and <code>AND CHAIN</code> does not start a new transaction.</li>
 <li>The transaction characteristics that PostgreSQL permits on the <code>BEGIN</code> line
 (<code>ISOLATION LEVEL ...</code>, <code>READ ONLY</code>/<code>READ WRITE</code>,

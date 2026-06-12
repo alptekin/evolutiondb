@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>ALTER TABLE — EvolutionDB 3.0</title>
+<title>ALTER TABLE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -16,7 +16,7 @@
 <main class="docs-content prose reveal">
 
 <h1>ALTER TABLE</h1>
-<p class="lede">Change the definition of an existing table — add, drop, rename, or retype columns; add, drop, rename, enable, disable, or validate constraints; toggle row-level security; and set or drop a TTL column.</p>
+<p class="lede">Change the definition of an existing table: add, drop, rename, or retype columns; add, drop, rename, enable, disable, or validate constraints; toggle row-level security; and set or drop a TTL column.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -64,7 +64,7 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>ALTER TABLE</code> changes the definition of an existing table. Each statement performs exactly one action — EvolutionDB does <em>not</em> accept a comma-separated list of actions in a single <code>ALTER TABLE</code> command. Issue separate statements to apply several changes.</p>
+<p><code>ALTER TABLE</code> changes the definition of an existing table. Each statement performs exactly one action, EvolutionDB does <em>not</em> accept a comma-separated list of actions in a single <code>ALTER TABLE</code> command. Issue separate statements to apply several changes.</p>
 
 <p>When the named table does not exist, the command fails with <code>relation "table_name" does not exist</code> (SQLSTATE <code>42P01</code>). All actions operate against the system catalog, which stores tables, columns, and constraints in B+ trees.</p>
 
@@ -82,7 +82,7 @@
 <dt>table_name</dt>
 <dd>The name of the existing table to alter. Resolved through the current database and schema.</dd>
 
-<dt>ADD COLUMN <code>column_name</code> <code>data_type</code> [ <code>column_attribute</code> ... ]</dt>
+<dt>ADD COLUMN <code>column_name</code> <code>data_type</code> [ <code>column_attribute</code>.. ]</dt>
 <dd>Appends a new column to the table. The column is added at the end unless a position clause is supplied. Fails with <code>42701</code> if a column of that name already exists, and with <code>54011</code> if the table already has the maximum number of columns. Supported attributes are the same as in <code>CREATE TABLE</code>, including <code>NOT NULL</code>, <code>NULL</code>, <code>DEFAULT</code> (literal, <code>CURRENT_TIMESTAMP</code>, <code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code>, or an expression), <code>UNIQUE</code>, <code>AUTO_INCREMENT</code> / <code>IDENTITY</code>, <code>CHECK (...)</code>, <code>COMMENT</code>, and <code>GENERATED ALWAYS AS (...) STORED|VIRTUAL</code>. Note: a column added this way is never made part of the primary key. If the column is <code>NOT NULL</code> with no <code>DEFAULT</code> and the table already holds rows, the command fails with <code>23502</code> because existing rows would receive a NULL.</dd>
 
 <dt>FIRST | AFTER <code>existing_column</code></dt>
@@ -94,22 +94,22 @@
 <dt>RENAME COLUMN <code>old_column</code> TO <code>new_column</code> &nbsp;/&nbsp; RENAME <code>old_column</code> TO <code>new_column</code></dt>
 <dd>Renames a column. The <code>COLUMN</code> keyword is optional.</dd>
 
-<dt>MODIFY [COLUMN] <code>column_name</code> <code>data_type</code> [ <code>column_attribute</code> ... ]</dt>
+<dt>MODIFY [COLUMN] <code>column_name</code> <code>data_type</code> [ <code>column_attribute</code>.. ]</dt>
 <dd>Changes the type and/or attributes of an existing column. Fails with <code>42703</code> if the column does not exist, with <code>2BP01</code> if the column is part of the primary key and its type would change, and with <code>42804</code> if the old and new types are not automatically convertible. When the new definition adds <code>NOT NULL</code> to a column that was previously nullable, the table is scanned and the command fails with <code>23502</code> if any existing row holds a NULL in that column.</dd>
 
-<dt>CHANGE [COLUMN] <code>old_column</code> <code>new_column</code> <code>data_type</code> [ <code>column_attribute</code> ... ]</dt>
+<dt>CHANGE [COLUMN] <code>old_column</code> <code>new_column</code> <code>data_type</code> [ <code>column_attribute</code>.. ]</dt>
 <dd>MySQL-style combined rename plus retype: renames <code>old_column</code> to <code>new_column</code> (when the names differ) and then applies the new type and attributes, with the same validations as <code>MODIFY</code>. A position clause is honored.</dd>
 
 <dt>ADD CONSTRAINT <code>constraint_name</code> CHECK ( <code>expression</code> )</dt>
 <dd>Adds a named <code>CHECK</code> constraint. Every existing row is evaluated against <code>expression</code>; if any row fails, the command aborts (<code>23514</code>) and reports the offending row number. Fails with <code>42710</code> if a constraint of the same name already exists.</dd>
 
-<dt>ADD CONSTRAINT <code>constraint_name</code> UNIQUE ( <code>column</code> [, ...] )</dt>
+<dt>ADD CONSTRAINT <code>constraint_name</code> UNIQUE ( <code>column</code> [..] )</dt>
 <dd>Adds a named <code>UNIQUE</code> constraint over one or more columns. Fails with <code>42710</code> on a duplicate constraint name.</dd>
 
-<dt>ADD CONSTRAINT <code>constraint_name</code> PRIMARY KEY ( <code>column</code> [, ...] )</dt>
+<dt>ADD CONSTRAINT <code>constraint_name</code> PRIMARY KEY ( <code>column</code> [..] )</dt>
 <dd>Adds a primary key over the listed columns. Fails with <code>42710</code> if the table already has a primary key, with <code>42703</code> if a named column does not exist, with the not-null violation code if any key column contains NULLs, and with the unique violation code if the existing rows contain duplicate key values.</dd>
 
-<dt>ADD CONSTRAINT <code>constraint_name</code> FOREIGN KEY ( <code>column</code> [, ...] ) REFERENCES <code>ref_table</code> ( <code>ref_column</code> [, ...] ) [ <code>referential_action</code> ... ]</dt>
+<dt>ADD CONSTRAINT <code>constraint_name</code> FOREIGN KEY ( <code>column</code> [..] ) REFERENCES <code>ref_table</code> ( <code>ref_column</code> [..] ) [ <code>referential_action</code>.. ]</dt>
 <dd>Adds a foreign key referencing <code>ref_table</code>. Fails with <code>42P01</code> if the referenced table does not exist and with <code>42710</code> on a duplicate constraint name.</dd>
 
 <dt><code>referential_action</code></dt>

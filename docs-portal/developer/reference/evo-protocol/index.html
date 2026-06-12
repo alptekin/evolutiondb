@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>EVO text protocol — EvolutionDB</title>
+<title>EVO text protocol | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>EVO text protocol</h1>
-<p class="lede">EVO is EvolutionDB's native, line-oriented wire protocol served on TCP port <code>9967</code>. Every message is a UTF-8 text line terminated by <code>\n</code>. A session walks through a fixed handshake — greeting, optional STARTTLS, then authentication — before entering a request/response command loop where each reply is bracketed by a trailing <code>READY</code> marker. This page documents the exact tokens emitted and accepted by <code>adaptor/evo_protocol.c</code>.</p>
+<p class="lede">EVO is EvolutionDB's native, line-oriented wire protocol served on TCP port <code>9967</code>. Every message is a UTF-8 text line terminated by <code>\n</code>. A session walks through a fixed handshake, greeting, optional STARTTLS, then authentication, before entering a request/response command loop where each reply is bracketed by a trailing <code>READY</code> marker. This page documents the exact tokens emitted and accepted by <code>adaptor/evo_protocol.c</code>.</p>
 
 <div class="callout callout-note">
 <p>All framing below is taken verbatim from the server implementation. Tokens are case-sensitive on the server's output side; client commands are parsed with <code>strncasecmp</code>, so command keywords (<code>SQL</code>, <code>QUIT</code>, <code>PREPARE</code>, …) are accepted case-insensitively.</p>
@@ -24,8 +24,8 @@
 <h2 id="overview">Overview</h2>
 <p>A complete session has two phases:</p>
 <ol>
-<li><strong>Handshake</strong> — client greeting, server <code>HELLO</code>, optional <code>STARTTLS</code> upgrade, then <code>AUTH_SCRAM</code>/<code>AUTH</code> exchange ending in <code>AUTH_OK</code>.</li>
-<li><strong>Command loop</strong> — the client issues commands (<code>SQL</code>, <code>PREPARE</code>, <code>EXECUTE</code>, <code>EXECUTE_BATCH</code>, <code>EXECUTE_BATCH_BINARY</code>, <code>DEALLOCATE</code>, <code>QUIT</code>); the server answers and emits a final <code>READY</code> line per command.</li>
+<li><strong>Handshake</strong>, client greeting, server <code>HELLO</code>, optional <code>STARTTLS</code> upgrade, then <code>AUTH_SCRAM</code>/<code>AUTH</code> exchange ending in <code>AUTH_OK</code>.</li>
+<li><strong>Command loop</strong>, the client issues commands (<code>SQL</code>, <code>PREPARE</code>, <code>EXECUTE</code>, <code>EXECUTE_BATCH</code>, <code>EXECUTE_BATCH_BINARY</code>, <code>DEALLOCATE</code>, <code>QUIT</code>); the server answers and emits a final <code>READY</code> line per command.</li>
 </ol>
 <p>Lines are read with the connection's line reader; the server's main read buffer is 65536 bytes. All I/O passes through a <code>conn_t</code> wrapper so the same code works transparently over plaintext or TLS.</p>
 
@@ -93,7 +93,7 @@
 
 <h3 id="quit">QUIT</h3>
 <div class="sig"><code>QUIT</code></div>
-<p>The server replies <code>BYE</code> and ends the loop. (Any open transaction is auto-rolled back during teardown — see below.)</p>
+<p>The server replies <code>BYE</code> and ends the loop. (Any open transaction is auto-rolled back during teardown, see below.)</p>
 <pre><code><span class="c-key">BYE</span></code></pre>
 
 <h3 id="sql">SQL request</h3>
@@ -104,10 +104,10 @@
 <span class="c-key">READY</span></code></pre>
 <p>The body is read as the next line. The server then executes the statement and produces one of four response shapes (all followed by <code>READY</code>):</p>
 <ul>
-<li><strong>Error</strong> — <code>ERR &lt;sqlstate&gt; &lt;message&gt;</code></li>
-<li><strong>Result set</strong> (SELECT) — the <code>RESULT</code> framing described below</li>
-<li><strong>COPY stream</strong> — <code>COPY_READY</code> followed by a streamed body</li>
-<li><strong>Command</strong> (non-SELECT) — <code>OK</code> then <code>TAG &lt;command_tag&gt;</code></li>
+<li><strong>Error</strong>, <code>ERR &lt;sqlstate&gt; &lt;message&gt;</code></li>
+<li><strong>Result set</strong> (SELECT), the <code>RESULT</code> framing described below</li>
+<li><strong>COPY stream</strong>, <code>COPY_READY</code> followed by a streamed body</li>
+<li><strong>Command</strong> (non-SELECT), <code>OK</code> then <code>TAG &lt;command_tag&gt;</code></li>
 </ul>
 
 <h3 id="result-framing">RESULT framing (SELECT)</h3>
@@ -124,13 +124,13 @@
 <span class="c-key">TAG</span> &lt;command_tag&gt;</code></pre>
 <p>Token semantics, exactly as emitted by <code>evo_send_result</code>:</p>
 <ul>
-<li><code>RESULT</code> — opens the result set.</li>
-<li><code>COLS &lt;num_cols&gt;</code> — the column count.</li>
-<li><code>COL &lt;name&gt; &lt;pg_type_oid&gt; &lt;type_modifier&gt;</code> — one line per column, carrying the column name, its PostgreSQL type OID, and the type modifier.</li>
-<li><code>ROW</code> — opens a row; followed by exactly <code>num_cols</code> <code>FIELD</code> lines.</li>
-<li><code>FIELD &lt;value&gt;</code> — one field value. A SQL NULL (or a missing field pointer) is sent as the literal token <code>FIELD NULL</code>.</li>
-<li><code>END</code> — closes the row stream.</li>
-<li><code>TAG &lt;command_tag&gt;</code> — the command tag (e.g. <code>SELECT</code>).</li>
+<li><code>RESULT</code>, opens the result set.</li>
+<li><code>COLS &lt;num_cols&gt;</code>, the column count.</li>
+<li><code>COL &lt;name&gt; &lt;pg_type_oid&gt; &lt;type_modifier&gt;</code>: one line per column, carrying the column name, its PostgreSQL type OID, and the type modifier.</li>
+<li><code>ROW</code>, opens a row; followed by exactly <code>num_cols</code> <code>FIELD</code> lines.</li>
+<li><code>FIELD &lt;value&gt;</code>, one field value. A SQL NULL (or a missing field pointer) is sent as the literal token <code>FIELD NULL</code>.</li>
+<li><code>END</code>, closes the row stream.</li>
+<li><code>TAG &lt;command_tag&gt;</code>, the command tag (e.g. <code>SELECT</code>).</li>
 </ul>
 <p>The complete reply is then closed with <code>READY</code>.</p>
 
@@ -184,7 +184,7 @@
 
 <h3 id="prepare">PREPARE</h3>
 <div class="sig"><code>PREPARE &lt;stmt_name&gt; &lt;byte_length&gt;<span class="c-com">\n</span>&lt;sql-body&gt;<span class="c-com">\n</span></code></div>
-<p>The body length must be 1..65000. The server counts <code>$1</code>..<code>$9</code>-style placeholders to derive the parameter count, stores the template, and replies:</p>
+<p>The body length must be 1.65000. The server counts <code>$1</code>.<code>$9</code>-style placeholders to derive the parameter count, stores the template, and replies:</p>
 <pre><code><span class="c-key">OK</span>
 <span class="c-key">TAG</span> PREPARE
 <span class="c-key">READY</span></code></pre>
@@ -223,10 +223,10 @@
 <tr><td><code>s</code></td><td>string</td><td>4-byte big-endian length + UTF-8 bytes (no NUL); max 16 MB</td></tr>
 </tbody>
 </table>
-<p>The server decodes each binary parameter into its text form and reuses the same substitution and execution path as <code>EXECUTE_BATCH</code>. The response is identical to <code>EXECUTE_BATCH</code> (<code>BATCH_OK &lt;total_affected&gt;</code> or <code>BATCH_ERR &lt;row_index&gt; &lt;sqlstate&gt; &lt;msg&gt;</code>, each followed by <code>READY</code>). Here <code>param_count</code> must be 0..32; out-of-range arguments yield <code>ERR 42000 EXECUTE_BATCH_BINARY: invalid arguments</code>.</p>
+<p>The server decodes each binary parameter into its text form and reuses the same substitution and execution path as <code>EXECUTE_BATCH</code>. The response is identical to <code>EXECUTE_BATCH</code> (<code>BATCH_OK &lt;total_affected&gt;</code> or <code>BATCH_ERR &lt;row_index&gt; &lt;sqlstate&gt; &lt;msg&gt;</code>, each followed by <code>READY</code>). Here <code>param_count</code> must be 0.32; out-of-range arguments yield <code>ERR 42000 EXECUTE_BATCH_BINARY: invalid arguments</code>.</p>
 
 <div class="callout callout-warn">
-<p>Unlike the text batch, the binary batch has no fixed-size tail after an error. If the server replies <code>BATCH_ERR</code>, the client MUST stop sending payload bytes — the next read begins a fresh command. If the statement name is not found, the server drains the entire payload (decoding it field-by-field) and then replies <code>ERR 26000</code>.</p>
+<p>Unlike the text batch, the binary batch has no fixed-size tail after an error. If the server replies <code>BATCH_ERR</code>, the client MUST stop sending payload bytes, the next read begins a fresh command. If the statement name is not found, the server drains the entire payload (decoding it field-by-field) and then replies <code>ERR 26000</code>.</p>
 </div>
 
 <h3 id="deallocate">DEALLOCATE</h3>
@@ -254,7 +254,7 @@
 </ul>
 
 <div class="callout callout-note">
-<p>Auto-rollback on disconnect means an EVO client that drops mid-transaction never leaves partial work committed — the same guarantee the PG wire handler provides.</p>
+<p>Auto-rollback on disconnect means an EVO client that drops mid-transaction never leaves partial work committed, the same guarantee the PG wire handler provides.</p>
 </div>
 </main></div>
 <script src="/nav-data.js"></script>

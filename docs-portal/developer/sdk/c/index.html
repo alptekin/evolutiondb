@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>C library (libevosql-memory) — EvolutionDB</title>
+<title>C library (libevosql-memory) | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -17,25 +17,25 @@
 <h1>C library (libevosql-memory)</h1>
 <p class="lede">A thin C client over the EVO text protocol with high-level wrappers for the agent-memory primitives that ship with EvolutionDB. It is the FFI seam every higher-level binding (Python <code>ctypes</code>, Go <code>cgo</code>, Rust <code>bindgen</code>, Node <code>node-ffi-napi</code>) links against.</p>
 
-<div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>This is libevosql-memory 1.0.0, shipping with EvolutionDB 2.x. The header and ABI are stable — new API is added by appending functions to the bottom of <code>evosql_memory.h</code>, so existing call sites never need to recompile.</div></div>
+<div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>This is libevosql-memory 1.0.0, shipping with EvolutionDB 2.x. The header and ABI are stable, new API is added by appending functions to the bottom of <code>evosql_memory.h</code>, so existing call sites never need to recompile.</div></div>
 
 <h2 id="what">What it does</h2>
 <p>The library wraps the EVO text protocol (TCP port 9967) and exposes three layers, all declared in a single header, <code>include/evosql_memory.h</code>:</p>
 <ul>
-<li><strong>Typed agent-memory wrappers</strong> — <code>MEMORY STORE</code> (namespaced KV with optional vector embedding) and <code>CHECKPOINT STORE</code> (LangGraph-compatible checkpoint records).</li>
-<li><strong>A generic escape hatch</strong> — <code>evo_exec</code> / <code>evo_query</code> for any SQL the typed wrappers don't cover.</li>
-<li><strong>Streaming surfaces</strong> — <code>evo_subscribe</code> (LISTEN/NOTIFY) and <code>evo_cdc_subscribe</code> (the CDC JSON-lines stream), each running on its own socket and worker thread.</li>
+<li><strong>Typed agent-memory wrappers</strong>, <code>MEMORY STORE</code> (namespaced KV with optional vector embedding) and <code>CHECKPOINT STORE</code> (LangGraph-compatible checkpoint records).</li>
+<li><strong>A generic escape hatch</strong>, <code>evo_exec</code> / <code>evo_query</code> for any SQL the typed wrappers don't cover.</li>
+<li><strong>Streaming surfaces</strong>, <code>evo_subscribe</code> (LISTEN/NOTIFY) and <code>evo_cdc_subscribe</code> (the CDC JSON-lines stream), each running on its own socket and worker thread.</li>
 </ul>
 <p>The build produces a shared library (<code>.dylib</code>/<code>.so</code>/<code>.dll</code>), a static archive (<code>libevosql-memory.a</code>), and a <code>pkg-config</code> file. The source is two C files: <code>src/conn.c</code> (connection, query, typed wrappers, errors) and <code>src/subscribe.c</code> (the streaming workers).</p>
 
 <h2 id="install">Install</h2>
 <p>The fastest path is to download a pre-built artifact for your platform from the project's GitHub Releases page. Five platforms ship per release:</p>
 <ul>
-<li><code>libevosql-memory-linux-x64-vX.Y.Z.tar.gz</code> — Linux glibc x86_64</li>
-<li><code>libevosql-memory-linux-arm64-vX.Y.Z.tar.gz</code> — Linux glibc aarch64</li>
-<li><code>libevosql-memory-macos-arm64-vX.Y.Z.tar.gz</code> — macOS 14+ Apple Silicon</li>
-<li><code>libevosql-memory-macos-x64-vX.Y.Z.tar.gz</code> — macOS 13+ Intel</li>
-<li><code>libevosql-memory-windows-x64-vX.Y.Z.zip</code> — Windows 10/11 x86_64</li>
+<li><code>libevosql-memory-linux-x64-vX.Y.Z.tar.gz</code>, Linux glibc x86_64</li>
+<li><code>libevosql-memory-linux-arm64-vX.Y.Z.tar.gz</code>, Linux glibc aarch64</li>
+<li><code>libevosql-memory-macos-arm64-vX.Y.Z.tar.gz</code>, macOS 14+ Apple Silicon</li>
+<li><code>libevosql-memory-macos-x64-vX.Y.Z.tar.gz</code>, macOS 13+ Intel</li>
+<li><code>libevosql-memory-windows-x64-vX.Y.Z.zip</code>, Windows 10/11 x86_64</li>
 </ul>
 <p>Each archive untars to a directory holding the shared library, the static archive, and <code>evosql_memory.h</code>. Verify the asset's SHA-256 against the <code>SHA256SUMS</code> file attached to the same release.</p>
 <pre><code><span class="c-com"># download + unpack a pre-built artifact</span>
@@ -69,7 +69,7 @@ cc demo.c -levosql-memory -o demo
 <p>The streaming functions need <code>-lpthread</code> on POSIX; on Windows link <code>ws2_32</code> and <code>pthread</code> as the Makefile does.</p>
 
 <h2 id="configure">Configure (connection &amp; auth)</h2>
-<p>There are <strong>no environment variables or config files</strong> — connection details are passed as function arguments. <code>evo_connect()</code> takes <code>host</code>, <code>port</code>, <code>user</code>, and <code>password</code> directly. The default credentials for a stock server are <code>admin</code>/<code>admin</code>, and the default EVO port is <code>9967</code>.</p>
+<p>There are <strong>no environment variables or config files</strong>, connection details are passed as function arguments. <code>evo_connect()</code> takes <code>host</code>, <code>port</code>, <code>user</code>, and <code>password</code> directly. The default credentials for a stock server are <code>admin</code>/<code>admin</code>, and the default EVO port is <code>9967</code>.</p>
 <p>Authentication uses the EVO protocol's plaintext path. The client sends the greeting, declines STARTTLS, and authenticates with the legacy cleartext <code>AUTH &lt;user&gt; &lt;pass&gt;</code> line, which the server accepts as a fallback:</p>
 <pre><code>client → <span class="c-str">"EVO\n"</span>
 server → <span class="c-str">"HELLO EvoSQL 1.0\n"</span>
@@ -79,11 +79,11 @@ server → <span class="c-str">"AUTH_SCRAM\n"</span>
 client → <span class="c-str">"AUTH &lt;user&gt; &lt;pass&gt;\n"</span>
 server → <span class="c-str">"AUTH_OK\n"</span>
 </code></pre>
-<div class="callout callout-note"><span class="material-symbols-outlined">warning</span><div>v1 is plaintext only: no TLS client, no SCRAM, no extended-query / batch. Credentials cross the wire in cleartext — keep the connection on a trusted network or behind a tunnel.</div></div>
+<div class="callout callout-note"><span class="material-symbols-outlined">warning</span><div>v1 is plaintext only: no TLS client, no SCRAM, no extended-query / batch. Credentials cross the wire in cleartext, keep the connection on a trusted network or behind a tunnel.</div></div>
 
 <h2 id="usage">Usage</h2>
 <h3>Put / get memory</h3>
-<p>From <code>examples/put_get.c</code> — open a connection, create a store, write JSON values, read them back:</p>
+<p>From <code>examples/put_get.c</code>: open a connection, create a store, write JSON values, read them back:</p>
 <pre><code><span class="c-key">#include</span> <span class="c-str">&lt;stdio.h&gt;</span>
 <span class="c-key">#include</span> <span class="c-str">&lt;evosql_memory.h&gt;</span>
 
@@ -113,7 +113,7 @@ server → <span class="c-str">"AUTH_OK\n"</span>
 </code></pre>
 
 <h3>Reactive subscription</h3>
-<p>From <code>examples/reactive_agent.c</code> — <code>evo_subscribe()</code> opens its own connection, runs <code>LISTEN &lt;channel&gt;</code>, and dispatches each NOTIFY to your callback on a worker thread:</p>
+<p>From <code>examples/reactive_agent.c</code>, <code>evo_subscribe()</code> opens its own connection, runs <code>LISTEN &lt;channel&gt;</code>, and dispatches each NOTIFY to your callback on a worker thread:</p>
 <pre><code><span class="c-key">static void</span> on_event(<span class="c-key">const char</span> *channel, <span class="c-key">const char</span> *payload,
                      <span class="c-key">uint64_t</span> lsn, <span class="c-key">void</span> *ctx)
 {
@@ -133,7 +133,7 @@ evo_subscription_t *sub = evo_subscribe(
 
 evo_unsubscribe(sub);   <span class="c-com">/* deterministic: stops the worker, joins, frees */</span>
 </code></pre>
-<p>To produce events, another session runs <code>NOTIFY agent_events, 'hello world';</code> — for example via <a href="/platform/cli/">evosql-cli</a>.</p>
+<p>To produce events, another session runs <code>NOTIFY agent_events, 'hello world';</code>, for example via <a href="/platform/cli/">evosql-cli</a>.</p>
 
 <h3>Formatting a vector</h3>
 <p><code>evo_vector_format()</code> turns a <code>float[]</code> into the <code>[v1,v2,...]</code> literal EvoSQL accepts as a <code>VECTOR(N)</code> value, which you then pass as the optional embedding argument to <code>evo_memory_put()</code>:</p>
@@ -148,7 +148,7 @@ evo_memory_put(c, <span class="c-str">"demo"</span>, <span class="c-str">"users"
 
 <h3>Lifecycle</h3>
 <div class="sig">evo_conn_t *evo_connect(const char *host, int port, const char *user, const char *password)</div>
-<p>Opens a connection and runs the EVO handshake + auth. Returns <code>NULL</code> on failure — call <code>evo_strerror(NULL)</code> for the reason. The returned handle is opaque and must be freed with <code>evo_close()</code>.</p>
+<p>Opens a connection and runs the EVO handshake + auth. Returns <code>NULL</code> on failure, call <code>evo_strerror(NULL)</code> for the reason. The returned handle is opaque and must be freed with <code>evo_close()</code>.</p>
 <div class="sig">void evo_close(evo_conn_t *conn)</div>
 <p>Sends a best-effort <code>QUIT</code>, closes the socket, and frees the handle. NULL-tolerant.</p>
 
@@ -180,24 +180,24 @@ evo_memory_put(c, <span class="c-str">"demo"</span>, <span class="c-str">"users"
 <div class="sig">evo_subscription_t *evo_subscribe(const char *host, int port, const char *user, const char *password, const char *channel, evo_event_callback_t callback, void *ctx)</div>
 <p>Opens its own authenticated connection, runs <code>LISTEN &lt;channel&gt;</code>, and dispatches every NOTIFY to <code>callback</code>. The LISTEN response is drained synchronously so startup errors surface before the worker starts. Returns <code>NULL</code> on connect / listen failure. For NOTIFY events, <code>lsn</code> is always 0.</p>
 <div class="sig">evo_subscription_t *evo_cdc_subscribe(const char *host, int cdc_port, evo_event_callback_t callback, void *ctx, uint64_t from_lsn)</div>
-<p>Connects to the CDC JSON-lines stream (default port 9970 — a plain TCP port with no EVO handshake or auth) and emits one callback per WAL change. The callback's <code>channel</code> is the table name extracted from the JSON, <code>payload</code> is the full JSON line, and <code>lsn</code> carries the <code>xid</code> when present. <code>from_lsn</code> is reserved for v2 — pass 0.</p>
+<p>Connects to the CDC JSON-lines stream (default port 9970, a plain TCP port with no EVO handshake or auth) and emits one callback per WAL change. The callback's <code>channel</code> is the table name extracted from the JSON, <code>payload</code> is the full JSON line, and <code>lsn</code> carries the <code>xid</code> when present. <code>from_lsn</code> is reserved for v2, pass 0.</p>
 <div class="sig">int evo_ack_up_to(evo_subscription_t *sub, uint64_t lsn)</div>
 <p>Records the highest acked LSN. In v1 this is stored locally only; the server-side ack channel is wired in v2 once durable CDC subscription queues land. NOTIFY subscriptions ignore the call. Always returns <code>EVO_OK</code>.</p>
 <div class="sig">void evo_unsubscribe(evo_subscription_t *sub)</div>
 <p>Deterministic teardown: flags the worker, calls <code>shutdown()</code> so the blocked <code>recv()</code> returns, joins the thread, then frees. The callback will not fire after this returns. NULL-tolerant.</p>
 
 <div class="sig">typedef void (*evo_event_callback_t)(const char *channel, const char *payload, uint64_t lsn, void *ctx)</div>
-<p>Your callback runs on the subscription's worker thread. Treat the arguments as borrowed pointers — copy what you need, then return.</p>
+<p>Your callback runs on the subscription's worker thread. Treat the arguments as borrowed pointers: copy what you need, then return.</p>
 
 <h3>Error inspection</h3>
 <div class="sig">const char *evo_strerror(const evo_conn_t *conn)</div>
-<p>Returns the last error message on the calling thread (thread-local). Never <code>NULL</code>; returns <code>"(no error)"</code> when clean. The <code>conn</code> argument is accepted for completeness but ignored — pass <code>NULL</code> after a failed <code>evo_connect()</code>.</p>
+<p>Returns the last error message on the calling thread (thread-local). Never <code>NULL</code>; returns <code>"(no error)"</code> when clean. The <code>conn</code> argument is accepted for completeness but ignored, pass <code>NULL</code> after a failed <code>evo_connect()</code>.</p>
 <div class="sig">const char *evo_sqlstate(const evo_conn_t *conn)</div>
 <p>Returns the SQLSTATE of the last error, or the empty string if there was none.</p>
 
 <h2 id="notes">Notes &amp; limitations</h2>
 <ul>
-<li><strong>Threading.</strong> A single <code>evo_conn_t *</code> is <em>not</em> thread-safe — open one connection per thread. The last-error string is in thread-local storage, so errors don't leak across threads. Subscriptions own their own socket and worker; a single subscription never re-enters its own callback (it holds an internal mutex), but two distinct subscriptions can run their callbacks in parallel.</li>
+<li><strong>Threading.</strong> A single <code>evo_conn_t *</code> is <em>not</em> thread-safe, open one connection per thread. The last-error string is in thread-local storage, so errors don't leak across threads. Subscriptions own their own socket and worker; a single subscription never re-enters its own callback (it holds an internal mutex), but two distinct subscriptions can run their callbacks in parallel.</li>
 <li><strong>Plaintext only (v1).</strong> No TLS client, no SCRAM, no extended-query / batch protocol. The SDK declines STARTTLS and uses the legacy cleartext AUTH fallback.</li>
 <li><strong>CDC ack is local-only in v1.</strong> <code>evo_ack_up_to()</code> records the LSN client-side; durable server-side acknowledgement is a v2 item.</li>
 <li><strong>Fixed-size buffers.</strong> The typed wrappers stage SQL and results in fixed stack buffers (e.g. value JSON up to ~16 KB for puts). Oversized arguments return <code>EVO_ERR_BUFFER</code>. For arbitrarily large or unusual statements, use <code>evo_query</code> / <code>evo_exec</code> directly.</li>

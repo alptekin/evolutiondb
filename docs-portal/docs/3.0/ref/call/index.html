@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CALL — EvolutionDB 3.0</title>
+<title>CALL | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CALL</h1>
-<p class="lede">CALL — invoke a stored procedure and execute its body statement by statement.</p>
+<p class="lede">CALL, invoke a stored procedure and execute its body statement by statement.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -43,8 +43,8 @@ procedural control-flow constructs (<code>IF</code>/<code>ELSEIF</code>/<code>EL
 <code>WHILE&nbsp;…&nbsp;DO</code>/<code>END&nbsp;WHILE</code>, <code>LOOP</code>/<code>END&nbsp;LOOP</code>,
 <code>FOR&nbsp;…&nbsp;DO</code>/<code>END&nbsp;FOR</code>, <code>FOREACH&nbsp;…&nbsp;DO</code>/<code>END&nbsp;FOREACH</code>,
 and <code>CASE</code>/<code>WHEN</code>/<code>END&nbsp;CASE</code>), then executes them in order.</li>
-<li>Substitutes each declared parameter — both positional <code>$1</code>, <code>$2</code>, …
-references and references by parameter name — with the argument value before each
+<li>Substitutes each declared parameter, both positional <code>$1</code>, <code>$2</code>, …
+references and references by parameter name, with the argument value before each
 statement is run.</li>
 </ol>
 
@@ -81,16 +81,16 @@ database and current schema. Schema-qualified names are not part of the
 <dd>A value passed positionally to the procedure's corresponding parameter. The
 grammar accepts these argument forms:
 <ul>
-<li><strong>integer literal</strong> — e.g. <code>42</code></li>
-<li><strong>string literal</strong> — e.g. <code>'hello'</code> (quotes are preserved for substitution)</li>
-<li><strong>approximate-numeric / float literal</strong> — e.g. <code>3.14</code></li>
-<li><strong><code>NULL</code></strong> — substituted as the literal <code>NULL</code></li>
-<li><strong>boolean</strong> — <code>TRUE</code> or <code>FALSE</code></li>
-<li><strong>identifier</strong> (a bare <code>NAME</code>) — substituted verbatim</li>
-<li><strong>session variable</strong> — <code>@var</code>, eligible for OUT/INOUT write-back</li>
+<li><strong>integer literal</strong>, e.g. <code>42</code></li>
+<li><strong>string literal</strong>, e.g. <code>'hello'</code> (quotes are preserved for substitution)</li>
+<li><strong>approximate-numeric / float literal</strong>, e.g. <code>3.14</code></li>
+<li><strong><code>NULL</code></strong>, substituted as the literal <code>NULL</code></li>
+<li><strong>boolean</strong>, <code>TRUE</code> or <code>FALSE</code></li>
+<li><strong>identifier</strong> (a bare <code>NAME</code>), substituted verbatim</li>
+<li><strong>session variable</strong>, <code>@var</code>, eligible for OUT/INOUT write-back</li>
 </ul>
 Expressions, function calls, and arithmetic are <em>not</em> accepted as
-arguments — only the literal forms listed above. The number of arguments must
+arguments, only the literal forms listed above. The number of arguments must
 equal the number of declared parameters.</dd>
 </dl>
 

@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>24. Managing Databases — EvolutionDB 3.0</title>
+<title>24. Managing Databases | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -19,7 +19,7 @@
 
 <h2 id="overview">24.1. Overview</h2>
 <p>
-Unlike systems that give each database its own files or its own physical cluster directory, EvolutionDB stores <em>every</em> database in one unified, page-based file: <code>root/evosql.db</code>. The <code>root/</code> directory contains nothing else — there are no per-database subdirectories on disk. Databases, schemas, tables, and the rest of the metadata all live inside that file's system catalog, which is itself a set of B&plus;trees.
+Unlike systems that give each database its own files or its own physical cluster directory, EvolutionDB stores <em>every</em> database in one unified, page-based file: <code>root/evosql.db</code>. The <code>root/</code> directory contains nothing else, there are no per-database subdirectories on disk. Databases, schemas, tables, and the rest of the metadata all live inside that file's system catalog, which is itself a set of B&plus;trees.
 </p>
 <p>
 This means that "creating a database" is a pure catalog operation: it inserts a row into the catalog's database list and does not allocate or initialize any separate file. A database is therefore best understood as a logical grouping rather than a physical storage boundary.
@@ -34,14 +34,14 @@ On the very first start of a fresh storage file, EvolutionDB bootstraps the cata
 </p>
 <dl class="params">
 <dt>Default database</dt>
-<dd><code>evosql</code> — created automatically when the catalog is initialized for the first time. It always has internal database id <code>1</code>.</dd>
+<dd><code>evosql</code>, created automatically when the catalog is initialized for the first time. It always has internal database id <code>1</code>.</dd>
 <dt>Default schema</dt>
-<dd><code>default</code> — created inside every database (including <code>evosql</code>) at creation time.</dd>
+<dd><code>default</code>, created inside every database (including <code>evosql</code>) at creation time.</dd>
 <dt>Storage root</dt>
 <dd>The directory <code>root/</code>, holding the single file <code>root/evosql.db</code>. The directory name is fixed; it is not per-database.</dd>
 </dl>
 <div class="callout">
-<p><span class="material-symbols-outlined">info</span> <strong>PostgreSQL contrast.</strong> PostgreSQL ships with <code>postgres</code>, <code>template0</code>, and <code>template1</code>, and <code>CREATE DATABASE</code> physically clones a template directory. EvolutionDB has no template databases and no per-database directory — there is nothing to clone. A new database is simply a catalog entry plus its own <code>default</code> schema.</p>
+<p><span class="material-symbols-outlined">info</span> <strong>PostgreSQL contrast.</strong> PostgreSQL ships with <code>postgres</code>, <code>template0</code>, and <code>template1</code>, and <code>CREATE DATABASE</code> physically clones a template directory. EvolutionDB has no template databases and no per-database directory, there is nothing to clone. A new database is simply a catalog entry plus its own <code>default</code> schema.</p>
 </div>
 
 <h2 id="create-database">24.3. Creating a Database</h2>
@@ -76,7 +76,7 @@ Without <code>IF NOT EXISTS</code>, creating a database whose name is already re
 
 <h2 id="use">24.4. Switching Databases with <code>USE</code></h2>
 <p>
-The <a href="/3.0/ref/use/"><code>USE</code></a> command changes which database subsequent statements operate against. EvolutionDB verifies the name against the catalog, and if found, sets it as the session's current database. As a side effect, the current schema is <strong>reset to <code>default</code></strong> — switching databases does not preserve the schema you had selected before.
+The <a href="/3.0/ref/use/"><code>USE</code></a> command changes which database subsequent statements operate against. EvolutionDB verifies the name against the catalog, and if found, sets it as the session's current database. As a side effect, the current schema is <strong>reset to <code>default</code></strong>, switching databases does not preserve the schema you had selected before.
 </p>
 <div class="synopsis">
 <pre class="sig"><code><span class="c-key">USE</span> <span class="c-com">database_name</span></code></pre>
@@ -94,7 +94,7 @@ If the named database is not present in the catalog, <code>USE</code> fails with
 The current database and current schema are stored in each connection's own query context, not as a global server setting. Two clients connected at the same time can therefore be pointed at two different databases simultaneously, and one connection's <code>USE</code> never affects another. The selection lasts only for the life of the connection.
 </p>
 <div class="callout">
-<p><span class="material-symbols-outlined">info</span> <strong>PostgreSQL / standard-SQL contrast.</strong> In PostgreSQL there is no <code>USE</code> statement; you select a database by reconnecting (a connection is bound to one database for its lifetime). EvolutionDB's <code>USE</code> behaves more like the MySQL <code>USE</code> statement — an in-session switch — but it additionally resets the active schema to <code>default</code>, which MySQL does not, because MySQL conflates "database" and "schema".</p>
+<p><span class="material-symbols-outlined">info</span> <strong>PostgreSQL / standard-SQL contrast.</strong> In PostgreSQL there is no <code>USE</code> statement; you select a database by reconnecting (a connection is bound to one database for its lifetime). EvolutionDB's <code>USE</code> behaves more like the MySQL <code>USE</code> statement, an in-session switch, but it additionally resets the active schema to <code>default</code>, which MySQL does not, because MySQL conflates "database" and "schema".</p>
 </div>
 
 <h3 id="startup-db">24.4.2. The Database Chosen at Connect Time</h3>
@@ -108,7 +108,7 @@ Because all databases share <code>root/evosql.db</code>, qualifying an object na
 </p>
 <pre><code>database.schema.table</code></pre>
 <p>
-At runtime, the engine resolves unqualified names against the session's current database and current schema. The legacy path form <code>root/&lt;database&gt;/&lt;schema&gt;/&lt;table&gt;</code> still appears internally for backward compatibility when extracting bare table names, but it does <em>not</em> correspond to real directories on disk — it is a naming convention, not a filesystem layout.
+At runtime, the engine resolves unqualified names against the session's current database and current schema. The legacy path form <code>root/&lt;database&gt;/&lt;schema&gt;/&lt;table&gt;</code> still appears internally for backward compatibility when extracting bare table names, but it does <em>not</em> correspond to real directories on disk: it is a naming convention, not a filesystem layout.
 </p>
 <table>
 <thead>
@@ -169,11 +169,11 @@ For comparison, schema-level commands use <code>42E06</code> (duplicate schema) 
 
 <h2 id="see-also">24.8. See Also</h2>
 <ul>
-<li><a href="/3.0/ref/create-database/"><code>CREATE DATABASE</code></a> — full command reference</li>
-<li><a href="/3.0/ref/drop-database/"><code>DROP DATABASE</code></a> — full command reference</li>
-<li><a href="/3.0/ref/use/"><code>USE</code></a> — switch the active database</li>
-<li><a href="/3.0/admin/schemas/">Chapter 25, Managing Schemas</a> — the next level of the namespace</li>
-<li><a href="/3.0/ref/create-schema/"><code>CREATE SCHEMA</code></a> — add a schema to the current database</li>
+<li><a href="/3.0/ref/create-database/"><code>CREATE DATABASE</code></a>, full command reference</li>
+<li><a href="/3.0/ref/drop-database/"><code>DROP DATABASE</code></a>, full command reference</li>
+<li><a href="/3.0/ref/use/"><code>USE</code></a>, switch the active database</li>
+<li><a href="/3.0/admin/schemas/">Chapter 25, Managing Schemas</a>, the next level of the namespace</li>
+<li><a href="/3.0/ref/create-schema/"><code>CREATE SCHEMA</code></a>, add a schema to the current database</li>
 </ul>
 </main></div>
 <script src="/nav-data.js"></script>

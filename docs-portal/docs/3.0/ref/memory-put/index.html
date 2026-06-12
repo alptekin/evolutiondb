@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>MEMORY PUT — EvolutionDB 3.0</title>
+<title>MEMORY PUT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -38,8 +38,8 @@ search via <a href="/3.0/ref/memory-search/">MEMORY SEARCH</a>.
 The operation has <strong>upsert (PUT) semantics</strong>: the (<em>namespace</em>,
 <em>key</em>) pair forms the primary key of the store's backing table, so writing
 to an existing pair replaces the previous value rather than raising a duplicate-key
-error. The replacement is performed atomically inside the storage layer — the new
-tuple is inserted first and the old one is dropped afterward — so an item is never
+error. The replacement is performed atomically inside the storage layer, the new
+tuple is inserted first and the old one is dropped afterward, so an item is never
 left missing if the write fails partway through.
 </p>
 <p>
@@ -90,7 +90,7 @@ arguments it may be <code>NULL</code> to store the item without a vector.</dd>
 <div class="callout">
 <p>The argument syntax is positional, not column-named: every value is a quoted
 string literal (or <code>NULL</code>). Only the two arities shown in the Synopsis are
-accepted — three values without an embedding, or four values with one.</p>
+accepted: three values without an embedding, or four values with one.</p>
 </div>
 
 <h2 id="examples">Examples</h2>
@@ -136,7 +136,7 @@ The upsert behavior resembles PostgreSQL's
 <code>INSERT ... ON CONFLICT DO UPDATE</code>, but the two are unrelated in syntax:
 <code>MEMORY PUT</code> uses positional string-literal arguments and a fixed implicit
 schema rather than an explicit column list and conflict target. Unlike a standard
-<code>INSERT</code>, values are always string literals (or <code>NULL</code>) — bind
+<code>INSERT</code>, values are always string literals (or <code>NULL</code>), bind
 parameters and expressions are not accepted in the <code>VALUES</code> list. The
 equivalent hand-written statement would be an
 <code>INSERT INTO mem_&lt;store_name&gt; (...) VALUES (...)</code> against the backing

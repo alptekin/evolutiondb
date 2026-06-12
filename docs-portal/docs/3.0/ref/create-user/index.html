@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE USER — EvolutionDB 3.0</title>
+<title>CREATE USER | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -26,14 +26,14 @@
 <p><code>CREATE USER</code> adds a new login account to the EvolutionDB instance. The
 account is stored in the system catalog (the <code>CAT_SYS_USERS</code> B+ tree inside the
 unified storage file), keyed by user name, with the supplied password kept only as a
-PBKDF2-SHA256 hash — the plaintext password is never written to disk and is securely
+PBKDF2-SHA256 hash, the plaintext password is never written to disk and is securely
 wiped from memory after hashing.</p>
 
 <p>In EvolutionDB the statement is recognized as a fixed two-clause form:
 the user name, followed by the keyword <code>PASSWORD</code> and a password literal.
 Both the name and the password are mandatory; supplying an empty name or an empty
 password is rejected. There are no role attribute options (such as <code>SUPERUSER</code>,
-<code>LOGIN</code>, <code>CREATEDB</code>, or <code>VALID UNTIL</code>) — those clauses are not part of
+<code>LOGIN</code>, <code>CREATEDB</code>, or <code>VALID UNTIL</code>), those clauses are not part of
 EvolutionDB's grammar and are not accepted.</p>
 
 <p>The created account can immediately connect over either wire protocol

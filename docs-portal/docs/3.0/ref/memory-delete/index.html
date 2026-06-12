@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>MEMORY DELETE — EvolutionDB 3.0</title>
+<title>MEMORY DELETE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -25,7 +25,7 @@
 
 <h2 id="description">Description</h2>
 <p><code>MEMORY DELETE</code> removes exactly one entry from the memory store named <code>store_name</code>. An entry in a memory store is uniquely identified by the pair (<code>namespace</code>, <code>key</code>); <code>MEMORY DELETE</code> targets the single row whose composite primary key matches the supplied namespace and key.</p>
-<p>Internally, a memory store is backed by an ordinary table named <code>mem_&lt;store_name&gt;</code>. The two halves of the entry identity are combined into one composite primary-key value (the namespace and key joined by a record-separator byte). <code>MEMORY DELETE</code> rewrites the request as <code>DELETE FROM mem_&lt;store_name&gt; WHERE pk = '...'</code> and routes it through the engine's standard delete path. As a result, the operation honors exactly the same semantics as a hand-written <code>DELETE</code>: row-level security (RLS) policies attached to the backing table, foreign-key cascade actions, MVCC visibility, and triggers all apply. The RLS pass-through is what makes <code>MEMORY DELETE</code> safe in multi-tenant deployments — a caller can only delete rows its policy permits.</p>
+<p>Internally, a memory store is backed by an ordinary table named <code>mem_&lt;store_name&gt;</code>. The two halves of the entry identity are combined into one composite primary-key value (the namespace and key joined by a record-separator byte). <code>MEMORY DELETE</code> rewrites the request as <code>DELETE FROM mem_&lt;store_name&gt; WHERE pk = '...'</code> and routes it through the engine's standard delete path. As a result, the operation honors exactly the same semantics as a hand-written <code>DELETE</code>: row-level security (RLS) policies attached to the backing table, foreign-key cascade actions, MVCC visibility, and triggers all apply. The RLS pass-through is what makes <code>MEMORY DELETE</code> safe in multi-tenant deployments, a caller can only delete rows its policy permits.</p>
 <p>If the named store does not exist, the command fails with SQLSTATE <code>42704</code> (undefined object) and does not modify any data. If the store exists but no entry matches the given namespace and key, the command completes successfully having removed zero rows.</p>
 
 <div class="callout">

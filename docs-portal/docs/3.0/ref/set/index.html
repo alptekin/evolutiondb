@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>SET — EvolutionDB 3.0</title>
+<title>SET | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -32,8 +32,8 @@
 user variable. The right-hand side is evaluated as a full SQL value expression (including arithmetic,
 function calls and other constructs the expression engine understands), and the resulting value is
 stored under the given name for the lifetime of the connection. The variable can then be referenced
-anywhere an expression is allowed — for example in a <code>SELECT</code> list or a <code>WHERE</code>
-clause — by writing <code>@name</code>. Referencing a variable that was never set yields
+anywhere an expression is allowed, for example in a <code>SELECT</code> list or a <code>WHERE</code>
+clause, by writing <code>@name</code>. Referencing a variable that was never set yields
 <code>NULL</code> rather than an error. Several variables may be assigned in one statement by
 separating the assignments with commas.</p>
 
@@ -112,7 +112,7 @@ active schema.</dd>
 <h2 id="compatibility">Compatibility</h2>
 <p>There is no <code>SET</code> command in the SQL standard for run-time parameters; the standard
 defines <code>SET SCHEMA</code> as part of session management, and EvolutionDB's
-<code>SET SCHEMA schema_name</code> form follows that intent — it selects the schema used to resolve
+<code>SET SCHEMA schema_name</code> form follows that intent, it selects the schema used to resolve
 unqualified names. The <code>SET SCHEMA DEFAULT</code> spelling is an EvolutionDB convenience that
 selects the schema literally named <code>default</code>.</p>
 

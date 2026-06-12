@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>MCP Server — EvolutionDB</title>
+<title>MCP Server | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,12 +15,12 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>MCP Server</h1>
-<p class="lede">A Model Context Protocol server, written in pure Python, that gives Claude Desktop / Claude Code persistent long-term memory backed by EvolutionDB — plus an opt-in, human-approved personal-assistant action loop over your synced mail and chat.</p>
+<p class="lede">A Model Context Protocol server, written in pure Python, that gives Claude Desktop / Claude Code persistent long-term memory backed by EvolutionDB: plus an opt-in, human-approved personal-assistant action loop over your synced mail and chat.</p>
 
 <p>Distribution name on PyPI: <code>mcp-server-evolutiondb</code>. Package module: <code>mcp_server_evosql</code>. Source lives in the main repo under <code>client/mcp-server-evosql/</code>. The MCP server identifies itself to hosts as <code>evolutiondb-memory</code> (version <code>1.16.0</code>) and speaks MCP protocol version <code>2024-11-05</code>.</p>
 
 <h2 id="what-it-does">What it does</h2>
-<p>The server is a JSON-RPC 2.0 process that a host (Claude Desktop, Claude Code, or any MCP host) launches over stdio. It implements the MCP surface — <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>, and <code>ping</code> — and exposes a set of tools that read and write a real EvolutionDB database. It connects to EvolutionDB over the PostgreSQL wire protocol using <code>psycopg</code>, so the install is pure-Python: no C toolchain and no compiled <code>libevosql-memory</code> shared library are required at runtime.</p>
+<p>The server is a JSON-RPC 2.0 process that a host (Claude Desktop, Claude Code, or any MCP host) launches over stdio. It implements the MCP surface, <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>, and <code>ping</code>, and exposes a set of tools that read and write a real EvolutionDB database. It connects to EvolutionDB over the PostgreSQL wire protocol using <code>psycopg</code>, so the install is pure-Python: no C toolchain and no compiled <code>libevosql-memory</code> shared library are required at runtime.</p>
 <p>Two capability groups are exposed:</p>
 <ul>
 <li><strong>Long-term memory (core):</strong> <code>save_memory</code>, <code>search_memory</code>, <code>recent_memories</code>, <code>forget</code>, <code>list_tags</code>, plus retrieval/profile extras <code>show_profile</code>, <code>expand_episode</code>, <code>feedback</code>, <code>restore_memory</code>, <code>set_language</code>.</li>
@@ -30,25 +30,25 @@
 <p>See the <a href="/platform/mcp-server/">MCP Server platform overview</a> and the project <a href="https://wiki.evolutiondb.org">wiki</a> for broader context.</p>
 
 <h2 id="install">Install</h2>
-<pre><code><span class="c-com"># pure-Python install — no compiler needed</span>
+<pre><code><span class="c-com"># pure-Python install - no compiler needed</span>
 pipx install mcp-server-evolutiondb
 <span class="c-com"># or</span>
 pip install --user mcp-server-evolutiondb</code></pre>
 <p>The only runtime dependency is <code>psycopg[binary]&gt;=3.1</code>. Optional extras add capabilities:</p>
 <ul>
-<li><code>mcp-server-evolutiondb[embeddings-local]</code> — on-device semantic search via <code>sentence-transformers</code>.</li>
-<li><code>mcp-server-evolutiondb[turkish]</code> — Turkish morphological stemming for the gist channel (<code>snowballstemmer</code>).</li>
-<li><code>mcp-server-evolutiondb[send]</code> — the Teams send transport (<code>msal</code>). Gmail/Outlook reuse their sibling sync packages; iMessage/Slack need no extra package.</li>
+<li><code>mcp-server-evolutiondb[embeddings-local]</code>, on-device semantic search via <code>sentence-transformers</code>.</li>
+<li><code>mcp-server-evolutiondb[turkish]</code>, Turkish morphological stemming for the gist channel (<code>snowballstemmer</code>).</li>
+<li><code>mcp-server-evolutiondb[send]</code>, the Teams send transport (<code>msal</code>). Gmail/Outlook reuse their sibling sync packages; iMessage/Slack need no extra package.</li>
 </ul>
 <p>The package declares the following console entry points (from <code>pyproject.toml</code> <code>[project.scripts]</code>):</p>
 <ul>
-<li><code>mcp-server-evolutiondb</code> and <code>mcp-server-evosql</code> — the stdio MCP server (both map to <code>mcp_server_evosql.__main__:main</code>).</li>
-<li><code>evolutiondb-mcp-setup</code> — autodetect installed MCP hosts and merge the server into their configs.</li>
-<li><code>evolutiondb-send-setup</code> — print what a send channel needs (writes nothing).</li>
-<li><code>evolutiondb-brief</code> / <code>evolutiondb-outbox</code> — drive the action loop from the CLI.</li>
-<li><code>evolutiondb-embedded-fetch</code> — pre-fetch the embedded EvolutionDB binary.</li>
-<li><code>evolutiondb-mcp-http</code> — run the server as a streamable-HTTP listener.</li>
-<li><code>evolutiondb-mcp-oauth</code>, <code>evolutiondb-identity</code>, <code>evolutiondb-inspector</code>, <code>evolutiondb-tags</code> — OAuth proxy, identity CLI, DB inspector, and tagger CLI.</li>
+<li><code>mcp-server-evolutiondb</code> and <code>mcp-server-evosql</code>, the stdio MCP server (both map to <code>mcp_server_evosql.__main__:main</code>).</li>
+<li><code>evolutiondb-mcp-setup</code>, autodetect installed MCP hosts and merge the server into their configs.</li>
+<li><code>evolutiondb-send-setup</code>, print what a send channel needs (writes nothing).</li>
+<li><code>evolutiondb-brief</code> / <code>evolutiondb-outbox</code>, drive the action loop from the CLI.</li>
+<li><code>evolutiondb-embedded-fetch</code>, pre-fetch the embedded EvolutionDB binary.</li>
+<li><code>evolutiondb-mcp-http</code>, run the server as a streamable-HTTP listener.</li>
+<li><code>evolutiondb-mcp-oauth</code>, <code>evolutiondb-identity</code>, <code>evolutiondb-inspector</code>, <code>evolutiondb-tags</code>: OAuth proxy, identity CLI, DB inspector, and tagger CLI.</li>
 </ul>
 <p>EvolutionDB itself must be reachable. The simplest path is <code>docker compose up -d</code> in the main repo. Alternatively set <code>EVOSQL_EMBEDDED=1</code> and the server spawns a local EvolutionDB on first connect (auto-fetching a prebuilt binary if none is found, unless <code>EVOSQL_EMBEDDED_AUTOFETCH=0</code>); an already-running instance always wins.</p>
 
@@ -71,7 +71,7 @@ pip install --user mcp-server-evolutiondb</code></pre>
 <thead><tr><th>Env var</th><th>Default</th><th>Purpose</th></tr></thead>
 <tbody>
 <tr><td><code>EVOSQL_EMBEDDING_PROVIDER</code></td><td><code>none</code></td><td><code>openai</code>, <code>local</code>, or <code>none</code>. Turns <code>search_memory</code> into hybrid semantic + keyword.</td></tr>
-<tr><td><code>OPENAI_API_KEY</code></td><td>—</td><td>Required when the provider is <code>openai</code>.</td></tr>
+<tr><td><code>OPENAI_API_KEY</code></td><td>, </td><td>Required when the provider is <code>openai</code>.</td></tr>
 <tr><td><code>EVOSQL_SALIENCE_BOOST</code> / <code>EVOSQL_GRAPH_BOOST</code> / <code>EVOSQL_PROFILE_BOOST</code></td><td><code>0</code></td><td>Ranking-blend weights for salience, knowledge-graph activation, and the interest profile.</td></tr>
 <tr><td><code>EVOSQL_GRAPH_BUILD</code> / <code>EVOSQL_ENTITY_EXTRACT</code></td><td><code>1</code></td><td>Build graph edges / extract entities inline on save. Set to <code>0</code> to disable.</td></tr>
 <tr><td><code>EVOSQL_EMBEDDED</code> / <code>EVOSQL_EMBEDDED_AUTOFETCH</code></td><td>unset / on</td><td>Spawn a local EvolutionDB and auto-fetch its binary.</td></tr>
@@ -112,7 +112,7 @@ evolutiondb-mcp-setup --client claude-desktop --user-id your-handle</code></pre>
 {<span class="c-str">"jsonrpc"</span>:<span class="c-str">"2.0"</span>,<span class="c-str">"id"</span>:3,<span class="c-str">"method"</span>:<span class="c-str">"tools/call"</span>,
  <span class="c-str">"params"</span>:{<span class="c-str">"name"</span>:<span class="c-str">"save_memory"</span>,
            <span class="c-str">"arguments"</span>:{<span class="c-str">"fact"</span>:<span class="c-str">"loves jazz"</span>,<span class="c-str">"tags"</span>:[<span class="c-str">"preference"</span>]}}}</code></pre>
-<p>A <code>tools/call</code> result returns its payload as a single text content block; failures come back with <code>isError: true</code> (and, on an internal exception, only an opaque correlation ref — the raw engine error is logged server-side, never echoed to the client).</p>
+<p>A <code>tools/call</code> result returns its payload as a single text content block; failures come back with <code>isError: true</code> (and, on an internal exception, only an opaque correlation ref: the raw engine error is logged server-side, never echoed to the client).</p>
 <p><strong>Action-loop CLI.</strong> Read + suggest by default; nothing is delivered without an explicit, gated approval:</p>
 <pre><code>evolutiondb-brief                 <span class="c-com"># who's waiting on you, what you owe</span>
 evolutiondb-brief --queue 3       <span class="c-com"># draft + queue replies (nothing sent)</span>
@@ -125,13 +125,13 @@ evolutiondb-brief --approve       <span class="c-com"># deliver (dry-run unless 
 <h2 id="reference">Reference</h2>
 <p>The tool catalog the host sees is the module-level <code>TOOLS</code> list; <code>MCPServer._dispatch_tool</code> routes each call into a <code>MemoryBackend</code> method. Key entry points:</p>
 
-<div class="sig">def main() -&gt; int  <span class="c-com"># mcp_server_evosql.server (also mcp_server_evosql.__main__:main)</span></div>
+<div class="sig">def main() -&gt; int <span class="c-com"># mcp_server_evosql.server (also mcp_server_evosql.__main__:main)</span></div>
 <p>The stdio entry point invoked by the <code>mcp-server-evolutiondb</code> / <code>mcp-server-evosql</code> console scripts. Constructs an <code>MCPServer</code>, prints a one-line readiness banner to stderr, then loops over stdin reading newline-delimited JSON-RPC, dispatching each message and writing the response to stdout.</p>
 
 <div class="sig">class MCPServer</div>
 <p>Owns configuration (read from the environment in <code>__init__</code>) and the per-tenant <code>MemoryBackend</code> cache. <code>handle(msg, identity=None)</code> implements <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>, and <code>ping</code>; notifications without an <code>id</code> get no response. <code>_dispatch_tool(...)</code> maps each tool name to a backend method. An in-tenant RBAC layer denies read-only viewers the mutating tools listed in <code>_MUTATING_TOOLS</code>.</p>
 
-<div class="sig">class MemoryBackend(host, port, user, password, database, prefix, ...)</div>
+<div class="sig">class MemoryBackend(host, port, user, password, database, prefix..)</div>
 <p>Wraps a single <code>psycopg</code> connection (serialized by a reentrant lock) and exposes the memory operations. Reconnects with retry on dead connections; all generated SQL is inlined, so keys are validated (<code>_valid_key</code>) and string values escaped (<code>_e</code>) before use.</p>
 
 <div class="sig">def save(self, user_id, fact, tags=None, derived_from=None, source_class=None) -&gt; str</div>

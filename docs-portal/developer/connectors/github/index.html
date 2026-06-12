@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>GitHub connector — EvolutionDB</title>
+<title>GitHub connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,60 +15,60 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 
-  <h1>GitHub connector</h1>
-  <p class="lede">Pull every GitHub PR and issue thread you're involved in into EvolutionDB long-term memory, so the <a href="/platform/mcp-server/">MCP server</a> can surface them through <code>search_memory</code>.</p>
+ <h1>GitHub connector</h1>
+ <p class="lede">Pull every GitHub PR and issue thread you're involved in into EvolutionDB long-term memory, so the <a href="/platform/mcp-server/">MCP server</a> can surface them through <code>search_memory</code>.</p>
 
-  <h2 id="what-it-does">What it does</h2>
-  <p>The <code>evolutiondb-github-sync</code> package walks GitHub's
-  <code>/search/issues</code> endpoint for everything that matches
-  <code>involves:&lt;you&gt; updated:&gt;&lt;since&gt;</code> — issues and PRs you authored,
-  were assigned, reviewed, mentioned in, or commented on — and writes each thread
-  and its comments into an EvolutionDB memory store over the PostgreSQL wire
-  protocol. An AI assistant connected through the
-  <a href="/platform/mcp-server/">MCP server</a> can then recall
-  "what did we decide on PR #142 last week?" without re-reading the diff.</p>
+ <h2 id="what-it-does">What it does</h2>
+ <p>The <code>evolutiondb-github-sync</code> package walks GitHub's
+ <code>/search/issues</code> endpoint for everything that matches
+ <code>involves:&lt;you&gt; updated:&gt;&lt;since&gt;</code>: issues and PRs you authored,
+ were assigned, reviewed, mentioned in, or commented on, and writes each thread
+ and its comments into an EvolutionDB memory store over the PostgreSQL wire
+ protocol. An AI assistant connected through the
+ <a href="/platform/mcp-server/">MCP server</a> can then recall
+ "what did we decide on PR #142 last week?" without re-reading the diff.</p>
 
-  <p>For every matching thread the connector writes one record per object, each under a
-  deterministic key so a re-sync UPSERTs rather than duplicating:</p>
+ <p>For every matching thread the connector writes one record per object, each under a
+ deterministic key so a re-sync UPSERTs rather than duplicating:</p>
 
-  <pre><code><span class="c-com"># Record                  Key shape</span>
+ <pre><code><span class="c-com"># Record                  Key shape</span>
 The thread itself          gh_thread_&lt;repo&gt;#&lt;number&gt;
 Diff-anchored PR comments   gh_pr_comment_&lt;comment_id&gt;
 Issue-thread comments       gh_issue_comment_&lt;comment_id&gt;
 PR reviews with a body      gh_pr_review_&lt;review_id&gt;</code></pre>
 
-  <p>A per-thread watermark on each issue's <code>updated_at</code> (stored under
-  <code>github_state_&lt;repo&gt;#&lt;number&gt;</code>) lets a re-run skip threads that haven't
-  moved since the last pass. Issue and comment bodies are clipped to 4&nbsp;kB before
-  storage so they fit comfortably in an LLM context window.</p>
+ <p>A per-thread watermark on each issue's <code>updated_at</code> (stored under
+ <code>github_state_&lt;repo&gt;#&lt;number&gt;</code>) lets a re-run skip threads that haven't
+ moved since the last pass. Issue and comment bodies are clipped to 4&nbsp;kB before
+ storage so they fit comfortably in an LLM context window.</p>
 
-  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Records are stored as JSON values. Each carries a one-line <code>fact</code> string (e.g. <code>"alice opened pr o/r#42: …"</code>) plus structured fields — <code>repo</code>, <code>number</code>, <code>author</code>, <code>url</code>, <code>state</code>, <code>labels</code>, <code>assignees</code>, timestamps, and <code>tags</code>. PR comments also carry <code>path</code> + <code>commit</code>; PR reviews carry <code>state</code> (e.g. <code>APPROVED</code>) + <code>submitted_at</code>.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Records are stored as JSON values. Each carries a one-line <code>fact</code> string (e.g. <code>"alice opened pr o/r#42: …"</code>) plus structured fields, <code>repo</code>, <code>number</code>, <code>author</code>, <code>url</code>, <code>state</code>, <code>labels</code>, <code>assignees</code>, timestamps, and <code>tags</code>. PR comments also carry <code>path</code> + <code>commit</code>; PR reviews carry <code>state</code> (e.g. <code>APPROVED</code>) + <code>submitted_at</code>.</div></div>
 
-  <h2 id="install">Install</h2>
-  <p>The PyPI distribution name is <code>evolutiondb-github-sync</code>; the importable
-  module is <code>github_sync</code>. It requires Python 3.9+ and depends only on
-  <code>psycopg[binary]&gt;=3.1</code> (the GitHub client is built on the stdlib
-  <code>urllib</code>, with no <code>requests</code> / PyGithub dependency).</p>
+ <h2 id="install">Install</h2>
+ <p>The PyPI distribution name is <code>evolutiondb-github-sync</code>; the importable
+ module is <code>github_sync</code>. It requires Python 3.9+ and depends only on
+ <code>psycopg[binary]&gt;=3.1</code> (the GitHub client is built on the stdlib
+ <code>urllib</code>, with no <code>requests</code> / PyGithub dependency).</p>
 
-  <pre><code><span class="c-com"># from PyPI</span>
+ <pre><code><span class="c-com"># from PyPI</span>
 pip install evolutiondb-github-sync
 
 <span class="c-com"># or editable, from the EvolutionDB repo</span>
 pip install -e client/github-sync</code></pre>
 
-  <p>Installation registers a single console script, <code>evolutiondb-github-sync</code>,
-  which maps to <code>github_sync.__main__:main</code>. You can also run the module
-  directly with <code>python -m github_sync</code>.</p>
+ <p>Installation registers a single console script, <code>evolutiondb-github-sync</code>,
+ which maps to <code>github_sync.__main__:main</code>. You can also run the module
+ directly with <code>python -m github_sync</code>.</p>
 
-  <h2 id="configure">Configure</h2>
-  <p>Configuration comes from environment variables. On startup the CLI loads a dotenv
-  file (default <code>.env</code> in the working directory, overridable with
-  <code>--env-file</code>; a missing file is ignored). Existing environment variables
-  take precedence — the loader uses <code>setdefault</code>, so it never overwrites a
-  value already set in the environment. Copy <code>.env.example</code> to
-  <code>.env</code> and fill in:</p>
+ <h2 id="configure">Configure</h2>
+ <p>Configuration comes from environment variables. On startup the CLI loads a dotenv
+ file (default <code>.env</code> in the working directory, overridable with
+ <code>--env-file</code>; a missing file is ignored). Existing environment variables
+ take precedence, the loader uses <code>setdefault</code>, so it never overwrites a
+ value already set in the environment. Copy <code>.env.example</code> to
+ <code>.env</code> and fill in:</p>
 
-  <pre><code><span class="c-com"># --- GitHub ---</span>
+ <pre><code><span class="c-com"># --- GitHub ---</span>
 GITHUB_TOKEN=<span class="c-str">ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</span>   <span class="c-com"># classic PAT: repo (or public_repo) + read:user</span>
 GITHUB_USERNAME=<span class="c-str">your-handle</span>                          <span class="c-com"># the handle to follow (involves:&lt;user&gt;)</span>
 
@@ -84,10 +84,10 @@ MCP_USER_ID=<span class="c-str">default_user</span>      <span class="c-com"># n
 GITHUB_MEMORY_STORE=<span class="c-str">mcp_mem</span>   <span class="c-com"># memory store to write into</span>
 GITHUB_POLL_INTERVAL=<span class="c-str">900</span>     <span class="c-com"># daemon-mode poll interval, seconds</span></code></pre>
 
-  <p>Variable reference, as read by the <code>Config</code> class:</p>
+ <p>Variable reference, as read by the <code>Config</code> class:</p>
 
-  <pre><code><span class="c-com"># var                  default        meaning</span>
-GITHUB_TOKEN          (none, required)  GitHub PAT — Bearer auth on every API call
+ <pre><code><span class="c-com"># var                  default        meaning</span>
+GITHUB_TOKEN          (none, required)  GitHub PAT - Bearer auth on every API call
 GITHUB_USERNAME       (none, required)  handle plugged into involves:&lt;user&gt;
 EVOSQL_HOST           127.0.0.1         EvolutionDB host
 EVOSQL_PORT           5433              EvolutionDB PG-wire port
@@ -98,15 +98,15 @@ MCP_USER_ID           default_user      memory namespace (mem_namespace column)
 GITHUB_MEMORY_STORE   mcp_mem           memory store name (CREATE MEMORY STORE)
 GITHUB_POLL_INTERVAL  900               daemon poll interval (informational; --interval wins)</code></pre>
 
-  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div><code>GITHUB_TOKEN</code> and <code>GITHUB_USERNAME</code> are mandatory. If either is empty after loading the env, the CLI prints an error and exits with code <code>2</code> before contacting GitHub or the database.</div></div>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div><code>GITHUB_TOKEN</code> and <code>GITHUB_USERNAME</code> are mandatory. If either is empty after loading the env, the CLI prints an error and exits with code <code>2</code> before contacting GitHub or the database.</div></div>
 
-  <h2 id="usage">Usage</h2>
-  <p>Three flags drive the run mode, plus a window and a dry-run switch:</p>
+ <h2 id="usage">Usage</h2>
+ <p>Three flags drive the run mode, plus a window and a dry-run switch:</p>
 
-  <pre><code><span class="c-com"># One pass, then exit. Bootstrap from the last 7 days.</span>
+ <pre><code><span class="c-com"># One pass, then exit. Bootstrap from the last 7 days.</span>
 evolutiondb-github-sync --once --since 7d
 
-<span class="c-com"># Daemon mode — re-run every N seconds (floored at 60).</span>
+<span class="c-com"># Daemon mode - re-run every N seconds (floored at 60).</span>
 evolutiondb-github-sync --interval 900
 
 <span class="c-com"># Verify token + scopes and fetch from GitHub, but write nothing to the DB.</span>
@@ -115,127 +115,127 @@ evolutiondb-github-sync --once --dry-run
 <span class="c-com"># Point at an explicit dotenv file.</span>
 evolutiondb-github-sync --once --env-file ~/secrets/github.env</code></pre>
 
-  <p>Flags accepted by <code>main()</code>:</p>
-  <pre><code><span class="c-com"># --once              run a single pass and exit</span>
+ <p>Flags accepted by <code>main()</code>:</p>
+ <pre><code><span class="c-com"># --once              run a single pass and exit</span>
 <span class="c-com"># --interval SECONDS  daemon mode; loops until SIGINT/SIGTERM (min 60s)</span>
 <span class="c-com"># --since SPEC        floor for the first pass; SPEC is N + s|m|h|d|w (default 7d)</span>
 <span class="c-com"># --dry-run           fetch from GitHub but do not open or write the DB</span>
 <span class="c-com"># --env-file PATH     dotenv file to load (default .env; ignored if missing)</span></code></pre>
 
-  <p>With neither <code>--once</code> nor <code>--interval</code>, the connector runs a
-  single pass (the same as <code>--once</code>). Each pass prints a one-line JSON
-  summary to stdout:</p>
+ <p>With neither <code>--once</code> nor <code>--interval</code>, the connector runs a
+ single pass (the same as <code>--once</code>). Each pass prints a one-line JSON
+ summary to stdout:</p>
 
-  <pre><code>{<span class="c-str">"ok"</span>: true, <span class="c-str">"threads"</span>: 12, <span class="c-str">"comments"</span>: 84, <span class="c-str">"reviews"</span>: 6, <span class="c-str">"errors"</span>: 0}</code></pre>
+ <pre><code>{<span class="c-str">"ok"</span>: true, <span class="c-str">"threads"</span>: 12, <span class="c-str">"comments"</span>: 84, <span class="c-str">"reviews"</span>: 6, <span class="c-str">"errors"</span>: 0}</code></pre>
 
-  <p>On a fatal error the pass instead prints
-  <code>{"ok": false, "error": "&lt;message&gt;"}</code>. In daemon mode, <code>SIGINT</code>
-  and <code>SIGTERM</code> request a graceful stop — the current pass finishes before
-  the loop exits.</p>
+ <p>On a fatal error the pass instead prints
+ <code>{"ok": false, "error": "&lt;message&gt;"}</code>. In daemon mode, <code>SIGINT</code>
+ and <code>SIGTERM</code> request a graceful stop, the current pass finishes before
+ the loop exits.</p>
 
-  <p>Exit codes: <code>0</code> success, <code>2</code> bad arguments or missing required
-  config, <code>4</code> a pass raised an exception.</p>
+ <p>Exit codes: <code>0</code> success, <code>2</code> bad arguments or missing required
+ config, <code>4</code> a pass raised an exception.</p>
 
-  <h2 id="reference">Reference</h2>
+ <h2 id="reference">Reference</h2>
 
-  <h3 id="ref-cli"><code>github_sync.sync</code> — CLI and sync loop</h3>
+ <h3 id="ref-cli"><code>github_sync.sync</code>, CLI and sync loop</h3>
 
-  <div class="sig">main(argv: list | None = None) -&gt; int</div>
-  <p>Console-script entry point (registered as <code>evolutiondb-github-sync</code>).
-  Parses arguments, loads the dotenv file, builds a <code>Config</code>, then runs once
-  or loops on the interval. Returns the process exit code.</p>
+ <div class="sig">main(argv: list | None = None) -&gt; int</div>
+ <p>Console-script entry point (registered as <code>evolutiondb-github-sync</code>).
+ Parses arguments, loads the dotenv file, builds a <code>Config</code>, then runs once
+ or loops on the interval. Returns the process exit code.</p>
 
-  <div class="sig">sync_once(cfg: Config, *, since_default: str | None, dry_run: bool = False) -&gt; dict[str, int]</div>
-  <p>Runs a single pass: searches GitHub for involved threads, builds records, applies
-  watermark skipping, and (unless <code>dry_run</code>) writes to the store. Returns the
-  counters dict <code>{"threads", "comments", "reviews", "errors"}</code>. Raises
-  <code>RuntimeError</code> if the token or username is missing.</p>
+ <div class="sig">sync_once(cfg: Config, *, since_default: str | None, dry_run: bool = False) -&gt; dict[str, int]</div>
+ <p>Runs a single pass: searches GitHub for involved threads, builds records, applies
+ watermark skipping, and (unless <code>dry_run</code>) writes to the store. Returns the
+ counters dict <code>{"threads", "comments", "reviews", "errors"}</code>. Raises
+ <code>RuntimeError</code> if the token or username is missing.</p>
 
-  <div class="sig">parse_since(text: str) -&gt; str</div>
-  <p>Converts a window spec like <code>"1h"</code>, <code>"7d"</code>, or <code>"2w"</code>
-  (units <code>s|m|h|d|w</code>) into a UTC ISO-8601 timestamp ending in <code>Z</code>,
-  used as the <code>updated:&gt;</code> floor. Raises <code>ValueError</code> on anything
-  it can't parse.</p>
+ <div class="sig">parse_since(text: str) -&gt; str</div>
+ <p>Converts a window spec like <code>"1h"</code>, <code>"7d"</code>, or <code>"2w"</code>
+ (units <code>s|m|h|d|w</code>) into a UTC ISO-8601 timestamp ending in <code>Z</code>,
+ used as the <code>updated:&gt;</code> floor. Raises <code>ValueError</code> on anything
+ it can't parse.</p>
 
-  <div class="sig">class Config</div>
-  <p>Reads all environment variables into typed attributes (<code>token</code>,
-  <code>username</code>, <code>evosql_host</code>/<code>port</code>/<code>user</code>/<code>pass</code>/<code>db</code>,
-  <code>user_id</code>, <code>store</code>, <code>poll_secs</code>).</p>
+ <div class="sig">class Config</div>
+ <p>Reads all environment variables into typed attributes (<code>token</code>,
+ <code>username</code>, <code>evosql_host</code>/<code>port</code>/<code>user</code>/<code>pass</code>/<code>db</code>,
+ <code>user_id</code>, <code>store</code>, <code>poll_secs</code>).</p>
 
-  <h3 id="ref-api"><code>github_sync.api</code> — GitHub REST client</h3>
-  <p>A thin client over the standard library <code>urllib</code> — no third-party HTTP
-  dependency. Constructed as <code>GitHubClient(token)</code>; raises
-  <code>GitHubError(401, …)</code> if the token is empty.</p>
+ <h3 id="ref-api"><code>github_sync.api</code>, GitHub REST client</h3>
+ <p>A thin client over the standard library <code>urllib</code>, no third-party HTTP
+ dependency. Constructed as <code>GitHubClient(token)</code>; raises
+ <code>GitHubError(401, …)</code> if the token is empty.</p>
 
-  <div class="sig">GitHubClient.search_involves(user: str, since_iso: str | None = None) -&gt; Iterator[dict]</div>
-  <p>Yields issues and PRs the user is involved in (via <code>/search/issues</code> with
-  <code>involves:&lt;user&gt;</code> plus an optional <code>updated:&gt;&lt;since_iso&gt;</code>),
-  sorted by <code>updated</code> ascending, paginated 100 per page.</p>
+ <div class="sig">GitHubClient.search_involves(user: str, since_iso: str | None = None) -&gt; Iterator[dict]</div>
+ <p>Yields issues and PRs the user is involved in (via <code>/search/issues</code> with
+ <code>involves:&lt;user&gt;</code> plus an optional <code>updated:&gt;&lt;since_iso&gt;</code>),
+ sorted by <code>updated</code> ascending, paginated 100 per page.</p>
 
-  <div class="sig">GitHubClient.get_pr_review_comments(owner, repo, number) -&gt; list[dict]</div>
-  <div class="sig">GitHubClient.get_issue_comments(owner, repo, number) -&gt; list[dict]</div>
-  <div class="sig">GitHubClient.get_pr_reviews(owner, repo, number) -&gt; list[dict]</div>
-  <p>Fetch (and fully paginate) the diff-anchored review comments, the general
-  issue-thread comments, and the PR reviews for one thread, respectively.</p>
+ <div class="sig">GitHubClient.get_pr_review_comments(owner, repo, number) -&gt; list[dict]</div>
+ <div class="sig">GitHubClient.get_issue_comments(owner, repo, number) -&gt; list[dict]</div>
+ <div class="sig">GitHubClient.get_pr_reviews(owner, repo, number) -&gt; list[dict]</div>
+ <p>Fetch (and fully paginate) the diff-anchored review comments, the general
+ issue-thread comments, and the PR reviews for one thread, respectively.</p>
 
-  <div class="sig">parse_repository_url(url: str) -&gt; dict | None</div>
-  <p>Extracts <code>{"owner", "repo"}</code> from a search result's
-  <code>repository_url</code>. Returns <code>None</code> for an unexpected shape.</p>
+ <div class="sig">parse_repository_url(url: str) -&gt; dict | None</div>
+ <p>Extracts <code>{"owner", "repo"}</code> from a search result's
+ <code>repository_url</code>. Returns <code>None</code> for an unexpected shape.</p>
 
-  <div class="sig">class GitHubError(Exception)</div>
-  <p>Carries the HTTP <code>status</code>, message, and <code>url</code>. Per-thread
-  <code>GitHubError</code>s are caught in <code>sync_once</code>, logged to stderr, and
-  counted as an <code>error</code> rather than aborting the whole pass.</p>
+ <div class="sig">class GitHubError(Exception)</div>
+ <p>Carries the HTTP <code>status</code>, message, and <code>url</code>. Per-thread
+ <code>GitHubError</code>s are caught in <code>sync_once</code>, logged to stderr, and
+ counted as an <code>error</code> rather than aborting the whole pass.</p>
 
-  <h3 id="ref-state"><code>github_sync.state</code> — EvolutionDB memory backend</h3>
-  <p>Writes records and watermarks over the PG wire protocol via <code>psycopg</code>.
-  On construction it issues <code>CREATE MEMORY STORE &lt;store&gt;</code> (ignoring the error
-  if it already exists) and reconnects up to three times with backoff on a dropped
-  connection.</p>
+ <h3 id="ref-state"><code>github_sync.state</code>, EvolutionDB memory backend</h3>
+ <p>Writes records and watermarks over the PG wire protocol via <code>psycopg</code>.
+ On construction it issues <code>CREATE MEMORY STORE &lt;store&gt;</code> (ignoring the error
+ if it already exists) and reconnects up to three times with backoff on a dropped
+ connection.</p>
 
-  <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
-  <p>Opens an autocommit connection and ensures the target memory store exists.</p>
+ <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+ <p>Opens an autocommit connection and ensures the target memory store exists.</p>
 
-  <div class="sig">MemoryStore.put_record(key: str, record: dict) -&gt; None</div>
-  <p>Serializes <code>record</code> to JSON and runs
-  <code>MEMORY PUT INTO &lt;store&gt; VALUES (&lt;namespace&gt;, &lt;key&gt;, &lt;value&gt;)</code>.</p>
+ <div class="sig">MemoryStore.put_record(key: str, record: dict) -&gt; None</div>
+ <p>Serializes <code>record</code> to JSON and runs
+ <code>MEMORY PUT INTO &lt;store&gt; VALUES (&lt;namespace&gt;, &lt;key&gt;, &lt;value&gt;)</code>.</p>
 
-  <div class="sig">MemoryStore.get_watermark(repo, number) -&gt; str | None</div>
-  <div class="sig">MemoryStore.set_watermark(repo, number, updated_at: str) -&gt; None</div>
-  <p>Read and write the per-thread <code>updated_at</code> watermark under
-  <code>github_state_&lt;repo&gt;#&lt;number&gt;</code>; <code>get_watermark</code> queries the
-  underlying <code>__mem_&lt;store&gt;</code> table directly.</p>
+ <div class="sig">MemoryStore.get_watermark(repo, number) -&gt; str | None</div>
+ <div class="sig">MemoryStore.set_watermark(repo, number, updated_at: str) -&gt; None</div>
+ <p>Read and write the per-thread <code>updated_at</code> watermark under
+ <code>github_state_&lt;repo&gt;#&lt;number&gt;</code>; <code>get_watermark</code> queries the
+ underlying <code>__mem_&lt;store&gt;</code> table directly.</p>
 
-  <h2 id="rate-limits">Rate limits</h2>
-  <p>A classic PAT gives 5,000 REST calls per hour. One pass spends roughly one search
-  call plus three calls per active thread. The client reads
-  <code>X-RateLimit-Remaining</code> / <code>X-RateLimit-Reset</code> and sleeps until
-  reset when the budget is exhausted; it also honours the secondary-rate-limit
-  <code>Retry-After</code> header (bounded to 5 waits before raising). Transient
-  transport failures are retried with exponential backoff (1, 2, 4, 8, 16&nbsp;s).</p>
+ <h2 id="rate-limits">Rate limits</h2>
+ <p>A classic PAT gives 5,000 REST calls per hour. One pass spends roughly one search
+ call plus three calls per active thread. The client reads
+ <code>X-RateLimit-Remaining</code> / <code>X-RateLimit-Reset</code> and sleeps until
+ reset when the budget is exhausted; it also honours the secondary-rate-limit
+ <code>Retry-After</code> header (bounded to 5 waits before raising). Transient
+ transport failures are retried with exponential backoff (1, 2, 4, 8, 16&nbsp;s).</p>
 
-  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><code>/search/issues</code> caps at 1,000 results per query, so a narrow <code>--since</code> window matters for very active accounts.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><code>/search/issues</code> caps at 1,000 results per query, so a narrow <code>--since</code> window matters for very active accounts.</div></div>
 
-  <h2 id="notes">Notes &amp; limitations</h2>
-  <ul>
-    <li><strong>Not indexed:</strong> commit messages (already queryable in local git),
-    workflow / check runs (high volume, low recall value), and notifications (they
-    overlap with the issue / comment streams).</li>
-    <li><strong>PR reviews without a body are skipped</strong> — only reviews carrying a
-    summary body are recorded.</li>
-    <li><strong>Privacy:</strong> records land in the same store the
-    <a href="/platform/mcp-server/">MCP server</a> reads from. Anyone with access to that
-    database and the matching <code>MCP_USER_ID</code> can recall the content through
-    <code>search_memory</code>. Don't use a <code>GITHUB_TOKEN</code> with broader scope
-    than you'd hand the assistant directly.</li>
-    <li><strong>State backend:</strong> <code>state.py</code> is described in-source as a
-    copy of the teams-sync backend, duplicated per connector so each package stays a
-    single <code>pip install</code> away from working rather than sharing a library.</li>
-    <li><strong>Version:</strong> <code>0.1.0</code> (Development Status: 4 - Beta).</li>
-  </ul>
+ <h2 id="notes">Notes &amp; limitations</h2>
+ <ul>
+ <li><strong>Not indexed:</strong> commit messages (already queryable in local git),
+ workflow / check runs (high volume, low recall value), and notifications (they
+ overlap with the issue / comment streams).</li>
+ <li><strong>PR reviews without a body are skipped</strong>, only reviews carrying a
+ summary body are recorded.</li>
+ <li><strong>Privacy:</strong> records land in the same store the
+ <a href="/platform/mcp-server/">MCP server</a> reads from. Anyone with access to that
+ database and the matching <code>MCP_USER_ID</code> can recall the content through
+ <code>search_memory</code>. Don't use a <code>GITHUB_TOKEN</code> with broader scope
+ than you'd hand the assistant directly.</li>
+ <li><strong>State backend:</strong> <code>state.py</code> is described in-source as a
+ copy of the teams-sync backend, duplicated per connector so each package stays a
+ single <code>pip install</code> away from working rather than sharing a library.</li>
+ <li><strong>Version:</strong> <code>0.1.0</code> (Development Status: 4 - Beta).</li>
+ </ul>
 
-  <p>See also the <a href="/platform/mcp-server/">MCP server</a> docs, and the project
-  wiki at <a href="https://wiki.evolutiondb.org">wiki.evolutiondb.org</a>.</p>
+ <p>See also the <a href="/platform/mcp-server/">MCP server</a> docs, and the project
+ wiki at <a href="https://wiki.evolutiondb.org">wiki.evolutiondb.org</a>.</p>
 
 </main></div>
 <script src="/nav-data.js"></script>

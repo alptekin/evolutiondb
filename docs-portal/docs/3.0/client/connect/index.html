@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>30. Connecting (PG wire & EVO) — EvolutionDB 3.0</title>
+<title>30. Connecting (PG wire & EVO) | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -47,7 +47,7 @@
 ./adaptor/evosql-server 5433</code></pre>
 
 <div class="callout">
-<p><strong>Note.</strong> The standard PostgreSQL port is 5432. EvolutionDB defaults to <strong>5433</strong> so it can coexist with a real PostgreSQL instance on the same host. Point your client's port at 5433 (or whatever you set with <code>--pg-port</code>) — connecting to 5432 reaches PostgreSQL, not EvolutionDB.</p>
+<p><strong>Note.</strong> The standard PostgreSQL port is 5432. EvolutionDB defaults to <strong>5433</strong> so it can coexist with a real PostgreSQL instance on the same host. Point your client's port at 5433 (or whatever you set with <code>--pg-port</code>): connecting to 5432 reaches PostgreSQL, not EvolutionDB.</p>
 </div>
 
 <h2 id="credentials">30.2. Credentials</h2>
@@ -90,7 +90,7 @@
 <p>After a valid v3.0 StartupMessage, the server always issues an <strong>AuthenticationCleartextPassword</strong> request and expects a <code>PasswordMessage</code> (<code>'p'</code>) in reply. The password is verified with <code>AuthenticateUser</code>; on success the server sends <code>AuthenticationOk</code>, on failure a <code>FATAL</code> error with SQLSTATE <code>28P01</code> (<code>password authentication failed</code>).</p>
 
 <div class="callout">
-<p><strong>Note.</strong> The PG path uses <em>cleartext</em> password authentication only — MD5 and SCRAM-SHA-256 are <strong>not</strong> offered on the wire here (real PostgreSQL negotiates <code>scram-sha-256</code> by default). Because the password crosses the wire in clear, enable TLS via SSLRequest so the credential is encrypted in transit. The native EVO protocol (<a href="#evo">below</a>) does offer SCRAM and does not transmit the password.</p>
+<p><strong>Note.</strong> The PG path uses <em>cleartext</em> password authentication only, MD5 and SCRAM-SHA-256 are <strong>not</strong> offered on the wire here (real PostgreSQL negotiates <code>scram-sha-256</code> by default). Because the password crosses the wire in clear, enable TLS via SSLRequest so the credential is encrypted in transit. The native EVO protocol (<a href="#evo">below</a>) does offer SCRAM and does not transmit the password.</p>
 </div>
 
 <h3 id="pg-ready">30.3.3. Parameters, key data, and ReadyForQuery</h3>
@@ -98,7 +98,7 @@
 <p>On successful authentication the server emits a fixed set of <code>ParameterStatus</code> messages so that drivers which key behavior off server settings work correctly:</p>
 
 <dl class="params">
-<dt><code>server_version</code></dt><dd><code>15.0 (EvoSQL)</code> — the protocol-compatibility version reported to clients.</dd>
+<dt><code>server_version</code></dt><dd><code>15.0 (EvoSQL)</code>, the protocol-compatibility version reported to clients.</dd>
 <dt><code>server_encoding</code> / <code>client_encoding</code></dt><dd>Both <code>UTF8</code>.</dd>
 <dt><code>DateStyle</code></dt><dd><code>ISO, MDY</code></dd>
 <dt><code>integer_datetimes</code></dt><dd><code>on</code></dd>
@@ -109,7 +109,7 @@
 <dt><code>IntervalStyle</code></dt><dd><code>postgres</code></dd>
 </dl>
 
-<p>The server then sends <code>BackendKeyData</code> — carrying the session-registry ID (used as the PID) and a randomly generated 32-bit cancel key — followed by <code>ReadyForQuery</code>. The transaction-status byte in <code>ReadyForQuery</code> is <code>I</code> (idle), <code>T</code> (in a transaction block), or <code>E</code> (failed transaction awaiting <a href="/3.0/ref/rollback/">ROLLBACK</a>).</p>
+<p>The server then sends <code>BackendKeyData</code>, carrying the session-registry ID (used as the PID) and a randomly generated 32-bit cancel key, followed by <code>ReadyForQuery</code>. The transaction-status byte in <code>ReadyForQuery</code> is <code>I</code> (idle), <code>T</code> (in a transaction block), or <code>E</code> (failed transaction awaiting <a href="/3.0/ref/rollback/">ROLLBACK</a>).</p>
 
 <h3 id="pg-simple">30.3.4. Simple Query protocol</h3>
 
@@ -128,7 +128,7 @@ testdb=&gt; <span class="c-key">SELECT</span> id, name <span class="c-key">FROM<
 <ul>
 <li><strong>Named statements are retained.</strong> A <code>Parse</code> stores the query text keyed by statement name (up to <strong>64</strong> named statements per connection). A later <code>Bind</code>+<code>Execute</code> that re-uses the name with no preceding <code>Parse</code> rebuilds the query from the retained template. Unnamed statements use the empty name and are freely replaced.</li>
 <li><strong>Parameter substitution is textual.</strong> Bound <code>$1</code>, <code>$2</code>, … placeholders are interpolated into the SQL string: <code>NULL</code> parameters become the literal <code>NULL</code>; all other values are single-quoted with embedded quotes doubled. Up to <strong>64</strong> parameters per Bind are handled.</li>
-<li><strong>Binary parameter formats</strong> are decoded for the common fixed widths — 4-byte int32, 2-byte int16, 8-byte int64, and 1-byte boolean — and converted to text. Other binary inputs are copied through as-is.</li>
+<li><strong>Binary parameter formats</strong> are decoded for the common fixed widths: 4-byte int32, 2-byte int16, 8-byte int64, and 1-byte boolean, and converted to text. Other binary inputs are copied through as-is.</li>
 <li><strong>Describe</strong> of a portal/statement returns a <code>RowDescription</code> for a <code>SELECT</code> with columns, or <code>NoData</code> otherwise; <code>Describe('S')</code> first emits a <code>ParameterDescription</code> reporting zero parameter type OIDs.</li>
 <li><strong>Close('S', name)</strong> deallocates the named prepared statement and drops its retained template; <code>Close('P', …)</code> for a portal is acknowledged but retains nothing.</li>
 </ul>
@@ -190,11 +190,11 @@ END
 TAG &lt;command_tag&gt;
 READY</code></pre>
 
-<p>A non-<code>SELECT</code> statement returns <code>OK</code> then <code>TAG &lt;command_tag&gt;</code> (for example <code>TAG INSERT 0 2</code>), and errors return <code>ERR &lt;sqlstate&gt; &lt;message&gt;</code>. Every command — success or error — is terminated by a <code>READY</code> line. Sending <code>QUIT</code> ends the session with <code>BYE</code>.</p>
+<p>A non-<code>SELECT</code> statement returns <code>OK</code> then <code>TAG &lt;command_tag&gt;</code> (for example <code>TAG INSERT 0 2</code>), and errors return <code>ERR &lt;sqlstate&gt; &lt;message&gt;</code>. Every command, success or error, is terminated by a <code>READY</code> line. Sending <code>QUIT</code> ends the session with <code>BYE</code>.</p>
 
 <h3 id="evo-prepared">30.4.3. Server-side prepared statements and batches</h3>
 
-<p>EVO exposes named prepared statements directly on the protocol — there is no SQL-level <a href="/3.0/ref/prepare/">PREPARE</a> required. Up to <strong>32</strong> statements may be held per connection. Placeholders are <code>$1</code>…<code>$9+</code>; the parameter count is derived from the highest placeholder seen.</p>
+<p>EVO exposes named prepared statements directly on the protocol, there is no SQL-level <a href="/3.0/ref/prepare/">PREPARE</a> required. Up to <strong>32</strong> statements may be held per connection. Placeholders are <code>$1</code>…<code>$9+</code>; the parameter count is derived from the highest placeholder seen.</p>
 
 <table>
 <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
@@ -212,7 +212,7 @@ READY</code></pre>
 <table>
 <thead><tr><th>Code</th><th>Type</th><th>Payload</th></tr></thead>
 <tbody>
-<tr><td><code>N</code></td><td>NULL</td><td>none — emitted as SQL <code>NULL</code></td></tr>
+<tr><td><code>N</code></td><td>NULL</td><td>none, emitted as SQL <code>NULL</code></td></tr>
 <tr><td><code>i</code></td><td>int4</td><td>4 bytes, big-endian</td></tr>
 <tr><td><code>l</code></td><td>int8</td><td>8 bytes, big-endian</td></tr>
 <tr><td><code>d</code></td><td>float8</td><td>8 bytes, big-endian IEEE-754</td></tr>
@@ -237,15 +237,15 @@ READY</code></pre>
 
 <ul>
 <li><strong>Default isolation</strong> is READ COMMITTED. See <a href="/3.0/ref/set-transaction/">SET TRANSACTION</a> and <a href="/3.0/concepts/mvcc/">MVCC &amp; isolation</a>.</li>
-<li><strong>Idle timeout</strong>: if a session idle timeout is configured, a connection that sends no data within the window is terminated — SQLSTATE <code>57P05</code> (<code>terminating connection due to idle timeout</code> on PG; <code>idle timeout</code> on EVO).</li>
+<li><strong>Idle timeout</strong>: if a session idle timeout is configured, a connection that sends no data within the window is terminated, SQLSTATE <code>57P05</code> (<code>terminating connection due to idle timeout</code> on PG; <code>idle timeout</code> on EVO).</li>
 <li><strong>Auto-rollback on disconnect</strong>: if a client drops while a transaction is open, the server rolls it back, releases any SERIALIZABLE lock, and frees the undo log.</li>
 <li><strong>Temporary objects</strong>: session-scoped temporary tables and global-temp-table contents are dropped automatically when the session ends.</li>
-<li><strong>LISTEN/NOTIFY</strong>: asynchronous notifications are delivered between replies — as standard <code>NotificationResponse</code> on PG, and as a <code>NOTIFY &lt;sender_id&gt; &lt;channel&gt; &lt;len&gt;</code> framed line on EVO. See <a href="/3.0/ref/listen/">LISTEN</a> / <a href="/3.0/ref/notify/">NOTIFY</a>.</li>
+<li><strong>LISTEN/NOTIFY</strong>: asynchronous notifications are delivered between replies, as standard <code>NotificationResponse</code> on PG, and as a <code>NOTIFY &lt;sender_id&gt; &lt;channel&gt; &lt;len&gt;</code> framed line on EVO. See <a href="/3.0/ref/listen/">LISTEN</a> / <a href="/3.0/ref/notify/">NOTIFY</a>.</li>
 </ul>
 
 <h2 id="cancel">30.6. Query cancellation</h2>
 
-<p>On the PG protocol, <code>BackendKeyData</code> hands the client a PID (the session-registry ID) and a random 32-bit secret. To cancel an in-flight query the client opens a <em>second</em> connection and sends a <code>CancelRequest</code> (code <code>80877102</code>) carrying that PID and secret. The server matches the session by PID + secret, sets its cancel flag, and immediately closes the cancel connection — exactly as the PostgreSQL spec prescribes.</p>
+<p>On the PG protocol, <code>BackendKeyData</code> hands the client a PID (the session-registry ID) and a random 32-bit secret. To cancel an in-flight query the client opens a <em>second</em> connection and sends a <code>CancelRequest</code> (code <code>80877102</code>) carrying that PID and secret. The server matches the session by PID + secret, sets its cancel flag, and immediately closes the cancel connection, exactly as the PostgreSQL spec prescribes.</p>
 
 <div class="callout">
 <p><strong>Note.</strong> The cancel key is generated fresh per connection from a cryptographic random source (and forced non-zero), so a leaked key only affects the one session it was issued for. The EVO protocol does not expose an out-of-band cancel channel; cancellation there relies on the idle timeout and connection teardown.</p>
@@ -273,11 +273,11 @@ READY</code></pre>
 
 <h2 id="see-also">30.8. See also</h2>
 <ul>
-<li><a href="/3.0/admin/auth/">Authentication &amp; users</a> — account provisioning and password hashing</li>
-<li><a href="/3.0/ref/create-user/">CREATE USER</a>, <a href="/3.0/ref/grant/">GRANT</a> — privileges checked after connect</li>
-<li><a href="/3.0/ref/copy/">COPY</a> — bulk load/unload over both protocols</li>
-<li><a href="/3.0/ref/prepare/">PREPARE</a>, <a href="/3.0/ref/execute/">EXECUTE</a> — SQL-level prepared statements</li>
-<li><a href="/3.0/ref/listen/">LISTEN</a> / <a href="/3.0/ref/notify/">NOTIFY</a> — asynchronous notifications</li>
+<li><a href="/3.0/admin/auth/">Authentication &amp; users</a>, account provisioning and password hashing</li>
+<li><a href="/3.0/ref/create-user/">CREATE USER</a>, <a href="/3.0/ref/grant/">GRANT</a>, privileges checked after connect</li>
+<li><a href="/3.0/ref/copy/">COPY</a>, bulk load/unload over both protocols</li>
+<li><a href="/3.0/ref/prepare/">PREPARE</a>, <a href="/3.0/ref/execute/">EXECUTE</a>, SQL-level prepared statements</li>
+<li><a href="/3.0/ref/listen/">LISTEN</a> / <a href="/3.0/ref/notify/">NOTIFY</a>, asynchronous notifications</li>
 <li><a href="/3.0/concepts/mvcc/">MVCC &amp; isolation</a>, <a href="/3.0/ref/set-transaction/">SET TRANSACTION</a></li>
 </ul>
 </main></div>

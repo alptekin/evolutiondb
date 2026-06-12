@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>LISTEN / UNLISTEN / NOTIFY — EvolutionDB 3.0</title>
+<title>LISTEN / UNLISTEN / NOTIFY | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -28,8 +28,8 @@
 
 <h2 id="description">Description</h2>
 <p><code>LISTEN</code> registers the current session as a listener on the notification
-<em>channel</em> named <code>channel</code>. <code>NOTIFY</code> sends a notification — together with an
-optional <em>payload</em> string — to every session currently listening on the
+<em>channel</em> named <code>channel</code>. <code>NOTIFY</code> sends a notification, together with an
+optional <em>payload</em> string, to every session currently listening on the
 matching channel. <code>UNLISTEN</code> removes the current session's registration for one
 channel, or for all channels when <code>*</code> is given.</p>
 
@@ -46,7 +46,7 @@ rejected.</p>
 
 <p><strong>Transactional delivery.</strong> <code>NOTIFY</code> is <em>commit-gated</em>. A
 <code>NOTIFY</code> issued inside an explicit transaction block is not delivered
-immediately — its channel and payload are enqueued on the session and the
+immediately, its channel and payload are enqueued on the session and the
 messages are flushed only when the transaction commits. If the transaction
 rolls back, the pending notifications are discarded and nothing is delivered.
 In auto-commit mode (no open <code>BEGIN</code>), the statement commits on its own, so
@@ -96,8 +96,8 @@ delivered.</dd>
 <div class="callout">
 <p><strong>Note.</strong> EvolutionDB accepts a quoted string literal as the
 <code>NOTIFY</code> payload. It does not support passing the payload as an arbitrary
-expression in the <code>NOTIFY</code> statement form. To build a payload dynamically — for
-example from query values — use the built-in function <code>evo_notify(channel,
+expression in the <code>NOTIFY</code> statement form. To build a payload dynamically, for
+example from query values, use the built-in function <code>evo_notify(channel,
 payload)</code>, which enqueues a notification using the same commit-gated path. The
 companion function <code>pg_listening_channels()</code> returns the channels the current
 session is listening on.</p>

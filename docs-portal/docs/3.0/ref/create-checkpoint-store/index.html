@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE CHECKPOINT STORE — EvolutionDB 3.0</title>
+<title>CREATE CHECKPOINT STORE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -44,7 +44,7 @@
 <dt>created_at <span class="c-com">TIMESTAMP</span></dt>
 <dd>Insertion time, set automatically by the engine on each write.</dd>
 </dl>
-<p>Because the store is just a catalog registration over an ordinary table, every standard engine path applies to it unchanged — MVCC visibility, row-level security, triggers, and replication all work on the backing table exactly as on a hand-written table.</p>
+<p>Because the store is just a catalog registration over an ordinary table, every standard engine path applies to it unchanged: MVCC visibility, row-level security, triggers, and replication all work on the backing table exactly as on a hand-written table.</p>
 <p>If a store with the same <em>name</em> already exists, the statement fails (SQLSTATE <code>42710</code>) unless <code>IF NOT EXISTS</code> is given, in which case the statement is a no-op and no error is raised. A missing or empty <em>name</em> is a syntax error (SQLSTATE <code>42601</code>).</p>
 
 <h2 id="parameters">Parameters</h2>
@@ -54,7 +54,7 @@
 <dt><em>name</em></dt>
 <dd>The name of the checkpoint store to create. It must match the engine's identifier pattern (<code>[A-Za-z][A-Za-z0-9_]*</code>). The backing table is created as <code>ck_<em>name</em></code> in the current schema.</dd>
 <dt>WITH ( retention = '<em>interval_text</em>' )</dt>
-<dd>Optional. Stores a free-form retention expression (for example <code>'30 days'</code> or <code>'1 hour'</code>) on the store descriptor in the catalog. The value is recorded verbatim with surrounding quotes stripped; it is descriptive metadata only. In this release no automatic retention pruning is performed against it — old checkpoints are not deleted by the engine on the basis of this value. <code>retention</code> is the only key accepted inside the <code>WITH</code> clause.</dd>
+<dd>Optional. Stores a free-form retention expression (for example <code>'30 days'</code> or <code>'1 hour'</code>) on the store descriptor in the catalog. The value is recorded verbatim with surrounding quotes stripped; it is descriptive metadata only. In this release no automatic retention pruning is performed against it, old checkpoints are not deleted by the engine on the basis of this value. <code>retention</code> is the only key accepted inside the <code>WITH</code> clause.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
@@ -78,11 +78,11 @@
 <span class="c-key">ORDER BY</span> created_at <span class="c-key">DESC</span><span class="c-com">;</span></code></pre>
 
 <div class="callout">
-<p>The grammar also accepts native checkpoint DML — <code>CHECKPOINT PUT [WRITES] INTO <em>name</em> VALUES (…)</code>, <code>CHECKPOINT GET FROM <em>name</em> THREAD '<em>id</em>' [AT '<em>checkpoint_id</em>']</code>, and <code>CHECKPOINT LIST FROM <em>name</em> THREAD '<em>id</em>' [LIMIT <em>n</em>]</code> — which compile down to <code>INSERT</code> / <code>SELECT</code> against the same backing table. <code>GET</code> returns the newest matching row; <code>LIST</code> returns history newest-first.</p>
+<p>The grammar also accepts native checkpoint DML, <code>CHECKPOINT PUT [WRITES] INTO <em>name</em> VALUES (…)</code>, <code>CHECKPOINT GET FROM <em>name</em> THREAD '<em>id</em>' [AT '<em>checkpoint_id</em>']</code>, and <code>CHECKPOINT LIST FROM <em>name</em> THREAD '<em>id</em>' [LIMIT <em>n</em>]</code>, which compile down to <code>INSERT</code> / <code>SELECT</code> against the same backing table. <code>GET</code> returns the newest matching row; <code>LIST</code> returns history newest-first.</p>
 </div>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE CHECKPOINT STORE</code> is an EvolutionDB extension. It is not part of the SQL standard and has no equivalent in PostgreSQL — PostgreSQL has no checkpoint-store object (its <code>CHECKPOINT</code> command is an unrelated WAL/buffer flush operation).</p>
+<p><code>CREATE CHECKPOINT STORE</code> is an EvolutionDB extension. It is not part of the SQL standard and has no equivalent in PostgreSQL, PostgreSQL has no checkpoint-store object (its <code>CHECKPOINT</code> command is an unrelated WAL/buffer flush operation).</p>
 <p>The clauses EvolutionDB accepts are exactly <code>IF NOT EXISTS</code> and the single-key <code>WITH (retention = '…')</code> option shown in the Synopsis. There is no <code>TABLESPACE</code>, owner, encoding, or other PostgreSQL <code>CREATE …</code>-style clause here. Although the spelling of the <code>WITH</code> clause resembles a generic storage-parameter list, <code>retention</code> is the only recognized key and it is stored as descriptive metadata rather than enforced in this release.</p>
 
 <h2 id="see-also">See Also</h2>

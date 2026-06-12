@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE TRIGGER — EvolutionDB 3.0</title>
+<title>CREATE TRIGGER | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -30,7 +30,7 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>CREATE TRIGGER</code> registers a new trigger against an existing table (or the backing table of a memory store). Once created, the trigger fires for every row affected by the matching event, executing its procedural body through the same engine that runs stored procedures — so <code>IF</code>, <code>WHILE</code>, <code>SIGNAL</code>, and other procedural statements are available inside the body.</p>
+<p><code>CREATE TRIGGER</code> registers a new trigger against an existing table (or the backing table of a memory store). Once created, the trigger fires for every row affected by the matching event, executing its procedural body through the same engine that runs stored procedures, so <code>IF</code>, <code>WHILE</code>, <code>SIGNAL</code>, and other procedural statements are available inside the body.</p>
 <p>EvolutionDB triggers are always <strong>row-level</strong> (<code>FOR EACH ROW</code> is mandatory and is the only granularity the grammar accepts; there is no statement-level form). Each trigger fires on exactly one event and one timing. To react to several events you must create one trigger per event.</p>
 <p>Within the body, the special qualifiers <code>OLD.<em>column</em></code> and <code>NEW.<em>column</em></code> refer to the row values before and after the operation. These references are substituted with literal values immediately before the body is executed: <code>OLD</code> reflects the existing row (available for <code>UPDATE</code> and <code>DELETE</code>), and <code>NEW</code> reflects the incoming row (available for <code>INSERT</code> and <code>UPDATE</code>). A reference whose value is unknown is replaced with <code>NULL</code>.</p>
 <p>In a <code>BEFORE</code> trigger, a statement of the form <code>SET NEW.<em>column</em> = <em>expression</em>;</code> is recognized specially: the expression is evaluated and written back into the corresponding column of the row being inserted or updated, letting the trigger transform the row before it is stored. This rewrite is honored only for <code>BEFORE</code> triggers.</p>
@@ -55,7 +55,7 @@
 <dd>Attach the trigger to a memory store instead of an ordinary table. The store name is resolved through the memory-store catalog and rewritten to its backing table (<code>mem_<em>store_name</em></code>); the trigger then fires on that backing table exactly as a regular table trigger would.</dd>
 
 <dt>FOR EACH ROW</dt>
-<dd>Required. Specifies row-level firing — the body runs once per affected row. This is the only granularity supported.</dd>
+<dd>Required. Specifies row-level firing, the body runs once per affected row. This is the only granularity supported.</dd>
 
 <dt>trigger_body</dt>
 <dd>The procedural statements between <code>BEGIN</code> and <code>END</code>, executed for each matching row. The body reuses the stored-procedure execution engine and may reference <code>OLD.<em>column</em></code> / <code>NEW.<em>column</em></code>, and (in <code>BEFORE</code> triggers) assign to <code>NEW.<em>column</em></code> with <code>SET</code>.</dd>

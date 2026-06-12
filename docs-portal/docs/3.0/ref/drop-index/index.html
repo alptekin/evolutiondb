@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>DROP INDEX — EvolutionDB 3.0</title>
+<title>DROP INDEX | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -23,7 +23,7 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>DROP INDEX</code> removes an existing secondary index. The index is located by its name alone — EvolutionDB searches every table for an index with the given name, so the owning table does not need to be (and cannot be) specified in the command.</p>
+<p><code>DROP INDEX</code> removes an existing secondary index. The index is located by its name alone: EvolutionDB searches every table for an index with the given name, so the owning table does not need to be (and cannot be) specified in the command.</p>
 <p>When the index is found, its backing structure is destroyed according to the index's type:</p>
 <ul>
 <li>A B+ tree index has its tree pages freed (the default for <code>CREATE INDEX</code> and <code>CREATE UNIQUE INDEX</code>).</li>
@@ -60,11 +60,11 @@
 <p><code>DROP INDEX</code> is not part of the core SQL standard; the standard leaves index management to implementations. EvolutionDB's form is deliberately minimal.</p>
 <p>Compared to PostgreSQL, EvolutionDB accepts only <code>DROP INDEX index_name</code>. The following PostgreSQL clauses are <strong>not</strong> supported by EvolutionDB's grammar and must be omitted:</p>
 <ul>
-<li><code>IF EXISTS</code> — not accepted; dropping a missing index always raises an error.</li>
-<li><code>CONCURRENTLY</code> — not accepted; the drop is not online/concurrent.</li>
-<li><code>CASCADE</code> / <code>RESTRICT</code> — not accepted.</li>
-<li>Dropping multiple indexes in one statement (<code>DROP INDEX a, b</code>) — not accepted; one index name per statement.</li>
-<li>Schema-qualified names (<code>schema.index</code>) — the index is resolved by bare name across all tables.</li>
+<li><code>IF EXISTS</code>, not accepted; dropping a missing index always raises an error.</li>
+<li><code>CONCURRENTLY</code>, not accepted; the drop is not online/concurrent.</li>
+<li><code>CASCADE</code> / <code>RESTRICT</code>, not accepted.</li>
+<li>Dropping multiple indexes in one statement (<code>DROP INDEX a, b</code>), not accepted; one index name per statement.</li>
+<li>Schema-qualified names (<code>schema.index</code>), the index is resolved by bare name across all tables.</li>
 </ul>
 <p>Unlike PostgreSQL, EvolutionDB explicitly refuses to drop a primary-key index through this command.</p>
 

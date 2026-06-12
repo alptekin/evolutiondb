@@ -6,7 +6,7 @@
 <title>How EvolutionDB Compares</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script id="tailwind-config">
         tailwind.config = {
             darkMode: "class",
@@ -314,10 +314,10 @@
 </div>
 <h2 class="font-display-lg text-display-lg mb-4 leading-tight tracking-tight">
 How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
-            </h2>
+ </h2>
 <p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">
-                A SQL-compatible, agent-native memory layer that folds relational data, documents, and vectors into a single open-source binary. Here is how its architecture lines up against the tools teams reach for today — compared on capabilities, not marketing numbers.
-            </p>
+ A SQL-compatible, agent-native memory layer that folds relational data, documents, and vectors into a single open-source binary. Here is how its architecture lines up against the tools teams reach for today: compared on capabilities, not marketing numbers.
+ </p>
 </section>
 <!-- Category Nav -->
 <div class="flex justify-center mb-margin-md">
@@ -344,8 +344,8 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">Memory Built Into the Engine</h3>
 <p class="text-on-surface-variant mb-6 font-body-md leading-relaxed">
-                            EvolutionDB speaks the PostgreSQL wire protocol, so psql, DBeaver, and pgAdmin connect out of the box. The difference is in the DNA: agent-memory and vector primitives are first-class storage-engine features at the DDL level, not capabilities you add through an extension.
-                        </p>
+ EvolutionDB speaks the PostgreSQL wire protocol, so psql, DBeaver, and pgAdmin connect out of the box. The difference is in the DNA: agent-memory and vector primitives are first-class storage-engine features at the DDL level, not capabilities you add through an extension.
+ </p>
 <div class="space-y-4">
 <div class="flex items-start gap-4">
 <span class="material-symbols-outlined text-neon-cyan mt-1 check-draw" data-icon="check_circle">check_circle</span>
@@ -358,7 +358,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 <span class="material-symbols-outlined text-neon-cyan mt-1 check-draw" data-icon="check_circle">check_circle</span>
 <div>
 <p class="font-bold">No extensions to install</p>
-<p class="text-sm text-on-surface-variant">HNSW vector indexing ships in the core — no CREATE EXTENSION step, no version-compatibility juggling.</p>
+<p class="text-sm text-on-surface-variant">HNSW vector indexing ships in the core: no CREATE EXTENSION step, no version-compatibility juggling.</p>
 </div>
 </div>
 </div>
@@ -393,21 +393,21 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">MongoDB Atlas Vector Search</h3>
 <p class="text-on-surface-variant mb-6">
-                    Atlas Vector Search is a managed cloud service layered on a document store. EvolutionDB is a single binary you run yourself — including a zero-Docker embedded mode — with relational SQL, documents, and vectors in one engine.
-                </p>
+ Atlas Vector Search is a managed cloud service layered on a document store. EvolutionDB is a single binary you run yourself, including a zero-Docker embedded mode, with relational SQL, documents, and vectors in one engine.
+ </p>
 <ul class="space-y-3">
 <li class="flex items-center gap-3 text-on-surface">
 <span class="material-symbols-outlined text-neon-cyan text-sm check-draw" data-icon="verified">verified</span>
-                        SQL relational engine with MVCC transactions
-                    </li>
+ SQL relational engine with MVCC transactions
+ </li>
 <li class="flex items-center gap-3 text-on-surface">
 <span class="material-symbols-outlined text-neon-cyan text-sm check-draw" data-icon="verified">verified</span>
-                        Runs on-premise or air-gapped, no managed cloud required
-                    </li>
+ Runs on-premise or air-gapped, no managed cloud required
+ </li>
 <li class="flex items-center gap-3 text-on-surface">
 <span class="material-symbols-outlined text-neon-cyan text-sm check-draw" data-icon="verified">verified</span>
-                        Open source under the MIT license
-                    </li>
+ Open source under the MIT license
+ </li>
 </ul>
 </div>
 <!-- Comparison 3: Pinecone / Weaviate -->
@@ -418,8 +418,8 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">Pinecone / Weaviate</h3>
 <p class="text-on-surface-variant mb-6">
-                    Dedicated vector databases store embeddings as a separate service alongside your primary database. EvolutionDB keeps vectors and relational data in the same engine, so a single query can filter rows and run semantic search without a second system to sync.
-                </p>
+ Dedicated vector databases store embeddings as a separate service alongside your primary database. EvolutionDB keeps vectors and relational data in the same engine, so a single query can filter rows and run semantic search without a second system to sync.
+ </p>
 <div class="p-4 bg-white/5 rounded-lg border border-white/5 space-y-3">
 <div class="flex items-center gap-3">
 <span class="material-symbols-outlined text-neon-cyan text-sm" data-icon="check_circle">check_circle</span>
@@ -440,7 +440,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 <div class="grid md:grid-cols-3 gap-8">
 <div class="md:col-span-1">
 <h4 class="font-headline-md text-headline-md text-neon-cyan mb-2">Zep / Mem0</h4>
-<p class="text-on-surface-variant">Memory frameworks like Zep and Mem0 add an agent-memory layer on top of an existing database or vector store. EvolutionDB makes memory, temporal history, and vectors native to the storage engine itself — no extra backing store to operate.</p>
+<p class="text-on-surface-variant">Memory frameworks like Zep and Mem0 add an agent-memory layer on top of an existing database or vector store. EvolutionDB makes memory, temporal history, and vectors native to the storage engine itself, no extra backing store to operate.</p>
 </div>
 <div class="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
 <div class="p-4 glass-panel text-center rounded-lg hover:bg-white/5 transition-colors">

@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>31. evosql-cli — EvolutionDB 3.0</title>
+<title>31. evosql-cli | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -17,7 +17,7 @@
 <h1>31. evosql-cli</h1>
 <p class="lede"><code>evosql-cli</code> is EvolutionDB's interactive terminal client: it speaks the native EVO text protocol, renders result sets as tables, CSV or JSON, supports backslash meta-commands, and runs equally well as an interactive shell or a non-interactive script runner.</p>
 
-<p>Unlike PostgreSQL's <code>psql</code> — which talks the binary PostgreSQL wire protocol on port 5432 — <code>evosql-cli</code> connects over EvolutionDB's line-oriented <strong>EVO protocol</strong> on TCP port <strong>9967</strong>. The two are not interchangeable: <code>psql</code> (and other PostgreSQL clients such as DBeaver) connect to the server's PostgreSQL-compatible port 5433, while <code>evosql-cli</code> is the purpose-built client for the EVO port. Everything documented on this page reflects what the client actually implements; where a familiar <code>psql</code> feature is absent or behaves differently, that difference is called out honestly.</p>
+<p>Unlike PostgreSQL's <code>psql</code>, which talks the binary PostgreSQL wire protocol on port 5432, <code>evosql-cli</code> connects over EvolutionDB's line-oriented <strong>EVO protocol</strong> on TCP port <strong>9967</strong>. The two are not interchangeable: <code>psql</code> (and other PostgreSQL clients such as DBeaver) connect to the server's PostgreSQL-compatible port 5433, while <code>evosql-cli</code> is the purpose-built client for the EVO port. Everything documented on this page reflects what the client actually implements; where a familiar <code>psql</code> feature is absent or behaves differently, that difference is called out honestly.</p>
 
 <h2 id="invocation">31.1. Invocation</h2>
 
@@ -143,13 +143,13 @@ INSERT 0 1
 
 <p>You can leave the shell with the <code>\q</code> meta-command, with the bare words <code>quit</code> or <code>exit</code> (case-insensitive, kept for familiarity), or with end-of-file (Ctrl-D on an empty line). On a non-empty multi-line buffer, Ctrl-D discards the pending buffer and re-prompts rather than exiting.</p>
 
-<h3 id="cancel">31.3.3. Ctrl-C — cancel, not quit</h3>
+<h3 id="cancel">31.3.3. Ctrl-C, cancel, not quit</h3>
 
 <p><code>evosql-cli</code> never terminates on Ctrl-C. Its behavior depends on what the client is doing:</p>
 
 <dl class="params">
 <dt>At the prompt (typing)</dt>
-<dd>Ctrl-C abandons the current line and any pending multi-line buffer and re-draws a fresh prompt — shell-like. (On POSIX this is implemented by long-jumping out of readline after cleaning up the terminal; <code>rl_catch_signals</code> is disabled so readline never re-raises the signal.)</dd>
+<dd>Ctrl-C abandons the current line and any pending multi-line buffer and re-draws a fresh prompt, shell-like. (On POSIX this is implemented by long-jumping out of readline after cleaning up the terminal; <code>rl_catch_signals</code> is disabled so readline never re-raises the signal.)</dd>
 <dt>During a running query</dt>
 <dd>The EVO protocol has no in-band query-cancel message. The client therefore sets an interrupt flag, abandons the now-desynchronized socket, and <strong>transparently reconnects</strong> a fresh session, printing <code>query canceled</code>. Connection parameters are stashed at startup precisely so this reconnect can happen silently. If the schema may have changed (the canceled statement contained <code>CREATE</code>/<code>DROP</code>/<code>ALTER</code>), the completion cache is refreshed afterward.</dd>
 </dl>
@@ -185,7 +185,7 @@ MAX VARCHAR INT INTEGER TIMESTAMP BOOLEAN TEXT</code></pre>
 
 <h3 id="format-table">31.4.1. table (default)</h3>
 
-<p>An aligned grid: a bold header row, a dimmed <code>-+-</code> rule, then the rows, finishing with a dimmed <code>(N row[s])</code> count. Column widths are computed from the widest value (or header). NULL values render as the dimmed literal <code>NULL</code>. Status tags and the row count are written to standard output in this format. When <code>\x</code> (expanded) is on, each record is printed as a <code>-[ RECORD n ]-</code> banner followed by one <code>column | value</code> line per field — handy for wide rows.</p>
+<p>An aligned grid: a bold header row, a dimmed <code>-+-</code> rule, then the rows, finishing with a dimmed <code>(N row[s])</code> count. Column widths are computed from the widest value (or header). NULL values render as the dimmed literal <code>NULL</code>. Status tags and the row count are written to standard output in this format. When <code>\x</code> (expanded) is on, each record is printed as a <code>-[ RECORD n ]-</code> banner followed by one <code>column | value</code> line per field, handy for wide rows.</p>
 
 <h3 id="format-csv">31.4.2. csv</h3>
 
@@ -218,7 +218,7 @@ MAX VARCHAR INT INTEGER TIMESTAMP BOOLEAN TEXT</code></pre>
 ]</span></code></pre>
 
 <div class="callout">
-<strong>Limitations to know.</strong> NULL and empty string are indistinguishable in CSV. A result set is buffered fully in memory before printing — there is no streaming or paging, and the internal row buffer starts at 64 rows and doubles as needed (there is no fixed truncation in the EVO read path). The JSON emitter performs no pretty-printing beyond one object per line.
+<strong>Limitations to know.</strong> NULL and empty string are indistinguishable in CSV. A result set is buffered fully in memory before printing: there is no streaming or paging, and the internal row buffer starts at 64 rows and doubles as needed (there is no fixed truncation in the EVO read path). The JSON emitter performs no pretty-printing beyond one object per line.
 </div>
 
 <h2 id="meta">31.5. Meta-commands</h2>
@@ -254,7 +254,7 @@ MAX VARCHAR INT INTEGER TIMESTAMP BOOLEAN TEXT</code></pre>
 <dd>Read <var>FILE</var> and run it as a script (the same splitter used for <code>-f</code>). The file may itself contain meta-commands, including a nested <code>\i</code>.</dd>
 
 <dt><code>\e</code></dt>
-<dd>Open <code>$EDITOR</code> (default <code>vi</code>) on a private temporary file created with <code>mkstemp</code>; on a clean editor exit, the file's contents are run as a script. POSIX only — on Windows it prints that it is unsupported.</dd>
+<dd>Open <code>$EDITOR</code> (default <code>vi</code>) on a private temporary file created with <code>mkstemp</code>; on a clean editor exit, the file's contents are run as a script. POSIX only, on Windows it prints that it is unsupported.</dd>
 
 <dt><code>\!</code> <var>CMD</var></dt>
 <dd>Run <var>CMD</var> in the system shell.</dd>
@@ -264,7 +264,7 @@ MAX VARCHAR INT INTEGER TIMESTAMP BOOLEAN TEXT</code></pre>
 </dl>
 
 <div class="callout">
-<strong>Naming notes vs. <code>psql</code>.</strong> The verbs are deliberately psql-flavored, but the set is small and a few behave slightly differently: <code>\d</code> and <code>\dt</code> are aliases (both list tables, and <code>\d NAME</code> describes columns); <code>\l</code>, <code>\du</code>, <code>\dn</code> are thin wrappers over the corresponding <code>SHOW</code> command. There is no <code>\copy</code>, no <code>\g</code>, no variable system (<code>\set</code>), and no <code>\connect</code> — the connection is fixed for the life of the process (apart from the transparent reconnect after a Ctrl-C cancel).
+<strong>Naming notes vs. <code>psql</code>.</strong> The verbs are deliberately psql-flavored, but the set is small and a few behave slightly differently: <code>\d</code> and <code>\dt</code> are aliases (both list tables, and <code>\d NAME</code> describes columns); <code>\l</code>, <code>\du</code>, <code>\dn</code> are thin wrappers over the corresponding <code>SHOW</code> command. There is no <code>\copy</code>, no <code>\g</code>, no variable system (<code>\set</code>), and no <code>\connect</code>, the connection is fixed for the life of the process (apart from the transparent reconnect after a Ctrl-C cancel).
 </div>
 
 <h2 id="scripting">31.6. Scripting and non-interactive use</h2>
@@ -273,7 +273,7 @@ MAX VARCHAR INT INTEGER TIMESTAMP BOOLEAN TEXT</code></pre>
 
 <h3 id="splitter">31.6.1. The statement splitter</h3>
 
-<p>Script text — from <code>-c</code>, <code>-f</code>, piped stdin, <code>\i</code>, or <code>\e</code> — is split into statements by the same quote- and comment-aware scanner used interactively:</p>
+<p>Script text, from <code>-c</code>, <code>-f</code>, piped stdin, <code>\i</code>, or <code>\e</code>, is split into statements by the same quote- and comment-aware scanner used interactively:</p>
 
 <ul>
 <li>The kind of each statement is fixed at its first non-blank character: a line starting with <code>\</code> is a meta-command (terminated by newline); anything else is SQL (terminated by an unquoted <code>;</code>).</li>
@@ -296,7 +296,7 @@ SELECT count(*) FROM t;</code></pre>
 <dt><code>0</code></dt>
 <dd>All statements ran and the server reported no error.</dd>
 <dt><code>1</code></dt>
-<dd>A statement failed — the run hit a non-zero internal code (an unreadable <code>-f</code> file, a connection loss, or a Ctrl-C cancel) <em>or</em> the server returned an <code>ERR</code> for any statement (tracked by an error-seen flag, even if later statements succeed).</dd>
+<dd>A statement failed, the run hit a non-zero internal code (an unreadable <code>-f</code> file, a connection loss, or a Ctrl-C cancel) <em>or</em> the server returned an <code>ERR</code> for any statement (tracked by an error-seen flag, even if later statements succeed).</dd>
 <dt><code>2</code></dt>
 <dd>An invalid <code>--format</code> argument was given (the client exits before connecting).</dd>
 </dl>
@@ -304,7 +304,7 @@ SELECT count(*) FROM t;</code></pre>
 <pre><code>evosql-cli -c <span class="c-str">"SELECT 1"</span> &amp;&amp; echo ok || echo failed</code></pre>
 
 <div class="callout">
-<strong>Errors don't stop a script.</strong> In non-interactive mode a server <code>ERR</code> sets the error flag and the run continues to the next statement; the process still exits <code>1</code> at the end. A connection loss (<code>-1</code>) or Ctrl-C cancel (<code>-2</code>), however, stops the script. This differs from <code>psql</code>'s default and from its <code>ON_ERROR_STOP</code> — there is no equivalent setting here.
+<strong>Errors don't stop a script.</strong> In non-interactive mode a server <code>ERR</code> sets the error flag and the run continues to the next statement; the process still exits <code>1</code> at the end. A connection loss (<code>-1</code>) or Ctrl-C cancel (<code>-2</code>), however, stops the script. This differs from <code>psql</code>'s default and from its <code>ON_ERROR_STOP</code>, there is no equivalent setting here.
 </div>
 
 <h2 id="errors-tags">31.7. Status tags, errors, and timing</h2>

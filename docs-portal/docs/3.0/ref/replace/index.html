@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>REPLACE — EvolutionDB 3.0</title>
+<title>REPLACE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>REPLACE</h1>
-<p class="lede">REPLACE — insert a row, or if a row with the same primary key already exists, delete that row first and then insert the new one.</p>
+<p class="lede">REPLACE: insert a row, or if a row with the same primary key already exists, delete that row first and then insert the new one.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -35,15 +35,15 @@
 <p><code>REPLACE</code> writes rows into <em>table_name</em>. It behaves exactly like <a href="/3.0/ref/insert/">INSERT</a> with one difference: when the new row would collide with an existing row on the table's primary key, the existing row is deleted and the new row is inserted in its place, rather than the statement failing with a duplicate-key error.</p>
 <p>Conflict detection is driven entirely by the table's <strong>primary key</strong>. EvolutionDB builds the primary-key value from the supplied column values, probes the primary-key B+ tree, and:</p>
 <ul>
-<li>If no matching key is found, the row is inserted normally — identical to <code>INSERT</code>.</li>
+<li>If no matching key is found, the row is inserted normally, identical to <code>INSERT</code>.</li>
 <li>If a matching key is found, the engine deletes the existing row (an MVCC delete under the current transaction), then inserts the new row.</li>
 </ul>
 <p>A REPLACE is therefore a delete-plus-insert, not an in-place update: the replacement row is a brand-new tuple, any columns not provided take their defaults (or NULL), and any <code>BEFORE INSERT</code> triggers fire for the inserted row. The operation runs under the statement's transaction, so it is rolled back together with the surrounding work if the transaction aborts.</p>
 <p>Three forms are accepted, all sharing the same conflict semantics:</p>
 <ul>
-<li><strong>VALUES</strong> — one or more parenthesized row constructors, optionally preceded by an explicit column list.</li>
-<li><strong>SET</strong> — MySQL-style assignment form, listing <code><em>column</em> = <em>value</em></code> pairs for a single row.</li>
-<li><strong>SELECT</strong> — populate the target from the result of a query, optionally with an explicit column list.</li>
+<li><strong>VALUES</strong>: one or more parenthesized row constructors, optionally preceded by an explicit column list.</li>
+<li><strong>SET</strong>, MySQL-style assignment form, listing <code><em>column</em> = <em>value</em></code> pairs for a single row.</li>
+<li><strong>SELECT</strong>: populate the target from the result of a query, optionally with an explicit column list.</li>
 </ul>
 <div class="callout">
 <strong>Requires a primary key.</strong> REPLACE's conflict resolution operates on the primary-key index. A target table without a usable primary key has nothing to collide on, so REPLACE simply degrades to a plain insert and will raise a duplicate-key error only where the same key value recurs.
@@ -63,7 +63,7 @@
 <dt><em>table_name</em></dt>
 <dd>The table that receives the rows. It must already exist.</dd>
 
-<dt><em>column</em> [, ...]</dt>
+<dt><em>column</em> [..]</dt>
 <dd>An optional list of target columns. When given (VALUES and SELECT forms), values are matched positionally to these columns; columns omitted from the list take their default value (or NULL). When omitted, values are matched against the table's columns in definition order.</dd>
 
 <dt><em>expression</em></dt>
@@ -75,7 +75,7 @@
 <dt><em>select_statement</em></dt>
 <dd>A query whose result rows are replaced into the target. Each result row is processed with the same primary-key conflict resolution as a literal VALUES row.</dd>
 
-<dt>SET <em>column</em> = <em>value</em> [, ...]</dt>
+<dt>SET <em>column</em> = <em>value</em> [..]</dt>
 <dd>The single-row assignment form. Each pair sets one column; columns not listed take their default value (or NULL).</dd>
 </dl>
 

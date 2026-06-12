@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>UPDATE — EvolutionDB 3.0</title>
+<title>UPDATE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>UPDATE</h1>
-<p class="lede">UPDATE — change the values of columns in rows of a table that satisfy a condition.</p>
+<p class="lede">UPDATE, change the values of columns in rows of a table that satisfy a condition.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -76,8 +76,7 @@ statement references more than one table it is processed as a multi-table update
 
 <dt><em>column</em></dt>
 <dd>The name of a column in the target table. May be written qualified as <em>table</em>.<em>column</em>; the
-qualified form is what drives multi-table assignments. The column cannot be a generated column —
-assigning to one raises an error advising that it can only be updated to <code>DEFAULT</code>.</dd>
+qualified form is what drives multi-table assignments. The column cannot be a generated column, assigning to one raises an error advising that it can only be updated to <code>DEFAULT</code>.</dd>
 
 <dt><em>expression</em></dt>
 <dd>The value to assign to the column, written as a SQL expression after <code>=</code>. The new value must be
@@ -98,7 +97,7 @@ meaningful primarily in combination with <code>LIMIT</code>.</dd>
 effective <code>OFFSET</code>/<code>LIMIT</code> range before the updates are applied; rows outside the range are
 left unchanged.</dd>
 
-<dt>RETURNING * | <em>output_column</em> [ , ... ]</dt>
+<dt>RETURNING * | <em>output_column</em> [.. ]</dt>
 <dd>Causes <code>UPDATE</code> to return the affected rows. <code>RETURNING *</code> returns all columns; a column
 list returns just those columns. The returned values reflect the <strong>new</strong> (post-update) row.</dd>
 </dl>
@@ -136,7 +135,7 @@ extension that EvolutionDB supports, returning post-update column values.</p>
 <code>LIMIT</code> clauses on <code>UPDATE</code>. The <code>LIMIT <em>start</em>, <em>count</em></code> two-argument form is
 MySQL syntax; the <code>LIMIT <em>count</em> OFFSET <em>start</em></code> form follows PostgreSQL.</p>
 <p>Notable differences from PostgreSQL's <code>UPDATE</code>: EvolutionDB does not implement PostgreSQL's
-<code>UPDATE ... FROM <em>from_list</em></code> clause for joins — instead, multi-table updates are expressed by
+<code>UPDATE ... FROM <em>from_list</em></code> clause for joins: instead, multi-table updates are expressed by
 listing tables (and joins) directly after the <code>UPDATE</code> keyword in a FROM-style table reference and
 using qualified <code>SET <em>table</em>.<em>column</em> = ...</code> assignments, in the MySQL multi-table style.
 EvolutionDB also does not support the <code>WHERE CURRENT OF <em>cursor</em></code> targeting, table aliases for the

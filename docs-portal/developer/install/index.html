@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Install &amp; Run EvolutionDB — EvolutionDB</title>
+<title>Install &amp; Run EvolutionDB | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,15 +15,15 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 
-  <h1>Install &amp; Run EvolutionDB</h1>
-  <p class="lede">EvolutionDB is a single-process database server. There are three ways to get one running: <strong>Docker Compose</strong> (fastest), <strong>building from source</strong> with <code>make</code>, and the <strong>zero-Docker embedded mode</strong> where the <a href="/platform/mcp-server/">MCP server</a> spawns its own instance. Every path exposes the same two ports: the PostgreSQL wire protocol on <strong>5433</strong> and the native EVO text protocol on <strong>9967</strong>.</p>
+ <h1>Install &amp; Run EvolutionDB</h1>
+ <p class="lede">EvolutionDB is a single-process database server. There are three ways to get one running: <strong>Docker Compose</strong> (fastest), <strong>building from source</strong> with <code>make</code>, and the <strong>zero-Docker embedded mode</strong> where the <a href="/platform/mcp-server/">MCP server</a> spawns its own instance. Every path exposes the same two ports: the PostgreSQL wire protocol on <strong>5433</strong> and the native EVO text protocol on <strong>9967</strong>.</p>
 
-  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Default credentials in all examples are <code>admin</code> / <code>admin</code>. The user name comes from <code>EVOSQL_USER_NAME</code> (default <code>admin</code>); if you don't set <code>EVOSQL_PASSWORD</code> a random password is generated and printed once at startup.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Default credentials in all examples are <code>admin</code> / <code>admin</code>. The user name comes from <code>EVOSQL_USER_NAME</code> (default <code>admin</code>); if you don't set <code>EVOSQL_PASSWORD</code> a random password is generated and printed once at startup.</div></div>
 
-  <h2 id="docker">Option 1 — Docker Compose</h2>
-  <p>The repository ships a <code>docker-compose.yml</code> that builds the server image and starts it with sensible defaults. This is the recommended path for testing.</p>
+ <h2 id="docker">Option 1, Docker Compose</h2>
+ <p>The repository ships a <code>docker-compose.yml</code> that builds the server image and starts it with sensible defaults. This is the recommended path for testing.</p>
 
-  <pre><code><span class="c-com"># start the server in the background — PG:5433  EVO:9967</span>
+ <pre><code><span class="c-com"># start the server in the background - PG:5433  EVO:9967</span>
 docker compose up -d
 
 <span class="c-com"># stop the server, keeping the data volume</span>
@@ -32,32 +32,32 @@ docker compose down
 <span class="c-com"># stop and delete the data volume too</span>
 docker compose down -v</code></pre>
 
-  <p>The Compose service publishes three ports: <code>5433</code> (PostgreSQL wire), <code>9967</code> (native EVO protocol), and <code>9970</code> (CDC streaming, JSON Lines). Data is persisted in a named volume (<code>evosql-data</code>, mounted at <code>/data</code>), so it survives <code>docker compose down</code> and is only erased with <code>-v</code>.</p>
+ <p>The Compose service publishes three ports: <code>5433</code> (PostgreSQL wire), <code>9967</code> (native EVO protocol), and <code>9970</code> (CDC streaming, JSON Lines). Data is persisted in a named volume (<code>evosql-data</code>, mounted at <code>/data</code>), so it survives <code>docker compose down</code> and is only erased with <code>-v</code>.</p>
 
-  <p>The bundled <code>docker-compose.yml</code> sets these environment variables on the server:</p>
+ <p>The bundled <code>docker-compose.yml</code> sets these environment variables on the server:</p>
 
-  <pre><code><span class="c-com"># var                              value     meaning</span>
+ <pre><code><span class="c-com"># var                              value     meaning</span>
 EVOSQL_USER_NAME                   admin     login user name
 EVOSQL_PASSWORD                    admin     login password (remove for a random one)
 EVOSQL_CDC_PORT                    9970      CDC streaming port
 EVOSQL_AUTO_RECLAIM_INTERVAL_SEC   2         auto-RECLAIM tick (default is 30; 2 is for tests)
 EVOSQL_ENCRYPTION_KEY              (set)     TDE passphrase; set empty to disable encryption</code></pre>
 
-  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>The Compose file drops <code>EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</code> to <code>2</code> so TTL-driven row expiry runs visibly inside a test iteration. Production leaves the default <code>30</code>s — set it back if you are running benchmarks.</div></div>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>The Compose file drops <code>EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</code> to <code>2</code> so TTL-driven row expiry runs visibly inside a test iteration. Production leaves the default <code>30</code>s, set it back if you are running benchmarks.</div></div>
 
-  <p>To skip Compose and run the published image directly, mapping both protocol ports and supplying your own password:</p>
+ <p>To skip Compose and run the published image directly, mapping both protocol ports and supplying your own password:</p>
 
-  <pre><code>docker run -d -p 5433:5433 -p 9967:9967 \
+ <pre><code>docker run -d -p 5433:5433 -p 9967:9967 \
     -e EVOSQL_PASSWORD=<span class="c-str">mysecret</span> evolutiondb/evolutiondb:latest</code></pre>
 
-  <p>The Compose stack also defines a <code>cli</code> service that builds the CLI client image and depends on the server, so you can exec into it to reach the running database.</p>
+ <p>The Compose stack also defines a <code>cli</code> service that builds the CLI client image and depends on the server, so you can exec into it to reach the running database.</p>
 
-  <h2 id="build">Option 2 — Build from source</h2>
-  <p>EvolutionDB builds into three executables: the core SQL engine (<code>evolution/evosql</code>), the dual-protocol server (<code>adaptor/evosql-server</code>), and the CLI client (<code>cli/evosql-cli</code>).</p>
+ <h2 id="build">Option 2, Build from source</h2>
+ <p>EvolutionDB builds into three executables: the core SQL engine (<code>evolution/evosql</code>), the dual-protocol server (<code>adaptor/evosql-server</code>), and the CLI client (<code>cli/evosql-cli</code>).</p>
 
-  <p><strong>Requirements:</strong> GCC, Bison, Flex, and <code>libreadline-dev</code> (for the CLI). For TLS support you also need <code>libssl-dev</code> (OpenSSL).</p>
+ <p><strong>Requirements:</strong> GCC, Bison, Flex, and <code>libreadline-dev</code> (for the CLI). For TLS support you also need <code>libssl-dev</code> (OpenSSL).</p>
 
-  <pre><code><span class="c-com"># build all three components</span>
+ <pre><code><span class="c-com"># build all three components</span>
 make
 
 <span class="c-com"># build individual components</span>
@@ -77,11 +77,11 @@ make release
 <span class="c-com"># clean all build artifacts</span>
 make clean</code></pre>
 
-  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>If you change the SQL grammar (<code>evolution/parser/evoparser.y</code> or <code>evolution/parser/evolexer.l</code>), run <code>make generate</code> to regenerate the Flex/Bison parser. The generated files are committed to the repo, so a normal build does not require Bison or Flex to be installed.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>If you change the SQL grammar (<code>evolution/parser/evoparser.y</code> or <code>evolution/parser/evolexer.l</code>), run <code>make generate</code> to regenerate the Flex/Bison parser. The generated files are committed to the repo, so a normal build does not require Bison or Flex to be installed.</div></div>
 
-  <p>Once built, start the server and connect with the CLI:</p>
+ <p>Once built, start the server and connect with the CLI:</p>
 
-  <pre><code><span class="c-com"># start the server — PG:5433  EVO:9967</span>
+ <pre><code><span class="c-com"># start the server - PG:5433  EVO:9967</span>
 ./adaptor/evosql-server
 
 <span class="c-com"># start on a custom PostgreSQL port</span>
@@ -93,43 +93,43 @@ make clean</code></pre>
 <span class="c-com"># connect with a password prompt</span>
 ./cli/evosql-cli -W admin</code></pre>
 
-  <p>The server accepts <code>--pg-port</code> and <code>--evo-port</code> to override the default ports. On Linux/macOS the build produces plain executables; on Windows (MinGW/MSYS2) they carry a <code>.exe</code> suffix.</p>
+ <p>The server accepts <code>--pg-port</code> and <code>--evo-port</code> to override the default ports. On Linux/macOS the build produces plain executables; on Windows (MinGW/MSYS2) they carry a <code>.exe</code> suffix.</p>
 
-  <h2 id="embedded">Option 3 — Zero-Docker embedded mode</h2>
-  <p>The Python <a href="/platform/mcp-server/">MCP server</a> can run EvolutionDB without Docker and without a manual build. With <code>EVOSQL_EMBEDDED</code> set, on first connect the MCP server checks whether anything is already listening on <code>EVOSQL_HOST:PORT</code>. If the port is free it spawns a local EvolutionDB against a per-user data directory and connects to it; if something is already listening, it leaves that instance alone — an external or shared server still wins.</p>
+ <h2 id="embedded">Option 3, Zero-Docker embedded mode</h2>
+ <p>The Python <a href="/platform/mcp-server/">MCP server</a> can run EvolutionDB without Docker and without a manual build. With <code>EVOSQL_EMBEDDED</code> set, on first connect the MCP server checks whether anything is already listening on <code>EVOSQL_HOST:PORT</code>. If the port is free it spawns a local EvolutionDB against a per-user data directory and connects to it; if something is already listening, it leaves that instance alone, an external or shared server still wins.</p>
 
-  <pre><code><span class="c-com"># turn on embedded mode (any of 1/true/yes/on)</span>
+ <pre><code><span class="c-com"># turn on embedded mode (any of 1/true/yes/on)</span>
 export EVOSQL_EMBEDDED=1</code></pre>
 
-  <p>The spawned process lives until the MCP server exits. A signal reaper handles <code>SIGTERM</code> and <code>SIGINT</code> so that <code>docker stop</code>, <code>systemctl stop</code>, or a plain <code>kill</code> tears down the spawned server rather than orphaning it.</p>
+ <p>The spawned process lives until the MCP server exits. A signal reaper handles <code>SIGTERM</code> and <code>SIGINT</code> so that <code>docker stop</code>, <code>systemctl stop</code>, or a plain <code>kill</code> tears down the spawned server rather than orphaning it.</p>
 
-  <h3 id="embedded-binary">How the binary is found</h3>
-  <p>Embedded mode resolves the <code>evosql-server</code> binary in this precedence order:</p>
+ <h3 id="embedded-binary">How the binary is found</h3>
+ <p>Embedded mode resolves the <code>evosql-server</code> binary in this precedence order:</p>
 
-  <pre><code><span class="c-com"># 1. EVOSQL_SERVER_BINARY                an explicit path you set</span>
+ <pre><code><span class="c-com"># 1. EVOSQL_SERVER_BINARY                an explicit path you set</span>
 <span class="c-com"># 2. bundled in the package              the [embedded] wheel vendors one under bin/</span>
 <span class="c-com"># 3. evosql-server on PATH               whatever shutil.which finds</span>
 <span class="c-com"># 4. a previously auto-fetched binary    cached in the per-user data dir</span>
 <span class="c-com"># 5. the repo's adaptor/evosql-server    dev checkout fallback</span></code></pre>
 
-  <p>If none of those exist, auto-fetch downloads the prebuilt binary for your platform. Auto-fetch is <strong>on by default</strong> under embedded mode; disable it with <code>EVOSQL_EMBEDDED_AUTOFETCH=0</code>, in which case you must set <code>EVOSQL_SERVER_BINARY</code>, put <code>evosql-server</code> on <code>PATH</code>, or the server raises at startup.</p>
+ <p>If none of those exist, auto-fetch downloads the prebuilt binary for your platform. Auto-fetch is <strong>on by default</strong> under embedded mode; disable it with <code>EVOSQL_EMBEDDED_AUTOFETCH=0</code>, in which case you must set <code>EVOSQL_SERVER_BINARY</code>, put <code>evosql-server</code> on <code>PATH</code>, or the server raises at startup.</p>
 
-  <p>You can also pre-fetch the binary explicitly with the bundled console script, which downloads the prebuilt <code>evosql-server</code> for your platform into the per-user cache:</p>
+ <p>You can also pre-fetch the binary explicitly with the bundled console script, which downloads the prebuilt <code>evosql-server</code> for your platform into the per-user cache:</p>
 
-  <pre><code><span class="c-com"># pre-download the prebuilt server binary (default version 3.0.0)</span>
+ <pre><code><span class="c-com"># pre-download the prebuilt server binary (default version 3.0.0)</span>
 evolutiondb-embedded-fetch
 
 <span class="c-com"># or a specific server release version</span>
 evolutiondb-embedded-fetch --version 3.0.0</code></pre>
 
-  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>Auto-fetch downloads and executes a binary, so the source is pinned: it only fetches over HTTPS from <code>github.com</code> / <code>objects.githubusercontent.com</code>, and the version must match <code>N.N.N</code>. The published <code>.sha256</code> is verified on download. To use a binary from anywhere else, set <code>EVOSQL_SERVER_BINARY</code> to a local path instead of widening the release source.</div></div>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>Auto-fetch downloads and executes a binary, so the source is pinned: it only fetches over HTTPS from <code>github.com</code> / <code>objects.githubusercontent.com</code>, and the version must match <code>N.N.N</code>. The published <code>.sha256</code> is verified on download. To use a binary from anywhere else, set <code>EVOSQL_SERVER_BINARY</code> to a local path instead of widening the release source.</div></div>
 
-  <h3 id="embedded-ports">Ports and data directory</h3>
-  <p>The embedded launcher defaults to the PostgreSQL port <code>5433</code> and derives the EVO port as <code>port + 4534</code> (so the default pair is <code>5433</code> / <code>9967</code>, matching every other mode). It starts the server with <code>--pg-port</code> and <code>--evo-port</code>, runs it inside the data directory (the binary uses its working directory for storage — there is no <code>--data-dir</code> flag), and waits up to 20 seconds for the port to open.</p>
+ <h3 id="embedded-ports">Ports and data directory</h3>
+ <p>The embedded launcher defaults to the PostgreSQL port <code>5433</code> and derives the EVO port as <code>port + 4534</code> (so the default pair is <code>5433</code> / <code>9967</code>, matching every other mode). It starts the server with <code>--pg-port</code> and <code>--evo-port</code>, runs it inside the data directory (the binary uses its working directory for storage, there is no <code>--data-dir</code> flag), and waits up to 20 seconds for the port to open.</p>
 
-  <p>The per-user data directory is OS-appropriate, and can be overridden with <code>EVOSQL_EMBEDDED_DATA_DIR</code>:</p>
+ <p>The per-user data directory is OS-appropriate, and can be overridden with <code>EVOSQL_EMBEDDED_DATA_DIR</code>:</p>
 
-  <pre><code><span class="c-com"># macOS</span>
+ <pre><code><span class="c-com"># macOS</span>
 ~/Library/Application Support/EvolutionDB/data
 
 <span class="c-com"># Windows</span>
@@ -138,8 +138,8 @@ evolutiondb-embedded-fetch --version 3.0.0</code></pre>
 <span class="c-com"># Linux (or $XDG_DATA_HOME)</span>
 ~/.local/share/evolutiondb/data</code></pre>
 
-  <h3 id="embedded-env">Embedded environment variables</h3>
-  <pre><code><span class="c-com"># var                          default   meaning</span>
+ <h3 id="embedded-env">Embedded environment variables</h3>
+ <pre><code><span class="c-com"># var                          default   meaning</span>
 EVOSQL_EMBEDDED                (off)     turn embedded mode on (1/true/yes/on)
 EVOSQL_EMBEDDED_AUTOFETCH      1         auto-download the binary when none is found
 EVOSQL_SERVER_BINARY           (none)    explicit path to an evosql-server binary
@@ -147,13 +147,13 @@ EVOSQL_SERVER_VERSION          3.0.0     prebuilt server release to fetch
 EVOSQL_SERVER_RELEASE_BASE     github    release download base (pinned to github.com)
 EVOSQL_EMBEDDED_DATA_DIR       (per-OS)  override the per-user data directory</code></pre>
 
-  <h2 id="verify">Verify it's running</h2>
-  <p>Whichever path you took, the server listens on the same two ports. Connect with a PostgreSQL client over the wire protocol on <code>5433</code>, or with the native CLI over EVO on <code>9967</code>:</p>
+ <h2 id="verify">Verify it's running</h2>
+ <p>Whichever path you took, the server listens on the same two ports. Connect with a PostgreSQL client over the wire protocol on <code>5433</code>, or with the native CLI over EVO on <code>9967</code>:</p>
 
-  <div class="sig">psql -h 127.0.0.1 -p 5433 -U admin</div>
-  <div class="sig">./cli/evosql-cli -W admin</div>
+ <div class="sig">psql -h 127.0.0.1 -p 5433 -U admin</div>
+ <div class="sig">./cli/evosql-cli -W admin</div>
 
-  <p>The default database used throughout the test suite is <code>testdb</code>, with credentials <code>admin</code> / <code>admin</code>. From here, see <a href="/connect/">Connect (PG wire &amp; EVO)</a> for client details and the <a href="/platform/mcp-server/">MCP server</a> docs for the embedded-mode integration.</p>
+ <p>The default database used throughout the test suite is <code>testdb</code>, with credentials <code>admin</code> / <code>admin</code>. From here, see <a href="/connect/">Connect (PG wire &amp; EVO)</a> for client details and the <a href="/platform/mcp-server/">MCP server</a> docs for the embedded-mode integration.</p>
 
 </main></div>
 <script src="/nav-data.js"></script>

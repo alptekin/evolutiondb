@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>19. Scheduled Jobs — EvolutionDB 3.0</title>
+<title>19. Scheduled Jobs | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -20,7 +20,7 @@
 <p>A <em>scheduled job</em> is a persistent catalog object that binds a name to a cron expression and a single SQL statement. Jobs are created with <code>CREATE JOB</code>, paused or resumed with <code>ALTER JOB</code>, removed with <code>DROP JOB</code>, and introspected with <code>SHOW JOBS</code>. They are evaluated by the same background worker thread that drives auto-RECLAIM; there is no separate scheduler daemon or external process to configure.</p>
 
 <div class="callout">
-<p><strong>Maturity (3.0).</strong> The DDL surface, catalog persistence, cron matching, the <code>ENABLE</code>/<code>DISABLE</code> flag, and <code>SHOW JOBS</code> introspection are complete. Firing a job records the match (it stamps <code>last_run_unix</code> and writes a line to the server log) but <strong>does not yet run the stored SQL</strong> — side-effect execution is deferred to a future release. See <a href="#firing">§19.6</a> for the precise current behavior.</p>
+<p><strong>Maturity (3.0).</strong> The DDL surface, catalog persistence, cron matching, the <code>ENABLE</code>/<code>DISABLE</code> flag, and <code>SHOW JOBS</code> introspection are complete. Firing a job records the match (it stamps <code>last_run_unix</code> and writes a line to the server log) but <strong>does not yet run the stored SQL</strong>, side-effect execution is deferred to a future release. See <a href="#firing">§19.6</a> for the precise current behavior.</p>
 </div>
 
 <h2 id="overview">19.1. Overview</h2>
@@ -52,7 +52,7 @@
 
 <p>Both the cron expression and the SQL body arrive as string literals; the engine strips the surrounding quotes before storing them. A valid statement performs four checks in order: the name must be present, the cron expression must validate (<a href="#cron">§19.5</a>), the <code>DO</code> body must be non-empty, and the name must not already be in use.</p>
 
-<pre><code><span class="c-com">-- Fire every day at 03:00 (UTC — see the note on time zones below)</span>
+<pre><code><span class="c-com">-- Fire every day at 03:00 (UTC - see the note on time zones below)</span>
 <span class="c-key">CREATE JOB</span> nightly_rollup
     <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 3 * * *'</span>
     <span class="c-key">DO</span> <span class="c-str">'INSERT INTO daily_totals SELECT today(), count(*) FROM orders'</span>;
@@ -142,13 +142,13 @@
 <ol>
 <li>the job is <code>enabled</code>;</li>
 <li>its cron pattern matches the current UTC minute; and</li>
-<li>its <code>last_run_unix</code> is older than the start of the current minute — this de-duplicates a job that would otherwise match on two ticks inside the same minute.</li>
+<li>its <code>last_run_unix</code> is older than the start of the current minute, this de-duplicates a job that would otherwise match on two ticks inside the same minute.</li>
 </ol>
 
 <p>When a job fires, the scheduler stamps <code>last_run_unix</code> with the start of the current minute (persisting it to the catalog) and writes a line to the server log noting the match. <strong>In 3.0 it does not execute the stored SQL.</strong> The hooks for routing the job's SQL through the engine exist, but running arbitrary SQL from the background thread is gated until that path is made safe; that work is scheduled for a future release.</p>
 
 <div class="callout">
-<p><strong>What this means in practice.</strong> You can define, persist, enable/disable, and observe scheduled jobs today, and you can confirm a schedule "ticked" by watching <code>last_run_unix</code> advance in <code>SHOW JOBS</code>. Do not yet rely on a job's <code>DO</code> statement producing data changes — until SQL execution is wired up, the statement is recorded but not run.</p>
+<p><strong>What this means in practice.</strong> You can define, persist, enable/disable, and observe scheduled jobs today, and you can confirm a schedule "ticked" by watching <code>last_run_unix</code> advance in <code>SHOW JOBS</code>. Do not yet rely on a job's <code>DO</code> statement producing data changes: until SQL execution is wired up, the statement is recorded but not run.</p>
 </div>
 
 <h2 id="show">19.7. Inspecting jobs</h2>
@@ -172,7 +172,7 @@
 <table>
 <thead><tr><th>SQLSTATE</th><th>Condition</th><th>Raised by</th></tr></thead>
 <tbody>
-<tr><td><code>42601</code></td><td>Syntax error — missing job name, or empty <code>DO</code> body</td><td><code>CREATE JOB</code></td></tr>
+<tr><td><code>42601</code></td><td>Syntax error: missing job name, or empty <code>DO</code> body</td><td><code>CREATE JOB</code></td></tr>
 <tr><td><code>22023</code></td><td>Invalid cron expression (wrong field count, unsupported syntax, or out-of-range value)</td><td><code>CREATE JOB</code></td></tr>
 <tr><td><code>42710</code></td><td>A job with that name already exists</td><td><code>CREATE JOB</code> (without <code>IF EXISTS</code>)</td></tr>
 <tr><td><code>42704</code></td><td>The named job does not exist</td><td><code>DROP JOB</code> / <code>ALTER JOB</code> (without <code>IF EXISTS</code>)</td></tr>
@@ -184,7 +184,7 @@
 <ul>
 <li>A job's <code>DO</code> SQL is <strong>recorded but not executed</strong>; only the match is logged and <code>last_run_unix</code> is stamped. Treat jobs as schedulable metadata until execution lands.</li>
 <li>Cron matching uses <strong>UTC</strong>, not local time.</li>
-<li>The cron dialect supports only <code>*</code> or a single integer per field — no ranges, lists, steps, or names.</li>
+<li>The cron dialect supports only <code>*</code> or a single integer per field: no ranges, lists, steps, or names.</li>
 <li>Job names are <strong>global</strong>, not schema-qualified, and must be unique across the server.</li>
 <li>There is no <code>ALTER JOB</code> form to rewrite the schedule or SQL; drop and recreate to change them.</li>
 <li>The scheduler walks at most 64 jobs per tick.</li>

@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>INSERT — EvolutionDB 3.0</title>
+<title>INSERT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -48,8 +48,8 @@ columns that are omitted receive their declared <code>DEFAULT</code>, or <code>N
 default exists. If no column list is supplied, the values are assigned to the table's columns in
 their catalog (declaration) order.</p>
 
-<p>Before a row is written, the engine validates types, then — only when the table actually declares
-such constraints — <code>NOT NULL</code> and <code>UNIQUE</code> constraints, plus any <code>CHECK</code>
+<p>Before a row is written, the engine validates types, then, only when the table actually declares
+such constraints, <code>NOT NULL</code> and <code>UNIQUE</code> constraints, plus any <code>CHECK</code>
 constraints. A primary-key collision raises a duplicate-key error unless an
 <code>ON DUPLICATE KEY UPDATE</code> or <code>ON CONFLICT</code> clause is present.</p>
 
@@ -83,13 +83,13 @@ to obtain the base table name. If the table is a RANGE-partitioned parent, the r
 child partition whose bounds contain the partition-key value (in this release every row of a
 multi-row insert must route to the same partition).</dd>
 
-<dt>( column [, ...] )</dt>
+<dt>( column [..] )</dt>
 <dd>An optional target column list. When given, supplied values are matched positionally to these
 columns and reordered into table order; columns not listed take their default (or <code>NULL</code>).
 The number of values in each <code>VALUES</code> row must equal the number of named columns, otherwise
 the statement is rejected.</dd>
 
-<dt>VALUES ( … ) [, ...]</dt>
+<dt>VALUES ( … ) [..]</dt>
 <dd>One or more rows of values, each a parenthesized, comma-separated list. Multiple parenthesized
 groups perform a multi-row insert in a single statement.</dd>
 
@@ -100,7 +100,7 @@ groups perform a multi-row insert in a single statement.</dd>
 <dd>In a value position, requests the column's declared default value (or <code>NULL</code> if the
 column has no default). For a generated column, <code>DEFAULT</code> is the only value form allowed.</dd>
 
-<dt>SET column = { expression | DEFAULT } [, ...]</dt>
+<dt>SET column = { expression | DEFAULT } [..]</dt>
 <dd>MySQL-style assignment form: each named column is set to the given value (or its default). Only
 the <code>=</code> operator is permitted; any other comparison operator is a syntax error.</dd>
 
@@ -108,7 +108,7 @@ the <code>=</code> operator is permitted; any other comparison operator is a syn
 <dd>A <code>SELECT</code> whose result rows are inserted. The projected columns are matched against the
 optional target column list, or against the table's columns in order when no list is given.</dd>
 
-<dt>ON DUPLICATE KEY UPDATE column = expression [, ...]</dt>
+<dt>ON DUPLICATE KEY UPDATE column = expression [..]</dt>
 <dd>MySQL-style upsert. When an inserted row would violate the primary key or a <code>UNIQUE</code>
 constraint, the existing row is updated with the listed assignments instead of raising a
 duplicate-key error.</dd>
@@ -119,7 +119,7 @@ skipped; with <code>DO UPDATE SET</code> the existing row is updated with the gi
 An optional single-column conflict target may be named; composite targets such as
 <code>(a, b)</code> are not yet supported and raise an error.</dd>
 
-<dt>RETURNING * | column [, ...]</dt>
+<dt>RETURNING * | column [..]</dt>
 <dd>Returns data from the rows actually inserted. <code>RETURNING *</code> returns every column;
 otherwise the named columns are returned. Available on the <code>VALUES</code> form.</dd>
 </dl>
@@ -134,7 +134,7 @@ otherwise the named columns are returned. Available on the <code>VALUES</code> f
 <span class="c-key">VALUES</span> (<span class="c-str">2</span>, <span class="c-str">'Lin'</span>, <span class="c-key">DEFAULT</span>),
        (<span class="c-str">3</span>, <span class="c-str">'Bo'</span>,  <span class="c-str">'editor'</span>);</code></pre>
 
-<p>Omit the column list — values map to columns in declaration order:</p>
+<p>Omit the column list, values map to columns in declaration order:</p>
 <pre><code><span class="c-key">INSERT INTO</span> users <span class="c-key">VALUES</span> (<span class="c-str">4</span>, <span class="c-str">'Mei'</span>, <span class="c-str">'mei@example.com'</span>, <span class="c-key">DEFAULT</span>);</code></pre>
 
 <p>MySQL-style <code>SET</code> form:</p>
