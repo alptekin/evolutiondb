@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>REVOKE — EvolutionDB 3.0</title>
+<title>REVOKE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -43,7 +43,7 @@
 
 <p>If no grant entry exists for the named user and scope, the command fails with an error (SQLSTATE <code>42704</code>, <em>undefined object</em>) reporting that no matching grant was found.</p>
 
-<p><strong>Scopes.</strong> A privilege is attached to exactly one of three scope kinds — <code>DATABASE</code>, <code>SCHEMA</code>, or <code>TABLE</code> — identified by <code>scope_name</code>. The revoke must target the same scope kind and name that the original grant used; revoking a <code>TABLE</code>-scoped privilege does not affect a broader <code>DATABASE</code>- or <code>SCHEMA</code>-scoped grant for the same user.</p>
+<p><strong>Scopes.</strong> A privilege is attached to exactly one of three scope kinds, <code>DATABASE</code>, <code>SCHEMA</code>, or <code>TABLE</code>, identified by <code>scope_name</code>. The revoke must target the same scope kind and name that the original grant used; revoking a <code>TABLE</code>-scoped privilege does not affect a broader <code>DATABASE</code>- or <code>SCHEMA</code>-scoped grant for the same user.</p>
 
 <p><strong>PUBLIC grants are additive.</strong> EvolutionDB follows the PostgreSQL additive model: privileges granted to <code>PUBLIC</code> are checked independently from user-specific grants. A user-specific <code>REVOKE</code> removes only that user's own grant entry; it does <em>not</em> mask or override a privilege the user still holds through a <code>PUBLIC</code> grant. To withdraw a privilege from everyone, revoke it from <code>PUBLIC</code> as well.</p>
 
@@ -96,7 +96,7 @@
 <pre><code><span class="c-key">REVOKE</span> analysts <span class="c-key">FROM</span> alice;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>EvolutionDB's <code>REVOKE</code> covers the most common case of the SQL standard and of PostgreSQL — removing object privileges from a grantee — but differs in several respects:</p>
+<p>EvolutionDB's <code>REVOKE</code> covers the most common case of the SQL standard and of PostgreSQL, removing object privileges from a grantee, but differs in several respects:</p>
 <ul>
 <li><strong>Scope keyword is mandatory.</strong> Unlike the SQL standard / PostgreSQL, which infer the object class, EvolutionDB requires an explicit <code>ON DATABASE</code>, <code>ON SCHEMA</code>, or <code>ON TABLE</code> keyword.</li>
 <li><strong>No <code>CASCADE</code> / <code>RESTRICT</code>.</strong> The standard's dependent-privilege behavior keywords are not accepted. Revoking does not recursively withdraw privileges that the grantee may have re-granted to others.</li>

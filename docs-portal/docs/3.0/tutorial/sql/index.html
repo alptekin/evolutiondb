@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>2. The SQL Language — EvolutionDB 3.0</title>
+<title>2. The SQL Language | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,17 +15,17 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>2. The SQL Language</h1>
-<p class="lede">A hands-on tour of the SQL EvolutionDB actually speaks: creating tables, inserting rows, reading them back, filtering with <code>WHERE</code>, and ordering results with <code>ORDER BY</code> — grounded in what the engine implements, not in what the SQL standard merely permits.</p>
+<p class="lede">A hands-on tour of the SQL EvolutionDB actually speaks: creating tables, inserting rows, reading them back, filtering with <code>WHERE</code>, and ordering results with <code>ORDER BY</code>: grounded in what the engine implements, not in what the SQL standard merely permits.</p>
 
 <p>This chapter assumes a running server (PostgreSQL wire protocol on port <code>5433</code>, native EVO protocol on port <code>9967</code>) and a session connected to a database. Every example below has been kept to features the EvolutionDB engine genuinely executes. Where EvolutionDB deviates from PostgreSQL or the SQL standard, the difference is called out explicitly rather than glossed over.</p>
 
 <div class="callout">
-<p><strong>Conventions.</strong> SQL keywords are shown in upper case for readability, but EvolutionDB's lexer is case-insensitive for keywords — <code>SELECT</code>, <code>select</code>, and <code>Select</code> are equivalent. Identifiers (table and column names) are compared case-insensitively as well; the engine resolves columns with <code>strcasecmp</code>.</p>
+<p><strong>Conventions.</strong> SQL keywords are shown in upper case for readability, but EvolutionDB's lexer is case-insensitive for keywords, <code>SELECT</code>, <code>select</code>, and <code>Select</code> are equivalent. Identifiers (table and column names) are compared case-insensitively as well; the engine resolves columns with <code>strcasecmp</code>.</p>
 </div>
 
 <h2 id="concepts">2.1. Tables and the Storage Model</h2>
 
-<p>An EvolutionDB table is an ordered set of typed columns. Internally, every table lives inside a single page-based file (<code>evosql.db</code>, 4&nbsp;KB pages); its definition — name, columns, types, constraints — is recorded in the system catalog, and its rows are stored as binary tuples in a heap indexed by a B+ tree on the primary key.</p>
+<p>An EvolutionDB table is an ordered set of typed columns. Internally, every table lives inside a single page-based file (<code>evosql.db</code>, 4&nbsp;KB pages); its definition, name, columns, types, constraints, is recorded in the system catalog, and its rows are stored as binary tuples in a heap indexed by a B+ tree on the primary key.</p>
 
 <p>Two limits are worth knowing up front, because they are hard caps in the engine rather than soft guidance:</p>
 
@@ -72,7 +72,7 @@
 </table>
 
 <div class="callout">
-<p><strong>Honest contrast with PostgreSQL.</strong> EvolutionDB's type validation runs on the textual value at insert time and is deliberately narrow. Integer and float families check that the text parses as a number; <code>VARCHAR(n)</code>/<code>CHAR(n)</code> check length; <code>BOOLEAN</code>, <code>UUID</code>, and <code>JSON</code> have format checks. The <code>DATE</code>/<code>TIME</code>/<code>TIMESTAMP</code> and <code>TEXT</code>/<code>BLOB</code> families are accepted <em>without</em> value validation — unlike PostgreSQL, an out-of-range or malformed timestamp literal is stored verbatim rather than rejected. Do not rely on the engine to reject a bad date.</p>
+<p><strong>Honest contrast with PostgreSQL.</strong> EvolutionDB's type validation runs on the textual value at insert time and is deliberately narrow. Integer and float families check that the text parses as a number; <code>VARCHAR(n)</code>/<code>CHAR(n)</code> check length; <code>BOOLEAN</code>, <code>UUID</code>, and <code>JSON</code> have format checks. The <code>DATE</code>/<code>TIME</code>/<code>TIMESTAMP</code> and <code>TEXT</code>/<code>BLOB</code> families are accepted <em>without</em> value validation: unlike PostgreSQL, an out-of-range or malformed timestamp literal is stored verbatim rather than rejected. Do not rely on the engine to reject a bad date.</p>
 </div>
 
 <h3 id="constraints">2.2.2. Column Constraints and Defaults</h3>
@@ -100,7 +100,7 @@
 
 <pre><code><span class="c-key">INSERT INTO</span> employees <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'Ada Lovelace'</span>, <span class="c-str">'Engineering'</span>, <span class="c-str">9200</span>, <span class="c-key">true</span>);</code></pre>
 
-<p>String literals are single-quoted. Booleans accept <code>true</code>/<code>false</code> or <code>0</code>/<code>1</code>. If the count of supplied values does not match the table's column count, the engine raises an error reporting both numbers — <code>INSERT has N value(s) but table has M column(s)</code>.</p>
+<p>String literals are single-quoted. Booleans accept <code>true</code>/<code>false</code> or <code>0</code>/<code>1</code>. If the count of supplied values does not match the table's column count, the engine raises an error reporting both numbers, <code>INSERT has N value(s) but table has M column(s)</code>.</p>
 
 <h3 id="column-list-insert">2.3.1. Naming Columns Explicitly</h3>
 
@@ -122,7 +122,7 @@
 <p>Each row is validated and stored independently. Every value is checked against its column's type (<a href="#types">§2.2.1</a>), <code>NOT NULL</code>, <code>UNIQUE</code>, and <code>CHECK</code> constraints before the binary tuple is written to the heap and the primary key is inserted into the B+ tree.</p>
 
 <div class="callout">
-<p><strong>Note — control bytes are stripped.</strong> EvolutionDB delimits row data internally with control bytes (a field separator and a row separator). To prevent a crafted value from corrupting field boundaries, those bytes are stripped out of user-supplied values during insert. In practice this is invisible for normal text, but it means you cannot store those specific control characters verbatim.</p>
+<p><strong>Note, control bytes are stripped.</strong> EvolutionDB delimits row data internally with control bytes (a field separator and a row separator). To prevent a crafted value from corrupting field boundaries, those bytes are stripped out of user-supplied values during insert. In practice this is invisible for normal text, but it means you cannot store those specific control characters verbatim.</p>
 </div>
 
 <h2 id="querying">2.4. Querying a Table</h2>
@@ -135,7 +135,7 @@
 
 <h3 id="primary-key-lookup">2.4.1. Looking Up a Single Row by Key</h3>
 
-<p>When a query targets a row by its primary key, EvolutionDB can answer directly from the B+ tree without scanning the heap — it searches the index for the key, then reads exactly that one tuple. This is the fast path: an O(log&nbsp;n) index probe rather than a full scan. Selecting by other columns falls back to a scan.</p>
+<p>When a query targets a row by its primary key, EvolutionDB can answer directly from the B+ tree without scanning the heap: it searches the index for the key, then reads exactly that one tuple. This is the fast path: an O(log&nbsp;n) index probe rather than a full scan. Selecting by other columns falls back to a scan.</p>
 
 <h2 id="where">2.5. Filtering Rows With WHERE</h2>
 
@@ -149,7 +149,7 @@
 <pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees
 <span class="c-key">WHERE</span> salary &gt;= <span class="c-str">9000</span> <span class="c-key">AND</span> active = <span class="c-key">true</span>;</code></pre>
 
-<p>Expression evaluation is numeric when both sides parse as numbers and lexicographic (string) otherwise — the same dual comparison the engine uses internally. This matters for mixed data: a column compared as text will sort and match by character order, not numeric value, unless both operands are valid numbers.</p>
+<p>Expression evaluation is numeric when both sides parse as numbers and lexicographic (string) otherwise, the same dual comparison the engine uses internally. This matters for mixed data: a column compared as text will sort and match by character order, not numeric value, unless both operands are valid numbers.</p>
 
 <div class="callout">
 <p><strong>Honest contrast.</strong> EvolutionDB evaluates <code>WHERE</code> on the textual decoding of each row. There is no cost-based optimizer choosing among multiple indexes; the primary key B+ tree is used for direct key lookups, and other predicates are resolved by scanning. Treat <code>WHERE</code> as a row filter over a scan, except when you constrain the primary key to a single value.</p>
@@ -170,12 +170,12 @@
 <p>The sort comparator mirrors the <code>WHERE</code> comparison rule: if both values in a pair parse cleanly as numbers it sorts numerically, otherwise it sorts as text. So an <code>INTEGER</code> column sorts <code>2 &lt; 10</code> as expected, while a <code>VARCHAR</code> column holding <code>"10"</code> and <code>"2"</code> sorts <code>"10"</code> before <code>"2"</code>.</p>
 
 <div class="callout">
-<p><strong>Note — the 500-row sort cap.</strong> The <code>SELECT *</code> path materializes rows into a fixed in-memory buffer before sorting, and that buffer holds at most <strong>500 rows</strong>. When <code>ORDER BY</code> is applied to a table larger than 500 rows on this path, only the first 500 scanned rows are collected and sorted; the remainder are not included in the ordered output. This is an engine limitation, not standard SQL behavior — PostgreSQL would sort the entire result set. If a column named in <code>ORDER BY</code> does not exist, the engine reports the error and falls back to an unordered scan rather than aborting.</p>
+<p><strong>Note, the 500-row sort cap.</strong> The <code>SELECT *</code> path materializes rows into a fixed in-memory buffer before sorting, and that buffer holds at most <strong>500 rows</strong>. When <code>ORDER BY</code> is applied to a table larger than 500 rows on this path, only the first 500 scanned rows are collected and sorted; the remainder are not included in the ordered output. This is an engine limitation, not standard SQL behavior, PostgreSQL would sort the entire result set. If a column named in <code>ORDER BY</code> does not exist, the engine reports the error and falls back to an unordered scan rather than aborting.</p>
 </div>
 
 <h2 id="putting-together">2.7. Putting It Together</h2>
 
-<p>A complete tutorial session — create, populate, filter, and order — looks like this:</p>
+<p>A complete tutorial session, create, populate, filter, and order, looks like this:</p>
 
 <pre><code><span class="c-com">-- 1. Define the table</span>
 <span class="c-key">CREATE</span> <span class="c-key">TABLE</span> employees (
@@ -203,19 +203,19 @@
 <p>The operations above raise SQLSTATE-coded errors when a constraint or type rule is broken. The codes you are most likely to encounter while following this tutorial:</p>
 
 <dl class="params">
-<dt><code>22001</code> — string data right truncation</dt>
+<dt><code>22001</code>, string data right truncation</dt>
 <dd>A value longer than a <code>CHAR(n)</code> or <code>VARCHAR(n)</code> column.</dd>
-<dt><code>22003</code> — numeric value out of range</dt>
+<dt><code>22003</code>, numeric value out of range</dt>
 <dd>A non-numeric value supplied for an integer or float column.</dd>
-<dt><code>23502</code> — not-null violation</dt>
+<dt><code>23502</code>, not-null violation</dt>
 <dd>An empty or <code>NULL</code> value in a <code>NOT NULL</code> column.</dd>
-<dt><code>23505</code> — unique violation</dt>
+<dt><code>23505</code>, unique violation</dt>
 <dd>A duplicate primary-key or <code>UNIQUE</code> value.</dd>
-<dt><code>23514</code> — check violation</dt>
+<dt><code>23514</code>, check violation</dt>
 <dd>A row that fails a <code>CHECK</code> constraint.</dd>
-<dt><code>42P01</code> — undefined table</dt>
+<dt><code>42P01</code>, undefined table</dt>
 <dd>A query against a table that does not exist.</dd>
-<dt><code>42703</code> — undefined column</dt>
+<dt><code>42703</code>, undefined column</dt>
 <dd>A column-list <code>INSERT</code> naming a column the table does not have.</dd>
 </dl>
 

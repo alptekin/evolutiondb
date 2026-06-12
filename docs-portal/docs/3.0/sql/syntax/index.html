@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>4. SQL Syntax — EvolutionDB 3.0</title>
+<title>4. SQL Syntax | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -16,34 +16,34 @@
 <main class="docs-content prose reveal">
 
 <h1>4. SQL Syntax</h1>
-<p class="lede">How EvolutionDB's scanner and parser read SQL text: the lexical tokens — identifiers, literals, comments, operators, keywords — and how statements are framed and terminated.</p>
+<p class="lede">How EvolutionDB's scanner and parser read SQL text: the lexical tokens, identifiers, literals, comments, operators, keywords, and how statements are framed and terminated.</p>
 
-<p>This chapter describes the <em>lexical structure</em> of the SQL dialect accepted by EvolutionDB 3.0 — the rules that turn a stream of characters into the tokens the grammar consumes. Everything documented here is taken directly from the Flex scanner (<code>evolution/parser/evolexer.l</code>) and the Bison grammar (<code>evolution/parser/evoparser.y</code>); where the dialect departs from the SQL standard or from PostgreSQL, that is called out explicitly rather than assumed.</p>
+<p>This chapter describes the <em>lexical structure</em> of the SQL dialect accepted by EvolutionDB 3.0, the rules that turn a stream of characters into the tokens the grammar consumes. Everything documented here is taken directly from the Flex scanner (<code>evolution/parser/evolexer.l</code>) and the Bison grammar (<code>evolution/parser/evoparser.y</code>); where the dialect departs from the SQL standard or from PostgreSQL, that is called out explicitly rather than assumed.</p>
 
 <div class="callout">
-<p><strong>Lineage.</strong> The scanner is case-insensitive and reentrant, and its keyword set is a blend of MySQL and PostgreSQL spellings (for example both <code>INT8</code> and <code>BIGINT</code> tokenize to the same type). This is a deliberate compatibility choice — EvolutionDB speaks the PostgreSQL wire protocol but recognizes many MySQL-style constructs at the lexical level. Do not assume that a token existing here implies full PostgreSQL semantics; see the per-command pages under <a href="/3.0/ref/select/">SQL Commands</a> for what each construct actually does.</p>
+<p><strong>Lineage.</strong> The scanner is case-insensitive and reentrant, and its keyword set is a blend of MySQL and PostgreSQL spellings (for example both <code>INT8</code> and <code>BIGINT</code> tokenize to the same type). This is a deliberate compatibility choice, EvolutionDB speaks the PostgreSQL wire protocol but recognizes many MySQL-style constructs at the lexical level. Do not assume that a token existing here implies full PostgreSQL semantics; see the per-command pages under <a href="/3.0/ref/select/">SQL Commands</a> for what each construct actually does.</p>
 </div>
 
 <h2 id="overview">4.1. Lexical Overview</h2>
 <p>SQL input is a sequence of <em>tokens</em> separated, where necessary, by whitespace or comments. The scanner recognizes these token classes:</p>
 <dl class="params">
 <dt>Keywords</dt><dd>Reserved words such as <code>SELECT</code>, <code>FROM</code>, <code>CREATE</code>. Matched case-insensitively. See <a href="#keywords">§4.7</a>.</dd>
-<dt>Identifiers</dt><dd>Names of tables, columns, indexes, and aliases — either bare or backtick-quoted. See <a href="#identifiers">§4.2</a>.</dd>
+<dt>Identifiers</dt><dd>Names of tables, columns, indexes, and aliases, either bare or backtick-quoted. See <a href="#identifiers">§4.2</a>.</dd>
 <dt>Literals (constants)</dt><dd>String, numeric, boolean, NULL, hex, and bit-string constants. See <a href="#literals">§4.3</a>.</dd>
 <dt>Operators</dt><dd>Arithmetic, comparison, logical, bitwise, JSON, and vector operators. See <a href="#operators">§4.5</a>.</dd>
 <dt>User variables</dt><dd>Session variables prefixed with <code>@</code>. See <a href="#uservars">§4.4</a>.</dd>
 <dt>Comments and whitespace</dt><dd>Discarded before reaching the grammar. See <a href="#comments">§4.6</a>.</dd>
 </dl>
-<p>The scanner advances a byte cursor (<code>g_lex_pos</code>) on every token so the parser can slice out the verbatim text of a subquery — this is how correlated and <code>LATERAL</code> subqueries are captured for re-execution. That mechanism is invisible at the syntax level but explains why subquery text round-trips exactly as written.</p>
+<p>The scanner advances a byte cursor (<code>g_lex_pos</code>) on every token so the parser can slice out the verbatim text of a subquery, this is how correlated and <code>LATERAL</code> subqueries are captured for re-execution. That mechanism is invisible at the syntax level but explains why subquery text round-trips exactly as written.</p>
 
 <h2 id="identifiers">4.2. Identifiers and Names</h2>
 <p>An unquoted identifier (token <code>NAME</code>) must begin with an ASCII letter and may continue with letters, digits, and underscores:</p>
 <pre class="synopsis"><code>[A-Za-z][A-Za-z0-9_]*</code></pre>
 <p>This is the exact pattern in the scanner. Note the consequences, which differ from both the SQL standard and PostgreSQL:</p>
 <ul>
-<li>An identifier <strong>cannot start with an underscore</strong> — <code>_tmp</code> is not a valid bare identifier (PostgreSQL allows a leading <code>_</code>).</li>
+<li>An identifier <strong>cannot start with an underscore</strong>, <code>_tmp</code> is not a valid bare identifier (PostgreSQL allows a leading <code>_</code>).</li>
 <li>Only ASCII letters are accepted in bare identifiers; non-ASCII / Unicode letters are not part of the <code>NAME</code> pattern.</li>
-<li>There is no length cap in the lexer itself, but identifiers are copied into fixed-size buffers downstream (qualified <code>table.column</code> references are formatted with a 127-character limit per part — see <a href="#qualified">§4.2.2</a>).</li>
+<li>There is no length cap in the lexer itself, but identifiers are copied into fixed-size buffers downstream (qualified <code>table.column</code> references are formatted with a 127-character limit per part, see <a href="#qualified">§4.2.2</a>).</li>
 </ul>
 
 <h3 id="quoted-identifiers">4.2.1. Backtick-Quoted Identifiers</h3>
@@ -55,7 +55,7 @@
     `<span class="c-str">order date</span>` <span class="c-key">DATE</span>       <span class="c-com">-- embedded space is legal inside backticks</span>
 );</code></pre>
 <div class="callout">
-<p><strong>Double quotes are string-like, not identifier-like.</strong> Unlike the SQL standard and PostgreSQL — where <code>"foo"</code> is a delimited <em>identifier</em> — EvolutionDB's scanner treats a double-quoted run as a <strong>string literal</strong> (it shares the same lexer rule as single-quoted strings). If you need to quote an identifier, use backticks. See <a href="#string-literals">§4.3.1</a>.</p>
+<p><strong>Double quotes are string-like, not identifier-like.</strong> Unlike the SQL standard and PostgreSQL, where <code>"foo"</code> is a delimited <em>identifier</em>, EvolutionDB's scanner treats a double-quoted run as a <strong>string literal</strong> (it shares the same lexer rule as single-quoted strings). If you need to quote an identifier, use backticks. See <a href="#string-literals">§4.3.1</a>.</p>
 </div>
 
 <h3 id="qualified">4.2.2. Qualified Names</h3>
@@ -75,21 +75,21 @@
 <span class="c-str">"( \\. | "" | [^"\n] )*"</span></code></pre>
 <p>Two escaping mechanisms are recognized inside a string:</p>
 <ul>
-<li><strong>Doubled quote</strong> — write <code>''</code> for a literal single quote (the SQL-standard form), or <code>""</code> for a literal double quote inside a double-quoted string. The parser collapses the doubled quote to a single character.</li>
-<li><strong>Backslash escape</strong> — a backslash followed by any character (<code>\\.</code>) is accepted by the scanner.</li>
+<li><strong>Doubled quote</strong>, write <code>''</code> for a literal single quote (the SQL-standard form), or <code>""</code> for a literal double quote inside a double-quoted string. The parser collapses the doubled quote to a single character.</li>
+<li><strong>Backslash escape</strong>, a backslash followed by any character (<code>\\.</code>) is accepted by the scanner.</li>
 </ul>
 <p>A string may <strong>not</strong> span a newline: a quote opened with no closing quote before the end of the line raises <span class="c-str">"Unterminated string"</span>.</p>
 <pre><code><span class="c-key">SELECT</span> <span class="c-str">'it''s here'</span>;       <span class="c-com">-- doubled quote -> it's here</span>
 <span class="c-key">SELECT</span> <span class="c-str">"a double-quoted literal"</span>;  <span class="c-com">-- double quotes = string, not identifier</span></code></pre>
 <div class="callout">
-<p><strong>No dollar-quoting, no E'' prefix.</strong> PostgreSQL's dollar-quoted strings (<code>$tag$ … $tag$</code>) and escape-string prefix (<code>E'…'</code>) are not part of this lexer. Long literals (for example a multi-kilobyte vector written as text) are supported — the literal buffer is heap-sized to the token — but they must still stay on a single line.</p>
+<p><strong>No dollar-quoting, no E'' prefix.</strong> PostgreSQL's dollar-quoted strings (<code>$tag$ … $tag$</code>) and escape-string prefix (<code>E'…'</code>) are not part of this lexer. Long literals (for example a multi-kilobyte vector written as text) are supported, the literal buffer is heap-sized to the token, but they must still stay on a single line.</p>
 </div>
 
 <h3 id="numeric-literals">4.3.2. Numeric Constants</h3>
 <p>The scanner distinguishes exact integers from approximate (floating-point) numbers:</p>
 <dl class="params">
-<dt><code>INTNUM</code> — integer</dt><dd>Pattern <code>-?[0-9]+</code>, parsed with <code>atoi</code>. Note that an optional leading minus sign is part of the integer token itself.</dd>
-<dt><code>APPROXNUM</code> — approximate</dt><dd>A number containing a decimal point and/or an exponent, e.g. <code>3.14</code>, <code>.5</code>, <code>1E10</code>, <code>2.5e-3</code>. Parsed with <code>atof</code>.</dd>
+<dt><code>INTNUM</code>, integer</dt><dd>Pattern <code>-?[0-9]+</code>, parsed with <code>atoi</code>. Note that an optional leading minus sign is part of the integer token itself.</dd>
+<dt><code>APPROXNUM</code>, approximate</dt><dd>A number containing a decimal point and/or an exponent, e.g. <code>3.14</code>, <code>.5</code>, <code>1E10</code>, <code>2.5e-3</code>. Parsed with <code>atof</code>.</dd>
 </dl>
 <pre><code><span class="c-key">SELECT</span> 42, -7, 3.14159, .5, 6.022E23;</code></pre>
 <div class="callout">
@@ -122,7 +122,7 @@
 <h2 id="uservars">4.4. User (Session) Variables</h2>
 <p>A user variable begins with <code>@</code> and is a session-scoped value. Four spellings are accepted:</p>
 <dl class="params">
-<dt><code>@name</code></dt><dd>Bare: <code>@[0-9a-z_.$]+</code> — note the bare form is matched only against <em>lowercase</em> letters, digits, <code>_</code>, <code>.</code>, and <code>$</code>.</dd>
+<dt><code>@name</code></dt><dd>Bare: <code>@[0-9a-z_.$]+</code>, note the bare form is matched only against <em>lowercase</em> letters, digits, <code>_</code>, <code>.</code>, and <code>$</code>.</dd>
 <dt><code>@"name"</code> / <code>@`name`</code> / <code>@'name'</code></dt><dd>Quoted, to allow spaces or mixed case in the variable name.</dd>
 </dl>
 <p>Variables are assigned with <code>SET</code> (using <code>=</code> or <code>:=</code>) and read inside expressions:</p>
@@ -164,7 +164,7 @@
 </tbody>
 </table>
 <div class="callout">
-<p><strong>MySQL-isms to watch.</strong> Two operators behave the way MySQL defines them, not PostgreSQL/SQL-standard: <code>||</code> is logical OR (not string concatenation — use <code>CONCAT(...)</code> for that), and <code>^</code> is bitwise XOR (not exponentiation — use <code>POWER(...)</code>). The <code>&lt;-&gt;</code> and <code>&lt;#&gt;</code> vector operators are EvolutionDB/pgvector-style extensions.</p>
+<p><strong>MySQL-isms to watch.</strong> Two operators behave the way MySQL defines them, not PostgreSQL/SQL-standard: <code>||</code> is logical OR (not string concatenation, use <code>CONCAT(...)</code> for that), and <code>^</code> is bitwise XOR (not exponentiation, use <code>POWER(...)</code>). The <code>&lt;-&gt;</code> and <code>&lt;#&gt;</code> vector operators are EvolutionDB/pgvector-style extensions.</p>
 </div>
 
 <h3 id="precedence">4.5.3. Operator Precedence</h3>
@@ -186,7 +186,7 @@
 <li><code>^</code> (bitwise XOR)</li>
 <li><code>-&gt;</code>, <code>-&gt;&gt;</code> (JSON)</li>
 <li>unary minus</li>
-<li><code>[</code> (array subscript — binds tightest)</li>
+<li><code>[</code> (array subscript, binds tightest)</li>
 </ol>
 <p>Use parentheses where intent matters; <code>(expr)</code> is always valid for grouping.</p>
 
@@ -201,9 +201,9 @@
 </tbody>
 </table>
 <div class="callout">
-<p><strong>The <code>--</code> rule is stricter than PostgreSQL.</strong> The scanner pattern is <code>"--"[ \t].*</code> — a dash-dash comment is recognized only when followed by a space or tab. So <code>--comment</code> (no space) is <em>not</em> a comment and will be scanned as operators, whereas <code>-- comment</code> is. PostgreSQL accepts <code>--</code> with no following space. Block comments are <strong>not</strong> nestable here (PostgreSQL nests them).</p>
+<p><strong>The <code>--</code> rule is stricter than PostgreSQL.</strong> The scanner pattern is <code>"--"[ \t].*</code>, a dash-dash comment is recognized only when followed by a space or tab. So <code>--comment</code> (no space) is <em>not</em> a comment and will be scanned as operators, whereas <code>-- comment</code> is. PostgreSQL accepts <code>--</code> with no following space. Block comments are <strong>not</strong> nestable here (PostgreSQL nests them).</p>
 </div>
-<p>Whitespace — space, tab, newline — separates tokens and is otherwise ignored. Any character that matches no rule raises <span class="c-str">"mystery character"</span>.</p>
+<p>Whitespace, space, tab, newline, separates tokens and is otherwise ignored. Any character that matches no rule raises <span class="c-str">"mystery character"</span>.</p>
 
 <h2 id="keywords">4.7. Keywords</h2>
 <p>Keywords are matched case-insensitively, so <code>SELECT</code>, <code>select</code>, and <code>Select</code> are equivalent. The scanner carries several context-sensitive and disambiguating behaviors worth knowing.</p>
@@ -211,7 +211,7 @@
 <h3 id="context-keywords">4.7.1. Context-Sensitive Tokenization</h3>
 <dl class="params">
 <dt><code>BETWEEN … AND</code></dt><dd>When <code>BETWEEN</code> is scanned, the lexer enters a special mode so the next <code>AND</code> is returned as the range-connector token rather than the logical-AND operator. Outside that mode <code>AND</code> is the boolean operator.</dd>
-<dt><code>NOT EXISTS</code> / <code>NOT IN</code></dt><dd><code>NOT EXISTS</code> is recognized as a <em>single</em> token (an <code>EXISTS</code> with a "negated" sub-flag). A side effect: <code>CREATE … IF NOT EXISTS</code> reaches the grammar as <code>IF EXISTS</code> with the negation flag set — the grammar comments note this explicitly.</dd>
+<dt><code>NOT EXISTS</code> / <code>NOT IN</code></dt><dd><code>NOT EXISTS</code> is recognized as a <em>single</em> token (an <code>EXISTS</code> with a "negated" sub-flag). A side effect: <code>CREATE … IF NOT EXISTS</code> reaches the grammar as <code>IF EXISTS</code> with the negation flag set, the grammar comments note this explicitly.</dd>
 <dt>Function-vs-keyword lookahead</dt><dd>Names like <code>COUNT</code>, <code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>RANK</code>, <code>IF</code>, <code>MOD</code>, <code>REPLACE</code>, and <code>YEAR</code> peek at the next character: if it is <code>(</code> they become a function token, otherwise they are returned as an ordinary identifier or keyword. This lets <code>rank</code> be a column name but <code>RANK()</code> a window function.</dd>
 <dt>Trailing-context functions</dt><dd>Many built-ins are matched only when immediately followed by <code>(</code> using a trailing-context rule (for example <code>CAST/"("</code>, <code>SUBSTRING/"("</code>, <code>L2_DISTANCE/"("</code>). Without the parenthesis they fall through to the identifier rule.</dd>
 </dl>
@@ -239,7 +239,7 @@
 <p>See <a href="/3.0/ref/create-table/">CREATE TABLE</a> for how these types are used in column definitions, and <a href="#col-atts">§4.8.2</a> for column attributes.</p>
 
 <h3 id="reserved-note">4.7.3. A Note on Reserved Words</h3>
-<p>The keyword set is large because the dialect spans many features (window functions, vector search, document/graph/memory stores, scheduled jobs, pub/sub). Not every keyword is fully reserved in every position — the grammar deliberately keeps some common words usable as names. For example <code>LEVEL</code> is intentionally <em>not</em> reserved (so <code>… AS level</code> works), and <code>VALUE</code> is scanned but returned as an ordinary <code>NAME</code>. When in doubt, backtick-quote a name that might collide (<a href="#quoted-identifiers">§4.2.1</a>).</p>
+<p>The keyword set is large because the dialect spans many features (window functions, vector search, document/graph/memory stores, scheduled jobs, pub/sub). Not every keyword is fully reserved in every position, the grammar deliberately keeps some common words usable as names. For example <code>LEVEL</code> is intentionally <em>not</em> reserved (so <code>… AS level</code> works), and <code>VALUE</code> is scanned but returned as an ordinary <code>NAME</code>. When in doubt, backtick-quote a name that might collide (<a href="#quoted-identifiers">§4.2.1</a>).</p>
 
 <h2 id="statements">4.8. Statements and Termination</h2>
 
@@ -248,7 +248,7 @@
 <pre class="sig"><code>stmt_list : stmt <span class="c-key">';'</span>
           | stmt <span class="c-key">';'</span> stmt_list
           ;</code></pre>
-<p>Every statement is therefore terminated by a semicolon (<code>;</code>), and multiple statements may be submitted in one batch separated by semicolons. The semicolon is part of the grammar — it is required, not merely a separator the client strips.</p>
+<p>Every statement is therefore terminated by a semicolon (<code>;</code>), and multiple statements may be submitted in one batch separated by semicolons. The semicolon is part of the grammar: it is required, not merely a separator the client strips.</p>
 <pre><code><span class="c-key">CREATE TABLE</span> t (id <span class="c-key">INTEGER</span> <span class="c-key">PRIMARY KEY</span>);
 <span class="c-key">INSERT INTO</span> t <span class="c-key">VALUES</span> (1);
 <span class="c-key">SELECT</span> * <span class="c-key">FROM</span> t;</code></pre>
@@ -266,7 +266,7 @@
 </dl>
 
 <h3 id="reference-cmds">4.8.3. Statement Categories</h3>
-<p>The grammar recognizes statements across these areas — each links to its reference page:</p>
+<p>The grammar recognizes statements across these areas, each links to its reference page:</p>
 <ul>
 <li><strong>Queries:</strong> <a href="/3.0/ref/select/">SELECT</a> (with <code>JOIN</code>, <code>GROUP BY</code>, <code>HAVING</code>, <code>ORDER BY</code>, <code>LIMIT</code>/<code>OFFSET</code>, window functions, <code>FOR UPDATE</code>/<code>FOR SHARE</code>, <code>FOR SYSTEM_TIME AS OF</code>).</li>
 <li><strong>Data modification:</strong> <a href="/3.0/ref/insert/">INSERT</a> (incl. <code>ON CONFLICT</code> / <code>ON DUPLICATE KEY UPDATE</code>), <a href="/3.0/ref/update/">UPDATE</a>, <a href="/3.0/ref/delete/">DELETE</a>, <a href="/3.0/ref/replace/">REPLACE</a>, <a href="/3.0/ref/copy/">COPY</a>, <a href="/3.0/ref/truncate/">TRUNCATE</a>.</li>
@@ -281,12 +281,12 @@
 <div class="callout">
 <p><strong>Notes &amp; limitations (lexical).</strong></p>
 <ul>
-<li><strong>Identifiers must start with an ASCII letter</strong> — no leading underscore, no Unicode letters in bare names. Use backticks for anything else.</li>
+<li><strong>Identifiers must start with an ASCII letter</strong>: no leading underscore, no Unicode letters in bare names. Use backticks for anything else.</li>
 <li><strong>Double quotes denote strings, not identifiers.</strong> Use backticks to quote identifiers.</li>
 <li><strong>String and quoted-name literals cannot cross a newline.</strong> An unterminated literal is a scan error, not a continuation.</li>
 <li><strong><code>--</code> comments require a following space or tab.</strong> <code>--like-this</code> is not a comment.</li>
 <li><strong>Block comments do not nest.</strong></li>
-<li><strong><code>||</code> is logical OR and <code>^</code> is bitwise XOR</strong> (MySQL semantics) — use <code>CONCAT()</code> and <code>POWER()</code> for concatenation and exponentiation.</li>
+<li><strong><code>||</code> is logical OR and <code>^</code> is bitwise XOR</strong> (MySQL semantics), use <code>CONCAT()</code> and <code>POWER()</code> for concatenation and exponentiation.</li>
 <li><strong>A leading <code>-</code> is part of a numeric literal</strong> at the lexical level; combined with operator precedence this is usually transparent, but it explains why negative numbers tokenize as single constants.</li>
 <li><strong>No dollar-quoting and no <code>E'…'</code> escape-string prefix.</strong></li>
 </ul>

@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>21. Triggers &amp; Procedures — EvolutionDB 3.0</title>
+<title>21. Triggers &amp; Procedures | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -107,7 +107,7 @@
 <span class="c-key">END</span>;</code></pre>
 
 <h2 id="call">21.5. CALL</h2>
-<p>A stored procedure is invoked with <code>CALL</code>; see <a href="/3.0/ref/call/">CALL</a>. The parser merely records the call name and arguments — the actual body execution happens in the adaptor layer <em>after</em> parsing returns, to avoid re-entering the parser mutex.</p>
+<p>A stored procedure is invoked with <code>CALL</code>; see <a href="/3.0/ref/call/">CALL</a>. The parser merely records the call name and arguments, the actual body execution happens in the adaptor layer <em>after</em> parsing returns, to avoid re-entering the parser mutex.</p>
 <div class="synopsis">
 <pre><code><span class="c-key">CALL</span> name <span class="c-key">(</span> <span class="opt">[ arg [, arg ... ] ]</span> <span class="c-key">)</span></code></pre>
 </div>
@@ -153,18 +153,18 @@
 <p><strong>Memory-store triggers.</strong> A trigger may be attached to a memory store with <code>ON MEMORY STORE name</code>. The parser stages the store name with an internal <code>@mem:</code> sentinel; at creation the store is resolved through the catalog and rewritten to its backing table <code>mem_&lt;name&gt;</code>, after which it fires exactly like a regular table trigger. A <code>PUT</code> event on a memory store is mapped to the <code>INSERT</code> (<code>'I'</code>) event internally. A nonexistent store raises SQLSTATE <code>42704</code>.</p>
 
 <h2 id="firing">21.7. Trigger firing model, errors, and recursion</h2>
-<p>The engine fires matching triggers from the <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> hook points, once per affected row, filtered by timing, event, and the <code>enabled</code> flag. For each fired trigger the substituted body is wrapped as a temporary procedure, called, then dropped — so triggers and procedures execute through the identical engine:</p>
+<p>The engine fires matching triggers from the <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> hook points, once per affected row, filtered by timing, event, and the <code>enabled</code> flag. For each fired trigger the substituted body is wrapped as a temporary procedure, called, then dropped, so triggers and procedures execute through the identical engine:</p>
 <pre><code><span class="c-com">-- conceptual expansion performed internally per fired trigger</span>
 <span class="c-key">CREATE OR REPLACE PROCEDURE</span> __trig_&lt;id&gt;__() <span class="c-key">AS</span> <span class="c-key">BEGIN</span> &lt;substituted body&gt; <span class="c-key">END</span>;
 <span class="c-key">CALL</span> __trig_&lt;id&gt;__();
 <span class="c-key">DROP PROCEDURE IF EXISTS</span> __trig_&lt;id&gt;__;</code></pre>
 <p><strong>Recursion limit.</strong> Trigger execution is guarded by a depth counter; nesting beyond <strong>16</strong> levels (<code>MAX_TRIGGER_DEPTH</code>) stops further trigger firing silently rather than erroring, preventing runaway recursion.</p>
 
-<p><strong>Raising errors with SIGNAL.</strong> A body — procedure or trigger — can abort with a user-defined error:</p>
+<p><strong>Raising errors with SIGNAL.</strong> A body, procedure or trigger, can abort with a user-defined error:</p>
 <div class="synopsis">
 <pre><code><span class="c-key">SIGNAL</span> <span class="opt">[ SQLSTATE 'xxxxx' ]</span> <span class="opt">[ SET MESSAGE_TEXT = 'message' ]</span></code></pre>
 </div>
-<p>If <code>SQLSTATE</code> is omitted it defaults to <code>45000</code> (unhandled user-defined exception); the default message is <em>"Unhandled user-defined exception"</em>. A <code>DECLARE … HANDLER FOR SQLEXCEPTION</code> can intercept the signal — a <code>CONTINUE</code> handler resumes after the failed statement, an <code>EXIT</code> handler unwinds the body — otherwise the error propagates to the caller. When a trigger body errors, the whole firing fails and the originating DML statement is aborted.</p>
+<p>If <code>SQLSTATE</code> is omitted it defaults to <code>45000</code> (unhandled user-defined exception); the default message is <em>"Unhandled user-defined exception"</em>. A <code>DECLARE … HANDLER FOR SQLEXCEPTION</code> can intercept the signal, a <code>CONTINUE</code> handler resumes after the failed statement, an <code>EXIT</code> handler unwinds the body, otherwise the error propagates to the caller. When a trigger body errors, the whole firing fails and the originating DML statement is aborted.</p>
 
 <pre><code><span class="c-key">CREATE TRIGGER</span> no_negatives <span class="c-key">BEFORE INSERT</span> <span class="c-key">ON</span> ledger <span class="c-key">FOR EACH ROW</span>
 <span class="c-key">BEGIN</span>
@@ -191,7 +191,7 @@
 <li><strong>No row-vs-statement choice.</strong> Triggers are always <code>FOR EACH ROW</code>; there is no statement-level trigger.</li>
 <li><strong>No <code>WHEN</code> condition, column list, or <code>INSTEAD OF</code>.</strong> The event is a single bare <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> with no filter; views cannot carry triggers.</li>
 <li><strong>One event per trigger.</strong> There is no <code>INSERT OR UPDATE</code> multi-event form; create separate triggers.</li>
-<li><strong>Table is not named on <code>DROP</code>/<code>ALTER TRIGGER</code></strong> — names are resolved by scanning the schema, so trigger names should be unique per schema.</li>
+<li><strong>Table is not named on <code>DROP</code>/<code>ALTER TRIGGER</code></strong>: names are resolved by scanning the schema, so trigger names should be unique per schema.</li>
 <li><strong>Textual parameter substitution, not value binding.</strong> Arguments and <code>OLD</code>/<code>NEW</code> references are spliced into SQL text; there is no typed parameter binding and no protection against injection.</li>
 <li><strong>No procedure/function overloading.</strong> Lookup is by name within a schema; functions and procedures share that namespace.</li>
 <li><strong>Functions are not callable inline.</strong> A <code>CREATE FUNCTION</code> body is run through the same engine as a procedure; the return type is recorded but the database does not expose user functions as expression-callable in <code>SELECT</code> the way PostgreSQL does.</li>
@@ -202,11 +202,11 @@
 
 <h2 id="see-also">21.10. See also</h2>
 <ul>
-<li><a href="/3.0/ref/create-procedure/">CREATE PROCEDURE</a> — full reference for <code>CREATE</code>/<code>DROP PROCEDURE</code> and <code>FUNCTION</code>.</li>
-<li><a href="/3.0/ref/create-trigger/">CREATE TRIGGER</a> — full reference for <code>CREATE</code>/<code>DROP</code>/<code>ALTER TRIGGER</code>.</li>
-<li><a href="/3.0/ref/call/">CALL</a> — invoking a stored procedure.</li>
-<li><a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, <a href="/3.0/ref/delete/">DELETE</a> — the DML statements whose hook points fire triggers.</li>
-<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a> — target of <code>ON MEMORY STORE</code> triggers.</li>
+<li><a href="/3.0/ref/create-procedure/">CREATE PROCEDURE</a>, full reference for <code>CREATE</code>/<code>DROP PROCEDURE</code> and <code>FUNCTION</code>.</li>
+<li><a href="/3.0/ref/create-trigger/">CREATE TRIGGER</a>, full reference for <code>CREATE</code>/<code>DROP</code>/<code>ALTER TRIGGER</code>.</li>
+<li><a href="/3.0/ref/call/">CALL</a>, invoking a stored procedure.</li>
+<li><a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, <a href="/3.0/ref/delete/">DELETE</a>, the DML statements whose hook points fire triggers.</li>
+<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>, target of <code>ON MEMORY STORE</code> triggers.</li>
 </ul>
 </main></div>
 <script src="/nav-data.js"></script>

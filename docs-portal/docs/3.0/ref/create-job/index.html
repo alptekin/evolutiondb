@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE JOB — EvolutionDB 3.0</title>
+<title>CREATE JOB | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE JOB</h1>
-<p class="lede">CREATE JOB — register a scheduled job that fires a SQL statement on a cron-style timetable.</p>
+<p class="lede">CREATE JOB, register a scheduled job that fires a SQL statement on a cron-style timetable.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -110,7 +110,7 @@ non-empty.</dd>
 <p><code>CREATE JOB</code> is not part of the SQL standard, which has no notion of
 scheduled jobs.</p>
 
-<p>It is also not a PostgreSQL command — core PostgreSQL has no built-in
+<p>It is also not a PostgreSQL command, core PostgreSQL has no built-in
 scheduler. The closest PostgreSQL analog is the third-party <code>pg_cron</code>
 extension, whose <code>cron.schedule('name', '0 3 * * *', 'SQL')</code> function call
 uses the same five-field cron convention. EvolutionDB exposes this as native DDL

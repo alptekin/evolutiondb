@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>28. Routine Maintenance — EvolutionDB 3.0</title>
+<title>28. Routine Maintenance | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,17 +15,17 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>28. Routine Maintenance</h1>
-<p class="lede">The two housekeeping operations every EvolutionDB table needs over its lifetime — <code>ANALYZE</code> to keep planner statistics current and <code>RECLAIM</code> to sweep dead row versions and defragment the heap — plus the background daemon that runs reclamation and time-based pruning for you.</p>
+<p class="lede">The two housekeeping operations every EvolutionDB table needs over its lifetime, <code>ANALYZE</code> to keep planner statistics current and <code>RECLAIM</code> to sweep dead row versions and defragment the heap, plus the background daemon that runs reclamation and time-based pruning for you.</p>
 
-<p>Because EvolutionDB uses multi-version concurrency control (see <a href="/3.0/sql/mvcc/">MVCC</a>), a <code>DELETE</code> or <code>UPDATE</code> never removes a row in place: the old version stays on its heap page until no running transaction could still read it. Likewise, the cost-based planner cannot estimate row counts or selectivity without sampled statistics. Routine maintenance is what keeps both of these honest — statistics fresh, and obsolete tuples swept out of the heap and the indexes. Both operations are explicit SQL commands, and reclamation additionally runs on a background timer.</p>
+<p>Because EvolutionDB uses multi-version concurrency control (see <a href="/3.0/sql/mvcc/">MVCC</a>), a <code>DELETE</code> or <code>UPDATE</code> never removes a row in place: the old version stays on its heap page until no running transaction could still read it. Likewise, the cost-based planner cannot estimate row counts or selectivity without sampled statistics. Routine maintenance is what keeps both of these honest: statistics fresh, and obsolete tuples swept out of the heap and the indexes. Both operations are explicit SQL commands, and reclamation additionally runs on a background timer.</p>
 
 <div class="callout">
-<p><strong>Terminology.</strong> EvolutionDB calls the storage-reclamation command <code>RECLAIM</code>, not <code>VACUUM</code>; there is no <code>VACUUM</code> keyword. The statistics command is <code>ANALYZE TABLE</code>, not bare <code>ANALYZE</code>. Neither command appears in the SQL standard — both are implementation-defined maintenance utilities.</p>
+<p><strong>Terminology.</strong> EvolutionDB calls the storage-reclamation command <code>RECLAIM</code>, not <code>VACUUM</code>; there is no <code>VACUUM</code> keyword. The statistics command is <code>ANALYZE TABLE</code>, not bare <code>ANALYZE</code>. Neither command appears in the SQL standard, both are implementation-defined maintenance utilities.</p>
 </div>
 
 <h2 id="analyze">28.1. Collecting Statistics with <code>ANALYZE</code></h2>
 
-<p><code>ANALYZE TABLE</code> performs a sequential scan of one table and records statistics in the system catalog. The planner reads these statistics — and <code>EXPLAIN</code> reports them — when it estimates how many rows a scan or predicate will produce. Without an <code>ANALYZE</code>, a table has no recorded <code>row_count</code>, and several maintenance heuristics described below fall back to conservative defaults.</p>
+<p><code>ANALYZE TABLE</code> performs a sequential scan of one table and records statistics in the system catalog. The planner reads these statistics, and <code>EXPLAIN</code> reports them, when it estimates how many rows a scan or predicate will produce. Without an <code>ANALYZE</code>, a table has no recorded <code>row_count</code>, and several maintenance heuristics described below fall back to conservative defaults.</p>
 
 <div class="synopsis">
 <pre><code><span class="c-key">ANALYZE TABLE</span> <span class="c-com">table_name</span>
@@ -51,7 +51,7 @@
 <dd>One auto-selected histogram per column that has at least one non-NULL value (see <a href="#analyze-histograms">28.1.2</a>).</dd>
 
 <dt>Per-index statistics</dt>
-<dd>For every index on the table, the B+ tree depth, leaf-page count, total entries, and average entries per leaf — read directly from the index tree.</dd>
+<dd>For every index on the table, the B+ tree depth, leaf-page count, total entries, and average entries per leaf, read directly from the index tree.</dd>
 </dl>
 
 <p>On success the server prints a one-line summary, for example:</p>
@@ -67,11 +67,11 @@ ANALYZE: 5012 rows sampled from 50000 (keep 10%), 4 columns, 412 pages</code></p
 <p>Histograms give the planner a distribution rather than a single distinct-count, so it can estimate equality and range selectivity. EvolutionDB builds one of two flavors per column, chosen automatically:</p>
 
 <ul>
-<li><strong>Frequency histogram</strong> — built when the number of distinct values (NDV) is no greater than the bucket budget. It stores one bucket per distinct value with its exact count, giving <em>exact</em> equality selectivity rather than an estimate.</li>
-<li><strong>Equi-depth histogram</strong> — built when the NDV exceeds the bucket budget. Distinct values are sorted (numerically when every value parses as a number, otherwise lexicographically) and grouped into buckets that each hold roughly the same number of rows. Each bucket stores its upper bound and a cumulative count.</li>
+<li><strong>Frequency histogram</strong>, built when the number of distinct values (NDV) is no greater than the bucket budget. It stores one bucket per distinct value with its exact count, giving <em>exact</em> equality selectivity rather than an estimate.</li>
+<li><strong>Equi-depth histogram</strong>, built when the NDV exceeds the bucket budget. Distinct values are sorted (numerically when every value parses as a number, otherwise lexicographically) and grouped into buckets that each hold roughly the same number of rows. Each bucket stores its upper bound and a cumulative count.</li>
 </ul>
 
-<p>The default bucket budget is 100, and no histogram exceeds 100 buckets; <code>UPDATE HISTOGRAM … WITH <i>n</i> BUCKETS</code> overrides the default but is still capped at 100. Distinct-value tracking is capped at 10,000 values per column — columns with more distinct values are summarized from that capped sample, which is also what keeps equi-depth bounds representative on very-high-cardinality columns.</p>
+<p>The default bucket budget is 100, and no histogram exceeds 100 buckets; <code>UPDATE HISTOGRAM … WITH <i>n</i> BUCKETS</code> overrides the default but is still capped at 100. Distinct-value tracking is capped at 10,000 values per column: columns with more distinct values are summarized from that capped sample, which is also what keeps equi-depth bounds representative on very-high-cardinality columns.</p>
 
 <pre><code><span class="c-com">-- Rebuild histograms for two columns only, with a smaller bucket budget,</span>
 <span class="c-com">-- leaving the per-column statistics untouched.</span>
@@ -117,7 +117,7 @@ ANALYZE: 5012 rows sampled from 50000 (keep 10%), 4 columns, 412 pages</code></p
 <p>For a non-empty table, <code>RECLAIM TABLE</code> works in order:</p>
 
 <ol>
-<li><strong>Dead-tuple removal and XID freeze.</strong> It walks every heap page and removes dead tuples — those whose inserting transaction aborted or crashed, and those whose deleting/updating transaction committed and is older than the oldest active transaction (the removal horizon). For each removed tuple it also cleans the primary-key B+ tree, every secondary index, and any TOAST overflow chain. In the same pass it <em>freezes</em> the transaction id of old committed live tuples — replacing an <code>xmin</code> older than the freeze cutoff with <code>XID_FROZEN</code> — so the original id can be recycled without wraparound risk.</li>
+<li><strong>Dead-tuple removal and XID freeze.</strong> It walks every heap page and removes dead tuples: those whose inserting transaction aborted or crashed, and those whose deleting/updating transaction committed and is older than the oldest active transaction (the removal horizon). For each removed tuple it also cleans the primary-key B+ tree, every secondary index, and any TOAST overflow chain. In the same pass it <em>freezes</em> the transaction id of old committed live tuples, replacing an <code>xmin</code> older than the freeze cutoff with <code>XID_FROZEN</code>, so the original id can be recycled without wraparound risk.</li>
 <li><strong>Per-page compaction.</strong> Each surviving heap page is compacted internally so its live records become contiguous and its free space is reclaimable.</li>
 <li><strong>Sparse-page merge.</strong> Live records are moved from tail pages into earlier pages that have room. A record is relocated only when the primary-key entry currently points at that exact version, so stale or duplicate MVCC versions are never mis-repointed.</li>
 <li><strong>Empty-page free + chain rebuild.</strong> Pages that end up with no live records are freed back to the shared page free list, and the heap page chain is rebuilt over only the surviving pages. Surviving pages are then marked all-visible in the visibility map.</li>
@@ -146,7 +146,7 @@ ANALYZE: 5012 rows sampled from 50000 (keep 10%), 4 columns, 412 pages</code></p
 <p>Because dead-tuple counters are only an estimate, it is good practice to run <code>ANALYZE TABLE</code> after a <code>RECLAIM</code> that moved many rows, so the planner sees the new <code>page_count</code> and row distribution.</p>
 
 <div class="callout">
-<p><strong>Locking.</strong> <code>RECLAIM</code> rewrites heap pages from an in-memory snapshot and returns freed pages to the single shared page free list. It must therefore run with exclusive access to the engine — it cannot overlap concurrent writers or readers of the table. When invoked by the background daemon it takes both the DML mutex and the parser write lock for the duration of the reclamation (see <a href="/3.0/admin/config/">Server Configuration</a> §23.3 for the lock model).</p>
+<p><strong>Locking.</strong> <code>RECLAIM</code> rewrites heap pages from an in-memory snapshot and returns freed pages to the single shared page free list. It must therefore run with exclusive access to the engine, it cannot overlap concurrent writers or readers of the table. When invoked by the background daemon it takes both the DML mutex and the parser write lock for the duration of the reclamation (see <a href="/3.0/admin/config/">Server Configuration</a> §23.3 for the lock model).</p>
 </div>
 
 <h2 id="auto-reclaim">28.3. Automatic Reclamation and Time-Based Pruning</h2>
@@ -189,7 +189,7 @@ ANALYZE: 5012 rows sampled from 50000 (keep 10%), 4 columns, 412 pages</code></p
 
 <h3 id="auto-reclaim-pruning">28.3.3. Time-based pruning passes</h3>
 
-<p>On the same tick, and under the parser write lock, the daemon runs three pruning passes that delete expired rows. These are distinct from dead-tuple reclamation — they delete <em>live</em> rows that have aged out of a retention window — but they share the maintenance tick.</p>
+<p>On the same tick, and under the parser write lock, the daemon runs three pruning passes that delete expired rows. These are distinct from dead-tuple reclamation, they delete <em>live</em> rows that have aged out of a retention window, but they share the maintenance tick.</p>
 
 <table>
 <thead><tr><th>Pass</th><th>Applies to</th><th>Deletes rows where…</th><th>Window source</th></tr></thead>
@@ -241,7 +241,7 @@ ANALYZE: 5012 rows sampled from 50000 (keep 10%), 4 columns, 412 pages</code></p
 <ul>
 <li><strong>No <code>VACUUM</code>, no autovacuum knobs.</strong> The command is <code>RECLAIM TABLE</code>; its thresholds (20% / 50 dead tuples), 30-second ceiling, and freeze cutoff are compiled in. The only runtime override is the test-only <code>EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</code> (1–30 s).</li>
 <li><strong>One table per statement.</strong> Both <code>ANALYZE TABLE</code> and <code>RECLAIM TABLE</code> act on a single, optionally schema-qualified table; there is no database-wide form.</li>
-<li><strong>Statistics are not auto-refreshed.</strong> Reclamation runs automatically, but <code>ANALYZE</code> does not — stale statistics persist until you re-run it.</li>
+<li><strong>Statistics are not auto-refreshed.</strong> Reclamation runs automatically, but <code>ANALYZE</code> does not, stale statistics persist until you re-run it.</li>
 <li><strong>RECLAIM needs exclusive access.</strong> It cannot overlap concurrent readers or writers of the engine; the daemon enforces this with the DML mutex plus the parser write lock.</li>
 <li><strong>Per-tick prune cap.</strong> Each time-based pruning pass removes at most 256 rows per table per tick; large backlogs drain over multiple ticks.</li>
 <li><strong>Distinct-value cap.</strong> <code>ANALYZE</code> tracks at most 10,000 distinct values per column and at most 100 histogram buckets; both are summarized beyond those caps.</li>

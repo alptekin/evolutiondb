@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Azure DevOps connector — EvolutionDB</title>
+<title>Azure DevOps connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -14,69 +14,69 @@
 <div class="docs-shell pt-16">
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
-  <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full glass-panel mb-6" style="border-color:rgba(34,211,238,.2)">
-    <span class="w-2 h-2 rounded-full bg-neon-cyan"></span>
-    <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">CONNECTOR · SYNC</span>
-  </div>
-  <h1>Azure DevOps connector</h1>
-  <p class="lede">A <code>*-sync</code> app that pulls the Azure DevOps pull requests and pipeline runs you're involved in — created by you or awaiting your review — into EvolutionDB long-term memory, where the <a href="/platform/mcp-server/">MCP server</a>'s <code>search_memory</code>, morning brief, and open-loops layer can use them.</p>
+ <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full glass-panel mb-6" style="border-color:rgba(34,211,238.2)">
+ <span class="w-2 h-2 rounded-full bg-neon-cyan"></span>
+ <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">CONNECTOR · SYNC</span>
+ </div>
+ <h1>Azure DevOps connector</h1>
+ <p class="lede">A <code>*-sync</code> app that pulls the Azure DevOps pull requests and pipeline runs you're involved in, created by you or awaiting your review: into EvolutionDB long-term memory, where the <a href="/platform/mcp-server/">MCP server</a>'s <code>search_memory</code>, morning brief, and open-loops layer can use them.</p>
 
-  <h2 id="what">What it does</h2>
-  <p>The package is <code>evolutiondb-azure-devops-sync</code> (version 0.1.0, <em>Development Status :: 4 - Beta</em>). Each pass walks the Azure DevOps REST API (version <code>7.1</code>) for the projects you have access to and writes deterministic records into a memory store over the PostgreSQL wire protocol. Because the keys are derived from stable IDs, a re-sync upserts the same row instead of duplicating it.</p>
-  <p>Three record kinds plus a per-PR watermark are written:</p>
-  <table>
-    <thead><tr><th>mem_key</th><th>content</th></tr></thead>
-    <tbody>
-      <tr><td><code>ado_thread_&lt;project/repo&gt;#&lt;prId&gt;</code></td><td>one row per pull request</td></tr>
-      <tr><td><code>ado_pr_comment_&lt;threadId&gt;_&lt;commentId&gt;</code></td><td>PR thread comments</td></tr>
-      <tr><td><code>ado_build_&lt;buildId&gt;</code></td><td>pipeline runs (CI context)</td></tr>
-      <tr><td><code>azdo_state_&lt;project/repo&gt;#&lt;prId&gt;</code></td><td>per-PR sync watermark</td></tr>
-    </tbody>
-  </table>
-  <p>"Me" is the PAT owner. The connector resolves the owner's identity GUID from <code>/_apis/connectionData</code>, then runs two precise per-project PR queries against that GUID — <em>created-by-me</em> and <em>review-requested-from-me</em> — so there is no fuzzy text search. Active PRs are always fetched; recently <code>completed</code> / <code>abandoned</code> PRs are fetched too, so open rows flip to closed and downstream open-loops auto-resolve.</p>
-  <p>Unlike the <a href="/connectors/github/">GitHub connector</a>, the ADO PR object carries <code>reviewers[]</code> with first-class <code>vote</code> values, which are stored verbatim:</p>
-  <table>
-    <thead><tr><th>vote</th><th>meaning</th></tr></thead>
-    <tbody>
-      <tr><td><code>10</code></td><td>approved</td></tr>
-      <tr><td><code>5</code></td><td>approved with suggestions</td></tr>
-      <tr><td><code>0</code></td><td>no vote</td></tr>
-      <tr><td><code>-5</code></td><td>waiting for author</td></tr>
-      <tr><td><code>-10</code></td><td>rejected</td></tr>
-    </tbody>
-  </table>
-  <p>Alongside the vote, each reviewer keeps <code>isRequired</code>, and the PR keeps <code>isDraft</code> and <code>status</code> — so "review requested from me and I haven't voted" is derivable downstream without guessing.</p>
-  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Honesty notes baked into the data: the PR list object has no <code>updatedDate</code>, so <code>updated_at</code> is the best available (<code>closedDate</code>, else <code>creationDate</code>) and per-PR watermarks are correspondingly coarse. Pipeline runs are searchable context, not open loops.</div></div>
+ <h2 id="what">What it does</h2>
+ <p>The package is <code>evolutiondb-azure-devops-sync</code> (version 0.1.0, <em>Development Status :: 4 - Beta</em>). Each pass walks the Azure DevOps REST API (version <code>7.1</code>) for the projects you have access to and writes deterministic records into a memory store over the PostgreSQL wire protocol. Because the keys are derived from stable IDs, a re-sync upserts the same row instead of duplicating it.</p>
+ <p>Three record kinds plus a per-PR watermark are written:</p>
+ <table>
+ <thead><tr><th>mem_key</th><th>content</th></tr></thead>
+ <tbody>
+ <tr><td><code>ado_thread_&lt;project/repo&gt;#&lt;prId&gt;</code></td><td>one row per pull request</td></tr>
+ <tr><td><code>ado_pr_comment_&lt;threadId&gt;_&lt;commentId&gt;</code></td><td>PR thread comments</td></tr>
+ <tr><td><code>ado_build_&lt;buildId&gt;</code></td><td>pipeline runs (CI context)</td></tr>
+ <tr><td><code>azdo_state_&lt;project/repo&gt;#&lt;prId&gt;</code></td><td>per-PR sync watermark</td></tr>
+ </tbody>
+ </table>
+ <p>"Me" is the PAT owner. The connector resolves the owner's identity GUID from <code>/_apis/connectionData</code>, then runs two precise per-project PR queries against that GUID, <em>created-by-me</em> and <em>review-requested-from-me</em>, so there is no fuzzy text search. Active PRs are always fetched; recently <code>completed</code> / <code>abandoned</code> PRs are fetched too, so open rows flip to closed and downstream open-loops auto-resolve.</p>
+ <p>Unlike the <a href="/connectors/github/">GitHub connector</a>, the ADO PR object carries <code>reviewers[]</code> with first-class <code>vote</code> values, which are stored verbatim:</p>
+ <table>
+ <thead><tr><th>vote</th><th>meaning</th></tr></thead>
+ <tbody>
+ <tr><td><code>10</code></td><td>approved</td></tr>
+ <tr><td><code>5</code></td><td>approved with suggestions</td></tr>
+ <tr><td><code>0</code></td><td>no vote</td></tr>
+ <tr><td><code>-5</code></td><td>waiting for author</td></tr>
+ <tr><td><code>-10</code></td><td>rejected</td></tr>
+ </tbody>
+ </table>
+ <p>Alongside the vote, each reviewer keeps <code>isRequired</code>, and the PR keeps <code>isDraft</code> and <code>status</code>, so "review requested from me and I haven't voted" is derivable downstream without guessing.</p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Honesty notes baked into the data: the PR list object has no <code>updatedDate</code>, so <code>updated_at</code> is the best available (<code>closedDate</code>, else <code>creationDate</code>) and per-PR watermarks are correspondingly coarse. Pipeline runs are searchable context, not open loops.</div></div>
 
-  <h2 id="install">Install</h2>
-  <p>Editable install from the monorepo:</p>
-  <pre><code><span class="c-key">pip install</span> -e client/azure-devops-sync</code></pre>
-  <p>The only runtime dependency is <code>psycopg[binary]&gt;=3.1</code> — the REST client uses the Python standard library (<code>urllib</code>), no <code>requests</code> or Azure SDK. Python 3.9+ is required. Installing the package exposes one console script:</p>
-  <pre><code>evolutiondb-azure-devops-sync</code></pre>
+ <h2 id="install">Install</h2>
+ <p>Editable install from the monorepo:</p>
+ <pre><code><span class="c-key">pip install</span> -e client/azure-devops-sync</code></pre>
+ <p>The only runtime dependency is <code>psycopg[binary]&gt;=3.1</code>, the REST client uses the Python standard library (<code>urllib</code>), no <code>requests</code> or Azure SDK. Python 3.9+ is required. Installing the package exposes one console script:</p>
+ <pre><code>evolutiondb-azure-devops-sync</code></pre>
 
-  <h2 id="configure">Configure (env vars / auth)</h2>
-  <p>Copy <code>.env.example</code> to <code>.env</code> (gitignored) and fill it in. At minimum set <code>AZURE_DEVOPS_ORG_URL</code> and <code>AZURE_DEVOPS_PAT</code>. The PAT needs <strong>Code (Read)</strong> + <strong>Build (Read)</strong> scopes. The dotenv loader uses <code>setdefault</code>, so a value already present in the real environment wins over the file.</p>
-  <table>
-    <thead><tr><th>variable</th><th>default</th><th>purpose</th></tr></thead>
-    <tbody>
-      <tr><td><code>AZURE_DEVOPS_ORG_URL</code></td><td>—</td><td>org URL, must start with <code>https://</code> (e.g. <code>https://dev.azure.com/your-org</code>)</td></tr>
-      <tr><td><code>AZURE_DEVOPS_PAT</code></td><td>—</td><td>Personal Access Token; Basic auth, username empty, password = PAT</td></tr>
-      <tr><td><code>AZURE_DEVOPS_PROJECTS</code></td><td>(empty)</td><td>comma-separated project filter; empty = every project in the org</td></tr>
-      <tr><td><code>EVOSQL_HOST</code></td><td><code>127.0.0.1</code></td><td>EvolutionDB host</td></tr>
-      <tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>PG wire port</td></tr>
-      <tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>DB user</td></tr>
-      <tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>DB password</td></tr>
-      <tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>database name</td></tr>
-      <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>memory namespace — share it with the MCP server's <code>MCP_USER_ID</code></td></tr>
-      <tr><td><code>ADO_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>memory store the records land in (the MCP server's primary store)</td></tr>
-      <tr><td><code>ADO_POLL_INTERVAL</code></td><td><code>900</code></td><td>daemon poll seconds; the <code>--interval</code> flag wins when passed</td></tr>
-    </tbody>
-  </table>
-  <p>On first connect the store is auto-created (a <code>CREATE MEMORY STORE</code> attempt whose error is swallowed if it already exists), so no manual schema step is needed.</p>
+ <h2 id="configure">Configure (env vars / auth)</h2>
+ <p>Copy <code>.env.example</code> to <code>.env</code> (gitignored) and fill it in. At minimum set <code>AZURE_DEVOPS_ORG_URL</code> and <code>AZURE_DEVOPS_PAT</code>. The PAT needs <strong>Code (Read)</strong> + <strong>Build (Read)</strong> scopes. The dotenv loader uses <code>setdefault</code>, so a value already present in the real environment wins over the file.</p>
+ <table>
+ <thead><tr><th>variable</th><th>default</th><th>purpose</th></tr></thead>
+ <tbody>
+ <tr><td><code>AZURE_DEVOPS_ORG_URL</code></td><td>, </td><td>org URL, must start with <code>https://</code> (e.g. <code>https://dev.azure.com/your-org</code>)</td></tr>
+ <tr><td><code>AZURE_DEVOPS_PAT</code></td><td>, </td><td>Personal Access Token; Basic auth, username empty, password = PAT</td></tr>
+ <tr><td><code>AZURE_DEVOPS_PROJECTS</code></td><td>(empty)</td><td>comma-separated project filter; empty = every project in the org</td></tr>
+ <tr><td><code>EVOSQL_HOST</code></td><td><code>127.0.0.1</code></td><td>EvolutionDB host</td></tr>
+ <tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>PG wire port</td></tr>
+ <tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>DB user</td></tr>
+ <tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>DB password</td></tr>
+ <tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>database name</td></tr>
+ <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>memory namespace, share it with the MCP server's <code>MCP_USER_ID</code></td></tr>
+ <tr><td><code>ADO_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>memory store the records land in (the MCP server's primary store)</td></tr>
+ <tr><td><code>ADO_POLL_INTERVAL</code></td><td><code>900</code></td><td>daemon poll seconds; the <code>--interval</code> flag wins when passed</td></tr>
+ </tbody>
+ </table>
+ <p>On first connect the store is auto-created (a <code>CREATE MEMORY STORE</code> attempt whose error is swallowed if it already exists), so no manual schema step is needed.</p>
 
-  <h2 id="usage">Usage</h2>
-  <p>The CLI takes a single subcommand-free set of flags. A one-shot pass:</p>
-  <pre><code><span class="c-com"># one pass, then exit</span>
+ <h2 id="usage">Usage</h2>
+ <p>The CLI takes a single subcommand-free set of flags. A one-shot pass:</p>
+ <pre><code><span class="c-com"># one pass, then exit</span>
 evolutiondb-azure-devops-sync --once
 
 <span class="c-com"># fetch everything but persist nothing (no DB writes)</span>
@@ -84,29 +84,29 @@ evolutiondb-azure-devops-sync --once --dry-run
 
 <span class="c-com"># run as a daemon, one pass every 900 seconds</span>
 evolutiondb-azure-devops-sync --interval 900</code></pre>
-  <p>The supported flags (from <code>argparse</code>):</p>
-  <table>
-    <thead><tr><th>flag</th><th>effect</th></tr></thead>
-    <tbody>
-      <tr><td><code>--once</code></td><td>run a single pass and exit</td></tr>
-      <tr><td><code>--interval N</code></td><td>daemon mode, sleep N seconds between passes (floored to 60)</td></tr>
-      <tr><td><code>--since</code></td><td>initial floor when no watermark exists; default <code>7d</code>. Format <code>&lt;n&gt;&lt;unit&gt;</code> with unit one of <code>s m h d w</code> (e.g. <code>1h</code>, <code>7d</code>)</td></tr>
-      <tr><td><code>--dry-run</code></td><td>fetch but don't persist</td></tr>
-      <tr><td><code>--env-file</code></td><td>dotenv path; default <code>.env</code>, ignored if missing</td></tr>
-    </tbody>
-  </table>
-  <p>If neither <code>--once</code> nor <code>--interval</code> is given, the connector runs exactly one pass (same as <code>--once</code>).</p>
+ <p>The supported flags (from <code>argparse</code>):</p>
+ <table>
+ <thead><tr><th>flag</th><th>effect</th></tr></thead>
+ <tbody>
+ <tr><td><code>--once</code></td><td>run a single pass and exit</td></tr>
+ <tr><td><code>--interval N</code></td><td>daemon mode, sleep N seconds between passes (floored to 60)</td></tr>
+ <tr><td><code>--since</code></td><td>initial floor when no watermark exists; default <code>7d</code>. Format <code>&lt;n&gt;&lt;unit&gt;</code> with unit one of <code>s m h d w</code> (e.g. <code>1h</code>, <code>7d</code>)</td></tr>
+ <tr><td><code>--dry-run</code></td><td>fetch but don't persist</td></tr>
+ <tr><td><code>--env-file</code></td><td>dotenv path; default <code>.env</code>, ignored if missing</td></tr>
+ </tbody>
+ </table>
+ <p>If neither <code>--once</code> nor <code>--interval</code> is given, the connector runs exactly one pass (same as <code>--once</code>).</p>
 
-  <h3 id="output">Output &amp; exit codes</h3>
-  <p>Each pass prints one JSON line to stdout. On success:</p>
-  <pre><code>{<span class="c-str">"ok"</span>: <span class="c-key">true</span>, <span class="c-str">"prs"</span>: N, <span class="c-str">"comments"</span>: N, <span class="c-str">"builds"</span>: N, <span class="c-str">"errors"</span>: N}</code></pre>
-  <p>On a failed pass: <code>{"ok": false, "error": "&lt;message&gt;"}</code>. Per-project fetch failures don't abort the pass — they're logged to stderr and counted in <code>errors</code>.</p>
-  <p>Exit codes: <code>0</code> ok · <code>2</code> config error (bad <code>--since</code>, or missing org URL / PAT) · <code>4</code> pass failed. <code>SIGTERM</code>/<code>SIGINT</code> requests a graceful stop — the current pass finishes before the daemon exits.</p>
+ <h3 id="output">Output &amp; exit codes</h3>
+ <p>Each pass prints one JSON line to stdout. On success:</p>
+ <pre><code>{<span class="c-str">"ok"</span>: <span class="c-key">true</span>, <span class="c-str">"prs"</span>: N, <span class="c-str">"comments"</span>: N, <span class="c-str">"builds"</span>: N, <span class="c-str">"errors"</span>: N}</code></pre>
+ <p>On a failed pass: <code>{"ok": false, "error": "&lt;message&gt;"}</code>. Per-project fetch failures don't abort the pass, they're logged to stderr and counted in <code>errors</code>.</p>
+ <p>Exit codes: <code>0</code> ok · <code>2</code> config error (bad <code>--since</code>, or missing org URL / PAT) · <code>4</code> pass failed. <code>SIGTERM</code>/<code>SIGINT</code> requests a graceful stop, the current pass finishes before the daemon exits.</p>
 
-  <h3 id="record-shape">Record shape</h3>
-  <p>A PR record (the value stored under <code>ado_thread_…</code>) looks like:</p>
-  <pre><code>{
-  <span class="c-str">"fact"</span>: <span class="c-str">"jane.dev@example.com opened pr widgets-project/widgets#42: Add retry/backoff — …"</span>,
+ <h3 id="record-shape">Record shape</h3>
+ <p>A PR record (the value stored under <code>ado_thread_…</code>) looks like:</p>
+ <pre><code>{
+  <span class="c-str">"fact"</span>: <span class="c-str">"jane.dev@example.com opened pr widgets-project/widgets#42: Add retry/backoff - …"</span>,
   <span class="c-str">"source"</span>: <span class="c-str">"azure_devops"</span>,
   <span class="c-str">"kind"</span>: <span class="c-str">"pr"</span>,
   <span class="c-str">"repo"</span>: <span class="c-str">"widgets-project/widgets"</span>,
@@ -120,76 +120,76 @@ evolutiondb-azure-devops-sync --interval 900</code></pre>
   <span class="c-str">"updated_at"</span>: <span class="c-str">"2026-06-08T09:00:00Z"</span>,  <span class="c-com">// closedDate, else creationDate</span>
   <span class="c-str">"tags"</span>: [<span class="c-str">"azure_devops"</span>, <span class="c-str">"pr"</span>, <span class="c-str">"widgets-project/widgets"</span>]
 }</code></pre>
-  <p><code>fact</code>/<code>title</code>/<code>body</code> text is clipped to ~4&nbsp;KB before storing. Comment records (<code>kind: pr_comment</code>) skip system comments and empty bodies, and add a <code>path</code> field when the thread is anchored to a file. Build records carry <code>kind: pipeline_run</code> with <code>pipeline</code>, <code>result</code>, <code>branch</code>, <code>commit</code>, and the run's web URL.</p>
+ <p><code>fact</code>/<code>title</code>/<code>body</code> text is clipped to ~4&nbsp;KB before storing. Comment records (<code>kind: pr_comment</code>) skip system comments and empty bodies, and add a <code>path</code> field when the thread is anchored to a file. Build records carry <code>kind: pipeline_run</code> with <code>pipeline</code>, <code>result</code>, <code>branch</code>, <code>commit</code>, and the run's web URL.</p>
 
-  <h2 id="reference">Reference</h2>
-  <p>The package is three modules: <code>api</code> (REST client), <code>sync</code> (record builders + CLI), and <code>state</code> (memory backend). The entry point is <code>azure_devops_sync.__main__:main</code>, which simply re-exports <code>sync.main</code>.</p>
+ <h2 id="reference">Reference</h2>
+ <p>The package is three modules: <code>api</code> (REST client), <code>sync</code> (record builders + CLI), and <code>state</code> (memory backend). The entry point is <code>azure_devops_sync.__main__:main</code>, which simply re-exports <code>sync.main</code>.</p>
 
-  <h3>azure_devops_sync.api</h3>
-  <div class="sig">class AzdoClient(org_url: str, pat: str, user_agent: str = "evolutiondb-azure-devops-sync")</div>
-  <p>Minimal Azure DevOps REST 7.1 client bound to one organization. Validates that <code>org_url</code> is <code>https://</code> and that a PAT is present (raising <code>AzdoError</code> otherwise), and builds the Basic auth header from <code>:&lt;pat&gt;</code>.</p>
+ <h3>azure_devops_sync.api</h3>
+ <div class="sig">class AzdoClient(org_url: str, pat: str, user_agent: str = "evolutiondb-azure-devops-sync")</div>
+ <p>Minimal Azure DevOps REST 7.1 client bound to one organization. Validates that <code>org_url</code> is <code>https://</code> and that a PAT is present (raising <code>AzdoError</code> otherwise), and builds the Basic auth header from <code>:&lt;pat&gt;</code>.</p>
 
-  <div class="sig">AzdoClient.connection_data() -&gt; dict</div>
-  <p>Returns the authenticated (PAT-owner) identity from <code>/_apis/connectionData</code> — the <code>{'id': &lt;guid&gt;, …}</code> object that drives the "me" queries.</p>
+ <div class="sig">AzdoClient.connection_data() -&gt; dict</div>
+ <p>Returns the authenticated (PAT-owner) identity from <code>/_apis/connectionData</code>, the <code>{'id': &lt;guid&gt;, …}</code> object that drives the "me" queries.</p>
 
-  <div class="sig">AzdoClient.projects() -&gt; List[dict]</div>
-  <p>All projects in the org (paginated via <code>$top</code>/<code>$skip</code>).</p>
+ <div class="sig">AzdoClient.projects() -&gt; List[dict]</div>
+ <p>All projects in the org (paginated via <code>$top</code>/<code>$skip</code>).</p>
 
-  <div class="sig">AzdoClient.pull_requests(project, *, creator_id=None, reviewer_id=None, status="active", min_time=None) -&gt; List[dict]</div>
-  <p>Pull requests for one project, filtered by creator and/or reviewer identity GUID. When <code>min_time</code> is set it filters on close time (<code>queryTimeRangeType=closed</code>), which is only meaningful for completed/abandoned PRs.</p>
+ <div class="sig">AzdoClient.pull_requests(project, *, creator_id=None, reviewer_id=None, status="active", min_time=None) -&gt; List[dict]</div>
+ <p>Pull requests for one project, filtered by creator and/or reviewer identity GUID. When <code>min_time</code> is set it filters on close time (<code>queryTimeRangeType=closed</code>), which is only meaningful for completed/abandoned PRs.</p>
 
-  <div class="sig">AzdoClient.pr_threads(project, repository_id, pr_id) -&gt; List[dict]</div>
-  <p>The comment threads on one PR (used to build <code>pr_comment</code> records).</p>
+ <div class="sig">AzdoClient.pr_threads(project, repository_id, pr_id) -&gt; List[dict]</div>
+ <p>The comment threads on one PR (used to build <code>pr_comment</code> records).</p>
 
-  <div class="sig">AzdoClient.builds(project, *, min_time=None, top=200) -&gt; List[dict]</div>
-  <p>Pipeline runs for one project, newest first (<code>queueTimeDescending</code>), optionally floored by <code>min_time</code>.</p>
-  <p>The client honors <code>429</code>/<code>503</code> with <code>Retry-After</code> (bounded to 5 retries) and retries transient socket/SSL/connection errors with an exponential backoff <code>(1, 2, 4, 8, 16)</code>; a non-JSON response (e.g. an HTML login page) is treated as a bad/expired PAT. Errors surface as <code>AzdoError</code> with <code>.status</code> and <code>.url</code>.</p>
+ <div class="sig">AzdoClient.builds(project, *, min_time=None, top=200) -&gt; List[dict]</div>
+ <p>Pipeline runs for one project, newest first (<code>queueTimeDescending</code>), optionally floored by <code>min_time</code>.</p>
+ <p>The client honors <code>429</code>/<code>503</code> with <code>Retry-After</code> (bounded to 5 retries) and retries transient socket/SSL/connection errors with an exponential backoff <code>(1, 2, 4, 8, 16)</code>; a non-JSON response (e.g. an HTML login page) is treated as a bad/expired PAT. Errors surface as <code>AzdoError</code> with <code>.status</code> and <code>.url</code>.</p>
 
-  <h3>azure_devops_sync.sync</h3>
-  <div class="sig">class Config()</div>
-  <p>Reads all configuration from environment variables (see <a href="#configure">Configure</a>) into typed attributes.</p>
+ <h3>azure_devops_sync.sync</h3>
+ <div class="sig">class Config()</div>
+ <p>Reads all configuration from environment variables (see <a href="#configure">Configure</a>) into typed attributes.</p>
 
-  <div class="sig">sync_once(cfg: Config, *, since_default: Optional[str], dry_run: bool = False) -&gt; Dict[str, int]</div>
-  <p>Runs one full pass: resolves the PAT owner, opens the memory store (unless <code>dry_run</code>), iterates the projects, fetches PRs / threads / builds, applies the per-PR watermark check, writes records, and returns the <code>{prs, comments, builds, errors}</code> counters.</p>
+ <div class="sig">sync_once(cfg: Config, *, since_default: Optional[str], dry_run: bool = False) -&gt; Dict[str, int]</div>
+ <p>Runs one full pass: resolves the PAT owner, opens the memory store (unless <code>dry_run</code>), iterates the projects, fetches PRs / threads / builds, applies the per-PR watermark check, writes records, and returns the <code>{prs, comments, builds, errors}</code> counters.</p>
 
-  <div class="sig">build_pr_record(pr: Dict, project: str) -&gt; Optional[Dict]</div>
-  <p>Turns a raw ADO PR object into the stored record (the shape shown above). Returns <code>None</code> when there's no <code>pullRequestId</code>.</p>
+ <div class="sig">build_pr_record(pr: Dict, project: str) -&gt; Optional[Dict]</div>
+ <p>Turns a raw ADO PR object into the stored record (the shape shown above). Returns <code>None</code> when there's no <code>pullRequestId</code>.</p>
 
-  <div class="sig">build_comment_record(comment, thread, repo, number) -&gt; Optional[Dict]</div>
-  <p>Builds a <code>pr_comment</code> record. Returns <code>None</code> for system comments or empty bodies; adds <code>path</code> when the thread has a <code>filePath</code> context.</p>
+ <div class="sig">build_comment_record(comment, thread, repo, number) -&gt; Optional[Dict]</div>
+ <p>Builds a <code>pr_comment</code> record. Returns <code>None</code> for system comments or empty bodies; adds <code>path</code> when the thread has a <code>filePath</code> context.</p>
 
-  <div class="sig">build_build_record(build: Dict, project: str) -&gt; Optional[Dict]</div>
-  <p>Builds a <code>pipeline_run</code> record (pipeline name, status/result, branch, commit, requester, web URL). Returns <code>None</code> when there's no build <code>id</code>.</p>
+ <div class="sig">build_build_record(build: Dict, project: str) -&gt; Optional[Dict]</div>
+ <p>Builds a <code>pipeline_run</code> record (pipeline name, status/result, branch, commit, requester, web URL). Returns <code>None</code> when there's no build <code>id</code>.</p>
 
-  <div class="sig">parse_since(text: str) -&gt; str</div>
-  <p>Parses a relative duration like <code>1h</code> / <code>7d</code> into an ISO-8601 UTC timestamp (e.g. <code>2026-06-05T…Z</code>). Raises <code>ValueError</code> on anything that isn't <code>&lt;n&gt;&lt;s|m|h|d|w&gt;</code>.</p>
+ <div class="sig">parse_since(text: str) -&gt; str</div>
+ <p>Parses a relative duration like <code>1h</code> / <code>7d</code> into an ISO-8601 UTC timestamp (e.g. <code>2026-06-05T…Z</code>). Raises <code>ValueError</code> on anything that isn't <code>&lt;n&gt;&lt;s|m|h|d|w&gt;</code>.</p>
 
-  <div class="sig">main() -&gt; int</div>
-  <p>The console-script entry point: parses flags, loads the dotenv file, validates config, installs signal handlers, and runs one pass or the daemon loop. Returns the process exit code.</p>
+ <div class="sig">main() -&gt; int</div>
+ <p>The console-script entry point: parses flags, loads the dotenv file, validates config, installs signal handlers, and runs one pass or the daemon loop. Returns the process exit code.</p>
 
-  <h3>azure_devops_sync.state</h3>
-  <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
-  <p>The memory backend. Connects to EvolutionDB with <code>psycopg</code> (autocommit), ensures the store exists, and reconnects up to 3 times with backoff on a dropped connection. All records and watermarks are written with <code>MEMORY PUT INTO &lt;store&gt; VALUES (namespace, key, value)</code>; values are JSON.</p>
+ <h3>azure_devops_sync.state</h3>
+ <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+ <p>The memory backend. Connects to EvolutionDB with <code>psycopg</code> (autocommit), ensures the store exists, and reconnects up to 3 times with backoff on a dropped connection. All records and watermarks are written with <code>MEMORY PUT INTO &lt;store&gt; VALUES (namespace, key, value)</code>; values are JSON.</p>
 
-  <div class="sig">MemoryStore.put_record(key: str, record: Dict) -&gt; None</div>
-  <p>Upserts one JSON record under <code>key</code> in the configured namespace.</p>
+ <div class="sig">MemoryStore.put_record(key: str, record: Dict) -&gt; None</div>
+ <p>Upserts one JSON record under <code>key</code> in the configured namespace.</p>
 
-  <div class="sig">MemoryStore.get_watermark(repo, number) -&gt; Optional[str]</div>
-  <div class="sig">MemoryStore.set_watermark(repo, number, updated_at) -&gt; None</div>
-  <p>Read / write the per-PR watermark (stored under the <code>azdo_state_</code> prefix). <code>sync_once</code> skips a PR whose <code>updated_at</code> isn't newer than the stored watermark.</p>
-  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>The backend escapes values and inlines them into the SQL string (single quotes doubled, newlines/tabs flattened) rather than using bound parameters. It's intended for internal, trusted PR/build data on a local EvolutionDB instance.</div></div>
+ <div class="sig">MemoryStore.get_watermark(repo, number) -&gt; Optional[str]</div>
+ <div class="sig">MemoryStore.set_watermark(repo, number, updated_at) -&gt; None</div>
+ <p>Read / write the per-PR watermark (stored under the <code>azdo_state_</code> prefix). <code>sync_once</code> skips a PR whose <code>updated_at</code> isn't newer than the stored watermark.</p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>The backend escapes values and inlines them into the SQL string (single quotes doubled, newlines/tabs flattened) rather than using bound parameters. It's intended for internal, trusted PR/build data on a local EvolutionDB instance.</div></div>
 
-  <h2 id="notes">Notes &amp; limitations</h2>
-  <ul>
-    <li><strong>Coarse PR freshness.</strong> The PR list object has no <code>updatedDate</code>, so <code>updated_at</code> falls back to <code>closedDate</code> or <code>creationDate</code>. A new comment on an unchanged PR won't move the PR watermark; comment rows are still re-fetched and upserted each pass.</li>
-    <li><strong>Pipeline runs are context, not loops.</strong> Build records are written for search/brief context only and are not tracked as open loops.</li>
-    <li><strong>"Me" = PAT owner.</strong> There's no username option; the connector always scopes PRs to the PAT owner's identity GUID.</li>
-    <li><strong>Optional PII masking.</strong> If <code>evolutiondb-pii</code> is installed, the fields <code>fact</code>, <code>title</code>, <code>body</code>, <code>author</code> are protected with encrypted companion rows via <a href="/platform/pii/">the PII guard</a>; without it, masking is a no-op.</li>
-    <li><strong>Cleartext by default.</strong> Records store logins, titles, and up to ~4&nbsp;KB of PR/comment text in cleartext — anyone with DB access and the namespace can recall them. Keep real org names and tokens in <code>.env</code> (gitignored) only.</li>
-    <li><strong>Tests are pure-function.</strong> <code>tests/test_sync.py</code> exercises the record builders and the <code>parse_since</code> parser with fictional fixtures — no live API, no DB.</li>
-  </ul>
+ <h2 id="notes">Notes &amp; limitations</h2>
+ <ul>
+ <li><strong>Coarse PR freshness.</strong> The PR list object has no <code>updatedDate</code>, so <code>updated_at</code> falls back to <code>closedDate</code> or <code>creationDate</code>. A new comment on an unchanged PR won't move the PR watermark; comment rows are still re-fetched and upserted each pass.</li>
+ <li><strong>Pipeline runs are context, not loops.</strong> Build records are written for search/brief context only and are not tracked as open loops.</li>
+ <li><strong>"Me" = PAT owner.</strong> There's no username option; the connector always scopes PRs to the PAT owner's identity GUID.</li>
+ <li><strong>Optional PII masking.</strong> If <code>evolutiondb-pii</code> is installed, the fields <code>fact</code>, <code>title</code>, <code>body</code>, <code>author</code> are protected with encrypted companion rows via <a href="/platform/pii/">the PII guard</a>; without it, masking is a no-op.</li>
+ <li><strong>Cleartext by default.</strong> Records store logins, titles, and up to ~4&nbsp;KB of PR/comment text in cleartext, anyone with DB access and the namespace can recall them. Keep real org names and tokens in <code>.env</code> (gitignored) only.</li>
+ <li><strong>Tests are pure-function.</strong> <code>tests/test_sync.py</code> exercises the record builders and the <code>parse_since</code> parser with fictional fixtures: no live API, no DB.</li>
+ </ul>
 
-  <div class="callout callout-note"><span class="material-symbols-outlined">menu_book</span><div>Looking for engine internals (how <code>MEMORY PUT</code> / stores work under the hood)? See <a href="/reference/memory-sql/">Memory &amp; Entity SQL</a> and the <a href="https://wiki.evolutiondb.org">code wiki</a>.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">menu_book</span><div>Looking for engine internals (how <code>MEMORY PUT</code> / stores work under the hood)? See <a href="/reference/memory-sql/">Memory &amp; Entity SQL</a> and the <a href="https://wiki.evolutiondb.org">code wiki</a>.</div></div>
 </main></div>
 <script src="/nav-data.js"></script>
 <script src="/nav.js"></script>

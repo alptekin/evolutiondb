@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE MEMORY STORE — EvolutionDB 3.0</title>
+<title>CREATE MEMORY STORE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE MEMORY STORE</h1>
-<p class="lede">Create a new long-term agent memory store — a namespaced key/value store with optional vector embeddings for semantic search.</p>
+<p class="lede">Create a new long-term agent memory store, a namespaced key/value store with optional vector embeddings for semantic search.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -32,13 +32,13 @@
 <p><code>CREATE MEMORY STORE</code> registers a new memory store in the current schema and provisions its backing table. A memory store is purpose-built for agent long-term memory: each record is addressed by a <em>namespace</em> plus a <em>key</em>, carries an arbitrary JSON <em>value</em>, and may optionally carry a vector <em>embedding</em> for semantic similarity search.</p>
 <p>Internally, the store is backed by an ordinary table named <code>mem_&lt;store_name&gt;</code> created in the current schema. That table holds the following columns:</p>
 <ul>
-<li><code>mem_namespace</code> — <code>VARCHAR(255) NOT NULL</code></li>
-<li><code>mem_key</code> — <code>VARCHAR(255) NOT NULL</code></li>
-<li><code>pk</code> — <code>VARCHAR(512) PRIMARY KEY</code>, the composite of namespace and key</li>
-<li><code>mem_value</code> — <code>JSON</code> (nullable)</li>
-<li><code>embedding</code> — <code>VECTOR(N)</code>, present <strong>only</strong> when <code>embedding_dim</code> is greater than 0</li>
-<li><code>created_at</code> — <code>TIMESTAMP</code></li>
-<li><code>ttl_at</code> — <code>TIMESTAMP</code> (nullable)</li>
+<li><code>mem_namespace</code>, <code>VARCHAR(255) NOT NULL</code></li>
+<li><code>mem_key</code>, <code>VARCHAR(255) NOT NULL</code></li>
+<li><code>pk</code>, <code>VARCHAR(512) PRIMARY KEY</code>, the composite of namespace and key</li>
+<li><code>mem_value</code>, <code>JSON</code> (nullable)</li>
+<li><code>embedding</code>, <code>VECTOR(N)</code>, present <strong>only</strong> when <code>embedding_dim</code> is greater than 0</li>
+<li><code>created_at</code>, <code>TIMESTAMP</code></li>
+<li><code>ttl_at</code>, <code>TIMESTAMP</code> (nullable)</li>
 </ul>
 <p>When <code>embedding_dim</code> is omitted or 0, the <code>embedding</code> column is left out entirely and the store behaves as a pure namespaced JSON key/value table. In that case <code>MEMORY SEARCH</code> against the store fails, because there is no embedding column to score against.</p>
 <p>Because the backing table is a regular table, everything that applies to tables applies to a memory store: MVCC, primary-key uniqueness on <code>(namespace, key)</code>, row-level security policies, triggers, and foreign-key cascades. The <code>MEMORY PUT</code>, <code>GET</code>, <code>SEARCH</code>, <code>DELETE</code>, and <code>LIST NAMESPACES</code> commands are thin wrappers that compile down to ordinary <code>INSERT</code>/<code>SELECT</code>/<code>DELETE</code> against <code>mem_&lt;store_name&gt;</code>.</p>
@@ -47,7 +47,7 @@
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>IF NOT EXISTS</dt>
-<dd>Do nothing (other than emitting no error) if a memory store with the same name already exists. The pre-existing store is not modified — its <code>embedding_dim</code> and <code>distance</code> settings are kept as-is.</dd>
+<dd>Do nothing (other than emitting no error) if a memory store with the same name already exists. The pre-existing store is not modified, its <code>embedding_dim</code> and <code>distance</code> settings are kept as-is.</dd>
 
 <dt>store_name</dt>
 <dd>The name of the memory store to create. The backing table is created as <code>mem_&lt;store_name&gt;</code> in the current schema.</dd>
@@ -58,10 +58,10 @@
 <dt>distance = 'metric'</dt>
 <dd>The distance/similarity metric used by <code>MEMORY SEARCH</code> to rank results against the query vector. This setting is recorded on the store and selects which vector function scores each row at search time. Accepted values:
 <ul>
-<li><code>'cosine'</code> — cosine distance (the default if this option is omitted, or if an unrecognized value is supplied).</li>
-<li><code>'l2'</code> — Euclidean (L2) distance.</li>
-<li><code>'inner'</code> or <code>'ip'</code> — inner product.</li>
-<li><code>'l1'</code> — Manhattan (L1) distance.</li>
+<li><code>'cosine'</code>: cosine distance (the default if this option is omitted, or if an unrecognized value is supplied).</li>
+<li><code>'l2'</code>, Euclidean (L2) distance.</li>
+<li><code>'inner'</code> or <code>'ip'</code>, inner product.</li>
+<li><code>'l1'</code>, Manhattan (L1) distance.</li>
 </ul>
 The metric is meaningful only when <code>embedding_dim &gt; 0</code>.</dd>
 </dl>

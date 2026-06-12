@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>22. Installation — EvolutionDB 3.0</title>
+<title>22. Installation | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>22. Installation</h1>
-<p class="lede">How to obtain a running EvolutionDB 3.0 server — either by building the three executables from source with a C toolchain, or by pulling the prebuilt container image and starting it with <code>docker compose</code>.</p>
+<p class="lede">How to obtain a running EvolutionDB 3.0 server: either by building the three executables from source with a C toolchain, or by pulling the prebuilt container image and starting it with <code>docker compose</code>.</p>
 
 <p>EvolutionDB ships as three independent executables built from one source tree:</p>
 <dl class="params">
@@ -121,7 +121,7 @@ make</code></pre>
 </dl>
 
 <div class="callout">
-<p><strong>Honest scope.</strong> The container image and CI run on Linux; macOS and MinGW are supported by the Makefiles but are best-effort targets. There are no prebuilt OS packages (no <code>.deb</code>, <code>.rpm</code>, Homebrew tap, or Windows installer) — you build from source or use Docker.</p>
+<p><strong>Honest scope.</strong> The container image and CI run on Linux; macOS and MinGW are supported by the Makefiles but are best-effort targets. There are no prebuilt OS packages (no <code>.deb</code>, <code>.rpm</code>, Homebrew tap, or Windows installer), you build from source or use Docker.</p>
 </div>
 
 <h2 id="22.4">22.4. Installing with Docker</h2>
@@ -151,8 +151,8 @@ docker compose down -v</code></pre>
 <table>
 <thead><tr><th>Port</th><th>Protocol</th><th>Default</th><th>How to change</th></tr></thead>
 <tbody>
-<tr><td>PostgreSQL wire</td><td>PG frontend/backend protocol — psql, DBeaver, JDBC</td><td><code>5433</code></td><td><code>--pg-port</code></td></tr>
-<tr><td>EVO native</td><td>EvoSQL text protocol — <code>evosql-cli</code>, C/Python SDK</td><td><code>9967</code></td><td><code>--evo-port</code></td></tr>
+<tr><td>PostgreSQL wire</td><td>PG frontend/backend protocol, psql, DBeaver, JDBC</td><td><code>5433</code></td><td><code>--pg-port</code></td></tr>
+<tr><td>EVO native</td><td>EvoSQL text protocol, <code>evosql-cli</code>, C/Python SDK</td><td><code>9967</code></td><td><code>--evo-port</code></td></tr>
 <tr><td>Replication</td><td>WAL sender for replicas</td><td><code>9968</code> (disabled unless configured)</td><td><code>--replication-port</code></td></tr>
 <tr><td>CDC stream</td><td>Change-data-capture, JSON Lines</td><td>disabled (compose maps <code>9970</code>)</td><td><code>--cdc-port</code> / <code>EVOSQL_CDC_PORT</code></td></tr>
 </tbody>
@@ -167,7 +167,7 @@ docker compose down -v</code></pre>
 <p>The default administrative user name is <code>admin</code> (<code>EVOSQL_USER_NAME</code>). The password is controlled by <code>EVOSQL_PASSWORD</code>:</p>
 <ul>
 <li>If <code>EVOSQL_PASSWORD</code> is set, that password is used. The bundled <code>docker-compose.yml</code> sets it to <code>admin</code> for convenience.</li>
-<li>If it is unset, a random password is generated and printed to stdout once on first start — check <code>docker logs</code> to retrieve it.</li>
+<li>If it is unset, a random password is generated and printed to stdout once on first start, check <code>docker logs</code> to retrieve it.</li>
 </ul>
 
 <p>A few other environment variables seen in the compose file shape first start; the complete reference is in <a href="/3.0/admin/config/">23. Server Configuration</a>:</p>
@@ -199,7 +199,7 @@ docker compose down -v</code></pre>
 <span class="c-com"># Or connect any PostgreSQL client over the wire protocol</span>
 psql -h 127.0.0.1 -p 5433 -U admin testdb</code></pre>
 
-<p>Once connected you can create objects immediately — there is no <code>initdb</code> or template database to bootstrap. See <a href="/3.0/ref/create-database/">CREATE DATABASE</a>, <a href="/3.0/ref/create-table/">CREATE TABLE</a>, and the agent-memory DDL such as <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a> and <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>.</p>
+<p>Once connected you can create objects immediately, there is no <code>initdb</code> or template database to bootstrap. See <a href="/3.0/ref/create-database/">CREATE DATABASE</a>, <a href="/3.0/ref/create-table/">CREATE TABLE</a>, and the agent-memory DDL such as <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a> and <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>.</p>
 
 <h2 id="22.6">22.6. Verifying the installation</h2>
 
@@ -219,7 +219,7 @@ python tests/test_evo_protocol.py</code></pre>
 <li>No <code>configure</code> script and no <code>initdb</code>: the engine creates its single 4&nbsp;KB-page file (<code>evosql.db</code>) in the working directory on first run.</li>
 <li>The server links the engine's object files directly rather than a shared library; there is no installable <code>libevolution</code>. (The separate C client SDK, <code>client/libevosql-memory/</code>, is built with its own <code>make -C client/libevosql-memory</code>.)</li>
 <li>TLS and page encryption are compile-time options (<code>TLS=1</code>); a non-TLS build cannot be switched to TLS at runtime.</li>
-<li>Bison and Flex are needed only for <code>make generate</code> — never for an ordinary build, because the generated sources are committed.</li>
+<li>Bison and Flex are needed only for <code>make generate</code>: never for an ordinary build, because the generated sources are committed.</li>
 <li>No OS-native packages are published; distribution is source build or container image only.</li>
 </ul>
 </div>

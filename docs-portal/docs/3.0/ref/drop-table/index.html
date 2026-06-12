@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>DROP TABLE — EvolutionDB 3.0</title>
+<title>DROP TABLE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>DROP TABLE</h1>
-<p class="lede">Remove a table — together with its rows, indexes, constraints and access policies — from the current database.</p>
+<p class="lede">Remove a table: together with its rows, indexes, constraints and access policies, from the current database.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -27,7 +27,7 @@
 <ul>
 <li>the primary-key B+ tree is destroyed;</li>
 <li>all heap pages holding the table's rows are freed back to the page manager;</li>
-<li>every secondary index — B+ tree as well as hash / unique-hash indexes — is destroyed;</li>
+<li>every secondary index, B+ tree as well as hash / unique-hash indexes, is destroyed;</li>
 <li>the catalog entry is dropped, which also removes the table's columns, indexes and constraints;</li>
 <li>the table's inheritance link (if it was a child of another table) is scrubbed;</li>
 <li>any row-level security policies attached to the table are removed.</li>
@@ -36,7 +36,7 @@
 <p>Before any storage is touched, two dependency checks run:</p>
 <ul>
 <li><b>Inheritance children.</b> If the table has child tables that inherit from it, the drop is refused unless <code>CASCADE</code> is given. With <code>CASCADE</code>, each child (and recursively each grandchild) is dropped first, then the parent.</li>
-<li><b>Views.</b> If any view in the current database references the table by name, the drop is refused. This check is <em>not</em> overridden by <code>CASCADE</code> — a depended-on view must be dropped explicitly first.</li>
+<li><b>Views.</b> If any view in the current database references the table by name, the drop is refused. This check is <em>not</em> overridden by <code>CASCADE</code>, a depended-on view must be dropped explicitly first.</li>
 </ul>
 <div class="callout">
 <p>A successful <code>DROP TABLE</code> reports <code>command(s) completed successfully!..</code>. A refused drop raises <code>SQLSTATE 2BP01</code> (dependent objects still exist).</p>
@@ -51,7 +51,7 @@
 <dd>The name of the table to drop. The name is resolved against the current database and schema via the catalog. Exactly one name is accepted.</dd>
 
 <dt>CASCADE</dt>
-<dd>Automatically drop tables that inherit from this table, recursing through the whole inheritance subtree, before dropping the named table. Note that <code>CASCADE</code> covers <em>inheritance children only</em>; it does not force the removal of dependent views — a view that references the table still blocks the drop.</dd>
+<dd>Automatically drop tables that inherit from this table, recursing through the whole inheritance subtree, before dropping the named table. Note that <code>CASCADE</code> covers <em>inheritance children only</em>; it does not force the removal of dependent views, a view that references the table still blocks the drop.</dd>
 
 <dt>RESTRICT</dt>
 <dd>Refuse to drop the table if any other object (an inheritance child) depends on it. This is the default behavior when neither keyword is supplied.</dd>

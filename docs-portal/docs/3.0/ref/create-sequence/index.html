@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE SEQUENCE — EvolutionDB 3.0</title>
+<title>CREATE SEQUENCE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE SEQUENCE</h1>
-<p class="lede">Define a new sequence generator — a named, persistent counter that produces a monotonic series of <code>BIGINT</code> values via the <code>nextval()</code>, <code>currval()</code>, <code>setval()</code> and <code>lastval()</code> functions.</p>
+<p class="lede">Define a new sequence generator: a named, persistent counter that produces a monotonic series of <code>BIGINT</code> values via the <code>nextval()</code>, <code>currval()</code>, <code>setval()</code> and <code>lastval()</code> functions.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -52,14 +52,14 @@
 <dd>The maximum value the sequence can generate. Defaults to <code>2147483647</code> (2<sup>31</sup>&minus;1). For an ascending sequence this is the cycle wrap target when <code>CYCLE</code> is set, and the ceiling at which a non-cycling ascending sequence errors out.</dd>
 
 <dt><code>START [ WITH ]</code> <var>start</var></dt>
-<dd>The first value returned by the sequence — the value yielded by the first <code>nextval()</code> call. The <code>WITH</code> keyword is optional. If omitted, the start value defaults to <var>minvalue</var>.</dd>
+<dd>The first value returned by the sequence, the value yielded by the first <code>nextval()</code> call. The <code>WITH</code> keyword is optional. If omitted, the start value defaults to <var>minvalue</var>.</dd>
 
 <dt><code>CYCLE</code> / <code>NOT CYCLE</code></dt>
 <dd><code>CYCLE</code> allows the sequence to wrap around when it reaches <var>maxvalue</var> (ascending) or <var>minvalue</var> (descending). <code>NOT CYCLE</code> (the default) causes <code>nextval()</code> to raise an error once a bound is reached.</dd>
 </dl>
 
 <div class="callout">
-<p><strong>Note.</strong> The clause order shown in the Synopsis is conventional, not mandatory — the grammar accepts the options in any order, and a later occurrence of the same option overrides an earlier one. Sequence values are 64-bit signed integers (<code>BIGINT</code>), but the default <code>MAXVALUE</code> is 2147483647; raise <code>MAXVALUE</code> explicitly if you need the full 64-bit range.</p>
+<p><strong>Note.</strong> The clause order shown in the Synopsis is conventional, not mandatory: the grammar accepts the options in any order, and a later occurrence of the same option overrides an earlier one. Sequence values are 64-bit signed integers (<code>BIGINT</code>), but the default <code>MAXVALUE</code> is 2147483647; raise <code>MAXVALUE</code> explicitly if you need the full 64-bit range.</p>
 </div>
 
 <h2 id="examples">Examples</h2>
@@ -88,7 +88,7 @@
     <span class="c-key">INCREMENT</span> <span class="c-num">-1</span>
     <span class="c-key">MINVALUE</span> <span class="c-num">0</span>;</code></pre>
 
-<p>Create idempotently — skip if it already exists:</p>
+<p>Create idempotently, skip if it already exists:</p>
 <pre><code><span class="c-key">CREATE SEQUENCE IF NOT EXISTS</span> session_seq;</code></pre>
 
 <p>Reposition a sequence with <code>setval()</code> so the next <code>nextval()</code> returns 200:</p>

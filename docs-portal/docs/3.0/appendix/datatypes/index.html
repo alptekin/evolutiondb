@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>B. Data Type Reference — EvolutionDB 3.0</title>
+<title>B. Data Type Reference | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -29,10 +29,10 @@
 family = type_code / 10000      <span class="c-com">// integer division</span>
 size   = type_code % 10000      <span class="c-com">// length, dimension, or modifier</span></code></pre>
 
-<p>The <code>tuple_format.c</code> codec branches purely on <code>family</code> (see the <code>type_family()</code> helper); the <code>size</code> portion is meaningful only for a few families (CHAR/VARCHAR length, VECTOR dimension). For example the column declaration <code>VARCHAR(50)</code> produces the type code <code>130050</code> — family <code>13</code> (string/varchar), size <code>50</code>. <code>VECTOR(768)</code> produces <code>260768</code> — family <code>26</code>, dimension <code>768</code>.</p>
+<p>The <code>tuple_format.c</code> codec branches purely on <code>family</code> (see the <code>type_family()</code> helper); the <code>size</code> portion is meaningful only for a few families (CHAR/VARCHAR length, VECTOR dimension). For example the column declaration <code>VARCHAR(50)</code> produces the type code <code>130050</code>, family <code>13</code> (string/varchar), size <code>50</code>. <code>VECTOR(768)</code> produces <code>260768</code>, family <code>26</code>, dimension <code>768</code>.</p>
 
 <div class="callout">
-<p><strong>Length modifiers and integer attributes are recorded but not enforced.</strong> The grammar folds extra attributes into the size portion of the type code: <code>UNSIGNED</code> adds <code>1000</code>, <code>ZEROFILL</code> adds <code>2000</code> (rule <code>opt_uz</code>), a <code>DECIMAL(p,s)</code> scale adds <code>1000 × s</code> (rule <code>opt_length</code>), and a column-level <code>BINARY</code> attribute on text adds <code>4000</code> (rule <code>opt_binary</code>). These bits survive in the catalog but the storage codec never reads them — there is no range check, no zero-padding, and no unsigned arithmetic at the tuple layer. Treat them as documentation, not constraints.</p>
+<p><strong>Length modifiers and integer attributes are recorded but not enforced.</strong> The grammar folds extra attributes into the size portion of the type code: <code>UNSIGNED</code> adds <code>1000</code>, <code>ZEROFILL</code> adds <code>2000</code> (rule <code>opt_uz</code>), a <code>DECIMAL(p,s)</code> scale adds <code>1000 × s</code> (rule <code>opt_length</code>), and a column-level <code>BINARY</code> attribute on text adds <code>4000</code> (rule <code>opt_binary</code>). These bits survive in the catalog but the storage codec never reads them: there is no range check, no zero-padding, and no unsigned arithmetic at the tuple layer. Treat them as documentation, not constraints.</p>
 </div>
 
 <h2 id="tuple-layout">B.2. Where a value lives: the binary tuple</h2>
@@ -41,7 +41,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 
 <pre class="synopsis"><code><span class="c-key">[magic 1B = 0xE7]</span> <span class="c-key">[table_id 4B]</span>          <span class="c-com">// prefix, 5 bytes</span>
 <span class="c-key">[body_len 2B]</span> <span class="c-key">[num_cols 1B]</span> <span class="c-key">[flags 1B]</span>   <span class="c-com">// header, 4 bytes</span>
-<span class="c-key">[xmin 4B]</span> <span class="c-key">[xmax 4B]</span>                       <span class="c-com">// MVCC, 8 bytes — present only if flags &amp; 0x02</span>
+<span class="c-key">[xmin 4B]</span> <span class="c-key">[xmax 4B]</span>                       <span class="c-com">// MVCC, 8 bytes - present only if flags &amp; 0x02</span>
 <span class="c-key">[null bitmap]</span>                            <span class="c-com">// ceil(num_cols / 8) bytes</span>
 <span class="c-key">[column data ...]</span>                        <span class="c-com">// per-type encodings, in declared order</span></code></pre>
 
@@ -55,7 +55,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 <dt><code>TUPLE_MAX_COLS</code> = 255</dt><dd>Hard ceiling on columns per tuple (num_cols is a single byte).</dd>
 </dl>
 
-<p>The <code>flags</code> byte advertises optional sections and visibility hints: <code>0x01</code> HAS_NULLS, <code>0x02</code> MVCC, <code>0x04</code> HOT_UPDATED, <code>0x08</code> HEAP_ONLY, <code>0x10</code> XMIN_COMMITTED, <code>0x20</code> XMIN_ABORTED. NULL values occupy <strong>zero</strong> bytes in the column-data region — they are recorded only by setting their bit in the null bitmap — so the encodings below describe non-NULL storage. See <a href="/3.0/ref/insert/">INSERT</a> and the MVCC chapter for how the header is populated.</p>
+<p>The <code>flags</code> byte advertises optional sections and visibility hints: <code>0x01</code> HAS_NULLS, <code>0x02</code> MVCC, <code>0x04</code> HOT_UPDATED, <code>0x08</code> HEAP_ONLY, <code>0x10</code> XMIN_COMMITTED, <code>0x20</code> XMIN_ABORTED. NULL values occupy <strong>zero</strong> bytes in the column-data region, they are recorded only by setting their bit in the null bitmap, so the encodings below describe non-NULL storage. See <a href="/3.0/ref/insert/">INSERT</a> and the MVCC chapter for how the header is populated.</p>
 
 <h2 id="encodings">B.3. Physical storage by family</h2>
 
@@ -77,7 +77,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 </table>
 
 <div class="callout">
-<p><strong>The string path is the default, and it is broad.</strong> Any family not explicitly listed above falls into the length-prefixed byte path in <code>tup_build()</code>'s <code>default:</code> case. This means DATE, TIME, TIMESTAMP, DECIMAL, CHAR, VARCHAR, TEXT, BINARY, VARBINARY, BLOB, ENUM, SET, JSON, and YEAR are <strong>all stored as the verbatim input text</strong>, length-prefixed. There is no numeric DECIMAL representation, no packed date/time, and no validation of JSON or ENUM membership at the tuple layer — the bytes you send are the bytes stored.</p>
+<p><strong>The string path is the default, and it is broad.</strong> Any family not explicitly listed above falls into the length-prefixed byte path in <code>tup_build()</code>'s <code>default:</code> case. This means DATE, TIME, TIMESTAMP, DECIMAL, CHAR, VARCHAR, TEXT, BINARY, VARBINARY, BLOB, ENUM, SET, JSON, and YEAR are <strong>all stored as the verbatim input text</strong>, length-prefixed. There is no numeric DECIMAL representation, no packed date/time, and no validation of JSON or ENUM membership at the tuple layer, the bytes you send are the bytes stored.</p>
 </div>
 
 <h2 id="type-table">B.4. Complete type reference</h2>
@@ -123,7 +123,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 
 <p>Notes on the table:</p>
 <ul>
-<li><strong>Families 1–5 share one encoding.</strong> TINYINT, SMALLINT, MEDIUMINT, INT, and INTEGER are five distinct type codes but all decode to a 4-byte <code>int32</code>. There is no 1- or 2-byte integer storage, and no overflow checking against the declared width. <code>BIT</code> shares family 1 with TINYINT and is likewise stored as <code>int32</code> — it is not a bit-packed type.</li>
+<li><strong>Families 1–5 share one encoding.</strong> TINYINT, SMALLINT, MEDIUMINT, INT, and INTEGER are five distinct type codes but all decode to a 4-byte <code>int32</code>. There is no 1- or 2-byte integer storage, and no overflow checking against the declared width. <code>BIT</code> shares family 1 with TINYINT and is likewise stored as <code>int32</code>, it is not a bit-packed type.</li>
 <li><strong>REAL and DOUBLE both decode as 8-byte double</strong> (family 7 and 8 share the codec branch); only FLOAT (family 9) is a 4-byte single.</li>
 <li><strong>UUID has a fixed code (180036)</strong> regardless of how you write it. On a malformed input string the codec stores 16 zero bytes rather than raising an error.</li>
 <li>The <code>opt</code> term in TEXT-family codes is the column-level <code>BINARY</code> attribute (<code>+4000</code>); it does not change storage.</li>
@@ -131,7 +131,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 
 <h2 id="numeric">B.5. Numeric, boolean, and UUID details</h2>
 
-<p>Integers are parsed at INSERT time with C's <code>atoi()</code> (families 1–5) or <code>strtoll()</code> (BIGINT). Values that exceed the destination width wrap rather than error. Floating types use <code>strtod()</code>. Booleans accept <code>true</code>/<code>t</code>/<code>1</code> as true (case-insensitive for <code>true</code>); anything else is stored as false. There is no dedicated NULL byte — see the null bitmap in B.2.</p>
+<p>Integers are parsed at INSERT time with C's <code>atoi()</code> (families 1–5) or <code>strtoll()</code> (BIGINT). Values that exceed the destination width wrap rather than error. Floating types use <code>strtod()</code>. Booleans accept <code>true</code>/<code>t</code>/<code>1</code> as true (case-insensitive for <code>true</code>); anything else is stored as false. There is no dedicated NULL byte, see the null bitmap in B.2.</p>
 
 <pre><code><span class="c-key">CREATE TABLE</span> demo (
   id   <span class="c-key">INT</span>,            <span class="c-com">-- 40000, stored int32 LE</span>
@@ -147,7 +147,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 
 <span class="c-key">SELECT</span> ok, uid <span class="c-key">FROM</span> demo;   <span class="c-com">-- -> true | 550e8400-e29b-41d4-a716-446655440000</span></code></pre>
 
-<p>On read-back, doubles render with <code>%.15g</code> and floats with <code>%.7g</code>, so a value's printed precision depends on its storage family. The per-field text buffer is 256 bytes (<code>fields[][256]</code>), which is the limit for how wide any single decoded value can be — see B.7.</p>
+<p>On read-back, doubles render with <code>%.15g</code> and floats with <code>%.7g</code>, so a value's printed precision depends on its storage family. The per-field text buffer is 256 bytes (<code>fields[][256]</code>), which is the limit for how wide any single decoded value can be, see B.7.</p>
 
 <h2 id="arrays">B.6. Arrays (family 25)</h2>
 
@@ -174,27 +174,27 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 
 <h2 id="vectors">B.7. Vectors (family 26)</h2>
 
-<p>A <code>VECTOR(N)</code> column stores exactly <code>N</code> 32-bit floats, little-endian, with <strong>no</strong> per-value length prefix — the dimension is recovered from the type code (<code>type_code % 10000</code>), so every row in the column is fixed-width <code>4N</code> bytes. <code>VECTOR_MAX_DIM</code> = 16384.</p>
+<p>A <code>VECTOR(N)</code> column stores exactly <code>N</code> 32-bit floats, little-endian, with <strong>no</strong> per-value length prefix, the dimension is recovered from the type code (<code>type_code % 10000</code>), so every row in the column is fixed-width <code>4N</code> bytes. <code>VECTOR_MAX_DIM</code> = 16384.</p>
 
-<p>The text form is a bracketed list, <code>[f1,f2,...]</code> (braces <code>{...}</code> are also tolerated on input). NaN and infinities are rejected at parse time — embedding vectors must be finite. To keep large vectors within the statement size cap, the parser also accepts a compact quantized literal of the form <code>b64i8:&lt;base64&gt;</code> (a float32 LE scale factor followed by <code>int8</code> components), which it dequantizes to float4 on the way in.</p>
+<p>The text form is a bracketed list, <code>[f1,f2,...]</code> (braces <code>{...}</code> are also tolerated on input). NaN and infinities are rejected at parse time, embedding vectors must be finite. To keep large vectors within the statement size cap, the parser also accepts a compact quantized literal of the form <code>b64i8:&lt;base64&gt;</code> (a float32 LE scale factor followed by <code>int8</code> components), which it dequantizes to float4 on the way in.</p>
 
 <pre><code><span class="c-key">CREATE TABLE</span> docs (id <span class="c-key">INT</span>, embedding <span class="c-key">VECTOR</span>(<span class="c-str">3</span>));   <span class="c-com">-- 260003</span>
 <span class="c-key">INSERT INTO</span> docs <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'[0.1, 0.2, 0.3]'</span>);
 <span class="c-key">SELECT</span> embedding <span class="c-key">FROM</span> docs;   <span class="c-com">-- -> [0.1,0.2,0.3]</span></code></pre>
 
 <div class="callout">
-<p><strong>Text decoding of wide vectors truncates; use the binary accessor.</strong> The generic field decoder writes into a 256-byte buffer, so a vector whose text rendering exceeds that is emitted with a trailing <code>...]</code> marker — a display artifact, not data loss. The full payload is always intact on disk; callers that need every component read it directly via <code>tup_get_vector()</code>, which copies the raw <code>float4</code> array and bypasses text rendering entirely. The same 256-byte limit applies to any wide string, array, or DECIMAL value when rendered as text.</p>
+<p><strong>Text decoding of wide vectors truncates; use the binary accessor.</strong> The generic field decoder writes into a 256-byte buffer, so a vector whose text rendering exceeds that is emitted with a trailing <code>...]</code> marker: a display artifact, not data loss. The full payload is always intact on disk; callers that need every component read it directly via <code>tup_get_vector()</code>, which copies the raw <code>float4</code> array and bypasses text rendering entirely. The same 256-byte limit applies to any wide string, array, or DECIMAL value when rendered as text.</p>
 </div>
 
 <h2 id="notes">B.8. Notes and limitations</h2>
 
 <div class="callout">
 <ul>
-<li><strong>Type names are far richer than type behaviour.</strong> Roughly two dozen declared types collapse into seven physical encodings. Choosing <code>SMALLINT</code> vs <code>BIGINT</code> changes storage width (4B vs 8B); choosing <code>SMALLINT</code> vs <code>MEDIUMINT</code> vs <code>INT</code> does not — all three are <code>int32</code>.</li>
+<li><strong>Type names are far richer than type behaviour.</strong> Roughly two dozen declared types collapse into seven physical encodings. Choosing <code>SMALLINT</code> vs <code>BIGINT</code> changes storage width (4B vs 8B); choosing <code>SMALLINT</code> vs <code>MEDIUMINT</code> vs <code>INT</code> does not, all three are <code>int32</code>.</li>
 <li><strong>No type-layer validation.</strong> Declared lengths, DECIMAL precision/scale, UNSIGNED/ZEROFILL, ENUM/SET membership, and JSON well-formedness are not enforced by <code>tuple_format.c</code>. DATE/TIME/TIMESTAMP, DECIMAL, and JSON are stored as verbatim text. This differs from both the SQL standard and PostgreSQL, which validate and pack these types.</li>
 <li><strong>Endianness is fixed little-endian.</strong> The on-disk file is not portable across big-endian hosts.</li>
 <li><strong>NULL is metadata, not a value.</strong> NULLs occupy zero column-data bytes and are tracked solely by the null bitmap, gated by the HAS_NULLS flag bit.</li>
-<li><strong>UUID never errors on bad input</strong> — it silently stores 16 zero bytes, so application-side validation is advisable.</li>
+<li><strong>UUID never errors on bad input</strong>: it silently stores 16 zero bytes, so application-side validation is advisable.</li>
 <li><strong>Per-field text width is 256 bytes</strong> on read-back. Wide DECIMAL, TEXT, array, and vector values are truncated in their text rendering; the stored bytes are unaffected, and vectors expose a binary accessor for full fidelity.</li>
 <li><strong>Hard ceilings:</strong> 255 columns per tuple, 65535 elements / 65535 bytes per array blob, 16384 dimensions per vector.</li>
 </ul>

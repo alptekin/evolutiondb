@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>MEMORY SEARCH — EvolutionDB 3.0</title>
+<title>MEMORY SEARCH | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>MEMORY SEARCH</h1>
-<p class="lede">MEMORY SEARCH — rank the rows of a memory store by vector distance from a query embedding and return the closest matches.</p>
+<p class="lede">MEMORY SEARCH, rank the rows of a memory store by vector distance from a query embedding and return the closest matches.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -40,7 +40,7 @@
 </dl>
 <p>The search is implemented internally as a SELECT over the backing table, so any row-level security policies, MVCC visibility rules, and other engine-level guarantees that apply to that table apply identically to the search results.</p>
 <div class="callout">
-<p>The memory store must have been created with a non-zero <code>embedding_dim</code>. Searching a store that was created without an embedding column raises an error (<code>SQLSTATE 42P01</code>) — such a store is a pure JSON key/value table with no semantic-search capability. Searching a store that does not exist raises <code>SQLSTATE 42704</code>.</p>
+<p>The memory store must have been created with a non-zero <code>embedding_dim</code>. Searching a store that was created without an embedding column raises an error (<code>SQLSTATE 42P01</code>), such a store is a pure JSON key/value table with no semantic-search capability. Searching a store that does not exist raises <code>SQLSTATE 42704</code>.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>

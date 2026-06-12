@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE ENTITY STORE — EvolutionDB 3.0</title>
+<title>CREATE ENTITY STORE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE ENTITY STORE</h1>
-<p class="lede">Create a named entity store — a key-addressed, upsert-by-key collection of entity summaries with mention counts and last-seen timestamps, backed by an ordinary EvolutionDB table.</p>
+<p class="lede">Create a named entity store: a key-addressed, upsert-by-key collection of entity summaries with mention counts and last-seen timestamps, backed by an ordinary EvolutionDB table.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -78,7 +78,7 @@
 <pre><code><span class="c-key">DROP ENTITY STORE</span> people<span class="c-com">;</span></code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE ENTITY STORE</code> is an EvolutionDB extension. There is no <code>CREATE ENTITY STORE</code> statement in the SQL standard, and PostgreSQL has no equivalent command — it is not portable.</p>
+<p><code>CREATE ENTITY STORE</code> is an EvolutionDB extension. There is no <code>CREATE ENTITY STORE</code> statement in the SQL standard, and PostgreSQL has no equivalent command, it is not portable.</p>
 <p>The clause spelling differs from common SQL conventions: EvolutionDB's grammar accepts <code>IF EXISTS</code> as the create-time guard, whereas PostgreSQL and the SQL community use <code>IF NOT EXISTS</code> for the same "create-only-if-absent" intent. The runtime behavior matches the conventional if-not-exists meaning.</p>
 <p>The store is not a distinct storage engine: it is implemented entirely on top of a normal EvolutionDB table (<code>ent_</code><em>name</em>) with a B+ tree primary-key index on <code>entity_key</code>, and the entity DML verbs are translated into ordinary <code>INSERT</code>, <code>UPDATE</code>, and <code>SELECT</code> execution paths. The backing table is visible to regular SQL queries.</p>
 

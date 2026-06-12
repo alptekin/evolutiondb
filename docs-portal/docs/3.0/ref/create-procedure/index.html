@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE PROCEDURE — EvolutionDB 3.0</title>
+<title>CREATE PROCEDURE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -34,7 +34,7 @@
 <p>The procedure is created in the database and schema that are current at definition time, resolved through the system catalog. If a procedure with the same name already exists in that schema, the statement fails with a "procedure already exists" error (SQLSTATE <code>42P07</code>) unless <code>OR REPLACE</code> is given, in which case the existing definition is dropped first and re-created.</p>
 <p>The body is delimited by a balanced <code>BEGIN</code> … <code>END</code> pair. Nested blocks are tracked while scanning for the closing keyword: each inner <code>BEGIN</code> increases the nesting depth and each standalone <code>END</code> decreases it, while compound terminators such as <code>END IF</code>, <code>END WHILE</code>, <code>END LOOP</code>, <code>END FOR</code>, <code>END FOREACH</code> and <code>END CASE</code> are recognized and do not close the procedure. The outer <code>END</code> at depth zero terminates the definition. Text inside single-quoted string literals is ignored during this scan.</p>
 <p>Parameters declared in the argument list become substitution targets inside the body. When the procedure is invoked, positional placeholders of the form <code>$1</code>, <code>$2</code>, … and bare references to a parameter's name are replaced with the corresponding argument value supplied to <code>CALL</code> before each statement is executed. References that match nothing are left untouched, and text inside string literals is copied verbatim without substitution.</p>
-<p>The body may contain ordinary SQL statements as well as control-flow constructs — <code>IF … END IF</code>, <code>WHILE … END WHILE</code>, <code>LOOP … END LOOP</code>, <code>FOR … END FOR</code>, <code>FOREACH … END FOREACH</code> and <code>CASE … END CASE</code> — which the engine splits and resolves into a block map at call time.</p>
+<p>The body may contain ordinary SQL statements as well as control-flow constructs, <code>IF … END IF</code>, <code>WHILE … END WHILE</code>, <code>LOOP … END LOOP</code>, <code>FOR … END FOR</code>, <code>FOREACH … END FOREACH</code> and <code>CASE … END CASE</code>, which the engine splits and resolves into a block map at call time.</p>
 <div class="callout">
 <p>Argument <em>modes</em> (<code>IN</code>, <code>OUT</code>, <code>INOUT</code>) are accepted by the grammar and recorded, but procedures are driven entirely by textual parameter substitution at <code>CALL</code> time; there is no separate output-binding mechanism. A procedure with no parameters still requires the empty parentheses.</p>
 </div>

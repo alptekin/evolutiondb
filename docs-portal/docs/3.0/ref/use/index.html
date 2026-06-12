@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>USE — EvolutionDB 3.0</title>
+<title>USE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>USE</h1>
-<p class="lede">USE — select the active database for the current session.</p>
+<p class="lede">USE, select the active database for the current session.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -26,7 +26,7 @@
 <p><code>USE</code> changes which database subsequent statements operate against. EvolutionDB resolves every table reference through the active <em>database</em> and <em>schema</em> pair, so issuing <code>USE</code> repoints all unqualified object lookups at the named database.</p>
 <p>The target database must already exist in the system catalog. If it does not, the command fails with <span class="c-str">database "<em>database_name</em>" does not exist</span> (SQLSTATE for undefined database) and the active database is left unchanged.</p>
 <p>On success, switching the active database also <strong>resets the active schema to <code>default</code></strong>. Any prior schema selection (for example one made with <code>SET SCHEMA</code>) is discarded by the switch; if you need a non-default schema in the new database you must select it again afterwards.</p>
-<p>The optional <code>DATABASE</code> keyword is purely cosmetic — <code>USE mydb</code> and <code>USE DATABASE mydb</code> are accepted by the grammar and behave identically.</p>
+<p>The optional <code>DATABASE</code> keyword is purely cosmetic, <code>USE mydb</code> and <code>USE DATABASE mydb</code> are accepted by the grammar and behave identically.</p>
 <div class="callout">
 <p><strong>Note:</strong> <code>USE</code> changes session state, not stored schema. It is not transactional in the sense of being rolled back by a failed statement; it takes effect immediately for the connection that issues it and persists until the next <code>USE</code> (or until the connection closes).</p>
 </div>

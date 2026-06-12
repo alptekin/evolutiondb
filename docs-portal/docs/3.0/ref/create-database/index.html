@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE DATABASE — EvolutionDB 3.0</title>
+<title>CREATE DATABASE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -56,7 +56,7 @@
 <h2 id="compatibility">Compatibility</h2>
 <p>The SQL standard does not define <code>CREATE DATABASE</code>; it is a PostgreSQL/MySQL extension. EvolutionDB implements a deliberately minimal form of the command.</p>
 <ul>
-<li><b>Versus PostgreSQL:</b> PostgreSQL's <code>CREATE DATABASE</code> accepts a long list of options such as <code>OWNER</code>, <code>TEMPLATE</code>, <code>ENCODING</code>, <code>LOCALE</code>, <code>LC_COLLATE</code>, <code>LC_CTYPE</code>, <code>TABLESPACE</code>, <code>CONNECTION LIMIT</code>, and <code>IS_TEMPLATE</code>. EvolutionDB supports <b>none</b> of these — they are not accepted by the grammar. The only optional element is the <code>IF NOT EXISTS</code> guard.</li>
+<li><b>Versus PostgreSQL:</b> PostgreSQL's <code>CREATE DATABASE</code> accepts a long list of options such as <code>OWNER</code>, <code>TEMPLATE</code>, <code>ENCODING</code>, <code>LOCALE</code>, <code>LC_COLLATE</code>, <code>LC_CTYPE</code>, <code>TABLESPACE</code>, <code>CONNECTION LIMIT</code>, and <code>IS_TEMPLATE</code>. EvolutionDB supports <b>none</b> of these, they are not accepted by the grammar. The only optional element is the <code>IF NOT EXISTS</code> guard.</li>
 <li><b>Versus MySQL:</b> MySQL allows <code>CREATE {DATABASE | SCHEMA}</code> with <code>CHARACTER SET</code> and <code>COLLATE</code> options; EvolutionDB does not accept those options on <code>CREATE DATABASE</code>. In EvolutionDB, <code>CREATE DATABASE</code> and <code>CREATE SCHEMA</code> are distinct commands at different levels of the hierarchy (a schema lives inside the current database), not synonyms.</li>
 <li><b>EvolutionDB behavior:</b> Creating a database also creates a schema named <code>default</code> within it. The new database does not become the session's current database; an explicit <a href="/3.0/ref/use/">USE</a> is required.</li>
 </ul>

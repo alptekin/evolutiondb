@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>5. Data Definition — EvolutionDB 3.0</title>
+<title>5. Data Definition | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>5. Data Definition</h1>
-<p class="lede">How EvolutionDB defines the objects that hold data — schemas, tables, columns, constraints, sequences, and domains — and how those definitions are altered and dropped.</p>
+<p class="lede">How EvolutionDB defines the objects that hold data: schemas, tables, columns, constraints, sequences, and domains, and how those definitions are altered and dropped.</p>
 
 <p>This chapter describes the data-definition language (DDL) that EvolutionDB actually implements. Every behavior documented here is taken from the engine's <code>CREATE</code>/<code>ALTER</code>/<code>DROP</code> handlers and the SQL grammar; where EvolutionDB diverges from PostgreSQL or the SQL standard, the difference is called out explicitly rather than glossed over. For the full per-statement syntax, follow the links into the command reference under <code>/3.0/ref/</code>.</p>
 
@@ -40,7 +40,7 @@
 
 <h2 id="schemas">5.2. Schemas</h2>
 
-<p>A schema is created inside the current database. <code>CREATE SCHEMA</code> takes only a name and an optional existence guard — there is no inline object list and no authorization clause.</p>
+<p>A schema is created inside the current database. <code>CREATE SCHEMA</code> takes only a name and an optional existence guard, there is no inline object list and no authorization clause.</p>
 
 <pre><code><span class="c-key">CREATE</span> <span class="c-key">SCHEMA</span> sales;
 <span class="c-key">CREATE</span> <span class="c-key">SCHEMA</span> <span class="opt">IF NOT EXISTS</span> sales;
@@ -100,7 +100,7 @@
 
 <h3 id="inherits">5.3.3. Inheritance</h3>
 
-<p><code>INHERITS ( <i>parent</i> )</code> prepends the parent's columns to the child's own column list. Duplicate column names between parent and child are rejected with <code>42701</code> (duplicate column) — EvolutionDB does not merge same-named columns the way PostgreSQL does. If the child declares its own primary key, the inherited primary-key flag is stripped from the parent columns. The combined column count must stay within the 256-column ceiling.</p>
+<p><code>INHERITS ( <i>parent</i> )</code> prepends the parent's columns to the child's own column list. Duplicate column names between parent and child are rejected with <code>42701</code> (duplicate column), EvolutionDB does not merge same-named columns the way PostgreSQL does. If the child declares its own primary key, the inherited primary-key flag is stripped from the parent columns. The combined column count must stay within the 256-column ceiling.</p>
 
 <p>Dropping an inherited-from parent requires <code>CASCADE</code>; see <a href="#dropping">§5.7</a>.</p>
 
@@ -151,7 +151,7 @@
 <p>Value checking happens at insert/update time, not at <code>CREATE TABLE</code> time. The engine validates integer, numeric, <code>CHAR</code>/<code>VARCHAR</code> length, <code>UUID</code> format, <code>BOOLEAN</code>, and <code>JSON</code> values; date/time, binary, blob, text, enum, and set values are stored without content validation.</p>
 
 <div class="callout">
-<p><strong>Note.</strong> Because the type is a single integer code, <code>ALTER TABLE ... MODIFY</code> can only change a type within the same family (and, for <code>CHAR</code>/<code>VARCHAR</code>, only widen the length). Cross-family conversions are rejected — see <a href="#alter-columns">§5.6.2</a>.</p>
+<p><strong>Note.</strong> Because the type is a single integer code, <code>ALTER TABLE ... MODIFY</code> can only change a type within the same family (and, for <code>CHAR</code>/<code>VARCHAR</code>, only widen the length). Cross-family conversions are rejected, see <a href="#alter-columns">§5.6.2</a>.</p>
 </div>
 
 <h2 id="constraints">5.5. Constraints</h2>
@@ -278,7 +278,7 @@
 
 <h2 id="dropping">5.7. Dropping and Truncating Tables</h2>
 
-<p><a href="/3.0/ref/drop-table/">DROP TABLE</a> removes a table and all of its storage — primary-key tree, heap pages, secondary indexes, constraints, RLS policies, and inheritance links:</p>
+<p><a href="/3.0/ref/drop-table/">DROP TABLE</a> removes a table and all of its storage: primary-key tree, heap pages, secondary indexes, constraints, RLS policies, and inheritance links:</p>
 
 <pre><code><span class="c-key">DROP</span> <span class="c-key">TABLE</span> employees;
 <span class="c-key">DROP</span> <span class="c-key">TABLE</span> <span class="opt">IF EXISTS</span> employees;

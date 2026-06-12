@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>DELETE — EvolutionDB 3.0</title>
+<title>DELETE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -52,7 +52,7 @@ all visible rows in the table; the statement then leaves a valid but empty table
 
 <p>Deletion is performed in two phases for the single-table form: rows matching the
 <code>WHERE</code> expression are collected first, then removed. Removal is an MVCC
-<em>soft delete</em> — the row's <code>xmax</code> is stamped with the current transaction
+<em>soft delete</em>, the row's <code>xmax</code> is stamped with the current transaction
 id and the primary-key index entry is retained so that concurrent readers can still
 locate the tuple and evaluate its visibility. Space is reclaimed later by the background
 reclaim process once <code>xmax</code> is committed and no snapshot can still see the row.
@@ -75,7 +75,7 @@ deeper chains (e.g. circular references) raise a foreign-key violation.</p>
 <p><strong>Triggers, indexes, and policies.</strong> <code>BEFORE DELETE</code> and
 <code>AFTER DELETE</code> triggers fire per row when the table defines them. Secondary index
 entries for the row are removed. If row-level security is enabled on the table, the session
-user's <code>DELETE</code> <code>USING</code> policy gates each row — rows the policy does not
+user's <code>DELETE</code> <code>USING</code> policy gates each row, rows the policy does not
 expose are silently skipped (so the deleted count reflects only rows the user may delete).</p>
 
 <div class="callout">

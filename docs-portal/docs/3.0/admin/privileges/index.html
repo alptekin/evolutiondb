@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>25. Roles &amp; Privileges — EvolutionDB 3.0</title>
+<title>25. Roles &amp; Privileges | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -29,8 +29,8 @@
 </dl>
 <p>Two non-table principals are special and exist implicitly:</p>
 <ul>
-<li><strong><code>admin</code></strong> — the built-in superuser. <a href="#admin-superuser">§25.6</a>.</li>
-<li><strong><code>PUBLIC</code></strong> — a synthetic principal whose grants apply to every user additively. <a href="#public">§25.5</a>.</li>
+<li><strong><code>admin</code></strong>, the built-in superuser. <a href="#admin-superuser">§25.6</a>.</li>
+<li><strong><code>PUBLIC</code></strong>, a synthetic principal whose grants apply to every user additively. <a href="#public">§25.5</a>.</li>
 </ul>
 
 <div class="callout">
@@ -64,7 +64,7 @@
 <p>When a session presents credentials, <code>AuthenticateUser()</code> performs the following, in order:</p>
 <ol>
 <li>The supplied username is lower-cased and looked up in the catalog. If that fails, the original (unmodified) case is tried as a fallback. This makes login effectively <strong>case-insensitive</strong> for the common case while still tolerating a name that was stored with mixed case.</li>
-<li>If the matched principal is a role (<code>is_role = 1</code>), authentication fails immediately — <strong>roles cannot log in</strong>.</li>
+<li>If the matched principal is a role (<code>is_role = 1</code>), authentication fails immediately, <strong>roles cannot log in</strong>.</li>
 <li>The presented password is verified against the stored hash with a constant-time comparison to resist timing attacks.</li>
 </ol>
 
@@ -102,27 +102,27 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 <h3 id="role-lifecycle">25.4.1. Creating and dropping roles</h3>
 <pre class="synopsis"><code><span class="c-key">CREATE ROLE</span> name;
 <span class="c-key">DROP ROLE</span> name;</code></pre>
-<p><code>CREATE ROLE</code> fails if any user <em>or</em> role of that name already exists — users and roles share one namespace. <code>DROP ROLE</code> verifies the target really is a role (<code>is_role = 1</code>) and then performs a full cleanup: it removes the role's catalog row, deletes all grants <em>held by</em> the role, and removes every membership edge that points <em>to</em> the role (so no user is left a member of a role that no longer exists).</p>
+<p><code>CREATE ROLE</code> fails if any user <em>or</em> role of that name already exists, users and roles share one namespace. <code>DROP ROLE</code> verifies the target really is a role (<code>is_role = 1</code>) and then performs a full cleanup: it removes the role's catalog row, deletes all grants <em>held by</em> the role, and removes every membership edge that points <em>to</em> the role (so no user is left a member of a role that no longer exists).</p>
 
 <h3 id="role-membership">25.4.2. Granting roles to users</h3>
 <pre class="synopsis"><code><span class="c-key">GRANT</span> role_name <span class="c-key">TO</span> user_name;
 <span class="c-key">REVOKE</span> role_name <span class="c-key">FROM</span> user_name;</code></pre>
-<p>Membership is itself a catalog grant: it is stored with <code>scope_type = ROLE</code>, scope name equal to the role, and the literal privilege text <code>MEMBER</code>. Granting a role enforces three checks: the role must exist, the target user must exist, and the target must be a user (not another role). Granting a role to a principal that is itself a role is rejected — <strong>roles cannot be nested</strong>. A duplicate membership is also rejected.</p>
+<p>Membership is itself a catalog grant: it is stored with <code>scope_type = ROLE</code>, scope name equal to the role, and the literal privilege text <code>MEMBER</code>. Granting a role enforces three checks: the role must exist, the target user must exist, and the target must be a user (not another role). Granting a role to a principal that is itself a role is rejected, <strong>roles cannot be nested</strong>. A duplicate membership is also rejected.</p>
 <pre><code><span class="c-key">CREATE ROLE</span> reporting;
 <span class="c-key">GRANT SELECT</span> <span class="c-key">ON SCHEMA</span> testdb.public <span class="c-key">TO</span> reporting;
 <span class="c-key">GRANT</span> reporting <span class="c-key">TO</span> app_rw;   <span class="c-com">-- app_rw now inherits reporting's grants</span></code></pre>
 
 <h3 id="role-inheritance">25.4.3. How role privileges are inherited</h3>
-<p>During a privilege check, after a user's own grants and <code>PUBLIC</code> grants are exhausted, the engine looks up the user's direct role memberships and re-runs the same waterfall (<a href="#waterfall">§25.7</a>) for each role. Membership is resolved one level deep only — a role granted to a role would not be followed, and in any case such nesting is disallowed at grant time. At most 16 role memberships per user are consulted during a check.</p>
+<p>During a privilege check, after a user's own grants and <code>PUBLIC</code> grants are exhausted, the engine looks up the user's direct role memberships and re-runs the same waterfall (<a href="#waterfall">§25.7</a>) for each role. Membership is resolved one level deep only: a role granted to a role would not be followed, and in any case such nesting is disallowed at grant time. At most 16 role memberships per user are consulted during a check.</p>
 
 <h2 id="public">25.5. The PUBLIC pseudo-principal</h2>
-<p>Grants made to <code>PUBLIC</code> apply to every user. EvolutionDB treats <code>PUBLIC</code> grants as purely <strong>additive</strong>: during a check the engine first evaluates the user's own grants, then — if still undecided — evaluates <code>PUBLIC</code> grants over the identical waterfall. A user-specific <code>REVOKE</code> therefore does <em>not</em> cancel a privilege that was granted to <code>PUBLIC</code>; to remove it you must revoke from <code>PUBLIC</code> directly.</p>
+<p>Grants made to <code>PUBLIC</code> apply to every user. EvolutionDB treats <code>PUBLIC</code> grants as purely <strong>additive</strong>: during a check the engine first evaluates the user's own grants, then, if still undecided, evaluates <code>PUBLIC</code> grants over the identical waterfall. A user-specific <code>REVOKE</code> therefore does <em>not</em> cancel a privilege that was granted to <code>PUBLIC</code>; to remove it you must revoke from <code>PUBLIC</code> directly.</p>
 <div class="callout">
 <p><strong>No default PUBLIC grants.</strong> Unlike PostgreSQL, which grants some default privileges to <code>PUBLIC</code> on new objects, a freshly created EvolutionDB database carries <strong>no</strong> implicit <code>PUBLIC</code> grants (a MySQL-style closed default). New non-admin users start with no access until a grant is made.</p>
 </div>
 
 <h2 id="admin-superuser">25.6. The admin superuser</h2>
-<p>The principal named <code>admin</code> (matched case-insensitively) is a hard-coded superuser. Every privilege check for <code>admin</code> returns <em>allowed</em> immediately, with no catalog I/O, and <code>HasGrantOption()</code> likewise always returns true for <code>admin</code>. To make the rule self-consistent, on first initialization the engine seeds one grant — <code>admin</code> on <code>DATABASE *</code> with <code>ALL</code> and grant option — but the in-memory fast path means <code>admin</code> is authorized even before any grant row is consulted.</p>
+<p>The principal named <code>admin</code> (matched case-insensitively) is a hard-coded superuser. Every privilege check for <code>admin</code> returns <em>allowed</em> immediately, with no catalog I/O, and <code>HasGrantOption()</code> likewise always returns true for <code>admin</code>. To make the rule self-consistent, on first initialization the engine seeds one grant, <code>admin</code> on <code>DATABASE *</code> with <code>ALL</code> and grant option, but the in-memory fast path means <code>admin</code> is authorized even before any grant row is consulted.</p>
 <div class="callout">
 <p><strong>Caution.</strong> Superuser status is fixed to the literal name <code>admin</code>. There is no <code>ALTER USER ... SUPERUSER</code> and no way to promote or demote superuser status at runtime. Treat the <code>admin</code> credential as the master key to the instance.</p>
 </div>
@@ -162,14 +162,14 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 <span class="c-key">REVOKE</span> priv[, priv ...] <span class="c-key">ON</span> {<span class="c-key">DATABASE</span> | <span class="c-key">SCHEMA</span> | <span class="c-key">TABLE</span>} object <span class="c-key">FROM</span> user;</code></pre>
 
 <h3 id="grant-semantics">25.8.1. GRANT semantics</h3>
-<p>A grant is keyed by <code>(user, scope_type, scope_name)</code>. If no grant exists for that triple, a new row is created with the parsed privilege mask. If a grant already exists, the new privileges are <strong>merged</strong> (bitwise OR) into the existing set rather than replacing it, and <code>WITH GRANT OPTION</code> is sticky — specifying it sets the option to true, while omitting it leaves an already-set option untouched. <code>GRANT</code> never silently drops a privilege the principal already held at that scope.</p>
+<p>A grant is keyed by <code>(user, scope_type, scope_name)</code>. If no grant exists for that triple, a new row is created with the parsed privilege mask. If a grant already exists, the new privileges are <strong>merged</strong> (bitwise OR) into the existing set rather than replacing it, and <code>WITH GRANT OPTION</code> is sticky: specifying it sets the option to true, while omitting it leaves an already-set option untouched. <code>GRANT</code> never silently drops a privilege the principal already held at that scope.</p>
 <pre><code><span class="c-key">CREATE USER</span> analyst <span class="c-key">PASSWORD</span> <span class="c-str">'pw'</span>;
 <span class="c-key">GRANT SELECT</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">TO</span> analyst;
 <span class="c-key">GRANT INSERT</span>, <span class="c-key">UPDATE</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">TO</span> analyst;
 <span class="c-com">-- analyst now holds SELECT,INSERT,UPDATE on that table</span></code></pre>
 
 <h3 id="grant-option">25.8.2. WITH GRANT OPTION</h3>
-<p>The grant option is a single boolean stored on the grant row — it is not tracked per individual privilege. <code>HasGrantOption()</code> answers whether a principal may re-grant a privilege: it returns true if the principal holds the requested privilege at the exact scope <em>and</em> the row's grant-option flag is set. For <code>DATABASE</code> scope the wildcard <code>*</code> grant is also consulted. (<code>admin</code> always passes.)</p>
+<p>The grant option is a single boolean stored on the grant row, it is not tracked per individual privilege. <code>HasGrantOption()</code> answers whether a principal may re-grant a privilege: it returns true if the principal holds the requested privilege at the exact scope <em>and</em> the row's grant-option flag is set. For <code>DATABASE</code> scope the wildcard <code>*</code> grant is also consulted. (<code>admin</code> always passes.)</p>
 
 <h3 id="revoke-semantics">25.8.3. REVOKE semantics</h3>
 <p><code>REVOKE</code> targets the same <code>(user, scope_type, scope_name)</code> triple. If no matching grant exists, it errors with SQLSTATE <code>42704</code>. Otherwise the requested privileges are cleared from the mask: if some privileges remain, the grant row is rewritten with the reduced set; if none remain, the row is deleted entirely. Revoking <code>ALL</code> additionally clears the grant option on the way out.</p>
@@ -178,7 +178,7 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 <span class="c-key">REVOKE</span> <span class="c-key">ALL</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">FROM</span> analyst;
 <span class="c-com">-- grant row removed entirely</span></code></pre>
 <div class="callout">
-<p><strong>No cascading revoke.</strong> <code>REVOKE</code> affects only the named principal's own grant row. It does not cascade to principals who received the privilege from that principal via <code>WITH GRANT OPTION</code>, and there is no <code>RESTRICT</code>/<code>CASCADE</code> clause. There is also no separate "revoke grant option only" form — to drop the option you must revoke and re-grant.</p>
+<p><strong>No cascading revoke.</strong> <code>REVOKE</code> affects only the named principal's own grant row. It does not cascade to principals who received the privilege from that principal via <code>WITH GRANT OPTION</code>, and there is no <code>RESTRICT</code>/<code>CASCADE</code> clause. There is also no separate "revoke grant option only" form, to drop the option you must revoke and re-grant.</p>
 </div>
 
 <h3 id="show-grants">25.8.4. Inspecting grants</h3>
@@ -188,19 +188,19 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 <h2 id="waterfall">25.9. The TABLE &rarr; SCHEMA &rarr; DATABASE waterfall</h2>
 <p>Authorization for a data operation is decided by <code>CheckPrivilege(username, database, schema, table, privilege)</code>. The check is <strong>most-specific-first</strong> and short-circuits the moment any source grants the needed bit. The order is fixed:</p>
 <ol>
-<li><strong>admin fast path</strong> — if the principal is <code>admin</code>, return allowed at once.</li>
+<li><strong>admin fast path</strong>, if the principal is <code>admin</code>, return allowed at once.</li>
 <li><strong>User grants, by scope, narrowest first:</strong>
-  <ol>
-  <li>TABLE — <code>database.schema.table</code> (only attempted when all three are present)</li>
-  <li>SCHEMA — <code>database.schema</code></li>
-  <li>DATABASE — the named <code>database</code>, then the <code>*</code> wildcard</li>
-  </ol>
+ <ol>
+ <li>TABLE, <code>database.schema.table</code> (only attempted when all three are present)</li>
+ <li>SCHEMA, <code>database.schema</code></li>
+ <li>DATABASE, the named <code>database</code>, then the <code>*</code> wildcard</li>
+ </ol>
 </li>
-<li><strong>PUBLIC grants</strong> — identical TABLE&rarr;SCHEMA&rarr;DATABASE&rarr;<code>*</code> sequence for the <code>PUBLIC</code> principal.</li>
-<li><strong>Role-inherited grants</strong> — for each of the user's roles, the same waterfall again.</li>
+<li><strong>PUBLIC grants</strong>, identical TABLE&rarr;SCHEMA&rarr;DATABASE&rarr;<code>*</code> sequence for the <code>PUBLIC</code> principal.</li>
+<li><strong>Role-inherited grants</strong>: for each of the user's roles, the same waterfall again.</li>
 <li>If nothing matched, return <em>denied</em>.</li>
 </ol>
-<p>"Most specific wins first" means a privilege found at TABLE scope ends the search before SCHEMA or DATABASE rows are even read. Because the check stops at the first <em>granting</em> source, the waterfall can only ever <em>add</em> authority as it widens — it never withholds a broad grant because a narrower scope is silent. There is no deny rule: a grant either exists and permits, or it is absent.</p>
+<p>"Most specific wins first" means a privilege found at TABLE scope ends the search before SCHEMA or DATABASE rows are even read. Because the check stops at the first <em>granting</em> source, the waterfall can only ever <em>add</em> authority as it widens, it never withholds a broad grant because a narrower scope is silent. There is no deny rule: a grant either exists and permits, or it is absent.</p>
 <pre><code><span class="c-com">-- broad read at the database level</span>
 <span class="c-key">GRANT SELECT</span> <span class="c-key">ON DATABASE</span> testdb <span class="c-key">TO</span> analyst;
 <span class="c-com">-- a SELECT on testdb.public.orders is now allowed:</span>
@@ -241,10 +241,10 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 
 <h2 id="see-also">25.12. See also</h2>
 <ul>
-<li><a href="/3.0/ref/create-user/">CREATE USER</a> — create a login principal.</li>
-<li><a href="/3.0/ref/grant/">GRANT</a> — grant privileges or role membership.</li>
-<li><a href="/3.0/ref/revoke/">REVOKE</a> — remove privileges or role membership.</li>
-<li><a href="/3.0/ref/show/">SHOW</a> — <code>SHOW USERS</code>, <code>SHOW GRANTS</code>.</li>
+<li><a href="/3.0/ref/create-user/">CREATE USER</a>, create a login principal.</li>
+<li><a href="/3.0/ref/grant/">GRANT</a>, grant privileges or role membership.</li>
+<li><a href="/3.0/ref/revoke/">REVOKE</a>, remove privileges or role membership.</li>
+<li><a href="/3.0/ref/show/">SHOW</a>, <code>SHOW USERS</code>, <code>SHOW GRANTS</code>.</li>
 </ul>
 </main></div>
 <script src="/nav-data.js"></script>

@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>18. Subscriptions &amp; CDC — EvolutionDB 3.0</title>
+<title>18. Subscriptions &amp; CDC | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -35,7 +35,7 @@
     payload    <span class="c-key">VARCHAR</span>(8000),                  <span class="c-com">-- the NOTIFY payload; '' for payload-less NOTIFY</span>
     posted_at  <span class="c-key">TIMESTAMP</span>      <span class="c-key">NOT NULL</span>        <span class="c-com">-- UTC append time, 'YYYY-MM-DD HH:MM:SS'</span>
 );</code></pre>
-<p>One row is written per published <code>NOTIFY</code>. The <code>seq</code> is the primary key, so the backing table's B+ tree already orders rows ascending by sequence — no explicit <code>ORDER BY</code> is required to drain in arrival order. The <code>posted_at</code> stamp is generated server-side in UTC at publish time.</p>
+<p>One row is written per published <code>NOTIFY</code>. The <code>seq</code> is the primary key, so the backing table's B+ tree already orders rows ascending by sequence, no explicit <code>ORDER BY</code> is required to drain in arrival order. The <code>posted_at</code> stamp is generated server-side in UTC at publish time.</p>
 
 <h3 id="catalog-fields">18.2.2. Subscription catalog fields</h3>
 <p>The system catalog stores one descriptor per subscription. <code>SHOW SUBSCRIPTIONS</code> exposes these columns:</p>
@@ -80,7 +80,7 @@
 
 <h3 id="ack">18.4.2. ACK SUBSCRIPTION</h3>
 <p class="sig"><code>ACK SUBSCRIPTION <em>name</em> UPTO <em>seq</em></code></p>
-<p>Advances the acknowledgement watermark to <em>seq</em>. The operation is monotonic and idempotent: it only moves <code>last_ack_seq</code> forward, so <code>ACK ... UPTO 5</code> followed by <code>ACK ... UPTO 3</code> leaves the watermark at <code>5</code>. The acknowledged sequence need not correspond to an actually-stored row — the watermark simply moves, and the prune daemon catches up on its next tick. Acknowledging an unknown subscription fails with <code>42704</code>.</p>
+<p>Advances the acknowledgement watermark to <em>seq</em>. The operation is monotonic and idempotent: it only moves <code>last_ack_seq</code> forward, so <code>ACK ... UPTO 5</code> followed by <code>ACK ... UPTO 3</code> leaves the watermark at <code>5</code>. The acknowledged sequence need not correspond to an actually-stored row: the watermark simply moves, and the prune daemon catches up on its next tick. Acknowledging an unknown subscription fails with <code>42704</code>.</p>
 <pre><code><span class="c-key">ACK SUBSCRIPTION</span> orders_cdc <span class="c-key">UPTO</span> 2;</code></pre>
 
 <h2 id="lifecycle">18.5. End-to-end lifecycle</h2>
@@ -125,10 +125,10 @@
 </table>
 
 <h2 id="postgres">18.8. Comparison with PostgreSQL</h2>
-<p>EvolutionDB's syntax deliberately echoes PostgreSQL's <code>CREATE SUBSCRIPTION</code> keyword but the semantics are entirely different — these are not logical-replication subscriptions.</p>
+<p>EvolutionDB's syntax deliberately echoes PostgreSQL's <code>CREATE SUBSCRIPTION</code> keyword but the semantics are entirely different, these are not logical-replication subscriptions.</p>
 <dl class="params">
 <dt>Source of data</dt>
-<dd>PostgreSQL subscriptions consume a logical replication stream from a publisher's WAL. EvolutionDB subscriptions consume committed <code>NOTIFY</code> payloads on a named channel — there is no upstream node, publication, or replication slot.</dd>
+<dd>PostgreSQL subscriptions consume a logical replication stream from a publisher's WAL. EvolutionDB subscriptions consume committed <code>NOTIFY</code> payloads on a named channel: there is no upstream node, publication, or replication slot.</dd>
 <dt>Binding</dt>
 <dd>PostgreSQL binds a subscription to a <code>PUBLICATION</code> on a remote <code>CONNECTION</code>. EvolutionDB binds a subscription to a local channel with <code>FOR CHANNEL</code>; there is no publication object and no connection string.</dd>
 <dt>Delivery &amp; replay</dt>
@@ -153,10 +153,10 @@
 
 <h2 id="see-also">18.9. See also</h2>
 <ul>
-<li><a href="/3.0/ref/notify/">NOTIFY</a> — emit a payload on a channel (the publisher side of CDC).</li>
-<li><a href="/3.0/ref/listen/">LISTEN</a> — subscribe a live connection to a channel (transient, in-memory).</li>
-<li><a href="/3.0/ref/create-subscription/">CREATE SUBSCRIPTION</a>, <a href="/3.0/ref/drop-subscription/">DROP SUBSCRIPTION</a>, <a href="/3.0/ref/resume-subscription/">RESUME SUBSCRIPTION</a>, <a href="/3.0/ref/ack-subscription/">ACK SUBSCRIPTION</a> — command reference pages.</li>
-<li><a href="/3.0/ref/show/">SHOW SUBSCRIPTIONS</a> — list registered subscriptions and their watermarks.</li>
+<li><a href="/3.0/ref/notify/">NOTIFY</a>, emit a payload on a channel (the publisher side of CDC).</li>
+<li><a href="/3.0/ref/listen/">LISTEN</a>: subscribe a live connection to a channel (transient, in-memory).</li>
+<li><a href="/3.0/ref/create-subscription/">CREATE SUBSCRIPTION</a>, <a href="/3.0/ref/drop-subscription/">DROP SUBSCRIPTION</a>, <a href="/3.0/ref/resume-subscription/">RESUME SUBSCRIPTION</a>, <a href="/3.0/ref/ack-subscription/">ACK SUBSCRIPTION</a>, command reference pages.</li>
+<li><a href="/3.0/ref/show/">SHOW SUBSCRIPTIONS</a>, list registered subscriptions and their watermarks.</li>
 </ul>
 </main></div>
 <script src="/nav-data.js"></script>

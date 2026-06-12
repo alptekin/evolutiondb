@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Slack connector — EvolutionDB</title>
+<title>Slack connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,7 +18,7 @@
 <p class="lede">A read-only <code>*-sync</code> connector that pulls the Slack DMs, group DMs, and channels you belong to into EvolutionDB long-term memory, so an AI assistant can recall them later through <code>search_memory</code>.</p>
 
 <h2 id="what-it-does">What it does</h2>
-<p>The package <code>evolutiondb-slack-sync</code> walks every conversation the token's user is part of — public channels they've joined, private channels, DMs, and group DMs — and persists each message into an EvolutionDB <a href="/platform/mcp-server/">MCP memory store</a>. The <a href="/platform/mcp-server/">MCP server</a> then surfaces those messages through <code>search_memory</code>, so an assistant can answer questions like "what did Ahmet say about the database migration last week?" weeks later.</p>
+<p>The package <code>evolutiondb-slack-sync</code> walks every conversation the token's user is part of: public channels they've joined, private channels, DMs, and group DMs, and persists each message into an EvolutionDB <a href="/platform/mcp-server/">MCP memory store</a>. The <a href="/platform/mcp-server/">MCP server</a> then surfaces those messages through <code>search_memory</code>, so an assistant can answer questions like "what did Ahmet say about the database migration last week?" weeks later.</p>
 <p>Concretely, each pass:</p>
 <ul>
 <li>Lists every conversation via <code>conversations.list</code> (types <code>public_channel,private_channel,mpim,im</code>, archived excluded).</li>
@@ -32,12 +32,12 @@
 <h3 id="not-indexed">What is not indexed</h3>
 <p>The sync loop deliberately skips:</p>
 <ul>
-<li>System messages with subtype <code>channel_join</code>, <code>channel_leave</code>, <code>bot_add</code>, or <code>bot_remove</code> — pure noise.</li>
-<li>Messages that have neither <code>text</code> nor <code>attachments</code> (counted as <code>skipped</code>). Per the README, file/image binaries are not stored — only the text caption is captured — and reactions are not indexed.</li>
+<li>System messages with subtype <code>channel_join</code>, <code>channel_leave</code>, <code>bot_add</code>, or <code>bot_remove</code>, pure noise.</li>
+<li>Messages that have neither <code>text</code> nor <code>attachments</code> (counted as <code>skipped</code>). Per the README, file/image binaries are not stored, only the text caption is captured, and reactions are not indexed.</li>
 </ul>
 
 <h2 id="install">Install</h2>
-<p>The distribution name on PyPI is <code>evolutiondb-slack-sync</code>; the importable package is <code>slack_sync</code>. It requires Python 3.9+ and depends only on <code>psycopg[binary]&gt;=3.1</code> (the Slack client itself uses the standard library <code>urllib</code> — no <code>slack_sdk</code> dependency).</p>
+<p>The distribution name on PyPI is <code>evolutiondb-slack-sync</code>; the importable package is <code>slack_sync</code>. It requires Python 3.9+ and depends only on <code>psycopg[binary]&gt;=3.1</code> (the Slack client itself uses the standard library <code>urllib</code>, no <code>slack_sdk</code> dependency).</p>
 <pre><code><span class="c-com"># From PyPI</span>
 pip install evolutiondb-slack-sync
 
@@ -47,7 +47,7 @@ pip install -e client/slack-sync
 <p>Installing exposes a single console script, <code>evolutiondb-slack-sync</code> (entry point <code>slack_sync.__main__:main</code>).</p>
 
 <h2 id="configure">Configure (env vars / auth)</h2>
-<p>Configuration is entirely through environment variables. The CLI loads a dotenv file before reading them — by default <code>.env</code> in the working directory, overridable with <code>--env-file</code>. Existing process environment values win (the loader uses <code>setdefault</code>, so it never overwrites what is already set).</p>
+<p>Configuration is entirely through environment variables. The CLI loads a dotenv file before reading them, by default <code>.env</code> in the working directory, overridable with <code>--env-file</code>. Existing process environment values win (the loader uses <code>setdefault</code>, so it never overwrites what is already set).</p>
 
 <h3 id="slack-auth">Slack authentication</h3>
 <p>Auth is a single <strong>User OAuth token</strong> (<code>xoxp-…</code>), created at <a href="https://api.slack.com/apps">https://api.slack.com/apps</a> → Create New App → From scratch. Add the following read-only <em>user-token</em> scopes under OAuth &amp; Permissions, install the app, and copy the User OAuth Token into <code>SLACK_USER_TOKEN</code>:</p>
@@ -57,19 +57,19 @@ im:history          im:read
 mpim:history        mpim:read
 users:read
 </code></pre>
-<p>These are user scopes, not bot scopes — the package walks the conversations the human is actually part of, so no workspace-admin approval is needed. The README notes that sending is opt-in and off by default; staying with the scopes above keeps the token strictly read-only. (The outbox action loop's reply path additionally requires the <code>chat:write</code> scope plus <code>EVOSQL_SEND_ENABLED=1</code> / <code>EVOSQL_SEND_CHANNELS=slack</code>, per ADR-004 — but that send path lives outside this package.)</p>
+<p>These are user scopes, not bot scopes: the package walks the conversations the human is actually part of, so no workspace-admin approval is needed. The README notes that sending is opt-in and off by default; staying with the scopes above keeps the token strictly read-only. (The outbox action loop's reply path additionally requires the <code>chat:write</code> scope plus <code>EVOSQL_SEND_ENABLED=1</code> / <code>EVOSQL_SEND_CHANNELS=slack</code>, per ADR-004, but that send path lives outside this package.)</p>
 
 <h3 id="env-vars">Environment variables</h3>
 <table>
 <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
 <tbody>
-<tr><td><code>SLACK_USER_TOKEN</code></td><td>— (required)</td><td>User OAuth token (<code>xoxp-…</code>). The run aborts with exit code 2 if unset.</td></tr>
+<tr><td><code>SLACK_USER_TOKEN</code></td><td>, (required)</td><td>User OAuth token (<code>xoxp-…</code>). The run aborts with exit code 2 if unset.</td></tr>
 <tr><td><code>EVOSQL_HOST</code></td><td><code>127.0.0.1</code></td><td>EvolutionDB host (PostgreSQL wire protocol).</td></tr>
 <tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>EvolutionDB PG-protocol port.</td></tr>
 <tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>Database user.</td></tr>
 <tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>Database password.</td></tr>
 <tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>Database name.</td></tr>
-<tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace — records are written under this namespace and recalled per <code>MCP_USER_ID</code>.</td></tr>
+<tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace, records are written under this namespace and recalled per <code>MCP_USER_ID</code>.</td></tr>
 <tr><td><code>SLACK_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>Name of the EvolutionDB memory store to write into.</td></tr>
 <tr><td><code>SLACK_POLL_INTERVAL</code></td><td><code>600</code></td><td>Daemon-mode poll interval in seconds (used by <code>Config.poll_secs</code>).</td></tr>
 </tbody>
@@ -77,13 +77,13 @@ users:read
 
 <h2 id="usage">Usage</h2>
 <p>The CLI has five flags: <code>--once</code>, <code>--interval &lt;seconds&gt;</code>, <code>--since &lt;duration&gt;</code> (default <code>3d</code>), <code>--dry-run</code>, and <code>--env-file &lt;path&gt;</code> (default <code>.env</code>).</p>
-<pre><code><span class="c-com"># First run — pull the last three days, then exit.</span>
+<pre><code><span class="c-com"># First run - pull the last three days, then exit.</span>
 evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--since</span> 3d
 
 <span class="c-com"># Daemon mode: pass, then sleep --interval seconds, repeat.</span>
 evolutiondb-slack-sync <span class="c-key">--interval</span> 600
 
-<span class="c-com"># Auth/scope check only — no DB writes.</span>
+<span class="c-com"># Auth/scope check only - no DB writes.</span>
 evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--dry-run</span>
 </code></pre>
 <p>If <code>--once</code> is given, or no <code>--interval</code> is supplied, exactly one pass runs. In daemon mode the interval is clamped to a minimum of 60 seconds, and <code>SIGTERM</code>/<code>SIGINT</code> request a graceful stop after the current pass finishes.</p>
@@ -93,7 +93,7 @@ evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--d
 <p>On failure the line is <code>{"ok": false, "error": "&lt;message&gt;"}</code>. (The figures above are the README's illustrative example, not guaranteed counts.)</p>
 
 <h3 id="since-syntax">--since syntax</h3>
-<p><code>--since</code> takes a duration of the form <code>&lt;n&gt;&lt;unit&gt;</code>, where unit is one of <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code> (e.g. <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>3d</code>, <code>2w</code>). It is converted to a Unix-seconds floor that becomes Slack's <code>oldest</code> bound. A garbage value exits with code 2. Note: <code>--since</code> is only the <em>default</em> floor — for channels that already have a stored watermark, the watermark takes precedence.</p>
+<p><code>--since</code> takes a duration of the form <code>&lt;n&gt;&lt;unit&gt;</code>, where unit is one of <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code> (e.g. <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>3d</code>, <code>2w</code>). It is converted to a Unix-seconds floor that becomes Slack's <code>oldest</code> bound. A garbage value exits with code 2. Note: <code>--since</code> is only the <em>default</em> floor: for channels that already have a stored watermark, the watermark takes precedence.</p>
 
 <h3 id="record-shape">Record shape</h3>
 <p>Each message is stored as a JSON record under the key <code>slack_msg_&lt;channel&gt;_&lt;ts&gt;</code>. Fields written by <code>_build_record</code>:</p>
@@ -161,11 +161,11 @@ evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--d
 
 <h2 id="notes">Notes and limitations</h2>
 <ul>
-<li><strong>Beta.</strong> The package is version <code>0.1.0</code> and marked Development Status 4 - Beta. There is no <code>slack_sdk</code> dependency — the API client is hand-rolled on <code>urllib</code>.</li>
+<li><strong>Beta.</strong> The package is version <code>0.1.0</code> and marked Development Status 4 - Beta. There is no <code>slack_sdk</code> dependency, the API client is hand-rolled on <code>urllib</code>.</li>
 <li><strong>Read-only by design.</strong> The scopes above grant no write access. There is no posting/sending code in this package; the opt-in reply path lives in the outbox action loop (see ADR-004) and additionally needs <code>chat:write</code>.</li>
 <li><strong>Rate limits.</strong> Slack throttles <code>conversations.history</code> at Tier 3 (50+ req/min per workspace). The client retries a 429 exactly once after sleeping for <code>Retry-After</code>. For very active workspaces, raise <code>SLACK_POLL_INTERVAL</code> rather than looping tighter.</li>
 <li><strong>SQL building uses string interpolation.</strong> <code>state.py</code> escapes values with a local <code>_e()</code> helper (newline/tab stripping + single-quote doubling) and interpolates them into the <code>MEMORY PUT</code> / <code>SELECT</code> statements rather than using parameter binding.</li>
-<li><strong>Privacy.</strong> The user-scope token reads exactly the conversations the human can already see — no privilege escalation — but once a message lands in EvolutionDB, anyone with the matching <code>MCP_USER_ID</code> namespace can recall it via <code>search_memory</code>. Confirm that piping work Slack into a personal memory store is acceptable before enabling it.</li>
+<li><strong>Privacy.</strong> The user-scope token reads exactly the conversations the human can already see, no privilege escalation, but once a message lands in EvolutionDB, anyone with the matching <code>MCP_USER_ID</code> namespace can recall it via <code>search_memory</code>. Confirm that piping work Slack into a personal memory store is acceptable before enabling it.</li>
 <li><strong>Tests.</strong> <code>tests/test_sync.py</code> covers the pure functions only (<code>parse_since</code>, <code>_ts_to_iso</code>, <code>_build_record</code>); there are no integration tests against a live Slack workspace or database in the package.</li>
 </ul>
 <p>Related: <a href="/platform/mcp-server/">MCP server</a> · <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a>.</p>

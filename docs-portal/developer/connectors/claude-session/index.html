@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Claude sessions connector — EvolutionDB</title>
+<title>Claude sessions connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Claude sessions connector</h1>
-<p class="lede">Index your Claude Code session transcripts into EvolutionDB long-term memory so the assistant can search past conversations — a local-file connector, no API and no token.</p>
+<p class="lede">Index your Claude Code session transcripts into EvolutionDB long-term memory so the assistant can search past conversations: a local-file connector, no API and no token.</p>
 
 <h2 id="what-it-does">What it does</h2>
 <p>
@@ -28,9 +28,9 @@ memory. Once indexed, the digests are recallable through the
 </p>
 <p>Each session produces two memory keys:</p>
 <ul>
-<li><code>claude_session_&lt;sessionId&gt;</code> — the digest: an AI title (when present),
+<li><code>claude_session_&lt;sessionId&gt;</code>, the digest: an AI title (when present),
 trimmed user/assistant turns, project, git branch, turn count, and start/end timestamps.</li>
-<li><code>claude_session_state_&lt;sessionId&gt;</code> — a per-session watermark holding the
+<li><code>claude_session_state_&lt;sessionId&gt;</code>, a per-session watermark holding the
 last seen timestamp.</li>
 </ul>
 <p>
@@ -47,13 +47,13 @@ pip install -e client/claude-session-sync</code></pre>
 <p>
 Requires Python <code>&gt;=3.9</code>. The only runtime dependency is
 <code>psycopg[binary]&gt;=3.1</code> (the connector talks to EvolutionDB over the
-PostgreSQL wire protocol). PII masking is optional — see
+PostgreSQL wire protocol). PII masking is optional, see
 <a href="#notes">Notes</a>.
 </p>
 
 <h2 id="configure">Configure (env vars / auth)</h2>
 <p>
-No secrets are required — the connector reads local transcript files. Connection
+No secrets are required, the connector reads local transcript files. Connection
 and namespace settings are read from environment variables (a <code>.env</code> file
 in the working directory is loaded automatically; pass <code>--env-file</code> to
 point elsewhere). The shipped <code>.env.example</code> lists every variable:
@@ -84,7 +84,7 @@ CLAUDE_SESSION_POLL_INTERVAL=<span class="c-str">900</span></code></pre>
 <tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>DB user.</td></tr>
 <tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>DB password.</td></tr>
 <tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>Database name.</td></tr>
-<tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace — match the MCP server so records are recallable.</td></tr>
+<tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace, match the MCP server so records are recallable.</td></tr>
 <tr><td><code>CLAUDE_SESSION_STORE</code></td><td><code>mcp_mem</code></td><td>Target memory store. Created if missing via <code>CREATE MEMORY STORE</code>.</td></tr>
 <tr><td><code>CLAUDE_SESSION_POLL_INTERVAL</code></td><td><code>900</code></td><td>Default daemon poll interval, in seconds.</td></tr>
 </tbody>
@@ -168,11 +168,11 @@ in autocommit mode and issues <code>CREATE MEMORY STORE</code> (ignoring failure
 exists). It auto-reconnects up to 3 times with backoff on dropped connections. Methods:
 </p>
 <ul>
-<li><code>get_watermark(session_id) -&gt; Optional[str]</code> — reads the stored
+<li><code>get_watermark(session_id) -&gt; Optional[str]</code>, reads the stored
 <code>updated_at</code> for a session from <code>__mem_&lt;store&gt;</code>.</li>
-<li><code>set_watermark(session_id, updated_at)</code> — writes the
+<li><code>set_watermark(session_id, updated_at)</code>, writes the
 <code>claude_session_state_&lt;sessionId&gt;</code> row via <code>MEMORY PUT INTO</code>.</li>
-<li><code>put_record(key, record)</code> — JSON-encodes the record and writes it with
+<li><code>put_record(key, record)</code>, JSON-encodes the record and writes it with
 <code>MEMORY PUT INTO</code>.</li>
 </ul>
 
@@ -186,7 +186,7 @@ truncated, to keep the record JSON under the engine's ~8&nbsp;KB value cap.</li>
 <li><strong>Watermark granularity.</strong> A session is re-indexed only when its latest
 turn timestamp is newer than the stored watermark; equal-or-older sessions count as
 <em>skipped</em>.</li>
-<li><strong>Privacy / cleartext.</strong> Transcripts are real work — prompts, code, and
+<li><strong>Privacy / cleartext.</strong> Transcripts are real work: prompts, code, and
 assistant output land in EvolutionDB in cleartext under your namespace. Anyone with DB
 access and the namespace can recall them via <code>search_memory</code>. Scope what gets
 indexed by pointing <code>--dir</code> / <code>CLAUDE_PROJECTS_DIR</code> at a single

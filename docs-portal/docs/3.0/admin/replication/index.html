@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>29. Replication &amp; Sharding — EvolutionDB 3.0</title>
+<title>29. Replication &amp; Sharding | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -20,7 +20,7 @@
 <p>EvolutionDB ships three cooperating clustering subsystems, all implemented in the adaptor layer and all <em>opt-in at runtime</em>: physical replication (<code>adaptor/replication.c</code>), Raft leader election (<code>adaptor/raft.c</code>), and a distributed query engine with sharding (<code>adaptor/distributed.c</code>, <code>adaptor/shard.c</code>). A server started without the relevant flags runs as an ordinary single node; none of these paths are entered. They are also gated behind POSIX sockets and pthreads, so on Windows (MinGW) the implementations compile to stubs and only the default embedded/single-node flow is available.</p>
 
 <div class="callout">
-<p><strong>Scope of this chapter.</strong> This page documents only what the engine actually implements today. Where EvolutionDB diverges from PostgreSQL or the SQL standard, that is called out honestly — several of these subsystems are deliberately simplified (heartbeat-only Raft, page-image WAL, regex-free SQL key extraction) and the limitations are listed in the <a href="#notes">Notes</a> callout.</p>
+<p><strong>Scope of this chapter.</strong> This page documents only what the engine actually implements today. Where EvolutionDB diverges from PostgreSQL or the SQL standard, that is called out honestly: several of these subsystems are deliberately simplified (heartbeat-only Raft, page-image WAL, regex-free SQL key extraction) and the limitations are listed in the <a href="#notes">Notes</a> callout.</p>
 </div>
 
 <h2 id="overview">29.1. Overview &amp; topology</h2>
@@ -38,7 +38,7 @@
 
 <p>The role is chosen by the <code>--role</code> flag or the <code>EVOSQL_REPLICATION_ROLE</code> environment variable. A late-arriving replica start always wins over a stored pin (<code>repl_get_role()</code> returns <code>replica</code> as soon as the receiver is running), and a Raft election can flip the role at runtime (see <a href="#raft">29.3</a>).</p>
 
-<p>Unlike PostgreSQL — which has separate <code>primary_conninfo</code>, <code>standby.signal</code>, and a <code>recovery.conf</code> lineage — EvolutionDB configures everything through a small set of CLI flags and environment variables read at boot in <code>adaptor/main.c</code>:</p>
+<p>Unlike PostgreSQL, which has separate <code>primary_conninfo</code>, <code>standby.signal</code>, and a <code>recovery.conf</code> lineage, EvolutionDB configures everything through a small set of CLI flags and environment variables read at boot in <code>adaptor/main.c</code>:</p>
 
 <table>
 <thead><tr><th>Flag</th><th>Environment</th><th>Meaning</th></tr></thead>
@@ -46,20 +46,20 @@
 <tr><td><code>--role primary|replica|witness</code></td><td><code>EVOSQL_REPLICATION_ROLE</code></td><td>Pin the replication role.</td></tr>
 <tr><td><code>--replication-port PORT</code></td><td><code>EVOSQL_REPLICATION_PORT</code></td><td>Primary WAL sender listen port (default <code>9968</code>).</td></tr>
 <tr><td><code>--replica HOST:PORT</code></td><td><code>EVOSQL_PRIMARY_HOST</code> / <code>EVOSQL_PRIMARY_PORT</code></td><td>Replica connects here to receive WAL.</td></tr>
-<tr><td><code>--cluster h1:p,h2:p,…</code></td><td>—</td><td>Raft cluster membership (comma-separated <code>host:port</code>).</td></tr>
-<tr><td><code>--node-id N</code></td><td>—</td><td>0-based index of this node in the <code>--cluster</code> list.</td></tr>
+<tr><td><code>--cluster h1:p,h2:p,…</code></td><td>, </td><td>Raft cluster membership (comma-separated <code>host:port</code>).</td></tr>
+<tr><td><code>--node-id N</code></td><td>, </td><td>0-based index of this node in the <code>--cluster</code> list.</td></tr>
 <tr><td><code>--cdc-port PORT</code></td><td><code>EVOSQL_CDC_PORT</code></td><td>Change-Data-Capture JSON Lines stream port.</td></tr>
-<tr><td><code>--dist-port PORT</code></td><td>—</td><td>Internal distributed-query port (default <code>9969</code>).</td></tr>
-<tr><td><code>--base-backup PATH</code></td><td>—</td><td>Run a base backup and exit (no listeners).</td></tr>
-<tr><td>—</td><td><code>EVOSQL_SYNC_COMMIT</code></td><td>Truthy enables synchronous commit (default async).</td></tr>
-<tr><td>—</td><td><code>EVOSQL_REPLICATION_USER</code> / <code>_PASSWORD</code></td><td>Replication auth credentials.</td></tr>
-<tr><td>—</td><td><code>EVOSQL_REPLICATION_TLS</code></td><td>Truthy wraps replication in TLS (reuses server cert/key).</td></tr>
+<tr><td><code>--dist-port PORT</code></td><td>, </td><td>Internal distributed-query port (default <code>9969</code>).</td></tr>
+<tr><td><code>--base-backup PATH</code></td><td>, </td><td>Run a base backup and exit (no listeners).</td></tr>
+<tr><td>, </td><td><code>EVOSQL_SYNC_COMMIT</code></td><td>Truthy enables synchronous commit (default async).</td></tr>
+<tr><td>, </td><td><code>EVOSQL_REPLICATION_USER</code> / <code>_PASSWORD</code></td><td>Replication auth credentials.</td></tr>
+<tr><td>, </td><td><code>EVOSQL_REPLICATION_TLS</code></td><td>Truthy wraps replication in TLS (reuses server cert/key).</td></tr>
 </tbody>
 </table>
 
 <h2 id="physical-replication">29.2. Physical (WAL streaming) replication</h2>
 
-<p>Physical replication ships raw WAL page images from a primary to one or more replicas. The unit of replication is a WAL record: <code>[lsn:4][page_no:4][page_len:2][timestamp:8]…[page bytes][CRC]</code>. Because EvolutionDB's WAL stores full <em>page images</em> (4&nbsp;KB pages), a replica reapplies a record simply by writing the page image to the same byte offset (<code>page_no &times; 4096</code>) in its local data file and invalidating any cached copy in its buffer pool. There is no logical redo or operator replay — this is closer to PostgreSQL's full-page-write streaming than to its record-level redo.</p>
+<p>Physical replication ships raw WAL page images from a primary to one or more replicas. The unit of replication is a WAL record: <code>[lsn:4][page_no:4][page_len:2][timestamp:8]…[page bytes][CRC]</code>. Because EvolutionDB's WAL stores full <em>page images</em> (4&nbsp;KB pages), a replica reapplies a record simply by writing the page image to the same byte offset (<code>page_no &times; 4096</code>) in its local data file and invalidating any cached copy in its buffer pool. There is no logical redo or operator replay, this is closer to PostgreSQL's full-page-write streaming than to its record-level redo.</p>
 
 <h3 id="streaming-protocol">29.2.1. The streaming protocol</h3>
 
@@ -76,11 +76,11 @@ OK   <span class="c-com">| ERR &lt;reason&gt;</span>
 <p>After the handshake the primary streams framed messages. Each message begins with a single type byte:</p>
 
 <dl class="params">
-<dt><code>'W'</code> — <code>REPL_MSG_WAL_DATA</code></dt>
+<dt><code>'W'</code>, <code>REPL_MSG_WAL_DATA</code></dt>
 <dd>Followed by a 4-byte length and the full WAL record. The replica parses the embedded record header, writes the page, advances its slot LSN, and (every 100 records) persists the slot file and sends an ACK.</dd>
-<dt><code>'H'</code> — <code>REPL_MSG_HEARTBEAT</code></dt>
+<dt><code>'H'</code>, <code>REPL_MSG_HEARTBEAT</code></dt>
 <dd>Keepalive, sent on a 5-second interval when no WAL is flowing. The replica answers with an ACK carrying its current confirmed LSN, keeping <a href="#sync-commit">synchronous-commit</a> waiters and status views fresh.</dd>
-<dt><code>'A'</code> — <code>REPL_MSG_ACK</code></dt>
+<dt><code>'A'</code>, <code>REPL_MSG_ACK</code></dt>
 <dd>Replica → primary, a 5-byte frame (<code>'A'</code> + <code>uint32</code> confirmed LSN). The primary's sender drains ACKs between batches and on every heartbeat tick, performing byte-level resync if it sees an unexpected byte.</dd>
 </dl>
 
@@ -90,13 +90,13 @@ OK   <span class="c-com">| ERR &lt;reason&gt;</span>
 
 <p>Bring up a primary with the WAL sender listening, then bootstrap a replica from a base backup and point it at the primary:</p>
 
-<pre><code><span class="c-com"># 1. Primary — start with the WAL sender on port 9968</span>
+<pre><code><span class="c-com"># 1. Primary - start with the WAL sender on port 9968</span>
 ./evosql-server --role primary --replication-port 9968
 
 <span class="c-com"># 2. Take a base backup into a fresh data directory (runs and exits)</span>
 ./evosql-server --base-backup /var/lib/evosql/standby1
 
-<span class="c-com"># 3. Replica — replay the backup, then stream from the primary</span>
+<span class="c-com"># 3. Replica - replay the backup, then stream from the primary</span>
 EVOSQL_PRIMARY_HOST=primary.internal \
 EVOSQL_PRIMARY_PORT=9968 \
 ./evosql-server --role replica --replica primary.internal:9968
@@ -126,7 +126,7 @@ EVOSQL_PRIMARY_PORT=9968 \
 
 <ul>
 <li>Majority is <code>ceil(active / 2)</code>: 1 replica needs 1 ACK, 2 need 1, 3 need 2.</li>
-<li>With no active replicas the call returns success immediately — sync degrades gracefully to async rather than stalling the only writer.</li>
+<li>With no active replicas the call returns success immediately, sync degrades gracefully to async rather than stalling the only writer.</li>
 <li>The default wait is <code>REPL_SYNC_COMMIT_DEFAULT_MS = 2000</code> ms; on timeout the caller falls back to async commit (returns <code>-1</code>).</li>
 </ul>
 
@@ -155,9 +155,9 @@ EVOSQL_PRIMARY_PORT=9968 \
 <table>
 <thead><tr><th>Condition on tuple</th><th>Event <code>op</code></th></tr></thead>
 <tbody>
-<tr><td><code>xmin &gt; 0</code>, <code>xmax = 0</code>, not HEAP_ONLY</td><td><code>'I'</code> — INSERT</td></tr>
-<tr><td><code>xmin &gt; 0</code>, <code>xmax = 0</code>, HEAP_ONLY flag (<code>0x08</code>)</td><td><code>'U'</code> — UPDATE (new version)</td></tr>
-<tr><td><code>xmax &gt; 0</code>, not HOT_UPDATED (<code>0x04</code>)</td><td><code>'D'</code> — DELETE</td></tr>
+<tr><td><code>xmin &gt; 0</code>, <code>xmax = 0</code>, not HEAP_ONLY</td><td><code>'I'</code>, INSERT</td></tr>
+<tr><td><code>xmin &gt; 0</code>, <code>xmax = 0</code>, HEAP_ONLY flag (<code>0x08</code>)</td><td><code>'U'</code>, UPDATE (new version)</td></tr>
+<tr><td><code>xmax &gt; 0</code>, not HOT_UPDATED (<code>0x04</code>)</td><td><code>'D'</code>, DELETE</td></tr>
 </tbody>
 </table>
 
@@ -184,7 +184,7 @@ EVOSQL_PRIMARY_PORT=9968 \
 <dt><code>LEADER</code> (2)</dt><dd>Won a majority; sends periodic heartbeats and accepts writes.</dd>
 </dl>
 
-<p>Timing constants (<code>adaptor/raft.h</code>): heartbeat every <code>150</code> ms; the election timeout is randomized in <code>[300, 500)</code> ms to avoid split votes. A candidate wins with <code>g_num_nodes / 2 + 1</code> votes. A vote is granted only if the candidate's term is at least as high, the follower has not already voted this term, and <strong>the candidate's <code>last_lsn</code> is at least the follower's</strong> — an up-to-dateness check that prevents a stale node from becoming leader. The maximum cluster size is <code>RAFT_MAX_NODES</code> = 7.</p>
+<p>Timing constants (<code>adaptor/raft.h</code>): heartbeat every <code>150</code> ms; the election timeout is randomized in <code>[300, 500)</code> ms to avoid split votes. A candidate wins with <code>g_num_nodes / 2 + 1</code> votes. A vote is granted only if the candidate's term is at least as high, the follower has not already voted this term, and <strong>the candidate's <code>last_lsn</code> is at least the follower's</strong>, an up-to-dateness check that prevents a stale node from becoming leader. The maximum cluster size is <code>RAFT_MAX_NODES</code> = 7.</p>
 
 <p>Persistent Raft state (<code>current_term</code>, <code>voted_for</code>) is written atomically to <code>root/raft.state</code> via temp-file-plus-rename with an fsync, so a restart cannot grant a second vote in the same term. Every <code>10000</code> AppendEntries the node snapshots its high-water LSN and term to <code>root/raft.snapshot</code>; because there is no in-memory log to truncate in this design, the snapshot is primarily an operator artifact and a placeholder for future log-based compaction.</p>
 
@@ -205,7 +205,7 @@ EVOSQL_PRIMARY_PORT=9968 \
 </code></pre>
 
 <div class="callout">
-<p><strong>Honesty note on Raft.</strong> This is a pragmatic subset of the Raft paper. AppendEntries carries only a heartbeat and a last-LSN advertisement — there is no replicated command log, no log-index/commit-index matching, and no per-entry conflict resolution. Durable agreement comes from the separate WAL stream and the majority-ACK sync-commit path. Treat it as automated election + failover, not a general-purpose replicated state machine.</p>
+<p><strong>Honesty note on Raft.</strong> This is a pragmatic subset of the Raft paper. AppendEntries carries only a heartbeat and a last-LSN advertisement: there is no replicated command log, no log-index/commit-index matching, and no per-entry conflict resolution. Durable agreement comes from the separate WAL stream and the majority-ACK sync-commit path. Treat it as automated election + failover, not a general-purpose replicated state machine.</p>
 </div>
 
 <h2 id="distributed">29.4. Distributed query engine</h2>
@@ -262,7 +262,7 @@ EVOSQL_PRIMARY_PORT=9968 \
 );
 </code></pre>
 
-<p>Range routing walks the shard descriptors and picks the first shard whose <code>range_bound</code> is greater than the key (string comparison), or the catch-all bound declared with <code>MAXVALUE</code> (stored as an empty bound that always matches). Bounds are compared as strings — there is no numeric or collation-aware range partitioning. Inspect shards with:</p>
+<p>Range routing walks the shard descriptors and picks the first shard whose <code>range_bound</code> is greater than the key (string comparison), or the catch-all bound declared with <code>MAXVALUE</code> (stored as an empty bound that always matches). Bounds are compared as strings, there is no numeric or collation-aware range partitioning. Inspect shards with:</p>
 
 <pre><code><span class="c-key">SHOW</span> SHARDS ledger;
 <span class="c-com">-- shard_name | ordinal | owner_node_id | range_bound | shard_type | shard_key</span>
@@ -273,21 +273,21 @@ EVOSQL_PRIMARY_PORT=9968 \
 <p>When the distributed engine is enabled, <code>shard_try_route()</code> inspects the statement for the shard key:</p>
 
 <ul>
-<li><strong>Pruning.</strong> For an <code>INSERT</code> it reads the shard-key value from the column/VALUES list; for <code>SELECT</code>/<code>UPDATE</code>/<code>DELETE</code> it reads a <code>shard_key = value</code> equality from the <code>WHERE</code> clause. The matching shard is resolved and, if remote, the whole statement is forwarded to that shard's owner — a single-shard query.</li>
+<li><strong>Pruning.</strong> For an <code>INSERT</code> it reads the shard-key value from the column/VALUES list; for <code>SELECT</code>/<code>UPDATE</code>/<code>DELETE</code> it reads a <code>shard_key = value</code> equality from the <code>WHERE</code> clause. The matching shard is resolved and, if remote, the whole statement is forwarded to that shard's owner, a single-shard query.</li>
 <li><strong>Scatter-gather.</strong> If no shard key is present, the statement is broadcast to every shard. Each local shard runs in-process; each remote shard is forwarded over PG wire. <code>SELECT</code> results are merged (column metadata taken from the first non-empty result, rows appended) and the command tag is rewritten as <code>SELECT &lt;total_rows&gt;</code>. <code>UPDATE</code>/<code>DELETE</code> without a shard key also scatter to all shards.</li>
 </ul>
 
-<p>In standalone (non-distributed) mode every shard is local and routing is skipped — the ordinary executor handles the statement.</p>
+<p>In standalone (non-distributed) mode every shard is local and routing is skipped, the ordinary executor handles the statement.</p>
 
 <div class="callout" id="notes">
 <p><strong>Notes &amp; limitations.</strong></p>
 <ul>
 <li><strong>Platform.</strong> Replication, Raft, distributed routing and sharding are POSIX-only. On Windows (MinGW) these files compile to stubs; only single-node embedded mode is available.</li>
 <li><strong>Page-image WAL.</strong> Physical replication ships 4&nbsp;KB page images, not logical redo. Primary and replica must share the same page layout and TDE settings; the replica re-encrypts pages on write if TDE is enabled.</li>
-<li><strong>Shard-key extraction is textual.</strong> <code>shard.c</code> parses the shard key from raw SQL with a hand-written scanner — single quotes and simple <code>WHERE col = value</code> equality only. Parameterized queries, expressions, functions, <code>IN</code> lists, joins, or multi-row <code>INSERT</code> defeat pruning and fall back to scatter-gather or local execution. Cross-shard JOINs, aggregates and <code>ORDER BY</code> are <em>not</em> reconciled — scatter-gather concatenates rows without re-sorting or re-aggregating.</li>
+<li><strong>Shard-key extraction is textual.</strong> <code>shard.c</code> parses the shard key from raw SQL with a hand-written scanner, single quotes and simple <code>WHERE col = value</code> equality only. Parameterized queries, expressions, functions, <code>IN</code> lists, joins, or multi-row <code>INSERT</code> defeat pruning and fall back to scatter-gather or local execution. Cross-shard JOINs, aggregates and <code>ORDER BY</code> are <em>not</em> reconciled, scatter-gather concatenates rows without re-sorting or re-aggregating.</li>
 <li><strong>Raft is election-only.</strong> No replicated command log, no log-matching, and a leader lease that is effectively term-based. Durability of writes comes from the WAL stream and sync-commit, not from Raft log agreement.</li>
 <li><strong>Sync commit is server-wide.</strong> A single <code>EVOSQL_SYNC_COMMIT</code> switch with a 2&nbsp;s timeout and majority-of-active-slots quorum; no per-transaction control and no named quorum sets like PostgreSQL's <code>synchronous_standby_names</code>.</li>
-<li><strong>CDC payload is minimal.</strong> Events carry <code>op</code>, table, <code>xid</code>, a best-effort PK string and a timestamp — not full row images. The stream is one-way NDJSON.</li>
+<li><strong>CDC payload is minimal.</strong> Events carry <code>op</code>, table, <code>xid</code>, a best-effort PK string and a timestamp, not full row images. The stream is one-way NDJSON.</li>
 <li><strong>Internal forwarding is trusted.</strong> Cross-node query forwarding authenticates as <code>_dist_internal</code> with no password; the distributed port must not be exposed to untrusted networks.</li>
 <li><strong>Cluster ceilings.</strong> <code>RAFT_MAX_NODES</code> = 7, <code>DIST_MAX_NODES</code> = 7, <code>REPL_MAX_SLOTS</code> = 16, <code>CDC_MAX_SUBSCRIBERS</code> = 32.</li>
 </ul>
@@ -295,11 +295,11 @@ EVOSQL_PRIMARY_PORT=9968 \
 
 <h2 id="see-also">29.6. See also</h2>
 <ul>
-<li><a href="/3.0/ref/create-table/">CREATE TABLE</a> — <code>ON NODE</code>, <code>SHARD BY HASH</code>, <code>SHARD BY RANGE</code> table options.</li>
-<li><a href="/3.0/ref/show/">SHOW</a> — <code>REPLICATION STATUS</code>, <code>REPLICATION LAG</code>, <code>CLUSTER STATUS</code>, <code>NODES</code>, <code>SHARDS</code>, <code>TABLE PLACEMENT</code>.</li>
-<li><a href="/3.0/ref/create-subscription/">CREATE SUBSCRIPTION</a> — declarative logical-replication / CDC consumer surface.</li>
-<li><a href="/3.0/ref/select/">SELECT</a>, <a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, <a href="/3.0/ref/delete/">DELETE</a> — statements subject to shard pruning and distributed forwarding.</li>
-<li><a href="/3.0/ref/transaction/">Transactions</a> — interaction of <code>COMMIT</code> with synchronous replication.</li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a>, <code>ON NODE</code>, <code>SHARD BY HASH</code>, <code>SHARD BY RANGE</code> table options.</li>
+<li><a href="/3.0/ref/show/">SHOW</a>, <code>REPLICATION STATUS</code>, <code>REPLICATION LAG</code>, <code>CLUSTER STATUS</code>, <code>NODES</code>, <code>SHARDS</code>, <code>TABLE PLACEMENT</code>.</li>
+<li><a href="/3.0/ref/create-subscription/">CREATE SUBSCRIPTION</a>, declarative logical-replication / CDC consumer surface.</li>
+<li><a href="/3.0/ref/select/">SELECT</a>, <a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, <a href="/3.0/ref/delete/">DELETE</a>, statements subject to shard pruning and distributed forwarding.</li>
+<li><a href="/3.0/ref/transaction/">Transactions</a>, interaction of <code>COMMIT</code> with synchronous replication.</li>
 </ul>
 
 </main></div>

@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Go SDK — EvolutionDB</title>
+<title>Go SDK | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Go SDK</h1>
-<p class="lede">A cgo binding over <code>libevosql-memory</code> that gives Go programs an idiomatic <code>Conn</code> type, typed <code>*Error</code> returns, and the EvoSQL agent-memory primitives — talking to the server over the EVO text protocol.</p>
+<p class="lede">A cgo binding over <code>libevosql-memory</code> that gives Go programs an idiomatic <code>Conn</code> type, typed <code>*Error</code> returns, and the EvoSQL agent-memory primitives, talking to the server over the EVO text protocol.</p>
 
 <h2 id="what-it-does">What it does</h2>
 <p>The Go SDK (<code>go-evosql-memory</code>) is a thin, idiomatic wrapper around the C SDK <code>libevosql-memory</code>. It is <strong>not</strong> a pure-Go driver: the cgo layer links the C archive and forwards each call to the corresponding <code>evo_*</code> function in <code>evosql_memory.h</code>. On the wire it speaks the EVO text protocol (default port <code>9967</code>), the same protocol used by the <a href="/cli/">CLI client</a> and the <a href="/platform/mcp-server/">MCP server</a>.</p>
@@ -28,13 +28,13 @@
 </ul>
 <div class="callout callout-note">
 <span class="material-symbols-outlined">info</span>
-<div>Scope note: this binding wraps the connection, generic SQL, MEMORY STORE, CHECKPOINT STORE, and vector-format surfaces of the C SDK. The C header also exposes a LISTEN/NOTIFY and CDC subscription API (<code>evo_subscribe</code>, <code>evo_cdc_subscribe</code>, <code>evo_unsubscribe</code>), but the Go package does <strong>not</strong> bind those calls yet — use the C or another SDK for streaming.</div>
+<div>Scope note: this binding wraps the connection, generic SQL, MEMORY STORE, CHECKPOINT STORE, and vector-format surfaces of the C SDK. The C header also exposes a LISTEN/NOTIFY and CDC subscription API (<code>evo_subscribe</code>, <code>evo_cdc_subscribe</code>, <code>evo_unsubscribe</code>), but the Go package does <strong>not</strong> bind those calls yet, use the C or another SDK for streaming.</div>
 </div>
 
 <h2 id="install">Install</h2>
 <p>The module path is:</p>
 <div class="sig">github.com/alptekin/evolutiondb/client/go-evosql-memory</div>
-<p>The package requires <strong>cgo</strong> and the C archive <code>libevosql-memory.a</code> to be present at build time. Inside the monorepo the cgo directives use <code>${SRCDIR}</code> so the relative path resolves out of the box — just build the C SDK first:</p>
+<p>The package requires <strong>cgo</strong> and the C archive <code>libevosql-memory.a</code> to be present at build time. Inside the monorepo the cgo directives use <code>${SRCDIR}</code> so the relative path resolves out of the box, just build the C SDK first:</p>
 <pre><code><span class="c-com"># build the C SDK archive first</span>
 make -C ../libevosql-memory
 
@@ -55,7 +55,7 @@ go build ./...</code></pre>
 </div>
 
 <h2 id="configure">Configure (connection &amp; auth)</h2>
-<p>There are no environment variables for connecting — host, port, user, and password are passed directly to <code>Connect</code>. The default credentials on a fresh EvoSQL server are <code>admin</code> / <code>admin</code>, and the EVO text protocol listens on port <code>9967</code>.</p>
+<p>There are no environment variables for connecting: host, port, user, and password are passed directly to <code>Connect</code>. The default credentials on a fresh EvoSQL server are <code>admin</code> / <code>admin</code>, and the EVO text protocol listens on port <code>9967</code>.</p>
 <pre><code>c, err := evosql.<span class="c-fn">Connect</span>(<span class="c-str">"127.0.0.1"</span>, <span class="c-num">9967</span>, <span class="c-str">"admin"</span>, <span class="c-str">"admin"</span>)
 <span class="c-key">if</span> err != <span class="c-key">nil</span> { <span class="c-com">/* handle */</span> }
 <span class="c-key">defer</span> c.<span class="c-fn">Close</span>()</code></pre>
@@ -97,7 +97,7 @@ go build ./...</code></pre>
 }</code></pre>
 
 <h3>Generic SQL</h3>
-<p>For anything the typed helpers don't cover, use <code>Exec</code> (DML/DDL, returns the affected-row count) and <code>Query</code> (SELECT, returns rows of strings — the EVO wire format is text, so NULL columns come back as <code>""</code>).</p>
+<p>For anything the typed helpers don't cover, use <code>Exec</code> (DML/DDL, returns the affected-row count) and <code>Query</code> (SELECT, returns rows of strings: the EVO wire format is text, so NULL columns come back as <code>""</code>).</p>
 <pre><code>n, _ := c.<span class="c-fn">Exec</span>(<span class="c-str">"CREATE TABLE t (id INT, name VARCHAR(50))"</span>)
 
 rows, err := c.<span class="c-fn">Query</span>(<span class="c-str">"SELECT id, name FROM t"</span>)
@@ -124,7 +124,7 @@ lit := evosql.<span class="c-fn">FormatVector</span>(emb) <span class="c-com">//
 <p>Opens a connection to an EvoSQL server over the EVO text protocol. Returns <code>nil</code> and an <code>*Error</code> on failure. A finalizer is registered so the connection is released if you forget to <code>Close</code> it; the caller is still responsible for calling <code>Close</code> explicitly.</p>
 
 <div class="sig">func (c *Conn) Close() error</div>
-<p>Releases the connection. Idempotent — safe to call more than once and safe when invoked by the finalizer. Always returns <code>nil</code>.</p>
+<p>Releases the connection. Idempotent, safe to call more than once and safe when invoked by the finalizer. Always returns <code>nil</code>.</p>
 
 <div class="sig">func (c *Conn) Exec(sql string) (int, error)</div>
 <p>Runs a DML/DDL statement and returns the affected-row count. A negative C return code is translated into a typed <code>*Error</code>.</p>
@@ -153,15 +153,15 @@ lit := evosql.<span class="c-fn">FormatVector</span>(emb) <span class="c-com">//
 <h3 id="errors">Errors</h3>
 <p>Every fallible call returns a <code>*Error</code> (assignable to <code>error</code>). It carries:</p>
 <ul>
-<li><code>Kind ErrorKind</code> — one of <code>ErrGeneral</code>, <code>ErrConnect</code>, <code>ErrAuth</code>, <code>ErrProtocol</code>, <code>ErrSQL</code>, <code>ErrBuffer</code>, <code>ErrNotFound</code>, mapped from the C SDK return codes (<code>-2</code>…<code>-7</code>).</li>
-<li><code>Message string</code> — the human-readable message from the C SDK's thread-local last-error storage.</li>
-<li><code>SQLState string</code> — the SQLSTATE of the last error, or empty when there is none.</li>
+<li><code>Kind ErrorKind</code>, one of <code>ErrGeneral</code>, <code>ErrConnect</code>, <code>ErrAuth</code>, <code>ErrProtocol</code>, <code>ErrSQL</code>, <code>ErrBuffer</code>, <code>ErrNotFound</code>, mapped from the C SDK return codes (<code>-2</code>…<code>-7</code>).</li>
+<li><code>Message string</code>, the human-readable message from the C SDK's thread-local last-error storage.</li>
+<li><code>SQLState string</code>: the SQLSTATE of the last error, or empty when there is none.</li>
 </ul>
-<p><code>Error()</code> formats as <code>evosql sql &lt;state&gt;: &lt;message&gt;</code> when a SQLSTATE is present, otherwise <code>evosql: &lt;message&gt;</code>. Use a type assertion or <code>errors.As</code> to inspect <code>Kind</code> — for example, treating a missing row as a soft miss:</p>
+<p><code>Error()</code> formats as <code>evosql sql &lt;state&gt;: &lt;message&gt;</code> when a SQLSTATE is present, otherwise <code>evosql: &lt;message&gt;</code>. Use a type assertion or <code>errors.As</code> to inspect <code>Kind</code>: for example, treating a missing row as a soft miss:</p>
 <pre><code>val, err := c.<span class="c-fn">MemoryGet</span>(<span class="c-str">"go_demo"</span>, <span class="c-str">"users"</span>, <span class="c-str">"bob"</span>)
 <span class="c-key">var</span> e *evosql.Error
 <span class="c-key">if</span> errors.<span class="c-fn">As</span>(err, &amp;e) &amp;&amp; e.Kind == evosql.ErrNotFound {
-	<span class="c-com">// row absent — handle gracefully</span>
+	<span class="c-com">// row absent - handle gracefully</span>
 }</code></pre>
 
 <h2 id="notes">Notes &amp; limitations</h2>

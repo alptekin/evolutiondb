@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Python SDK — EvolutionDB</title>
+<title>Python SDK | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,21 +15,21 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Python SDK</h1>
-<p class="lede"><code>evosql_memory</code> — a Pythonic <code>ctypes</code> wrapper over the <code>libevosql-memory</code> shared library, plus thin duck-typed adapters for six agent frameworks (LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Mem0).</p>
+<p class="lede"><code>evosql_memory</code>, a Pythonic <code>ctypes</code> wrapper over the <code>libevosql-memory</code> shared library, plus thin duck-typed adapters for six agent frameworks (LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, Mem0).</p>
 
 <h2 id="what-it-does">What it does</h2>
-<p>The package gives Python apps and agents direct access to EvolutionDB's memory primitives — <code>MEMORY STORE</code>, <code>CHECKPOINT STORE</code>, <code>MESSAGE LOG</code>, <code>ENTITY STORE</code>, <code>DOCUMENT STORE</code> — over the native EVO wire protocol (default port <code>9967</code>). It is a binding, not a reimplementation: the C SDK (<a href="/platform/mcp-server/">see the platform packages</a> and the C SDK in the monorepo) already owns connection state, error handling, and the wire protocol; <code>evosql_memory</code> loads that shared library and exposes:</p>
+<p>The package gives Python apps and agents direct access to EvolutionDB's memory primitives, <code>MEMORY STORE</code>, <code>CHECKPOINT STORE</code>, <code>MESSAGE LOG</code>, <code>ENTITY STORE</code>, <code>DOCUMENT STORE</code>, over the native EVO wire protocol (default port <code>9967</code>). It is a binding, not a reimplementation: the C SDK (<a href="/platform/mcp-server/">see the platform packages</a> and the C SDK in the monorepo) already owns connection state, error handling, and the wire protocol; <code>evosql_memory</code> loads that shared library and exposes:</p>
 <ul>
-<li><code>Connection</code> — generic SQL (<code>exec_</code>, <code>query</code>) plus typed helpers for the memory and checkpoint stores.</li>
-<li><code>Subscription</code> — a background <code>LISTEN</code>/event stream with a Python callback bridged to the C callback, running on a C-owned worker thread.</li>
-<li><code>cdc_subscribe</code> — a CDC stream subscriber (same <code>Subscription</code> wrapper, different server-side endpoint).</li>
-<li><code>format_vector</code> — turns a Python float sequence into the EVO vector literal.</li>
+<li><code>Connection</code>, generic SQL (<code>exec_</code>, <code>query</code>) plus typed helpers for the memory and checkpoint stores.</li>
+<li><code>Subscription</code>, a background <code>LISTEN</code>/event stream with a Python callback bridged to the C callback, running on a C-owned worker thread.</li>
+<li><code>cdc_subscribe</code>, a CDC stream subscriber (same <code>Subscription</code> wrapper, different server-side endpoint).</li>
+<li><code>format_vector</code>, turns a Python float sequence into the EVO vector literal.</li>
 <li>Six adapter modules under <code>evosql_memory.adapters.*</code> that map each framework's memory interface onto these primitives.</li>
 </ul>
 <p>The package version (<code>evosql_memory.__version__</code>) is <code>1.0.0</code>.</p>
 
 <h2 id="install">Install</h2>
-<p>There is <strong>no packaging file</strong> (no <code>pyproject.toml</code>, <code>setup.py</code>, or <code>package.json</code>) and <strong>no PyPI distribution</strong> in the repo today — the package is consumed straight from the source tree. The only hard dependency is the C SDK shared library, <code>libevosql-memory.{dylib,so}</code>.</p>
+<p>There is <strong>no packaging file</strong> (no <code>pyproject.toml</code>, <code>setup.py</code>, or <code>package.json</code>) and <strong>no PyPI distribution</strong> in the repo today, the package is consumed straight from the source tree. The only hard dependency is the C SDK shared library, <code>libevosql-memory.{dylib,so}</code>.</p>
 <p>Build the shared library once, then put the package directory on <code>PYTHONPATH</code>:</p>
 <pre><code><span class="c-com"># 1. build the C SDK shared library</span>
 cd client/libevosql-memory
@@ -43,15 +43,15 @@ python3 client/python-evosql-memory/examples/react_agent_demo.py</code></pre>
 <h2 id="configure">Configure (library location &amp; auth)</h2>
 <p>At import time, <code>evosql_memory.core</code> searches for the shared library in this exact order and loads the first one that resolves:</p>
 <ol>
-<li><code>$EVOSQL_MEMORY_LIB</code> — an explicit path to the library (the override).</li>
-<li><code>../../libevosql-memory/build/libevosql-memory.{dylib,so}</code> — relative to the package directory, so a source checkout works with no env setup.</li>
-<li><code>libevosql-memory.{dylib,so}</code> — resolved through the system loader path (<code>DYLD_LIBRARY_PATH</code> / <code>LD_LIBRARY_PATH</code>, or after a system install).</li>
+<li><code>$EVOSQL_MEMORY_LIB</code>, an explicit path to the library (the override).</li>
+<li><code>../../libevosql-memory/build/libevosql-memory.{dylib,so}</code>: relative to the package directory, so a source checkout works with no env setup.</li>
+<li><code>libevosql-memory.{dylib,so}</code>, resolved through the system loader path (<code>DYLD_LIBRARY_PATH</code> / <code>LD_LIBRARY_PATH</code>, or after a system install).</li>
 </ol>
 <p>The extension is <code>dylib</code> on macOS (<code>platform.system() == "Darwin"</code>) and <code>so</code> elsewhere. If none load, import raises <code>OSError</code> telling you to set <code>EVOSQL_MEMORY_LIB</code> or build the SDK.</p>
-<p><strong>Auth.</strong> There is no config file or auth env var — credentials are passed positionally to <code>connect()</code> / <code>Connection</code> / <code>Subscription</code> as <code>(host, port, user, password)</code>. The examples and tests use <code>127.0.0.1</code>, port <code>9967</code>, user <code>admin</code>, password <code>admin</code>.</p>
+<p><strong>Auth.</strong> There is no config file or auth env var, credentials are passed positionally to <code>connect()</code> / <code>Connection</code> / <code>Subscription</code> as <code>(host, port, user, password)</code>. The examples and tests use <code>127.0.0.1</code>, port <code>9967</code>, user <code>admin</code>, password <code>admin</code>.</p>
 
 <h2 id="usage">Usage</h2>
-<p><strong>Quickstart — connect, create a store, put/get.</strong> <code>Connection</code> is a context manager:</p>
+<p><strong>Quickstart: connect, create a store, put/get.</strong> <code>Connection</code> is a context manager:</p>
 <pre><code><span class="c-key">from</span> evosql_memory <span class="c-key">import</span> connect
 
 <span class="c-key">with</span> connect(<span class="c-str">"127.0.0.1"</span>, <span class="c-str">9967</span>, <span class="c-str">"admin"</span>, <span class="c-str">"admin"</span>) <span class="c-key">as</span> conn:
@@ -78,7 +78,7 @@ n = conn.exec_(<span class="c-str">"NOTIFY my_chan, 'hello'"</span>)   <span cla
 <pre><code>conn.memory_put(<span class="c-str">"demo"</span>, <span class="c-str">"docs"</span>, <span class="c-str">"d1"</span>, <span class="c-str">'{"text":"hi"}'</span>,
                 embedding=[<span class="c-str">0.1</span>, <span class="c-str">0.2</span>, <span class="c-str">0.3</span>])</code></pre>
 
-<p><strong>Framework adapters.</strong> Each adapter is a thin (50–200 line) shim that mirrors a framework's interface. The package <em>never</em> imports the framework itself — duck-typed objects slot in because frameworks check for methods, not classes. Import only the one your stack needs:</p>
+<p><strong>Framework adapters.</strong> Each adapter is a thin (50–200 line) shim that mirrors a framework's interface. The package <em>never</em> imports the framework itself: duck-typed objects slot in because frameworks check for methods, not classes. Import only the one your stack needs:</p>
 <pre><code><span class="c-com"># LangGraph in a few lines</span>
 <span class="c-key">from</span> evosql_memory <span class="c-key">import</span> connect
 <span class="c-key">from</span> evosql_memory.adapters.langgraph_evosql <span class="c-key">import</span> EvoCheckpointSaver, EvoBaseStore
@@ -111,15 +111,15 @@ graph = workflow.compile(checkpointer=checkpointer, store=store)</code></pre>
 <p>CDC stream subscriber. Same <code>Subscription</code> wrapper as <code>Subscription(...)</code> but targets the server's CDC endpoint, starting from <code>from_lsn</code>. The callback signature is <code>(channel, payload, lsn)</code>.</p>
 
 <h3>class Connection</h3>
-<p>Wraps a single <code>libevosql-memory</code> connection. <strong>Not thread-safe</strong> — use one <code>Connection</code> per thread. Supports the context-manager protocol; <code>__del__</code> closes the handle if you forget.</p>
+<p>Wraps a single <code>libevosql-memory</code> connection. <strong>Not thread-safe</strong>, use one <code>Connection</code> per thread. Supports the context-manager protocol; <code>__del__</code> closes the handle if you forget.</p>
 <div class="sig">Connection(host: str, port: int, user: str, password: str)</div>
 <p>Opens the connection; raises <code>EvoError</code> / <code>EvoSqlError</code> if <code>evo_connect</code> fails.</p>
 <div class="sig">close() -&gt; None</div>
 <p>Closes the underlying handle (idempotent).</p>
 <div class="sig">exec_(sql: str) -&gt; int</div>
-<p>Runs DML/DDL. Returns the affected-row count (or 0). Raises <code>EvoSqlError</code> on a server-side failure. (Note the trailing underscore — <code>exec</code> avoids the Python builtin.)</p>
+<p>Runs DML/DDL. Returns the affected-row count (or 0). Raises <code>EvoSqlError</code> on a server-side failure. (Note the trailing underscore, <code>exec</code> avoids the Python builtin.)</p>
 <div class="sig">query(sql: str, max_rows: int = 256, max_cols: int = 32, col_buf_size: int = 4096) -&gt; List[List[str]]</div>
-<p>Runs a SELECT and returns rows; every cell is a string, NULL is <code>""</code>. The result buffer is allocated Python-side (<code>max_rows * max_cols * col_buf_size</code> bytes), so bump the sizes for larger results — over-sizing only costs RAM.</p>
+<p>Runs a SELECT and returns rows; every cell is a string, NULL is <code>""</code>. The result buffer is allocated Python-side (<code>max_rows * max_cols * col_buf_size</code> bytes), so bump the sizes for larger results, over-sizing only costs RAM.</p>
 <div class="sig">memory_put(store, ns, key, value_json, embedding: Optional[Sequence[float]] = None) -&gt; None</div>
 <p>Upserts a memory row. If <code>embedding</code> is supplied it is rendered with <code>format_vector</code> and stored alongside.</p>
 <div class="sig">memory_get(store, ns, key, buf_size: int = 32768) -&gt; str</div>
@@ -149,32 +149,32 @@ graph = workflow.compile(checkpointer=checkpointer, store=store)</code></pre>
 <p>Raised when the server returns <code>ERR &lt;sqlstate&gt; ...</code>; <code>sqlstate</code> is populated.</p>
 
 <h3>Framework adapters</h3>
-<p>Each module lives under <code>evosql_memory.adapters</code> and is independent — import the one you need. Constructors take a live <code>Connection</code> (and usually a store name); most accept <code>auto_create=True</code>, which <code>DROP</code>s and re-creates the backing store on construction.</p>
+<p>Each module lives under <code>evosql_memory.adapters</code> and is independent, import the one you need. Constructors take a live <code>Connection</code> (and usually a store name); most accept <code>auto_create=True</code>, which <code>DROP</code>s and re-creates the backing store on construction.</p>
 <table>
 <thead><tr><th>Module</th><th>Classes</th><th>Backing primitive(s)</th></tr></thead>
 <tbody>
 <tr><td><code>langgraph_evosql</code></td><td><code>EvoCheckpointSaver</code> (<code>put</code>/<code>get</code>/<code>list</code>), <code>EvoBaseStore</code> (<code>put</code>/<code>get</code>/<code>delete</code>/<code>search</code>, optional <code>embedding_dim</code>)</td><td>CHECKPOINT STORE, MEMORY STORE</td></tr>
 <tr><td><code>langchain_evosql</code></td><td><code>EvoChatMessageHistory</code>, <code>EvoVectorStoreRetrieverMemory</code>, <code>EvoConversationEntityMemory</code></td><td>MESSAGE LOG, MEMORY STORE (vector), ENTITY STORE</td></tr>
 <tr><td><code>llamaindex_evosql</code></td><td><code>EvoKVStore</code>, <code>EvoDocumentStore</code> (Mongo-style filter DSL), <code>EvoChatMemoryBuffer</code></td><td>MEMORY STORE, DOCUMENT STORE, MESSAGE LOG</td></tr>
-<tr><td><code>crewai_evosql</code></td><td><code>EvoCrewMemory</code> — STM (<code>stm_*</code>) + LTM (<code>ltm_*</code>) + entities</td><td>MEMORY STORE + CHECKPOINT STORE + ENTITY STORE</td></tr>
+<tr><td><code>crewai_evosql</code></td><td><code>EvoCrewMemory</code>, STM (<code>stm_*</code>) + LTM (<code>ltm_*</code>) + entities</td><td>MEMORY STORE + CHECKPOINT STORE + ENTITY STORE</td></tr>
 <tr><td><code>autogen_evosql</code></td><td><code>EvoAutoGenMemory</code> (<code>add</code>/<code>query</code>/<code>remove</code>/<code>clear</code>)</td><td>MEMORY STORE</td></tr>
-<tr><td><code>mem0_compat</code></td><td><code>Memory</code> — drop-in for <code>from mem0 import Memory</code> (<code>add</code>/<code>search</code>/<code>get</code>/<code>update</code>/<code>delete</code>/<code>history</code>)</td><td>MEMORY STORE</td></tr>
+<tr><td><code>mem0_compat</code></td><td><code>Memory</code>, drop-in for <code>from mem0 import Memory</code> (<code>add</code>/<code>search</code>/<code>get</code>/<code>update</code>/<code>delete</code>/<code>history</code>)</td><td>MEMORY STORE</td></tr>
 </tbody>
 </table>
 
 <h2 id="examples-tests">Examples &amp; tests</h2>
-<p><code>examples/react_agent_demo.py</code> runs a minimal LangGraph-style ReAct loop entirely on EvolutionDB — checkpoint per step, chat history per session, long-term memory keyed by question, and a real-time <code>NOTIFY</code> channel broadcasting each step. It does not require <code>langgraph</code> to be installed; start the server first (<code>docker compose up -d</code>), then <code>python3 client/python-evosql-memory/examples/react_agent_demo.py</code>.</p>
+<p><code>examples/react_agent_demo.py</code> runs a minimal LangGraph-style ReAct loop entirely on EvolutionDB: checkpoint per step, chat history per session, long-term memory keyed by question, and a real-time <code>NOTIFY</code> channel broadcasting each step. It does not require <code>langgraph</code> to be installed; start the server first (<code>docker compose up -d</code>), then <code>python3 client/python-evosql-memory/examples/react_agent_demo.py</code>.</p>
 <p><code>python_tests/test_adapters.py</code> is a self-contained runner (plain <code>assert</code> + a <code>run()</code> harness, no pytest) with eleven cases: connection, streaming, and one happy path per adapter. Each test drops and recreates its store on entry so the suite is re-runnable. It needs a live <code>evosql-server</code> on <code>127.0.0.1:9967</code>.</p>
 <pre><code>python3 client/python-evosql-memory/python_tests/test_adapters.py</code></pre>
 
 <h2 id="notes">Notes &amp; limitations</h2>
 <ul>
-<li><strong>Source-tree only.</strong> No <code>pip install</code>, no <code>pyproject.toml</code> / <code>setup.py</code>, no PyPI package — use <code>PYTHONPATH</code>. (The package landing page's <code>pip install python-evosql-memory</code> / <code>MemoryClient</code> snippet describes an aspirational API; the real entry points are <code>connect()</code> / <code>Connection</code>, with no <code>MemoryClient</code> class in the code today.)</li>
+<li><strong>Source-tree only.</strong> No <code>pip install</code>, no <code>pyproject.toml</code> / <code>setup.py</code>, no PyPI package, use <code>PYTHONPATH</code>. (The package landing page's <code>pip install python-evosql-memory</code> / <code>MemoryClient</code> snippet describes an aspirational API; the real entry points are <code>connect()</code> / <code>Connection</code>, with no <code>MemoryClient</code> class in the code today.)</li>
 <li><strong>Shared library required.</strong> Import fails with <code>OSError</code> if <code>libevosql-memory.{dylib,so}</code> cannot be located. Set <code>EVOSQL_MEMORY_LIB</code> or build the C SDK.</li>
-<li><strong>Threading.</strong> One <code>Connection</code> per thread (the C SDK contract). A single <code>Subscription</code> never re-enters its own callback (internal per-subscription mutex), but two subscriptions can fire callbacks in parallel — make callbacks safe for that.</li>
+<li><strong>Threading.</strong> One <code>Connection</code> per thread (the C SDK contract). A single <code>Subscription</code> never re-enters its own callback (internal per-subscription mutex), but two subscriptions can fire callbacks in parallel, make callbacks safe for that.</li>
 <li><strong>Results are text.</strong> <code>query()</code> returns strings; callers parse JSON / numbers themselves. Buffers are pre-allocated, so very large rows need larger <code>col_buf_size</code> / <code>buf_size</code>.</li>
 <li><strong>SQL is string-built.</strong> Adapters interpolate identifiers and values into SQL and escape single quotes (<code>'</code> → <code>''</code>); store names and other identifiers are not parameterized, so treat them as trusted.</li>
-<li><strong>Adapters are duck-typed shims</strong> against framework contracts, not the frameworks themselves — verify against your installed framework version. Several reference engine features tied to specific server tasks (MESSAGE LOG, DOCUMENT FILTER, ENTITY STORE); they require server support for those statements.</li>
+<li><strong>Adapters are duck-typed shims</strong> against framework contracts, not the frameworks themselves, verify against your installed framework version. Several reference engine features tied to specific server tasks (MESSAGE LOG, DOCUMENT FILTER, ENTITY STORE); they require server support for those statements.</li>
 </ul>
 <p>See also the <a href="/platform/mcp-server/">MCP server</a> for an agent-facing wrapper over the same primitives, and the <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a> for the EVO protocol and store reference.</p>
 </main></div>

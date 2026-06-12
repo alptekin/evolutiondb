@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>1. Getting Started — EvolutionDB 3.0</title>
+<title>1. Getting Started | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>1. Getting Started</h1>
-<p class="lede">Install EvolutionDB, start the server, connect with a client, and run your first <code>CREATE TABLE</code>, <code>INSERT</code>, and <code>SELECT</code> — in a few minutes, from one binary.</p>
+<p class="lede">Install EvolutionDB, start the server, connect with a client, and run your first <code>CREATE TABLE</code>, <code>INSERT</code>, and <code>SELECT</code>: in a few minutes, from one binary.</p>
 
 <p>EvolutionDB is a single-process SQL database engine written in C. One server speaks two protocols at once: the <b>PostgreSQL wire protocol</b> on TCP port <code>5433</code> (so <code>psql</code>, DBeaver, pgAdmin, and JDBC drivers connect unchanged) and a native <b>EVO text protocol</b> on TCP port <code>9967</code> (used by the bundled <code>evosql-cli</code> client). This chapter walks through getting a server running and executing your first statements against it. Later chapters cover the full SQL surface; here we stay deliberately small.</p>
 
@@ -28,9 +28,9 @@
 <p>The bundled <code>docker-compose.yml</code> publishes three ports and provisions a persistent named volume <code>evosql-data</code> mounted at <code>/data</code>, so your data survives container restarts. The ports are:</p>
 <dl class="params">
 <dt>5433</dt>
-<dd>PostgreSQL wire protocol — for <code>psql</code>, DBeaver, pgAdmin, JDBC.</dd>
+<dd>PostgreSQL wire protocol, for <code>psql</code>, DBeaver, pgAdmin, JDBC.</dd>
 <dt>9967</dt>
-<dd>Native EVO text protocol — for the bundled <code>evosql-cli</code>.</dd>
+<dd>Native EVO text protocol, for the bundled <code>evosql-cli</code>.</dd>
 <dt>9970</dt>
 <dd>CDC (change-data-capture) streaming as JSON Lines. You will not need this for a first session.</dd>
 </dl>
@@ -47,11 +47,11 @@
     -e EVOSQL_PASSWORD=mysecret evolutiondb/evolutiondb:latest</code></pre>
 
 <div class="callout">
-<b>About the default password.</b> Under the Compose file shipped in the repository, <code>EVOSQL_PASSWORD</code> is set to <code>admin</code>. If you remove or comment out that variable, the server generates a random password and prints it <i>once</i> at startup — capture it from the logs, because it is not stored anywhere you can read it back.
+<b>About the default password.</b> Under the Compose file shipped in the repository, <code>EVOSQL_PASSWORD</code> is set to <code>admin</code>. If you remove or comment out that variable, the server generates a random password and prints it <i>once</i> at startup: capture it from the logs, because it is not stored anywhere you can read it back.
 </div>
 
 <h3 id="install-source">1.1.2. Building from source</h3>
-<p>Building requires <b>GCC</b>, <b>Bison</b>, <b>Flex</b>, and <b>libreadline-dev</b> (for the CLI). TLS support additionally needs <b>libssl-dev</b>. Build all three components — the core engine, the dual-protocol server, and the CLI — with a bare <code>make</code>:</p>
+<p>Building requires <b>GCC</b>, <b>Bison</b>, <b>Flex</b>, and <b>libreadline-dev</b> (for the CLI). TLS support additionally needs <b>libssl-dev</b>. Build all three components: the core engine, the dual-protocol server, and the CLI, with a bare <code>make</code>:</p>
 <pre><code><span class="c-key">make</span>                  <span class="c-com"># core engine + adaptor + CLI</span>
 <span class="c-key">make</span> adaptor TLS=1    <span class="c-com"># build the server with OpenSSL TLS support</span></code></pre>
 <p>This produces the server at <code>adaptor/evosql-server</code>, the CLI at <code>cli/evosql-cli</code>, and the core engine at <code>evolution/evosql</code>. If you ever change the SQL grammar, regenerate the parser with <code>make generate</code> before rebuilding.</p>
@@ -77,7 +77,7 @@
 <dt>-u, --user USER</dt>
 <dd>Username (default <code>admin</code>).</dd>
 <dt>-W, --password PW</dt>
-<dd>Password — or set the <code>EVOSQL_PASSWORD</code> environment variable. If neither is given on an interactive run, you are prompted (with echo off).</dd>
+<dd>Password, or set the <code>EVOSQL_PASSWORD</code> environment variable. If neither is given on an interactive run, you are prompted (with echo off).</dd>
 <dt>-c, --command SQL</dt>
 <dd>Run a single SQL statement and exit (non-interactive).</dd>
 <dt>-f, --file FILE</dt>
@@ -121,7 +121,7 @@
 </div>
 
 <h2 id="first-statements">1.3. Your first table</h2>
-<p>The remaining examples assume an interactive <code>evosql-cli</code> session, but they run identically through <code>psql</code> — they are ordinary SQL. We will create a table, insert a few rows, and read them back.</p>
+<p>The remaining examples assume an interactive <code>evosql-cli</code> session, but they run identically through <code>psql</code>, they are ordinary SQL. We will create a table, insert a few rows, and read them back.</p>
 
 <h3 id="create-table">1.3.1. CREATE TABLE</h3>
 <p>Define a small table. Column types here are drawn from the integer, character, and boolean families that the engine implements:</p>
@@ -131,7 +131,7 @@
     price     <span class="c-key">DECIMAL</span>(10, 2),
     in_stock  <span class="c-key">BOOLEAN</span> <span class="c-key">DEFAULT</span> <span class="c-key">TRUE</span>
 );</code></pre>
-<p>EvolutionDB stores each record in its binary tuple format — a sentinel byte and table id, then a header, a null bitmap, and the column data. A column type code packs both a type family and a size; <code>VARCHAR(50)</code>, for instance, is encoded as <code>130050</code>. See <a href="/3.0/ref/create-table/">CREATE TABLE</a> for the full column-attribute, constraint, and table-option grammar.</p>
+<p>EvolutionDB stores each record in its binary tuple format: a sentinel byte and table id, then a header, a null bitmap, and the column data. A column type code packs both a type family and a size; <code>VARCHAR(50)</code>, for instance, is encoded as <code>130050</code>. See <a href="/3.0/ref/create-table/">CREATE TABLE</a> for the full column-attribute, constraint, and table-option grammar.</p>
 <p>A few of the data types you will reach for first:</p>
 <table>
 <thead><tr><th>Type</th><th>Use for</th></tr></thead>
@@ -177,15 +177,15 @@
 <h2 id="where-next">1.4. Where to go next</h2>
 <p>You now have a working server, a connection, and a table you created, populated, and queried. From here:</p>
 <ul>
-<li>Build richer schemas with constraints, indexes, and defaults — see <a href="/3.0/ref/create-table/">CREATE TABLE</a> and <a href="/3.0/ref/create-index/">CREATE INDEX</a>.</li>
+<li>Build richer schemas with constraints, indexes, and defaults, see <a href="/3.0/ref/create-table/">CREATE TABLE</a> and <a href="/3.0/ref/create-index/">CREATE INDEX</a>.</li>
 <li>Modify data with <a href="/3.0/ref/update/">UPDATE</a> and <a href="/3.0/ref/delete/">DELETE</a>, wrapped in <a href="/3.0/ref/transaction/">transactions</a> with savepoints.</li>
-<li>Explore the agent-memory objects that distinguish EvolutionDB — <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a> (vector search), <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>, and reactive <a href="/3.0/ref/listen-notify/">LISTEN / NOTIFY</a> push.</li>
+<li>Explore the agent-memory objects that distinguish EvolutionDB, <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a> (vector search), <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>, and reactive <a href="/3.0/ref/listen-notify/">LISTEN / NOTIFY</a> push.</li>
 </ul>
 
 <div class="callout">
 <b>Notes and limitations.</b>
 <ul>
-<li><b>Two ports, one server.</b> The PostgreSQL protocol lives on <code>5433</code> and the native EVO protocol on <code>9967</code> — they are not interchangeable. Point <code>psql</code>/JDBC at <code>5433</code> and <code>evosql-cli</code> at <code>9967</code>.</li>
+<li><b>Two ports, one server.</b> The PostgreSQL protocol lives on <code>5433</code> and the native EVO protocol on <code>9967</code>, they are not interchangeable. Point <code>psql</code>/JDBC at <code>5433</code> and <code>evosql-cli</code> at <code>9967</code>.</li>
 <li><b>Authentication mode is fixed.</b> The wire protocol always uses CleartextPassword; there is no MD5/SCRAM negotiation as in stock PostgreSQL. Use TLS on untrusted links.</li>
 <li><b>Single storage file, global state.</b> The engine keeps all data in one page-based file and serializes query execution behind a lock for thread safety; it is a single-process server, not a multi-node cluster.</li>
 <li><b>Catalog is emulated, not complete.</b> Enough of <code>pg_catalog</code> / <code>information_schema</code> is faked for common GUI tools to introspect schemas; do not assume full PostgreSQL system-catalog fidelity.</li>

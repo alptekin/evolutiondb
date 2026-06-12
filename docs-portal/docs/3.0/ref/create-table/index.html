@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE TABLE — EvolutionDB 3.0</title>
+<title>CREATE TABLE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE TABLE</h1>
-<p class="lede">Define a new base table — its columns, types, per-column attributes, and table-level constraints — in the current schema, or populate one from a query result.</p>
+<p class="lede">Define a new base table: its columns, types, per-column attributes, and table-level constraints: in the current schema, or populate one from a query result.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -107,7 +107,7 @@
 <dt>DEFAULT <i>value</i></dt>
 <dd>Supplies a default value used when an <code>INSERT</code> omits the column. The value may be a string, integer, float, or boolean literal. Function defaults <code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code>, and the special value <code>CURRENT_TIMESTAMP</code> are recognized, as is a parenthesized expression default <code>DEFAULT ( <i>expr</i> )</code>.</dd>
 
-<dt>AUTO_INCREMENT [ ( <i>start</i> [ , <i>increment</i> ] ) ] / IDENTITY [ ( <i>start</i> [ , <i>increment</i> ] ) ]</dt>
+<dt>AUTO_INCREMENT [ ( <i>start</i> [, <i>increment</i> ] ) ] / IDENTITY [ ( <i>start</i> [, <i>increment</i> ] ) ]</dt>
 <dd>Auto-assigns increasing integer values for the column. With no arguments the sequence starts at 1 and increments by 1; an explicit start and optional increment may be given. <code>IDENTITY</code> is an alias for the same mechanism.</dd>
 
 <dt>PRIMARY KEY / KEY (column attribute)</dt>
@@ -125,31 +125,31 @@
 <dt>GENERATED ALWAYS AS ( <i>expr</i> ) [ STORED | VIRTUAL ] / AS ( <i>expr</i> ) [ STORED | VIRTUAL ]</dt>
 <dd>Defines a generated column whose value is computed from <i>expr</i>. <code>STORED</code> persists the computed value; <code>VIRTUAL</code> (the default when neither keyword is given) computes it on read.</dd>
 
-<dt>CONSTRAINT <i>name</i> ...</dt>
+<dt>CONSTRAINT <i>name</i>..</dt>
 <dd>Assigns an explicit name to a <code>UNIQUE</code>, <code>PRIMARY KEY</code>, <code>CHECK</code>, or <code>FOREIGN KEY</code> constraint, whether written inline or at the table level. Unnamed CHECK constraints are auto-named <code><i>table</i>_check_<i>n</i></code>.</dd>
 
-<dt>PRIMARY KEY ( <i>column</i> [ , ... ] ) (table constraint)</dt>
+<dt>PRIMARY KEY ( <i>column</i> [.. ] ) (table constraint)</dt>
 <dd>Declares one or more columns as the primary key. Supports composite keys.</dd>
 
-<dt>UNIQUE ( <i>column</i> [ , ... ] ) (table constraint)</dt>
+<dt>UNIQUE ( <i>column</i> [.. ] ) (table constraint)</dt>
 <dd>Declares a (possibly multi-column) uniqueness constraint.</dd>
 
-<dt>FOREIGN KEY ( <i>column</i> [ , ... ] ) REFERENCES [ <i>schema</i>. ]<i>ref_table</i> ( <i>ref_column</i> [ , ... ] ) [ <i>fk_action</i> ... ]</dt>
+<dt>FOREIGN KEY ( <i>column</i> [.. ] ) REFERENCES [ <i>schema</i>. ]<i>ref_table</i> ( <i>ref_column</i> [.. ] ) [ <i>fk_action</i>.. ]</dt>
 <dd>Declares a referential integrity constraint linking local columns to columns in <i>ref_table</i> (optionally in another schema). Referential actions are configured with the <code>fk_action</code> clauses below.</dd>
 
-<dt>fk_action — ON DELETE / ON UPDATE { CASCADE | SET NULL | RESTRICT | SET DEFAULT | NO ACTION }</dt>
+<dt>fk_action, ON DELETE / ON UPDATE { CASCADE | SET NULL | RESTRICT | SET DEFAULT | NO ACTION }</dt>
 <dd>Selects the action applied to referencing rows when the referenced row is deleted or updated.</dd>
 
-<dt>fk_action — MATCH { FULL | SIMPLE | PARTIAL }</dt>
+<dt>fk_action, MATCH { FULL | SIMPLE | PARTIAL }</dt>
 <dd>Sets the match semantics for composite foreign keys.</dd>
 
-<dt>fk_action — [ NOT ] DEFERRABLE [ INITIALLY { DEFERRED | IMMEDIATE } ]</dt>
+<dt>fk_action, [ NOT ] DEFERRABLE [ INITIALLY { DEFERRED | IMMEDIATE } ]</dt>
 <dd>Controls whether constraint checking can be deferred to transaction commit, and the initial check timing.</dd>
 
-<dt>KEY / INDEX ( <i>column</i> [ , ... ] )</dt>
+<dt>KEY / INDEX ( <i>column</i> [.. ] )</dt>
 <dd>Requests an index on the listed columns as part of the table definition. <code>INDEX</code> and <code>KEY</code> are accepted as synonyms in this position.</dd>
 
-<dt>FULLTEXT { INDEX | KEY } ( <i>column</i> [ , ... ] )</dt>
+<dt>FULLTEXT { INDEX | KEY } ( <i>column</i> [.. ] )</dt>
 <dd>Requests a full-text index on the listed columns.</dd>
 
 <dt>AUTO_INCREMENT [ = ] <i>n</i> (table option)</dt>
@@ -158,7 +158,7 @@
 <dt>ON COMMIT { DELETE ROWS | PRESERVE ROWS } (table option)</dt>
 <dd>For temporary tables, chooses whether rows are deleted or preserved at transaction commit.</dd>
 
-<dt>SHARD BY HASH ( <i>column</i> ) SHARDS <i>n</i> / SHARD BY RANGE ( <i>column</i> ) ( ... )</dt>
+<dt>SHARD BY HASH ( <i>column</i> ) SHARDS <i>n</i> / SHARD BY RANGE ( <i>column</i> ) (.. )</dt>
 <dd>Distributes the table across <i>n</i> hash shards on <i>column</i>, or across explicit value ranges. Each range shard is written as <code>SHARD <i>name</i> VALUES LESS THAN { '<i>value</i>' | MAXVALUE } ON NODE <i>id</i></code>.</dd>
 
 <dt>PARTITION BY RANGE ( <i>column</i> ) (table option)</dt>

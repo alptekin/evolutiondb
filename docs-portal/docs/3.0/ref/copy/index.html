@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>COPY — EvolutionDB 3.0</title>
+<title>COPY | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,13 +15,13 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>COPY</h1>
-<p class="lede">COPY — bulk-transfer rows between a table and a file or client stream in CSV or TEXT format.</p>
+<p class="lede">COPY, bulk-transfer rows between a table and a file or client stream in CSV or TEXT format.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
-COPY <span class="opt">table_name</span> <span class="opt">[ ( <span class="opt">column_name</span> [, ...] ) ]</span><br/>
+COPY <span class="opt">table_name</span> <span class="opt">[ ( <span class="opt">column_name</span> [..] ) ]</span><br/>
 &nbsp;&nbsp;&nbsp;&nbsp;{ FROM | TO } { <span class="opt">'filename'</span> | STDIN | STDOUT }<br/>
-&nbsp;&nbsp;&nbsp;&nbsp;<span class="opt">[ [ WITH ] ( <var>option</var> [, ...] ) ]</span>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="opt">[ [ WITH ] ( <var>option</var> [..] ) ]</span>
 
 <br/><br/>where <var>option</var> is one of:<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;FORMAT { CSV | TEXT }<br/>
@@ -48,16 +48,16 @@ COPY <span class="opt">table_name</span> <span class="opt">[ ( <span class="opt"
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>table_name</dt>
-<dd>The name of an existing table to copy into (<code>FROM</code>) or out of (<code>TO</code>). A target table is always required; <code>COPY (query) TO</code> is not supported in this grammar — only a table name may follow <code>COPY</code>.</dd>
+<dd>The name of an existing table to copy into (<code>FROM</code>) or out of (<code>TO</code>). A target table is always required; <code>COPY (query) TO</code> is not supported in this grammar, only a table name may follow <code>COPY</code>.</dd>
 
-<dt>( column_name [, ...] )</dt>
+<dt>( column_name [..] )</dt>
 <dd>An optional list of columns. On <code>COPY FROM</code>, it states which columns the incoming fields map to and in what order. When omitted, all columns of the table are assumed in their declared order.</dd>
 
 <dt>FROM</dt>
-<dd>Specifies that data flows <em>into</em> the table — an import. Pair with <code>'filename'</code> or <code>STDIN</code>.</dd>
+<dd>Specifies that data flows <em>into</em> the table, an import. Pair with <code>'filename'</code> or <code>STDIN</code>.</dd>
 
 <dt>TO</dt>
-<dd>Specifies that data flows <em>out of</em> the table — an export. Pair with <code>'filename'</code> or <code>STDOUT</code>.</dd>
+<dd>Specifies that data flows <em>out of</em> the table, an export. Pair with <code>'filename'</code> or <code>STDOUT</code>.</dd>
 
 <dt>'filename'</dt>
 <dd>The absolute path of the server-side file to read from or write to. On export the file is opened for writing (truncated/created); on import it is opened for reading. The path must be absolute and free of <code>..</code> components.</dd>

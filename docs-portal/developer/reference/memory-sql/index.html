@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Memory &amp; Entity SQL — EvolutionDB</title>
+<title>Memory &amp; Entity SQL | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Memory &amp; Entity SQL</h1>
-<p class="lede">EvolutionDB ships two purpose-built SQL surfaces for agent memory: <strong>MEMORY stores</strong> — a namespaced JSON key/value store with optional vector embeddings for semantic search — and <strong>ENTITY stores</strong> — a key/summary/facts store that tracks how often each entity is mentioned. Both are thin SQL skins over ordinary tables: every statement compiles down to the engine's regular INSERT / SELECT / DELETE path, so RLS policies, MVCC, triggers, and FK cascade all apply unchanged.</p>
+<p class="lede">EvolutionDB ships two purpose-built SQL surfaces for agent memory: <strong>MEMORY stores</strong>, a namespaced JSON key/value store with optional vector embeddings for semantic search, and <strong>ENTITY stores</strong>, a key/summary/facts store that tracks how often each entity is mentioned. Both are thin SQL skins over ordinary tables: every statement compiles down to the engine's regular INSERT / SELECT / DELETE path, so RLS policies, MVCC, triggers, and FK cascade all apply unchanged.</p>
 
 <h2 id="overview">How it works</h2>
 <p>A MEMORY store named <code>foo</code> is backed by a regular table named <code>mem_foo</code>; an ENTITY store named <code>bar</code> is backed by <code>ent_bar</code>. The store itself is registered in the system catalog, and the backing table is created in the current schema. Because the backing object is a normal table, you can attach policies and triggers to it through the dedicated <code>ON MEMORY STORE</code> grammar, and everything a hand-written DML statement supports works here too.</p>
@@ -31,13 +31,13 @@ CREATE MEMORY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 </div>
 <p>The backing table columns are:</p>
 <ul>
-<li><code>mem_namespace</code> — VARCHAR(255) NOT NULL</li>
-<li><code>mem_key</code> — VARCHAR(255) NOT NULL</li>
-<li><code>pk</code> — VARCHAR(512) PRIMARY KEY (composite <code>namespace</code> + separator + <code>key</code>)</li>
-<li><code>mem_value</code> — JSON</li>
-<li><code>embedding</code> — VECTOR(N) <em>(only present when <code>embedding_dim</code> &gt; 0)</em></li>
-<li><code>created_at</code> — TIMESTAMP</li>
-<li><code>ttl_at</code> — TIMESTAMP (nullable, NULL by default)</li>
+<li><code>mem_namespace</code>, VARCHAR(255) NOT NULL</li>
+<li><code>mem_key</code>, VARCHAR(255) NOT NULL</li>
+<li><code>pk</code>, VARCHAR(512) PRIMARY KEY (composite <code>namespace</code> + separator + <code>key</code>)</li>
+<li><code>mem_value</code>, JSON</li>
+<li><code>embedding</code>, VECTOR(N) <em>(only present when <code>embedding_dim</code> &gt; 0)</em></li>
+<li><code>created_at</code>, TIMESTAMP</li>
+<li><code>ttl_at</code>: TIMESTAMP (nullable, NULL by default)</li>
 </ul>
 <p>When <code>embedding_dim</code> is 0 (the default), the embedding column is omitted entirely and the store is a pure JSON KV table. Valid <code>distance</code> values are <code>'cosine'</code> (default), <code>'l2'</code>, <code>'inner'</code> / <code>'ip'</code>, and <code>'l1'</code>; any unrecognized value falls back to cosine.</p>
 <pre><code><span class="c-com">-- pure JSON key/value store</span>
@@ -48,7 +48,7 @@ CREATE MEMORY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 
 <span class="c-key">CREATE MEMORY STORE</span> agent_notes <span class="c-key">IF NOT EXISTS</span>;</code></pre>
 <div class="callout callout-warn">
-<p>The grammar token sequence is literally <code>CREATE MEMORY STORE IF EXISTS name</code>, but it is emitted as <em>IF NOT EXISTS</em> semantics — when the store already exists the statement is a silent no-op rather than an error.</p>
+<p>The grammar token sequence is literally <code>CREATE MEMORY STORE IF EXISTS name</code>, but it is emitted as <em>IF NOT EXISTS</em> semantics, when the store already exists the statement is a silent no-op rather than an error.</p>
 </div>
 
 <h2 id="drop-memory-store">DROP MEMORY STORE</h2>
@@ -112,9 +112,9 @@ MEMORY DELETE FROM <span class="c-key">name</span> WHERE NS = '<span class="c-st
 </div>
 <pre><code><span class="c-key">MEMORY DELETE FROM</span> agent_notes
 &nbsp;&nbsp;<span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'fav_color'</span>;</code></pre>
-<p>Internally this emits <code>DELETE FROM mem_&lt;name&gt; WHERE pk = '&lt;ns&gt;\x1E&lt;key&gt;'</code> and runs it through the standard delete path. That means any RLS policy attached to the backing table is enforced — this is what makes <code>MEMORY DELETE</code> multi-tenant safe. The composite key uses Record Separator (0x1E) as the namespace/key joiner internally; you never write that byte yourself.</p>
+<p>Internally this emits <code>DELETE FROM mem_&lt;name&gt; WHERE pk = '&lt;ns&gt;\x1E&lt;key&gt;'</code> and runs it through the standard delete path. That means any RLS policy attached to the backing table is enforced, this is what makes <code>MEMORY DELETE</code> multi-tenant safe. The composite key uses Record Separator (0x1E) as the namespace/key joiner internally; you never write that byte yourself.</p>
 <div class="callout callout-note">
-<p>Both <code>NS</code> and <code>KEY</code> are mandatory in the DELETE grammar. There is no "delete a whole namespace" form on this surface — DELETE always targets exactly one <code>(namespace, key)</code> row. To clear a namespace, list its keys and delete them one by one, or operate on the <code>mem_&lt;name&gt;</code> backing table directly with ordinary SQL.</p>
+<p>Both <code>NS</code> and <code>KEY</code> are mandatory in the DELETE grammar. There is no "delete a whole namespace" form on this surface, DELETE always targets exactly one <code>(namespace, key)</code> row. To clear a namespace, list its keys and delete them one by one, or operate on the <code>mem_&lt;name&gt;</code> backing table directly with ordinary SQL.</p>
 </div>
 
 <h2 id="memory-list-namespaces">MEMORY LIST NAMESPACES</h2>
@@ -134,11 +134,11 @@ DROP ENTITY STORE <span class="c-key">name</span> [ IF EXISTS ]
 </div>
 <p>The backing table columns are:</p>
 <ul>
-<li><code>entity_key</code> — VARCHAR(255) PRIMARY KEY NOT NULL</li>
-<li><code>summary</code> — VARCHAR(8000)</li>
-<li><code>facts</code> — VARCHAR(8000) (JSON-shaped string)</li>
-<li><code>mention_count</code> — INT NOT NULL</li>
-<li><code>last_seen</code> — TIMESTAMP NOT NULL</li>
+<li><code>entity_key</code>, VARCHAR(255) PRIMARY KEY NOT NULL</li>
+<li><code>summary</code>, VARCHAR(8000)</li>
+<li><code>facts</code>, VARCHAR(8000) (JSON-shaped string)</li>
+<li><code>mention_count</code>, INT NOT NULL</li>
+<li><code>last_seen</code>, TIMESTAMP NOT NULL</li>
 </ul>
 <pre><code><span class="c-key">CREATE ENTITY STORE</span> people;
 <span class="c-key">CREATE ENTITY STORE</span> people <span class="c-key">IF NOT EXISTS</span>;
@@ -154,7 +154,7 @@ ENTITY PUT INTO <span class="c-key">name</span> VALUES ( '<span class="c-str">ke
 
 <span class="c-key">ENTITY PUT INTO</span> people
 &nbsp;&nbsp;<span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">'Lead engineer'</span>, <span class="c-str">'{"team":"storage","tz":"UTC+3"}'</span>);</code></pre>
-<p>Unlike <code>MEMORY PUT</code>, all three positional arguments are plain string literals — there is no <code>NULL</code> keyword form on the entity surface (omit the third argument to leave <code>facts</code> NULL).</p>
+<p>Unlike <code>MEMORY PUT</code>, all three positional arguments are plain string literals, there is no <code>NULL</code> keyword form on the entity surface (omit the third argument to leave <code>facts</code> NULL).</p>
 
 <h3 id="entity-get">ENTITY GET</h3>
 <p>Fetches a single entity by exact key.</p>
@@ -194,16 +194,16 @@ ENTITY RANK FROM <span class="c-key">name</span> [ LIMIT <span class="c-key">n</
 CREATE MEMORY STORE name [IF NOT EXISTS] [WITH (embedding_dim = N [, distance = 'cosine|l2|inner|ip|l1'])]
 DROP MEMORY STORE name [CASCADE] | DROP MEMORY STORE IF EXISTS name
 MEMORY PUT INTO name VALUES ('ns', 'key', value|NULL [, 'embedding'])
-MEMORY GET FROM name WHERE NS = '..' AND KEY = '..'
+MEMORY GET FROM name WHERE NS = '.' AND KEY = '.'
 MEMORY SEARCH name USING VECTOR 'query' [LIMIT k]
-MEMORY DELETE FROM name WHERE NS = '..' AND KEY = '..'
+MEMORY DELETE FROM name WHERE NS = '.' AND KEY = '.'
 MEMORY LIST NAMESPACES IN name [PREFIX 'prefix']
 
 <span class="c-com">-- Entity store</span>
 CREATE ENTITY STORE name [IF NOT EXISTS]
 DROP ENTITY STORE name [IF EXISTS]
 ENTITY PUT INTO name VALUES ('key', 'summary' [, 'facts'])
-ENTITY GET FROM name WHERE KEY = '..'
+ENTITY GET FROM name WHERE KEY = '.'
 ENTITY RANK FROM name [LIMIT n]
 </div>
 </main></div>

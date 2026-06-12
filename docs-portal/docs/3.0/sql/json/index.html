@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>13. JSON — EvolutionDB 3.0</title>
+<title>13. JSON | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -20,12 +20,12 @@
 <p>This chapter documents the <code>JSON</code> data type and every JSON operation that EvolutionDB actually implements. The engine's JSON support is a self-contained, allocation-light implementation built around a recursive-descent parser; it follows the <strong>MySQL</strong> function set and the MySQL <code>$.path</code> expression syntax rather than the PostgreSQL <code>json</code>/<code>jsonb</code> operator set or the SQL/JSON standard. Where the behaviour diverges from those systems, the difference is called out explicitly so you are never surprised.</p>
 
 <div class="callout">
-<strong>At a glance.</strong> EvolutionDB JSON is <em>text-backed</em>: a <code>JSON</code> column holds the original document bytes, validated on write. There is no binary/decomposed storage form, no path indexing, and no in-place document mutation — the transformation functions return a new string. If you have used MySQL's JSON functions, the surface here will feel familiar; if you have used PostgreSQL <code>jsonb</code>, expect a different operator vocabulary.
+<strong>At a glance.</strong> EvolutionDB JSON is <em>text-backed</em>: a <code>JSON</code> column holds the original document bytes, validated on write. There is no binary/decomposed storage form, no path indexing, and no in-place document mutation, the transformation functions return a new string. If you have used MySQL's JSON functions, the surface here will feel familiar; if you have used PostgreSQL <code>jsonb</code>, expect a different operator vocabulary.
 </div>
 
 <h2 id="type">13.1. The <code>JSON</code> Data Type</h2>
 
-<p>EvolutionDB provides a single JSON type, declared as either <code>JSON</code> or <code>JSONB</code>. Both spellings are accepted by the parser and resolve to the <em>same</em> type — there is no separate binary representation, so <code>JSONB</code> is purely an alias for compatibility with tooling that emits it.</p>
+<p>EvolutionDB provides a single JSON type, declared as either <code>JSON</code> or <code>JSONB</code>. Both spellings are accepted by the parser and resolve to the <em>same</em> type: there is no separate binary representation, so <code>JSONB</code> is purely an alias for compatibility with tooling that emits it.</p>
 
 <table>
 <thead><tr><th>Property</th><th>Value</th></tr></thead>
@@ -56,7 +56,7 @@
 <p>See <a href="/3.0/ref/create-table">CREATE TABLE</a> for column declaration and <a href="/3.0/ref/insert">INSERT</a> for write semantics.</p>
 
 <div class="callout">
-<strong>Validation grammar.</strong> The parser accepts standard JSON: objects, arrays, strings (with <code>\" \\ \/ \b \f \n \r \t</code> and <code>\uXXXX</code> escapes), numbers (optional sign, integer/fraction/exponent), and the literals <code>true</code>, <code>false</code>, <code>null</code>. Leading-zero integers, control characters inside strings, and depth beyond 64 levels are rejected. Unlike PostgreSQL <code>jsonb</code>, duplicate object keys are <em>not</em> de-duplicated or reordered — the document is stored verbatim, so key order and whitespace are preserved.
+<strong>Validation grammar.</strong> The parser accepts standard JSON: objects, arrays, strings (with <code>\" \\ \/ \b \f \n \r \t</code> and <code>\uXXXX</code> escapes), numbers (optional sign, integer/fraction/exponent), and the literals <code>true</code>, <code>false</code>, <code>null</code>. Leading-zero integers, control characters inside strings, and depth beyond 64 levels are rejected. Unlike PostgreSQL <code>jsonb</code>, duplicate object keys are <em>not</em> de-duplicated or reordered: the document is stored verbatim, so key order and whitespace are preserved.
 </div>
 
 <h2 id="path">13.2. Path Expressions</h2>
@@ -176,7 +176,7 @@
 </code></pre>
 
 <div class="callout">
-<strong>Single-key limitation on modification.</strong> <code>JSON_SET</code>, <code>JSON_INSERT</code>, <code>JSON_REPLACE</code>, and <code>JSON_REMOVE</code> operate on <em>top-level object keys only</em>. The document must be an object, and the path must be a single <code>$.key</code> step — nested paths (<code>$.a.b</code>) and array indexes (<code>$.a[0]</code>) are rejected. This is a deliberate simplification; MySQL's equivalents accept arbitrary paths and multiple path/value pairs. <code>JSON_SEARCH</code> matches only string values (numbers, booleans, and <code>null</code> are skipped) and requires an exact, full-string match rather than a <code>LIKE</code> pattern.
+<strong>Single-key limitation on modification.</strong> <code>JSON_SET</code>, <code>JSON_INSERT</code>, <code>JSON_REPLACE</code>, and <code>JSON_REMOVE</code> operate on <em>top-level object keys only</em>. The document must be an object, and the path must be a single <code>$.key</code> step, nested paths (<code>$.a.b</code>) and array indexes (<code>$.a[0]</code>) are rejected. This is a deliberate simplification; MySQL's equivalents accept arbitrary paths and multiple path/value pairs. <code>JSON_SEARCH</code> matches only string values (numbers, booleans, and <code>null</code> are skipped) and requires an exact, full-string match rather than a <code>LIKE</code> pattern.
 </div>
 
 <h2 id="errors">13.7. Error Reference</h2>

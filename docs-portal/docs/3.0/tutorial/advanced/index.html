@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>3. Advanced Features — EvolutionDB 3.0</title>
+<title>3. Advanced Features | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -20,12 +20,12 @@
 <p>The earlier chapters covered creating tables and running queries. This chapter is a tutorial for the parts of EvolutionDB that make it more than a single-file SQL engine: multi-version transactions, the index types you can build on a table, and the vector / memory features aimed at AI-agent workloads. Every example below runs against a live server; connect with the CLI client (<code>evosql-cli</code>) or any PostgreSQL wire-protocol client on port 5433. Where behaviour diverges from PostgreSQL or the SQL standard, the text says so plainly rather than implying parity.</p>
 
 <div class="callout">
-<p><strong>About this chapter.</strong> The features here are described as implemented, including their version-1 limitations. Several subsystems — notably the HNSW vector index and the agent-memory <code>SEARCH</code> path — carry caveats that are documented inline. Read the "Notes" callouts before depending on a feature in production.</p>
+<p><strong>About this chapter.</strong> The features here are described as implemented, including their version-1 limitations. Several subsystems, notably the HNSW vector index and the agent-memory <code>SEARCH</code> path, carry caveats that are documented inline. Read the "Notes" callouts before depending on a feature in production.</p>
 </div>
 
 <h2 id="transactions">3.1. Transactions and MVCC</h2>
 
-<p>EvolutionDB uses <strong>Multi-Version Concurrency Control (MVCC)</strong>. Instead of locking rows for readers, each modified row carries the transaction that created it and the transaction that deleted it; a query sees a consistent <em>snapshot</em> of the database and skips rows that were not yet committed — or were already deleted — as of that snapshot. This is the same family of mechanism PostgreSQL uses, and the visibility rules are deliberately PostgreSQL-style.</p>
+<p>EvolutionDB uses <strong>Multi-Version Concurrency Control (MVCC)</strong>. Instead of locking rows for readers, each modified row carries the transaction that created it and the transaction that deleted it; a query sees a consistent <em>snapshot</em> of the database and skips rows that were not yet committed, or were already deleted, as of that snapshot. This is the same family of mechanism PostgreSQL uses, and the visibility rules are deliberately PostgreSQL-style.</p>
 
 <h3 id="xid">3.1.1. Transaction IDs and the commit log</h3>
 
@@ -59,7 +59,7 @@
 
 <dl class="params">
 <dt>READ UNCOMMITTED</dt>
-<dd>Accepted, but treated like READ COMMITTED — EvolutionDB never exposes uncommitted rows.</dd>
+<dd>Accepted, but treated like READ COMMITTED, EvolutionDB never exposes uncommitted rows.</dd>
 <dt>READ COMMITTED <em>(default)</em></dt>
 <dd>A new snapshot is taken at the start of <em>each statement</em>, so a transaction sees rows committed by others between its own statements.</dd>
 <dt>REPEATABLE READ</dt>
@@ -69,7 +69,7 @@
 </dl>
 
 <div class="callout">
-<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL's SERIALIZABLE uses fully optimistic Serializable Snapshot Isolation that allows wide concurrency and may abort a transaction at commit. EvolutionDB's SERIALIZABLE is stricter operationally — it holds a writer-exclusive lock for the duration — so it trades concurrency for a simpler guarantee. Choose REPEATABLE READ if you need snapshot stability without that serialization cost.</p>
+<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL's SERIALIZABLE uses fully optimistic Serializable Snapshot Isolation that allows wide concurrency and may abort a transaction at commit. EvolutionDB's SERIALIZABLE is stricter operationally, it holds a writer-exclusive lock for the duration, so it trades concurrency for a simpler guarantee. Choose REPEATABLE READ if you need snapshot stability without that serialization cost.</p>
 </div>
 
 <h3 id="tx-control">3.1.3. Running a transaction</h3>
@@ -110,15 +110,15 @@
   <span class="c-key">FOR SYSTEM_TIME AS OF TRANSACTION</span> <span class="c-str">42</span>;
 </code></pre>
 
-<p>This builds a synthetic snapshot whose <code>xmax</code> sits one past XID 42: every transaction up to and including 42 is visible, and anything newer is invisible. The historical view has no active list — it is a clean point-in-time read, not a concurrency snapshot.</p>
+<p>This builds a synthetic snapshot whose <code>xmax</code> sits one past XID 42: every transaction up to and including 42 is visible, and anything newer is invisible. The historical view has no active list: it is a clean point-in-time read, not a concurrency snapshot.</p>
 
 <div class="callout">
-<p><strong>Notes — transactions.</strong></p>
+<p><strong>Notes, transactions.</strong></p>
 <ul>
 <li>Rows written before MVCC existed (no MVCC flag in the tuple header) are unconditionally visible, for backward compatibility with older database files.</li>
-<li>The active-transaction array is fixed at 256 entries. If it fills, a warning is logged and the overflowing transaction is not tracked, which can make its visibility incorrect — keep concurrency below that bound.</li>
+<li>The active-transaction array is fixed at 256 entries. If it fills, a warning is logged and the overflowing transaction is not tracked, which can make its visibility incorrect, keep concurrency below that bound.</li>
 <li>Temporal "AS OF TRANSACTION" can only reach back as far as the relevant old row versions still exist; the commit timestamp recorded in the CSN ring is used to bound the retention window, and a CSN slot that has been evicted reports an unknown commit time.</li>
-<li>The as-of operand is a transaction ID, not a clock value — there is no <code>AS OF TIMESTAMP</code> form.</li>
+<li>The as-of operand is a transaction ID, not a clock value, there is no <code>AS OF TIMESTAMP</code> form.</li>
 </ul>
 </div>
 
@@ -151,7 +151,7 @@
 <span class="c-com">-- unique constraint enforced at build and on insert</span>
 <span class="c-key">CREATE UNIQUE INDEX</span> uq_sku <span class="c-key">ON</span> products (sku);
 
-<span class="c-com">-- hash index — equality lookups only</span>
+<span class="c-com">-- hash index - equality lookups only</span>
 <span class="c-key">CREATE INDEX</span> idx_status <span class="c-key">ON</span> orders <span class="c-key">USING HASH</span> (status);
 </code></pre>
 
@@ -172,7 +172,7 @@
 
 <h3 id="index-concurrently">3.2.3. Building an index without blocking writers</h3>
 
-<p>Adding <code>CONCURRENTLY</code> lets you build an index while other sessions keep writing to the table. The build runs in three phases. Phase&nbsp;1 registers the index in the catalog in a <em>building</em> state. Phase&nbsp;2 scans the existing rows in batches of 100, releasing the engine lock between batches so other queries can proceed, while a modification log captures the primary keys of any rows changed by concurrent DML. Phase&nbsp;3 reconciles that log — removing stale entries and inserting current values for each touched key — and only then marks the index <em>ready</em>.</p>
+<p>Adding <code>CONCURRENTLY</code> lets you build an index while other sessions keep writing to the table. The build runs in three phases. Phase&nbsp;1 registers the index in the catalog in a <em>building</em> state. Phase&nbsp;2 scans the existing rows in batches of 100, releasing the engine lock between batches so other queries can proceed, while a modification log captures the primary keys of any rows changed by concurrent DML. Phase&nbsp;3 reconciles that log, removing stale entries and inserting current values for each touched key, and only then marks the index <em>ready</em>.</p>
 
 <pre><code><span class="c-key">CREATE INDEX CONCURRENTLY</span> idx_created <span class="c-key">ON</span> events (created_at);
 </code></pre>
@@ -184,7 +184,7 @@
 <p>A <code>FULLTEXT</code> index tokenizes a text column and stores one <code>(word, primary-key)</code> pair per token in a B+ tree, supporting word-level <code>MATCH</code> search.</p>
 
 <div class="callout">
-<p><strong>Notes — full-text.</strong> In version 1 a full-text index is <strong>not</strong> auto-maintained on <code>INSERT</code> / <code>UPDATE</code> / <code>DELETE</code>. The <code>MATCH</code> evaluator currently re-scans and re-tokenizes the heap per row, so results stay correct, but the index itself can drift after bulk DML. Re-create the index after a large load to keep it fresh.</p>
+<p><strong>Notes, full-text.</strong> In version 1 a full-text index is <strong>not</strong> auto-maintained on <code>INSERT</code> / <code>UPDATE</code> / <code>DELETE</code>. The <code>MATCH</code> evaluator currently re-scans and re-tokenizes the heap per row, so results stay correct, but the index itself can drift after bulk DML. Re-create the index after a large load to keep it fresh.</p>
 </div>
 
 <p>To remove any secondary index, use <a href="/3.0/ref/drop-index/">DROP INDEX</a>. The primary-key index (type <code>P</code>) is protected and cannot be dropped.</p>
@@ -243,7 +243,7 @@
   <span class="c-key">WHERE</span> HNSW_KNN(embedding, idx_doc_vec, <span class="c-str">'[0.12, 0.07, ...]'</span>, <span class="c-str">10</span>);
 </code></pre>
 
-<p>The search uses graph traversal for larger datasets and falls back to an exact brute-force top-<em>k</em> scan for small sets (or if the graph could not be built) — the results are returned in ascending distance order either way. A search beam width (<code>ef_search</code>, 64 by default) governs the graph walk.</p>
+<p>The search uses graph traversal for larger datasets and falls back to an exact brute-force top-<em>k</em> scan for small sets (or if the graph could not be built), the results are returned in ascending distance order either way. A search beam width (<code>ef_search</code>, 64 by default) governs the graph walk.</p>
 
 <h3 id="hnsw-hybrid">3.3.3. Hybrid (filtered) search</h3>
 
@@ -267,7 +267,7 @@
 </code></pre>
 
 <div class="callout">
-<p><strong>Notes — HNSW.</strong></p>
+<p><strong>Notes, HNSW.</strong></p>
 <ul>
 <li>HNSW graphs live <strong>in memory only</strong>. The catalog records the build parameters (<code>m</code>, <code>ef_construction</code>, distance) in the index's metadata, and the engine rebuilds every HNSW graph from that metadata at startup; a graph that fails to rebuild is left empty and queries fall back to brute force until it is re-created.</li>
 <li>An HNSW index targets a single <code>VECTOR</code> column; multi-column ANN indexes are not supported in version 1.</li>
@@ -292,7 +292,7 @@
   <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">1024</span>, distance = <span class="c-str">'cosine'</span>);
 </code></pre>
 
-<p>The backing table has a fixed shape: a <code>mem_namespace</code> and <code>mem_key</code>, a composite primary key (namespace and key joined by a Record Separator byte, <code>0x1E</code>), a JSON <code>mem_value</code>, a <code>created_at</code> and nullable <code>ttl_at</code> timestamp, and — only when <code>embedding_dim &gt; 0</code> — an <code>embedding</code> vector column. The <code>distance</code> option accepts <code>cosine</code> (default), <code>l2</code>, <code>inner</code> / <code>ip</code>, or <code>l1</code>.</p>
+<p>The backing table has a fixed shape: a <code>mem_namespace</code> and <code>mem_key</code>, a composite primary key (namespace and key joined by a Record Separator byte, <code>0x1E</code>), a JSON <code>mem_value</code>, a <code>created_at</code> and nullable <code>ttl_at</code> timestamp, and, only when <code>embedding_dim &gt; 0</code>, an <code>embedding</code> vector column. The <code>distance</code> option accepts <code>cosine</code> (default), <code>l2</code>, <code>inner</code> / <code>ip</code>, or <code>l1</code>.</p>
 
 <h3 id="memory-crud">3.4.2. Storing and reading memories</h3>
 
@@ -317,7 +317,7 @@
 <span class="c-key">MEMORY LIST NAMESPACES IN</span> recall <span class="c-key">PREFIX</span> <span class="c-str">'user:'</span>;
 </code></pre>
 
-<p>Because <code>MEMORY GET</code>, <code>DELETE</code>, and <code>LIST</code> compile down to ordinary <code>SELECT</code> / <code>DELETE</code> statements against the backing table, any row-level security policy attached to that table applies automatically — which is what makes a memory store multi-tenant safe. See the per-command pages: <a href="/3.0/ref/memory-put/">MEMORY PUT</a>, <a href="/3.0/ref/memory-get/">MEMORY GET</a>, <a href="/3.0/ref/memory-search/">MEMORY SEARCH</a>, <a href="/3.0/ref/memory-delete/">MEMORY DELETE</a>.</p>
+<p>Because <code>MEMORY GET</code>, <code>DELETE</code>, and <code>LIST</code> compile down to ordinary <code>SELECT</code> / <code>DELETE</code> statements against the backing table, any row-level security policy attached to that table applies automatically, which is what makes a memory store multi-tenant safe. See the per-command pages: <a href="/3.0/ref/memory-put/">MEMORY PUT</a>, <a href="/3.0/ref/memory-get/">MEMORY GET</a>, <a href="/3.0/ref/memory-search/">MEMORY SEARCH</a>, <a href="/3.0/ref/memory-delete/">MEMORY DELETE</a>.</p>
 
 <h3 id="memory-search">3.4.3. Semantic search</h3>
 
@@ -329,17 +329,17 @@
 <p>If no <code>LIMIT</code> is given the search returns up to 10 results by default.</p>
 
 <div class="callout">
-<p><strong>Notes — memory stores.</strong></p>
+<p><strong>Notes, memory stores.</strong></p>
 <ul>
 <li><code>MEMORY SEARCH</code> requires a store created with <code>embedding_dim &gt; 0</code>; searching a KV-only store raises an error.</li>
-<li>Search currently computes the score per row over the backing table and orders by it — it does not yet route through the HNSW index, so for very large stores it scales linearly. The result ranking is still correct.</li>
+<li>Search currently computes the score per row over the backing table and orders by it: it does not yet route through the HNSW index, so for very large stores it scales linearly. The result ranking is still correct.</li>
 <li><code>ttl_at</code> is stored (NULL by default) but expiry is not auto-enforced by the store layer; treat it as advisory metadata for now.</li>
 <li>Because a store <em>is</em> a table, you can always query <code>mem_&lt;store&gt;</code> directly with standard SQL when you need joins, aggregates, or filters the memory verbs do not expose.</li>
 </ul>
 </div>
 
 <h2 id="next">3.5. Where to go next</h2>
-<p>The command pages under <a href="/3.0/ref/">Reference</a> give the exact grammar, options, and error codes for each statement used above — start with <a href="/3.0/ref/create-index/">CREATE INDEX</a>, <a href="/3.0/ref/transaction/">BEGIN / COMMIT / ROLLBACK</a>, and <a href="/3.0/ref/memory-search/">MEMORY SEARCH</a>.</p>
+<p>The command pages under <a href="/3.0/ref/">Reference</a> give the exact grammar, options, and error codes for each statement used above, start with <a href="/3.0/ref/create-index/">CREATE INDEX</a>, <a href="/3.0/ref/transaction/">BEGIN / COMMIT / ROLLBACK</a>, and <a href="/3.0/ref/memory-search/">MEMORY SEARCH</a>.</p>
 
 </main></div>
 <script src="/nav-data.js"></script>

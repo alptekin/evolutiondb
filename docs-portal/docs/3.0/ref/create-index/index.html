@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>CREATE INDEX — EvolutionDB 3.0</title>
+<title>CREATE INDEX | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -44,13 +44,13 @@
 <p>An index may cover a single column, several columns (a <em>composite</em> index, whose key is the column values joined with <code>|</code>), or a single supported <em>expression</em>. Indexes on <code>ARRAY</code> columns are rejected in this version.</p>
 <p>EvolutionDB supports four index shapes, selected by the modifiers and the access-method clause:</p>
 <ul>
-<li><strong>B+ tree</strong> (default) — ordered index supporting equality and the prefix scans used by the planner.</li>
-<li><strong>Hash</strong> (<code>USING HASH</code>) — equality-only index backed by an extendible-hash directory.</li>
-<li><strong>Full-text</strong> (<code>CREATE FULLTEXT INDEX</code>) — an inverted index: the text column is tokenized and one <code>(token, PK)</code> pair is inserted per token.</li>
-<li><strong>HNSW</strong> (<code>USING HNSW</code>) — an in-memory graph for approximate nearest-neighbor search over a <code>VECTOR</code> column.</li>
+<li><strong>B+ tree</strong> (default), ordered index supporting equality and the prefix scans used by the planner.</li>
+<li><strong>Hash</strong> (<code>USING HASH</code>), equality-only index backed by an extendible-hash directory.</li>
+<li><strong>Full-text</strong> (<code>CREATE FULLTEXT INDEX</code>), an inverted index: the text column is tokenized and one <code>(token, PK)</code> pair is inserted per token.</li>
+<li><strong>HNSW</strong> (<code>USING HNSW</code>), an in-memory graph for approximate nearest-neighbor search over a <code>VECTOR</code> column.</li>
 </ul>
 <div class="callout">
-<p>If an index already exists on the same column list (and it is not the primary-key index), <code>CREATE INDEX</code> fails with <code>index already exists on column '…'</code> — unless <code>IF EXISTS</code> was given, in which case the statement is a no-op.</p>
+<p>If an index already exists on the same column list (and it is not the primary-key index), <code>CREATE INDEX</code> fails with <code>index already exists on column '…'</code>, unless <code>IF EXISTS</code> was given, in which case the statement is a no-op.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
@@ -62,7 +62,7 @@
 <dd>Builds the index without holding the write lock for the whole scan. The index is first registered in a building state, then populated in batches; the lock is released between batches so other queries can proceed. Concurrent writes during the build are recorded in a modification log and reconciled in a final pass before the index is marked ready. Only the building session pays the cost; readers ignore an index that is still building.</dd>
 
 <dt>IF EXISTS</dt>
-<dd>Makes the statement a no-op (instead of an error) when an index already exists on the same column list. Note the spelling: EvolutionDB's grammar accepts the <code>IF EXISTS</code> token sequence here, and it carries the standard <em>"if not exists"</em> meaning — skip creation if a matching index is already present.</dd>
+<dd>Makes the statement a no-op (instead of an error) when an index already exists on the same column list. Note the spelling: EvolutionDB's grammar accepts the <code>IF EXISTS</code> token sequence here, and it carries the standard <em>"if not exists"</em> meaning, skip creation if a matching index is already present.</dd>
 
 <dt><var>name</var></dt>
 <dd>The name of the index to create. Index names are looked up globally by <code>DROP INDEX</code>, so choose a name unique across the database.</dd>
@@ -73,7 +73,7 @@
 <dt>USING HASH</dt>
 <dd>Selects an extendible-hash index instead of the default B+ tree. Hash indexes are created with the engine's default bucket count and support equality lookups only.</dd>
 
-<dt><var>column_name</var> [, ...]</dt>
+<dt><var>column_name</var> [..]</dt>
 <dd>One or more columns to index. Each named column must exist in the table, or the command fails with <code>column '…' does not exist in table '…'</code>. More than one column produces a composite index keyed on the concatenated column values.</dd>
 
 <dt><var>expression</var></dt>
@@ -128,12 +128,12 @@
 <h2 id="compatibility">Compatibility</h2>
 <p><code>CREATE INDEX</code> is not part of the SQL standard; the standard leaves indexing to the implementation. EvolutionDB's syntax follows PostgreSQL closely but differs in several concrete ways:</p>
 <ul>
-<li><strong><code>IF EXISTS</code> vs <code>IF NOT EXISTS</code></strong> — PostgreSQL spells the skip-if-present option <code>IF NOT EXISTS</code>. EvolutionDB's grammar accepts the token sequence <code>IF EXISTS</code> in this position, and it carries the same "skip if a matching index already exists" semantics.</li>
-<li><strong>Access methods</strong> — EvolutionDB supports the default B+ tree, <code>USING HASH</code>, and <code>USING HNSW</code>. PostgreSQL's <code>btree</code>/<code>gin</code>/<code>gist</code>/<code>spgist</code>/<code>brin</code> method names and a generic <code>USING <var>method</var></code> clause are not supported.</li>
-<li><strong>Full-text</strong> — EvolutionDB uses a dedicated <code>CREATE FULLTEXT INDEX</code> statement (MySQL-style) rather than PostgreSQL's <code>tsvector</code> + GIN approach. The full-text index is not auto-maintained on DML.</li>
-<li><strong>Expression indexes</strong> — limited to <code>UPPER</code>, <code>LOWER</code>, <code>LENGTH</code>, and <code>CONCAT(a, b)</code>. PostgreSQL allows arbitrary immutable expressions and parenthesized expression lists.</li>
-<li><strong>Unsupported clauses</strong> — EvolutionDB does not accept PostgreSQL's <code>ASC</code>/<code>DESC</code>, <code>NULLS FIRST/LAST</code>, <code>COLLATE</code>, per-column opclasses for B+ tree/hash indexes, <code>INCLUDE</code>, <code>WHERE</code> (partial indexes), <code>TABLESPACE</code>, or storage-parameter <code>WITH (...)</code> on non-HNSW indexes. The HNSW <code>WITH</code> clause accepts only <code>m</code> and <code>ef_construction</code>.</li>
-<li><strong>HNSW</strong> — the opclass names (<code>vector_cosine_ops</code>, <code>vector_l2_ops</code>, <code>vector_ip_ops</code>, <code>vector_l1_ops</code>) and <code>WITH</code> parameters mirror the pgvector extension. The HNSW graph is held in memory and rebuilt at startup from catalog-stored parameters.</li>
+<li><strong><code>IF EXISTS</code> vs <code>IF NOT EXISTS</code></strong>, PostgreSQL spells the skip-if-present option <code>IF NOT EXISTS</code>. EvolutionDB's grammar accepts the token sequence <code>IF EXISTS</code> in this position, and it carries the same "skip if a matching index already exists" semantics.</li>
+<li><strong>Access methods</strong>: EvolutionDB supports the default B+ tree, <code>USING HASH</code>, and <code>USING HNSW</code>. PostgreSQL's <code>btree</code>/<code>gin</code>/<code>gist</code>/<code>spgist</code>/<code>brin</code> method names and a generic <code>USING <var>method</var></code> clause are not supported.</li>
+<li><strong>Full-text</strong>, EvolutionDB uses a dedicated <code>CREATE FULLTEXT INDEX</code> statement (MySQL-style) rather than PostgreSQL's <code>tsvector</code> + GIN approach. The full-text index is not auto-maintained on DML.</li>
+<li><strong>Expression indexes</strong>, limited to <code>UPPER</code>, <code>LOWER</code>, <code>LENGTH</code>, and <code>CONCAT(a, b)</code>. PostgreSQL allows arbitrary immutable expressions and parenthesized expression lists.</li>
+<li><strong>Unsupported clauses</strong>, EvolutionDB does not accept PostgreSQL's <code>ASC</code>/<code>DESC</code>, <code>NULLS FIRST/LAST</code>, <code>COLLATE</code>, per-column opclasses for B+ tree/hash indexes, <code>INCLUDE</code>, <code>WHERE</code> (partial indexes), <code>TABLESPACE</code>, or storage-parameter <code>WITH (...)</code> on non-HNSW indexes. The HNSW <code>WITH</code> clause accepts only <code>m</code> and <code>ef_construction</code>.</li>
+<li><strong>HNSW</strong>, the opclass names (<code>vector_cosine_ops</code>, <code>vector_l2_ops</code>, <code>vector_ip_ops</code>, <code>vector_l1_ops</code>) and <code>WITH</code> parameters mirror the pgvector extension. The HNSW graph is held in memory and rebuilt at startup from catalog-stored parameters.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>

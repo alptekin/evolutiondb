@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>TRUNCATE — EvolutionDB 3.0</title>
+<title>TRUNCATE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -32,7 +32,7 @@ underlying storage wholesale, which makes it considerably faster on large tables
 <p>For each named table, EvolutionDB destroys the heap pages, the primary-key B+ tree,
 and every secondary index (B+ tree, hash, and unique-hash), then recreates them as
 empty structures and resets the table's row/page statistics to zero. The table
-definition — columns, constraints, indexes, and privileges — is left intact; only
+definition, columns, constraints, indexes, and privileges, is left intact; only
 the data is removed.</p>
 <p>The <code>TABLE</code> keyword is required: EvolutionDB's grammar accepts
 <code>TRUNCATE TABLE</code>, not the bare <code>TRUNCATE</code> form.</p>

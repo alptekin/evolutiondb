@@ -2,10 +2,10 @@
 <html class="dark" lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Node.js SDK — EvolutionDB</title>
+<title>Node.js SDK | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,7 +18,7 @@
 <p class="lede">A Node.js / TypeScript-friendly binding (<code>evosql-memory</code>) over the native <code>libevosql-memory</code> C library, exposing a <code>Connection</code> class for raw SQL plus agent-memory and LangGraph-checkpoint helpers.</p>
 
 <h2 id="what-it-does">What it does</h2>
-<p>The <code>node-evosql-memory</code> package is a thin <code>ffi-napi</code> binding over the C SDK <code>libevosql-memory</code>. It loads the shared library at <code>require</code> time, maps the C surface with <code>ffi-napi</code> / <code>ref-napi</code>, and gives you a single <code>Connection</code> class. On top of plain <code>exec</code>/<code>query</code> it provides convenience methods for the agent-memory store (<code>memoryPut</code> / <code>memoryGet</code> / <code>memoryDelete</code>) and LangGraph-style checkpoints (<code>checkpointPut</code> / <code>checkpointGetLatest</code>). It connects to a running EvolutionDB server over the wire — it is a client, not an embedded engine.</p>
+<p>The <code>node-evosql-memory</code> package is a thin <code>ffi-napi</code> binding over the C SDK <code>libevosql-memory</code>. It loads the shared library at <code>require</code> time, maps the C surface with <code>ffi-napi</code> / <code>ref-napi</code>, and gives you a single <code>Connection</code> class. On top of plain <code>exec</code>/<code>query</code> it provides convenience methods for the agent-memory store (<code>memoryPut</code> / <code>memoryGet</code> / <code>memoryDelete</code>) and LangGraph-style checkpoints (<code>checkpointPut</code> / <code>checkpointGetLatest</code>). It connects to a running EvolutionDB server over the wire: it is a client, not an embedded engine.</p>
 <p>Because it is FFI over a native <code>.dylib</code> / <code>.so</code>, the shared library must be present on the host (see <a href="#configure">Configure</a>). Supports Node 18+.</p>
 <p>Related: the <a href="/platform/mcp-server/">MCP server</a> exposes the same memory store to AI agents, and the broader concepts are documented on the <a href="https://wiki.evolutiondb.org">project wiki</a>.</p>
 
@@ -34,15 +34,15 @@ npm run example                              <span class="c-com"># runs examples
 <span class="c-key">export</span> EVOSQL_MEMORY_LIB=<span class="c-str">/path/to/libevosql-memory.dylib</span></code></pre>
 
 <h2 id="configure">Configure</h2>
-<p>There is no config file. Connection parameters are passed positionally to the <code>Connection</code> constructor (<code>host</code>, <code>port</code>, <code>user</code>, <code>password</code>) — the examples use <code>127.0.0.1</code>, port <code>9967</code>, and <code>admin</code> / <code>admin</code>.</p>
+<p>There is no config file. Connection parameters are passed positionally to the <code>Connection</code> constructor (<code>host</code>, <code>port</code>, <code>user</code>, <code>password</code>), the examples use <code>127.0.0.1</code>, port <code>9967</code>, and <code>admin</code> / <code>admin</code>.</p>
 <p>The only environment variable the SDK reads is the shared-library location. At load time the binding resolves <code>libevosql-memory.&#123;dylib,so&#125;</code> in this exact order:</p>
 <ol>
-<li><code>process.env.EVOSQL_MEMORY_LIB</code> — an explicit path (used only if the file exists).</li>
-<li><code>../../libevosql-memory/build/libevosql-memory.&#123;dylib,so&#125;</code> — the in-tree SDK build directory, relative to <code>lib/index.js</code>.</li>
-<li>The system loader path (e.g. <code>/usr/local/lib</code>, <code>/usr/lib</code>) — <code>ffi.Library</code> is given the bare name <code>evosql-memory</code>.</li>
+<li><code>process.env.EVOSQL_MEMORY_LIB</code>, an explicit path (used only if the file exists).</li>
+<li><code>../../libevosql-memory/build/libevosql-memory.&#123;dylib,so&#125;</code>: the in-tree SDK build directory, relative to <code>lib/index.js</code>.</li>
+<li>The system loader path (e.g. <code>/usr/local/lib</code>, <code>/usr/lib</code>), <code>ffi.Library</code> is given the bare name <code>evosql-memory</code>.</li>
 </ol>
 <p>The extension is chosen from <code>process.platform</code>: <code>.dylib</code> on macOS (<code>darwin</code>), otherwise <code>.so</code>.</p>
-<p>Authentication is whatever the EvolutionDB server enforces — the SDK simply forwards the <code>user</code> / <code>password</code> you pass to <code>evo_connect</code>. There is no credential storage or token handling in the binding itself.</p>
+<p>Authentication is whatever the EvolutionDB server enforces, the SDK simply forwards the <code>user</code> / <code>password</code> you pass to <code>evo_connect</code>. There is no credential storage or token handling in the binding itself.</p>
 
 <h2 id="usage">Usage</h2>
 <p>Open a connection, run statements, and always close it in a <code>finally</code> block:</p>
@@ -87,10 +87,10 @@ npm run example                              <span class="c-com"># runs examples
 
 <h3>Connection</h3>
 <div class="sig">new Connection(host, port, user, password)</div>
-<p>Opens a connection via <code>evo_connect</code>. Throws the last C error if the handle is null. A <code>Connection</code> is <strong>not</strong> safe to share across worker threads — open one per worker.</p>
+<p>Opens a connection via <code>evo_connect</code>. Throws the last C error if the handle is null. A <code>Connection</code> is <strong>not</strong> safe to share across worker threads, open one per worker.</p>
 
 <div class="sig">close()</div>
-<p>Calls <code>evo_close</code> and nulls the handle. Idempotent — safe to call on an already-closed connection.</p>
+<p>Calls <code>evo_close</code> and nulls the handle. Idempotent, safe to call on an already-closed connection.</p>
 
 <div class="sig">exec(sql) → int</div>
 <p>Runs a statement via <code>evo_exec</code>. Returns the non-negative return code (e.g. affected rows as reported by the C layer); throws <code>EvoError</code> if the code is negative.</p>
@@ -127,7 +127,7 @@ npm run example                              <span class="c-com"># runs examples
 <ul>
 <li><strong>FFI dependency.</strong> The package is an <code>ffi-napi</code> binding, so the native <code>libevosql-memory</code> shared library must be present and resolvable (see <a href="#configure">Configure</a>). There is no pure-JS fallback.</li>
 <li><strong>Node 18+.</strong> Declared via <code>engines.node</code> in <code>package.json</code>.</li>
-<li><strong>Not thread-safe.</strong> Do not share a <code>Connection</code> across worker threads — open one per worker. The C SDK's last-error storage is thread-local, so an error in one worker does not leak into another's reading.</li>
+<li><strong>Not thread-safe.</strong> Do not share a <code>Connection</code> across worker threads, open one per worker. The C SDK's last-error storage is thread-local, so an error in one worker does not leak into another's reading.</li>
 <li><strong>String results only.</strong> <code>query</code> returns columns as decoded UTF-8 strings; there is no automatic type coercion. Oversized cells are bounded by <code>colBufSize</code>.</li>
 <li><strong>Fixed buffers.</strong> <code>memoryGet</code> / <code>checkpointGetLatest</code> read into a caller-sized buffer (defaults 32 KiB / 64 KiB); raise <code>bufSize</code> for larger values.</li>
 <li><strong>No TypeScript typings shipped.</strong> The package is written in plain JavaScript (CommonJS, <code>main: lib/index.js</code>); it is usable from TypeScript but no <code>.d.ts</code> is bundled.</li>
