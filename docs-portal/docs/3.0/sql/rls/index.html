@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>20. Row-Level Security — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+<h1>20. Row-Level Security</h1>
+<p class="lede">Row-Level Security (RLS) lets you attach per-table policies that restrict which rows a session user may read, insert, update, or delete — enforced inside the engine on every DML path, not bolted on by the application.</p>
+
+<p>EvolutionDB implements RLS as a small, focused subset of the PostgreSQL model: a table carries an <em>RLS-enabled</em> flag, and any number of named <strong>policies</strong> attach to that table. A policy pairs an optional row-filter expression (<code class="c-key">USING</code>) and an optional write-validation expression (<code class="c-key">WITH CHECK</code>) with a command scope and an optional role list. When the flag is on, the engine rewrites reads to filter rows through the matching <code class="c-key">USING</code> expressions and validates written rows against the matching <code class="c-key">WITH CHECK</code> expressions.</p>
+
+<p>The SQL surface and its persistence are handled in <code>evolution/db/Policy.c</code>; runtime enforcement helpers (the read overlay and the write check) live alongside it and are invoked from the SELECT, INSERT, UPDATE, and DELETE paths.</p>
+
+<h2 id="enabling">20.1. Enabling and Disabling RLS on a Table</h2>
+
+<p>Policies are defined independently, but they only take effect once Row-Level Security is enabled on the owning table. Toggling the flag does not create, drop, or alter any policy — it merely controls whether the engine consults them.</p>
+
+<pre class="synopsis"><code><span class="c-key">ALTER TABLE</span> <i>table_name</i> <span class="c-key">ENABLE ROW LEVEL SECURITY</span>;
+<span class="c-key">ALTER TABLE</span> <i>table_name</i> <span class="c-key">DISABLE ROW LEVEL SECURITY</span>;</code></pre>
+
+<p>The grammar accepts only the exact phrase <code class="c-key">ROW LEVEL SECURITY</code>; a misspelled middle word raises a syntax error (<span class="c-com">"expected LEVEL after ROW…"</span>). The toggle sets a single per-table flag (<code>rls_enabled</code>) in the system catalog via <code>cat_update_table_rls_flag()</code>.</p>
+
+<pre><code><span class="c-com">-- turn enforcement on; existing policies (if any) now apply</span>
+<span class="c-key">ALTER TABLE</span> accounts <span class="c-key">ENABLE ROW LEVEL SECURITY</span>;
+
+<span class="c-com">-- turn enforcement off; policies remain in the catalog, just dormant</span>
+<span class="c-key">ALTER TABLE</span> accounts <span class="c-key">DISABLE ROW LEVEL SECURITY</span>;</code></pre>
+
+<div class="callout">
+<p><strong>Default-deny.</strong> When a table has <code>rls_enabled = 1</code> but <em>no policy matches</em> a non-superuser's command, access is denied: reads return zero rows and writes are rejected. Enabling RLS before defining any policy effectively locks out every non-superuser. The <code class="c-str">admin</code> user is treated as a superuser and bypasses RLS entirely (see <a href="#superuser">§20.6</a>).</p>
+</div>
+
+<h2 id="create-policy">20.2. CREATE POLICY</h2>
+
+<p>Creates a named policy attached to a table. See also the command reference page at <a href="/3.0/ref/create-policy/">CREATE POLICY</a>.</p>
+
+<pre class="synopsis"><code><span class="c-key">CREATE POLICY</span> <i>policy_name</i> <span class="c-key">ON</span> <i>table_name</i>
+    [ <span class="c-key">AS</span> { <span class="c-key">PERMISSIVE</span> | <span class="c-key">RESTRICTIVE</span> } ]
+    [ <span class="c-key">FOR</span> { <span class="c-key">ALL</span> | <span class="c-key">SELECT</span> | <span class="c-key">INSERT</span> | <span class="c-key">UPDATE</span> | <span class="c-key">DELETE</span> } ]
+    [ <span class="c-key">TO</span> <i>role</i> [, ...] ]
+    [ <span class="c-key">USING</span> ( <i>using_expression</i> ) ]
+    [ <span class="c-key">WITH CHECK</span> ( <i>check_expression</i> ) ];</code></pre>
+
+<p>Every clause except the name and target table is optional. The clauses must appear in the order shown above (the grammar is positional: <code class="c-key">AS</code>, then <code class="c-key">FOR</code>, then <code class="c-key">TO</code>, then <code class="c-key">USING</code>, then <code class="c-key">WITH CHECK</code>).</p>
+
+<dl class="params">
+  <dt><code>policy_name</code></dt>
+  <dd>The policy name. Unique per table: policies are keyed by <code>table_id:policy_name</code> in the catalog, so the same name may be reused on different tables. Creating a duplicate name on the same table fails with SQLSTATE <code>42710</code>.</dd>
+
+  <dt><code class="c-key">AS PERMISSIVE</code> / <code class="c-key">AS RESTRICTIVE</code></dt>
+  <dd>Controls how the policy combines with others. <strong>PERMISSIVE</strong> policies are OR'd together; <strong>RESTRICTIVE</strong> policies are AND'd on top. The default is <code class="c-key">PERMISSIVE</code>. See <a href="#combining">§20.5</a>.</dd>
+
+  <dt><code class="c-key">FOR</code></dt>
+  <dd>The command scope the policy applies to. The default is <code class="c-key">FOR ALL</code>. Internally each scope maps to a one-character command code (<a href="#cmd-codes">§20.4</a>).</dd>
+
+  <dt><code class="c-key">TO</code> <i>role</i> [, ...]</dt>
+  <dd>The roles the policy applies to. Up to <strong>8</strong> roles may be listed (<code>CAT_MAX_POLICY_ROLES</code>); excess entries are ignored. When the list is omitted the policy applies to every role. A role named <code class="c-str">public</code> in the list also matches every role. Role matching is case-insensitive and is compared against the session user name.</dd>
+
+  <dt><code class="c-key">USING</code> ( <i>using_expression</i> )</dt>
+  <dd>A boolean expression evaluated per existing row. Rows for which it is true are visible to <code class="c-key">SELECT</code> and eligible for <code class="c-key">UPDATE</code>/<code class="c-key">DELETE</code>. The expression AST is serialized into the catalog (hex-encoded, up to 2048 bytes — <code>CAT_MAX_POLICY_EXPR</code>).</dd>
+
+  <dt><code class="c-key">WITH CHECK</code> ( <i>check_expression</i> )</dt>
+  <dd>A boolean expression that new or updated rows must satisfy on <code class="c-key">INSERT</code> and <code class="c-key">UPDATE</code>. If omitted, the <code class="c-key">USING</code> expression is reused for the write check (matching PostgreSQL).</dd>
+</dl>
+
+<pre><code><span class="c-com">-- each user only sees and writes their own rows</span>
+<span class="c-key">CREATE POLICY</span> owner_rows <span class="c-key">ON</span> documents
+    <span class="c-key">FOR</span> <span class="c-key">ALL</span>
+    <span class="c-key">USING</span> (owner = <span class="c-str">'alice'</span>)
+    <span class="c-key">WITH CHECK</span> (owner = <span class="c-str">'alice'</span>);
+
+<span class="c-com">-- read-only visibility policy scoped to one role</span>
+<span class="c-key">CREATE POLICY</span> public_published <span class="c-key">ON</span> documents
+    <span class="c-key">AS</span> <span class="c-key">PERMISSIVE</span>
+    <span class="c-key">FOR</span> <span class="c-key">SELECT</span>
+    <span class="c-key">TO</span> reader
+    <span class="c-key">USING</span> (status = <span class="c-str">'published'</span>);
+
+<span class="c-com">-- a restrictive guard that ANDs on top of any permissive policy</span>
+<span class="c-key">CREATE POLICY</span> not_archived <span class="c-key">ON</span> documents
+    <span class="c-key">AS</span> <span class="c-key">RESTRICTIVE</span>
+    <span class="c-key">FOR</span> <span class="c-key">SELECT</span>
+    <span class="c-key">USING</span> (archived = <span class="c-str">false</span>);</code></pre>
+
+<div class="callout">
+<p><strong>Memory-store sugar.</strong> EvolutionDB also accepts <code class="c-key">CREATE POLICY</code> <i>name</i> <code class="c-key">ON MEMORY STORE</code> <i>store</i> (and the matching <code class="c-key">ALTER MEMORY STORE … ENABLE/DISABLE ROW LEVEL SECURITY</code>). These resolve to the store's backing table (named <code>mem_&lt;store&gt;</code>) and otherwise behave identically. If the store does not exist, the literal name is used and the usual <span class="c-com">"relation does not exist"</span> error is raised.</p>
+</div>
+
+<h2 id="drop-policy">20.3. DROP POLICY</h2>
+
+<p>Removes a policy from a table. See also <a href="/3.0/ref/drop-policy/">DROP POLICY</a>.</p>
+
+<pre class="synopsis"><code><span class="c-key">DROP POLICY</span> <i>policy_name</i> <span class="c-key">ON</span> <i>table_name</i>;</code></pre>
+
+<pre><code><span class="c-key">DROP POLICY</span> public_published <span class="c-key">ON</span> documents;</code></pre>
+
+<p>The target table is resolved first; if it does not exist the error is SQLSTATE <code>42P01</code> (undefined table). If the table exists but carries no such policy, the error is SQLSTATE <code>42704</code> (undefined object). Dropping a policy does not change the table's <code>rls_enabled</code> flag — if you drop the last policy while RLS is still enabled, the table falls back to default-deny for non-superusers.</p>
+
+<h2 id="cmd-codes">20.4. Command Scopes</h2>
+
+<p>The <code class="c-key">FOR</code> clause stores a single command-code byte on the policy. A policy participates in enforcement only when its scope matches the operation being run (or when the scope is <code class="c-key">ALL</code>).</p>
+
+<table>
+<thead><tr><th>FOR clause</th><th>Code</th><th>Applies to</th></tr></thead>
+<tbody>
+<tr><td><code class="c-key">FOR ALL</code> (default)</td><td><code>'*'</code></td><td>SELECT, INSERT, UPDATE, DELETE</td></tr>
+<tr><td><code class="c-key">FOR SELECT</code></td><td><code>'S'</code></td><td>Read path (USING overlay)</td></tr>
+<tr><td><code class="c-key">FOR INSERT</code></td><td><code>'I'</code></td><td>Write check (WITH CHECK)</td></tr>
+<tr><td><code class="c-key">FOR UPDATE</code></td><td><code>'U'</code></td><td>Read overlay for candidates + write check</td></tr>
+<tr><td><code class="c-key">FOR DELETE</code></td><td><code>'D'</code></td><td>Write check on deletion candidates</td></tr>
+</tbody>
+</table>
+
+<h2 id="combining">20.5. How Policies Are Combined and Enforced</h2>
+
+<p>Enforcement splits into two distinct mechanisms depending on whether the operation reads or writes rows.</p>
+
+<h3 id="read-overlay">20.5.1. Read overlay (SELECT, and UPDATE/DELETE row selection)</h3>
+
+<p>For reads, the engine builds an <em>overlay</em> expression from every policy that matches the command and the session user, and AND's it into the statement's existing <code class="c-key">WHERE</code> clause. The combination rule is:</p>
+
+<ul>
+<li>All matching <strong>PERMISSIVE</strong> <code class="c-key">USING</code> expressions are OR'd together.</li>
+<li>All matching <strong>RESTRICTIVE</strong> <code class="c-key">USING</code> expressions are AND'd on top of that OR group.</li>
+<li>If <em>no</em> permissive policy matches, the overlay is the constant <code>false</code> — i.e. zero rows. (A restrictive policy alone never grants visibility; there must be a permissive grant for any row to pass.)</li>
+</ul>
+
+<p>The result is folded into the same WHERE expression every scan path evaluates, so plain table scans, fast paths, and expression indexes all see the same filtered view. The original WHERE is restored after the statement. The same overlay is applied per joined table in multi-table queries.</p>
+
+<pre><code><span class="c-com">-- with the three documents policies above, a non-superuser SELECT</span>
+<span class="c-com">-- effectively runs as:</span>
+<span class="c-com">--   WHERE (&lt;your WHERE&gt;)</span>
+<span class="c-com">--     AND ( owner = 'alice' OR status = 'published' )  -- PERMISSIVE OR-group</span>
+<span class="c-com">--     AND ( archived = false )                          -- RESTRICTIVE AND</span>
+<span class="c-key">SELECT</span> * <span class="c-key">FROM</span> documents <span class="c-key">WHERE</span> created &gt; <span class="c-str">'2026-01-01'</span>;</code></pre>
+
+<h3 id="write-check">20.5.2. Write check (INSERT, UPDATE, DELETE)</h3>
+
+<p>For writes, the engine evaluates the matching policies' <code class="c-key">WITH CHECK</code> expression (falling back to <code class="c-key">USING</code> when no <code class="c-key">WITH CHECK</code> is present) against the candidate row's column values. The acceptance rule is:</p>
+
+<ul>
+<li>If <em>any</em> matching <strong>RESTRICTIVE</strong> check evaluates false, the write is rejected immediately.</li>
+<li>At least one matching <strong>PERMISSIVE</strong> check must evaluate true.</li>
+<li>If no permissive policy matches at all, the write is rejected (default-deny).</li>
+</ul>
+
+<p>A failed check raises SQLSTATE <code>42501</code> with the message <span class="c-com">new row for relation "…" violates row-level security policy</span>. An expression result is treated as truthy when it equals <code>t</code>, <code>true</code>, or <code>1</code>, or is a non-zero number.</p>
+
+<pre><code><span class="c-com">-- rejected: WITH CHECK (owner = 'alice') is false for this row</span>
+<span class="c-key">INSERT INTO</span> documents (id, owner, status) <span class="c-key">VALUES</span> (1, <span class="c-str">'bob'</span>, <span class="c-str">'draft'</span>);
+<span class="c-com">-- ERROR: new row for relation "documents" violates row-level security policy</span></code></pre>
+
+<h2 id="superuser">20.6. Superuser Bypass</h2>
+
+<p>The <code class="c-str">admin</code> user is recognized as a superuser and bypasses both the read overlay and the write check entirely — RLS is never applied to its statements, regardless of the table's flag or any policy. Recognition is by case-insensitive comparison of the session user name against <code class="c-str">admin</code>. EvolutionDB does not currently expose a per-table "force RLS" mode, so there is no way to subject the superuser to its own policies.</p>
+
+<h2 id="errors">20.7. Error Codes</h2>
+
+<p>The RLS surface uses the following SQLSTATE values:</p>
+
+<table>
+<thead><tr><th>SQLSTATE</th><th>Condition</th></tr></thead>
+<tbody>
+<tr><td><code>42601</code></td><td>Syntax error — missing policy name or target table, or malformed <code class="c-key">ENABLE/DISABLE ROW LEVEL SECURITY</code>.</td></tr>
+<tr><td><code>42P01</code> / <code>42E01</code></td><td>Undefined table — the target relation does not exist.</td></tr>
+<tr><td><code>42704</code></td><td>Undefined object — <code class="c-key">DROP POLICY</code> on a policy (or memory store) that does not exist.</td></tr>
+<tr><td><code>42710</code></td><td>Duplicate object — a policy of the same name already exists on the table.</td></tr>
+<tr><td><code>42501</code></td><td>Insufficient privilege — a written row violated a <code class="c-key">WITH CHECK</code> policy.</td></tr>
+<tr><td><code>EX000</code></td><td>Internal error — the RLS flag could not be updated.</td></tr>
+</tbody>
+</table>
+
+<h2 id="notes">20.8. Notes and Limitations</h2>
+
+<div class="callout">
+<p>EvolutionDB's RLS is a deliberate subset of the SQL/PostgreSQL model. Where it differs from PostgreSQL:</p>
+<ul>
+<li><strong>No <code class="c-key">ALTER POLICY</code>.</strong> To change a policy, <code class="c-key">DROP</code> it and <code class="c-key">CREATE</code> it again.</li>
+<li><strong>No <code class="c-key">FORCE ROW LEVEL SECURITY</code>.</strong> The owner/superuser (<code class="c-str">admin</code>) always bypasses policies; there is no opt-in to enforce them on the superuser.</li>
+<li><strong>Superuser detection is name-based.</strong> Only the literal user <code class="c-str">admin</code> is treated as a superuser for RLS purposes; this is not derived from a role privilege system.</li>
+<li><strong>Role matching is by session user name.</strong> The <code class="c-key">TO</code> list is compared, case-insensitively, against the current user; <code class="c-str">public</code> is a special value meaning "all roles." There is no role-membership/inheritance resolution.</li>
+<li><strong>Fixed limits.</strong> At most 8 roles per policy (<code>CAT_MAX_POLICY_ROLES</code>); each serialized <code class="c-key">USING</code>/<code class="c-key">WITH CHECK</code> expression is capped at 2048 bytes (<code>CAT_MAX_POLICY_EXPR</code>).</li>
+<li><strong>Clause order is fixed.</strong> <code class="c-key">CREATE POLICY</code> clauses must appear as <code class="c-key">AS</code> → <code class="c-key">FOR</code> → <code class="c-key">TO</code> → <code class="c-key">USING</code> → <code class="c-key">WITH CHECK</code>.</li>
+<li><strong>Disabling RLS does not drop policies.</strong> Policies persist in the catalog and re-activate when RLS is re-enabled.</li>
+</ul>
+</div>
+
+<p>See also: <a href="/3.0/ref/create-policy/">CREATE POLICY</a>, <a href="/3.0/ref/drop-policy/">DROP POLICY</a>, <a href="/3.0/ref/alter-table/">ALTER TABLE</a>.</p>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

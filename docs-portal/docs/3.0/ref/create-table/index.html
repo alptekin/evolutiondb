@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE TABLE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE TABLE</h1>
+<p class="lede">Define a new base table — its columns, types, per-column attributes, and table-level constraints — in the current schema, or populate one from a query result.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE</span> <span class="opt">[ TEMPORARY | GLOBAL TEMPORARY ]</span> <span class="c-key">TABLE</span> <span class="opt">[ IF NOT EXISTS ]</span> <span class="opt">[ <i>schema</i> . ]</span><i>table_name</i> (
+    { <i>column_name</i> <i>data_type</i> <span class="opt">[ <i>column_attribute</i> [ ... ] ]</span>
+    | <i>table_constraint</i> }
+    [ , ... ]
+)
+<span class="opt">[ <i>table_option</i> [ ... ] ]</span>
+<span class="opt">[ INHERITS ( <i>parent_table</i> ) ]</span>
+
+<span class="c-com">-- Create a table from a query result (CTAS):</span>
+<span class="c-key">CREATE</span> <span class="opt">[ TEMPORARY | GLOBAL TEMPORARY ]</span> <span class="c-key">TABLE</span> <span class="opt">[ IF NOT EXISTS ]</span> <span class="opt">[ <i>schema</i> . ]</span><i>table_name</i>
+    <span class="opt">[ ( <i>column_name</i> [ , ... ] ) ]</span>
+    <span class="opt">[ IGNORE | REPLACE ]</span> <span class="opt">[ AS ]</span> <i>select_statement</i>
+
+<span class="c-com">-- Create a range partition child bound to an existing parent:</span>
+<span class="c-key">CREATE</span> <span class="opt">[ TEMPORARY | GLOBAL TEMPORARY ]</span> <span class="c-key">TABLE</span> <span class="opt">[ IF NOT EXISTS ]</span> <i>table_name</i>
+    <span class="c-key">PARTITION OF</span> <i>parent</i> <span class="c-key">FOR VALUES FROM</span> ( <i>lo</i> ) <span class="c-key">TO</span> ( <i>hi</i> )
+
+<span class="c-com">where column_attribute is one of:</span>
+    <span class="c-key">NOT NULL</span> | <span class="c-key">NULL</span>
+    <span class="c-key">DEFAULT</span> <i>value</i>
+    <span class="c-key">DEFAULT</span> { gen_random_uuid() | gen_random_uuid_v7() | snowflake_id() | CURRENT_TIMESTAMP | ( <i>expr</i> ) }
+    <span class="c-key">AUTO_INCREMENT</span> <span class="opt">[ ( <i>start</i> [ , <i>increment</i> ] ) ]</span>
+    <span class="c-key">IDENTITY</span> <span class="opt">[ ( <i>start</i> [ , <i>increment</i> ] ) ]</span>
+    <span class="c-key">PRIMARY KEY</span> | <span class="c-key">KEY</span>
+    <span class="c-key">UNIQUE</span> <span class="opt">[ KEY ]</span>
+    <span class="c-key">CHECK</span> ( <i>expr</i> )
+    <span class="c-key">COMMENT</span> <i>'string'</i>
+    <span class="c-key">CONSTRAINT</span> <i>name</i> { UNIQUE | PRIMARY KEY | CHECK ( <i>expr</i> ) }
+    <span class="c-key">GENERATED ALWAYS AS</span> ( <i>expr</i> ) <span class="opt">[ STORED | VIRTUAL ]</span>
+    <span class="c-key">AS</span> ( <i>expr</i> ) <span class="opt">[ STORED | VIRTUAL ]</span>
+
+<span class="c-com">and table_constraint is one of:</span>
+    <span class="opt">[ CONSTRAINT <i>name</i> ]</span> <span class="c-key">PRIMARY KEY</span> ( <i>column</i> [ , ... ] )
+    <span class="opt">[ CONSTRAINT <i>name</i> ]</span> <span class="c-key">UNIQUE</span> ( <i>column</i> [ , ... ] )
+    <span class="opt">[ CONSTRAINT <i>name</i> ]</span> <span class="c-key">CHECK</span> ( <i>expr</i> )
+    <span class="opt">[ CONSTRAINT <i>name</i> ]</span> <span class="c-key">FOREIGN KEY</span> ( <i>column</i> [ , ... ] )
+        <span class="c-key">REFERENCES</span> <span class="opt">[ <i>schema</i> . ]</span><i>ref_table</i> ( <i>ref_column</i> [ , ... ] ) <span class="opt">[ <i>fk_action</i> [ ... ] ]</span>
+    <span class="c-key">KEY</span> ( <i>column</i> [ , ... ] ) | <span class="c-key">INDEX</span> ( <i>column</i> [ , ... ] )
+    <span class="c-key">FULLTEXT</span> { INDEX | KEY } ( <i>column</i> [ , ... ] )
+
+<span class="c-com">and fk_action is one of:</span>
+    <span class="c-key">ON DELETE</span> { CASCADE | SET NULL | RESTRICT | SET DEFAULT | NO ACTION }
+    <span class="c-key">ON UPDATE</span> { CASCADE | SET NULL | RESTRICT | SET DEFAULT | NO ACTION }
+    <span class="c-key">MATCH</span> { FULL | SIMPLE | PARTIAL }
+    <span class="opt">[ NOT ]</span> <span class="c-key">DEFERRABLE</span> <span class="opt">[ INITIALLY { DEFERRED | IMMEDIATE } ]</span>
+
+<span class="c-com">and table_option is one of:</span>
+    <span class="c-key">AUTO_INCREMENT</span> <span class="opt">[ = ]</span> <i>n</i>
+    <span class="c-key">ON COMMIT</span> { DELETE ROWS | PRESERVE ROWS }
+    <span class="c-key">SHARD BY HASH</span> ( <i>column</i> ) <span class="c-key">SHARDS</span> <i>n</i>
+    <span class="c-key">SHARD BY RANGE</span> ( <i>column</i> ) ( <i>shard_def</i> [ , ... ] )
+    <span class="c-key">PARTITION BY RANGE</span> ( <i>column</i> )
+    <span class="c-key">WITH SYSTEM VERSIONING</span>
+    <span class="c-key">WITH</span> ( ttl_column = <i>'column_name'</i> )</code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE TABLE</code> creates a new, initially empty base table in the current schema of the current database. The table is owned by the issuing user. Each column is given a name, a data type, and an optional list of column attributes; table-level constraints and table options may follow the column list.</p>
+<p>EvolutionDB resolves the current database and schema before creating the table. If the table name is qualified as <code><i>schema</i>.<i>table_name</i></code>, the leading name selects the target schema; otherwise the session's current schema (see <a href="/3.0/ref/set-schema/">SET SCHEMA</a>) is used. If the target schema does not exist, the statement fails.</p>
+<p>Columns and storage use EvolutionDB's binary tuple format: every record is prefixed with a sentinel byte and the table id, then a header, a null bitmap, and the column data. Type codes carry both a type family and a size (for example, <code>VARCHAR(50)</code> is encoded as <code>130050</code>). A table may have at most 256 columns.</p>
+<p>If a table with the same name already exists in the target schema, the statement fails with a "table already exists" error (SQLSTATE <code>42P07</code>) unless <code>IF NOT EXISTS</code> is given, in which case the existing table is left untouched and the statement succeeds without error.</p>
+<p><b>Create from a query (CTAS).</b> When a <code>select_statement</code> follows the table name, the new table is populated from the query result. If an explicit column list is supplied, those names are used; otherwise column names and types are inferred from the SELECT output. <code>IGNORE</code> and <code>REPLACE</code> modify how rows that would violate uniqueness are handled during the bulk load.</p>
+<p><b>Inheritance.</b> <code>INHERITS ( <i>parent</i> )</code> prepends the parent table's columns to the child's own columns. The parent must already exist, and a child column may not duplicate the name of an inherited column.</p>
+<p><b>Partition child.</b> The <code>PARTITION OF <i>parent</i> FOR VALUES FROM (<i>lo</i>) TO (<i>hi</i>)</code> form creates a range-partition child bound to an existing range-partitioned parent for the half-open integer range <code>[lo, hi)</code>.</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>TEMPORARY / GLOBAL TEMPORARY</dt>
+<dd>Marks the table as temporary. <code>TEMPORARY</code> creates a session-local temporary table; <code>GLOBAL TEMPORARY</code> creates a global temporary table. Combine with the <code>ON COMMIT</code> table option to control row lifetime on transaction commit.</dd>
+
+<dt>IF NOT EXISTS</dt>
+<dd>Suppresses the "table already exists" error. If a table of the same name already exists in the target schema, no new table is created and no error is raised. (Note: the grammar spells this as the <code>IF NOT EXISTS</code> clause; it does not validate column compatibility with the existing table.)</dd>
+
+<dt>schema.table_name / table_name</dt>
+<dd>The name of the table to create, optionally schema-qualified. An unqualified name is created in the session's current schema.</dd>
+
+<dt>column_name</dt>
+<dd>The name of a column in the new table.</dd>
+
+<dt>data_type</dt>
+<dd>The column's data type. Supported types include the integer family (<code>BIT</code>, <code>TINYINT</code>, <code>SMALLINT</code>, <code>MEDIUMINT</code>, <code>INT</code>/<code>INTEGER</code>, <code>BIGINT</code>, each accepting an optional <code>UNSIGNED</code>/<code>ZEROFILL</code> modifier), approximate and exact numerics (<code>REAL</code>, <code>DOUBLE</code>, <code>FLOAT</code>, <code>DECIMAL(<i>p</i>,<i>s</i>)</code>), date/time types (<code>DATE</code>, <code>TIME</code>, <code>TIMESTAMP</code>, <code>DATETIME</code>, <code>YEAR</code>), character types (<code>CHAR(<i>n</i>)</code>, <code>VARCHAR(<i>n</i>)</code>, <code>TINYTEXT</code>, <code>TEXT</code>, <code>MEDIUMTEXT</code>, <code>LONGTEXT</code>), binary types (<code>BINARY(<i>n</i>)</code>, <code>VARBINARY(<i>n</i>)</code>, <code>TINYBLOB</code>, <code>BLOB</code>, <code>MEDIUMBLOB</code>, <code>LONGBLOB</code>), <code>ENUM(...)</code>, <code>SET(...)</code>, <code>BOOLEAN</code>, <code>UUID</code>, <code>JSON</code>, <code>VECTOR(<i>dim</i>)</code>, and array types written as <code><i>type</i>[]</code>. Character and text types accept an optional <code>CHAR SET '<i>name</i>'</code> / <code>COLLATE '<i>name</i>'</code> suffix.</dd>
+
+<dt>NOT NULL / NULL</dt>
+<dd>Declares whether the column may contain NULL. <code>NOT NULL</code> rejects NULLs; <code>NULL</code> (the default) allows them.</dd>
+
+<dt>DEFAULT <i>value</i></dt>
+<dd>Supplies a default value used when an <code>INSERT</code> omits the column. The value may be a string, integer, float, or boolean literal. Function defaults <code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code>, and the special value <code>CURRENT_TIMESTAMP</code> are recognized, as is a parenthesized expression default <code>DEFAULT ( <i>expr</i> )</code>.</dd>
+
+<dt>AUTO_INCREMENT [ ( <i>start</i> [ , <i>increment</i> ] ) ] / IDENTITY [ ( <i>start</i> [ , <i>increment</i> ] ) ]</dt>
+<dd>Auto-assigns increasing integer values for the column. With no arguments the sequence starts at 1 and increments by 1; an explicit start and optional increment may be given. <code>IDENTITY</code> is an alias for the same mechanism.</dd>
+
+<dt>PRIMARY KEY / KEY (column attribute)</dt>
+<dd>Marks the column as the table's primary key. <code>KEY</code> used as a column attribute is treated as <code>PRIMARY KEY</code>.</dd>
+
+<dt>UNIQUE [ KEY ] (column attribute)</dt>
+<dd>Requires the column's values to be unique across rows.</dd>
+
+<dt>CHECK ( <i>expr</i> )</dt>
+<dd>Defines a row-level check constraint that each row must satisfy. May be given inline on a column or as a table-level constraint.</dd>
+
+<dt>COMMENT <i>'string'</i></dt>
+<dd>Attaches a descriptive comment to the column.</dd>
+
+<dt>GENERATED ALWAYS AS ( <i>expr</i> ) [ STORED | VIRTUAL ] / AS ( <i>expr</i> ) [ STORED | VIRTUAL ]</dt>
+<dd>Defines a generated column whose value is computed from <i>expr</i>. <code>STORED</code> persists the computed value; <code>VIRTUAL</code> (the default when neither keyword is given) computes it on read.</dd>
+
+<dt>CONSTRAINT <i>name</i> ...</dt>
+<dd>Assigns an explicit name to a <code>UNIQUE</code>, <code>PRIMARY KEY</code>, <code>CHECK</code>, or <code>FOREIGN KEY</code> constraint, whether written inline or at the table level. Unnamed CHECK constraints are auto-named <code><i>table</i>_check_<i>n</i></code>.</dd>
+
+<dt>PRIMARY KEY ( <i>column</i> [ , ... ] ) (table constraint)</dt>
+<dd>Declares one or more columns as the primary key. Supports composite keys.</dd>
+
+<dt>UNIQUE ( <i>column</i> [ , ... ] ) (table constraint)</dt>
+<dd>Declares a (possibly multi-column) uniqueness constraint.</dd>
+
+<dt>FOREIGN KEY ( <i>column</i> [ , ... ] ) REFERENCES [ <i>schema</i>. ]<i>ref_table</i> ( <i>ref_column</i> [ , ... ] ) [ <i>fk_action</i> ... ]</dt>
+<dd>Declares a referential integrity constraint linking local columns to columns in <i>ref_table</i> (optionally in another schema). Referential actions are configured with the <code>fk_action</code> clauses below.</dd>
+
+<dt>fk_action — ON DELETE / ON UPDATE { CASCADE | SET NULL | RESTRICT | SET DEFAULT | NO ACTION }</dt>
+<dd>Selects the action applied to referencing rows when the referenced row is deleted or updated.</dd>
+
+<dt>fk_action — MATCH { FULL | SIMPLE | PARTIAL }</dt>
+<dd>Sets the match semantics for composite foreign keys.</dd>
+
+<dt>fk_action — [ NOT ] DEFERRABLE [ INITIALLY { DEFERRED | IMMEDIATE } ]</dt>
+<dd>Controls whether constraint checking can be deferred to transaction commit, and the initial check timing.</dd>
+
+<dt>KEY / INDEX ( <i>column</i> [ , ... ] )</dt>
+<dd>Requests an index on the listed columns as part of the table definition. <code>INDEX</code> and <code>KEY</code> are accepted as synonyms in this position.</dd>
+
+<dt>FULLTEXT { INDEX | KEY } ( <i>column</i> [ , ... ] )</dt>
+<dd>Requests a full-text index on the listed columns.</dd>
+
+<dt>AUTO_INCREMENT [ = ] <i>n</i> (table option)</dt>
+<dd>Sets the starting value of the table's auto-increment sequence.</dd>
+
+<dt>ON COMMIT { DELETE ROWS | PRESERVE ROWS } (table option)</dt>
+<dd>For temporary tables, chooses whether rows are deleted or preserved at transaction commit.</dd>
+
+<dt>SHARD BY HASH ( <i>column</i> ) SHARDS <i>n</i> / SHARD BY RANGE ( <i>column</i> ) ( ... )</dt>
+<dd>Distributes the table across <i>n</i> hash shards on <i>column</i>, or across explicit value ranges. Each range shard is written as <code>SHARD <i>name</i> VALUES LESS THAN { '<i>value</i>' | MAXVALUE } ON NODE <i>id</i></code>.</dd>
+
+<dt>PARTITION BY RANGE ( <i>column</i> ) (table option)</dt>
+<dd>Declares the table as range-partitioned on <i>column</i>. Child partitions are added with the <code>PARTITION OF</code> form.</dd>
+
+<dt>WITH SYSTEM VERSIONING (table option)</dt>
+<dd>Turns the table into a system-versioned (temporal) table. EvolutionDB auto-injects validity-period columns and links a <code><i>table</i>_history</code> shadow table that retains superseded row versions.</dd>
+
+<dt>WITH ( ttl_column = <i>'column_name'</i> ) (table option)</dt>
+<dd>Designates a TTL column. The auto-reclaim daemon prunes rows whose value in this column is older than the current time. The named column must exist in the table.</dd>
+
+<dt>INHERITS ( <i>parent_table</i> )</dt>
+<dd>Inherits the parent table's columns, which are prepended to the child's own columns. The parent must exist; duplicate column names are rejected.</dd>
+
+<dt>PARTITION OF <i>parent</i> FOR VALUES FROM ( <i>lo</i> ) TO ( <i>hi</i> )</dt>
+<dd>Creates a range-partition child of an existing partitioned <i>parent</i>, covering the half-open integer range from <i>lo</i> (inclusive) to <i>hi</i> (exclusive).</dd>
+
+<dt>[ IGNORE | REPLACE ] [ AS ] <i>select_statement</i></dt>
+<dd>Populates the new table from the result of <i>select_statement</i> (CREATE TABLE AS). <code>IGNORE</code> skips rows that would conflict; <code>REPLACE</code> replaces them. The <code>AS</code> keyword is optional.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create a simple table with a primary key, defaults, and a check:</p>
+<pre><code><span class="c-key">CREATE TABLE</span> users (
+    id        <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span> <span class="c-key">AUTO_INCREMENT</span>,
+    email     <span class="c-key">VARCHAR</span>(255) <span class="c-key">NOT NULL</span> <span class="c-key">UNIQUE</span>,
+    age       <span class="c-key">INT</span> <span class="c-key">CHECK</span> (age &gt;= 0),
+    status    <span class="c-key">VARCHAR</span>(20) <span class="c-key">DEFAULT</span> <span class="c-str">'active'</span>,
+    created   <span class="c-key">TIMESTAMP</span> <span class="c-key">DEFAULT</span> <span class="c-key">CURRENT_TIMESTAMP</span>
+);</code></pre>
+
+<p>Idempotent creation and a UUID default:</p>
+<pre><code><span class="c-key">CREATE TABLE</span> <span class="c-key">IF NOT EXISTS</span> sessions (
+    id    <span class="c-key">UUID</span> <span class="c-key">DEFAULT</span> gen_random_uuid() <span class="c-key">PRIMARY KEY</span>,
+    token <span class="c-key">TEXT</span> <span class="c-key">NOT NULL</span>
+);</code></pre>
+
+<p>Composite primary key and a named foreign key with referential actions:</p>
+<pre><code><span class="c-key">CREATE TABLE</span> order_items (
+    order_id  <span class="c-key">INT</span>,
+    product_id <span class="c-key">INT</span>,
+    qty       <span class="c-key">INT</span> <span class="c-key">NOT NULL</span> <span class="c-key">DEFAULT</span> 1,
+    <span class="c-key">PRIMARY KEY</span> (order_id, product_id),
+    <span class="c-key">CONSTRAINT</span> fk_order <span class="c-key">FOREIGN KEY</span> (order_id)
+        <span class="c-key">REFERENCES</span> orders (id) <span class="c-key">ON DELETE CASCADE</span>
+);</code></pre>
+
+<p>Generated column and a vector column:</p>
+<pre><code><span class="c-key">CREATE TABLE</span> docs (
+    id       <span class="c-key">BIGINT</span> <span class="c-key">IDENTITY</span>,
+    title    <span class="c-key">VARCHAR</span>(200),
+    title_len <span class="c-key">INT</span> <span class="c-key">GENERATED ALWAYS AS</span> (length(title)) <span class="c-key">STORED</span>,
+    embedding <span class="c-key">VECTOR</span>(768)
+);</code></pre>
+
+<p>Create from a query (CTAS), and a system-versioned table:</p>
+<pre><code><span class="c-key">CREATE TABLE</span> active_users <span class="c-key">AS</span>
+    <span class="c-key">SELECT</span> id, email <span class="c-key">FROM</span> users <span class="c-key">WHERE</span> status = <span class="c-str">'active'</span>;
+
+<span class="c-key">CREATE TABLE</span> accounts (
+    id      <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    balance <span class="c-key">DECIMAL</span>(12,2)
+) <span class="c-key">WITH SYSTEM VERSIONING</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>EvolutionDB's <code>CREATE TABLE</code> blends SQL-standard, PostgreSQL, and MySQL conventions, and is not strictly conformant to any single one.</p>
+<ul>
+<li><b>From the SQL standard / PostgreSQL:</b> column definitions, <code>PRIMARY KEY</code>, <code>UNIQUE</code>, <code>CHECK</code>, <code>FOREIGN KEY ... REFERENCES</code> with <code>ON DELETE</code>/<code>ON UPDATE</code> actions and <code>MATCH</code>/<code>DEFERRABLE</code> clauses, <code>GENERATED ALWAYS AS</code>, <code>INHERITS</code>, <code>IF NOT EXISTS</code>, and <code>CREATE TABLE AS</code> are all supported.</li>
+<li><b>From MySQL:</b> <code>AUTO_INCREMENT</code>, <code>KEY</code>/<code>INDEX</code> and <code>FULLTEXT</code> declarations inside the column list, the <code>COMMENT</code> column attribute, <code>UNSIGNED</code>/<code>ZEROFILL</code> integer modifiers, the MySQL type spellings (<code>TINYINT</code>, <code>MEDIUMTEXT</code>, <code>LONGBLOB</code>, <code>ENUM</code>, <code>SET</code>, <code>DATETIME</code>, <code>YEAR</code>), the <code>AS ( <i>expr</i> ) STORED|VIRTUAL</code> generated-column shorthand, and the trailing table options syntax are MySQL-style.</li>
+<li><b>EvolutionDB extensions:</b> <code>VECTOR(<i>dim</i>)</code> columns, the <code>gen_random_uuid_v7()</code> and <code>snowflake_id()</code> default functions, <code>WITH SYSTEM VERSIONING</code>, <code>WITH (ttl_column = ...)</code>, hash/range sharding (<code>SHARD BY</code>), and the integer-range <code>PARTITION OF ... FOR VALUES</code> child form are EvolutionDB-specific.</li>
+<li><b>Differences and unsupported clauses:</b> Unlike PostgreSQL, there is no <code>UNLOGGED</code>, no <code>OF <i>type</i></code>, no <code>EXCLUDE</code> constraints, no per-column <code>COLLATE</code> using identifiers (a quoted string follows <code>COLLATE</code> instead), and no tablespace clause. The grammar accepts the <code>NULL</code> column attribute as an explicit no-op affirming nullability.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/alter-table/">ALTER TABLE</a></li>
+<li><a href="/3.0/ref/drop-table/">DROP TABLE</a></li>
+<li><a href="/3.0/ref/create-index/">CREATE INDEX</a></li>
+<li><a href="/3.0/ref/truncate/">TRUNCATE TABLE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/data-types/">Data Types</a></li>
+<li><a href="/3.0/ref/set-schema/">SET SCHEMA</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

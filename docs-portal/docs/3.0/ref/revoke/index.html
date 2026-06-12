@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>REVOKE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>REVOKE</h1>
+<p class="lede">Remove access privileges or role membership previously granted to a database user.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">REVOKE</span> { <span class="c-key">ALL</span> <span class="opt">[ PRIVILEGES ]</span> | privilege <span class="opt">[, ...]</span> }
+    <span class="c-key">ON</span> { <span class="c-key">DATABASE</span> | <span class="c-key">SCHEMA</span> | <span class="c-key">TABLE</span> } scope_name
+    <span class="c-key">FROM</span> user_name
+
+<span class="c-com">-- Role membership form</span>
+<span class="c-key">REVOKE</span> role_name <span class="c-key">FROM</span> user_name</code></pre>
+</div>
+<p>where <code>privilege</code> is one of:</p>
+<div class="synopsis">
+<pre><code><span class="c-key">SELECT</span> | <span class="c-key">INSERT</span> | <span class="c-key">UPDATE</span> | <span class="c-key">DELETE</span> | <span class="c-key">CREATE</span> | <span class="c-key">DROP</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>REVOKE</code> removes one or more previously granted privileges from a user, or removes a user's membership in a role. It is the inverse of <a href="/3.0/ref/grant/">GRANT</a>.</p>
+
+<p>EvolutionDB privileges are stored in the system catalog as a single grant entry per <em>(user, scope)</em> pair. When you revoke privileges, EvolutionDB locates the matching grant for the named user and scope, removes the requested privilege bits, and then:</p>
+<ul>
+<li>If privileges remain, the grant entry is rewritten with the reduced privilege set.</li>
+<li>If no privileges remain, the grant entry is deleted entirely.</li>
+<li>If <code>ALL</code> (or <code>ALL PRIVILEGES</code>) is revoked, any <code>WITH GRANT OPTION</code> flag on the entry is also cleared.</li>
+</ul>
+
+<p>If no grant entry exists for the named user and scope, the command fails with an error (SQLSTATE <code>42704</code>, <em>undefined object</em>) reporting that no matching grant was found.</p>
+
+<p><strong>Scopes.</strong> A privilege is attached to exactly one of three scope kinds — <code>DATABASE</code>, <code>SCHEMA</code>, or <code>TABLE</code> — identified by <code>scope_name</code>. The revoke must target the same scope kind and name that the original grant used; revoking a <code>TABLE</code>-scoped privilege does not affect a broader <code>DATABASE</code>- or <code>SCHEMA</code>-scoped grant for the same user.</p>
+
+<p><strong>PUBLIC grants are additive.</strong> EvolutionDB follows the PostgreSQL additive model: privileges granted to <code>PUBLIC</code> are checked independently from user-specific grants. A user-specific <code>REVOKE</code> removes only that user's own grant entry; it does <em>not</em> mask or override a privilege the user still holds through a <code>PUBLIC</code> grant. To withdraw a privilege from everyone, revoke it from <code>PUBLIC</code> as well.</p>
+
+<p><strong>Role form.</strong> When the command contains no <code>ON</code> keyword, it is interpreted as a role-membership revoke: <code>REVOKE role_name FROM user_name</code> removes the user's membership in the named role.</p>
+
+<p><strong>Who may revoke.</strong> The <code>admin</code> user may always revoke. A non-admin user may revoke a privilege only if it holds that same privilege <code>WITH GRANT OPTION</code> on the same scope; otherwise the command is denied (SQLSTATE <code>42501</code>). Role-membership revokes may only be performed by <code>admin</code>.</p>
+
+<p>On success the command reports the tag <code>REVOKE</code> for the privilege form, or <code>REVOKE ROLE</code> for the role-membership form.</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>ALL [ PRIVILEGES ]</dt>
+<dd>Revoke every privilege EvolutionDB tracks for the scope: <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>CREATE</code>, and <code>DROP</code>. The optional keyword <code>PRIVILEGES</code> is accepted and ignored, matching SQL-standard noise-word usage. Revoking <code>ALL</code> also clears the grant's <code>WITH GRANT OPTION</code> flag.</dd>
+
+<dt>privilege</dt>
+<dd>A specific privilege to remove. Recognized values are <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>CREATE</code>, and <code>DROP</code>. Multiple privileges may be listed separated by commas. Privilege names are case-insensitive. Tokens that are not recognized are silently ignored; if the resulting privilege set is empty, the command fails with an <em>invalid privilege specification</em> error.</dd>
+
+<dt>ON DATABASE | SCHEMA | TABLE scope_name</dt>
+<dd>Selects the scope kind and names the object the grant applies to. Exactly one of <code>DATABASE</code>, <code>SCHEMA</code>, or <code>TABLE</code> must be given. <code>scope_name</code> may be written unquoted, single-quoted (<code>'name'</code>), or double-quoted (<code>"name"</code>). It must match the scope kind and name used by the original <code>GRANT</code>.</dd>
+
+<dt>FROM user_name</dt>
+<dd>The user (or <code>PUBLIC</code>) whose privileges or role membership are being removed. May be written unquoted or single-quoted.</dd>
+
+<dt>role_name</dt>
+<dd>In the role-membership form (no <code>ON</code> clause), the name of the role whose membership is being withdrawn from <code>user_name</code>. If the user is not a member of that role, the command fails.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Not supported.</strong> EvolutionDB's <code>REVOKE</code> does not accept the SQL-standard <code>GRANT OPTION FOR</code> clause, the <code>CASCADE</code> / <code>RESTRICT</code> behavior keywords, column-level privilege lists, <code>REVOKE ... FROM PUBLIC</code> shorthand beyond naming <code>PUBLIC</code> as the user, or revoking from multiple users in one statement. Revoking a single privilege from <code>ALL</code> requires it to be present in the existing grant.</p>
+</div>
+
+<h2 id="examples">Examples</h2>
+
+<p>Remove the ability to insert into a table while leaving read access intact:</p>
+<pre><code><span class="c-key">REVOKE</span> <span class="c-key">INSERT</span> <span class="c-key">ON</span> <span class="c-key">TABLE</span> orders <span class="c-key">FROM</span> reporting;</code></pre>
+
+<p>Revoke several privileges at once:</p>
+<pre><code><span class="c-key">REVOKE</span> <span class="c-key">INSERT</span>, <span class="c-key">UPDATE</span>, <span class="c-key">DELETE</span> <span class="c-key">ON</span> <span class="c-key">TABLE</span> orders <span class="c-key">FROM</span> reporting;</code></pre>
+
+<p>Withdraw all privileges on a schema (this also clears any grant option the user held):</p>
+<pre><code><span class="c-key">REVOKE</span> <span class="c-key">ALL</span> <span class="c-key">PRIVILEGES</span> <span class="c-key">ON</span> <span class="c-key">SCHEMA</span> sales <span class="c-key">FROM</span> analyst;</code></pre>
+
+<p>Revoke a database-wide privilege from everyone by targeting <code>PUBLIC</code>:</p>
+<pre><code><span class="c-key">REVOKE</span> <span class="c-key">SELECT</span> <span class="c-key">ON</span> <span class="c-key">DATABASE</span> testdb <span class="c-key">FROM</span> PUBLIC;</code></pre>
+
+<p>Use a quoted scope name when it is not a plain identifier:</p>
+<pre><code><span class="c-key">REVOKE</span> <span class="c-key">SELECT</span> <span class="c-key">ON</span> <span class="c-key">TABLE</span> <span class="c-str">"Quarterly Report"</span> <span class="c-key">FROM</span> analyst;</code></pre>
+
+<p>Remove a user's membership in a role (admin only):</p>
+<pre><code><span class="c-key">REVOKE</span> analysts <span class="c-key">FROM</span> alice;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>EvolutionDB's <code>REVOKE</code> covers the most common case of the SQL standard and of PostgreSQL — removing object privileges from a grantee — but differs in several respects:</p>
+<ul>
+<li><strong>Scope keyword is mandatory.</strong> Unlike the SQL standard / PostgreSQL, which infer the object class, EvolutionDB requires an explicit <code>ON DATABASE</code>, <code>ON SCHEMA</code>, or <code>ON TABLE</code> keyword.</li>
+<li><strong>No <code>CASCADE</code> / <code>RESTRICT</code>.</strong> The standard's dependent-privilege behavior keywords are not accepted. Revoking does not recursively withdraw privileges that the grantee may have re-granted to others.</li>
+<li><strong>No <code>GRANT OPTION FOR</code>.</strong> You cannot revoke only the grant option while keeping the underlying privilege. Revoking <code>ALL</code> clears the grant option; revoking individual privileges leaves the flag unchanged on whatever remains.</li>
+<li><strong>No column-level privileges</strong> and no multi-grantee lists.</li>
+<li><strong>Privilege set.</strong> EvolutionDB tracks only <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>CREATE</code>, and <code>DROP</code>. PostgreSQL privileges such as <code>TRUNCATE</code>, <code>REFERENCES</code>, <code>TRIGGER</code>, <code>CONNECT</code>, <code>TEMPORARY</code>, <code>EXECUTE</code>, and <code>USAGE</code> are not modeled.</li>
+<li><strong>Additive PUBLIC model.</strong> As in PostgreSQL, a user-specific revoke does not override a privilege still held via a grant to <code>PUBLIC</code>.</li>
+<li><strong>Role revoke is admin-only</strong> and uses the same flat <code>REVOKE role FROM user</code> form as PostgreSQL, but without <code>ADMIN OPTION FOR</code> or cascade semantics.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/grant/">GRANT</a></li>
+<li><a href="/3.0/ref/create-user/">CREATE USER</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

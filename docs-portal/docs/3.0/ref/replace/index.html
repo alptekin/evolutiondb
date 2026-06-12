@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>REPLACE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>REPLACE</h1>
+<p class="lede">REPLACE — insert a row, or if a row with the same primary key already exists, delete that row first and then insert the new one.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">REPLACE</span> <span class="opt">[ LOW_PRIORITY | DELAYED | HIGH_PRIORITY ]</span> <span class="opt">[ IGNORE ]</span> <span class="opt">[ INTO ]</span> <em>table_name</em>
+    <span class="opt">[ ( <em>column</em> [, ...] ) ]</span>
+    <span class="c-key">VALUES</span> ( { <em>expression</em> | <span class="c-key">DEFAULT</span> } [, ...] ) [, ...]
+
+<span class="c-key">REPLACE</span> <span class="opt">[ LOW_PRIORITY | DELAYED | HIGH_PRIORITY ]</span> <span class="opt">[ IGNORE ]</span> <span class="opt">[ INTO ]</span> <em>table_name</em>
+    <span class="c-key">SET</span> <em>column</em> = { <em>expression</em> | <span class="c-key">DEFAULT</span> } [, ...]
+
+<span class="c-key">REPLACE</span> <span class="opt">[ LOW_PRIORITY | DELAYED | HIGH_PRIORITY ]</span> <span class="opt">[ IGNORE ]</span> <span class="opt">[ INTO ]</span> <em>table_name</em>
+    <span class="opt">[ ( <em>column</em> [, ...] ) ]</span>
+    <em>select_statement</em></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>REPLACE</code> writes rows into <em>table_name</em>. It behaves exactly like <a href="/3.0/ref/insert/">INSERT</a> with one difference: when the new row would collide with an existing row on the table's primary key, the existing row is deleted and the new row is inserted in its place, rather than the statement failing with a duplicate-key error.</p>
+<p>Conflict detection is driven entirely by the table's <strong>primary key</strong>. EvolutionDB builds the primary-key value from the supplied column values, probes the primary-key B+ tree, and:</p>
+<ul>
+<li>If no matching key is found, the row is inserted normally — identical to <code>INSERT</code>.</li>
+<li>If a matching key is found, the engine deletes the existing row (an MVCC delete under the current transaction), then inserts the new row.</li>
+</ul>
+<p>A REPLACE is therefore a delete-plus-insert, not an in-place update: the replacement row is a brand-new tuple, any columns not provided take their defaults (or NULL), and any <code>BEFORE INSERT</code> triggers fire for the inserted row. The operation runs under the statement's transaction, so it is rolled back together with the surrounding work if the transaction aborts.</p>
+<p>Three forms are accepted, all sharing the same conflict semantics:</p>
+<ul>
+<li><strong>VALUES</strong> — one or more parenthesized row constructors, optionally preceded by an explicit column list.</li>
+<li><strong>SET</strong> — MySQL-style assignment form, listing <code><em>column</em> = <em>value</em></code> pairs for a single row.</li>
+<li><strong>SELECT</strong> — populate the target from the result of a query, optionally with an explicit column list.</li>
+</ul>
+<div class="callout">
+<strong>Requires a primary key.</strong> REPLACE's conflict resolution operates on the primary-key index. A target table without a usable primary key has nothing to collide on, so REPLACE simply degrades to a plain insert and will raise a duplicate-key error only where the same key value recurs.
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>LOW_PRIORITY | DELAYED | HIGH_PRIORITY</dt>
+<dd>Priority hints carried over from the INSERT grammar. They are accepted for MySQL syntax compatibility but do not change scheduling in EvolutionDB; statements execute under the engine's single serialized write path regardless of the hint.</dd>
+
+<dt>IGNORE</dt>
+<dd>Accepted modifier shared with INSERT. It is parsed in the same option position as the priority hints. Because REPLACE already resolves primary-key collisions by replacing the existing row, IGNORE has no additional effect on the conflict path.</dd>
+
+<dt>INTO</dt>
+<dd>Optional noise word before the table name, accepted for compatibility. <code>REPLACE table</code> and <code>REPLACE INTO table</code> are equivalent.</dd>
+
+<dt><em>table_name</em></dt>
+<dd>The table that receives the rows. It must already exist.</dd>
+
+<dt><em>column</em> [, ...]</dt>
+<dd>An optional list of target columns. When given (VALUES and SELECT forms), values are matched positionally to these columns; columns omitted from the list take their default value (or NULL). When omitted, values are matched against the table's columns in definition order.</dd>
+
+<dt><em>expression</em></dt>
+<dd>A value expression producing the column value. Within a VALUES row or a SET assignment, the literal keyword <code>DEFAULT</code> may be used instead of an expression to request the column's declared default.</dd>
+
+<dt>DEFAULT</dt>
+<dd>Substitutes the column's default value (or NULL when no default is declared) for that position.</dd>
+
+<dt><em>select_statement</em></dt>
+<dd>A query whose result rows are replaced into the target. Each result row is processed with the same primary-key conflict resolution as a literal VALUES row.</dd>
+
+<dt>SET <em>column</em> = <em>value</em> [, ...]</dt>
+<dd>The single-row assignment form. Each pair sets one column; columns not listed take their default value (or NULL).</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create a table keyed by a primary key, then replace into it:</p>
+<pre><code><span class="c-key">CREATE TABLE</span> products (
+    id     <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    name   <span class="c-key">VARCHAR</span>(50),
+    price  <span class="c-key">INT</span>
+);
+
+<span class="c-com">-- No row with id = 1 yet: behaves like INSERT</span>
+<span class="c-key">REPLACE INTO</span> products (id, name, price) <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'Keyboard'</span>, <span class="c-str">40</span>);
+
+<span class="c-com">-- id = 1 already exists: old row is deleted, new row inserted in its place</span>
+<span class="c-key">REPLACE INTO</span> products (id, name, price) <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'Keyboard Pro'</span>, <span class="c-str">65</span>);</code></pre>
+
+<p>Multi-row VALUES, with one new key and one colliding key:</p>
+<pre><code><span class="c-key">REPLACE INTO</span> products (id, name, price)
+<span class="c-key">VALUES</span> (<span class="c-str">2</span>, <span class="c-str">'Mouse'</span>, <span class="c-str">25</span>),
+       (<span class="c-str">1</span>, <span class="c-str">'Keyboard Max'</span>, <span class="c-str">80</span>);</code></pre>
+
+<p>The <code>INTO</code> keyword is optional, and a column may be set to its default:</p>
+<pre><code><span class="c-key">REPLACE</span> products (id, name, price) <span class="c-key">VALUES</span> (<span class="c-str">3</span>, <span class="c-str">'Cable'</span>, <span class="c-key">DEFAULT</span>);</code></pre>
+
+<p>The SET form replaces a single row:</p>
+<pre><code><span class="c-key">REPLACE INTO</span> products
+<span class="c-key">SET</span> id = <span class="c-str">1</span>, name = <span class="c-str">'Keyboard Ultra'</span>, price = <span class="c-str">95</span>;</code></pre>
+
+<p>The SELECT form copies rows from another table, replacing on key collisions:</p>
+<pre><code><span class="c-key">REPLACE INTO</span> products (id, name, price)
+<span class="c-key">SELECT</span> id, name, price <span class="c-key">FROM</span> staging_products;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>REPLACE</code> is <strong>not part of the SQL standard</strong>, and <strong>PostgreSQL does not have a REPLACE statement</strong>. EvolutionDB's REPLACE follows the <strong>MySQL/MariaDB</strong> dialect: the same three forms (<code>VALUES</code>, <code>SET</code>, and <code>... SELECT</code>), the optional <code>INTO</code> keyword, and the priority/<code>IGNORE</code> modifiers are all accepted in the MySQL syntax positions.</p>
+<p>Differences and limitations to be aware of:</p>
+<ul>
+<li><strong>Primary key only.</strong> Like MySQL, EvolutionDB resolves the conflict by deleting the existing row and inserting the new one. EvolutionDB performs this resolution against the table's <em>primary key</em>; it does not evaluate additional UNIQUE constraints as separate conflict targets.</li>
+<li><strong>Priority hints are no-ops.</strong> <code>LOW_PRIORITY</code>, <code>DELAYED</code>, and <code>HIGH_PRIORITY</code> are accepted for syntactic compatibility but do not affect scheduling.</li>
+<li><strong>Portable alternative.</strong> For standard-conforming upsert behavior, prefer <code>INSERT ... ON CONFLICT DO UPDATE</code> (PostgreSQL style) or <code>INSERT ... ON DUPLICATE KEY UPDATE</code> (MySQL style), both supported by EvolutionDB's INSERT. Unlike REPLACE, those forms update the existing row in place rather than deleting and re-inserting it.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

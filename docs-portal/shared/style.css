@@ -82,3 +82,26 @@ body { background: radial-gradient(circle at 20% -10%, rgba(34,211,238,.08), rgb
 .doc-card .material-symbols-outlined { color:#22D3EE; font-size: 28px; }
 
 @media (prefers-reduced-motion: reduce) { .reveal { animation: none; } }
+
+/* ---- PostgreSQL-style reference manual (docs.evolutiondb.org) ---- */
+.breadcrumb { font-size: 12.5px; color:#859397; margin-bottom: 18px; font-family:'JetBrains Mono',monospace; }
+.breadcrumb a { color:#859397; text-decoration:none; border:0; }
+.breadcrumb a:hover { color:#22D3EE; }
+.synopsis { background:#0a0e17; border:1px solid rgba(255,255,255,.1); border-left:3px solid #6366F1;
+  border-radius:10px; padding:16px 18px; margin:14px 0 24px; font-family:'JetBrains Mono',monospace;
+  font-size:13px; line-height:1.65; color:#dfe2ef; white-space:pre-wrap; overflow-x:auto; }
+.synopsis .opt { color:#859397; }          /* [optional] tokens */
+.prose dl.params { margin: 14px 0; }
+.prose dl.params dt { font-family:'JetBrains Mono',monospace; color:#a2eeff; font-size:13.5px;
+  margin-top: 16px; font-weight:600; }
+.prose dl.params dd { margin: 4px 0 0 18px; color:#cdd6e4; line-height:1.65; }
+.prose dl.params dd + dt { border-top: 1px solid rgba(255,255,255,.05); padding-top: 14px; }
+.verselect { background:#0a0e17; color:#8aebff; border:1px solid rgba(34,211,238,.3); border-radius:8px;
+  padding:4px 8px; font-size:12px; font-family:'JetBrains Mono',monospace; cursor:pointer; }
+.prevnext { display:flex; justify-content:space-between; gap:16px; margin-top:56px; padding-top:24px;
+  border-top:1px solid rgba(255,255,255,.1); }
+.prevnext a { flex:1; text-decoration:none; border:1px solid rgba(255,255,255,.1); border-radius:12px;
+  padding:14px 16px; color:#cdd6e4; transition:all .2s; }
+.prevnext a:hover { border-color:rgba(34,211,238,.4); background:rgba(34,211,238,.05); }
+.prevnext .nx { text-align:right; }
+.prevnext small { display:block; color:#859397; font-size:11px; font-family:'JetBrains Mono',monospace; }

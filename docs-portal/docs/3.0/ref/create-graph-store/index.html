@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE GRAPH STORE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE GRAPH STORE</h1>
+<p class="lede">Create a named bitemporal knowledge-graph store and its backing node and edge tables.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE GRAPH STORE</span> <span class="opt">[ IF EXISTS ]</span> <span class="c-com">store_name</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE GRAPH STORE</code> registers a new knowledge-graph store under <code>store_name</code> and provisions the two relational tables that hold its data. It is part of EvolutionDB's bitemporal knowledge-graph surface (Feature&nbsp;224), alongside <code>GRAPH UPSERT NODE</code>, <code>GRAPH UPSERT EDGE</code>, and <code>GRAPH NEIGHBORS</code>.</p>
+<p>For a store named <code>store_name</code>, the command creates:</p>
+<ul>
+<li><strong><code>kg_&lt;store_name&gt;_nodes</code></strong> — columns <code>id VARCHAR(255) PRIMARY KEY NOT NULL</code>, <code>type VARCHAR(64)</code>, <code>props VARCHAR(8000)</code> (JSON-shaped), and <code>valid_from TIMESTAMP NOT NULL</code>.</li>
+<li><strong><code>kg_&lt;store_name&gt;_edges</code></strong> — columns <code>id BIGINT PRIMARY KEY AUTO_INCREMENT</code>, <code>src VARCHAR(255) NOT NULL</code>, <code>rel VARCHAR(128) NOT NULL</code>, <code>dst VARCHAR(255) NOT NULL</code>, <code>props VARCHAR(8000)</code>, <code>valid_from TIMESTAMP NOT NULL</code>, and <code>invalid_at TIMESTAMP</code> (where <code>NULL</code> marks a currently-active edge).</li>
+</ul>
+<p>Both tables are created in the current schema (the schema resolved from the current database/schema context). The store itself is recorded as one row in the system catalog (<code>CAT_SYS_GRAPH_STORES</code>), holding the store name plus the table ids of its nodes and edges tables. The store name is global to the catalog — it is not schema-qualified.</p>
+<p>The <code>invalid_at</code> column on edges is what makes the store <em>bitemporal</em>: an <code>UPSERT EDGE</code> on an existing <code>(src, rel, dst)</code> triple stamps the prior live row's <code>invalid_at</code> to <code>NOW()</code> and appends a fresh row, so a <code>GRAPH NEIGHBORS … AS OF</code> query can reconstruct the graph as it stood at any past timestamp.</p>
+<div class="callout">
+<p><strong>Idempotency.</strong> Without the optional clause, creating a store whose name already exists raises an error (SQLSTATE <code>42710</code>, <em>duplicate object</em>). With the clause present, an already-existing store is left untouched and the command succeeds silently.</p>
+</div>
+<div class="callout">
+<p><strong>Grammar note.</strong> The optional &ldquo;create only if absent&rdquo; clause is spelled <code>IF EXISTS</code> in the accepted grammar (token sequence <code>CREATE GRAPH STORE IF EXISTS store_name</code>). Despite the keyword being <code>EXISTS</code>, the semantics are <em>if-not-exists</em>: when present, an already-existing store is a no-op rather than an error. This differs from the <code>IF NOT EXISTS</code> spelling used by <code>CREATE TABLE</code> and most other EvolutionDB DDL.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>IF EXISTS</code></dt>
+<dd>Optional. When present, do not raise an error if a graph store with the same name already exists; instead, do nothing and report success. The backing tables are not recreated or altered. (See the grammar note above: this clause behaves as <em>if-not-exists</em> despite its keyword.)</dd>
+<dt><code>store_name</code></dt>
+<dd>The name of the graph store to create. It must be a bare identifier and is required. The same name is used to derive the backing table names <code>kg_&lt;store_name&gt;_nodes</code> and <code>kg_&lt;store_name&gt;_edges</code>, and is recorded verbatim in the system catalog. A missing name raises a syntax error (SQLSTATE <code>42601</code>).</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create a knowledge-graph store named <code>kb</code>:</p>
+<pre><code><span class="c-key">CREATE GRAPH STORE</span> kb;</code></pre>
+
+<p>Create it only if it is not already present:</p>
+<pre><code><span class="c-key">CREATE GRAPH STORE</span> <span class="c-key">IF EXISTS</span> kb;</code></pre>
+
+<p>Create a store and populate it. Each <code>VALUES</code> argument is a single-quoted string:</p>
+<pre><code><span class="c-key">CREATE GRAPH STORE</span> kb;
+
+<span class="c-com">-- nodes: (id, type, props)</span>
+<span class="c-key">GRAPH UPSERT NODE INTO</span> kb <span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">'person'</span>, <span class="c-str">'{"role":"engineer"}'</span>);
+<span class="c-key">GRAPH UPSERT NODE INTO</span> kb <span class="c-key">VALUES</span> (<span class="c-str">'acme'</span>, <span class="c-str">'org'</span>, <span class="c-str">'{"sector":"db"}'</span>);
+
+<span class="c-com">-- edge: (src, rel, dst)</span>
+<span class="c-key">GRAPH UPSERT EDGE INTO</span> kb <span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">'works_at'</span>, <span class="c-str">'acme'</span>);
+
+<span class="c-com">-- edge with optional props: (src, rel, dst, props)</span>
+<span class="c-key">GRAPH UPSERT EDGE INTO</span> kb <span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">'knows'</span>, <span class="c-str">'bob'</span>, <span class="c-str">'{"since":2021}'</span>);</code></pre>
+
+<p>Walk the graph outward from a node. The optional <code>DEPTH</code> and <code>AS OF</code> clauses control hop count and the temporal snapshot:</p>
+<pre><code><span class="c-key">GRAPH NEIGHBORS OF</span> <span class="c-str">'alice'</span> <span class="c-key">IN</span> kb;
+<span class="c-key">GRAPH NEIGHBORS OF</span> <span class="c-str">'alice'</span> <span class="c-key">IN</span> kb <span class="c-key">DEPTH</span> 2;
+<span class="c-key">GRAPH NEIGHBORS OF</span> <span class="c-str">'alice'</span> <span class="c-key">IN</span> kb <span class="c-key">AS OF</span> <span class="c-str">'2026-01-01 00:00:00'</span>;</code></pre>
+
+<p>Remove the store, dropping both backing tables and the catalog entry:</p>
+<pre><code><span class="c-key">DROP GRAPH STORE</span> kb;
+<span class="c-key">DROP GRAPH STORE</span> <span class="c-key">IF EXISTS</span> kb;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE GRAPH STORE</code> is an EvolutionDB extension. There is no such statement in the SQL standard (SQL:2016), and PostgreSQL has no <code>CREATE GRAPH STORE</code> command — graph workloads on PostgreSQL are handled by external extensions (for example Apache AGE's <code>create_graph()</code> function), not by core DDL. EvolutionDB instead exposes a first-class, fixed-shape store: the node and edge schemas are defined by the engine and cannot be customized at creation time, and a store has exactly one nodes table and one edges table.</p>
+<p>The optional clause is spelled <code>IF EXISTS</code> (not <code>IF NOT EXISTS</code>) but carries if-not-exists semantics; this is specific to the graph-store and entity-store grammar and is not how the SQL standard or PostgreSQL spell conditional <code>CREATE</code>.</p>
+<p>The model is bitemporal in the spirit of Zep Graphiti rather than the SQL standard's system-versioned tables: edges are never deleted on update but are closed by stamping <code>invalid_at</code>, enabling point-in-time <code>AS OF</code> reads. EvolutionDB does not implement SQL standard <code>FOR SYSTEM_TIME</code> syntax for these stores.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-entity-store/">CREATE ENTITY STORE</a></li>
+<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/drop-table/">DROP TABLE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

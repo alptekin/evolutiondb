@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE DOMAIN — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE DOMAIN</h1>
+<p class="lede">Register a named, reusable data type built from a base type plus optional <code>NOT NULL</code> and <code>CHECK</code> constraints.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE DOMAIN</span> domain_name <span class="c-key">AS</span> data_type
+    <span class="opt">[ DEFAULT default_expr ]</span>
+    <span class="opt">[ NOT NULL ]</span>
+    <span class="opt">[ CHECK ( expression ) ]</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE DOMAIN</code> creates a <em>domain</em>: a named definition that pairs an
+underlying base <code>data_type</code> with optional constraints. The domain is recorded in
+EvolutionDB's system catalog so that it can be referred to by name.</p>
+<p>Internally the domain is not given its own catalog entity. EvolutionDB stores it in the
+shared <em>constraints</em> B+ tree under the system namespace (<code>table_id = 0</code>) with a
+constraint type of <code>'D'</code>. The catalog row packs three fields into a single
+definition string of the form <code>"type_val|not_null|check_serialized"</code>: the numeric
+type code of the base type, a <code>0</code>/<code>1</code> flag for <code>NOT NULL</code>, and — when a
+<code>CHECK</code> clause is given — the serialized check expression. The domain name is unique
+within that system namespace; creating a domain whose name already exists fails with
+SQLSTATE <code>42710</code> (<em>duplicate object</em>).</p>
+<p>The base type is any type accepted by EvolutionDB's <code>data_type</code> grammar — for example
+<code>INTEGER</code>, <code>BIGINT</code>, <code>DECIMAL(p,s)</code>, <code>VARCHAR(n)</code>, <code>CHAR(n)</code>,
+<code>TEXT</code>, <code>BOOLEAN</code>, <code>DATE</code>, <code>TIMESTAMP</code>, <code>UUID</code>, <code>JSON</code>,
+<code>ENUM(...)</code>, array types written <code>type[]</code>, and so on.</p>
+
+<div class="callout">
+<p><strong>Honest implementation note.</strong> Two parts of the syntax are accepted by the parser but
+have limited effect in the current release, and you should not rely on them:</p>
+<ul>
+<li><strong><code>DEFAULT default_expr</code> is parsed but not stored.</strong> The grammar accepts the
+clause, but the value is discarded — the catalog row records only the base type, the
+<code>NOT NULL</code> flag, and the <code>CHECK</code> expression. No default is persisted with the domain.</li>
+<li><strong>Domains are recorded, not yet enforced as column types.</strong> A domain is written to the
+catalog, but the engine does not currently resolve a domain name when it appears as a column
+type in <a href="/3.0/ref/create-table/">CREATE TABLE</a>; the domain's <code>NOT NULL</code> and
+<code>CHECK</code> rules are therefore not automatically applied to columns by referencing the
+domain name.</li>
+</ul>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>domain_name</dt>
+<dd>The name of the domain to create. It must be unique within the system namespace; a clash
+returns <code>domain "name" already exists</code> with SQLSTATE <code>42710</code>.</dd>
+
+<dt>data_type</dt>
+<dd>The underlying base type for the domain, given after the required <code>AS</code> keyword. Any
+type from EvolutionDB's <code>data_type</code> grammar is allowed, including parameterized types
+such as <code>VARCHAR(n)</code> and <code>DECIMAL(p,s)</code> and array types written <code>type[]</code>.
+The type is stored as its internal numeric code (<code>type_family &times; 10000 + size</code>).</dd>
+
+<dt>DEFAULT default_expr</dt>
+<dd>Accepted by the grammar but <em>not persisted</em> in this release. The expression is parsed and
+then discarded, so it does not become part of the stored domain definition.</dd>
+
+<dt>NOT NULL</dt>
+<dd>Marks the domain as not accepting null values. When present, the not-null flag is recorded in
+the domain's catalog definition. May be combined with a <code>CHECK</code> clause.</dd>
+
+<dt>CHECK ( expression )</dt>
+<dd>A boolean constraint expression associated with the domain. When given, the expression is
+serialized and stored alongside the base type in the domain's catalog row.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>A simple domain over an integer base type:</p>
+<pre><code><span class="c-key">CREATE DOMAIN</span> postal_code <span class="c-key">AS</span> <span class="c-key">INTEGER</span>;</code></pre>
+
+<p>A text domain that disallows nulls:</p>
+<pre><code><span class="c-key">CREATE DOMAIN</span> email_addr <span class="c-key">AS</span> <span class="c-key">VARCHAR</span>(<span class="c-str">255</span>) <span class="c-key">NOT NULL</span>;</code></pre>
+
+<p>A domain with a value constraint:</p>
+<pre><code><span class="c-key">CREATE DOMAIN</span> percent <span class="c-key">AS</span> <span class="c-key">INTEGER</span>
+    <span class="c-key">CHECK</span> (value &gt;= <span class="c-str">0</span> <span class="c-key">AND</span> value &lt;= <span class="c-str">100</span>);</code></pre>
+
+<p>A non-null domain with a check, combined:</p>
+<pre><code><span class="c-key">CREATE DOMAIN</span> positive_amount <span class="c-key">AS</span> <span class="c-key">DECIMAL</span>(<span class="c-str">12</span>,<span class="c-str">2</span>) <span class="c-key">NOT NULL</span>
+    <span class="c-key">CHECK</span> (value &gt; <span class="c-str">0</span>);</code></pre>
+
+<p><span class="c-com">-- The DEFAULT clause parses, but the value is not stored with the domain:</span></p>
+<pre><code><span class="c-key">CREATE DOMAIN</span> country_code <span class="c-key">AS</span> <span class="c-key">CHAR</span>(<span class="c-str">2</span>) <span class="c-key">DEFAULT</span> <span class="c-str">'US'</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE DOMAIN</code> exists in the SQL standard and in PostgreSQL. EvolutionDB implements a
+deliberately narrow subset:</p>
+<ul>
+<li>EvolutionDB accepts <code>DEFAULT</code>, a single <code>NOT NULL</code>, and a single unnamed
+<code>CHECK (expression)</code>. The standard and PostgreSQL also allow named constraints
+(<code>CONSTRAINT name CHECK ...</code>), multiple constraints, <code>NULL</code> (explicitly nullable),
+and <code>COLLATE</code> — none of these are part of EvolutionDB's grammar.</li>
+<li>Unlike PostgreSQL, EvolutionDB does not require or accept a schema-qualified domain name in
+this command; the domain is registered in a single system namespace.</li>
+<li><code>DEFAULT</code> is syntactically accepted but, in the current release, the default value is
+not retained. PostgreSQL stores and applies the default.</li>
+<li>In PostgreSQL a domain becomes a usable column type that enforces its constraints on every
+column declared with it. In the current EvolutionDB release the domain is recorded in the
+catalog but is not yet wired in as a referenceable column type, so its constraints are not
+automatically enforced through the domain name.</li>
+</ul>
+<p>Code that depends on default propagation or on domain-typed columns should treat those
+behaviors as not yet available and use explicit column-level <code>NOT NULL</code>/<code>CHECK</code>
+constraints in <a href="/3.0/ref/create-table/">CREATE TABLE</a> instead.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/alter-table/">ALTER TABLE</a></li>
+<li><a href="/3.0/ref/create-index/">CREATE INDEX</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

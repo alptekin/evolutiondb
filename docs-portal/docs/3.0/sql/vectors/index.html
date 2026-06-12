@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>14. Vectors &amp; Hybrid Search — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>14. Vectors &amp; Hybrid Search</h1>
+<p class="lede">EvolutionDB stores fixed-dimension dense embeddings in <code>VECTOR(N)</code> columns, ranks them with four built-in distance metrics, accelerates nearest-neighbor queries with an in-memory HNSW index, and combines an equality filter with vector ranking through a single hybrid-search call.</p>
+
+<h2 id="overview">14.1. Overview</h2>
+<p>Vector support in EvolutionDB is built from four cooperating pieces:</p>
+<ul>
+<li>The <a href="#type"><code>VECTOR(N)</code> data type</a> — a fixed-dimension array of single-precision floats stored inline in the binary tuple.</li>
+<li><a href="#distance">Distance functions and operators</a> — <code>COSINE_DISTANCE</code>, <code>L2_DISTANCE</code>, <code>INNER_PRODUCT</code>, <code>L1_DISTANCE</code>, plus the <code>&lt;-&gt;</code> and <code>&lt;#&gt;</code> operators.</li>
+<li>The <a href="#hnsw">HNSW index</a> — created with <code>CREATE INDEX … USING HNSW</code> and queried through the <code>HNSW_KNN</code> function or a cosine <code>ORDER BY</code>.</li>
+<li><a href="#hybrid">Hybrid search</a> — <code>HNSW_FILTER_KNN</code>, which folds a single equality predicate into vector ranking with automatic pre-/post-filter strategy selection.</li>
+</ul>
+
+<div class="callout">
+<p><strong>Relationship to PostgreSQL.</strong> The surface syntax deliberately echoes the <code>pgvector</code> extension — <code>VECTOR(N)</code>, <code>USING HNSW</code>, the <code>vector_cosine_ops</code> opclass family, the <code>WITH (m=…, ef_construction=…)</code> parameters, and the <code>&lt;-&gt;</code> / <code>&lt;#&gt;</code> operators are all recognized. The implementation, however, is EvolutionDB's own: a brute-force-backed in-memory graph (see <a href="#notes">Notes</a>). EvolutionDB is not <code>pgvector</code> and does not promise the same recall, persistence, or operator coverage. This chapter documents only what the engine actually implements.</p>
+</div>
+
+<h2 id="type">14.2. The <code>VECTOR(N)</code> Type</h2>
+<p>A <code>VECTOR(N)</code> column holds exactly <em>N</em> single-precision (float4) components. The dimension is declared at <code>CREATE TABLE</code> time and is part of the column's type; rows are not allowed to carry vectors of a different length.</p>
+
+<pre class="synopsis"><code><span class="c-key">VECTOR</span> ( <span class="c-com">dimension</span> )</code></pre>
+
+<p>Internally the dimension is folded into the type code as <code>260000 + N</code> (type family 26). For example <code>VECTOR(3)</code> is encoded as <code>260003</code> and <code>VECTOR(1536)</code> as <code>261536</code>. The payload is stored inline in the tuple as <em>N</em> consecutive 4-byte little-endian floats with no length prefix — the dimension is recovered from the column's type code, not from the stored bytes.</p>
+
+<dl class="params">
+<dt>Storage</dt><dd>N × 4 bytes, float4 little-endian, stored inline in the binary tuple. A <code>VECTOR(1536)</code> value occupies 6144 bytes of column data.</dd>
+<dt>Maximum dimension</dt><dd><code>16384</code> (<code>VECTOR_MAX_DIM</code>). Declaring or inserting beyond this is rejected.</dd>
+<dt>Element type</dt><dd>32-bit IEEE float. Values are accepted as decimal text and converted to float4 on insert.</dd>
+<dt>NULL</dt><dd>A vector column may be NULL like any other column; the null bitmap marks it and no payload bytes are written.</dd>
+</dl>
+
+<h3 id="literals">14.2.1. Vector literals</h3>
+<p>A vector value is supplied as a string literal in one of three accepted forms:</p>
+<dl class="params">
+<dt><code>[f1,f2,…]</code></dt><dd>Bracketed list of decimal floats. This is the canonical text form and the one used when a vector is rendered back out.</dd>
+<dt><code>{f1,f2,…}</code></dt><dd>Brace-delimited list; accepted as an equivalent input form.</dd>
+<dt><code>b64i8:&lt;base64&gt;</code></dt><dd>A compact quantized form: a little-endian float32 scale factor followed by an <code>int8[]</code> array, base64-encoded. On decode each byte is dequantized as <code>byte × (scale / 127)</code>. This keeps a 1024-dimension query literal around 1.4&nbsp;KB, comfortably under the statement-size cap, and is intended for machine-generated queries.</dd>
+</dl>
+
+<p>Whitespace inside a list is ignored; an embedded <code>NaN</code> is rejected as a parse error.</p>
+
+<pre><code><span class="c-com">-- Declare and populate a table of embeddings</span>
+<span class="c-key">CREATE TABLE</span> docs (
+    id    <span class="c-key">INTEGER</span> <span class="c-key">PRIMARY KEY</span>,
+    title <span class="c-key">VARCHAR</span>(<span class="c-str">200</span>),
+    topic <span class="c-key">VARCHAR</span>(<span class="c-str">40</span>),
+    emb   <span class="c-key">VECTOR</span>(<span class="c-str">3</span>)
+);
+
+<span class="c-key">INSERT INTO</span> docs (id, title, topic, emb) <span class="c-key">VALUES</span>
+  (<span class="c-str">1</span>, <span class="c-str">'intro to storage'</span>,  <span class="c-str">'storage'</span>, <span class="c-str">'[0.10, 0.20, 0.97]'</span>),
+  (<span class="c-str">2</span>, <span class="c-str">'btree internals'</span>,   <span class="c-str">'storage'</span>, <span class="c-str">'[0.11, 0.19, 0.98]'</span>),
+  (<span class="c-str">3</span>, <span class="c-str">'wire protocol'</span>,     <span class="c-str">'protocol'</span>,<span class="c-str">'[0.90, 0.05, 0.10]'</span>);</code></pre>
+
+<p>See <a href="/3.0/ref/create-table/">CREATE TABLE</a> for the full column-definition grammar and <a href="/3.0/ref/insert/">INSERT</a> for value syntax.</p>
+
+<h2 id="distance">14.3. Distance Functions and Operators</h2>
+<p>Four scalar distance functions are available in any expression position (projection, <code>WHERE</code>, <code>ORDER BY</code>). Each takes two vectors of equal length and returns a <code>DOUBLE</code> distance — smaller is more similar.</p>
+
+<table>
+<thead><tr><th>Function</th><th>Operator</th><th>Returns</th><th>Definition</th></tr></thead>
+<tbody>
+<tr><td><code>COSINE_DISTANCE(a, b)</code></td><td><code>&lt;=&gt;</code> (in <code>ORDER BY</code> only)</td><td>double</td><td><code>1 − (a·b) / (‖a‖·‖b‖)</code>. Returns <code>1.0</code> if either vector is all-zero.</td></tr>
+<tr><td><code>L2_DISTANCE(a, b)</code></td><td><code>&lt;-&gt;</code></td><td>double</td><td>Euclidean distance, <code>√Σ(aᵢ−bᵢ)²</code>.</td></tr>
+<tr><td><code>INNER_PRODUCT(a, b)</code></td><td><code>&lt;#&gt;</code></td><td>double</td><td>Negated dot product, <code>−Σ(aᵢ·bᵢ)</code>. Negated so that "more similar" sorts first, consistent with the other metrics.</td></tr>
+<tr><td><code>L1_DISTANCE(a, b)</code></td><td>—</td><td>double</td><td>Manhattan distance, <code>Σ|aᵢ−bᵢ|</code>.</td></tr>
+</tbody>
+</table>
+
+<p>Three vector utility functions round out the set:</p>
+<dl class="params">
+<dt><code>VECTOR_DIM(v)</code></dt><dd>Number of components in <code>v</code>.</dd>
+<dt><code>VECTOR_NORM(v)</code></dt><dd>The L2 norm (magnitude) of <code>v</code>.</dd>
+<dt><code>VECTOR_NORMALIZE(v)</code></dt><dd>The unit vector in the direction of <code>v</code>.</dd>
+</dl>
+
+<pre><code><span class="c-com">-- Exact (un-indexed) nearest neighbors via a distance function in ORDER BY</span>
+<span class="c-key">SELECT</span> id, title,
+       <span class="c-key">L2_DISTANCE</span>(emb, <span class="c-str">'[0.10, 0.20, 0.97]'</span>) <span class="c-key">AS</span> dist
+<span class="c-key">FROM</span>   docs
+<span class="c-key">ORDER BY</span> dist <span class="c-key">ASC</span>
+<span class="c-key">LIMIT</span> <span class="c-str">5</span>;
+
+<span class="c-com">-- The L2 operator form is equivalent to L2_DISTANCE()</span>
+<span class="c-key">SELECT</span> id, emb <span class="c-key">&lt;-&gt;</span> <span class="c-str">'[0.10, 0.20, 0.97]'</span> <span class="c-key">AS</span> dist <span class="c-key">FROM</span> docs <span class="c-key">ORDER BY</span> dist;</code></pre>
+
+<div class="callout">
+<p><strong>Operator availability differs by metric.</strong> Only two infix operators exist: <code>&lt;-&gt;</code> (L2) and <code>&lt;#&gt;</code> (inner product), usable anywhere an expression is allowed. Cosine has <em>no</em> general infix operator — the <code>&lt;=&gt;</code> spelling is accepted only in the <a href="#orderby"><code>ORDER BY</code> position</a>. For cosine elsewhere, call <code>COSINE_DISTANCE()</code>. There is no L1 operator at all; use <code>L1_DISTANCE()</code>. This is narrower than <code>pgvector</code>, which exposes a full operator set per metric.</p>
+</div>
+
+<h3 id="orderby">14.3.1. Cosine <code>ORDER BY</code></h3>
+<p>For convenience, a column may be ranked by cosine distance against a query literal directly in <code>ORDER BY</code> using the <code>&lt;=&gt;</code> operator:</p>
+
+<pre class="sig"><code><span class="c-key">ORDER BY</span> <span class="c-com">column</span> <span class="c-key">&lt;=&gt;</span> <span class="c-str">'[f1,f2,…]'</span> [ <span class="c-key">ASC</span> | <span class="c-key">DESC</span> ]</code></pre>
+
+<pre><code><span class="c-key">SELECT</span> id, title
+<span class="c-key">FROM</span>   docs
+<span class="c-key">ORDER BY</span> emb <span class="c-key">&lt;=&gt;</span> <span class="c-str">'[0.10, 0.20, 0.97]'</span> <span class="c-key">ASC</span>
+<span class="c-key">LIMIT</span> <span class="c-str">3</span>;</code></pre>
+
+<p>Only the cosine sub-operator is honored in this position. Any other comparison operator (<code>=</code>, <code>&lt;</code>, <code>&gt;</code>, …) used with a string literal in <code>ORDER BY</code> is rejected by the grammar with an explicit error, rather than being silently ignored.</p>
+
+<h2 id="hnsw">14.4. The HNSW Index</h2>
+<p>For larger collections, an HNSW (Hierarchical Navigable Small World) index provides nearest-neighbor lookup without scanning every row at query time. It is created with the <code>USING HNSW</code> access method on a single <code>VECTOR(N)</code> column.</p>
+
+<pre class="synopsis"><code><span class="c-key">CREATE INDEX</span> [ <span class="c-key">IF NOT EXISTS</span> ] <span class="c-com">name</span>
+    <span class="c-key">ON</span> <span class="c-com">table</span> <span class="c-key">USING HNSW</span> ( <span class="c-com">column</span> [ <span class="c-com">opclass</span> ] )
+    [ <span class="c-key">WITH</span> ( m = <span class="c-com">int</span> [, ef_construction = <span class="c-com">int</span> ] ) ]</code></pre>
+
+<h3 id="opclass">14.4.1. Operator classes (metric selection)</h3>
+<p>The optional opclass names the distance metric the index ranks by. It defaults to cosine when omitted. An unrecognized opclass name falls back to cosine rather than raising an error.</p>
+
+<table>
+<thead><tr><th>Opclass</th><th>Metric</th><th>Internal kind</th></tr></thead>
+<tbody>
+<tr><td><code>vector_cosine_ops</code> (default)</td><td>cosine distance</td><td><code>HNSW_DIST_COSINE</code> (0)</td></tr>
+<tr><td><code>vector_l2_ops</code></td><td>L2 / Euclidean</td><td><code>HNSW_DIST_L2</code> (1)</td></tr>
+<tr><td><code>vector_ip_ops</code> / <code>vector_inner_ops</code></td><td>inner product</td><td><code>HNSW_DIST_INNER</code> (2)</td></tr>
+<tr><td><code>vector_l1_ops</code></td><td>L1 / Manhattan</td><td><code>HNSW_DIST_L1</code> (3)</td></tr>
+</tbody>
+</table>
+
+<h3 id="params">14.4.2. Build parameters</h3>
+<dl class="params">
+<dt><code>m</code></dt><dd>Maximum neighbor degree per node above layer 0 (layer 0 nodes get up to <code>2·m</code> neighbors). Defaults to <code>16</code>. Larger <code>m</code> increases graph connectivity and recall at the cost of memory and build time.</dd>
+<dt><code>ef_construction</code></dt><dd>Beam width used while inserting nodes during the build. Defaults to <code>64</code>. Larger values build a higher-quality graph at the cost of build time. (Note: a bare <code>CREATE INDEX … USING HNSW</code> with no <code>WITH</code> clause uses <code>ef_construction = 64</code>; the brute-force build helper's standalone default of 200 does not apply through DDL.)</dd>
+</dl>
+
+<p>Query-time beam width (<code>ef_search</code>) is fixed at <code>64</code> in this release and is not yet user-tunable per query. If the requested <code>k</code> exceeds <code>ef_search</code>, the beam is widened to <code>k</code> for that query.</p>
+
+<pre><code><span class="c-com">-- Cosine HNSW index with default m=16, ef_construction=64</span>
+<span class="c-key">CREATE INDEX</span> docs_emb_idx <span class="c-key">ON</span> docs <span class="c-key">USING HNSW</span> (emb);
+
+<span class="c-com">-- L2 metric with explicit build parameters</span>
+<span class="c-key">CREATE INDEX</span> docs_emb_l2 <span class="c-key">ON</span> docs
+    <span class="c-key">USING HNSW</span> (emb vector_l2_ops)
+    <span class="c-key">WITH</span> (m = <span class="c-str">32</span>, ef_construction = <span class="c-str">200</span>);</code></pre>
+
+<p>See <a href="/3.0/ref/create-index/">CREATE INDEX</a> and <a href="/3.0/ref/drop-index/">DROP INDEX</a> for the general index grammar.</p>
+
+<h3 id="build">14.4.3. How the index is built and stored</h3>
+<p>At <code>CREATE INDEX</code> time the engine scans the table, decodes the vector column from every live row into a dense in-memory store, then builds a multi-layer navigable graph over that store. Each indexed table/column is identified by <code>(table_id, index_name)</code>. The graph and its backing vectors live entirely in process memory — there is currently no on-disk persistence of the graph itself.</p>
+
+<p>Search uses the graph traversal (a sub-linear greedy beam walk) when the graph built successfully and the collection is large enough to benefit. For very small collections (at or below <code>2·ef_search</code> rows) or if graph construction hit an allocation failure, the engine transparently falls back to an <strong>exact brute-force top-k scan</strong> over the dense store. The brute-force path is exact by construction; the graph path is approximate.</p>
+
+<h3 id="knn">14.4.4. Querying with <code>HNSW_KNN</code></h3>
+<p>Nearest-neighbor lookups against the index are issued through the <code>HNSW_KNN</code> table function:</p>
+
+<pre class="sig"><code><span class="c-key">HNSW_KNN</span> ( <span class="c-com">table_name</span>, <span class="c-com">index_name</span>, <span class="c-com">query_vector</span>, <span class="c-com">k</span> )</code></pre>
+
+<dl class="params">
+<dt><code>table_name</code>, <code>index_name</code></dt><dd>The table and the HNSW index to search.</dd>
+<dt><code>query_vector</code></dt><dd>A vector literal in any accepted form (<code>[…]</code>, <code>{…}</code>, or <code>b64i8:</code>). Its dimension must match the indexed column; a mismatch returns no result.</dd>
+<dt><code>k</code></dt><dd>An integer literal: the number of nearest neighbors to return, ordered by ascending distance.</dd>
+</dl>
+
+<p>Each result row carries the matching row's primary-key value and its distance to the query vector.</p>
+
+<pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> <span class="c-key">HNSW_KNN</span>(
+    <span class="c-str">'docs'</span>, <span class="c-str">'docs_emb_idx'</span>,
+    <span class="c-str">'[0.10, 0.20, 0.97]'</span>, <span class="c-str">5</span>
+);</code></pre>
+
+<div class="callout">
+<p><strong>The index is not auto-maintained or rebuilt.</strong> An HNSW graph is a point-in-time snapshot taken at <code>CREATE INDEX</code>. Rows inserted, updated, or deleted afterward are <em>not</em> reflected until the index is rebuilt. Existing HNSW indexes are also not reloaded at server startup in this release. To refresh the graph, re-issue <code>CREATE INDEX</code> (or <code>REINDEX</code> when available). This differs sharply from PostgreSQL indexes, which are transactionally maintained on every write.</p>
+</div>
+
+<h2 id="hybrid">14.5. Hybrid (Lexical + Vector) Search</h2>
+<p>Hybrid search combines a single equality predicate on an ordinary column with vector ranking, in one call. This is the common "filter then rank by similarity" pattern — for example, "find the documents most similar to this embedding, but only among rows whose <code>topic = 'storage'</code>."</p>
+
+<pre class="sig"><code><span class="c-key">HNSW_FILTER_KNN</span> ( <span class="c-com">table_name</span>, <span class="c-com">index_name</span>, <span class="c-com">query_vector</span>, <span class="c-com">k</span>,
+                  <span class="c-str">'column=value[:mode]'</span> )</code></pre>
+
+<p>The fifth argument is a string literal of the form <code>column=value</code>, with an optional <code>:mode</code> suffix selecting the execution strategy. An empty or absent filter degrades the call to a plain <code>HNSW_KNN</code>.</p>
+
+<dl class="params">
+<dt><code>auto</code> (default)</dt><dd>The engine measures filter selectivity (<code>matching_rows / total_rows</code>) and chooses pre-filter when selectivity is below 10%, otherwise post-filter.</dd>
+<dt><code>pre</code></dt><dd>Force pre-filter: restrict to rows where <code>column = value</code> first, then compute distances and take top-k. Best when the filter is tight (few matches).</dd>
+<dt><code>post</code></dt><dd>Force post-filter: rank all vectors first, then discard hits whose column value doesn't match, oversampling to compensate. Best when the filter is loose (matches most rows).</dd>
+</dl>
+
+<pre><code><span class="c-com">-- Most-similar docs, restricted to topic = 'storage', auto strategy</span>
+<span class="c-key">SELECT</span> * <span class="c-key">FROM</span> <span class="c-key">HNSW_FILTER_KNN</span>(
+    <span class="c-str">'docs'</span>, <span class="c-str">'docs_emb_idx'</span>,
+    <span class="c-str">'[0.10, 0.20, 0.97]'</span>, <span class="c-str">5</span>,
+    <span class="c-str">'topic=storage'</span>
+);
+
+<span class="c-com">-- Force the pre-filter strategy</span>
+<span class="c-key">SELECT</span> * <span class="c-key">FROM</span> <span class="c-key">HNSW_FILTER_KNN</span>(
+    <span class="c-str">'docs'</span>, <span class="c-str">'docs_emb_idx'</span>,
+    <span class="c-str">'[0.10, 0.20, 0.97]'</span>, <span class="c-str">5</span>,
+    <span class="c-str">'topic=storage:pre'</span>
+);</code></pre>
+
+<p>The filter compares against the column's rendered text value; NULL column values never match. The predicate is a single equality only — ranges, <code>OR</code>, and multi-column predicates are not part of the hybrid call. For richer filtering, combine plain <code>HNSW_KNN</code> with a surrounding <a href="/3.0/ref/select/">SELECT</a> <code>WHERE</code> clause.</p>
+
+<h3 id="explain">14.5.1. Inspecting the chosen strategy</h3>
+<p>A diagnostic sibling, <code>HNSW_HYBRID_EXPLAIN</code>, takes the same arguments as <code>HNSW_FILTER_KNN</code> but reports which strategy the planner picked along with the selectivity statistics it used — the candidate (total scanned) count, the number of filter matches, and the measured selectivity.</p>
+
+<pre class="sig"><code><span class="c-key">HNSW_HYBRID_EXPLAIN</span> ( <span class="c-com">table_name</span>, <span class="c-com">index_name</span>, <span class="c-com">query_vector</span>, <span class="c-com">k</span>,
+                      <span class="c-str">'column=value[:mode]'</span> )</code></pre>
+
+<pre><code><span class="c-key">SELECT</span> <span class="c-key">HNSW_HYBRID_EXPLAIN</span>(
+    <span class="c-str">'docs'</span>, <span class="c-str">'docs_emb_idx'</span>,
+    <span class="c-str">'[0.10, 0.20, 0.97]'</span>, <span class="c-str">5</span>,
+    <span class="c-str">'topic=storage'</span>
+);</code></pre>
+
+<h2 id="errors">14.6. Reference: error and edge-case behavior</h2>
+<table>
+<thead><tr><th>Situation</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td>Query vector dimension ≠ indexed dimension</td><td>Query returns no rows (mismatch is not satisfiable).</td></tr>
+<tr><td>Vector literal contains <code>NaN</code> or a non-numeric token</td><td>Parse error.</td></tr>
+<tr><td>Declared/inserted dimension &gt; 16384</td><td>Rejected.</td></tr>
+<tr><td>Cosine distance with an all-zero operand</td><td>Defined as <code>1.0</code> (maximum distance) rather than a division error.</td></tr>
+<tr><td><code>HNSW_KNN</code> with <code>k ≤ 0</code></td><td>Error.</td></tr>
+<tr><td>Empty table at <code>CREATE INDEX</code></td><td>Builds successfully with zero vectors; searches return no rows.</td></tr>
+<tr><td>Graph build allocation failure</td><td>Silent fallback to exact brute-force search.</td></tr>
+<tr><td><code>HNSW_FILTER_KNN</code> with empty filter string</td><td>Degrades to plain <code>HNSW_KNN</code>.</td></tr>
+<tr><td>NULL value in the hybrid filter column</td><td>Never matches the equality predicate.</td></tr>
+</tbody>
+</table>
+
+<h2 id="notes">14.7. Notes and limitations</h2>
+<div class="callout">
+<ul>
+<li><strong>In-memory only.</strong> The HNSW graph and its dense vector store live in process memory. There is no on-disk persistence of the graph, and indexes are not reloaded on startup — rebuild with <code>CREATE INDEX</code> after a restart.</li>
+<li><strong>Snapshot semantics.</strong> The graph reflects the table only as of build time; subsequent DML is not auto-maintained into the index. Re-create the index to pick up changes.</li>
+<li><strong>Approximate vs. exact.</strong> The graph path is an approximate nearest-neighbor search; small collections (≤ <code>2·ef_search</code> rows) and build-failure fallbacks use an exact brute-force scan instead.</li>
+<li><strong>Fixed query beam width.</strong> <code>ef_search</code> is fixed at 64 (widened to <code>k</code> when <code>k</code> is larger). There is no per-query <code>SET ef_search</code> yet.</li>
+<li><strong>One column per HNSW index.</strong> An HNSW index covers a single <code>VECTOR(N)</code> column.</li>
+<li><strong>Single equality in hybrid search.</strong> <code>HNSW_FILTER_KNN</code> supports exactly one <code>column = value</code> predicate; it is not a general WHERE engine.</li>
+<li><strong>Bounded internal capacity.</strong> The active HNSW graph registry holds a fixed number of graphs (64) and primary-key keys up to 256 bytes; very long composite keys are truncated for index bookkeeping.</li>
+<li><strong>Operator coverage.</strong> Only <code>&lt;-&gt;</code> (L2) and <code>&lt;#&gt;</code> (inner) are general operators; cosine via <code>&lt;=&gt;</code> is limited to <code>ORDER BY</code>; L1 has no operator. Unlike PostgreSQL/<code>pgvector</code>, EvolutionDB does not implement a full per-metric operator family or index-condition pushdown for arbitrary distance operators.</li>
+</ul>
+</div>
+
+<h2 id="seealso">14.8. See also</h2>
+<ul>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a> — declaring <code>VECTOR(N)</code> columns</li>
+<li><a href="/3.0/ref/create-index/">CREATE INDEX</a> · <a href="/3.0/ref/drop-index/">DROP INDEX</a> — managing the HNSW index</li>
+<li><a href="/3.0/ref/insert/">INSERT</a> · <a href="/3.0/ref/select/">SELECT</a> — loading and querying vector data</li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

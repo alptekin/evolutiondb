@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DELETE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>DELETE</h1>
+<p class="lede">Remove rows from a table.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">DELETE</span> <span class="opt">[ LOW_PRIORITY ] [ QUICK ] [ IGNORE ]</span> <span class="c-key">FROM</span> <em>table_name</em>
+    <span class="opt">[ <span class="c-key">WHERE</span> <em>condition</em> ]</span>
+    <span class="opt">[ <span class="c-key">ORDER BY</span> <em>column</em> [ ASC | DESC ] [, ...] ]</span>
+    <span class="opt">[ <span class="c-key">LIMIT</span> <em>count</em> [ OFFSET <em>start</em> | , <em>count</em> ] ]</span>
+    <span class="opt">[ <span class="c-key">RETURNING</span> * | <em>output_column</em> [, ...] ]</span>
+
+<span class="c-com">-- Multi-table form 1 (delete from joined targets)</span>
+<span class="c-key">DELETE</span> <span class="opt">[ LOW_PRIORITY ] [ QUICK ] [ IGNORE ]</span> <em>target_table</em> <span class="opt">[ .* ]</span> [, ...]
+    <span class="c-key">FROM</span> <em>table_references</em>
+    <span class="opt">[ <span class="c-key">WHERE</span> <em>condition</em> ]</span>
+
+<span class="c-com">-- Multi-table form 2 (USING)</span>
+<span class="c-key">DELETE</span> <span class="opt">[ LOW_PRIORITY ] [ QUICK ] [ IGNORE ]</span> <span class="c-key">FROM</span> <em>target_table</em> <span class="opt">[ .* ]</span> [, ...]
+    <span class="c-key">USING</span> <em>table_references</em>
+    <span class="opt">[ <span class="c-key">WHERE</span> <em>condition</em> ]</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>DELETE</code> removes rows that satisfy the <code>WHERE</code> condition from
+<em>table_name</em>. If the <code>WHERE</code> clause is absent, the effect is to delete
+all visible rows in the table; the statement then leaves a valid but empty table.</p>
+
+<p>EvolutionDB accepts three grammatical forms of <code>DELETE</code>:</p>
+<ul>
+<li>A <strong>single-table</strong> delete: <code>DELETE FROM table_name ...</code>.</li>
+<li>A <strong>multi-table</strong> delete naming the target tables before <code>FROM</code>
+(<code>DELETE t1, t2 FROM ...</code>), or after <code>FROM</code> with a separate
+<code>USING</code> source list. Both multi-table forms drive a join over
+<em>table_references</em> and then delete the matched rows from each named target.</li>
+</ul>
+
+<p>Deletion is performed in two phases for the single-table form: rows matching the
+<code>WHERE</code> expression are collected first, then removed. Removal is an MVCC
+<em>soft delete</em> — the row's <code>xmax</code> is stamped with the current transaction
+id and the primary-key index entry is retained so that concurrent readers can still
+locate the tuple and evaluate its visibility. Space is reclaimed later by the background
+reclaim process once <code>xmax</code> is committed and no snapshot can still see the row.
+Tuples written before MVCC was introduced (no MVCC header) fall back to immediate physical
+removal of the heap slot and index entry.</p>
+
+<p>Each delete is transactional. The pre-image of every removed row is written to the undo
+log, so a <code>ROLLBACK</code> (or disconnect, which auto-rolls back) restores the rows.
+An exclusive row lock is taken per row; if it cannot be acquired the statement fails with a
+lock or deadlock error and the whole statement is rolled back.</p>
+
+<p><strong>Referential integrity.</strong> Before a row is removed, EvolutionDB enforces every
+foreign-key constraint that references the row's table. Depending on the constraint's
+<code>ON DELETE</code> action, the engine will reject the delete (<code>RESTRICT</code> /
+<code>NO ACTION</code>), recursively delete the referencing child rows (<code>CASCADE</code>),
+or rewrite the child foreign-key columns to <code>NULL</code> (<code>SET NULL</code>) or to
+their column default (<code>SET DEFAULT</code>). Cascades recurse to a maximum depth of 32;
+deeper chains (e.g. circular references) raise a foreign-key violation.</p>
+
+<p><strong>Triggers, indexes, and policies.</strong> <code>BEFORE DELETE</code> and
+<code>AFTER DELETE</code> triggers fire per row when the table defines them. Secondary index
+entries for the row are removed. If row-level security is enabled on the table, the session
+user's <code>DELETE</code> <code>USING</code> policy gates each row — rows the policy does not
+expose are silently skipped (so the deleted count reflects only rows the user may delete).</p>
+
+<div class="callout">
+<strong>ORDER BY is parsed but not applied.</strong> The single-table grammar accepts an
+<code>ORDER BY</code> clause for MySQL syntax compatibility, but EvolutionDB's execution
+engine does not order the rows it deletes. <code>ORDER BY</code> therefore has no observable
+effect on which rows are removed. Use <code>WHERE</code> (and <code>LIMIT</code> if you need
+to cap the count) to control the row set precisely.
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>LOW_PRIORITY</code>, <code>QUICK</code>, <code>IGNORE</code></dt>
+<dd>MySQL-style delete options accepted by the grammar for compatibility. They are parsed
+into an option bitmask but do not change EvolutionDB's delete behavior.</dd>
+
+<dt><em>table_name</em></dt>
+<dd>The name of the table from which rows are deleted (single-table form). It is resolved
+through the system catalog in the current database and schema. Deleting from a table that
+does not exist reports an error and removes no rows.</dd>
+
+<dt><em>target_table</em> <code>[ .* ]</code></dt>
+<dd>In the multi-table forms, a table whose matched rows are to be deleted. One or more
+targets may be listed, comma-separated. The optional <code>.*</code> suffix is accepted
+after a target name. In the first form the targets precede <code>FROM</code>; in the second
+they follow <code>FROM</code> and the join source is given after <code>USING</code>.</dd>
+
+<dt><em>table_references</em></dt>
+<dd>The join expression that supplies the rows to test in the multi-table forms (the same
+table-reference syntax used by <code>SELECT</code>, including joins). Rows produced by this
+join determine which rows are removed from each <em>target_table</em>.</dd>
+
+<dt><code>WHERE</code> <em>condition</em></dt>
+<dd>An expression returning a boolean. Only rows for which it evaluates to true are deleted.
+A result of <code>true</code>/<code>t</code>/<code>1</code>, or any non-zero numeric value, is
+treated as a match. If omitted, every visible row qualifies.</dd>
+
+<dt><code>ORDER BY</code> <em>column</em> <code>[ ASC | DESC ]</code></dt>
+<dd>Accepted by the single-table grammar but not honored by the executor (see callout above).</dd>
+
+<dt><code>LIMIT</code> <em>count</em> <code>[ OFFSET</code> <em>start</em> <code>]</code></dt>
+<dd>Caps how many of the matched rows are actually deleted (single-table form). Both the
+<code>LIMIT count OFFSET start</code> and the MySQL <code>LIMIT start, count</code> spellings
+are accepted. The limit/offset window is applied to the collected set of matching rows before
+removal.</dd>
+
+<dt><code>RETURNING * | </code><em>output_column</em></dt>
+<dd>Causes <code>DELETE</code> to return values from the rows it removed (single-table form).
+<code>RETURNING *</code> returns all columns of each deleted row; otherwise the listed column
+names are returned. Values reflect the row as it existed immediately before deletion.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Delete a single row identified by its primary key:</p>
+<pre><code><span class="c-key">DELETE FROM</span> employees <span class="c-key">WHERE</span> id = <span class="c-str">42</span>;</code></pre>
+
+<p>Delete all rows that match a condition:</p>
+<pre><code><span class="c-key">DELETE FROM</span> orders <span class="c-key">WHERE</span> status = <span class="c-str">'cancelled'</span>;</code></pre>
+
+<p>Empty a table (no <code>WHERE</code> clause):</p>
+<pre><code><span class="c-key">DELETE FROM</span> session_log;</code></pre>
+
+<p>Delete at most 100 matching rows:</p>
+<pre><code><span class="c-key">DELETE FROM</span> events <span class="c-key">WHERE</span> level = <span class="c-str">'debug'</span> <span class="c-key">LIMIT</span> <span class="c-str">100</span>;</code></pre>
+
+<p>Delete and return the removed rows:</p>
+<pre><code><span class="c-key">DELETE FROM</span> products <span class="c-key">WHERE</span> discontinued = <span class="c-str">true</span>
+    <span class="c-key">RETURNING</span> id, name;</code></pre>
+
+<p>Multi-table delete using a join (first form): remove orphaned order lines whose
+parent order no longer exists:</p>
+<pre><code><span class="c-key">DELETE</span> order_lines
+    <span class="c-key">FROM</span> order_lines <span class="c-key">LEFT JOIN</span> orders
+         <span class="c-key">ON</span> order_lines.order_id = orders.id
+    <span class="c-key">WHERE</span> orders.id <span class="c-key">IS NULL</span>;</code></pre>
+
+<p>Multi-table delete with <code>USING</code> (second form):</p>
+<pre><code><span class="c-key">DELETE FROM</span> order_lines
+    <span class="c-key">USING</span> orders
+    <span class="c-key">WHERE</span> order_lines.order_id = orders.id
+      <span class="c-key">AND</span> orders.status = <span class="c-str">'voided'</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>The single-table <code>DELETE FROM table WHERE ...</code> form, together with
+<code>RETURNING</code>, follows the SQL standard and PostgreSQL closely. EvolutionDB's
+<code>RETURNING</code> behaves like PostgreSQL's: <code>*</code> or a list of column names
+yields the pre-deletion row values.</p>
+<ul>
+<li>The <code>LOW_PRIORITY</code>, <code>QUICK</code>, and <code>IGNORE</code> options and the
+multi-table <code>DELETE t1, t2 FROM ...</code> / <code>DELETE FROM ... USING ...</code> forms
+are MySQL extensions, not part of the SQL standard. The option keywords are accepted for
+compatibility but have no effect on execution.</li>
+<li>The <code>LIMIT</code> clause on <code>DELETE</code> (including the MySQL
+<code>LIMIT start, count</code> spelling) is a non-standard extension. PostgreSQL does not
+permit <code>LIMIT</code> directly on <code>DELETE</code>.</li>
+<li><code>ORDER BY</code> on <code>DELETE</code> is accepted for MySQL syntax compatibility
+but, unlike MySQL, has no effect in EvolutionDB.</li>
+<li>EvolutionDB does not support the PostgreSQL <code>WHERE CURRENT OF</code> cursor form, the
+<code>ONLY</code> / inheritance qualifiers, or table aliasing of the delete target. The
+PostgreSQL join source keyword is <code>USING</code>, which EvolutionDB's second multi-table
+form also uses.</li>
+<li><code>ON DELETE</code> referential actions (<code>RESTRICT</code>, <code>NO ACTION</code>,
+<code>CASCADE</code>, <code>SET NULL</code>, <code>SET DEFAULT</code>) are enforced, consistent
+with the SQL standard.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+<li><a href="/3.0/ref/truncate/">TRUNCATE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

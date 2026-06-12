@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE SUBSCRIPTION — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE SUBSCRIPTION</h1>
+<p class="lede">Register a durable mailbox that captures every <code>NOTIFY</code> committed on a channel, so a consumer can disconnect and later drain the backlog in order.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE SUBSCRIPTION</span> <span class="opt">[ IF NOT EXISTS ]</span> <span class="c-com">subscription_name</span>
+    <span class="c-key">FOR CHANNEL</span> <span class="c-com">channel_name</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE SUBSCRIPTION</code> creates a <em>durable</em> subscription on top of EvolutionDB's in-memory <code>LISTEN</code>/<code>NOTIFY</code> mechanism. A plain <code>LISTEN</code> only delivers notifications to a session that is connected and listening at the moment a <code>NOTIFY</code> fires; anything published while the consumer is offline is lost. A subscription removes that gap: it binds a named, persistent mailbox to a channel.</p>
+<p>Once the subscription exists, every <code>NOTIFY</code> that commits on <code>channel_name</code> appends a row to a private backing table. Each row carries a monotonically increasing sequence number (<code>seq</code>), the notification <code>payload</code>, and a <code>posted_at</code> timestamp. The consumer reads the backlog with <a href="/3.0/ref/listen-notify/"><code>RESUME SUBSCRIPTION</code></a>, which returns every row whose <code>seq</code> is greater than the acknowledged watermark, ordered by <code>seq</code> ascending, and then advances the watermark with <code>ACK SUBSCRIPTION ... UPTO N</code>.</p>
+<p>Behind the scenes, creating the subscription does two things:</p>
+<ol>
+<li>It creates a backing table named <code>sub_&lt;subscription_name&gt;</code> in the current schema with the columns <code>seq BIGINT PRIMARY KEY</code>, <code>payload VARCHAR(8000)</code> (nullable), and <code>posted_at TIMESTAMP NOT NULL</code>.</li>
+<li>It registers a catalog entry recording the channel binding, the backing-table id, the acknowledgement watermark (<code>last_ack_seq</code>, starting at 0), the next sequence number to assign (<code>next_seq</code>, starting at 1), and a retention window of 7 days that the auto-<code>RECLAIM</code> daemon honors when pruning acknowledged and expired rows.</li>
+</ol>
+<p>Durable writes happen on the <code>NOTIFY</code> commit path <em>after</em> the in-memory listener fan-out, so live consumers do not pay the cost of the on-disk append when no subscription is enrolled on the channel.</p>
+
+<div class="callout">
+<p>The channel binding matches case-insensitively against the channel named in <code>NOTIFY</code>. A subscription captures only notifications committed <em>after</em> it is created; it does not back-fill notifications that fired earlier.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>IF NOT EXISTS</dt>
+<dd>Do nothing (rather than raising an error) if a subscription with the same name already exists. Note that this does not guarantee the existing subscription is bound to the same channel — it only suppresses the duplicate-name error. The phrase is recognized as a single <code>NOT EXISTS</code> token by the lexer, so the spelling is fixed.</dd>
+
+<dt>subscription_name</dt>
+<dd>The name of the new subscription. The name must be unique among subscriptions; attempting to create a duplicate without <code>IF NOT EXISTS</code> raises SQLSTATE <code>42710</code> (<em>duplicate object</em>). The name is also used to derive the backing table name <code>sub_&lt;subscription_name&gt;</code>.</dd>
+
+<dt>FOR CHANNEL channel_name</dt>
+<dd>The notification channel this subscription captures. This clause is required; omitting it raises a syntax error (SQLSTATE <code>42601</code>). Every <code>NOTIFY</code> committed on this channel name appends one row to the subscription's mailbox.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Not supported.</strong> EvolutionDB's <code>CREATE SUBSCRIPTION</code> has no <code>CONNECTION</code>, <code>PUBLICATION</code>, or <code>WITH (...)</code> clause. The grammar accepts exactly the two forms shown in the Synopsis. The retention window is a fixed default (7 days) and is not currently configurable through the statement.</p>
+</div>
+
+<h2 id="examples">Examples</h2>
+<p>Create a durable subscription bound to the <code>orders</code> channel:</p>
+<pre><code><span class="c-key">CREATE SUBSCRIPTION</span> orders_mailbox <span class="c-key">FOR CHANNEL</span> orders;</code></pre>
+
+<p>Create one only if it does not already exist (idempotent setup):</p>
+<pre><code><span class="c-key">CREATE SUBSCRIPTION IF NOT EXISTS</span> orders_mailbox <span class="c-key">FOR CHANNEL</span> orders;</code></pre>
+
+<p>A producer publishes to the channel; the payload is captured durably even if no session is listening:</p>
+<pre><code><span class="c-key">NOTIFY</span> orders, <span class="c-str">'order #4821 created'</span>;</code></pre>
+
+<p>Later, a consumer reconnects and drains the backlog, then acknowledges through the last sequence it processed:</p>
+<pre><code><span class="c-key">RESUME SUBSCRIPTION</span> orders_mailbox;   <span class="c-com">-- returns (seq, payload, posted_at) for seq &gt; last_ack</span>
+<span class="c-key">ACK SUBSCRIPTION</span> orders_mailbox <span class="c-key">UPTO</span> 12;</code></pre>
+
+<p>Inspect registered subscriptions and remove one when it is no longer needed:</p>
+<pre><code><span class="c-key">SHOW SUBSCRIPTIONS</span>;
+<span class="c-key">DROP SUBSCRIPTION</span> <span class="opt">[</span><span class="c-key">IF EXISTS</span><span class="opt">]</span> orders_mailbox;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE SUBSCRIPTION</code> is not part of the SQL standard.</p>
+<p>PostgreSQL has a <code>CREATE SUBSCRIPTION</code> statement, but it serves an entirely different purpose: it is part of logical replication and subscribes to a <em>publication</em> on a remote server via a <code>CONNECTION</code> string. EvolutionDB's command shares only the keyword. Here it is a local, single-server feature that layers durability onto <code>LISTEN</code>/<code>NOTIFY</code> — there is no remote connection, no publication, and no replication slot. The PostgreSQL <code>CONNECTION</code>, <code>PUBLICATION</code>, and <code>WITH</code> options are not accepted by EvolutionDB's grammar.</p>
+<p>The companion verbs <code>RESUME SUBSCRIPTION</code> and <code>ACK SUBSCRIPTION ... UPTO</code>, used to drain and acknowledge the mailbox, are EvolutionDB extensions with no PostgreSQL equivalent.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/listen-notify/">LISTEN / NOTIFY</a></li>
+<li><a href="/3.0/ref/reclaim/">RECLAIM</a></li>
+<li><a href="/3.0/ref/show/">SHOW</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

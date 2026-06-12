@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>2. The SQL Language — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>2. The SQL Language</h1>
+<p class="lede">A hands-on tour of the SQL EvolutionDB actually speaks: creating tables, inserting rows, reading them back, filtering with <code>WHERE</code>, and ordering results with <code>ORDER BY</code> — grounded in what the engine implements, not in what the SQL standard merely permits.</p>
+
+<p>This chapter assumes a running server (PostgreSQL wire protocol on port <code>5433</code>, native EVO protocol on port <code>9967</code>) and a session connected to a database. Every example below has been kept to features the EvolutionDB engine genuinely executes. Where EvolutionDB deviates from PostgreSQL or the SQL standard, the difference is called out explicitly rather than glossed over.</p>
+
+<div class="callout">
+<p><strong>Conventions.</strong> SQL keywords are shown in upper case for readability, but EvolutionDB's lexer is case-insensitive for keywords — <code>SELECT</code>, <code>select</code>, and <code>Select</code> are equivalent. Identifiers (table and column names) are compared case-insensitively as well; the engine resolves columns with <code>strcasecmp</code>.</p>
+</div>
+
+<h2 id="concepts">2.1. Tables and the Storage Model</h2>
+
+<p>An EvolutionDB table is an ordered set of typed columns. Internally, every table lives inside a single page-based file (<code>evosql.db</code>, 4&nbsp;KB pages); its definition — name, columns, types, constraints — is recorded in the system catalog, and its rows are stored as binary tuples in a heap indexed by a B+ tree on the primary key.</p>
+
+<p>Two limits are worth knowing up front, because they are hard caps in the engine rather than soft guidance:</p>
+
+<dl class="params">
+<dt>Maximum columns per table</dt>
+<dd>Bounded by <code>CAT_MAX_COLUMNS</code>. <code>CREATE TABLE</code> rejects definitions that exceed it, and the same cap governs inherited columns and system-versioning shadow columns.</dd>
+<dt>Record size</dt>
+<dd>A single row's accumulated value buffer must fit within <code>RECORD_BUF_SIZE</code>. <code>INSERT</code> raises a <code>data_exception</code> if the row's text exceeds it before the tuple is even built.</dd>
+</dl>
+
+<h2 id="creating-a-table">2.2. Creating a New Table</h2>
+
+<p>You create a table with the <a href="/3.0/ref/create-table/">CREATE TABLE</a> command, naming each column and giving it a data type:</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">TABLE</span> employees (
+    id        <span class="c-key">INTEGER</span> <span class="c-key">PRIMARY KEY</span>,
+    name      <span class="c-key">VARCHAR</span>(<span class="c-str">50</span>) <span class="c-key">NOT NULL</span>,
+    dept      <span class="c-key">VARCHAR</span>(<span class="c-str">30</span>),
+    salary    <span class="c-key">INTEGER</span>,
+    active    <span class="c-key">BOOLEAN</span> <span class="c-key">DEFAULT</span> <span class="c-str">true</span>
+);</code></pre>
+
+<p>On success the engine reports <code>command(s) completed successfully!..</code>. The whitespace and line breaks are not significant, and the statement is terminated by a semicolon.</p>
+
+<h3 id="types">2.2.1. Data Types</h3>
+
+<p>EvolutionDB encodes each column type as a single integer: <code>typeVal / 10000</code> is the <em>type family</em> and <code>typeVal % 10000</code> is the family-specific size (for instance the length of a <code>VARCHAR</code>). The grammar assigns these encodings directly. The following are the families you will use in everyday tutorial SQL:</p>
+
+<table>
+<thead><tr><th>SQL written</th><th>Family base</th><th>Stored as</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>SMALLINT</code></td><td><code>20000</code></td><td>integer</td><td>Value validated as a base-10 integer.</td></tr>
+<tr><td><code>INT</code> / <code>INTEGER</code> / <code>INT4</code></td><td><code>40000</code> / <code>50000</code></td><td>integer</td><td>The bare keyword carries no length; storage uses a default width.</td></tr>
+<tr><td><code>BIGINT</code> / <code>INT8</code></td><td><code>60000</code></td><td>int64 little-endian</td><td>Validated as an integer.</td></tr>
+<tr><td><code>REAL</code> / <code>DOUBLE</code> / <code>FLOAT</code></td><td><code>70000</code> / <code>80000</code> / <code>90000</code></td><td>numeric</td><td>Validated with <code>strtod</code>.</td></tr>
+<tr><td><code>DECIMAL</code></td><td><code>110000</code></td><td>string</td><td>Validated as numeric.</td></tr>
+<tr><td><code>CHAR(n)</code></td><td><code>120000 + n</code></td><td>length-prefixed string</td><td>Length checked against <code>n</code>.</td></tr>
+<tr><td><code>VARCHAR(n)</code></td><td><code>130000 + n</code></td><td>length-prefixed string</td><td>Values longer than <code>n</code> raise <code>string_data_right_truncation</code> (22001).</td></tr>
+<tr><td><code>DATE</code> / <code>TIME</code> / <code>TIMESTAMP</code></td><td><code>100001</code> / <code>100002</code> / <code>100003</code></td><td>string</td><td>No format validation at insert time.</td></tr>
+<tr><td><code>BOOLEAN</code> / <code>BOOL</code></td><td><code>220001</code></td><td>boolean</td><td>Accepts <code>true</code>, <code>false</code>, <code>0</code>, <code>1</code> (case-sensitive for the words).</td></tr>
+<tr><td><code>UUID</code></td><td><code>180036</code></td><td>16-byte value</td><td>Must be a 36-char hyphenated hex UUID.</td></tr>
+<tr><td><code>JSON</code></td><td><code>230000</code></td><td>string</td><td>Validated as well-formed JSON.</td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<p><strong>Honest contrast with PostgreSQL.</strong> EvolutionDB's type validation runs on the textual value at insert time and is deliberately narrow. Integer and float families check that the text parses as a number; <code>VARCHAR(n)</code>/<code>CHAR(n)</code> check length; <code>BOOLEAN</code>, <code>UUID</code>, and <code>JSON</code> have format checks. The <code>DATE</code>/<code>TIME</code>/<code>TIMESTAMP</code> and <code>TEXT</code>/<code>BLOB</code> families are accepted <em>without</em> value validation — unlike PostgreSQL, an out-of-range or malformed timestamp literal is stored verbatim rather than rejected. Do not rely on the engine to reject a bad date.</p>
+</div>
+
+<h3 id="constraints">2.2.2. Column Constraints and Defaults</h3>
+
+<p>A column definition can carry inline constraints. The ones exercised on the <code>INSERT</code> path are:</p>
+
+<dl class="params">
+<dt><code>PRIMARY KEY</code></dt>
+<dd>Marks the key column(s). EvolutionDB builds a B+ tree on the primary key and rejects duplicate keys with a <em>unique violation</em>. A table-level <code>PRIMARY KEY (a, b)</code> produces a composite key. PK columns must be supplied a value.</dd>
+<dt><code>NOT NULL</code></dt>
+<dd>An <code>INSERT</code> that leaves the column empty or explicitly <code>NULL</code> raises <code>not_null_violation</code> (23502).</dd>
+<dt><code>UNIQUE</code></dt>
+<dd>Validated by scanning existing rows. A duplicate non-NULL value raises <code>unique_violation</code> (23505). NULLs do not collide with each other.</dd>
+<dt><code>DEFAULT value</code></dt>
+<dd>Used when a column is omitted in a column-list <code>INSERT</code>. Surrounding quotes are stripped from string literals. A handful of function defaults are evaluated at insert time, including <code>CURRENT_TIMESTAMP</code> and <code>gen_random_uuid()</code>.</dd>
+<dt><code>CHECK (expr)</code></dt>
+<dd>The expression is evaluated against each new row; a falsy result raises <code>check_violation</code> (23514).</dd>
+</dl>
+
+<p>See <a href="/3.0/ref/create-table/">CREATE TABLE</a> for the full constraint surface (foreign keys, composite uniqueness, generated columns, and system versioning).</p>
+
+<h2 id="inserting-rows">2.3. Populating a Table With Rows</h2>
+
+<p>Use <a href="/3.0/ref/insert/">INSERT</a> to add rows. In its simplest form you provide a value for every column, in declaration order:</p>
+
+<pre><code><span class="c-key">INSERT INTO</span> employees <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'Ada Lovelace'</span>, <span class="c-str">'Engineering'</span>, <span class="c-str">9200</span>, <span class="c-key">true</span>);</code></pre>
+
+<p>String literals are single-quoted. Booleans accept <code>true</code>/<code>false</code> or <code>0</code>/<code>1</code>. If the count of supplied values does not match the table's column count, the engine raises an error reporting both numbers — <code>INSERT has N value(s) but table has M column(s)</code>.</p>
+
+<h3 id="column-list-insert">2.3.1. Naming Columns Explicitly</h3>
+
+<p>You can name the target columns, in any order, and omit the rest. Omitted columns take their <code>DEFAULT</code>, or <code>NULL</code> if no default exists:</p>
+
+<pre><code><span class="c-key">INSERT INTO</span> employees (id, name) <span class="c-key">VALUES</span> (<span class="c-str">2</span>, <span class="c-str">'Grace Hopper'</span>);</code></pre>
+
+<p>Here <code>dept</code> and <code>salary</code> become <code>NULL</code>, and <code>active</code> takes its declared default of <code>true</code>. EvolutionDB reorders the supplied values into the table's physical column order, validates that every named column exists, and rejects writes that target a generated column. If the number of values does not match the number of named columns, the insert fails with <code>INSERT has N value(s) but N column(s) specified</code>.</p>
+
+<h3 id="multi-row-insert">2.3.2. Inserting Several Rows at Once</h3>
+
+<p>A single <code>INSERT</code> can carry multiple value groups, separated by commas:</p>
+
+<pre><code><span class="c-key">INSERT INTO</span> employees <span class="c-key">VALUES</span>
+    (<span class="c-str">3</span>, <span class="c-str">'Alan Turing'</span>,   <span class="c-str">'Research'</span>,    <span class="c-str">8800</span>, <span class="c-key">true</span>),
+    (<span class="c-str">4</span>, <span class="c-str">'Edsger Dijkstra'</span>, <span class="c-str">'Research'</span>,  <span class="c-str">8800</span>, <span class="c-key">false</span>),
+    (<span class="c-str">5</span>, <span class="c-str">'Barbara Liskov'</span>, <span class="c-str">'Engineering'</span>,<span class="c-str">9500</span>, <span class="c-key">true</span>);</code></pre>
+
+<p>Each row is validated and stored independently. Every value is checked against its column's type (<a href="#types">§2.2.1</a>), <code>NOT NULL</code>, <code>UNIQUE</code>, and <code>CHECK</code> constraints before the binary tuple is written to the heap and the primary key is inserted into the B+ tree.</p>
+
+<div class="callout">
+<p><strong>Note — control bytes are stripped.</strong> EvolutionDB delimits row data internally with control bytes (a field separator and a row separator). To prevent a crafted value from corrupting field boundaries, those bytes are stripped out of user-supplied values during insert. In practice this is invisible for normal text, but it means you cannot store those specific control characters verbatim.</p>
+</div>
+
+<h2 id="querying">2.4. Querying a Table</h2>
+
+<p>The <a href="/3.0/ref/select/">SELECT</a> command retrieves rows. To read an entire table, select all columns with <code>*</code>:</p>
+
+<pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees;</code></pre>
+
+<p>The engine resolves the table's columns from the catalog, prints a header row of column names followed by a separator line, then performs a heap scan, decoding each binary tuple back into its fields. A column whose stored value is <code>NULL</code> is rendered as the literal <code>NULL</code>.</p>
+
+<h3 id="primary-key-lookup">2.4.1. Looking Up a Single Row by Key</h3>
+
+<p>When a query targets a row by its primary key, EvolutionDB can answer directly from the B+ tree without scanning the heap — it searches the index for the key, then reads exactly that one tuple. This is the fast path: an O(log&nbsp;n) index probe rather than a full scan. Selecting by other columns falls back to a scan.</p>
+
+<h2 id="where">2.5. Filtering Rows With WHERE</h2>
+
+<p>A <code>WHERE</code> clause restricts the result to rows for which a condition holds. The condition is evaluated per row against that row's decoded column values:</p>
+
+<pre><code><span class="c-key">SELECT</span> name, salary <span class="c-key">FROM</span> employees
+<span class="c-key">WHERE</span> dept = <span class="c-str">'Research'</span>;</code></pre>
+
+<p>Conditions combine column references, literals, comparison operators, and the boolean connectives <code>AND</code>/<code>OR</code>/<code>NOT</code>:</p>
+
+<pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees
+<span class="c-key">WHERE</span> salary &gt;= <span class="c-str">9000</span> <span class="c-key">AND</span> active = <span class="c-key">true</span>;</code></pre>
+
+<p>Expression evaluation is numeric when both sides parse as numbers and lexicographic (string) otherwise — the same dual comparison the engine uses internally. This matters for mixed data: a column compared as text will sort and match by character order, not numeric value, unless both operands are valid numbers.</p>
+
+<div class="callout">
+<p><strong>Honest contrast.</strong> EvolutionDB evaluates <code>WHERE</code> on the textual decoding of each row. There is no cost-based optimizer choosing among multiple indexes; the primary key B+ tree is used for direct key lookups, and other predicates are resolved by scanning. Treat <code>WHERE</code> as a row filter over a scan, except when you constrain the primary key to a single value.</p>
+</div>
+
+<h2 id="order-by">2.6. Sorting Results With ORDER BY</h2>
+
+<p>By default, rows come back in heap-scan order, which you should treat as unspecified. To impose an order, add <code>ORDER BY</code> with a column name:</p>
+
+<pre><code><span class="c-key">SELECT</span> name, salary <span class="c-key">FROM</span> employees
+<span class="c-key">ORDER BY</span> salary;</code></pre>
+
+<p>The default direction is ascending. Append <code>DESC</code> for descending order (and <code>ASC</code> for explicit ascending):</p>
+
+<pre><code><span class="c-key">SELECT</span> name, salary <span class="c-key">FROM</span> employees
+<span class="c-key">ORDER BY</span> salary <span class="c-key">DESC</span>;</code></pre>
+
+<p>The sort comparator mirrors the <code>WHERE</code> comparison rule: if both values in a pair parse cleanly as numbers it sorts numerically, otherwise it sorts as text. So an <code>INTEGER</code> column sorts <code>2 &lt; 10</code> as expected, while a <code>VARCHAR</code> column holding <code>"10"</code> and <code>"2"</code> sorts <code>"10"</code> before <code>"2"</code>.</p>
+
+<div class="callout">
+<p><strong>Note — the 500-row sort cap.</strong> The <code>SELECT *</code> path materializes rows into a fixed in-memory buffer before sorting, and that buffer holds at most <strong>500 rows</strong>. When <code>ORDER BY</code> is applied to a table larger than 500 rows on this path, only the first 500 scanned rows are collected and sorted; the remainder are not included in the ordered output. This is an engine limitation, not standard SQL behavior — PostgreSQL would sort the entire result set. If a column named in <code>ORDER BY</code> does not exist, the engine reports the error and falls back to an unordered scan rather than aborting.</p>
+</div>
+
+<h2 id="putting-together">2.7. Putting It Together</h2>
+
+<p>A complete tutorial session — create, populate, filter, and order — looks like this:</p>
+
+<pre><code><span class="c-com">-- 1. Define the table</span>
+<span class="c-key">CREATE</span> <span class="c-key">TABLE</span> employees (
+    id     <span class="c-key">INTEGER</span> <span class="c-key">PRIMARY KEY</span>,
+    name   <span class="c-key">VARCHAR</span>(<span class="c-str">50</span>) <span class="c-key">NOT NULL</span>,
+    dept   <span class="c-key">VARCHAR</span>(<span class="c-str">30</span>),
+    salary <span class="c-key">INTEGER</span>
+);
+
+<span class="c-com">-- 2. Add rows</span>
+<span class="c-key">INSERT INTO</span> employees <span class="c-key">VALUES</span>
+    (<span class="c-str">1</span>, <span class="c-str">'Ada Lovelace'</span>,  <span class="c-str">'Engineering'</span>, <span class="c-str">9200</span>),
+    (<span class="c-str">2</span>, <span class="c-str">'Alan Turing'</span>,   <span class="c-str">'Research'</span>,    <span class="c-str">8800</span>),
+    (<span class="c-str">3</span>, <span class="c-str">'Barbara Liskov'</span>,<span class="c-str">'Engineering'</span>, <span class="c-str">9500</span>);
+
+<span class="c-com">-- 3. Filter and order</span>
+<span class="c-key">SELECT</span> name, salary <span class="c-key">FROM</span> employees
+<span class="c-key">WHERE</span>  dept = <span class="c-str">'Engineering'</span>
+<span class="c-key">ORDER BY</span> salary <span class="c-key">DESC</span>;</code></pre>
+
+<p>The final query returns Barbara Liskov (9500) before Ada Lovelace (9200), and excludes Alan Turing because his department does not match the filter.</p>
+
+<h2 id="error-codes">2.8. Common Errors in This Chapter</h2>
+
+<p>The operations above raise SQLSTATE-coded errors when a constraint or type rule is broken. The codes you are most likely to encounter while following this tutorial:</p>
+
+<dl class="params">
+<dt><code>22001</code> — string data right truncation</dt>
+<dd>A value longer than a <code>CHAR(n)</code> or <code>VARCHAR(n)</code> column.</dd>
+<dt><code>22003</code> — numeric value out of range</dt>
+<dd>A non-numeric value supplied for an integer or float column.</dd>
+<dt><code>23502</code> — not-null violation</dt>
+<dd>An empty or <code>NULL</code> value in a <code>NOT NULL</code> column.</dd>
+<dt><code>23505</code> — unique violation</dt>
+<dd>A duplicate primary-key or <code>UNIQUE</code> value.</dd>
+<dt><code>23514</code> — check violation</dt>
+<dd>A row that fails a <code>CHECK</code> constraint.</dd>
+<dt><code>42P01</code> — undefined table</dt>
+<dd>A query against a table that does not exist.</dd>
+<dt><code>42703</code> — undefined column</dt>
+<dd>A column-list <code>INSERT</code> naming a column the table does not have.</dd>
+</dl>
+
+<p>The next chapter builds on these basics, moving from single-table tutorial queries into the full reference for each command. See <a href="/3.0/ref/create-table/">CREATE TABLE</a>, <a href="/3.0/ref/insert/">INSERT</a>, and <a href="/3.0/ref/select/">SELECT</a> for the complete syntax and every option each command supports.</p>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

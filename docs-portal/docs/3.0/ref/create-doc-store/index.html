@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE DOC STORE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE DOC STORE</h1>
+<p class="lede">Create a document store — a JSON-document collection with an optional embedding column for vector search.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE DOCUMENT STORE</span> <span class="opt">[ IF EXISTS ]</span> <em>store_name</em>
+    <span class="opt">[ WITH ( <em>option</em> [, ...] ) ]</span>
+
+<span class="c-com">where <em>option</em> is one of:</span>
+
+    embedding_dim = <em>integer</em>
+    distance = <span class="c-str">'cosine'</span> | <span class="c-str">'l2'</span> | <span class="c-str">'inner'</span> | <span class="c-str">'ip'</span> | <span class="c-str">'l1'</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE DOCUMENT STORE</code> defines a new document store named <em>store_name</em>. A document store is a thin abstraction over an ordinary EvolutionDB table: under the hood, the engine creates a backing table named <code>doc_&lt;store_name&gt;</code> in the current schema and registers the store in the system catalog. Because the store is backed by a regular table, MVCC visibility, row-level security, and the standard error path all apply to its documents.</p>
+
+<p>The backing table is created with a fixed layout:</p>
+<ul>
+<li><code>id</code> — <code>VARCHAR(255)</code>, <code>NOT NULL</code>, primary key</li>
+<li><code>content</code> — <code>VARCHAR(8000)</code>, the document body</li>
+<li><code>meta</code> — <code>VARCHAR(8000)</code>, a JSON-shaped metadata string (may be <code>NULL</code>)</li>
+<li><code>embedding</code> — <code>VECTOR(N)</code>, created <strong>only</strong> when <code>embedding_dim</code> is greater than 0</li>
+<li><code>created_at</code> — <code>TIMESTAMP</code>, <code>NOT NULL</code>, set to the UTC time of each write</li>
+</ul>
+
+<p>If <code>embedding_dim</code> is omitted or 0, no <code>embedding</code> column is created and the store is a pure JSON key/value collection; in that case <code>DOCUMENT SEARCH</code> against the store fails because there is no vector column to score. The <code>distance</code> option records which distance function <code>DOCUMENT SEARCH</code> will use when ranking results; it has no effect on stores created without an embedding column.</p>
+
+<p>If a store with the same name already exists, the command raises an error (SQLSTATE <code>42710</code>) unless <code>IF EXISTS</code> is given, in which case the command does nothing and succeeds.</p>
+
+<div class="callout">
+<strong>Note on <code>IF EXISTS</code>:</strong> EvolutionDB's grammar spells the idempotent form <code>CREATE DOCUMENT STORE IF EXISTS</code> — not the PostgreSQL-style <code>IF NOT EXISTS</code>. The semantics are the same as PostgreSQL's <code>IF NOT EXISTS</code>: skip creation when a store of that name is already present.
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>IF EXISTS</dt>
+<dd>Do not raise an error if a document store with the same name already exists. The existing store is left unchanged and the command returns success. Note the keyword spelling is <code>IF EXISTS</code>, not <code>IF NOT EXISTS</code>.</dd>
+
+<dt><em>store_name</em></dt>
+<dd>The name of the document store to create. This name is registered in the catalog and also determines the backing table name (<code>doc_&lt;store_name&gt;</code>) created in the current schema.</dd>
+
+<dt>WITH ( <em>option</em> [, ...] )</dt>
+<dd>An optional, comma-separated list of creation options. Two options are accepted; any combination or order is allowed.</dd>
+
+<dt>embedding_dim = <em>integer</em></dt>
+<dd>The dimensionality of the vector embedding stored for each document. When greater than 0, the backing table gains a <code>VECTOR(N)</code> column named <code>embedding</code> and the store can be queried with <code>DOCUMENT SEARCH ... USING VECTOR</code>. The default is 0, meaning no embedding column is created.</dd>
+
+<dt>distance = <em>string</em></dt>
+<dd>The distance function used to rank results during <code>DOCUMENT SEARCH</code>. Accepted values (case-insensitive): <code>'cosine'</code>, <code>'l2'</code>, <code>'inner'</code> (alias <code>'ip'</code>), and <code>'l1'</code>. The default is <code>'cosine'</code>. Any unrecognized value falls back to <code>'cosine'</code>. This setting is recorded with the store and only matters when an embedding column exists.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create a pure JSON document store with no vector column:</p>
+<pre><code><span class="c-key">CREATE DOCUMENT STORE</span> notes;</code></pre>
+
+<p>Create a store with 384-dimensional embeddings, ranked by cosine distance (the default):</p>
+<pre><code><span class="c-key">CREATE DOCUMENT STORE</span> articles
+    <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">384</span>);</code></pre>
+
+<p>Create a store with embeddings ranked by L2 distance:</p>
+<pre><code><span class="c-key">CREATE DOCUMENT STORE</span> products
+    <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">768</span>, distance = <span class="c-str">'l2'</span>);</code></pre>
+
+<p>Create a store only if one does not already exist:</p>
+<pre><code><span class="c-key">CREATE DOCUMENT STORE IF EXISTS</span> articles
+    <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">384</span>, distance = <span class="c-str">'cosine'</span>);</code></pre>
+
+<p>Write a document and then query the store with a Mongo-style filter:</p>
+<pre><code><span class="c-key">DOCUMENT WRITE INTO</span> articles
+    <span class="c-key">VALUES</span> (<span class="c-str">'a1'</span>, <span class="c-str">'Vector databases explained'</span>, <span class="c-str">'{"lang":"en","tags":["db"]}'</span>);
+
+<span class="c-key">DOCUMENT FILTER FROM</span> articles
+    <span class="c-key">WHERE</span> <span class="c-str">'{"lang":"en"}'</span> <span class="c-key">LIMIT</span> <span class="c-str">10</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE DOCUMENT STORE</code> is an EvolutionDB extension. There is no document store concept in the SQL standard, and PostgreSQL has no equivalent statement — PostgreSQL applications instead use a <code>jsonb</code> column on an ordinary table, and vector search is provided by the third-party <code>pgvector</code> extension via <code>CREATE EXTENSION</code> and a <code>vector</code> column type. EvolutionDB folds both ideas into a single command and a small set of <code>DOCUMENT</code> verbs.</p>
+<p>Differences worth noting:</p>
+<ul>
+<li>The idempotency keyword is <code>IF EXISTS</code>, whereas PostgreSQL's <code>CREATE</code> statements use <code>IF NOT EXISTS</code>.</li>
+<li>The backing table schema (<code>id</code>, <code>content</code>, <code>meta</code>, optional <code>embedding</code>, <code>created_at</code>) is fixed and not user-definable; you cannot add arbitrary columns through this command.</li>
+<li>Only two <code>WITH</code> options are accepted — <code>embedding_dim</code> and <code>distance</code>. PostgreSQL/pgvector tuning options (for example HNSW build parameters such as <code>m</code> or <code>ef_construction</code>) are not part of this statement.</li>
+<li>Documents are queried, written, and removed with the EvolutionDB-specific <code>DOCUMENT WRITE</code>, <code>DOCUMENT FILTER</code>, <code>DOCUMENT SEARCH</code>, and <code>DOCUMENT DELETE</code> verbs rather than ordinary <code>INSERT</code>/<code>SELECT</code>/<code>DELETE</code> (although those verbs reuse the same execution machinery internally).</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/drop-doc-store/">DROP DOC STORE</a></li>
+<li><a href="/3.0/ref/document-write/">DOCUMENT WRITE</a></li>
+<li><a href="/3.0/ref/document-filter/">DOCUMENT FILTER</a></li>
+<li><a href="/3.0/ref/document-search/">DOCUMENT SEARCH</a></li>
+<li><a href="/3.0/ref/document-delete/">DOCUMENT DELETE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

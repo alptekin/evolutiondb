@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE TRIGGER — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE TRIGGER</h1>
+<p class="lede">Define a row-level trigger whose procedural body runs automatically before or after an <code>INSERT</code>, <code>UPDATE</code>, or <code>DELETE</code> on a table or memory store.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE TRIGGER</span> <span class="opt">name</span>
+    { <span class="c-key">BEFORE</span> | <span class="c-key">AFTER</span> }
+    { <span class="c-key">INSERT</span> | <span class="c-key">UPDATE</span> | <span class="c-key">DELETE</span> | <span class="c-key">PUT</span> }
+    <span class="c-key">ON</span> { <span class="opt">table_name</span> | <span class="c-key">MEMORY STORE</span> <span class="opt">store_name</span> }
+    <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="opt">trigger_body</span>
+<span class="c-key">END</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE TRIGGER</code> registers a new trigger against an existing table (or the backing table of a memory store). Once created, the trigger fires for every row affected by the matching event, executing its procedural body through the same engine that runs stored procedures — so <code>IF</code>, <code>WHILE</code>, <code>SIGNAL</code>, and other procedural statements are available inside the body.</p>
+<p>EvolutionDB triggers are always <strong>row-level</strong> (<code>FOR EACH ROW</code> is mandatory and is the only granularity the grammar accepts; there is no statement-level form). Each trigger fires on exactly one event and one timing. To react to several events you must create one trigger per event.</p>
+<p>Within the body, the special qualifiers <code>OLD.<em>column</em></code> and <code>NEW.<em>column</em></code> refer to the row values before and after the operation. These references are substituted with literal values immediately before the body is executed: <code>OLD</code> reflects the existing row (available for <code>UPDATE</code> and <code>DELETE</code>), and <code>NEW</code> reflects the incoming row (available for <code>INSERT</code> and <code>UPDATE</code>). A reference whose value is unknown is replaced with <code>NULL</code>.</p>
+<p>In a <code>BEFORE</code> trigger, a statement of the form <code>SET NEW.<em>column</em> = <em>expression</em>;</code> is recognized specially: the expression is evaluated and written back into the corresponding column of the row being inserted or updated, letting the trigger transform the row before it is stored. This rewrite is honored only for <code>BEFORE</code> triggers.</p>
+<p>Trigger bodies may themselves perform DML that fires other triggers; recursion is bounded by a fixed maximum nesting depth, beyond which further trigger firing is silently suppressed. If the body raises an error, the firing operation fails and the error (with its SQLSTATE, where one is set) propagates to the caller.</p>
+<p>Creating a trigger whose name already exists fails (SQLSTATE <code>42P07</code>). Naming a target table that does not exist fails (SQLSTATE <code>42P01</code>); naming a memory store that does not exist fails (SQLSTATE <code>42704</code>).</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>name</dt>
+<dd>The name of the new trigger. Trigger names are looked up across all tables in the current schema, so a name must be unique within the schema.</dd>
+
+<dt>BEFORE | AFTER</dt>
+<dd>The timing of the trigger relative to the triggering operation. <code>BEFORE</code> runs the body before the row change is applied (and enables <code>SET NEW.<em>column</em></code> rewrites); <code>AFTER</code> runs the body once the row change has been applied.</dd>
+
+<dt>INSERT | UPDATE | DELETE | PUT</dt>
+<dd>The single event that fires the trigger. <code>PUT</code> is accepted as an alias and is treated identically to <code>INSERT</code>. Only one event may be specified per trigger; there is no multi-event (<code>INSERT OR UPDATE</code>) form, and <code>UPDATE</code> cannot be restricted to a column list.</dd>
+
+<dt>ON table_name</dt>
+<dd>The table the trigger is attached to. The table must already exist in the current database and schema.</dd>
+
+<dt>ON MEMORY STORE store_name</dt>
+<dd>Attach the trigger to a memory store instead of an ordinary table. The store name is resolved through the memory-store catalog and rewritten to its backing table (<code>mem_<em>store_name</em></code>); the trigger then fires on that backing table exactly as a regular table trigger would.</dd>
+
+<dt>FOR EACH ROW</dt>
+<dd>Required. Specifies row-level firing — the body runs once per affected row. This is the only granularity supported.</dd>
+
+<dt>trigger_body</dt>
+<dd>The procedural statements between <code>BEGIN</code> and <code>END</code>, executed for each matching row. The body reuses the stored-procedure execution engine and may reference <code>OLD.<em>column</em></code> / <code>NEW.<em>column</em></code>, and (in <code>BEFORE</code> triggers) assign to <code>NEW.<em>column</em></code> with <code>SET</code>.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+
+<p>Stamp a value into a new row before it is inserted (BEFORE trigger with <code>SET NEW</code>):</p>
+<pre><code><span class="c-key">CREATE TRIGGER</span> trg_audit_stamp
+    <span class="c-key">BEFORE INSERT ON</span> orders
+    <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">SET</span> NEW.status = <span class="c-str">'pending'</span>;
+<span class="c-key">END</span>;</code></pre>
+
+<p>Mirror deleted rows into an audit table (AFTER trigger using <code>OLD</code>):</p>
+<pre><code><span class="c-key">CREATE TRIGGER</span> trg_archive_deleted
+    <span class="c-key">AFTER DELETE ON</span> orders
+    <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">INSERT INTO</span> orders_archive (id, status)
+    <span class="c-key">VALUES</span> (OLD.id, OLD.status);
+<span class="c-key">END</span>;</code></pre>
+
+<p>Reject an update with <code>SIGNAL</code> when a guard condition holds (BEFORE trigger using both <code>OLD</code> and <code>NEW</code>):</p>
+<pre><code><span class="c-key">CREATE TRIGGER</span> trg_no_downgrade
+    <span class="c-key">BEFORE UPDATE ON</span> orders
+    <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">IF</span> NEW.total &lt; OLD.total <span class="c-key">THEN</span>
+        <span class="c-key">SIGNAL SQLSTATE</span> <span class="c-str">'45000'</span>;
+    <span class="c-key">END IF</span>;
+<span class="c-key">END</span>;</code></pre>
+
+<p>Attach a trigger to a memory store (<code>PUT</code> is treated as <code>INSERT</code>):</p>
+<pre><code><span class="c-key">CREATE TRIGGER</span> trg_cache_touch
+    <span class="c-key">AFTER PUT ON MEMORY STORE</span> sessions
+    <span class="c-key">FOR EACH ROW</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-com">-- runs against the backing table mem_sessions</span>
+    <span class="c-key">INSERT INTO</span> session_log (sid) <span class="c-key">VALUES</span> (NEW.sid);
+<span class="c-key">END</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>EvolutionDB's <code>CREATE TRIGGER</code> resembles the SQL standard and PostgreSQL but is a narrower, more MySQL-flavored form, and several PostgreSQL clauses are <strong>not</strong> supported:</p>
+<ul>
+<li><strong>Inline body, not a function.</strong> The action is written directly as a <code>BEGIN … END</code> block. There is no <code>EXECUTE FUNCTION</code> / <code>EXECUTE PROCEDURE</code> clause and no separate trigger function; the body runs on the procedure engine.</li>
+<li><strong>Row-level only.</strong> <code>FOR EACH ROW</code> is required. The PostgreSQL <code>FOR EACH STATEMENT</code> granularity is not available.</li>
+<li><strong>Single event only.</strong> Exactly one of <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, or <code>PUT</code> per trigger. PostgreSQL's <code>INSERT OR UPDATE OR DELETE</code> combinations and <code>UPDATE OF <em>column</em></code> are not accepted. <code>TRUNCATE</code> triggers are not supported.</li>
+<li><strong>No <code>WHEN</code> condition.</strong> There is no <code>WHEN (condition)</code> clause; gate logic must be written inside the body (for example with <code>IF … SIGNAL</code>).</li>
+<li><strong>No <code>REFERENCING</code> / transition tables.</strong> Old and new values are exposed only through literal <code>OLD.<em>column</em></code> / <code>NEW.<em>column</em></code> substitution, not via named transition tables.</li>
+<li><strong><code>PUT</code> alias and <code>MEMORY STORE</code> target</strong> are EvolutionDB extensions with no equivalent in PostgreSQL or the SQL standard.</li>
+<li><strong>Row mutation via <code>SET NEW.<em>column</em></code></strong> in <code>BEFORE</code> triggers follows the MySQL convention rather than PostgreSQL's "assign to <code>NEW</code> and <code>RETURN</code>" model.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

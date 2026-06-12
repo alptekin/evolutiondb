@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE DATABASE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE DATABASE</h1>
+<p class="lede">Create a new, empty database and register it in the system catalog, automatically provisioning a schema named <code>default</code> inside it.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE DATABASE</span> <span class="opt">[ IF NOT EXISTS ]</span> <i>database_name</i></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE DATABASE</code> creates a new database. A database is the top-level container in EvolutionDB's catalog hierarchy: it holds schemas, which in turn hold tables and other objects. The statement records the new database in the system catalog and assigns it a catalog-generated database id.</p>
+<p>As part of creation, EvolutionDB immediately provisions a schema named <code>default</code> inside the new database, so the database is ready to receive objects without a separate <a href="/3.0/ref/create-schema/">CREATE SCHEMA</a> step.</p>
+<p>Creating a database does not switch the session to it. The session's current database is unchanged; use <a href="/3.0/ref/use/">USE</a> to make the new database current before creating objects in it.</p>
+<p>If a database with the same name already exists, the statement fails with a "database already exists" error (SQLSTATE <code>42E04</code>) unless <code>IF NOT EXISTS</code> is given, in which case the existing database is left untouched and the statement succeeds without raising an error. If the catalog cannot allocate the database for any other reason, the statement fails with an I/O error (SQLSTATE <code>58030</code>).</p>
+<p>On a freshly initialized instance the catalog is bootstrapped with a default database named <code>evosql</code> (and a <code>default</code> schema within it), so at least one database always exists before any <code>CREATE DATABASE</code> is issued.</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>IF NOT EXISTS</dt>
+<dd>Suppresses the "database already exists" error. If a database with the given name is already present in the catalog, no new database is created and the statement completes successfully without modifying the existing one. Without this clause, attempting to create a duplicate database is an error.</dd>
+
+<dt>database_name</dt>
+<dd>The name of the database to create. It must be unique among existing databases; name matching against the catalog is case-sensitive for the lookup performed on creation.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create a database:</p>
+<pre><code><span class="c-key">CREATE DATABASE</span> shop;</code></pre>
+
+<p>Create a database only if it does not already exist (idempotent):</p>
+<pre><code><span class="c-key">CREATE DATABASE</span> <span class="c-key">IF NOT EXISTS</span> analytics;</code></pre>
+
+<p>Create a database, then switch to it and start defining objects in its <code>default</code> schema:</p>
+<pre><code><span class="c-key">CREATE DATABASE</span> reporting;
+<span class="c-key">USE</span> reporting;
+<span class="c-key">CREATE TABLE</span> events (
+    id   <span class="c-key">BIGINT</span> <span class="c-key">PRIMARY KEY</span> <span class="c-key">AUTO_INCREMENT</span>,
+    name <span class="c-key">VARCHAR</span>(120) <span class="c-key">NOT NULL</span>
+);</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>The SQL standard does not define <code>CREATE DATABASE</code>; it is a PostgreSQL/MySQL extension. EvolutionDB implements a deliberately minimal form of the command.</p>
+<ul>
+<li><b>Versus PostgreSQL:</b> PostgreSQL's <code>CREATE DATABASE</code> accepts a long list of options such as <code>OWNER</code>, <code>TEMPLATE</code>, <code>ENCODING</code>, <code>LOCALE</code>, <code>LC_COLLATE</code>, <code>LC_CTYPE</code>, <code>TABLESPACE</code>, <code>CONNECTION LIMIT</code>, and <code>IS_TEMPLATE</code>. EvolutionDB supports <b>none</b> of these — they are not accepted by the grammar. The only optional element is the <code>IF NOT EXISTS</code> guard.</li>
+<li><b>Versus MySQL:</b> MySQL allows <code>CREATE {DATABASE | SCHEMA}</code> with <code>CHARACTER SET</code> and <code>COLLATE</code> options; EvolutionDB does not accept those options on <code>CREATE DATABASE</code>. In EvolutionDB, <code>CREATE DATABASE</code> and <code>CREATE SCHEMA</code> are distinct commands at different levels of the hierarchy (a schema lives inside the current database), not synonyms.</li>
+<li><b>EvolutionDB behavior:</b> Creating a database also creates a schema named <code>default</code> within it. The new database does not become the session's current database; an explicit <a href="/3.0/ref/use/">USE</a> is required.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/drop-database/">DROP DATABASE</a></li>
+<li><a href="/3.0/ref/use/">USE</a></li>
+<li><a href="/3.0/ref/create-schema/">CREATE SCHEMA</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

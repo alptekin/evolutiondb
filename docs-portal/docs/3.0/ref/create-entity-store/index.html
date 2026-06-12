@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE ENTITY STORE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE ENTITY STORE</h1>
+<p class="lede">Create a named entity store — a key-addressed, upsert-by-key collection of entity summaries with mention counts and last-seen timestamps, backed by an ordinary EvolutionDB table.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE ENTITY STORE</span> <span class="opt">[ IF EXISTS ]</span> <em>name</em></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE ENTITY STORE</code> registers a new entity store named <em>name</em> in the current schema. An entity store is a high-level abstraction over a regular EvolutionDB table: the command creates a backing table and a catalog entry that ties the store name to it, so you can later use the entity DML verbs (<code>ENTITY PUT</code>, <code>ENTITY GET</code>, <code>ENTITY RANK</code>) instead of writing raw SQL.</p>
+<p>The backing table is created automatically and named <code>ent_</code><em>name</em>. It has a fixed five-column shape:</p>
+<dl class="params">
+<dt>entity_key VARCHAR(255) PRIMARY KEY NOT NULL</dt>
+<dd>The lookup key for the entity. Primary key, so keys are unique and indexed by a B+ tree; <code>ENTITY PUT</code> upserts against this key.</dd>
+<dt>summary VARCHAR(8000)</dt>
+<dd>A free-text summary of the entity. Nullable.</dd>
+<dt>facts VARCHAR(8000)</dt>
+<dd>An optional JSON-shaped string of structured facts. Nullable; stored as SQL <code>NULL</code> when omitted.</dd>
+<dt>mention_count INT NOT NULL</dt>
+<dd>How many times the entity has been written. Set to <code>1</code> on first <code>ENTITY PUT</code> and incremented on every subsequent put for the same key.</dd>
+<dt>last_seen TIMESTAMP NOT NULL</dt>
+<dd>UTC ISO timestamp (<code>YYYY-MM-DD HH:MM:SS</code>) of the most recent put.</dd>
+</dl>
+<p>The store is registered in the system catalog as an entity store entry that records its name and the backing table's id. If a store with the same name already exists, the command raises an error (SQLSTATE <code>42710</code>) unless the <code>IF EXISTS</code> clause is given, in which case the existing store is left untouched and the command succeeds silently. A missing name is reported as a syntax error (SQLSTATE <code>42601</code>).</p>
+<p>Dropping the store with <code>DROP ENTITY STORE</code> drops the backing <code>ent_</code><em>name</em> table and removes the catalog entry.</p>
+
+<div class="callout">
+<p><strong>Note on the guard clause.</strong> The grammar accepts the literal token sequence <code>IF EXISTS</code> here (not the SQL-conventional <code>IF NOT EXISTS</code>). Its effect, however, is the standard "if-not-exists" semantics: when the store already exists the statement is a no-op rather than an error.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>IF EXISTS</code></dt>
+<dd>Do not raise an error if an entity store with the same name already exists; instead leave the existing store in place and return success. Without this clause, attempting to create a store that already exists fails with <code>entity store '<em>name</em>' already exists</code> (SQLSTATE <code>42710</code>).</dd>
+<dt><em>name</em></dt>
+<dd>The name of the entity store to create. The backing table is created as <code>ent_</code><em>name</em> in the current schema, and the store is registered under this name in the catalog. Required.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create an entity store named <code>people</code>:</p>
+<pre><code><span class="c-key">CREATE ENTITY STORE</span> people<span class="c-com">;</span></code></pre>
+
+<p>Create it only if it does not already exist (idempotent setup):</p>
+<pre><code><span class="c-key">CREATE ENTITY STORE</span> <span class="c-key">IF EXISTS</span> people<span class="c-com">;</span></code></pre>
+
+<p>Create a store and start populating it with the entity DML verbs:</p>
+<pre><code><span class="c-key">CREATE ENTITY STORE</span> people<span class="c-com">;</span>
+
+<span class="c-com">-- upsert by key: summary only</span>
+<span class="c-key">ENTITY PUT INTO</span> people <span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">'Lead engineer on the storage team'</span>)<span class="c-com">;</span>
+
+<span class="c-com">-- upsert by key: summary + JSON-shaped facts</span>
+<span class="c-key">ENTITY PUT INTO</span> people <span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">'Storage team lead'</span>, <span class="c-str">'{"role":"lead","team":"storage"}'</span>)<span class="c-com">;</span>
+
+<span class="c-com">-- look up one entity by key</span>
+<span class="c-key">ENTITY GET FROM</span> people <span class="c-key">WHERE KEY</span> = <span class="c-str">'alice'</span><span class="c-com">;</span>
+
+<span class="c-com">-- rank entities by mention_count DESC (tie-broken by last_seen DESC)</span>
+<span class="c-key">ENTITY RANK FROM</span> people <span class="c-key">LIMIT</span> 10<span class="c-com">;</span></code></pre>
+
+<p>Drop the store and its backing table:</p>
+<pre><code><span class="c-key">DROP ENTITY STORE</span> people<span class="c-com">;</span></code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE ENTITY STORE</code> is an EvolutionDB extension. There is no <code>CREATE ENTITY STORE</code> statement in the SQL standard, and PostgreSQL has no equivalent command — it is not portable.</p>
+<p>The clause spelling differs from common SQL conventions: EvolutionDB's grammar accepts <code>IF EXISTS</code> as the create-time guard, whereas PostgreSQL and the SQL community use <code>IF NOT EXISTS</code> for the same "create-only-if-absent" intent. The runtime behavior matches the conventional if-not-exists meaning.</p>
+<p>The store is not a distinct storage engine: it is implemented entirely on top of a normal EvolutionDB table (<code>ent_</code><em>name</em>) with a B+ tree primary-key index on <code>entity_key</code>, and the entity DML verbs are translated into ordinary <code>INSERT</code>, <code>UPDATE</code>, and <code>SELECT</code> execution paths. The backing table is visible to regular SQL queries.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/memory-put/">MEMORY PUT</a></li>
+<li><a href="/3.0/ref/memory-get/">MEMORY GET</a></li>
+<li><a href="/3.0/ref/drop-table/">DROP TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

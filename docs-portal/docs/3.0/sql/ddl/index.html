@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>5. Data Definition — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>5. Data Definition</h1>
+<p class="lede">How EvolutionDB defines the objects that hold data — schemas, tables, columns, constraints, sequences, and domains — and how those definitions are altered and dropped.</p>
+
+<p>This chapter describes the data-definition language (DDL) that EvolutionDB actually implements. Every behavior documented here is taken from the engine's <code>CREATE</code>/<code>ALTER</code>/<code>DROP</code> handlers and the SQL grammar; where EvolutionDB diverges from PostgreSQL or the SQL standard, the difference is called out explicitly rather than glossed over. For the full per-statement syntax, follow the links into the command reference under <code>/3.0/ref/</code>.</p>
+
+<h2 id="model">5.1. The Object Model</h2>
+
+<p>EvolutionDB stores all metadata in a system catalog held in B+ trees inside a single page file. Objects are nested four levels deep, addressed internally by the path <code>root/<i>database</i>/<i>schema</i>/<i>table</i></code>:</p>
+
+<dl class="params">
+<dt>Database</dt>
+<dd>The top-level container. The session works inside one current database (see <a href="/3.0/ref/use/">USE</a>).</dd>
+<dt>Schema</dt>
+<dd>A named namespace inside a database. Tables, sequences, and views live in a schema. The session has one current schema; an unqualified object name resolves against it.</dd>
+<dt>Table</dt>
+<dd>A base relation: an ordered list of columns plus its constraints and indexes. Rows are stored as binary tuples in heap pages, keyed by a primary-key B+ tree.</dd>
+<dt>Column</dt>
+<dd>A named, typed field. A table may have at most <strong>256</strong> columns (<code>CAT_MAX_COLUMNS</code>); identifiers are limited to 127 usable characters (<code>CAT_MAX_NAME_LEN</code> is 128 including the terminator).</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Note.</strong> Unlike PostgreSQL, EvolutionDB has no <code>CREATE SCHEMA ... AUTHORIZATION</code>, no schema search-path list, and no concept of a per-object owner role at the schema level. A name is resolved against exactly one current schema, or against the schema named in a qualified <code><i>schema</i>.<i>table</i></code> reference.</p>
+</div>
+
+<h2 id="schemas">5.2. Schemas</h2>
+
+<p>A schema is created inside the current database. <code>CREATE SCHEMA</code> takes only a name and an optional existence guard — there is no inline object list and no authorization clause.</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">SCHEMA</span> sales;
+<span class="c-key">CREATE</span> <span class="c-key">SCHEMA</span> <span class="opt">IF NOT EXISTS</span> sales;
+
+<span class="c-com">-- Make it the active schema for unqualified names:</span>
+<span class="c-key">SET</span> <span class="c-key">SCHEMA</span> sales;
+<span class="c-key">SET</span> <span class="c-key">SCHEMA</span> <span class="c-key">DEFAULT</span>;</code></pre>
+
+<p>If the schema already exists, <code>CREATE SCHEMA</code> fails with SQLSTATE <code>42P06</code> (duplicate schema) unless <code>IF NOT EXISTS</code> was given, in which case it silently succeeds. <code>SET SCHEMA</code> verifies the schema exists in the current database before switching; a missing schema raises <code>3F000</code> (invalid schema name).</p>
+
+<p><code>DROP SCHEMA</code> is unconditionally cascading in EvolutionDB: it drops every table in the schema before removing the schema itself.</p>
+
+<pre><code><span class="c-key">DROP</span> <span class="c-key">SCHEMA</span> sales;
+<span class="c-key">DROP</span> <span class="c-key">SCHEMA</span> <span class="opt">IF EXISTS</span> sales;</code></pre>
+
+<div class="callout">
+<p><strong>Caveat.</strong> There is no <code>RESTRICT</code> / <code>CASCADE</code> keyword on <code>DROP SCHEMA</code>. The behavior is always equivalent to PostgreSQL's <code>CASCADE</code> for the tables it contains: dropping a non-empty schema discards its tables without warning. A non-existent schema raises <code>3F000</code> unless <code>IF EXISTS</code> is supplied. See <a href="/3.0/ref/set-schema/">SET SCHEMA</a>.</p>
+</div>
+
+<h2 id="tables">5.3. Creating Tables</h2>
+
+<p><a href="/3.0/ref/create-table/">CREATE TABLE</a> defines a base table in the current (or qualified) schema. A column list mixes column definitions with table-level constraints.</p>
+
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE</span> <span class="opt">[ TEMPORARY | GLOBAL TEMPORARY ]</span> <span class="c-key">TABLE</span> <span class="opt">[ IF NOT EXISTS ]</span> <span class="opt">[ <i>schema</i> . ]</span><i>table_name</i> (
+    { <i>column_name</i> <i>data_type</i> <span class="opt">[ <i>column_attribute</i> [ ... ] ]</span>
+    | <i>table_constraint</i> }
+    [ , ... ]
+)
+<span class="opt">[ <i>table_option</i> [ ... ] ]</span>
+<span class="opt">[ INHERITS ( <i>parent_table</i> ) ]</span></code></pre>
+</div>
+
+<p>A minimal example:</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">TABLE</span> employees (
+    id        <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span> <span class="c-key">AUTO_INCREMENT</span>,
+    name      <span class="c-key">VARCHAR</span>(100) <span class="c-key">NOT NULL</span>,
+    email     <span class="c-key">VARCHAR</span>(255) <span class="c-key">UNIQUE</span>,
+    salary    <span class="c-key">DECIMAL</span>(10,2) <span class="c-key">DEFAULT</span> <span class="c-str">0</span>,
+    status    <span class="c-key">VARCHAR</span>(20) <span class="c-key">DEFAULT</span> <span class="c-str">'active'</span>,
+    hired_at  <span class="c-key">TIMESTAMP</span> <span class="c-key">DEFAULT</span> <span class="c-key">CURRENT_TIMESTAMP</span>
+);</code></pre>
+
+<p>If a table of the same name already exists in the target schema, <code>CREATE TABLE</code> fails with <code>42P07</code> (duplicate table) unless <code>IF NOT EXISTS</code> is present. The clause only suppresses the error; it does <em>not</em> compare the new definition with the existing one.</p>
+
+<h3 id="temp-tables">5.3.1. Temporary tables</h3>
+
+<p>The <code>TEMPORARY</code> and <code>GLOBAL TEMPORARY</code> prefixes mark a table as session-local or global-temporary respectively. Row lifetime on transaction boundaries is controlled by the <code>ON COMMIT</code> table option rather than by the prefix alone.</p>
+
+<h3 id="ctas">5.3.2. CREATE TABLE AS / SELECT</h3>
+
+<p>A table can be populated directly from a query. Both an inferred form (columns derived from the query) and an explicit-column form are accepted, optionally prefixed with <code>IGNORE</code> or <code>REPLACE</code>:</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">TABLE</span> active_emps <span class="c-key">AS</span>
+    <span class="c-key">SELECT</span> id, name <span class="c-key">FROM</span> employees <span class="c-key">WHERE</span> status = <span class="c-str">'active'</span>;</code></pre>
+
+<h3 id="inherits">5.3.3. Inheritance</h3>
+
+<p><code>INHERITS ( <i>parent</i> )</code> prepends the parent's columns to the child's own column list. Duplicate column names between parent and child are rejected with <code>42701</code> (duplicate column) — EvolutionDB does not merge same-named columns the way PostgreSQL does. If the child declares its own primary key, the inherited primary-key flag is stripped from the parent columns. The combined column count must stay within the 256-column ceiling.</p>
+
+<p>Dropping an inherited-from parent requires <code>CASCADE</code>; see <a href="#dropping">§5.7</a>.</p>
+
+<h3 id="partition">5.3.4. Range partitioning</h3>
+
+<p>A parent table declares <code>PARTITION BY RANGE ( <i>column</i> )</code> as a table option, then child partitions are attached:</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">TABLE</span> events (id <span class="c-key">INT</span>, ts <span class="c-key">INT</span>) <span class="c-key">PARTITION BY RANGE</span> (ts);
+
+<span class="c-key">CREATE</span> <span class="c-key">TABLE</span> events_q1 <span class="c-key">PARTITION OF</span> events
+    <span class="c-key">FOR VALUES FROM</span> (<span class="c-str">0</span>) <span class="c-key">TO</span> (<span class="c-str">100</span>);</code></pre>
+
+<p>Each child copies the parent's columns and registers an integer half-open range <code>[lo, hi)</code>. The engine validates that <code>lo &lt; hi</code> and that the new range does not overlap an existing partition; a table may hold at most <strong>1024</strong> partitions (<code>EVO_MAX_PARTITIONS</code>). Range bounds are integers only.</p>
+
+<h2 id="datatypes">5.4. Data Types</h2>
+
+<p>A column's type is encoded as a single integer: <code><i>family</i> × 10000 + <i>size</i></code>. The family identifies the type class; the size carries a length, precision, or element count where applicable. The table below lists the families the grammar produces.</p>
+
+<table>
+<thead><tr><th>Type</th><th>Family code</th><th>Size meaning</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>BIT</code></td><td>1</td><td>optional length</td><td>validated as integer</td></tr>
+<tr><td><code>TINYINT</code></td><td>1</td><td>optional length</td><td><code>UNSIGNED</code>/<code>ZEROFILL</code> modifiers add 1000/2000</td></tr>
+<tr><td><code>SMALLINT</code></td><td>2</td><td>optional length</td><td>integer family</td></tr>
+<tr><td><code>MEDIUMINT</code></td><td>3</td><td>optional length</td><td>integer family</td></tr>
+<tr><td><code>INT</code></td><td>4</td><td>optional length</td><td>integer family</td></tr>
+<tr><td><code>INTEGER</code></td><td>5</td><td>optional length</td><td>integer family</td></tr>
+<tr><td><code>BIGINT</code></td><td>6</td><td>optional length</td><td>integer family</td></tr>
+<tr><td><code>REAL</code></td><td>7</td><td>optional precision</td><td>numeric, validated with <code>strtod</code></td></tr>
+<tr><td><code>DOUBLE</code></td><td>8</td><td>optional precision</td><td>numeric</td></tr>
+<tr><td><code>FLOAT</code></td><td>9</td><td>optional precision</td><td>numeric</td></tr>
+<tr><td><code>DATE</code> / <code>TIME</code> / <code>TIMESTAMP</code> / <code>DATETIME</code> / <code>YEAR</code></td><td>10</td><td>1–5 selector</td><td>fixed codes <code>100001</code>–<code>100005</code>; no value validation</td></tr>
+<tr><td><code>DECIMAL</code></td><td>11</td><td><code>p</code> + 1000·<code>s</code></td><td>numeric</td></tr>
+<tr><td><code>CHAR(<i>n</i>)</code></td><td>12</td><td>length <code>n</code></td><td>length-checked on insert</td></tr>
+<tr><td><code>VARCHAR(<i>n</i>)</code></td><td>13</td><td>length <code>n</code></td><td>length-checked on insert</td></tr>
+<tr><td><code>BINARY</code> / <code>VARBINARY</code></td><td>14 / 15</td><td>length</td><td>no value validation</td></tr>
+<tr><td><code>TINYBLOB</code>…<code>LONGBLOB</code></td><td>16</td><td>1–4 selector</td><td>codes <code>160001</code>–<code>160004</code></td></tr>
+<tr><td><code>TINYTEXT</code>…<code>LONGTEXT</code></td><td>17</td><td>variant + binary flag</td><td>no value validation</td></tr>
+<tr><td><code>UUID</code></td><td>18</td><td>36</td><td>format-validated (<code>8-4-4-4-12</code> hex)</td></tr>
+<tr><td><code>ENUM(...)</code> / <code>SET(...)</code></td><td>20 / 21</td><td>member count</td><td>no value validation</td></tr>
+<tr><td><code>BOOLEAN</code></td><td>22</td><td>1</td><td>accepts <code>true/false/0/1</code></td></tr>
+<tr><td><code>JSON</code></td><td>23</td><td>0</td><td>validated as well-formed JSON</td></tr>
+<tr><td><code><i>type</i>[]</code></td><td>25</td><td>base family</td><td>array type</td></tr>
+<tr><td><code>VECTOR(<i>dim</i>)</code></td><td>26</td><td>dimension</td><td>fixed-dimension vector</td></tr>
+</tbody>
+</table>
+
+<p>Value checking happens at insert/update time, not at <code>CREATE TABLE</code> time. The engine validates integer, numeric, <code>CHAR</code>/<code>VARCHAR</code> length, <code>UUID</code> format, <code>BOOLEAN</code>, and <code>JSON</code> values; date/time, binary, blob, text, enum, and set values are stored without content validation.</p>
+
+<div class="callout">
+<p><strong>Note.</strong> Because the type is a single integer code, <code>ALTER TABLE ... MODIFY</code> can only change a type within the same family (and, for <code>CHAR</code>/<code>VARCHAR</code>, only widen the length). Cross-family conversions are rejected — see <a href="#alter-columns">§5.6.2</a>.</p>
+</div>
+
+<h2 id="constraints">5.5. Constraints</h2>
+
+<p>EvolutionDB records five constraint kinds in the catalog, distinguished by a single type byte: primary key (<code>P</code>), unique (<code>U</code>), check (<code>C</code>), foreign key (<code>F</code>), and domain (<code>D</code>, used internally for <a href="#domains">domains</a>). Constraints may be written inline on a column or at the table level, and may be explicitly named with <code>CONSTRAINT <i>name</i></code>.</p>
+
+<h3 id="primary-keys">5.5.1. Primary keys</h3>
+
+<p>A single-column primary key is declared inline (<code>PRIMARY KEY</code> or, as a column attribute, the bare keyword <code>KEY</code>); a composite key uses the table-level form:</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">TABLE</span> order_items (
+    order_id  <span class="c-key">INT</span>,
+    line_no   <span class="c-key">INT</span>,
+    qty       <span class="c-key">INT</span> <span class="c-key">NOT NULL</span>,
+    <span class="c-key">PRIMARY KEY</span> (order_id, line_no)
+);</code></pre>
+
+<p>The primary key is backed by a B+ tree created automatically with the table; it is the table's clustering index. The composite-key form accepts up to 16 columns.</p>
+
+<h3 id="unique">5.5.2. Unique constraints</h3>
+
+<p>A column attribute <code>UNIQUE</code> (or <code>UNIQUE KEY</code>) marks a single column unique; the table-level <code>UNIQUE (<i>cols</i>)</code> form covers one or more columns. Up to 8 table-level unique constraints may be declared per <code>CREATE TABLE</code>. An unnamed unique constraint is auto-named <code><i>table</i>_<i>cols</i>_key</code>.</p>
+
+<h3 id="check">5.5.3. Check constraints</h3>
+
+<p>A <code>CHECK (<i>expr</i>)</code> constraint stores a serialized boolean expression that each row must satisfy. It may be inline or table-level, and named or auto-named <code><i>table</i>_check_<i>n</i></code>:</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">TABLE</span> products (
+    id     <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    price  <span class="c-key">DECIMAL</span>(10,2) <span class="c-key">CHECK</span> (price &gt;= <span class="c-str">0</span>),
+    <span class="c-key">CONSTRAINT</span> nonempty_name <span class="c-key">CHECK</span> (name &lt;&gt; <span class="c-str">''</span>)
+);</code></pre>
+
+<h3 id="foreign-keys">5.5.4. Foreign keys</h3>
+
+<p>A foreign key references the primary key of another table (optionally schema-qualified). Both the single- and composite-column forms are supported, with referential actions:</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">TABLE</span> orders (
+    id          <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    customer_id <span class="c-key">INT</span>,
+    <span class="c-key">CONSTRAINT</span> fk_cust <span class="c-key">FOREIGN KEY</span> (customer_id)
+        <span class="c-key">REFERENCES</span> customers (id)
+        <span class="c-key">ON DELETE CASCADE</span> <span class="c-key">ON UPDATE RESTRICT</span>
+);</code></pre>
+
+<p>The referenced table must already exist (otherwise <code>42P01</code>). Up to 8 foreign keys may be declared per <code>CREATE TABLE</code>; an unnamed one is auto-named <code><i>table</i>_<i>cols</i>_fkey</code>. The supported clauses and their stored action codes are:</p>
+
+<dl class="params">
+<dt>ON DELETE / ON UPDATE</dt>
+<dd><code>CASCADE</code> (1), <code>SET NULL</code> (2), <code>RESTRICT</code> (3), <code>SET DEFAULT</code> (4), <code>NO ACTION</code> (5). The default when omitted is action 0 (no action).</dd>
+<dt>MATCH</dt>
+<dd><code>SIMPLE</code> (0, the default), <code>FULL</code> (1), <code>PARTIAL</code> (2).</dd>
+<dt>DEFERRABLE</dt>
+<dd><code>NOT DEFERRABLE</code> (0), <code>DEFERRABLE</code> / <code>DEFERRABLE INITIALLY IMMEDIATE</code> (1), <code>DEFERRABLE INITIALLY DEFERRED</code> (2). These modes are parsed and stored.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Note.</strong> A foreign key always references the parent's <em>primary key</em> B+ tree. Rows whose foreign-key columns are all NULL are accepted regardless of <code>MATCH</code> mode. The <code>MATCH PARTIAL</code> mode is recorded but is not standard-complete.</p>
+</div>
+
+<h2 id="alter">5.6. Altering Tables</h2>
+
+<p><a href="/3.0/ref/alter-table/">ALTER TABLE</a> supports a broad set of subcommands. Each runs immediately and validates existing data where relevant.</p>
+
+<h3 id="alter-constraints">5.6.1. Adding and changing constraints</h3>
+
+<pre><code><span class="c-com">-- Add constraints (existing rows are validated first):</span>
+<span class="c-key">ALTER TABLE</span> products <span class="c-key">ADD CONSTRAINT</span> pos_price <span class="c-key">CHECK</span> (price &gt;= <span class="c-str">0</span>);
+<span class="c-key">ALTER TABLE</span> emp <span class="c-key">ADD CONSTRAINT</span> u_email <span class="c-key">UNIQUE</span> (email);
+<span class="c-key">ALTER TABLE</span> orders <span class="c-key">ADD CONSTRAINT</span> fk_c <span class="c-key">FOREIGN KEY</span> (customer_id) <span class="c-key">REFERENCES</span> customers (id);
+<span class="c-key">ALTER TABLE</span> t <span class="c-key">ADD CONSTRAINT</span> pk_t <span class="c-key">PRIMARY KEY</span> (a, b);
+
+<span class="c-com">-- Manage existing constraints:</span>
+<span class="c-key">ALTER TABLE</span> t <span class="c-key">DROP CONSTRAINT</span> u_email;
+<span class="c-key">ALTER TABLE</span> t <span class="c-key">RENAME CONSTRAINT</span> u_email <span class="c-key">TO</span> uq_email;
+<span class="c-key">ALTER TABLE</span> t <span class="c-key">ENABLE CONSTRAINT</span> pos_price;
+<span class="c-key">ALTER TABLE</span> t <span class="c-key">DISABLE CONSTRAINT</span> pos_price;</code></pre>
+
+<p>When adding a <code>CHECK</code>, the engine scans every existing row and rejects the constraint (with the row number) if any row fails. Adding a <code>UNIQUE</code> constraint runs an O(n²) duplicate scan; adding a <code>PRIMARY KEY</code> additionally rejects NULL values in the key columns and refuses if the table already has a primary key. A duplicate constraint name raises <code>42710</code>; a missing one raises <code>42704</code>.</p>
+
+<p><strong>Deferred validation.</strong> The <code>NOT VALIDATE</code> suffix on a new <code>CHECK</code> or <code>FOREIGN KEY</code> adds the constraint without scanning existing data, marking it unvalidated. A later <code>VALIDATE CONSTRAINT</code> performs the scan and flips the validated flag:</p>
+
+<pre><code><span class="c-key">ALTER TABLE</span> t <span class="c-key">ADD CONSTRAINT</span> c1 <span class="c-key">CHECK</span> (x &gt; <span class="c-str">0</span>) <span class="c-key">NOT VALIDATE</span>;
+<span class="c-key">ALTER TABLE</span> t <span class="c-key">VALIDATE CONSTRAINT</span> c1;</code></pre>
+
+<div class="callout">
+<p><strong>Note.</strong> The keyword spelling is <code>NOT VALIDATE</code> (not PostgreSQL's <code>NOT VALID</code>). A <code>DISABLE</code>d <code>CHECK</code> constraint is skipped when reading constraints back, so it is no longer enforced; <code>ENABLE</code> restores it.</p>
+</div>
+
+<h3 id="alter-columns">5.6.2. Adding, dropping, and changing columns</h3>
+
+<pre><code><span class="c-key">ALTER TABLE</span> emp <span class="c-key">ADD COLUMN</span> phone <span class="c-key">VARCHAR</span>(20);
+<span class="c-key">ALTER TABLE</span> emp <span class="c-key">ADD COLUMN</span> active <span class="c-key">BOOLEAN</span> <span class="c-key">DEFAULT</span> <span class="c-str">true</span> <span class="c-key">AFTER</span> name;
+<span class="c-key">ALTER TABLE</span> emp <span class="c-key">DROP COLUMN</span> phone;
+<span class="c-key">ALTER TABLE</span> emp <span class="c-key">RENAME COLUMN</span> name <span class="c-key">TO</span> full_name;
+<span class="c-key">ALTER TABLE</span> emp <span class="c-key">MODIFY COLUMN</span> full_name <span class="c-key">VARCHAR</span>(200);
+<span class="c-key">ALTER TABLE</span> emp <span class="c-key">CHANGE COLUMN</span> full_name display_name <span class="c-key">VARCHAR</span>(200);</code></pre>
+
+<dl class="params">
+<dt>ADD COLUMN</dt>
+<dd>Appends a column (optionally repositioned with <code>FIRST</code> or <code>AFTER <i>col</i></code>, which eagerly rewrites every tuple). A <code>NOT NULL</code> column without a <code>DEFAULT</code> is rejected if the table already holds rows (<code>23502</code>). A primary-key column cannot be added this way. Adding past 256 columns raises <code>54011</code>.</dd>
+<dt>DROP COLUMN</dt>
+<dd>Marks the column dropped. Refused (<code>2BP01</code>) if it is part of the primary key, is the table's only column, or is referenced by a secondary index, a foreign key, or a unique constraint.</dd>
+<dt>RENAME COLUMN</dt>
+<dd>Renames a column and updates any secondary index column lists that referenced the old name. A name collision raises <code>42701</code>.</dd>
+<dt>MODIFY / CHANGE COLUMN</dt>
+<dd>Changes a column's type and attributes (<code>CHANGE</code> also renames it, MySQL-style). The new type must be in the same family as the old one; <code>CHAR</code>/<code>VARCHAR</code> may only widen. A cross-family change raises <code>42804</code>; changing a primary-key column's type raises <code>2BP01</code>. Switching to <code>NOT NULL</code> scans for existing NULLs and fails with <code>23502</code> if any are found.</dd>
+</dl>
+
+<h3 id="rename-table">5.6.3. Renaming tables</h3>
+
+<p>A table is renamed with the standalone <code>RENAME TABLE</code> statement:</p>
+
+<pre><code><span class="c-key">RENAME TABLE</span> employees <span class="c-key">TO</span> staff;</code></pre>
+
+<p>A missing source raises <code>42P01</code>; a target name already in use raises <code>42P07</code>.</p>
+
+<h3 id="alter-ttl">5.6.4. Table TTL</h3>
+
+<p>A table may nominate a column whose value drives row expiry by the background reclaim daemon. The column must exist on the table or the statement fails (<code>42703</code>):</p>
+
+<pre><code><span class="c-key">ALTER TABLE</span> sessions <span class="c-key">SET</span> ttl_column = <span class="c-str">'expires_at'</span>;
+<span class="c-key">ALTER TABLE</span> sessions <span class="c-key">DROP</span> <span class="c-key">TTL</span>;</code></pre>
+
+<h2 id="dropping">5.7. Dropping and Truncating Tables</h2>
+
+<p><a href="/3.0/ref/drop-table/">DROP TABLE</a> removes a table and all of its storage — primary-key tree, heap pages, secondary indexes, constraints, RLS policies, and inheritance links:</p>
+
+<pre><code><span class="c-key">DROP</span> <span class="c-key">TABLE</span> employees;
+<span class="c-key">DROP</span> <span class="c-key">TABLE</span> <span class="opt">IF EXISTS</span> employees;
+<span class="c-key">DROP</span> <span class="c-key">TABLE</span> employees <span class="c-key">CASCADE</span>;</code></pre>
+
+<p>The drop is refused with <code>2BP01</code> if a view references the table, or if the table has inheritance children and <code>CASCADE</code> was not given. With <code>CASCADE</code>, child tables are dropped recursively first. <code>RESTRICT</code> is the default; a missing table raises an error unless <code>IF EXISTS</code> is supplied.</p>
+
+<p><a href="/3.0/ref/truncate/">TRUNCATE</a> empties a table (or several) by destroying and recreating its heap and index trees, far faster than a row-by-row delete:</p>
+
+<pre><code><span class="c-key">TRUNCATE</span> <span class="c-key">TABLE</span> logs;
+<span class="c-key">TRUNCATE</span> <span class="c-key">TABLE</span> t1, t2 <span class="c-key">CASCADE</span>;
+<span class="c-key">TRUNCATE</span> <span class="c-key">TABLE</span> logs <span class="c-key">CONTINUE IDENTITY</span>;</code></pre>
+
+<p>If a non-empty table references the target via a foreign key, <code>TRUNCATE</code> fails with <code>23503</code> unless <code>CASCADE</code> is given, in which case the referencing table is truncated first. By default the auto-increment counter is reset to its start; <code>CONTINUE IDENTITY</code> preserves it. Table statistics are reset.</p>
+
+<h2 id="sequences">5.8. Sequences</h2>
+
+<p>EvolutionDB provides PostgreSQL-style sequence objects, stored per schema. See <a href="/3.0/ref/create-sequence/">CREATE SEQUENCE</a>.</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">SEQUENCE</span> <span class="opt">IF NOT EXISTS</span> order_seq
+    <span class="c-key">START WITH</span> <span class="c-str">100</span>
+    <span class="c-key">INCREMENT BY</span> <span class="c-str">1</span>
+    <span class="c-key">MINVALUE</span> <span class="c-str">1</span>
+    <span class="c-key">MAXVALUE</span> <span class="c-str">1000000</span>
+    <span class="c-key">CYCLE</span>;
+
+<span class="c-key">SELECT</span> nextval(<span class="c-str">'order_seq'</span>);
+<span class="c-key">SELECT</span> setval(<span class="c-str">'order_seq'</span>, <span class="c-str">500</span>);</code></pre>
+
+<dl class="params">
+<dt>START [ WITH ] <i>n</i></dt>
+<dd>The first value <code>nextval</code> returns. Defaults to <code>MINVALUE</code> when omitted.</dd>
+<dt>INCREMENT [ BY ] <i>n</i></dt>
+<dd>The step between values (default 1). May be negative for a descending sequence.</dd>
+<dt>MINVALUE <i>n</i> / MAXVALUE <i>n</i></dt>
+<dd>Bounds. Defaults are min 1 and max 2147483647.</dd>
+<dt>CYCLE / NOT CYCLE</dt>
+<dd>Whether the sequence wraps at its bound (to the opposite bound) or raises an error. Default is <code>NOT CYCLE</code>.</dd>
+</dl>
+
+<p><code>nextval</code> is atomic under a dedicated mutex. The first call returns the current (start) value and marks the sequence "called"; subsequent calls add the increment, wrapping or erroring at the bound per the cycle flag. <code>setval</code> sets the stored value directly.</p>
+
+<p>Sequences can be altered, restarted, renamed, and dropped:</p>
+
+<pre><code><span class="c-key">ALTER SEQUENCE</span> order_seq <span class="c-key">INCREMENT BY</span> <span class="c-str">2</span> <span class="c-key">MAXVALUE</span> <span class="c-str">2000000</span>;
+<span class="c-key">ALTER SEQUENCE</span> order_seq <span class="c-key">RESTART</span>;
+<span class="c-key">ALTER SEQUENCE</span> order_seq <span class="c-key">RESTART WITH</span> <span class="c-str">1</span>;
+<span class="c-key">ALTER SEQUENCE</span> order_seq <span class="c-key">RENAME TO</span> ord_seq;
+<span class="c-key">DROP</span> <span class="c-key">SEQUENCE</span> <span class="opt">IF EXISTS</span> ord_seq;</code></pre>
+
+<div class="callout">
+<p><strong>Caveat.</strong> <code>ALTER SEQUENCE</code> only applies options that differ from their defaults: an option left at its default value (for example <code>INCREMENT 1</code>, <code>MINVALUE 1</code>, or <code>MAXVALUE 2147483647</code>) is treated as "unspecified" and leaves the stored setting unchanged. <code>RENAME</code> is implemented as drop-and-recreate under the same id. There is no <code>CACHE</code> or <code>OWNED BY</code> clause, and column defaults reference generators such as <code>AUTO_INCREMENT</code>/<code>IDENTITY</code> directly rather than via an owned sequence.</p>
+</div>
+
+<h2 id="domains">5.9. Domains</h2>
+
+<p>A domain is a named, reusable type built on a base type, optionally with a default, a <code>NOT NULL</code> marker, and a <code>CHECK</code>. See <a href="/3.0/ref/create-domain/">CREATE DOMAIN</a>.</p>
+
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">DOMAIN</span> positive_int <span class="c-key">AS</span> <span class="c-key">INT</span> <span class="c-key">CHECK</span> (<span class="c-key">VALUE</span> &gt; <span class="c-str">0</span>);
+<span class="c-key">CREATE</span> <span class="c-key">DOMAIN</span> email <span class="c-key">AS</span> <span class="c-key">VARCHAR</span>(255) <span class="c-key">NOT NULL</span>;
+<span class="c-key">CREATE</span> <span class="c-key">DOMAIN</span> score <span class="c-key">AS</span> <span class="c-key">INT</span> <span class="c-key">DEFAULT</span> <span class="c-str">0</span>;</code></pre>
+
+<p>A domain is stored as a special constraint entry (type <code>D</code>) in a system namespace, packing its base type code, NOT-null flag, and serialized check. Creating a domain whose name already exists raises <code>42710</code>.</p>
+
+<div class="callout">
+<p><strong>Note.</strong> Domain support is intentionally minimal compared to PostgreSQL. The grammar accepts <code>CREATE DOMAIN ... AS <i>type</i> [ DEFAULT <i>expr</i> ] [ NOT NULL ] [ CHECK (<i>expr</i>) ]</code>, but the <code>DEFAULT</code> clause in particular is parsed without being persisted in the current build, and there is no <code>DROP DOMAIN</code> or <code>ALTER DOMAIN</code> statement. Treat domains as a lightweight, forward-looking facility rather than a complete type system.</p>
+</div>
+
+<h2 id="errors">5.10. Common DDL SQLSTATEs</h2>
+
+<p>DDL statements surface failures through standard five-character SQLSTATE codes. The codes most commonly raised by the statements in this chapter are:</p>
+
+<table>
+<thead><tr><th>SQLSTATE</th><th>Meaning</th><th>Typical trigger</th></tr></thead>
+<tbody>
+<tr><td><code>42P01</code></td><td>undefined table</td><td>referenced or target table does not exist</td></tr>
+<tr><td><code>42P06</code></td><td>duplicate schema</td><td><code>CREATE SCHEMA</code> on an existing name</td></tr>
+<tr><td><code>42P07</code></td><td>duplicate table</td><td><code>CREATE TABLE</code> / <code>RENAME TABLE</code> name clash</td></tr>
+<tr><td><code>42701</code></td><td>duplicate column</td><td>repeated column name (incl. inheritance merge)</td></tr>
+<tr><td><code>42703</code></td><td>undefined column</td><td>unknown column in a constraint or TTL clause</td></tr>
+<tr><td><code>42704</code></td><td>undefined object</td><td>constraint not found on the table</td></tr>
+<tr><td><code>42710</code></td><td>duplicate object</td><td>constraint, sequence, or domain name in use</td></tr>
+<tr><td><code>42804</code></td><td>datatype mismatch</td><td>incompatible type change in <code>MODIFY</code></td></tr>
+<tr><td><code>2BP01</code></td><td>dependent objects still exist</td><td>drop blocked by a child, view, index, or constraint</td></tr>
+<tr><td><code>23502</code></td><td>not-null violation</td><td>adding a <code>NOT NULL</code> column/attribute over existing data</td></tr>
+<tr><td><code>23503</code></td><td>foreign-key violation</td><td><code>TRUNCATE</code> blocked by a referencing table</td></tr>
+<tr><td><code>3F000</code></td><td>invalid schema name</td><td><code>SET SCHEMA</code> / <code>DROP SCHEMA</code> on a missing schema</td></tr>
+<tr><td><code>54011</code></td><td>too many columns</td><td>exceeding the 256-column ceiling</td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<p><strong>Note.</strong> Some early or partial code paths report duplicate or missing tables with a plain <code>Error: ...</code> message instead of a SQLSTATE; rely on the codes above for the well-defined failure cases, and on the message text otherwise.</p>
+</div>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

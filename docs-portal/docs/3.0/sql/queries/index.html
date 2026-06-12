@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>7. Queries — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>7. Queries</h1>
+<p class="lede">How EvolutionDB turns a <code>SELECT</code> into rows — projection, filtering with <code>WHERE</code>, joins, subqueries, grouping and aggregates, and finally <code>ORDER BY</code> / <code>LIMIT</code> — as the engine actually implements it.</p>
+
+<p>This chapter describes the read path. The full grammar and clause-by-clause reference live on the <a href="/3.0/ref/select/">SELECT</a> command page; here we focus on <em>behavior</em>: what each stage computes, in what order, and where EvolutionDB diverges from PostgreSQL or the SQL standard. Everything below reflects the engine source — <code>evolution/db/Select.c</code>, <code>evolution/db/expression.c</code>, and the adaptor's join pipeline in <code>adaptor/join.c</code>.</p>
+
+<h2 id="overview">7.1. Overview &amp; Processing Order</h2>
+<p>A table query is evaluated stage by stage. Logically, the stages run in this sequence:</p>
+<ol>
+<li><strong>FROM / join.</strong> The leftmost source is the driving relation; each subsequent source is joined onto the accumulated row (rows are produced one at a time — see <a href="#joins">§7.3</a>).</li>
+<li><strong>WHERE.</strong> The boolean condition is evaluated against each candidate row; rows that do not evaluate to true are dropped (<a href="#where">§7.2</a>).</li>
+<li><strong>GROUP BY / aggregates.</strong> Surviving rows are collapsed into groups and aggregate functions are computed per group (<a href="#grouping">§7.5</a>).</li>
+<li><strong>HAVING.</strong> A boolean condition filters whole groups.</li>
+<li><strong>Projection.</strong> The select list is evaluated to form output rows; <code>DISTINCT</code> then removes duplicates.</li>
+<li><strong>Window functions.</strong> Post-processed after grouping and before sorting.</li>
+<li><strong>ORDER BY.</strong> Rows are sorted (<a href="#order-limit">§7.6</a>).</li>
+<li><strong>LIMIT / OFFSET.</strong> The returned row count is restricted.</li>
+</ol>
+<p>Inside the core engine there are two physical shapes. A single-table query resolves the table from the catalog and either does a <strong>primary-key lookup</strong> (when the <code>WHERE</code> is a single equality on the PK) or a <strong>sequential table scan</strong> through the buffer pool, decoding each binary tuple as it goes. A multi-table query is handed to the <a href="#joins">join pipeline</a>. Both paths decode rows with <code>tup_extract_fields()</code> and stream them; the engine does not build a separate query-plan tree or cost-based optimizer.</p>
+<div class="callout">
+<strong>Note.</strong> EvolutionDB evaluates expressions on the <em>text</em> form of each column value (the same rendering the wire protocol returns). Comparisons try a numeric interpretation first and fall back to byte-wise string comparison; there is no separate typed expression engine. This keeps the implementation small but means a few behaviors differ from a strictly typed planner — they are called out per section below.</p>
+</div>
+
+<h2 id="projections">7.1.1. Projections (the select list)</h2>
+<p>Each select-list item is an expression node (<code>ExprNode</code>) built by the parser. Supported forms include:</p>
+<ul>
+<li><code>*</code> — projects every column of the source.</li>
+<li>Plain column references (<code>col</code> or qualified <code>alias.col</code>). Qualified names resolve by exact match first, then by stripping the qualifier and matching the bare column name (<code>expr_evaluate</code>, case <code>EXPR_COLUMN</code>).</li>
+<li>Literals: integer, float, string, boolean, <code>NULL</code>.</li>
+<li>Arithmetic and bitwise operators: <code>+ - * / %</code>, <code>&lt;&lt; &gt;&gt;</code>, <code>&amp; | ^</code>.</li>
+<li>String functions: <code>SUBSTRING</code>, <code>TRIM</code>, <code>UPPER</code>, <code>LOWER</code>, <code>LENGTH</code>, <code>CONCAT</code>, <code>REPLACE</code>, <code>COALESCE</code>.</li>
+<li><code>CASE</code> (both searched and simple forms — the simple form is desugared to equality comparisons).</li>
+<li>JSON accessors (<code>-&gt;</code>, <code>-&gt;&gt;</code>) and the <code>JSON_*</code> function family.</li>
+<li>Aggregate and window functions (see <a href="#grouping">§7.5</a>).</li>
+</ul>
+<p>An item may be renamed with <code>AS <i>alias</i></code> (the <code>AS</code> keyword is optional). The alias is stored into the node's display name via <code>expr_store_select()</code>, which is also the name used to look the value back up in <code>HAVING</code> and window evaluation.</p>
+<pre><code><span class="c-key">SELECT</span> name, salary * <span class="c-str">12</span> <span class="c-key">AS</span> annual, UPPER(dept) <span class="c-key">FROM</span> employees;</code></pre>
+
+<div class="callout">
+<strong>Note.</strong> Integer division uses floating-point math internally and division/modulo by zero return <code>0</code> rather than raising an error (see <code>expr_evaluate_num</code>, cases <code>EXPR_DIV</code> / <code>EXPR_MOD</code>) — PostgreSQL would raise <code>division_by_zero</code>. Field rendering buffers are fixed at 256 bytes per column in the scan path, so extremely long projected values are truncated.
+</div>
+
+<h2 id="where">7.2. The WHERE Clause</h2>
+<p>The <code>WHERE</code> condition is an expression tree evaluated per row by <code>expr_evaluate()</code>. A row is kept only when the result is the boolean true string (<code>"t"</code>); the join pipeline treats <code>"0"</code>, <code>"false"</code>, <code>"f"</code>, and a NULL (unevaluable) result as "discard" (see the end-of-pipeline test in <code>pipeline_recurse</code>).</p>
+
+<h3 id="where-ops">Supported predicates</h3>
+<dl class="params">
+<dt>Comparisons</dt>
+<dd><code>=</code>, <code>&lt;&gt;</code>, <code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>. Each side is evaluated to a string; if <em>both</em> sides parse cleanly and fully as numbers, the comparison is numeric, otherwise it is <code>strcmp</code>-lexical (<code>expr_evaluate</code>, <code>EXPR_CMP_*</code>).</dd>
+<dt>Logical</dt>
+<dd><code>AND</code>, <code>OR</code>, <code>NOT</code>, <code>XOR</code>, with SQL three-valued logic for NULL operands (e.g. <code>TRUE AND NULL</code> &rarr; NULL, <code>FALSE AND NULL</code> &rarr; FALSE).</dd>
+<dt>NULL tests</dt>
+<dd><code>IS NULL</code> / <code>IS NOT NULL</code>. A column is treated as NULL when it is absent from the row or carries the internal null marker.</dd>
+<dt>Pattern match</dt>
+<dd><code>LIKE</code> / <code>NOT LIKE</code> with <code>%</code> (any sequence) and <code>_</code> (any single character), matched by a small in-engine wildcard matcher.</dd>
+<dt>Range / membership</dt>
+<dd><code>BETWEEN low AND high</code> (desugared to <code>x &gt;= low AND x &lt;= high</code>), <code>NOT BETWEEN</code> (&rarr; <code>x &lt; low OR x &gt; high</code>), and <code>IN (list)</code> / <code>NOT IN (list)</code> (desugared into a <strong>balanced</strong> OR/AND tree so long lists do not overflow the recursive evaluator).</dd>
+<dt>Subqueries</dt>
+<dd><code>IN (SELECT ...)</code>, <code>NOT IN (SELECT ...)</code>, <code>EXISTS</code> / <code>NOT EXISTS</code>, and scalar <code>(SELECT ...)</code> — see <a href="#subqueries">§7.4</a>.</dd>
+<dt>Full-text &amp; vector</dt>
+<dd><code>MATCH(col) AGAINST('terms')</code> (any-term token match, returning a hit count), and vector-distance operators.</dd>
+</dl>
+
+<p>A comparison where either side evaluates to NULL yields NULL (not false), matching SQL semantics — so such a row is not returned.</p>
+<pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> orders
+<span class="c-key">WHERE</span> status = <span class="c-str">'open'</span>
+  <span class="c-key">AND</span> total <span class="c-key">BETWEEN</span> <span class="c-str">100</span> <span class="c-key">AND</span> <span class="c-str">500</span>
+  <span class="c-key">AND</span> note <span class="c-key">LIKE</span> <span class="c-str">'%urgent%'</span>;</code></pre>
+
+<h3 id="where-pushdown">PK lookup &amp; push-down</h3>
+<p>For a single table, a <code>WHERE</code> that is a lone equality (or simple comparison) on the primary-key column is detected by <code>expr_is_simple_pk_range()</code> and serviced by a direct B+ tree lookup (<code>bt2_search</code>) instead of a full scan. In the join pipeline the same idea drives <em>first-table push-down</em>: an <code>alias.col = literal</code> conjunct that targets the driving table is extracted (<code>extract_eq_for_alias</code>) and used either as a PK lookup or as an early per-row column filter, before the rest of the <code>WHERE</code> tree is applied to the fully merged row.</p>
+<div class="callout">
+<strong>Note.</strong> Numeric-vs-lexical comparison is decided per value at evaluation time, not by declared column type. Two operands that both happen to look numeric are compared numerically even if the column is textual; mixed cases fall back to <code>strcmp</code>. There is no implicit collation beyond byte order, and string comparison is case-sensitive (column-name <em>resolution</em>, by contrast, is case-insensitive).
+</div>
+
+<h2 id="joins">7.3. Joins</h2>
+<p>Multi-table queries run through the iterator/pipeline engine in <code>adaptor/join.c</code>. It is a Volcano-style recursion (<code>pipeline_recurse</code>): no table is fully materialized; each table contributes one row at a time, and the merged row is extended depth-first until the deepest level emits a complete joined tuple. Memory is O(number of tables), not O(table size).</p>
+
+<h3 id="join-types">Join types</h3>
+<p>The parser encodes each join type as a small integer the pipeline reads back:</p>
+<table>
+<thead><tr><th>Syntax</th><th>Encoded code</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td><code>JOIN</code> (plain)</td><td>100</td><td>Inner join.</td></tr>
+<tr><td><code>INNER JOIN</code></td><td>101</td><td>Inner join.</td></tr>
+<tr><td><code>CROSS JOIN</code></td><td>102</td><td>Cartesian product (no key filter).</td></tr>
+<tr><td><code>STRAIGHT_JOIN</code></td><td>200</td><td>Inner join (MySQL ordering hint; treated as inner).</td></tr>
+<tr><td><code>LEFT [OUTER] JOIN</code></td><td>301 / 305</td><td>Left outer: emit NULL-filled right side when no match.</td></tr>
+<tr><td><code>RIGHT [OUTER] JOIN</code></td><td>302 / 306</td><td>Parsed and accepted; see note below.</td></tr>
+<tr><td><code>NATURAL [LEFT|RIGHT] JOIN</code></td><td>400+</td><td>Parsed and accepted; see note below.</td></tr>
+</tbody>
+</table>
+
+<h3 id="join-exec">How a join row is produced</h3>
+<p>Before the pipeline starts, the engine analyzes each <code>ON</code> condition with <code>extract_eq_columns()</code> to find the equality <code>left.col = right.col</code> and maps it to a <em>left key</em> (a column index in the already-merged row) and a <em>right key</em> (a column in the table being joined). Then, for each table beyond the first:</p>
+<ul>
+<li>If the right key is the joined table's <strong>primary key</strong>, the match is found with an O(log n) B+ tree lookup (<code>bt2_search</code>).</li>
+<li>Otherwise the joined table is <strong>scanned</strong> and rows are kept where the right-key column equals the left key value (a nested-loop scan).</li>
+<li>With no usable key (e.g. <code>CROSS JOIN</code>), the joined table is scanned with no filter — a full Cartesian expansion.</li>
+</ul>
+<p>For a <code>LEFT</code> join (codes 301/305), if no inner row matches, the right side's columns are filled with NULLs and the merged row is still emitted. Output columns are named <code>alias.column</code> when the source carries an alias. MVCC visibility is checked per scanned row, so joins observe the same snapshot as the rest of the statement.</p>
+<pre><code><span class="c-key">SELECT</span> e.name, d.dept_name
+<span class="c-key">FROM</span> employees <span class="c-key">AS</span> e
+<span class="c-key">INNER JOIN</span> departments <span class="c-key">AS</span> d <span class="c-key">ON</span> e.dept_id = d.id;</code></pre>
+
+<h3 id="join-lateral">LATERAL and UNNEST sources</h3>
+<p>A <code>LATERAL ( <i>subquery</i> )</code> source is re-executed once per outer row: the merged outer row is published into the query context so correlated column references resolve against it, the inner statement is run via <code>query_execute</code>, and each result row is appended (<code>pipeline_recurse_lateral</code>). A <code>UNNEST(<i>array_expr</i>)</code> source expands an array into one row per element. Both integrate as join slots and respect <code>LEFT</code> semantics (a lateral/unnest that yields no rows still emits NULLs under a left join).</p>
+
+<div class="callout">
+<strong>Note — join limitations.</strong> Only an equality <code>ON</code> condition between two columns is recognized for key-based matching; a non-equi <code>ON</code> or one with expressions falls back to a full scan of the joined table (the broader <code>WHERE</code> tree still filters the final merged row). <code>RIGHT</code> and <code>NATURAL</code> joins are parsed, but the NULL-fill branch in <code>pipeline_recurse</code> only fires for the <code>LEFT</code> codes (301/305) — do not rely on right-outer NULL extension or on <code>NATURAL</code> auto-deriving the join key the way PostgreSQL does. <code>FULL OUTER JOIN</code> is not implemented as a NULL-extending join. Use explicit <code>LEFT JOIN ... ON</code> for portable outer-join behavior.
+</div>
+
+<h2 id="subqueries">7.4. Subqueries</h2>
+<p>Subqueries are stored as their raw SQL text on the expression node (<code>subquery_sql</code>) and dispatched through a callback (<code>g_qctx-&gt;subquery_fn</code>) that runs the inner statement and returns its values. The forms handled in <code>expr_evaluate</code> are:</p>
+<dl class="params">
+<dt>Scalar subquery — <code>(SELECT ...)</code></dt>
+<dd>Executed and reduced to a single value, usable anywhere a scalar expression is allowed.</dd>
+<dt><code>expr IN (SELECT ...)</code> / <code>NOT IN</code></dt>
+<dd>The subquery's column is materialized (up to 256 values) and tested for membership.</dd>
+<dt><code>EXISTS (SELECT ...)</code> / <code>NOT EXISTS</code></dt>
+<dd>Truth is decided by whether the subquery returns any row.</dd>
+</dl>
+<p>Correlated subqueries work through the same outer-scope mechanism used by <code>LATERAL</code>: a column reference inside the subquery that is not local resolves against the published outer row.</p>
+<pre><code><span class="c-key">SELECT</span> name <span class="c-key">FROM</span> employees e
+<span class="c-key">WHERE</span> <span class="c-key">EXISTS</span> (
+  <span class="c-key">SELECT</span> <span class="c-str">1</span> <span class="c-key">FROM</span> orders o <span class="c-key">WHERE</span> o.emp_id = e.id
+);</code></pre>
+
+<h2 id="grouping">7.5. Grouping &amp; Aggregates</h2>
+<p>When the select list contains an aggregate function or the query has a <code>GROUP BY</code>, the executor switches to the grouping path. Rows are bucketed: with <code>GROUP BY</code>, each row's grouping-key value(s) assign it to a group; with no <code>GROUP BY</code> but an aggregate present, all rows form a single group. Aggregates are then computed by re-walking the rows of each group.</p>
+
+<h3 id="agg-funcs">Aggregate functions</h3>
+<dl class="params">
+<dt><code>COUNT(*)</code></dt>
+<dd>Number of rows in the group.</dd>
+<dt><code>COUNT(<i>expr</i>)</code></dt>
+<dd>Number of rows where <i>expr</i> evaluates to a non-NULL value.</dd>
+<dt><code>SUM(<i>expr</i>)</code> / <code>AVG(<i>expr</i>)</code></dt>
+<dd>Numeric total / mean over non-NULL values; an all-NULL group returns NULL. <code>AVG</code> reports an integer when the mean is whole, otherwise four decimal places.</dd>
+<dt><code>MIN(<i>expr</i>)</code> / <code>MAX(<i>expr</i>)</code></dt>
+<dd>Extreme value; numeric when every value parses as a number, lexical otherwise.</dd>
+<dt><code>GROUP_CONCAT(<i>expr</i>)</code></dt>
+<dd>Concatenates non-NULL values of the group with a separator (default <code>,</code>), MySQL-style.</dd>
+</dl>
+<p>Non-aggregate select-list expressions in a grouped query are evaluated against the <em>first</em> row of each group. A <code>HAVING</code> condition is then evaluated per group; aggregates referenced in <code>HAVING</code> are matched by display name to the computed select-list aggregates, and any extra aggregates appearing only in <code>HAVING</code> are computed on the fly.</p>
+<pre><code><span class="c-key">SELECT</span> dept_id, COUNT(*) <span class="c-key">AS</span> headcount, AVG(salary) <span class="c-key">AS</span> avg_pay
+<span class="c-key">FROM</span> employees
+<span class="c-key">GROUP BY</span> dept_id
+<span class="c-key">HAVING</span> COUNT(*) &gt; <span class="c-str">3</span>;</code></pre>
+<div class="callout">
+<strong>Note.</strong> EvolutionDB does not enforce the SQL rule that every non-aggregated select-list column must appear in <code>GROUP BY</code>; an ungrouped column simply takes its value from the group's first row (MySQL-style permissiveness, unlike PostgreSQL's strict check). <code>COUNT(DISTINCT ...)</code> and other <code>DISTINCT</code>-qualified aggregate arguments are not part of this aggregate path.
+</div>
+
+<h2 id="order-limit">7.6. ORDER BY, DISTINCT &amp; LIMIT</h2>
+
+<h3 id="distinct">DISTINCT</h3>
+<p><code>SELECT DISTINCT</code> removes duplicate result rows after projection. <code>DISTINCTROW</code> is accepted as a synonym. Duplicate elimination compares the rendered output rows.</p>
+
+<h3 id="order">ORDER BY</h3>
+<p>Rows are sorted by <code>qsort</code> over the result set. Each sort key may be a column name, a qualified <code>table.column</code>, or a 1-based column position (<code>ORDER BY 2</code>), each optionally suffixed with <code>ASC</code> (default) or <code>DESC</code>. The comparison is <strong>adaptive</strong>: when both values being compared parse cleanly and entirely as numbers the order is numeric, otherwise it is lexical (<code>CompareRecords</code> in <code>Select.c</code>); <code>DESC</code> simply negates the comparison result.</p>
+<p>A special <code>ORDER BY <i>vector_col</i> &lt;=&gt; '<i>literal</i>'</code> form ranks rows by cosine distance for nearest-neighbor search. When the column carries a ready HNSW index and the query has a <code>LIMIT</code> (and no disqualifying clause such as <code>DISTINCT</code>, <code>OFFSET</code>, join, or extra sort keys), the executor takes an approximate-nearest-neighbor fast path; otherwise it brute-force sorts by distance.</p>
+<pre><code><span class="c-key">SELECT</span> id <span class="c-key">FROM</span> documents
+<span class="c-key">ORDER BY</span> embedding <span class="c-key">&lt;=&gt;</span> <span class="c-str">'[0.12, 0.84, 0.05]'</span>
+<span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
+
+<h3 id="limit">LIMIT / OFFSET</h3>
+<p>Three forms are accepted: <code>LIMIT <i>count</i></code>; the MySQL two-argument form <code>LIMIT <i>offset</i>, <i>count</i></code>; and <code>LIMIT <i>count</i> OFFSET <i>offset</i></code>. <code>LIMIT</code> / <code>OFFSET</code> is applied last, after ORDER BY, DISTINCT, and grouping. In the streaming single-table path, <code>OFFSET</code> skips the first N matching rows and <code>LIMIT</code> stops the scan once N rows have been sent.</p>
+<pre><code><span class="c-key">SELECT</span> name <span class="c-key">FROM</span> employees
+<span class="c-key">ORDER BY</span> name
+<span class="c-key">LIMIT</span> <span class="c-str">20</span>, <span class="c-str">10</span>;   <span class="c-com">-- skip 20, return 10</span></code></pre>
+<div class="callout">
+<strong>Note.</strong> The engine's built-in text renderer buffers rows in fixed-size storage for in-memory <code>ORDER BY</code> sorting (up to a few hundred rows in the <code>SELECT *</code> path); large result sets are sorted/streamed by the adaptor's query executor when clients connect through the server. There is no standalone <code>OFFSET</code> clause without <code>LIMIT</code>, and <code>FETCH FIRST</code> / set operations (<code>UNION</code>/<code>INTERSECT</code>/<code>EXCEPT</code>) / CTEs (<code>WITH</code>) are not part of the query grammar.
+</div>
+
+<h2 id="errors">7.7. Common Errors</h2>
+<dl class="params">
+<dt><code>42P01</code> — relation does not exist</dt>
+<dd>A table named in <code>FROM</code> or a join could not be resolved in the catalog (<code>tapi_resolve</code> failed).</dd>
+<dt><code>53000</code> — out of memory</dt>
+<dd>The join pipeline could not allocate its per-table or merged-row buffers.</dd>
+</dl>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/select/">SELECT</a> — full clause-by-clause command reference and synopsis</li>
+<li><a href="/3.0/ref/create-index/">CREATE INDEX</a> — primary-key and HNSW indexes that enable the lookup / ANN fast paths</li>
+<li><a href="/3.0/ref/insert/">INSERT</a> · <a href="/3.0/ref/update/">UPDATE</a> · <a href="/3.0/ref/delete/">DELETE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

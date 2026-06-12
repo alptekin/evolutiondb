@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>9. Functions &amp; Operators — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+<h1>9. Functions &amp; Operators</h1>
+<p class="lede">The operators, built-in functions, conditional expressions, type coercion, and <code>NULL</code> handling that EvolutionDB 3.0 evaluates in <code>WHERE</code>, <code>SELECT</code>, <code>HAVING</code>, <code>SET</code>, <code>DEFAULT</code>, and <code>CHECK</code> — exactly as implemented by the engine's single expression evaluator.</p>
+
+<p>Every scalar expression in EvolutionDB is built into an expression tree by the Bison parser and evaluated by one function, <code>expr_evaluate</code>, in <code>evolution/db/expression.c</code>. There is no separate type system threaded through the tree: each node is evaluated to a string (its rendered value), and the evaluator returns a second flag indicating whether that value is <code>NULL</code>. A companion routine, <code>expr_evaluate_num</code>, evaluates the same tree to a C <code>double</code> for arithmetic. Understanding this string-plus-NULL-flag model explains most of the type-coercion and comparison behavior described in this chapter.</p>
+
+<div class="callout">
+<p><strong>Scope of this chapter.</strong> Only functions and operators that the expression evaluator actually implements are documented here, with their real argument counts, return shapes, and edge behavior. Where EvolutionDB borrows surface syntax from MySQL or PostgreSQL but evaluates it differently — for example, integer-only <code>%</code>, a non-collating <code>LIKE</code>, or MySQL-style <code>NULL</code>-propagating <code>CONCAT</code> — the difference is called out. Functions that are parsed but only meaningful in other clauses (aggregates resolved by the query executor, window functions, set-returning <code>unnest</code> in <code>FROM</code>) are noted where they touch the evaluator.</p>
+</div>
+
+<h2 id="evaluation-model">9.1. The Evaluation Model</h2>
+
+<p>A scalar expression is evaluated against a row presented as parallel arrays of column names and string column values. The evaluator resolves a column reference by name (case-insensitively), returns string literals verbatim, and for any arithmetic or numeric node falls back to the numeric evaluator and re-renders the result as text. Integer results are printed without a decimal point; non-integers use <code>%g</code> formatting.</p>
+
+<p>Two facts follow from the string-valued design and recur throughout this chapter:</p>
+
+<dl class="params">
+<dt>Values carry no static type</dt><dd>A column value, a literal, and a function result are all text at evaluation time. Comparisons and arithmetic decide numeric-versus-textual treatment per operation, by inspecting the operand strings (see <a href="#coercion">Section 9.7</a>).</dd>
+<dt>NULL is a separate return channel</dt><dd>The evaluator returns <code>1</code> when it produced a value and <code>0</code> to signal <code>NULL</code>. A <code>NULL</code> literal, a column whose stored value is the internal null marker, and an unresolved column name all evaluate to <code>NULL</code>. Functions that internally represent <code>NULL</code> in their output use the engine's null marker string.</dd>
+</dl>
+
+<h2 id="operators">9.2. Operators</h2>
+
+<h3 id="arithmetic">9.2.1. Arithmetic and Bitwise Operators</h3>
+
+<p>Arithmetic is evaluated numerically as C <code>double</code>. The following operators are recognized:</p>
+
+<table>
+<thead><tr><th>Operator</th><th>Operation</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>+</code></td><td>Addition</td><td></td></tr>
+<tr><td><code>-</code></td><td>Subtraction; also unary negation</td><td></td></tr>
+<tr><td><code>*</code></td><td>Multiplication</td><td></td></tr>
+<tr><td><code>/</code></td><td>Division</td><td>Division by zero yields <code>0</code>, not an error and not infinity.</td></tr>
+<tr><td><code>%</code></td><td>Modulo</td><td>Integer modulo: both operands are truncated to <code>long long</code> first. Modulo by zero yields <code>0</code>.</td></tr>
+<tr><td><code>&lt;&lt;</code> &nbsp; <code>&gt;&gt;</code></td><td>Bit shift left / right</td><td>Operands truncated to <code>long long</code>.</td></tr>
+<tr><td><code>&amp;</code> &nbsp; <code>|</code> &nbsp; <code>^</code></td><td>Bitwise AND / OR / XOR</td><td>Operands truncated to <code>long long</code>.</td></tr>
+</tbody>
+</table>
+
+<pre><code><span class="c-key">SELECT</span> price * 1.1, qty % 12, flags &amp; 4 <span class="c-key">FROM</span> orders;</code></pre>
+
+<div class="callout">
+<p><strong>NULL in arithmetic.</strong> Arithmetic runs through the numeric evaluator, which treats an unresolved or non-numeric operand as <code>0.0</code> rather than propagating <code>NULL</code>. So <code>NULL + 1</code> reached through the numeric path resolves to <code>1</code>, and a non-numeric string contributes its <code>strtod</code> value (<code>0</code> for text with no leading number). This differs from the SQL standard, where any <code>NULL</code> arithmetic operand makes the whole expression <code>NULL</code>.</p>
+</div>
+
+<h3 id="comparison">9.2.2. Comparison Operators</h3>
+
+<p>The six comparison operators return a boolean rendered as the single characters <code>t</code> or <code>f</code>:</p>
+
+<dl class="params">
+<dt><code>=</code></dt><dd>Equal</dd>
+<dt><code>&lt;&gt;</code></dt><dd>Not equal</dd>
+<dt><code>&lt;</code> &nbsp; <code>&gt;</code></dt><dd>Less than / greater than</dd>
+<dt><code>&lt;=</code> &nbsp; <code>&gt;=</code></dt><dd>Less than or equal / greater than or equal</dd>
+</dl>
+
+<p>A comparison first evaluates both sides. If <em>either</em> side is <code>NULL</code>, the comparison result is <code>NULL</code> (the evaluator returns the null channel), in keeping with SQL three-valued logic. Otherwise the evaluator decides how to compare: if both rendered values parse cleanly and entirely as numbers, it compares them numerically; otherwise it compares them as byte strings with <code>strcmp</code> (see <a href="#coercion">Section 9.7</a>).</p>
+
+<pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> orders <span class="c-key">WHERE</span> total &gt;= 100 <span class="c-key">AND</span> status &lt;&gt; <span class="c-str">'cancelled'</span>;</code></pre>
+
+<div class="callout">
+<p><strong>The <code>&lt;=&gt;</code> operator.</strong> EvolutionDB parses <code>&lt;=&gt;</code> as a vector cosine-distance operator (<a href="#vector">Section 9.6.7</a>). When its operands are not vector literals it falls back to a plain equality test that returns <code>t</code>/<code>f</code> — so <code>SELECT 1 &lt;=&gt; 1</code> returns <code>t</code>. It is not MySQL's null-safe equals in the general case.</p>
+</div>
+
+<h3 id="logical">9.2.3. Logical Operators</h3>
+
+<p><code>AND</code>, <code>OR</code>, <code>NOT</code>, and <code>XOR</code> operate on boolean values with full SQL three-valued logic. A value counts as true if it is <code>t</code>, the word <code>true</code> (case-insensitive), or a non-zero number; anything else is false. The truth tables for <code>NULL</code> follow the standard:</p>
+
+<table>
+<thead><tr><th>Expression</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>FALSE AND NULL</code></td><td><code>f</code></td></tr>
+<tr><td><code>TRUE AND NULL</code></td><td><code>NULL</code></td></tr>
+<tr><td><code>NULL AND NULL</code></td><td><code>NULL</code></td></tr>
+<tr><td><code>TRUE OR NULL</code></td><td><code>t</code></td></tr>
+<tr><td><code>FALSE OR NULL</code></td><td><code>NULL</code></td></tr>
+<tr><td><code>NOT NULL</code></td><td><code>NULL</code></td></tr>
+<tr><td><code>NULL XOR x</code></td><td><code>NULL</code> (XOR requires both operands non-null)</td></tr>
+</tbody>
+</table>
+
+<h3 id="pattern">9.2.4. Pattern Matching: LIKE and REGEXP</h3>
+
+<p><code>LIKE</code> and <code>NOT LIKE</code> implement the two SQL wildcards: <code>%</code> matches any sequence of characters (including none) and <code>_</code> matches exactly one character. Matching is performed byte-by-byte by an iterative backtracking matcher.</p>
+
+<pre><code><span class="c-key">SELECT</span> name <span class="c-key">FROM</span> users <span class="c-key">WHERE</span> name <span class="c-key">LIKE</span> <span class="c-str">'A%'</span> <span class="c-key">AND</span> email <span class="c-key">NOT LIKE</span> <span class="c-str">'%@test._'</span>;</code></pre>
+
+<p>If either the subject or the pattern is <code>NULL</code>, the result is <code>NULL</code>.</p>
+
+<p><code>REGEXP</code> and <code>NOT REGEXP</code> match against a POSIX extended regular expression. On a <code>NULL</code> operand the result is <code>NULL</code>; an invalid pattern that fails to compile evaluates to <code>f</code> (false) rather than raising an error.</p>
+
+<div class="callout">
+<p><strong>Limitations.</strong> <code>LIKE</code> is byte-exact and case-<em>sensitive</em>; there is no <code>ESCAPE</code> clause and no <code>ILIKE</code>, so a literal <code>%</code> or <code>_</code> in the pattern cannot be escaped. <code>REGEXP</code> is backed by the platform POSIX <code>&lt;regex.h&gt;</code> on Linux/macOS and is compiled <code>REG_EXTENDED | REG_NOSUB</code>; on Windows (MinGW) builds, which lack POSIX regex, <code>REGEXP</code> always returns <code>f</code>.</p>
+</div>
+
+<h3 id="null-predicates">9.2.5. NULL Predicates, BETWEEN, IN</h3>
+
+<p><code>IS NULL</code> and <code>IS NOT NULL</code> test whether their operand is <code>NULL</code>. A column counts as null when its stored value is the engine's null marker or when the named column is not present in the row at all; any literal (integer, float, string, boolean) is never null.</p>
+
+<p><code>BETWEEN</code>, <code>NOT BETWEEN</code>, <code>IN</code>, and <code>NOT IN</code> are not evaluated as distinct node types — the parser <em>desugars</em> them into combinations of the operators above:</p>
+
+<dl class="params">
+<dt><code>x BETWEEN a AND b</code></dt><dd>rewritten as <code>(x &gt;= a) AND (x &lt;= b)</code>.</dd>
+<dt><code>x NOT BETWEEN a AND b</code></dt><dd>rewritten as <code>(x &lt; a) OR (x &gt; b)</code>.</dd>
+<dt><code>x IN (a, b, c)</code></dt><dd>rewritten as <code>(x = a) OR (x = b) OR (x = c)</code>, combined into a <em>balanced</em> OR tree so a long list stays shallow.</dd>
+<dt><code>x NOT IN (a, b, c)</code></dt><dd>rewritten as <code>(x &lt;&gt; a) AND (x &lt;&gt; b) AND (x &lt;&gt; c)</code>, combined into a balanced AND tree.</dd>
+</dl>
+
+<p>Because <code>IN</code>/<code>NOT IN</code> reduce to comparisons and logical operators, they inherit the three-valued <code>NULL</code> behavior of those operators. An empty <code>IN ()</code> list evaluates to false and an empty <code>NOT IN ()</code> to true.</p>
+
+<h2 id="case">9.3. Conditional Expressions</h2>
+
+<h3 id="case-when">9.3.1. CASE</h3>
+
+<p>Both forms of <code>CASE</code> are supported. The searched form tests a boolean condition per branch; the simple form compares a single operand against each <code>WHEN</code> value. Internally the simple form is desugared into the searched form by turning each <code>WHEN v</code> into the comparison <code>operand = v</code>, so the two share one evaluator.</p>
+
+<pre><code><span class="c-com">-- searched CASE</span>
+<span class="c-key">SELECT</span> <span class="c-key">CASE</span>
+         <span class="c-key">WHEN</span> score &gt;= 90 <span class="c-key">THEN</span> <span class="c-str">'A'</span>
+         <span class="c-key">WHEN</span> score &gt;= 80 <span class="c-key">THEN</span> <span class="c-str">'B'</span>
+         <span class="c-key">ELSE</span> <span class="c-str">'F'</span>
+       <span class="c-key">END</span> <span class="c-key">FROM</span> grades;
+
+<span class="c-com">-- simple CASE (desugars to status = 'A', status = 'I', ...)</span>
+<span class="c-key">SELECT</span> <span class="c-key">CASE</span> status <span class="c-key">WHEN</span> <span class="c-str">'A'</span> <span class="c-key">THEN</span> <span class="c-str">'active'</span>
+                   <span class="c-key">WHEN</span> <span class="c-str">'I'</span> <span class="c-key">THEN</span> <span class="c-str">'inactive'</span> <span class="c-key">END</span> <span class="c-key">FROM</span> accounts;</code></pre>
+
+<p>Branches are evaluated top to bottom; the first <code>WHEN</code> whose condition is true selects its <code>THEN</code> result. A branch whose condition is <code>NULL</code> is treated as not matched and skipped. If no branch matches, the <code>ELSE</code> result is returned, or <code>NULL</code> if there is no <code>ELSE</code>.</p>
+
+<h3 id="coalesce-nullif">9.3.2. COALESCE, NULLIF, IFNULL, IF</h3>
+
+<dl class="params">
+<dt><code>COALESCE(a, b)</code></dt><dd>Returns <code>a</code> if it is non-null, otherwise <code>b</code>, otherwise <code>NULL</code>. The implemented arity is two arguments.</dd>
+<dt><code>NULLIF(a, b)</code></dt><dd>Returns <code>NULL</code> when <code>a</code> and <code>b</code> are equal as strings; otherwise returns <code>a</code>.</dd>
+<dt><code>IFNULL(a, b)</code></dt><dd>MySQL-style: returns <code>a</code> if non-null, else <code>b</code>.</dd>
+<dt><code>IF(cond, t, f)</code></dt><dd>MySQL-style three-argument conditional: evaluates <code>cond</code> for truthiness (<code>t</code>, <code>true</code>, <code>1</code>, or any non-zero number) and returns the second or third argument accordingly; a <code>NULL</code> condition takes the false branch.</dd>
+</dl>
+
+<h3 id="boolean-tests">9.3.3. IS TRUE / IS FALSE</h3>
+
+<p><code>x IS TRUE</code> returns <code>t</code> only when <code>x</code> renders as <code>t</code>, <code>true</code>, or <code>1</code>; otherwise <code>f</code> (a <code>NULL</code> operand yields <code>f</code>). <code>x IS FALSE</code> returns <code>t</code> only when <code>x</code> renders as <code>f</code>, <code>false</code>, or <code>0</code>.</p>
+
+<h2 id="string-functions">9.4. String Functions</h2>
+
+<p>String functions evaluate their first argument and, with the noted exceptions, return <code>NULL</code> if it is <code>NULL</code>.</p>
+
+<table>
+<thead><tr><th>Function</th><th>Returns</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td><code>UPPER(s)</code> / <code>LOWER(s)</code></td><td>text</td><td>ASCII case fold via <code>toupper</code>/<code>tolower</code> per byte.</td></tr>
+<tr><td><code>LENGTH(s)</code></td><td>integer</td><td>Byte length of the string (<code>strlen</code>), not character count.</td></tr>
+<tr><td><code>SUBSTRING(s, pos [, len])</code></td><td>text</td><td>1-based start position; a position below 1 is clamped to 1. With no length, returns the tail from <code>pos</code>.</td></tr>
+<tr><td><code>TRIM([LEADING|TRAILING|BOTH] [chars] FROM s)</code></td><td>text</td><td>Trims any of the characters in <code>chars</code> (default a single space) from the chosen end(s).</td></tr>
+<tr><td><code>CONCAT(a, b)</code></td><td>text</td><td>Concatenates two arguments. <strong>NULL-propagating</strong> (MySQL style): if either argument is <code>NULL</code>, the result is <code>NULL</code>.</td></tr>
+<tr><td><code>REPLACE(s, from, to)</code></td><td>text</td><td>Replaces all non-overlapping occurrences of <code>from</code> with <code>to</code>. An empty <code>from</code> returns <code>s</code> unchanged.</td></tr>
+<tr><td><code>LEFT(s, n)</code> / <code>RIGHT(s, n)</code></td><td>text</td><td>First / last <code>n</code> bytes; <code>n</code> is clamped to <code>[0, length]</code>.</td></tr>
+<tr><td><code>LPAD(s, n, pad)</code> / <code>RPAD(s, n, pad)</code></td><td>text</td><td>Pads to width <code>n</code> with the repeating <code>pad</code> string (default space) on the left / right.</td></tr>
+<tr><td><code>REVERSE(s)</code></td><td>text</td><td>Reverses the bytes of the string.</td></tr>
+<tr><td><code>REPEAT(s, n)</code></td><td>text</td><td>Concatenates <code>n</code> copies of <code>s</code>.</td></tr>
+<tr><td><code>INSTR(s, sub)</code></td><td>integer</td><td>1-based position of the first occurrence of <code>sub</code> in <code>s</code>, or <code>0</code> if not found.</td></tr>
+<tr><td><code>LOCATE(sub, s)</code></td><td>integer</td><td>Same as <code>INSTR</code> with the arguments swapped.</td></tr>
+<tr><td><code>TOKEN_LENGTH(s)</code></td><td>integer</td><td>Coarse whitespace-split word count, used as a stand-in for a tokenizer.</td></tr>
+</tbody>
+</table>
+
+<pre><code><span class="c-key">SELECT</span> <span class="c-key">UPPER</span>(<span class="c-key">LEFT</span>(name, 3)), <span class="c-key">LENGTH</span>(bio),
+       <span class="c-key">REPLACE</span>(slug, <span class="c-str">'-'</span>, <span class="c-str">'_'</span>),
+       <span class="c-key">SUBSTRING</span>(sku, 2, 4)
+<span class="c-key">FROM</span> profiles;</code></pre>
+
+<div class="callout">
+<p><strong>Encoding caveat.</strong> All string functions are byte-oriented. <code>LENGTH</code>, <code>SUBSTRING</code>, <code>LEFT</code>/<code>RIGHT</code>, and <code>REVERSE</code> count and slice by byte, so a multi-byte UTF-8 character is several units and can be split. <code>UPPER</code>/<code>LOWER</code> fold only ASCII letters. There is no separate <code>CHAR_LENGTH</code>; intermediate string buffers in the evaluator are bounded (commonly 512 bytes), so very long values may be truncated inside a function.</p>
+</div>
+
+<h2 id="math-functions">9.5. Mathematical Functions</h2>
+
+<p>Math functions evaluate their arguments numerically and render the result with <code>%g</code> (or as an integer where noted). A <code>NULL</code> argument generally yields <code>NULL</code>.</p>
+
+<table>
+<thead><tr><th>Function</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>ABS(x)</code></td><td>Absolute value.</td></tr>
+<tr><td><code>CEIL(x)</code> / <code>FLOOR(x)</code></td><td>Round up / down to an integer value.</td></tr>
+<tr><td><code>ROUND(x [, d])</code></td><td>Round to <code>d</code> decimal places (default 0).</td></tr>
+<tr><td><code>POWER(a, b)</code></td><td><code>a</code> raised to the power <code>b</code>.</td></tr>
+<tr><td><code>SQRT(x)</code></td><td>Square root.</td></tr>
+<tr><td><code>MOD(a, b)</code></td><td>Floating-point remainder (<code>fmod</code>); <code>MOD(a, 0)</code> returns <code>NULL</code>.</td></tr>
+<tr><td><code>LOG(x)</code></td><td>Natural logarithm.</td></tr>
+<tr><td><code>LOG10(x)</code></td><td>Base-10 logarithm.</td></tr>
+<tr><td><code>SIGN(x)</code></td><td><code>1</code>, <code>-1</code>, or <code>0</code> by sign of <code>x</code> (integer).</td></tr>
+<tr><td><code>RAND()</code></td><td>Pseudo-random double in <code>[0, 1]</code>.</td></tr>
+<tr><td><code>PI()</code></td><td>The constant &#960; (15 significant digits).</td></tr>
+</tbody>
+</table>
+
+<pre><code><span class="c-key">SELECT</span> <span class="c-key">ROUND</span>(price * 1.08, 2), <span class="c-key">CEIL</span>(weight), <span class="c-key">SIGN</span>(balance) <span class="c-key">FROM</span> items;</code></pre>
+
+<div class="callout">
+<p><strong>Note.</strong> The function-named <code>MOD(a, b)</code> uses floating-point <code>fmod</code> and returns <code>NULL</code> on a zero divisor, whereas the <code>%</code> operator (<a href="#arithmetic">Section 9.2.1</a>) truncates to integers and returns <code>0</code> on a zero divisor. <code>SQRT</code>, <code>LOG</code>, and <code>LOG10</code> of out-of-domain inputs follow the C library and may render as <code>nan</code> or <code>-inf</code> rather than raising an error.</p>
+</div>
+
+<h2 id="other-functions">9.6. Other Built-in Functions</h2>
+
+<h3 id="datetime">9.6.1. Date and Time</h3>
+
+<dl class="params">
+<dt><code>CURRENT_TIMESTAMP</code> / <code>NOW()</code></dt><dd>Current local date-time as <code>YYYY-MM-DD HH:MM:SS</code>.</dd>
+<dt><code>CURRENT_DATE</code></dt><dd>Current local date as <code>YYYY-MM-DD</code>.</dd>
+<dt><code>CURRENT_TIME</code></dt><dd>Current local time as <code>HH:MM:SS</code>.</dd>
+<dt><code>YEAR / MONTH / DAY / HOUR / MINUTE / SECOND(dt)</code></dt><dd>Extract a single field from a <code>YYYY-MM-DD [HH:MM:SS]</code> string by parsing it with <code>sscanf</code>.</dd>
+<dt><code>DATEDIFF(d1, d2)</code></dt><dd>Whole days between two dates (<code>d1 - d2</code>), via <code>mktime</code>/<code>difftime</code>.</dd>
+<dt><code>DATE_ADD(dt, n unit)</code> / <code>DATE_SUB(dt, n unit)</code></dt><dd>Add or subtract <code>n</code> of a unit. Recognized units are <code>YEAR</code>, <code>MONTH</code>, <code>HOUR</code>; any other unit is treated as <code>DAY</code>. The result is rendered as a date (<code>YYYY-MM-DD</code>).</dd>
+</dl>
+
+<pre><code><span class="c-key">SELECT</span> <span class="c-key">YEAR</span>(created_at), <span class="c-key">DATEDIFF</span>(<span class="c-key">CURRENT_DATE</span>, signup_date) <span class="c-key">FROM</span> users;</code></pre>
+
+<div class="callout">
+<p><strong>Note.</strong> Date functions operate on the textual <code>YYYY-MM-DD</code> form and use the server's local time zone through the C library; there is no time-zone-aware <code>TIMESTAMPTZ</code> arithmetic here. <code>DATE_ADD</code>/<code>DATE_SUB</code> normalize through <code>mktime</code> and emit a date even when an <code>HOUR</code> unit is given.</p>
+</div>
+
+<h3 id="identifiers">9.6.2. Identifier and Session Functions</h3>
+
+<dl class="params">
+<dt><code>gen_random_uuid()</code></dt><dd>Random RFC 4122 version-4 UUID, formatted as 8-4-4-4-12 lowercase hex.</dd>
+<dt><code>gen_random_uuid_v7()</code></dt><dd>Time-ordered RFC 9562 version-7 UUID (48-bit millisecond timestamp prefix).</dd>
+<dt><code>snowflake_id()</code></dt><dd>64-bit Snowflake-style id: 41-bit millisecond timestamp (custom epoch 2026-01-01 UTC) + 10-bit machine id + 12-bit per-millisecond sequence. The machine id derives from <code>$EVOSQL_MACHINE_ID</code> or a hash of the hostname.</dd>
+<dt><code>last_insert_id()</code></dt><dd>The last value captured from a UUID/Snowflake/auto-increment default, or <code>0</code> if none.</dd>
+<dt><code>CURRENT_USER</code></dt><dd>The session username from the active query context, or <code>unknown</code> outside a session.</dd>
+<dt><code>evo_current_xid()</code></dt><dd>The last-assigned MVCC transaction id.</dd>
+</dl>
+
+<p>These generator functions are most commonly used as column <code>DEFAULT</code>s; see <a href="/3.0/ref/create-table">CREATE TABLE</a>.</p>
+
+<h3 id="sequences">9.6.3. Sequence Functions</h3>
+
+<p>Sequence values are produced by functions resolved against the catalog of the current schema; see <a href="/3.0/ref/create-sequence">CREATE SEQUENCE</a>.</p>
+
+<dl class="params">
+<dt><code>nextval(name)</code></dt><dd>Advance the sequence and return its new value; also updates the session's <code>lastval</code> tracking.</dd>
+<dt><code>currval(name)</code></dt><dd>The sequence's current value without advancing. Errors if the sequence does not exist, or if it has not yet been called in this session.</dd>
+<dt><code>setval(name, value [, is_called])</code></dt><dd>Set the sequence's current value; an <code>is_called</code> of false/0 makes the next <code>nextval</code> return <code>value</code> itself.</dd>
+<dt><code>lastval()</code></dt><dd>The value most recently produced by <code>nextval</code> in this session; errors if no sequence has been called yet.</dd>
+</dl>
+
+<h3 id="json">9.6.4. JSON Functions and Operators</h3>
+
+<p>JSON is stored and manipulated as text. The arrow operators and a MySQL-compatible function set are available:</p>
+
+<dl class="params">
+<dt><code>json -&gt; key</code></dt><dd>Extract a member or element, returning a JSON value.</dd>
+<dt><code>json -&gt;&gt; key</code></dt><dd>Extract a member or element as unquoted text.</dd>
+<dt><code>JSON_EXTRACT(j, path)</code></dt><dd>Extract by path.</dd>
+<dt><code>JSON_UNQUOTE(j)</code> / <code>JSON_QUOTE(s)</code></dt><dd>Remove / add JSON string quoting.</dd>
+<dt><code>JSON_TYPE(j)</code></dt><dd>Type name of the JSON value.</dd>
+<dt><code>JSON_LENGTH(j)</code> / <code>JSON_DEPTH(j)</code></dt><dd>Element count / nesting depth (<code>NULL</code> on invalid input).</dd>
+<dt><code>JSON_VALID(j)</code></dt><dd><code>1</code> if the text is valid JSON, else <code>0</code> (a <code>NULL</code> argument yields <code>0</code>).</dd>
+<dt><code>JSON_KEYS(j)</code></dt><dd>Keys of a JSON object.</dd>
+<dt><code>JSON_PRETTY(j)</code></dt><dd>Indented rendering.</dd>
+<dt><code>JSON_SET / JSON_INSERT / JSON_REPLACE(j, path, value)</code></dt><dd>Path-based mutation with set / insert-only / replace-only semantics.</dd>
+<dt><code>JSON_REMOVE(j, path)</code></dt><dd>Remove the element at a path.</dd>
+<dt><code>JSON_CONTAINS(target, candidate)</code></dt><dd><code>1</code>/<code>0</code> containment test.</dd>
+<dt><code>JSON_CONTAINS_PATH(j, mode, path)</code></dt><dd>Test for a path; <code>mode</code> of <code>all</code> versus <code>one</code>.</dd>
+<dt><code>JSON_SEARCH(j, mode, str)</code></dt><dd>Locate a string value; <code>mode</code> of <code>all</code> versus <code>one</code>.</dd>
+<dt><code>JSON_OBJECT(k, v)</code> / <code>JSON_ARRAY(v1 [, v2 [, v3]])</code></dt><dd>Construct an object from one key/value pair, or an array from up to three values. Values that are already valid JSON are inserted as-is; other values are quoted.</dd>
+</dl>
+
+<pre><code><span class="c-key">SELECT</span> data-&gt;&gt;<span class="c-str">'name'</span>, <span class="c-key">JSON_LENGTH</span>(data-&gt;<span class="c-str">'tags'</span>)
+<span class="c-key">FROM</span> events
+<span class="c-key">WHERE</span> <span class="c-key">JSON_VALID</span>(data) = 1 <span class="c-key">AND</span> <span class="c-key">JSON_CONTAINS</span>(data, <span class="c-str">'{"active":true}'</span>) = 1;</code></pre>
+
+<h3 id="arrays">9.6.5. Array Constructors and Functions</h3>
+
+<p>Arrays are represented internally as PostgreSQL-style brace text (<code>{e1,e2,NULL,...}</code>), with quoting applied to elements containing separators or whitespace.</p>
+
+<dl class="params">
+<dt><code>ARRAY[e1, e2, ...]</code></dt><dd>Construct an array literal. A <code>NULL</code> element is rendered as the unquoted token <code>NULL</code>.</dd>
+<dt><code>arr[i]</code></dt><dd>1-based subscript. An out-of-bounds or malformed index yields <code>NULL</code> (PostgreSQL semantics).</dd>
+<dt><code>array_length(arr)</code></dt><dd>Element count.</dd>
+<dt><code>x &lt;op&gt; ANY(arr)</code></dt><dd>True if the comparison holds for any element; if no element matches but the array contains a <code>NULL</code>, the result is <code>NULL</code>; otherwise false. Element comparison is numeric when both sides parse as numbers, else lexicographic.</dd>
+<dt><code>unnest(arr)</code></dt><dd>In scalar context returns the array text as-is; true row-producing expansion requires <code>FROM</code>-clause placement, handled by the join pipeline rather than this evaluator.</dd>
+</dl>
+
+<h3 id="fulltext">9.6.6. Full-Text Match</h3>
+
+<p><code>MATCH(col) AGAINST('query')</code> tokenizes both the row's column value and the query literal and returns the count of query terms that appear in the row (used as a boolean in <code>WHERE</code> and as a relevance score in <code>ORDER BY</code>). It is a simple "any-term" match — a positive count means a match — not a ranked full-text engine.</p>
+
+<h3 id="vector">9.6.7. Vector Distance Functions and Operators</h3>
+
+<p>Vectors arrive as their text form, either bracketed (<code>[f1,f2,...]</code> or <code>{f1,f2,...}</code>) or as a compact quantized form (<code>b64i8:&lt;base64&gt;</code>) that is decoded back to floats. The distance operators and their named equivalents:</p>
+
+<table>
+<thead><tr><th>Operator</th><th>Distance</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;=&gt;</code></td><td>Cosine distance (<code>1 - cosine similarity</code>)</td></tr>
+<tr><td>L2 operator</td><td>Euclidean distance</td></tr>
+<tr><td>inner-product operator</td><td>Negative dot product</td></tr>
+<tr><td>L1 operator</td><td>Manhattan distance</td></tr>
+</tbody>
+</table>
+
+<p>If either operand is <code>NULL</code>, the result is <code>NULL</code>. If the dimensions of the two vectors disagree, the result is <code>NULL</code>. When the operands are not vector literals, the cosine operator falls back to a string-equality test (returning <code>t</code>/<code>f</code>); the other operators require vectors and return <code>NULL</code>. Companion functions <code>vector_dim(v)</code> (element count), <code>vector_norm(v)</code> (L2 norm), and <code>vector_normalize(v)</code> (unit vector, rendered as bracketed text) round-trip through the same parser. Approximate nearest-neighbor helpers <code>hnsw_knn(...)</code> and <code>hnsw_filter_knn(...)</code> return comma-separated primary-key lists; see <a href="/3.0/ref/create-index">CREATE INDEX</a>.</p>
+
+<h3 id="utility">9.6.8. Subqueries, Notifications, and Timing</h3>
+
+<dl class="params">
+<dt><code>(SELECT ...)</code> scalar subquery</dt><dd>Returns the first value of the subquery, or <code>NULL</code> if it returns no rows.</dd>
+<dt><code>x IN (SELECT ...)</code> / <code>x NOT IN (SELECT ...)</code></dt><dd>Membership against subquery results (up to 256 collected values).</dd>
+<dt><code>[NOT] EXISTS (SELECT ...)</code></dt><dd>True/false on whether the subquery returns any row.</dd>
+<dt><code>evo_notify(channel, payload)</code></dt><dd>Enqueue a notification on the session's channel and return the payload; see <a href="/3.0/ref/listen-notify">LISTEN / NOTIFY</a>.</dd>
+<dt><code>pg_listening_channels()</code></dt><dd>Array text of the session's current listens.</dd>
+<dt><code>evo_sleep(ms)</code></dt><dd>Interruptible delay; returns <code>0</code>.</dd>
+<dt><code>evo_jitter(min_ms, max_ms)</code></dt><dd>Random interruptible delay; returns the actual milliseconds slept.</dd>
+</dl>
+
+<h2 id="coercion">9.7. Type Coercion and CAST</h2>
+
+<p>Because values are untyped text during evaluation, coercion is decided per operation rather than by a declared expression type:</p>
+
+<dl class="params">
+<dt>Comparisons</dt><dd>Both operands are compared <em>numerically</em> only when each renders as a complete, valid number (the entire string is consumed by <code>strtod</code> and is non-empty). If either side is not a clean number, the comparison falls back to a byte-wise <code>strcmp</code>. So <code>'10' = 10</code> and <code>'2' &lt; '10'</code> both behave numerically, but <code>'10x' &lt; '9'</code> compares as text.</dd>
+<dt>Arithmetic</dt><dd>Operands are coerced with <code>strtod</code>; text with no leading number contributes <code>0</code>.</dd>
+<dt>Boolean context</dt><dd>A value is true if it is <code>t</code>, <code>true</code> (case-insensitive), or a non-zero number; <code>1</code> is also accepted as true inside <code>CASE</code> and <code>IF</code>.</dd>
+</dl>
+
+<p>Explicit conversion uses <code>CAST(expr AS type)</code>. The conversion is driven by the target type's family code (recall the type encoding <code>typeVal / 10000</code> = family from Chapter 4):</p>
+
+<table>
+<thead><tr><th>Target family</th><th>CAST behavior</th></tr></thead>
+<tbody>
+<tr><td>Integer types</td><td>Parse with <code>strtol</code> and render as a base-10 integer.</td></tr>
+<tr><td>Float / double types</td><td>Parse with <code>strtod</code> and render with <code>%g</code>.</td></tr>
+<tr><td>Boolean</td><td>Non-zero numeric value renders as <code>true</code>, otherwise <code>false</code>.</td></tr>
+<tr><td>VARCHAR / CHAR / TEXT / DATE</td><td>String pass-through (no reformatting).</td></tr>
+</tbody>
+</table>
+
+<pre><code><span class="c-key">SELECT</span> <span class="c-key">CAST</span>(price <span class="c-key">AS</span> <span class="c-key">INT</span>), <span class="c-key">CAST</span>(active <span class="c-key">AS</span> <span class="c-key">BOOLEAN</span>) <span class="c-key">FROM</span> items;</code></pre>
+
+<p>A <code>CAST</code> of a <code>NULL</code> value is <code>NULL</code>. See <a href="/3.0/sql/datatypes">Chapter 4, Data Types</a> for the family codes and <a href="/3.0/ref/select">SELECT</a> for where expressions may appear.</p>
+
+<h2 id="null-handling">9.8. NULL Handling Summary</h2>
+
+<p>The treatment of <code>NULL</code> is not uniform across operations; the table below collects the rules from earlier sections so the differences are visible side by side.</p>
+
+<table>
+<thead><tr><th>Context</th><th>NULL behavior</th></tr></thead>
+<tbody>
+<tr><td>Comparison operators (<code>=</code>, <code>&lt;</code>, …)</td><td>Any <code>NULL</code> operand &#8594; result <code>NULL</code> (three-valued).</td></tr>
+<tr><td><code>AND</code> / <code>OR</code> / <code>NOT</code> / <code>XOR</code></td><td>Standard three-valued logic (see <a href="#logical">Section 9.2.3</a>).</td></tr>
+<tr><td><code>LIKE</code> / <code>REGEXP</code></td><td>Any <code>NULL</code> operand &#8594; <code>NULL</code>.</td></tr>
+<tr><td>String functions</td><td><code>NULL</code> input generally &#8594; <code>NULL</code>.</td></tr>
+<tr><td><code>CONCAT</code></td><td>Any <code>NULL</code> argument &#8594; <code>NULL</code> (MySQL style, not PostgreSQL ignore-null).</td></tr>
+<tr><td>Most math functions</td><td><code>NULL</code> input &#8594; <code>NULL</code>; <code>MOD(a,0)</code> &#8594; <code>NULL</code>.</td></tr>
+<tr><td>Arithmetic operators (numeric path)</td><td><code>NULL</code> / non-numeric operand treated as <code>0</code> — does <em>not</em> propagate.</td></tr>
+<tr><td><code>CASE</code> branch with <code>NULL</code> condition</td><td>Treated as not matched; falls through.</td></tr>
+<tr><td><code>COALESCE</code> / <code>IFNULL</code></td><td>Return the first non-null argument.</td></tr>
+<tr><td>Array subscript out of range</td><td><code>NULL</code>.</td></tr>
+<tr><td>Vector distance, dimension mismatch</td><td><code>NULL</code>.</td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<p><strong>Note &#8212; honest divergences from the SQL standard.</strong> Three behaviors differ from a standard-conforming engine and are worth remembering:
+(1) division and modulo by zero return <code>0</code> rather than raising a <code>division_by_zero</code> error;
+(2) arithmetic treats a <code>NULL</code> operand as <code>0</code> on the numeric path instead of propagating <code>NULL</code>;
+(3) <code>CONCAT</code> propagates <code>NULL</code> like MySQL, whereas PostgreSQL's <code>||</code> / <code>concat()</code> ignore nulls.
+String functions are byte-oriented and ASCII-only for case folding, and <code>LIKE</code> has no <code>ESCAPE</code> clause. Treat these as engine-specific and test edge cases explicitly.</p>
+</div>
+
+<h2 id="check-constraints">9.9. Expressions in CHECK Constraints</h2>
+
+<p>A subset of the expression language can be persisted in a table's metadata for use in <code>CHECK</code> constraints. The expression is serialized to a compact reverse-Polish (postfix) token stream and re-parsed when the constraint is evaluated. The serializable node set is: column references, the four literal kinds plus <code>NULL</code>; the comparison, logical (<code>AND</code>/<code>OR</code>/<code>NOT</code>/<code>XOR</code>), and arithmetic operators; <code>IS NULL</code>/<code>IS NOT NULL</code>; <code>LIKE</code>/<code>NOT LIKE</code>; the functions <code>UPPER</code>, <code>LOWER</code>, <code>LENGTH</code>, <code>TOKEN_LENGTH</code>, <code>CONCAT</code>, <code>COALESCE</code>, the JSON arrow operators; and the session functions <code>CURRENT_USER</code>, <code>CURRENT_TIMESTAMP</code>, <code>CURRENT_DATE</code>, <code>CURRENT_TIME</code>. Node types outside this set are dropped during serialization, so a <code>CHECK</code> built from unsupported functions will not round-trip faithfully — keep <code>CHECK</code> expressions within the list above. See <a href="/3.0/ref/create-table">CREATE TABLE</a> for constraint syntax.</p>
+
+<pre><code><span class="c-key">CREATE TABLE</span> accounts (
+    id       <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    email    <span class="c-key">VARCHAR</span>(120) <span class="c-key">CHECK</span> (<span class="c-key">LENGTH</span>(email) &gt; 3),
+    balance  <span class="c-key">DECIMAL</span>(12,2) <span class="c-key">CHECK</span> (balance &gt;= 0),
+    owner    <span class="c-key">VARCHAR</span>(60) <span class="c-key">CHECK</span> (owner = <span class="c-key">CURRENT_USER</span>)
+);</code></pre>
+
+<p>For where these expressions are used in practice, see <a href="/3.0/ref/select">SELECT</a> (projection, <code>WHERE</code>, <code>HAVING</code>), <a href="/3.0/sql/dml">Chapter 6, Data Manipulation</a> (<code>SET</code> assignments, <code>DEFAULT</code>, <code>ON CONFLICT</code> updates), and <a href="/3.0/ref/create-sequence">CREATE SEQUENCE</a> for the sequence functions.</p>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>
