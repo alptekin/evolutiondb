@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>22. Installation — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>22. Installation</h1>
+<p class="lede">How to obtain a running EvolutionDB 3.0 server — either by building the three executables from source with a C toolchain, or by pulling the prebuilt container image and starting it with <code>docker compose</code>.</p>
+
+<p>EvolutionDB ships as three independent executables built from one source tree:</p>
+<dl class="params">
+<dt><code>evolution/evosql</code></dt>
+<dd>The standalone core SQL engine (parser, storage, executor). Built by <code>make evolution</code>. Useful for embedded or single-user experimentation; it has no network listener.</dd>
+<dt><code>adaptor/evosql-server</code></dt>
+<dd>The dual-protocol server. It links the engine object files directly (it does <em>not</em> link a shared library) and exposes the PostgreSQL wire protocol and the native EVO text protocol over TCP. This is what you run in production. Built by <code>make adaptor</code>.</dd>
+<dt><code>cli/evosql-cli</code></dt>
+<dd>The interactive command-line client (GNU readline based). Built by <code>make cli</code>.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Compared with PostgreSQL.</strong> PostgreSQL distributes a configure/make build with dozens of optional contrib modules and a separate <code>initdb</code> step to lay out a data directory. EvolutionDB has neither: there is no <code>configure</code> script, no <code>initdb</code>, and no cluster directory. The server creates and manages a single page file (<code>evosql.db</code>, 4&nbsp;KB pages) on first start in its working directory.</p>
+</div>
+
+<h2 id="22.1">22.1. Requirements</h2>
+
+<p>The build toolchain and library dependencies are deliberately small. The exact set depends on which component you are building and whether you enable TLS.</p>
+
+<table>
+<thead><tr><th>Component</th><th>Build tools</th><th>Libraries</th></tr></thead>
+<tbody>
+<tr><td>Core engine (<code>evosql</code>)</td><td>GCC, Make</td><td><code>liblz4</code></td></tr>
+<tr><td>Server (<code>evosql-server</code>)</td><td>GCC, Make; Bison + Flex only to regenerate the parser</td><td><code>liblz4</code>; <code>libssl</code>/<code>libcrypto</code> when <code>TLS=1</code></td></tr>
+<tr><td>CLI client (<code>evosql-cli</code>)</td><td>GCC, Make</td><td><code>libreadline</code>; <code>libssl</code>/<code>libcrypto</code> when <code>TLS=1</code></td></tr>
+</tbody>
+</table>
+
+<p>Notes on individual libraries, drawn from the actual Makefiles:</p>
+<dl class="params">
+<dt>liblz4</dt>
+<dd>Always linked into the engine. It backs the TOAST overflow store that keeps large text rows from monopolising disk space. It is a small (~150&nbsp;KB) dependency available as <code>liblz4-dev</code> (Debian/Ubuntu), <code>lz4</code> (Homebrew, Alpine apk), or <code>lz4-devel</code> (RHEL/Fedora).</dd>
+<dt>libreadline</dt>
+<dd>Required only by the CLI client for line editing and history. The history file is <code>~/.evosql_history</code> (capped at 500 lines).</dd>
+<dt>OpenSSL (libssl / libcrypto)</dt>
+<dd>Optional. Needed only when building with <code>TLS=1</code> (server) or <code>TLS=1</code> (CLI). The server uses it for the TLS transport and AES-256 Transparent Data Encryption.</dd>
+<dt>Bison + Flex</dt>
+<dd>Needed only to run <code>make generate</code>. The generated parser/lexer (<code>evoparser.tab.c/h</code>, <code>lex.yy.c</code>) are committed to the repository, so an ordinary build does <strong>not</strong> require Bison or Flex.</dd>
+</dl>
+
+<h2 id="22.2">22.2. Building from source</h2>
+
+<p>From the repository root, the top-level <code>Makefile</code> drives the three sub-project Makefiles. Order matters: the engine is built first because the server and CLI link against its object files.</p>
+
+<pre><code><span class="c-com"># Build all three executables (evolution, adaptor, cli)</span>
+make
+
+<span class="c-com"># Or build a single component</span>
+make evolution
+make adaptor
+make cli
+
+<span class="c-com"># Clean every object file and executable</span>
+make clean</code></pre>
+
+<p>A successful <code>make</code> prints the paths of the three binaries it produced:</p>
+<pre><code>====================================
+  Build complete!
+    evolution/evosql
+    adaptor/evosql-server
+    cli/evosql-cli
+====================================</code></pre>
+
+<h3 id="22.2.1">22.2.1. Enabling TLS and encryption</h3>
+
+<p>TLS support is off by default. Pass <code>TLS=1</code> to compile the server with the OpenSSL transport and the page-encryption code path (the <code>EVOSQL_TLS</code> and <code>EVO_ENCRYPTION</code> compile-time flags):</p>
+
+<pre><code><span class="c-com"># Server with OpenSSL TLS + Transparent Data Encryption</span>
+make adaptor TLS=1
+
+<span class="c-com"># CLI with TLS so it can connect to a TLS-enabled server</span>
+make -C cli TLS=1</code></pre>
+
+<div class="callout">
+<p><strong>TLS is a build-time decision.</strong> Unlike PostgreSQL, where <code>ssl = on</code> is a runtime <code>postgresql.conf</code> setting on a single binary, EvolutionDB compiles the TLS code in or out. A server built without <code>TLS=1</code> cannot serve TLS at all, regardless of environment variables. See <a href="/3.0/admin/config/">23. Server Configuration</a> for the runtime certificate variables (<code>EVOSQL_TLS_CERT</code>, <code>EVOSQL_TLS_KEY</code>).</p>
+</div>
+
+<h3 id="22.2.2">22.2.2. Regenerating the parser</h3>
+
+<p>You only need this if you have modified the grammar (<code>evolution/parser/evoparser.y</code>) or lexer (<code>evolution/parser/evolexer.l</code>). It requires Bison and Flex:</p>
+
+<pre><code><span class="c-com"># Regenerate evoparser.tab.c/h and lex.yy.c, then rebuild</span>
+make generate
+make</code></pre>
+
+<h3 id="22.2.3">22.2.3. Release binaries</h3>
+
+<p><code>make release</code> builds everything, copies the three executables into <code>release/</code>, and strips their symbol tables:</p>
+
+<pre><code>make release   <span class="c-com"># stripped binaries land in release/</span></code></pre>
+
+<h2 id="22.3">22.3. Platform notes</h2>
+
+<p>The Makefiles detect the platform with <code>uname -s</code> and adjust link flags and the executable suffix accordingly.</p>
+
+<dl class="params">
+<dt>Linux</dt>
+<dd>The reference platform. Executables have no suffix. Server links <code>-lpthread -lm -llz4</code>. Install dev packages with your package manager, e.g. <code>apt-get install gcc make bison flex liblz4-dev libssl-dev libreadline-dev</code>.</dd>
+<dt>macOS (Darwin)</dt>
+<dd>Builds native binaries with no suffix. Because Homebrew keeps <code>liblz4</code>, <code>readline</code>, and <code>openssl</code> off the default search path, the Makefiles add the Homebrew cellar include/lib paths automatically (e.g. <code>-I/opt/homebrew/include</code>, and <code>brew --prefix readline</code> / <code>brew --prefix openssl</code> for the keg-only formulas). Install with <code>brew install lz4 readline openssl bison flex</code>.</dd>
+<dt>Windows (MinGW / MSYS2)</dt>
+<dd>Produces <code>.exe</code> files (<code>evosql.exe</code>, <code>evosql-server.exe</code>, <code>evosql-cli.exe</code>). The Makefiles redirect linker temp files to <code>/tmp</code> to work around a permission issue, and link the Winsock library <code>-lws2_32</code> instead of pthreads.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Honest scope.</strong> The container image and CI run on Linux; macOS and MinGW are supported by the Makefiles but are best-effort targets. There are no prebuilt OS packages (no <code>.deb</code>, <code>.rpm</code>, Homebrew tap, or Windows installer) — you build from source or use Docker.</p>
+</div>
+
+<h2 id="22.4">22.4. Installing with Docker</h2>
+
+<p>The shipped <code>docker-compose.yml</code> builds the server from a multi-stage <code>Dockerfile</code> (<code>gcc:13</code> builder &rarr; <code>debian:bookworm-slim</code> runtime, built with <code>TLS=1</code>) and starts it. This is the recommended path for testing and for clients such as DBeaver, pgAdmin, or psql.</p>
+
+<pre><code><span class="c-com"># Start the server (builds the image on first run)</span>
+docker compose up -d              <span class="c-com"># PG:5433  EVO:9967</span>
+
+<span class="c-com"># Stop the server, keeping the data volume</span>
+docker compose down
+
+<span class="c-com"># Stop the server and DELETE all data</span>
+docker compose down -v</code></pre>
+
+<p>To run the published image directly without the compose file:</p>
+
+<pre><code>docker run -d -p 5433:5433 -p 9967:9967 \
+    -e <span class="c-str">EVOSQL_PASSWORD</span>=mysecret evolutiondb/evolutiondb:latest</code></pre>
+
+<p>The container entrypoint generates a self-signed TLS certificate under <code>/data/certs/</code> on first start (10-year validity, CN <code>evosql-server</code>) if none exists, exports <code>EVOSQL_TLS_CERT</code>/<code>EVOSQL_TLS_KEY</code>, and then execs the server. The database file and certificates live in the <code>/data</code> volume, so data survives <code>docker compose down</code> but is destroyed by <code>down -v</code>.</p>
+
+<h3 id="22.4.1">22.4.1. Ports</h3>
+
+<p>The server is dual-protocol. The defaults below come directly from the source (<code>DEFAULT_PG_PORT</code>, <code>DEFAULT_EVO_PORT</code>, <code>REPL_DEFAULT_PORT</code>) and the compose file.</p>
+
+<table>
+<thead><tr><th>Port</th><th>Protocol</th><th>Default</th><th>How to change</th></tr></thead>
+<tbody>
+<tr><td>PostgreSQL wire</td><td>PG frontend/backend protocol — psql, DBeaver, JDBC</td><td><code>5433</code></td><td><code>--pg-port</code></td></tr>
+<tr><td>EVO native</td><td>EvoSQL text protocol — <code>evosql-cli</code>, C/Python SDK</td><td><code>9967</code></td><td><code>--evo-port</code></td></tr>
+<tr><td>Replication</td><td>WAL sender for replicas</td><td><code>9968</code> (disabled unless configured)</td><td><code>--replication-port</code></td></tr>
+<tr><td>CDC stream</td><td>Change-data-capture, JSON Lines</td><td>disabled (compose maps <code>9970</code>)</td><td><code>--cdc-port</code> / <code>EVOSQL_CDC_PORT</code></td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<p><strong>Note: port 5433, not 5432.</strong> EvolutionDB defaults its PostgreSQL-compatible listener to <code>5433</code> so it does not collide with a real PostgreSQL on the same host. Point your client at <code>-p 5433</code>.</p>
+</div>
+
+<h3 id="22.4.2">22.4.2. First-start credentials</h3>
+
+<p>The default administrative user name is <code>admin</code> (<code>EVOSQL_USER_NAME</code>). The password is controlled by <code>EVOSQL_PASSWORD</code>:</p>
+<ul>
+<li>If <code>EVOSQL_PASSWORD</code> is set, that password is used. The bundled <code>docker-compose.yml</code> sets it to <code>admin</code> for convenience.</li>
+<li>If it is unset, a random password is generated and printed to stdout once on first start — check <code>docker logs</code> to retrieve it.</li>
+</ul>
+
+<p>A few other environment variables seen in the compose file shape first start; the complete reference is in <a href="/3.0/admin/config/">23. Server Configuration</a>:</p>
+<dl class="params">
+<dt><code>EVOSQL_ENCRYPTION_KEY</code></dt>
+<dd>Master passphrase for AES-256 Transparent Data Encryption. Set it to an empty string to disable encryption. Page&nbsp;0 (the file header) is always stored in plaintext regardless.</dd>
+<dt><code>EVOSQL_CDC_PORT</code></dt>
+<dd>Enables the change-data-capture streaming server on the given port (JSON Lines).</dd>
+<dt><code>EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</code></dt>
+<dd>How often the background reclaim/TTL tick runs. The compose file lowers it to <code>2</code> so TTL-driven row expiry is visible in tests; production leaves the default (30&nbsp;s).</dd>
+<dt><code>EVOSQL_BUFFER_POOL_SIZE</code></dt>
+<dd>Clock-sweep buffer pool size, accepting a raw page count or a unit suffix (<code>K</code>/<code>M</code>/<code>G</code>) interpreted against the 4&nbsp;KB page size; also settable via <code>--buffer-pool-size</code>.</dd>
+</dl>
+
+<h2 id="22.5">22.5. Running a local build</h2>
+
+<p>After <code>make</code>, start the server and connect. The server prints its version and a banner showing the active ports and whether TLS is compiled in.</p>
+
+<pre><code><span class="c-com"># Start the server (defaults: PG 5433, EVO 9967)</span>
+./adaptor/evosql-server
+
+<span class="c-com"># Use a different PostgreSQL-wire port</span>
+./adaptor/evosql-server --pg-port 5434
+
+<span class="c-com"># Connect with the native CLI (EVO port 9967)</span>
+./cli/evosql-cli
+./cli/evosql-cli -W admin        <span class="c-com"># prompt for password</span>
+
+<span class="c-com"># Or connect any PostgreSQL client over the wire protocol</span>
+psql -h 127.0.0.1 -p 5433 -U admin testdb</code></pre>
+
+<p>Once connected you can create objects immediately — there is no <code>initdb</code> or template database to bootstrap. See <a href="/3.0/ref/create-database/">CREATE DATABASE</a>, <a href="/3.0/ref/create-table/">CREATE TABLE</a>, and the agent-memory DDL such as <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a> and <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>.</p>
+
+<h2 id="22.6">22.6. Verifying the installation</h2>
+
+<p>The test suite is a set of Python scripts that speak the raw PG wire protocol (no <code>psycopg2</code> dependency). They require a running server and connect to <code>127.0.0.1:5433</code> (PG) or <code>:9967</code> (EVO) with the default credentials <code>admin</code>/<code>admin</code> against database <code>testdb</code>.</p>
+
+<pre><code><span class="c-com"># Start the server first</span>
+docker compose up -d
+
+<span class="c-com"># Run individual test files</span>
+python tests/test_memory_store.py
+python tests/test_checkpoint_store.py
+python tests/test_evo_protocol.py</code></pre>
+
+<div class="callout">
+<p><strong>Notes &amp; limitations.</strong></p>
+<ul>
+<li>No <code>configure</code> script and no <code>initdb</code>: the engine creates its single 4&nbsp;KB-page file (<code>evosql.db</code>) in the working directory on first run.</li>
+<li>The server links the engine's object files directly rather than a shared library; there is no installable <code>libevolution</code>. (The separate C client SDK, <code>client/libevosql-memory/</code>, is built with its own <code>make -C client/libevosql-memory</code>.)</li>
+<li>TLS and page encryption are compile-time options (<code>TLS=1</code>); a non-TLS build cannot be switched to TLS at runtime.</li>
+<li>Bison and Flex are needed only for <code>make generate</code> — never for an ordinary build, because the generated sources are committed.</li>
+<li>No OS-native packages are published; distribution is source build or container image only.</li>
+</ul>
+</div>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

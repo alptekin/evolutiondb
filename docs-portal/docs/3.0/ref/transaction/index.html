@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>BEGIN / COMMIT / ROLLBACK — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>BEGIN / COMMIT / ROLLBACK</h1>
+<p class="lede">Open, commit, or abort a multi-statement transaction so that a group of changes either all take effect together or none of them do.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">BEGIN</span>
+<span class="c-key">START TRANSACTION</span>
+
+<span class="c-key">COMMIT</span>
+<span class="c-key">END</span>
+
+<span class="c-key">ROLLBACK</span>
+
+<span class="c-key">SAVEPOINT</span> savepoint_name
+<span class="c-key">ROLLBACK TO</span> <span class="opt">[ SAVEPOINT ]</span> savepoint_name
+<span class="c-key">RELEASE</span> <span class="opt">[ SAVEPOINT ]</span> savepoint_name</code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p>In EvolutionDB every statement runs in its own implicit, auto-committed transaction
+unless you have first opened an explicit transaction block. <code>BEGIN</code> (or its
+synonym <code>START TRANSACTION</code>) starts such a block: from that point every
+data-modifying statement is recorded in a per-connection <em>undo log</em> and is held
+open until you finish the block with <code>COMMIT</code> or <code>ROLLBACK</code>.</p>
+
+<p><code>COMMIT</code> makes all the changes made since <code>BEGIN</code> durable and
+visible to other connections. Before acknowledging the commit, the server flushes the
+transaction's dirty pages to the write-ahead log, assigns a commit sequence number, and
+marks the transaction committed in the commit log (CLOG). The undo log is then discarded
+and any locks the transaction held are released. <code>END</code> is accepted as an exact
+synonym for <code>COMMIT</code>.</p>
+
+<p><code>ROLLBACK</code> abandons the transaction: the undo log is replayed in reverse,
+restoring every inserted, updated, or deleted row to its prior state, the transaction is
+marked aborted in the CLOG, and its locks are released. Under MVCC, rolling back an
+<code>UPDATE</code> or <code>DELETE</code> works by clearing the soft-delete marker
+(<code>xmax</code>) on the original tuple rather than rewriting data, with a re-insert
+fallback for pre-MVCC rows.</p>
+
+<p>Each connection has its own transaction context (the undo log is thread-local), so
+transactions on different connections are independent. If a connection disconnects with a
+transaction still open, the server automatically rolls it back.</p>
+
+<div class="callout">
+<strong>Note.</strong> If a statement inside the block raises an error, the transaction
+enters an <em>aborted</em> state. While aborted, only <code>ROLLBACK</code>,
+<code>COMMIT</code>, <code>SAVEPOINT</code>, and <code>RELEASE</code> are accepted; other
+statements are rejected until the block is closed. Issuing <code>COMMIT</code> on an
+aborted transaction performs an implicit <code>ROLLBACK</code> (all work is discarded),
+matching PostgreSQL.
+</div>
+
+<h3 id="isolation">Isolation level</h3>
+<p>The transaction isolation level is <strong>not</strong> set on the <code>BEGIN</code>
+statement itself. EvolutionDB matches <code>BEGIN</code>/<code>START TRANSACTION</code> by
+prefix, so any words you type after the keyword are accepted but ignored. To choose an
+isolation level, run <code>SET</code> <code>[SESSION]</code> <code>TRANSACTION ISOLATION
+LEVEL</code> before opening (or before issuing any query inside) the transaction. The
+recognized levels are <code>READ UNCOMMITTED</code>, <code>READ COMMITTED</code> (the
+default), <code>REPEATABLE READ</code>, and <code>SERIALIZABLE</code>.</p>
+<p>At <code>READ COMMITTED</code> each statement takes a fresh snapshot. At
+<code>REPEATABLE READ</code> and <code>SERIALIZABLE</code>, <code>BEGIN</code> takes a
+single snapshot that the whole transaction sees. A <code>SERIALIZABLE</code> transaction
+additionally registers with the conflict guard for write-skew detection and may fail at
+<code>COMMIT</code> with SQLSTATE <code>40001</code> (<em>could not serialize access due to
+read/write dependencies among transactions</em>), in which case the transaction is rolled
+back and the command reports <code>ROLLBACK</code>.</p>
+
+<h3 id="savepoints">Savepoints</h3>
+<p>Within an open transaction you may set named savepoints. <code>SAVEPOINT name</code>
+marks the current position in the undo log. <code>ROLLBACK TO [SAVEPOINT] name</code>
+replays the undo log back to that mark — undoing everything done since the savepoint while
+leaving earlier work and the transaction itself intact — and clears the aborted state so
+the transaction can continue. <code>RELEASE [SAVEPOINT] name</code> forgets the savepoint
+(and all newer ones) without undoing any work. Defining a savepoint with the name of an
+existing one overwrites it. Savepoint commands outside a transaction fail with SQLSTATE
+<code>25P01</code>; referencing a savepoint that does not exist fails with
+<code>3B001</code>.</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>BEGIN</dt>
+<dd>Start an explicit transaction block on the current connection. Initializes a fresh
+undo log and savepoint stack and assigns the transaction an MVCC transaction id. The
+command reports the tag <code>BEGIN</code>. Issuing <code>BEGIN</code> while already inside
+a transaction logs a warning and is otherwise a no-op (it does <em>not</em> start a nested
+transaction).</dd>
+
+<dt>START TRANSACTION</dt>
+<dd>An exact synonym for <code>BEGIN</code>; behaves identically.</dd>
+
+<dt>COMMIT</dt>
+<dd>End the current transaction, making all of its changes permanent. Flushes WAL, records
+the commit in the CLOG with a commit sequence number, releases locks, discards the undo
+log, and delivers any pending notifications. Reports the tag <code>COMMIT</code>. Run
+outside a transaction it is a harmless no-op.</dd>
+
+<dt>END</dt>
+<dd>An exact synonym for <code>COMMIT</code>.</dd>
+
+<dt>ROLLBACK</dt>
+<dd>End the current transaction, undoing all changes made since <code>BEGIN</code> by
+replaying the undo log in reverse, marking the transaction aborted, and releasing locks.
+Reports the tag <code>ROLLBACK</code>. Run outside a transaction it is a harmless
+no-op.</dd>
+
+<dt>SAVEPOINT savepoint_name</dt>
+<dd>Establish a new savepoint at the current point within the open transaction. Names are
+case-insensitive; re-using an existing name overwrites that savepoint.</dd>
+
+<dt>ROLLBACK TO [ SAVEPOINT ] savepoint_name</dt>
+<dd>Undo all changes made after the named savepoint was established, without ending the
+transaction. The <code>SAVEPOINT</code> keyword is optional. Savepoints created after the
+target are discarded, and the transaction's aborted flag (if any) is cleared.</dd>
+
+<dt>RELEASE [ SAVEPOINT ] savepoint_name</dt>
+<dd>Destroy the named savepoint and all savepoints created after it, keeping the work done
+since then. The <code>SAVEPOINT</code> keyword is optional.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Transfer money between two accounts atomically:</p>
+<pre><code><span class="c-key">BEGIN</span>;
+<span class="c-key">UPDATE</span> accounts <span class="c-key">SET</span> balance = balance - <span class="c-str">100</span> <span class="c-key">WHERE</span> id = <span class="c-str">1</span>;
+<span class="c-key">UPDATE</span> accounts <span class="c-key">SET</span> balance = balance + <span class="c-str">100</span> <span class="c-key">WHERE</span> id = <span class="c-str">2</span>;
+<span class="c-key">COMMIT</span>;</code></pre>
+
+<p>Discard a set of changes instead of keeping them:</p>
+<pre><code><span class="c-key">BEGIN</span>;
+<span class="c-key">DELETE FROM</span> staging_rows;
+<span class="c-com">-- changed your mind:</span>
+<span class="c-key">ROLLBACK</span>;</code></pre>
+
+<p>Use a savepoint to undo only part of a transaction:</p>
+<pre><code><span class="c-key">BEGIN</span>;
+<span class="c-key">INSERT INTO</span> orders (id, total) <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">50</span>);
+<span class="c-key">SAVEPOINT</span> before_items;
+<span class="c-key">INSERT INTO</span> order_items (order_id, sku) <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'BAD-SKU'</span>);
+<span class="c-key">ROLLBACK TO SAVEPOINT</span> before_items;   <span class="c-com">-- keep the order, drop the bad item</span>
+<span class="c-key">COMMIT</span>;</code></pre>
+
+<p>Choose an isolation level before opening the transaction:</p>
+<pre><code><span class="c-key">SET TRANSACTION ISOLATION LEVEL</span> <span class="c-key">REPEATABLE READ</span>;
+<span class="c-key">BEGIN</span>;
+<span class="c-key">SELECT</span> count(*) <span class="c-key">FROM</span> inventory;
+<span class="c-com">-- the same snapshot is seen for the whole transaction</span>
+<span class="c-key">SELECT</span> sum(qty) <span class="c-key">FROM</span> inventory;
+<span class="c-key">COMMIT</span>;</code></pre>
+
+<p><code>END</code> is interchangeable with <code>COMMIT</code>:</p>
+<pre><code><span class="c-key">BEGIN</span>;
+<span class="c-key">UPDATE</span> settings <span class="c-key">SET</span> value = <span class="c-str">'on'</span> <span class="c-key">WHERE</span> key = <span class="c-str">'feature_x'</span>;
+<span class="c-key">END</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>EvolutionDB's transaction control follows the spirit of the SQL standard and is broadly
+compatible with PostgreSQL, with some intentional simplifications.</p>
+<ul>
+<li>Both <code>BEGIN</code> and the SQL-standard <code>START TRANSACTION</code> are
+accepted and behave identically. <code>END</code> is accepted as a synonym for
+<code>COMMIT</code> (a PostgreSQL extension); the standard only defines
+<code>COMMIT</code>.</li>
+<li>Optional noise words PostgreSQL allows on these statements (<code>WORK</code>,
+<code>TRANSACTION</code>, <code>AND CHAIN</code>, etc.) are not parsed as distinct clauses.
+EvolutionDB matches the leading keyword and ignores any trailing text, so writing
+<code>COMMIT WORK</code> behaves the same as <code>COMMIT</code> — but the extra words have
+no effect and <code>AND CHAIN</code> does not start a new transaction.</li>
+<li>The transaction characteristics that PostgreSQL permits on the <code>BEGIN</code> line
+(<code>ISOLATION LEVEL ...</code>, <code>READ ONLY</code>/<code>READ WRITE</code>,
+<code>DEFERRABLE</code>) are <strong>not</strong> read from the <code>BEGIN</code>
+statement. Set the isolation level beforehand with <code>SET [SESSION] TRANSACTION
+ISOLATION LEVEL</code>; there is no read-only or deferrable transaction mode.</li>
+<li>Nested <code>BEGIN</code> is a no-op that emits a warning rather than an error
+(matching PostgreSQL), and <code>COMMIT</code>/<code>ROLLBACK</code> outside a transaction
+are harmless no-ops.</li>
+<li><code>SAVEPOINT</code>, <code>ROLLBACK TO [SAVEPOINT]</code>, and <code>RELEASE
+[SAVEPOINT]</code> are supported with PostgreSQL-compatible semantics, including
+overwriting a savepoint when its name is reused and clearing the aborted state on
+<code>ROLLBACK TO</code>.</li>
+<li>A failed statement aborts the whole transaction; subsequent statements are refused
+until <code>ROLLBACK</code> (or a <code>ROLLBACK TO</code> a prior savepoint). This matches
+PostgreSQL's failed-transaction behavior, and <code>COMMIT</code> on an aborted
+transaction performs an implicit rollback.</li>
+<li>Two-phase commit is available through the separate <code>XA</code> command family
+(<code>XA START</code>/<code>END</code>/<code>PREPARE</code>/<code>COMMIT</code>/<code>ROLLBACK</code>/<code>RECOVER</code>),
+not through a <code>PREPARE TRANSACTION</code> statement.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

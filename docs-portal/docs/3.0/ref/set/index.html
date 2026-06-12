@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SET — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>SET</h1>
+<p class="lede">Set a session user variable, or change the active schema for the current connection.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">SET</span> @<span class="opt">variable_name</span> { = | := } <span class="opt">value_expression</span> <span class="opt">[ , @<span class="opt">variable_name</span> { = | := } <span class="opt">value_expression</span> [ , ... ] ]</span>
+
+<span class="c-key">SET SCHEMA</span> <span class="opt">schema_name</span>
+<span class="c-key">SET SCHEMA DEFAULT</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>SET</code> serves two distinct purposes in EvolutionDB, distinguished by what follows the keyword.</p>
+
+<p><strong>User variables.</strong> <code>SET @name = expr</code> defines or overwrites a session-scoped
+user variable. The right-hand side is evaluated as a full SQL value expression (including arithmetic,
+function calls and other constructs the expression engine understands), and the resulting value is
+stored under the given name for the lifetime of the connection. The variable can then be referenced
+anywhere an expression is allowed — for example in a <code>SELECT</code> list or a <code>WHERE</code>
+clause — by writing <code>@name</code>. Referencing a variable that was never set yields
+<code>NULL</code> rather than an error. Several variables may be assigned in one statement by
+separating the assignments with commas.</p>
+
+<p>Either <code>=</code> or <code>:=</code> may be used as the assignment operator. No other
+comparison operator is accepted; for instance <code>SET @x &gt; 1</code> is a syntax error.</p>
+
+<p><strong>Schema selection.</strong> <code>SET SCHEMA schema_name</code> changes the active schema
+within the current database, so that subsequently unqualified table and object names resolve against
+that schema. The schema must already exist in the current database; if it does not, the statement
+fails with an <em>undefined schema</em> error and the active schema is left unchanged.
+<code>SET SCHEMA DEFAULT</code> switches back to the schema named <code>default</code>.</p>
+
+<p>The scope of both forms is the connection that issues them. Variables and the chosen schema are
+not shared between connections, and they do not survive disconnection.</p>
+
+<div class="callout">
+<p><strong>Note.</strong> User variables are addressed with a leading <code>@</code> sigil
+(for example <code>@x</code>, <code>@threshold</code>). This is the only way to read or write them;
+there is no separate inspection command. A connection may hold up to 64 distinct user variables.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>@variable_name</code></dt>
+<dd>The name of the session user variable to assign, written with a leading <code>@</code>.
+Reuse of an existing name overwrites its previous value.</dd>
+
+<dt><code>= </code> / <code>:=</code></dt>
+<dd>The assignment operator. Both forms are equivalent. They are the only operators accepted in this
+position.</dd>
+
+<dt><code>value_expression</code></dt>
+<dd>Any SQL value expression. It is evaluated once at the time the <code>SET</code> statement runs,
+and its computed value is stored in the variable. The stored value is later returned verbatim
+wherever <code>@variable_name</code> is referenced.</dd>
+
+<dt><code>schema_name</code></dt>
+<dd>The name of an existing schema in the current database to make active for the connection.
+Subsequent unqualified object names resolve against this schema.</dd>
+
+<dt><code>DEFAULT</code></dt>
+<dd>In the <code>SET SCHEMA DEFAULT</code> form, selects the schema named <code>default</code> as the
+active schema.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+
+<p>Assign an integer and read it back:</p>
+<pre><code><span class="c-key">SET</span> @x = <span class="c-str">42</span>;
+<span class="c-key">SELECT</span> @x;        <span class="c-com">-- 42</span></code></pre>
+
+<p>The right-hand side is a full expression, so arithmetic works:</p>
+<pre><code><span class="c-key">SET</span> @x = <span class="c-str">10</span> + <span class="c-str">20</span>;
+<span class="c-key">SELECT</span> @x;        <span class="c-com">-- 30</span></code></pre>
+
+<p>Use the colon-equals form, and store a string:</p>
+<pre><code><span class="c-key">SET</span> @name := <span class="c-str">'Alice'</span>;
+<span class="c-key">SELECT</span> @name;     <span class="c-com">-- Alice</span></code></pre>
+
+<p>Reference a variable inside a query:</p>
+<pre><code><span class="c-key">SET</span> @threshold = <span class="c-str">15</span>;
+<span class="c-key">SELECT</span> * <span class="c-key">FROM</span> uv_test <span class="c-key">WHERE</span> val &gt; @threshold;</code></pre>
+
+<p>Overwriting reuses the same name:</p>
+<pre><code><span class="c-key">SET</span> @x = <span class="c-str">1</span>;
+<span class="c-key">SET</span> @x = <span class="c-str">99</span>;
+<span class="c-key">SELECT</span> @x;        <span class="c-com">-- 99</span></code></pre>
+
+<p>An unset variable evaluates to <code>NULL</code>:</p>
+<pre><code><span class="c-key">SELECT</span> @undefined_var_xyz;   <span class="c-com">-- NULL</span></code></pre>
+
+<p>Switch the active schema for the connection, then return to the default:</p>
+<pre><code><span class="c-key">SET SCHEMA</span> sales;
+<span class="c-key">SET SCHEMA DEFAULT</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>There is no <code>SET</code> command in the SQL standard for run-time parameters; the standard
+defines <code>SET SCHEMA</code> as part of session management, and EvolutionDB's
+<code>SET SCHEMA schema_name</code> form follows that intent — it selects the schema used to resolve
+unqualified names. The <code>SET SCHEMA DEFAULT</code> spelling is an EvolutionDB convenience that
+selects the schema literally named <code>default</code>.</p>
+
+<p>EvolutionDB's user-variable form, <code>SET @name = expr</code> (with <code>:=</code> as an
+accepted alternative), follows the MySQL session-variable convention rather than PostgreSQL.
+It is unrelated to PostgreSQL's <code>SET configuration_parameter TO value</code> /
+<code>SET ... = ...</code> for run-time configuration: EvolutionDB does not implement that family of
+configuration parameters, nor the <code>SET SESSION</code>, <code>SET LOCAL</code>,
+<code>SET TIME ZONE</code>, or <code>SET TRANSACTION</code> clauses. Likewise, PostgreSQL has no
+equivalent of EvolutionDB's <code>@</code>-sigil user variables; in PostgreSQL such per-session
+values are typically handled with customized run-time parameters or PL/pgSQL variables.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/use/">USE</a></li>
+<li><a href="/3.0/ref/create-schema/">CREATE SCHEMA</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

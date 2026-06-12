@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>MEMORY DELETE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>MEMORY DELETE</h1>
+<p class="lede">Remove a single key/value entry from a memory store, identified by its namespace and key.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">MEMORY DELETE FROM</span> <i>store_name</i>
+    <span class="c-key">WHERE NS</span> = '<i>namespace</i>' <span class="c-key">AND KEY</span> = '<i>key</i>'</code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>MEMORY DELETE</code> removes exactly one entry from the memory store named <code>store_name</code>. An entry in a memory store is uniquely identified by the pair (<code>namespace</code>, <code>key</code>); <code>MEMORY DELETE</code> targets the single row whose composite primary key matches the supplied namespace and key.</p>
+<p>Internally, a memory store is backed by an ordinary table named <code>mem_&lt;store_name&gt;</code>. The two halves of the entry identity are combined into one composite primary-key value (the namespace and key joined by a record-separator byte). <code>MEMORY DELETE</code> rewrites the request as <code>DELETE FROM mem_&lt;store_name&gt; WHERE pk = '...'</code> and routes it through the engine's standard delete path. As a result, the operation honors exactly the same semantics as a hand-written <code>DELETE</code>: row-level security (RLS) policies attached to the backing table, foreign-key cascade actions, MVCC visibility, and triggers all apply. The RLS pass-through is what makes <code>MEMORY DELETE</code> safe in multi-tenant deployments — a caller can only delete rows its policy permits.</p>
+<p>If the named store does not exist, the command fails with SQLSTATE <code>42704</code> (undefined object) and does not modify any data. If the store exists but no entry matches the given namespace and key, the command completes successfully having removed zero rows.</p>
+
+<div class="callout">
+<p><strong>Both predicates are required.</strong> The grammar accepts only the fixed form <code>WHERE NS = '...' AND KEY = '...'</code>. The comparison operator must be <code>=</code>, the two predicates must be joined by <code>AND</code>, and both the namespace and key values are string literals. There is no way to delete a whole namespace, match a key prefix, or omit either predicate through <code>MEMORY DELETE</code>.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><i>store_name</i></dt>
+<dd>The name of the target memory store, written after <code>FROM</code>. The store must already exist (see <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>); otherwise the command raises SQLSTATE <code>42704</code>.</dd>
+<dt><code>NS = '<i>namespace</i>'</code></dt>
+<dd>String literal giving the namespace component of the entry to delete. Together with the key it forms the entry's unique identity. An empty string (<code>''</code>) is a valid namespace value.</dd>
+<dt><code>KEY = '<i>key</i>'</code></dt>
+<dd>String literal giving the key component of the entry to delete, within the given namespace.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Delete a single entry by namespace and key:</p>
+<pre><code><span class="c-key">MEMORY DELETE FROM</span> chat_memory
+    <span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'last_topic'</span>;</code></pre>
+
+<p>Delete an entry stored under the empty namespace:</p>
+<pre><code><span class="c-key">MEMORY DELETE FROM</span> kv_store
+    <span class="c-key">WHERE NS</span> = <span class="c-str">''</span> <span class="c-key">AND KEY</span> = <span class="c-str">'session_token'</span>;</code></pre>
+
+<p>A typical write-then-remove lifecycle for one entry:</p>
+<pre><code><span class="c-com">-- store an entry</span>
+<span class="c-key">MEMORY PUT INTO</span> chat_memory
+    <span class="c-key">VALUES</span> (<span class="c-str">'user:42'</span>, <span class="c-str">'last_topic'</span>, <span class="c-str">'{"text":"billing"}'</span>);
+
+<span class="c-com">-- read it back</span>
+<span class="c-key">MEMORY GET FROM</span> chat_memory <span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'last_topic'</span>;
+
+<span class="c-com">-- remove it</span>
+<span class="c-key">MEMORY DELETE FROM</span> chat_memory <span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'last_topic'</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>MEMORY DELETE</code> is an EvolutionDB extension and is not part of the SQL standard; there is no equivalent statement in PostgreSQL. It exists as ergonomic sugar over the standard <a href="/3.0/ref/delete/">DELETE</a> statement: the request is translated into <code>DELETE FROM mem_&lt;store_name&gt; WHERE pk = '...'</code> and executed through the ordinary delete engine, so it inherits standard delete behavior including RLS, foreign-key actions, MVCC, and triggers.</p>
+<p>Unlike a general-purpose <code>DELETE</code>, the <code>MEMORY DELETE</code> grammar is deliberately restricted: it accepts only equality on both <code>NS</code> and <code>KEY</code> joined by <code>AND</code>, and supports no other <code>WHERE</code> shape, <code>ORDER BY</code>, <code>LIMIT</code>, or <code>RETURNING</code> clause. To delete by any other criterion, target the backing table directly with a standard <code>DELETE</code> statement.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a></li>
+<li><a href="/3.0/ref/memory-put/">MEMORY PUT</a></li>
+<li><a href="/3.0/ref/memory-get/">MEMORY GET</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+<li><a href="/3.0/ref/create-policy/">CREATE POLICY</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

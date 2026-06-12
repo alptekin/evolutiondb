@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>31. evosql-cli — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>31. evosql-cli</h1>
+<p class="lede"><code>evosql-cli</code> is EvolutionDB's interactive terminal client: it speaks the native EVO text protocol, renders result sets as tables, CSV or JSON, supports backslash meta-commands, and runs equally well as an interactive shell or a non-interactive script runner.</p>
+
+<p>Unlike PostgreSQL's <code>psql</code> — which talks the binary PostgreSQL wire protocol on port 5432 — <code>evosql-cli</code> connects over EvolutionDB's line-oriented <strong>EVO protocol</strong> on TCP port <strong>9967</strong>. The two are not interchangeable: <code>psql</code> (and other PostgreSQL clients such as DBeaver) connect to the server's PostgreSQL-compatible port 5433, while <code>evosql-cli</code> is the purpose-built client for the EVO port. Everything documented on this page reflects what the client actually implements; where a familiar <code>psql</code> feature is absent or behaves differently, that difference is called out honestly.</p>
+
+<h2 id="invocation">31.1. Invocation</h2>
+
+<p>The client takes connection parameters and an optional one-shot command or script file. With no command or file and a terminal attached to standard input, it starts an interactive shell; otherwise it runs in non-interactive (script) mode.</p>
+
+<pre class="synopsis"><code>evosql-cli [<span class="c-com">OPTIONS</span>] [-c <span class="c-str">SQL</span> | -f <span class="c-str">FILE</span>]</code></pre>
+
+<dl class="params">
+<dt><code>-h</code>, <code>--host</code> <var>HOST</var></dt>
+<dd>Server hostname. Default: <code>localhost</code>. Resolved via <code>gethostbyname()</code>, falling back to <code>inet_addr()</code> for a literal IPv4 address.</dd>
+
+<dt><code>-p</code>, <code>--port</code> <var>PORT</var></dt>
+<dd>Server EVO port. Default: <code>9967</code>. (This is the EVO port, not the PostgreSQL port 5433.)</dd>
+
+<dt><code>-u</code>, <code>--user</code> <var>USER</var></dt>
+<dd>Username. Default: <code>admin</code>.</dd>
+
+<dt><code>-W</code>, <code>--password</code> <var>PW</var></dt>
+<dd>Password. If omitted, the client reads the <code>EVOSQL_PASSWORD</code> environment variable; if that is also unset and the server requires authentication, it prompts interactively with echo disabled.</dd>
+
+<dt><code>-c</code>, <code>--command</code> <var>SQL</var></dt>
+<dd>Run the given SQL string and exit. Forces non-interactive mode.</dd>
+
+<dt><code>-f</code>, <code>--file</code> <var>FILE</var></dt>
+<dd>Run SQL read from <var>FILE</var> and exit. Forces non-interactive mode.</dd>
+
+<dt><code>-F</code>, <code>--format</code> <var>FMT</var></dt>
+<dd>Output format: <code>table</code> (default), <code>csv</code>, or <code>json</code>. An unknown value is rejected with exit code <code>2</code>.</dd>
+
+<dt><code>-x</code>, <code>--expanded</code></dt>
+<dd>Expanded display: print one <code>column | value</code> line per field instead of an aligned grid. Equivalent to the <code>\x</code> meta-command. Applies to <code>table</code> format only.</dd>
+
+<dt><code>--timing</code></dt>
+<dd>Print per-statement client-side wall time after each statement. Equivalent to <code>\timing</code>.</dd>
+
+<dt><code>--color</code> / <code>--no-color</code></dt>
+<dd>Force ANSI colors on / off. The default is automatic: colors are emitted only when the format is <code>table</code> <em>and</em> standard output is a TTY (on Windows, colors are always off).</dd>
+
+<dt><code>--help</code></dt>
+<dd>Print usage and exit <code>0</code>.</dd>
+</dl>
+
+<p>Example sessions:</p>
+
+<pre><code><span class="c-com"># interactive shell, default localhost:9967 as admin</span>
+evosql-cli
+
+<span class="c-com"># connect to a remote host, prompt for password</span>
+evosql-cli -h db.example.net -p 9967 -u alice
+
+<span class="c-com"># one-shot query, machine-readable output</span>
+evosql-cli -F json -c <span class="c-str">"SELECT id, name FROM users"</span>
+
+<span class="c-com"># run a script file</span>
+evosql-cli -f schema.sql
+
+<span class="c-com"># pipe a script in on stdin (runs non-interactively)</span>
+evosql-cli &lt; schema.sql</code></pre>
+
+<div class="callout">
+<strong>Password handling.</strong> Precedence is <code>-W</code> &rarr; <code>EVOSQL_PASSWORD</code> &rarr; interactive prompt. Passing a secret on the command line exposes it to other users via the process table; prefer the environment variable or the prompt for anything sensitive.
+</div>
+
+<h2 id="connecting">31.2. Connecting and authentication</h2>
+
+<p>On startup the client opens a TCP socket, disables nothing on the line, and performs the EVO handshake:</p>
+
+<ol>
+<li>The client sends the literal line <code>EVO</code> as protocol identification.</li>
+<li>The server replies with a line beginning <code>HELLO</code>. Any other greeting is a fatal error.</li>
+<li>The server then sends either <code>STARTTLS</code>, <code>AUTH_REQUIRED</code>, or <code>AUTH_SCRAM</code>.</li>
+<li>If <code>STARTTLS</code> is offered and the client was built with TLS support (see below), the connection is upgraded to TLS <em>before</em> any credentials are sent. The next message (the auth request) is then read over the encrypted channel.</li>
+<li>For <code>AUTH_REQUIRED</code> or <code>AUTH_SCRAM</code>, the client sends <code>AUTH <var>username</var> <var>password</var></code> and expects <code>AUTH_OK</code>; anything else is an authentication failure and the client exits.</li>
+</ol>
+
+<p>The password buffer and the assembled <code>AUTH</code> message are securely wiped from memory immediately after the line is sent, using a volatile <code>memset</code> indirection that the compiler cannot optimize away.</p>
+
+<div class="callout">
+<strong>SCRAM is advertised but not performed by this client.</strong> Even when the server offers <code>AUTH_SCRAM</code> (SCRAM-SHA-256), <code>evosql-cli</code> answers with the cleartext <code>AUTH</code> form. The server accepts both. If the connection is not protected by TLS, credentials travel in cleartext over the wire.
+</div>
+
+<h3 id="tls">31.2.1. TLS</h3>
+
+<p>TLS is a compile-time option. Build the client with <code>-DEVOSQL_CLI_TLS</code> (linking <code>-lssl -lcrypto</code>), or use <code>make TLS=1</code>. Behavior at the <code>STARTTLS</code> step depends on whether that flag was set:</p>
+
+<dl class="params">
+<dt>Built with TLS</dt>
+<dd>The client acknowledges <code>STARTTLS</code>, performs an OpenSSL handshake using <code>TLS_client_method()</code>, and continues authentication over the encrypted channel. On success it prints <code>[TLS] Encrypted connection established</code> to standard error, and the interactive banner shows <code>(TLS)</code>.</dd>
+<dt>Built without TLS</dt>
+<dd>The client declines by sending <code>NOTLS</code> and continues in plaintext, printing a warning that credentials will be sent in cleartext and suggesting <code>make TLS=1</code>.</dd>
+</dl>
+
+<div class="callout">
+<strong>No certificate verification.</strong> The TLS client creates a context and connects, but does <em>not</em> verify the server certificate or hostname. This protects against passive eavesdropping but not against an active man-in-the-middle. There is no equivalent of <code>psql</code>'s <code>sslmode=verify-full</code>.
+</div>
+
+<h2 id="interactive">31.3. The interactive shell</h2>
+
+<p>In interactive mode the client prints a banner, loads command history, primes the tab-completion cache, installs its <code>SIGINT</code> handler, and enters the read loop. The primary prompt is <code>evosql&gt;</code>; while a statement is still being accumulated the continuation prompt is <code>...&gt;</code>.</p>
+
+<pre><code>Connected to EvoSQL at localhost:9967
+Type SQL (end with ';'), or \? for help, \q to quit.
+
+evosql&gt; SELECT 1 AS n;
+n
+-
+1
+(1 row)
+evosql&gt;</code></pre>
+
+<h3 id="statement-terminator">31.3.1. Statement assembly and the semicolon</h3>
+
+<p>SQL statements are terminated by a semicolon, not by pressing Enter. Lines are accumulated into a buffer until the buffer's last significant (non-whitespace, non-comment) character is a <code>;</code> that lies <em>outside</em> any quoted string. A semicolon inside a string literal keeps the continuation prompt rather than submitting a half-typed statement:</p>
+
+<pre><code>evosql&gt; INSERT INTO t(msg)
+   ...&gt; VALUES ('a; b; c');
+INSERT 0 1
+(1 row)</code></pre>
+
+<p>Because the EVO protocol frames each query as a single line, embedded newlines (and carriage returns) inside a multi-line statement are folded to spaces before the statement is sent. Quote tracking distinguishes single quotes (<code>'</code>) from double quotes (<code>"</code>), and a <code>--</code> line comment outside quotes is consumed to end of line.</p>
+
+<h3 id="bare-words">31.3.2. Quitting</h3>
+
+<p>You can leave the shell with the <code>\q</code> meta-command, with the bare words <code>quit</code> or <code>exit</code> (case-insensitive, kept for familiarity), or with end-of-file (Ctrl-D on an empty line). On a non-empty multi-line buffer, Ctrl-D discards the pending buffer and re-prompts rather than exiting.</p>
+
+<h3 id="cancel">31.3.3. Ctrl-C — cancel, not quit</h3>
+
+<p><code>evosql-cli</code> never terminates on Ctrl-C. Its behavior depends on what the client is doing:</p>
+
+<dl class="params">
+<dt>At the prompt (typing)</dt>
+<dd>Ctrl-C abandons the current line and any pending multi-line buffer and re-draws a fresh prompt — shell-like. (On POSIX this is implemented by long-jumping out of readline after cleaning up the terminal; <code>rl_catch_signals</code> is disabled so readline never re-raises the signal.)</dd>
+<dt>During a running query</dt>
+<dd>The EVO protocol has no in-band query-cancel message. The client therefore sets an interrupt flag, abandons the now-desynchronized socket, and <strong>transparently reconnects</strong> a fresh session, printing <code>query canceled</code>. Connection parameters are stashed at startup precisely so this reconnect can happen silently. If the schema may have changed (the canceled statement contained <code>CREATE</code>/<code>DROP</code>/<code>ALTER</code>), the completion cache is refreshed afterward.</dd>
+</dl>
+
+<div class="callout">
+<strong>This is a real difference from <code>psql</code>.</strong> In PostgreSQL, Ctrl-C sends a protocol-level cancel request on a side channel and the same session continues. In EvolutionDB the only way to abandon a running EVO query from the prompt is to drop and reopen the socket, so any uncommitted transaction state on the old connection is lost. See <a href="/3.0/ref/transaction/">transaction control</a>.
+</div>
+
+<h3 id="history">31.3.4. Command history</h3>
+
+<p>History is persisted to <code>~/.evosql_history</code> (on Windows, <code>%USERPROFILE%\.evosql_history</code>), capped at <strong>500</strong> entries. On POSIX the client uses GNU readline's history facilities (with arrow-key recall and in-line editing); on Windows it provides a built-in readline replacement using the Win32 console API with the same 500-entry cap, up/down recall, and basic line editing.</p>
+
+<div class="callout">
+<strong>Secrets stay out of history.</strong> Any completed statement that contains a bare <code>PASSWORD</code> keyword is excluded from the on-disk history file, so cleartext passwords from e.g. <a href="/3.0/ref/create-user/">CREATE USER</a> never reach disk. The keyword boundary is checked against any non-identifier character, so forms like <code>PASSWORD'secret'</code> are caught too.
+</div>
+
+<h3 id="completion">31.3.5. Tab completion</h3>
+
+<p>On POSIX (GNU readline) only, pressing Tab completes against a fixed list of SQL keywords and a cached list of table names. Matching is case-insensitive on the typed prefix; filename fallback is disabled. The table-name cache is populated at startup via <code>SHOW TABLES</code> and refreshed after any statement containing <code>CREATE</code>, <code>DROP</code>, or <code>ALTER</code> (and after a canceled DDL reconnect), so newly created or dropped tables appear or disappear without restarting the client. The completed keyword set is fixed and includes the common DML/DDL words, join keywords, aggregate names, and a few type names:</p>
+
+<pre><code>SELECT FROM WHERE INSERT INTO VALUES UPDATE SET DELETE CREATE TABLE
+DROP ALTER INDEX JOIN LEFT RIGHT INNER OUTER ON GROUP BY ORDER HAVING
+LIMIT OFFSET DISTINCT AS AND OR NOT NULL LIKE IN BETWEEN PRIMARY KEY
+FOREIGN REFERENCES DEFAULT UNIQUE CHECK BEGIN COMMIT ROLLBACK DATABASE
+SCHEMA USER GRANT REVOKE SHOW TABLES DATABASES USERS COUNT SUM AVG MIN
+MAX VARCHAR INT INTEGER TIMESTAMP BOOLEAN TEXT</code></pre>
+
+<p>Tab completion is not available in the Windows console build.</p>
+
+<h2 id="formats">31.4. Output formats</h2>
+
+<p>The result format is set with <code>-F</code>/<code>--format</code> at startup or the <code>\format</code> meta-command at runtime. Three formats are supported.</p>
+
+<h3 id="format-table">31.4.1. table (default)</h3>
+
+<p>An aligned grid: a bold header row, a dimmed <code>-+-</code> rule, then the rows, finishing with a dimmed <code>(N row[s])</code> count. Column widths are computed from the widest value (or header). NULL values render as the dimmed literal <code>NULL</code>. Status tags and the row count are written to standard output in this format. When <code>\x</code> (expanded) is on, each record is printed as a <code>-[ RECORD n ]-</code> banner followed by one <code>column | value</code> line per field — handy for wide rows.</p>
+
+<h3 id="format-csv">31.4.2. csv</h3>
+
+<p>RFC 4180-style CSV: a header row of column names, then one line per row. A field is quoted only if it contains a comma, a double quote, CR, or LF; embedded double quotes are doubled. A NULL value is emitted as an empty field (indistinguishable from an empty string). In CSV (and JSON) mode only the data goes to standard output; status tags, the row count, errors, and timing go to standard error, so a redirected stream contains clean data.</p>
+
+<pre><code>evosql-cli -F csv -c <span class="c-str">"SELECT id, name FROM users"</span> &gt; users.csv</code></pre>
+
+<h3 id="format-json">31.4.3. json</h3>
+
+<p>A JSON array of objects, one object per row, keyed by column name. Strings use minimal escaping (<code>\"</code>, <code>\\</code>, <code>\n</code>, <code>\r</code>, <code>\t</code>, and <code>\u00XX</code> for other control characters). A NULL value is emitted as JSON <code>null</code>. A value is emitted as an <em>unquoted</em> JSON number only when both conditions hold: the column's PostgreSQL type OID is numeric, and the value's text is a strict JSON number; otherwise it is quoted. The recognised numeric OIDs are:</p>
+
+<table>
+<thead><tr><th>OID</th><th>Type</th></tr></thead>
+<tbody>
+<tr><td>20</td><td><code>int8</code> (bigint)</td></tr>
+<tr><td>21</td><td><code>int2</code> (smallint)</td></tr>
+<tr><td>23</td><td><code>int4</code> (integer)</td></tr>
+<tr><td>26</td><td><code>oid</code></td></tr>
+<tr><td>700</td><td><code>float4</code> (real)</td></tr>
+<tr><td>701</td><td><code>float8</code> (double precision)</td></tr>
+<tr><td>1700</td><td><code>numeric</code></td></tr>
+</tbody>
+</table>
+
+<p>The OID for each column is recovered from the EVO <code>COL</code> line, whose form is <code>&lt;name&gt; &lt;pg_type_oid&gt; &lt;type_modifier&gt;</code>; the client drops the two trailing integer fields by count (the column name itself may contain spaces) and reads the OID from the second-from-last token.</p>
+
+<pre><code>evosql-cli -F json -c <span class="c-str">"SELECT id, name FROM users LIMIT 1"</span>
+<span class="c-com">[
+ {"id": 1, "name": "alice"}
+]</span></code></pre>
+
+<div class="callout">
+<strong>Limitations to know.</strong> NULL and empty string are indistinguishable in CSV. A result set is buffered fully in memory before printing — there is no streaming or paging, and the internal row buffer starts at 64 rows and doubles as needed (there is no fixed truncation in the EVO read path). The JSON emitter performs no pretty-printing beyond one object per line.
+</div>
+
+<h2 id="meta">31.5. Meta-commands</h2>
+
+<p>A line beginning with a backslash is a meta-command. Unlike SQL statements, a meta-command is terminated by the newline (not by a semicolon), though a trailing semicolon is tolerated. Run <code>\?</code> for the built-in summary. The full set the client implements:</p>
+
+<dl class="params">
+<dt><code>\?</code>, <code>\h</code>, <code>\help</code></dt>
+<dd>Print the meta-command reference.</dd>
+
+<dt><code>\d</code>, <code>\dt</code></dt>
+<dd>With no argument, list tables (runs <code>SHOW TABLES</code>). With a name, describe that table's columns by querying <code>information_schema.columns</code> for <code>column_name, data_type, is_nullable</code>. See <a href="/3.0/ref/show/">SHOW</a>.</dd>
+
+<dt><code>\l</code></dt>
+<dd>List databases (<code>SHOW DATABASES</code>). See <a href="/3.0/ref/create-database/">CREATE DATABASE</a>.</dd>
+
+<dt><code>\du</code></dt>
+<dd>List users (<code>SHOW USERS</code>). See <a href="/3.0/ref/create-user/">CREATE USER</a>.</dd>
+
+<dt><code>\dn</code></dt>
+<dd>List schemas (<code>SHOW SCHEMAS</code>).</dd>
+
+<dt><code>\x</code></dt>
+<dd>Toggle expanded display (one column per line). Prints the new state.</dd>
+
+<dt><code>\timing</code></dt>
+<dd>Toggle per-statement timing. Prints the new state.</dd>
+
+<dt><code>\format <var>F</var></code></dt>
+<dd>Set the output format to <code>table</code>, <code>csv</code>, or <code>json</code> (case-insensitive). Any other argument prints a usage line.</dd>
+
+<dt><code>\i <var>FILE</var></code></dt>
+<dd>Read <var>FILE</var> and run it as a script (the same splitter used for <code>-f</code>). The file may itself contain meta-commands, including a nested <code>\i</code>.</dd>
+
+<dt><code>\e</code></dt>
+<dd>Open <code>$EDITOR</code> (default <code>vi</code>) on a private temporary file created with <code>mkstemp</code>; on a clean editor exit, the file's contents are run as a script. POSIX only — on Windows it prints that it is unsupported.</dd>
+
+<dt><code>\!</code> <var>CMD</var></dt>
+<dd>Run <var>CMD</var> in the system shell.</dd>
+
+<dt><code>\q</code>, <code>\quit</code></dt>
+<dd>Quit the client.</dd>
+</dl>
+
+<div class="callout">
+<strong>Naming notes vs. <code>psql</code>.</strong> The verbs are deliberately psql-flavored, but the set is small and a few behave slightly differently: <code>\d</code> and <code>\dt</code> are aliases (both list tables, and <code>\d NAME</code> describes columns); <code>\l</code>, <code>\du</code>, <code>\dn</code> are thin wrappers over the corresponding <code>SHOW</code> command. There is no <code>\copy</code>, no <code>\g</code>, no variable system (<code>\set</code>), and no <code>\connect</code> — the connection is fixed for the life of the process (apart from the transparent reconnect after a Ctrl-C cancel).
+</div>
+
+<h2 id="scripting">31.6. Scripting and non-interactive use</h2>
+
+<p>The client runs non-interactively whenever <code>-c</code> or <code>-f</code> is given, or when standard input is not a terminal (piped or redirected). In that mode it runs the supplied SQL, sends a <code>QUIT</code> line, closes the connection, and exits.</p>
+
+<h3 id="splitter">31.6.1. The statement splitter</h3>
+
+<p>Script text — from <code>-c</code>, <code>-f</code>, piped stdin, <code>\i</code>, or <code>\e</code> — is split into statements by the same quote- and comment-aware scanner used interactively:</p>
+
+<ul>
+<li>The kind of each statement is fixed at its first non-blank character: a line starting with <code>\</code> is a meta-command (terminated by newline); anything else is SQL (terminated by an unquoted <code>;</code>).</li>
+<li><code>--</code> line comments outside quotes run to end of line and are collapsed to a single separating space inside a statement; a standalone comment line is dropped.</li>
+<li>Single and double quotes are tracked so semicolons and comment markers inside string literals are not treated as syntax.</li>
+<li>Newlines and carriage returns inside a SQL statement are folded to spaces (the EVO protocol expects a single-line query).</li>
+<li>A trailing statement with no final <code>;</code> or newline is still run.</li>
+</ul>
+
+<pre><code><span class="c-com">-- schema.sql</span>
+CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(50));
+INSERT INTO t VALUES (1, 'alice'), (2, 'bob');
+SELECT count(*) FROM t;</code></pre>
+
+<h3 id="exit-status">31.6.2. Exit status</h3>
+
+<p>Non-interactive exit status is designed so CI and shell scripts can detect a failed query:</p>
+
+<dl class="params">
+<dt><code>0</code></dt>
+<dd>All statements ran and the server reported no error.</dd>
+<dt><code>1</code></dt>
+<dd>A statement failed — the run hit a non-zero internal code (an unreadable <code>-f</code> file, a connection loss, or a Ctrl-C cancel) <em>or</em> the server returned an <code>ERR</code> for any statement (tracked by an error-seen flag, even if later statements succeed).</dd>
+<dt><code>2</code></dt>
+<dd>An invalid <code>--format</code> argument was given (the client exits before connecting).</dd>
+</dl>
+
+<pre><code>evosql-cli -c <span class="c-str">"SELECT 1"</span> &amp;&amp; echo ok || echo failed</code></pre>
+
+<div class="callout">
+<strong>Errors don't stop a script.</strong> In non-interactive mode a server <code>ERR</code> sets the error flag and the run continues to the next statement; the process still exits <code>1</code> at the end. A connection loss (<code>-1</code>) or Ctrl-C cancel (<code>-2</code>), however, stops the script. This differs from <code>psql</code>'s default and from its <code>ON_ERROR_STOP</code> — there is no equivalent setting here.
+</div>
+
+<h2 id="errors-tags">31.7. Status tags, errors, and timing</h2>
+
+<p>The EVO protocol reports the outcome of each statement as a command tag (e.g. <code>INSERT 0 1</code>, <code>SELECT</code>, <code>CREATE TABLE</code>), an error line, or a result set. The client surfaces these as follows:</p>
+
+<dl class="params">
+<dt>Command tag</dt>
+<dd>Printed verbatim. In <code>table</code> format it goes to standard output; in <code>csv</code>/<code>json</code> it goes to standard error so it does not pollute the data stream.</dd>
+<dt>Error</dt>
+<dd>Printed as <code>ERROR: <var>message</var></code> to standard error (in red when color is on). The error-seen flag is set so non-interactive runs can exit non-zero.</dd>
+<dt>Row count</dt>
+<dd>A <code>(N row[s])</code> footer follows each result set, routed like the command tag (stdout for <code>table</code>, stderr otherwise).</dd>
+<dt>Timing</dt>
+<dd>When <code>\timing</code> / <code>--timing</code> is on, a <code>Time: X.X ms</code> line is printed to standard error after each statement. This is the client-side wall time around the request/response (measured with <code>clock()</code>), not a server-reported execution time.</dd>
+</dl>
+
+<h2 id="data-types">31.8. Type fidelity</h2>
+
+<p>The client itself is type-agnostic for display: every value arrives as text on a <code>FIELD</code> line and is printed as-is in <code>table</code> and <code>csv</code> formats. The only place type information is consulted is JSON output, where the column's PostgreSQL type OID (carried on the EVO <code>COL</code> line) decides whether a numeric-looking value is emitted unquoted (see <a href="#format-json">§31.4.3</a>). For the full type system and how values are stored, see the SQL reference and the data-type chapters; for query syntax see <a href="/3.0/ref/select/">SELECT</a>, <a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/update/">UPDATE</a>, and <a href="/3.0/ref/delete/">DELETE</a>.</p>
+
+<h2 id="notes">31.9. Notes and limitations</h2>
+
+<div class="callout">
+<ul>
+<li><strong>EVO port only.</strong> <code>evosql-cli</code> connects to the EVO text protocol on port 9967. To use the PostgreSQL wire protocol (port 5433) use <code>psql</code> or any PostgreSQL-compatible client; <code>evosql-cli</code> cannot talk to that port.</li>
+<li><strong>No in-band query cancel.</strong> Canceling a running query drops and reopens the connection, losing any uncommitted transaction state on that session.</li>
+<li><strong>SCRAM not implemented client-side.</strong> The client always authenticates with the cleartext <code>AUTH</code> form even when the server advertises SCRAM-SHA-256.</li>
+<li><strong>TLS does not verify certificates.</strong> When built with TLS, the handshake protects against passive eavesdropping only.</li>
+<li><strong>Results are fully buffered.</strong> Large result sets are read into memory before display; there is no paging or streaming output.</li>
+<li><strong>Single fixed connection.</strong> No <code>\connect</code>, no connection switching, no variables. The host/port/user/password are bound for the life of the process.</li>
+<li><strong>NULL vs. empty string in CSV.</strong> Both render as an empty field; they are distinguishable only in <code>json</code> (where NULL is <code>null</code>) and in <code>table</code> (where NULL prints as <code>NULL</code>).</li>
+<li><strong>Platform parity.</strong> Tab completion and <code>\e</code> are POSIX-only; the Windows console build provides history and basic line editing but not these features.</li>
+</ul>
+</div>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

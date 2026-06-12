@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>ANALYZE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>ANALYZE</h1>
+<p class="lede">ANALYZE — scan a table to collect statistics and column histograms used by the query planner.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">ANALYZE TABLE</span> <span class="c-com">table_name</span>
+    <span class="opt">[ <span class="c-key">WITH SAMPLE</span> <span class="c-com">n</span> { <span class="c-key">PERCENT</span> | <span class="c-key">ROWS</span> } ]</span>
+    <span class="opt">[ <span class="c-key">UPDATE HISTOGRAM ON</span> <span class="c-com">column</span> [, ...] <span class="opt">[ <span class="c-key">WITH</span> <span class="c-com">n</span> <span class="c-key">BUCKETS</span> ]</span>
+      | <span class="c-key">DROP HISTOGRAM ON</span> <span class="c-com">column</span> [, ...] ]</span></code></pre>
+</div>
+<p><code>table_name</code> may be schema-qualified as <code>schema.table</code>.</p>
+
+<h2 id="description">Description</h2>
+<p><code>ANALYZE TABLE</code> performs a sequential scan of <code>table_name</code> and records statistics in the system catalog. Two clauses are optional and independent: the <code>WITH SAMPLE</code> clause controls how many rows are inspected, and the histogram clause controls which per-column histograms are built or removed. The statistics are read by <code>EXPLAIN</code> when it estimates row counts and chooses access paths.</p>
+<p>With no optional clause, <code>ANALYZE TABLE t</code> rebuilds every statistic for the table:</p>
+<ul>
+<li><strong>Table-level statistics</strong> — <code>row_count</code>, <code>page_count</code> (heap pages, counted by walking the page chain), and <code>last_analyzed</code> (the wall-clock time of this run).</li>
+<li><strong>Per-column statistics</strong> — <code>null_count</code>, <code>distinct_count</code>, <code>min</code>, <code>max</code>, and <code>avg_width</code> for each column.</li>
+<li><strong>Per-column histograms</strong> — one auto-selected histogram per column that has at least one non-NULL value.</li>
+<li><strong>Per-index statistics</strong> — for every index on the table, the B+ tree depth, leaf-page count, total entries, and average entries per leaf.</li>
+</ul>
+<p>Histograms come in two flavors, chosen automatically per column. When the number of distinct values (NDV) is no greater than the bucket budget, a <strong>frequency histogram</strong> is built (one bucket per value, giving exact equality selectivity). Otherwise an <strong>equi-depth histogram</strong> is built: distinct values are sorted (numerically when every value parses as a number, otherwise lexicographically) and grouped into buckets holding roughly the same number of rows, each storing an upper bound and a cumulative count. The default bucket budget is 100, and no histogram may exceed 100 buckets.</p>
+<p>Distinct-value tracking is capped at 10,000 values per column; columns with more distinct values are summarized from that capped sample. Statistics are stored in the catalog regardless of how many rows were scanned.</p>
+<p>On success the server prints a one-line summary of the rows scanned, columns analyzed, and pages counted (and, when sampling, the sampled-row count and keep percentage).</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>table_name</code></dt>
+<dd>The table to analyze, optionally schema-qualified (<code>schema.table</code>). The table must exist; otherwise the command fails with <code>ERROR: table "…" does not exist</code>.</dd>
+
+<dt><code>WITH SAMPLE <i>n</i> PERCENT</code></dt>
+<dd>Inspect each row with probability <i>n</i>% (Bernoulli sampling). <i>n</i> is clamped to the range 1–100. Sampled per-column counters (null count, width sums) are scaled back up to full-table estimates; <code>min</code> and <code>max</code> are always computed from the full scan because doing so is free.</dd>
+
+<dt><code>WITH SAMPLE <i>n</i> ROWS</code></dt>
+<dd>Target approximately <i>n</i> sampled rows. <i>n</i> has a minimum of 1. The target is converted into a keep percentage using the table's previously recorded <code>row_count</code>; if no prior row count is available (no earlier <code>ANALYZE</code>), the command falls back to a full scan.</dd>
+
+<dt>(no <code>WITH SAMPLE</code> clause)</dt>
+<dd>Automatic sampling: a full scan is used for tables under 10,000 rows; larger tables (per the previously recorded <code>row_count</code>) are sampled at 10%. Without a prior row count, a full scan is performed.</dd>
+
+<dt><code>UPDATE HISTOGRAM ON <i>column</i> [, ...]</code></dt>
+<dd>Rebuild histograms only for the listed columns and skip rewriting the per-column statistics. The table is still scanned so the listed columns' value distributions can be collected.</dd>
+
+<dt><code>WITH <i>n</i> BUCKETS</code></dt>
+<dd>Used together with <code>UPDATE HISTOGRAM</code> to request <i>n</i> buckets instead of the default of 100. Values above 100 are reduced to 100.</dd>
+
+<dt><code>DROP HISTOGRAM ON <i>column</i> [, ...]</code></dt>
+<dd>Delete the stored histograms for the listed columns. This is a catalog-only operation: no table scan is performed and no other statistics are touched.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Rebuild all statistics, histograms, and index statistics for a table:</p>
+<pre><code><span class="c-key">ANALYZE TABLE</span> orders;</code></pre>
+
+<p>Analyze a schema-qualified table:</p>
+<pre><code><span class="c-key">ANALYZE TABLE</span> sales.orders;</code></pre>
+
+<p>Analyze a large table using a 10% Bernoulli sample:</p>
+<pre><code><span class="c-key">ANALYZE TABLE</span> events <span class="c-key">WITH SAMPLE</span> <span class="c-str">10</span> <span class="c-key">PERCENT</span>;</code></pre>
+
+<p>Aim for roughly 5,000 sampled rows:</p>
+<pre><code><span class="c-key">ANALYZE TABLE</span> events <span class="c-key">WITH SAMPLE</span> <span class="c-str">5000</span> <span class="c-key">ROWS</span>;</code></pre>
+
+<p>Rebuild histograms for two columns with a custom bucket count, without touching other statistics:</p>
+<pre><code><span class="c-key">ANALYZE TABLE</span> orders
+    <span class="c-key">UPDATE HISTOGRAM ON</span> status, region
+    <span class="c-key">WITH</span> <span class="c-str">32</span> <span class="c-key">BUCKETS</span>;</code></pre>
+
+<p>Drop the histogram for a single column (no scan):</p>
+<pre><code><span class="c-key">ANALYZE TABLE</span> orders <span class="c-key">DROP HISTOGRAM ON</span> notes;</code></pre>
+
+<p>Combine sampling with a targeted histogram rebuild:</p>
+<pre><code><span class="c-key">ANALYZE TABLE</span> events <span class="c-key">WITH SAMPLE</span> <span class="c-str">20</span> <span class="c-key">PERCENT</span>
+    <span class="c-key">UPDATE HISTOGRAM ON</span> event_type;</code></pre>
+
+<div class="callout">
+<p>The <code>WITH SAMPLE</code> clause precedes the histogram clause. When both are present, the histogram is built from the sampled rows and its bucket counts are scaled up to full-table estimates so that histogram-backed selectivity matches the reported <code>row_count</code>.</p>
+</div>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>There is no <code>ANALYZE</code> statement in the SQL standard; statistics collection is implementation-defined.</p>
+<p>EvolutionDB's command requires the <code>TABLE</code> keyword (<code>ANALYZE TABLE <i>name</i></code>) and accepts exactly one table per statement. This differs from PostgreSQL, where the keyword is <code>ANALYZE</code> without <code>TABLE</code>, multiple tables and a per-table column list may be given, and options such as <code>VERBOSE</code> and <code>SKIP_LOCKED</code> appear in a parenthesized option list. PostgreSQL has no <code>WITH SAMPLE</code>, <code>UPDATE HISTOGRAM</code>, or <code>DROP HISTOGRAM</code> clauses; instead it controls sampling globally through the <code>default_statistics_target</code> setting and the per-column <code>ALTER TABLE … SET STATISTICS</code>. None of those PostgreSQL forms are accepted by EvolutionDB.</p>
+<p>The <code>WITH SAMPLE … PERCENT</code> form is conceptually similar to the standard <code>TABLESAMPLE BERNOULLI</code> clause used in <code>SELECT</code>, but here it governs only which rows feed the statistics gatherer, not a query result set.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-index/">CREATE INDEX</a></li>
+<li><a href="/3.0/ref/drop-index/">DROP INDEX</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

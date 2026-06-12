@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>DROP INDEX — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>DROP INDEX</h1>
+<p class="lede">Remove a secondary index from the database and reclaim the storage it occupied.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">DROP INDEX</span> <span class="c-com">index_name</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>DROP INDEX</code> removes an existing secondary index. The index is located by its name alone — EvolutionDB searches every table for an index with the given name, so the owning table does not need to be (and cannot be) specified in the command.</p>
+<p>When the index is found, its backing structure is destroyed according to the index's type:</p>
+<ul>
+<li>A B+ tree index has its tree pages freed (the default for <code>CREATE INDEX</code> and <code>CREATE UNIQUE INDEX</code>).</li>
+<li>A hash index (created with <code>USING HASH</code>) has its hash directory and bucket pages freed.</li>
+<li>An HNSW approximate-nearest-neighbor index has its in-memory graph released.</li>
+</ul>
+<p>After the backing structure is destroyed, the corresponding entry is removed from the system catalog. On success the server reports <code>Index '<i>index_name</i>' dropped.</code></p>
+<p>A primary-key index cannot be dropped with this command; attempting to do so raises an error. Drop or alter the table to remove a primary key constraint instead.</p>
+<div class="callout">
+<p><strong>Note.</strong> The index name must match an index that actually exists. If no index by that name is found, the command fails with <code>index '<i>index_name</i>' does not exist</code>. EvolutionDB's grammar does not accept an <code>IF EXISTS</code> clause, so there is no built-in way to suppress this error.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>index_name</code></dt>
+<dd>The name of the index to remove. Because the lookup is by name across all tables, the name identifies the index on its own; no schema qualifier or owning-table reference is used. The name must refer to an existing secondary index that is not a primary-key index.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create an index, then drop it by name:</p>
+<pre><code><span class="c-key">CREATE INDEX</span> idx_users_email <span class="c-key">ON</span> users (email)<span class="c-key">;</span>
+<span class="c-key">DROP INDEX</span> idx_users_email<span class="c-key">;</span></code></pre>
+<p>Drop a hash index created with <code>USING HASH</code>. The drop command is the same regardless of how the index was built:</p>
+<pre><code><span class="c-key">CREATE INDEX</span> idx_orders_status <span class="c-key">ON</span> orders (status) <span class="c-key">USING HASH</span><span class="c-key">;</span>
+<span class="c-key">DROP INDEX</span> idx_orders_status<span class="c-key">;</span></code></pre>
+<p>Attempting to drop a primary-key index fails:</p>
+<pre><code><span class="c-com">-- raises: cannot drop primary key index '...'</span>
+<span class="c-key">DROP INDEX</span> users_pkey<span class="c-key">;</span></code></pre>
+<p>Dropping an index that does not exist fails:</p>
+<pre><code><span class="c-com">-- raises: index 'no_such_index' does not exist</span>
+<span class="c-key">DROP INDEX</span> no_such_index<span class="c-key">;</span></code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>DROP INDEX</code> is not part of the core SQL standard; the standard leaves index management to implementations. EvolutionDB's form is deliberately minimal.</p>
+<p>Compared to PostgreSQL, EvolutionDB accepts only <code>DROP INDEX index_name</code>. The following PostgreSQL clauses are <strong>not</strong> supported by EvolutionDB's grammar and must be omitted:</p>
+<ul>
+<li><code>IF EXISTS</code> — not accepted; dropping a missing index always raises an error.</li>
+<li><code>CONCURRENTLY</code> — not accepted; the drop is not online/concurrent.</li>
+<li><code>CASCADE</code> / <code>RESTRICT</code> — not accepted.</li>
+<li>Dropping multiple indexes in one statement (<code>DROP INDEX a, b</code>) — not accepted; one index name per statement.</li>
+<li>Schema-qualified names (<code>schema.index</code>) — the index is resolved by bare name across all tables.</li>
+</ul>
+<p>Unlike PostgreSQL, EvolutionDB explicitly refuses to drop a primary-key index through this command.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-index/">CREATE INDEX</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/drop-table/">DROP TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

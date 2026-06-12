@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE PROCEDURE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE PROCEDURE</h1>
+<p class="lede">Define a new stored procedure whose body is a block of SQL statements that is stored as raw text and replayed statement-by-statement when the procedure is invoked with <code>CALL</code>.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE</span> <span class="opt">[ <span class="c-key">OR REPLACE</span> ]</span> <span class="c-key">PROCEDURE</span> <em>name</em> ( <span class="opt">[ <em>argument</em> [, ...] ]</span> ) <span class="opt">[ <span class="c-key">AS</span> ]</span>
+<span class="c-key">BEGIN</span>
+    <em>statements</em>
+<span class="c-key">END</span>
+
+<span class="c-com">where <em>argument</em> is:</span>
+
+    <span class="opt">[ <span class="c-key">IN</span> | <span class="c-key">OUT</span> | <span class="c-key">INOUT</span> ]</span> <em>arg_name</em> <em>arg_type</em></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE PROCEDURE</code> registers a named procedure in the current database and schema. Unlike many engines, EvolutionDB does not compile the body into an intermediate form: the raw text between the opening <code>BEGIN</code> and its matching <code>END</code> is captured verbatim from the original SQL input and stored in the system catalog. At <code>CALL</code> time the stored text is split into individual statements and each is executed through the normal query path.</p>
+<p>The procedure is created in the database and schema that are current at definition time, resolved through the system catalog. If a procedure with the same name already exists in that schema, the statement fails with a "procedure already exists" error (SQLSTATE <code>42P07</code>) unless <code>OR REPLACE</code> is given, in which case the existing definition is dropped first and re-created.</p>
+<p>The body is delimited by a balanced <code>BEGIN</code> … <code>END</code> pair. Nested blocks are tracked while scanning for the closing keyword: each inner <code>BEGIN</code> increases the nesting depth and each standalone <code>END</code> decreases it, while compound terminators such as <code>END IF</code>, <code>END WHILE</code>, <code>END LOOP</code>, <code>END FOR</code>, <code>END FOREACH</code> and <code>END CASE</code> are recognized and do not close the procedure. The outer <code>END</code> at depth zero terminates the definition. Text inside single-quoted string literals is ignored during this scan.</p>
+<p>Parameters declared in the argument list become substitution targets inside the body. When the procedure is invoked, positional placeholders of the form <code>$1</code>, <code>$2</code>, … and bare references to a parameter's name are replaced with the corresponding argument value supplied to <code>CALL</code> before each statement is executed. References that match nothing are left untouched, and text inside string literals is copied verbatim without substitution.</p>
+<p>The body may contain ordinary SQL statements as well as control-flow constructs — <code>IF … END IF</code>, <code>WHILE … END WHILE</code>, <code>LOOP … END LOOP</code>, <code>FOR … END FOR</code>, <code>FOREACH … END FOREACH</code> and <code>CASE … END CASE</code> — which the engine splits and resolves into a block map at call time.</p>
+<div class="callout">
+<p>Argument <em>modes</em> (<code>IN</code>, <code>OUT</code>, <code>INOUT</code>) are accepted by the grammar and recorded, but procedures are driven entirely by textual parameter substitution at <code>CALL</code> time; there is no separate output-binding mechanism. A procedure with no parameters still requires the empty parentheses.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>OR REPLACE</code></dt>
+<dd>Replace an existing procedure of the same name in the current schema instead of raising an error. When omitted, defining over an existing procedure fails with SQLSTATE <code>42P07</code>.</dd>
+<dt><em>name</em></dt>
+<dd>The identifier of the procedure to create. The procedure is registered under the current database and schema.</dd>
+<dt><code>IN</code> | <code>OUT</code> | <code>INOUT</code></dt>
+<dd>Optional mode of the argument that follows. When no mode keyword is given, the argument defaults to <code>IN</code>. The mode is stored with the parameter but does not change the textual-substitution execution model.</dd>
+<dt><em>arg_name</em></dt>
+<dd>The name of an argument. Inside the body it may be referenced either by this name or by its positional placeholder (<code>$1</code> for the first argument, <code>$2</code> for the second, and so on). Name matching is case-insensitive.</dd>
+<dt><em>arg_type</em></dt>
+<dd>The declared data type of the argument (for example <code>INT</code>, <code>VARCHAR(50)</code>, <code>TEXT</code>, <code>BOOLEAN</code>). It documents the expected argument and is parsed as a normal column-style type.</dd>
+<dt><code>AS</code></dt>
+<dd>Optional noise keyword permitted immediately before <code>BEGIN</code>. The definition is identical whether or not <code>AS</code> is present.</dd>
+<dt><em>statements</em></dt>
+<dd>The procedure body: a sequence of SQL statements and control-flow constructs between <code>BEGIN</code> and the matching outer <code>END</code>. Statements are separated by semicolons. The text is stored as-is and executed at <code>CALL</code> time.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>A procedure with no arguments that performs an insert:</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">PROCEDURE</span> add_default_user()
+<span class="c-key">BEGIN</span>
+    <span class="c-key">INSERT</span> <span class="c-key">INTO</span> users (name, active) <span class="c-key">VALUES</span> (<span class="c-str">'guest'</span>, <span class="c-key">TRUE</span>);
+<span class="c-key">END</span>;</code></pre>
+
+<p>A procedure that uses named parameters, substituted into the body at call time:</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">PROCEDURE</span> raise_salary(dept_id <span class="c-key">INT</span>, pct <span class="c-key">INT</span>) <span class="c-key">AS</span>
+<span class="c-key">BEGIN</span>
+    <span class="c-key">UPDATE</span> employees
+       <span class="c-key">SET</span> salary = salary + (salary * pct / <span class="c-str">100</span>)
+     <span class="c-key">WHERE</span> department = dept_id;
+<span class="c-key">END</span>;
+
+<span class="c-com">-- invoke it</span>
+<span class="c-key">CALL</span> raise_salary(<span class="c-str">3</span>, <span class="c-str">10</span>);</code></pre>
+
+<p>The same body using positional placeholders instead of names:</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">PROCEDURE</span> raise_salary(dept_id <span class="c-key">INT</span>, pct <span class="c-key">INT</span>)
+<span class="c-key">BEGIN</span>
+    <span class="c-key">UPDATE</span> employees
+       <span class="c-key">SET</span> salary = salary + (salary * $2 / <span class="c-str">100</span>)
+     <span class="c-key">WHERE</span> department = $1;
+<span class="c-key">END</span>;</code></pre>
+
+<p>Redefining an existing procedure with <code>OR REPLACE</code> and a control-flow body:</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">OR REPLACE</span> <span class="c-key">PROCEDURE</span> archive_or_skip(min_age <span class="c-key">INT</span>)
+<span class="c-key">BEGIN</span>
+    <span class="c-key">IF</span> min_age &gt; <span class="c-str">0</span> <span class="c-key">THEN</span>
+        <span class="c-key">DELETE</span> <span class="c-key">FROM</span> sessions <span class="c-key">WHERE</span> age &gt; min_age;
+    <span class="c-key">END</span> <span class="c-key">IF</span>;
+<span class="c-key">END</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>EvolutionDB's <code>CREATE PROCEDURE</code> resembles the SQL/PSM persistent-stored-modules form and MySQL's procedure syntax more than PostgreSQL's. Differences worth noting:</p>
+<ul>
+<li><strong>No language clause.</strong> PostgreSQL requires <code>LANGUAGE</code> and wraps the body in a dollar-quoted or single-quoted string. EvolutionDB has no <code>LANGUAGE</code> clause and no body string-quoting: the body is written directly as a <code>BEGIN … END</code> block, and <code>AS</code> is merely an optional noise word.</li>
+<li><strong>Textual parameters.</strong> Arguments are applied by literal text substitution (<code>$n</code> placeholders or parameter names) rather than as bound, typed values. Argument types and <code>IN</code>/<code>OUT</code>/<code>INOUT</code> modes are recorded but do not establish typed binding or output parameters.</li>
+<li><strong>Unsupported PostgreSQL options.</strong> Clauses such as <code>SECURITY DEFINER/INVOKER</code>, <code>SET</code> configuration, <code>TRANSFORM</code>, <code>EXTERNAL</code> and explicit <code>argmode</code>-defaulted parameters with <code>DEFAULT</code> values are not part of EvolutionDB's grammar and are not accepted.</li>
+<li><strong>Single-name resolution.</strong> Procedures are not overloadable by argument signature; they are identified by name within a database and schema, and <code>DROP PROCEDURE</code> takes only the bare name (no argument list).</li>
+</ul>
+<p>The companion <code>CREATE FUNCTION</code> form shares this grammar and adds a <code>RETURNS</code> type clause. Both are stored and executed by the same engine.</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-trigger/">CREATE TRIGGER</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE SEQUENCE — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE SEQUENCE</h1>
+<p class="lede">Define a new sequence generator — a named, persistent counter that produces a monotonic series of <code>BIGINT</code> values via the <code>nextval()</code>, <code>currval()</code>, <code>setval()</code> and <code>lastval()</code> functions.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE SEQUENCE</span> <span class="opt">[ <span class="c-key">IF NOT EXISTS</span> ]</span> <var>name</var>
+    <span class="opt">[ <span class="c-key">INCREMENT</span> <span class="opt">[ <span class="c-key">BY</span> ]</span> <var>increment</var> ]</span>
+    <span class="opt">[ <span class="c-key">MINVALUE</span> <var>minvalue</var> ]</span>
+    <span class="opt">[ <span class="c-key">MAXVALUE</span> <var>maxvalue</var> ]</span>
+    <span class="opt">[ <span class="c-key">START</span> <span class="opt">[ <span class="c-key">WITH</span> ]</span> <var>start</var> ]</span>
+    <span class="opt">[ <span class="c-key">CYCLE</span> | <span class="c-key">NOT CYCLE</span> ]</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE SEQUENCE</code> creates a new sequence-number generator. The sequence is stored as a persistent object in the system catalog of the current schema, and survives server restarts.</p>
+<p>After creation, the sequence is manipulated through the sequence functions. <code>nextval(<var>name</var>)</code> advances the sequence and returns its new value; the very first call to <code>nextval()</code> on a freshly created sequence returns the <code>START</code> value (the sequence is not yet "called"). Subsequent calls add <var>increment</var> to the current value. <code>currval()</code> returns the value most recently obtained, <code>lastval()</code> returns the value of the most recently used sequence in the session, and <code>setval()</code> resets the current value.</p>
+<p>If the supplied <var>name</var> already names a sequence in the current schema, an error is raised unless <code>IF NOT EXISTS</code> is given, in which case a notice is emitted and no new sequence is created. Note that <code>IF NOT EXISTS</code> only checks whether a sequence of the same name exists; it does not verify that the existing definition matches the requested one.</p>
+<p>Each call to <code>nextval()</code> is serialized by an internal mutex and immediately persisted to the catalog, so concurrent sessions never receive the same value. Because the new value is written before it is returned, sequence values consumed inside a transaction are <em>not</em> rolled back if that transaction aborts; gaps in the series are therefore normal and expected.</p>
+<p>When <var>increment</var> is positive the sequence is ascending; when it is negative the sequence is descending. On reaching <var>maxvalue</var> (ascending) or <var>minvalue</var> (descending), a sequence declared <code>CYCLE</code> wraps around to <var>minvalue</var> or <var>maxvalue</var> respectively, while a non-cycling sequence raises an error.</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>IF NOT EXISTS</code></dt>
+<dd>Do not raise an error if a sequence with the same name already exists in the current schema. A notice is issued instead. The pre-existing sequence is left unchanged.</dd>
+
+<dt><var>name</var></dt>
+<dd>The name of the sequence to create. The sequence is created in the current schema. Names are not schema-qualified in this form.</dd>
+
+<dt><code>INCREMENT [ BY ]</code> <var>increment</var></dt>
+<dd>The value added to the current sequence value on each call to <code>nextval()</code>. A positive value makes an ascending sequence, a negative value a descending one. The <code>BY</code> keyword is optional. Defaults to <code>1</code>.</dd>
+
+<dt><code>MINVALUE</code> <var>minvalue</var></dt>
+<dd>The minimum value the sequence can generate. Defaults to <code>1</code>. For a descending sequence this is the value used as the cycle wrap target when <code>CYCLE</code> is set, and the floor at which a non-cycling descending sequence errors out.</dd>
+
+<dt><code>MAXVALUE</code> <var>maxvalue</var></dt>
+<dd>The maximum value the sequence can generate. Defaults to <code>2147483647</code> (2<sup>31</sup>&minus;1). For an ascending sequence this is the cycle wrap target when <code>CYCLE</code> is set, and the ceiling at which a non-cycling ascending sequence errors out.</dd>
+
+<dt><code>START [ WITH ]</code> <var>start</var></dt>
+<dd>The first value returned by the sequence — the value yielded by the first <code>nextval()</code> call. The <code>WITH</code> keyword is optional. If omitted, the start value defaults to <var>minvalue</var>.</dd>
+
+<dt><code>CYCLE</code> / <code>NOT CYCLE</code></dt>
+<dd><code>CYCLE</code> allows the sequence to wrap around when it reaches <var>maxvalue</var> (ascending) or <var>minvalue</var> (descending). <code>NOT CYCLE</code> (the default) causes <code>nextval()</code> to raise an error once a bound is reached.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Note.</strong> The clause order shown in the Synopsis is conventional, not mandatory — the grammar accepts the options in any order, and a later occurrence of the same option overrides an earlier one. Sequence values are 64-bit signed integers (<code>BIGINT</code>), but the default <code>MAXVALUE</code> is 2147483647; raise <code>MAXVALUE</code> explicitly if you need the full 64-bit range.</p>
+</div>
+
+<h2 id="examples">Examples</h2>
+<p>Create an ascending sequence starting at 1, incrementing by 1 (all defaults):</p>
+<pre><code><span class="c-key">CREATE SEQUENCE</span> order_id_seq;</code></pre>
+
+<p>Draw values from it:</p>
+<pre><code><span class="c-key">SELECT</span> nextval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 1  (the START value)</span>
+<span class="c-key">SELECT</span> nextval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 2</span>
+<span class="c-key">SELECT</span> currval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 2</span></code></pre>
+
+<p>Create a sequence that starts at 1000 and counts up by 10:</p>
+<pre><code><span class="c-key">CREATE SEQUENCE</span> invoice_seq
+    <span class="c-key">START WITH</span> <span class="c-num">1000</span>
+    <span class="c-key">INCREMENT BY</span> <span class="c-num">10</span>;</code></pre>
+
+<p>Create a bounded, cycling sequence (1 → 5, then back to 1):</p>
+<pre><code><span class="c-key">CREATE SEQUENCE</span> day_slot_seq
+    <span class="c-key">MINVALUE</span> <span class="c-num">1</span>
+    <span class="c-key">MAXVALUE</span> <span class="c-num">5</span>
+    <span class="c-key">CYCLE</span>;</code></pre>
+
+<p>Create a descending sequence:</p>
+<pre><code><span class="c-key">CREATE SEQUENCE</span> countdown_seq
+    <span class="c-key">START</span> <span class="c-num">100</span>
+    <span class="c-key">INCREMENT</span> <span class="c-num">-1</span>
+    <span class="c-key">MINVALUE</span> <span class="c-num">0</span>;</code></pre>
+
+<p>Create idempotently — skip if it already exists:</p>
+<pre><code><span class="c-key">CREATE SEQUENCE IF NOT EXISTS</span> session_seq;</code></pre>
+
+<p>Reposition a sequence with <code>setval()</code> so the next <code>nextval()</code> returns 200:</p>
+<pre><code><span class="c-key">SELECT</span> setval(<span class="c-str">'invoice_seq'</span>, <span class="c-num">200</span>);</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE SEQUENCE</code> conforms to the spirit of the SQL standard, with the following EvolutionDB-specific differences:</p>
+<ul>
+<li>EvolutionDB supports the clauses <code>INCREMENT&nbsp;[BY]</code>, <code>MINVALUE</code>, <code>MAXVALUE</code>, <code>START&nbsp;[WITH]</code> and <code>CYCLE</code> / <code>NOT CYCLE</code>, plus the EvolutionDB extension <code>IF NOT EXISTS</code>.</li>
+<li>The standard's bare keyword <code>NO CYCLE</code> is written <code>NOT CYCLE</code> in EvolutionDB. The forms <code>NO MINVALUE</code> and <code>NO MAXVALUE</code> are <strong>not</strong> supported; omit the clause to accept the default instead.</li>
+<li>The PostgreSQL clauses <code>AS</code> <var>data_type</var>, <code>CACHE</code>, <code>OWNED BY</code> and <code>TEMPORARY</code>/<code>UNLOGGED</code> are <strong>not</strong> accepted by the grammar. Sequences are always persistent <code>BIGINT</code> generators, and every <code>nextval()</code> writes through to the catalog (no client-side cache).</li>
+<li>The standard reserves <code>nextval</code>/<code>currval</code> as expressions; like PostgreSQL, EvolutionDB exposes them as functions taking the sequence name as a string argument, e.g. <code>nextval('seq')</code>.</li>
+<li>The default <code>MAXVALUE</code> is <code>2147483647</code> rather than the 64-bit maximum; raise it explicitly when a larger ceiling is required.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/drop-sequence/">DROP SEQUENCE</a></li>
+<li><a href="/3.0/ref/alter-sequence/">ALTER SEQUENCE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

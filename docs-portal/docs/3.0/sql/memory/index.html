@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>15. Memory &amp; Entity Stores — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>15. Memory &amp; Entity Stores</h1>
+<p class="lede">EvolutionDB exposes two first-class agent-memory primitives — the <em>memory store</em> (a namespaced JSON key/value table with optional per-row embeddings and semantic <code>SEARCH</code>) and the <em>entity store</em> (a per-key summary table that auto-tracks mention counts) — implemented as thin SQL statements that compile down to ordinary tables, B+ tree primary keys, MVCC tuples, and the engine's existing <code>INSERT</code>/<code>SELECT</code>/<code>UPDATE</code>/<code>DELETE</code> machinery.</p>
+
+<h2 id="overview">15.1. Overview</h2>
+<p>A memory store and an entity store are not new storage engines. Each is a <strong>named catalog object</strong> bound to one regular backing table; the dedicated <code>MEMORY ...</code> and <code>ENTITY ...</code> statements are convenience verbs that build the right tuple and route it through the same code path a hand-written DML statement would take. Because of that, everything the engine already does to a normal table — primary-key indexing, MVCC visibility, row-level security policies, foreign-key cascades, triggers — applies unchanged.</p>
+<p>The two stores answer different questions:</p>
+<dl class="params">
+<dt>Memory store</dt>
+<dd>"Give me the value I filed under <em>namespace + key</em>," or "find the rows whose embedding is closest to this query vector." A namespaced JSON KV store that can optionally carry one <code>VECTOR(N)</code> column per row for semantic recall. See <a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>.</dd>
+<dt>Entity store</dt>
+<dd>"What do I know about this entity, and how often has it come up?" A per-key table holding a <code>summary</code>, an optional <code>facts</code> blob, an auto-incrementing <code>mention_count</code>, and a <code>last_seen</code> timestamp. See <a href="/3.0/ref/create-entity-store/">CREATE ENTITY STORE</a>.</dd>
+</dl>
+<div class="callout">
+<p><strong>Relationship to PostgreSQL.</strong> These statements are EvolutionDB extensions; they are not part of the SQL standard and have no PostgreSQL equivalent. PostgreSQL users would model the same data with a hand-rolled table plus the <code>pgvector</code> extension and application-side upsert logic. EvolutionDB folds the table layout, the upsert semantics, and the distance ranking into single statements. Vector distance itself reuses the engine's native operators documented in the Vectors chapter.</p>
+</div>
+
+<h2 id="memory-create">15.2. Creating a memory store</h2>
+<p>A memory store is created with <code>CREATE MEMORY STORE</code>. The optional <code>WITH</code> list declares whether the store carries embeddings and which distance metric <code>SEARCH</code> should use.</p>
+<pre class="synopsis"><code><span class="c-key">CREATE MEMORY STORE</span> name
+    [ <span class="c-key">WITH</span> ( embedding_dim = <span class="c-str">N</span> [, distance = <span class="c-str">'cosine'</span> ] ) ]</code></pre>
+<dl class="params">
+<dt><code>embedding_dim = N</code></dt>
+<dd>Dimensionality of the per-row embedding. When <code>N &gt; 0</code> the backing table gains a <code>VECTOR(N)</code> column and the store supports <code>MEMORY SEARCH</code>. When omitted (or <code>0</code>, the default) <strong>no embedding column is created at all</strong> and the store is a pure JSON KV table — <code>SEARCH</code> against it is an error.</dd>
+<dt><code>distance = '...'</code></dt>
+<dd>Distance metric recorded in the catalog and used later by <code>SEARCH</code>. Accepted literals are listed in <a href="#distance-table">§15.5</a>. The default is <code>cosine</code>; any unrecognized literal silently falls back to <code>cosine</code>.</dd>
+</dl>
+<pre><code><span class="c-com">-- semantic store with 1536-d embeddings, L2 distance</span>
+<span class="c-key">CREATE MEMORY STORE</span> agent_mem <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">1536</span>, distance = <span class="c-str">'l2'</span>);
+
+<span class="c-com">-- plain namespaced JSON KV store, no vectors</span>
+<span class="c-key">CREATE MEMORY STORE</span> scratch;</code></pre>
+<p>The statement also supports <code>CREATE MEMORY STORE IF NOT EXISTS name</code>, which returns success if a store of that name already exists rather than raising <code>42710</code>.</p>
+
+<h3 id="memory-backing">15.2.1. The backing table</h3>
+<p>Creating a memory store named <code>foo</code> creates a regular table named <code>mem_foo</code> in the current schema with the following columns. The <code>embedding</code> column is present only when <code>embedding_dim &gt; 0</code>.</p>
+<table>
+<thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>mem_namespace</code></td><td><code>VARCHAR(255)</code></td><td><code>NOT NULL</code></td></tr>
+<tr><td><code>mem_key</code></td><td><code>VARCHAR(255)</code></td><td><code>NOT NULL</code></td></tr>
+<tr><td><code>pk</code></td><td><code>VARCHAR(512)</code></td><td><code>PRIMARY KEY</code> — composite of namespace and key</td></tr>
+<tr><td><code>mem_value</code></td><td><code>JSON</code></td><td>nullable</td></tr>
+<tr><td><code>embedding</code></td><td><code>VECTOR(N)</code></td><td>only if <code>embedding_dim &gt; 0</code>; nullable</td></tr>
+<tr><td><code>created_at</code></td><td><code>TIMESTAMP</code></td><td>set at PUT time, UTC</td></tr>
+<tr><td><code>ttl_at</code></td><td><code>TIMESTAMP</code></td><td>nullable; written <code>NULL</code> by every PUT (reserved)</td></tr>
+</tbody>
+</table>
+<p>The primary key is a single derived column, not a two-column composite. The namespace and key are joined into one string separated by the ASCII <em>Record Separator</em> byte (<code>0x1E</code>):</p>
+<pre><code><span class="c-com">-- pk is: namespace + 0x1E + key</span>
+<span class="c-com">-- 0x1E avoids the engine's internal field/row separators (0x1F, 0x02)</span></code></pre>
+<p>Because the PK is an indexed <code>VARCHAR</code>, point lookups by namespace+key are O(log n) through the B+ tree, and the <code>mem_namespace</code> / <code>mem_key</code> columns remain queryable directly should you choose to run ordinary SQL against <code>mem_foo</code>.</p>
+
+<h2 id="memory-put">15.3. Writing memories — MEMORY PUT</h2>
+<p><code>MEMORY PUT</code> performs an <strong>upsert by primary key</strong>. The full reference is at <a href="/3.0/ref/memory-put/">MEMORY PUT</a>.</p>
+<pre class="synopsis"><code><span class="c-key">MEMORY PUT INTO</span> name <span class="c-key">VALUES</span> (ns, key, value [, embedding])</code></pre>
+<p>Three positional values are required — namespace, key, JSON value — and a fourth optional value supplies the embedding (only meaningful for a store created with <code>embedding_dim &gt; 0</code>). Each value may be a quoted string literal or <code>NULL</code>.</p>
+<pre><code><span class="c-com">-- KV-only write</span>
+<span class="c-key">MEMORY PUT INTO</span> scratch
+  <span class="c-key">VALUES</span> (<span class="c-str">'user:42'</span>, <span class="c-str">'lang'</span>, <span class="c-str">'{"locale":"tr-TR"}'</span>);
+
+<span class="c-com">-- write with an embedding (store created WITH embedding_dim = 4)</span>
+<span class="c-key">MEMORY PUT INTO</span> agent_mem
+  <span class="c-key">VALUES</span> (<span class="c-str">'user:42'</span>, <span class="c-str">'fact:1'</span>,
+          <span class="c-str">'{"text":"prefers dark mode"}'</span>,
+          <span class="c-str">'[0.10, 0.22, 0.07, 0.91]'</span>);</code></pre>
+<p>The embedding literal is a bracketed comma-separated float list (the same textual form the engine accepts for <code>VECTOR</code> columns elsewhere). Omitting the embedding on a semantic store, or passing <code>NULL</code>, leaves that row's embedding null — the row is still stored and retrievable by key, it simply will not participate meaningfully in a <code>SEARCH</code> score.</p>
+<div class="callout">
+<p><strong>Upsert is atomic and crash-safe.</strong> PUT does not delete-then-insert. The insert is performed first and, on a primary-key collision, the PK is re-pointed to the freshly inserted tuple and the old one is dropped (new-first, swap-last). A failed re-insert can therefore never leave the row in a deleted state. The <code>created_at</code> timestamp is rewritten on every PUT; the value reflects the most recent write, not the first one.</p>
+</div>
+
+<h2 id="memory-get">15.4. Reading by key — MEMORY GET</h2>
+<p><code>MEMORY GET</code> is an exact point lookup on namespace + key. See <a href="/3.0/ref/memory-get/">MEMORY GET</a>.</p>
+<pre class="synopsis"><code><span class="c-key">MEMORY GET FROM</span> name <span class="c-key">WHERE NS</span> = <span class="c-str">'&lt;ns&gt;'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'&lt;key&gt;'</span></code></pre>
+<p>The grammar is fixed: both the <code>NS</code> and the <code>KEY</code> predicate are mandatory and joined by <code>AND</code>. Internally this compiles to a single-row <code>SELECT ... WHERE pk = '&lt;ns&gt;0x1E&lt;key&gt;' LIMIT 1</code>. The projected columns are the namespace, key, value, the embedding (only when the store has one), and <code>created_at</code>.</p>
+<pre><code><span class="c-key">MEMORY GET FROM</span> scratch <span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'lang'</span>;</code></pre>
+
+<h2 id="memory-search">15.5. Semantic recall — MEMORY SEARCH</h2>
+<p><code>MEMORY SEARCH</code> ranks every row in the store by vector distance from a query embedding, closest first. See <a href="/3.0/ref/memory-search/">MEMORY SEARCH</a>.</p>
+<pre class="synopsis"><code><span class="c-key">MEMORY SEARCH</span> name <span class="c-key">USING VECTOR</span> <span class="c-str">'&lt;query&gt;'</span> [ <span class="c-key">LIMIT</span> n ]</code></pre>
+<p>The query is a bracketed float list, identical in form to a stored embedding. The statement projects <code>(mem_namespace, mem_key, mem_value, score)</code>, where <code>score</code> is computed per row using the distance function recorded for the store at <code>CREATE</code> time, and orders the result by <code>score</code> ascending so the nearest matches appear first. <code>LIMIT</code> defaults to no engine-imposed cap when omitted; supply a value to bound the result set (the recommended practice is to always pass a small <code>LIMIT</code>).</p>
+<pre><code><span class="c-key">MEMORY SEARCH</span> agent_mem
+  <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.11, 0.20, 0.08, 0.90]'</span>
+  <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
+<p id="distance-table">The distance metric is fixed when the store is created (<a href="#memory-create">§15.2</a>) and drives which native operator <code>SEARCH</code> uses for the <code>score</code> column:</p>
+<table>
+<thead><tr><th><code>distance</code> literal</th><th>Internal kind</th><th>Operator used by SEARCH</th></tr></thead>
+<tbody>
+<tr><td><code>'cosine'</code> (default)</td><td><code>MEMORY_DIST_COSINE</code></td><td>cosine distance</td></tr>
+<tr><td><code>'l2'</code></td><td><code>MEMORY_DIST_L2</code></td><td>Euclidean (L2) distance</td></tr>
+<tr><td><code>'inner'</code> / <code>'ip'</code></td><td><code>MEMORY_DIST_INNER</code></td><td>inner-product distance</td></tr>
+<tr><td><code>'l1'</code></td><td><code>MEMORY_DIST_L1</code></td><td>Manhattan (L1) distance</td></tr>
+</tbody>
+</table>
+<div class="callout">
+<p><strong>SEARCH is a full scan, scored per row.</strong> It does not use an approximate vector index. The <code>distance = ...</code> metric configured at creation time is what makes the ranking semantically meaningful, but every row's distance is computed during the scan. Calling <code>SEARCH</code> against a store created without an embedding column raises an error (<code>42P01</code>): a non-semantic store has no vector to compare. Ordering is performed inside the engine via the score column's positional ordinal — there is no <code>ORDER BY &lt;expression&gt;</code> exposed on this statement.</p>
+</div>
+
+<h2 id="memory-list">15.6. Enumerating namespaces — MEMORY LIST NAMESPACES</h2>
+<p>To discover which namespaces exist in a store, use <code>MEMORY LIST NAMESPACES</code>. It compiles to <code>SELECT DISTINCT mem_namespace FROM mem_&lt;name&gt;</code>, with an optional prefix filter applied as a <code>LIKE 'prefix%'</code> predicate.</p>
+<pre class="synopsis"><code><span class="c-key">MEMORY LIST NAMESPACES IN</span> name [ <span class="c-key">PREFIX</span> <span class="c-str">'&lt;prefix&gt;'</span> ]</code></pre>
+<pre><code><span class="c-key">MEMORY LIST NAMESPACES IN</span> scratch;
+<span class="c-key">MEMORY LIST NAMESPACES IN</span> scratch <span class="c-key">PREFIX</span> <span class="c-str">'user:'</span>;</code></pre>
+
+<h2 id="memory-delete">15.7. Removing memories — MEMORY DELETE</h2>
+<p><code>MEMORY DELETE</code> removes the single row matching a namespace + key. See <a href="/3.0/ref/memory-delete/">MEMORY DELETE</a>.</p>
+<pre class="synopsis"><code><span class="c-key">MEMORY DELETE FROM</span> name <span class="c-key">WHERE NS</span> = <span class="c-str">'&lt;ns&gt;'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'&lt;key&gt;'</span></code></pre>
+<p>As with <code>GET</code>, both predicates are mandatory. The statement routes through the engine's standard <code>DELETE</code> path against <code>mem_&lt;name&gt;</code> filtered on the composite <code>pk</code>. That routing is deliberate: any row-level security policy, foreign-key cascade, MVCC versioning, or trigger attached to the backing table applies exactly as it would to a hand-written <code>DELETE FROM mem_&lt;name&gt; WHERE pk = '...'</code>. This is what makes <code>MEMORY DELETE</code> safe to use in a multi-tenant database where each tenant is fenced off by an RLS policy.</p>
+<pre><code><span class="c-key">MEMORY DELETE FROM</span> scratch <span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'lang'</span>;</code></pre>
+
+<h2 id="memory-drop">15.8. Dropping a memory store</h2>
+<p><code>DROP MEMORY STORE</code> removes both the catalog registration and the backing <code>mem_&lt;name&gt;</code> table.</p>
+<pre class="synopsis"><code><span class="c-key">DROP MEMORY STORE</span> name [ <span class="c-key">CASCADE</span> ]
+<span class="c-key">DROP MEMORY STORE IF EXISTS</span> name</code></pre>
+<p><code>IF EXISTS</code> suppresses the not-found error (<code>42704</code>) and returns success. The backing table is dropped if present.</p>
+
+<h2 id="entity-store">15.9. Entity stores</h2>
+<p>An entity store keeps one row per entity key, tracking a rolling summary plus how many times the entity has been mentioned. It is created and dropped analogously to a memory store but takes no <code>WITH</code> options. See <a href="/3.0/ref/create-entity-store/">CREATE ENTITY STORE</a>.</p>
+<pre class="synopsis"><code><span class="c-key">CREATE ENTITY STORE</span> name [ <span class="c-key">IF NOT EXISTS</span> ]
+<span class="c-key">DROP ENTITY STORE</span> name [ <span class="c-key">IF EXISTS</span> ]</code></pre>
+<p>Creating an entity store named <code>foo</code> builds a backing table named <code>ent_foo</code> with this fixed shape:</p>
+<table>
+<thead><tr><th>Column</th><th>Type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>entity_key</code></td><td><code>VARCHAR(255)</code></td><td><code>PRIMARY KEY</code>, <code>NOT NULL</code></td></tr>
+<tr><td><code>summary</code></td><td><code>VARCHAR(8000)</code></td><td>nullable</td></tr>
+<tr><td><code>facts</code></td><td><code>VARCHAR(8000)</code></td><td>nullable; a JSON-shaped string</td></tr>
+<tr><td><code>mention_count</code></td><td><code>INT</code></td><td><code>NOT NULL</code>; auto-incremented on each PUT</td></tr>
+<tr><td><code>last_seen</code></td><td><code>TIMESTAMP</code></td><td><code>NOT NULL</code>; advanced to the current UTC time on each PUT</td></tr>
+</tbody>
+</table>
+
+<h3 id="entity-put">15.9.1. ENTITY PUT — upsert with mention tracking</h3>
+<p><code>ENTITY PUT</code> is an upsert keyed on <code>entity_key</code>, but unlike <code>MEMORY PUT</code> it carries semantics of its own: a first write inserts the row with <code>mention_count = 1</code>; every subsequent write to the same key <strong>updates</strong> the summary and facts, increments <code>mention_count</code> by one, and advances <code>last_seen</code>.</p>
+<pre class="synopsis"><code><span class="c-key">ENTITY PUT INTO</span> name <span class="c-key">VALUES</span> (<span class="c-str">'key'</span>, <span class="c-str">'summary'</span> [, <span class="c-str">'facts'</span>])</code></pre>
+<pre><code><span class="c-com">-- first mention: inserts with mention_count = 1</span>
+<span class="c-key">ENTITY PUT INTO</span> people
+  <span class="c-key">VALUES</span> (<span class="c-str">'ada'</span>, <span class="c-str">'Works on the storage layer'</span>);
+
+<span class="c-com">-- second mention: updates summary, mention_count -> 2, last_seen bumped</span>
+<span class="c-key">ENTITY PUT INTO</span> people
+  <span class="c-key">VALUES</span> (<span class="c-str">'ada'</span>, <span class="c-str">'Leads the B+ tree rewrite'</span>,
+          <span class="c-str">'{"team":"core","tz":"UTC+3"}'</span>);</code></pre>
+<p>The optional third value is the <code>facts</code> blob; when omitted it is stored as <code>NULL</code>. The existence check is a direct primary-key probe of the backing table's B+ tree, and the prior <code>mention_count</code> is read from the existing tuple before being incremented, so the counter is monotonic per key.</p>
+
+<h3 id="entity-get">15.9.2. ENTITY GET</h3>
+<p><code>ENTITY GET</code> fetches a single entity row by key.</p>
+<pre class="synopsis"><code><span class="c-key">ENTITY GET FROM</span> name <span class="c-key">WHERE KEY</span> = <span class="c-str">'k'</span></code></pre>
+<pre><code><span class="c-key">ENTITY GET FROM</span> people <span class="c-key">WHERE KEY</span> = <span class="c-str">'ada'</span>;</code></pre>
+<p>It projects <code>(entity_key, summary, facts, mention_count, last_seen)</code> for the matching key, limited to one row.</p>
+
+<h3 id="entity-rank">15.9.3. ENTITY RANK</h3>
+<p><code>ENTITY RANK</code> returns the store's rows ordered by <code>mention_count</code> descending, tie-broken by <code>last_seen</code> descending — the most-discussed, most-recent entities first.</p>
+<pre class="synopsis"><code><span class="c-key">ENTITY RANK FROM</span> name [ <span class="c-key">LIMIT</span> n ]</code></pre>
+<pre><code><span class="c-com">-- top 10 entities by how often they've been mentioned</span>
+<span class="c-key">ENTITY RANK FROM</span> people <span class="c-key">LIMIT</span> <span class="c-str">10</span>;</code></pre>
+<p>The ordering is performed by the engine's own sort over the result set; <code>LIMIT</code> bounds the output when supplied.</p>
+
+<h2 id="errors">15.10. Status &amp; error codes</h2>
+<p>The store statements set SQLSTATE codes consistent with the rest of the engine. The codes most relevant to these primitives:</p>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Raised when</th></tr></thead>
+<tbody>
+<tr><td><code>42601</code></td><td>A required name is missing (e.g. <code>CREATE MEMORY STORE</code> with no store name).</td></tr>
+<tr><td><code>42710</code></td><td>Creating a store whose name already exists (without <code>IF NOT EXISTS</code>).</td></tr>
+<tr><td><code>42704</code></td><td>Referencing a store (PUT / GET / SEARCH / DELETE / RANK / DROP) that does not exist.</td></tr>
+<tr><td><code>42P01</code></td><td><code>MEMORY SEARCH</code> against a store created without an embedding column.</td></tr>
+</tbody>
+</table>
+
+<h2 id="notes">15.11. Notes &amp; limitations</h2>
+<div class="callout">
+<ul>
+<li><strong>SEARCH is exact, not indexed.</strong> <code>MEMORY SEARCH</code> scans and scores every row; it does not consult an approximate-nearest-neighbour vector index. For large stores this is linear in the number of rows.</li>
+<li><strong>The distance metric is fixed at creation.</strong> It cannot be changed after <code>CREATE MEMORY STORE</code>; there is no <code>ALTER</code> for stores. Recreate the store to switch metrics.</li>
+<li><strong>No <code>ORDER BY &lt;expr&gt;</code> surface.</strong> <code>SEARCH</code> sorts internally by its computed <code>score</code> column via a positional ordinal; you cannot supply your own ordering expression on the statement itself.</li>
+<li><strong><code>ttl_at</code> is reserved.</strong> The memory backing table carries a <code>ttl_at</code> column and the catalog descriptor carries a <code>ttl_days</code> field, but <code>MEMORY PUT</code> always writes <code>ttl_at</code> as <code>NULL</code> and no automatic expiry pass is wired up. Treat TTL as not yet implemented.</li>
+<li><strong>Fixed predicate shapes.</strong> <code>MEMORY GET</code>/<code>DELETE</code> require exactly <code>WHERE NS = '...' AND KEY = '...'</code>, and <code>ENTITY GET</code> requires exactly <code>WHERE KEY = '...'</code>. These are not general <code>WHERE</code> clauses. For arbitrary queries, run ordinary SQL against the backing <code>mem_&lt;name&gt;</code> / <code>ent_&lt;name&gt;</code> table directly.</li>
+<li><strong>Entity <code>facts</code> is a string, not a JSON column.</strong> It is stored as <code>VARCHAR(8000)</code> holding a JSON-shaped string; the engine does not parse or validate it as JSON.</li>
+<li><strong>Stores live in the current schema.</strong> The backing table is created in the schema resolved from the current database/schema context; a store name is unique within the catalog's store registry.</li>
+<li><strong>Timestamps are UTC.</strong> <code>created_at</code> and <code>last_seen</code> are formatted as <code>YYYY-MM-DD HH:MM:SS</code> in UTC at write time.</li>
+</ul>
+</div>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

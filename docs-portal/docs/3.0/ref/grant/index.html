@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>GRANT — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>GRANT</h1>
+<p class="lede">Grant access privileges on a database, schema, or table to a user, or grant membership in a role to a user.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-com">-- Grant privileges on a database object:</span>
+<span class="c-key">GRANT</span> <i>privilege</i> <span class="opt">[ , ... ]</span>
+    <span class="c-key">ON</span> { <span class="c-key">DATABASE</span> | <span class="c-key">SCHEMA</span> | <span class="c-key">TABLE</span> } <i>object_name</i>
+    <span class="c-key">TO</span> <i>username</i>
+    <span class="opt">[ WITH GRANT OPTION ]</span>
+
+<span class="c-com">-- Grant membership in a role (no ON clause):</span>
+<span class="c-key">GRANT</span> <i>role_name</i> <span class="c-key">TO</span> <i>username</i>
+
+<span class="c-com">where privilege is one of:</span>
+    <span class="c-key">SELECT</span> | <span class="c-key">INSERT</span> | <span class="c-key">UPDATE</span> | <span class="c-key">DELETE</span> | <span class="c-key">CREATE</span> | <span class="c-key">DROP</span>
+    <span class="c-key">ALL</span> <span class="opt">[ PRIVILEGES ]</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>GRANT</code> gives privileges to a user. EvolutionDB recognizes two distinct forms, distinguished by whether an <code>ON</code> clause is present:</p>
+<p><b>Object privileges.</b> The first form (with <code>ON</code>) grants one or more privileges on a single database object — a <code>DATABASE</code>, a <code>SCHEMA</code>, or a <code>TABLE</code> — to a named user. Each privilege corresponds to a SQL operation: <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>CREATE</code>, and <code>DROP</code>. <code>ALL</code> (also accepted as <code>ALL PRIVILEGES</code>) is shorthand for all six.</p>
+<p><b>Role membership.</b> The second form (no <code>ON</code>) makes <i>username</i> a member of <i>role_name</i>. When privileges are checked, a user inherits every privilege held by the roles it belongs to, in addition to its own.</p>
+<p><b>Additive, merging semantics.</b> Granting privileges that overlap an existing grant for the same user and object does not replace the grant — it merges: the new privilege bits are OR-ed into the bits already recorded, and <code>WITH GRANT OPTION</code> is turned on if requested (an existing grant option is never cleared by a re-grant). A user's own grants and grants made to the special grantee <code>PUBLIC</code> are both additive: an unprivileged user still benefits from any matching <code>PUBLIC</code> grant.</p>
+<p><b>How privileges are resolved.</b> At access-check time EvolutionDB applies a most-specific-first waterfall: it looks for a matching grant at <code>TABLE</code> scope, then <code>SCHEMA</code> scope, then <code>DATABASE</code> scope (a <code>DATABASE</code> grant on the wildcard name <code>*</code> applies to every database). The same waterfall is then repeated for <code>PUBLIC</code>, and finally for each role the user belongs to. If any level yields the requested privilege, access is allowed.</p>
+<p><b>Who may run GRANT.</b> The built-in <code>admin</code> user is a superuser and may grant anything (and is always considered to hold <code>WITH GRANT OPTION</code>). A non-admin user may only delegate privileges it itself holds <em>with the grant option</em> on the same object; otherwise the statement fails with "Permission denied". Only <code>admin</code> may grant role membership.</p>
+<div class="callout">
+<p>EvolutionDB ships with one grant pre-installed: <code>admin</code> holds <code>ALL</code> on <code>DATABASE *</code>. New databases are created with <em>no</em> default <code>PUBLIC</code> grants, so non-admin users start with no access until something is granted to them (directly, via <code>PUBLIC</code>, or via a role).</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>privilege</dt>
+<dd>The privilege to grant. One of <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>CREATE</code>, or <code>DROP</code>. Privilege names are case-insensitive. Multiple privileges may be listed, separated by commas. Unrecognized privilege words are silently ignored; if the list ends up empty, the statement fails with "Invalid privilege specification".</dd>
+
+<dt>ALL [ PRIVILEGES ]</dt>
+<dd>Shorthand for all six privileges (<code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>CREATE</code>, <code>DROP</code>). The optional <code>PRIVILEGES</code> keyword is accepted for SQL-standard compatibility and has no additional effect.</dd>
+
+<dt>ON DATABASE | SCHEMA | TABLE</dt>
+<dd>Selects the scope (kind of object) the grant applies to. Exactly one of these keywords must follow <code>ON</code>. The waterfall resolution treats <code>TABLE</code> as the most specific scope and <code>DATABASE</code> as the broadest.</dd>
+
+<dt>object_name</dt>
+<dd>The name of the object being granted on. It may be written bare, single-quoted, or double-quoted. For a <code>DATABASE</code> grant the name is a database name (or the wildcard <code>*</code>, meaning all databases). For finer scopes the name is recorded as given; checks build the lookup key from the session's database, schema, and table (for example <code><i>db</i>.<i>schema</i>.<i>table</i></code> at table scope), so qualify the name to match the level you intend.</dd>
+
+<dt>TO username</dt>
+<dd>The user that receives the privileges (or role membership). May be written bare or single-quoted. Use the special name <code>PUBLIC</code> to grant to every user additively. The target user is not required to exist for an object grant; for a role grant the target must be an existing user (not a role).</dd>
+
+<dt>WITH GRANT OPTION</dt>
+<dd>Allows the recipient to in turn grant the same privileges on the same object to other users. Only valid in the object-privilege form. Without it, the recipient may use the privileges but not delegate them. A non-admin grantor must itself hold the grant option to confer it.</dd>
+
+<dt>role_name (role-membership form)</dt>
+<dd>In the no-<code>ON</code> form, the name of an existing role whose membership is conferred on <i>username</i>. The role must exist, the target must be a user, and the user must not already be a member; otherwise the statement fails. Only <code>admin</code> may run this form.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Grant read access on a table to a user:</p>
+<pre><code><span class="c-key">GRANT</span> <span class="c-key">SELECT</span> <span class="c-key">ON</span> <span class="c-key">TABLE</span> orders <span class="c-key">TO</span> analyst;</code></pre>
+
+<p>Grant several privileges at once, and let the recipient re-delegate them:</p>
+<pre><code><span class="c-key">GRANT</span> <span class="c-key">SELECT</span>, <span class="c-key">INSERT</span>, <span class="c-key">UPDATE</span> <span class="c-key">ON</span> <span class="c-key">TABLE</span> orders <span class="c-key">TO</span> app_user <span class="c-key">WITH GRANT OPTION</span>;</code></pre>
+
+<p>Grant every privilege on a schema to everyone:</p>
+<pre><code><span class="c-key">GRANT</span> <span class="c-key">ALL PRIVILEGES</span> <span class="c-key">ON</span> <span class="c-key">SCHEMA</span> reporting <span class="c-key">TO</span> PUBLIC;</code></pre>
+
+<p>Grant create/drop authority across all databases (the wildcard scope):</p>
+<pre><code><span class="c-key">GRANT</span> <span class="c-key">CREATE</span>, <span class="c-key">DROP</span> <span class="c-key">ON</span> <span class="c-key">DATABASE</span> <span class="c-str">'*'</span> <span class="c-key">TO</span> dba;</code></pre>
+
+<p>Grant database-level read access to a single database:</p>
+<pre><code><span class="c-key">GRANT</span> <span class="c-key">SELECT</span> <span class="c-key">ON</span> <span class="c-key">DATABASE</span> testdb <span class="c-key">TO</span> readonly;</code></pre>
+
+<p>Grant role membership (no <code>ON</code> clause — run as <code>admin</code>):</p>
+<pre><code><span class="c-key">GRANT</span> reporting_role <span class="c-key">TO</span> analyst;</code></pre>
+
+<p>Inspect the resulting grants:</p>
+<pre><code><span class="c-key">SHOW GRANTS</span> <span class="c-key">FOR</span> analyst;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>EvolutionDB's <code>GRANT</code> follows the spirit of the SQL standard and PostgreSQL but is intentionally simplified, and the statement is handled by a dedicated command interceptor rather than the main SQL grammar.</p>
+<ul>
+<li><b>Consistent with the standard / PostgreSQL:</b> the privilege set <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>; the <code>ALL [PRIVILEGES]</code> shorthand; the <code>TO</code> target with the special grantee <code>PUBLIC</code>; <code>WITH GRANT OPTION</code> delegation; and additive <code>PUBLIC</code> semantics all match PostgreSQL's model.</li>
+<li><b>EvolutionDB specifics:</b> <code>CREATE</code> and <code>DROP</code> are object privileges in the same grant list as DML privileges. The object scope is one of exactly three keywords — <code>DATABASE</code>, <code>SCHEMA</code>, or <code>TABLE</code> — and a <code>DATABASE</code> grant may use the wildcard name <code>*</code> to cover all databases. Privilege resolution uses a most-specific-first waterfall (TABLE → SCHEMA → DATABASE) plus role inheritance. The <code>admin</code> user is an implicit superuser.</li>
+<li><b>Differences and unsupported clauses:</b> there is no <code>ON ALL TABLES IN SCHEMA</code>, no column-level privileges, no privileges on sequences/functions/types/foreign objects, no <code>GRANTED BY</code> clause, and no <code>WITH ADMIN OPTION</code> for role grants. The grant object must be a single named object; lists of objects are not accepted. Privilege checking is by username (and roles); object grants do not require the target user to pre-exist.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/revoke/">REVOKE</a></li>
+<li><a href="/3.0/ref/show-grants/">SHOW GRANTS</a></li>
+<li><a href="/3.0/ref/create-user/">CREATE USER</a></li>
+<li><a href="/3.0/ref/create-role/">CREATE ROLE</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/create-schema/">CREATE SCHEMA</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>INSERT — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>INSERT</h1>
+<p class="lede">Add one or more new rows to a table.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">INSERT</span> <span class="opt">[ LOW_PRIORITY | DELAYED | HIGH_PRIORITY | IGNORE ]</span> <span class="opt">[ <span class="c-key">INTO</span> ]</span> <span class="c-com">table_name</span>
+    <span class="opt">[ ( <span class="c-com">column</span> [, ...] ) ]</span>
+    <span class="c-key">VALUES</span> ( { <span class="c-com">expression</span> | <span class="c-key">DEFAULT</span> } [, ...] ) [, ...]
+    <span class="opt">[ <span class="c-key">ON DUPLICATE KEY UPDATE</span> <span class="c-com">column</span> = <span class="c-com">expression</span> [, ...] ]</span>
+    <span class="opt">[ <span class="c-key">ON CONFLICT</span> [ ( <span class="c-com">column</span> ) ] { <span class="c-key">DO NOTHING</span> | <span class="c-key">DO UPDATE SET</span> <span class="c-com">column</span> = <span class="c-com">expression</span> [, ...] } ]</span>
+    <span class="opt">[ <span class="c-key">RETURNING</span> { * | <span class="c-com">column</span> [, ...] } ]</span>
+
+<span class="c-com">--- INSERT ... SET form ---</span>
+<span class="c-key">INSERT</span> <span class="opt">[ LOW_PRIORITY | DELAYED | HIGH_PRIORITY | IGNORE ]</span> <span class="opt">[ <span class="c-key">INTO</span> ]</span> <span class="c-com">table_name</span>
+    <span class="c-key">SET</span> <span class="c-com">column</span> = { <span class="c-com">expression</span> | <span class="c-key">DEFAULT</span> } [, ...]
+    <span class="opt">[ <span class="c-key">ON DUPLICATE KEY UPDATE</span> <span class="c-com">column</span> = <span class="c-com">expression</span> [, ...] ]</span>
+
+<span class="c-com">--- INSERT ... SELECT form ---</span>
+<span class="c-key">INSERT</span> <span class="opt">[ LOW_PRIORITY | DELAYED | HIGH_PRIORITY | IGNORE ]</span> <span class="opt">[ <span class="c-key">INTO</span> ]</span> <span class="c-com">table_name</span>
+    <span class="opt">[ ( <span class="c-com">column</span> [, ...] ) ]</span>
+    <span class="c-com">select_statement</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>INSERT</code> adds new rows to <code>table_name</code>. There are three accepted forms:
+the <code>VALUES</code> form (one or more parenthesized value lists), the <code>SET</code> form
+(MySQL-style <code>column = value</code> assignments), and the <code>INSERT … SELECT</code> form
+that inserts the result of a subquery.</p>
+
+<p>If a parenthesized <em>column</em> list is supplied, each value is matched to the named column;
+columns that are omitted receive their declared <code>DEFAULT</code>, or <code>NULL</code> when no
+default exists. If no column list is supplied, the values are assigned to the table's columns in
+their catalog (declaration) order.</p>
+
+<p>Before a row is written, the engine validates types, then — only when the table actually declares
+such constraints — <code>NOT NULL</code> and <code>UNIQUE</code> constraints, plus any <code>CHECK</code>
+constraints. A primary-key collision raises a duplicate-key error unless an
+<code>ON DUPLICATE KEY UPDATE</code> or <code>ON CONFLICT</code> clause is present.</p>
+
+<p>Columns declared <code>DEFAULT</code> are resolved at insert time. Function-style defaults such as
+<code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code> and
+<code>CURRENT_TIMESTAMP</code> are evaluated per row; expression defaults are evaluated with the
+rest of the row available as context. A column with <code>AUTO_INCREMENT</code> is filled from the
+table's running counter (advanced by its step) when no explicit value is given. Stored generated
+columns are computed from the inserted row; writing an explicit non-<code>DEFAULT</code> value into
+a generated column is rejected.</p>
+
+<callout class="callout">
+The first value produced for an <code>AUTO_INCREMENT</code> column or by
+<code>gen_random_uuid*()</code> / <code>snowflake_id()</code> in a statement is captured and is
+afterwards available through <code>LAST_INSERT_ID()</code>.
+</callout>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>LOW_PRIORITY | DELAYED | HIGH_PRIORITY | IGNORE</dt>
+<dd>MySQL-compatibility option keywords. They are accepted by the grammar but have no effect on
+execution in EvolutionDB; they exist so that statements copied from MySQL parse without error.</dd>
+
+<dt>INTO</dt>
+<dd>Optional noise word before the table name, accepted for SQL/PostgreSQL compatibility.
+<code>INSERT t …</code> and <code>INSERT INTO t …</code> are equivalent.</dd>
+
+<dt>table_name</dt>
+<dd>The name of an existing table to insert into. A <code>.dat</code> suffix, if present, is stripped
+to obtain the base table name. If the table is a RANGE-partitioned parent, the row is routed to the
+child partition whose bounds contain the partition-key value (in this release every row of a
+multi-row insert must route to the same partition).</dd>
+
+<dt>( column [, ...] )</dt>
+<dd>An optional target column list. When given, supplied values are matched positionally to these
+columns and reordered into table order; columns not listed take their default (or <code>NULL</code>).
+The number of values in each <code>VALUES</code> row must equal the number of named columns, otherwise
+the statement is rejected.</dd>
+
+<dt>VALUES ( … ) [, ...]</dt>
+<dd>One or more rows of values, each a parenthesized, comma-separated list. Multiple parenthesized
+groups perform a multi-row insert in a single statement.</dd>
+
+<dt>expression</dt>
+<dd>A value expression producing the column value (literal, function call, arithmetic, etc.).</dd>
+
+<dt>DEFAULT</dt>
+<dd>In a value position, requests the column's declared default value (or <code>NULL</code> if the
+column has no default). For a generated column, <code>DEFAULT</code> is the only value form allowed.</dd>
+
+<dt>SET column = { expression | DEFAULT } [, ...]</dt>
+<dd>MySQL-style assignment form: each named column is set to the given value (or its default). Only
+the <code>=</code> operator is permitted; any other comparison operator is a syntax error.</dd>
+
+<dt>select_statement</dt>
+<dd>A <code>SELECT</code> whose result rows are inserted. The projected columns are matched against the
+optional target column list, or against the table's columns in order when no list is given.</dd>
+
+<dt>ON DUPLICATE KEY UPDATE column = expression [, ...]</dt>
+<dd>MySQL-style upsert. When an inserted row would violate the primary key or a <code>UNIQUE</code>
+constraint, the existing row is updated with the listed assignments instead of raising a
+duplicate-key error.</dd>
+
+<dt>ON CONFLICT [ ( column ) ] DO NOTHING | DO UPDATE SET …</dt>
+<dd>PostgreSQL-style conflict handling. With <code>DO NOTHING</code> a conflicting row is silently
+skipped; with <code>DO UPDATE SET</code> the existing row is updated with the given assignments.
+An optional single-column conflict target may be named; composite targets such as
+<code>(a, b)</code> are not yet supported and raise an error.</dd>
+
+<dt>RETURNING * | column [, ...]</dt>
+<dd>Returns data from the rows actually inserted. <code>RETURNING *</code> returns every column;
+otherwise the named columns are returned. Available on the <code>VALUES</code> form.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Insert a single fully-specified row:</p>
+<pre><code><span class="c-key">INSERT INTO</span> users (id, name, email)
+<span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'Ada'</span>, <span class="c-str">'ada@example.com'</span>);</code></pre>
+
+<p>Insert several rows in one statement, letting a column fall back to its default:</p>
+<pre><code><span class="c-key">INSERT INTO</span> users (id, name, role)
+<span class="c-key">VALUES</span> (<span class="c-str">2</span>, <span class="c-str">'Lin'</span>, <span class="c-key">DEFAULT</span>),
+       (<span class="c-str">3</span>, <span class="c-str">'Bo'</span>,  <span class="c-str">'editor'</span>);</code></pre>
+
+<p>Omit the column list — values map to columns in declaration order:</p>
+<pre><code><span class="c-key">INSERT INTO</span> users <span class="c-key">VALUES</span> (<span class="c-str">4</span>, <span class="c-str">'Mei'</span>, <span class="c-str">'mei@example.com'</span>, <span class="c-key">DEFAULT</span>);</code></pre>
+
+<p>MySQL-style <code>SET</code> form:</p>
+<pre><code><span class="c-key">INSERT INTO</span> users
+<span class="c-key">SET</span> id = <span class="c-str">5</span>, name = <span class="c-str">'Sam'</span>, role = <span class="c-key">DEFAULT</span>;</code></pre>
+
+<p>Insert from a query:</p>
+<pre><code><span class="c-key">INSERT INTO</span> archived_users (id, name)
+<span class="c-key">SELECT</span> id, name <span class="c-key">FROM</span> users <span class="c-key">WHERE</span> active = <span class="c-str">0</span>;</code></pre>
+
+<p>Upsert with MySQL <code>ON DUPLICATE KEY UPDATE</code>:</p>
+<pre><code><span class="c-key">INSERT INTO</span> counters (key, hits)
+<span class="c-key">VALUES</span> (<span class="c-str">'home'</span>, <span class="c-str">1</span>)
+<span class="c-key">ON DUPLICATE KEY UPDATE</span> hits = hits + <span class="c-str">1</span>;</code></pre>
+
+<p>Upsert with PostgreSQL <code>ON CONFLICT</code>, returning the result:</p>
+<pre><code><span class="c-key">INSERT INTO</span> counters (key, hits)
+<span class="c-key">VALUES</span> (<span class="c-str">'home'</span>, <span class="c-str">1</span>)
+<span class="c-key">ON CONFLICT</span> (key) <span class="c-key">DO UPDATE SET</span> hits = hits + <span class="c-str">1</span>
+<span class="c-key">RETURNING</span> *;</code></pre>
+
+<p>Skip a conflicting row silently:</p>
+<pre><code><span class="c-key">INSERT INTO</span> counters (key, hits)
+<span class="c-key">VALUES</span> (<span class="c-str">'home'</span>, <span class="c-str">1</span>)
+<span class="c-key">ON CONFLICT DO NOTHING</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>EvolutionDB's <code>INSERT</code> is a hybrid of the SQL standard, PostgreSQL, and MySQL:</p>
+<ul>
+<li><strong>SQL standard / PostgreSQL:</strong> the <code>INSERT INTO … VALUES …</code> and
+<code>INSERT INTO … SELECT …</code> forms, multi-row <code>VALUES</code>, the <code>DEFAULT</code>
+keyword in value positions, the <code>ON CONFLICT … DO NOTHING / DO UPDATE SET</code> clause, and
+<code>RETURNING</code> follow PostgreSQL conventions.</li>
+<li><strong>MySQL extensions:</strong> the optional priority/<code>IGNORE</code> modifiers, the
+omittable <code>INTO</code> keyword, the <code>SET column = value</code> assignment form, and
+<code>ON DUPLICATE KEY UPDATE</code> come from MySQL. The priority and <code>IGNORE</code> modifiers
+are parsed but have no runtime effect.</li>
+<li><strong>Differences from PostgreSQL:</strong> the standard <code>OVERRIDING { SYSTEM | USER } VALUE</code>
+clause, a <code>DEFAULT VALUES</code> clause, naming a constraint as the conflict target
+(<code>ON CONFLICT ON CONSTRAINT …</code>), the <code>WHERE</code> predicate on
+<code>ON CONFLICT … DO UPDATE</code>, and common table expressions
+(<code>WITH … INSERT</code>) are <em>not</em> supported. A multi-column <code>ON CONFLICT</code> target
+is rejected. <code>RETURNING</code> is supported on the <code>VALUES</code> form.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+<li><a href="/3.0/ref/replace/">REPLACE</a></li>
+<li><a href="/3.0/ref/copy/">COPY</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

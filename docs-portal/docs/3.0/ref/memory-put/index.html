@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>MEMORY PUT — EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>MEMORY PUT</h1>
+<p class="lede">Write (insert or replace) a single key/value memory item into a memory store.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">MEMORY PUT INTO</span> <em>store_name</em> <span class="c-key">VALUES</span> (
+    <em>namespace</em>,
+    <em>key</em>,
+    <em>value</em> <span class="opt">[ , <em>embedding</em> ]</span>
+)</code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p>
+<code>MEMORY PUT</code> stores one item in a memory store previously created with
+<a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>. An item is identified
+by the pair (<em>namespace</em>, <em>key</em>); its payload is an arbitrary
+<em>value</em> and, optionally, an <em>embedding</em> vector used for semantic
+search via <a href="/3.0/ref/memory-search/">MEMORY SEARCH</a>.
+</p>
+<p>
+The operation has <strong>upsert (PUT) semantics</strong>: the (<em>namespace</em>,
+<em>key</em>) pair forms the primary key of the store's backing table, so writing
+to an existing pair replaces the previous value rather than raising a duplicate-key
+error. The replacement is performed atomically inside the storage layer — the new
+tuple is inserted first and the old one is dropped afterward — so an item is never
+left missing if the write fails partway through.
+</p>
+<p>
+Under the hood each memory store is materialized as an ordinary heap table named
+<code>mem_&lt;store_name&gt;</code> in the current schema. <code>MEMORY PUT</code>
+fills in that table's columns automatically: it derives the composite primary key
+from <em>namespace</em> and <em>key</em>, stamps <code>created_at</code> with the
+current UTC timestamp, and leaves <code>ttl_at</code> NULL. Because the write is
+routed through the engine's normal insert path, MVCC visibility, constraints, and
+any policies on the backing table apply.
+</p>
+<p>
+The <em>embedding</em> argument may be supplied only for stores that were created
+with an embedding dimension (<code>embedding_dim &gt; 0</code>). For a store created
+without embeddings, use the three-value form; the embedding column does not exist and
+the four-value form has no slot to fill.
+</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><em>store_name</em></dt>
+<dd>The name of the target memory store, given as a bare identifier (the
+<code>INTO</code> target). The store must already exist; otherwise the command
+fails with SQLSTATE <code>42704</code> (memory store does not exist).</dd>
+
+<dt><em>namespace</em></dt>
+<dd>A string literal that groups related items (for example a tenant, agent, or
+conversation id). Together with <em>key</em> it forms the item's identity. Stored in
+the <code>mem_namespace</code> column.</dd>
+
+<dt><em>key</em></dt>
+<dd>A string literal identifying the item within its namespace. The
+(<em>namespace</em>, <em>key</em>) pair is unique within the store; reusing a pair
+replaces the existing item.</dd>
+
+<dt><em>value</em></dt>
+<dd>The payload, written to the store's <code>mem_value</code> (JSON) column. Each
+argument is either a string literal or the keyword <code>NULL</code>; supplying
+<code>NULL</code> here stores a NULL value.</dd>
+
+<dt><em>embedding</em></dt>
+<dd>Optional. A string literal holding the vector for this item in
+<code>[f1,f2,...]</code> form, stored in the <code>embedding</code> column. Permitted
+only when the store was created with an embedding dimension. As with the other
+arguments it may be <code>NULL</code> to store the item without a vector.</dd>
+</dl>
+
+<div class="callout">
+<p>The argument syntax is positional, not column-named: every value is a quoted
+string literal (or <code>NULL</code>). Only the two arities shown in the Synopsis are
+accepted — three values without an embedding, or four values with one.</p>
+</div>
+
+<h2 id="examples">Examples</h2>
+<p>Store a memory item in a plain key/value store (no embedding):</p>
+<pre><code><span class="c-key">MEMORY PUT INTO</span> agent_mem <span class="c-key">VALUES</span> (
+    <span class="c-str">'user:42'</span>,
+    <span class="c-str">'favorite_color'</span>,
+    <span class="c-str">'{"color": "blue"}'</span>
+);</code></pre>
+
+<p>Overwrite the same item (same namespace and key) with a new value:</p>
+<pre><code><span class="c-key">MEMORY PUT INTO</span> agent_mem <span class="c-key">VALUES</span> (
+    <span class="c-str">'user:42'</span>,
+    <span class="c-str">'favorite_color'</span>,
+    <span class="c-str">'{"color": "green"}'</span>
+);</code></pre>
+
+<p>Store an item together with its embedding vector (store created with an embedding
+dimension):</p>
+<pre><code><span class="c-key">MEMORY PUT INTO</span> agent_mem <span class="c-key">VALUES</span> (
+    <span class="c-str">'user:42'</span>,
+    <span class="c-str">'note'</span>,
+    <span class="c-str">'Prefers concise answers'</span>,
+    <span class="c-str">'[0.12, -0.04, 0.88, 0.31]'</span>
+);</code></pre>
+
+<p>Store an item with a NULL value:</p>
+<pre><code><span class="c-key">MEMORY PUT INTO</span> agent_mem <span class="c-key">VALUES</span> (
+    <span class="c-str">'session:abc'</span>,
+    <span class="c-str">'last_seen'</span>,
+    <span class="c-key">NULL</span>
+);</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>
+<code>MEMORY PUT</code> is an EvolutionDB extension. It is <strong>not</strong> part of
+the SQL standard and has no equivalent in PostgreSQL. It is purpose-built for
+long-term agent memory: a managed key/value-plus-vector abstraction over an ordinary
+backing table.
+</p>
+<p>
+The upsert behavior resembles PostgreSQL's
+<code>INSERT ... ON CONFLICT DO UPDATE</code>, but the two are unrelated in syntax:
+<code>MEMORY PUT</code> uses positional string-literal arguments and a fixed implicit
+schema rather than an explicit column list and conflict target. Unlike a standard
+<code>INSERT</code>, values are always string literals (or <code>NULL</code>) — bind
+parameters and expressions are not accepted in the <code>VALUES</code> list. The
+equivalent hand-written statement would be an
+<code>INSERT INTO mem_&lt;store_name&gt; (...) VALUES (...)</code> against the backing
+table with a manually computed primary key, timestamp, and conflict handling.
+</p>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a></li>
+<li><a href="/3.0/ref/drop-memory-store/">DROP MEMORY STORE</a></li>
+<li><a href="/3.0/ref/memory-get/">MEMORY GET</a></li>
+<li><a href="/3.0/ref/memory-search/">MEMORY SEARCH</a></li>
+<li><a href="/3.0/ref/memory-delete/">MEMORY DELETE</a></li>
+<li><a href="/3.0/ref/memory-list-namespaces/">MEMORY LIST NAMESPACES</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>
