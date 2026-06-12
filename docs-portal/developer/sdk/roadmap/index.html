@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>SDKs — language roadmap — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+  <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full glass-panel mb-6" style="border-color:rgba(34,211,238,.2)">
+    <span class="w-2 h-2 rounded-full bg-neon-cyan"></span>
+    <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">SDK · LANGUAGE FAMILY</span>
+  </div>
+  <h1>SDKs — language roadmap</h1>
+  <p class="lede">EvolutionDB ships an agent-memory client family under <code>client/*-evosql-memory</code>. One C library, <code>libevosql-memory</code>, owns the wire work; every other language is a thin binding over it through C FFI. This page is the <strong>honest status of the family</strong> — what is implemented and exercised, what is implemented but not yet test-covered in-tree, and what each binding still leans on. Where a binding has no test suite, it is labelled exactly that — never "works".</p>
+
+  <h2 id="shape">The shape of the family</h2>
+  <p>Every binding talks to <code>evosql-server</code> through one common foundation. The heavy work — TCP, the EVO handshake, AUTH, <code>RESULT</code>/<code>ROW</code> parsing, <code>NOTIFY</code> framing, CDC NDJSON, vector formatting — lives in the C library. The language layers add idiomatic ergonomics (generics, exceptions, <code>IDisposable</code>, finalizers) without re-implementing the protocol.</p>
+  <pre><code>            <span class="c-com">┌──────────────────────────────────────────┐</span>
+            <span class="c-com">│            evosql-server                  │</span>
+            <span class="c-com">│   PG wire (5433)   │   EVO native (9967)   │</span>
+            <span class="c-com">└──────────────────────────────────────────┘</span>
+                          <span class="c-com">▲</span>
+                          <span class="c-com">│ EVO text protocol</span>
+            <span class="c-com">┌──────────────────────────────────────────┐</span>
+            <span class="c-com">│   libevosql-memory  (C — the FFI seam)    │</span>
+            <span class="c-com">└──────────────────────────────────────────┘</span>
+      <span class="c-key">Python  Node  Go  C++  .NET  Java  Ruby  Rust  Swift</span></code></pre>
+  <p>The C contract is small and stable: roughly 16 public functions in <code>include/evosql_memory.h</code> — connect/close, <code>exec</code>/<code>query</code>, the memory and checkpoint verbs, vector formatting, the subscribe/CDC pair, and the two last-error accessors. Every binding mirrors that same surface.</p>
+
+  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>Read this page, not the directory listing. Each binding directory contains real source files of meaningful size, so "is there code?" is the wrong question — all nine have code. The honest distinction is <strong>maturity</strong>: which bindings ship their own tests, which ship only a smoke example, and what each one depends on to run at all. That gradient is documented below.</div></div>
+
+  <h2 id="contract">The shared contract (read this first)</h2>
+  <p>No binding stands alone. Each one resolves the C artifact — <code>libevosql-memory.{so,dylib,dll}</code> or the static <code>.a</code> — at build or load time, then surfaces the C error path (<code>evo_strerror</code> / <code>evo_sqlstate</code>) as a language-native exception. The C error codes every binding maps from:</p>
+  <div class="sig">EVO_OK = 0 · EVO_ERR_CONNECT = -2 · EVO_ERR_AUTH = -3 · EVO_ERR_PROTOCOL = -4 · EVO_ERR_SQL = -5 · EVO_ERR_BUFFER = -6 · EVO_ERR_NOT_FOUND = -7</div>
+  <p>Build the C SDK once; every other binding consumes the artifact in <code>client/libevosql-memory/build/</code>:</p>
+  <pre><code><span class="c-com"># produces libevosql-memory.{dylib,so,a} + a pkg-config file</span>
+make -C client/libevosql-memory</code></pre>
+  <p>This dependency is the single most important fact about the non-C, non-Python-pure bindings: until that artifact exists (or a pre-built release binary is pointed at via an env override), they have nothing to link against.</p>
+
+  <h2 id="tiers">Maturity tiers</h2>
+  <p>Bindings group into three tiers by how much of the binding itself is verified in-tree — independent of whether the underlying C library works (it does; it has its own tests and compiled artifacts).</p>
+
+  <h3 id="tier-foundation">Tier 0 — Foundation (C): implemented &amp; tested</h3>
+  <p>The C library <code>libevosql-memory</code> is the canonical client and the only one that owns wire logic. It is the most complete member of the family.</p>
+  <ul>
+    <li>Source: <code>src/conn.c</code> (~590 lines) and <code>src/subscribe.c</code> (~496 lines) — connection/query plus the live subscription and CDC paths.</li>
+    <li>Build: a <code>Makefile</code> producing both the static archive (<code>libevosql-memory.a</code>) and a shared library (<code>libevosql-memory.dylib</code>/<code>.so</code>), plus an <code>evosql-memory.pc</code> pkg-config file. Compiled artifacts are present in <code>build/</code>.</li>
+    <li>Tests: <code>tests/test_sdk.c</code> and <code>tests/test_subscribe.c</code> ship in-tree.</li>
+  </ul>
+  <p>Status: <strong>implemented and test-covered.</strong> This is the one to trust without caveats.</p>
+
+  <h3 id="tier-1">Tier 1 — First-class: implemented, with tests / adapters</h3>
+  <p>Two bindings go beyond a thin wrapper.</p>
+  <table>
+    <thead><tr><th>binding</th><th>version</th><th>runtime</th><th>what makes it tier-1</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Python</strong> — <code>python-evosql-memory</code></td><td>1.0.0</td><td>ctypes (no compiler at install)</td><td>Richest binding. Core client plus six framework adapters and a Python test file (<code>python_tests/test_adapters.py</code>).</td></tr>
+      <tr><td><strong>C</strong> — <code>libevosql-memory</code></td><td>—</td><td>native</td><td>See Tier 0 above. Listed here too because it is the only binding that is both the foundation and fully test-covered.</td></tr>
+    </tbody>
+  </table>
+  <p>Python is the broadest surface in the family. It uses <code>ctypes</code> auto-discovery to find the C library and ships adapters for six agent frameworks:</p>
+  <div class="sig">LangGraph · LangChain · LlamaIndex · CrewAI · AutoGen · Mem0 (compat)</div>
+  <p>Files present: <code>evosql_memory/core.py</code>, the six adapter modules under <code>evosql_memory/adapters/</code>, an example agent, and a test module. Of all the language bindings, Python is the one with in-tree tests.</p>
+  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>"Test-covered" here means a test file exists in the binding's own tree. Like every test in this project, these are runtime tests — they assume a reachable <code>evosql-server</code>. They are not a substitute for confirming your own deployment connects.</div></div>
+
+  <h3 id="tier-2">Tier 2 — Implemented bindings, smoke example only</h3>
+  <p>These bindings have a complete, real wrapper over the C surface and a runnable smoke example, but <strong>no test suite of their own in-tree</strong>. The code is there and reviewable; the verification is the single put/get example, not an assertion suite.</p>
+  <table>
+    <thead><tr><th>binding</th><th>version</th><th>runtime / mechanism</th><th>in-tree verification</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Node.js</strong> — <code>node-evosql-memory</code></td><td>1.0.0</td><td>Node ≥ 18; <code>ffi-napi</code> + <code>ref-napi</code></td><td>example only (<code>examples/put_get.js</code>)</td></tr>
+      <tr><td><strong>Go</strong> — <code>go-evosql-memory</code></td><td>module, Go 1.21</td><td>cgo (links the C archive)</td><td>example only (<code>examples/put_get/main.go</code>)</td></tr>
+    </tbody>
+  </table>
+  <p>Both wrap the same ~16-function contract idiomatically (a Go <code>EvoSQL</code> struct; a Node module with the FFI surface in <code>lib/index.js</code>). Treat them as implemented bindings whose correctness you should confirm against your own server before relying on them in production — there is no assertion suite proving every verb in-tree.</p>
+
+  <h3 id="tier-3">Tier 3 — Implemented bindings, no tests, binary-dependent</h3>
+  <p>Six bindings exist as complete, idiomatic wrappers — full FFI/P-Invoke/JNA/system-module surfaces with native error types — but each one ships <strong>only source plus a smoke example, no test suite</strong>, and each is hard-dependent on the C artifact being built or a pre-built release binary being pointed at. They are real code; they are not independently verified in-tree. Do not assume any of these is production-proven from this repo alone.</p>
+  <table>
+    <thead><tr><th>binding</th><th>version</th><th>runtime / mechanism</th><th>requires</th></tr></thead>
+    <tbody>
+      <tr><td><strong>C++</strong> — <code>cpp-evosql-memory</code></td><td>—</td><td>C++17 header-only RAII (<code>evosql_memory.hpp</code>)</td><td>link <code>libevosql-memory.a</code> / shared lib</td></tr>
+      <tr><td><strong>.NET</strong> — <code>dotnet-evosql-memory</code></td><td>1.0.0</td><td>net8.0; P/Invoke (<code>DllImport</code>)</td><td><code>evosql-memory</code> shared lib on the loader path (or <code>EVOSQL_MEMORY_LIB</code>)</td></tr>
+      <tr><td><strong>Java</strong> — <code>evosql-memory</code></td><td>1.0.0</td><td>Java 17; JNA; Maven</td><td>shared lib via <code>-Djna.library.path</code></td></tr>
+      <tr><td><strong>Ruby</strong> — <code>evosql_memory</code></td><td>1.0.0</td><td>Ruby ≥ 2.7; <code>ffi</code> ~&gt; 1.17</td><td>shared lib (relative path or <code>EVOSQL_MEMORY_LIB</code>)</td></tr>
+      <tr><td><strong>Rust</strong> — <code>evosql-memory</code></td><td>1.0.0</td><td>edition 2021; pure FFI, <code>build.rs</code> links</td><td>the static archive at link time</td></tr>
+      <tr><td><strong>Swift</strong> — <code>EvoSQLMemory</code></td><td>—</td><td>swift-tools 5.7; system-module C interop</td><td><code>-Xlinker -L../libevosql-memory/build</code></td></tr>
+    </tbody>
+  </table>
+  <p>Each of these mirrors the same put/get/checkpoint/subscribe contract and maps <code>evo_strerror</code>/<code>evo_sqlstate</code> to a native error (<code>evosql::Error</code>/<code>NotFound</code>, <code>EvoException</code>/<code>EvoNotFoundException</code>, Java <code>NotFoundException</code>, Ruby <code>NotFound</code>, a Rust <code>Error</code> enum, Swift <code>EvoError</code>/<code>EvoNotFound</code>). The wrappers are written and idiomatic. What is missing is in-tree test coverage and, until you build it, the C artifact they bind against.</p>
+
+  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>What this page will not tell you: that any Tier-3 binding is "shipped and working." The source is present and the smoke example compiles against a built C library — but there is no test suite in these directories to back a stronger claim, so none is made here. Build the C SDK, run the binding's <code>put_get</code> example against your own server, and verify before depending on it.</div></div>
+
+  <h2 id="building-out">What "completing" a binding means</h2>
+  <p>The contract for promoting any Tier-2 / Tier-3 binding toward first-class is the same five steps every existing binding followed:</p>
+  <ol>
+    <li>Resolve the <code>libevosql-memory</code> artifact by env override or relative path to <code>../libevosql-memory/build/</code>.</li>
+    <li>Bind the ~16-function public API from <code>include/evosql_memory.h</code>.</li>
+    <li>Wrap the opaque <code>evo_conn_t*</code> and <code>evo_subscription_t*</code> handles in an idiomatic type with explicit close + finalizer.</li>
+    <li>Surface <code>evo_strerror()</code> / <code>evo_sqlstate()</code> as native exceptions.</li>
+    <li>Ship a smoke example that drops + creates + writes + reads a memory store.</li>
+  </ol>
+  <p>The honest gap for the Tier-2 and Tier-3 set is step beyond (5): an in-tree test suite that asserts each verb, the way the C library and Python binding already do. Until that lands for a given binding, this page keeps it labelled by what is actually present, not by aspiration.</p>
+
+  <h2 id="pick">Picking a binding today</h2>
+  <ul>
+    <li><strong>Want the safest path?</strong> Use the <a href="/">C library</a> or the <a href="/">Python binding</a> — the two with in-tree tests.</li>
+    <li><strong>On Node or Go?</strong> The binding is real; confirm it against your server with the bundled <code>put_get</code> example first.</li>
+    <li><strong>On C++ / .NET / Java / Ruby / Rust / Swift?</strong> The wrapper exists and is idiomatic, but build the C SDK, run the smoke example, and validate before production use — there is no test suite proving it here.</li>
+    <li><strong>Every binding</strong> needs the C artifact built once (<code>make -C client/libevosql-memory</code>) or a pre-built release library pointed at via the binding's env override.</li>
+  </ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Orchestrator (hub) — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+  <h1>Orchestrator (hub)</h1>
+  <p class="lede">One local control panel — a web UI and a terminal that share the same controls — for supervising every EvolutionDB <code>*-sync</code> connector and wiring the same <code>evolutiondb-memory</code> MCP server into each AI host. The PyPI package is <code>evolutiondb-hub</code>; the import package is <code>orchestrator</code>.</p>
+
+  <h2 id="what">What it does</h2>
+  <p>The hub is a connector supervisor. It does not sync anything itself and it stores no secrets — it starts, stops, schedules, installs and authenticates the per-source connector packages, and tracks which ones are running. Concretely it:</p>
+  <ul>
+    <li><strong>Lists every connector</strong> on one page with current state (running / stopped / external), last-start time, the install status of the connector's binary, an OS-scheduled (launchd / systemd) flag, and a free-form <em>agent-owner</em> label.</li>
+    <li><strong>Starts and stops connectors</strong> as detached background processes (<code>start_new_session=True</code>). It also detects connectors already running under launchd / systemd by scanning <code>ps</code>, marks them <code>managed_by: "external"</code>, and refuses to double-spawn or stop them.</li>
+    <li><strong>Schedules connectors</strong> at the OS level so they survive a reboot — a launchd <code>.plist</code> on macOS or a systemd <code>--user</code> service + timer on Linux. Windows scheduling is not implemented.</li>
+    <li><strong>Installs / upgrades</strong> a connector's PyPI package into the hub's own Python, and <strong>runs its <code>--auth</code> flow</strong> (or, for token-based connectors, reports the <code>.env</code> path to edit).</li>
+    <li><strong>Wires the <code>evolutiondb-memory</code> MCP block</strong> into AI-host config files (Claude Desktop, Claude Code, ChatGPT Desktop / Codex, Gemini CLI / Code Assist) or removes it — delegating to <code>mcp_server_evosql.setup</code>. See the <a href="/platform/mcp-server/">MCP server</a> page.</li>
+    <li><strong>Manages an MCP HTTP transport + OAuth proxy + optional Cloudflare quick tunnel</strong> so web-based AI hosts can reach the same memory server the desktop clients use.</li>
+    <li><strong>Runs the <code>evolutiondb-inspector</code></strong> memory browser as a hub-owned process.</li>
+  </ul>
+  <p>Everything the web UI does is also available from the CLI, so headless / shell-script setups need nothing else.</p>
+
+  <h2 id="connectors">Known connectors &amp; clients</h2>
+  <p>Connectors and AI hosts are static dataclasses in <code>orchestrator/config.py</code> (the single source of truth read by the supervisor, UI and CLI). The built-in connector set (<code>ConnectorSpec</code>) is:</p>
+  <table>
+    <thead><tr><th>name</th><th>label</th><th>console script</th><th>pip package</th><th>auth</th></tr></thead>
+    <tbody>
+      <tr><td><code>teams</code></td><td>Microsoft Teams</td><td><code>evosql-teams-sync</code></td><td><code>evolutiondb-teams-sync</code></td><td><code>--auth</code> (device code)</td></tr>
+      <tr><td><code>gmail</code></td><td>Gmail</td><td><code>evolutiondb-gmail-sync</code></td><td><code>evolutiondb-gmail-sync</code></td><td><code>--auth</code> (Google OAuth)</td></tr>
+      <tr><td><code>slack</code></td><td>Slack</td><td><code>evolutiondb-slack-sync</code></td><td><code>evolutiondb-slack-sync</code></td><td><code>.env</code> token (<code>xoxp-</code>)</td></tr>
+      <tr><td><code>github</code></td><td>GitHub</td><td><code>evolutiondb-github-sync</code></td><td><code>evolutiondb-github-sync</code></td><td><code>.env</code> token (PAT)</td></tr>
+      <tr><td><code>calendar</code></td><td>Google Calendar</td><td><code>evolutiondb-calendar-sync</code></td><td><code>evolutiondb-calendar-sync</code></td><td><code>--auth</code> (Google OAuth)</td></tr>
+      <tr><td><code>browser</code></td><td>Browser History</td><td><code>evolutiondb-browser-sync</code></td><td><code>evolutiondb-browser-sync</code></td><td>none</td></tr>
+      <tr><td><code>imessage</code></td><td>iMessage / SMS</td><td><code>evolutiondb-imessage-sync</code></td><td><code>evolutiondb-imessage-sync</code></td><td>none (Full Disk Access)</td></tr>
+      <tr><td><code>notes</code></td><td>Apple Notes</td><td><code>evolutiondb-notes-sync</code></td><td><code>evolutiondb-notes-sync</code></td><td>none (Automation perm)</td></tr>
+      <tr><td><code>notion</code></td><td>Notion</td><td><code>evolutiondb-notion-sync</code></td><td><code>evolutiondb-notion-sync</code></td><td><code>.env</code> token (<code>NOTION_TOKEN</code>)</td></tr>
+      <tr><td><code>youtube</code></td><td>YouTube</td><td><code>evolutiondb-youtube-sync</code></td><td><code>evolutiondb-youtube-sync</code></td><td><code>--auth</code> (Google OAuth)</td></tr>
+      <tr><td><code>outlook</code></td><td>Outlook</td><td><code>evolutiondb-outlook-sync</code></td><td><code>evolutiondb-outlook-sync</code></td><td><code>--auth</code> (device code)</td></tr>
+    </tbody>
+  </table>
+  <p>Each spec also carries a <code>module_name</code> (e.g. <code>gmail_sync</code>) so the hub can recognise <code>python -m &lt;module&gt;</code> runs from external supervisors, a <code>poll_default</code> interval in seconds (600–3600 depending on source), an <code>indexes</code> list used by the UI, and an <code>auth_hint</code>. AI-host targets (<code>AgentSpec</code>) are: <code>claude-desktop</code>, <code>claude-code</code>, <code>chatgpt-desktop</code>, <code>chatgpt-cli</code>, <code>gemini-cli</code>, <code>gemini-code</code>.</p>
+  <p>You can append your own without code changes: drop entries in <code>~/.evosql/custom_connectors.json</code> / <code>~/.evosql/custom_agents.json</code> (or call <code>config.add_custom_connector()</code> / <code>add_custom_agent()</code>), and they are merged into the in-process lists at import time.</p>
+
+  <h2 id="install">Install</h2>
+  <pre><code><span class="c-com"># the hub itself, plus the MCP server it drives for client/tunnel/inspector commands</span>
+<span class="c-key">pip install</span> evolutiondb-hub mcp-server-evolutiondb</code></pre>
+  <p>The hub has <strong>no runtime dependencies of its own</strong> (<code>dependencies = []</code> in <code>pyproject.toml</code>; stdlib <code>http.server</code> powers the web UI). It requires Python <code>&gt;=3.9</code> and exposes a single console script, <code>evolutiondb-hub</code> (entry point <code>orchestrator.cli:main</code>). The <code>client …</code>, <code>tunnel …</code> and <code>inspector …</code> subcommands additionally need <code>mcp-server-evolutiondb</code> on PATH; <code>install</code>/<code>start</code> of a given source needs that source's own package:</p>
+  <pre><code><span class="c-key">pip install</span> evolutiondb-gmail-sync evolutiondb-slack-sync   <span class="c-com"># …etc, per source you use</span></code></pre>
+
+  <h2 id="configure">Configure (env vars)</h2>
+  <p>There is no config file you edit by hand — behaviour is driven by a handful of environment variables, all optional with sane defaults. The hub binds the web UI and every spawned listener to <code>127.0.0.1</code> only and has <strong>no auth</strong>; it is a personal local panel.</p>
+  <table>
+    <thead><tr><th>env var</th><th>default</th><th>used by</th></tr></thead>
+    <tbody>
+      <tr><td><code>EVOSQL_HUB_STATE</code></td><td><code>~/.evosql/orchestrator.json</code></td><td>state-file path (<code>state.py</code>)</td></tr>
+      <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>memory namespace for <code>client enable</code>, <code>schedule</code>, <code>inspector</code></td></tr>
+      <tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>PostgreSQL wire port written into a client's MCP block</td></tr>
+      <tr><td><code>EVOSQL_MCP_HTTP_PORT</code></td><td><code>8970</code></td><td><code>tunnel</code> HTTP transport port</td></tr>
+      <tr><td><code>EVOSQL_MCP_AUTH_TOKEN</code></td><td><em>auto (24-byte hex)</em></td><td><code>tunnel</code> bearer token (reused if already set)</td></tr>
+      <tr><td><code>EVOSQL_OAUTH_PROXY_PORT</code></td><td><code>8972</code></td><td><code>tunnel</code> OAuth 2.1 proxy port</td></tr>
+      <tr><td><code>EVOSQL_INSPECTOR_PORT</code></td><td><code>8765</code></td><td><code>inspector</code> port</td></tr>
+    </tbody>
+  </table>
+  <p>The web UI itself defaults to port <code>8771</code> (override with <code>--port</code>; not an env var).</p>
+
+  <h3 id="state">State on disk</h3>
+  <p>The hub keeps one JSON state file so pids, labels and intervals survive restarts. There are no secrets in it — connector auth tokens live in their own per-connector caches under <code>~/.evosql/</code>.</p>
+  <pre><code>~/.evosql/orchestrator.json          <span class="c-com"># sources{}, tunnel{}, inspector{}, user_id, updated_at — mode 0600</span>
+~/.evosql/logs/&lt;source&gt;.log           <span class="c-com"># stdout+stderr of each hub-spawned connector</span>
+~/.evosql/logs/install-&lt;source&gt;.log   <span class="c-com"># pip install output</span>
+~/.evosql/logs/auth-&lt;source&gt;.log      <span class="c-com"># --auth flow output</span>
+~/.evosql/logs/{mcp-http,mcp-oauth,cloudflared,inspector}.log</code></pre>
+  <p>Saves are atomic (write to <code>.tmp</code>, <code>chmod 0600</code>, then <code>replace</code>). The README notes the single-user race window is tiny.</p>
+
+  <h2 id="usage">Usage</h2>
+  <p>Launch the web UI (binds <code>127.0.0.1</code> only):</p>
+  <pre><code><span class="c-key">evolutiondb-hub</span> web                      <span class="c-com"># → http://127.0.0.1:8771</span>
+<span class="c-key">evolutiondb-hub</span> web --port 9000 --host 127.0.0.1</code></pre>
+  <p>Drive the same operations from the terminal:</p>
+  <pre><code><span class="c-com"># inspect every connector (add --json for the machine-readable form the UI uses)</span>
+<span class="c-key">evolutiondb-hub</span> status
+<span class="c-key">evolutiondb-hub</span> status --json
+
+<span class="c-com"># spawn / kill one connector (interval overrides the per-source poll_default)</span>
+<span class="c-key">evolutiondb-hub</span> start gmail --interval 600
+<span class="c-key">evolutiondb-hub</span> stop  gmail
+
+<span class="c-com"># install / upgrade its PyPI package, then run its auth flow</span>
+<span class="c-key">evolutiondb-hub</span> install gmail
+<span class="c-key">evolutiondb-hub</span> auth    gmail
+
+<span class="c-com"># keep it running across reboots (launchd on macOS, systemd --user on Linux)</span>
+<span class="c-key">evolutiondb-hub</span> schedule   gmail --interval 900
+<span class="c-key">evolutiondb-hub</span> unschedule gmail
+
+<span class="c-com"># label a source with the agent you mentally assigned to it (or 'none' to clear)</span>
+<span class="c-key">evolutiondb-hub</span> set-agent gmail gemini
+
+<span class="c-com"># wire / unwire one AI host's evolutiondb-memory MCP block</span>
+<span class="c-key">evolutiondb-hub</span> client claude-desktop  enable
+<span class="c-key">evolutiondb-hub</span> client chatgpt-desktop disable
+<span class="c-key">evolutiondb-hub</span> client gemini-cli      status
+
+<span class="c-com"># publish the MCP server over HTTP (+ OAuth proxy) and a Cloudflare quick tunnel</span>
+<span class="c-key">evolutiondb-hub</span> tunnel start
+<span class="c-key">evolutiondb-hub</span> tunnel start --no-public --port 8970 --token MYTOKEN
+<span class="c-key">evolutiondb-hub</span> tunnel status
+<span class="c-key">evolutiondb-hub</span> tunnel stop
+
+<span class="c-com"># open the embedded memory inspector</span>
+<span class="c-key">evolutiondb-hub</span> inspector start --port 8765
+<span class="c-key">evolutiondb-hub</span> inspector status</code></pre>
+  <p>Every subcommand except <code>web</code> and the human <code>status</code> table prints a JSON result object and exits non-zero when <code>ok</code> is false. The <code>set-agent</code> label is a purely local annotation — connectors do not read it, and every record still lands in the same memory store searchable from any AI host.</p>
+
+  <h3 id="agent-owner-label">The agent-owner label</h3>
+  <p>The label answers "which AI assistant am I supposed to point at my Gmail this week?" — it is metadata on the panel, not data the connector acts on. Accepting <code>none</code>, <code>clear</code> or <code>-</code> clears it.</p>
+
+  <h2 id="reference">Reference</h2>
+  <p>Public surface, by module. All operation functions return a JSON-serialisable <code>dict</code>; the convention is <code>{"ok": bool, …}</code> (the <code>client enable</code> path instead returns <code>{"status": "wrote"|"unchanged"|…}</code> from <code>mcp_setup.configure_client</code>).</p>
+
+  <h3 id="ref-supervisor">supervisor.py — process supervision</h3>
+  <div class="sig">supervisor.status_all() -> dict[str, dict]</div>
+  <p>Returns one status dict per built-in connector, keyed by name. Each carries <code>state</code> (<code>running</code> / <code>stopped</code> / <code>unknown</code>), <code>managed_by</code> (<code>hub</code> / <code>external</code> / <code>None</code>), <code>pid</code>, <code>binary</code> (resolved via <code>shutil.which</code>), <code>agent_owner</code> and <code>scheduled</code>.</p>
+  <div class="sig">supervisor.status(name) -> dict</div>
+  <p>Status for one connector. Live hub pid wins; a stale pid in the state file is cleared; otherwise it scans <code>ps -Ao pid,command</code> for the console-script <em>or</em> module name and reports an external run if found.</p>
+  <div class="sig">supervisor.start(name, *, interval=None) -> dict</div>
+  <p>Spawns <code>&lt;binary&gt; --interval &lt;N&gt;</code> detached, waits ~0.3s, and if the process exited immediately returns the last 5 log lines instead of recording a dead pid. Refuses to start if already running. <code>interval</code> defaults to the spec's <code>poll_default</code>.</p>
+  <div class="sig">supervisor.stop(name, *, timeout_s=5.0) -> dict</div>
+  <p>Sends <code>SIGTERM</code> to the hub-managed pid, waits up to <code>timeout_s</code>, then <code>SIGKILL</code>. Refuses to touch an externally-managed pid (telling you to use <code>launchctl</code> / <code>systemctl</code>).</p>
+  <div class="sig">supervisor.set_agent_owner(name, agent) -> dict</div>
+  <p>Persists the agent-owner label into the state file. Also exposed: <code>pid_alive(pid)</code> and <code>find_external_pid(*needles)</code>.</p>
+
+  <h3 id="ref-config">config.py — registry</h3>
+  <div class="sig">config.CONNECTORS: list[ConnectorSpec] &nbsp;·&nbsp; config.AGENTS: list[AgentSpec]</div>
+  <p>The static registries. <code>config.get(name)</code> returns a <code>ConnectorSpec</code> or <code>None</code>. <code>add_custom_connector(dict)</code> / <code>add_custom_agent(dict)</code> validate, persist to <code>~/.evosql/custom_*.json</code> and append to the live lists.</p>
+
+  <h3 id="ref-schedule">schedule.py — OS-level scheduling</h3>
+  <div class="sig">schedule.schedule(name, *, interval=None, user_id=None) -> dict</div>
+  <p>On macOS writes <code>~/Library/LaunchAgents/com.evolutiondb.&lt;name&gt;-sync.plist</code> and loads it idempotently with <code>launchctl bootout</code> then <code>bootstrap gui/$UID</code>. On Linux writes <code>~/.config/systemd/user/evolutiondb-&lt;name&gt;-sync.{service,timer}</code> and runs <code>systemctl --user enable --now</code>. Scheduled runs invoke the binary with <code>--once</code> on a <code>StartInterval</code> / <code>OnUnitActiveSec</code> cadence. Returns an error on any other platform.</p>
+  <div class="sig">schedule.unschedule(name) -> dict &nbsp;·&nbsp; schedule.is_scheduled(name) -> bool</div>
+  <p><code>render_plist(...)</code> and <code>render_systemd_units(...)</code> are pure helpers (no side effects) that produce the unit text.</p>
+
+  <h3 id="ref-install">install.py — package + auth lifecycle</h3>
+  <div class="sig">install.install(name) -> dict</div>
+  <p>Runs <code>{sys.executable} -m pip install --upgrade &lt;pip_package&gt;</code> (3-minute timeout) into the hub's own environment, streams output to <code>install-&lt;name&gt;.log</code>, and returns the resolved <code>binary</code> plus a 20-line log <code>tail</code>.</p>
+  <div class="sig">install.authenticate(name) -> dict</div>
+  <p>For connectors with an <code>auth_subcommand</code> (default <code>--auth</code>): spawns <code>&lt;binary&gt; --auth</code> detached and returns <code>auth_kind: "interactive"</code> with a pid and log path (the connector opens its own browser / device-code flow). For token connectors (<code>slack</code>, <code>github</code>, <code>notion</code>): returns <code>auth_kind: "env"</code> with the best-guess <code>.env</code> path to edit and the spec's hint.</p>
+
+  <h3 id="ref-tunnel">tunnel.py — MCP HTTP transport + Cloudflare</h3>
+  <div class="sig">tunnel.start(*, port=None, token=None, tunnel=True) -> dict</div>
+  <p>Spawns <code>evolutiondb-mcp-http --host 127.0.0.1 --port &lt;port&gt;</code> with the bearer token in its env, then layers an OAuth 2.1 proxy (<code>evolutiondb-mcp-oauth</code>) in front so ChatGPT-class clients can connect, and — unless <code>tunnel=False</code> — a <code>cloudflared tunnel --url …</code> quick tunnel. It parses the <code>https://*.trycloudflare.com</code> URL out of the cloudflared log (20s timeout). All three binaries come from <code>mcp-server-evolutiondb</code> (cloudflared is optional / skipped if absent).</p>
+  <div class="sig">tunnel.stop() -> dict &nbsp;·&nbsp; tunnel.status() -> dict</div>
+  <p><code>stop()</code> SIGTERMs cloudflared, the OAuth proxy and the HTTP listener (2s grace, then SIGKILL) and clears <code>state["tunnel"]</code>. <code>status()</code> reports liveness of each half plus the public URL.</p>
+
+  <h3 id="ref-inspector">inspector_mgr.py — memory browser</h3>
+  <div class="sig">inspector_mgr.start(*, port=None) -> dict &nbsp;·&nbsp; stop() -> dict &nbsp;·&nbsp; status() -> dict</div>
+  <p>Spawns <code>evolutiondb-inspector --host 127.0.0.1 --port &lt;port&gt;</code> (default 8765) with <code>MCP_USER_ID</code> resolved from the env, falling back to the value persisted in the state file, then <code>"default_user"</code>.</p>
+
+  <h3 id="ref-state">state.py — persisted state</h3>
+  <div class="sig">state.load() -> dict &nbsp;·&nbsp; state.save(state) -> None</div>
+  <p>Read/write <code>~/.evosql/orchestrator.json</code> (or <code>$EVOSQL_HUB_STATE</code>). Helpers: <code>get_source</code>, <code>set_source</code>, <code>remove_source_pid</code>, <code>get_user_id</code>, <code>set_user_id</code>.</p>
+
+  <h3 id="ref-web">web.py — web UI</h3>
+  <div class="sig">web.serve(*, host="127.0.0.1", port=8771) -> int</div>
+  <p>A no-framework <code>ThreadingHTTPServer</code>. Pages: <code>/</code>, <code>/connectors</code>, <code>/clients</code>, <code>/tunnel</code>, <code>/inspector</code>. JSON API: <code>GET /api/{sources,clients,tunnel,inspector,health}</code> and <code>POST /api/sources/&lt;name&gt;/{start|stop|schedule|unschedule|install|auth|agent}</code>, <code>POST /api/clients/&lt;name&gt;/{enable|disable|install}</code>, <code>POST /api/{tunnel,inspector}/{start|stop}</code>.</p>
+
+  <h2 id="notes">Notes &amp; limitations</h2>
+  <ul>
+    <li><strong>No auth, localhost only.</strong> The web UI and every spawned listener bind to <code>127.0.0.1</code>. Public exposure only ever happens through the explicit <code>tunnel</code> command, which sits behind a bearer token plus the OAuth proxy.</li>
+    <li><strong>The hub stores no secrets.</strong> The state file is mode <code>0600</code> and contains pids, intervals, labels and (only while a tunnel is live) the generated bearer token. Connector OAuth/refresh tokens stay in their own per-connector caches.</li>
+    <li><strong>Windows scheduling is not implemented</strong> — <code>schedule()</code> / <code>unschedule()</code> return an error there. Foreground <code>start</code>/<code>stop</code> still work cross-platform.</li>
+    <li><strong>The README under-documents the CLI.</strong> The shipped <code>README.md</code> mentions five connectors and six subcommands; the code in this version (<code>evolutiondb-hub</code> <code>0.5.1</code>) registers eleven built-in connectors and also exposes <code>schedule</code>, <code>unschedule</code>, <code>install</code>, <code>auth</code>, <code>tunnel</code> and <code>inspector</code>. (<code>orchestrator.__init__.__version__</code> still reads <code>0.5.0</code> while <code>pyproject.toml</code> is <code>0.5.1</code>.)</li>
+    <li><strong>External-run detection is best-effort</strong> — it relies on string-matching the console-script or module name in <code>ps</code> output; an unusual launch command may not be recognised.</li>
+    <li>The <code>client</code> commands import <code>mcp_server_evosql.setup</code> lazily and fail with a clear message if <code>mcp-server-evolutiondb</code> is not installed; the same is true for <code>tunnel</code> / <code>inspector</code>, which need the <code>evolutiondb-mcp-http</code>, <code>evolutiondb-mcp-oauth</code> and <code>evolutiondb-inspector</code> binaries.</li>
+  </ul>
+
+  <h2 id="see-also">See also</h2>
+  <ul>
+    <li><a href="/platform/mcp-server/">MCP server</a> — the <code>evolutiondb-memory</code> server the hub wires into AI hosts and publishes over HTTP.</li>
+    <li><a href="/connectors/gmail/">Connector pages</a> — per-source <code>*-sync</code> packages the hub supervises.</li>
+    <li><a href="https://wiki.evolutiondb.org">wiki.evolutiondb.org</a> — project wiki.</li>
+  </ul>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

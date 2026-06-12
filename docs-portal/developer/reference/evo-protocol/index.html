@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>EVO text protocol — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>EVO text protocol</h1>
+<p class="lede">EVO is EvolutionDB's native, line-oriented wire protocol served on TCP port <code>9967</code>. Every message is a UTF-8 text line terminated by <code>\n</code>. A session walks through a fixed handshake — greeting, optional STARTTLS, then authentication — before entering a request/response command loop where each reply is bracketed by a trailing <code>READY</code> marker. This page documents the exact tokens emitted and accepted by <code>adaptor/evo_protocol.c</code>.</p>
+
+<div class="callout callout-note">
+<p>All framing below is taken verbatim from the server implementation. Tokens are case-sensitive on the server's output side; client commands are parsed with <code>strncasecmp</code>, so command keywords (<code>SQL</code>, <code>QUIT</code>, <code>PREPARE</code>, …) are accepted case-insensitively.</p>
+</div>
+
+<h2 id="overview">Overview</h2>
+<p>A complete session has two phases:</p>
+<ol>
+<li><strong>Handshake</strong> — client greeting, server <code>HELLO</code>, optional <code>STARTTLS</code> upgrade, then <code>AUTH_SCRAM</code>/<code>AUTH</code> exchange ending in <code>AUTH_OK</code>.</li>
+<li><strong>Command loop</strong> — the client issues commands (<code>SQL</code>, <code>PREPARE</code>, <code>EXECUTE</code>, <code>EXECUTE_BATCH</code>, <code>EXECUTE_BATCH_BINARY</code>, <code>DEALLOCATE</code>, <code>QUIT</code>); the server answers and emits a final <code>READY</code> line per command.</li>
+</ol>
+<p>Lines are read with the connection's line reader; the server's main read buffer is 65536 bytes. All I/O passes through a <code>conn_t</code> wrapper so the same code works transparently over plaintext or TLS.</p>
+
+<h2 id="handshake">Handshake</h2>
+<p>The handshake is strictly ordered. Each step below is a single line unless noted.</p>
+
+<h3 id="greeting">Greeting</h3>
+<p>The client opens by sending the literal greeting line:</p>
+<div class="sig"><code>EVO</code></div>
+<p>If the first line is anything other than <code>EVO</code>, the server replies with an error and closes the connection:</p>
+<pre><code><span class="c-key">ERR</span> <span class="c-str">08000</span> Expected EVO greeting</code></pre>
+<p>On a valid greeting the server responds with its version banner:</p>
+<pre><code><span class="c-key">HELLO</span> EvoSQL <span class="c-str">1.0</span></code></pre>
+
+<h3 id="starttls">STARTTLS upgrade</h3>
+<p>If TLS is compiled in and available, the server offers an upgrade <em>before</em> authentication so credentials are never sent in cleartext:</p>
+<pre><code><span class="c-com">// server, only when TLS is available</span>
+<span class="c-key">STARTTLS</span></code></pre>
+<p>The client then either accepts or declines:</p>
+<ul>
+<li>Client sends <code>STARTTLS</code> &rarr; the server performs the TLS handshake (<code>conn_tls_accept</code>) and the rest of the session is encrypted. A failed handshake closes the connection.</li>
+<li>Client sends anything else &rarr; the server logs the decline and continues in plaintext for backward compatibility.</li>
+</ul>
+
+<div class="callout callout-warn">
+<p>The <code>STARTTLS</code> offer is only emitted when the server build has TLS support. A client must not assume it will always appear; read the line after <code>HELLO</code> and branch on whether it is <code>STARTTLS</code> or the <code>AUTH_SCRAM</code> challenge.</p>
+</div>
+
+<h3 id="auth">Authentication</h3>
+<p>The server advertises SCRAM-SHA-256 by sending:</p>
+<pre><code><span class="c-key">AUTH_SCRAM</span></code></pre>
+<p>The client replies with one of two formats. The next line's prefix selects the path:</p>
+
+<h4 id="auth-scram">SCRAM-SHA-256 (preferred)</h4>
+<p>SCRAM never transmits the password, so it protects the secret even without TLS. The exchange is three client/server message pairs:</p>
+<div class="sig"><code>SCRAM-CLIENT-FIRST &lt;client-first-message&gt;</code></div>
+<p>The server processes the client-first message and replies with the server-first message (the raw SCRAM line produced by <code>scram_server_first</code>). The client then sends:</p>
+<div class="sig"><code>SCRAM-CLIENT-FINAL &lt;client-final-message&gt;</code></div>
+<p>The server verifies the client proof and replies with the server-final message (containing the ServerSignature for mutual authentication). Failures at any step emit a SQLSTATE <code>28P01</code> error and close the connection, for example:</p>
+<pre><code><span class="c-key">ERR</span> <span class="c-str">28P01</span> SCRAM: invalid client-first message
+<span class="c-key">ERR</span> <span class="c-str">28P01</span> Expected SCRAM-CLIENT-FINAL
+<span class="c-key">ERR</span> <span class="c-str">28P01</span> SCRAM authentication failed</code></pre>
+
+<h4 id="auth-cleartext">Legacy cleartext AUTH</h4>
+<p>For backward compatibility a client may instead send a single space-separated line:</p>
+<div class="sig"><code>AUTH &lt;username&gt; &lt;password&gt;</code></div>
+<p>The username runs up to the first whitespace; everything after the separating space is taken as the password. On failure:</p>
+<pre><code><span class="c-key">ERR</span> <span class="c-str">28P01</span> Authentication failed</code></pre>
+<p>If the line is neither a SCRAM client-first nor an <code>AUTH</code> line:</p>
+<pre><code><span class="c-key">ERR</span> <span class="c-str">28000</span> Expected AUTH or SCRAM-CLIENT-FIRST</code></pre>
+
+<h4 id="auth-ok">Success</h4>
+<p>After either path authenticates, the server confirms and the session enters the command loop:</p>
+<pre><code><span class="c-key">AUTH_OK</span></code></pre>
+
+<div class="callout callout-note">
+<p>The default credentials in development are <code>admin</code>/<code>admin</code>. The server's default session context is database <code>default</code> with isolation level READ COMMITTED.</p>
+</div>
+
+<h2 id="command-loop">Command loop</h2>
+<p>After <code>AUTH_OK</code> the server loops reading one command line at a time. If an idle timeout is configured for the session, the server uses <code>select()</code> to wait; on timeout it emits <code>ERR 57P05 idle timeout</code> and closes.</p>
+<p>Every command's response ends with a standalone:</p>
+<pre><code><span class="c-key">READY</span></code></pre>
+<p>The one exception is <code>QUIT</code>, which ends the session.</p>
+
+<h3 id="quit">QUIT</h3>
+<div class="sig"><code>QUIT</code></div>
+<p>The server replies <code>BYE</code> and ends the loop. (Any open transaction is auto-rolled back during teardown — see below.)</p>
+<pre><code><span class="c-key">BYE</span></code></pre>
+
+<h3 id="sql">SQL request</h3>
+<p>A query is sent as a header line declaring the byte length, immediately followed by the SQL body on its own line:</p>
+<div class="sig"><code>SQL &lt;length&gt;<span class="c-com">\n</span>&lt;sql-text&gt;<span class="c-com">\n</span></code></div>
+<p>The declared <code>&lt;length&gt;</code> must be greater than 0 and at most 65000, otherwise:</p>
+<pre><code><span class="c-key">ERR</span> <span class="c-str">42000</span> Invalid SQL length
+<span class="c-key">READY</span></code></pre>
+<p>The body is read as the next line. The server then executes the statement and produces one of four response shapes (all followed by <code>READY</code>):</p>
+<ul>
+<li><strong>Error</strong> — <code>ERR &lt;sqlstate&gt; &lt;message&gt;</code></li>
+<li><strong>Result set</strong> (SELECT) — the <code>RESULT</code> framing described below</li>
+<li><strong>COPY stream</strong> — <code>COPY_READY</code> followed by a streamed body</li>
+<li><strong>Command</strong> (non-SELECT) — <code>OK</code> then <code>TAG &lt;command_tag&gt;</code></li>
+</ul>
+
+<h3 id="result-framing">RESULT framing (SELECT)</h3>
+<p>A SELECT result set is framed as a fixed sequence of tokens. Column metadata first, then rows, then the end marker and command tag:</p>
+<pre><code><span class="c-key">RESULT</span>
+<span class="c-key">COLS</span> &lt;num_cols&gt;
+<span class="c-key">COL</span> &lt;name&gt; &lt;pg_type_oid&gt; &lt;type_modifier&gt;
+<span class="c-com">... one COL line per column ...</span>
+<span class="c-key">ROW</span>
+<span class="c-key">FIELD</span> &lt;value&gt;
+<span class="c-com">... one FIELD line per column ...</span>
+<span class="c-com">... one ROW block per row ...</span>
+<span class="c-key">END</span>
+<span class="c-key">TAG</span> &lt;command_tag&gt;</code></pre>
+<p>Token semantics, exactly as emitted by <code>evo_send_result</code>:</p>
+<ul>
+<li><code>RESULT</code> — opens the result set.</li>
+<li><code>COLS &lt;num_cols&gt;</code> — the column count.</li>
+<li><code>COL &lt;name&gt; &lt;pg_type_oid&gt; &lt;type_modifier&gt;</code> — one line per column, carrying the column name, its PostgreSQL type OID, and the type modifier.</li>
+<li><code>ROW</code> — opens a row; followed by exactly <code>num_cols</code> <code>FIELD</code> lines.</li>
+<li><code>FIELD &lt;value&gt;</code> — one field value. A SQL NULL (or a missing field pointer) is sent as the literal token <code>FIELD NULL</code>.</li>
+<li><code>END</code> — closes the row stream.</li>
+<li><code>TAG &lt;command_tag&gt;</code> — the command tag (e.g. <code>SELECT</code>).</li>
+</ul>
+<p>The complete reply is then closed with <code>READY</code>.</p>
+
+<div class="callout callout-warn">
+<p><code>FIELD NULL</code> is indistinguishable at the token level from a non-null value whose text happens to be the four characters <code>NULL</code>. The server sends <code>FIELD NULL</code> only when the field is actually a SQL NULL, but clients that need to round-trip a string literal <code>"NULL"</code> should be aware of the ambiguity in the text framing.</p>
+</div>
+
+<h3 id="ok-tag">OK / TAG (non-SELECT)</h3>
+<p>For statements that are not SELECT and not a COPY stream, the server replies with:</p>
+<pre><code><span class="c-key">OK</span>
+<span class="c-key">TAG</span> &lt;command_tag&gt;
+<span class="c-key">READY</span></code></pre>
+<p>The command tag is the engine's result tag, e.g. <code>INSERT 0 1</code>, <code>UPDATE 3</code>, <code>DELETE 2</code>.</p>
+
+<h3 id="errors">ERR responses</h3>
+<p>Errors are a single line carrying the SQLSTATE and message:</p>
+<div class="sig"><code>ERR &lt;sqlstate&gt; &lt;message&gt;</code></div>
+<p>For query-execution errors the SQLSTATE and message come from the result set (<code>rs-&gt;error_sqlstate</code>, <code>rs-&gt;error_message</code>). Protocol-level errors use fixed SQLSTATEs seen in the source, including <code>08000</code> (bad greeting), <code>28000</code>/<code>28P01</code> (auth), <code>42000</code> (bad command / invalid length / unknown command), <code>57P05</code> (idle timeout), <code>53000</code> (resource limits), <code>26000</code> (prepared statement not found), and <code>22000</code> (COPY failure). An unrecognized command produces:</p>
+<pre><code><span class="c-key">ERR</span> <span class="c-str">42000</span> Unknown command: &lt;line&gt;
+<span class="c-key">READY</span></code></pre>
+
+<h2 id="copy">COPY streaming</h2>
+<p>When a <code>SQL</code> request is a COPY statement, the server enters a streaming sub-protocol instead of the normal result framing. It first signals readiness:</p>
+<pre><code><span class="c-key">COPY_READY</span></code></pre>
+
+<h3 id="copy-in">COPY FROM STDIN</h3>
+<p>After <code>COPY_READY</code>, the client sends one CSV-formatted row per line, each <code>\n</code>-terminated, and signals end-of-data with the PostgreSQL sentinel line:</p>
+<div class="sig"><code>\.</code></div>
+<p>On success the server replies with the row count as a COPY tag; on failure a SQLSTATE <code>22000</code> error:</p>
+<pre><code><span class="c-key">OK</span>
+<span class="c-key">TAG</span> COPY &lt;n&gt;
+<span class="c-key">READY</span>
+
+<span class="c-com">// on failure</span>
+<span class="c-key">ERR</span> <span class="c-str">22000</span> &lt;message&gt;
+<span class="c-key">READY</span></code></pre>
+
+<h3 id="copy-out">COPY TO STDOUT</h3>
+<p>After <code>COPY_READY</code>, the server streams one row per line, each prefixed with <code>D:</code>, then emits the terminator sentinel, then the COPY tag:</p>
+<pre><code><span class="c-key">COPY_READY</span>
+<span class="c-key">D:</span>&lt;csv-line&gt;
+<span class="c-com">... one D: line per row ...</span>
+\.
+<span class="c-key">OK</span>
+<span class="c-key">TAG</span> COPY &lt;n&gt;
+<span class="c-key">READY</span></code></pre>
+<p>The <code>\.</code> terminator is always emitted (even on error) so the client knows the stream has ended.</p>
+
+<h2 id="prepared">Prepared statements</h2>
+<p>EVO supports server-side prepared statements with positional <code>$N</code> placeholders (1-based). The session can hold at most 32 prepared statements.</p>
+
+<h3 id="prepare">PREPARE</h3>
+<div class="sig"><code>PREPARE &lt;stmt_name&gt; &lt;byte_length&gt;<span class="c-com">\n</span>&lt;sql-body&gt;<span class="c-com">\n</span></code></div>
+<p>The body length must be 1..65000. The server counts <code>$1</code>..<code>$9</code>-style placeholders to derive the parameter count, stores the template, and replies:</p>
+<pre><code><span class="c-key">OK</span>
+<span class="c-key">TAG</span> PREPARE
+<span class="c-key">READY</span></code></pre>
+<p>Error cases include a missing name (<code>42000</code>), invalid length (<code>42000</code>), more than 32 statements (<code>53000 Too many prepared statements (max 32)</code>), and out-of-memory (<code>53000</code>). Re-preparing an existing name overwrites it.</p>
+
+<h3 id="execute">EXECUTE</h3>
+<div class="sig"><code>EXECUTE &lt;stmt_name&gt; &lt;param_count&gt;<span class="c-com">\n</span>&lt;param1&gt;<span class="c-com">\n</span>&lt;param2&gt;<span class="c-com">\n</span>...</code></div>
+<p>The header is followed by <code>param_count</code> lines, one per parameter value. The server substitutes each <code>$N</code> in the template: the special value <code>\N</code> becomes the SQL literal <code>NULL</code>; every other value is wrapped in single quotes with internal quotes doubled. The substituted SQL is then executed and answered with either the <code>RESULT</code> framing (SELECT) or <code>OK</code>/<code>TAG</code> (otherwise), followed by <code>READY</code>.</p>
+<p>If the named statement does not exist, the server still drains the declared parameter lines to stay in sync, then:</p>
+<pre><code><span class="c-key">ERR</span> <span class="c-str">26000</span> Prepared statement '&lt;name&gt;' not found
+<span class="c-key">READY</span></code></pre>
+
+<h3 id="execute-batch">EXECUTE_BATCH</h3>
+<div class="sig"><code>EXECUTE_BATCH &lt;stmt_name&gt; &lt;row_count&gt; &lt;param_count&gt;<span class="c-com">\n</span>&lt;row1_param1&gt;<span class="c-com">\n</span>...&lt;rowN_paramM&gt;<span class="c-com">\n</span></code></div>
+<p>Sends <code>row_count &times; param_count</code> parameter lines in row-major order. Each row reuses the same substitution rules as <code>EXECUTE</code> (<code>\N</code> &rarr; NULL, otherwise quoted). The server sums affected rows from each command tag (<code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code>) and replies with one of:</p>
+<pre><code><span class="c-key">BATCH_OK</span> &lt;total_affected&gt;
+<span class="c-key">READY</span>
+
+<span class="c-com">// on the first failing row</span>
+<span class="c-key">BATCH_ERR</span> &lt;row_index&gt; &lt;sqlstate&gt; &lt;msg&gt;
+<span class="c-key">READY</span></code></pre>
+<p>On a row error the server drains the remaining parameter lines so the protocol stays aligned. Invalid arguments yield <code>ERR 42000 EXECUTE_BATCH: invalid arguments</code>.</p>
+
+<h3 id="execute-batch-binary">EXECUTE_BATCH_BINARY</h3>
+<p>A binary variant that avoids text re-encoding of parameters. The header is identical, but the payload that follows is a raw binary stream rather than text lines:</p>
+<div class="sig"><code>EXECUTE_BATCH_BINARY &lt;stmt_name&gt; &lt;row_count&gt; &lt;param_count&gt;<span class="c-com">\n</span>&lt;binary payload&gt;</code></div>
+<p>For each row, for each parameter in order, the payload is a 1-byte type code optionally followed by its value:</p>
+<table>
+<thead><tr><th>Code</th><th>Type</th><th>Payload</th></tr></thead>
+<tbody>
+<tr><td><code>N</code></td><td>NULL</td><td>none</td></tr>
+<tr><td><code>i</code></td><td>int4</td><td>4 bytes, big-endian</td></tr>
+<tr><td><code>l</code></td><td>int8</td><td>8 bytes, big-endian</td></tr>
+<tr><td><code>d</code></td><td>float8</td><td>8 bytes, big-endian IEEE 754</td></tr>
+<tr><td><code>b</code></td><td>bool</td><td>1 byte (0 = false, non-zero = true)</td></tr>
+<tr><td><code>s</code></td><td>string</td><td>4-byte big-endian length + UTF-8 bytes (no NUL); max 16 MB</td></tr>
+</tbody>
+</table>
+<p>The server decodes each binary parameter into its text form and reuses the same substitution and execution path as <code>EXECUTE_BATCH</code>. The response is identical to <code>EXECUTE_BATCH</code> (<code>BATCH_OK &lt;total_affected&gt;</code> or <code>BATCH_ERR &lt;row_index&gt; &lt;sqlstate&gt; &lt;msg&gt;</code>, each followed by <code>READY</code>). Here <code>param_count</code> must be 0..32; out-of-range arguments yield <code>ERR 42000 EXECUTE_BATCH_BINARY: invalid arguments</code>.</p>
+
+<div class="callout callout-warn">
+<p>Unlike the text batch, the binary batch has no fixed-size tail after an error. If the server replies <code>BATCH_ERR</code>, the client MUST stop sending payload bytes — the next read begins a fresh command. If the statement name is not found, the server drains the entire payload (decoding it field-by-field) and then replies <code>ERR 26000</code>.</p>
+</div>
+
+<h3 id="deallocate">DEALLOCATE</h3>
+<div class="sig"><code>DEALLOCATE &lt;stmt_name&gt;</code></div>
+<p>Frees a prepared statement and compacts the slot table. Success:</p>
+<pre><code><span class="c-key">OK</span>
+<span class="c-key">TAG</span> DEALLOCATE
+<span class="c-key">READY</span></code></pre>
+<p>A missing name yields <code>ERR 42000 DEALLOCATE: missing statement name</code>; an unknown statement yields <code>ERR 26000 Prepared statement '&lt;name&gt;' not found</code>.</p>
+
+<h2 id="notify">Async NOTIFY frames</h2>
+<p>LISTEN/NOTIFY delivery is pushed asynchronously between replies. A notification is a two-part, line-oriented frame the client can read between two <code>READY</code> markers:</p>
+<pre><code><span class="c-key">NOTIFY</span> &lt;sender_session_id&gt; &lt;channel&gt; &lt;payload_len&gt;
+&lt;payload&gt;</code></pre>
+<p>The header gives the originating session id, the channel name, and the payload byte length; the payload bytes follow on the next line. The frame is written as a unit under the connection's write lock so it cannot interleave with a multi-line <code>RESULT</code> being streamed.</p>
+
+<h2 id="session-teardown">Session teardown</h2>
+<p>When the loop ends (client <code>QUIT</code>, disconnect, or idle timeout), the server:</p>
+<ul>
+<li>Frees all prepared statements for the session.</li>
+<li><strong>Auto-rolls back</strong> any open transaction (the undo log is replayed and freed). For a SERIALIZABLE transaction it also unregisters the transaction from the conflict graph.</li>
+<li>Drops LISTEN/NOTIFY state and marks the connection invalid so in-flight async senders abort their writes.</li>
+<li>Unregisters from the session registry and drops session-scoped temporary tables.</li>
+<li>Shuts down TLS (if active). The socket itself is closed by <code>server.c</code>, not the protocol handler.</li>
+</ul>
+
+<div class="callout callout-note">
+<p>Auto-rollback on disconnect means an EVO client that drops mid-transaction never leaves partial work committed — the same guarantee the PG wire handler provides.</p>
+</div>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

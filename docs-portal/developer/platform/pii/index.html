@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PII guard — EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+  <h1>PII guard</h1>
+  <p class="lede">Detect, mask, and hybrid-encrypt sensitive data before it lands in EvolutionDB long-term memory or leaves the host via a public LLM. This is the <code>evolutiondb-pii</code> Python package — the bridge every <code>*-sync</code> connector calls before a <code>MEMORY PUT</code>.</p>
+
+  <h2 id="what">What it does</h2>
+  <p>For a given record, the library produces two parallel renderings of the same text:</p>
+  <ul>
+    <li>a <strong>masked</strong> copy — what the row stores by default and what the <a href="/platform/mcp-server/">MCP server</a>'s search path hands to LLMs (<code>***@example.com</code>, <code>4111 1111 **** 1111</code>, <code>Me***et Yı***ız</code>, …);</li>
+    <li>a <strong>cipher_tokens</strong> list — the original sensitive substrings, each encrypted with <strong>AES-256-GCM</strong> under a fresh per-token key that is itself wrapped with <strong>RSA-OAEP (SHA-256), 2048-bit</strong>. Recovery needs the private key, which by default never leaves <code>~/.evosql/pii_private.pem</code>.</li>
+  </ul>
+  <p>No plaintext is stored alongside the masked record, and no PII reaches an external LLM through the standard search path. A one-shot CLI restores the originals when the operator holds the private key.</p>
+  <p>Why hybrid rather than plain RSA: raw RSA-2048 caps a single plaintext at roughly 245 bytes, too small for an email body or a Notes entry. The library follows the same shape TLS / S/MIME / PGP use — a random 256-bit AES key per token, wrapped with RSA-OAEP-SHA256, with AES-256-GCM doing the bulk encryption. The triple <code>(wrapped_key, iv, ciphertext+tag)</code> lands in the row.</p>
+
+  <h2 id="install">Install</h2>
+  <pre><code><span class="c-com"># from PyPI</span>
+<span class="c-key">pip install</span> evolutiondb-pii
+
+<span class="c-com"># or editable, from the monorepo</span>
+<span class="c-key">pip install</span> -e client/evolutiondb-pii</code></pre>
+  <p>Install name is <code>evolutiondb-pii</code>; the import package is <code>evolutiondb_pii</code>. Runtime dependencies (from <code>pyproject.toml</code>) are <code>cryptography&gt;=42</code> and <code>psycopg[binary]&gt;=3.1</code> — the latter is only exercised by the DB-backed keystore, DB rule store, and the <code>row-decrypt</code>/<code>backfill</code> commands, all of which import it lazily. Requires Python 3.9+. The console script <code>evolutiondb-pii</code> maps to <code>evolutiondb_pii.__main__:main</code>. Current version: <code>0.3.0</code> (Beta).</p>
+
+  <h2 id="configure">Configure (keys &amp; env vars)</h2>
+  <p>The keypair can live on the filesystem (default) or in a passphrase-wrapped DB row. Pick one with a one-time <code>keygen</code>.</p>
+
+  <h3>File-backed (default)</h3>
+  <pre><code>evolutiondb-pii keygen
+<span class="c-com"># {"ok": true, "store": "file",</span>
+<span class="c-com">#  "public": "~/.evosql/pii_public.pem",</span>
+<span class="c-com">#  "private": "~/.evosql/pii_private.pem", "bits": "2048"}</span></code></pre>
+  <p>The private file is written with mode <code>0600</code>. Pass <code>--passphrase</code> to encrypt the PEM at rest (it then prompts, falling back to <code>EVOSQL_PII_PASSPHRASE</code>). <code>keygen</code> refuses to overwrite an existing keypair unless you pass <code>--force</code> — and a fresh keypair makes every token encrypted under the old public key unreadable.</p>
+
+  <h3>DB-backed (multi-host / shared backup)</h3>
+  <pre><code>evolutiondb-pii keygen --store=db
+<span class="c-com"># Private key passphrase: ********</span>
+<span class="c-com"># {"ok": true, "store": "db", "namespace": "...",</span>
+<span class="c-com">#  "key_id": "&lt;uuid4&gt;", "created_at": "...Z"}</span></code></pre>
+  <p>The keypair is wrapped with <strong>PBKDF2-SHA256 (100,000 iterations)</strong> deriving a 32-byte key, then <strong>AES-256-GCM</strong>, before it lands as a single row in the <code>__mem_pii_keystore</code> memory store (store name <code>pii_keystore</code>, key <code>default</code>). The row carries <code>public_pem</code> in the clear plus the wrapped private key; the passphrase is the only thing that can unwrap it, so a DB snapshot alone is useless. The row's namespace is the <code>MCP_USER_ID</code> value (default <code>default_user</code>), which isolates keypairs per tenant.</p>
+  <p>To move between storage modes without rotating (every existing cipher token stays decryptable):</p>
+  <pre><code>evolutiondb-pii keystore-import   <span class="c-com"># ~/.evosql/pii_*.pem  →  DB</span>
+evolutiondb-pii keystore-export   <span class="c-com"># DB  →  ~/.evosql/pii_*.pem</span></code></pre>
+
+  <h3>Custom rules in the DB</h3>
+  <p>Rules can also live in the DB — one row per rule in the <code>__mem_pii_rules</code> store (store name <code>pii_rules</code>), keyed by rule <code>name</code>:</p>
+  <pre><code>evolutiondb-pii rules-push my_rules.json --replace
+evolutiondb-pii rules-list
+evolutiondb-pii rules-pull &gt; /tmp/dump.json
+<span class="c-key">export</span> EVOSQL_PII_RULES=db</code></pre>
+  <p>DB rules layer the same way the file overrides do — they merge over the bundled defaults by <code>name</code>.</p>
+
+  <h3>Environment matrix</h3>
+  <table>
+    <thead><tr><th>Variable</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>EVOSQL_PII_KEYSTORE</code></td><td><code>auto</code> (default), <code>file</code>, or <code>db</code> — tells the library where the keypair lives. <code>auto</code> prefers a DB row when one exists and falls back to the filesystem PEM.</td></tr>
+      <tr><td><code>EVOSQL_PII_RULES</code></td><td>A path to a JSON override file, or the literal <code>db</code> to read rules from <code>__mem_pii_rules</code>. Unset uses <code>~/.evosql/pii_rules.json</code> if present.</td></tr>
+      <tr><td><code>EVOSQL_PII_PASSPHRASE</code></td><td>Non-interactive private-key passphrase (CI / Vault flows). When set, CLI passphrase prompts read this instead of <code>getpass</code>.</td></tr>
+      <tr><td><code>EVOSQL_PII_MASK</code></td><td><code>on</code> (default) forces the integration engine and errors loudly if no key is available; <code>auto</code> enables only when a key exists; <code>off</code> disables masking entirely (passthrough).</td></tr>
+      <tr><td><code>EVOSQL_PII_PUBLIC_KEY</code></td><td>Override path to the public PEM (used by <code>encrypt</code> and the integration layer's file fallback).</td></tr>
+      <tr><td><code>MCP_USER_ID</code></td><td>Namespace for the DB keystore + rules rows (default <code>default_user</code>).</td></tr>
+    </tbody>
+  </table>
+  <p>The <code>row-decrypt</code> and <code>backfill</code> commands open a psycopg connection from the standard <code>EVOSQL_HOST</code> (<code>127.0.0.1</code>), <code>EVOSQL_PORT</code> (<code>5433</code>), <code>EVOSQL_USER</code> (<code>admin</code>), <code>EVOSQL_PASSWORD</code> (<code>admin</code>), <code>EVOSQL_DATABASE</code> (<code>evosql</code>) variables.</p>
+
+  <h2 id="usage">Usage</h2>
+  <h3>Python — quick tour</h3>
+  <pre><code><span class="c-key">from</span> evolutiondb_pii <span class="c-key">import</span> encrypt_record, decrypt_record, mask
+
+<span class="c-com"># Just see the mask (runs detection inline)</span>
+mask(<span class="c-str">"Kart 4111 1111 1111 1111 sahibi mehmet@example.com"</span>)
+<span class="c-com"># → 'Kart 4111 1111 **** 1111 sahibi ***@example.com'</span>
+
+<span class="c-com"># Full pipeline — what a sync client does</span>
+record = {<span class="c-str">"text"</span>: <span class="c-str">"Mehmet Yıldız, kart 4111 1111 1111 1111"</span>}
+masked, tokens = encrypt_record(record, fields=[<span class="c-str">"text"</span>])
+<span class="c-com"># masked["text"] → "Me***et Yı***ız, kart 4111 1111 **** 1111"</span>
+<span class="c-com"># tokens         → [{"id":"t000001","tag":"credit_card", ...}, ...]</span>
+
+<span class="c-com"># Round-trip (private key needed)</span>
+restored = decrypt_record(masked, tokens)
+<span class="c-com"># restored["text"] == record["text"]</span></code></pre>
+  <p><code>encrypt_record</code> shallow-copies the record, so the caller's original dict stays intact. With no <code>public_key</code> argument it loads <code>~/.evosql/pii_public.pem</code>; with no <code>rules</code> argument it loads the merged default + user rule set.</p>
+
+  <h3>Python — sync-client integration</h3>
+  <p>The one call a connector makes; it resolves the engine once (env-gated, cached per process), masks the named fields, and splits the cipher tokens into companion rows so a single oversize record never blows past the per-statement wire limit:</p>
+  <pre><code><span class="c-key">from</span> evolutiondb_pii.integration <span class="c-key">import</span> protect_record
+
+rec, companions = protect_record(rec, fields=_PII_FIELDS,
+                                 key_prefix=<span class="c-str">f"outlook_pii_{msg_id}"</span>)
+store.put_record(main_key, rec)
+<span class="c-key">for</span> ck, cv <span class="c-key">in</span> companions:
+    store.put_record(ck, cv)</code></pre>
+  <p>The masked record gains a <code>_pii_refs</code> list pointing at its companion keys (<code>f"{key_prefix}_{i}"</code>). Each companion value is <code>{"version":1, "of":source, "chunk":i, "tokens":[...]}</code>. When <code>EVOSQL_PII_MASK=off</code> (or no key is resolvable in <code>auto</code> mode), <code>protect_record</code> is a no-op returning <code>(rec, [])</code> — callers need no feature-flag branch.</p>
+
+  <h3>CLI</h3>
+  <p><code>FILE</code> is <code>-</code> for stdin. Commands that touch the DB read connection settings from the <code>EVOSQL_*</code> env vars above.</p>
+  <pre><code>evolutiondb-pii keygen [--store=file|db] [--passphrase] [--force]
+evolutiondb-pii keystore-import        <span class="c-com"># filesystem keypair → DB</span>
+evolutiondb-pii keystore-export        <span class="c-com"># DB keypair → filesystem PEMs</span>
+evolutiondb-pii rules-push FILE [--replace]
+evolutiondb-pii rules-pull             <span class="c-com"># dump DB rules as JSON</span>
+evolutiondb-pii rules-list [--json]    <span class="c-com"># name/tag/priority/enabled table</span>
+evolutiondb-pii scan FILE [--rules-file FILE]      <span class="c-com"># masked rendering</span>
+evolutiondb-pii encrypt FILE           <span class="c-com"># emit {masked, cipher_tokens} JSON</span>
+evolutiondb-pii decrypt FILE [--keystore=file|db]  <span class="c-com"># restore plaintext</span>
+evolutiondb-pii row-decrypt --namespace=NS --key=K [--store=...] [--keystore=...]
+evolutiondb-pii backfill --namespace=NS [--store=...] [--key-prefix=...] [--dry-run]</code></pre>
+  <p>All subcommands share a <code>--namespace</code> flag (defaults to <code>MCP_USER_ID</code>). <code>--store</code> defaults to <code>mcp_mem</code> for <code>row-decrypt</code> / <code>backfill</code>. On any uncaught error the CLI prints <code>{"ok": false, "error": "..."}</code> to stderr and exits non-zero.</p>
+
+  <h2 id="reference">Reference</h2>
+  <p>Public surface re-exported from <code>evolutiondb_pii/__init__.py</code>: <code>detect</code>, <code>mask</code>, <code>encrypt_record</code>, <code>decrypt_record</code>, <code>generate_keypair</code>, <code>load_rules</code>, <code>protect_record</code>, plus the <code>Match</code> and <code>Rule</code> dataclasses.</p>
+
+  <div class="sig">detect(text: str, rules: list[Rule] | None = None) -&gt; list[Match]</div>
+  <p>Scan <code>text</code> and return non-overlapping <code>Match</code> records in start order. Runs every loaded rule's regex, keeps validator-approved spans, then resolves overlaps by descending <code>priority</code> (ties: earliest start, then longest match). Defaults to the merged default + user rule set. Bounded by the engine limits (<code>max_field_chars_scanned</code>, default 65536; <code>max_matches_per_field</code>, default 200).</p>
+
+  <div class="sig">mask(text: str, matches=None, rules=None) -&gt; str</div>
+  <p>Render <code>text</code> with every detected match replaced by its rule's masked form. Pass pre-detected <code>matches</code> to share work; omit them to detect inline. An unknown mask <code>kind</code> falls back to full-star so a config typo never leaks data.</p>
+
+  <div class="sig">encrypt_record(record: dict, fields: list[str], public_key=None, rules=None) -&gt; tuple[dict, list[dict]]</div>
+  <p>Walk <code>fields</code>, mask + encrypt every detected span, and return <code>(masked_record, cipher_tokens)</code>. Token offsets are computed against the <em>masked</em> string. Loads the public key from disk when <code>public_key</code> is None.</p>
+
+  <div class="sig">decrypt_record(masked_record: dict, cipher_tokens: list[dict], private_key=None, passphrase: bytes | None = None) -&gt; dict</div>
+  <p>Reverse of <code>encrypt_record</code>. Returns a new dict whose targeted fields hold the original strings reconstructed from <code>cipher_tokens</code>. Loads the private PEM (optionally decrypting it with <code>passphrase</code>) when <code>private_key</code> is None.</p>
+
+  <div class="sig">protect_record(rec, fields, key_prefix, *, source=None, env_var="EVOSQL_PII_MASK") -&gt; tuple[dict, list[tuple[str, dict]]]</div>
+  <p>High-level connector helper in <code>evolutiondb_pii.integration</code>. Masks the named fields, splits cipher tokens into ~5,500-byte companion chunks, stamps the masked record with <code>_pii_refs</code>, and returns <code>(masked_rec, [(row_key, row_value), ...])</code>. No-op (<code>(rec, [])</code>) when protection is off.</p>
+
+  <div class="sig">generate_keypair(public_path="~/.evosql/pii_public.pem", private_path="~/.evosql/pii_private.pem", bits=2048, passphrase=None) -&gt; dict</div>
+  <p>Generate a fresh RSA keypair (PKCS#8 PEM, public exponent 65537) and persist both halves; the private file is chmod'd <code>0600</code>. Rejects <code>bits &lt; 2048</code>. With a <code>passphrase</code> the PEM is encrypted with the library's best-available algorithm. Returns the written paths.</p>
+
+  <div class="sig">load_rules(user_path: str | None = None) -&gt; list[Rule]</div>
+  <p>Return the merged, priority-sorted list of <em>enabled</em> rules: bundled <code>data/default_rules.json</code> first, then the user override (explicit path, <code>EVOSQL_PII_RULES</code>, or <code>~/.evosql/pii_rules.json</code>) overlaid by <code>name</code> — matching names replace field-by-field, novel names append. <code>load_limits()</code> is the sibling that returns the scan guardrails.</p>
+
+  <div class="sig">@dataclass Match(start, end, text, rule, tag)</div>
+  <p>One detected PII fragment: the half-open span inside the source string, the covered substring, the matching rule name, and the semantic tag.</p>
+
+  <div class="sig">@dataclass Rule(name, enabled, priority, tag, pattern, validate, mask: MaskSpec)</div>
+  <p>A single PII rule. <code>__post_init__</code> compiles <code>pattern</code> into <code>compiled</code> so detection stays hot-path cheap. <code>mask</code> is a <code>MaskSpec</code> selecting one of the rendering kinds below.</p>
+
+  <h3 id="masks">Mask kinds</h3>
+  <table>
+    <thead><tr><th>Kind</th><th>Key fields</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>positional</code></td><td><code>keep_first</code>, <code>keep_last</code>, <code>preserve_sep</code></td><td>Stars the middle, keeps head + tail. <code>preserve_sep</code> leaves spaces / dashes visible (cards, IBANs, plates).</td></tr>
+      <tr><td><code>keep_after</code></td><td><code>separator</code>, <code>head_stars</code></td><td>Stars the head, keeps everything from <code>separator</code> onward — email shape.</td></tr>
+      <tr><td><code>keep_before</code></td><td><code>separator</code></td><td>Mirror of <code>keep_after</code>.</td></tr>
+      <tr><td><code>name_smart</code></td><td><code>short_threshold</code></td><td>Per whitespace token: long tokens keep first 2 + last 2, short ones keep first + last. Whitespace-preserving.</td></tr>
+      <tr><td><code>full_star</code></td><td>—</td><td>Length-preserving stars.</td></tr>
+      <tr><td><code>template</code></td><td><code>template</code>, <code>extract</code></td><td>Render a template; <code>url_userinfo</code> strips <code>user:pass</code> from a URL, <code>literal</code> echoes the template unchanged.</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="validators">Validators</h3>
+  <p>Detection-time post-checks (in <code>validators.py</code>) that drop false positives the regex can't catch. An unknown validator name accepts silently, so a typo never silently drops a span.</p>
+  <table>
+    <thead><tr><th>Name</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><code>luhn</code></td><td>Credit / debit card check digit (13–19 digits).</td></tr>
+      <tr><td><code>tckn_checksum</code></td><td>Turkish citizen ID (TC Kimlik), 11 digits, two trailing check digits.</td></tr>
+      <tr><td><code>vkn_checksum</code></td><td>Turkish tax number, 10 digits.</td></tr>
+      <tr><td><code>iban_mod97</code></td><td>IBAN per ISO 13616.</td></tr>
+      <tr><td><code>entropy_gte_4_0</code></td><td>Reject low-entropy long strings (the runtime threshold is 3.8 bits/symbol — the 4.0 in the name is historical).</td></tr>
+      <tr><td><code>person_name_heuristic</code></td><td>Trim obviously-not-name title-cased word runs. Best-effort only.</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="rules">Default rule set (v1)</h3>
+  <p>The bundled <code>default_rules.json</code> ships: <code>email</code>, <code>credit_card</code>, <code>tckn</code>, <code>iban</code>, <code>phone_tr</code>, <code>phone_intl</code>, <code>vkn</code>, <code>passport_generic</code>, <code>plate_tr</code>, <code>api_token_long</code>, <code>high_entropy_blob</code>, <code>jwt</code>, and <code>url_with_credentials</code>. <code>date_of_birth</code> and <code>person_name_tr</code> are off by default — opt-in. A rule's shape:</p>
+  <pre><code>{
+  <span class="c-str">"name"</span>:     <span class="c-str">"credit_card"</span>,
+  <span class="c-str">"enabled"</span>:  <span class="c-key">true</span>,
+  <span class="c-str">"priority"</span>: 95,
+  <span class="c-str">"tag"</span>:      <span class="c-str">"credit_card"</span>,
+  <span class="c-str">"pattern"</span>:  <span class="c-str">"\\b(?:\\d[ \\-]?){12,18}\\d\\b"</span>,
+  <span class="c-str">"validate"</span>: <span class="c-str">"luhn"</span>,
+  <span class="c-str">"mask"</span>: { <span class="c-str">"kind"</span>: <span class="c-str">"positional"</span>, <span class="c-str">"keep_first"</span>: 8,
+             <span class="c-str">"keep_last"</span>: 4, <span class="c-str">"preserve_sep"</span>: <span class="c-key">true</span> }
+}</code></pre>
+
+  <h2 id="notes">Notes &amp; limitations</h2>
+  <ul>
+    <li><strong>Names need real NER.</strong> The default <code>person_name_tr</code> rule is heuristic-only and ships disabled; reliable name detection needs an LLM or a proper NER pass (a later phase).</li>
+    <li><strong>Validators are conservative.</strong> They err on the side of dropping ambiguous spans rather than leaking — a clearly valid PII value that happens to flunk a checksum will look like normal text.</li>
+    <li><strong>No in-place re-encrypt / rotation today.</strong> A fresh <code>keygen</code> emits a new public key, but cipher tokens encrypted under the old public key must be decrypted then re-encrypted under the new one. The README's roadmap lists <code>keygen --rotate</code>, a <code>rekey</code> command, and <code>decrypt_only</code> legacy-key mode as future work (Phase 6) — these are <em>not</em> implemented in 0.3.0.</li>
+    <li><strong>DB-backed keystore needs the passphrase only at decrypt time.</strong> Sync workers run unattended with just the public key; they never need the private one.</li>
+    <li><strong>SQL string handling.</strong> <code>store_io</code> writes rows by quote-escaping values into <code>MEMORY PUT</code> / <code>DELETE</code> statements (no bind parameters), and uses a DELETE-then-PUT upsert to dodge a historical large-value duplicate-key issue. Memory stores are self-bootstrapping — a missing store is created on first write.</li>
+    <li>The masked rendering is also the only PII surface a search query sees, so the masking quality directly bounds what an LLM can ever recover from the standard search path. The matching engine bits and the SQL surface that backs <code>MEMORY PUT</code> are documented in the <a href="https://wiki.evolutiondb.org">code wiki</a>.</li>
+  </ul>
+
+  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>This page documents <code>evolutiondb-pii</code> <strong>0.3.0</strong> (Beta, MIT). It is a client-side Python library, not part of the C engine. For where the masked records are stored and recalled, see the <a href="/platform/mcp-server/">MCP Server</a>.</div></div>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>
