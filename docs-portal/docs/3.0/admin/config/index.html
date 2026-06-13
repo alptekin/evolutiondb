@@ -15,17 +15,17 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>23. Server Configuration</h1>
-<p class="lede">How to start and tune <code>evosql-server</code>: the listener ports it opens, the command-line flags and environment variables it reads at boot, and the limits that govern how many clients it will serve at once.</p>
+<p class="lede">This page shows how to start and tune <code>evosql-server</code>. It covers the listener ports it opens. It covers the command-line flags and environment variables it reads at boot. It also covers the limits on how many clients it will serve at once.</p>
 
-<p>EvolutionDB has a single server executable, <code>evosql-server</code> (built from <code>adaptor/</code>). It is a <strong>dual-protocol</strong> server: one process spawns two TCP listeners, the PostgreSQL wire protocol and the native EVO text protocol, backed by one shared SQL engine and one shared data file (<code>evosql.db</code>). All configuration is supplied at process start through command-line flags and environment variables. Unlike PostgreSQL, there is <em>no <code>postgresql.conf</code> file and no <code>SET</code>-able GUC reload</em>: the knobs documented here are read once in <code>main()</code> and apply for the lifetime of the process.</p>
+<p>EvolutionDB has one server executable, <code>evosql-server</code>. It is built from <code>adaptor/</code>. It is a <strong>dual-protocol</strong> server. One process starts two TCP listeners. One is the PostgreSQL wire protocol. The other is the native EVO text protocol. Both share one SQL engine and one data file, <code>evosql.db</code>. You set all configuration when the process starts. You use command-line flags and environment variables. PostgreSQL uses a <code>postgresql.conf</code> file and a <code>SET</code>-able GUC reload, but EvolutionDB has <em>neither</em>. The settings on this page are read once in <code>main()</code>. They apply for the whole life of the process.</p>
 
 <div class="callout">
-<p><strong>Precedence.</strong> For every setting that has both a flag and an environment variable, the server follows a consistent rule: <strong>environment variables are read first to seed defaults, then command-line flags override them.</strong> The flag always wins.</p>
+<p><strong>Precedence.</strong> Some settings have both a flag and an environment variable. The server uses one rule for all of them. <strong>It reads environment variables first to set defaults. Then command-line flags override them.</strong> The flag always wins.</p>
 </div>
 
 <h2 id="invocation">23.1. Invoking the Server</h2>
 
-<p>The synopsis below lists every flag the argument parser in <code>adaptor/main.c</code> recognizes.</p>
+<p>The synopsis below lists every flag the argument parser in <code>adaptor/main.c</code> knows about.</p>
 
 <pre class="synopsis"><code>evosql-server
     [<span class="c-key">--pg-port</span> <var>PORT</var>]
@@ -41,17 +41,17 @@
     [<span class="c-key">--base-backup</span> <var>PATH</var>]
     [<var>PORT</var>]</code></pre>
 
-<p>A bare positional number is accepted for backward compatibility and is interpreted as the <strong>PG port</strong>:</p>
+<p>You can also pass a plain number with no flag. The server reads it as the <strong>PG port</strong>. This is kept for backward compatibility.</p>
 
 <pre><code><span class="c-com"># These two are equivalent</span>
 evosql-server <span class="c-key">--pg-port</span> 5544
 evosql-server 5544</code></pre>
 
-<p>The argument parser is positional-tolerant but not strict: an unrecognized flag is silently ignored (there is no usage/error exit for unknown options). Flags that require a value are only consumed when a following argument exists.</p>
+<p>The argument parser is not strict. It ignores any flag it does not know. It does not print a usage message or exit with an error for unknown options. A flag that needs a value is only used when another argument follows it.</p>
 
 <h3 id="startup-output">23.1.1. Startup Output</h3>
 
-<p>On a normal boot the server prints its version, the buffer-pool size, TLS status, the two protocol ports, the resolved maximum connection count, and an ASCII banner, then begins accepting connections. A typical session looks like:</p>
+<p>On a normal boot the server prints some information. It prints its version, the buffer-pool size, and the TLS status. It prints the two protocol ports and the maximum connection count. It also prints an ASCII banner. Then it starts to accept connections. A typical boot looks like this.</p>
 
 <pre><code>EvolutionDB v3.0.0
 [BufferPool] 32768 pages (128 MB)
@@ -66,11 +66,11 @@ evosql-server 5544</code></pre>
 [EVO] Listening on port 9967
 [PG] Listening on port 5433</code></pre>
 
-<p>The PG listener runs on the main thread and blocks forever; the EVO listener (and, when configured, the distributed-query listener) runs in a background thread.</p>
+<p>The PG listener runs on the main thread. It blocks forever. The EVO listener runs in a background thread. The distributed-query listener also runs in a background thread when it is configured.</p>
 
 <h2 id="ports">23.2. Ports and Listeners</h2>
 
-<p>The server can open up to four kinds of TCP listeners. Only the two protocol listeners are opened unconditionally; the rest are opened only when their feature is configured.</p>
+<p>The server can open up to four kinds of TCP listeners. It always opens the two protocol listeners. It opens the other listeners only when you turn their feature on.</p>
 
 <table>
 <thead><tr><th>Listener</th><th>Default port</th><th>How to set</th><th>Opened when</th></tr></thead>
@@ -82,51 +82,51 @@ evosql-server 5544</code></pre>
 <tr><td>Distributed query engine</td><td><code>9969</code></td><td><code>--dist-port</code></td><td><code>--cluster</code> + <code>--node-id</code> given</td></tr>
 </tbody>
 </table>
-<p style="font-size:0.85em;opacity:0.8">* <code>9968</code> (<code>REPL_DEFAULT_PORT</code>) is the default upstream port assumed for a replica when only a host is supplied; the WAL <em>sender</em> itself only starts when <code>--replication-port</code>/<code>EVOSQL_REPLICATION_PORT</code> is explicitly &gt; 0.</p>
+<p style="font-size:0.85em;opacity:0.8">* <code>9968</code> is <code>REPL_DEFAULT_PORT</code>. A replica uses it as the default upstream port when you give only a host. The WAL <em>sender</em> itself starts only when <code>--replication-port</code> or <code>EVOSQL_REPLICATION_PORT</code> is set to a value &gt; 0.</p>
 
-<p>The two protocol ports are the ones you will configure most often. The default <code>5433</code> deliberately avoids PostgreSQL's <code>5432</code> so the two can run side by side on one host. Each listener binds with a fixed <code>listen()</code> backlog of <code>5</code>.</p>
+<p>You will set the two protocol ports most often. The default PG port is <code>5433</code>. This is on purpose. It is not PostgreSQL's <code>5432</code>, so both can run on one host at the same time. Each listener binds with a fixed <code>listen()</code> backlog of <code>5</code>.</p>
 
 <pre><code><span class="c-com"># Run two engines on one box without colliding</span>
 evosql-server <span class="c-key">--pg-port</span> 5433 <span class="c-key">--evo-port</span> 9967
 evosql-server <span class="c-key">--pg-port</span> 5443 <span class="c-key">--evo-port</span> 9977</code></pre>
 
 <div class="callout">
-<p><strong>No bind-address control.</strong> EvolutionDB has no <code>listen_addresses</code> equivalent. The bind address is fixed in the network layer; you cannot, via configuration, restrict the server to <code>localhost</code> or pick a specific interface. Use OS firewall rules or container networking to limit reach.</p>
+<p><strong>No bind-address control.</strong> EvolutionDB has nothing like <code>listen_addresses</code>. The bind address is fixed in the network layer. You cannot use configuration to limit the server to <code>localhost</code>. You also cannot use it to pick one interface. Use OS firewall rules or container networking to limit who can reach it.</p>
 </div>
 
 <h2 id="connection-limits">23.3. Connection Limits and the Worker Pool</h2>
 
-<p>EvolutionDB enforces a hard ceiling on concurrent client connections. The accept loop in <code>server_listen()</code> checks the live count under a mutex before dispatching each connection; if the limit is already reached, the new socket is <strong>closed immediately</strong> and a rejection line is logged.</p>
+<p>EvolutionDB sets a hard limit on the number of client connections at one time. The accept loop in <code>server_listen()</code> checks the live count under a mutex before it handles each connection. The new socket is <strong>closed right away</strong> when the limit is already reached. The server also logs a rejection line.</p>
 
 <pre><code>[PG] Connection rejected: limit 100 reached</code></pre>
 
 <dl class="params">
 <dt><code>max_connections</code></dt>
-<dd>Maximum number of concurrent client connections across <em>both</em> protocols combined. The compiled-in default is <strong>100</strong>. The active/limit pair is printed on every connect and disconnect (<code>active: 7/100</code>). There is no startup flag for this value; it is exposed through the catalog accessors <code>get_max_connections()</code> / <code>set_max_connections()</code> and reported by the server banner as <code>Max connections</code>.</dd>
+<dd>The most client connections allowed at one time. This count covers <em>both</em> protocols together. The default is built into the code and is <strong>100</strong>. The server prints the active count and the limit on every connect and disconnect. It looks like <code>active: 7/100</code>. There is no startup flag for this value. You reach it through the catalog accessors <code>get_max_connections()</code> and <code>set_max_connections()</code>. The server banner shows it as <code>Max connections</code>.</dd>
 
 <dt><code>EVOSQL_POOL_SIZE</code> (env)</dt>
-<dd>Size of the pre-spawned worker thread pool that services accepted sockets. Default <strong>20</strong>. Setting it to <code>0</code> disables the pool and falls back to the legacy <em>one-thread-per-connection</em> path (useful under Valgrind / ThreadSanitizer). The pool's internal task queue capacity tracks <code>max_connections</code> so a connect storm cannot exhaust memory.</dd>
+<dd>The size of the worker thread pool. The server starts these threads in advance to handle accepted sockets. The default is <strong>20</strong>. Set it to <code>0</code> to turn the pool off. The server then falls back to the old <em>one-thread-per-connection</em> path. This is useful under Valgrind or ThreadSanitizer. The pool's task queue size follows <code>max_connections</code>. So a burst of connections cannot use up all the memory.</dd>
 
 <dt><code>MAX_SESSIONS</code> (compile-time)</dt>
-<dd>The session registry, the array that backs session introspection and statement cancellation, has a fixed capacity of <strong>256</strong> slots. When all slots are in use a session still receives a valid ID but is not tracked in the registry.</dd>
+<dd>The session registry has a fixed size of <strong>256</strong> slots. This array backs session introspection and statement cancellation. A new session still gets a valid ID when all slots are in use. But the registry does not track it.</dd>
 </dl>
 
-<p>Each connection runs in its own thread (pooled or spawned). Query execution across all threads is serialized through a parser read/write lock plus a DML mutex (see <a href="/3.0/admin/concurrency/">Concurrency &amp; Locking</a>), so the engine remains single-writer even though the network layer is fully multi-threaded.</p>
+<p>Each connection runs in its own thread. The thread comes from the pool or is spawned. The server runs queries one at a time across all threads. It uses a parser read/write lock and a DML mutex to do this. You can read more in <a href="/3.0/admin/concurrency/">Concurrency &amp; Locking</a>. So the engine still has a single writer, even though the network layer uses many threads.</p>
 
 <div class="callout">
-<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL's <code>max_connections</code> is a reloadable GUC and connections each get a backend process; EvolutionDB's limit is a fixed default of 100, set in code, and connections are threads sharing one address space. There is no per-role or per-database connection limit, and no reserved superuser slots.</p>
+<p><strong>How this differs from PostgreSQL.</strong> In PostgreSQL <code>max_connections</code> is a reloadable GUC. Each connection gets its own backend process. EvolutionDB has a fixed limit of 100, set in code. Its connections are threads that share one address space. There is no limit per role or per database. There are no reserved superuser slots.</p>
 </div>
 
 <h2 id="buffer-pool">23.4. Buffer Pool Size</h2>
 
-<p>The Clock-Sweep buffer pool (see <a href="/3.0/admin/storage/">Storage &amp; the Buffer Pool</a>) caches 4 KB pages. Its size is the single most impactful memory tuning knob and is the only one parsed with unit suffixes.</p>
+<p>The Clock-Sweep buffer pool caches 4 KB pages. You can read more in <a href="/3.0/admin/storage/">Storage &amp; the Buffer Pool</a>. Its size has the biggest effect on memory of any setting here. It is also the only setting that accepts unit suffixes.</p>
 
 <dl class="params">
 <dt><code>--buffer-pool-size</code> <var>SIZE</var> / <code>EVOSQL_BUFFER_POOL_SIZE</code></dt>
-<dd>Sets the number of 4 KB pages held in the buffer pool. The default is <strong>32768 pages (128 MB)</strong> (<code>BP_DEFAULT_PAGES</code>). The flag takes precedence; if the flag is absent the environment variable is consulted.</dd>
+<dd>Sets how many 4 KB pages the buffer pool holds. The default is <strong>32768 pages, which is 128 MB</strong>. This default is <code>BP_DEFAULT_PAGES</code>. The flag wins over the environment variable. The server reads the environment variable only when the flag is absent.</dd>
 </dl>
 
-<p>The size string accepts a unit suffix or a raw page count, parsed as follows:</p>
+<p>The size string can use a unit suffix or a plain page count. The server reads it as follows.</p>
 
 <table>
 <thead><tr><th>Input</th><th>Interpreted as</th><th>Resulting pages</th></tr></thead>
@@ -143,29 +143,29 @@ evosql-server <span class="c-key">--buffer-pool-size</span> 256M
 EVOSQL_BUFFER_POOL_SIZE=256M evosql-server
 evosql-server <span class="c-key">--buffer-pool-size</span> 65536   <span class="c-com"># raw pages</span></code></pre>
 
-<p>A value that parses to zero or less is treated as "unset" and the 128 MB default is used. The resolved size is echoed at startup as a <code>[BufferPool]</code> line in pages and MB (or KB for very small pools).</p>
+<p>A value that comes out as zero or less counts as "unset". The server then uses the 128 MB default. It prints the final size at startup on a <code>[BufferPool]</code> line. The line shows pages and MB. For very small pools it shows KB.</p>
 
 <h2 id="auth-env">23.5. Authentication Bootstrap</h2>
 
-<p>The initial superuser is provisioned at first boot from two environment variables read by the user-management layer (<code>evolution/db/UserMgmt.c</code>):</p>
+<p>The server creates the first superuser on the first boot. It reads two environment variables to do this. The user-management layer reads them in <code>evolution/db/UserMgmt.c</code>.</p>
 
 <dl class="params">
 <dt><code>EVOSQL_USER_NAME</code></dt>
-<dd>Name of the bootstrap superuser. Default <strong><code>admin</code></strong>.</dd>
+<dd>The name of the bootstrap superuser. The default is <strong><code>admin</code></strong>.</dd>
 <dt><code>EVOSQL_PASSWORD</code></dt>
-<dd>Password for the bootstrap superuser. If unset or empty, the server <strong>generates a random 16-character password and prints it once</strong> at startup. Capture it from the logs, because it is not stored in plaintext or shown again. The stored credential uses PBKDF2-SHA256 (see <a href="/3.0/ref/create-user/">CREATE USER</a> and <a href="/3.0/admin/security/">Security</a>).</dd>
+<dd>The password for the bootstrap superuser. The server <strong>creates a random 16-character password and prints it once</strong> at startup when this is unset or empty. Save it from the logs. The server does not store it in plaintext and does not show it again. The stored credential uses PBKDF2-SHA256. See <a href="/3.0/ref/create-user/">CREATE USER</a> and <a href="/3.0/admin/security/">Security</a>.</dd>
 </dl>
 
 <pre><code><span class="c-com"># Deterministic credentials for local development</span>
 EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=admin evosql-server</code></pre>
 
 <div class="callout">
-<p><strong>Both protocols force cleartext-password auth.</strong> The PG wire handler always issues a <code>CleartextPassword</code> challenge, the actual hashing happens server-side. Run behind TLS (next section) so the cleartext password is never exposed on the wire.</p>
+<p><strong>Both protocols force cleartext-password auth.</strong> The PG wire handler always sends a <code>CleartextPassword</code> challenge. The hashing happens on the server side. Run the server behind TLS so the cleartext password is never seen on the wire. The next section covers TLS.</p>
 </div>
 
 <h2 id="tls">23.6. Transport Security (TLS)</h2>
 
-<p>TLS is opt-in and is enabled purely through the environment. If <em>both</em> of the following point to readable PEM files, the server initializes an OpenSSL context for the PG-wire transport at startup; otherwise it prints <code>TLS disabled</code> and continues in cleartext. (TLS support also requires a build with <code>TLS=1</code>.)</p>
+<p>TLS is off by default. You turn it on only through the environment. The server sets up an OpenSSL context for the PG-wire transport at startup when <em>both</em> variables below point to readable PEM files. If they do not, it prints <code>TLS disabled</code> and runs in cleartext. TLS also needs a build made with <code>TLS=1</code>.</p>
 
 <dl class="params">
 <dt><code>EVOSQL_TLS_CERT</code></dt>
@@ -178,29 +178,29 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=admin evosql-server</code></pre>
 EVOSQL_TLS_KEY=/etc/evosql/server.key \
 evosql-server</code></pre>
 
-<p>A failed TLS init is non-fatal: the server logs <code>[TLS] Failed to initialise - continuing without TLS</code> and runs in cleartext rather than refusing to start. The replication transport can reuse the same certificate/key pair when <code>EVOSQL_REPLICATION_TLS</code> is truthy (see below).</p>
+<p>A failed TLS init does not stop the server. It logs <code>[TLS] Failed to initialise - continuing without TLS</code> and runs in cleartext. It does not refuse to start. The replication transport can reuse the same certificate and key pair. This happens when <code>EVOSQL_REPLICATION_TLS</code> is truthy. See below.</p>
 
 <h2 id="replication-env">23.7. Replication, CDC and Cluster Boot Settings</h2>
 
-<p>Replication topology can be primed entirely from the environment (handy for containers), then refined with flags. The environment is read first; matching flags override it. Full operational detail lives in <a href="/3.0/admin/replication/">High Availability &amp; Replication</a>, this section only documents the boot-time configuration surface.</p>
+<p>You can set up the replication topology fully from the environment. This is handy for containers. You can then refine it with flags. The server reads the environment first. Matching flags override it. <a href="/3.0/admin/replication/">High Availability &amp; Replication</a> has the full operational detail. This section only covers the boot-time settings.</p>
 
 <dl class="params">
 <dt><code>EVOSQL_REPLICATION_ROLE</code> / <code>--role</code></dt>
-<dd>One of <code>primary</code>, <code>replica</code>, or <code>witness</code>. Pins the role reported by <code>SHOW REPLICATION STATUS</code> before any peer connects. An unrecognized value logs a warning and leaves the role unset.</dd>
+<dd>One of <code>primary</code>, <code>replica</code>, or <code>witness</code>. This sets the role that <code>SHOW REPLICATION STATUS</code> reports before any peer connects. An unknown value logs a warning and leaves the role unset.</dd>
 <dt><code>EVOSQL_PRIMARY_HOST</code> / <code>EVOSQL_PRIMARY_PORT</code></dt>
-<dd>Upstream the server should follow when <code>role=replica</code>. When a host is given without a port, the replica targets <code>REPL_DEFAULT_PORT</code> (<code>9968</code>). Equivalent to the flag <code>--replica HOST:PORT</code>.</dd>
+<dd>The upstream the server should follow when <code>role=replica</code>. The replica uses <code>REPL_DEFAULT_PORT</code>, which is <code>9968</code>, when you give a host without a port. This is the same as the flag <code>--replica HOST:PORT</code>.</dd>
 <dt><code>EVOSQL_REPLICATION_PORT</code> / <code>--replication-port</code></dt>
-<dd>Port on which a primary runs its WAL sender. The sender starts only when this resolves to a value &gt; 0.</dd>
+<dd>The port where a primary runs its WAL sender. The sender starts only when this comes out as a value &gt; 0.</dd>
 <dt><code>EVOSQL_REPLICATION_USER</code> / <code>EVOSQL_REPLICATION_PASSWORD</code></dt>
-<dd>Credentials pre-registered for the replication auth handshake. Both must be set together to take effect.</dd>
+<dd>The credentials for the replication auth handshake. You must set both for them to take effect.</dd>
 <dt><code>EVOSQL_REPLICATION_TLS</code></dt>
-<dd>Truthy (<code>1</code>, <code>t</code>, <code>T</code>, <code>y</code>, <code>Y</code>) enables TLS on the replication transport using the same cert/key as the PG-wire context.</dd>
+<dd>A truthy value turns on TLS for the replication transport. The truthy values are <code>1</code>, <code>t</code>, <code>T</code>, <code>y</code>, and <code>Y</code>. It uses the same cert and key as the PG-wire context.</dd>
 <dt><code>--cdc-port</code> / <code>EVOSQL_CDC_PORT</code></dt>
-<dd>Starts a Change-Data-Capture streaming listener that pushes WAL-decoded changes as JSON Lines. Off unless &gt; 0.</dd>
+<dd>Starts a Change-Data-Capture streaming listener. It pushes WAL-decoded changes as JSON Lines. It is off unless the value is &gt; 0.</dd>
 <dt><code>--cluster</code> + <code>--node-id</code></dt>
-<dd>A comma-separated <code>host:port</code> node list plus this node's zero-based index. Supplying both starts the Raft consensus module and the distributed query engine; per-node PG and dist ports are derived by offsetting from this node's ports.</dd>
+<dd>A comma-separated <code>host:port</code> node list plus this node's zero-based index. Give both to start the Raft consensus module and the distributed query engine. The server works out each node's PG and dist ports by offsetting from this node's ports.</dd>
 <dt><code>--base-backup</code> <var>PATH</var></dt>
-<dd>One-shot mode: clones the data directory to <var>PATH</var> and exits <strong>without binding any listener sockets</strong>. Used to bootstrap a fresh replica from a primary. Exit code <code>0</code> on success, <code>1</code> on failure.</dd>
+<dd>A one-shot mode. It copies the data directory to <var>PATH</var> and exits <strong>without binding any listener sockets</strong>. Use it to bootstrap a fresh replica from a primary. The exit code is <code>0</code> on success and <code>1</code> on failure.</dd>
 </dl>
 
 <pre><code><span class="c-com"># Primary with WAL sender on 9968</span>
@@ -215,12 +215,12 @@ evosql-server</code></pre>
 
 <dl class="params">
 <dt><code>EVOSQL_SYSTEM_TIME_RETENTION_DAYS</code></dt>
-<dd>Seeds the retention window for system-versioned (temporal) table history. Default <strong>7 days</strong>; <code>0</code> disables retention pruning. Any non-negative integer is accepted at boot. Unlike most settings here this one <em>can</em> be changed at runtime with <code>SET SYSTEM_TIME_RETENTION = <var>N</var></code>, which overrides the boot value for the running process.</dd>
+<dd>Sets the retention window for system-versioned table history. These are temporal tables. The default is <strong>7 days</strong>. A value of <code>0</code> turns retention pruning off. The server accepts any non-negative integer at boot. Most settings here are fixed at boot, but this one <em>can</em> change at runtime. Use <code>SET SYSTEM_TIME_RETENTION = <var>N</var></code>. This overrides the boot value for the running process.</dd>
 </dl>
 
 <h2 id="reference">23.9. Quick Reference</h2>
 
-<p>Every command-line flag and environment variable the server reads at startup, in one place.</p>
+<p>This table lists every command-line flag and environment variable the server reads at startup. They are all in one place.</p>
 
 <table>
 <thead><tr><th>Setting</th><th>Flag</th><th>Environment variable</th><th>Default</th></tr></thead>
@@ -251,16 +251,16 @@ evosql-server</code></pre>
 <div class="callout">
 <p><strong>Notes &amp; limitations</strong></p>
 <ul>
-<li><strong>No config file.</strong> There is no <code>postgresql.conf</code>/<code>evosql.conf</code>. All configuration is flags + environment, resolved once at process start.</li>
-<li><strong>Most settings are not runtime-reloadable.</strong> Changing ports, buffer-pool size, pool size, TLS, or the connection limit requires a restart. The only documented exception is <code>SYSTEM_TIME_RETENTION</code>, changeable via <code>SET</code>.</li>
-<li><strong>Connection limit is compiled-in (100).</strong> It is not exposed as a startup flag; over-limit connections are dropped at accept time with a logged rejection, not a protocol-level error message.</li>
-<li><strong>No bind-address / interface selection.</strong> Restrict exposure with firewall or container networking.</li>
-<li><strong>Unknown flags are ignored silently</strong>: there is no usage banner or non-zero exit for a typo'd option, so double-check spelling.</li>
-<li><strong>Graceful shutdown</strong> on <code>SIGTERM</code>/<code>SIGINT</code> drains the worker pool, checkpoints the WAL, flushes the buffer pool, and closes the data file before exiting (POSIX only).</li>
+<li><strong>No config file.</strong> There is no <code>postgresql.conf</code> or <code>evosql.conf</code>. All configuration comes from flags and the environment. The server resolves it once at process start.</li>
+<li><strong>Most settings cannot reload at runtime.</strong> You must restart to change ports, buffer-pool size, pool size, TLS, or the connection limit. The only documented exception is <code>SYSTEM_TIME_RETENTION</code>. You can change it with <code>SET</code>.</li>
+<li><strong>The connection limit is built into the code and is 100.</strong> There is no startup flag for it. The server drops over-limit connections at accept time and logs a rejection. It does not send a protocol-level error message.</li>
+<li><strong>No bind-address or interface selection.</strong> Use a firewall or container networking to limit who can reach it.</li>
+<li><strong>Unknown flags are ignored without any message.</strong> There is no usage banner and no non-zero exit for a misspelled option. So check your spelling.</li>
+<li><strong>Graceful shutdown</strong> happens on <code>SIGTERM</code> or <code>SIGINT</code>. The server drains the worker pool, checkpoints the WAL, flushes the buffer pool, and closes the data file before it exits. This is POSIX only.</li>
 </ul>
 </div>
 
-<p>See also: <a href="/3.0/admin/storage/">Storage &amp; the Buffer Pool</a> · <a href="/3.0/admin/replication/">High Availability &amp; Replication</a> · <a href="/3.0/admin/security/">Security</a> · <a href="/3.0/ref/create-user/">CREATE USER</a> · <a href="/3.0/ref/set/">SET</a>.</p>
+<p>See also. <a href="/3.0/admin/storage/">Storage &amp; the Buffer Pool</a> · <a href="/3.0/admin/replication/">High Availability &amp; Replication</a> · <a href="/3.0/admin/security/">Security</a> · <a href="/3.0/ref/create-user/">CREATE USER</a> · <a href="/3.0/ref/set/">SET</a>.</p>
 </main></div>
 <script src="/nav-data.js"></script>
 <script src="/nav.js"></script>

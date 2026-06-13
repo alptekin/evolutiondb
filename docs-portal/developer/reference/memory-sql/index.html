@@ -15,16 +15,16 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Memory &amp; Entity SQL</h1>
-<p class="lede">EvolutionDB ships two purpose-built SQL surfaces for agent memory: <strong>MEMORY stores</strong>, a namespaced JSON key/value store with optional vector embeddings for semantic search, and <strong>ENTITY stores</strong>, a key/summary/facts store that tracks how often each entity is mentioned. Both are thin SQL skins over ordinary tables: every statement compiles down to the engine's regular INSERT / SELECT / DELETE path, so RLS policies, MVCC, triggers, and FK cascade all apply unchanged.</p>
+<p class="lede">EvolutionDB has two SQL surfaces built for agent memory. <strong>MEMORY stores</strong> are a namespaced JSON key/value store. They can also hold vector embeddings for semantic search. <strong>ENTITY stores</strong> hold a key, a summary, and facts. They also track how often each entity is mentioned. Both surfaces are thin SQL skins over normal tables. Every statement compiles down to the engine's regular INSERT, SELECT, and DELETE path. So RLS policies, MVCC, triggers, and FK cascade all work the same way.</p>
 
 <h2 id="overview">How it works</h2>
-<p>A MEMORY store named <code>foo</code> is backed by a regular table named <code>mem_foo</code>; an ENTITY store named <code>bar</code> is backed by <code>ent_bar</code>. The store itself is registered in the system catalog, and the backing table is created in the current schema. Because the backing object is a normal table, you can attach policies and triggers to it through the dedicated <code>ON MEMORY STORE</code> grammar, and everything a hand-written DML statement supports works here too.</p>
+<p>A MEMORY store named <code>foo</code> uses a regular table named <code>mem_foo</code>. An ENTITY store named <code>bar</code> uses a table named <code>ent_bar</code>. The store is registered in the system catalog. The backing table is created in the current schema. The backing object is a normal table. So you can attach policies and triggers to it through the <code>ON MEMORY STORE</code> grammar. Everything that a hand-written DML statement supports works here too.</p>
 <div class="callout callout-note">
-<p>Both surfaces are case-insensitive on keywords, like the rest of EvolutionDB SQL. Store names are bare identifiers (the <span class="c-com">NAME</span> token). Namespace, key, value, summary, and facts arguments are single-quoted string literals (SQL-standard doubled quotes <code>''</code> are collapsed to a single <code>'</code> on write, so values round-trip).</p>
+<p>Both surfaces treat keywords as case-insensitive. This is the same as the rest of EvolutionDB SQL. Store names are bare identifiers. They use the <span class="c-com">NAME</span> token. The namespace, key, value, summary, and facts arguments are single-quoted string literals. A doubled quote <code>''</code> is turned into a single <code>'</code> on write. So values round-trip correctly.</p>
 </div>
 
 <h2 id="create-memory-store">CREATE MEMORY STORE</h2>
-<p>Creates a memory store and its <code>mem_&lt;name&gt;</code> backing table. The optional <code>WITH</code> list configures the embedding dimension and the distance metric used by <code>MEMORY SEARCH</code>.</p>
+<p>Creates a memory store and its <code>mem_&lt;name&gt;</code> backing table. The optional <code>WITH</code> list sets the embedding dimension. It also sets the distance metric that <code>MEMORY SEARCH</code> uses.</p>
 <div class="sig">
 CREATE MEMORY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 &nbsp;&nbsp;[ WITH ( embedding_dim = <span class="c-key">N</span> [, distance = '<span class="c-str">metric</span>'] ) ]
@@ -33,13 +33,13 @@ CREATE MEMORY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 <ul>
 <li><code>mem_namespace</code>, VARCHAR(255) NOT NULL</li>
 <li><code>mem_key</code>, VARCHAR(255) NOT NULL</li>
-<li><code>pk</code>, VARCHAR(512) PRIMARY KEY (composite <code>namespace</code> + separator + <code>key</code>)</li>
+<li><code>pk</code>, VARCHAR(512) PRIMARY KEY. It is <code>namespace</code> plus a separator plus <code>key</code>.</li>
 <li><code>mem_value</code>, JSON</li>
-<li><code>embedding</code>, VECTOR(N) <em>(only present when <code>embedding_dim</code> &gt; 0)</em></li>
+<li><code>embedding</code>, VECTOR(N). <em>This column exists only when <code>embedding_dim</code> &gt; 0.</em></li>
 <li><code>created_at</code>, TIMESTAMP</li>
-<li><code>ttl_at</code>: TIMESTAMP (nullable, NULL by default)</li>
+<li><code>ttl_at</code>, TIMESTAMP. It can be NULL. It is NULL by default.</li>
 </ul>
-<p>When <code>embedding_dim</code> is 0 (the default), the embedding column is omitted entirely and the store is a pure JSON KV table. Valid <code>distance</code> values are <code>'cosine'</code> (default), <code>'l2'</code>, <code>'inner'</code> / <code>'ip'</code>, and <code>'l1'</code>; any unrecognized value falls back to cosine.</p>
+<p>By default <code>embedding_dim</code> is 0. When it is 0, the embedding column is left out. The store is then a pure JSON key/value table. The valid <code>distance</code> values are <code>'cosine'</code>, <code>'l2'</code>, <code>'inner'</code>, <code>'ip'</code>, and <code>'l1'</code>. The default is <code>'cosine'</code>. Any value that is not in this list falls back to cosine.</p>
 <pre><code><span class="c-com">-- pure JSON key/value store</span>
 <span class="c-key">CREATE MEMORY STORE</span> agent_notes;
 
@@ -48,7 +48,7 @@ CREATE MEMORY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 
 <span class="c-key">CREATE MEMORY STORE</span> agent_notes <span class="c-key">IF NOT EXISTS</span>;</code></pre>
 <div class="callout callout-warn">
-<p>The grammar token sequence is literally <code>CREATE MEMORY STORE IF EXISTS name</code>, but it is emitted as <em>IF NOT EXISTS</em> semantics, when the store already exists the statement is a silent no-op rather than an error.</p>
+<p>The grammar token sequence is written as <code>CREATE MEMORY STORE IF EXISTS name</code>. But it works with <em>IF NOT EXISTS</em> semantics. When the store already exists, the statement does nothing. It does not raise an error.</p>
 </div>
 
 <h2 id="drop-memory-store">DROP MEMORY STORE</h2>
@@ -60,14 +60,14 @@ DROP MEMORY STORE IF EXISTS <span class="c-key">name</span>
 <pre><code><span class="c-key">DROP MEMORY STORE</span> recall;
 <span class="c-key">DROP MEMORY STORE</span> recall <span class="c-key">CASCADE</span>;
 <span class="c-key">DROP MEMORY STORE IF EXISTS</span> recall;</code></pre>
-<p>Without <code>IF EXISTS</code>, dropping a missing store raises an error (SQLSTATE <code>42704</code>). The drop locates the backing table in the current schema and removes it, then unregisters the store from the catalog.</p>
+<p>Without <code>IF EXISTS</code>, dropping a store that does not exist raises an error. The SQLSTATE is <code>42704</code>. The drop finds the backing table in the current schema and removes it. Then it removes the store from the catalog.</p>
 
 <h2 id="memory-put">MEMORY PUT</h2>
-<p>Upserts a single row keyed on <code>(namespace, key)</code>. PUT semantics are an atomic upsert: on a primary-key collision the engine repoints the PK to the freshly-inserted tuple and drops the old one, so a failed re-insert can never leave the row deleted.</p>
+<p>Upserts a single row. The row is keyed on <code>(namespace, key)</code>. PUT is an atomic upsert. When the primary key already exists, the engine points the PK to the new tuple and drops the old one. So a failed re-insert can never leave the row deleted.</p>
 <div class="sig">
 MEMORY PUT INTO <span class="c-key">name</span> VALUES ( '<span class="c-str">ns</span>', '<span class="c-str">key</span>', <span class="c-str">value</span> [, '<span class="c-str">embedding</span>'] )
 </div>
-<p>The <code>value</code> position accepts either a string literal or the bare keyword <code>NULL</code> (the <code>mem_val</code> rule is <code>STRING | NULL</code>). When present, the optional fourth argument is the embedding vector as a literal of the form <code>'[f1,f2,...]'</code>; if the store has an embedding column and you omit the vector, the embedding is stored as NULL. <code>created_at</code> is set to the current UTC timestamp; <code>ttl_at</code> defaults to NULL.</p>
+<p>The <code>value</code> position takes a string literal or the bare keyword <code>NULL</code>. The <code>mem_val</code> rule is <code>STRING | NULL</code>. The fourth argument is optional. It is the embedding vector. It uses a literal of the form <code>'[f1,f2,...]'</code>. If the store has an embedding column and you leave out the vector, the embedding is stored as NULL. <code>created_at</code> is set to the current UTC timestamp. <code>ttl_at</code> defaults to NULL.</p>
 <pre><code><span class="c-com">-- JSON value, no embedding</span>
 <span class="c-key">MEMORY PUT INTO</span> agent_notes
 &nbsp;&nbsp;<span class="c-key">VALUES</span> (<span class="c-str">'user:42'</span>, <span class="c-str">'fav_color'</span>, <span class="c-str">'{"color":"teal"}'</span>);
@@ -79,55 +79,55 @@ MEMORY PUT INTO <span class="c-key">name</span> VALUES ( '<span class="c-str">ns
 <span class="c-com">-- with embedding vector (store created WITH embedding_dim)</span>
 <span class="c-key">MEMORY PUT INTO</span> recall
 &nbsp;&nbsp;<span class="c-key">VALUES</span> (<span class="c-str">'session:7'</span>, <span class="c-str">'greeting'</span>, <span class="c-str">'{"text":"hi there"}'</span>, <span class="c-str">'[0.12,0.04,-0.91]'</span>);</code></pre>
-<p>PUT into a store that does not exist raises SQLSTATE <code>42704</code>.</p>
+<p>A PUT into a store that does not exist raises SQLSTATE <code>42704</code>.</p>
 
 <h2 id="memory-get">MEMORY GET</h2>
-<p>Fetches the single row for an exact <code>(namespace, key)</code> pair. The WHERE clause is fixed: it must be <code>NS = '...' AND KEY = '...'</code>.</p>
+<p>Fetches the single row for an exact <code>(namespace, key)</code> pair. The WHERE clause is fixed. It must be <code>NS = '...' AND KEY = '...'</code>.</p>
 <div class="sig">
 MEMORY GET FROM <span class="c-key">name</span> WHERE NS = '<span class="c-str">ns</span>' AND KEY = '<span class="c-str">key</span>'
 </div>
 <pre><code><span class="c-key">MEMORY GET FROM</span> agent_notes
 &nbsp;&nbsp;<span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'fav_color'</span>;</code></pre>
-<p>The result projects <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, then <code>embedding</code> (only when the store has one), and <code>created_at</code>. The lookup matches on the composite <code>pk</code> column and is limited to one row.</p>
+<p>The result returns <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, then <code>embedding</code>, and <code>created_at</code>. The <code>embedding</code> column appears only when the store has one. The lookup matches on the composite <code>pk</code> column. It returns at most one row.</p>
 <div class="callout callout-note">
-<p>The <code>NS</code> and <code>KEY</code> comparisons must use <code>=</code>. The grammar accepts the generic <span class="c-com">COMPARISON</span> token in that position, but GET resolves the pair to the exact composite primary key, so only equality is meaningful.</p>
+<p>The <code>NS</code> and <code>KEY</code> comparisons must use <code>=</code>. The grammar accepts the generic <span class="c-com">COMPARISON</span> token in that spot. But GET turns the pair into the exact composite primary key. So only equality has any meaning here.</p>
 </div>
 
 <h2 id="memory-search">MEMORY SEARCH</h2>
-<p>Semantic search over a store's embeddings. Scans the store and projects a per-row <code>score</code> computed with the store's configured distance metric, ordered closest-first.</p>
+<p>Runs a semantic search over a store's embeddings. It scans the store and returns a <code>score</code> for each row. The score uses the store's distance metric. The closest matches come first.</p>
 <div class="sig">
 MEMORY SEARCH <span class="c-key">name</span> USING VECTOR '<span class="c-str">query</span>' [ LIMIT <span class="c-key">k</span> ]
 </div>
 <pre><code><span class="c-key">MEMORY SEARCH</span> recall <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.10,0.05,-0.88]'</span>;
 <span class="c-key">MEMORY SEARCH</span> recall <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.10,0.05,-0.88]'</span> <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
-<p>The projection is <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, and <code>score</code>. Results are ordered ascending by the score column so the closest matches appear first. When <code>LIMIT</code> is omitted the default is 10.</p>
+<p>The result returns <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, and <code>score</code>. Results are sorted by the score column in ascending order. So the closest matches appear first. When you leave out <code>LIMIT</code>, the default is 10.</p>
 <div class="callout callout-warn">
-<p>SEARCH requires the store to have been created with <code>embedding_dim &gt; 0</code>. Running it against a store with no embedding column raises SQLSTATE <code>42P01</code>.</p>
+<p>SEARCH needs the store to have been created with <code>embedding_dim &gt; 0</code>. Running it on a store with no embedding column raises SQLSTATE <code>42P01</code>.</p>
 </div>
 
 <h2 id="memory-delete">MEMORY DELETE</h2>
-<p>Deletes the row for an exact <code>(namespace, key)</code> pair. Like GET, the WHERE clause is fixed to <code>NS = '...' AND KEY = '...'</code>.</p>
+<p>Deletes the row for an exact <code>(namespace, key)</code> pair. The WHERE clause is fixed to <code>NS = '...' AND KEY = '...'</code>. This is the same form that GET uses.</p>
 <div class="sig">
 MEMORY DELETE FROM <span class="c-key">name</span> WHERE NS = '<span class="c-str">ns</span>' AND KEY = '<span class="c-str">key</span>'
 </div>
 <pre><code><span class="c-key">MEMORY DELETE FROM</span> agent_notes
 &nbsp;&nbsp;<span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'fav_color'</span>;</code></pre>
-<p>Internally this emits <code>DELETE FROM mem_&lt;name&gt; WHERE pk = '&lt;ns&gt;\x1E&lt;key&gt;'</code> and runs it through the standard delete path. That means any RLS policy attached to the backing table is enforced, this is what makes <code>MEMORY DELETE</code> multi-tenant safe. The composite key uses Record Separator (0x1E) as the namespace/key joiner internally; you never write that byte yourself.</p>
+<p>Inside the engine, this emits <code>DELETE FROM mem_&lt;name&gt; WHERE pk = '&lt;ns&gt;\x1E&lt;key&gt;'</code>. It runs through the standard delete path. So any RLS policy attached to the backing table is enforced. This is what makes <code>MEMORY DELETE</code> safe for multiple tenants. The composite key joins the namespace and key with the Record Separator byte 0x1E. You never write that byte yourself.</p>
 <div class="callout callout-note">
-<p>Both <code>NS</code> and <code>KEY</code> are mandatory in the DELETE grammar. There is no "delete a whole namespace" form on this surface, DELETE always targets exactly one <code>(namespace, key)</code> row. To clear a namespace, list its keys and delete them one by one, or operate on the <code>mem_&lt;name&gt;</code> backing table directly with ordinary SQL.</p>
+<p>Both <code>NS</code> and <code>KEY</code> are required in the DELETE grammar. There is no "delete a whole namespace" form here. DELETE always targets exactly one <code>(namespace, key)</code> row. To clear a namespace, list its keys and delete them one by one. Or work on the <code>mem_&lt;name&gt;</code> backing table directly with normal SQL.</p>
 </div>
 
 <h2 id="memory-list-namespaces">MEMORY LIST NAMESPACES</h2>
-<p>Returns the distinct namespaces present in a store, optionally filtered by a prefix.</p>
+<p>Returns the distinct namespaces in a store. You can filter them by a prefix.</p>
 <div class="sig">
 MEMORY LIST NAMESPACES IN <span class="c-key">name</span> [ PREFIX '<span class="c-str">prefix</span>' ]
 </div>
 <pre><code><span class="c-key">MEMORY LIST NAMESPACES IN</span> agent_notes;
 <span class="c-key">MEMORY LIST NAMESPACES IN</span> agent_notes <span class="c-key">PREFIX</span> <span class="c-str">'user:'</span>;</code></pre>
-<p>This compiles to <code>SELECT DISTINCT mem_namespace FROM mem_&lt;name&gt;</code>, and when a prefix is given it adds <code>WHERE mem_namespace LIKE 'prefix%'</code>.</p>
+<p>This compiles to <code>SELECT DISTINCT mem_namespace FROM mem_&lt;name&gt;</code>. When you give a prefix, it adds <code>WHERE mem_namespace LIKE 'prefix%'</code>.</p>
 
 <h2 id="entity-store">ENTITY STORE</h2>
-<p>An entity store is a key/summary/facts store that also tracks a mention count and a last-seen timestamp, intended for "what does the agent know about this person/thing" memory. It is backed by an <code>ent_&lt;name&gt;</code> table.</p>
+<p>An entity store holds a key, a summary, and facts. It also tracks a mention count and a last-seen timestamp. It is made for "what does the agent know about this person or thing" memory. It uses an <code>ent_&lt;name&gt;</code> table.</p>
 <div class="sig">
 CREATE ENTITY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 DROP ENTITY STORE <span class="c-key">name</span> [ IF EXISTS ]
@@ -136,7 +136,7 @@ DROP ENTITY STORE <span class="c-key">name</span> [ IF EXISTS ]
 <ul>
 <li><code>entity_key</code>, VARCHAR(255) PRIMARY KEY NOT NULL</li>
 <li><code>summary</code>, VARCHAR(8000)</li>
-<li><code>facts</code>, VARCHAR(8000) (JSON-shaped string)</li>
+<li><code>facts</code>, VARCHAR(8000). It holds a JSON-shaped string.</li>
 <li><code>mention_count</code>, INT NOT NULL</li>
 <li><code>last_seen</code>, TIMESTAMP NOT NULL</li>
 </ul>
@@ -145,7 +145,7 @@ DROP ENTITY STORE <span class="c-key">name</span> [ IF EXISTS ]
 <span class="c-key">DROP ENTITY STORE IF EXISTS</span> people;</code></pre>
 
 <h3 id="entity-put">ENTITY PUT</h3>
-<p>Upserts an entity by key. On an existing key it updates <code>summary</code> / <code>facts</code> and bumps <code>mention_count</code> and <code>last_seen</code>; otherwise it inserts a new row. The <code>facts</code> argument is optional.</p>
+<p>Upserts an entity by key. When the key already exists, it updates <code>summary</code> and <code>facts</code>. It also raises <code>mention_count</code> and updates <code>last_seen</code>. When the key is new, it inserts a new row. The <code>facts</code> argument is optional.</p>
 <div class="sig">
 ENTITY PUT INTO <span class="c-key">name</span> VALUES ( '<span class="c-str">key</span>', '<span class="c-str">summary</span>' [, '<span class="c-str">facts</span>'] )
 </div>
@@ -154,7 +154,7 @@ ENTITY PUT INTO <span class="c-key">name</span> VALUES ( '<span class="c-str">ke
 
 <span class="c-key">ENTITY PUT INTO</span> people
 &nbsp;&nbsp;<span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">'Lead engineer'</span>, <span class="c-str">'{"team":"storage","tz":"UTC+3"}'</span>);</code></pre>
-<p>Unlike <code>MEMORY PUT</code>, all three positional arguments are plain string literals, there is no <code>NULL</code> keyword form on the entity surface (omit the third argument to leave <code>facts</code> NULL).</p>
+<p>Unlike <code>MEMORY PUT</code>, all three arguments are plain string literals. The entity surface has no <code>NULL</code> keyword form. To leave <code>facts</code> NULL, just omit the third argument.</p>
 
 <h3 id="entity-get">ENTITY GET</h3>
 <p>Fetches a single entity by exact key.</p>
@@ -162,7 +162,7 @@ ENTITY PUT INTO <span class="c-key">name</span> VALUES ( '<span class="c-str">ke
 ENTITY GET FROM <span class="c-key">name</span> WHERE KEY = '<span class="c-str">key</span>'
 </div>
 <pre><code><span class="c-key">ENTITY GET FROM</span> people <span class="c-key">WHERE KEY</span> = <span class="c-str">'alice'</span>;</code></pre>
-<p>Projects <code>entity_key</code>, <code>summary</code>, <code>facts</code>, <code>mention_count</code>, and <code>last_seen</code>, limited to one row.</p>
+<p>Returns <code>entity_key</code>, <code>summary</code>, <code>facts</code>, <code>mention_count</code>, and <code>last_seen</code>. It returns at most one row.</p>
 
 <h3 id="entity-rank">ENTITY RANK</h3>
 <p>Returns entities ordered by how often they have been mentioned.</p>
@@ -171,10 +171,10 @@ ENTITY RANK FROM <span class="c-key">name</span> [ LIMIT <span class="c-key">n</
 </div>
 <pre><code><span class="c-key">ENTITY RANK FROM</span> people;
 <span class="c-key">ENTITY RANK FROM</span> people <span class="c-key">LIMIT</span> <span class="c-str">10</span>;</code></pre>
-<p>Rows come back sorted by <code>mention_count</code> descending, with <code>last_seen</code> descending as the tie-breaker. The projection is the same five columns as <code>ENTITY GET</code>.</p>
+<p>Rows come back sorted by <code>mention_count</code> in descending order. When two rows tie, <code>last_seen</code> descending breaks the tie. The result has the same five columns as <code>ENTITY GET</code>.</p>
 
 <h2 id="policies-triggers">Policies and triggers on stores</h2>
-<p>Because a store's backing table is a regular table, EvolutionDB exposes dedicated <code>ON MEMORY STORE</code> grammar that resolves a store name to its backing table for security and automation:</p>
+<p>A store's backing table is a regular table. So EvolutionDB gives you the <code>ON MEMORY STORE</code> grammar. It maps a store name to its backing table. You use it for security and automation:</p>
 <pre><code><span class="c-com">-- attach an RLS policy to a memory store's backing table</span>
 <span class="c-key">CREATE POLICY</span> tenant_isolation <span class="c-key">ON MEMORY STORE</span> recall <span class="c-com">/* ... */</span>;
 <span class="c-key">DROP POLICY</span> tenant_isolation <span class="c-key">ON MEMORY STORE</span> recall;
@@ -186,7 +186,7 @@ ENTITY RANK FROM <span class="c-key">name</span> [ LIMIT <span class="c-key">n</
 <span class="c-com">-- row-level trigger on a memory store</span>
 <span class="c-key">CREATE TRIGGER</span> audit_writes <span class="c-key">BEFORE INSERT ON MEMORY STORE</span> recall
 &nbsp;&nbsp;<span class="c-key">FOR EACH ROW BEGIN</span> <span class="c-com">/* ... */</span> <span class="c-key">END</span>;</code></pre>
-<p>Since <code>MEMORY DELETE</code> routes through the engine's standard delete path, any policy you attach this way is enforced on those deletes as well as on direct DML against the <code>mem_&lt;name&gt;</code> table.</p>
+<p><code>MEMORY DELETE</code> routes through the engine's standard delete path. So any policy you attach this way is enforced on those deletes. It is also enforced on direct DML against the <code>mem_&lt;name&gt;</code> table.</p>
 
 <h2 id="summary">Quick reference</h2>
 <div class="sig">

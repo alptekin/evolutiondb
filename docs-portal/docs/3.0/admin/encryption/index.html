@@ -15,44 +15,44 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>26. Encryption (TDE)</h1>
-<p class="lede">EvolutionDB transparently encrypts every data page on disk with AES-256, protecting the database file at rest while leaving page contents in cleartext inside the running server's buffer pool.</p>
+<p class="lede">EvolutionDB encrypts every data page on disk with AES-256. This protects the database file when it sits on disk. Inside the running server's buffer pool, the page contents stay in cleartext.</p>
 
-<p>Transparent Data Encryption (TDE) operates entirely below the SQL layer. Tables, indexes, the system catalog, and the write-ahead log are all stored as 4&nbsp;KB pages; when TDE is active, those pages are encrypted on their way to disk and decrypted on their way back, with no change to the SQL you write or the rows you read. The only artifact visible from SQL is that the on-disk file (<code>evosql.db</code>) and its WAL are unreadable without the passphrase.</p>
+<p>Transparent Data Encryption (TDE) works below the SQL layer. Tables, indexes, the system catalog, and the write-ahead log are all stored as 4&nbsp;KB pages. When TDE is active, those pages are encrypted as they go to disk. They are decrypted as they come back. The SQL you write and the rows you read do not change. From SQL the only visible effect is that the on-disk file <code>evosql.db</code> and its WAL cannot be read without the passphrase.</p>
 
-<p>This chapter documents exactly what EvolutionDB implements: a two-layer key hierarchy (MEK/DEK), AES-256 page encryption in CTR mode, key wrapping with AES-256-GCM, and passphrase-derived key material via PBKDF2-SHA256. Where it helps, it contrasts EvolutionDB's choices with PostgreSQL and the broader TDE landscape: honestly, without claiming features that do not exist.</p>
+<p>This chapter describes exactly what EvolutionDB implements. It uses a two-layer key hierarchy called MEK and DEK. It uses AES-256 page encryption in CTR mode. It wraps keys with AES-256-GCM. It derives key material from the passphrase with PBKDF2-SHA256. Where it helps, this chapter compares EvolutionDB with PostgreSQL and other TDE designs. The comparison is honest. It does not claim features that do not exist.</p>
 
 <div class="callout">
-<p><strong>Build requirement.</strong> TDE is a compile-time feature guarded by the <code>EVO_ENCRYPTION</code> macro. The server's <code>TLS=1</code> build sets it automatically (it pulls in OpenSSL's EVP API for AES). A server built <em>without</em> <code>EVO_ENCRYPTION</code> compiles the entire crypto path out to no-op stubs, the database is always plaintext and the encryption controls in this chapter have no effect.</p>
+<p><strong>Build requirement.</strong> TDE is a compile-time feature. It is guarded by the <code>EVO_ENCRYPTION</code> macro. The server's <code>TLS=1</code> build sets this macro for you. That build also pulls in OpenSSL's EVP API for AES. A server built <em>without</em> <code>EVO_ENCRYPTION</code> turns the whole crypto path into no-op stubs. In that case the database is always plaintext. The encryption controls in this chapter then have no effect.</p>
 </div>
 
 <h2 id="overview">26.1. Overview</h2>
 
-<p>EvolutionDB's TDE is <em>page-level</em> and <em>whole-database</em>. There is no per-table, per-column, or per-tablespace encryption: when a database is created with a passphrase set, every page except page&nbsp;0 is encrypted, and that decision is permanent for the life of the file. This mirrors the granularity of cluster-wide TDE designs and differs from column-level encryption such as PostgreSQL's <code>pgcrypto</code>, which encrypts individual values inside otherwise-plaintext pages.</p>
+<p>EvolutionDB's TDE works at the <em>page level</em> and covers the <em>whole database</em>. There is no per-table, per-column, or per-tablespace encryption. When a database is created with a passphrase set, every page except page&nbsp;0 is encrypted. That choice is permanent for the life of the file. This matches the granularity of cluster-wide TDE designs. It differs from column-level encryption such as PostgreSQL's <code>pgcrypto</code>. That tool encrypts single values inside pages that stay otherwise plaintext.</p>
 
 <dl class="params">
-<dt>What is encrypted</dt><dd>All pages numbered 1 and above: heap pages, B+ tree index pages, slotted-page records, the system catalog, the free list, and WAL page images written during replay.</dd>
-<dt>What is <em>not</em> encrypted</dt><dd>Page&nbsp;0 (the <code>FileHeader</code>) is always plaintext. It holds the file magic, version, page size, catalog roots, and the encryption metadata itself (salt, wrapped DEK, IV prefix) needed to bootstrap decryption.</dd>
-<dt>Where plaintext lives</dt><dd>In the buffer pool. Pages are held decrypted in memory; encryption happens only as a page is flushed to disk, and decryption only as it is read from disk. The query engine never sees ciphertext.</dd>
-<dt>Threat model</dt><dd>Protection at rest. TDE defends against theft of the database file, the WAL, or the physical disk. It does <em>not</em> protect against an attacker who can read the server's memory or who holds the passphrase.</dd>
+<dt>What is encrypted</dt><dd>All pages numbered 1 and above. This covers heap pages, B+ tree index pages, slotted-page records, the system catalog, the free list, and WAL page images written during replay.</dd>
+<dt>What is <em>not</em> encrypted</dt><dd>Page&nbsp;0 is the <code>FileHeader</code>. It is always plaintext. It holds the file magic, version, page size, and catalog roots. It also holds the encryption metadata itself, such as the salt, the wrapped DEK, and the IV prefix. The server needs this metadata to start decryption.</dd>
+<dt>Where plaintext lives</dt><dd>In the buffer pool. Pages are held decrypted in memory. Encryption happens only when a page is flushed to disk. Decryption happens only when a page is read from disk. The query engine never sees ciphertext.</dd>
+<dt>Threat model</dt><dd>Protection at rest. TDE defends against theft of the database file, the WAL, or the physical disk. It does <em>not</em> protect against an attacker who can read the server's memory. It does not protect against an attacker who holds the passphrase.</dd>
 </dl>
 
-<p class="callout">Because the buffer pool stores plaintext and the engine operates on plaintext, TDE is invisible to queries and adds no semantic restrictions. A <code>SELECT</code> over an encrypted database is byte-for-byte identical to one over a plaintext database.</p>
+<p class="callout">The buffer pool stores plaintext and the engine works on plaintext. So TDE is invisible to queries and adds no rules to your SQL. A <code>SELECT</code> over an encrypted database returns the same bytes as one over a plaintext database.</p>
 
 <h2 id="key-hierarchy">26.2. Key hierarchy: MEK and DEK</h2>
 
-<p>EvolutionDB uses a two-layer key architecture in the style of Oracle TDE:</p>
+<p>EvolutionDB uses a two-layer key design in the style of Oracle TDE.</p>
 
 <table>
 <thead><tr><th>Key</th><th>Size</th><th>Derived / generated</th><th>Stored where</th></tr></thead>
 <tbody>
-<tr><td><strong>MEK</strong>, Master Encryption Key</td><td>256 bits</td><td>Derived from the passphrase + a random 16-byte salt via PBKDF2-SHA256</td><td>Never stored. Recomputed in memory at startup; wiped immediately after use.</td></tr>
-<tr><td><strong>DEK</strong>, Data Encryption Key</td><td>256 bits</td><td>Generated once from the OS CSPRNG when the database is first created</td><td>Stored <em>wrapped</em> (encrypted by the MEK) in the plaintext <code>FileHeader</code> on page&nbsp;0.</td></tr>
+<tr><td><strong>MEK</strong>, Master Encryption Key</td><td>256 bits</td><td>Derived from the passphrase and a random 16-byte salt with PBKDF2-SHA256</td><td>Never stored. It is recomputed in memory at startup. It is wiped right after use.</td></tr>
+<tr><td><strong>DEK</strong>, Data Encryption Key</td><td>256 bits</td><td>Generated once from the OS CSPRNG when the database is first created</td><td>Stored <em>wrapped</em> in the plaintext <code>FileHeader</code> on page&nbsp;0. The MEK encrypts it.</td></tr>
 </tbody>
 </table>
 
-<p>The DEK is the key that actually encrypts pages. The MEK exists only to protect the DEK. This indirection is what makes rekeying cheap: changing the passphrase changes the MEK, which re-wraps the same DEK, so the gigabytes of already-encrypted pages never need rewriting.</p>
+<p>The DEK is the key that encrypts pages. The MEK exists only to protect the DEK. This extra layer makes rekeying cheap. Changing the passphrase changes the MEK. The new MEK re-wraps the same DEK. So the gigabytes of already-encrypted pages never need rewriting.</p>
 
-<p>The passphrase is supplied through the <code>EVOSQL_ENCRYPTION_KEY</code> environment variable. It is read with <code>getenv()</code> at startup and is never persisted. If the variable is unset or empty, encryption is not initialized.</p>
+<p>The passphrase comes from the <code>EVOSQL_ENCRYPTION_KEY</code> environment variable. The server reads it with <code>getenv()</code> at startup and never saves it. If the variable is unset or empty, encryption is not initialized.</p>
 
 <pre class="synopsis"><code><span class="c-com"># Key flow at a glance</span>
 EVOSQL_ENCRYPTION_KEY  ──PBKDF2-SHA256(salt,100000)──▶  MEK (256-bit)
@@ -61,79 +61,79 @@ DEK  ──AES-256-CTR──▶  page ciphertext  (pages 1..N)</code></pre>
 
 <h3 id="mek-derivation">26.2.1. MEK derivation (PBKDF2-SHA256)</h3>
 
-<p>The MEK is derived by stretching the passphrase with PBKDF2-SHA256. EvolutionDB ships a pure-C implementation of SHA-256, HMAC-SHA256, and PBKDF2 (no external dependency for the KDF itself), conforming to FIPS&nbsp;180-4, RFC&nbsp;2104, and RFC&nbsp;2898.</p>
+<p>The MEK is derived by stretching the passphrase with PBKDF2-SHA256. EvolutionDB ships its own pure-C code for SHA-256, HMAC-SHA256, and PBKDF2. The KDF needs no external library. The code follows FIPS&nbsp;180-4, RFC&nbsp;2104, and RFC&nbsp;2898.</p>
 
 <dl class="params">
 <dt>PRF</dt><dd>HMAC-SHA256</dd>
-<dt>Iterations</dt><dd><code>PBKDF2_ITERATIONS = 100000</code> (fixed, compiled-in)</dd>
-<dt>Salt</dt><dd>16 random bytes, generated per database, stored in the <code>FileHeader</code> as <code>encryption_salt[16]</code></dd>
+<dt>Iterations</dt><dd><code>PBKDF2_ITERATIONS = 100000</code>. This value is fixed and compiled in.</dd>
+<dt>Salt</dt><dd>16 random bytes. Each database gets its own salt. It is stored in the <code>FileHeader</code> as <code>encryption_salt[16]</code>.</dd>
 <dt>Derived key length</dt><dd>32 bytes (256 bits)</dd>
 </dl>
 
-<p>The same PBKDF2 implementation also backs user-password hashing (see <a href="/3.0/admin/authentication/">Authentication</a>), where hashes are stored in the format <code>pbkdf2:100000:&lt;hex-salt&gt;:&lt;hex-hash&gt;</code>. For TDE the derived bytes are used directly as the MEK and are never written to disk.</p>
+<p>The same PBKDF2 code also backs user-password hashing. See <a href="/3.0/admin/authentication/">Authentication</a>. There the hashes are stored in the format <code>pbkdf2:100000:&lt;hex-salt&gt;:&lt;hex-hash&gt;</code>. For TDE the derived bytes are used straight as the MEK. They are never written to disk.</p>
 
 <div class="callout">
-<p><strong>Honest comparison.</strong> 100,000 PBKDF2-SHA256 iterations is a fixed, moderate work factor. It is below the project's own user-auth guidance (the security standard calls for 600,000+ iterations for password storage) and well below modern memory-hard KDFs such as Argon2 or scrypt, which PBKDF2 cannot match against GPU/ASIC attackers. The practical mitigation is to use a long, high-entropy passphrase: against a strong passphrase the KDF iteration count is not the limiting factor.</p>
+<p><strong>Honest comparison.</strong> 100,000 PBKDF2-SHA256 iterations is a fixed, moderate work factor. It is below the project's own user-auth guidance. The security standard asks for 600,000 or more iterations for password storage. It is also well below modern memory-hard KDFs such as Argon2 or scrypt. PBKDF2 cannot match those against GPU or ASIC attackers. The best fix is a long passphrase with high entropy. With a strong passphrase the iteration count is not the weak point.</p>
 </div>
 
 <h3 id="dek-wrapping">26.2.2. DEK wrapping (AES-256-GCM)</h3>
 
-<p>The 32-byte DEK is wrapped (encrypted) under the MEK with AES-256-GCM, producing a 48-byte blob: 32 bytes of ciphertext followed by a 16-byte GCM authentication tag. This blob is stored in the <code>FileHeader</code> as <code>wrapped_dek[48]</code>.</p>
+<p>The 32-byte DEK is wrapped under the MEK with AES-256-GCM. To wrap means to encrypt. The result is a 48-byte blob. It holds 32 bytes of ciphertext and then a 16-byte GCM authentication tag. This blob is stored in the <code>FileHeader</code> as <code>wrapped_dek[48]</code>.</p>
 
-<p>The GCM tag does double duty as a <strong>passphrase verifier</strong>. On startup the server derives the MEK from the supplied passphrase and attempts to unwrap the DEK; if the passphrase is wrong, the derived MEK is wrong, and GCM tag verification fails. The server treats that failure as a fatal "wrong encryption key" error rather than silently producing garbage:</p>
+<p>The GCM tag also works as a <strong>passphrase verifier</strong>. At startup the server derives the MEK from the passphrase and tries to unwrap the DEK. If the passphrase is wrong, the MEK is wrong, and the GCM tag check fails. The server treats that failure as a fatal "wrong encryption key" error. It does not quietly produce garbage.</p>
 
 <pre><code><span class="c-com">FATAL: Wrong encryption key for this database.</span>
 <span class="c-com">The EVOSQL_ENCRYPTION_KEY does not match.</span></code></pre>
 
-<p>The wrapping IV is the fixed 12-byte string <code>EVO_WRAP_KEY</code>. Reusing a fixed IV with GCM is normally dangerous, but it is safe here because each database has a unique random salt, which produces a unique MEK, so the (key, IV) pair is never reused across databases with the same DEK.</p>
+<p>The wrapping IV is the fixed 12-byte string <code>EVO_WRAP_KEY</code>. Reusing a fixed IV with GCM is normally dangerous. It is safe here. Each database has its own random salt. That salt produces a unique MEK. So the key and IV pair is never reused across databases with the same DEK.</p>
 
 <h2 id="page-encryption">26.3. Page encryption (AES-256-CTR)</h2>
 
-<p>Pages are encrypted with AES-256 in <strong>CTR</strong> mode using the DEK. CTR is a stream-cipher mode, chosen deliberately for two properties that matter to a page store:</p>
+<p>Pages are encrypted with AES-256 in <strong>CTR</strong> mode using the DEK. CTR is a stream-cipher mode. It was picked on purpose for two reasons that matter to a page store.</p>
 
 <dl class="params">
-<dt>Zero storage overhead</dt><dd>CTR ciphertext is the same length as the plaintext. A 4096-byte page encrypts to exactly 4096 bytes, so the on-disk layout, page numbering, and offsets are identical whether or not TDE is enabled. There is no per-page authentication tag.</dd>
-<dt>Symmetric operation</dt><dd>In CTR mode encryption and decryption are the same operation. EvolutionDB uses a single routine for both directions.</dd>
+<dt>Zero storage overhead</dt><dd>CTR ciphertext has the same length as the plaintext. A 4096-byte page encrypts to exactly 4096 bytes. So the on-disk layout, page numbering, and offsets are the same with or without TDE. There is no per-page authentication tag.</dd>
+<dt>Symmetric operation</dt><dd>In CTR mode encryption and decryption are the same operation. EvolutionDB uses one routine for both directions.</dd>
 </dl>
 
 <h3 id="page-iv">26.3.1. Per-page IV construction</h3>
 
-<p>Each page gets a distinct 16-byte CTR IV built from a per-database random prefix and the page number:</p>
+<p>Each page gets its own 16-byte CTR IV. The IV is built from a random per-database prefix and the page number.</p>
 
 <pre class="synopsis"><code><span class="c-com">IV (16 bytes) = iv_prefix[8] || page_no_LE[4] || zeros[4]</span>
                └ random, per-DB ┘  └ little-endian ┘ └ counter ┘</code></pre>
 
-<p>The 8-byte <code>iv_prefix</code> is generated once with the OS CSPRNG when the database is created and stored in the <code>FileHeader</code> as <code>page_iv_prefix[8]</code>. Critically, the prefix <strong>never changes</strong>, even when the passphrase is rotated. Because the page number is part of the IV, no two pages share an IV, which is the requirement CTR mode places on the caller.</p>
+<p>The 8-byte <code>iv_prefix</code> is generated once with the OS CSPRNG when the database is created. It is stored in the <code>FileHeader</code> as <code>page_iv_prefix[8]</code>. The prefix <strong>never changes</strong>, even when the passphrase is rotated. The page number is part of the IV. So no two pages share an IV. That is the rule CTR mode puts on the caller.</p>
 
 <div class="callout">
-<p><strong>Limitation: CTR offers confidentiality, not integrity.</strong> Unlike GCM (used for the DEK wrap), CTR has no authentication tag, so EvolutionDB does not detect tampering or bit-rot of encrypted pages, a flipped ciphertext bit silently flips the corresponding plaintext bit. TDE here defends against <em>reading</em> the file, not against an adversary who can <em>modify</em> it. This is the same trade-off most zero-overhead page-level TDE schemes make; use filesystem/volume integrity (or checksums at a higher layer) if tamper-detection is required.</p>
+<p><strong>Limitation. CTR gives confidentiality, not integrity.</strong> GCM is used for the DEK wrap and has an authentication tag. CTR does not. So EvolutionDB does not detect tampering or bit-rot of encrypted pages. A flipped ciphertext bit quietly flips the matching plaintext bit. TDE here defends against <em>reading</em> the file. It does not defend against an attacker who can <em>change</em> it. Most zero-overhead page-level TDE schemes make the same trade-off. Use filesystem or volume integrity if you need tamper detection. You can also add checksums at a higher layer.</p>
 </div>
 
 <h3 id="page0-plaintext">26.3.2. Page 0 stays plaintext</h3>
 
-<p>Page&nbsp;0, the <code>FileHeader</code>, is never encrypted. Both the encrypt and decrypt entry points short-circuit when <code>page_no == 0</code>. This is necessary because page&nbsp;0 holds the bootstrap metadata (magic, salt, wrapped DEK, IV prefix) that the server must read <em>before</em> it can derive any key. The header therefore exposes the fact that a database is encrypted, the salt, the wrapped (encrypted) DEK, and the IV prefix, but none of these reveal the DEK without the passphrase.</p>
+<p>Page&nbsp;0 is the <code>FileHeader</code>. It is never encrypted. Both the encrypt and decrypt entry points return early when <code>page_no == 0</code>. This is needed because page&nbsp;0 holds the startup metadata. That metadata is the magic, the salt, the wrapped DEK, and the IV prefix. The server must read it <em>before</em> it can derive any key. So the header shows that a database is encrypted. It also shows the salt, the wrapped DEK, and the IV prefix. None of these reveal the DEK without the passphrase.</p>
 
-<p>EvolutionDB does not encrypt the <code>page_no == 0</code> region for the same architectural reason PostgreSQL's at-rest encryption proposals keep certain control data accessible: you cannot decrypt the thing that tells you how to decrypt.</p>
+<p>EvolutionDB does not encrypt the <code>page_no == 0</code> region. PostgreSQL's at-rest encryption proposals keep some control data readable for the same reason. You cannot decrypt the thing that tells you how to decrypt.</p>
 
 <h3 id="io-path">26.3.3. Where encryption happens in the I/O path</h3>
 
-<p>All page I/O flows through the Clock-Sweep buffer pool (see <a href="/3.0/internals/buffer-pool/">Buffer Pool</a>). Encryption and decryption are applied at exactly the disk boundary:</p>
+<p>All page I/O flows through the Clock-Sweep buffer pool. See <a href="/3.0/internals/buffer-pool/">Buffer Pool</a>. Encryption and decryption happen right at the disk boundary.</p>
 
 <table>
 <thead><tr><th>Path</th><th>Action</th></tr></thead>
 <tbody>
-<tr><td>Buffer pool flush (dirty page → disk)</td><td>Page is copied into a scratch buffer, encrypted in place, then written. The in-memory page stays plaintext.</td></tr>
-<tr><td>Buffer pool fault (disk → buffer)</td><td>Page is read, then decrypted in place if encryption is enabled and <code>page_no &gt; 0</code>.</td></tr>
-<tr><td>WAL replay (recovery)</td><td>Page images written to the data file during replay are encrypted before <code>pwrite</code>, page&nbsp;0 excepted.</td></tr>
-<tr><td>Replication shipping</td><td>Pages are encrypted on the same code path before being sent downstream.</td></tr>
+<tr><td>Buffer pool flush (dirty page → disk)</td><td>The page is copied into a scratch buffer. It is encrypted in place. Then it is written. The in-memory page stays plaintext.</td></tr>
+<tr><td>Buffer pool fault (disk → buffer)</td><td>The page is read. Then it is decrypted in place if encryption is enabled and <code>page_no &gt; 0</code>.</td></tr>
+<tr><td>WAL replay (recovery)</td><td>Page images written to the data file during replay are encrypted before <code>pwrite</code>. Page&nbsp;0 is the exception.</td></tr>
+<tr><td>Replication shipping</td><td>Pages are encrypted on the same code path before they are sent downstream.</td></tr>
 </tbody>
 </table>
 
-<p>Every one of these guards on both <code>pcrypt_is_enabled()</code> and <code>page_no &gt; 0</code>, so a plaintext database and page&nbsp;0 always bypass the cipher.</p>
+<p>Every one of these checks both <code>pcrypt_is_enabled()</code> and <code>page_no &gt; 0</code>. So a plaintext database and page&nbsp;0 always skip the cipher.</p>
 
 <h2 id="enabling">26.4. Enabling encryption</h2>
 
-<p>TDE is decided <strong>at database creation time</strong> and is controlled entirely by the <code>EVOSQL_ENCRYPTION_KEY</code> environment variable. There is no <code>CREATE DATABASE ... ENCRYPTED</code> clause and no SQL statement that turns encryption on for an existing plaintext file.</p>
+<p>TDE is decided <strong>when the database is created</strong>. It is controlled only by the <code>EVOSQL_ENCRYPTION_KEY</code> environment variable. There is no <code>CREATE DATABASE ... ENCRYPTED</code> clause. There is no SQL statement that turns encryption on for an existing plaintext file.</p>
 
 <h3 id="enable-new">26.4.1. A new (empty) database</h3>
 

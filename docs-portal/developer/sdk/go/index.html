@@ -15,26 +15,26 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Go SDK</h1>
-<p class="lede">A cgo binding over <code>libevosql-memory</code> that gives Go programs an idiomatic <code>Conn</code> type, typed <code>*Error</code> returns, and the EvoSQL agent-memory primitives, talking to the server over the EVO text protocol.</p>
+<p class="lede">A cgo binding over <code>libevosql-memory</code>. It gives Go programs a clean <code>Conn</code> type, typed <code>*Error</code> returns, and the EvoSQL agent-memory functions. It talks to the server over the EVO text protocol.</p>
 
 <h2 id="what-it-does">What it does</h2>
-<p>The Go SDK (<code>go-evosql-memory</code>) is a thin, idiomatic wrapper around the C SDK <code>libevosql-memory</code>. It is <strong>not</strong> a pure-Go driver: the cgo layer links the C archive and forwards each call to the corresponding <code>evo_*</code> function in <code>evosql_memory.h</code>. On the wire it speaks the EVO text protocol (default port <code>9967</code>), the same protocol used by the <a href="/cli/">CLI client</a> and the <a href="/platform/mcp-server/">MCP server</a>.</p>
-<p>What you get over raw cgo:</p>
+<p>The Go SDK (<code>go-evosql-memory</code>) is a thin wrapper around the C SDK <code>libevosql-memory</code>. It is <strong>not</strong> a pure-Go driver. The cgo layer links the C archive. It forwards each call to the matching <code>evo_*</code> function in <code>evosql_memory.h</code>. On the wire it speaks the EVO text protocol on default port <code>9967</code>. This is the same protocol used by the <a href="/cli/">CLI client</a> and the <a href="/platform/mcp-server/">MCP server</a>.</p>
+<p>The wrapper adds these things over raw cgo:</p>
 <ul>
-<li>A <code>Conn</code> struct with a finalizer-backed <code>Close()</code> so a forgotten connection is still released by the GC.</li>
-<li>A typed <code>*Error</code> carrying a <code>Kind</code>, a <code>Message</code> (from the C SDK's thread-local last-error storage), and a <code>SQLState</code>.</li>
-<li>Helpers for the MEMORY STORE and CHECKPOINT STORE agent-memory primitives, plus generic <code>Exec</code>/<code>Query</code> escape hatches.</li>
-<li>A <code>FormatVector</code> helper that renders a <code>[]float32</code> as the <code>[v1,v2,…]</code> literal EvoSQL accepts as a <code>VECTOR(N)</code> value.</li>
+<li>A <code>Conn</code> struct with a finalizer-backed <code>Close()</code>. A forgotten connection is still released by the GC.</li>
+<li>A typed <code>*Error</code>. It carries a <code>Kind</code>, a <code>Message</code>, and a <code>SQLState</code>. The message comes from the C SDK thread-local last-error storage.</li>
+<li>Helpers for the MEMORY STORE and CHECKPOINT STORE agent-memory functions. It also gives you generic <code>Exec</code> and <code>Query</code> calls for everything else.</li>
+<li>A <code>FormatVector</code> helper. It renders a <code>[]float32</code> as the <code>[v1,v2,…]</code> literal that EvoSQL accepts as a <code>VECTOR(N)</code> value.</li>
 </ul>
 <div class="callout callout-note">
 <span class="material-symbols-outlined">info</span>
-<div>Scope note: this binding wraps the connection, generic SQL, MEMORY STORE, CHECKPOINT STORE, and vector-format surfaces of the C SDK. The C header also exposes a LISTEN/NOTIFY and CDC subscription API (<code>evo_subscribe</code>, <code>evo_cdc_subscribe</code>, <code>evo_unsubscribe</code>), but the Go package does <strong>not</strong> bind those calls yet, use the C or another SDK for streaming.</div>
+<div>Scope note. This binding wraps the connection, generic SQL, MEMORY STORE, CHECKPOINT STORE, and vector-format parts of the C SDK. The C header also has a LISTEN/NOTIFY and CDC subscription API. These are <code>evo_subscribe</code>, <code>evo_cdc_subscribe</code>, and <code>evo_unsubscribe</code>. The Go package does <strong>not</strong> bind those calls yet. Use the C SDK or another SDK for streaming.</div>
 </div>
 
 <h2 id="install">Install</h2>
-<p>The module path is:</p>
+<p>The module path is shown below.</p>
 <div class="sig">github.com/alptekin/evolutiondb/client/go-evosql-memory</div>
-<p>The package requires <strong>cgo</strong> and the C archive <code>libevosql-memory.a</code> to be present at build time. Inside the monorepo the cgo directives use <code>${SRCDIR}</code> so the relative path resolves out of the box, just build the C SDK first:</p>
+<p>The package needs <strong>cgo</strong>. The C archive <code>libevosql-memory.a</code> must be present at build time. Inside the monorepo the cgo directives use <code>${SRCDIR}</code>. The relative path resolves on its own. You just build the C SDK first.</p>
 <pre><code><span class="c-com"># build the C SDK archive first</span>
 make -C ../libevosql-memory
 
@@ -42,27 +42,27 @@ make -C ../libevosql-memory
 cd client/go-evosql-memory
 go build ./...
 go run ./examples/put_get</code></pre>
-<p>The in-tree cgo directives are:</p>
+<p>The in-tree cgo directives are shown below.</p>
 <pre><code><span class="c-com">#cgo CFLAGS:  -I${SRCDIR}/../libevosql-memory/include</span>
 <span class="c-com">#cgo LDFLAGS: -L${SRCDIR}/../libevosql-memory/build -levosql-memory -lpthread</span></code></pre>
-<p>For a system-wide install, point cgo at the installed headers and library with the standard environment variables:</p>
+<p>For a system-wide install, point cgo at the installed headers and library. Use the standard environment variables.</p>
 <pre><code>CGO_CFLAGS=<span class="c-str">"-I/usr/local/include"</span> \
 CGO_LDFLAGS=<span class="c-str">"-L/usr/local/lib -levosql-memory -lpthread"</span> \
 go build ./...</code></pre>
 <div class="callout callout-note">
 <span class="material-symbols-outlined">download</span>
-<div>Pre-built <code>libevosql-memory</code> binaries for Linux / macOS / Windows are attached to every <a href="https://github.com/alptekin/evolutiondb/releases/latest">GitHub Release</a>. Unpack one and point <code>CGO_LDFLAGS=-L… -levosql-memory</code> at it to skip the <code>make -C ../libevosql-memory</code> step.</div>
+<div>Pre-built <code>libevosql-memory</code> binaries for Linux, macOS, and Windows are attached to every <a href="https://github.com/alptekin/evolutiondb/releases/latest">GitHub Release</a>. Unpack one and point <code>CGO_LDFLAGS=-L… -levosql-memory</code> at it. This skips the <code>make -C ../libevosql-memory</code> step.</div>
 </div>
 
 <h2 id="configure">Configure (connection &amp; auth)</h2>
-<p>There are no environment variables for connecting: host, port, user, and password are passed directly to <code>Connect</code>. The default credentials on a fresh EvoSQL server are <code>admin</code> / <code>admin</code>, and the EVO text protocol listens on port <code>9967</code>.</p>
+<p>There are no environment variables for connecting. You pass host, port, user, and password straight to <code>Connect</code>. The default login on a fresh EvoSQL server is <code>admin</code> / <code>admin</code>. The EVO text protocol listens on port <code>9967</code>.</p>
 <pre><code>c, err := evosql.<span class="c-fn">Connect</span>(<span class="c-str">"127.0.0.1"</span>, <span class="c-num">9967</span>, <span class="c-str">"admin"</span>, <span class="c-str">"admin"</span>)
 <span class="c-key">if</span> err != <span class="c-key">nil</span> { <span class="c-com">/* handle */</span> }
 <span class="c-key">defer</span> c.<span class="c-fn">Close</span>()</code></pre>
-<p>The only build-time configuration is the cgo <code>CGO_CFLAGS</code> / <code>CGO_LDFLAGS</code> pair shown under <a href="#install">Install</a>, used to locate the C headers and archive.</p>
+<p>The only build-time setup is the cgo <code>CGO_CFLAGS</code> and <code>CGO_LDFLAGS</code> pair shown under <a href="#install">Install</a>. It tells the build where to find the C headers and archive.</p>
 
 <h2 id="usage">Usage</h2>
-<p>The example below is the package's own smoke test (<code>examples/put_get/main.go</code>): create a MEMORY STORE, put a JSON value, read it back, then drop the store.</p>
+<p>The example below is the package's own smoke test. It lives in <code>examples/put_get/main.go</code>. It creates a MEMORY STORE, puts a JSON value, reads it back, then drops the store.</p>
 <pre><code><span class="c-key">package</span> main
 
 <span class="c-key">import</span> (
@@ -97,7 +97,7 @@ go build ./...</code></pre>
 }</code></pre>
 
 <h3>Generic SQL</h3>
-<p>For anything the typed helpers don't cover, use <code>Exec</code> (DML/DDL, returns the affected-row count) and <code>Query</code> (SELECT, returns rows of strings: the EVO wire format is text, so NULL columns come back as <code>""</code>).</p>
+<p>For anything the typed helpers do not cover, use <code>Exec</code> and <code>Query</code>. <code>Exec</code> runs DML and DDL and returns the affected-row count. <code>Query</code> runs a SELECT and returns rows of strings. The EVO wire format is text, so NULL columns come back as <code>""</code>.</p>
 <pre><code>n, _ := c.<span class="c-fn">Exec</span>(<span class="c-str">"CREATE TABLE t (id INT, name VARCHAR(50))"</span>)
 
 rows, err := c.<span class="c-fn">Query</span>(<span class="c-str">"SELECT id, name FROM t"</span>)
@@ -107,33 +107,33 @@ rows, err := c.<span class="c-fn">Query</span>(<span class="c-str">"SELECT id, n
 }</code></pre>
 <div class="callout callout-warn">
 <span class="material-symbols-outlined">warning</span>
-<div><code>Query</code> uses fixed buffers: at most <strong>256 rows</strong>, <strong>32 columns</strong>, and <strong>4096 bytes per cell</strong>. Result sets larger than these limits are truncated to the buffer. For wide or large results, narrow the query or page it yourself.</div>
+<div><code>Query</code> uses fixed buffers. It holds at most <strong>256 rows</strong>, <strong>32 columns</strong>, and <strong>4096 bytes per cell</strong>. Result sets larger than these limits are cut to fit the buffer. For wide or large results, narrow the query or page it yourself.</div>
 </div>
 
 <h3>Vectors / embeddings</h3>
-<p><code>MemoryPut</code> takes an optional <code>[]float32</code> embedding. Pass <code>nil</code> for no embedding; a non-empty slice is rendered with <code>FormatVector</code> into the <code>[v1,v2,…]</code> literal before being sent.</p>
+<p><code>MemoryPut</code> takes an optional <code>[]float32</code> embedding. Pass <code>nil</code> for no embedding. A non-empty slice is rendered with <code>FormatVector</code> into the <code>[v1,v2,…]</code> literal before it is sent.</p>
 <pre><code>emb := []<span class="c-key">float32</span>{<span class="c-num">0.12</span>, <span class="c-num">0.34</span>, <span class="c-num">0.56</span>}
 c.<span class="c-fn">MemoryPut</span>(<span class="c-str">"go_demo"</span>, <span class="c-str">"docs"</span>, <span class="c-str">"d1"</span>, <span class="c-str">`{"text":"hello"}`</span>, emb)
 
 lit := evosql.<span class="c-fn">FormatVector</span>(emb) <span class="c-com">// "[0.120000,0.340000,0.560000]"</span></code></pre>
 
 <h2 id="reference">Reference</h2>
-<p>All methods hang off <code>*Conn</code> unless noted. Errors are returned as <code>error</code> but concretely are <code>*Error</code> (see <a href="#errors">Errors</a>).</p>
+<p>All methods hang off <code>*Conn</code> unless noted. Errors are returned as <code>error</code>. Under the hood they are always <code>*Error</code>. See <a href="#errors">Errors</a>.</p>
 
 <div class="sig">func Connect(host string, port int, user, password string) (*Conn, error)</div>
-<p>Opens a connection to an EvoSQL server over the EVO text protocol. Returns <code>nil</code> and an <code>*Error</code> on failure. A finalizer is registered so the connection is released if you forget to <code>Close</code> it; the caller is still responsible for calling <code>Close</code> explicitly.</p>
+<p>Opens a connection to an EvoSQL server over the EVO text protocol. Returns <code>nil</code> and an <code>*Error</code> on failure. A finalizer is registered, so the connection is released if you forget to <code>Close</code> it. You should still call <code>Close</code> yourself.</p>
 
 <div class="sig">func (c *Conn) Close() error</div>
-<p>Releases the connection. Idempotent, safe to call more than once and safe when invoked by the finalizer. Always returns <code>nil</code>.</p>
+<p>Releases the connection. It is safe to call more than once. It is also safe when the finalizer calls it. Always returns <code>nil</code>.</p>
 
 <div class="sig">func (c *Conn) Exec(sql string) (int, error)</div>
-<p>Runs a DML/DDL statement and returns the affected-row count. A negative C return code is translated into a typed <code>*Error</code>.</p>
+<p>Runs a DML or DDL statement and returns the affected-row count. A negative C return code is turned into a typed <code>*Error</code>.</p>
 
 <div class="sig">func (c *Conn) Query(sql string) ([][]string, error)</div>
-<p>Runs a SELECT and returns rows where each cell is a string. NULL columns come back as the empty string. Subject to the fixed 256×32×4096 buffer limits noted above.</p>
+<p>Runs a SELECT and returns rows where each cell is a string. NULL columns come back as the empty string. The fixed 256×32×4096 buffer limits noted above still apply.</p>
 
 <div class="sig">func (c *Conn) MemoryPut(store, namespace, key, valueJSON string, embedding []float32) error</div>
-<p>Writes a row into a MEMORY STORE under <code>(namespace, key)</code>. <code>embedding</code> may be <code>nil</code>; a non-empty slice is formatted to a vector literal first.</p>
+<p>Writes a row into a MEMORY STORE under <code>(namespace, key)</code>. <code>embedding</code> may be <code>nil</code>. A non-empty slice is formatted to a vector literal first.</p>
 
 <div class="sig">func (c *Conn) MemoryGet(store, namespace, key string) (string, error)</div>
 <p>Returns the value JSON for <code>(store, namespace, key)</code>. When the row is missing it returns an <code>*Error</code> with <code>Kind == ErrNotFound</code>. The internal read buffer is 32&nbsp;KB.</p>
@@ -145,19 +145,19 @@ lit := evosql.<span class="c-fn">FormatVector</span>(emb) <span class="c-com">//
 <p>Writes a checkpoint snapshot into a CHECKPOINT STORE for the given thread.</p>
 
 <div class="sig">func (c *Conn) CheckpointGetLatest(store, threadID string) (string, error)</div>
-<p>Returns the latest checkpoint values JSON for the thread, or an <code>*Error</code> with <code>Kind == ErrNotFound</code> if there is none. The internal read buffer is 64&nbsp;KB.</p>
+<p>Returns the latest checkpoint values JSON for the thread. If there is none, it returns an <code>*Error</code> with <code>Kind == ErrNotFound</code>. The internal read buffer is 64&nbsp;KB.</p>
 
 <div class="sig">func FormatVector(vec []float32) string</div>
-<p>Package-level helper. Renders a <code>[]float32</code> as the <code>[v1,v2,…]</code> literal EvoSQL accepts as a <code>VECTOR(N)</code> value, formatting each component with <code>%.6f</code>. Returns the empty string for an empty/nil slice.</p>
+<p>Package-level helper. Renders a <code>[]float32</code> as the <code>[v1,v2,…]</code> literal that EvoSQL accepts as a <code>VECTOR(N)</code> value. Each component is formatted with <code>%.6f</code>. Returns the empty string for an empty or nil slice.</p>
 
 <h3 id="errors">Errors</h3>
-<p>Every fallible call returns a <code>*Error</code> (assignable to <code>error</code>). It carries:</p>
+<p>Every call that can fail returns a <code>*Error</code>. It is assignable to <code>error</code>. It carries three fields.</p>
 <ul>
-<li><code>Kind ErrorKind</code>, one of <code>ErrGeneral</code>, <code>ErrConnect</code>, <code>ErrAuth</code>, <code>ErrProtocol</code>, <code>ErrSQL</code>, <code>ErrBuffer</code>, <code>ErrNotFound</code>, mapped from the C SDK return codes (<code>-2</code>…<code>-7</code>).</li>
-<li><code>Message string</code>, the human-readable message from the C SDK's thread-local last-error storage.</li>
-<li><code>SQLState string</code>: the SQLSTATE of the last error, or empty when there is none.</li>
+<li><code>Kind ErrorKind</code>. It is one of <code>ErrGeneral</code>, <code>ErrConnect</code>, <code>ErrAuth</code>, <code>ErrProtocol</code>, <code>ErrSQL</code>, <code>ErrBuffer</code>, or <code>ErrNotFound</code>. It is mapped from the C SDK return codes <code>-2</code> through <code>-7</code>.</li>
+<li><code>Message string</code>. It is the human-readable message from the C SDK thread-local last-error storage.</li>
+<li><code>SQLState string</code>. It is the SQLSTATE of the last error, or empty when there is none.</li>
 </ul>
-<p><code>Error()</code> formats as <code>evosql sql &lt;state&gt;: &lt;message&gt;</code> when a SQLSTATE is present, otherwise <code>evosql: &lt;message&gt;</code>. Use a type assertion or <code>errors.As</code> to inspect <code>Kind</code>: for example, treating a missing row as a soft miss:</p>
+<p>When a SQLSTATE is present, <code>Error()</code> formats as <code>evosql sql &lt;state&gt;: &lt;message&gt;</code>. Otherwise it formats as <code>evosql: &lt;message&gt;</code>. Use a type assertion or <code>errors.As</code> to inspect <code>Kind</code>. The example below treats a missing row as a soft miss.</p>
 <pre><code>val, err := c.<span class="c-fn">MemoryGet</span>(<span class="c-str">"go_demo"</span>, <span class="c-str">"users"</span>, <span class="c-str">"bob"</span>)
 <span class="c-key">var</span> e *evosql.Error
 <span class="c-key">if</span> errors.<span class="c-fn">As</span>(err, &amp;e) &amp;&amp; e.Kind == evosql.ErrNotFound {
@@ -166,13 +166,13 @@ lit := evosql.<span class="c-fn">FormatVector</span>(emb) <span class="c-com">//
 
 <h2 id="notes">Notes &amp; limitations</h2>
 <ul>
-<li><strong>cgo required.</strong> This is not a pure-Go driver. You must build (or download) <code>libevosql-memory</code> and have a C toolchain available; cross-compiling needs the matching C archive for the target platform.</li>
-<li><strong>A <code>*Conn</code> is not goroutine-safe.</strong> Open one connection per goroutine. The C SDK's last-error storage is thread-local, so two goroutines on two connections won't see each other's errors via <code>Error.Message</code>.</li>
-<li><strong>Buffer limits.</strong> <code>Query</code> is capped at 256 rows × 32 columns × 4096 bytes/cell; <code>MemoryGet</code> reads up to 32&nbsp;KB; <code>CheckpointGetLatest</code> up to 64&nbsp;KB. Larger payloads are truncated.</li>
-<li><strong>No streaming binding.</strong> The underlying C SDK supports LISTEN/NOTIFY and CDC subscriptions, but the Go package does not wrap them.</li>
+<li><strong>cgo required.</strong> This is not a pure-Go driver. You must build or download <code>libevosql-memory</code> and have a C toolchain ready. Cross-compiling needs the matching C archive for the target platform.</li>
+<li><strong>A <code>*Conn</code> is not goroutine-safe.</strong> Open one connection per goroutine. The C SDK last-error storage is thread-local. So two goroutines on two connections will not see each other's errors through <code>Error.Message</code>.</li>
+<li><strong>Buffer limits.</strong> <code>Query</code> is capped at 256 rows by 32 columns by 4096 bytes per cell. <code>MemoryGet</code> reads up to 32&nbsp;KB. <code>CheckpointGetLatest</code> reads up to 64&nbsp;KB. Larger payloads are cut off.</li>
+<li><strong>No streaming binding.</strong> The C SDK underneath supports LISTEN/NOTIFY and CDC subscriptions. The Go package does not wrap them.</li>
 <li><strong>Go version.</strong> The module declares <code>go 1.21</code>.</li>
 </ul>
-<p>See also: <a href="/platform/mcp-server/">MCP server</a> for agent integrations, and the project <a href="https://wiki.evolutiondb.org">wiki</a> for the EVO protocol and agent-memory store reference.</p>
+<p>See also the <a href="/platform/mcp-server/">MCP server</a> for agent integrations. The project <a href="https://wiki.evolutiondb.org">wiki</a> has the EVO protocol and agent-memory store reference.</p>
 </main></div>
 <script src="/nav-data.js"></script>
 <script src="/nav.js"></script>

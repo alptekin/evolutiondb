@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE POLICY</h1>
-<p class="lede">Define a row-level security policy that restricts which rows users may read or write on a table.</p>
+<p class="lede">Create a row-level security policy. It limits which rows users can read or write on a table.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -36,57 +36,57 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>CREATE POLICY</code> creates a row-level security (RLS) policy and stores it in the system catalog against the target table. A policy names a row-filter expression that EvolutionDB applies automatically when ordinary users run <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, or <code>DELETE</code> against the table.</p>
-<p>Creating a policy by itself does not change query behavior. Row-level security is only enforced once it has been switched on for the table with <code>ALTER TABLE <var>table_name</var> ENABLE ROW LEVEL SECURITY</code>. While RLS is enabled, every applicable policy is consulted on each affected row; policies are otherwise dormant.</p>
-<p>The <code>admin</code> account is treated as a superuser and bypasses all policies entirely: it always sees and may write every row, regardless of how many policies exist or whether RLS is enabled.</p>
-<p>How the configured expressions combine for a given statement and user:</p>
+<p><code>CREATE POLICY</code> creates a row-level security (RLS) policy. It stores the policy in the system catalog against the target table. A policy holds a row-filter expression. EvolutionDB applies this expression on its own when ordinary users run <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, or <code>DELETE</code> on the table.</p>
+<p>Creating a policy on its own does not change how queries behave. Row-level security only takes effect after you turn it on for the table with <code>ALTER TABLE <var>table_name</var> ENABLE ROW LEVEL SECURITY</code>. While RLS is on, every policy that applies is checked on each affected row. At other times the policies stay inactive.</p>
+<p>The <code>admin</code> account is a superuser. It skips all policies. It always sees and can write every row. This is true no matter how many policies exist or whether RLS is on.</p>
+<p>The expressions combine like this for a given statement and user.</p>
 <ul>
-<li><strong>Permissive policies</strong> (the default) are combined with <code>OR</code>. A row is visible / writable if it satisfies <em>any one</em> permissive policy that applies to the user and command.</li>
-<li><strong>Restrictive policies</strong> are combined with <code>AND</code> and are layered on top of the permissive result. A row must satisfy <em>every</em> applicable restrictive policy in addition to passing the permissive set.</li>
-<li>If no permissive policy applies to the current user and command, the effective result is "no rows": the table appears empty for reads, and writes are rejected. At least one permissive policy must match for any access to be granted.</li>
+<li><strong>Permissive policies</strong> are the default. They are joined with <code>OR</code>. A row is visible or writable if it passes <em>any one</em> permissive policy that applies to the user and command.</li>
+<li><strong>Restrictive policies</strong> are joined with <code>AND</code>. They are added on top of the permissive result. A row must pass <em>every</em> restrictive policy that applies. It must also pass the permissive set.</li>
+<li>Sometimes no permissive policy applies to the current user and command. Then the result is "no rows". The table looks empty for reads. Writes are rejected. At least one permissive policy must match before any access is allowed.</li>
 </ul>
-<p><code>USING</code> controls which existing rows are <em>visible</em> to a command (it is folded into the query's <code>WHERE</code> filter for <code>SELECT</code>, <code>UPDATE</code>, and <code>DELETE</code>). <code>WITH CHECK</code> controls which <em>new or modified</em> row values may be written by <code>INSERT</code> and <code>UPDATE</code>; a write whose new row fails the check is rejected. When <code>WITH CHECK</code> is omitted, the <code>USING</code> expression is reused as the write check, matching PostgreSQL.</p>
-<p>The <code>ON MEMORY STORE <var>store_name</var></code> form is syntactic sugar for protecting a memory store: it resolves the store to its backing <code>mem_<var>store_name</var></code> table and creates an ordinary table policy there. Policy expressions can reference the backing columns (such as <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>) like any other column.</p>
+<p><code>USING</code> controls which existing rows a command can <em>see</em>. It is added to the query's <code>WHERE</code> filter for <code>SELECT</code>, <code>UPDATE</code>, and <code>DELETE</code>. <code>WITH CHECK</code> controls which <em>new or changed</em> row values can be written by <code>INSERT</code> and <code>UPDATE</code>. A write is rejected if its new row fails the check. When you leave out <code>WITH CHECK</code>, the <code>USING</code> expression is used as the write check. This matches PostgreSQL.</p>
+<p>The <code>ON MEMORY STORE <var>store_name</var></code> form is a shortcut for protecting a memory store. It resolves the store to its backing <code>mem_<var>store_name</var></code> table. Then it creates an ordinary table policy there. Policy expressions can use the backing columns like any other column. These columns include <code>mem_namespace</code>, <code>mem_key</code>, and <code>mem_value</code>.</p>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt><var>name</var></dt>
-<dd>The name of the new policy. Policy names are scoped to their table; the same name may be reused on different tables. Creating a policy whose name already exists on the same table raises a duplicate-object error.</dd>
+<dd>The name of the new policy. Policy names belong to their table. You can use the same name on different tables. If you create a policy with a name that already exists on the same table, you get a duplicate-object error.</dd>
 
 <dt><var>table_name</var></dt>
 <dd>The existing table the policy applies to. If the relation does not exist, the command fails with <code>relation "<var>table_name</var>" does not exist</code>.</dd>
 
 <dt><span class="c-key">ON MEMORY STORE</span> <var>store_name</var></dt>
-<dd>Apply the policy to a memory store instead of a regular table. EvolutionDB looks up the store and targets its backing <code>mem_<var>store_name</var></code> table. If the store is not found, the command fails with the same relation-not-found error.</dd>
+<dd>Apply the policy to a memory store instead of a regular table. EvolutionDB looks up the store. Then it targets the store's backing <code>mem_<var>store_name</var></code> table. If the store is not found, the command fails with the same relation-not-found error.</dd>
 
 <dt><span class="c-key">AS PERMISSIVE</span> | <span class="c-key">AS RESTRICTIVE</span></dt>
-<dd>Selects how the policy combines with others. <code>PERMISSIVE</code> policies are OR-ed together; <code>RESTRICTIVE</code> policies are AND-ed on top. When <code>AS</code> is omitted, the policy is <strong>PERMISSIVE</strong>.</dd>
+<dd>Sets how the policy combines with others. <code>PERMISSIVE</code> policies are joined with <code>OR</code>. <code>RESTRICTIVE</code> policies are joined with <code>AND</code> on top. When you leave out <code>AS</code>, the policy is <strong>PERMISSIVE</strong>.</dd>
 
 <dt><span class="c-key">FOR ALL</span> | <span class="c-key">FOR SELECT</span> | <span class="c-key">FOR INSERT</span> | <span class="c-key">FOR UPDATE</span> | <span class="c-key">FOR DELETE</span></dt>
-<dd>Restricts the policy to a single command type, or to all commands. When <code>FOR</code> is omitted, the policy applies to <strong>ALL</strong> commands. Only the single keywords shown here are accepted, comma-separated command lists are not supported.</dd>
+<dd>Limits the policy to one command type, or to all commands. When you leave out <code>FOR</code>, the policy applies to <strong>ALL</strong> commands. Only the single keywords shown here are accepted. Comma-separated command lists are not supported.</dd>
 
 <dt><span class="c-key">TO</span> <var>role_name</var> [..]</dt>
-<dd>The roles (users) the policy applies to. Role matching is case-insensitive against the connected username, and the special role <code>public</code> matches every user. When <code>TO</code> is omitted, the policy applies to all users.</dd>
+<dd>The roles the policy applies to. Roles are users. Role matching is case-insensitive against the connected username. The special role <code>public</code> matches every user. When you leave out <code>TO</code>, the policy applies to all users.</dd>
 
 <dt><span class="c-key">USING</span> ( <var>using_expression</var> )</dt>
-<dd>A boolean expression evaluated per row to decide row visibility for <code>SELECT</code>, <code>UPDATE</code>, and <code>DELETE</code>. Rows for which it is false are hidden from the user. The expression may reference the table's columns. The parsed expression is serialized and stored in the catalog.</dd>
+<dd>A boolean expression. It is checked for each row to decide row visibility for <code>SELECT</code>, <code>UPDATE</code>, and <code>DELETE</code>. Rows where it is false are hidden from the user. The expression can use the table's columns. The parsed expression is serialized and stored in the catalog.</dd>
 
 <dt><span class="c-key">WITH CHECK</span> ( <var>check_expression</var> )</dt>
-<dd>A boolean expression evaluated against the proposed new row for <code>INSERT</code> and <code>UPDATE</code>. A write whose resulting row does not satisfy the check is rejected. If omitted, the <code>USING</code> expression is used as the check.</dd>
+<dd>A boolean expression. It is checked against the proposed new row for <code>INSERT</code> and <code>UPDATE</code>. A write is rejected if its resulting row fails the check. If you leave it out, the <code>USING</code> expression is used as the check.</dd>
 </dl>
 
 <div class="callout">
-<p><strong>Note.</strong> A policy is inert until you run <code>ALTER TABLE <var>table_name</var> ENABLE ROW LEVEL SECURITY</code>. For a memory store, use <code>ALTER MEMORY STORE <var>store_name</var> ENABLE ROW LEVEL SECURITY</code>.</p>
+<p><strong>Note.</strong> A policy does nothing until you run <code>ALTER TABLE <var>table_name</var> ENABLE ROW LEVEL SECURITY</code>. For a memory store, use <code>ALTER MEMORY STORE <var>store_name</var> ENABLE ROW LEVEL SECURITY</code>.</p>
 </div>
 
 <h2 id="examples">Examples</h2>
-<p>Restrict a table so each tenant sees only its own rows, then enable enforcement:</p>
+<p>Limit a table so each tenant sees only its own rows. Then turn on enforcement:</p>
 <pre><code><span class="c-key">CREATE POLICY</span> tenant_isolation <span class="c-key">ON</span> orders
     <span class="c-key">USING</span> (tenant_id = current_tenant);
 
 <span class="c-key">ALTER TABLE</span> orders <span class="c-key">ENABLE ROW LEVEL SECURITY</span>;</code></pre>
 
-<p>A read-only policy for one role plus a write-check that prevents back-dated inserts:</p>
+<p>A read-only policy for one role. It also has a write check that stops back-dated inserts:</p>
 <pre><code><span class="c-key">CREATE POLICY</span> analyst_read <span class="c-key">ON</span> events
     <span class="c-key">FOR</span> <span class="c-key">SELECT</span>
     <span class="c-key">TO</span> analyst, auditor
@@ -96,13 +96,13 @@
     <span class="c-key">FOR</span> <span class="c-key">INSERT</span>
     <span class="c-key">WITH CHECK</span> (created_at &gt;= <span class="c-str">'2026-01-01'</span>);</code></pre>
 
-<p>A restrictive policy layered on top of permissive ones, a row must pass both. This one applies to everyone via <code>public</code>:</p>
+<p>A restrictive policy added on top of permissive ones. A row must pass both. This one applies to everyone through <code>public</code>:</p>
 <pre><code><span class="c-key">CREATE POLICY</span> hide_archived <span class="c-key">ON</span> documents
     <span class="c-key">AS</span> <span class="c-key">RESTRICTIVE</span>
     <span class="c-key">TO</span> public
     <span class="c-key">USING</span> (archived = <span class="c-key">false</span>);</code></pre>
 
-<p>Protect a memory store; the policy is created on its backing table:</p>
+<p>Protect a memory store. The policy is created on its backing table:</p>
 <pre><code><span class="c-key">CREATE POLICY</span> session_scope <span class="c-key">ON MEMORY STORE</span> sessions
     <span class="c-key">USING</span> (mem_namespace = owner_namespace);
 
@@ -112,16 +112,16 @@
 <pre><code><span class="c-key">DROP POLICY</span> tenant_isolation <span class="c-key">ON</span> orders;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE POLICY</code> is not part of the SQL standard; it follows PostgreSQL's row-level security extension. EvolutionDB implements a practical subset:</p>
+<p><code>CREATE POLICY</code> is not part of the SQL standard. It follows PostgreSQL's row-level security extension. EvolutionDB supports a useful subset:</p>
 <ul>
-<li><strong>Supported:</strong> <code>AS PERMISSIVE</code>/<code>RESTRICTIVE</code> (default permissive), <code>FOR ALL</code>/<code>SELECT</code>/<code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> (default all), <code>TO</code> role lists with the <code>public</code> pseudo-role, <code>USING</code>, and <code>WITH CHECK</code>. As in PostgreSQL, an absent <code>WITH CHECK</code> falls back to <code>USING</code>, permissive policies OR together, and restrictive policies AND on top.</li>
-<li><strong>Differences:</strong> <code>FOR</code> accepts only a single command keyword. There is no <code>ALTER POLICY</code> command, change a policy by dropping and recreating it. The <code>ON MEMORY STORE</code> form is an EvolutionDB extension with no PostgreSQL equivalent. Role matching is performed case-insensitively against the connected username; the built-in <code>admin</code> account is an unconditional superuser that bypasses all policies.</li>
-<li>As in PostgreSQL, policies have no effect until row-level security is enabled on the table, and a table with RLS enabled but no applicable permissive policy denies all access to non-superusers.</li>
+<li><strong>Supported.</strong> <code>AS PERMISSIVE</code> and <code>RESTRICTIVE</code> with permissive as the default. <code>FOR ALL</code>, <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> with all as the default. <code>TO</code> role lists with the <code>public</code> pseudo-role. <code>USING</code>. <code>WITH CHECK</code>. As in PostgreSQL, a missing <code>WITH CHECK</code> falls back to <code>USING</code>. Permissive policies join with <code>OR</code>. Restrictive policies join with <code>AND</code> on top.</li>
+<li><strong>Differences.</strong> <code>FOR</code> accepts only a single command keyword. There is no <code>ALTER POLICY</code> command. To change a policy, drop it and create it again. The <code>ON MEMORY STORE</code> form is an EvolutionDB extension. PostgreSQL has no equivalent. Role matching is case-insensitive against the connected username. The built-in <code>admin</code> account is always a superuser. It bypasses all policies.</li>
+<li>As in PostgreSQL, policies have no effect until row-level security is enabled on the table. A table with RLS enabled but no permissive policy that applies denies all access to non-superusers.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>
 <ul>
-<li><a href="/3.0/ref/alter-table/">ALTER TABLE</a>, enable or disable row-level security on a table</li>
+<li><a href="/3.0/ref/alter-table/">ALTER TABLE</a>. It turns row-level security on or off for a table.</li>
 <li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
 <li><a href="/3.0/ref/select/">SELECT</a></li>
 <li><a href="/3.0/ref/insert/">INSERT</a></li>

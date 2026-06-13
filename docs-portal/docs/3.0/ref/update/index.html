@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>UPDATE</h1>
-<p class="lede">UPDATE, change the values of columns in rows of a table that satisfy a condition.</p>
+<p class="lede">UPDATE changes column values in the rows of a table that match a condition.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -27,95 +27,96 @@
     <span class="opt">[ LIMIT <em>start</em> , <em>count</em> ]</span>
     <span class="opt">[ RETURNING * | <em>output_column</em> [ , ... ] ]</span></code></pre>
 </div>
-<p>The assignment operator in the <code>SET</code> list must be <code>=</code>; any other comparison operator
-in that position is rejected by the parser (<span class="c-com">"bad update assignment"</span>).</p>
+<p>The assignment operator in the <code>SET</code> list must be <code>=</code>. The parser rejects any other comparison operator in that spot. It reports <span class="c-com">"bad update assignment"</span>.</p>
 
 <h2 id="description">Description</h2>
-<p><code>UPDATE</code> changes the values of the specified columns in all rows of <em>table</em> that satisfy
-the <code>WHERE</code> condition. Only the columns named in the <code>SET</code> clause are touched; all other columns
-retain their current values. The number of rows changed is reported back to the client.</p>
+<p><code>UPDATE</code> changes the values of the named columns. It does this for every row of <em>table</em> that
+matches the <code>WHERE</code> condition. Only the columns named in the <code>SET</code> clause change. All other columns
+keep their current values. The server reports the number of changed rows back to the client.</p>
 
-<p>EvolutionDB applies each update <strong>non-destructively (MVCC)</strong>: rather than overwriting a row
-in place, the engine stamps the old version with the current transaction's <code>xmax</code> (soft-delete),
-writes the new version to a fresh heap location with a fresh <code>xmin</code>, and re-points the primary-key
-B+ tree entry at the new RowID. This preserves the old version on the page so concurrent readers
-holding an older snapshot still see the pre-update row, and so the change can be rolled back. An
-exclusive row lock is acquired for each row before it is modified; if it cannot be granted the
-statement fails with a lock or deadlock error.</p>
+<p>EvolutionDB applies each update without destroying the old data. This is the MVCC model. The engine
+does not overwrite a row in place. Instead it stamps the old version with the current transaction's
+<code>xmax</code>. This marks the old version as soft-deleted. The engine then writes the new version to a fresh
+heap location with a fresh <code>xmin</code>. It then points the primary-key B+ tree entry at the new RowID. The
+old version stays on the page. So other readers that hold an older snapshot still see the row before the
+update. The change can also be rolled back. The engine takes an exclusive row lock on each row before it
+changes the row. If the lock cannot be granted, the statement fails with a lock or deadlock error.</p>
 
-<p>Two execution forms exist. The <strong>WHERE-expression form</strong> scans the table (or, for a simple
-primary-key range predicate such as <code>WHERE id &lt;= 5000</code>, walks only the matching B+ tree keys),
-collects the matching rows, then applies the update to each. The <strong>single-key form</strong> (no
-<code>WHERE</code>) addresses one row directly by its primary key. When the <code>FROM</code>-style table list names
-more than one table, or a join is present, the statement is handled as a multi-table update.</p>
+<p>There are two ways to run an update. The <strong>WHERE-expression form</strong> scans the table. It collects
+the matching rows. Then it applies the update to each one. For a simple primary-key range condition like
+<code>WHERE id &lt;= 5000</code>, the engine walks only the matching B+ tree keys instead. The <strong>single-key
+form</strong> has no <code>WHERE</code> clause. It finds one row directly by its primary key. The statement becomes a
+multi-table update when the <code>FROM</code>-style table list names more than one table. It also becomes a
+multi-table update when a join is present.</p>
 
-<p>Before a row is written, EvolutionDB validates the new values against the column's declared type and
-against <code>NOT&nbsp;NULL</code>, <code>UNIQUE</code>, <code>CHECK</code>, and <code>FOREIGN KEY</code> constraints, re-evaluates
-any <code>STORED</code> generated columns, enforces row-level security <code>USING</code>/<code>WITH&nbsp;CHECK</code>
-policies, and fires <code>BEFORE</code>/<code>AFTER UPDATE</code> triggers. A <code>SET</code> on a generated column is
-rejected. When a primary-key column is changed, the configured <code>ON UPDATE</code> referential action
-(<code>RESTRICT</code>, <code>NO&nbsp;ACTION</code>, <code>CASCADE</code>, <code>SET&nbsp;NULL</code>, <code>SET&nbsp;DEFAULT</code>) is
-enforced on referencing child rows. For system-versioned tables, the pre-update row is copied to the
-history table with its <code>valid_to</code> set to the current time, and the live row's validity window is
-refreshed automatically.</p>
+<p>EvolutionDB checks the new values before it writes a row. It checks them against the column's declared
+type. It also checks the <code>NOT&nbsp;NULL</code>, <code>UNIQUE</code>, <code>CHECK</code>, and <code>FOREIGN KEY</code> constraints.
+It re-evaluates any <code>STORED</code> generated columns. It enforces row-level security <code>USING</code> and
+<code>WITH&nbsp;CHECK</code> policies. It fires <code>BEFORE UPDATE</code> and <code>AFTER UPDATE</code> triggers. A
+<code>SET</code> on a generated column is rejected. The engine enforces the configured <code>ON UPDATE</code> referential
+action on referencing child rows when a primary-key column changes. The action can be <code>RESTRICT</code>,
+<code>NO&nbsp;ACTION</code>, <code>CASCADE</code>, <code>SET&nbsp;NULL</code>, or <code>SET&nbsp;DEFAULT</code>. For system-versioned
+tables, the engine copies the old row to the history table. It sets the old row's <code>valid_to</code> to the
+current time. It also refreshes the live row's validity window automatically.</p>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>LOW_PRIORITY</dt>
-<dd>Optional update modifier accepted by the grammar (MySQL-compatibility keyword). It is parsed and
-recorded but does not change EvolutionDB's scheduling behavior.</dd>
+<dd>An optional update modifier that the grammar accepts. It is a MySQL-compatibility keyword. The
+parser reads it and records it. It does not change how EvolutionDB schedules work.</dd>
 
 <dt>IGNORE</dt>
-<dd>Optional update modifier accepted by the grammar (MySQL-compatibility keyword). It is parsed and
-recorded as an option flag.</dd>
+<dd>An optional update modifier that the grammar accepts. It is a MySQL-compatibility keyword. The
+parser reads it and records it as an option flag.</dd>
 
 <dt><em>table</em> [ AS <em>alias</em> ]</dt>
-<dd>The target table whose rows are to be updated. An optional alias may be given. More than one
-table reference may be listed (comma-separated), and join syntax is accepted; when the resolved
-statement references more than one table it is processed as a multi-table update.</dd>
+<dd>The target table whose rows you want to update. You can give an optional alias. You can list more
+than one table reference, separated by commas. Join syntax is also accepted. The statement is processed
+as a multi-table update when it references more than one table.</dd>
 
 <dt><em>column</em></dt>
-<dd>The name of a column in the target table. May be written qualified as <em>table</em>.<em>column</em>; the
-qualified form is what drives multi-table assignments. The column cannot be a generated column, assigning to one raises an error advising that it can only be updated to <code>DEFAULT</code>.</dd>
+<dd>The name of a column in the target table. You can write it in the qualified form <em>table</em>.<em>column</em>.
+The qualified form is what drives multi-table assignments. The column cannot be a generated column. If you
+assign to one, the engine raises an error. The error says the column can only be updated to <code>DEFAULT</code>.</dd>
 
 <dt><em>expression</em></dt>
-<dd>The value to assign to the column, written as a SQL expression after <code>=</code>. The new value must be
-compatible with the column's declared type; type validation runs before the row is written.</dd>
+<dd>The value to assign to the column. You write it as a SQL expression after <code>=</code>. The new value must
+match the column's declared type. The engine checks the type before it writes the row.</dd>
 
 <dt>WHERE <em>condition</em></dt>
-<dd>An expression returning a boolean (truthy) result. Only rows for which it evaluates true are
-updated. When omitted in the single-key form, the row is located by primary key; when an expression
-WHERE is present, every row matching the predicate is updated. A simple primary-key range or equality
-predicate is optimized to a B+ tree cursor walk instead of a full table scan.</dd>
+<dd>An expression that returns a boolean result. Only rows where it is true are updated. In the single-key
+form you leave it out, and the engine finds the row by primary key. When you give a WHERE expression, every
+row that matches the condition is updated. A simple primary-key range or equality condition uses a B+ tree
+cursor walk instead of a full table scan.</dd>
 
 <dt>ORDER BY <em>column</em> [ ASC | DESC ]</dt>
-<dd>Accepted by the grammar (MySQL-style ordered update). It orders the candidate rows and is
-meaningful primarily in combination with <code>LIMIT</code>.</dd>
+<dd>The grammar accepts this MySQL-style ordered update. It orders the candidate rows. It is most useful
+together with <code>LIMIT</code>.</dd>
 
 <dt>LIMIT <em>count</em> [ OFFSET <em>start</em> ] / LIMIT <em>start</em>, <em>count</em></dt>
-<dd>Restricts how many of the matched rows are actually updated. The matched set is sliced by the
-effective <code>OFFSET</code>/<code>LIMIT</code> range before the updates are applied; rows outside the range are
-left unchanged.</dd>
+<dd>Limits how many of the matched rows are actually updated. The engine slices the matched set by the
+<code>OFFSET</code> and <code>LIMIT</code> range first. Then it applies the updates. Rows outside the range are left
+unchanged.</dd>
 
 <dt>RETURNING * | <em>output_column</em> [.. ]</dt>
-<dd>Causes <code>UPDATE</code> to return the affected rows. <code>RETURNING *</code> returns all columns; a column
-list returns just those columns. The returned values reflect the <strong>new</strong> (post-update) row.</dd>
+<dd>Makes <code>UPDATE</code> return the affected rows. <code>RETURNING *</code> returns all columns. A column list
+returns just those columns. The returned values show the <strong>new</strong> row after the update.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
 
-<p>Change a single column on one row identified by its primary key:</p>
+<p>Change one column on one row that you find by its primary key:</p>
 <pre><code><span class="c-key">UPDATE</span> employees <span class="c-key">SET</span> salary = <span class="c-str">75000</span> <span class="c-key">WHERE</span> id = <span class="c-str">42</span>;</code></pre>
 
-<p>Update several columns at once, computing a new value from an expression:</p>
+<p>Update several columns at once. One new value comes from an expression:</p>
 <pre><code><span class="c-key">UPDATE</span> products
    <span class="c-key">SET</span> price = price * <span class="c-str">1.10</span>, updated_by = <span class="c-str">'admin'</span>
  <span class="c-key">WHERE</span> category = <span class="c-str">'books'</span>;</code></pre>
 
-<p>Range predicate over the primary key (uses the B+ tree cursor fast path):</p>
+<p>A range condition over the primary key. This uses the B+ tree cursor fast path:</p>
 <pre><code><span class="c-key">UPDATE</span> orders <span class="c-key">SET</span> status = <span class="c-str">'archived'</span> <span class="c-key">WHERE</span> id &lt;= <span class="c-str">5000</span>;</code></pre>
 
-<p>Update only the first few matching rows, in order, and return the new values:</p>
+<p>Update only the first few matching rows in order, and return the new values:</p>
 <pre><code><span class="c-key">UPDATE</span> tickets
    <span class="c-key">SET</span> priority = <span class="c-str">'high'</span>
  <span class="c-key">WHERE</span> assignee <span class="c-key">IS NULL</span>
@@ -128,20 +129,20 @@ list returns just those columns. The returned values reflect the <strong>new</st
 
 <h2 id="compatibility">Compatibility</h2>
 <p>The core form <code>UPDATE <em>table</em> SET <em>col</em> = <em>expr</em> [ , ... ] WHERE <em>condition</em></code> follows the
-SQL standard and matches PostgreSQL closely. The optional <code>RETURNING</code> clause is a PostgreSQL
-extension that EvolutionDB supports, returning post-update column values.</p>
-<p>Several clauses are MySQL-flavored extensions rather than SQL-standard or PostgreSQL features: the
-<code>LOW_PRIORITY</code> and <code>IGNORE</code> modifiers before the table name, and the <code>ORDER BY</code> /
-<code>LIMIT</code> clauses on <code>UPDATE</code>. The <code>LIMIT <em>start</em>, <em>count</em></code> two-argument form is
-MySQL syntax; the <code>LIMIT <em>count</em> OFFSET <em>start</em></code> form follows PostgreSQL.</p>
-<p>Notable differences from PostgreSQL's <code>UPDATE</code>: EvolutionDB does not implement PostgreSQL's
-<code>UPDATE ... FROM <em>from_list</em></code> clause for joins: instead, multi-table updates are expressed by
-listing tables (and joins) directly after the <code>UPDATE</code> keyword in a FROM-style table reference and
-using qualified <code>SET <em>table</em>.<em>column</em> = ...</code> assignments, in the MySQL multi-table style.
-EvolutionDB also does not support the <code>WHERE CURRENT OF <em>cursor</em></code> targeting, table aliases for the
-sole purpose of a <code>FROM</code> join, or the standard <code>SET (col1, col2) = (...)</code> multi-column
-row-assignment form; assignments are written one column at a time. The assignment operator must be a
-plain <code>=</code>.</p>
+SQL standard. It matches PostgreSQL closely. The optional <code>RETURNING</code> clause is a PostgreSQL
+extension. EvolutionDB supports it. It returns the column values after the update.</p>
+<p>A few clauses are MySQL-style extensions. They are not part of the SQL standard or PostgreSQL. These are
+the <code>LOW_PRIORITY</code> and <code>IGNORE</code> modifiers before the table name. They also include the
+<code>ORDER BY</code> and <code>LIMIT</code> clauses on <code>UPDATE</code>. The <code>LIMIT <em>start</em>, <em>count</em></code>
+two-argument form is MySQL syntax. The <code>LIMIT <em>count</em> OFFSET <em>start</em></code> form follows PostgreSQL.</p>
+<p>EvolutionDB's <code>UPDATE</code> differs from PostgreSQL in some ways. It does not implement PostgreSQL's
+<code>UPDATE ... FROM <em>from_list</em></code> clause for joins. Instead, you write multi-table updates by
+listing tables and joins directly after the <code>UPDATE</code> keyword in a FROM-style table reference. You then
+use qualified <code>SET <em>table</em>.<em>column</em> = ...</code> assignments. This is the MySQL multi-table style.
+EvolutionDB also does not support <code>WHERE CURRENT OF <em>cursor</em></code> targeting. It does not support table
+aliases used only for a <code>FROM</code> join. It does not support the standard <code>SET (col1, col2) = (...)</code>
+multi-column row-assignment form. You write assignments one column at a time. The assignment operator must
+be a plain <code>=</code>.</p>
 
 <h2 id="see-also">See Also</h2>
 <ul>

@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>SAVEPOINT</h1>
-<p class="lede">Define a new savepoint within the current transaction block, marking a point you can later roll back to without aborting the whole transaction.</p>
+<p class="lede">Create a new savepoint inside the current transaction. A savepoint marks a point you can roll back to later. You do not have to stop the whole transaction to do this.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -23,24 +23,24 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>SAVEPOINT</code> establishes a named marker inside the currently open transaction. Once a savepoint is set, you can use <code>ROLLBACK TO SAVEPOINT</code> to undo every change made after the savepoint was created, leaving the savepoint itself and any work done before it intact, or <code>RELEASE SAVEPOINT</code> to discard the marker and merge its work into the surrounding transaction.</p>
-<p>In EvolutionDB, transaction control statements are interpreted by the protocol adaptor rather than by the SQL grammar parser. The adaptor maintains a per-session <em>undo log</em> of the changes made since the transaction began. Creating a savepoint records the current length of that undo log; rolling back to the savepoint replays the undo entries in reverse until the log is back at the recorded length. This means a savepoint is essentially a saved position in the undo stack, not a nested sub-transaction with its own transaction id.</p>
-<p>A savepoint can only be defined while a transaction is open. If no transaction is in progress, the command fails with SQLSTATE <code>25P01</code> ("SAVEPOINT can only be used in a transaction"). A savepoint name is required; issuing <code>SAVEPOINT</code> with no name fails with SQLSTATE <code>42601</code>.</p>
-<p>If you create a savepoint with the same name as an existing savepoint in the current transaction, EvolutionDB <strong>overwrites</strong> the existing one in place, re-pointing it at the current position in the undo log. (See <a href="#compatibility">Compatibility</a>: this differs from the SQL standard and PostgreSQL, which keep both and shadow the older one.)</p>
-<p>Savepoint names are compared case-insensitively and are truncated to 127 characters. A single transaction can hold up to 64 active savepoints; attempting to create more fails with SQLSTATE <code>53000</code> ("too many savepoints").</p>
+<p><code>SAVEPOINT</code> sets a named marker inside the open transaction. After you set a savepoint, you have two choices. You can run <code>ROLLBACK TO SAVEPOINT</code> to undo every change made after the savepoint. The savepoint and the work done before it stay in place. You can also run <code>RELEASE SAVEPOINT</code> to drop the marker. Its work then becomes part of the transaction around it.</p>
+<p>In EvolutionDB, the protocol adaptor reads transaction control statements. The SQL grammar parser does not. The adaptor keeps an <em>undo log</em> for each session. This log holds the changes made since the transaction began. When you create a savepoint, the adaptor saves the current length of that undo log. When you roll back to the savepoint, the adaptor replays the undo entries in reverse. It stops when the log is back at the saved length. So a savepoint is just a saved position in the undo stack. It is not a nested sub-transaction with its own transaction id.</p>
+<p>You can only create a savepoint while a transaction is open. If no transaction is running, the command fails with SQLSTATE <code>25P01</code>. The message is "SAVEPOINT can only be used in a transaction". A savepoint name is required. If you run <code>SAVEPOINT</code> with no name, it fails with SQLSTATE <code>42601</code>.</p>
+<p>You can create a savepoint with the same name as one that already exists in the transaction. In that case EvolutionDB <strong>overwrites</strong> the old one in place. It moves the marker to the current position in the undo log. This is not how the SQL standard and PostgreSQL work. They keep both savepoints and hide the older one. See <a href="#compatibility">Compatibility</a> for more.</p>
+<p>Savepoint names are compared without regard to case. They are cut to 127 characters. One transaction can hold up to 64 active savepoints. If you try to create more, the command fails with SQLSTATE <code>53000</code>. The message is "too many savepoints".</p>
 
 <div class="callout">
-<p><strong>Note.</strong> The command keyword and name are parsed positionally: the adaptor reads the word <code>SAVEPOINT</code>, then takes the next whitespace-delimited token (terminated by a space, a semicolon, or end of statement) as the savepoint name. There is no quoting or parenthesized option syntax.</p>
+<p><strong>Note.</strong> The keyword and the name are read by position. The adaptor reads the word <code>SAVEPOINT</code>. Then it takes the next token as the savepoint name. A token ends at a space, a semicolon, or the end of the statement. There is no quoting and no parenthesized option syntax.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>savepoint_name</dt>
-<dd>The name to give the new savepoint. Required. The name is a single whitespace-delimited token; it is matched case-insensitively when later referenced by <code>ROLLBACK TO SAVEPOINT</code> or <code>RELEASE SAVEPOINT</code>, and is stored truncated to 127 characters. Reusing a name that already exists in the current transaction overwrites that savepoint rather than creating a second one.</dd>
+<dd>The name for the new savepoint. This is required. The name is one token with no spaces. Later you can use it with <code>ROLLBACK TO SAVEPOINT</code> or <code>RELEASE SAVEPOINT</code>. The match does not care about case. The name is stored cut to 127 characters. If you reuse a name that already exists in the transaction, it overwrites that savepoint. It does not create a second one.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Establish a savepoint, then roll back to it to discard only the most recent change:</p>
+<p>Set a savepoint. Then roll back to it to drop only the most recent change.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 
 <span class="c-key">INSERT INTO</span> accounts <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'opening'</span>);
@@ -57,7 +57,7 @@
 <span class="c-key">COMMIT</span>;
 <span class="c-com">-- rows 1 and 3 are committed; row 2 is gone</span></code></pre>
 
-<p>Release a savepoint once you are sure the work it guards is good. After release the marker is gone, but the underlying changes remain part of the transaction:</p>
+<p>Release a savepoint once you are sure its work is good. After the release, the marker is gone. The changes stay part of the transaction.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 
 <span class="c-key">SAVEPOINT</span> sp1;
@@ -68,7 +68,7 @@
 
 <span class="c-key">COMMIT</span>;</code></pre>
 
-<p>Reusing a savepoint name moves the marker forward instead of stacking a new one:</p>
+<p>Reusing a savepoint name moves the marker forward. It does not stack a new one.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 
 <span class="c-key">INSERT INTO</span> log <span class="c-key">VALUES</span> (<span class="c-str">'a'</span>);
@@ -85,19 +85,19 @@
 <span class="c-key">COMMIT</span>;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>EvolutionDB's <code>SAVEPOINT</code> follows the spirit of the SQL standard's <code>&lt;savepoint statement&gt;</code> and is wire-compatible with the PostgreSQL form for the common case of <code>SAVEPOINT <em>name</em></code>. The companion commands <code>ROLLBACK TO [SAVEPOINT] <em>name</em></code> and <code>RELEASE [SAVEPOINT] <em>name</em></code> are accepted with the <code>SAVEPOINT</code> keyword optional, matching PostgreSQL.</p>
-<p>Differences to be aware of:</p>
+<p>EvolutionDB's <code>SAVEPOINT</code> follows the idea of the SQL standard's <code>&lt;savepoint statement&gt;</code>. For the common case of <code>SAVEPOINT <em>name</em></code>, it works the same as the PostgreSQL form on the wire. The related commands <code>ROLLBACK TO [SAVEPOINT] <em>name</em></code> and <code>RELEASE [SAVEPOINT] <em>name</em></code> also work. The <code>SAVEPOINT</code> keyword is optional in them. This matches PostgreSQL.</p>
+<p>Here are the differences to know about.</p>
 <dl class="params">
 <dt>Duplicate names overwrite</dt>
-<dd>The SQL standard and PostgreSQL allow multiple savepoints with the same name, where the newest shadows the older ones until released. EvolutionDB instead overwrites a same-named savepoint in place, so there is never more than one savepoint per name in a transaction.</dd>
+<dd>The SQL standard and PostgreSQL allow many savepoints with the same name. The newest one hides the older ones until it is released. EvolutionDB does it another way. It overwrites a same-named savepoint in place. So a transaction never has more than one savepoint per name.</dd>
 <dt>No nested sub-transactions</dt>
-<dd>Savepoints are implemented as positions in a per-session undo log, not as nested transactions with their own ids. There is no separate sub-transaction visibility or per-savepoint error isolation beyond undoing the recorded changes.</dd>
+<dd>A savepoint is a position in the undo log for the session. It is not a nested transaction with its own id. There is no separate sub-transaction view. There is no per-savepoint error isolation. The only thing a savepoint can do is undo the recorded changes.</dd>
 <dt>Fixed savepoint limit</dt>
-<dd>A transaction may hold at most 64 active savepoints. Exceeding this fails with SQLSTATE <code>53000</code>.</dd>
+<dd>A transaction can hold at most 64 active savepoints. If you go past this limit, the command fails with SQLSTATE <code>53000</code>.</dd>
 <dt>Plain identifier names only</dt>
-<dd>Names are read as a single unquoted, whitespace-delimited token and compared case-insensitively. Quoted or delimited identifiers and any parenthesized option syntax are not supported.</dd>
+<dd>A name is read as one token with no quotes and no spaces. The match does not care about case. Quoted or delimited identifiers are not supported. Parenthesized option syntax is not supported either.</dd>
 <dt>Statement handled by the adaptor</dt>
-<dd>Transaction control statements (including <code>SAVEPOINT</code>) are recognized by the protocol adaptor, not the SQL grammar. They must appear as standalone statements rather than embedded within other SQL.</dd>
+<dd>The protocol adaptor reads transaction control statements. This includes <code>SAVEPOINT</code>. The SQL grammar does not read them. They must stand on their own. You cannot put them inside other SQL.</dd>
 </dl>
 
 <h2 id="see-also">See Also</h2>

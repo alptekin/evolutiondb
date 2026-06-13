@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>SET</h1>
-<p class="lede">Set a session user variable, or change the active schema for the current connection.</p>
+<p class="lede">Set a session user variable. You can also change the active schema for the current connection.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -26,70 +26,70 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>SET</code> serves two distinct purposes in EvolutionDB, distinguished by what follows the keyword.</p>
+<p><code>SET</code> has two uses in EvolutionDB. The word after the keyword tells them apart.</p>
 
-<p><strong>User variables.</strong> <code>SET @name = expr</code> defines or overwrites a session-scoped
-user variable. The right-hand side is evaluated as a full SQL value expression (including arithmetic,
-function calls and other constructs the expression engine understands), and the resulting value is
-stored under the given name for the lifetime of the connection. The variable can then be referenced
-anywhere an expression is allowed, for example in a <code>SELECT</code> list or a <code>WHERE</code>
-clause, by writing <code>@name</code>. Referencing a variable that was never set yields
-<code>NULL</code> rather than an error. Several variables may be assigned in one statement by
-separating the assignments with commas.</p>
+<p><strong>User variables.</strong> <code>SET @name = expr</code> creates or overwrites a user variable
+for the session. The right-hand side is read as a full SQL value expression. This can include
+arithmetic, function calls, and other things the expression engine understands. The result is stored
+under the given name for the life of the connection. You can then use the variable anywhere an
+expression is allowed. For example, you can use it in a <code>SELECT</code> list or a
+<code>WHERE</code> clause by writing <code>@name</code>. A variable that was never set returns
+<code>NULL</code> instead of raising an error. You can set several variables in one statement.
+Separate the assignments with commas.</p>
 
-<p>Either <code>=</code> or <code>:=</code> may be used as the assignment operator. No other
-comparison operator is accepted; for instance <code>SET @x &gt; 1</code> is a syntax error.</p>
+<p>You can use either <code>=</code> or <code>:=</code> as the assignment operator. No other
+comparison operator is accepted. For example, <code>SET @x &gt; 1</code> is a syntax error.</p>
 
 <p><strong>Schema selection.</strong> <code>SET SCHEMA schema_name</code> changes the active schema
-within the current database, so that subsequently unqualified table and object names resolve against
-that schema. The schema must already exist in the current database; if it does not, the statement
-fails with an <em>undefined schema</em> error and the active schema is left unchanged.
+inside the current database. After this, unqualified table and object names resolve against that
+schema. The schema must already exist in the current database. If it does not, the statement fails
+with an <em>undefined schema</em> error. The active schema then stays the same.
 <code>SET SCHEMA DEFAULT</code> switches back to the schema named <code>default</code>.</p>
 
-<p>The scope of both forms is the connection that issues them. Variables and the chosen schema are
-not shared between connections, and they do not survive disconnection.</p>
+<p>Both forms apply only to the connection that runs them. Variables and the chosen schema are not
+shared between connections. They do not survive after you disconnect.</p>
 
 <div class="callout">
-<p><strong>Note.</strong> User variables are addressed with a leading <code>@</code> sigil
-(for example <code>@x</code>, <code>@threshold</code>). This is the only way to read or write them;
-there is no separate inspection command. A connection may hold up to 64 distinct user variables.</p>
+<p><strong>Note.</strong> User variables start with a leading <code>@</code> sigil. For example,
+<code>@x</code> and <code>@threshold</code>. This is the only way to read or write them. There is no
+separate command to inspect them. A connection can hold up to 64 different user variables.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt><code>@variable_name</code></dt>
-<dd>The name of the session user variable to assign, written with a leading <code>@</code>.
-Reuse of an existing name overwrites its previous value.</dd>
+<dd>The name of the session user variable to assign. Write it with a leading <code>@</code>.
+If you reuse an existing name, the old value is overwritten.</dd>
 
 <dt><code>= </code> / <code>:=</code></dt>
-<dd>The assignment operator. Both forms are equivalent. They are the only operators accepted in this
-position.</dd>
+<dd>The assignment operator. Both forms mean the same thing. They are the only operators accepted in
+this position.</dd>
 
 <dt><code>value_expression</code></dt>
-<dd>Any SQL value expression. It is evaluated once at the time the <code>SET</code> statement runs,
-and its computed value is stored in the variable. The stored value is later returned verbatim
-wherever <code>@variable_name</code> is referenced.</dd>
+<dd>Any SQL value expression. It is evaluated once when the <code>SET</code> statement runs. The
+computed value is stored in the variable. The stored value is then returned as is wherever you use
+<code>@variable_name</code>.</dd>
 
 <dt><code>schema_name</code></dt>
-<dd>The name of an existing schema in the current database to make active for the connection.
-Subsequent unqualified object names resolve against this schema.</dd>
+<dd>The name of an existing schema in the current database. It becomes the active schema for the
+connection. After this, unqualified object names resolve against this schema.</dd>
 
 <dt><code>DEFAULT</code></dt>
-<dd>In the <code>SET SCHEMA DEFAULT</code> form, selects the schema named <code>default</code> as the
-active schema.</dd>
+<dd>In the <code>SET SCHEMA DEFAULT</code> form, this picks the schema named <code>default</code> as
+the active schema.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
 
-<p>Assign an integer and read it back:</p>
+<p>Assign an integer and read it back again:</p>
 <pre><code><span class="c-key">SET</span> @x = <span class="c-str">42</span>;
 <span class="c-key">SELECT</span> @x;        <span class="c-com">-- 42</span></code></pre>
 
-<p>The right-hand side is a full expression, so arithmetic works:</p>
+<p>The right-hand side is a full expression. So arithmetic works:</p>
 <pre><code><span class="c-key">SET</span> @x = <span class="c-str">10</span> + <span class="c-str">20</span>;
 <span class="c-key">SELECT</span> @x;        <span class="c-com">-- 30</span></code></pre>
 
-<p>Use the colon-equals form, and store a string:</p>
+<p>Use the colon-equals form to store a string:</p>
 <pre><code><span class="c-key">SET</span> @name := <span class="c-str">'Alice'</span>;
 <span class="c-key">SELECT</span> @name;     <span class="c-com">-- Alice</span></code></pre>
 
@@ -97,7 +97,7 @@ active schema.</dd>
 <pre><code><span class="c-key">SET</span> @threshold = <span class="c-str">15</span>;
 <span class="c-key">SELECT</span> * <span class="c-key">FROM</span> uv_test <span class="c-key">WHERE</span> val &gt; @threshold;</code></pre>
 
-<p>Overwriting reuses the same name:</p>
+<p>You can overwrite a variable with the same name:</p>
 <pre><code><span class="c-key">SET</span> @x = <span class="c-str">1</span>;
 <span class="c-key">SET</span> @x = <span class="c-str">99</span>;
 <span class="c-key">SELECT</span> @x;        <span class="c-com">-- 99</span></code></pre>
@@ -110,20 +110,21 @@ active schema.</dd>
 <span class="c-key">SET SCHEMA DEFAULT</span>;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>There is no <code>SET</code> command in the SQL standard for run-time parameters; the standard
-defines <code>SET SCHEMA</code> as part of session management, and EvolutionDB's
-<code>SET SCHEMA schema_name</code> form follows that intent, it selects the schema used to resolve
-unqualified names. The <code>SET SCHEMA DEFAULT</code> spelling is an EvolutionDB convenience that
-selects the schema literally named <code>default</code>.</p>
+<p>The SQL standard has no <code>SET</code> command for run-time parameters. The standard does define
+<code>SET SCHEMA</code> as part of session management. EvolutionDB's
+<code>SET SCHEMA schema_name</code> form follows that intent. It selects the schema used to resolve
+unqualified names. The <code>SET SCHEMA DEFAULT</code> spelling is an EvolutionDB shortcut. It
+selects the schema named <code>default</code>.</p>
 
-<p>EvolutionDB's user-variable form, <code>SET @name = expr</code> (with <code>:=</code> as an
-accepted alternative), follows the MySQL session-variable convention rather than PostgreSQL.
-It is unrelated to PostgreSQL's <code>SET configuration_parameter TO value</code> /
-<code>SET ... = ...</code> for run-time configuration: EvolutionDB does not implement that family of
-configuration parameters, nor the <code>SET SESSION</code>, <code>SET LOCAL</code>,
-<code>SET TIME ZONE</code>, or <code>SET TRANSACTION</code> clauses. Likewise, PostgreSQL has no
-equivalent of EvolutionDB's <code>@</code>-sigil user variables; in PostgreSQL such per-session
-values are typically handled with customized run-time parameters or PL/pgSQL variables.</p>
+<p>EvolutionDB's user-variable form is <code>SET @name = expr</code>. You can also use
+<code>:=</code> here. This form follows the MySQL session-variable convention, not PostgreSQL. It is
+not related to PostgreSQL's <code>SET configuration_parameter TO value</code> or
+<code>SET ... = ...</code> for run-time configuration. EvolutionDB does not implement that family of
+configuration parameters. It also does not implement the <code>SET SESSION</code>,
+<code>SET LOCAL</code>, <code>SET TIME ZONE</code>, or <code>SET TRANSACTION</code> clauses.
+PostgreSQL also has no equivalent of EvolutionDB's <code>@</code>-sigil user variables. In
+PostgreSQL, such per-session values are usually handled with customized run-time parameters or
+PL/pgSQL variables.</p>
 
 <h2 id="see-also">See Also</h2>
 <ul>

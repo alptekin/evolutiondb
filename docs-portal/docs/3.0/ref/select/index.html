@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>SELECT</h1>
-<p class="lede">Retrieve rows from one or more tables, subqueries, or set-returning sources, with optional filtering, grouping, ordering, and row limiting.</p>
+<p class="lede">Read rows from one or more tables, subqueries, or set-returning sources. You can also filter, group, order, and limit the rows.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -64,83 +64,83 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>SELECT</code> reads rows from the database and returns them as a result set. EvolutionDB accepts two principal shapes, both defined by the <code>select_stmt</code> rule in <code>evoparser.y</code>:</p>
+<p><code>SELECT</code> reads rows from the database and returns them as a result set. EvolutionDB accepts two main shapes. Both are defined by the <code>select_stmt</code> rule in <code>evoparser.y</code>.</p>
 <ol>
-<li>A <strong>projection-only</strong> form, <code>SELECT <i>select_expr_list</i></code> with no <code>FROM</code>, which evaluates the listed expressions once and returns a single row. (This is how <code>SELECT 1</code>, <code>SELECT NOW()</code>, etc. are handled.)</li>
-<li>The full <strong>table query</strong> form, which adds <code>FROM</code> and the optional <code>WHERE</code>, <code>GROUP BY</code>, <code>HAVING</code>, <code>ORDER BY</code>, <code>LIMIT</code>, and row-locking clauses.</li>
+<li>A <strong>projection-only</strong> form, <code>SELECT <i>select_expr_list</i></code> with no <code>FROM</code>. It evaluates the listed expressions once and returns a single row. This is how <code>SELECT 1</code> and <code>SELECT NOW()</code> are handled.</li>
+<li>The full <strong>table query</strong> form. It adds <code>FROM</code> and the optional <code>WHERE</code>, <code>GROUP BY</code>, <code>HAVING</code>, <code>ORDER BY</code>, <code>LIMIT</code>, and row-locking clauses.</li>
 </ol>
-<p>The general processing order of a table query is:</p>
+<p>A table query is processed in this order.</p>
 <ol>
-<li>Each <em>from_item</em> in <code>FROM</code> is scanned, then joins are applied (the leftmost item is the driving relation; subsequent items default to <code>INNER JOIN</code> unless an explicit join type is given).</li>
-<li>If <code>WHERE</code> is present, its <em>condition</em> is evaluated against each candidate row; rows for which it is not true are discarded.</li>
-<li>If <code>GROUP BY</code> is present, surviving rows are collapsed into groups; aggregate functions in the select list are computed per group. <code>WITH ROLLUP</code> adds super-aggregate summary rows.</li>
+<li>Each <em>from_item</em> in <code>FROM</code> is scanned. Then joins are applied. The leftmost item is the driving relation. The other items default to <code>INNER JOIN</code> unless you give an explicit join type.</li>
+<li>If <code>WHERE</code> is present, its <em>condition</em> is checked against each candidate row. Rows that are not true are dropped.</li>
+<li>If <code>GROUP BY</code> is present, the remaining rows are collapsed into groups. Aggregate functions in the select list are computed for each group. <code>WITH ROLLUP</code> adds super-aggregate summary rows.</li>
 <li>If <code>HAVING</code> is present, its <em>condition</em> filters the groups.</li>
-<li>The select list is evaluated to form the output rows. <code>DISTINCT</code> / <code>DISTINCTROW</code> then removes duplicate rows.</li>
-<li>If <code>ORDER BY</code> is present, rows are sorted. For non-numeric values the comparison is lexical; values that parse cleanly as numbers are compared numerically (see <code>CompareRecords</code> in <code>Select.c</code>).</li>
-<li><code>LIMIT</code> / <code>OFFSET</code> restricts how many rows are returned.</li>
-<li>If <code>FOR UPDATE</code> / <code>FOR SHARE</code> is present, the returned rows are locked.</li>
+<li>The select list is evaluated to form the output rows. Then <code>DISTINCT</code> and <code>DISTINCTROW</code> remove duplicate rows.</li>
+<li>If <code>ORDER BY</code> is present, rows are sorted. Non-numeric values are compared as text. Values that parse cleanly as numbers are compared as numbers. See <code>CompareRecords</code> in <code>Select.c</code>.</li>
+<li><code>LIMIT</code> and <code>OFFSET</code> limit how many rows are returned.</li>
+<li>If <code>FOR UPDATE</code> or <code>FOR SHARE</code> is present, the returned rows are locked.</li>
 </ol>
-<p>The simple single-table path inside the engine resolves the table from the catalog, performs either a primary-key lookup (when a single equality on the PK is given) or a sequential table scan via the buffer pool, decodes the binary tuple format, and prints the matching rows.</p>
+<p>The simple single-table path inside the engine works in a few steps. It finds the table in the catalog. It then does a primary-key lookup when a single equality on the PK is given, or a sequential table scan through the buffer pool. It decodes the binary tuple format. Finally it prints the matching rows.</p>
 <div class="callout">
-<strong>Note.</strong> The engine's built-in text renderer for the <code>SELECT *</code> path buffers rows for in-memory <code>ORDER BY</code> sorting in fixed-size storage. When driven through the dual-protocol server (the normal way clients connect), result streaming and richer expression handling are managed by the adaptor's query executor.
+<strong>Note.</strong> The engine has a built-in text renderer for the <code>SELECT *</code> path. It buffers rows in fixed-size storage so it can sort <code>ORDER BY</code> in memory. The normal way clients connect is through the dual-protocol server. In that case the adaptor's query executor handles result streaming and richer expression work.
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>ALL / DISTINCT / DISTINCTROW</dt>
-<dd>Duplicate-row treatment. <code>ALL</code> (the default) returns every row. <code>DISTINCT</code> eliminates duplicate result rows; <code>DISTINCTROW</code> is accepted as a synonym. Specifying the same option twice is a parse error ("duplicate … option").</dd>
+<dd>These control how duplicate rows are handled. <code>ALL</code> is the default and returns every row. <code>DISTINCT</code> removes duplicate result rows. <code>DISTINCTROW</code> means the same thing. If you give the same option twice, you get a parse error called "duplicate … option".</dd>
 
 <dt>HIGH_PRIORITY, STRAIGHT_JOIN, SQL_SMALL_RESULT, SQL_BIG_RESULT, SQL_CALC_FOUND_ROWS</dt>
-<dd>MySQL-compatibility select options that are <em>accepted by the grammar</em> as leading keywords. They are parsed without error so MySQL-style statements load; only <code>DISTINCT</code>/<code>DISTINCTROW</code> alter result semantics in this position.</dd>
+<dd>These are MySQL-compatibility select options. The grammar accepts them as leading keywords. They parse without error so MySQL-style statements still load. In this position, only <code>DISTINCT</code> and <code>DISTINCTROW</code> change the result.</dd>
 
 <dt>* / <i>select_expr</i> [ [AS] <i>output_alias</i> ]</dt>
-<dd>The select list. <code>*</code> projects all columns of the source. Otherwise each item is an expression (a column reference, literal, arithmetic/string/aggregate/window function call, etc.) optionally renamed with <code>AS <i>alias</i></code> (the <code>AS</code> keyword is optional).</dd>
+<dd>This is the select list. <code>*</code> returns all columns of the source. Each other item is an expression. It can be a column reference, a literal, or a call to an arithmetic, string, aggregate, or window function. You can rename it with <code>AS <i>alias</i></code>. The <code>AS</code> keyword is optional.</dd>
 
 <dt><i>from_item</i> (FROM)</dt>
-<dd>One or more sources, comma-separated (comma forms an implicit cross/inner join). A source may be a table (<code>table_name</code> or <code>schema.table_name</code>), a parenthesized subquery aliased with a name, a <code>LATERAL</code> subquery, an <code>UNNEST(<i>array_expr</i>)</code> set-returning source, a parenthesized join, or an explicit join (see below).</dd>
+<dd>One or more sources, separated by commas. A comma makes an implicit cross or inner join. A source can be a table, written as <code>table_name</code> or <code>schema.table_name</code>. It can also be a subquery in parentheses with a name, a <code>LATERAL</code> subquery, an <code>UNNEST(<i>array_expr</i>)</code> set-returning source, a join in parentheses, or an explicit join. The join forms are shown below.</dd>
 
 <dt>ONLY <i>table_name</i></dt>
-<dd>In a table source, <code>ONLY</code> restricts the scan to the named parent table and suppresses rows that would otherwise be drawn from inheriting child tables.</dd>
+<dd>In a table source, <code>ONLY</code> limits the scan to the named parent table. It hides rows that would otherwise come from child tables that inherit from it.</dd>
 
 <dt>JOIN clauses</dt>
-<dd>EvolutionDB accepts <code>INNER JOIN</code>, <code>CROSS JOIN</code>, plain <code>JOIN</code> (treated as inner), <code>STRAIGHT_JOIN</code>, <code>LEFT [OUTER] JOIN</code>, <code>RIGHT [OUTER] JOIN</code>, and <code>NATURAL</code> joins (optionally <code>LEFT</code>/<code>RIGHT</code> <code>OUTER</code>). The join predicate is supplied with <code>ON <i>condition</i></code> or <code>USING ( <i>column</i> [, ...] )</code>; outer joins require an explicit condition.</dd>
+<dd>EvolutionDB accepts these joins. They are <code>INNER JOIN</code>, <code>CROSS JOIN</code>, plain <code>JOIN</code> which is treated as inner, <code>STRAIGHT_JOIN</code>, <code>LEFT [OUTER] JOIN</code>, <code>RIGHT [OUTER] JOIN</code>, and <code>NATURAL</code> joins. A <code>NATURAL</code> join may also use <code>LEFT</code> or <code>RIGHT</code> <code>OUTER</code>. You give the join predicate with <code>ON <i>condition</i></code> or <code>USING ( <i>column</i> [, ...] )</code>. Outer joins need an explicit condition.</dd>
 
 <dt><i>index_hint</i></dt>
-<dd>An optional per-table hint: <code>USE KEY</code>, <code>IGNORE KEY</code>, or <code>FORCE KEY</code>, each over a parenthesized index list and optionally scoped to joins with <code>FOR JOIN</code>.</dd>
+<dd>An optional per-table hint. It can be <code>USE KEY</code>, <code>IGNORE KEY</code>, or <code>FORCE KEY</code>. Each one takes an index list in parentheses. You can also scope it to joins with <code>FOR JOIN</code>.</dd>
 
 <dt>FOR SYSTEM_TIME AS OF TRANSACTION <i>xid</i></dt>
-<dd>A temporal (time-travel) qualifier: evaluate the query against the snapshot of the database as of the given transaction id <i>xid</i> rather than the current snapshot.</dd>
+<dd>This is a time-travel qualifier. It runs the query against the database snapshot at the given transaction id <i>xid</i> instead of the current snapshot.</dd>
 
 <dt>WHERE <i>condition</i></dt>
-<dd>A boolean expression; only rows for which it evaluates to true are passed on. Supports comparisons, <code>AND</code>/<code>OR</code>/<code>NOT</code>, <code>IN (...)</code> and <code>IN (<i>subquery</i>)</code>, <code>EXISTS (<i>subquery</i>)</code>, scalar/quantified subqueries, and vector-distance operators.</dd>
+<dd>A boolean expression. Only rows where it is true are passed on. It supports comparisons, <code>AND</code>/<code>OR</code>/<code>NOT</code>, <code>IN (...)</code> and <code>IN (<i>subquery</i>)</code>, <code>EXISTS (<i>subquery</i>)</code>, scalar and quantified subqueries, and vector-distance operators.</dd>
 
 <dt>GROUP BY <i>expression</i> [ASC | DESC] [..] [WITH ROLLUP]</dt>
-<dd>Groups rows that share values over the listed expressions so aggregate functions are computed per group. An optional <code>ASC</code>/<code>DESC</code> may follow each grouping expression. <code>WITH ROLLUP</code> appends super-aggregate (subtotal/grand-total) rows.</dd>
+<dd>This groups rows that share the same values over the listed expressions. Aggregate functions are then computed for each group. An optional <code>ASC</code> or <code>DESC</code> can follow each grouping expression. <code>WITH ROLLUP</code> adds super-aggregate subtotal and grand-total rows.</dd>
 
 <dt>HAVING <i>condition</i></dt>
-<dd>A boolean condition applied to grouped rows (typically referencing aggregates), filtering whole groups after <code>GROUP BY</code>.</dd>
+<dd>A boolean condition applied to grouped rows. It usually refers to aggregates. It filters whole groups after <code>GROUP BY</code>.</dd>
 
 <dt>ORDER BY <i>order_item</i> [..]</dt>
-<dd>Sort key list. Each item is a column name, a qualified <code>table.column</code>, a 1-based column position (e.g. <code>ORDER BY 2</code>), or a vector nearest-neighbor expression <code><i>column</i> &lt;=&gt; '<i>vector_literal</i>'</code> using the cosine-distance operator <code>&lt;=&gt;</code>. Each key may be followed by <code>ASC</code> (default) or <code>DESC</code>. Note: in <code>ORDER BY</code> expression position only the <code>&lt;=&gt;</code> operator is permitted; other comparison operators are rejected.</dd>
+<dd>A list of sort keys. Each item is a column name, a qualified <code>table.column</code>, a 1-based column position such as <code>ORDER BY 2</code>, or a vector nearest-neighbor expression <code><i>column</i> &lt;=&gt; '<i>vector_literal</i>'</code> that uses the cosine-distance operator <code>&lt;=&gt;</code>. Each key can be followed by <code>ASC</code>, the default, or <code>DESC</code>. In <code>ORDER BY</code> expression position only the <code>&lt;=&gt;</code> operator is allowed. Other comparison operators are rejected.</dd>
 
 <dt>LIMIT { <i>count</i> | <i>offset</i>, <i>count</i> | <i>count</i> OFFSET <i>offset</i> }</dt>
-<dd>Restricts the number of rows returned. Three forms are accepted: <code>LIMIT <i>count</i></code>; the MySQL two-argument form <code>LIMIT <i>offset</i>, <i>count</i></code>; and <code>LIMIT <i>count</i> OFFSET <i>offset</i></code>.</dd>
+<dd>This limits how many rows are returned. Three forms are accepted. They are <code>LIMIT <i>count</i></code>, the MySQL two-argument form <code>LIMIT <i>offset</i>, <i>count</i></code>, and <code>LIMIT <i>count</i> OFFSET <i>offset</i></code>.</dd>
 
 <dt>FOR UPDATE | FOR SHARE [ SKIP LOCKED ]</dt>
-<dd>Row-level locking of the returned rows. <code>FOR UPDATE</code> takes an exclusive row lock; <code>FOR SHARE</code> takes a shared lock. The optional <code>SKIP LOCKED</code> modifier skips rows that are already locked rather than waiting on them.</dd>
+<dd>This locks the returned rows at row level. <code>FOR UPDATE</code> takes an exclusive row lock. <code>FOR SHARE</code> takes a shared lock. The optional <code>SKIP LOCKED</code> modifier skips rows that are already locked instead of waiting for them.</dd>
 
 <dt>INTO <i>column</i> [..]</dt>
-<dd>The trailing variable-target list form: directs the selected values into the named targets. (Distinct from the table-creating <code>SELECT ... INTO <i>new_table</i> FROM ...</code> form described below.)</dd>
+<dd>This is the trailing variable-target list form. It sends the selected values into the named targets. It is different from the table-creating <code>SELECT ... INTO <i>new_table</i> FROM ...</code> form described below.</dd>
 
 <dt>SELECT.. INTO <i>new_table</i> FROM..</dt>
-<dd>A PostgreSQL-style table-creating variant: the result of the query is materialized into a brand-new table <i>new_table</i> whose columns are inferred from the select list. (Internally this drives the CREATE-TABLE-AS / inferred-schema path.)</dd>
+<dd>This is a PostgreSQL-style table-creating form. The query result is stored in a brand-new table <i>new_table</i>. Its columns are inferred from the select list. Inside the engine this uses the CREATE-TABLE-AS and inferred-schema path.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
 <p>Select every column from a table:</p>
 <pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees;</code></pre>
 
-<p>Project specific columns with an output alias and filter rows:</p>
+<p>Return specific columns with an output alias and filter the rows:</p>
 <pre><code><span class="c-key">SELECT</span> name, salary <span class="c-key">AS</span> pay
 <span class="c-key">FROM</span> employees
 <span class="c-key">WHERE</span> dept_id = <span class="c-str">10</span>;</code></pre>
@@ -150,7 +150,7 @@
 <span class="c-key">FROM</span> employees
 <span class="c-key">ORDER BY</span> dept_id <span class="c-key">DESC</span>;</code></pre>
 
-<p>Aggregate per group, filter the groups, and keep only the top rows:</p>
+<p>Aggregate per group, filter the groups, and keep only the top rows.</p>
 <pre><code><span class="c-key">SELECT</span> dept_id, COUNT(*) <span class="c-key">AS</span> headcount, AVG(salary) <span class="c-key">AS</span> avg_pay
 <span class="c-key">FROM</span> employees
 <span class="c-key">GROUP BY</span> dept_id
@@ -195,12 +195,12 @@
 <pre><code><span class="c-key">SELECT</span> v <span class="c-key">FROM</span> <span class="c-key">UNNEST</span>(ARRAY[<span class="c-str">1</span>, <span class="c-str">2</span>, <span class="c-str">3</span>]) <span class="c-key">AS</span> t(v);</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>EvolutionDB's <code>SELECT</code> blends SQL-standard, PostgreSQL, and MySQL spellings:</p>
+<p>EvolutionDB's <code>SELECT</code> mixes SQL-standard, PostgreSQL, and MySQL spellings.</p>
 <ul>
-<li><strong>SQL standard / PostgreSQL.</strong> <code>DISTINCT</code>, the join family (<code>INNER</code>, <code>CROSS</code>, <code>LEFT</code>/<code>RIGHT</code> <code>[OUTER]</code>, <code>NATURAL</code>, <code>ON</code>/<code>USING</code>), <code>GROUP BY</code> / <code>HAVING</code> / <code>ORDER BY</code>, <code>LATERAL</code> subqueries, <code>UNNEST</code>, row locking (<code>FOR UPDATE</code> / <code>FOR SHARE</code> with <code>SKIP LOCKED</code>), the <code>SELECT ... INTO <i>new_table</i></code> table-creating form, and the SQL:2011 temporal opener <code>FOR SYSTEM_TIME AS OF</code> all follow standard / PostgreSQL conventions. Note the temporal clause takes <code>TRANSACTION <i>xid</i></code> (a transaction id) rather than a timestamp.</li>
-<li><strong>MySQL extensions.</strong> <code>DISTINCTROW</code>, the leading options <code>HIGH_PRIORITY</code>, <code>STRAIGHT_JOIN</code>, <code>SQL_SMALL_RESULT</code>, <code>SQL_BIG_RESULT</code>, <code>SQL_CALC_FOUND_ROWS</code>, the two-argument <code>LIMIT <i>offset</i>, <i>count</i></code> form, <code>WITH ROLLUP</code> on <code>GROUP BY</code>, and the index hints <code>USE</code>/<code>IGNORE</code>/<code>FORCE KEY</code> are MySQL-style. Several of the leading options are accepted for source compatibility but do not change result semantics.</li>
-<li><strong>EvolutionDB-specific.</strong> The vector-distance operator <code>&lt;=&gt;</code> (cosine distance) is allowed in <code>ORDER BY</code> expression position for nearest-neighbor search; other comparison operators are rejected there.</li>
-<li><strong>Not part of this command.</strong> The grammar's <code>select_stmt</code> rule does not define <code>WITH</code> (common table expressions), set operations (<code>UNION</code>/<code>INTERSECT</code>/<code>EXCEPT</code>), <code>WINDOW</code>-clause named windows, <code>FETCH FIRST</code>, or <code>OFFSET</code> as a standalone clause, only the <code>LIMIT</code> forms shown above. Window functions appear via function expressions in the select list rather than as a separate top-level clause.</li>
+<li><strong>SQL standard / PostgreSQL.</strong> Several parts follow standard and PostgreSQL conventions. These are <code>DISTINCT</code>, the join family with <code>INNER</code>, <code>CROSS</code>, <code>LEFT</code>/<code>RIGHT</code> <code>[OUTER]</code>, <code>NATURAL</code>, and <code>ON</code>/<code>USING</code>, then <code>GROUP BY</code>, <code>HAVING</code>, and <code>ORDER BY</code>, <code>LATERAL</code> subqueries, <code>UNNEST</code>, row locking with <code>FOR UPDATE</code> or <code>FOR SHARE</code> and <code>SKIP LOCKED</code>, the <code>SELECT ... INTO <i>new_table</i></code> table-creating form, and the SQL:2011 temporal opener <code>FOR SYSTEM_TIME AS OF</code>. Note that the temporal clause takes <code>TRANSACTION <i>xid</i></code>, a transaction id, instead of a timestamp.</li>
+<li><strong>MySQL extensions.</strong> Several parts are MySQL-style. These are <code>DISTINCTROW</code>, the leading options <code>HIGH_PRIORITY</code>, <code>STRAIGHT_JOIN</code>, <code>SQL_SMALL_RESULT</code>, <code>SQL_BIG_RESULT</code>, and <code>SQL_CALC_FOUND_ROWS</code>, the two-argument <code>LIMIT <i>offset</i>, <i>count</i></code> form, <code>WITH ROLLUP</code> on <code>GROUP BY</code>, and the index hints <code>USE</code>/<code>IGNORE</code>/<code>FORCE KEY</code>. Several of the leading options are accepted for source compatibility but do not change the result.</li>
+<li><strong>EvolutionDB-specific.</strong> The vector-distance operator <code>&lt;=&gt;</code> means cosine distance. It is allowed in <code>ORDER BY</code> expression position for nearest-neighbor search. Other comparison operators are rejected there.</li>
+<li><strong>Not part of this command.</strong> The grammar's <code>select_stmt</code> rule does not define some clauses. These are <code>WITH</code> common table expressions, set operations such as <code>UNION</code>/<code>INTERSECT</code>/<code>EXCEPT</code>, <code>WINDOW</code>-clause named windows, <code>FETCH FIRST</code>, and <code>OFFSET</code> as a standalone clause. Only the <code>LIMIT</code> forms shown above are supported. Window functions appear as function expressions in the select list, not as a separate top-level clause.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>

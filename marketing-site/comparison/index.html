@@ -316,7 +316,7 @@
 How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
  </h2>
 <p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">
- A SQL-compatible, agent-native memory layer that folds relational data, documents, and vectors into a single open-source binary. Here is how its architecture lines up against the tools teams reach for today: compared on capabilities, not marketing numbers.
+ EvolutionDB is an open-source memory layer for agents. It speaks SQL. It keeps relational data, documents, and vectors in one binary. This page shows how it lines up against the tools teams use today. We compare it on what it can do, not on marketing numbers.
  </p>
 </section>
 <!-- Category Nav -->
@@ -344,21 +344,21 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">Memory Built Into the Engine</h3>
 <p class="text-on-surface-variant mb-6 font-body-md leading-relaxed">
- EvolutionDB speaks the PostgreSQL wire protocol, so psql, DBeaver, and pgAdmin connect out of the box. The difference is in the DNA: agent-memory and vector primitives are first-class storage-engine features at the DDL level, not capabilities you add through an extension.
+ EvolutionDB speaks the PostgreSQL wire protocol. So psql, DBeaver, and pgAdmin connect right away. The difference is deeper than that. Agent memory and vector types are built into the storage engine at the DDL level. You do not add them through an extension.
  </p>
 <div class="space-y-4">
 <div class="flex items-start gap-4">
 <span class="material-symbols-outlined text-neon-cyan mt-1 check-draw" data-icon="check_circle">check_circle</span>
 <div>
 <p class="font-bold">First-class SQL primitives</p>
-<p class="text-sm text-on-surface-variant">MEMORY STORE, ENTITY STORE, and VECTOR(N) are built-in types, not bolt-ons.</p>
+<p class="text-sm text-on-surface-variant">MEMORY STORE, ENTITY STORE, and VECTOR(N) are built-in types. They are not add-ons.</p>
 </div>
 </div>
 <div class="flex items-start gap-4">
 <span class="material-symbols-outlined text-neon-cyan mt-1 check-draw" data-icon="check_circle">check_circle</span>
 <div>
 <p class="font-bold">No extensions to install</p>
-<p class="text-sm text-on-surface-variant">HNSW vector indexing ships in the core: no CREATE EXTENSION step, no version-compatibility juggling.</p>
+<p class="text-sm text-on-surface-variant">HNSW vector indexing ships in the core. There is no CREATE EXTENSION step. There are no version-compatibility problems to manage.</p>
 </div>
 </div>
 </div>
@@ -393,7 +393,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">MongoDB Atlas Vector Search</h3>
 <p class="text-on-surface-variant mb-6">
- Atlas Vector Search is a managed cloud service layered on a document store. EvolutionDB is a single binary you run yourself, including a zero-Docker embedded mode, with relational SQL, documents, and vectors in one engine.
+ Atlas Vector Search is a managed cloud service. It sits on top of a document store. EvolutionDB is a single binary that you run yourself. It even has a zero-Docker embedded mode. It puts relational SQL, documents, and vectors in one engine.
  </p>
 <ul class="space-y-3">
 <li class="flex items-center gap-3 text-on-surface">
@@ -402,8 +402,8 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
  </li>
 <li class="flex items-center gap-3 text-on-surface">
 <span class="material-symbols-outlined text-neon-cyan text-sm check-draw" data-icon="verified">verified</span>
- Runs on-premise or air-gapped, no managed cloud required
- </li>
+ Runs on-premise or air-gapped. No managed cloud needed
+</li>
 <li class="flex items-center gap-3 text-on-surface">
 <span class="material-symbols-outlined text-neon-cyan text-sm check-draw" data-icon="verified">verified</span>
  Open source under the MIT license
@@ -418,7 +418,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">Pinecone / Weaviate</h3>
 <p class="text-on-surface-variant mb-6">
- Dedicated vector databases store embeddings as a separate service alongside your primary database. EvolutionDB keeps vectors and relational data in the same engine, so a single query can filter rows and run semantic search without a second system to sync.
+ Dedicated vector databases store embeddings in a separate service. That service runs next to your main database. EvolutionDB keeps vectors and relational data in the same engine. So one query can filter rows and run semantic search. You do not need a second system to keep in sync.
  </p>
 <div class="p-4 bg-white/5 rounded-lg border border-white/5 space-y-3">
 <div class="flex items-center gap-3">
@@ -440,7 +440,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 <div class="grid md:grid-cols-3 gap-8">
 <div class="md:col-span-1">
 <h4 class="font-headline-md text-headline-md text-neon-cyan mb-2">Zep / Mem0</h4>
-<p class="text-on-surface-variant">Memory frameworks like Zep and Mem0 add an agent-memory layer on top of an existing database or vector store. EvolutionDB makes memory, temporal history, and vectors native to the storage engine itself, no extra backing store to operate.</p>
+<p class="text-on-surface-variant">Memory frameworks like Zep and Mem0 add an agent-memory layer on top of a database or vector store you already run. EvolutionDB puts memory, temporal history, and vectors inside the storage engine itself. There is no extra backing store to run.</p>
 </div>
 <div class="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4">
 <div class="p-4 glass-panel text-center rounded-lg hover:bg-white/5 transition-colors">
@@ -520,7 +520,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 <!-- CTA -->
 <section class="mt-margin-lg text-center reveal">
 <h3 class="font-headline-md text-headline-md mb-4">See it for yourself</h3>
-<p class="text-on-surface-variant max-w-xl mx-auto mb-8">EvolutionDB is open source under the MIT license. Clone the repository, read the docs, and run it in embedded mode with zero Docker.</p>
+<p class="text-on-surface-variant max-w-xl mx-auto mb-8">EvolutionDB is open source under the MIT license. Clone the repository. Read the docs. Run it in embedded mode with zero Docker.</p>
 <div class="flex flex-col sm:flex-row gap-4 justify-center">
 <a class="px-8 py-4 rounded-lg bg-gradient-to-r from-neon-cyan to-deep-indigo text-on-primary font-bold transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(34,211,238,0.3)] shimmer-effect" href="https://github.com/alptekin/evolutiondb">Get Started</a>
 <a class="px-8 py-4 rounded-lg glass-panel hover:bg-white/10 text-pure-white transition-all hover:scale-105 active:scale-95" href="https://github.com/alptekin/evolutiondb">View on GitHub</a>

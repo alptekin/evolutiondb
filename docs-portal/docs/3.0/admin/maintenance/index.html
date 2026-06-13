@@ -15,17 +15,17 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>28. Routine Maintenance</h1>
-<p class="lede">The two housekeeping operations every EvolutionDB table needs over its lifetime, <code>ANALYZE</code> to keep planner statistics current and <code>RECLAIM</code> to sweep dead row versions and defragment the heap, plus the background daemon that runs reclamation and time-based pruning for you.</p>
+<p class="lede">Every EvolutionDB table needs two housekeeping jobs during its life. <code>ANALYZE</code> keeps the planner statistics fresh. <code>RECLAIM</code> sweeps out dead row versions and defragments the heap. A background daemon also runs reclamation and time-based pruning for you.</p>
 
-<p>Because EvolutionDB uses multi-version concurrency control (see <a href="/3.0/sql/mvcc/">MVCC</a>), a <code>DELETE</code> or <code>UPDATE</code> never removes a row in place: the old version stays on its heap page until no running transaction could still read it. Likewise, the cost-based planner cannot estimate row counts or selectivity without sampled statistics. Routine maintenance is what keeps both of these honest: statistics fresh, and obsolete tuples swept out of the heap and the indexes. Both operations are explicit SQL commands, and reclamation additionally runs on a background timer.</p>
+<p>EvolutionDB uses multi-version concurrency control. See <a href="/3.0/sql/mvcc/">MVCC</a>. A <code>DELETE</code> or <code>UPDATE</code> never removes a row in place. The old version stays on its heap page until no running transaction could still read it. The cost-based planner also cannot estimate row counts or selectivity without sampled statistics. Routine maintenance keeps both of these correct. It keeps statistics fresh and sweeps old tuples out of the heap and the indexes. Both operations are explicit SQL commands. Reclamation also runs on a background timer.</p>
 
 <div class="callout">
-<p><strong>Terminology.</strong> EvolutionDB calls the storage-reclamation command <code>RECLAIM</code>, not <code>VACUUM</code>; there is no <code>VACUUM</code> keyword. The statistics command is <code>ANALYZE TABLE</code>, not bare <code>ANALYZE</code>. Neither command appears in the SQL standard, both are implementation-defined maintenance utilities.</p>
+<p><strong>Terminology.</strong> EvolutionDB calls the storage-reclamation command <code>RECLAIM</code>, not <code>VACUUM</code>. There is no <code>VACUUM</code> keyword. The statistics command is <code>ANALYZE TABLE</code>, not bare <code>ANALYZE</code>. Neither command appears in the SQL standard. Both are implementation-defined maintenance tools.</p>
 </div>
 
 <h2 id="analyze">28.1. Collecting Statistics with <code>ANALYZE</code></h2>
 
-<p><code>ANALYZE TABLE</code> performs a sequential scan of one table and records statistics in the system catalog. The planner reads these statistics, and <code>EXPLAIN</code> reports them, when it estimates how many rows a scan or predicate will produce. Without an <code>ANALYZE</code>, a table has no recorded <code>row_count</code>, and several maintenance heuristics described below fall back to conservative defaults.</p>
+<p><code>ANALYZE TABLE</code> does a sequential scan of one table. It records statistics in the system catalog. The planner reads these statistics when it estimates how many rows a scan or predicate will produce. <code>EXPLAIN</code> also reports them. Without an <code>ANALYZE</code>, a table has no recorded <code>row_count</code>. Several maintenance rules described below then fall back to safe defaults.</p>
 
 <div class="synopsis">
 <pre><code><span class="c-key">ANALYZE TABLE</span> <span class="c-com">table_name</span>
@@ -34,27 +34,27 @@
       | <span class="c-key">DROP HISTOGRAM ON</span> <span class="c-com">column</span> [, ...] ]</span></code></pre>
 </div>
 
-<p>A bare <code>ANALYZE TABLE t</code> rebuilds <em>every</em> statistic for the table. The full reference, including every clause and its edge cases, lives on the <a href="/3.0/ref/analyze/">ANALYZE</a> command page; this section summarizes what is collected and how the numbers are derived.</p>
+<p>A bare <code>ANALYZE TABLE t</code> rebuilds <em>every</em> statistic for the table. The full reference covers every clause and its edge cases. It lives on the <a href="/3.0/ref/analyze/">ANALYZE</a> command page. This section sums up what is collected and how the numbers are worked out.</p>
 
 <h3 id="analyze-collected">28.1.1. What is collected</h3>
 
-<p>A single full <code>ANALYZE TABLE</code> writes four kinds of catalog records:</p>
+<p>A single full <code>ANALYZE TABLE</code> writes four kinds of catalog records.</p>
 
 <dl class="params">
 <dt>Table-level statistics</dt>
-<dd><code>row_count</code> (rows seen during the scan), <code>page_count</code> (heap pages, counted by walking the page chain), and <code>last_analyzed</code> (the wall-clock time of this run).</dd>
+<dd><code>row_count</code> is the number of rows seen during the scan. <code>page_count</code> is the number of heap pages, counted by walking the page chain. <code>last_analyzed</code> is the wall-clock time of this run.</dd>
 
 <dt>Per-column statistics</dt>
-<dd>For each column: <code>null_count</code>, <code>distinct_count</code>, <code>min</code>, <code>max</code>, and <code>avg_width</code> (average value width in bytes).</dd>
+<dd>Each column gets <code>null_count</code>, <code>distinct_count</code>, <code>min</code>, <code>max</code>, and <code>avg_width</code>. The last one is the average value width in bytes.</dd>
 
 <dt>Per-column histograms</dt>
-<dd>One auto-selected histogram per column that has at least one non-NULL value (see <a href="#analyze-histograms">28.1.2</a>).</dd>
+<dd>One auto-selected histogram per column that has at least one non-NULL value. See <a href="#analyze-histograms">28.1.2</a>.</dd>
 
 <dt>Per-index statistics</dt>
-<dd>For every index on the table, the B+ tree depth, leaf-page count, total entries, and average entries per leaf, read directly from the index tree.</dd>
+<dd>For every index on the table, the server reads the B+ tree depth, leaf-page count, total entries, and average entries per leaf. These come straight from the index tree.</dd>
 </dl>
 
-<p>On success the server prints a one-line summary, for example:</p>
+<p>On success the server prints a one-line summary. Here are two examples.</p>
 
 <pre><code><span class="c-com"># Full scan</span>
 ANALYZE: 50000 rows, 4 columns, 412 pages
@@ -64,7 +64,7 @@ ANALYZE: 5012 rows sampled from 50000 (keep 10%), 4 columns, 412 pages</code></p
 
 <h3 id="analyze-histograms">28.1.2. Histograms</h3>
 
-<p>Histograms give the planner a distribution rather than a single distinct-count, so it can estimate equality and range selectivity. EvolutionDB builds one of two flavors per column, chosen automatically:</p>
+<p>A histogram gives the planner a distribution instead of a single distinct-count. This lets it estimate equality and range selectivity. EvolutionDB builds one of two kinds per column. It chooses the kind automatically.</p>
 
 <ul>
 <li><strong>Frequency histogram</strong>, built when the number of distinct values (NDV) is no greater than the bucket budget. It stores one bucket per distinct value with its exact count, giving <em>exact</em> equality selectivity rather than an estimate.</li>

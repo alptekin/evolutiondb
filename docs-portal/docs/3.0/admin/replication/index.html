@@ -15,23 +15,23 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>29. Replication &amp; Sharding</h1>
-<p class="lede">How EvolutionDB copies a database across nodes with physical WAL streaming, elects a leader with a Raft consensus core, and spreads a single table over several machines through hash/range sharding and transparent query routing.</p>
+<p class="lede">How EvolutionDB copies a database across nodes. It uses physical WAL streaming. It picks a leader with a Raft consensus core. It can also spread one table over several machines with hash or range sharding and automatic query routing.</p>
 
-<p>EvolutionDB ships three cooperating clustering subsystems, all implemented in the adaptor layer and all <em>opt-in at runtime</em>: physical replication (<code>adaptor/replication.c</code>), Raft leader election (<code>adaptor/raft.c</code>), and a distributed query engine with sharding (<code>adaptor/distributed.c</code>, <code>adaptor/shard.c</code>). A server started without the relevant flags runs as an ordinary single node; none of these paths are entered. They are also gated behind POSIX sockets and pthreads, so on Windows (MinGW) the implementations compile to stubs and only the default embedded/single-node flow is available.</p>
+<p>EvolutionDB has three clustering parts that work together. They all live in the adaptor layer. They are all <em>opt-in at runtime</em>. The parts are physical replication in <code>adaptor/replication.c</code>, Raft leader election in <code>adaptor/raft.c</code>, and a distributed query engine with sharding in <code>adaptor/distributed.c</code> and <code>adaptor/shard.c</code>. A server started without the right flags runs as a normal single node. None of these paths run in that case. They also need POSIX sockets and pthreads. On Windows with MinGW these files compile to stubs. There only the default embedded single-node flow works.</p>
 
 <div class="callout">
-<p><strong>Scope of this chapter.</strong> This page documents only what the engine actually implements today. Where EvolutionDB diverges from PostgreSQL or the SQL standard, that is called out honestly: several of these subsystems are deliberately simplified (heartbeat-only Raft, page-image WAL, regex-free SQL key extraction) and the limitations are listed in the <a href="#notes">Notes</a> callout.</p>
+<p><strong>Scope of this chapter.</strong> This page describes only what the engine does today. Where EvolutionDB differs from PostgreSQL or the SQL standard, we say so clearly. Several of these parts are kept simple on purpose. Raft is heartbeat-only. The WAL ships page images. SQL key extraction uses no regex. The limits are listed in the <a href="#notes">Notes</a> callout.</p>
 </div>
 
 <h2 id="overview">29.1. Overview &amp; topology</h2>
 
-<p>A node takes one of three replication roles, pinned at startup and surfaced by <a href="/3.0/ref/show/">SHOW REPLICATION STATUS</a>:</p>
+<p>A node takes one of three replication roles. The role is set at startup. You can see it with <a href="/3.0/ref/show/">SHOW REPLICATION STATUS</a>.</p>
 
 <dl class="params">
 <dt><code>primary</code> (<code>REPL_ROLE_PRIMARY</code> = 0)</dt>
-<dd>Accepts DML, runs the WAL <em>sender</em>, and streams WAL records to connected replicas. Default role.</dd>
+<dd>Accepts DML. It runs the WAL <em>sender</em>. It streams WAL records to the replicas that connect. This is the default role.</dd>
 <dt><code>replica</code> (<code>REPL_ROLE_REPLICA</code> = 1)</dt>
-<dd>Connects to a primary, replays the streamed WAL into its local data file, and serves read traffic. <code>repl_is_replica()</code> gates the write path.</dd>
+<dd>Connects to a primary. It replays the streamed WAL into its own data file. It serves read traffic. <code>repl_is_replica()</code> blocks the write path.</dd>
 <dt><code>witness</code> (<code>REPL_ROLE_WITNESS</code> = 2)</dt>
 <dd>Participates in Raft voting but stores no data and rejects SELECTs. Used to break ties in an even-sized cluster without paying for a full data copy.</dd>
 </dl>

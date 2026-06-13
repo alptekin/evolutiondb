@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>MEMORY GET</h1>
-<p class="lede">Fetch a single record from a memory store by its namespace and key.</p>
+<p class="lede">Get one record from a memory store by its namespace and key.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -24,69 +24,71 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>MEMORY GET</code> retrieves exactly one stored entry from a memory store created with
-<a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>. A memory store is backed by an
-ordinary table named <code>mem_&lt;store_name&gt;</code>, and each entry is identified by a composite
-primary key formed from its <em>namespace</em> and <em>key</em>. <code>MEMORY GET</code> resolves the
-target row by building that composite key and looking it up directly, returning at most one row.</p>
+<p><code>MEMORY GET</code> gets exactly one stored entry from a memory store. You make the store with
+<a href="/3.0/ref/create-memory-store/">CREATE MEMORY STORE</a>. A memory store is held in a normal
+table named <code>mem_&lt;store_name&gt;</code>. Each entry has a composite primary key. That key is
+made from its <em>namespace</em> and its <em>key</em>. <code>MEMORY GET</code> builds that composite key
+and looks it up directly. It returns at most one row.</p>
 
-<p>The result set is a projection of the backing table. The following columns are always returned, in
-order: <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, and <code>created_at</code>.
-If the store was created with a non-zero embedding dimension, the <code>embedding</code> column is
-additionally projected between <code>mem_value</code> and <code>created_at</code>. The query is
-internally capped at one row.</p>
+<p>The result set is a projection of the backing table. These columns always come back, in this
+order. They are <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, and
+<code>created_at</code>. The store can be made with a non-zero embedding dimension. In that case the
+<code>embedding</code> column also comes back. It sits between <code>mem_value</code> and
+<code>created_at</code>. The query is capped at one row inside the engine.</p>
 
-<p>Internally the command rewrites to a <code>SELECT</code> against the backing table with a predicate
-of the form <code>pk = 'namespace' || 0x1E || 'key'</code> (the namespace and key joined by an ASCII
-Record Separator, <code>0x1E</code>). Because it runs through the standard <code>SELECT</code> path, row-level
-security policies, MVCC visibility, and triggers attached to the store apply identically to a
-hand-written query against <code>mem_&lt;store_name&gt;</code>.</p>
+<p>Inside the engine the command turns into a <code>SELECT</code> against the backing table. The
+predicate has the form <code>pk = 'namespace' || 0x1E || 'key'</code>. The namespace and key are joined
+by an ASCII Record Separator. That byte is <code>0x1E</code>. The command runs through the normal
+<code>SELECT</code> path. So row-level security policies, MVCC visibility, and triggers on the store
+work the same way as in a query you write by hand against <code>mem_&lt;store_name&gt;</code>.</p>
 
-<p>If no entry matches the given namespace and key, the command succeeds and returns an empty result
-set. If the named store does not exist, an error is raised with SQLSTATE <code>42704</code>
-(<code>undefined_object</code>).</p>
+<p>The command may find no entry for the given namespace and key. Then it still succeeds and returns
+an empty result set. If the named store does not exist, the command raises an error. The SQLSTATE is
+<code>42704</code>. That code means <code>undefined_object</code>.</p>
 
 <div class="callout">
-<p>The <code>WHERE</code> clause of <code>MEMORY GET</code> is fixed: it accepts exactly the two
-conditions <code>NS</code> and <code>KEY</code> joined by <code>AND</code>. The grammar tolerates any
-comparison operator token in each position, but the lookup is always performed as an exact equality
-match on the composite key; non-equality operators do not produce a range scan. Always write
-<code>=</code> for clarity.</p>
+<p>The <code>WHERE</code> clause of <code>MEMORY GET</code> is fixed. It takes exactly two conditions.
+They are <code>NS</code> and <code>KEY</code>, joined by <code>AND</code>. The grammar accepts any
+comparison operator token in each spot. But the lookup is always an exact equality match on the
+composite key. A non-equality operator does not create a range scan. Always write <code>=</code> to
+keep things clear.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt><code>store_name</code></dt>
-<dd>The name of the memory store to read from, as given to <code>CREATE MEMORY STORE</code>. This is an
-identifier (not a quoted string). It resolves to the backing table <code>mem_&lt;store_name&gt;</code>.
-If the store does not exist, the command fails with SQLSTATE <code>42704</code>.</dd>
+<dd>The name of the memory store you want to read. You give the same name to <code>CREATE MEMORY
+STORE</code>. This is an identifier, not a quoted string. It points to the backing table
+<code>mem_&lt;store_name&gt;</code>. If the store does not exist, the command fails with SQLSTATE
+<code>42704</code>.</dd>
 
 <dt><code>NS = 'namespace'</code></dt>
-<dd>The namespace component of the entry's identity, given as a string literal. The namespace lets a
-single store hold logically separate partitions of memory (for example, one namespace per agent,
-session, or tenant). Surrounding quotes are stripped and SQL-standard doubled inner quotes are
-collapsed before the lookup.</dd>
+<dd>The namespace part of the entry's identity, given as a string literal. The namespace lets one
+store hold separate parts of memory. For example, you can use one namespace per agent, session, or
+tenant. The outer quotes are stripped before the lookup. SQL-standard doubled inner quotes are
+collapsed into one quote too.</dd>
 
 <dt><code>KEY = 'key'</code></dt>
-<dd>The key component of the entry's identity within the namespace, given as a string literal.
-Together <code>NS</code> and <code>KEY</code> uniquely identify one stored record. Quote handling is the
-same as for the namespace.</dd>
+<dd>The key part of the entry's identity inside the namespace, given as a string literal. Together
+<code>NS</code> and <code>KEY</code> point to one stored record. Quotes are handled the same way as
+for the namespace.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Read back a value that was written with <a href="/3.0/ref/memory-put/">MEMORY PUT</a>:</p>
+<p>Read back a value that you wrote with <a href="/3.0/ref/memory-put/">MEMORY PUT</a>.</p>
 <pre><code><span class="c-key">MEMORY PUT INTO</span> agent_mem
     <span class="c-key">VALUES</span> (<span class="c-str">'session:42'</span>, <span class="c-str">'last_intent'</span>, <span class="c-str">'book_flight'</span>);
 
 <span class="c-key">MEMORY GET FROM</span> agent_mem
     <span class="c-key">WHERE NS</span> = <span class="c-str">'session:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'last_intent'</span>;</code></pre>
 
-<p>A namespace and key containing a single quote, written with the SQL-standard doubled quote:</p>
+<p>This example has a namespace and a key with a single quote. You write it with the SQL-standard
+doubled quote.</p>
 <pre><code><span class="c-key">MEMORY GET FROM</span> agent_mem
     <span class="c-key">WHERE NS</span> = <span class="c-str">'user''s notes'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'draft'</span>;</code></pre>
 
-<p>Fetching from a store created with an embedding dimension also returns the <code>embedding</code>
-column:</p>
+<p>The store can be made with an embedding dimension. A read from that kind of store also returns the
+<code>embedding</code> column.</p>
 <pre><code><span class="c-key">CREATE MEMORY STORE</span> kb <span class="c-key">WITH</span> (embedding_dim = <span class="c-com">3</span>, distance = <span class="c-str">'cosine'</span>);
 <span class="c-key">MEMORY PUT INTO</span> kb
     <span class="c-key">VALUES</span> (<span class="c-str">'docs'</span>, <span class="c-str">'intro'</span>, <span class="c-str">'welcome'</span>, <span class="c-str">'[0.1, 0.2, 0.3]'</span>);
@@ -96,15 +98,15 @@ column:</p>
     <span class="c-key">WHERE NS</span> = <span class="c-str">'docs'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'intro'</span>;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>MEMORY GET</code> is an EvolutionDB extension and is not part of the SQL standard; there is no
-corresponding command in PostgreSQL. It exists as ergonomic sugar over a single-row
+<p><code>MEMORY GET</code> is an EvolutionDB extension. It is not part of the SQL standard. PostgreSQL
+has no matching command. It is a short, easy form for a single-row
 <code>SELECT &hellip; WHERE pk = &hellip; LIMIT 1</code> against the store's backing table.</p>
-<p>The clause vocabulary is intentionally narrow. Unlike a general <code>SELECT</code>, the
-<code>WHERE</code> clause cannot be extended: only the fixed <code>NS</code> + <code>KEY</code> equality
-pair is accepted, there is no column projection list, no <code>ORDER BY</code>, and no user-supplied
-<code>LIMIT</code> (the result is always capped at one row). To run arbitrary predicates over stored
-memory, query the backing table <code>mem_&lt;store_name&gt;</code> directly with a standard
-<code>SELECT</code>.</p>
+<p>The set of clauses is kept small on purpose. A general <code>SELECT</code> is flexible, but here
+the <code>WHERE</code> clause cannot grow. It takes only the fixed <code>NS</code> + <code>KEY</code>
+equality pair. There is no column list. There is no <code>ORDER BY</code>. There is no
+<code>LIMIT</code> that you set yourself. The result is always capped at one row. To run any predicate
+you like over stored memory, query the backing table <code>mem_&lt;store_name&gt;</code> directly with
+a standard <code>SELECT</code>.</p>
 
 <h2 id="see-also">See Also</h2>
 <ul>

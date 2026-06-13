@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>SHOW</h1>
-<p class="lede">Display the value of a run-time configuration parameter, or list catalog objects such as databases, schemas, tables, users, grants, and stores.</p>
+<p class="lede">Show the value of a run-time configuration parameter. You can also list catalog objects such as databases, schemas, tables, users, grants, and stores.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -47,14 +47,14 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>SHOW</code> reports the value of a run-time configuration parameter or returns a result set listing catalog objects. Unlike most statements in EvolutionDB, <code>SHOW</code> is <strong>not</strong> defined in the Bison grammar (<code>evolution/parser/evoparser.y</code>). Instead the dual-protocol adaptor intercepts any statement whose first keyword is <code>SHOW</code> in <code>adaptor/catalog.c</code> and dispatches it before the SQL engine ever sees it.</p>
+<p><code>SHOW</code> reports the value of a run-time configuration parameter. It can also return a result set that lists catalog objects. Most statements in EvolutionDB are defined in the Bison grammar. <code>SHOW</code> is <strong>not</strong>. The grammar file is <code>evolution/parser/evoparser.y</code>. Instead the dual-protocol adaptor catches any statement whose first keyword is <code>SHOW</code>. This happens in <code>adaptor/catalog.c</code>. The adaptor handles the statement before the SQL engine ever sees it.</p>
 
-<p>Dispatch works by <strong>case-insensitive substring matching</strong> against the raw statement text, and the <strong>first matching form wins</strong>. Three of the forms (<code>SHOW NODES</code>, <code>SHOW TABLE PLACEMENT</code>, <code>SHOW SHARDS</code>) are recognized by the distributed-command handler, which runs ahead of the general <code>SHOW</code> handler. All forms return a result set tagged with the command tag <code>SHOW</code>; the object-listing forms behave like a <code>SELECT</code> and each defines its own columns.</p>
+<p>Dispatch uses <strong>case-insensitive substring matching</strong> against the raw statement text. The <strong>first matching form wins</strong>. Three forms are handled by the distributed-command handler. These are <code>SHOW NODES</code>, <code>SHOW TABLE PLACEMENT</code>, and <code>SHOW SHARDS</code>. That handler runs ahead of the general <code>SHOW</code> handler. All forms return a result set tagged with the command tag <code>SHOW</code>. The object-listing forms behave like a <code>SELECT</code>. Each one defines its own columns.</p>
 
-<p>Because matching is substring-based and order-sensitive, the keyword you intend must be the one that matches earliest in the dispatch chain. For example, a statement containing the word <code>tables</code> is treated as <code>SHOW TABLES</code>. Any <code>SHOW</code> statement that matches none of the listed forms falls through to the run-time parameter path, which returns a single <code>setting</code> column (an empty string when the parameter is unknown).</p>
+<p>Matching is substring-based and order-sensitive. So the keyword you want must be the one that matches earliest in the dispatch chain. For example, a statement that contains the word <code>tables</code> is treated as <code>SHOW TABLES</code>. A <code>SHOW</code> statement that matches none of the listed forms falls through to the run-time parameter path. That path returns a single <code>setting</code> column. The value is an empty string when the parameter is unknown.</p>
 
 <div class="callout">
-<p><strong>Scope.</strong> The object listings resolve against the session's <em>current database</em> and <em>current schema</em>. <code>SHOW TABLES</code> and <code>SHOW VIEWS</code> show only objects in the current schema; temporary tables are listed only to the session that owns them. <code>SHOW DATABASES</code>, <code>SHOW USERS</code>, <code>SHOW ROLES</code>, and the store/job/subscription listings are cluster-wide.</p>
+<p><strong>Scope.</strong> The object listings use the session's <em>current database</em> and <em>current schema</em>. <code>SHOW TABLES</code> and <code>SHOW VIEWS</code> show only objects in the current schema. A temporary table is shown only to the session that owns it. <code>SHOW DATABASES</code>, <code>SHOW USERS</code>, <code>SHOW ROLES</code>, and the store, job, and subscription listings cover the whole cluster.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
@@ -67,13 +67,13 @@
 <dd>Lists every schema in the current database. Returns one column, <code>schema</code>.</dd>
 
 <dt>TABLES</dt>
-<dd>Lists tables in the current schema of the current database. Returns one column, <code>table</code>. Temporary tables appear only in the session that created them.</dd>
+<dd>Lists tables in the current schema of the current database. Returns one column, <code>table</code>. A temporary table appears only in the session that created it.</dd>
 
 <dt>VIEWS</dt>
-<dd>Lists views in the current schema. Returns <code>view_name</code> and <code>view_sql</code> (the stored defining query).</dd>
+<dd>Lists views in the current schema. Returns <code>view_name</code> and <code>view_sql</code>. The <code>view_sql</code> column holds the stored query that defines the view.</dd>
 
 <dt>CREATE VIEW <code>view_name</code></dt>
-<dd>Shows the reconstructed <code>CREATE VIEW</code> statement for the named view. Returns columns <code>View</code> and <code>Create View</code>. The definition is rebuilt as <code>CREATE VIEW name AS &lt;stored sql&gt;</code>. If the view does not exist in the current database/schema, the statement returns SQLSTATE <code>42P01</code> (view does not exist).</dd>
+<dd>Shows the rebuilt <code>CREATE VIEW</code> statement for the named view. Returns columns <code>View</code> and <code>Create View</code>. The definition is rebuilt as <code>CREATE VIEW name AS &lt;stored sql&gt;</code>. The view must exist in the current database and schema. If it does not, the statement returns SQLSTATE <code>42P01</code>. That code means the view does not exist.</dd>
 
 <dt>USERS</dt>
 <dd>Lists all database users. Returns one column, <code>username</code>.</dd>
@@ -82,16 +82,16 @@
 <dd>Lists all roles. Returns one column, <code>role_name</code>.</dd>
 
 <dt>GRANTS [ FOR <code>user_name</code> ]</dt>
-<dd>Lists privilege grants. With no <code>FOR</code> clause, all grants are returned; with <code>FOR user_name</code> (the name may be unquoted or single-quoted) the result is filtered to that user. Returns <code>user</code>, <code>scope</code> (TABLE / SCHEMA / DATABASE), <code>object</code>, <code>privileges</code>, and <code>grant_option</code> (<code>YES</code>/<code>NO</code>).</dd>
+<dd>Lists privilege grants. With no <code>FOR</code> clause, all grants are returned. With <code>FOR user_name</code> the result is filtered to that user. The name may be unquoted or single-quoted. Returns <code>user</code>, <code>scope</code>, <code>object</code>, <code>privileges</code>, and <code>grant_option</code>. The <code>scope</code> value is TABLE, SCHEMA, or DATABASE. The <code>grant_option</code> value is <code>YES</code> or <code>NO</code>.</dd>
 
 <dt>JOBS</dt>
-<dd>Lists registered scheduled (cron) jobs. Returns <code>name</code>, <code>schedule</code> (the cron expression), <code>sql</code> (the body it runs), <code>enabled</code> (boolean), and <code>last_run_unix</code> (Unix timestamp of the last fire; <code>0</code> means never run).</dd>
+<dd>Lists registered scheduled cron jobs. Returns <code>name</code>, <code>schedule</code>, <code>sql</code>, <code>enabled</code>, and <code>last_run_unix</code>. The <code>schedule</code> column is the cron expression. The <code>sql</code> column is the body it runs. The <code>enabled</code> column is a boolean. The <code>last_run_unix</code> column is the Unix timestamp of the last fire. A value of <code>0</code> means the job has never run.</dd>
 
 <dt>SUBSCRIPTIONS</dt>
 <dd>Lists durable subscriptions. Returns <code>name</code>, <code>channel</code>, <code>last_ack_seq</code>, <code>next_seq</code>, and <code>ttl_days</code>.</dd>
 
 <dt>MEMORY STORES</dt>
-<dd>Lists memory stores created with <code>CREATE MEMORY STORE</code>. Returns <code>name</code>, <code>backing_table_id</code>, <code>embedding_dim</code>, and <code>distance</code> (<code>cosine</code>, <code>l2</code>, <code>inner</code>, or <code>l1</code>). The underscore spelling <code>MEMORY_STORES</code> is also accepted.</dd>
+<dd>Lists memory stores created with <code>CREATE MEMORY STORE</code>. Returns <code>name</code>, <code>backing_table_id</code>, <code>embedding_dim</code>, and <code>distance</code>. The <code>distance</code> value is <code>cosine</code>, <code>l2</code>, <code>inner</code>, or <code>l1</code>. The underscore spelling <code>MEMORY_STORES</code> is also accepted.</dd>
 
 <dt>CHECKPOINT STORES</dt>
 <dd>Lists checkpoint stores. Returns <code>name</code>, <code>backing_table_id</code>, and <code>retention</code>. The underscore spelling <code>CHECKPOINT_STORES</code> is also accepted.</dd>
@@ -109,61 +109,61 @@
 <dd>Lists message logs. Returns <code>name</code>, <code>backing_table_id</code>, and <code>ttl_days</code>. The underscore spelling <code>MESSAGE_LOGS</code> is also accepted.</dd>
 
 <dt>EVO_SESSIONS</dt>
-<dd>Lists currently connected sessions. Returns <code>pid</code> (session id), <code>username</code>, <code>database</code>, <code>state</code> (<code>active</code> or <code>idle</code>), and <code>duration_ms</code> (milliseconds the current query has been running; <code>0</code> when idle).</dd>
+<dd>Lists the sessions that are connected right now. Returns <code>pid</code>, <code>username</code>, <code>database</code>, <code>state</code>, and <code>duration_ms</code>. The <code>pid</code> column is the session id. The <code>state</code> value is <code>active</code> or <code>idle</code>. The <code>duration_ms</code> column is how many milliseconds the current query has been running. It is <code>0</code> when the session is idle.</dd>
 
 <dt>EVO_PROCESSES</dt>
-<dd>Like <code>EVO_SESSIONS</code> but adds a <code>query</code> column with the text of the session's current statement. Columns: <code>pid</code>, <code>username</code>, <code>database</code>, <code>state</code>, <code>duration_ms</code>, <code>query</code>.</dd>
+<dd>Works like <code>EVO_SESSIONS</code>. It adds a <code>query</code> column with the text of the session's current statement. The columns are <code>pid</code>, <code>username</code>, <code>database</code>, <code>state</code>, <code>duration_ms</code>, and <code>query</code>.</dd>
 
 <dt>REPLICATION STATUS</dt>
-<dd>Per-replica view of the streaming replication slots. Returns <code>role</code> (<code>primary</code>, <code>replica</code>, or <code>witness</code>), <code>replica_id</code>, <code>my_lsn</code>, <code>confirmed_lsn</code>, <code>lag_bytes</code>, <code>active</code>, and <code>last_seen_us</code>. With no replicas a single summary row for the local role is returned. (Matched only when the text does not also contain <code>cluster</code>.)</dd>
+<dd>Shows the streaming replication slots, one row per replica. Returns <code>role</code>, <code>replica_id</code>, <code>my_lsn</code>, <code>confirmed_lsn</code>, <code>lag_bytes</code>, <code>active</code>, and <code>last_seen_us</code>. The <code>role</code> value is <code>primary</code>, <code>replica</code>, or <code>witness</code>. When there are no replicas, a single summary row for the local role is returned. This form matches only when the text does not also contain <code>cluster</code>.</dd>
 
 <dt>REPLICATION LAG</dt>
-<dd>Compact per-slot lag view. Returns <code>replica_id</code> and <code>lag_bytes</code>.</dd>
+<dd>Shows a short lag view, one row per slot. Returns <code>replica_id</code> and <code>lag_bytes</code>.</dd>
 
 <dt>NODES</dt>
-<dd>Lists nodes in a distributed cluster. Returns <code>node_id</code>, <code>host</code>, <code>pg_port</code>, and <code>role</code> (<code>SELF</code> or <code>PEER</code>). On a non-distributed server a single <code>STANDALONE</code> row for <code>localhost:5433</code> is returned. Handled by the distributed-command path.</dd>
+<dd>Lists nodes in a distributed cluster. Returns <code>node_id</code>, <code>host</code>, <code>pg_port</code>, and <code>role</code>. The <code>role</code> value is <code>SELF</code> or <code>PEER</code>. On a non-distributed server, it returns a single <code>STANDALONE</code> row for <code>localhost:5433</code>. The distributed-command path handles this form.</dd>
 
 <dt>TABLE PLACEMENT</dt>
-<dd>Lists every non-temporary table with its owning node. Returns <code>table_name</code>, <code>schema</code>, <code>owner_node_id</code>, and <code>location</code> (<code>LOCAL</code> or <code>REMOTE</code>). Handled by the distributed-command path.</dd>
+<dd>Lists every non-temporary table with the node that owns it. Returns <code>table_name</code>, <code>schema</code>, <code>owner_node_id</code>, and <code>location</code>. The <code>location</code> value is <code>LOCAL</code> or <code>REMOTE</code>. The distributed-command path handles this form.</dd>
 
 <dt>SHARDS <code>table_name</code></dt>
-<dd>Lists the shards of a sharded table. Returns <code>shard_name</code>, <code>ordinal</code>, <code>owner_node_id</code>, <code>range_bound</code> (<code>MAXVALUE</code> for the open upper bound), <code>shard_type</code> (<code>HASH</code> or <code>RANGE</code>), and <code>shard_key</code>. Returns no rows if the table is not sharded. Handled by the distributed-command path.</dd>
+<dd>Lists the shards of a sharded table. Returns <code>shard_name</code>, <code>ordinal</code>, <code>owner_node_id</code>, <code>range_bound</code>, <code>shard_type</code>, and <code>shard_key</code>. The <code>range_bound</code> value is <code>MAXVALUE</code> for the open upper bound. The <code>shard_type</code> value is <code>HASH</code> or <code>RANGE</code>. It returns no rows if the table is not sharded. The distributed-command path handles this form.</dd>
 
 <dt><code>configuration_parameter</code></dt>
-<dd>Any <code>SHOW</code> form not matched above returns a single <code>setting</code> column. Recognized parameters include <code>system_time_retention</code> (days of system-versioned history retained; <code>0</code> = pruning disabled, returned as <code>system_time_retention_days</code>), <code>max_connections</code>, <code>active_connections</code>, <code>statement_timeout</code> / <code>evo_statement_timeout</code>, <code>evo_lock_timeout</code>, <code>evo_idle_timeout</code>, <code>transaction_isolation</code>, <code>server_version</code> (reports <code>15.0 (EvoSQL)</code>), <code>max_identifier_length</code> (<code>63</code>), <code>standard_conforming_strings</code> (<code>on</code>), <code>search_path</code>, <code>cluster</code> status (Raft role/term/leader/LSN), <code>buffer_pool_stats</code> (multi-column hit-rate and I/O view), and <code>buffer_pool_size</code> (also accepted as <code>shared_buffers</code>, <code>innodb_buffer_pool_size</code>, or <code>db_cache_size</code>). An unrecognized parameter yields one row with an empty <code>setting</code> value rather than an error.</dd>
+<dd>Any <code>SHOW</code> form not matched above returns a single <code>setting</code> column. The known parameters include the ones below. <code>system_time_retention</code> is the number of days of system-versioned history that is kept. A value of <code>0</code> means pruning is off. It is returned as <code>system_time_retention_days</code>. Other known parameters are <code>max_connections</code>, <code>active_connections</code>, <code>statement_timeout</code> / <code>evo_statement_timeout</code>, <code>evo_lock_timeout</code>, <code>evo_idle_timeout</code>, <code>transaction_isolation</code>, and <code>search_path</code>. <code>server_version</code> reports <code>15.0 (EvoSQL)</code>. <code>max_identifier_length</code> reports <code>63</code>. <code>standard_conforming_strings</code> reports <code>on</code>. <code>cluster</code> reports the Raft status, which is the role, term, leader, and LSN. <code>buffer_pool_stats</code> is a multi-column view of the hit rate and I/O. <code>buffer_pool_size</code> is also accepted as <code>shared_buffers</code>, <code>innodb_buffer_pool_size</code>, or <code>db_cache_size</code>. An unknown parameter does not raise an error. It returns one row with an empty <code>setting</code> value.</dd>
 
 </dl>
 
 <h2 id="examples">Examples</h2>
 
-<p>List databases, then schemas and tables in the current database:</p>
+<p>List databases. Then list the schemas and tables in the current database.</p>
 <pre><code><span class="c-key">SHOW</span> <span class="c-key">DATABASES</span>;
 <span class="c-key">SHOW</span> <span class="c-key">SCHEMAS</span>;
 <span class="c-key">SHOW</span> <span class="c-key">TABLES</span>;</code></pre>
 
-<p>Reconstruct the definition of a view:</p>
+<p>Rebuild the definition of a view.</p>
 <pre><code><span class="c-key">SHOW</span> <span class="c-key">CREATE VIEW</span> active_users;</code></pre>
 
-<p>Show all grants, then only those held by one user:</p>
+<p>Show all grants. Then show only the grants held by one user.</p>
 <pre><code><span class="c-key">SHOW</span> <span class="c-key">GRANTS</span>;
 <span class="c-key">SHOW</span> <span class="c-key">GRANTS</span> <span class="c-key">FOR</span> <span class="c-str">'analyst'</span>;</code></pre>
 
-<p>Inspect connected sessions and the queries they are running:</p>
+<p>Look at the connected sessions and the queries they are running.</p>
 <pre><code><span class="c-key">SHOW</span> <span class="c-key">EVO_PROCESSES</span>;</code></pre>
 
-<p>List the shards of a sharded table on a distributed cluster:</p>
+<p>List the shards of a sharded table on a distributed cluster.</p>
 <pre><code><span class="c-key">SHOW</span> <span class="c-key">SHARDS</span> orders;</code></pre>
 
-<p>Read run-time parameters:</p>
+<p>Read run-time parameters.</p>
 <pre><code><span class="c-key">SHOW</span> server_version;        <span class="c-com">-- 15.0 (EvoSQL)</span>
 <span class="c-key">SHOW</span> max_connections;
 <span class="c-key">SHOW</span> buffer_pool_stats;     <span class="c-com">-- pool_pages, hits, misses, hit_rate, ...</span>
 <span class="c-key">SHOW</span> system_time_retention; <span class="c-com">-- system_time_retention_days</span></code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>There is no <code>SHOW</code> statement in the SQL standard. EvolutionDB's run-time-parameter form (<code>SHOW configuration_parameter</code>) follows the PostgreSQL convention and exposes several PostgreSQL-compatible names such as <code>server_version</code>, <code>max_connections</code>, <code>standard_conforming_strings</code>, <code>search_path</code>, and <code>shared_buffers</code>. For interoperability, <code>SHOW server_version</code> reports a PostgreSQL-style string (<code>15.0 (EvoSQL)</code>).</p>
+<p>The SQL standard has no <code>SHOW</code> statement. The run-time-parameter form of EvolutionDB is <code>SHOW configuration_parameter</code>. It follows the PostgreSQL convention. It supports several PostgreSQL-compatible names such as <code>server_version</code>, <code>max_connections</code>, <code>standard_conforming_strings</code>, <code>search_path</code>, and <code>shared_buffers</code>. To help other tools work with it, <code>SHOW server_version</code> reports a PostgreSQL-style string. That string is <code>15.0 (EvoSQL)</code>.</p>
 
-<p>The object-listing and store-listing forms (<code>SHOW DATABASES</code>, <code>SHOW TABLES</code>, <code>SHOW SCHEMAS</code>, <code>SHOW GRANTS</code>, and the various <code>... STORES</code> forms) are EvolutionDB extensions; their shape is closer to MySQL-style <code>SHOW</code> listings than to PostgreSQL, but the exact keywords and result columns are EvolutionDB-specific. PostgreSQL's <code>SHOW ALL</code> and the <code>SHOW SESSION</code> / <code>SHOW LOCAL</code> qualifiers are not implemented; matching is substring-based, so qualifiers are simply ignored. EvolutionDB does not raise an error for an unknown parameter, it returns an empty <code>setting</code> value, whereas PostgreSQL raises an error.</p>
+<p>The object-listing and store-listing forms are EvolutionDB extensions. These forms include <code>SHOW DATABASES</code>, <code>SHOW TABLES</code>, <code>SHOW SCHEMAS</code>, <code>SHOW GRANTS</code>, and the various <code>... STORES</code> forms. Their shape is closer to MySQL-style <code>SHOW</code> listings than to PostgreSQL. But the exact keywords and result columns are specific to EvolutionDB. PostgreSQL's <code>SHOW ALL</code> is not implemented. The <code>SHOW SESSION</code> and <code>SHOW LOCAL</code> qualifiers are not implemented either. Matching is substring-based, so these qualifiers are simply ignored. EvolutionDB does not raise an error for an unknown parameter. It returns an empty <code>setting</code> value instead. PostgreSQL raises an error in this case.</p>
 
 <h2 id="see-also">See Also</h2>
 <ul>

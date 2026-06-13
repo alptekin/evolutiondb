@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE SEQUENCE</h1>
-<p class="lede">Define a new sequence generator: a named, persistent counter that produces a monotonic series of <code>BIGINT</code> values via the <code>nextval()</code>, <code>currval()</code>, <code>setval()</code> and <code>lastval()</code> functions.</p>
+<p class="lede">Create a new sequence generator. A sequence is a named counter that is saved on disk. It gives you a series of <code>BIGINT</code> values that always go in one direction. You read these values with the <code>nextval()</code>, <code>currval()</code>, <code>setval()</code> and <code>lastval()</code> functions.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -28,80 +28,80 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>CREATE SEQUENCE</code> creates a new sequence-number generator. The sequence is stored as a persistent object in the system catalog of the current schema, and survives server restarts.</p>
-<p>After creation, the sequence is manipulated through the sequence functions. <code>nextval(<var>name</var>)</code> advances the sequence and returns its new value; the very first call to <code>nextval()</code> on a freshly created sequence returns the <code>START</code> value (the sequence is not yet "called"). Subsequent calls add <var>increment</var> to the current value. <code>currval()</code> returns the value most recently obtained, <code>lastval()</code> returns the value of the most recently used sequence in the session, and <code>setval()</code> resets the current value.</p>
-<p>If the supplied <var>name</var> already names a sequence in the current schema, an error is raised unless <code>IF NOT EXISTS</code> is given, in which case a notice is emitted and no new sequence is created. Note that <code>IF NOT EXISTS</code> only checks whether a sequence of the same name exists; it does not verify that the existing definition matches the requested one.</p>
-<p>Each call to <code>nextval()</code> is serialized by an internal mutex and immediately persisted to the catalog, so concurrent sessions never receive the same value. Because the new value is written before it is returned, sequence values consumed inside a transaction are <em>not</em> rolled back if that transaction aborts; gaps in the series are therefore normal and expected.</p>
-<p>When <var>increment</var> is positive the sequence is ascending; when it is negative the sequence is descending. On reaching <var>maxvalue</var> (ascending) or <var>minvalue</var> (descending), a sequence declared <code>CYCLE</code> wraps around to <var>minvalue</var> or <var>maxvalue</var> respectively, while a non-cycling sequence raises an error.</p>
+<p><code>CREATE SEQUENCE</code> creates a new sequence-number generator. The sequence is saved as an object in the system catalog of the current schema. It stays on disk after a server restart.</p>
+<p>Once the sequence exists, you work with it through the sequence functions. <code>nextval(<var>name</var>)</code> moves the sequence forward and returns the new value. The first call to <code>nextval()</code> on a brand new sequence returns the <code>START</code> value. At that point the sequence has not been used yet. Each later call adds <var>increment</var> to the current value. <code>currval()</code> returns the value you got most recently. <code>lastval()</code> returns the value of the sequence you used most recently in this session. <code>setval()</code> sets the current value to a number you choose.</p>
+<p>If the given <var>name</var> already belongs to a sequence in the current schema, you get an error. To avoid this, use <code>IF NOT EXISTS</code>. Then you get a notice and no new sequence is created. Keep in mind that <code>IF NOT EXISTS</code> only checks if a sequence with that name exists. It does not check if the old definition matches the new one you asked for.</p>
+<p>Each call to <code>nextval()</code> runs one at a time under an internal mutex. The new value is saved to the catalog right away. Because of this, two sessions never get the same value. The new value is saved before it is returned. So sequence values used inside a transaction are <em>not</em> rolled back if that transaction fails. This means gaps in the series are normal and expected.</p>
+<p>When <var>increment</var> is positive, the sequence counts up. When it is negative, the sequence counts down. An ascending sequence may reach <var>maxvalue</var>. A descending sequence may reach <var>minvalue</var>. A sequence with <code>CYCLE</code> then wraps around. An ascending one goes back to <var>minvalue</var>. A descending one goes back to <var>maxvalue</var>. A sequence without cycling raises an error instead.</p>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt><code>IF NOT EXISTS</code></dt>
-<dd>Do not raise an error if a sequence with the same name already exists in the current schema. A notice is issued instead. The pre-existing sequence is left unchanged.</dd>
+<dd>Do not raise an error if a sequence with the same name already exists in the current schema. You get a notice instead. The old sequence is left unchanged.</dd>
 
 <dt><var>name</var></dt>
-<dd>The name of the sequence to create. The sequence is created in the current schema. Names are not schema-qualified in this form.</dd>
+<dd>The name of the sequence to create. The sequence is created in the current schema. You cannot add a schema name to it in this form.</dd>
 
 <dt><code>INCREMENT [ BY ]</code> <var>increment</var></dt>
-<dd>The value added to the current sequence value on each call to <code>nextval()</code>. A positive value makes an ascending sequence, a negative value a descending one. The <code>BY</code> keyword is optional. Defaults to <code>1</code>.</dd>
+<dd>The value added to the current sequence value on each call to <code>nextval()</code>. A positive value makes the sequence count up. A negative value makes it count down. The <code>BY</code> keyword is optional. The default is <code>1</code>.</dd>
 
 <dt><code>MINVALUE</code> <var>minvalue</var></dt>
-<dd>The minimum value the sequence can generate. Defaults to <code>1</code>. For a descending sequence this is the value used as the cycle wrap target when <code>CYCLE</code> is set, and the floor at which a non-cycling descending sequence errors out.</dd>
+<dd>The smallest value the sequence can produce. The default is <code>1</code>. For a descending sequence, this is the wrap target when <code>CYCLE</code> is set. For a descending sequence without cycling, this is the floor where it raises an error.</dd>
 
 <dt><code>MAXVALUE</code> <var>maxvalue</var></dt>
-<dd>The maximum value the sequence can generate. Defaults to <code>2147483647</code> (2<sup>31</sup>&minus;1). For an ascending sequence this is the cycle wrap target when <code>CYCLE</code> is set, and the ceiling at which a non-cycling ascending sequence errors out.</dd>
+<dd>The largest value the sequence can produce. The default is <code>2147483647</code>. This is 2<sup>31</sup>&minus;1. For an ascending sequence, this is the wrap target when <code>CYCLE</code> is set. For an ascending sequence without cycling, this is the ceiling where it raises an error.</dd>
 
 <dt><code>START [ WITH ]</code> <var>start</var></dt>
-<dd>The first value returned by the sequence, the value yielded by the first <code>nextval()</code> call. The <code>WITH</code> keyword is optional. If omitted, the start value defaults to <var>minvalue</var>.</dd>
+<dd>The first value the sequence returns. This is the value you get from the first <code>nextval()</code> call. The <code>WITH</code> keyword is optional. If you leave it out, the start value is <var>minvalue</var>.</dd>
 
 <dt><code>CYCLE</code> / <code>NOT CYCLE</code></dt>
-<dd><code>CYCLE</code> allows the sequence to wrap around when it reaches <var>maxvalue</var> (ascending) or <var>minvalue</var> (descending). <code>NOT CYCLE</code> (the default) causes <code>nextval()</code> to raise an error once a bound is reached.</dd>
+<dd><code>CYCLE</code> lets the sequence wrap around when it reaches a limit. An ascending sequence wraps at <var>maxvalue</var>. A descending sequence wraps at <var>minvalue</var>. <code>NOT CYCLE</code> is the default. With it, <code>nextval()</code> raises an error once a limit is reached.</dd>
 </dl>
 
 <div class="callout">
-<p><strong>Note.</strong> The clause order shown in the Synopsis is conventional, not mandatory: the grammar accepts the options in any order, and a later occurrence of the same option overrides an earlier one. Sequence values are 64-bit signed integers (<code>BIGINT</code>), but the default <code>MAXVALUE</code> is 2147483647; raise <code>MAXVALUE</code> explicitly if you need the full 64-bit range.</p>
+<p><strong>Note.</strong> The clause order in the Synopsis is just a convention. It is not required. The grammar accepts the options in any order. If you give the same option twice, the later one wins. Sequence values are 64-bit signed integers. This is the <code>BIGINT</code> type. But the default <code>MAXVALUE</code> is 2147483647. Set <code>MAXVALUE</code> yourself if you need the full 64-bit range.</p>
 </div>
 
 <h2 id="examples">Examples</h2>
-<p>Create an ascending sequence starting at 1, incrementing by 1 (all defaults):</p>
+<p>Create an ascending sequence that starts at 1 and goes up by 1. This uses all the defaults.</p>
 <pre><code><span class="c-key">CREATE SEQUENCE</span> order_id_seq;</code></pre>
 
-<p>Draw values from it:</p>
+<p>Read values from it:</p>
 <pre><code><span class="c-key">SELECT</span> nextval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 1  (the START value)</span>
 <span class="c-key">SELECT</span> nextval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 2</span>
 <span class="c-key">SELECT</span> currval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 2</span></code></pre>
 
-<p>Create a sequence that starts at 1000 and counts up by 10:</p>
+<p>Create a sequence that starts at 1000 and counts up by 10.</p>
 <pre><code><span class="c-key">CREATE SEQUENCE</span> invoice_seq
     <span class="c-key">START WITH</span> <span class="c-num">1000</span>
     <span class="c-key">INCREMENT BY</span> <span class="c-num">10</span>;</code></pre>
 
-<p>Create a bounded, cycling sequence (1 → 5, then back to 1):</p>
+<p>Create a sequence that has limits and cycles. It goes from 1 to 5, then back to 1.</p>
 <pre><code><span class="c-key">CREATE SEQUENCE</span> day_slot_seq
     <span class="c-key">MINVALUE</span> <span class="c-num">1</span>
     <span class="c-key">MAXVALUE</span> <span class="c-num">5</span>
     <span class="c-key">CYCLE</span>;</code></pre>
 
-<p>Create a descending sequence:</p>
+<p>Create a sequence that counts down.</p>
 <pre><code><span class="c-key">CREATE SEQUENCE</span> countdown_seq
     <span class="c-key">START</span> <span class="c-num">100</span>
     <span class="c-key">INCREMENT</span> <span class="c-num">-1</span>
     <span class="c-key">MINVALUE</span> <span class="c-num">0</span>;</code></pre>
 
-<p>Create idempotently, skip if it already exists:</p>
+<p>Create the sequence only if it does not exist yet. If it already exists, skip it.</p>
 <pre><code><span class="c-key">CREATE SEQUENCE IF NOT EXISTS</span> session_seq;</code></pre>
 
-<p>Reposition a sequence with <code>setval()</code> so the next <code>nextval()</code> returns 200:</p>
+<p>Move a sequence to a new spot with <code>setval()</code>. After this, the next <code>nextval()</code> call returns 200.</p>
 <pre><code><span class="c-key">SELECT</span> setval(<span class="c-str">'invoice_seq'</span>, <span class="c-num">200</span>);</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE SEQUENCE</code> conforms to the spirit of the SQL standard, with the following EvolutionDB-specific differences:</p>
+<p><code>CREATE SEQUENCE</code> follows the spirit of the SQL standard. EvolutionDB has a few differences from it. They are listed below.</p>
 <ul>
-<li>EvolutionDB supports the clauses <code>INCREMENT&nbsp;[BY]</code>, <code>MINVALUE</code>, <code>MAXVALUE</code>, <code>START&nbsp;[WITH]</code> and <code>CYCLE</code> / <code>NOT CYCLE</code>, plus the EvolutionDB extension <code>IF NOT EXISTS</code>.</li>
-<li>The standard's bare keyword <code>NO CYCLE</code> is written <code>NOT CYCLE</code> in EvolutionDB. The forms <code>NO MINVALUE</code> and <code>NO MAXVALUE</code> are <strong>not</strong> supported; omit the clause to accept the default instead.</li>
-<li>The PostgreSQL clauses <code>AS</code> <var>data_type</var>, <code>CACHE</code>, <code>OWNED BY</code> and <code>TEMPORARY</code>/<code>UNLOGGED</code> are <strong>not</strong> accepted by the grammar. Sequences are always persistent <code>BIGINT</code> generators, and every <code>nextval()</code> writes through to the catalog (no client-side cache).</li>
-<li>The standard reserves <code>nextval</code>/<code>currval</code> as expressions; like PostgreSQL, EvolutionDB exposes them as functions taking the sequence name as a string argument, e.g. <code>nextval('seq')</code>.</li>
-<li>The default <code>MAXVALUE</code> is <code>2147483647</code> rather than the 64-bit maximum; raise it explicitly when a larger ceiling is required.</li>
+<li>EvolutionDB supports the clauses <code>INCREMENT&nbsp;[BY]</code>, <code>MINVALUE</code>, <code>MAXVALUE</code>, <code>START&nbsp;[WITH]</code> and <code>CYCLE</code> / <code>NOT CYCLE</code>. It also adds the extra clause <code>IF NOT EXISTS</code>.</li>
+<li>The standard uses the keyword <code>NO CYCLE</code>. In EvolutionDB you write <code>NOT CYCLE</code> instead. The forms <code>NO MINVALUE</code> and <code>NO MAXVALUE</code> are <strong>not</strong> supported. Leave the clause out to use the default.</li>
+<li>The grammar does <strong>not</strong> accept the PostgreSQL clauses <code>AS</code> <var>data_type</var>, <code>CACHE</code>, <code>OWNED BY</code> and <code>TEMPORARY</code>/<code>UNLOGGED</code>. Sequences are always saved <code>BIGINT</code> generators. Every <code>nextval()</code> writes straight to the catalog. There is no client-side cache.</li>
+<li>The standard treats <code>nextval</code>/<code>currval</code> as expressions. Like PostgreSQL, EvolutionDB makes them functions. You pass the sequence name as a string. For example, <code>nextval('seq')</code>.</li>
+<li>The default <code>MAXVALUE</code> is <code>2147483647</code>, not the 64-bit maximum. Set it yourself when you need a higher ceiling.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>
