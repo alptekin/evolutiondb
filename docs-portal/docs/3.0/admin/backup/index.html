@@ -15,63 +15,63 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>27. Backup, WAL &amp; Recovery</h1>
-<p class="lede">How EvolutionDB keeps your data crash-safe: a full-page-image write-ahead log, the checkpoint that recycles it, two-pass replay on restart, point-in-time recovery from the WAL archive, and the base-backup that clones a live database.</p>
+<p class="lede">This page explains how EvolutionDB keeps your data safe when a crash happens. It covers the full-page-image write-ahead log, the checkpoint that recycles it, two-pass replay on restart, point-in-time recovery from the WAL archive, and the base backup that clones a live database.</p>
 
-<p>Durability in EvolutionDB rests on a single mechanism, a <strong>full-page-image (FPI) write-ahead log</strong> implemented in <code>evolution/db/wal.c</code>. Before any modified 4&nbsp;KB page reaches the data file <code>evosql.db</code>, a complete image of that page is appended to the log file <code>evosql.wal</code> and flushed. If the process dies between the log write and the data write, the next start replays the logged images so no page is ever left torn. Everything else in this chapter: checkpoints, recovery, the time-travel archive, and base backups, is built on top of that one log.</p>
+<p>Durability in EvolutionDB rests on one mechanism. It is a <strong>full-page-image (FPI) write-ahead log</strong> built in <code>evolution/db/wal.c</code>. Before any changed 4&nbsp;KB page reaches the data file <code>evosql.db</code>, a full image of that page is added to the log file <code>evosql.wal</code> and flushed. If the process dies between the log write and the data write, the next start replays the logged images. This way no page is ever left torn. Everything else in this chapter is built on top of that one log. That includes checkpoints, recovery, the time-travel archive, and base backups.</p>
 
 <div class="callout">
-<p><strong>A note on terminology.</strong> The SQL keyword <code>CHECKPOINT</code> in EvolutionDB belongs to the LangGraph <em>checkpoint store</em> feature (see <a href="/3.0/ref/checkpoint/">CHECKPOINT</a> and <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>) and has <em>nothing to do</em> with the WAL checkpoint described here. The WAL checkpoint is an internal engine operation; there is no SQL statement that triggers it. Wherever this chapter says &ldquo;checkpoint&rdquo; unqualified, it means the WAL checkpoint.</p>
+<p><strong>A note on terminology.</strong> The SQL keyword <code>CHECKPOINT</code> in EvolutionDB belongs to the LangGraph <em>checkpoint store</em> feature. See <a href="/3.0/ref/checkpoint/">CHECKPOINT</a> and <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>. It has <em>nothing to do</em> with the WAL checkpoint described here. The WAL checkpoint is an internal engine operation. No SQL statement triggers it. When this chapter says &ldquo;checkpoint&rdquo; on its own, it means the WAL checkpoint.</p>
 </div>
 
 <h2 id="wal">27.1. The Write-Ahead Log</h2>
 
-<p>The WAL lives in a single sequential file, <code>evosql.wal</code>, created alongside the data file and managed entirely by the page manager and buffer pool, it is not a directory of segments. It begins with a fixed 16-byte header followed by a stream of variable-length records:</p>
+<p>The WAL lives in one sequential file named <code>evosql.wal</code>. It is created next to the data file. The page manager and buffer pool manage it fully. It is not a directory of segments. It begins with a fixed 16-byte header. After the header comes a stream of variable-length records.</p>
 
 <table>
 <thead><tr><th>Field</th><th>Size</th><th>Meaning</th></tr></thead>
 <tbody>
-<tr><td><code>magic</code></td><td>4&nbsp;B</td><td><code>0x57414C45</code> (&ldquo;WALE&rdquo;). A header without it is treated as corrupt and reinitialized.</td></tr>
-<tr><td><code>version</code></td><td>2&nbsp;B</td><td>WAL format version (currently <code>1</code>).</td></tr>
+<tr><td><code>magic</code></td><td>4&nbsp;B</td><td><code>0x57414C45</code>, which means &ldquo;WALE&rdquo;. A header without it is treated as corrupt and reset.</td></tr>
+<tr><td><code>version</code></td><td>2&nbsp;B</td><td>The WAL format version. It is <code>1</code> right now.</td></tr>
 <tr><td><code>reserved</code></td><td>2&nbsp;B</td><td>Padding.</td></tr>
 <tr><td><code>checkpoint_lsn</code></td><td>4&nbsp;B</td><td>Every page up to this LSN is known to be on disk in the data file. Replay skips records at or below it.</td></tr>
-<tr><td><code>next_lsn</code></td><td>4&nbsp;B</td><td>The next log sequence number to assign. Starts at <code>1</code> for a fresh log.</td></tr>
+<tr><td><code>next_lsn</code></td><td>4&nbsp;B</td><td>The next log sequence number to assign. It starts at <code>1</code> for a fresh log.</td></tr>
 </tbody>
 </table>
 
-<p>Each record after the header is a full page image wrapped in an 18-byte header and a trailing CRC:</p>
+<p>Each record after the header is a full page image. It is wrapped in an 18-byte header and a CRC at the end.</p>
 
 <pre class="synopsis"><code>[ <span class="c-key">lsn</span>:4B ][ <span class="c-key">page_no</span>:4B ][ <span class="c-key">page_len</span>:2B ][ <span class="c-key">timestamp</span>:8B ][ page image:page_len ][ <span class="c-key">crc32</span>:4B ]
 \________________ 18-byte record header _________________/</code></pre>
 
 <dl class="params">
 <dt><code>lsn</code></dt>
-<dd>Monotonically increasing log sequence number, assigned under the WAL mutex when the record is written.</dd>
+<dd>A log sequence number that always increases. It is assigned under the WAL mutex when the record is written.</dd>
 <dt><code>page_no</code></dt>
-<dd>The data-file page this image belongs to. Values <code>0xFFFFFFFC</code>&ndash;<code>0xFFFFFFFE</code> are reserved sentinels for distributed-transaction records (see <a href="#xa">§27.7</a>), not real pages.</dd>
+<dd>The data-file page this image belongs to. Values <code>0xFFFFFFFC</code>&ndash;<code>0xFFFFFFFE</code> are reserved sentinels for distributed-transaction records. They are not real pages. See <a href="#xa">§27.7</a>.</dd>
 <dt><code>page_len</code></dt>
-<dd>Bytes of page payload. Always <code>1&ndash;4096</code>; a record claiming <code>0</code> or more than <code>EVO_PAGE_SIZE</code> ends replay.</dd>
+<dd>The number of bytes in the page payload. It is always <code>1&ndash;4096</code>. A record that claims <code>0</code> or more than <code>EVO_PAGE_SIZE</code> ends replay.</dd>
 <dt><code>timestamp</code></dt>
-<dd>Microseconds since the Unix epoch, captured with <code>gettimeofday()</code> at log time. This is what makes the WAL archive replayable to a point in time (see <a href="#pitr">§27.5</a>).</dd>
+<dd>Microseconds since the Unix epoch. It is captured with <code>gettimeofday()</code> at log time. This is what makes the WAL archive replayable to a point in time. See <a href="#pitr">§27.5</a>.</dd>
 <dt><code>crc32</code></dt>
-<dd>IEEE CRC-32 (the zlib/gzip polynomial) over the 18-byte header <em>plus</em> the page image. Replay recomputes and compares it; a mismatch stops replay at that record, so a partially written tail record is never applied.</dd>
+<dd>An IEEE CRC-32 over the 18-byte header <em>plus</em> the page image. It uses the zlib and gzip polynomial. Replay recomputes it and compares it. If it does not match, replay stops at that record. This way a partly written tail record is never applied.</dd>
 </dl>
 
-<p>EvolutionDB logs <em>whole pages</em>, not logical row operations. There is no redo/undo record type, no per-tuple delta, and no separate logical record stream in the WAL itself; the unit of recovery is the 4&nbsp;KB page. This makes replay trivially idempotent, re-applying a page image is harmless, at the cost of a larger log than a delta-based design would produce.</p>
+<p>EvolutionDB logs <em>whole pages</em>, not logical row operations. There is no redo or undo record type. There is no per-tuple delta. There is no separate logical record stream in the WAL itself. The unit of recovery is the 4&nbsp;KB page. This makes replay safe to repeat. Re-applying a page image does no harm. The cost is a larger log than a delta-based design would produce.</p>
 
 <div class="callout">
-<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL writes typed redo records and only emits a <em>full-page image</em> for the first change to a page after a checkpoint (the rest are deltas). EvolutionDB always logs the full page. PostgreSQL stores the WAL as a directory of 16&nbsp;MB segment files with an LSN-derived naming scheme; EvolutionDB uses one growing <code>evosql.wal</code> file that is truncated back to its 16-byte header at each checkpoint.</p>
+<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL writes typed redo records. It only writes a <em>full-page image</em> for the first change to a page after a checkpoint. The rest are deltas. EvolutionDB always logs the full page. PostgreSQL stores the WAL as a directory of 16&nbsp;MB segment files. Their names come from the LSN. EvolutionDB uses one growing <code>evosql.wal</code> file. That file is cut back to its 16-byte header at each checkpoint.</p>
 </div>
 
 <h2 id="write-ahead-rule">27.2. The Write-Ahead Rule &amp; Commit Path</h2>
 
-<p>The defining invariant is: <strong>a page's WAL record is durable before that page is allowed to reach the data file</strong>. EvolutionDB enforces it at commit time rather than on every page write, by deferring both the data-page flush and the WAL <code>fsync</code> until a transaction commits.</p>
+<p>The core rule is simple. <strong>A page's WAL record must be durable before that page is allowed to reach the data file.</strong> EvolutionDB applies this rule at commit time, not on every page write. It does this by holding back both the data-page flush and the WAL <code>fsync</code> until a transaction commits.</p>
 
-<p>When an auto-commit statement or an explicit <code>COMMIT</code> succeeds, the server calls <code>bp_wal_flush_dirty()</code> (in the buffer pool) before marking the transaction committed in the commit log:</p>
+<p>An auto-commit statement or an explicit <code>COMMIT</code> may succeed. When it does, the server calls <code>bp_wal_flush_dirty()</code> in the buffer pool. This happens before the transaction is marked committed in the commit log. The steps are below.</p>
 
 <ol>
-<li>Walk the set of pages this transaction dirtied (tracked in a small array; a rare overflow falls back to a full buffer-pool scan).</li>
-<li>For each dirty page, append its current image to the WAL via <code>wal_log_page()</code>.</li>
-<li>Issue a <strong>single</strong> <code>wal_fsync()</code> that flushes all of those records at once.</li>
+<li>Walk the set of pages this transaction made dirty. A small array tracks them. If that array overflows, which is rare, it falls back to a full buffer-pool scan.</li>
+<li>For each dirty page, add its current image to the WAL with <code>wal_log_page()</code>.</li>
+<li>Run a <strong>single</strong> <code>wal_fsync()</code> that flushes all of those records at once.</li>
 <li>Only then assign a commit sequence number and record the commit.</li>
 </ol>
 

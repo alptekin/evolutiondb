@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>REPLACE</h1>
-<p class="lede">REPLACE: insert a row, or if a row with the same primary key already exists, delete that row first and then insert the new one.</p>
+<p class="lede">REPLACE inserts a row. If a row with the same primary key already exists, it deletes that row first. Then it inserts the new one.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -32,55 +32,55 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>REPLACE</code> writes rows into <em>table_name</em>. It behaves exactly like <a href="/3.0/ref/insert/">INSERT</a> with one difference: when the new row would collide with an existing row on the table's primary key, the existing row is deleted and the new row is inserted in its place, rather than the statement failing with a duplicate-key error.</p>
-<p>Conflict detection is driven entirely by the table's <strong>primary key</strong>. EvolutionDB builds the primary-key value from the supplied column values, probes the primary-key B+ tree, and:</p>
+<p><code>REPLACE</code> writes rows into <em>table_name</em>. It works just like <a href="/3.0/ref/insert/">INSERT</a>, but with one difference. The new row may clash with an existing row on the table's primary key. When this happens, the old row is deleted and the new row takes its place. The statement does not fail with a duplicate-key error.</p>
+<p>Conflict detection uses only the table's <strong>primary key</strong>. EvolutionDB builds the primary-key value from the column values you give. It then checks the primary-key B+ tree.</p>
 <ul>
-<li>If no matching key is found, the row is inserted normally, identical to <code>INSERT</code>.</li>
-<li>If a matching key is found, the engine deletes the existing row (an MVCC delete under the current transaction), then inserts the new row.</li>
+<li>If no matching key is found, the row is inserted in the normal way. This is the same as <code>INSERT</code>.</li>
+<li>If a matching key is found, the engine deletes the old row. This is an MVCC delete under the current transaction. Then it inserts the new row.</li>
 </ul>
-<p>A REPLACE is therefore a delete-plus-insert, not an in-place update: the replacement row is a brand-new tuple, any columns not provided take their defaults (or NULL), and any <code>BEFORE INSERT</code> triggers fire for the inserted row. The operation runs under the statement's transaction, so it is rolled back together with the surrounding work if the transaction aborts.</p>
-<p>Three forms are accepted, all sharing the same conflict semantics:</p>
+<p>So a REPLACE is a delete plus an insert. It is not an in-place update. The replacement row is a brand-new tuple. Any columns you do not provide take their defaults or NULL. Any <code>BEFORE INSERT</code> triggers fire for the inserted row. The operation runs inside the statement's transaction. If the transaction aborts, it is rolled back with the rest of the work.</p>
+<p>Three forms are accepted. They all share the same conflict behavior.</p>
 <ul>
-<li><strong>VALUES</strong>: one or more parenthesized row constructors, optionally preceded by an explicit column list.</li>
-<li><strong>SET</strong>, MySQL-style assignment form, listing <code><em>column</em> = <em>value</em></code> pairs for a single row.</li>
-<li><strong>SELECT</strong>: populate the target from the result of a query, optionally with an explicit column list.</li>
+<li><strong>VALUES</strong> uses one or more rows in parentheses. You can add a column list before them.</li>
+<li><strong>SET</strong> is the MySQL-style assignment form. It lists <code><em>column</em> = <em>value</em></code> pairs for a single row.</li>
+<li><strong>SELECT</strong> fills the target from the result of a query. You can add a column list.</li>
 </ul>
 <div class="callout">
-<strong>Requires a primary key.</strong> REPLACE's conflict resolution operates on the primary-key index. A target table without a usable primary key has nothing to collide on, so REPLACE simply degrades to a plain insert and will raise a duplicate-key error only where the same key value recurs.
+<strong>Requires a primary key.</strong> REPLACE resolves conflicts using the primary-key index. A table without a usable primary key has nothing to collide on. In that case REPLACE acts as a plain insert. It raises a duplicate-key error only when the same key value comes up again.
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>LOW_PRIORITY | DELAYED | HIGH_PRIORITY</dt>
-<dd>Priority hints carried over from the INSERT grammar. They are accepted for MySQL syntax compatibility but do not change scheduling in EvolutionDB; statements execute under the engine's single serialized write path regardless of the hint.</dd>
+<dd>Priority hints carried over from the INSERT grammar. They are accepted for MySQL syntax compatibility. They do not change scheduling in EvolutionDB. Statements run on the engine's single serialized write path no matter which hint you use.</dd>
 
 <dt>IGNORE</dt>
-<dd>Accepted modifier shared with INSERT. It is parsed in the same option position as the priority hints. Because REPLACE already resolves primary-key collisions by replacing the existing row, IGNORE has no additional effect on the conflict path.</dd>
+<dd>A modifier shared with INSERT. It is parsed in the same option spot as the priority hints. REPLACE already resolves primary-key collisions by replacing the old row. So IGNORE has no extra effect on the conflict path.</dd>
 
 <dt>INTO</dt>
-<dd>Optional noise word before the table name, accepted for compatibility. <code>REPLACE table</code> and <code>REPLACE INTO table</code> are equivalent.</dd>
+<dd>An optional word before the table name. It is accepted for compatibility. <code>REPLACE table</code> and <code>REPLACE INTO table</code> mean the same thing.</dd>
 
 <dt><em>table_name</em></dt>
 <dd>The table that receives the rows. It must already exist.</dd>
 
 <dt><em>column</em> [..]</dt>
-<dd>An optional list of target columns. When given (VALUES and SELECT forms), values are matched positionally to these columns; columns omitted from the list take their default value (or NULL). When omitted, values are matched against the table's columns in definition order.</dd>
+<dd>An optional list of target columns. You can use it with the VALUES and SELECT forms. When you give it, values are matched to these columns by position. Columns left out of the list take their default value or NULL. When you leave the list out, values are matched to the table's columns in the order they were defined.</dd>
 
 <dt><em>expression</em></dt>
-<dd>A value expression producing the column value. Within a VALUES row or a SET assignment, the literal keyword <code>DEFAULT</code> may be used instead of an expression to request the column's declared default.</dd>
+<dd>A value expression that gives the column value. Inside a VALUES row or a SET assignment, you can use the keyword <code>DEFAULT</code> instead of an expression. This asks for the column's declared default.</dd>
 
 <dt>DEFAULT</dt>
-<dd>Substitutes the column's default value (or NULL when no default is declared) for that position.</dd>
+<dd>Puts the column's default value in that spot. It uses NULL when no default is declared.</dd>
 
 <dt><em>select_statement</em></dt>
-<dd>A query whose result rows are replaced into the target. Each result row is processed with the same primary-key conflict resolution as a literal VALUES row.</dd>
+<dd>A query whose result rows are replaced into the target. Each result row uses the same primary-key conflict handling as a VALUES row.</dd>
 
 <dt>SET <em>column</em> = <em>value</em> [..]</dt>
-<dd>The single-row assignment form. Each pair sets one column; columns not listed take their default value (or NULL).</dd>
+<dd>The single-row assignment form. Each pair sets one column. Columns you do not list take their default value or NULL.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a table keyed by a primary key, then replace into it:</p>
+<p>Create a table with a primary key. Then replace into it.</p>
 <pre><code><span class="c-key">CREATE TABLE</span> products (
     id     <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
     name   <span class="c-key">VARCHAR</span>(50),
@@ -93,29 +93,29 @@
 <span class="c-com">-- id = 1 already exists: old row is deleted, new row inserted in its place</span>
 <span class="c-key">REPLACE INTO</span> products (id, name, price) <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'Keyboard Pro'</span>, <span class="c-str">65</span>);</code></pre>
 
-<p>Multi-row VALUES, with one new key and one colliding key:</p>
+<p>A multi-row VALUES form. One key is new and one key collides.</p>
 <pre><code><span class="c-key">REPLACE INTO</span> products (id, name, price)
 <span class="c-key">VALUES</span> (<span class="c-str">2</span>, <span class="c-str">'Mouse'</span>, <span class="c-str">25</span>),
        (<span class="c-str">1</span>, <span class="c-str">'Keyboard Max'</span>, <span class="c-str">80</span>);</code></pre>
 
-<p>The <code>INTO</code> keyword is optional, and a column may be set to its default:</p>
+<p>The <code>INTO</code> keyword is optional. A column can be set to its default.</p>
 <pre><code><span class="c-key">REPLACE</span> products (id, name, price) <span class="c-key">VALUES</span> (<span class="c-str">3</span>, <span class="c-str">'Cable'</span>, <span class="c-key">DEFAULT</span>);</code></pre>
 
-<p>The SET form replaces a single row:</p>
+<p>The SET form replaces a single row.</p>
 <pre><code><span class="c-key">REPLACE INTO</span> products
 <span class="c-key">SET</span> id = <span class="c-str">1</span>, name = <span class="c-str">'Keyboard Ultra'</span>, price = <span class="c-str">95</span>;</code></pre>
 
-<p>The SELECT form copies rows from another table, replacing on key collisions:</p>
+<p>The SELECT form copies rows from another table. It replaces rows on key collisions.</p>
 <pre><code><span class="c-key">REPLACE INTO</span> products (id, name, price)
 <span class="c-key">SELECT</span> id, name, price <span class="c-key">FROM</span> staging_products;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>REPLACE</code> is <strong>not part of the SQL standard</strong>, and <strong>PostgreSQL does not have a REPLACE statement</strong>. EvolutionDB's REPLACE follows the <strong>MySQL/MariaDB</strong> dialect: the same three forms (<code>VALUES</code>, <code>SET</code>, and <code>... SELECT</code>), the optional <code>INTO</code> keyword, and the priority/<code>IGNORE</code> modifiers are all accepted in the MySQL syntax positions.</p>
-<p>Differences and limitations to be aware of:</p>
+<p><code>REPLACE</code> is <strong>not part of the SQL standard</strong>. <strong>PostgreSQL does not have a REPLACE statement</strong>. EvolutionDB's REPLACE follows the <strong>MySQL/MariaDB</strong> dialect. It accepts the same three forms <code>VALUES</code>, <code>SET</code>, and <code>... SELECT</code>. It also accepts the optional <code>INTO</code> keyword and the priority and <code>IGNORE</code> modifiers in the MySQL syntax spots.</p>
+<p>Here are the differences and limits to keep in mind.</p>
 <ul>
-<li><strong>Primary key only.</strong> Like MySQL, EvolutionDB resolves the conflict by deleting the existing row and inserting the new one. EvolutionDB performs this resolution against the table's <em>primary key</em>; it does not evaluate additional UNIQUE constraints as separate conflict targets.</li>
-<li><strong>Priority hints are no-ops.</strong> <code>LOW_PRIORITY</code>, <code>DELAYED</code>, and <code>HIGH_PRIORITY</code> are accepted for syntactic compatibility but do not affect scheduling.</li>
-<li><strong>Portable alternative.</strong> For standard-conforming upsert behavior, prefer <code>INSERT ... ON CONFLICT DO UPDATE</code> (PostgreSQL style) or <code>INSERT ... ON DUPLICATE KEY UPDATE</code> (MySQL style), both supported by EvolutionDB's INSERT. Unlike REPLACE, those forms update the existing row in place rather than deleting and re-inserting it.</li>
+<li><strong>Primary key only.</strong> Like MySQL, EvolutionDB resolves the conflict by deleting the old row and inserting the new one. EvolutionDB does this against the table's <em>primary key</em>. It does not treat extra UNIQUE constraints as separate conflict targets.</li>
+<li><strong>Priority hints do nothing.</strong> <code>LOW_PRIORITY</code>, <code>DELAYED</code>, and <code>HIGH_PRIORITY</code> are accepted for syntax compatibility. They do not affect scheduling.</li>
+<li><strong>Portable alternative.</strong> For standard upsert behavior, use <code>INSERT ... ON CONFLICT DO UPDATE</code> in the PostgreSQL style or <code>INSERT ... ON DUPLICATE KEY UPDATE</code> in the MySQL style. EvolutionDB's INSERT supports both. Unlike REPLACE, those forms update the old row in place. They do not delete and re-insert it.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>

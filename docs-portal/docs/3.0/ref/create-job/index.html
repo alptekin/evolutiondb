@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE JOB</h1>
-<p class="lede">CREATE JOB, register a scheduled job that fires a SQL statement on a cron-style timetable.</p>
+<p class="lede">CREATE JOB adds a scheduled job. The job runs a SQL statement on a cron-style timetable.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -25,63 +25,63 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>CREATE JOB</code> registers a named scheduled job in the system catalog. A job
-couples a five-field cron expression with a single SQL statement; when the
-scheduler observes a wall-clock minute that matches the cron pattern, the job is
-marked as due.</p>
+<p><code>CREATE JOB</code> adds a named scheduled job to the system catalog. A job
+joins a five-field cron expression with one SQL statement. The scheduler checks
+the current minute on the clock. When that minute matches the cron pattern, the
+job is marked as due.</p>
 
-<p>The cron expression and the SQL body are both supplied as quoted string
-literals, so whitespace and special characters in either are handled by the
-lexer's normal quoting rules rather than the SQL grammar. The surrounding quotes
-are stripped before the values are stored in the catalog.</p>
+<p>You give both the cron expression and the SQL body as quoted string
+literals. So whitespace and special characters in them follow the lexer's normal
+quoting rules. They do not follow the SQL grammar. The outer quotes are removed
+before the values are stored in the catalog.</p>
 
-<p>Newly created jobs are <strong>enabled</strong> by default and have a null last-run
-timestamp. Jobs can be turned on and off with <code>ALTER JOB ... ENABLE</code> /
-<code>ALTER JOB ... DISABLE</code>, removed with <code>DROP JOB</code>, and inspected with
-<code>SHOW JOBS</code>, which exposes each job's name, cron expression, SQL body,
+<p>New jobs are <strong>enabled</strong> by default. Their last-run
+timestamp is null. You can turn jobs on and off with <code>ALTER JOB ... ENABLE</code> and
+<code>ALTER JOB ... DISABLE</code>. You can remove a job with <code>DROP JOB</code>. You can list jobs with
+<code>SHOW JOBS</code>. That command shows each job's name, cron expression, SQL body,
 enabled flag, and <code>last_run_unix</code> timestamp.</p>
 
 <div class="callout">
-<p><strong>Execution status.</strong> In this release the scheduler performs cron
-matching, persistence, ENABLE/DISABLE state, and <code>SHOW JOBS</code> introspection.
-When a job's cron pattern matches the current minute the scheduler stamps the
-job's <code>last_run_unix</code> field (so you can confirm a tick fired via
-<code>SHOW JOBS</code>) and logs a line to stderr. Actually running the job's SQL body
-as a side effect is deferred to a future release; do not rely on the SQL in
-<code>DO</code> being executed yet.</p>
+<p><strong>Execution status.</strong> In this release the scheduler does cron
+matching. It also handles persistence, the ENABLE and DISABLE state, and <code>SHOW JOBS</code> introspection.
+When a job's cron pattern matches the current minute, the scheduler updates the
+job's <code>last_run_unix</code> field. You can then check that a tick fired with
+<code>SHOW JOBS</code>. It also logs a line to stderr. Running the job's SQL body
+is not done yet. That part comes in a future release. Do not rely on the SQL in
+<code>DO</code> being run yet.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>IF EXISTS</dt>
 <dd>Do not raise an error if a job with the same <em>name</em> is already
-registered. When the named job exists the statement succeeds silently and the
-existing job is left unchanged; the cron expression and SQL body in the new
-statement are ignored. (Note the keyword spelling: EvolutionDB's grammar accepts
-the bare <code>IF EXISTS</code> form here, not PostgreSQL's <code>IF NOT EXISTS</code>.)</dd>
+registered. When the named job exists, the statement succeeds without a message. The
+existing job stays the same. The cron expression and SQL body in the new
+statement are ignored. Note the keyword spelling. EvolutionDB's grammar accepts
+the bare <code>IF EXISTS</code> form here. It does not use PostgreSQL's <code>IF NOT EXISTS</code> form.</dd>
 
 <dt><em>name</em></dt>
-<dd>The identifier of the job to create. Must be unique among scheduled jobs.
+<dd>The identifier of the job to create. It must be unique among scheduled jobs.
 Without <code>IF EXISTS</code>, creating a job whose name already exists raises an
-error (SQLSTATE <code>42710</code>).</dd>
+error. The SQLSTATE is <code>42710</code>.</dd>
 
 <dt>ON SCHEDULE '<em>min hour dom mon dow</em>'</dt>
 <dd>A five-field cron expression given as a quoted string. The fields are
-minute, hour, day-of-month, month, and day-of-week, separated by spaces (or
-tabs). Each field is either <code>*</code> (matches any value) or a single
-non-negative integer. Ranges (<code>1-5</code>), comma lists (<code>1,15,30</code>), and
-step values (<code>*/5</code>) are <strong>not</strong> supported.
+minute, hour, day-of-month, month, and day-of-week. Spaces or
+tabs separate the fields. Each field is either <code>*</code> or a single
+non-negative integer. The <code>*</code> matches any value. Ranges like <code>1-5</code>, comma lists like <code>1,15,30</code>, and
+step values like <code>*/5</code> are <strong>not</strong> supported.
 <br/><br/>
-Valid integer ranges per field: minute <code>0–59</code>, hour <code>0–23</code>,
-day-of-month <code>1–31</code>, month <code>1–12</code>, day-of-week <code>0–7</code> where
-both <code>0</code> and <code>7</code> denote Sunday. Matching is evaluated against UTC.
-An expression that does not parse to exactly five valid fields raises an error
-(SQLSTATE <code>22023</code>).</dd>
+Each field has a valid integer range. Minute is <code>0–59</code>. Hour is <code>0–23</code>.
+Day-of-month is <code>1–31</code>. Month is <code>1–12</code>. Day-of-week is <code>0–7</code>, where
+both <code>0</code> and <code>7</code> mean Sunday. Matching is done in UTC.
+An expression that does not parse to exactly five valid fields raises an error.
+The SQLSTATE is <code>22023</code>.</dd>
 
 <dt>DO '<em>sql_statement</em>'</dt>
-<dd>The SQL statement to associate with the job, supplied as a quoted string
-literal. It is stored verbatim in the catalog. The <code>DO</code> body must be
-non-empty.</dd>
+<dd>The SQL statement to link with the job. You give it as a quoted string
+literal. It is stored in the catalog exactly as written. The <code>DO</code> body must not be
+empty.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
@@ -107,23 +107,23 @@ non-empty.</dd>
 <span class="c-key">DROP JOB</span> <span class="opt">[ IF EXISTS ]</span> hourly_ping;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE JOB</code> is not part of the SQL standard, which has no notion of
+<p><code>CREATE JOB</code> is not part of the SQL standard. The SQL standard has no idea of
 scheduled jobs.</p>
 
-<p>It is also not a PostgreSQL command, core PostgreSQL has no built-in
-scheduler. The closest PostgreSQL analog is the third-party <code>pg_cron</code>
-extension, whose <code>cron.schedule('name', '0 3 * * *', 'SQL')</code> function call
-uses the same five-field cron convention. EvolutionDB exposes this as native DDL
-rather than a function, and its cron evaluator is intentionally minimal:</p>
+<p>It is also not a PostgreSQL command. Core PostgreSQL has no built-in
+scheduler. The closest thing in PostgreSQL is the third-party <code>pg_cron</code>
+extension. Its <code>cron.schedule('name', '0 3 * * *', 'SQL')</code> function call
+uses the same five-field cron style. EvolutionDB offers this as native DDL
+instead of a function. Its cron evaluator is kept simple on purpose. The rules are:</p>
 <ul>
-<li>Exactly five fields, each either <code>*</code> or a single integer. No ranges,
-comma lists, or step values (unlike <code>pg_cron</code> / standard crontab).</li>
-<li>Day-of-week accepts <code>0</code> and <code>7</code> for Sunday (POSIX cron convention).</li>
+<li>Exactly five fields. Each field is either <code>*</code> or a single integer. No ranges,
+comma lists, or step values. This is unlike <code>pg_cron</code> and standard crontab.</li>
+<li>Day-of-week accepts <code>0</code> and <code>7</code> for Sunday. This follows the POSIX cron style.</li>
 <li>Matching is done in UTC.</li>
-<li>The <code>IF EXISTS</code> spelling here differs from PostgreSQL's usual
+<li>The <code>IF EXISTS</code> spelling here is different from PostgreSQL's usual
 <code>IF NOT EXISTS</code> guard on <code>CREATE</code> statements.</li>
 <li>In this release the job's SQL body is matched and timestamped but not yet
-executed; see the note under <a href="#description">Description</a>.</li>
+run. See the note under <a href="#description">Description</a>.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>

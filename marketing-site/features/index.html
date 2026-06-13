@@ -272,8 +272,8 @@
  What's <span class="text-neon-cyan text-glow">In the Box?</span>
 </h1>
 <p class="font-body-lg text-body-lg text-on-surface-variant max-w-2xl mx-auto">
- EvolutionDB is a single C binary purpose-built to be long-term memory for AI agents: with in-engine memory primitives, native vectors, and time-travel queries, all behind the PostgreSQL wire protocol.
- </p>
+ EvolutionDB is a single C binary. It is built to be long-term memory for AI agents. The memory primitives, native vectors, and time-travel queries live inside the engine. You reach all of it through the PostgreSQL wire protocol.
+</p>
 </div>
 <!-- Features Bento Grid -->
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-gutter">
@@ -285,7 +285,7 @@
 <span class="material-symbols-outlined text-[28px]">psychology</span>
 </div>
 <h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-neon-cyan transition-colors">Agent-Memory Primitives</h3>
-<p class="text-on-surface-variant mb-6">First-class SQL primitives for agent long-term memory. Storing what an agent knows is a core feature of the storage engine, not a bolt-on layer or a sidecar service.</p>
+<p class="text-on-surface-variant mb-6">SQL primitives give agents long-term memory. Storing what an agent knows is a core part of the storage engine. It is not an extra layer or a side service.</p>
 <div class="grid grid-cols-2 gap-4">
 <div class="bg-surface-container-low border border-glass-border rounded p-3 font-code-sm text-code-sm text-neon-cyan hover:border-neon-cyan/40 transition-colors">
  MEMORY STORE
@@ -313,7 +313,7 @@
 <span class="material-symbols-outlined text-[28px]">polyline</span>
 </div>
 <h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-deep-indigo transition-colors">Native Vectors &amp; HNSW</h3>
-<p class="text-on-surface-variant">A built-in <code>VECTOR(N)</code> type with an HNSW index in the core, semantic and lexical hybrid search without a separate vector service.</p>
+<p class="text-on-surface-variant">The engine has a built-in <code>VECTOR(N)</code> type and an HNSW index. You can run hybrid search over meaning and words. You do not need a separate vector service.</p>
 </div>
 <div class="relative h-32 mt-6 bg-surface-container-lowest/50 rounded-lg overflow-hidden border border-glass-border">
 <div class="absolute inset-0 flex items-center justify-center font-code-sm text-code-sm text-on-surface-variant/50 cursor-blink">HYBRID SEARCH IN SQL</div>
@@ -326,7 +326,7 @@
 <span class="material-symbols-outlined text-[28px]">history</span>
 </div>
 <h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-tertiary transition-colors">Time-travel Queries</h3>
-<p class="text-on-surface-variant mb-6">An MVCC engine keeps prior versions, so you can run historical queries with <code>AS OF</code>. Ask what an agent knew at any point in the past.</p>
+<p class="text-on-surface-variant mb-6">An MVCC engine keeps older versions of your data. So you can query the past with <code>AS OF</code>. You can ask what an agent knew at any time before now.</p>
 <div class="p-4 bg-surface-container-highest rounded-lg border border-glass-border group-hover:border-tertiary/30 transition-colors">
 <pre class="font-code-sm text-code-sm text-tertiary overflow-x-auto scrollbar-hide cursor-blink">SELECT * FROM memories
 AS OF '2026-01-01';</pre>
@@ -339,7 +339,7 @@ AS OF '2026-01-01';</pre>
 <span class="material-symbols-outlined text-[28px]">hub</span>
 </div>
 <h3 class="font-headline-md text-headline-md text-pure-white mb-4 group-hover:text-neon-cyan transition-colors">One Binary, Dual Protocol</h3>
-<p class="text-on-surface-variant">A single server speaks the PostgreSQL wire protocol on port 5433 and a native EVO text protocol on port 9967. Connect with psql or DBeaver, or run the zero-Docker embedded mode.</p>
+<p class="text-on-surface-variant">One server speaks two protocols. It uses the PostgreSQL wire protocol on port 5433. It also uses a native EVO text protocol on port 9967. You can connect with psql or DBeaver. You can also run the embedded mode with no Docker.</p>
 <div class="mt-8 flex gap-3 flex-wrap">
 <span class="px-3 py-1 rounded-full bg-secondary-container/30 border border-secondary-container/50 text-secondary text-label-caps text-[10px] hover:bg-secondary-container transition-colors">PG WIRE :5433</span>
 <span class="px-3 py-1 rounded-full bg-secondary-container/30 border border-secondary-container/50 text-secondary text-label-caps text-[10px] hover:bg-secondary-container transition-colors">EVO :9967</span>
@@ -360,7 +360,7 @@ AS OF '2026-01-01';</pre>
 <div class="relative flex flex-col md:flex-row items-center gap-8">
 <div class="text-center md:text-left flex-1">
 <h3 class="font-headline-md text-headline-md text-pure-white mb-2">A Single C Binary</h3>
-<p class="text-on-surface-variant">Replace a complex side-stack with one application. Unified page storage: 4KB pages, slotted pages, B+ tree indexes, a Clock-Sweep buffer pool, and a write-ahead log with crash recovery, all in the engine.</p>
+<p class="text-on-surface-variant">One app can replace a whole stack of extra tools. The storage is unified and lives in the engine. It uses 4KB pages, slotted pages, B+ tree indexes, and a Clock-Sweep buffer pool. It also has a write-ahead log with crash recovery.</p>
 </div>
 <div class="bg-surface-container-highest p-6 rounded-lg border border-glass-border font-code-sm text-neon-cyan flex items-center gap-4 hover:border-neon-cyan/50 transition-colors group/cmd cursor-pointer">
 <span class="material-symbols-outlined group-hover/cmd:translate-x-1 transition-transform">terminal</span>
@@ -376,17 +376,17 @@ AS OF '2026-01-01';</pre>
 <div class="reveal stagger-1 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500">
 <span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">groups</span>
 <h3 class="font-headline-md text-[24px] text-pure-white mb-4">Multi-tenant Isolation</h3>
-<p class="text-on-surface-variant text-body-md">Per-tenant DATABASE, USER, and GRANT, enforced by the engine with a waterfall privilege check: table, then schema, then database.</p>
+<p class="text-on-surface-variant text-body-md">Each tenant gets its own DATABASE, USER, and GRANT. The engine checks rights step by step. It checks the table first, then the schema, then the database.</p>
 </div>
 <div class="reveal stagger-2 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500">
 <span class="material-symbols-outlined text-secondary text-4xl mb-4">lock</span>
 <h3 class="font-headline-md text-[24px] text-pure-white mb-4">Security Built In</h3>
-<p class="text-on-surface-variant text-body-md">Transparent data encryption (AES-256) for pages and PBKDF2-SHA256 password authentication, security as a storage-layer property.</p>
+<p class="text-on-surface-variant text-body-md">Pages use transparent data encryption with AES-256. Passwords use PBKDF2-SHA256. Security lives in the storage layer itself.</p>
 </div>
 <div class="reveal stagger-3 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500">
 <span class="material-symbols-outlined text-tertiary text-4xl mb-4">smart_toy</span>
 <h3 class="font-headline-md text-[24px] text-pure-white mb-4">Agent-native</h3>
-<p class="text-on-surface-variant text-body-md">Ships an MCP server and a standalone agent. Actions stay human-approved: drafts queue first, and a human approves before anything is sent.</p>
+<p class="text-on-surface-variant text-body-md">It ships an MCP server and a standalone agent. Every action waits for a human. Drafts go into a queue first. A person approves them before anything is sent.</p>
 </div>
 </div>
 </section>

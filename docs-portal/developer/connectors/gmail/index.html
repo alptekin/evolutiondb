@@ -19,22 +19,22 @@
  <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">CONNECTOR</span>
  </div>
  <h1>Gmail connector</h1>
- <p class="lede">A <code>*-sync</code> connector that pulls Gmail message <em>metadata</em>: subject, sender, recipients, snippet, labels and timestamps: into EvolutionDB long-term memory, so an AI assistant can recall "did Ahmet ever reply to that procurement thread?" weeks later.</p>
+ <p class="lede">A <code>*-sync</code> connector that pulls Gmail message <em>metadata</em> into EvolutionDB long-term memory. It saves the subject, sender, recipients, snippet, labels and timestamps. An AI assistant can then recall "did Ahmet ever reply to that procurement thread?" weeks later.</p>
 
  <h2 id="what">What it does</h2>
- <p>The package (<code>evolutiondb-gmail-sync</code>, version <code>0.1.2</code>) talks to the Gmail REST API, walks your mailbox with a Gmail search query, and writes one memory record per message into a <code>MEMORY STORE</code> via the PostgreSQL wire protocol on <code>:5433</code>. It runs as a one-shot pass or as a polling daemon.</p>
- <p>It deliberately stays in <strong>metadata mode</strong>: message <em>bodies are never fetched</em>. Each Gmail message is fetched with <code>format=metadata</code>, and the only preview kept is Gmail's pre-computed <code>snippet</code> (~150 characters). The README's rationale: subject + sender + recipient + date + snippet covers most recall use-cases without walking the multipart MIME tree.</p>
- <p>What lands in memory per message:</p>
+ <p>The package is <code>evolutiondb-gmail-sync</code>, version <code>0.1.2</code>. It talks to the Gmail REST API. It walks your mailbox with a Gmail search query. It writes one memory record per message into a <code>MEMORY STORE</code>. The write goes over the PostgreSQL wire protocol on <code>:5433</code>. It runs as a one-shot pass or as a polling daemon.</p>
+ <p>It stays in <strong>metadata mode</strong> on purpose. Message <em>bodies are never fetched</em>. Each Gmail message is fetched with <code>format=metadata</code>. The only preview kept is Gmail's pre-computed <code>snippet</code>, which is about 150 characters. The README explains why. The subject, sender, recipient, date and snippet cover most recall use-cases. There is no need to walk the multipart MIME tree.</p>
+ <p>Here is what lands in memory for each message.</p>
  <ul>
- <li><code>fact</code>, a one-line human string: <code>Email from &lt;sender&gt;: &lt;subject&gt; - &lt;snippet&gt;</code></li>
- <li><code>subject</code>, <code>from</code>, <code>to</code>, <code>cc</code>, from the corresponding headers</li>
- <li><code>snippet</code>, Gmail's preview (clipped at 1000 chars by <code>_short()</code>)</li>
- <li><code>labels</code>, label IDs resolved to names against <code>users/me/labels</code></li>
- <li><code>message_id</code>, <code>thread_id</code>, <code>rfc_message_id</code>, Gmail ids plus the RFC <code>Message-ID</code> header</li>
- <li><code>internal_date_ms</code> and <code>sent_at</code>: server-side receipt time (unix millis, plus an ISO-8601 rendering)</li>
+ <li><code>fact</code> is a one-line human string. The format is <code>Email from &lt;sender&gt;: &lt;subject&gt; - &lt;snippet&gt;</code></li>
+ <li><code>subject</code>, <code>from</code>, <code>to</code>, <code>cc</code>, taken from the matching headers</li>
+ <li><code>snippet</code> is Gmail's preview. It is clipped at 1000 chars by <code>_short()</code></li>
+ <li><code>labels</code> are label IDs resolved to names against <code>users/me/labels</code></li>
+ <li><code>message_id</code>, <code>thread_id</code>, <code>rfc_message_id</code> are the Gmail ids plus the RFC <code>Message-ID</code> header</li>
+ <li><code>internal_date_ms</code> and <code>sent_at</code> hold the server-side receipt time. One is unix millis. The other is an ISO-8601 rendering.</li>
  <li><code>source</code>=<code>"gmail"</code>, <code>kind</code>=<code>"email"</code>, and <code>tags</code> = <code>["gmail", "email", &lt;labels…&gt;]</code></li>
  </ul>
- <p>Each record is keyed by the Gmail message id as <code>gmail_msg_&lt;id&gt;</code>, so a re-sync UPSERTs rather than duplicates. A separate watermark record (<code>gmail_state_latest</code>) tracks the highest <code>internalDate</code> seen, so the next pass only asks Gmail for newer mail.</p>
+ <p>Each record is keyed by the Gmail message id as <code>gmail_msg_&lt;id&gt;</code>. So a re-sync UPSERTs the record instead of making a duplicate. A separate watermark record <code>gmail_state_latest</code> tracks the highest <code>internalDate</code> seen. So the next pass only asks Gmail for newer mail.</p>
 
  <h2 id="install">Install</h2>
  <pre><code><span class="c-com"># from PyPI</span>
@@ -42,19 +42,19 @@
 
 <span class="c-com"># or editable, from the monorepo</span>
 <span class="c-key">pip install</span> -e client/gmail-sync</code></pre>
- <p>Requires Python <code>&gt;=3.9</code>. Runtime dependencies are <code>psycopg[binary]&gt;=3.1</code> (the EvolutionDB / PostgreSQL wire client) and <code>evolutiondb-pii&gt;=0.1.1</code>. The PII package is used opportunistically, see <a href="#notes">Notes &amp; limitations</a>. Installing exposes one console script, <code>evolutiondb-gmail-sync</code> (entry point <code>gmail_sync.__main__:main</code>).</p>
+ <p>It requires Python <code>&gt;=3.9</code>. There are two runtime dependencies. One is <code>psycopg[binary]&gt;=3.1</code>, the EvolutionDB and PostgreSQL wire client. The other is <code>evolutiondb-pii&gt;=0.1.1</code>. The PII package is used only when it is available. See <a href="#notes">Notes &amp; limitations</a>. Installing adds one console script named <code>evolutiondb-gmail-sync</code>. Its entry point is <code>gmail_sync.__main__:main</code>.</p>
 
  <h2 id="configure">Configure</h2>
- <p>Configuration is read from environment variables. The CLI also auto-loads a dotenv file (<code>.env</code> by default, override with <code>--env-file</code>); existing environment variables win over file values (<code>os.environ.setdefault</code>). A starter <code>.env.example</code> ships with the package.</p>
+ <p>Configuration is read from environment variables. The CLI also auto-loads a dotenv file. The default file is <code>.env</code>. You can override it with <code>--env-file</code>. Existing environment variables win over file values. This is done with <code>os.environ.setdefault</code>. A starter <code>.env.example</code> ships with the package.</p>
 
  <h3 id="oauth">Google OAuth</h3>
- <p>The Gmail API does not accept simple bearer tokens: you supply an OAuth client from your own Google Cloud project (enable the Gmail API, create an <strong>OAuth client ID</strong> of type <em>Desktop app</em>), then set:</p>
+ <p>The Gmail API does not accept simple bearer tokens. You must supply an OAuth client from your own Google Cloud project. First enable the Gmail API. Then create an <strong>OAuth client ID</strong> of type <em>Desktop app</em>. Then set these values.</p>
  <pre><code>GOOGLE_CLIENT_ID=xxxxxxxxxx.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxx
 
 <span class="c-com"># refresh-token cache; written 0600 on POSIX</span>
 GMAIL_TOKEN_CACHE=~/.evosql/gmail_token.json</code></pre>
- <p>By default the connector requests only the <code>gmail.readonly</code> scope: it cannot send mail, mark messages, or modify labels. Sending is <strong>opt-in</strong>: setting <code>EVOSQL_GMAIL_SEND</code> to one of <code>1</code>/<code>true</code>/<code>yes</code>/<code>on</code> adds the <code>gmail.send</code> scope at consent time (used by the outbox action loop's approve-send per ADR-004). The default is read-only.</p>
+ <p>By default the connector requests only the <code>gmail.readonly</code> scope. So it cannot send mail, mark messages, or modify labels. Sending is <strong>opt-in</strong>. Set <code>EVOSQL_GMAIL_SEND</code> to one of <code>1</code>/<code>true</code>/<code>yes</code>/<code>on</code> to add the <code>gmail.send</code> scope at consent time. The outbox action loop uses this for its approve-send step, per ADR-004. The default is read-only.</p>
 
  <h3 id="db-env">EvolutionDB &amp; correlation</h3>
  <table>
@@ -65,18 +65,18 @@ GMAIL_TOKEN_CACHE=~/.evosql/gmail_token.json</code></pre>
  <tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>DB user</td></tr>
  <tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>DB password</td></tr>
  <tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>Database name</td></tr>
- <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace (correlates with the <a href="/platform/mcp-server/">MCP server</a>)</td></tr>
+ <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace. It correlates with the <a href="/platform/mcp-server/">MCP server</a>.</td></tr>
  <tr><td><code>GMAIL_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>Target <code>MEMORY STORE</code> name</td></tr>
  <tr><td><code>GMAIL_POLL_INTERVAL</code></td><td><code>900</code></td><td>Daemon poll interval, seconds</td></tr>
  </tbody>
  </table>
 
  <h3 id="auth-flow">First-time auth</h3>
- <p>The first run opens a browser tab for Google's consent screen. The package spins up a one-shot HTTP listener on a random <code>127.0.0.1</code> port (the OAuth loopback redirect for installed apps), validates the <code>state</code> parameter against CSRF, exchanges the auth code for a refresh token, and stores the result at <code>$GMAIL_TOKEN_CACHE</code> (mode 0600 on POSIX). Subsequent runs are silent, the refresh token mints fresh access tokens on demand.</p>
+ <p>The first run opens a browser tab for Google's consent screen. The package starts a one-shot HTTP listener on a random <code>127.0.0.1</code> port. This is the OAuth loopback redirect for installed apps. It validates the <code>state</code> parameter against CSRF. It exchanges the auth code for a refresh token. Then it stores the result at <code>$GMAIL_TOKEN_CACHE</code>. The file mode is 0600 on POSIX. Later runs are silent. The refresh token mints fresh access tokens when needed.</p>
  <pre><code>evolutiondb-gmail-sync --auth</code></pre>
 
  <h2 id="usage">Usage</h2>
- <p>The CLI accepts these flags (from <code>gmail_sync/sync.py</code>): <code>--auth</code>, <code>--once</code>, <code>--interval SECONDS</code>, <code>--since</code> (default <code>7d</code>), <code>--query STR</code>, <code>--dry-run</code>, and <code>--env-file</code> (default <code>.env</code>).</p>
+ <p>The CLI accepts these flags. They come from <code>gmail_sync/sync.py</code>. The flags are <code>--auth</code>, <code>--once</code>, <code>--interval SECONDS</code>, <code>--since</code> with a default of <code>7d</code>, <code>--query STR</code>, <code>--dry-run</code>, and <code>--env-file</code> with a default of <code>.env</code>.</p>
  <pre><code><span class="c-com"># One pass; first-time bootstrap pulls the last 7 days.</span>
 evolutiondb-gmail-sync --once --since 7d
 
@@ -89,11 +89,11 @@ evolutiondb-gmail-sync --once --since 30d \
 
 <span class="c-com"># Verify auth + fetch without writing anything to the database.</span>
 evolutiondb-gmail-sync --once --dry-run</code></pre>
- <p><code>--since</code> takes a compact duration like <code>1h</code>, <code>7d</code>, <code>2w</code> (units <code>s/m/h/d/w</code>); it is only used as the first-run floor when the store has no watermark yet. Once a watermark exists, the pass derives <code>after:&lt;epoch&gt;</code> from it. If neither yields a floor, the query falls back to <code>newer_than:30d</code>.</p>
- <p>Each pass prints a one-line JSON summary on stdout:</p>
+ <p><code>--since</code> takes a compact duration like <code>1h</code>, <code>7d</code>, <code>2w</code>. The units are <code>s/m/h/d/w</code>. It is only used as the first-run floor when the store has no watermark yet. Once a watermark exists, the pass derives <code>after:&lt;epoch&gt;</code> from it. If neither one gives a floor, the query falls back to <code>newer_than:30d</code>.</p>
+ <p>Each pass prints a one-line JSON summary on stdout.</p>
  <pre><code>{<span class="c-str">"ok"</span>: true, <span class="c-str">"messages"</span>: 42, <span class="c-str">"skipped"</span>: 8, <span class="c-str">"errors"</span>: 0}</code></pre>
- <p>On auth failure the summary is <code>{"ok": false, "error": "…", "hint": "run with --auth"}</code> (exit 3); any other failure prints <code>{"ok": false, "error": "…"}</code> (exit 4). In daemon mode, <code>SIGTERM</code>/<code>SIGINT</code> requests a graceful stop after the current pass finishes.</p>
- <p>You can also drive the engine programmatically:</p>
+ <p>On auth failure the summary is <code>{"ok": false, "error": "…", "hint": "run with --auth"}</code> and the exit code is 3. Any other failure prints <code>{"ok": false, "error": "…"}</code> and the exit code is 4. In daemon mode, <code>SIGTERM</code>/<code>SIGINT</code> asks for a graceful stop after the current pass finishes.</p>
+ <p>You can also drive the engine from your own code.</p>
  <pre><code><span class="c-key">from</span> gmail_sync.sync <span class="c-key">import</span> Config, sync_once
 
 cfg = Config()  <span class="c-com"># reads env vars described above</span>
@@ -103,60 +103,60 @@ counts = sync_once(cfg, since_seconds=<span class="c-str">None</span>,
 <span class="c-key">print</span>(counts)  <span class="c-com"># {"messages": .., "skipped": .., "errors": ..}</span></code></pre>
 
  <h2 id="reference">Reference</h2>
- <p>The package is four modules under <code>gmail_sync/</code>: <code>sync.py</code> (orchestration + CLI), <code>auth.py</code> (OAuth), <code>api.py</code> (Gmail REST client), and <code>state.py</code> (memory backend).</p>
+ <p>The package has four modules under <code>gmail_sync/</code>. <code>sync.py</code> handles orchestration and the CLI. <code>auth.py</code> handles OAuth. <code>api.py</code> is the Gmail REST client. <code>state.py</code> is the memory backend.</p>
 
  <h3 id="ref-sync">gmail_sync.sync</h3>
  <div class="sig">def main(argv: list | None = None) -&gt; int</div>
- <p>CLI entry point (the console script). Parses arguments, loads the dotenv file, builds a <code>Config</code>, and runs either the <code>--auth</code> flow, a single pass, or the daemon loop. Returns a process exit code.</p>
+ <p>The CLI entry point. This is the console script. It parses arguments, loads the dotenv file, and builds a <code>Config</code>. Then it runs the <code>--auth</code> flow, a single pass, or the daemon loop. It returns a process exit code.</p>
  <div class="sig">def sync_once(cfg: Config, *, since_seconds: int | None, extra_query: str = "", dry_run: bool = False) -&gt; dict</div>
- <p>Runs one sync pass. Authenticates non-interactively (assumes <code>--auth</code> ran already), resolves labels, builds the Gmail query from the stored watermark or <code>since_seconds</code>, then iterates messages: skipping those already stored, fetching metadata, building a record, and writing it. Returns a counter dict <code>{"messages", "skipped", "errors"}</code>.</p>
+ <p>Runs one sync pass. It authenticates without a prompt and assumes <code>--auth</code> already ran. It resolves labels. It builds the Gmail query from the stored watermark or from <code>since_seconds</code>. Then it goes through the messages one by one. It skips ones that are already stored. For the rest it fetches metadata, builds a record, and writes it. It returns a counter dict <code>{"messages", "skipped", "errors"}</code>.</p>
  <div class="sig">class Config</div>
- <p>Snapshot of all configuration read from environment variables (Google client id/secret, token cache path, EvolutionDB connection, <code>MCP_USER_ID</code> namespace, store name, poll interval).</p>
+ <p>A snapshot of all configuration read from environment variables. This covers the Google client id and secret, the token cache path, the EvolutionDB connection, the <code>MCP_USER_ID</code> namespace, the store name, and the poll interval.</p>
  <div class="sig">def parse_since(text: str) -&gt; int</div>
- <p>Parses a compact duration (<code>"7d"</code>, <code>"1h"</code>, …) into a unix-seconds floor suitable for Gmail's <code>after:</code> operator. Raises <code>ValueError</code> on malformed input.</p>
+ <p>Parses a compact duration like <code>"7d"</code> or <code>"1h"</code> into a unix-seconds floor. The floor suits Gmail's <code>after:</code> operator. It raises <code>ValueError</code> on bad input.</p>
 
  <h3 id="ref-auth">gmail_sync.auth</h3>
  <div class="sig">class GmailAuth(client_id: str, client_secret: str, cache_path: str)</div>
- <p>Implements the Google OAuth 2.0 loopback-redirect flow for an installed app, using only the standard library (urllib + <code>http.server</code>). Raises <code>AuthError</code> if client id/secret are missing.</p>
+ <p>Runs the Google OAuth 2.0 loopback-redirect flow for an installed app. It uses only the standard library, namely urllib and <code>http.server</code>. It raises <code>AuthError</code> if the client id or secret is missing.</p>
  <div class="sig">def GmailAuth.ensure_token(interactive: bool = False) -&gt; str</div>
- <p>Returns a valid access token. Uses the cached access token if still valid (&gt;60s of life), otherwise refreshes via the stored refresh token. When <code>interactive=True</code> and no token works, runs the browser consent flow; when <code>interactive=False</code> it raises <code>AuthError</code> telling you to run <code>--auth</code>.</p>
+ <p>Returns a valid access token. It uses the cached access token if it still has more than 60s of life. Otherwise it refreshes the token with the stored refresh token. When <code>interactive=True</code> and no token works, it runs the browser consent flow. When <code>interactive=False</code> it raises <code>AuthError</code> and tells you to run <code>--auth</code>.</p>
  <div class="sig">class AuthError(Exception)</div>
- <p>Raised for any OAuth problem, missing credentials, token-endpoint errors, <code>state</code> mismatch, timeout waiting for the redirect, or a missing <code>refresh_token</code> in Google's response.</p>
+ <p>Raised for any OAuth problem. This includes missing credentials, token-endpoint errors, a <code>state</code> mismatch, a timeout waiting for the redirect, or a missing <code>refresh_token</code> in Google's response.</p>
 
  <h3 id="ref-api">gmail_sync.api</h3>
  <div class="sig">class GmailClient(token_provider: Callable[[], str], user_agent: str = "evolutiondb-gmail-sync")</div>
- <p>Thin Gmail REST client against <code>https://gmail.googleapis.com/gmail/v1</code>, built on urllib. The <code>token_provider</code> callable supplies a bearer token per request (so token refresh is transparent). It retries transient transport errors with exponential backoff <code>(1,2,4,8,16)</code>, retries once on <code>401</code> (token re-mint) and once on <code>429</code> honoring <code>Retry-After</code>.</p>
+ <p>A small Gmail REST client for <code>https://gmail.googleapis.com/gmail/v1</code>. It is built on urllib. The <code>token_provider</code> callable supplies a bearer token for each request. So token refresh is transparent. It retries transient transport errors with exponential backoff <code>(1,2,4,8,16)</code>. It retries once on <code>401</code> to re-mint the token. It retries once on <code>429</code> and honors <code>Retry-After</code>.</p>
  <div class="sig">def GmailClient.list_messages(q: str, max_results: int = 100) -&gt; Iterator[dict]</div>
- <p>Yields message stubs (<code>{id, threadId}</code>) for a Gmail search query, transparently following <code>nextPageToken</code> pagination. <code>q</code> is ordinary Gmail search syntax, the same thing you type in the web UI.</p>
+ <p>Yields message stubs of the form <code>{id, threadId}</code> for a Gmail search query. It follows <code>nextPageToken</code> pagination on its own. <code>q</code> is ordinary Gmail search syntax. It is the same thing you type in the web UI.</p>
  <div class="sig">def GmailClient.get_message_metadata(msg_id: str) -&gt; dict</div>
- <p>Fetches one message with <code>format=metadata</code>, requesting only the <code>From</code>, <code>To</code>, <code>Cc</code>, <code>Subject</code>, <code>Date</code> and <code>Message-ID</code> headers. (To capture bodies instead, the source suggests switching to <code>format=full</code> and adding a MIME body walker.)</p>
+ <p>Fetches one message with <code>format=metadata</code>. It requests only the <code>From</code>, <code>To</code>, <code>Cc</code>, <code>Subject</code>, <code>Date</code> and <code>Message-ID</code> headers. To capture bodies instead, the source suggests switching to <code>format=full</code> and adding a MIME body walker.</p>
  <div class="sig">def GmailClient.list_labels() -&gt; list[dict]</div>
- <p>Returns the mailbox's labels from <code>users/me/labels</code>, used to resolve label IDs to display names.</p>
+ <p>Returns the mailbox's labels from <code>users/me/labels</code>. It is used to resolve label IDs to display names.</p>
  <div class="sig">def headers_to_dict(headers: list[dict]) -&gt; dict[str, str]</div>
- <p>Flattens Gmail's <code>payload.headers</code> array into a dict, keeping only the headers in <code>KEEP_HEADERS</code> and comma-joining repeated values (e.g. multiple <code>Cc</code> lines).</p>
+ <p>Flattens Gmail's <code>payload.headers</code> array into a dict. It keeps only the headers in <code>KEEP_HEADERS</code>. It comma-joins repeated values, such as multiple <code>Cc</code> lines.</p>
  <div class="sig">class GmailError(status: int, msg: str, url: str)</div>
- <p>Raised for non-transient HTTP responses from Gmail; carries the HTTP <code>status</code>.</p>
+ <p>Raised for non-transient HTTP responses from Gmail. It carries the HTTP <code>status</code>.</p>
 
  <h3 id="ref-state">gmail_sync.state</h3>
  <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
- <p>The EvolutionDB memory backend. Connects with psycopg (autocommit), issues <code>CREATE MEMORY STORE</code> if needed, and auto-reconnects (3 attempts, growing backoff) on dropped connections.</p>
+ <p>The EvolutionDB memory backend. It connects with psycopg in autocommit mode. It issues <code>CREATE MEMORY STORE</code> if needed. It auto-reconnects on dropped connections. It tries 3 times with growing backoff.</p>
  <div class="sig">def MemoryStore.put_record(key: str, record: dict) -&gt; None</div>
- <p>UPSERTs one JSON record into the store under <code>(namespace, key)</code> via <code>MEMORY PUT INTO &lt;store&gt;</code>.</p>
+ <p>UPSERTs one JSON record into the store under <code>(namespace, key)</code>. It uses <code>MEMORY PUT INTO &lt;store&gt;</code>.</p>
  <div class="sig">def MemoryStore.has_message(msg_id: str) -&gt; bool</div>
- <p>Returns whether <code>gmail_msg_&lt;msg_id&gt;</code> already exists in the namespace, the de-dup check that powers the <code>skipped</code> counter.</p>
+ <p>Returns whether <code>gmail_msg_&lt;msg_id&gt;</code> already exists in the namespace. This is the de-dup check that powers the <code>skipped</code> counter.</p>
  <div class="sig">def MemoryStore.get_watermark_ms() -&gt; int | None / set_watermark_ms(internal_date_ms: int) -&gt; None</div>
- <p>Read/write the incremental sync watermark (the highest <code>internalDate</code> in millis), stored as the special <code>gmail_state_latest</code> record.</p>
+ <p>Read and write the incremental sync watermark. The watermark is the highest <code>internalDate</code> in millis. It is stored as the special <code>gmail_state_latest</code> record.</p>
 
  <h2 id="notes">Notes &amp; limitations</h2>
  <ul>
- <li><strong>Metadata only.</strong> Message bodies and attachments are never fetched. The README and <code>api.py</code> document how to extend to full bodies (<code>format=full</code> + a MIME walker) if you need them, that code does not exist in the package today.</li>
- <li><strong>Read-only by default.</strong> Only <code>gmail.readonly</code> is requested unless you explicitly set <code>EVOSQL_GMAIL_SEND</code>, which adds <code>gmail.send</code> for the outbox action loop (ADR-004).</li>
- <li><strong>Optional PII masking.</strong> If <code>evolutiondb-pii</code> is importable, the fields <code>fact</code>, <code>subject</code>, <code>from</code>, <code>to</code>, <code>cc</code>, <code>snippet</code> and <code>rfc_message_id</code> are run through <code>protect_record</code> before storage, emitting companion records. Without it, records are stored as-is (transparent passthrough). See the <a href="/platform/pii/">PII guard</a>.</li>
- <li><strong>Version note.</strong> <code>pyproject.toml</code> declares <code>0.1.2</code> while <code>gmail_sync/__init__.__version__</code> still reads <code>0.1.0</code>; treat the pyproject value as authoritative.</li>
- <li><strong>Rate limits.</strong> Per the README, Gmail's per-user quota is 250 units/second and a metadata fetch costs 5 units; the client retries once on <code>429</code> using <code>Retry-After</code>.</li>
- <li><strong>Privacy.</strong> Everything read with this token becomes searchable by anyone with the matching <code>MCP_USER_ID</code>. Use a dedicated Google account for noisy or work-confidential mail rather than your primary inbox.</li>
+ <li><strong>Metadata only.</strong> Message bodies and attachments are never fetched. The README and <code>api.py</code> document how to extend it to full bodies with <code>format=full</code> and a MIME walker. That code does not exist in the package today.</li>
+ <li><strong>Read-only by default.</strong> Only <code>gmail.readonly</code> is requested. To add <code>gmail.send</code> you must set <code>EVOSQL_GMAIL_SEND</code> yourself. That scope is for the outbox action loop in ADR-004.</li>
+ <li><strong>Optional PII masking.</strong> If <code>evolutiondb-pii</code> can be imported, some fields are run through <code>protect_record</code> before storage. The fields are <code>fact</code>, <code>subject</code>, <code>from</code>, <code>to</code>, <code>cc</code>, <code>snippet</code> and <code>rfc_message_id</code>. This emits companion records. Without the package, records are stored as-is. See the <a href="/platform/pii/">PII guard</a>.</li>
+ <li><strong>Version note.</strong> <code>pyproject.toml</code> declares <code>0.1.2</code>. But <code>gmail_sync/__init__.__version__</code> still reads <code>0.1.0</code>. Treat the pyproject value as the correct one.</li>
+ <li><strong>Rate limits.</strong> Per the README, Gmail's per-user quota is 250 units/second. A metadata fetch costs 5 units. The client retries once on <code>429</code> using <code>Retry-After</code>.</li>
+ <li><strong>Privacy.</strong> Everything read with this token becomes searchable by anyone with the matching <code>MCP_USER_ID</code>. Use a dedicated Google account for noisy or work-confidential mail. Do not use your primary inbox.</li>
  </ul>
- <p>See also: the <a href="/platform/mcp-server/">MCP server</a> that surfaces these records to an assistant, and the wider <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a>.</p>
+ <p>See also the <a href="/platform/mcp-server/">MCP server</a> that surfaces these records to an assistant. See also the wider <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a>.</p>
 </main></div>
 <script src="/nav-data.js"></script>
 <script src="/nav.js"></script>

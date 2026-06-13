@@ -15,74 +15,74 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
  <h1>evolution-agent</h1>
- <p class="lede">A standalone agent loop over EvolutionDB's MCP tools: it drives the model itself (plan → act → observe → repeat) so it runs without a host like Claude Desktop, while every tool call still flows through the <a href="/platform/mcp-server/">MCP server</a> and the human-approved send invariant stays intact.</p>
+ <p class="lede">A standalone agent loop over EvolutionDB's MCP tools. It drives the model itself in a plan → act → observe → repeat cycle. So it runs without a host like Claude Desktop. Every tool call still flows through the <a href="/platform/mcp-server/">MCP server</a>. The human-approved send rule stays intact.</p>
 
  <h2 id="what">What it does</h2>
- <p><a href="/platform/mcp-server/">mcp-server-evolutiondb</a> is an MCP <em>server</em>: it executes tools that a host model (Claude Desktop / Claude Code) decides to call, it has no will of its own. <code>evolution-agent</code> adds that missing will. It calls a model directly, lets it choose tools, executes them, feeds the results back, and repeats until the model is done.</p>
- <p>"Standalone" means <strong>host-independent, not model-independent</strong>. The reasoning still comes from an LLM (Anthropic by default; any provider exposing a compatible <code>messages.create(...)</code> client can be injected). What changes is that <em>this</em> process owns the loop instead of Claude Desktop.</p>
- <p>Every tool call goes through the MCP server's own <code>_call_tool</code>, so RBAC, the append-only audit log, the PII gate, multi-tenant isolation, and the embedded EvolutionDB all come for free, none of it is re-implemented in this package.</p>
+ <p><a href="/platform/mcp-server/">mcp-server-evolutiondb</a> is an MCP <em>server</em>. It runs tools that a host model decides to call. The host model is Claude Desktop or Claude Code. The server has no will of its own. <code>evolution-agent</code> adds that missing will. It calls a model directly. It lets the model choose tools. It runs them. It feeds the results back. It repeats until the model is done.</p>
+ <p>"Standalone" means <strong>host-independent, not model-independent</strong>. The reasoning still comes from an LLM. Anthropic is the default. You can inject any provider that exposes a compatible <code>messages.create(...)</code> client. The change is that <em>this</em> process owns the loop instead of Claude Desktop.</p>
+ <p>Every tool call goes through the MCP server's own <code>_call_tool</code>. So you get RBAC, the append-only audit log, the PII gate, multi-tenant isolation, and the embedded EvolutionDB for free. This package does not re-implement any of it.</p>
 
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><strong>The send invariant (ADR-004) is intact.</strong> Nothing is ever delivered to the outside world by the agent. It may <em>draft</em> and <em>queue</em> a reply (<code>queue_reply</code>), but a human approves it (<code>approve_send</code>), and delivery stays dry-run unless the operator explicitly opted in. The system prompt states this rule to the model, and the underlying outbox enforces it structurally.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><strong>The send rule (ADR-004) is intact.</strong> The agent never delivers anything to the outside world. It may <em>draft</em> and <em>queue</em> a reply with <code>queue_reply</code>. Then a human approves it with <code>approve_send</code>. Delivery stays dry-run unless the operator turns it on. The system prompt states this rule to the model. The outbox enforces the rule in code.</div></div>
 
- <div class="callout callout-warn"><span class="material-symbols-outlined">construction</span><div><strong>Status: Phase 0 / Alpha (v0.1.0).</strong> The shipped surface is the agent-loop core, the MCP→Anthropic tool bridge, the system prompt, a CLI, and a dependency-free browser chat. AWS hosting and later UI work are future phases. Part of the <a href="https://github.com/alptekin/evolutiondb">EvolutionDB monorepo</a>.</div></div>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">construction</span><div><strong>Status: Phase 0 / Alpha (v0.1.0).</strong> This release ships the agent-loop core, the MCP→Anthropic tool bridge, the system prompt, a CLI, and a dependency-free browser chat. AWS hosting and later UI work come in future phases. It is part of the <a href="https://github.com/alptekin/evolutiondb">EvolutionDB monorepo</a>.</div></div>
 
  <h2 id="install">Install</h2>
- <p>The distribution name on PyPI is <code>evolutiondb-agent</code>; the importable package is <code>evolution_agent</code>. It depends on <code>mcp-server-evolutiondb&gt;=1.16.0</code>. The default model runs through the Anthropic SDK, which is an optional extra.</p>
+ <p>The distribution name on PyPI is <code>evolutiondb-agent</code>. The importable package is <code>evolution_agent</code>. It depends on <code>mcp-server-evolutiondb&gt;=1.16.0</code>. The default model runs through the Anthropic SDK. The SDK is an optional extra.</p>
  <pre><code><span class="c-com"># the package + the Anthropic SDK extra</span>
 <span class="c-key">pip install</span> evolutiondb-agent[anthropic]
 <span class="c-key">export</span> ANTHROPIC_API_KEY=sk-...</code></pre>
  <p>Two console scripts are installed:</p>
  <ul>
- <li><code>evolution-agent</code> → <code>evolution_agent.__main__:main</code> (the terminal loop)</li>
- <li><code>evolution-agent-web</code> → <code>evolution_agent.web:main</code> (the browser chat)</li>
+ <li><code>evolution-agent</code> → <code>evolution_agent.__main__:main</code> is the terminal loop</li>
+ <li><code>evolution-agent-web</code> → <code>evolution_agent.web:main</code> is the browser chat</li>
  </ul>
- <p>Requires Python 3.9+. License is MIT.</p>
+ <p>It needs Python 3.9 or newer. The license is MIT.</p>
 
  <h2 id="configure">Configure (env vars / auth)</h2>
- <p>The agent connects to EvolutionDB exactly the way the MCP server does: either over the PostgreSQL wire to a running instance, or by spawning a local zero-Docker instance with <code>EVOSQL_EMBEDDED=1</code>.</p>
+ <p>The agent connects to EvolutionDB the same way the MCP server does. It can use the PostgreSQL wire to reach a running instance. Or it can start a local zero-Docker instance with <code>EVOSQL_EMBEDDED=1</code>.</p>
  <table>
  <thead><tr><th>Env var</th><th>Default</th><th>Purpose</th></tr></thead>
  <tbody>
  <tr><td><code>ANTHROPIC_API_KEY</code></td><td>, </td><td>Required for the default Anthropic model.</td></tr>
  <tr><td><code>EVOSQL_AGENT_MODEL</code></td><td><code>claude-opus-4-8</code></td><td>Model id. README suggests <code>claude-sonnet-4-6</code> for lower cost.</td></tr>
- <tr><td><code>EVOSQL_AGENT_TOKEN_BUDGET</code></td><td><code>60000</code> (web)</td><td>Hard ceiling on cumulative input+output tokens per chat; <code>0</code> = unlimited (not advised when exposed). Read by the web server only.</td></tr>
- <tr><td><code>EVOSQL_EMBEDDED</code></td><td>, </td><td><code>1</code> → spawn a local EvolutionDB (zero-Docker).</td></tr>
- <tr><td><code>EVOSQL_HOST</code> / <code>EVOSQL_PORT</code></td><td><code>127.0.0.1</code> / <code>5433</code></td><td>EvolutionDB connection (PG wire).</td></tr>
+ <tr><td><code>EVOSQL_AGENT_TOKEN_BUDGET</code></td><td><code>60000</code> (web)</td><td>Hard ceiling on total input plus output tokens per chat. Set <code>0</code> for unlimited. Unlimited is not safe when the chat is exposed. Only the web server reads this.</td></tr>
+ <tr><td><code>EVOSQL_EMBEDDED</code></td><td>, </td><td>Set <code>1</code> to start a local zero-Docker EvolutionDB.</td></tr>
+ <tr><td><code>EVOSQL_HOST</code> / <code>EVOSQL_PORT</code></td><td><code>127.0.0.1</code> / <code>5433</code></td><td>EvolutionDB connection over the PG wire.</td></tr>
  <tr><td><code>EVOSQL_USER</code> / <code>EVOSQL_PASSWORD</code></td><td><code>admin</code> / <code>admin</code></td><td>EvolutionDB credentials.</td></tr>
- <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace / identity.</td></tr>
+ <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace and identity.</td></tr>
  <tr><td><code>EVOSQL_WEB_HOST</code></td><td><code>127.0.0.1</code></td><td>Bind host for <code>evolution-agent-web</code>.</td></tr>
  <tr><td><code>EVOSQL_WEB_PORT</code></td><td><code>8800</code></td><td>Listen port for <code>evolution-agent-web</code>.</td></tr>
  </tbody>
  </table>
- <div class="callout callout-note"><span class="material-symbols-outlined">key</span><div>The EvolutionDB connection variables (<code>EVOSQL_*</code>) and <code>MCP_USER_ID</code> are interpreted by <code>mcp-server-evolutiondb</code>, not by this package, <code>evolution-agent</code> simply constructs <code>MCPServer()</code> and lets it read the environment.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">key</span><div><code>mcp-server-evolutiondb</code> reads the EvolutionDB connection variables and <code>MCP_USER_ID</code>. This package does not read them. <code>evolution-agent</code> just builds <code>MCPServer()</code> and lets the server read the environment.</div></div>
 
  <h2 id="usage">Usage</h2>
 
  <h3>Terminal</h3>
- <p>Pass the request as arguments or pipe it on stdin. Tool calls stream to stderr; the final answer goes to stdout.</p>
+ <p>Pass the request as arguments. Or pipe it on stdin. Tool calls stream to stderr. The final answer goes to stdout.</p>
  <pre><code>evolution-agent <span class="c-str">"what meetings do I have today and who owes me a reply?"</span>
 <span class="c-key">echo</span> <span class="c-str">"summarize my open loops"</span> | evolution-agent
 evolution-agent -v <span class="c-str">"draft a reply to Alice about the Q3 report"</span>   <span class="c-com"># show tool I/O</span></code></pre>
- <p>The CLI accepts these flags (parsed by hand in <code>__main__.py</code>; everything else is treated as prompt text):</p>
+ <p>The CLI accepts these flags. They are parsed by hand in <code>__main__.py</code>. Everything else is treated as prompt text.</p>
  <table>
  <thead><tr><th>Flag</th><th>Effect</th></tr></thead>
  <tbody>
- <tr><td><code>--model &lt;id&gt;</code></td><td>Override the model for this run (otherwise <code>EVOSQL_AGENT_MODEL</code> / the default).</td></tr>
+ <tr><td><code>--model &lt;id&gt;</code></td><td>Set the model for this run. Without it, the agent uses <code>EVOSQL_AGENT_MODEL</code> or the default.</td></tr>
  <tr><td><code>--max-turns &lt;n&gt;</code></td><td>Cap the plan→act→observe iterations. Default <code>12</code>.</td></tr>
  <tr><td><code>-v</code>, <code>--verbose</code></td><td>Also stream each tool's <em>result</em> to stderr, not just the call.</td></tr>
- <tr><td><code>--once</code></td><td>Single prompt then exit. This is the default mode; the flag is accepted for clarity.</td></tr>
+ <tr><td><code>--once</code></td><td>Run one prompt, then exit. This is the default mode. The flag is accepted to make it clear.</td></tr>
  <tr><td><code>-h</code>, <code>--help</code></td><td>Print the module docstring and exit.</td></tr>
  </tbody>
  </table>
- <p>Exit codes: <code>0</code> on success, <code>2</code> when no prompt was supplied, <code>1</code> when <code>mcp_server_evosql</code> or the Anthropic SDK is missing, or on any agent error. If the loop hits <code>--max-turns</code> without a final answer, a note is written to stderr.</p>
+ <p>Here are the exit codes. <code>0</code> means success. <code>2</code> means no prompt was given. <code>1</code> means <code>mcp_server_evosql</code> or the Anthropic SDK is missing, or the agent hit an error. If the loop reaches <code>--max-turns</code> without a final answer, it writes a note to stderr.</p>
 
  <h3>Browser chat</h3>
  <pre><code>evolution-agent-web                       <span class="c-com"># http://127.0.0.1:8800</span>
 EVOSQL_EMBEDDED=1 evolution-agent-web</code></pre>
- <p>A dependency-free single-page chat (stdlib <code>http.server</code> + Server-Sent Events, no web framework). The agent's tool timeline streams live, and a "pending approvals" panel surfaces every draft the agent queued, clicking <em>Approve</em> calls <code>approve_send</code>, which stays dry-run unless the operator enabled real delivery. It needs the <code>anthropic</code> SDK + <code>ANTHROPIC_API_KEY</code>; without them the chat endpoint returns a clear, streamed error. The HTTP routes are: <code>GET /</code> (the UI), <code>GET /api/chat?q=…</code> (SSE stream of the run), <code>GET /api/pending</code> (queued drafts via <code>list_pending_replies</code>), and <code>POST /api/approve</code> with a JSON <code>{"id": …}</code> body (calls <code>approve_send</code>).</p>
+ <p>This is a dependency-free single-page chat. It uses the stdlib <code>http.server</code> and Server-Sent Events. There is no web framework. The agent's tool timeline streams live. A "pending approvals" panel shows every draft the agent queued. Clicking <em>Approve</em> calls <code>approve_send</code>. That stays dry-run unless the operator turned on real delivery. The chat needs the <code>anthropic</code> SDK and <code>ANTHROPIC_API_KEY</code>. Without them, the chat endpoint returns a clear, streamed error. There are four HTTP routes. <code>GET /</code> serves the UI. <code>GET /api/chat?q=…</code> streams the run over SSE. <code>GET /api/pending</code> returns queued drafts through <code>list_pending_replies</code>. <code>POST /api/approve</code> takes a JSON <code>{"id": …}</code> body and calls <code>approve_send</code>.</p>
 
  <h3>Library</h3>
- <p>Both the model client and the tool server are injectable, so the loop is unit-testable with no network, API key, or database (see <code>tests/test_loop.py</code>).</p>
+ <p>You can inject both the model client and the tool server. So you can unit-test the loop with no network, no API key, and no database. See <code>tests/test_loop.py</code>.</p>
  <pre><code><span class="c-key">from</span> evolution_agent <span class="c-key">import</span> AgentLoop
 <span class="c-key">from</span> mcp_server_evosql.server <span class="c-key">import</span> MCPServer
 
@@ -91,41 +91,41 @@ result = agent.run(<span class="c-str">"who am I waiting on?"</span>)
 <span class="c-key">print</span>(result[<span class="c-str">"final_text"</span>])
 <span class="c-key">for</span> step <span class="c-key">in</span> result[<span class="c-str">"steps"</span>]:          <span class="c-com"># every tool call + its result</span>
     <span class="c-key">print</span>(step[<span class="c-str">"tool"</span>], step[<span class="c-str">"input"</span>])</code></pre>
- <p>The repo also ships <code>examples/demo.py</code>, a self-contained morning-assistant task. It auto-starts a throwaway local <code>evosql-server</code> if none is running, then drives a real multi-step task (recall/save memory, draft + queue a reply). If <code>ANTHROPIC_API_KEY</code> is set and <code>anthropic</code> is installed it uses the real model; otherwise it falls back to a scripted model so the tools, memory, and database stay real but the demo runs offline.</p>
+ <p>The repo also ships <code>examples/demo.py</code>. It is a self-contained morning-assistant task. It starts a throwaway local <code>evosql-server</code> if none is running. Then it runs a real multi-step task. The task recalls and saves memory and drafts and queues a reply. If <code>ANTHROPIC_API_KEY</code> is set and <code>anthropic</code> is installed, it uses the real model. If not, it falls back to a scripted model. The tools, memory, and database stay real, but the demo runs offline.</p>
 
  <h2 id="reference">Reference</h2>
- <p>The public surface is exported from <code>evolution_agent.__init__</code>: <code>AgentLoop</code>, <code>DEFAULT_MODEL</code>, <code>DEFAULT_SYSTEM</code>, and <code>build_anthropic_tools</code>.</p>
+ <p><code>evolution_agent.__init__</code> exports the public surface. It exports <code>AgentLoop</code>, <code>DEFAULT_MODEL</code>, <code>DEFAULT_SYSTEM</code>, and <code>build_anthropic_tools</code>.</p>
 
  <h3>AgentLoop</h3>
  <div class="sig">class AgentLoop(server=None, *, client=None, model=None, system=None, tools=None, identity=None, max_turns=12, max_tokens=4096, token_budget=None, on_event=None)</div>
- <p>A plan → act → observe → repeat loop over the MCP server's tools. <code>server</code> only needs a <code>_call_tool(name, args, identity=None) -&gt; dict</code> method (<code>MCPServer</code> provides it; tests pass a fake). <code>client</code> only needs <code>messages.create(...) -&gt; response</code> whose result exposes <code>.content</code> (blocks), <code>.stop_reason</code>, and optional <code>.usage</code> (the Anthropic SDK matches). When <code>server</code>, <code>client</code>, or <code>tools</code> are omitted they are built lazily from <code>mcp_server_evosql</code> and <code>anthropic</code>, so importing the package never requires either. <code>token_budget</code> is a hard ceiling on cumulative input+output tokens for a single run (<code>None</code> = unlimited; the turn cap still bounds the call count). <code>on_event(kind, payload)</code> is an optional observer, an exception it raises is swallowed so it can never break the loop.</p>
+ <p>This is a plan → act → observe → repeat loop over the MCP server's tools. <code>server</code> only needs a <code>_call_tool(name, args, identity=None) -&gt; dict</code> method. <code>MCPServer</code> provides it, and tests pass a fake. <code>client</code> only needs <code>messages.create(...) -&gt; response</code>. The result must expose <code>.content</code> blocks, <code>.stop_reason</code>, and an optional <code>.usage</code>. The Anthropic SDK matches this. If you leave out <code>server</code>, <code>client</code>, or <code>tools</code>, they are built lazily from <code>mcp_server_evosql</code> and <code>anthropic</code>. So importing the package never needs either one. <code>token_budget</code> is a hard ceiling on total input plus output tokens for a single run. <code>None</code> means unlimited. The turn cap still bounds the call count. <code>on_event(kind, payload)</code> is an optional observer. If it raises an exception, the loop swallows it, so the observer can never break the loop.</p>
 
  <div class="sig">AgentLoop.run(user_message: str) -&gt; dict</div>
- <p>Drives the conversation to completion and returns a transcript dict: <code>final_text</code> (str), <code>steps</code> (a list of <code>{tool, input, result}</code>, one per executed tool call), <code>turns</code> (int), <code>stop_reason</code> (str), and <code>usage</code> (<code>{input_tokens, output_tokens, total_tokens}</code>). Parallel tool calls in one model turn are all executed and fed back as a single user turn of <code>tool_result</code> blocks. A <code>pause_turn</code> stop reason is resumed rather than treated as final. <code>stop_reason</code> is <code>"max_turns"</code> if the turn cap is hit without a final answer, or <code>"budget"</code> if <code>token_budget</code> is exhausted before the next model call.</p>
+ <p>This drives the conversation to the end and returns a transcript dict. The dict has <code>final_text</code> as a str. It has <code>steps</code>, a list of <code>{tool, input, result}</code> with one entry per executed tool call. It has <code>turns</code> as an int. It has <code>stop_reason</code> as a str. It has <code>usage</code> as <code>{input_tokens, output_tokens, total_tokens}</code>. If one model turn makes parallel tool calls, the loop runs them all. It feeds them back as a single user turn of <code>tool_result</code> blocks. A <code>pause_turn</code> stop reason is resumed, not treated as final. <code>stop_reason</code> is <code>"max_turns"</code> if the turn cap is hit without a final answer. It is <code>"budget"</code> if <code>token_budget</code> runs out before the next model call.</p>
 
  <h3>build_anthropic_tools</h3>
  <div class="sig">build_anthropic_tools(tools: list[dict]) -&gt; list[dict]</div>
- <p>Maps MCP tool descriptors (<code>{name, description, inputSchema}</code>) to the Anthropic Messages <code>tools=</code> shape (<code>{name, description, input_schema}</code>). The only real difference is the schema key name; a missing schema defaults to <code>{"type": "object", "properties": {}}</code> and a missing description to <code>""</code>.</p>
+ <p>This maps MCP tool descriptors to the Anthropic Messages <code>tools=</code> shape. The MCP shape is <code>{name, description, inputSchema}</code>. The Anthropic shape is <code>{name, description, input_schema}</code>. The only real difference is the schema key name. A missing schema defaults to <code>{"type": "object", "properties": {}}</code>. A missing description defaults to <code>""</code>.</p>
 
  <h3>DEFAULT_MODEL</h3>
  <div class="sig">DEFAULT_MODEL = os.environ.get("EVOSQL_AGENT_MODEL", "claude-opus-4-8")</div>
- <p>The model id used when none is passed. Resolved from the environment at import time.</p>
+ <p>This is the model id used when you pass none. It is read from the environment at import time.</p>
 
  <h3>DEFAULT_SYSTEM</h3>
  <div class="sig">DEFAULT_SYSTEM: str</div>
- <p>The agent's persona plus the non-negotiable send rule. It tells the model it is a personal/work assistant backed by EvolutionDB long-term memory, states the HARD RULE that it must never deliver anything itself (draft + <code>queue_reply</code>, then human <code>approve_send</code>; sending stays dry-run; never claim a message was sent), and instructs it to recall existing memory first, stay concise, answer in the user's own language, and adjust when a tool returns an <code>error</code>.</p>
+ <p>This holds the agent's persona and the firm send rule. It tells the model it is a personal and work assistant backed by EvolutionDB long-term memory. It states the HARD RULE that the model must never deliver anything itself. The model drafts and calls <code>queue_reply</code>. Then a human calls <code>approve_send</code>. Sending stays dry-run. The model must never claim a message was sent. The prompt also tells the model to recall existing memory first, stay concise, answer in the user's own language, and adjust when a tool returns an <code>error</code>.</p>
 
  <h2 id="notes">Notes &amp; limitations</h2>
  <ul>
- <li><strong>Model-dependent.</strong> The reasoning is an LLM call; "standalone" only means it does not need a host application. The default path requires the <code>anthropic</code> SDK and <code>ANTHROPIC_API_KEY</code>. Any client with a compatible <code>messages.create(...)</code> can be injected via the <code>client=</code> argument.</li>
- <li><strong>Single-shot CLI.</strong> The terminal entry point runs one prompt then exits; there is no interactive REPL. There is no streaming of the model's text to stdout, only the final answer is printed (text and tool I/O stream to stderr).</li>
- <li><strong>Tool set comes from the MCP server.</strong> This package does not define tools. It bridges whatever the installed <code>mcp-server-evolutiondb</code> exposes (recall/save memory, daily/meeting summaries, open-loop tracking, PR review, drafting replies, and the approval gate).</li>
- <li><strong>Cost guards.</strong> <code>max_turns</code> bounds the iteration count everywhere; <code>token_budget</code> additionally caps spend, but it is only wired up in the web server (default <code>60000</code> via <code>EVOSQL_AGENT_TOKEN_BUDGET</code>). The CLI runs with no token budget.</li>
- <li><strong>Web server is minimal.</strong> The browser chat is stdlib-only with no authentication; the default bind is loopback. Do not expose it publicly without putting your own auth and an enforced token budget in front of it.</li>
- <li><strong>Send invariant.</strong> The loop itself never delivers anything; the guarantee is enforced structurally by the MCP server's outbox, not just by the prompt. See <a href="https://wiki.evolutiondb.org">the code wiki</a> for the ADR-004 internals.</li>
+ <li><strong>Model-dependent.</strong> The reasoning is an LLM call. "Standalone" only means it does not need a host application. The default path needs the <code>anthropic</code> SDK and <code>ANTHROPIC_API_KEY</code>. You can inject any client with a compatible <code>messages.create(...)</code> through the <code>client=</code> argument.</li>
+ <li><strong>Single-shot CLI.</strong> The terminal entry point runs one prompt, then exits. There is no interactive REPL. It does not stream the model's text to stdout. It prints only the final answer. Text and tool I/O stream to stderr.</li>
+ <li><strong>Tool set comes from the MCP server.</strong> This package does not define tools. It bridges whatever the installed <code>mcp-server-evolutiondb</code> exposes. That includes recall and save memory, daily and meeting summaries, open-loop tracking, PR review, drafting replies, and the approval gate.</li>
+ <li><strong>Cost guards.</strong> <code>max_turns</code> bounds the iteration count everywhere. <code>token_budget</code> also caps spend, but only the web server wires it up. The default is <code>60000</code> through <code>EVOSQL_AGENT_TOKEN_BUDGET</code>. The CLI runs with no token budget.</li>
+ <li><strong>Web server is minimal.</strong> The browser chat uses the stdlib only and has no authentication. The default bind is loopback. Do not expose it publicly. First put your own auth and an enforced token budget in front of it.</li>
+ <li><strong>Send rule.</strong> The loop itself never delivers anything. The MCP server's outbox enforces this in code, not just in the prompt. See <a href="https://wiki.evolutiondb.org">the code wiki</a> for the ADR-004 internals.</li>
  </ul>
 
- <div class="callout callout-note"><span class="material-symbols-outlined">menu_book</span><div>Looking for how the engine and outbox work inside, function by function? That's the <a href="https://wiki.evolutiondb.org">code wiki</a>. For the tools this loop drives, see the <a href="/platform/mcp-server/">MCP Server</a> page.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">menu_book</span><div>Want to see how the engine and outbox work inside, function by function? Read the <a href="https://wiki.evolutiondb.org">code wiki</a>. For the tools this loop drives, see the <a href="/platform/mcp-server/">MCP Server</a> page.</div></div>
 </main></div>
 <script src="/nav-data.js"></script>
 <script src="/nav.js"></script>

@@ -15,55 +15,58 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>11. Transactions &amp; MVCC</h1>
-<p class="lede">How EvolutionDB groups statements into atomic transactions, isolates concurrent connections with multi-version snapshots, and guards rows from conflicting writers.</p>
+<p class="lede">How EvolutionDB groups statements into atomic transactions. How it keeps connections apart with multi-version snapshots. How it guards rows from writers that conflict.</p>
 
-<p>This chapter describes the concurrency model implemented in EvolutionDB 3.0: explicit
-transaction blocks, savepoints, the four SQL isolation levels, the snapshot-based
-visibility rule that lets readers and writers run without blocking each other, and the
-row- and gap-locking machinery used by writers and by the <code>SERIALIZABLE</code>
-level. For the exact syntax of individual statements, follow the cross-links to the
+<p>This chapter explains how EvolutionDB 3.0 handles many things at once. It covers explicit
+transaction blocks, savepoints, and the four SQL isolation levels. It also covers the
+snapshot rule that lets readers and writers run at the same time without blocking each
+other. And it covers the row locks and gap locks that writers use, and that the
+<code>SERIALIZABLE</code> level uses. For the exact syntax of each statement, follow the
+links to the
 <a href="/3.0/ref/transaction/">transaction</a>, <a href="/3.0/ref/savepoint/">savepoint</a>,
 <a href="/3.0/ref/set/">SET</a>, and <a href="/3.0/ref/select/">SELECT</a> reference pages.</p>
 
 <h2 id="overview">11.1. Overview</h2>
 <p>Every statement in EvolutionDB runs inside a transaction. If you have not opened an
-explicit block, each statement runs in its own implicit, auto-committed transaction: the
-change is applied and made durable as soon as the statement succeeds. Opening a block with
-<code>BEGIN</code> defers that commit until you say so, so that a group of changes either
-all take effect together or none of them do.</p>
+explicit block, each statement runs in its own auto-committed transaction. The change is
+applied and made durable as soon as the statement succeeds. Opening a block with
+<code>BEGIN</code> holds back that commit until you say so. This way a group of changes
+either all take effect together or none of them do.</p>
 
-<p>Concurrency control combines two independent mechanisms:</p>
+<p>Concurrency control uses two separate parts.</p>
 <dl class="params">
 <dt>Undo log (rollback)</dt>
-<dd>A per-connection, thread-local stack of <em>undo entries</em>. Every
+<dd>This is a stack of <em>undo entries</em>. Each connection has its own. Every
 <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> inside an open block
-pushes an entry recording how to reverse it. <code>COMMIT</code> discards the log;
-<code>ROLLBACK</code> replays it in reverse. This provides per-connection atomicity.</dd>
+pushes an entry. The entry records how to reverse the change. <code>COMMIT</code> throws
+the log away. <code>ROLLBACK</code> replays it in reverse. This gives atomicity per
+connection.</dd>
 <dt>MVCC (isolation)</dt>
-<dd>Each transaction is assigned a 32-bit transaction id (XID). Row versions carry the XID
+<dd>Each transaction gets a 32-bit transaction id (XID). Row versions carry the XID
 that created them (<code>xmin</code>) and the XID that deleted them (<code>xmax</code>).
-A transaction reads through a <em>snapshot</em> that decides which versions are visible,
-so reads never block writes and writes never block reads.</dd>
+A transaction reads through a <em>snapshot</em>. The snapshot decides which versions are
+visible. So reads never block writes and writes never block reads.</dd>
 </dl>
 
-<p>The two layers cooperate: an <code>UPDATE</code> or <code>DELETE</code> does not
-physically overwrite or remove a row, it sets the old version's <code>xmax</code> to the
-deleting XID (a "soft delete") and, for an update, inserts a new version. Rollback then
-simply clears <code>xmax</code> to revive the original version, falling back to a
-re-insert only for rows written before MVCC existed.</p>
+<p>The two layers work together. An <code>UPDATE</code> or <code>DELETE</code> does not
+overwrite or remove a row on disk. It sets the old version's <code>xmax</code> to the
+deleting XID. This is a "soft delete". For an update, it also inserts a new version.
+Rollback then just clears <code>xmax</code> to bring the original version back. It only
+falls back to a re-insert for rows written before MVCC existed.</p>
 
 <div class="callout">
-<strong>Note.</strong> Durability is provided by a write-ahead log: before a
-<code>COMMIT</code> is acknowledged the transaction's dirty pages are flushed to the WAL,
-a commit sequence number (CSN) is assigned, and the transaction is marked committed in the
-commit log (CLOG). If the optional synchronous-commit mode is enabled
-(<code>EVOSQL_SYNC_COMMIT=1</code>), the commit additionally waits for replica acknowledgement
-of its WAL position, degrading silently to asynchronous commit on timeout.
+<strong>Note.</strong> A write-ahead log gives durability. Before a
+<code>COMMIT</code> is acknowledged, the transaction's dirty pages are flushed to the WAL.
+Then a commit sequence number (CSN) is assigned. Then the transaction is marked committed
+in the commit log (CLOG). You can turn on the optional synchronous-commit mode with
+<code>EVOSQL_SYNC_COMMIT=1</code>. When it is on, the commit also waits for a replica to
+acknowledge its WAL position. If that wait times out, the commit quietly falls back to
+asynchronous commit.
 </div>
 
 <h2 id="control">11.2. Transaction control statements</h2>
-<p>Transaction control commands are recognized by prefix at the session layer (they do not
-go through the SQL parser). The recognized verbs are:</p>
+<p>The session layer recognizes transaction control commands by their prefix. They do not
+go through the SQL parser. These are the verbs it knows.</p>
 
 <div class="synopsis">
 <pre><code><span class="c-key">BEGIN</span>
@@ -81,12 +84,12 @@ go through the SQL parser). The recognized verbs are:</p>
 
 <h3 id="begin">11.2.1. BEGIN / START TRANSACTION</h3>
 <p><code>BEGIN</code> and its synonym <code>START TRANSACTION</code> open an explicit block.
-On <code>BEGIN</code> the server creates a fresh undo log, initializes an empty savepoint
-stack, assigns the transaction's XID, and registers it as active. At
-<code>REPEATABLE READ</code> and <code>SERIALIZABLE</code> a single snapshot is captured
-immediately (see <a href="#isolation">11.4</a>); at <code>READ COMMITTED</code> and
-<code>READ UNCOMMITTED</code> no transaction-wide snapshot is taken, each statement
-snapshots on its own.</p>
+On <code>BEGIN</code> the server creates a new undo log. It sets up an empty savepoint
+stack. It assigns the transaction's XID. And it marks the transaction as active. At
+<code>REPEATABLE READ</code> and <code>SERIALIZABLE</code> the server takes one snapshot
+right away. See <a href="#isolation">11.4</a> for more. At <code>READ COMMITTED</code> and
+<code>READ UNCOMMITTED</code> no snapshot is taken for the whole transaction. Each
+statement takes its own snapshot.</p>
 
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">INSERT INTO</span> accounts <span class="c-key">VALUES</span> (<span class="c-str">'alice'</span>, <span class="c-str">100</span>);
@@ -94,64 +97,64 @@ snapshots on its own.</p>
 <span class="c-key">COMMIT</span>;</code></pre>
 
 <div class="callout">
-<strong>Note.</strong> The isolation level is <em>not</em> taken from words typed after
-<code>BEGIN</code>. Because the verb is matched by prefix, any trailing text (for example
-<code>BEGIN ISOLATION LEVEL SERIALIZABLE</code>) is accepted but ignored. Use
-<a href="/3.0/ref/set/">SET TRANSACTION ISOLATION LEVEL</a> first. Issuing <code>BEGIN</code>
-while already inside a block logs a warning and is otherwise a no-op (the existing block
-continues), it does not open a nested transaction.
+<strong>Note.</strong> The isolation level is <em>not</em> read from words typed after
+<code>BEGIN</code>. The verb is matched by its prefix. So any extra text is accepted but
+ignored. For example, <code>BEGIN ISOLATION LEVEL SERIALIZABLE</code> ignores the extra
+words. Use <a href="/3.0/ref/set/">SET TRANSACTION ISOLATION LEVEL</a> first instead. If you
+run <code>BEGIN</code> while already inside a block, the server logs a warning and does
+nothing else. The existing block continues. It does not open a nested transaction.
 </div>
 
 <h3 id="commit">11.2.2. COMMIT / END</h3>
-<p><code>COMMIT</code> (synonym: <code>END</code>) finalizes the block. The server flushes
-dirty pages to the WAL, obtains a CSN, marks the XID committed in the CLOG, releases all
-row and gap locks held by the transaction, unregisters the XID from the active list, and
-discards the undo log. From that moment the changes are durable and visible to other
-connections whose snapshots are taken after the commit.</p>
+<p><code>COMMIT</code> finishes the block. Its synonym is <code>END</code>. The server
+flushes dirty pages to the WAL. It gets a CSN. It marks the XID committed in the CLOG. It
+releases all row and gap locks the transaction held. It removes the XID from the active
+list. And it throws away the undo log. From that moment the changes are durable. They are
+visible to other connections that take their snapshots after the commit.</p>
 
 <h3 id="rollback">11.2.3. ROLLBACK</h3>
-<p><code>ROLLBACK</code> abandons the block. The undo log is replayed in reverse, restoring
-every inserted, updated, or deleted row; the XID is marked aborted in the CLOG; and its
-locks are released. Because deletes and updates are soft, rollback usually just clears the
-<code>xmax</code> marker on the affected tuples rather than rewriting any data.</p>
+<p><code>ROLLBACK</code> drops the block. The undo log is replayed in reverse. This restores
+every inserted, updated, or deleted row. The XID is marked aborted in the CLOG. And its
+locks are released. Deletes and updates are soft. So rollback usually just clears the
+<code>xmax</code> marker on the affected tuples. It does not rewrite any data.</p>
 
 <table>
 <thead><tr><th>DML in the block</th><th>Undo entry</th><th>What ROLLBACK does</th></tr></thead>
 <tbody>
 <tr><td><code>INSERT</code></td><td><code>TX_OP_INSERT</code></td><td>Delete the inserted row and remove its primary-key index entry.</td></tr>
-<tr><td><code>UPDATE</code></td><td><code>TX_OP_UPDATE</code></td><td>Delete the new version; restore the old version by clearing its <code>xmax</code> (re-insert old data if the old slot was physically gone).</td></tr>
-<tr><td><code>DELETE</code></td><td><code>TX_OP_DELETE</code></td><td>Clear <code>xmax</code> to "un-delete" the tuple (re-insert old data for pre-MVCC rows).</td></tr>
+<tr><td><code>UPDATE</code></td><td><code>TX_OP_UPDATE</code></td><td>Delete the new version. Restore the old version by clearing its <code>xmax</code>. Re-insert the old data if the old slot was already gone.</td></tr>
+<tr><td><code>DELETE</code></td><td><code>TX_OP_DELETE</code></td><td>Clear <code>xmax</code> to bring the tuple back. Re-insert the old data for pre-MVCC rows.</td></tr>
 </tbody>
 </table>
 
 <div class="callout">
 <strong>Note.</strong> If a statement inside the block raises an error, the transaction
-enters an <em>aborted</em> state. While aborted, only <code>ROLLBACK</code>,
-<code>COMMIT</code>/<code>END</code>, <code>SAVEPOINT</code>, and <code>RELEASE</code> are
-accepted; any other statement is rejected until the block is closed. Issuing
-<code>COMMIT</code> on an aborted transaction performs an implicit <code>ROLLBACK</code>, all work is discarded, matching PostgreSQL. If a connection disconnects with a block still
-open, the server automatically rolls it back.
+enters an <em>aborted</em> state. While aborted, the server only accepts
+<code>ROLLBACK</code>, <code>COMMIT</code>, <code>END</code>, <code>SAVEPOINT</code>, and
+<code>RELEASE</code>. It rejects any other statement until the block is closed. If you run
+<code>COMMIT</code> on an aborted transaction, the server does a <code>ROLLBACK</code>
+instead. All work is discarded. This matches PostgreSQL. If a connection disconnects with a
+block still open, the server rolls it back on its own.
 </div>
 
 <h2 id="savepoints">11.3. Savepoints</h2>
-<p>Savepoints mark a position in the undo-log stack so that you can roll back part of a
-transaction without abandoning the whole block. They are only valid inside an open
-transaction. See the <a href="/3.0/ref/savepoint/">SAVEPOINT</a> reference for full
-syntax.</p>
+<p>Savepoints mark a position in the undo-log stack. They let you roll back part of a
+transaction without dropping the whole block. They only work inside an open transaction.
+See the <a href="/3.0/ref/savepoint/">SAVEPOINT</a> reference for the full syntax.</p>
 
 <dl class="params">
 <dt><code>SAVEPOINT</code> name</dt>
 <dd>Records the current undo-log depth under <em>name</em> and pushes it on the savepoint
-stack. Re-using an existing name overwrites it in place (PostgreSQL behavior). Names are
-matched case-insensitively. Up to 64 savepoints may be active at once.</dd>
+stack. If you re-use an existing name, it is overwritten in place. This matches PostgreSQL.
+Names are matched without case. Up to 64 savepoints may be active at once.</dd>
 <dt><code>ROLLBACK TO</code> <span class="opt">[SAVEPOINT]</span> name</dt>
-<dd>Replays undo entries down to the recorded depth, undoing all work after the savepoint,
-then destroys any savepoints created after it. The savepoint itself survives and can be
-rolled back to again. This also clears the aborted state, so you can continue the
-transaction after a statement error if you had a savepoint before it.</dd>
+<dd>Replays undo entries down to the recorded depth. This undoes all work done after the
+savepoint. Then it destroys any savepoints made after it. The savepoint itself stays and
+you can roll back to it again. This also clears the aborted state. So you can keep going
+after a statement error, as long as you set a savepoint before it.</dd>
 <dt><code>RELEASE</code> <span class="opt">[SAVEPOINT]</span> name</dt>
-<dd>Forgets <em>name</em> and all newer savepoints without undoing any work. The data
-changes remain part of the still-open transaction.</dd>
+<dd>Forgets <em>name</em> and all newer savepoints. It does not undo any work. The data
+changes stay part of the still-open transaction.</dd>
 </dl>
 
 <pre><code><span class="c-key">BEGIN</span>;
@@ -163,106 +166,110 @@ changes remain part of the still-open transaction.</dd>
 <span class="c-key">COMMIT</span>;                    <span class="c-com">-- rows (1,'start') and (3,'final') persist</span></code></pre>
 
 <div class="callout">
-<strong>Note.</strong> Savepoints in EvolutionDB are positions in the per-connection undo
-log. They roll back data changes recorded since the savepoint, but they do not capture a
-separate MVCC sub-snapshot: the visibility snapshot in use is the transaction's (or the
-statement's), not the savepoint's. Issuing <code>SAVEPOINT</code>, <code>ROLLBACK TO</code>,
-or <code>RELEASE</code> outside a transaction raises <code>SQLSTATE 25P01</code>; referring
-to an unknown name raises <code>SQLSTATE 3B001</code> (<em>savepoint does not exist</em>).
+<strong>Note.</strong> In EvolutionDB a savepoint is a position in the undo log of one
+connection. It rolls back data changes made since the savepoint. It does not take a
+separate MVCC sub-snapshot. The visibility snapshot in use stays the transaction's snapshot
+or the statement's snapshot. It is not the savepoint's. If you run <code>SAVEPOINT</code>,
+<code>ROLLBACK TO</code>, or <code>RELEASE</code> outside a transaction, the server raises
+<code>SQLSTATE 25P01</code>. If you name a savepoint that does not exist, it raises
+<code>SQLSTATE 3B001</code> (<em>savepoint does not exist</em>).
 </div>
 
 <h2 id="isolation">11.4. Isolation levels</h2>
-<p>EvolutionDB recognizes all four standard isolation levels. Set the level for the session
-(and for the next transaction) <em>before</em> opening a block, using
-<a href="/3.0/ref/set/">SET</a>:</p>
+<p>EvolutionDB supports all four standard isolation levels. Set the level for the session
+and for the next transaction <em>before</em> you open a block. Use
+<a href="/3.0/ref/set/">SET</a> to do this.</p>
 
 <div class="synopsis">
 <pre><code><span class="c-key">SET</span> <span class="opt">[ SESSION ]</span> <span class="c-key">TRANSACTION ISOLATION LEVEL</span>
     { <span class="c-key">READ UNCOMMITTED</span> | <span class="c-key">READ COMMITTED</span> | <span class="c-key">REPEATABLE READ</span> | <span class="c-key">SERIALIZABLE</span> }</code></pre>
 </div>
 
-<p>The default level for a new connection is <code>READ COMMITTED</code>. Setting the level
-once a transaction has already issued a query raises <code>SQLSTATE 25001</code>; an
-unrecognized level raises <code>SQLSTATE 22023</code>.</p>
+<p>The default level for a new connection is <code>READ COMMITTED</code>. If you set the
+level after a transaction has already run a query, the server raises
+<code>SQLSTATE 25001</code>. If the level is not one it knows, it raises
+<code>SQLSTATE 22023</code>.</p>
 
 <table>
 <thead><tr><th>Level</th><th>Internal code</th><th>Snapshot strategy</th><th>Extra machinery</th></tr></thead>
 <tbody>
-<tr><td><code>READ UNCOMMITTED</code></td><td>0</td><td>Per-statement snapshot (treated like READ COMMITTED).</td><td>None.</td></tr>
-<tr><td><code>READ COMMITTED</code> <em>(default)</em></td><td>1</td><td>A fresh snapshot is taken at the start of every statement.</td><td>None.</td></tr>
-<tr><td><code>REPEATABLE READ</code></td><td>2</td><td>A single snapshot taken at <code>BEGIN</code> is reused for the whole transaction.</td><td>None.</td></tr>
-<tr><td><code>SERIALIZABLE</code></td><td>3</td><td>A single snapshot taken at <code>BEGIN</code>, like REPEATABLE READ.</td><td>Conflict guard (write-skew detection) + gap locks; serializer mutex.</td></tr>
+<tr><td><code>READ UNCOMMITTED</code></td><td>0</td><td>One snapshot per statement. It is treated like READ COMMITTED.</td><td>None.</td></tr>
+<tr><td><code>READ COMMITTED</code> <em>(default)</em></td><td>1</td><td>A new snapshot is taken at the start of every statement.</td><td>None.</td></tr>
+<tr><td><code>REPEATABLE READ</code></td><td>2</td><td>One snapshot is taken at <code>BEGIN</code> and used for the whole transaction.</td><td>None.</td></tr>
+<tr><td><code>SERIALIZABLE</code></td><td>3</td><td>One snapshot is taken at <code>BEGIN</code>, like REPEATABLE READ.</td><td>Conflict guard for write-skew detection, plus gap locks and a serializer mutex.</td></tr>
 </tbody>
 </table>
 
-<p>Honest comparison with the SQL standard and PostgreSQL:</p>
+<p>Here is an honest comparison with the SQL standard and PostgreSQL.</p>
 <ul>
-<li><strong>READ UNCOMMITTED.</strong> The standard permits dirty reads at this level.
-EvolutionDB does not implement dirty reads, uncommitted versions are never made visible, so this level behaves exactly like <code>READ COMMITTED</code>. This matches PostgreSQL,
-which also promotes <code>READ UNCOMMITTED</code> to <code>READ COMMITTED</code>.</li>
-<li><strong>READ COMMITTED.</strong> Each statement sees a snapshot taken when it begins,
-so two statements in the same transaction can see different committed data (non-repeatable
-reads and phantoms are possible). This is the standard meaning of the level.</li>
-<li><strong>REPEATABLE READ.</strong> The whole transaction reads through one snapshot, so
-rows it has already read do not change underneath it. EvolutionDB does not perform
-first-updater-wins abort detection at this level, so it does not guarantee the stricter
-"snapshot isolation" anomaly set that PostgreSQL's REPEATABLE READ provides.</li>
-<li><strong>SERIALIZABLE.</strong> Adds a conflict guard that tracks read/write
-dependencies and rejects a commit that forms a dangerous structure (write skew), plus gap
-locks to block phantom inserts into a scanned range. To preserve a globally serial order it
-also takes a process-wide mutex for the life of the transaction, so concurrent DML from
-other connections blocks until this transaction commits or rolls back. A failed
-serialization check aborts the commit with <code>SQLSTATE 40001</code>
+<li><strong>READ UNCOMMITTED.</strong> The standard allows dirty reads at this level.
+EvolutionDB does not do dirty reads. Uncommitted versions are never made visible. So this
+level acts exactly like <code>READ COMMITTED</code>. This matches PostgreSQL. PostgreSQL
+also turns <code>READ UNCOMMITTED</code> into <code>READ COMMITTED</code>.</li>
+<li><strong>READ COMMITTED.</strong> Each statement sees a snapshot taken when it starts.
+So two statements in the same transaction can see different committed data. Non-repeatable
+reads and phantoms are possible. This is the standard meaning of the level.</li>
+<li><strong>REPEATABLE READ.</strong> The whole transaction reads through one snapshot. So
+rows it has already read do not change under it. EvolutionDB does not do
+first-updater-wins abort detection at this level. So it does not give the stricter
+"snapshot isolation" anomaly set that PostgreSQL's REPEATABLE READ gives.</li>
+<li><strong>SERIALIZABLE.</strong> This adds a conflict guard. The guard tracks read and
+write dependencies. It rejects a commit that forms a dangerous shape, which is write skew.
+It also adds gap locks to block phantom inserts into a scanned range. To keep a single
+serial order across the whole system, it takes a process-wide mutex for the life of the
+transaction. So DML from other connections waits until this transaction commits or rolls
+back. A failed serialization check aborts the commit with <code>SQLSTATE 40001</code>
 (<em>could not serialize access due to read/write dependencies among transactions</em>).</li>
 </ul>
 
 <div class="callout">
-<strong>Note.</strong> Because <code>SERIALIZABLE</code> holds a global DML mutex for the
-transaction's lifetime, it serializes writes across all connections rather than allowing
-the optimistic concurrency PostgreSQL's SSI permits. Treat it as a correctness tool for
-critical sections, not as a high-throughput level. The conflict guard tracks a bounded
-number of read interests and predicate locks per transaction; it catches common write-skew
-patterns but is not a complete dependency-graph analysis.
+<strong>Note.</strong> <code>SERIALIZABLE</code> holds a global DML mutex for the whole life
+of the transaction. So it serializes writes across all connections. It does not allow the
+optimistic concurrency that PostgreSQL's SSI allows. Use it as a correctness tool for
+critical sections. Do not use it as a high-throughput level. The conflict guard tracks a
+limited number of read interests and predicate locks per transaction. It catches common
+write-skew patterns. But it is not a full dependency-graph analysis.
 </div>
 
 <h2 id="snapshots">11.5. Snapshots &amp; visibility</h2>
-<p>A snapshot is a point-in-time view of transaction activity. It records:</p>
+<p>A snapshot is a view of transaction activity at one moment in time. It records the
+following.</p>
 <dl class="params">
 <dt><code>xmin</code></dt><dd>The lowest XID still active when the snapshot was taken. Every XID below this is finished.</dd>
 <dt><code>xmax</code></dt><dd>One past the highest XID assigned so far. Every XID at or above this is "in the future" and invisible.</dd>
-<dt><code>active_xids[]</code></dt><dd>The list of XIDs that were in progress at snapshot time (up to 256 concurrent transactions are tracked).</dd>
-<dt><code>my_xid</code></dt><dd>The XID of the transaction that took the snapshot, used to recognize its own writes.</dd>
-<dt><code>snapshot_csn</code></dt><dd>The highest committed CSN at snapshot time, enabling an O(1) "committed before me" fast path.</dd>
+<dt><code>active_xids[]</code></dt><dd>The list of XIDs that were in progress at snapshot time. Up to 256 transactions running at once are tracked.</dd>
+<dt><code>my_xid</code></dt><dd>The XID of the transaction that took the snapshot. It is used to recognize its own writes.</dd>
+<dt><code>snapshot_csn</code></dt><dd>The highest committed CSN at snapshot time. It gives an O(1) "committed before me" fast path.</dd>
 </dl>
 
 <p>A heap tuple stores its creator XID (<code>xmin</code>) and deleter XID
-(<code>xmax</code>) in its MVCC header. The visibility predicate decides whether a tuple is
-visible to a snapshot roughly as follows:</p>
+(<code>xmax</code>) in its MVCC header. The visibility rule decides whether a tuple is
+visible to a snapshot. It works roughly like this.</p>
 <ol>
-<li>Tuples without an MVCC header (pre-MVCC rows) are always visible. A frozen
-<code>xmin</code> (the reserved value <code>1</code>) is treated as committed long ago and
-always visible.</li>
-<li>If <code>xmin</code> is the snapshot's own XID, the tuple is the reader's own insert:
-visible unless the same transaction also deleted it.</li>
-<li>Otherwise <code>xmin</code> must be <em>committed</em> in the CLOG, <em>below</em>
+<li>Tuples without an MVCC header are pre-MVCC rows. They are always visible. A frozen
+<code>xmin</code> is the reserved value <code>1</code>. It is treated as committed long ago
+and is always visible.</li>
+<li>If <code>xmin</code> is the snapshot's own XID, the tuple is the reader's own insert.
+It is visible, unless the same transaction also deleted it.</li>
+<li>In other cases <code>xmin</code> must be <em>committed</em> in the CLOG, <em>below</em>
 <code>xmax</code>, and <em>not</em> in the active list. Only then is the creating
 transaction's work visible.</li>
-<li>If <code>xmax</code> is 0 the tuple was never deleted and is visible. If the deleter is
-this transaction, it is invisible. If the deleter has not committed, committed after the
-snapshot, or was active at snapshot time, the tuple is still visible. Only when the deleter
-committed and is visible in this snapshot is the tuple considered dead.</li>
+<li>If <code>xmax</code> is 0, the tuple was never deleted and is visible. If the deleter is
+this transaction, it is invisible. The tuple is still visible if the deleter has not
+committed, or committed after the snapshot, or was active at snapshot time. The tuple
+counts as dead only when the deleter committed and is visible in this snapshot.</li>
 </ol>
 
-<p>To avoid repeating CLOG and CSN lookups, the engine uses hint bits
-(<code>XMIN_COMMITTED</code> / <code>XMIN_ABORTED</code> stamped on the tuple after the
-first successful check) and a CSN ring-buffer cache. None of this changes the result of the
-predicate, it only makes it faster.</p>
+<p>The engine avoids repeating CLOG and CSN lookups. It uses hint bits and a CSN
+ring-buffer cache. The hint bits are <code>XMIN_COMMITTED</code> and
+<code>XMIN_ABORTED</code>. They are stamped on the tuple after the first successful check.
+None of this changes the result of the rule. It only makes it faster.</p>
 
 <h3 id="temporal">11.5.1. Temporal queries (FOR SYSTEM_TIME)</h3>
-<p>You can read the database as of a past transaction by constructing a synthetic snapshot
-positioned just after a given XID committed: every committed XID up to and including that
-value is visible, and anything assigned later is invisible. EvolutionDB exposes this with a
-SQL:2011-style opener on <a href="/3.0/ref/select/">SELECT</a>:</p>
+<p>You can read the database as it was at a past transaction. The engine builds a snapshot
+placed just after a given XID committed. Every committed XID up to and including that value
+is visible. Anything assigned later is invisible. EvolutionDB offers this with a
+SQL:2011-style clause on <a href="/3.0/ref/select/">SELECT</a>.</p>
 
 <pre><code><span class="c-com">-- current transaction id of this session</span>
 <span class="c-key">SELECT</span> evo_current_xid();
@@ -271,32 +278,32 @@ SQL:2011-style opener on <a href="/3.0/ref/select/">SELECT</a>:</p>
 <span class="c-key">SELECT</span> * <span class="c-key">FROM</span> orders <span class="c-key">FOR SYSTEM_TIME AS OF TRANSACTION</span> <span class="c-str">42</span>;</code></pre>
 
 <div class="callout">
-<strong>Note.</strong> The historical view does not track concurrency, it has no active
-list, so it shows a clean committed-only image at the chosen XID. How far back you can go
-is bounded by retention: the CSN/commit-timestamp cache is a ring buffer, and a snapshot
-whose XID has aged out of the retained window is rejected rather than returning a
-misleading result.
+<strong>Note.</strong> The historical view does not track concurrency. It has no active
+list. So it shows a clean image with only committed data at the chosen XID. How far back
+you can go is limited by retention. The CSN cache and commit-timestamp cache use a ring
+buffer. If a snapshot's XID has dropped out of the kept window, the server rejects it. It
+does not return a misleading result.
 </div>
 
 <h2 id="locks">11.6. Row locks &amp; explicit locking</h2>
-<p>Readers and writers do not block each other through MVCC, but writers to the <em>same
-row</em> must serialize. EvolutionDB provides a row-level lock manager keyed by
-(<code>table_id</code>, primary-key value). Locks are held by XID and are released
-automatically at <code>COMMIT</code>, <code>ROLLBACK</code>, end of an auto-commit
-statement, or disconnect.</p>
+<p>MVCC means readers and writers do not block each other. But writers to the <em>same
+row</em> must run one at a time. EvolutionDB has a row-level lock manager. It is keyed by
+the <code>table_id</code> and the primary-key value. Locks are held by XID. They are
+released on their own at <code>COMMIT</code>, at <code>ROLLBACK</code>, at the end of an
+auto-commit statement, or at disconnect.</p>
 
 <table>
 <thead><tr><th>Mode</th><th>Acquired by</th><th>Compatibility</th></tr></thead>
 <tbody>
-<tr><td><code>EVO_LOCK_EXCLUSIVE</code></td><td><code>UPDATE</code>, <code>DELETE</code>, <code>SELECT ... FOR UPDATE</code></td><td>Single holder; conflicts with everything.</td></tr>
-<tr><td><code>EVO_LOCK_SHARED</code></td><td><code>SELECT ... FOR SHARE</code></td><td>Compatible with other shared holders; conflicts with exclusive.</td></tr>
+<tr><td><code>EVO_LOCK_EXCLUSIVE</code></td><td><code>UPDATE</code>, <code>DELETE</code>, <code>SELECT ... FOR UPDATE</code></td><td>One holder only. It conflicts with everything.</td></tr>
+<tr><td><code>EVO_LOCK_SHARED</code></td><td><code>SELECT ... FOR SHARE</code></td><td>It works with other shared holders. It conflicts with exclusive.</td></tr>
 </tbody>
 </table>
 
-<p>Acquisition is re-entrant: the same XID re-locking a row it already holds is a no-op, and
-a shared lock can be upgraded to exclusive by the same holder. A request that conflicts with
-another transaction's lock waits on a condition variable until the lock is released or a
-timeout expires.</p>
+<p>Locking is re-entrant. If the same XID locks a row it already holds, nothing happens. The
+same holder can also upgrade a shared lock to exclusive. If a request conflicts with another
+transaction's lock, it waits on a condition variable. It waits until the lock is released or
+the timeout runs out.</p>
 
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">SELECT</span> balance <span class="c-key">FROM</span> accounts <span class="c-key">WHERE</span> name = <span class="c-str">'alice'</span> <span class="c-key">FOR UPDATE</span>;
@@ -304,14 +311,14 @@ timeout expires.</p>
 <span class="c-key">COMMIT</span>;   <span class="c-com">-- row lock released here</span></code></pre>
 
 <h3 id="timeout">11.6.1. Lock waits, timeout &amp; deadlocks</h3>
-<p>The default lock wait timeout is 5000 ms. A per-session override can be set with
-<code>SET EVO_LOCK_TIMEOUT = <em>ms</em></code> (0 restores the default). If a waiter is not
-granted the lock within the timeout, the operation fails with a lock-timeout error
-(<code>EVO_LOCK_TIMEOUT</code>).</p>
-<p>Before sleeping, the lock manager runs a wait-for-graph cycle check: it follows the chain
-of "who is each holder waiting for" and, if that chain leads back to the requester, reports
-a deadlock immediately (<code>EVO_LOCK_DEADLOCK</code>) instead of waiting for the timeout.
-The search is bounded to a fixed depth.</p>
+<p>The default lock wait timeout is 5000 ms. You can override it per session with
+<code>SET EVO_LOCK_TIMEOUT = <em>ms</em></code>. A value of 0 restores the default. If a
+waiter does not get the lock within the timeout, the operation fails with a lock-timeout
+error (<code>EVO_LOCK_TIMEOUT</code>).</p>
+<p>Before it sleeps, the lock manager runs a wait-for-graph cycle check. It follows the
+chain of who each holder is waiting for. If that chain leads back to the requester, it
+reports a deadlock right away with <code>EVO_LOCK_DEADLOCK</code>. It does not wait for the
+timeout. The search has a fixed depth limit.</p>
 
 <dl class="params">
 <dt><code>EVO_LOCK_OK</code> (0)</dt><dd>Lock granted (or no lock needed).</dd>
@@ -321,54 +328,56 @@ The search is bounded to a fixed depth.</p>
 </dl>
 
 <div class="callout">
-<strong>Note.</strong> Shared locks are tracked with a single holder slot per row (last
-writer wins for the recorded holder), so <code>FOR SHARE</code> is treated as compatible
-but not fully multi-holder. <code>SKIP LOCKED</code> is accepted on
-<code>FOR UPDATE</code>/<code>FOR SHARE</code> for syntax compatibility. Row locks are keyed
-by primary key, so a table without a usable primary key cannot take a row lock (the request
-is a no-op).
+<strong>Note.</strong> Shared locks use a single holder slot per row. The last writer wins
+for the recorded holder. So <code>FOR SHARE</code> is treated as compatible, but it is not
+fully multi-holder. <code>SKIP LOCKED</code> is accepted on <code>FOR UPDATE</code> and
+<code>FOR SHARE</code> for syntax compatibility. Row locks are keyed by primary key. So a
+table without a usable primary key cannot take a row lock. In that case the request does
+nothing.
 </div>
 
 <h3 id="gaplocks">11.6.2. Gap locks (phantom prevention)</h3>
-<p>To prevent phantom inserts in <code>SERIALIZABLE</code> transactions, a range scan can
-take a <em>gap lock</em> covering a key interval <code>(lo, hi]</code> on a table (an empty
-bound means &minus;&infin; or +&infin;). When another transaction tries to
-<code>INSERT</code> a key that falls inside an active gap lock held by a different XID, the
-insert waits, with the same timeout as row locks, until the gap lock is released at the
-holder's commit or rollback. Gap locks do not conflict with each other; they conflict only
-with inserts. They are taken automatically during <code>SERIALIZABLE</code> range scans and
-are not exposed as an explicit statement.</p>
+<p>Gap locks stop phantom inserts in <code>SERIALIZABLE</code> transactions. A range scan can
+take a <em>gap lock</em>. The lock covers a key interval <code>(lo, hi]</code> on a table.
+An empty bound means &minus;&infin; or +&infin;. Suppose another transaction tries to
+<code>INSERT</code> a key that falls inside an active gap lock held by a different XID. Then
+the insert waits. It uses the same timeout as row locks. It waits until the gap lock is
+released at the holder's commit or rollback. Gap locks do not conflict with each other. They
+conflict only with inserts. They are taken on their own during <code>SERIALIZABLE</code>
+range scans. There is no explicit statement for them.</p>
 
 <h2 id="lifecycle">11.7. XID lifecycle &amp; reserved ids</h2>
-<p>Transaction ids are 32-bit values handed out by a monotonic counter persisted in the
-database file header, so they survive restart. A handful of values are reserved:</p>
+<p>Transaction ids are 32-bit values. A counter that only goes up hands them out. The counter
+is kept in the database file header. So the ids survive a restart. A few values are
+reserved.</p>
 
 <dl class="params">
-<dt><code>0</code>, pre-MVCC sentinel</dt><dd>A tuple with no MVCC header; always visible. Also used as "no deleter" in <code>xmax</code>.</dd>
-<dt><code>1</code>, <code>XID_FROZEN</code></dt><dd>"Committed long ago"; an <code>xmin</code> of 1 is always visible without consulting the CLOG.</dd>
-<dt><code>2+</code>, normal</dt><dd>The first assignable transaction id; assigned in increasing order.</dd>
+<dt><code>0</code>, pre-MVCC sentinel</dt><dd>A tuple with no MVCC header. It is always visible. It is also used as "no deleter" in <code>xmax</code>.</dd>
+<dt><code>1</code>, <code>XID_FROZEN</code></dt><dd>It means "committed long ago". An <code>xmin</code> of 1 is always visible. The server does not check the CLOG for it.</dd>
+<dt><code>2+</code>, normal</dt><dd>The first transaction id that can be assigned. Ids are assigned in increasing order.</dd>
 </dl>
 
-<p>The CLOG stores two status bits per XID, <code>00</code> in-progress, <code>01</code>
-committed, <code>10</code> aborted, packed into 4 KB pages, with each page covering 16,320
-ids and chained for overflow. At startup the server records the first XID it assigns; any
-XID below that value still marked in-progress belongs to a session that crashed and is
-treated as effectively aborted, so its half-written rows never become visible.</p>
+<p>The CLOG stores two status bits per XID. <code>00</code> means in-progress.
+<code>01</code> means committed. <code>10</code> means aborted. The bits are packed into 4
+KB pages. Each page covers 16,320 ids and is chained for overflow. At startup the server
+records the first XID it assigns. Any XID below that value still marked in-progress belongs
+to a session that crashed. It is treated as aborted. So its half-written rows never become
+visible.</p>
 
 <div class="callout">
-<strong>Note.</strong> XID assignment is lazy for auto-commit DML: a transaction id is not
-allocated until the first write, so read-only statements do not consume ids. The active
-transaction array holds up to 256 entries; this caps the number of concurrent transactions
-that snapshots can track precisely.
+<strong>Note.</strong> For auto-commit DML, XID assignment is lazy. A transaction id is not
+given out until the first write. So read-only statements do not use up ids. The active
+transaction array holds up to 256 entries. This sets the limit on how many transactions
+running at once a snapshot can track exactly.
 </div>
 
 <h2 id="seealso">11.8. See also</h2>
 <ul>
-<li><a href="/3.0/ref/transaction/">BEGIN / COMMIT / ROLLBACK</a>, transaction control reference</li>
-<li><a href="/3.0/ref/savepoint/">SAVEPOINT</a>, savepoint, <code>ROLLBACK TO</code>, <code>RELEASE</code> reference</li>
-<li><a href="/3.0/ref/set/">SET</a>, setting the isolation level and lock timeout</li>
-<li><a href="/3.0/ref/select/">SELECT</a>, <code>FOR UPDATE</code>, <code>FOR SHARE</code>, and <code>FOR SYSTEM_TIME AS OF</code></li>
-<li><a href="/3.0/ref/update/">UPDATE</a> · <a href="/3.0/ref/delete/">DELETE</a>, soft-delete writers that take row locks</li>
+<li><a href="/3.0/ref/transaction/">BEGIN / COMMIT / ROLLBACK</a>. The transaction control reference.</li>
+<li><a href="/3.0/ref/savepoint/">SAVEPOINT</a>. The reference for savepoints, <code>ROLLBACK TO</code>, and <code>RELEASE</code>.</li>
+<li><a href="/3.0/ref/set/">SET</a>. How to set the isolation level and the lock timeout.</li>
+<li><a href="/3.0/ref/select/">SELECT</a>. Covers <code>FOR UPDATE</code>, <code>FOR SHARE</code>, and <code>FOR SYSTEM_TIME AS OF</code>.</li>
+<li><a href="/3.0/ref/update/">UPDATE</a> · <a href="/3.0/ref/delete/">DELETE</a>. Soft-delete writers that take row locks.</li>
 </ul>
 </main></div>
 <script src="/nav-data.js"></script>

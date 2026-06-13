@@ -15,23 +15,23 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>17. LISTEN / NOTIFY</h1>
-<p class="lede">EvolutionDB ships a lightweight, in-memory publish/subscribe channel: connections register interest with <code>LISTEN</code>, any connection raises an event with <code>NOTIFY</code>, and the server pushes an asynchronous message to every listener, across both the PostgreSQL wire protocol and the native EVO text protocol.</p>
+<p class="lede">EvolutionDB has a small, in-memory publish and subscribe channel. A connection signs up for a channel with <code>LISTEN</code>. Any connection can raise an event with <code>NOTIFY</code>. The server then pushes an async message to every listener. This works on both the PostgreSQL wire protocol and the native EVO text protocol.</p>
 
 <h2 id="overview">17.1. Overview</h2>
-<p>Asynchronous notification gives applications a way to signal each other without polling a table. A connection subscribes to a named <em>channel</em>; later, the same or another connection publishes an event on that channel, optionally carrying a short text <em>payload</em>. The server delivers the event to every subscribed connection as an out-of-band message, it arrives on the listener's socket whether or not it is currently running a query.</p>
-<p>EvolutionDB implements three statements and a small set of helper functions:</p>
+<p>Async notification lets applications signal each other without polling a table. A connection subscribes to a named <em>channel</em>. Later, the same or another connection publishes an event on that channel. The event can carry a short text <em>payload</em>. The server delivers the event to every subscribed connection as an out-of-band message. It arrives on the listener's socket even while the listener is running a query.</p>
+<p>EvolutionDB has three statements and a small set of helper functions.</p>
 <dl class="params">
 <dt><code>LISTEN</code></dt>
 <dd>Subscribe the current session to a channel. See <a href="/3.0/ref/listen-notify">LISTEN / NOTIFY</a>.</dd>
 <dt><code>UNLISTEN</code></dt>
 <dd>Cancel one subscription, or all of them with <code>UNLISTEN *</code>.</dd>
 <dt><code>NOTIFY</code></dt>
-<dd>Publish an event on a channel, optionally with a payload string. Delivery is gated on transaction commit.</dd>
+<dd>Publish an event on a channel. A payload string is optional. The event is delivered when the transaction commits.</dd>
 </dl>
-<p>The registry is a process-local hash map (a djb2-hashed bucket array of 1024 slots, each bucket a linked list of channel records, each channel a linked list of listeners). It is <strong>not persisted</strong> and <strong>not shared across server processes</strong>: subscriptions live and die with the running server and with the connection that created them. For events that must survive a disconnected consumer, see <a href="#durable">§17.8 Durable subscriptions</a>.</p>
+<p>The registry is a process-local hash map. It is a djb2-hashed bucket array of 1024 slots. Each bucket is a linked list of channel records. Each channel is a linked list of listeners. The registry is <strong>not persisted</strong> and is <strong>not shared across server processes</strong>. Subscriptions live and die with the running server and with the connection that created them. For events that must survive a disconnected consumer, see <a href="#durable">§17.8 Durable subscriptions</a>.</p>
 
 <div class="callout">
-<p><strong>Identity / "PID".</strong> Wherever PostgreSQL reports the notifying backend's process id, EvolutionDB reports the sender's internal <em>session id</em> instead. It is a per-connection integer, not an operating-system PID. On the PG wire protocol it is sent in the 4-byte PID field of the <code>NotificationResponse</code> (<code>'A'</code>) message; on the EVO protocol it is the first field of the <code>NOTIFY</code> async frame.</p>
+<p><strong>Identity and "PID".</strong> PostgreSQL reports the process id of the backend that sent the notification. EvolutionDB reports the sender's internal <em>session id</em> instead. The session id is a per-connection integer. It is not an operating-system PID. On the PG wire protocol it is sent in the 4-byte PID field of the <code>NotificationResponse</code> (<code>'A'</code>) message. On the EVO protocol it is the first field of the <code>NOTIFY</code> async frame.</p>
 </div>
 
 <h2 id="listen">17.2. LISTEN, subscribing to a channel</h2>
@@ -39,16 +39,16 @@
 <pre><code><span class="c-key">LISTEN</span> channel
 <span class="c-key">LISTEN</span> channel <span class="c-key">SELF</span></code></pre>
 </div>
-<p>Registering a listen has two effects, both applied immediately when the statement runs (not deferred to commit): the <code>(session, channel)</code> pair is added to the global registry, and the channel is recorded in the session's own listen mirror so helper functions can enumerate it. If the session is already listening on that channel, the registration is an idempotent upsert, only the self-delivery flag (below) is updated.</p>
+<p>A <code>LISTEN</code> has two effects. Both happen right away when the statement runs. They are not deferred to commit. First, the <code>(session, channel)</code> pair is added to the global registry. Second, the channel is recorded in the session's own listen mirror so helper functions can list it. If the session already listens on that channel, the registration is an idempotent upsert. In that case only the self-delivery flag is updated. The flag is explained below.</p>
 <pre><code><span class="c-key">LISTEN</span> orders;
 <span class="c-com">-- session is now subscribed to channel "orders"</span></code></pre>
 
 <h3 id="self">17.2.1. Self-delivery (the <code>SELF</code> keyword)</h3>
-<p>By default a session does <strong>not</strong> receive notifications that it raised itself, matching PostgreSQL's default behavior. EvolutionDB exposes opt-in self-delivery through a dedicated keyword rather than a parameter clause:</p>
+<p>By default a session does <strong>not</strong> receive notifications that it raised itself. This matches PostgreSQL's default behavior. EvolutionDB lets you turn on self-delivery with a special keyword instead of a parameter clause.</p>
 <pre><code><span class="c-key">LISTEN</span> orders <span class="c-key">SELF</span>;
 <span class="c-com">-- now this session WILL be delivered its own NOTIFY orders events</span></code></pre>
 <div class="callout">
-<p><strong>Honest contrast with PostgreSQL.</strong> PostgreSQL has no per-channel "self" switch, same-session delivery is governed globally by the <code>client_min_messages</code>/queue mechanics, and a backend simply does not see its own notifications. EvolutionDB's <code>LISTEN ... SELF</code> is an EvolutionDB-specific extension. The grammar comment notes it was chosen over a <code>WITH (self = true)</code> clause specifically to avoid a token conflict on <code>=</code> in the <code>LISTEN</code> context.</p>
+<p><strong>Honest contrast with PostgreSQL.</strong> PostgreSQL has no per-channel "self" switch. Same-session delivery is controlled globally by the <code>client_min_messages</code> and queue mechanics. A backend simply does not see its own notifications. EvolutionDB's <code>LISTEN ... SELF</code> is an EvolutionDB-specific extension. The grammar comment notes one reason for the keyword. It was chosen over a <code>WITH (self = true)</code> clause to avoid a token conflict on <code>=</code> in the <code>LISTEN</code> context.</p>
 </div>
 
 <h2 id="unlisten">17.3. UNLISTEN, cancelling subscriptions</h2>
@@ -56,28 +56,28 @@
 <pre><code><span class="c-key">UNLISTEN</span> channel
 <span class="c-key">UNLISTEN</span> *</code></pre>
 </div>
-<p><code>UNLISTEN channel</code> removes this session's subscription to a single channel; <code>UNLISTEN *</code> removes every subscription owned by the session. Both forms take effect immediately and both report the command tag <code>UNLISTEN</code>. Cancelling a channel you were not listening on is not an error, it is silently a no-op.</p>
+<p><code>UNLISTEN channel</code> removes this session's subscription to one channel. <code>UNLISTEN *</code> removes every subscription owned by the session. Both forms take effect right away. Both report the command tag <code>UNLISTEN</code>. Cancelling a channel you were not listening on is not an error. It does nothing.</p>
 <pre><code><span class="c-key">UNLISTEN</span> orders;   <span class="c-com">-- stop listening on one channel</span>
 <span class="c-key">UNLISTEN</span> *;        <span class="c-com">-- stop listening on everything</span></code></pre>
 <p>When a channel's last listener is removed, the empty channel record is freed from the registry automatically.</p>
-<p>You do not need to call <code>UNLISTEN</code> before disconnecting: when a connection closes, the server runs a disconnect hook that removes all of that session's subscriptions and drops any pending (un-committed) notifications it had queued.</p>
+<p>You do not need to call <code>UNLISTEN</code> before disconnecting. When a connection closes, the server runs a disconnect hook. The hook removes all of that session's subscriptions. It also drops any pending notifications the session had queued but not yet committed.</p>
 
 <h2 id="notify">17.4. NOTIFY, publishing an event</h2>
 <div class="synopsis">
 <pre><code><span class="c-key">NOTIFY</span> channel
 <span class="c-key">NOTIFY</span> channel<span class="c-com">,</span> <span class="c-str">'payload'</span></code></pre>
 </div>
-<p>A <code>NOTIFY</code> raises an event on a channel with an optional single-quoted payload string. Unlike <code>LISTEN</code>/<code>UNLISTEN</code>, <code>NOTIFY</code> does <strong>not</strong> fire immediately, it is <em>enqueued</em> onto the session's pending list and delivered when the surrounding transaction commits (see <a href="#transactions">§17.5</a>). The command tag is <code>NOTIFY</code>.</p>
+<p>A <code>NOTIFY</code> raises an event on a channel. It can take an optional single-quoted payload string. <code>NOTIFY</code> does <strong>not</strong> fire right away, unlike <code>LISTEN</code> and <code>UNLISTEN</code>. It is <em>enqueued</em> onto the session's pending list. It is delivered when the surrounding transaction commits. See <a href="#transactions">§17.5</a>. The command tag is <code>NOTIFY</code>.</p>
 <pre><code><span class="c-key">NOTIFY</span> orders;
 <span class="c-key">NOTIFY</span> orders<span class="c-com">,</span> <span class="c-str">'order 4711 shipped'</span>;</code></pre>
-<p>Payloads are plain text. Internally the parser strips the surrounding quotes and stages the payload for the executor; an empty payload and an omitted payload are equivalent and deliver an empty string to listeners.</p>
+<p>Payloads are plain text. The parser strips the surrounding quotes and stages the payload for the executor. An empty payload and a missing payload are the same. Both deliver an empty string to listeners.</p>
 
 <h2 id="transactions">17.5. Transactional behavior</h2>
-<p>Notifications respect transaction boundaries. A <code>NOTIFY</code> is buffered until the transaction that issued it commits; if the transaction rolls back, the buffered notifications are discarded and never delivered.</p>
+<p>Notifications respect transaction boundaries. A <code>NOTIFY</code> is buffered until the transaction that issued it commits. If the transaction rolls back, the buffered notifications are discarded. They are never delivered.</p>
 <ul>
-<li><strong>Autocommit.</strong> Outside an explicit <a href="/3.0/ref/transaction">BEGIN</a>, a <code>NOTIFY</code> is flushed and delivered immediately after the statement, so a listener sees the message before the client's next response.</li>
-<li><strong>Explicit transactions.</strong> Inside <code>BEGIN … COMMIT</code>, all enqueued notifications are delivered at <code>COMMIT</code>; a <code>ROLLBACK</code> discards every pending notification for the session.</li>
-<li><strong>Savepoints.</strong> Each pending notification records the <a href="/3.0/ref/savepoint">savepoint</a> depth at which it was raised. <code>ROLLBACK TO SAVEPOINT</code> discards exactly those notifications enqueued after that savepoint, leaving earlier ones queued for the eventual commit.</li>
+<li><strong>Autocommit.</strong> Outside an explicit <a href="/3.0/ref/transaction">BEGIN</a>, a <code>NOTIFY</code> is flushed and delivered right after the statement. A listener sees the message before the client's next response.</li>
+<li><strong>Explicit transactions.</strong> Inside <code>BEGIN … COMMIT</code>, all enqueued notifications are delivered at <code>COMMIT</code>. A <code>ROLLBACK</code> discards every pending notification for the session.</li>
+<li><strong>Savepoints.</strong> Each pending notification records the <a href="/3.0/ref/savepoint">savepoint</a> depth where it was raised. <code>ROLLBACK TO SAVEPOINT</code> discards only the notifications enqueued after that savepoint. Earlier ones stay queued for the eventual commit.</li>
 </ul>
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">NOTIFY</span> orders<span class="c-com">,</span> <span class="c-str">'a'</span>;       <span class="c-com">-- queued (depth 0)</span>
@@ -87,12 +87,12 @@
 <span class="c-key">COMMIT</span>;                      <span class="c-com">-- only 'a' is delivered</span></code></pre>
 
 <h3 id="dedup">17.5.1. Commit-time de-duplication</h3>
-<p>At commit, before fan-out, the pending list is collapsed: duplicate <code>(channel, payload, sender)</code> triples raised in the same transaction are merged into a single delivery. Channel names are compared case-insensitively; payloads are compared exactly (case-sensitively). This matches PostgreSQL's "identical notifications within a transaction are folded" rule and means a tight loop of <code>NOTIFY orders, 'x'</code> delivers one message, not many.</p>
+<p>At commit, before fan-out, the pending list is collapsed. Duplicate <code>(channel, payload, sender)</code> triples raised in the same transaction are merged into a single delivery. Channel names are compared without case. Payloads are compared exactly, with case. This matches PostgreSQL's rule that identical notifications within a transaction are folded. A tight loop of <code>NOTIFY orders, 'x'</code> delivers one message, not many.</p>
 
 <h2 id="delivery">17.6. Delivery model and self-filtering</h2>
-<p>At commit, for each (de-duplicated) pending notification the server takes a read-lock on the registry, copies the current listener list for the channel into a fixed-size snapshot, releases the lock, and only then writes to each listener's connection. This snapshot-then-release pattern means network I/O never happens while the registry lock is held, avoiding deadlocks against per-connection write locks.</p>
-<p>The self-delivery filter is applied during the snapshot: a listener whose <code>session_id</code> equals the sender's is skipped unless that listener subscribed with <code>LISTEN ... SELF</code> (see <a href="#self">§17.2.1</a>).</p>
-<p>Each listener receives the message in its protocol's native asynchronous form:</p>
+<p>At commit, the server handles each de-duplicated pending notification in turn. It takes a read-lock on the registry. It copies the current listener list for the channel into a fixed-size snapshot. It releases the lock. Only then does it write to each listener's connection. This snapshot-then-release pattern means network I/O never happens while the registry lock is held. That avoids deadlocks against per-connection write locks.</p>
+<p>The self-delivery filter is applied during the snapshot. A listener whose <code>session_id</code> matches the sender's is skipped. The exception is a listener that subscribed with <code>LISTEN ... SELF</code>. See <a href="#self">§17.2.1</a>.</p>
+<p>Each listener receives the message in its protocol's native async form.</p>
 <table>
 <thead><tr><th>Protocol</th><th>Frame</th><th>Fields delivered</th></tr></thead>
 <tbody>
@@ -100,15 +100,15 @@
 <tr><td>EVO text (9967)</td><td><code>NOTIFY &lt;session_id&gt; &lt;channel&gt; &lt;payload_len&gt;\n&lt;payload&gt;\n</code></td><td>sender session id, channel, payload length, then the payload bytes</td></tr>
 </tbody>
 </table>
-<p>Both protocols share the same in-memory registry, so a <code>NOTIFY</code> from a <code>psql</code> client can wake an EVO-protocol listener and vice versa.</p>
+<p>Both protocols share the same in-memory registry. A <code>NOTIFY</code> from a <code>psql</code> client can wake an EVO-protocol listener. The reverse also works.</p>
 
 <h2 id="functions">17.7. Helper functions</h2>
-<p>Two function-call forms are available inside SQL expressions for programmatic use, for example from a stored procedure body or a trigger (see <a href="/3.0/ref/call">CALL</a>):</p>
+<p>Two function-call forms are available inside SQL expressions. You can use them in code, for example from a stored procedure body or a trigger. See <a href="/3.0/ref/call">CALL</a>.</p>
 <dl class="params">
 <dt><code>EVO_NOTIFY(channel, payload)</code></dt>
-<dd>Enqueues a notification, equivalent to the <code>NOTIFY</code> statement. <code>PG_NOTIFY(channel, payload)</code> is accepted as a PostgreSQL-compatible alias for the same function. Like the statement form, the event is buffered and delivered at commit.</dd>
+<dd>Enqueues a notification. It works the same as the <code>NOTIFY</code> statement. <code>PG_NOTIFY(channel, payload)</code> is a PostgreSQL-compatible alias for the same function. Like the statement form, the event is buffered and delivered at commit.</dd>
 <dt><code>PG_LISTENING_CHANNELS()</code></dt>
-<dd>Returns the channels the current session is listening on, read from the session's own listen mirror.</dd>
+<dd>Returns the channels the current session is listening on. The list is read from the session's own listen mirror.</dd>
 </dl>
 <pre><code><span class="c-com">-- raise a notification from inside a procedure / trigger</span>
 <span class="c-key">SELECT</span> <span class="c-key">EVO_NOTIFY</span>(<span class="c-str">'orders'</span><span class="c-com">,</span> <span class="c-str">'inserted'</span>);
@@ -117,18 +117,18 @@
 <span class="c-key">SELECT</span> <span class="c-key">PG_LISTENING_CHANNELS</span>();</code></pre>
 
 <h2 id="limits">17.8. Identifiers, limits, and error codes</h2>
-<p>Channel names are case-insensitive (compared with a folded hash and <code>strcasecmp</code>), so <code>orders</code> and <code>ORDERS</code> are the same channel. The relevant fixed limits are:</p>
+<p>Channel names are case-insensitive. They are compared with a folded hash and <code>strcasecmp</code>. So <code>orders</code> and <code>ORDERS</code> are the same channel. The fixed limits are listed below.</p>
 <dl class="params">
 <dt>Channel name length</dt>
-<dd>Maximum 63 characters (64-byte buffer including the terminator), mirroring PostgreSQL's <code>NAMEDATALEN</code>. Over-long or empty names are rejected.</dd>
+<dd>Maximum 63 characters. The buffer is 64 bytes including the terminator. This mirrors PostgreSQL's <code>NAMEDATALEN</code>. Over-long or empty names are rejected.</dd>
 <dt>Payload length</dt>
 <dd>Maximum 8000 bytes. An over-long payload is rejected before delivery.</dd>
 <dt>Per-session LISTEN cap</dt>
-<dd>A session may listen on at most 32 channels concurrently. The thirty-third distinct <code>LISTEN</code> is refused.</dd>
+<dd>A session may listen on at most 32 channels at once. The thirty-third distinct <code>LISTEN</code> is refused.</dd>
 <dt>Snapshot fan-out bound</dt>
 <dd>A single delivery copies up to 1024 listeners per channel into its snapshot.</dd>
 </dl>
-<p>Errors are reported with these SQLSTATE codes:</p>
+<p>Errors are reported with these SQLSTATE codes.</p>
 <table>
 <thead><tr><th>SQLSTATE</th><th>Condition</th></tr></thead>
 <tbody>
@@ -138,24 +138,24 @@
 </table>
 
 <h2 id="durable">17.9. Durable subscriptions</h2>
-<p>Plain <code>LISTEN</code>/<code>NOTIFY</code> is fire-and-forget: a notification is delivered only to connections that are subscribed at the moment of commit. A consumer that is offline when the event fires misses it entirely.</p>
-<p>For an at-least-once, replayable queue, EvolutionDB layers a separate <em>durable subscription</em> feature on top of the same channels. At commit, after the in-memory fan-out, each notification is also appended to every persistent mailbox bound to that channel; a consumer that reconnects later can drain the backlog. This is described in <a href="/3.0/sql/subscriptions">Chapter on durable subscriptions</a> and the <a href="/3.0/ref/create-subscription">CREATE SUBSCRIPTION</a> command. The fast path is unaffected: when a channel has no durable subscribers, no extra work is done.</p>
+<p>Plain <code>LISTEN</code> and <code>NOTIFY</code> are fire-and-forget. A notification is delivered only to connections that are subscribed at the moment of commit. A consumer that is offline when the event fires misses it.</p>
+<p>EvolutionDB adds a separate <em>durable subscription</em> feature on top of the same channels. It gives you an at-least-once, replayable queue. At commit, after the in-memory fan-out, each notification is also appended to every persistent mailbox bound to that channel. A consumer that reconnects later can drain the backlog. This is described in the <a href="/3.0/sql/subscriptions">Chapter on durable subscriptions</a> and the <a href="/3.0/ref/create-subscription">CREATE SUBSCRIPTION</a> command. The fast path is not affected. When a channel has no durable subscribers, no extra work is done.</p>
 
 <div class="callout">
 <p><strong>Notes and limitations</strong></p>
 <ul>
-<li>The listener registry is <strong>in-memory and per-process</strong>. It is not written to <code>evosql.db</code>, is not recovered after a restart, and is not visible to other server processes. Use <a href="#durable">durable subscriptions</a> when an event must survive a disconnect or restart.</li>
-<li>The "PID" reported to listeners is the sender's internal <strong>session id</strong>, not an OS process id.</li>
-<li>Same-session notifications are filtered out by default; opt in per channel with <code>LISTEN ... SELF</code> (an EvolutionDB extension, not standard PostgreSQL syntax).</li>
-<li><code>NOTIFY</code> is commit-gated; a rolled-back transaction (or <code>ROLLBACK TO SAVEPOINT</code> covering the statement) delivers nothing. Identical notifications within one transaction are collapsed to a single delivery.</li>
-<li>Channel names are case-insensitive; payloads are compared case-sensitively for de-duplication.</li>
-<li><code>NOTIFY</code> currently accepts only a channel name and an optional quoted string literal, arbitrary expression payloads are not yet supported by the statement form.</li>
-<li>Disconnecting auto-cancels all of a session's listens and discards its uncommitted pending notifications.</li>
+<li>The listener registry is <strong>in-memory and per-process</strong>. It is not written to <code>evosql.db</code>. It is not recovered after a restart. It is not visible to other server processes. Use <a href="#durable">durable subscriptions</a> when an event must survive a disconnect or restart.</li>
+<li>The "PID" reported to listeners is the sender's internal <strong>session id</strong>. It is not an OS process id.</li>
+<li>Same-session notifications are filtered out by default. Turn them on per channel with <code>LISTEN ... SELF</code>. This is an EvolutionDB extension, not standard PostgreSQL syntax.</li>
+<li><code>NOTIFY</code> is commit-gated. A rolled-back transaction delivers nothing. The same is true for a <code>ROLLBACK TO SAVEPOINT</code> that covers the statement. Identical notifications within one transaction are collapsed to a single delivery.</li>
+<li>Channel names are compared without case. Payloads are compared with case for de-duplication.</li>
+<li><code>NOTIFY</code> currently accepts only a channel name and an optional quoted string literal. The statement form does not yet support arbitrary expression payloads.</li>
+<li>Disconnecting auto-cancels all of a session's listens. It also discards the session's uncommitted pending notifications.</li>
 </ul>
 </div>
 
 <h2 id="example">17.10. End-to-end example</h2>
-<p>Connection A subscribes and waits; connection B publishes:</p>
+<p>Connection A subscribes and waits. Connection B publishes.</p>
 <pre><code><span class="c-com">-- connection A</span>
 <span class="c-key">LISTEN</span> orders;
 <span class="c-com">-- A now blocks/polls for async messages on the channel</span>

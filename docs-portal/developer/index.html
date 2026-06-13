@@ -19,10 +19,10 @@
  <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">DEVELOPER PORTAL</span>
  </div>
  <h1>Build on EvolutionDB</h1>
- <p class="lede">Everything you need to give your app or agent long-term memory: language SDKs, ready-made data connectors, the platform packages, and the wire-protocol reference. Every package here is open source (MIT) and lives in the <a href="https://github.com/alptekin/evolutiondb">monorepo</a>.</p>
+ <p class="lede">Here you find everything you need to give your app or agent long-term memory. You get language SDKs, ready-made data connectors, the platform packages, and the wire-protocol reference. Every package here is open source under the MIT license. They all live in the <a href="https://github.com/alptekin/evolutiondb">monorepo</a>.</p>
 
  <h2 id="start">Quick start</h2>
- <p>Run the database (one binary, PostgreSQL wire on <code>:5433</code> + native EVO on <code>:9967</code>), then talk to it from your language of choice:</p>
+ <p>Run the database first. It is one binary. It speaks the PostgreSQL wire protocol on <code>:5433</code> and the native EVO protocol on <code>:9967</code>. Then you can talk to it from the language you like.</p>
  <pre><code><span class="c-com"># 1. start EvolutionDB</span>
 docker compose up -d
 
@@ -34,7 +34,7 @@ m.save(<span class="c-str">"Alice prefers email over Slack"</span>, tags=[<span 
 m.search(<span class="c-str">"how does Alice like to be contacted?"</span>)</code></pre>
 
  <h2 id="sdks">Memory SDKs</h2>
- <p>Thin clients for the <code>MEMORY STORE</code> / <code>ENTITY STORE</code> primitives, in your language.</p>
+ <p>These are small clients for the <code>MEMORY STORE</code> and <code>ENTITY STORE</code> primitives. You get one for your language.</p>
  <div class="card-grid">
  <a class="doc-card" href="/sdk/python/"><span class="material-symbols-outlined">code</span><h3>Python</h3><p>python-evosql-memory, the reference client.</p></a>
  <a class="doc-card" href="/sdk/node/"><span class="material-symbols-outlined">javascript</span><h3>Node.js</h3><p>node-evosql-memory for JS/TS apps.</p></a>
@@ -43,7 +43,7 @@ m.search(<span class="c-str">"how does Alice like to be contacted?"</span>)</cod
  </div>
 
  <h2 id="connectors">Connectors</h2>
- <p>Drop-in <code>*-sync</code> apps that pull activity from the tools you already use into EvolutionDB long-term memory: GitHub, Azure DevOps, Gmail, Outlook, Teams, Slack, Calendar, Notion, Notes, Browser, iMessage, YouTube and Claude sessions.</p>
+ <p>These are drop-in <code>*-sync</code> apps. They pull activity from the tools you already use into EvolutionDB long-term memory. They work with GitHub, Azure DevOps, Gmail, Outlook, Teams, Slack, Calendar, Notion, Notes, Browser, iMessage, YouTube and Claude sessions.</p>
  <div class="card-grid">
  <a class="doc-card" href="/connectors/github/"><span class="material-symbols-outlined">merge</span><h3>GitHub &amp; Azure DevOps</h3><p>PRs, reviews, pipelines → memory.</p></a>
  <a class="doc-card" href="/connectors/gmail/"><span class="material-symbols-outlined">mail</span><h3>Mail &amp; chat</h3><p>Gmail, Outlook, Teams, Slack, iMessage.</p></a>
@@ -58,7 +58,7 @@ m.search(<span class="c-str">"how does Alice like to be contacted?"</span>)</cod
  <a class="doc-card" href="/platform/orchestrator/"><span class="material-symbols-outlined">tune</span><h3>Orchestrator</h3><p>Supervise the connector fleet.</p></a>
  </div>
 
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Looking for how the engine works inside, function by function? That's the <a href="https://wiki.evolutiondb.org">code wiki</a>.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Do you want to learn how the engine works inside, function by function? You can read the <a href="https://wiki.evolutiondb.org">code wiki</a>.</div></div>
 </main>
 </div>
 <script src="/nav-data.js"></script>

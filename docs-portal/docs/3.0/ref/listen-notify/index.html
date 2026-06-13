@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>LISTEN / UNLISTEN / NOTIFY</h1>
-<p class="lede">Subscribe to, unsubscribe from, and publish messages on a named asynchronous notification channel.</p>
+<p class="lede">Subscribe to a named channel, stop subscribing, and send messages on it.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -27,130 +27,131 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>LISTEN</code> registers the current session as a listener on the notification
-<em>channel</em> named <code>channel</code>. <code>NOTIFY</code> sends a notification, together with an
-optional <em>payload</em> string, to every session currently listening on the
-matching channel. <code>UNLISTEN</code> removes the current session's registration for one
-channel, or for all channels when <code>*</code> is given.</p>
+<p><code>LISTEN</code> signs up the current session to listen on the notification
+<em>channel</em> named <code>channel</code>. <code>NOTIFY</code> sends a notification to every session that
+is listening on the same channel. You can also send an optional <em>payload</em>
+string with it. <code>UNLISTEN</code> removes the current session from one channel. Use
+<code>*</code> to remove it from all channels.</p>
 
-<p>The notification registry is held entirely in server memory and is shared
-between both front-end protocols: connections speaking the PostgreSQL wire
-protocol (port 5433) and connections speaking the native EVO text protocol
-(port 9967) can listen and notify across each other through the same channel
-names. A session's listens are automatically dropped when its connection
-closes.</p>
+<p>The notification registry is kept only in server memory. It is shared
+between both front-end protocols. Connections that speak the PostgreSQL wire
+protocol use port 5433. Connections that speak the native EVO text protocol use
+port 9967. Both kinds of connection can listen and notify each other through the
+same channel names. When a connection closes, its listens are dropped
+automatically.</p>
 
-<p>Channel names are matched case-insensitively (they are folded to lower case
-for lookup). A channel name may be at most 63 bytes long; longer names are
+<p>Channel names are matched without regard to case. They are folded to lower
+case for lookup. A channel name may be at most 63 bytes long. Longer names are
 rejected.</p>
 
 <p><strong>Transactional delivery.</strong> <code>NOTIFY</code> is <em>commit-gated</em>. A
-<code>NOTIFY</code> issued inside an explicit transaction block is not delivered
-immediately, its channel and payload are enqueued on the session and the
-messages are flushed only when the transaction commits. If the transaction
-rolls back, the pending notifications are discarded and nothing is delivered.
-In auto-commit mode (no open <code>BEGIN</code>), the statement commits on its own, so
-the notification is flushed as soon as the <code>NOTIFY</code> statement finishes. By
-contrast, <code>LISTEN</code> and <code>UNLISTEN</code> take effect immediately when the statement
-executes; they are not deferred to commit.</p>
+<code>NOTIFY</code> that runs inside an explicit transaction block is not delivered right
+away. Its channel and payload are queued on the session. The messages are sent
+only when the transaction commits. If the transaction rolls back, the queued
+notifications are dropped and nothing is sent. In auto-commit mode there is no
+open <code>BEGIN</code>. The statement commits on its own. So the notification is sent as
+soon as the <code>NOTIFY</code> statement finishes. <code>LISTEN</code> and <code>UNLISTEN</code> work
+differently. They take effect right away when the statement runs. They are not
+held back until commit.</p>
 
 <p><strong>Self-notification.</strong> By default a session does <em>not</em> receive
-notifications it sends on a channel it is itself listening on. To opt in to
-same-session delivery, register the listen with the <code>SELF</code> keyword
-(<code>LISTEN channel SELF</code>). Re-running <code>LISTEN</code> for a channel the session is
-already listening on simply updates the self-delivery flag in place rather than
-creating a duplicate registration.</p>
+the notifications it sends on a channel it listens to itself. You can opt in to
+same-session delivery. To do this, add the <code>SELF</code> keyword when you listen.
+Write it as <code>LISTEN channel SELF</code>. You can run <code>LISTEN</code> again for a channel the
+session already listens on. This just updates the self-delivery flag in place.
+It does not create a second registration.</p>
 
-<p><strong>Delivery format.</strong> On the PostgreSQL wire protocol a notification is
-delivered as a <code>NotificationResponse</code> (<code>'A'</code>) message carrying the sending
+<p><strong>Delivery format.</strong> On the PostgreSQL wire protocol a notification
+arrives as a <code>NotificationResponse</code> (<code>'A'</code>) message. It carries the sending
 session id, the channel name, and the payload. On the EVO text protocol it
 arrives as an asynchronous <code>NOTIFY &lt;sender-session&gt; &lt;channel&gt; &lt;payload-length&gt;</code>
-line followed by the payload bytes.</p>
+line. The payload bytes follow that line.</p>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>channel</dt>
-<dd>Name of the notification channel, given as an identifier. Maximum 63 bytes;
-matching is case-insensitive. A name longer than the limit (or otherwise
-invalid) raises SQLSTATE <code>42622</code> (<em>name too long</em>).</dd>
+<dd>The name of the notification channel. You give it as an identifier. It can
+be at most 63 bytes long. Matching is not case-sensitive. A name longer than the
+limit raises SQLSTATE <code>42622</code> (<em>name too long</em>). An otherwise invalid name
+raises the same error.</dd>
 
 <dt>SELF</dt>
-<dd>Only valid with <code>LISTEN</code>. Opts the current session in to receiving its own
-<code>NOTIFY</code> messages on this channel. Without <code>SELF</code>, a session's own
-notifications on a channel it listens to are suppressed (the PostgreSQL default
-behavior). This is EvolutionDB's single-keyword spelling of "deliver to self";
-there is no <code>WITH (self = …)</code> clause.</dd>
+<dd>Valid only with <code>LISTEN</code>. It opts the current session in to receive its own
+<code>NOTIFY</code> messages on this channel. Without <code>SELF</code>, a session does not get its
+own notifications on a channel it listens to. This is the PostgreSQL default
+behavior. <code>SELF</code> is EvolutionDB's single-keyword way to say "deliver to self".
+There is no <code>WITH (self = …)</code> clause.</dd>
 
 <dt>*</dt>
-<dd>Only valid with <code>UNLISTEN</code>. Cancels every channel registration owned by the
-current session in one statement.</dd>
+<dd>Valid only with <code>UNLISTEN</code>. It cancels every channel registration owned by
+the current session in one statement.</dd>
 
 <dt>payload</dt>
-<dd>Optional string literal sent along with the notification, separated from the
-channel by a comma. It is delivered verbatim to every listener. The payload may
-be at most 8000 bytes; a longer payload raises SQLSTATE <code>22023</code>
-(<em>payload string too long</em>). When no payload is supplied, an empty payload is
-delivered.</dd>
+<dd>An optional string literal sent with the notification. A comma separates it
+from the channel. It is delivered to every listener exactly as written. The
+payload can be at most 8000 bytes long. A longer payload raises SQLSTATE
+<code>22023</code> (<em>payload string too long</em>). When you do not give a payload, an
+empty payload is delivered.</dd>
 </dl>
 
 <div class="callout">
 <p><strong>Note.</strong> EvolutionDB accepts a quoted string literal as the
-<code>NOTIFY</code> payload. It does not support passing the payload as an arbitrary
-expression in the <code>NOTIFY</code> statement form. To build a payload dynamically, for
-example from query values, use the built-in function <code>evo_notify(channel,
-payload)</code>, which enqueues a notification using the same commit-gated path. The
-companion function <code>pg_listening_channels()</code> returns the channels the current
-session is listening on.</p>
+<code>NOTIFY</code> payload. The <code>NOTIFY</code> statement does not let you pass the payload as
+any other expression. Sometimes you want to build a payload from query values.
+For that, use the built-in function <code>evo_notify(channel, payload)</code>. It queues a
+notification through the same commit-gated path. The companion function
+<code>pg_listening_channels()</code> returns the channels the current session is listening
+on.</p>
 </div>
 
 <h2 id="examples">Examples</h2>
-<p>Configure a session to receive event notifications and then publish to it:</p>
+<p>Set up a session to receive event notifications, then send to it.</p>
 <pre><code><span class="c-key">LISTEN</span> orders_changed;
 
 <span class="c-key">NOTIFY</span> orders_changed;
 <span class="c-key">NOTIFY</span> orders_changed, <span class="c-str">'order 4711 shipped'</span>;</code></pre>
 
-<p>Receive your own notifications on a channel (opt in with <code>SELF</code>):</p>
+<p>Receive your own notifications on a channel. You opt in with <code>SELF</code>.</p>
 <pre><code><span class="c-key">LISTEN</span> heartbeat <span class="c-key">SELF</span>;
 <span class="c-key">NOTIFY</span> heartbeat, <span class="c-str">'ping'</span>;   <span class="c-com">-- this session also receives 'ping'</span></code></pre>
 
-<p>Defer delivery to commit: the listener sees the notification only after
-<code>COMMIT</code>, and never if the transaction is rolled back:</p>
+<p>Hold delivery until commit. The listener sees the notification only after
+<code>COMMIT</code>. It never sees it if the transaction is rolled back.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">NOTIFY</span> orders_changed, <span class="c-str">'pending'</span>;
 <span class="c-key">COMMIT</span>;            <span class="c-com">-- 'pending' is delivered here</span></code></pre>
 
-<p>Stop listening on one channel, then on everything:</p>
+<p>Stop listening on one channel, then on everything.</p>
 <pre><code><span class="c-key">UNLISTEN</span> orders_changed;
 <span class="c-key">UNLISTEN</span> <span class="c-str">*</span>;</code></pre>
 
-<p>Build a payload dynamically with the helper function, and inspect current
-subscriptions:</p>
+<p>Build a payload from query values with the helper function. Then check the
+current subscriptions.</p>
 <pre><code><span class="c-key">SELECT</span> evo_notify(<span class="c-str">'orders_changed'</span>, <span class="c-str">'order '</span> || id || <span class="c-str">' shipped'</span>)
 <span class="c-key">FROM</span> orders <span class="c-key">WHERE</span> id = 4711;
 
 <span class="c-key">SELECT</span> pg_listening_channels();</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>There is no <code>LISTEN</code>, <code>UNLISTEN</code>, or <code>NOTIFY</code> command in the SQL standard;
-these commands follow PostgreSQL.</p>
-<p>Differences from PostgreSQL worth noting:</p>
+<p>The SQL standard has no <code>LISTEN</code>, <code>UNLISTEN</code>, or <code>NOTIFY</code> command. These
+commands follow PostgreSQL.</p>
+<p>Here are the differences from PostgreSQL worth noting.</p>
 <ul>
-<li>EvolutionDB delivers same-session notifications only when the listen was
-registered with the <code>LISTEN channel SELF</code> form. PostgreSQL controls this with
-the <code>NOTIFY</code>-time behavior and lacks a <code>SELF</code> keyword; <code>SELF</code> is an
-EvolutionDB extension and the default (no <code>SELF</code>) matches PostgreSQL's default
-of not echoing a session's own notifications.</li>
-<li>The <code>NOTIFY</code> payload must be a string literal. PostgreSQL likewise requires
-a string literal here; EvolutionDB additionally offers the <code>evo_notify()</code>
-function for computed payloads.</li>
-<li>EvolutionDB's payload limit is 8000 bytes and channel names are limited to
-63 bytes, consistent with PostgreSQL's limits.</li>
-<li>Like PostgreSQL, notifications are commit-gated: messages sent inside a
-transaction are delivered only on <code>COMMIT</code> and dropped on rollback.</li>
-<li>The notification channel registry is in-memory only and shared across both
-the PostgreSQL and EVO protocols; it does not persist across a server restart.
-(For persistent, replayable subscriptions, see <code>CREATE SUBSCRIPTION</code>.)</li>
+<li>EvolutionDB delivers same-session notifications only when the listen used the
+<code>LISTEN channel SELF</code> form. PostgreSQL handles this at <code>NOTIFY</code> time and has no
+<code>SELF</code> keyword. <code>SELF</code> is an EvolutionDB extension. The default with no <code>SELF</code>
+matches PostgreSQL. By default neither one echoes a session's own
+notifications.</li>
+<li>The <code>NOTIFY</code> payload must be a string literal. PostgreSQL also requires a
+string literal here. EvolutionDB adds the <code>evo_notify()</code> function for computed
+payloads.</li>
+<li>EvolutionDB's payload limit is 8000 bytes. Channel names are limited to 63
+bytes. These match PostgreSQL's limits.</li>
+<li>Like PostgreSQL, notifications are commit-gated. Messages sent inside a
+transaction are delivered only on <code>COMMIT</code>. They are dropped on rollback.</li>
+<li>The notification channel registry is in memory only. It is shared across
+both the PostgreSQL and EVO protocols. It does not survive a server restart. For
+subscriptions that persist and can be replayed, see <code>CREATE SUBSCRIPTION</code>.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>

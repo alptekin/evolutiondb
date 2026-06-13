@@ -16,7 +16,7 @@
 <main class="docs-content prose reveal">
 
 <h1>ALTER TABLE</h1>
-<p class="lede">Change the definition of an existing table: add, drop, rename, or retype columns; add, drop, rename, enable, disable, or validate constraints; toggle row-level security; and set or drop a TTL column.</p>
+<p class="lede">Change the definition of a table that already exists. You can add, drop, rename, or retype columns. You can add, drop, rename, enable, disable, or validate constraints. You can turn row-level security on or off. You can also set or drop a TTL column.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -64,130 +64,130 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>ALTER TABLE</code> changes the definition of an existing table. Each statement performs exactly one action, EvolutionDB does <em>not</em> accept a comma-separated list of actions in a single <code>ALTER TABLE</code> command. Issue separate statements to apply several changes.</p>
+<p><code>ALTER TABLE</code> changes the definition of a table that already exists. Each statement does exactly one action. EvolutionDB does <em>not</em> accept a list of actions separated by commas in one <code>ALTER TABLE</code> command. Write a separate statement for each change.</p>
 
-<p>When the named table does not exist, the command fails with <code>relation "table_name" does not exist</code> (SQLSTATE <code>42P01</code>). All actions operate against the system catalog, which stores tables, columns, and constraints in B+ trees.</p>
+<p>If the named table does not exist, the command fails. It returns <code>relation "table_name" does not exist</code> with SQLSTATE <code>42P01</code>. All actions work on the system catalog. The catalog stores tables, columns, and constraints in B+ trees.</p>
 
-<p>The column actions come in two spelling families. <code>ADD COLUMN</code>, <code>RENAME COLUMN ... TO</code>, <code>DROP COLUMN</code> follow the ANSI/PostgreSQL spelling; <code>MODIFY</code> and <code>CHANGE</code> follow MySQL spelling. The <code>COLUMN</code> keyword is optional for <code>DROP</code>, <code>RENAME</code>, <code>MODIFY</code>, and <code>CHANGE</code>. <code>MODIFY</code> retypes a column in place, while <code>CHANGE</code> renames <em>and</em> retypes it in one statement.</p>
+<p>The column actions use two different spellings. <code>ADD COLUMN</code>, <code>RENAME COLUMN ... TO</code>, and <code>DROP COLUMN</code> use the ANSI and PostgreSQL spelling. <code>MODIFY</code> and <code>CHANGE</code> use the MySQL spelling. The <code>COLUMN</code> keyword is optional for <code>DROP</code>, <code>RENAME</code>, <code>MODIFY</code>, and <code>CHANGE</code>. <code>MODIFY</code> changes the type of a column in place. <code>CHANGE</code> renames <em>and</em> retypes a column in one statement.</p>
 
-<p>Adding, dropping, and reordering columns may rewrite existing rows. <code>ADD COLUMN</code> with a <code>FIRST</code> or <code>AFTER</code> position reorders the column in the catalog and rebuilds every tuple, filling the new column with <code>NULL</code>. <code>MODIFY</code>/<code>CHANGE</code> with a position clause likewise rewrites all tuples in the new column order. <code>DROP COLUMN</code> marks the column as dropped in the catalog rather than physically deleting it.</p>
+<p>Adding, dropping, and reordering columns can rewrite the existing rows. <code>ADD COLUMN</code> with a <code>FIRST</code> or <code>AFTER</code> position moves the column in the catalog. It then rebuilds every tuple and fills the new column with <code>NULL</code>. <code>MODIFY</code> and <code>CHANGE</code> with a position clause also rewrite all tuples in the new column order. <code>DROP COLUMN</code> marks the column as dropped in the catalog. It does not delete the data right away.</p>
 
-<p>Adding a <code>CHECK</code>, <code>PRIMARY KEY</code>, or <code>UNIQUE</code> constraint validates the existing rows first and aborts the command if any row violates the new constraint, unless <code>NOT VALIDATE</code> is given (CHECK and FOREIGN KEY only), which records the constraint as not-validated and skips the scan. A later <code>VALIDATE CONSTRAINT</code> runs the deferred check.</p>
+<p>Adding a <code>CHECK</code>, <code>PRIMARY KEY</code>, or <code>UNIQUE</code> constraint checks the existing rows first. The command stops if any row breaks the new constraint. You can skip this check with <code>NOT VALIDATE</code>, which works for CHECK and FOREIGN KEY only. <code>NOT VALIDATE</code> records the constraint as not-validated and skips the row scan. You can run <code>VALIDATE CONSTRAINT</code> later to do the check that was skipped.</p>
 
-<p>On success, column and TTL/RLS actions report <code>ALTER TABLE</code>; constraint actions report <code>command(s) completed successfully!..</code>.</p>
+<p>On success, column, TTL, and RLS actions report <code>ALTER TABLE</code>. Constraint actions report <code>command(s) completed successfully!..</code>.</p>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 
 <dt>table_name</dt>
-<dd>The name of the existing table to alter. Resolved through the current database and schema.</dd>
+<dd>The name of the table you want to change. The name is looked up in the current database and schema.</dd>
 
 <dt>ADD COLUMN <code>column_name</code> <code>data_type</code> [ <code>column_attribute</code>.. ]</dt>
-<dd>Appends a new column to the table. The column is added at the end unless a position clause is supplied. Fails with <code>42701</code> if a column of that name already exists, and with <code>54011</code> if the table already has the maximum number of columns. Supported attributes are the same as in <code>CREATE TABLE</code>, including <code>NOT NULL</code>, <code>NULL</code>, <code>DEFAULT</code> (literal, <code>CURRENT_TIMESTAMP</code>, <code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code>, or an expression), <code>UNIQUE</code>, <code>AUTO_INCREMENT</code> / <code>IDENTITY</code>, <code>CHECK (...)</code>, <code>COMMENT</code>, and <code>GENERATED ALWAYS AS (...) STORED|VIRTUAL</code>. Note: a column added this way is never made part of the primary key. If the column is <code>NOT NULL</code> with no <code>DEFAULT</code> and the table already holds rows, the command fails with <code>23502</code> because existing rows would receive a NULL.</dd>
+<dd>Adds a new column to the table. The column goes at the end unless you give a position clause. The command fails with <code>42701</code> if a column with that name already exists. It fails with <code>54011</code> if the table already has the maximum number of columns. The attributes are the same as in <code>CREATE TABLE</code>. They include <code>NOT NULL</code>, <code>NULL</code>, <code>DEFAULT</code>, <code>UNIQUE</code>, <code>AUTO_INCREMENT</code> / <code>IDENTITY</code>, <code>CHECK (...)</code>, <code>COMMENT</code>, and <code>GENERATED ALWAYS AS (...) STORED|VIRTUAL</code>. A <code>DEFAULT</code> can be a literal, <code>CURRENT_TIMESTAMP</code>, <code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code>, or an expression. A column added this way is never made part of the primary key. The command fails with <code>23502</code> when the column is <code>NOT NULL</code>, has no <code>DEFAULT</code>, and the table already holds rows. This is because the existing rows would get a NULL.</dd>
 
 <dt>FIRST | AFTER <code>existing_column</code></dt>
-<dd>Optional position clause for <code>ADD</code>, <code>MODIFY</code>, and <code>CHANGE</code>. <code>FIRST</code> places the column at ordinal 0; <code>AFTER existing_column</code> places it immediately after the named column. Choosing a position triggers an eager rewrite of every row into the new physical column order.</dd>
+<dd>An optional position clause for <code>ADD</code>, <code>MODIFY</code>, and <code>CHANGE</code>. <code>FIRST</code> puts the column at ordinal 0. <code>AFTER existing_column</code> puts it right after the named column. When you choose a position, every row is rewritten into the new physical column order.</dd>
 
 <dt>DROP COLUMN <code>column_name</code> &nbsp;/&nbsp; DROP <code>column_name</code></dt>
-<dd>Marks a column as dropped. Fails with <code>42703</code> if the column does not exist, and with <code>2BP01</code> if it is part of the primary key, is the only remaining active column, is referenced by a secondary index, or is referenced by a <code>FOREIGN KEY</code> or <code>UNIQUE</code> constraint.</dd>
+<dd>Marks a column as dropped. The command fails with <code>42703</code> if the column does not exist. It fails with <code>2BP01</code> in a few cases. These are when the column is part of the primary key, when it is the only active column left, when a secondary index uses it, or when a <code>FOREIGN KEY</code> or <code>UNIQUE</code> constraint uses it.</dd>
 
 <dt>RENAME COLUMN <code>old_column</code> TO <code>new_column</code> &nbsp;/&nbsp; RENAME <code>old_column</code> TO <code>new_column</code></dt>
-<dd>Renames a column. The <code>COLUMN</code> keyword is optional.</dd>
+<dd>Gives a column a new name. The <code>COLUMN</code> keyword is optional.</dd>
 
 <dt>MODIFY [COLUMN] <code>column_name</code> <code>data_type</code> [ <code>column_attribute</code>.. ]</dt>
-<dd>Changes the type and/or attributes of an existing column. Fails with <code>42703</code> if the column does not exist, with <code>2BP01</code> if the column is part of the primary key and its type would change, and with <code>42804</code> if the old and new types are not automatically convertible. When the new definition adds <code>NOT NULL</code> to a column that was previously nullable, the table is scanned and the command fails with <code>23502</code> if any existing row holds a NULL in that column.</dd>
+<dd>Changes the type or attributes of a column that already exists. The command fails with <code>42703</code> if the column does not exist. It fails with <code>2BP01</code> if the column is part of the primary key and its type would change. It fails with <code>42804</code> if the old type and the new type cannot be converted automatically. The new definition may add <code>NOT NULL</code> to a column that allowed NULL before. In that case the table is scanned. The command then fails with <code>23502</code> if any row holds a NULL in that column.</dd>
 
 <dt>CHANGE [COLUMN] <code>old_column</code> <code>new_column</code> <code>data_type</code> [ <code>column_attribute</code>.. ]</dt>
-<dd>MySQL-style combined rename plus retype: renames <code>old_column</code> to <code>new_column</code> (when the names differ) and then applies the new type and attributes, with the same validations as <code>MODIFY</code>. A position clause is honored.</dd>
+<dd>A MySQL-style action that renames and retypes a column at the same time. It renames <code>old_column</code> to <code>new_column</code> when the names differ. It then applies the new type and attributes. It runs the same checks as <code>MODIFY</code>. A position clause works here too.</dd>
 
 <dt>ADD CONSTRAINT <code>constraint_name</code> CHECK ( <code>expression</code> )</dt>
-<dd>Adds a named <code>CHECK</code> constraint. Every existing row is evaluated against <code>expression</code>; if any row fails, the command aborts (<code>23514</code>) and reports the offending row number. Fails with <code>42710</code> if a constraint of the same name already exists.</dd>
+<dd>Adds a named <code>CHECK</code> constraint. Every existing row is tested against <code>expression</code>. If any row fails, the command stops with <code>23514</code> and reports the row number that failed. The command fails with <code>42710</code> if a constraint with the same name already exists.</dd>
 
 <dt>ADD CONSTRAINT <code>constraint_name</code> UNIQUE ( <code>column</code> [..] )</dt>
-<dd>Adds a named <code>UNIQUE</code> constraint over one or more columns. Fails with <code>42710</code> on a duplicate constraint name.</dd>
+<dd>Adds a named <code>UNIQUE</code> constraint over one or more columns. The command fails with <code>42710</code> if the constraint name is already used.</dd>
 
 <dt>ADD CONSTRAINT <code>constraint_name</code> PRIMARY KEY ( <code>column</code> [..] )</dt>
-<dd>Adds a primary key over the listed columns. Fails with <code>42710</code> if the table already has a primary key, with <code>42703</code> if a named column does not exist, with the not-null violation code if any key column contains NULLs, and with the unique violation code if the existing rows contain duplicate key values.</dd>
+<dd>Adds a primary key over the listed columns. The command fails with <code>42710</code> if the table already has a primary key. It fails with <code>42703</code> if a named column does not exist. It fails with the not-null violation code if any key column holds NULL values. It fails with the unique violation code if the existing rows hold duplicate key values.</dd>
 
 <dt>ADD CONSTRAINT <code>constraint_name</code> FOREIGN KEY ( <code>column</code> [..] ) REFERENCES <code>ref_table</code> ( <code>ref_column</code> [..] ) [ <code>referential_action</code>.. ]</dt>
-<dd>Adds a foreign key referencing <code>ref_table</code>. Fails with <code>42P01</code> if the referenced table does not exist and with <code>42710</code> on a duplicate constraint name.</dd>
+<dd>Adds a foreign key that references <code>ref_table</code>. The command fails with <code>42P01</code> if the referenced table does not exist. It fails with <code>42710</code> if the constraint name is already used.</dd>
 
 <dt><code>referential_action</code></dt>
-<dd>Zero or more clauses attached to a <code>FOREIGN KEY</code>: <code>ON DELETE</code> and <code>ON UPDATE</code> each accept <code>CASCADE</code>, <code>SET NULL</code>, <code>SET DEFAULT</code>, <code>RESTRICT</code>, or <code>NO ACTION</code>; <code>MATCH</code> accepts <code>FULL</code>, <code>PARTIAL</code>, or <code>SIMPLE</code>; and the constraint may be marked <code>[NOT] DEFERRABLE</code>, optionally with <code>INITIALLY DEFERRED</code> or <code>INITIALLY IMMEDIATE</code>.</dd>
+<dd>One or more clauses that you attach to a <code>FOREIGN KEY</code>. You can leave them out. <code>ON DELETE</code> and <code>ON UPDATE</code> each take <code>CASCADE</code>, <code>SET NULL</code>, <code>SET DEFAULT</code>, <code>RESTRICT</code>, or <code>NO ACTION</code>. <code>MATCH</code> takes <code>FULL</code>, <code>PARTIAL</code>, or <code>SIMPLE</code>. You can also mark the constraint <code>[NOT] DEFERRABLE</code>, and add <code>INITIALLY DEFERRED</code> or <code>INITIALLY IMMEDIATE</code>.</dd>
 
 <dt>NOT VALIDATE</dt>
-<dd>Available on <code>ADD CONSTRAINT ... CHECK</code> and <code>ADD CONSTRAINT ... FOREIGN KEY</code>. Records the constraint as not-validated and skips the scan of existing rows, so the constraint applies only to subsequent writes until a later <code>VALIDATE CONSTRAINT</code> is run.</dd>
+<dd>You can use this on <code>ADD CONSTRAINT ... CHECK</code> and <code>ADD CONSTRAINT ... FOREIGN KEY</code>. It records the constraint as not-validated and skips the scan of existing rows. The constraint then applies only to later writes. It stays this way until you run <code>VALIDATE CONSTRAINT</code>.</dd>
 
 <dt>DROP CONSTRAINT <code>constraint_name</code></dt>
-<dd>Removes a constraint by name. Fails with <code>42704</code> if no such constraint exists on the table.</dd>
+<dd>Removes a constraint by name. The command fails with <code>42704</code> if the table has no constraint with that name.</dd>
 
 <dt>RENAME CONSTRAINT <code>old_name</code> TO <code>new_name</code></dt>
-<dd>Renames a constraint. Fails with <code>42704</code> if <code>old_name</code> is not found and <code>42710</code> if <code>new_name</code> is already in use.</dd>
+<dd>Gives a constraint a new name. The command fails with <code>42704</code> if <code>old_name</code> is not found. It fails with <code>42710</code> if <code>new_name</code> is already in use.</dd>
 
 <dt>ENABLE CONSTRAINT <code>constraint_name</code> &nbsp;/&nbsp; DISABLE CONSTRAINT <code>constraint_name</code></dt>
-<dd>Toggles the enabled flag of a constraint. A disabled constraint is not enforced on subsequent writes. Fails with <code>42704</code> if the constraint does not exist.</dd>
+<dd>Turns the enabled flag of a constraint on or off. A disabled constraint is not enforced on later writes. The command fails with <code>42704</code> if the constraint does not exist.</dd>
 
 <dt>VALIDATE CONSTRAINT <code>constraint_name</code></dt>
-<dd>Validates a constraint previously added with <code>NOT VALIDATE</code> by checking it against the existing rows and marking it validated.</dd>
+<dd>Validates a constraint that was added with <code>NOT VALIDATE</code>. It checks the constraint against the existing rows. It then marks the constraint as validated.</dd>
 
 <dt>ENABLE / DISABLE ROW LEVEL SECURITY</dt>
-<dd>Sets or clears the row-level-security flag on the table. The keyword sequence must be exactly <code>ROW LEVEL SECURITY</code>; any other word after <code>ROW</code> is a syntax error.</dd>
+<dd>Sets or clears the row-level-security flag on the table. The keywords must be exactly <code>ROW LEVEL SECURITY</code>. Any other word after <code>ROW</code> is a syntax error.</dd>
 
 <dt>SET TTL_COLUMN = <code>'column_name'</code></dt>
-<dd>Designates a timestamp column as the table's time-to-live column. The value is a single-quoted string literal. Fails if the named column does not exist on the table.</dd>
+<dd>Sets a timestamp column as the time-to-live column for the table. The value is a string in single quotes. The command fails if the named column does not exist on the table.</dd>
 
 <dt>DROP TTL</dt>
-<dd>Clears the table's TTL column designation.</dd>
+<dd>Clears the TTL column setting on the table.</dd>
 
 </dl>
 
 <h2 id="examples">Examples</h2>
 
-<p>Add a nullable column, then a column with a default placed after an existing one:</p>
+<p>Add a column that allows NULL. Then add a column with a default and place it after an existing column.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD COLUMN</span> nickname <span class="c-key">VARCHAR</span>(50);
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD COLUMN</span> created_at <span class="c-key">TIMESTAMP</span>
     <span class="c-key">DEFAULT</span> CURRENT_TIMESTAMP <span class="c-key">AFTER</span> nickname;</code></pre>
 
-<p>Rename and retype columns (PostgreSQL and MySQL spellings):</p>
+<p>Rename and retype columns. These examples show the PostgreSQL and MySQL spellings.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">RENAME COLUMN</span> nickname <span class="c-key">TO</span> display_name;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">MODIFY COLUMN</span> display_name <span class="c-key">VARCHAR</span>(100) <span class="c-key">NOT NULL</span>;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">CHANGE</span> display_name full_name <span class="c-key">VARCHAR</span>(120);</code></pre>
 
-<p>Drop a column:</p>
+<p>Drop a column.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">DROP COLUMN</span> full_name;</code></pre>
 
-<p>Add constraints:</p>
+<p>Add constraints.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD CONSTRAINT</span> chk_age <span class="c-key">CHECK</span> (age &gt;= 18);
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD CONSTRAINT</span> uq_email <span class="c-key">UNIQUE</span> (email);
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD CONSTRAINT</span> pk_emp <span class="c-key">PRIMARY KEY</span> (id);
 <span class="c-key">ALTER TABLE</span> orders <span class="c-key">ADD CONSTRAINT</span> fk_emp <span class="c-key">FOREIGN KEY</span> (emp_id)
     <span class="c-key">REFERENCES</span> employees (id) <span class="c-key">ON DELETE CASCADE</span>;</code></pre>
 
-<p>Add a foreign key without validating existing data, then validate it later:</p>
+<p>Add a foreign key without checking the existing data. Then validate it later.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> orders <span class="c-key">ADD CONSTRAINT</span> fk_emp2 <span class="c-key">FOREIGN KEY</span> (emp_id)
     <span class="c-key">REFERENCES</span> employees (id) <span class="c-key">NOT VALIDATE</span>;
 <span class="c-key">ALTER TABLE</span> orders <span class="c-key">VALIDATE CONSTRAINT</span> fk_emp2;</code></pre>
 
-<p>Rename, disable, re-enable, and drop a constraint:</p>
+<p>Rename, disable, enable again, and drop a constraint.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">RENAME CONSTRAINT</span> chk_age <span class="c-key">TO</span> chk_min_age;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">DISABLE CONSTRAINT</span> chk_min_age;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">ENABLE CONSTRAINT</span> chk_min_age;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">DROP CONSTRAINT</span> chk_min_age;</code></pre>
 
-<p>Toggle row-level security and manage a TTL column:</p>
+<p>Turn row-level security on and off, and manage a TTL column.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> sessions <span class="c-key">ENABLE ROW LEVEL SECURITY</span>;
 <span class="c-key">ALTER TABLE</span> sessions <span class="c-key">SET TTL_COLUMN =</span> <span class="c-str">'expires_at'</span>;
 <span class="c-key">ALTER TABLE</span> sessions <span class="c-key">DROP TTL</span>;
 <span class="c-key">ALTER TABLE</span> sessions <span class="c-key">DISABLE ROW LEVEL SECURITY</span>;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>The SQL standard defines <code>ALTER TABLE</code> with <code>ADD</code>, <code>DROP</code>, and <code>ALTER COLUMN</code> subforms. EvolutionDB deliberately blends PostgreSQL and MySQL spellings:</p>
+<p>The SQL standard defines <code>ALTER TABLE</code> with the <code>ADD</code>, <code>DROP</code>, and <code>ALTER COLUMN</code> subforms. EvolutionDB mixes the PostgreSQL and MySQL spellings on purpose.</p>
 <ul>
-<li><strong>PostgreSQL-style</strong> forms supported: <code>ADD COLUMN</code>, <code>DROP COLUMN</code>, <code>RENAME COLUMN ... TO</code>, named <code>ADD CONSTRAINT</code> for <code>CHECK</code> / <code>UNIQUE</code> / <code>PRIMARY KEY</code> / <code>FOREIGN KEY</code>, <code>DROP CONSTRAINT</code>, <code>RENAME CONSTRAINT</code>, <code>VALIDATE CONSTRAINT</code>, the referential <code>MATCH</code> and <code>DEFERRABLE</code> clauses, and <code>ENABLE / DISABLE ROW LEVEL SECURITY</code>.</li>
-<li><strong>MySQL-style</strong> forms supported: <code>MODIFY [COLUMN]</code>, <code>CHANGE [COLUMN]</code>, the optional <code>COLUMN</code> keyword on <code>DROP</code>/<code>RENAME</code>, and the <code>FIRST</code> / <code>AFTER</code> column-position clauses.</li>
-<li><strong>Differences from PostgreSQL.</strong> PostgreSQL spells deferred validation <code>NOT VALID</code>; EvolutionDB uses <code>NOT VALIDATE</code>. PostgreSQL writes <code>ALTER COLUMN ... TYPE</code> and <code>SET/DROP NOT NULL</code>; EvolutionDB instead retypes through <code>MODIFY</code>/<code>CHANGE</code>. <code>ENABLE / DISABLE CONSTRAINT</code> is an EvolutionDB extension (PostgreSQL has no per-constraint enable flag). EvolutionDB does not accept multiple comma-separated actions in one statement.</li>
-<li><strong>EvolutionDB extensions.</strong> <code>SET TTL_COLUMN = '...'</code> and <code>DROP TTL</code> manage automatic row expiry and have no SQL-standard or PostgreSQL equivalent.</li>
-<li><strong>Not supported.</strong> Clauses such as <code>ALTER COLUMN ... SET DEFAULT</code>, <code>SET/DROP NOT NULL</code>, <code>OWNER TO</code>, <code>SET SCHEMA</code>, <code>SET TABLESPACE</code>, <code>INHERIT</code>, and <code>RENAME TO</code> (table rename, which is a separate statement) are not part of the <code>ALTER TABLE</code> grammar.</li>
+<li><strong>PostgreSQL-style</strong> forms that are supported. These are <code>ADD COLUMN</code>, <code>DROP COLUMN</code>, <code>RENAME COLUMN ... TO</code>, named <code>ADD CONSTRAINT</code> for <code>CHECK</code> / <code>UNIQUE</code> / <code>PRIMARY KEY</code> / <code>FOREIGN KEY</code>, <code>DROP CONSTRAINT</code>, <code>RENAME CONSTRAINT</code>, <code>VALIDATE CONSTRAINT</code>, the referential <code>MATCH</code> and <code>DEFERRABLE</code> clauses, and <code>ENABLE / DISABLE ROW LEVEL SECURITY</code>.</li>
+<li><strong>MySQL-style</strong> forms that are supported. These are <code>MODIFY [COLUMN]</code>, <code>CHANGE [COLUMN]</code>, the optional <code>COLUMN</code> keyword on <code>DROP</code> and <code>RENAME</code>, and the <code>FIRST</code> / <code>AFTER</code> column-position clauses.</li>
+<li><strong>Differences from PostgreSQL.</strong> PostgreSQL spells deferred validation <code>NOT VALID</code>. EvolutionDB uses <code>NOT VALIDATE</code>. PostgreSQL writes <code>ALTER COLUMN ... TYPE</code> and <code>SET/DROP NOT NULL</code>. EvolutionDB retypes a column through <code>MODIFY</code> and <code>CHANGE</code> instead. <code>ENABLE / DISABLE CONSTRAINT</code> is an EvolutionDB extension. PostgreSQL has no per-constraint enable flag. EvolutionDB does not accept several actions separated by commas in one statement.</li>
+<li><strong>EvolutionDB extensions.</strong> <code>SET TTL_COLUMN = '...'</code> and <code>DROP TTL</code> manage automatic row expiry. They have no equivalent in the SQL standard or in PostgreSQL.</li>
+<li><strong>Not supported.</strong> Some clauses are not part of the <code>ALTER TABLE</code> grammar. These are <code>ALTER COLUMN ... SET DEFAULT</code>, <code>SET/DROP NOT NULL</code>, <code>OWNER TO</code>, <code>SET SCHEMA</code>, <code>SET TABLESPACE</code>, <code>INHERIT</code>, and <code>RENAME TO</code>. <code>RENAME TO</code> renames a table and is a separate statement.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>

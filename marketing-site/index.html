@@ -232,7 +232,7 @@
 <span class="text-neon-cyan">for AI Agents.</span>
  </h1>
 <p class="reveal active stagger-3 font-body-lg text-body-lg text-on-surface-variant max-w-xl">
- EvolutionDB is an open-source SQL database engine written in C, purpose-built to be the long-term memory for AI agents: relational storage, agent memory primitives, and a native vector index in a single binary.
+ EvolutionDB is an open-source SQL database written in C. It gives AI agents a memory that lasts. One binary holds your tables, your agent memory, and a vector index.
  </p>
 <div class="reveal active stagger-4 flex flex-col sm:flex-row gap-4 pt-4">
 <a class="px-8 py-4 rounded-lg bg-gradient-to-r from-neon-cyan to-deep-indigo text-on-primary font-bold transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(34,211,238,0.3)] shimmer-effect text-center" href="https://github.com/alptekin/evolutiondb">
@@ -299,44 +299,44 @@
 <div class="reveal stagger-1 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">memory</span>
 <h3 class="font-headline-md text-[24px] text-pure-white mb-4">Memory In-Engine</h3>
-<p class="text-on-surface-variant text-body-md">First-class MEMORY STORE and ENTITY STORE SQL primitives. Agent long-term memory is a storage-engine feature, not a bolt-on.</p>
+<p class="text-on-surface-variant text-body-md">MEMORY STORE and ENTITY STORE are built into the SQL engine. Agent memory is part of the database itself. It is not an add-on.</p>
 </div>
 <div class="reveal stagger-2 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-secondary text-4xl mb-4">scatter_plot</span>
 <h3 class="font-headline-md text-[24px] text-pure-white mb-4">Native Vectors</h3>
-<p class="text-on-surface-variant text-body-md">A VECTOR(N) type and an HNSW index live in the core, enabling semantic plus lexical hybrid search without extra services.</p>
+<p class="text-on-surface-variant text-body-md">The engine has a VECTOR(N) type and an HNSW index. You can run meaning-based and keyword search together. You do not need any extra service.</p>
 </div>
 <div class="reveal stagger-3 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-tertiary text-4xl mb-4">update</span>
 <h3 class="font-headline-md text-[24px] text-pure-white mb-4">Time-Travel</h3>
-<p class="text-on-surface-variant text-body-md">An MVCC engine with AS OF historical queries. Read your data as it was at any point in time, so you never lose the past.</p>
+<p class="text-on-surface-variant text-body-md">EvolutionDB keeps old versions of your rows. You can read your data as it was at any past time with AS OF. You never lose the past.</p>
 </div>
 </div>
 </div>
 <!-- Tertiary Capabilities Section -->
 <div class="mt-40 w-full">
-<h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-4">Built for Agents, Grounded in Real Storage</h2>
-<p class="reveal stagger-1 text-center text-on-surface-variant text-body-md max-w-2xl mx-auto mb-16">One server speaks the PostgreSQL wire protocol and a native EVO text protocol, so it works with psql and DBeaver, and it ships an MCP server and a standalone agent for AI-native workflows.</p>
+<h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-4">Built for Agents on Real Storage</h2>
+<p class="reveal stagger-1 text-center text-on-surface-variant text-body-md max-w-2xl mx-auto mb-16">One server speaks two protocols. It speaks the PostgreSQL wire protocol and a native EVO protocol. So it works with psql and DBeaver. It also ships an MCP server and a standalone agent.</p>
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
 <div class="reveal stagger-1 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">lan</span>
 <h3 class="font-headline-md text-[20px] text-pure-white mb-3">Dual Protocol</h3>
-<p class="text-on-surface-variant text-body-md">PostgreSQL wire on :5433 and a native EVO protocol on :9967 from one binary. Zero-Docker embedded mode included.</p>
+<p class="text-on-surface-variant text-body-md">One binary serves the PostgreSQL wire protocol on port 5433. It also serves the EVO protocol on port 9967. An embedded mode runs without Docker.</p>
 </div>
 <div class="reveal stagger-2 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-secondary text-4xl mb-4">smart_toy</span>
 <h3 class="font-headline-md text-[20px] text-pure-white mb-3">Agent-Native</h3>
-<p class="text-on-surface-variant text-body-md">An MCP server and a standalone agent. Actions stay human-approved. A draft is queued, and a person reviews it before anything is sent.</p>
+<p class="text-on-surface-variant text-body-md">EvolutionDB ships an MCP server and a standalone agent. Every action needs human approval. The agent saves a draft first. A person reads it before anything is sent.</p>
 </div>
 <div class="reveal stagger-3 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-tertiary text-4xl mb-4">storage</span>
 <h3 class="font-headline-md text-[20px] text-pure-white mb-3">Unified Storage</h3>
-<p class="text-on-surface-variant text-body-md">4KB slotted pages, B+ tree indexes, a Clock-Sweep buffer pool, and a write-ahead log with crash recovery.</p>
+<p class="text-on-surface-variant text-body-md">It uses 4KB pages, B+ tree indexes, and a Clock-Sweep buffer pool. A write-ahead log keeps your data safe after a crash.</p>
 </div>
 <div class="reveal stagger-4 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">shield_lock</span>
 <h3 class="font-headline-md text-[20px] text-pure-white mb-3">Secure & Multi-Tenant</h3>
-<p class="text-on-surface-variant text-body-md">Per-tenant DATABASE, USER and GRANT isolation, with TDE page encryption (AES-256) and PBKDF2-SHA256 auth.</p>
+<p class="text-on-surface-variant text-body-md">Each tenant gets its own DATABASE, USER, and GRANT. Pages are encrypted with AES-256. Logins use PBKDF2-SHA256.</p>
 </div>
 </div>
 </div>
@@ -344,7 +344,7 @@
 <div class="mt-40 w-full">
 <div class="reveal glass-panel rounded-xl p-margin-lg text-center flex flex-col items-center gap-6 shadow-[0_40px_80px_rgba(0,0,0,0.4)]">
 <h2 class="font-headline-md text-headline-md text-pure-white text-glow">Give your agents a memory that lasts.</h2>
-<p class="text-on-surface-variant text-body-md max-w-xl">Open source under the MIT license. Clone it, run a single binary, and connect with the tools you already use.</p>
+<p class="text-on-surface-variant text-body-md max-w-xl">EvolutionDB is open source under the MIT license. Clone it, run one binary, and connect with the tools you already use.</p>
 <div class="flex flex-col sm:flex-row gap-4 pt-2">
 <a class="px-8 py-4 rounded-lg bg-gradient-to-r from-neon-cyan to-deep-indigo text-on-primary font-bold transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(34,211,238,0.3)] shimmer-effect text-center" href="https://github.com/alptekin/evolutiondb">
  Get Started

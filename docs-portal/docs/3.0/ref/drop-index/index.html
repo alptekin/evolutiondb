@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>DROP INDEX</h1>
-<p class="lede">Remove a secondary index from the database and reclaim the storage it occupied.</p>
+<p class="lede">Remove a secondary index from the database. The storage it used is freed.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -23,33 +23,33 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>DROP INDEX</code> removes an existing secondary index. The index is located by its name alone: EvolutionDB searches every table for an index with the given name, so the owning table does not need to be (and cannot be) specified in the command.</p>
-<p>When the index is found, its backing structure is destroyed according to the index's type:</p>
+<p><code>DROP INDEX</code> removes an existing secondary index. The index is found by its name only. EvolutionDB searches every table for an index with that name. So you do not give the table that owns the index. You also cannot give it.</p>
+<p>When the index is found, its backing structure is destroyed. The way it is destroyed depends on the index type.</p>
 <ul>
-<li>A B+ tree index has its tree pages freed (the default for <code>CREATE INDEX</code> and <code>CREATE UNIQUE INDEX</code>).</li>
-<li>A hash index (created with <code>USING HASH</code>) has its hash directory and bucket pages freed.</li>
+<li>A B+ tree index has its tree pages freed. This is the default for <code>CREATE INDEX</code> and <code>CREATE UNIQUE INDEX</code>.</li>
+<li>A hash index has its hash directory and bucket pages freed. You create this type with <code>USING HASH</code>.</li>
 <li>An HNSW approximate-nearest-neighbor index has its in-memory graph released.</li>
 </ul>
-<p>After the backing structure is destroyed, the corresponding entry is removed from the system catalog. On success the server reports <code>Index '<i>index_name</i>' dropped.</code></p>
-<p>A primary-key index cannot be dropped with this command; attempting to do so raises an error. Drop or alter the table to remove a primary key constraint instead.</p>
+<p>After the backing structure is destroyed, the matching entry is removed from the system catalog. On success the server reports <code>Index '<i>index_name</i>' dropped.</code></p>
+<p>You cannot drop a primary-key index with this command. If you try, you get an error. Drop the table or alter it to remove the primary key constraint instead.</p>
 <div class="callout">
-<p><strong>Note.</strong> The index name must match an index that actually exists. If no index by that name is found, the command fails with <code>index '<i>index_name</i>' does not exist</code>. EvolutionDB's grammar does not accept an <code>IF EXISTS</code> clause, so there is no built-in way to suppress this error.</p>
+<p><strong>Note.</strong> The index name must match an index that really exists. If no index has that name, the command fails with <code>index '<i>index_name</i>' does not exist</code>. EvolutionDB's grammar does not accept an <code>IF EXISTS</code> clause. So there is no built-in way to hide this error.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt><code>index_name</code></dt>
-<dd>The name of the index to remove. Because the lookup is by name across all tables, the name identifies the index on its own; no schema qualifier or owning-table reference is used. The name must refer to an existing secondary index that is not a primary-key index.</dd>
+<dd>The name of the index to remove. The lookup is by name across all tables. So the name finds the index on its own. You do not use a schema qualifier or the owning table. The name must point to an existing secondary index. It must not be a primary-key index.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create an index, then drop it by name:</p>
+<p>Create an index. Then drop it by name:</p>
 <pre><code><span class="c-key">CREATE INDEX</span> idx_users_email <span class="c-key">ON</span> users (email)<span class="c-key">;</span>
 <span class="c-key">DROP INDEX</span> idx_users_email<span class="c-key">;</span></code></pre>
-<p>Drop a hash index created with <code>USING HASH</code>. The drop command is the same regardless of how the index was built:</p>
+<p>Drop a hash index made with <code>USING HASH</code>. The drop command is the same for every index type:</p>
 <pre><code><span class="c-key">CREATE INDEX</span> idx_orders_status <span class="c-key">ON</span> orders (status) <span class="c-key">USING HASH</span><span class="c-key">;</span>
 <span class="c-key">DROP INDEX</span> idx_orders_status<span class="c-key">;</span></code></pre>
-<p>Attempting to drop a primary-key index fails:</p>
+<p>A try to drop a primary-key index fails:</p>
 <pre><code><span class="c-com">-- raises: cannot drop primary key index '...'</span>
 <span class="c-key">DROP INDEX</span> users_pkey<span class="c-key">;</span></code></pre>
 <p>Dropping an index that does not exist fails:</p>
@@ -57,16 +57,16 @@
 <span class="c-key">DROP INDEX</span> no_such_index<span class="c-key">;</span></code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>DROP INDEX</code> is not part of the core SQL standard; the standard leaves index management to implementations. EvolutionDB's form is deliberately minimal.</p>
-<p>Compared to PostgreSQL, EvolutionDB accepts only <code>DROP INDEX index_name</code>. The following PostgreSQL clauses are <strong>not</strong> supported by EvolutionDB's grammar and must be omitted:</p>
+<p><code>DROP INDEX</code> is not part of the core SQL standard. The standard leaves index management to each database. EvolutionDB's form is kept very small on purpose.</p>
+<p>Next to PostgreSQL, EvolutionDB accepts only <code>DROP INDEX index_name</code>. EvolutionDB's grammar does <strong>not</strong> support these PostgreSQL clauses. You must leave them out.</p>
 <ul>
-<li><code>IF EXISTS</code>, not accepted; dropping a missing index always raises an error.</li>
-<li><code>CONCURRENTLY</code>, not accepted; the drop is not online/concurrent.</li>
-<li><code>CASCADE</code> / <code>RESTRICT</code>, not accepted.</li>
-<li>Dropping multiple indexes in one statement (<code>DROP INDEX a, b</code>), not accepted; one index name per statement.</li>
-<li>Schema-qualified names (<code>schema.index</code>), the index is resolved by bare name across all tables.</li>
+<li><code>IF EXISTS</code> is not accepted. A drop of a missing index always raises an error.</li>
+<li><code>CONCURRENTLY</code> is not accepted. The drop is not online or concurrent.</li>
+<li><code>CASCADE</code> and <code>RESTRICT</code> are not accepted.</li>
+<li>You cannot drop many indexes in one statement. <code>DROP INDEX a, b</code> is not accepted. Use one index name per statement.</li>
+<li>Schema-qualified names are not used. <code>schema.index</code> does not apply. The index is found by its bare name across all tables.</li>
 </ul>
-<p>Unlike PostgreSQL, EvolutionDB explicitly refuses to drop a primary-key index through this command.</p>
+<p>Unlike PostgreSQL, EvolutionDB will not drop a primary-key index with this command.</p>
 
 <h2 id="see-also">See Also</h2>
 <ul>

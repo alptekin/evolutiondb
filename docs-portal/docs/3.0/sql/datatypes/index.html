@@ -15,22 +15,22 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>8. Data Types</h1>
-<p class="lede">EvolutionDB ships a fixed set of built-in column types, each carrying a numeric <em>type code</em> that encodes both its family and its size parameter; this chapter documents the types the engine actually implements and how each is stored in the binary tuple.</p>
+<p class="lede">EvolutionDB has a fixed set of built-in column types. Each type carries a numeric <em>type code</em>. The code holds both the family and the size. This chapter lists the types the engine really supports. It also shows how each one is stored in the binary tuple.</p>
 
 <h2 id="overview">8.1. Overview</h2>
-<p>Every column declared in a <a href="/3.0/ref/create-table/">CREATE TABLE</a> statement is resolved by the parser into a single integer, the <strong>type code</strong> (<code>typeVal</code>). All type metadata in the catalog and all encode/decode decisions at run time flow from this one number. The encoding is:</p>
+<p>Every column in a <a href="/3.0/ref/create-table/">CREATE TABLE</a> statement is turned by the parser into a single integer. This integer is the <strong>type code</strong> (<code>typeVal</code>). All type metadata in the catalog comes from this one number. All encode and decode choices at run time come from it too. The encoding works like this:</p>
 <pre><code><span class="c-com">-- typeVal = family × 10000 + size</span>
 family  = typeVal / 10000
 size    = typeVal % 10000</code></pre>
-<p>The <code>family</code> selects the on-disk representation (how the value is laid out in bytes); the <code>size</code> sub-field carries a length, precision, dimension, or sub-type, depending on the family. For example, <code>VARCHAR(50)</code> resolves to <code>130050</code> (family <code>13</code>, size <code>50</code>) and <code>VECTOR(3)</code> resolves to <code>260003</code> (family <code>26</code>, dimension <code>3</code>).</p>
-<p>Internally the storage layer does not switch on the exact code but on the family alone. The decoder computes <code>type_family(type_code) = type_code / 10000</code> and dispatches to one of a small number of physical encodings (see <a href="#storage">§8.10</a>). This is why several spelled-out SQL types that differ only in declared width, for instance <code>TINYINT</code>, <code>SMALLINT</code>, <code>MEDIUMINT</code>, <code>INT</code>, and <code>INTEGER</code>, share an identical physical layout.</p>
+<p>The <code>family</code> picks the on-disk form. This is how the value is laid out in bytes. The <code>size</code> sub-field holds a length, precision, dimension, or sub-type. The meaning depends on the family. For example, <code>VARCHAR(50)</code> becomes <code>130050</code>. Here the family is <code>13</code> and the size is <code>50</code>. As another example, <code>VECTOR(3)</code> becomes <code>260003</code>. Here the family is <code>26</code> and the dimension is <code>3</code>.</p>
+<p>Inside, the storage layer does not look at the exact code. It looks only at the family. The decoder computes <code>type_family(type_code) = type_code / 10000</code>. Then it picks one of a small number of physical encodings. See <a href="#storage">§8.10</a>. This is why some SQL types share the same physical layout. They differ only in declared width. The types <code>TINYINT</code>, <code>SMALLINT</code>, <code>MEDIUMINT</code>, <code>INT</code>, and <code>INTEGER</code> are one such group.</p>
 
 <div class="callout">
-<p><strong>Note: declared width is metadata, not enforcement.</strong> A declared length such as the <code>50</code> in <code>VARCHAR(50)</code> is preserved in the type code and the catalog, but the engine does not currently reject or truncate over-length string values on insert: strings are stored with a <code>uint16</code> byte-length prefix and the declared size is informational. Likewise <code>UNSIGNED</code> and <code>ZEROFILL</code> attributes are parsed and folded into the type code (see <a href="#integers">§8.3</a>) but do not change the signed 32-bit physical storage.</p>
+<p><strong>Note. Declared width is metadata. It is not enforced.</strong> A declared length is kept in the type code and the catalog. The <code>50</code> in <code>VARCHAR(50)</code> is one such length. But the engine does not reject or truncate over-length string values on insert. Strings are stored with a <code>uint16</code> byte-length prefix. The declared size is only for information. In the same way, the <code>UNSIGNED</code> and <code>ZEROFILL</code> attributes are parsed and folded into the type code. See <a href="#integers">§8.3</a>. They do not change the signed 32-bit physical storage.</p>
 </div>
 
 <h2 id="type-table">8.2. Built-in type reference</h2>
-<p>The table below lists the type families recognized by the grammar, the base type code each maps to, and the physical encoding the storage layer uses for that family. Codes shown with <code>+ size</code> add a length/precision/dimension parameter to the base.</p>
+<p>The table below lists the type families the grammar knows. It shows the base type code for each one. It also shows the physical encoding the storage layer uses for that family. Codes shown with <code>+ size</code> add a length, precision, or dimension value to the base.</p>
 
 <table>
 <thead><tr><th>SQL type(s)</th><th>Family</th><th>Type code</th><th>Physical encoding</th></tr></thead>
@@ -62,117 +62,117 @@ size    = typeVal % 10000</code></pre>
 </tbody>
 </table>
 
-<p>The decoder groups families <code>1</code>–<code>5</code> together as a single 4-byte signed integer, families <code>7</code> and <code>8</code> together as an 8-byte double, and treats every family it does not have an explicit case for (10–17, 20, 21, 23, and others) as a length-prefixed string. The remaining families, <code>6</code> (BIGINT), <code>9</code> (FLOAT), <code>18</code> (UUID), <code>22</code> (BOOLEAN), <code>25</code> (ARRAY), <code>26</code> (VECTOR), each have a dedicated codec described below.</p>
+<p>The decoder groups families <code>1</code>–<code>5</code> together as one 4-byte signed integer. It groups families <code>7</code> and <code>8</code> together as an 8-byte double. Any family with no explicit case is treated as a length-prefixed string. This covers families 10–17, 20, 21, 23, and more. The other families each have their own codec. These are <code>6</code> for BIGINT, <code>9</code> for FLOAT, <code>18</code> for UUID, <code>22</code> for BOOLEAN, <code>25</code> for ARRAY, and <code>26</code> for VECTOR. They are described below.</p>
 
 <h2 id="integers">8.3. Integer types</h2>
-<p>EvolutionDB accepts the integer spellings <code>BIT</code>, <code>TINYINT</code>, <code>SMALLINT</code>, <code>MEDIUMINT</code>, <code>INT</code>, and <code>INTEGER</code> (families 1–5) and stores all of them identically as a <strong>signed 32-bit little-endian</strong> value. On encode the text value is passed through <code>atoi()</code>; on decode it is rendered with <code>%d</code>.</p>
+<p>EvolutionDB accepts these integer spellings. They are <code>BIT</code>, <code>TINYINT</code>, <code>SMALLINT</code>, <code>MEDIUMINT</code>, <code>INT</code>, and <code>INTEGER</code>. They belong to families 1–5. It stores all of them the same way. The form is a <strong>signed 32-bit little-endian</strong> value. On encode the text value is passed through <code>atoi()</code>. On decode it is rendered with <code>%d</code>.</p>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> t (
   a <span class="c-key">INT</span>,
   b <span class="c-key">SMALLINT</span>,
   c <span class="c-key">INTEGER</span> <span class="c-key">UNSIGNED</span>
 );
 <span class="c-key">INSERT INTO</span> t <span class="c-key">VALUES</span> (<span class="c-str">-2147483648</span>, <span class="c-str">42</span>, <span class="c-str">100</span>);</code></pre>
-<p>The optional length in parentheses (e.g. <code>INT(11)</code>) and the <code>UNSIGNED</code> / <code>ZEROFILL</code> attributes are accepted by the grammar and encoded into the type code: a length adds its literal value, <code>UNSIGNED</code> adds <code>1000</code>, and <code>ZEROFILL</code> adds <code>2000</code>. A two-argument length such as <code>(10,2)</code> encodes as <code>first + 1000 × second</code>. These modifiers are retained as metadata only; storage remains a signed <code>int32</code> regardless.</p>
+<p>The grammar also accepts an optional length in parentheses, such as <code>INT(11)</code>. It accepts the <code>UNSIGNED</code> and <code>ZEROFILL</code> attributes too. All of these are encoded into the type code. A length adds its literal value. <code>UNSIGNED</code> adds <code>1000</code>. <code>ZEROFILL</code> adds <code>2000</code>. A two-argument length such as <code>(10,2)</code> encodes as <code>first + 1000 × second</code>. These modifiers are kept as metadata only. Storage stays a signed <code>int32</code> in every case.</p>
 
 <div class="callout">
-<p><strong>Note, honest contrast with PostgreSQL.</strong> Unlike PostgreSQL, EvolutionDB does <em>not</em> provide distinct physical widths for <code>smallint</code> (2 B) and <code>bigint</code> at the same family, and it does not enforce range limits per declared type. All of families 1–5 occupy 4 bytes and silently accept any value <code>atoi()</code> parses. <code>UNSIGNED</code> is recorded but the value remains signed on disk.</p>
+<p><strong>Note. An honest contrast with PostgreSQL.</strong> PostgreSQL gives <code>smallint</code> its own 2-byte width. EvolutionDB does <em>not</em> do this. It does not give different physical widths per declared type. It also does not enforce range limits per declared type. All of families 1–5 take 4 bytes. They quietly accept any value that <code>atoi()</code> can parse. <code>UNSIGNED</code> is recorded. But the value stays signed on disk.</p>
 </div>
 
 <h2 id="bigint">8.4. BIGINT</h2>
-<p><code>BIGINT</code> (family 6, type code <code>60000</code>) is the one integer type with its own wide encoding: a <strong>signed 64-bit little-endian</strong> value, parsed with <code>strtoll()</code> and rendered with <code>%lld</code>. It is the appropriate type for large generated identifiers such as the values produced by <code>snowflake_id()</code>.</p>
+<p><code>BIGINT</code> has family 6 and type code <code>60000</code>. It is the one integer type with its own wide encoding. It is a <strong>signed 64-bit little-endian</strong> value. It is parsed with <code>strtoll()</code> and rendered with <code>%lld</code>. It is the right type for large generated ids. The values from <code>snowflake_id()</code> are one example.</p>
 <pre><code><span class="c-key">CREATE TABLE</span> events (id <span class="c-key">BIGINT</span> <span class="c-key">PRIMARY KEY</span>, payload <span class="c-key">TEXT</span>);</code></pre>
 
 <h2 id="floats">8.5. Floating-point types</h2>
-<p>Three floating-point spellings are recognized:</p>
+<p>The engine knows three floating-point spellings.</p>
 <dl class="params">
 <dt><code>REAL</code> (family 7) and <code>DOUBLE</code> (family 8)</dt>
-<dd>Stored as an 8-byte IEEE-754 <code>double</code>, little-endian. Parsed with <code>strtod()</code>, rendered with <code>%.15g</code>. <code>REAL</code> and <code>DOUBLE</code> are physically identical in EvolutionDB.</dd>
+<dd>Stored as an 8-byte IEEE-754 <code>double</code> in little-endian order. Parsed with <code>strtod()</code> and rendered with <code>%.15g</code>. <code>REAL</code> and <code>DOUBLE</code> are the same in physical storage in EvolutionDB.</dd>
 <dt><code>FLOAT</code> (family 9)</dt>
-<dd>Stored as a 4-byte IEEE-754 single-precision <code>float</code>, little-endian. Parsed with <code>strtod()</code> then narrowed to <code>float</code>, rendered with <code>%.7g</code>.</dd>
+<dd>Stored as a 4-byte IEEE-754 single-precision <code>float</code> in little-endian order. Parsed with <code>strtod()</code> and then narrowed to <code>float</code>. Rendered with <code>%.7g</code>.</dd>
 </dl>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> m (lo <span class="c-key">FLOAT</span>, hi <span class="c-key">DOUBLE</span>);
 <span class="c-key">INSERT INTO</span> m <span class="c-key">VALUES</span> (<span class="c-str">3.14159</span>, <span class="c-str">2.718281828459045</span>);</code></pre>
-<p>The optional precision/scale parentheses and <code>UNSIGNED</code>/<code>ZEROFILL</code> are accepted and folded into the type code exactly as for integers, but do not affect the physical width.</p>
+<p>The optional precision and scale parentheses are accepted here too. So are <code>UNSIGNED</code> and <code>ZEROFILL</code>. They are folded into the type code in the same way as for integers. They do not change the physical width.</p>
 
 <h2 id="decimal">8.6. DECIMAL / NUMERIC</h2>
-<p><code>DECIMAL</code> (family 11) declares with optional precision and scale, e.g. <code>DECIMAL(10,2)</code>, which the parser folds into the type code via the <code>(p,s) → p + 1000·s</code> length rule. <strong>Physically, DECIMAL is stored as length-prefixed text</strong>: it falls into the storage layer's default string case, not a dedicated fixed-point codec. The original digit string is preserved byte-for-byte and returned unchanged.</p>
+<p><code>DECIMAL</code> has family 11. It is declared with optional precision and scale, such as <code>DECIMAL(10,2)</code>. The parser folds these into the type code with the <code>(p,s) → p + 1000·s</code> length rule. <strong>In physical storage, DECIMAL is kept as length-prefixed text.</strong> It uses the storage layer's default string case. It does not use a dedicated fixed-point codec. The original digit string is kept byte-for-byte and returned unchanged.</p>
 <div class="callout">
-<p><strong>Note.</strong> Because <code>DECIMAL</code> is text-backed, it does not perform exact decimal arithmetic or scale rounding the way PostgreSQL's <code>numeric</code> does. Use it for faithful storage and round-tripping of decimal strings; arithmetic on the value is governed by the expression evaluator, not by a fixed-point engine.</p>
+<p><strong>Note.</strong> <code>DECIMAL</code> is backed by text. So it does not do exact decimal math or scale rounding. PostgreSQL's <code>numeric</code> does this, but EvolutionDB does not. Use it to store decimal strings and get them back unchanged. Math on the value is done by the expression evaluator. It is not done by a fixed-point engine.</p>
 </div>
 
 <h2 id="strings">8.7. Character and text types</h2>
-<p><code>CHAR</code> (family 12), <code>VARCHAR(n)</code> (family 13), and the four <code>TEXT</code> sizes (family 17: <code>TINYTEXT</code>, <code>TEXT</code>, <code>MEDIUMTEXT</code>, <code>LONGTEXT</code>) all use the same physical encoding: a <code>uint16</code> little-endian byte-length prefix followed by the raw bytes of the string.</p>
+<p><code>CHAR</code> is family 12. <code>VARCHAR(n)</code> is family 13. The four <code>TEXT</code> sizes are family 17. These are <code>TINYTEXT</code>, <code>TEXT</code>, <code>MEDIUMTEXT</code>, and <code>LONGTEXT</code>. They all use the same physical encoding. It is a <code>uint16</code> little-endian byte-length prefix, then the raw bytes of the string.</p>
 <pre><code><span class="c-com">-- on disk, for a string value v:</span>
 [len: uint16 LE][bytes of v ...]</code></pre>
-<p>This shared layout is why <code>VARCHAR</code> and <code>TEXT</code> behave the same at the storage level; they differ only in their declared metadata. The <code>uint16</code> prefix caps a single stored string field at 65 535 bytes within one tuple slot; larger values rely on the TOAST out-of-line mechanism (see <a href="#storage">§8.10</a>).</p>
+<p>This shared layout is why <code>VARCHAR</code> and <code>TEXT</code> act the same at the storage level. They differ only in their declared metadata. The <code>uint16</code> prefix limits one stored string field to 65 535 bytes in a single tuple slot. Larger values use the TOAST out-of-line mechanism. See <a href="#storage">§8.10</a>.</p>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> doc (
   title  <span class="c-key">VARCHAR</span>(<span class="c-str">200</span>),
   body   <span class="c-key">TEXT</span>,
   code   <span class="c-key">CHAR</span>(<span class="c-str">8</span>)
 );</code></pre>
 <div class="callout">
-<p><strong>Note, length is not enforced or padded.</strong> EvolutionDB does not pad <code>CHAR(n)</code> to a fixed width nor truncate <code>VARCHAR(n)</code> overflow. The declared length is metadata. On decode into the engine's 256-byte per-field text buffer, an individual field rendered for client output is bounded to 255 bytes; the full value is still stored intact.</p>
+<p><strong>Note. Length is not enforced or padded.</strong> EvolutionDB does not pad <code>CHAR(n)</code> to a fixed width. It does not truncate <code>VARCHAR(n)</code> overflow either. The declared length is metadata. The engine decodes into a 256-byte per-field text buffer. A single field rendered for client output is limited to 255 bytes. The full value is still stored intact.</p>
 </div>
 
 <h2 id="binary">8.8. Binary and BLOB types</h2>
-<p><code>BINARY</code> (family 14), <code>VARBINARY(n)</code> (family 15), and the <code>BLOB</code> sizes (family 16: <code>TINYBLOB</code>, <code>BLOB</code>, <code>MEDIUMBLOB</code>, <code>LONGBLOB</code>) share the same length-prefixed envelope as the string types, they are routed through the storage layer's default string case. The bytes are stored and returned verbatim.</p>
+<p><code>BINARY</code> is family 14. <code>VARBINARY(n)</code> is family 15. The <code>BLOB</code> sizes are family 16. These are <code>TINYBLOB</code>, <code>BLOB</code>, <code>MEDIUMBLOB</code>, and <code>LONGBLOB</code>. They use the same length-prefixed envelope as the string types. They go through the storage layer's default string case. The bytes are stored and returned exactly as given.</p>
 
 <h2 id="temporal">8.9. Date and time types</h2>
-<p>The temporal family (10) covers <code>DATE</code> (<code>100001</code>), <code>TIME</code> (<code>100002</code>), <code>TIMESTAMP</code> (<code>100003</code>), <code>DATETIME</code> (<code>100004</code>), and <code>YEAR</code> (<code>100005</code>). All five are stored as <strong>length-prefixed text</strong>: the literal you insert is preserved as a string and returned unchanged.</p>
+<p>The temporal family is family 10. It covers <code>DATE</code> as <code>100001</code>, <code>TIME</code> as <code>100002</code>, <code>TIMESTAMP</code> as <code>100003</code>, <code>DATETIME</code> as <code>100004</code>, and <code>YEAR</code> as <code>100005</code>. All five are stored as <strong>length-prefixed text</strong>. The literal you insert is kept as a string and returned unchanged.</p>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> log (
   ts   <span class="c-key">TIMESTAMP</span>,
   d    <span class="c-key">DATE</span>
 );
 <span class="c-key">INSERT INTO</span> log <span class="c-key">VALUES</span> (<span class="c-str">'2026-06-12 10:30:00'</span>, <span class="c-str">'2026-06-12'</span>);</code></pre>
-<p>Date/time arithmetic and extraction are performed by the expression evaluator (e.g. <code>NOW()</code>, <code>DATE_ADD()</code>, <code>YEAR()</code>, <code>DATEDIFF()</code>) rather than by a packed binary temporal representation.</p>
+<p>Date and time math is done by the expression evaluator. Extraction is done there too. Functions like <code>NOW()</code>, <code>DATE_ADD()</code>, <code>YEAR()</code>, and <code>DATEDIFF()</code> do this work. There is no packed binary form for temporal values.</p>
 <div class="callout">
-<p><strong>Note.</strong> Because temporal values are text-backed, EvolutionDB does not normalize or validate the calendar value at storage time the way a binary timestamp type would; the string you insert is the string you get back. There is currently no time-zone-aware <code>timestamptz</code>-style family.</p>
+<p><strong>Note.</strong> Temporal values are backed by text. So EvolutionDB does not normalize the calendar value at storage time. It does not validate it either. A binary timestamp type would do this, but EvolutionDB does not. The string you insert is the string you get back. There is no time-zone-aware family like <code>timestamptz</code>.</p>
 </div>
 
 <h2 id="boolean">8.10. BOOLEAN</h2>
-<p><code>BOOLEAN</code> (family 22, type code <code>220001</code>) is stored as a single byte: <code>1</code> for true, <code>0</code> for false. On input, the literals <code>true</code> (case-insensitive), <code>1</code>, and <code>t</code> are interpreted as true; everything else is false. On output the value is rendered as the text <code>true</code> or <code>false</code>.</p>
+<p><code>BOOLEAN</code> has family 22 and type code <code>220001</code>. It is stored as a single byte. The byte is <code>1</code> for true and <code>0</code> for false. On input, three literals mean true. They are <code>true</code> in any case, <code>1</code>, and <code>t</code>. Everything else means false. On output the value is rendered as the text <code>true</code> or <code>false</code>.</p>
 <pre><code><span class="c-key">CREATE TABLE</span> flags (id <span class="c-key">INT</span>, active <span class="c-key">BOOLEAN</span>);
 <span class="c-key">INSERT INTO</span> flags <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">true</span>), (<span class="c-str">2</span>, <span class="c-str">'f'</span>);</code></pre>
 
 <h2 id="uuid">8.11. UUID</h2>
-<p><code>UUID</code> (family 18, type code <code>180036</code>) is stored compactly as <strong>16 raw bytes</strong>. On input the canonical <code>8-4-4-4-12</code> hex form is parsed nibble-by-nibble, ignoring dashes; on output the 16 bytes are formatted back into the standard dashed lowercase representation.</p>
+<p><code>UUID</code> has family 18 and type code <code>180036</code>. It is stored in a compact form as <strong>16 raw bytes</strong>. On input the engine reads the standard <code>8-4-4-4-12</code> hex form. It is parsed one nibble at a time and dashes are ignored. On output the 16 bytes are turned back into the standard dashed lowercase form.</p>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> u (id <span class="c-key">UUID</span> <span class="c-key">PRIMARY KEY</span>, name <span class="c-key">TEXT</span>);
 <span class="c-key">INSERT INTO</span> u <span class="c-key">VALUES</span> (<span class="c-str">'550e8400-e29b-41d4-a716-446655440000'</span>, <span class="c-str">'demo'</span>);
 <span class="c-com">-- or generate one:</span>
 <span class="c-key">INSERT INTO</span> u <span class="c-key">VALUES</span> (<span class="c-key">gen_random_uuid</span>(), <span class="c-str">'auto'</span>);</code></pre>
-<p>If an input string cannot be parsed as 16 valid hex bytes, the stored value falls back to all-zero bytes rather than raising an error. UUID values can be generated server-side with <code>gen_random_uuid()</code> (v4), <code>gen_random_uuid_v7()</code>, or <code>snowflake_id()</code> (the latter producing a <code>BIGINT</code>).</p>
+<p>An input string may not parse as 16 valid hex bytes. In that case the stored value becomes all-zero bytes. No error is raised. You can generate UUID values on the server. The functions are <code>gen_random_uuid()</code> for v4, <code>gen_random_uuid_v7()</code>, and <code>snowflake_id()</code>. Note that <code>snowflake_id()</code> returns a <code>BIGINT</code>.</p>
 
 <h2 id="json">8.12. JSON</h2>
-<p><code>JSON</code> (family 23, type code <code>230000</code>) is stored as <strong>length-prefixed text</strong>, the document is kept as its raw string form. A rich set of JSON functions operates on these values, including <code>JSON_EXTRACT</code>, <code>JSON_UNQUOTE</code>, <code>JSON_TYPE</code>, <code>JSON_LENGTH</code>, <code>JSON_VALID</code>, <code>JSON_KEYS</code>, <code>JSON_SET</code>/<code>JSON_INSERT</code>/<code>JSON_REPLACE</code>/<code>JSON_REMOVE</code>, <code>JSON_CONTAINS</code>, <code>JSON_OBJECT</code>, and <code>JSON_ARRAY</code>. The <code>-&gt;</code> and <code>-&gt;&gt;</code> arrow operators are also supported for path access.</p>
+<p><code>JSON</code> has family 23 and type code <code>230000</code>. It is stored as <strong>length-prefixed text</strong>. The document is kept in its raw string form. Many JSON functions work on these values. They include <code>JSON_EXTRACT</code>, <code>JSON_UNQUOTE</code>, <code>JSON_TYPE</code>, <code>JSON_LENGTH</code>, <code>JSON_VALID</code>, <code>JSON_KEYS</code>, <code>JSON_SET</code>/<code>JSON_INSERT</code>/<code>JSON_REPLACE</code>/<code>JSON_REMOVE</code>, <code>JSON_CONTAINS</code>, <code>JSON_OBJECT</code>, and <code>JSON_ARRAY</code>. The <code>-&gt;</code> and <code>-&gt;&gt;</code> arrow operators also work for path access.</p>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> cfg (id <span class="c-key">INT</span>, props <span class="c-key">JSON</span>);
 <span class="c-key">INSERT INTO</span> cfg <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'{"theme":"dark","level":3}'</span>);
 <span class="c-key">SELECT</span> props -&gt;&gt; <span class="c-str">'$.theme'</span> <span class="c-key">FROM</span> cfg;</code></pre>
 <div class="callout">
-<p><strong>Note.</strong> JSON is text-backed (akin to PostgreSQL's <code>json</code> rather than the binary <code>jsonb</code>). The document text is preserved as written; there is no canonical binary normalization of keys or whitespace at storage time.</p>
+<p><strong>Note.</strong> JSON is backed by text. It is like PostgreSQL's <code>json</code> type, not the binary <code>jsonb</code> type. The document text is kept as written. There is no binary normalization of keys or whitespace at storage time.</p>
 </div>
 
 <h2 id="array">8.13. Array types</h2>
-<p>Any supported scalar type followed by <code>[]</code> declares a one-dimensional array (family 25). The type code is <code>250000 + base_family</code>, e.g. <code>INT[]</code> is <code>250004</code>, <code>TEXT[]</code> is <code>250017</code>, <code>UUID[]</code> is <code>250018</code>, <code>BOOLEAN[]</code> is <code>250022</code>. Only a fixed set of base families can be array elements; <code>ENUM</code>, <code>SET</code>, and <code>BLOB</code> are <em>not</em> valid element types and are rejected.</p>
-<p>Arrays use PostgreSQL-style brace text syntax on input and output, with case-insensitive <code>NULL</code> for null elements and double-quoting for elements containing delimiters:</p>
+<p>Any supported scalar type with <code>[]</code> after it declares a one-dimensional array. This is family 25. The type code is <code>250000 + base_family</code>. So <code>INT[]</code> is <code>250004</code>, <code>TEXT[]</code> is <code>250017</code>, <code>UUID[]</code> is <code>250018</code>, and <code>BOOLEAN[]</code> is <code>250022</code>. Only a fixed set of base families can be array elements. The types <code>ENUM</code>, <code>SET</code>, and <code>BLOB</code> are <em>not</em> valid element types. They are rejected.</p>
+<p>Arrays use PostgreSQL-style brace text syntax on input and output. A null element is written as <code>NULL</code> in any case. An element with delimiters in it is wrapped in double quotes.</p>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> tags (id <span class="c-key">INT</span>, labels <span class="c-key">TEXT</span>[], scores <span class="c-key">INT</span>[]);
 <span class="c-key">INSERT INTO</span> tags <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'{alpha,beta,"with,comma",NULL}'</span>, <span class="c-str">'{10,20,30}'</span>);</code></pre>
-<p>On disk the array is wrapped in the same <code>uint16</code> length envelope as a string; the payload itself is a structured blob:</p>
+<p>On disk the array is wrapped in the same <code>uint16</code> length envelope as a string. The payload itself is a structured blob.</p>
 <pre><code><span class="c-com">-- array blob layout (after the outer uint16 length)</span>
 [ndim: 1B = 1][flags: 1B][elem_tc: 4B LE][count: 2B LE]
 [null bitmap: ceil(count/8) B  if flags &amp; HAS_NULLS]
 [elements ...]   <span class="c-com">-- per-element scalar encoding; NULLs occupy 0 payload bytes</span></code></pre>
-<p>Each non-null element is stored with its scalar family's encoding (fixed-width integers/floats/UUID/boolean inline; variable-width text with its own <code>uint16</code> length prefix). The blob is capped at 65 535 bytes. Helper functions <code>ARRAY_LENGTH()</code> and <code>UNNEST()</code> operate on array values, and an <code>ARRAY[...]</code> literal constructor is available. The <code>= ANY(...)</code> / <code>= SOME(...)</code> membership forms also accept an array argument.</p>
+<p>Each non-null element is stored with its scalar family's encoding. Fixed-width integers, floats, UUID, and boolean are stored inline. Variable-width text has its own <code>uint16</code> length prefix. The blob is limited to 65 535 bytes. The helper functions <code>ARRAY_LENGTH()</code> and <code>UNNEST()</code> work on array values. An <code>ARRAY[...]</code> literal constructor is also available. The <code>= ANY(...)</code> and <code>= SOME(...)</code> membership forms accept an array argument too.</p>
 <div class="callout">
-<p><strong>Note, current limitations.</strong> Arrays are one-dimensional only (<code>ndim</code> is always 1). When an array is rendered through the engine's 256-byte per-field text buffer, very long arrays may be truncated in the textual representation even though the stored blob is intact.</p>
+<p><strong>Note. Current limits.</strong> Arrays are one-dimensional only. The <code>ndim</code> value is always 1. The engine renders an array through a 256-byte per-field text buffer. So very long arrays may be cut short in the text form. The stored blob stays intact.</p>
 </div>
 
 <h2 id="vector">8.14. VECTOR</h2>
-<p><code>VECTOR(N)</code> (family 26, type code <code>260000 + N</code>) is a fixed-dimension dense vector of single-precision floats, intended for embeddings and similarity search. The dimension <code>N</code> is carried directly in the type code (<code>type_code % 10000 = N</code>), so the payload needs <strong>no length prefix</strong>: it is exactly <code>N × 4</code> bytes of <code>float4</code> little-endian, written inline. The maximum dimension is 16 384.</p>
+<p><code>VECTOR(N)</code> has family 26 and type code <code>260000 + N</code>. It is a dense vector of single-precision floats with a fixed dimension. It is meant for embeddings and similarity search. The dimension <code>N</code> is held right in the type code. The rule is <code>type_code % 10000 = N</code>. So the payload needs <strong>no length prefix</strong>. It is exactly <code>N × 4</code> bytes of <code>float4</code> in little-endian order, written inline. The largest dimension is 16 384.</p>
 <pre class="synopsis"><code><span class="c-key">CREATE TABLE</span> emb (id <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>, v <span class="c-key">VECTOR</span>(<span class="c-str">3</span>));
 <span class="c-key">INSERT INTO</span> emb <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'[0.1,0.2,0.3]'</span>);
 <span class="c-key">SELECT</span> id <span class="c-key">FROM</span> emb <span class="c-key">ORDER BY</span> v &lt;-&gt; <span class="c-str">'[0.1,0.2,0.25]'</span> <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
-<p>The text input format is the bracketed list <code>[f1,f2,...]</code> (braces <code>{...}</code> are also tolerated); whitespace is allowed and the element count must match the declared dimension exactly. <code>NaN</code> and infinities are rejected, vector elements must be finite. Output is always rendered as the compact bracketed form with no spaces.</p>
-<p>To keep large vectors within the statement size cap, EvolutionDB also accepts a compact quantized literal of the form <code>b64i8:&lt;base64&gt;</code>, encoding a float32 scale factor followed by an array of <code>int8</code> components that are dequantized back to floats on parse. A 1024-dimension vector that would be ~10 KB as a bracketed literal fits in ~1.4 KB this way.</p>
+<p>The text input format is the bracketed list <code>[f1,f2,...]</code>. Braces <code>{...}</code> are also allowed. Whitespace is allowed. The element count must match the declared dimension exactly. <code>NaN</code> and infinities are rejected. Every vector element must be finite. Output is always the compact bracketed form with no spaces.</p>
+<p>Large vectors must stay within the statement size cap. So EvolutionDB also accepts a compact quantized literal of the form <code>b64i8:&lt;base64&gt;</code>. It holds a float32 scale factor and then an array of <code>int8</code> components. These are turned back into floats on parse. A 1024-dimension vector is about 10 KB as a bracketed literal. The same vector fits in about 1.4 KB this way.</p>
 <dl class="params">
 <dt><code>&lt;-&gt;</code> and <code>L2_DISTANCE()</code></dt><dd>Euclidean (L2) distance.</dd>
 <dt><code>&lt;#&gt;</code> and <code>INNER_PRODUCT()</code></dt><dd>Inner-product distance.</dd>
@@ -180,13 +180,13 @@ size    = typeVal % 10000</code></pre>
 <dt><code>L1_DISTANCE()</code></dt><dd>Manhattan (L1) distance.</dd>
 <dt><code>VECTOR_DIM()</code>, <code>VECTOR_NORM()</code>, <code>VECTOR_NORMALIZE()</code></dt><dd>Dimension, magnitude, and unit-normalization helpers.</dd>
 </dl>
-<p>Approximate nearest-neighbour search is available through the <code>HNSW</code> index family and the <code>HNSW_KNN()</code>, <code>HNSW_FILTER_KNN()</code>, and <code>HNSW_HYBRID_EXPLAIN()</code> functions. See <a href="/3.0/ref/create-index/">CREATE INDEX</a>.</p>
+<p>You can do approximate nearest-neighbour search with the <code>HNSW</code> index family. The functions are <code>HNSW_KNN()</code>, <code>HNSW_FILTER_KNN()</code>, and <code>HNSW_HYBRID_EXPLAIN()</code>. See <a href="/3.0/ref/create-index/">CREATE INDEX</a>.</p>
 
 <h2 id="enum-set">8.15. ENUM and SET</h2>
-<p><code>ENUM(...)</code> (family 20, type code <code>200000 + count</code>) and <code>SET(...)</code> (family 21, type code <code>210000 + count</code>) record their member count in the type code's size sub-field. Both are stored as <strong>length-prefixed text</strong>, the value is kept as a string. They are accepted in <code>CREATE TABLE</code> but are not validated against the declared member list at the storage layer, and they cannot be used as array element types.</p>
+<p><code>ENUM(...)</code> has family 20 and type code <code>200000 + count</code>. <code>SET(...)</code> has family 21 and type code <code>210000 + count</code>. Both record their member count in the type code's size sub-field. Both are stored as <strong>length-prefixed text</strong>. The value is kept as a string. They are accepted in <code>CREATE TABLE</code>. But the storage layer does not check the value against the declared member list. They cannot be used as array element types.</p>
 
 <h2 id="storage">8.16. How values are stored in a tuple</h2>
-<p>A user row is serialized into a binary tuple with the following structure. The leading magic byte <code>0xE7</code> identifies an EvolutionDB tuple.</p>
+<p>A user row is turned into a binary tuple with the structure below. The first magic byte <code>0xE7</code> marks an EvolutionDB tuple.</p>
 <pre><code><span class="c-com">-- binary tuple layout</span>
 [0xE7]                       <span class="c-com">-- magic (1 B)</span>
 [table_id: 4 B LE]           <span class="c-com">-- prefix total = 5 B</span>
@@ -194,18 +194,18 @@ size    = typeVal % 10000</code></pre>
 [xmin: 4 B][xmax: 4 B]       <span class="c-com">-- MVCC, present only if flags &amp; 0x02</span>
 [null bitmap: ceil(num_cols/8) B]
 [column data ...]            <span class="c-com">-- per-family encoding, in column order</span></code></pre>
-<p>The <code>flags</code> byte combines: <code>0x01</code> HAS_NULLS, <code>0x02</code> MVCC (xmin/xmax present), plus HOT and visibility-hint bits used by the MVCC layer. NULL columns are recorded only as a set bit in the null bitmap and consume zero payload bytes. Each non-null column is then laid out by its family as described in the sections above. A tuple holds at most 255 columns.</p>
-<p>Values too large to fit inline are stored out-of-line via the TOAST mechanism: the in-page record becomes a fixed-size stub (its own magic marker mirrors the normal tuple's MVCC layout) that points at the externally stored bytes, which are transparently rehydrated on read.</p>
+<p>The <code>flags</code> byte holds several bits. The bit <code>0x01</code> is HAS_NULLS. The bit <code>0x02</code> is MVCC and means xmin and xmax are present. There are also HOT and visibility-hint bits used by the MVCC layer. A NULL column is recorded only as a set bit in the null bitmap. It uses zero payload bytes. Each non-null column is then laid out by its family as shown in the sections above. A tuple holds at most 255 columns.</p>
+<p>Values too large to fit inline are stored out-of-line with the TOAST mechanism. The in-page record becomes a fixed-size stub. The stub has its own magic marker that mirrors the normal tuple's MVCC layout. The stub points at the bytes stored elsewhere. Those bytes are pulled back in on read without any extra work from you.</p>
 <div class="callout">
-<p><strong>Note, column type cache.</strong> Decoding a tuple requires the column type codes for its table. EvolutionDB keeps a small per-thread cache of column descriptors keyed by table id; the cache is invalidated whenever a table's schema changes (e.g. via <a href="/3.0/ref/alter-table/">ALTER TABLE</a>) so that the layout used to decode always matches the catalog.</p>
+<p><strong>Note. The column type cache.</strong> To decode a tuple, the engine needs the column type codes for its table. EvolutionDB keeps a small per-thread cache of column descriptors. It is keyed by table id. The cache is cleared whenever a table's schema changes. An <a href="/3.0/ref/alter-table/">ALTER TABLE</a> is one such change. This way the layout used to decode always matches the catalog.</p>
 </div>
 
 <h2 id="see-also">8.17. See also</h2>
 <ul>
-<li><a href="/3.0/ref/create-table/">CREATE TABLE</a>, declaring columns and their types.</li>
-<li><a href="/3.0/ref/alter-table/">ALTER TABLE</a>, adding or changing typed columns.</li>
-<li><a href="/3.0/ref/create-index/">CREATE INDEX</a>, B-tree and HNSW vector indexes.</li>
-<li><a href="/3.0/ref/insert/">INSERT</a>, supplying typed values.</li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a>. Declare columns and their types.</li>
+<li><a href="/3.0/ref/alter-table/">ALTER TABLE</a>. Add or change typed columns.</li>
+<li><a href="/3.0/ref/create-index/">CREATE INDEX</a>. Build B-tree and HNSW vector indexes.</li>
+<li><a href="/3.0/ref/insert/">INSERT</a>. Supply typed values.</li>
 </ul>
 </main></div>
 <script src="/nav-data.js"></script>

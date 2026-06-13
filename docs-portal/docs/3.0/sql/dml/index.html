@@ -16,17 +16,17 @@
 <main class="docs-content prose reveal">
 
 <h1>6. Data Manipulation</h1>
-<p class="lede">How rows enter, change, and leave a table in EvolutionDB, the <code>INSERT</code>, <code>REPLACE</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>COPY</code>, and <code>TRUNCATE</code> commands, as actually implemented by the engine's data-manipulation modules.</p>
+<p class="lede">This chapter shows how rows go into a table, change, and leave it in EvolutionDB. It covers the <code>INSERT</code>, <code>REPLACE</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>COPY</code>, and <code>TRUNCATE</code> commands as the engine's data-manipulation modules really run them.</p>
 
-<p>The previous chapters described how to create tables and what types a column may hold. A freshly created table is empty. This chapter covers the commands that put data into a table and change it afterward. Every command here goes through the same engine path: the Bison parser emits an RPN stream, the matching operation module (<code>Insert.c</code>, <code>Update.c</code>, <code>Delete.c</code>, <code>Copy.c</code>, <code>Drop.c</code>) validates and executes the change, and the change is written non-destructively under MVCC so concurrent readers keep seeing the version their snapshot entitles them to.</p>
+<p>The earlier chapters showed how to create tables and which types a column can hold. A new table is empty. This chapter covers the commands that put data into a table and change it later. Every command here uses the same engine path. The Bison parser emits an RPN stream. The matching operation module then checks and runs the change. Those modules are <code>Insert.c</code>, <code>Update.c</code>, <code>Delete.c</code>, <code>Copy.c</code>, and <code>Drop.c</code>. The change is written without overwriting old data under MVCC. This way, readers running at the same time still see the version their snapshot allows.</p>
 
 <div class="callout">
-<p><strong>Scope of this chapter.</strong> Only behavior that EvolutionDB 3.0 actually implements is documented. Where EvolutionDB borrows MySQL or PostgreSQL surface syntax but diverges in behavior, for example, single-column <code>ON CONFLICT</code> targets only, or <code>REPLACE</code> keyed on the primary key alone, the difference is called out explicitly. Statement-level syntax detail and option lists live on the per-command reference pages linked throughout.</p>
+<p><strong>Scope of this chapter.</strong> This page only documents behavior that EvolutionDB 3.0 really has. Sometimes EvolutionDB uses MySQL or PostgreSQL syntax but acts in a different way. One example is that <code>ON CONFLICT</code> targets only one column. Another is that <code>REPLACE</code> keys on the primary key alone. Each such difference is pointed out here. Full syntax detail and option lists are on the per-command reference pages linked below.</p>
 </div>
 
 <h2 id="inserting">6.1. Inserting Data</h2>
 
-<p>A new row is added with <a href="/3.0/ref/insert">INSERT</a>. You may list values positionally for every column, or name a subset of columns and supply values only for those.</p>
+<p>You add a new row with <a href="/3.0/ref/insert">INSERT</a>. You can list one value for every column in order. You can also name some of the columns and give values only for those.</p>
 
 <pre><code><span class="c-key">CREATE TABLE</span> products (
     id      <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
@@ -46,9 +46,9 @@
     (4, <span class="c-str">'Nut'</span>,   0.08),
     (5, <span class="c-str">'Washer'</span>, 0.05);</code></pre>
 
-<p>When a column list is given, the engine reorders each row's values into the physical table column order, fills omitted columns from their declared <code>DEFAULT</code>, and substitutes <code>NULL</code> for columns that have neither a value nor a default. A <code>DEFAULT</code> keyword may also be written explicitly in the <code>VALUES</code> list.</p>
+<p>When you give a column list, the engine puts each row's values back into the real table column order. It fills any missing column from its declared <code>DEFAULT</code>. If a column has neither a value nor a default, the engine uses <code>NULL</code>. You can also write the <code>DEFAULT</code> keyword directly in the <code>VALUES</code> list.</p>
 
-<p>EvolutionDB also accepts the MySQL <code>SET</code> form of <code>INSERT</code> and <code>INSERT ... SELECT</code>:</p>
+<p>EvolutionDB also accepts the MySQL <code>SET</code> form of <code>INSERT</code> and the <code>INSERT ... SELECT</code> form.</p>
 
 <pre><code><span class="c-key">INSERT INTO</span> products <span class="c-key">SET</span> id = 6, name = <span class="c-str">'Spring'</span>, price = 0.20;
 
@@ -57,15 +57,15 @@
 
 <h3 id="default-evaluation">6.1.1. Default and Generated Columns</h3>
 
-<p>Defaults are evaluated as the row is built, in three forms:</p>
+<p>Defaults are worked out as the row is built. There are three forms.</p>
 
 <dl class="params">
-<dt>Literal defaults</dt><dd>A constant declared with <code>DEFAULT</code> is copied verbatim.</dd>
-<dt>Function defaults</dt><dd>A small set of generator functions is evaluated per row: <code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code>, and <code>CURRENT_TIMESTAMP</code>. The first value produced by a UUID or Snowflake default is also captured for <code>LAST_INSERT_ID()</code>.</dd>
-<dt>Expression defaults</dt><dd>An arbitrary expression default is resolved in a second pass, after the literal and function defaults are in place, so it can reference other columns of the same row.</dd>
+<dt>Literal defaults</dt><dd>A constant declared with <code>DEFAULT</code> is copied as is.</dd>
+<dt>Function defaults</dt><dd>A small set of generator functions runs once per row. These are <code>gen_random_uuid()</code>, <code>gen_random_uuid_v7()</code>, <code>snowflake_id()</code>, and <code>CURRENT_TIMESTAMP</code>. The first value from a UUID or Snowflake default is also saved for <code>LAST_INSERT_ID()</code>.</dd>
+<dt>Expression defaults</dt><dd>An expression default is worked out in a second pass. This pass runs after the literal and function defaults are in place. So an expression default can read other columns of the same row.</dd>
 </dl>
 
-<p>Columns declared <code>GENERATED</code> are computed by the engine, not supplied by you. A <code>STORED</code> generated column is evaluated and written to disk; a <code>VIRTUAL</code> generated column is stored as a <code>NULL</code> placeholder and recomputed on read. Attempting to insert a non-<code>DEFAULT</code> value into a generated column raises an error:</p>
+<p>Columns declared <code>GENERATED</code> are computed by the engine. You do not supply them. A <code>STORED</code> generated column is worked out and written to disk. A <code>VIRTUAL</code> generated column is stored as a <code>NULL</code> placeholder and worked out again on read. If you try to insert a non-<code>DEFAULT</code> value into a generated column, you get an error.</p>
 
 <div class="callout">
 <p><code>cannot insert a non-DEFAULT value into column "…" because it is a generated column</code></p>
@@ -73,11 +73,11 @@
 
 <h3 id="auto-increment">6.1.2. AUTO_INCREMENT Columns</h3>
 
-<p>If a table has an <code>AUTO_INCREMENT</code> column, a row that supplies <code>NULL</code>, <code>0</code>, or an empty string for that column receives the next counter value (incremented by the table's step). Supplying an explicit value larger than the current counter advances the counter so future generated values stay unique. The generated value is recorded for <code>LAST_INSERT_ID()</code>, and the table's persisted counter is updated at the end of the statement.</p>
+<p>Suppose a table has an <code>AUTO_INCREMENT</code> column. A row that gives <code>NULL</code>, <code>0</code>, or an empty string for that column gets the next counter value. The counter goes up by the table's step. If you give a value larger than the current counter, the counter moves forward. This keeps future generated values unique. The generated value is saved for <code>LAST_INSERT_ID()</code>. The table's stored counter is updated at the end of the statement.</p>
 
 <h3 id="insert-validation">6.1.3. Validation Order</h3>
 
-<p>Each row is validated before it is stored. The engine probes which constraint classes the table actually has once per statement and skips the checks that do not apply, but when present they run in this order:</p>
+<p>Each row is checked before it is stored. Once per statement, the engine looks at which kinds of constraints the table has. It skips the checks that do not apply. The checks that do apply run in this order.</p>
 
 <table>
 <thead><tr><th>Check</th><th>Raised on failure</th><th>SQLSTATE</th></tr></thead>
@@ -90,15 +90,15 @@
 </tbody>
 </table>
 
-<p>A primary-key collision is detected separately when the row is stored, and a duplicate primary key also raises <code>23505</code>. <code>FOREIGN KEY</code> validation honors the constraint's match type: under <code>MATCH SIMPLE</code> (the default) any <code>NULL</code> in the referencing columns skips the check; under <code>MATCH FULL</code> a mix of <code>NULL</code> and non-<code>NULL</code> referencing values is itself an error. When the referenced columns are the parent's primary key, the existence check is a direct B+ tree lookup; otherwise it is a table scan.</p>
+<p>A primary-key clash is found later, when the row is stored. A duplicate primary key also raises <code>23505</code>. <code>FOREIGN KEY</code> validation follows the constraint's match type. <code>MATCH SIMPLE</code> is the default. Under it, any <code>NULL</code> in the referencing columns skips the check. Under <code>MATCH FULL</code>, a mix of <code>NULL</code> and non-<code>NULL</code> referencing values is an error by itself. When the referenced columns are the parent's primary key, the engine checks for the row with a direct B+ tree lookup. Otherwise it does a table scan.</p>
 
 <div class="callout">
-<p><strong>Note.</strong> A multi-row <code>INSERT</code> validates every row first and stores them afterward, but the statement is not transactional on its own: if a later row fails validation after earlier rows were stored, the stored rows remain unless the statement runs inside an explicit transaction that you roll back. Begin a transaction (see Chapter 7) when you need all-or-nothing semantics across a batch. Each row's data is also bounded by an 8 KB record buffer (<code>RECORD_BUF_SIZE</code>); oversized tuples are spilled to an overflow chain (TOAST) above a 3800-byte threshold, and a row that cannot fit on a single 4 KB page at all is rejected.</p>
+<p><strong>Note.</strong> A multi-row <code>INSERT</code> checks every row first and stores them after. But the statement is not a transaction on its own. Suppose a later row fails its check after earlier rows were stored. The stored rows stay, unless the statement runs inside an explicit transaction that you roll back. Begin a transaction when you need all-or-nothing behavior across a batch. See Chapter 7 for that. Each row's data also has a limit set by an 8 KB record buffer named <code>RECORD_BUF_SIZE</code>. Tuples above a 3800-byte threshold are spilled to an overflow chain called TOAST. A row that cannot fit on a single 4 KB page at all is rejected.</p>
 </div>
 
 <h3 id="upsert">6.1.4. Upserts: ON CONFLICT and ON DUPLICATE KEY</h3>
 
-<p>EvolutionDB supports two upsert spellings against the same underlying machinery. The PostgreSQL form is <code>ON CONFLICT</code>; the MySQL form is <code>ON DUPLICATE KEY UPDATE</code>.</p>
+<p>EvolutionDB supports two ways to write an upsert. Both use the same engine code. The PostgreSQL form is <code>ON CONFLICT</code>. The MySQL form is <code>ON DUPLICATE KEY UPDATE</code>.</p>
 
 <pre><code><span class="c-com">-- PostgreSQL form: do nothing on a conflicting key</span>
 <span class="c-key">INSERT INTO</span> products (id, name) <span class="c-key">VALUES</span> (1, <span class="c-str">'Widget v2'</span>)
@@ -112,27 +112,27 @@
 <span class="c-key">INSERT INTO</span> products (id, name) <span class="c-key">VALUES</span> (1, <span class="c-str">'Widget'</span>)
     <span class="c-key">ON DUPLICATE KEY UPDATE</span> price = price + 1;</code></pre>
 
-<p>When a conflicting key is found, <code>DO NOTHING</code> silently skips the row and does not count it; <code>DO UPDATE</code> (and the MySQL <code>UPDATE</code> clause) evaluates the assignment expressions and applies them to the existing row via the normal update path. In a <code>DO UPDATE</code> assignment, a bare column name refers to the <em>existing</em> row's value, while <code>EXCLUDED.<em>col</em></code> refers to the value the failed <code>INSERT</code> would have written. Conflicts are detected against the primary key and against <code>UNIQUE</code> indexes.</p>
+<p>When a conflicting key is found, <code>DO NOTHING</code> skips the row quietly and does not count it. <code>DO UPDATE</code> and the MySQL <code>UPDATE</code> clause work out the assignment expressions. They then apply them to the existing row through the normal update path. In a <code>DO UPDATE</code> assignment, a plain column name means the <em>existing</em> row's value. <code>EXCLUDED.<em>col</em></code> means the value the failed <code>INSERT</code> would have written. Conflicts are found against the primary key and against <code>UNIQUE</code> indexes.</p>
 
 <div class="callout">
-<p><strong>Limitation.</strong> The <code>ON CONFLICT</code> target accepts a single column name in parentheses. A composite target such as <code>ON CONFLICT (a, b)</code> is rejected at parse time with <code>composite ON CONFLICT target (a, b, ...) is not yet supported</code>. Omitting the target entirely is allowed and matches on any unique conflict.</p>
+<p><strong>Limitation.</strong> The <code>ON CONFLICT</code> target takes one column name in parentheses. A multi-column target like <code>ON CONFLICT (a, b)</code> is rejected at parse time with <code>composite ON CONFLICT target (a, b, ...) is not yet supported</code>. You can leave out the target. Then it matches on any unique conflict.</p>
 </div>
 
 <h3 id="returning">6.1.5. The RETURNING Clause</h3>
 
-<p>All three of <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> accept a trailing <code>RETURNING</code> clause that streams back the affected rows. <code>INSERT</code> returns the inserted values, <code>UPDATE</code> returns the new (post-<code>SET</code>) values, and <code>DELETE</code> returns the deleted values.</p>
+<p><code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> all accept a trailing <code>RETURNING</code> clause. It streams back the affected rows. <code>INSERT</code> returns the inserted values. <code>UPDATE</code> returns the new values after <code>SET</code>. <code>DELETE</code> returns the deleted values.</p>
 
 <pre><code><span class="c-key">INSERT INTO</span> products (id, name) <span class="c-key">VALUES</span> (7, <span class="c-str">'Clip'</span>) <span class="c-key">RETURNING</span> id;
 <span class="c-key">UPDATE</span> products <span class="c-key">SET</span> price = price * 1.1 <span class="c-key">WHERE</span> id = 3 <span class="c-key">RETURNING</span> id, price;
 <span class="c-key">DELETE FROM</span> products <span class="c-key">WHERE</span> price = 0 <span class="c-key">RETURNING</span> *;</code></pre>
 
 <div class="callout">
-<p><strong>Note.</strong> The <code>RETURNING</code> result buffer captures at most 256 rows per statement; rows beyond that limit are executed but not returned.</p>
+<p><strong>Note.</strong> The <code>RETURNING</code> result buffer holds at most 256 rows per statement. Rows past that limit are still run, but not returned.</p>
 </div>
 
 <h2 id="replace">6.2. Replacing Rows with REPLACE</h2>
 
-<p>The MySQL-style <a href="/3.0/ref/replace">REPLACE</a> statement is syntactically <code>INSERT</code> with the keyword swapped, and it shares the entire insert path. The difference is what happens on a primary-key collision: instead of failing, <code>REPLACE</code> deletes the existing row with the matching primary key and inserts the new row in its place.</p>
+<p>The MySQL-style <a href="/3.0/ref/replace">REPLACE</a> statement is just <code>INSERT</code> with the keyword swapped. It uses the whole insert path. The difference is what happens on a primary-key clash. <code>REPLACE</code> does not fail. Instead it deletes the existing row with the matching primary key and inserts the new row in its place.</p>
 
 <pre><code><span class="c-com">-- if id 1 exists, the old row is deleted and this row takes its place</span>
 <span class="c-key">REPLACE INTO</span> products <span class="c-key">VALUES</span> (1, <span class="c-str">'Widget v3'</span>, 14.00);
@@ -140,12 +140,12 @@
 <span class="c-key">REPLACE INTO</span> products <span class="c-key">SET</span> id = 1, name = <span class="c-str">'Widget v4'</span>;</code></pre>
 
 <div class="callout">
-<p><strong>Behavior difference from MySQL.</strong> EvolutionDB's <code>REPLACE</code> resolves conflicts on the <em>primary key</em>. The delete-then-insert is performed as an MVCC delete of the old version followed by a fresh insert, the new row gets a new heap location and a fresh transaction stamp; it does not preserve the old row's storage. Like <code>INSERT</code>, <code>REPLACE</code> also accepts the <code>VALUES</code>, <code>SET</code>, and <code>SELECT</code> source forms.</p>
+<p><strong>Behavior difference from MySQL.</strong> EvolutionDB's <code>REPLACE</code> resolves conflicts on the <em>primary key</em>. The delete-then-insert is done as an MVCC delete of the old version, then a fresh insert. The new row gets a new heap location and a fresh transaction stamp. It does not keep the old row's storage. Like <code>INSERT</code>, <code>REPLACE</code> also accepts the <code>VALUES</code>, <code>SET</code>, and <code>SELECT</code> source forms.</p>
 </div>
 
 <h2 id="updating">6.3. Updating Data</h2>
 
-<p>Existing rows are modified with <a href="/3.0/ref/update">UPDATE</a>. The <code>SET</code> clause lists the columns to change; <code>WHERE</code> selects which rows, and an optional <code>LIMIT</code> caps how many.</p>
+<p>You change existing rows with <a href="/3.0/ref/update">UPDATE</a>. The <code>SET</code> clause lists the columns to change. <code>WHERE</code> picks which rows. An optional <code>LIMIT</code> caps how many.</p>
 
 <pre><code><span class="c-key">UPDATE</span> products <span class="c-key">SET</span> price = 19.99 <span class="c-key">WHERE</span> id = 1;
 
@@ -155,7 +155,7 @@
 <span class="c-com">-- with no WHERE, every row is updated</span>
 <span class="c-key">UPDATE</span> products <span class="c-key">SET</span> price = 0;</code></pre>
 
-<p>Only the columns named in <code>SET</code> are changed; every other column is preserved. After the assignments are applied, the engine re-evaluates any <code>STORED</code> generated columns, then validates the resulting row against <code>CHECK</code>, <code>FOREIGN KEY</code>, and <code>UNIQUE</code> constraints, but it only re-checks a foreign-key or unique constraint if a column it covers was actually in the <code>SET</code> list. As with <code>INSERT</code>, generated columns may not be assigned a value other than <code>DEFAULT</code>:</p>
+<p>Only the columns named in <code>SET</code> change. Every other column stays the same. After the assignments are applied, the engine works out any <code>STORED</code> generated columns again. Then it checks the new row against <code>CHECK</code>, <code>FOREIGN KEY</code>, and <code>UNIQUE</code> constraints. It only re-checks a foreign-key or unique constraint when a column it covers was in the <code>SET</code> list. As with <code>INSERT</code>, you may not set a generated column to a value other than <code>DEFAULT</code>.</p>
 
 <div class="callout">
 <p><code>column "…" can only be updated to DEFAULT because it is a generated column</code></p>
@@ -163,60 +163,60 @@
 
 <h3 id="update-mvcc">6.3.1. How an Update Is Stored</h3>
 
-<p>EvolutionDB does not overwrite rows in place. An <code>UPDATE</code> is performed non-destructively:</p>
+<p>EvolutionDB does not overwrite rows in place. An <code>UPDATE</code> does not destroy the old data. It works in these steps.</p>
 
 <ol>
-<li>The old tuple is soft-deleted by stamping its MVCC <code>xmax</code> with the current transaction id.</li>
-<li>The new version is written to a heap page (a new location).</li>
-<li>The primary-key B+ tree entry is repointed to the new row id.</li>
+<li>The old tuple is soft-deleted. The engine stamps its MVCC <code>xmax</code> with the current transaction id.</li>
+<li>The new version is written to a heap page at a new location.</li>
+<li>The primary-key B+ tree entry is pointed at the new row id.</li>
 </ol>
 
-<p>This preserves the old version on its page so that concurrent readers holding an older snapshot still see it, and so the change can be rolled back. The physical space occupied by superseded versions is reclaimed later (see <a href="/3.0/ref/reclaim">RECLAIM</a>). An exclusive row lock is taken on each affected row; if two transactions contend, the engine may report a deadlock (<code>40P01</code>) or an inability to obtain the lock (<code>55P03</code> family).</p>
+<p>This keeps the old version on its page. So readers running at the same time with an older snapshot still see it. It also means the change can be rolled back. The space used by old versions is reclaimed later. See <a href="/3.0/ref/reclaim">RECLAIM</a> for that. An exclusive row lock is taken on each affected row. If two transactions fight for the same row, the engine may report a deadlock with <code>40P01</code>. It may also report that it could not get the lock in the <code>55P03</code> family.</p>
 
 <h3 id="update-pk">6.3.2. Updating a Primary Key, Referential Actions</h3>
 
-<p>When an <code>UPDATE</code> changes a primary-key column, the engine enforces the <code>ON UPDATE</code> referential action of every foreign key that references the table, for each child row that pointed at the old key value:</p>
+<p>When an <code>UPDATE</code> changes a primary-key column, the engine runs the <code>ON UPDATE</code> referential action of every foreign key that references the table. It does this for each child row that pointed at the old key value.</p>
 
 <dl class="params">
 <dt>RESTRICT / NO ACTION</dt><dd>The update is rejected if any child row references the old key.</dd>
 <dt>CASCADE</dt><dd>The child rows' foreign-key columns are rewritten to the new key value.</dd>
 <dt>SET NULL</dt><dd>The child rows' foreign-key columns are set to <code>NULL</code>.</dd>
-<dt>SET DEFAULT</dt><dd>The child rows' foreign-key columns are set to their declared defaults (falling back to <code>NULL</code> when no default exists).</dd>
+<dt>SET DEFAULT</dt><dd>The child rows' foreign-key columns are set to their declared defaults. If a column has no default, it falls back to <code>NULL</code>.</dd>
 </dl>
 
-<p>If the <code>SET</code> list does not actually change the primary-key value, no referential action runs.</p>
+<p>If the <code>SET</code> list does not really change the primary-key value, no referential action runs.</p>
 
 <h2 id="deleting">6.4. Deleting Data</h2>
 
-<p>Rows are removed with <a href="/3.0/ref/delete">DELETE</a>. A <code>WHERE</code> clause selects the rows to delete; without one, every row in the table is removed.</p>
+<p>You remove rows with <a href="/3.0/ref/delete">DELETE</a>. A <code>WHERE</code> clause picks the rows to delete. Without one, every row in the table is removed.</p>
 
 <pre><code><span class="c-key">DELETE FROM</span> products <span class="c-key">WHERE</span> price = 0;
 
 <span class="c-com">-- delete every row (the table itself remains)</span>
 <span class="c-key">DELETE FROM</span> products;</code></pre>
 
-<p><code>DELETE</code> runs in two phases. First it collects the matching rows: a single-column primary-key predicate of the form <code>pk = v</code>, <code>pk &lt; v</code>, <code>pk &lt;= v</code>, <code>pk &gt; v</code>, or <code>pk &gt;= v</code> is served by a B+ tree cursor walk that visits only the matching keys; any other predicate falls back to a full table scan with per-row <code>WHERE</code> evaluation. An optional <code>LIMIT</code>/<code>OFFSET</code> is then applied to the collected set. Second, it deletes each collected row.</p>
+<p><code>DELETE</code> runs in two phases. First it collects the matching rows. A single-column primary-key test of the form <code>pk = v</code>, <code>pk &lt; v</code>, <code>pk &lt;= v</code>, <code>pk &gt; v</code>, or <code>pk &gt;= v</code> uses a B+ tree cursor walk. That walk visits only the matching keys. Any other test falls back to a full table scan with a per-row <code>WHERE</code> check. An optional <code>LIMIT</code> or <code>OFFSET</code> is then applied to the collected set. Second, it deletes each collected row.</p>
 
-<p>For each row deleted, the engine enforces foreign-key referential integrity before removing it, runs <code>BEFORE</code>/<code>AFTER DELETE</code> triggers if any exist, removes the row's entries from secondary indexes, and then MVCC-soft-deletes the tuple by setting its <code>xmax</code>, the primary-key entry is kept so concurrent readers can still locate the row and check visibility. The space is reclaimed later.</p>
+<p>For each row deleted, the engine does several things. First it enforces foreign-key referential integrity before removing the row. Then it runs <code>BEFORE</code> and <code>AFTER DELETE</code> triggers if any exist. It removes the row's entries from secondary indexes. Then it MVCC-soft-deletes the tuple by setting its <code>xmax</code>. The primary-key entry is kept. So readers running at the same time can still find the row and check whether it is visible. The space is reclaimed later.</p>
 
 <h3 id="delete-fk">6.4.1. Foreign-Key Actions on Delete</h3>
 
-<p>Deleting a parent row triggers the <code>ON DELETE</code> action of every foreign key that references it:</p>
+<p>Deleting a parent row runs the <code>ON DELETE</code> action of every foreign key that references it.</p>
 
 <dl class="params">
-<dt>RESTRICT / NO ACTION</dt><dd>The delete is rejected if any child row references the parent. The error is <code>update or delete on table "…" violates foreign key constraint "…" on table "…"</code> (<code>23503</code>).</dd>
-<dt>CASCADE</dt><dd>Matching child rows are deleted. Cascades recurse to grandchildren first; a cascade chain deeper than 32 levels is rejected as a possible circular reference.</dd>
+<dt>RESTRICT / NO ACTION</dt><dd>The delete is rejected if any child row references the parent. The error is <code>update or delete on table "…" violates foreign key constraint "…" on table "…"</code> with code <code>23503</code>.</dd>
+<dt>CASCADE</dt><dd>Matching child rows are deleted. Cascades go to grandchildren first. A cascade chain deeper than 32 levels is rejected as a possible circular reference.</dd>
 <dt>SET NULL</dt><dd>The child rows' foreign-key columns are set to <code>NULL</code>.</dd>
-<dt>SET DEFAULT</dt><dd>The child rows' foreign-key columns are set to their declared defaults (falling back to <code>NULL</code>).</dd>
+<dt>SET DEFAULT</dt><dd>The child rows' foreign-key columns are set to their declared defaults. If a column has no default, it falls back to <code>NULL</code>.</dd>
 </dl>
 
 <div class="callout">
-<p><strong>Note.</strong> A <code>DELETE</code> with no <code>WHERE</code> still removes rows one at a time through the full delete path, so foreign-key checks, triggers, and index maintenance all run for every row. To empty a large table quickly and reset its identity counter, prefer <code>TRUNCATE</code> (Section 6.6).</p>
+<p><strong>Note.</strong> A <code>DELETE</code> with no <code>WHERE</code> still removes rows one at a time through the full delete path. So foreign-key checks, triggers, and index work all run for every row. To empty a large table fast and reset its identity counter, use <code>TRUNCATE</code> instead. See Section 6.6.</p>
 </div>
 
 <h2 id="copy">6.5. Bulk Loading and Unloading with COPY</h2>
 
-<p>The <a href="/3.0/ref/copy">COPY</a> command moves data in bulk between a table and a file or stream, in <code>CSV</code> or <code>TEXT</code> format. <code>COPY ... FROM</code> imports; <code>COPY ... TO</code> exports.</p>
+<p>The <a href="/3.0/ref/copy">COPY</a> command moves data in bulk between a table and a file or stream. It uses <code>CSV</code> or <code>TEXT</code> format. <code>COPY ... FROM</code> imports. <code>COPY ... TO</code> exports.</p>
 
 <pre><code><span class="c-com">-- import: each CSV line becomes one inserted row</span>
 <span class="c-key">COPY</span> products <span class="c-key">FROM</span> <span class="c-str">'/data/products.csv'</span> <span class="c-key">WITH</span> (FORMAT CSV, HEADER true);
@@ -229,37 +229,37 @@
 
 <h3 id="copy-options">6.5.1. COPY Options and Defaults</h3>
 
-<p>The format selects a set of dialect defaults, which the individual options then override:</p>
+<p>The format picks a set of default settings. The individual options then override them.</p>
 
 <dl class="params">
-<dt>FORMAT TEXT</dt><dd>Default. Delimiter is a tab, the null marker is <code>\N</code>.</dd>
-<dt>FORMAT CSV</dt><dd>Delimiter is a comma, the null marker is the empty string, quote character is <code>"</code>. The bare keyword <code>CSV</code> is also accepted as a synonym for <code>FORMAT CSV</code>.</dd>
-<dt>DELIMITER '<em>c</em>'</dt><dd>Single field-separator character.</dd>
-<dt>QUOTE '<em>c</em>'</dt><dd>Single quoting character (CSV).</dd>
-<dt>NULL '<em>s</em>'</dt><dd>String that represents a SQL <code>NULL</code>.</dd>
-<dt>HEADER [true]</dt><dd>On import, skip the first line; on export, write a header row of column names first.</dd>
+<dt>FORMAT TEXT</dt><dd>This is the default. The delimiter is a tab. The null marker is <code>\N</code>.</dd>
+<dt>FORMAT CSV</dt><dd>The delimiter is a comma. The null marker is the empty string. The quote character is <code>"</code>. The plain keyword <code>CSV</code> also works as a short way to write <code>FORMAT CSV</code>.</dd>
+<dt>DELIMITER '<em>c</em>'</dt><dd>One field-separator character.</dd>
+<dt>QUOTE '<em>c</em>'</dt><dd>One quoting character for CSV.</dd>
+<dt>NULL '<em>s</em>'</dt><dd>The string that stands for a SQL <code>NULL</code>.</dd>
+<dt>HEADER [true]</dt><dd>On import, skip the first line. On export, write a header row of column names first.</dd>
 </dl>
 
 <h3 id="copy-import-path">6.5.2. Import Semantics</h3>
 
-<p><code>COPY ... FROM</code> is not a separate write path, each parsed line is turned into a single-row <code>INSERT</code> and run through the normal insert machinery. This means every imported row is subject to the same type validation, <code>NOT NULL</code>, <code>UNIQUE</code>, <code>CHECK</code>, and <code>FOREIGN KEY</code> checks, and the same index and trigger maintenance, as an ordinary <code>INSERT</code>. File-mode <code>COPY FROM</code> runs auto-commit: on the first row that fails to parse or insert, the import stops and the command reports an error; in file mode the partial work is committed up to the failing row. The command returns the number of rows successfully inserted.</p>
+<p><code>COPY ... FROM</code> is not a separate write path. Each parsed line is turned into a single-row <code>INSERT</code> and run through the normal insert code. So every imported row gets the same checks as a normal <code>INSERT</code>. This means the same type validation and the <code>NOT NULL</code>, <code>UNIQUE</code>, <code>CHECK</code>, and <code>FOREIGN KEY</code> checks. It also means the same index and trigger work. File-mode <code>COPY FROM</code> runs in auto-commit mode. On the first row that fails to parse or insert, the import stops and the command reports an error. In file mode, the work done up to the failing row is committed. The command returns the number of rows it inserted.</p>
 
 <h3 id="copy-stream">6.5.3. File Mode and Stream Mode</h3>
 
-<p>EvolutionDB supports two transports:</p>
+<p>EvolutionDB supports two ways to move the data.</p>
 
 <dl class="params">
-<dt>File mode</dt><dd><code>FROM '/abs/path'</code> / <code>TO '/abs/path'</code>. The path must be absolute and may not contain a <code>..</code> component; relative or traversal paths are rejected.</dd>
-<dt>Stream mode</dt><dd><code>FROM STDIN</code> / <code>TO STDOUT</code>, driven by the PostgreSQL wire COPY subprotocol in the dual-protocol server. <code>STDIN</code> implies an import and <code>STDOUT</code> an export.</dd>
+<dt>File mode</dt><dd>This is <code>FROM '/abs/path'</code> and <code>TO '/abs/path'</code>. The path must be absolute. It may not contain a <code>..</code> part. Relative or traversal paths are rejected.</dd>
+<dt>Stream mode</dt><dd>This is <code>FROM STDIN</code> and <code>TO STDOUT</code>. It is driven by the PostgreSQL wire COPY subprotocol in the dual-protocol server. <code>STDIN</code> means an import. <code>STDOUT</code> means an export.</dd>
 </dl>
 
 <div class="callout">
-<p><strong>Security note.</strong> Server-side file COPY is not yet gated behind a superuser check, and the textual <code>..</code> guard does not defeat symbolic links. In the current release any user who can read or write a table can, through file-mode <code>COPY</code>, read or write any file the server process can reach. Treat file-mode <code>COPY</code> as a privileged operation operationally until a superuser gate ships. Stream mode (<code>STDIN</code>/<code>STDOUT</code>) does not touch the server filesystem and is not affected.</p>
+<p><strong>Security note.</strong> Server-side file COPY does not yet require a superuser check. The text <code>..</code> guard also does not stop symbolic links. In the current release, any user who can read or write a table can use file-mode <code>COPY</code>. Through it they can read or write any file the server process can reach. Until a superuser gate ships, treat file-mode <code>COPY</code> as a privileged operation in practice. Stream mode with <code>STDIN</code> and <code>STDOUT</code> does not touch the server filesystem. It is not affected.</p>
 </div>
 
 <h2 id="truncate">6.6. Emptying a Table with TRUNCATE</h2>
 
-<p><code>TRUNCATE TABLE</code> removes all rows from a table quickly by discarding and rebuilding the table's storage rather than deleting rows one by one. The table definition, its columns, and its constraints remain.</p>
+<p><code>TRUNCATE TABLE</code> removes all rows from a table fast. It throws away and rebuilds the table's storage. It does not delete rows one by one. The table definition, its columns, and its constraints stay.</p>
 
 <pre><code><span class="c-key">TRUNCATE TABLE</span> products;
 
@@ -272,31 +272,31 @@
 <span class="c-com">-- keep the AUTO_INCREMENT counter instead of resetting it</span>
 <span class="c-key">TRUNCATE TABLE</span> products <span class="c-key">CONTINUE IDENTITY</span>;</code></pre>
 
-<p>For each truncated table the engine destroys and recreates the primary-key B+ tree and every secondary index as empty trees, frees all of the table's heap pages, resets the row-count statistics, and, unless <code>CONTINUE IDENTITY</code> is given, resets the <code>AUTO_INCREMENT</code> counter to zero. The supported options are:</p>
+<p>For each truncated table, the engine does several things. It destroys and recreates the primary-key B+ tree and every secondary index as empty trees. It frees all of the table's heap pages. It resets the row-count statistics. Unless you give <code>CONTINUE IDENTITY</code>, it resets the <code>AUTO_INCREMENT</code> counter to zero. The supported options are below.</p>
 
 <table>
 <thead><tr><th>Option</th><th>Effect</th></tr></thead>
 <tbody>
-<tr><td><code>CASCADE</code></td><td>Recursively truncate any table that references the target by a foreign key, before truncating the target.</td></tr>
-<tr><td><code>RESTRICT</code></td><td>Accepted; the default behavior, refuse to truncate a table that is referenced by foreign keys from non-empty tables.</td></tr>
-<tr><td><code>RESTART IDENTITY</code></td><td>Accepted; identity/auto-increment counters are reset (this is also the default when the option is omitted).</td></tr>
+<tr><td><code>CASCADE</code></td><td>Truncate any table that references the target by a foreign key first. Then truncate the target.</td></tr>
+<tr><td><code>RESTRICT</code></td><td>Accepted. This is the default behavior. It refuses to truncate a table that is referenced by foreign keys from non-empty tables.</td></tr>
+<tr><td><code>RESTART IDENTITY</code></td><td>Accepted. Identity and auto-increment counters are reset. This is also the default when you leave the option out.</td></tr>
 <tr><td><code>CONTINUE IDENTITY</code></td><td>Do not reset the <code>AUTO_INCREMENT</code> counter.</td></tr>
 </tbody>
 </table>
 
-<p>Without <code>CASCADE</code>, truncating a table that is referenced by a foreign key from a non-empty table is rejected:</p>
+<p>Without <code>CASCADE</code>, you cannot truncate a table that is referenced by a foreign key from a non-empty table. It is rejected.</p>
 
 <div class="callout">
 <p><code>cannot truncate table "…": referenced by foreign key from "…"</code> (SQLSTATE <code>23503</code>)</p>
 </div>
 
 <div class="callout">
-<p><strong>TRUNCATE vs. DELETE.</strong> <code>DELETE FROM t</code> removes rows individually through the MVCC delete path: it fires triggers, enforces <code>ON DELETE</code> referential actions per row, supports <code>WHERE</code> and <code>RETURNING</code>, and leaves dead tuples for later reclamation. <code>TRUNCATE</code> takes no <code>WHERE</code>, fires no row triggers, throws away the storage wholesale, and resets identity counters. Use <code>DELETE</code> when you need row-level control or a subset; use <code>TRUNCATE</code> to empty a whole table cheaply.</p>
+<p><strong>TRUNCATE vs. DELETE.</strong> <code>DELETE FROM t</code> removes rows one by one through the MVCC delete path. It fires triggers. It runs <code>ON DELETE</code> referential actions for each row. It supports <code>WHERE</code> and <code>RETURNING</code>. It leaves dead tuples to be reclaimed later. <code>TRUNCATE</code> takes no <code>WHERE</code>. It fires no row triggers. It throws away the storage all at once. It resets identity counters. Use <code>DELETE</code> when you need row-level control or only a subset. Use <code>TRUNCATE</code> to empty a whole table cheaply.</p>
 </div>
 
 <h2 id="errors">6.7. Data-Manipulation Error Codes</h2>
 
-<p>DML commands report failures with a five-character SQLSTATE alongside a message. The codes you are most likely to encounter from this chapter's commands:</p>
+<p>DML commands report a failure with a five-character SQLSTATE and a message. Here are the codes you will most likely see from this chapter's commands.</p>
 
 <table>
 <thead><tr><th>SQLSTATE</th><th>Condition</th><th>Typical trigger</th></tr></thead>
@@ -314,7 +314,7 @@
 </tbody>
 </table>
 
-<p>See the per-command reference pages, <a href="/3.0/ref/insert">INSERT</a>, <a href="/3.0/ref/replace">REPLACE</a>, <a href="/3.0/ref/update">UPDATE</a>, <a href="/3.0/ref/delete">DELETE</a>, <a href="/3.0/ref/copy">COPY</a>: for the complete syntax synopsis and option grammar of each statement, and Chapter 7 for how these commands behave inside explicit transactions.</p>
+<p>See the per-command reference pages for the full syntax and option grammar of each statement. These are <a href="/3.0/ref/insert">INSERT</a>, <a href="/3.0/ref/replace">REPLACE</a>, <a href="/3.0/ref/update">UPDATE</a>, <a href="/3.0/ref/delete">DELETE</a>, and <a href="/3.0/ref/copy">COPY</a>. See Chapter 7 for how these commands behave inside explicit transactions.</p>
 
 </main></div>
 <script src="/nav-data.js"></script>

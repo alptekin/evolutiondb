@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE USER</h1>
-<p class="lede">Define a new database user (login account) authenticated by a password.</p>
+<p class="lede">Make a new database user that can log in with a password.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -24,60 +24,62 @@
 
 <h2 id="description">Description</h2>
 <p><code>CREATE USER</code> adds a new login account to the EvolutionDB instance. The
-account is stored in the system catalog (the <code>CAT_SYS_USERS</code> B+ tree inside the
-unified storage file), keyed by user name, with the supplied password kept only as a
-PBKDF2-SHA256 hash, the plaintext password is never written to disk and is securely
-wiped from memory after hashing.</p>
+account is stored in the system catalog. It lives in the <code>CAT_SYS_USERS</code> B+ tree
+inside the unified storage file. The account is keyed by user name. The password is
+kept only as a PBKDF2-SHA256 hash. The plain text password is never written to disk.
+It is also wiped from memory in a safe way after hashing.</p>
 
-<p>In EvolutionDB the statement is recognized as a fixed two-clause form:
-the user name, followed by the keyword <code>PASSWORD</code> and a password literal.
-Both the name and the password are mandatory; supplying an empty name or an empty
-password is rejected. There are no role attribute options (such as <code>SUPERUSER</code>,
-<code>LOGIN</code>, <code>CREATEDB</code>, or <code>VALID UNTIL</code>), those clauses are not part of
-EvolutionDB's grammar and are not accepted.</p>
+<p>In EvolutionDB the statement always has the same fixed form.
+You write the user name, then the keyword <code>PASSWORD</code>, then a password value.
+The name and the password are both required. An empty name is rejected. An empty
+password is rejected too. There are no role attribute options. For example, you
+cannot use <code>SUPERUSER</code>, <code>LOGIN</code>, <code>CREATEDB</code>, or
+<code>VALID UNTIL</code>. These clauses are not part of EvolutionDB's grammar. They
+are not accepted.</p>
 
-<p>The created account can immediately connect over either wire protocol
-(PostgreSQL on port 5433 or the native EVO protocol on port 9967). A freshly created
-user holds no privileges beyond what it is later granted; use <a href="/3.0/ref/grant/">GRANT</a>
-to assign access. User lookup at authentication time is case-insensitive: the
-authenticator first searches for the lower-cased name and then falls back to the name
-exactly as stored.</p>
+<p>The new account can connect right away. It can use either wire protocol.
+That means PostgreSQL on port 5433 or the native EVO protocol on port 9967. A new
+user has no privileges at first. It only gets the access you give it later. Use
+<a href="/3.0/ref/grant/">GRANT</a> to assign access. User lookup at login time is
+not case sensitive. The authenticator first looks for the lower-case name. If that
+is not found, it then looks for the name exactly as stored.</p>
 
 <div class="callout">
-<p><strong>Note</strong> &mdash; Unlike most EvolutionDB statements, <code>CREATE USER</code> is not
-processed by the Flex/Bison SQL parser. It is intercepted by the protocol adaptor's
-catalog layer and parsed as a literal command string, which is why only the exact
+<p><strong>Note</strong> &mdash; Most EvolutionDB statements go through the Flex/Bison SQL
+parser. <code>CREATE USER</code> does not. The protocol adaptor's catalog layer catches
+it first. It reads the statement as a plain command string. This is why only the exact
 <code>CREATE USER <em>name</em> PASSWORD '<em>password</em>'</code> shape is accepted.</p>
 </div>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt><code>name</code></dt>
-<dd>The name of the new user. Read as the first whitespace-delimited token after
-<code>CREATE USER</code> and stored verbatim in the system catalog. Maximum length is
-255 characters. Because authentication matching lower-cases the name before lookup,
-user names are effectively case-insensitive for login purposes.</dd>
+<dd>The name of the new user. It is the first word after <code>CREATE USER</code>.
+A space ends the word. The name is stored in the system catalog exactly as written.
+The longest allowed name is 255 characters. Login matches the name in lower case
+first. So for login, the name is not case sensitive.</dd>
 
 <dt><code>PASSWORD 'password'</code></dt>
-<dd>Required. The login password for the new user. The literal may be written
-single-quoted (<code>'secret'</code>) or as a bare token; a quoted value preserves spaces
-up to the closing quote. The value is hashed with PBKDF2-SHA256 (random per-user salt,
-100&nbsp;000 iterations) and stored as <code>pbkdf2:&lt;iterations&gt;:&lt;salt&gt;:&lt;hash&gt;</code>.
+<dd>Required. The login password for the new user. You can write it inside single
+quotes, like <code>'secret'</code>. You can also write it as a plain word. A quoted
+value keeps any spaces up to the closing quote. The value is hashed with
+PBKDF2-SHA256. Each user gets a random salt, and the hash uses 100&nbsp;000 iterations.
+It is stored as <code>pbkdf2:&lt;iterations&gt;:&lt;salt&gt;:&lt;hash&gt;</code>.
 An empty password is rejected with an invalid-parameter error.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a user with a single-quoted password:</p>
+<p>Create a user with a password in single quotes:</p>
 <pre><code><span class="c-key">CREATE USER</span> reporting <span class="c-key">PASSWORD</span> <span class="c-str">'r3port!ng_2026'</span>;</code></pre>
 
-<p>Create a user, then grant it access to a table (privileges are separate):</p>
+<p>Create a user, then grant it access to a table. Access is a separate step.</p>
 <pre><code><span class="c-key">CREATE USER</span> analyst <span class="c-key">PASSWORD</span> <span class="c-str">'an4lyst'</span>;
 <span class="c-key">GRANT SELECT ON</span> orders <span class="c-key">TO</span> analyst;</code></pre>
 
-<p>Connecting as the new user with the EVO CLI:</p>
+<p>Connect as the new user with the EVO CLI:</p>
 <pre><code>./cli/evosql-cli -U analyst -W   <span class="c-com"># prompts for the password</span></code></pre>
 
-<p>Attempting to create a user that already exists fails:</p>
+<p>Trying to create a user that already exists fails:</p>
 <pre><code><span class="c-key">CREATE USER</span> analyst <span class="c-key">PASSWORD</span> <span class="c-str">'whatever'</span>;
 <span class="c-com">-- ERROR: User 'analyst' already exists  (SQLSTATE 42710)</span></code></pre>
 
@@ -86,23 +88,23 @@ An empty password is rejected with an invalid-parameter error.</dd>
 <span class="c-com">-- ERROR: Syntax: CREATE USER &lt;name&gt; PASSWORD '&lt;pass&gt;'  (SQLSTATE 42601)</span></code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>There is no <code>CREATE USER</code> statement in the SQL standard; the standard defines
-roles via <code>CREATE ROLE</code>. EvolutionDB's form is a deliberately narrow subset of
-the PostgreSQL extension.</p>
+<p>The SQL standard has no <code>CREATE USER</code> statement. The standard defines
+roles with <code>CREATE ROLE</code> instead. EvolutionDB's form is a small part of
+the PostgreSQL extension. This was done on purpose.</p>
 <ul>
-<li><strong>Password is mandatory.</strong> PostgreSQL allows <code>CREATE USER</code> with no
-password and many optional attributes; EvolutionDB requires exactly
-<code>PASSWORD '<em>password</em>'</code> and accepts nothing else.</li>
-<li><strong>No role attributes.</strong> PostgreSQL options such as <code>SUPERUSER</code>,
+<li><strong>Password is required.</strong> PostgreSQL allows <code>CREATE USER</code> with no
+password and many optional attributes. EvolutionDB needs exactly
+<code>PASSWORD '<em>password</em>'</code>. It accepts nothing else.</li>
+<li><strong>No role attributes.</strong> PostgreSQL has options such as <code>SUPERUSER</code>,
 <code>CREATEDB</code>, <code>CREATEROLE</code>, <code>LOGIN</code>/<code>NOLOGIN</code>,
-<code>CONNECTION LIMIT</code>, <code>VALID UNTIL</code>, and <code>IN ROLE</code> are not part of
-EvolutionDB's grammar and will not parse.</li>
+<code>CONNECTION LIMIT</code>, <code>VALID UNTIL</code>, and <code>IN ROLE</code>. These
+are not part of EvolutionDB's grammar. They will not parse.</li>
 <li><strong>No password-encryption keywords.</strong> PostgreSQL accepts
-<code>PASSWORD '...'</code> with optional <code>ENCRYPTED</code>/<code>UNENCRYPTED</code> hints;
-EvolutionDB always hashes the supplied value with PBKDF2-SHA256 and stores only the hash.</li>
-<li><strong>Users vs. roles.</strong> EvolutionDB also has a separate
-<code>CREATE ROLE</code> form; roles created that way are flagged as non-login and cannot
-authenticate, whereas a user created with <code>CREATE USER</code> can log in.</li>
+<code>PASSWORD '...'</code> with optional <code>ENCRYPTED</code>/<code>UNENCRYPTED</code> hints.
+EvolutionDB always hashes the value with PBKDF2-SHA256. It stores only the hash.</li>
+<li><strong>Users and roles.</strong> EvolutionDB also has a separate
+<code>CREATE ROLE</code> form. Roles made that way are marked as non-login. They cannot
+log in. A user made with <code>CREATE USER</code> can log in.</li>
 </ul>
 
 <h2 id="see-also">See Also</h2>

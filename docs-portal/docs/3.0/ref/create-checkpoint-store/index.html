@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>CREATE CHECKPOINT STORE</h1>
-<p class="lede">Register a named checkpoint store for LangGraph-style agent state and auto-create its backing table.</p>
+<p class="lede">Register a named checkpoint store for LangGraph-style agent state. It also creates the backing table for you.</p>
 
 <h2 id="synopsis">Synopsis</h2>
 <div class="synopsis">
@@ -24,51 +24,51 @@
 </div>
 
 <h2 id="description">Description</h2>
-<p><code>CREATE CHECKPOINT STORE</code> registers a checkpoint store named <em>name</em> in the system catalog and, in the same statement, auto-creates a backing heap table that holds the actual checkpoint rows. The store is EvolutionDB's native backend for the LangGraph <code>BaseCheckpointSaver</code> contract: it persists per-thread agent snapshots so a graph run can be resumed from where it left off.</p>
-<p>The backing table is created in the current session schema with the fixed name <code>ck_<em>name</em></code> and the following fixed schema:</p>
+<p><code>CREATE CHECKPOINT STORE</code> registers a checkpoint store named <em>name</em> in the system catalog. The same statement also creates a backing heap table. This table holds the real checkpoint rows. The store is EvolutionDB's native backend for the LangGraph <code>BaseCheckpointSaver</code> contract. It saves per-thread agent snapshots. This lets a graph run start again from where it stopped.</p>
+<p>The backing table is created in the current session schema. It has the fixed name <code>ck_<em>name</em></code>. It uses this fixed schema.</p>
 <dl class="params">
 <dt>thread_id <span class="c-com">VARCHAR(255) NOT NULL</span></dt>
-<dd>The conversation / graph thread the checkpoint belongs to.</dd>
+<dd>The conversation or graph thread that owns the checkpoint.</dd>
 <dt>checkpoint_ns <span class="c-com">VARCHAR(255)</span></dt>
-<dd>Namespace within the thread. Nullable; an empty string maps to NULL in this engine.</dd>
+<dd>The namespace inside the thread. This can be NULL. An empty string becomes NULL in this engine.</dd>
 <dt>checkpoint_id <span class="c-com">VARCHAR(255) PRIMARY KEY</span></dt>
-<dd>The unique identifier of the checkpoint. Indexed via the primary-key B+ tree.</dd>
+<dd>The unique id of the checkpoint. The primary-key B+ tree indexes it.</dd>
 <dt>parent_id <span class="c-com">VARCHAR(255)</span></dt>
-<dd>The id of the checkpoint this one descends from. Nullable for root checkpoints.</dd>
+<dd>The id of the checkpoint that this one comes from. This is NULL for root checkpoints.</dd>
 <dt>ck_values <span class="c-com">JSON</span></dt>
-<dd>The serialized channel values payload. Named <code>ck_values</code> to avoid the SQL reserved word <code>values</code>.</dd>
+<dd>The serialized channel values payload. It is named <code>ck_values</code> so it does not clash with the SQL reserved word <code>values</code>.</dd>
 <dt>metadata <span class="c-com">JSON</span></dt>
-<dd>Application metadata attached to the checkpoint.</dd>
+<dd>Application metadata that is attached to the checkpoint.</dd>
 <dt>parent_config <span class="c-com">JSON</span></dt>
 <dd>The serialized configuration of the parent checkpoint.</dd>
 <dt>created_at <span class="c-com">TIMESTAMP</span></dt>
-<dd>Insertion time, set automatically by the engine on each write.</dd>
+<dd>The time the row was inserted. The engine sets it for you on each write.</dd>
 </dl>
-<p>Because the store is just a catalog registration over an ordinary table, every standard engine path applies to it unchanged: MVCC visibility, row-level security, triggers, and replication all work on the backing table exactly as on a hand-written table.</p>
-<p>If a store with the same <em>name</em> already exists, the statement fails (SQLSTATE <code>42710</code>) unless <code>IF NOT EXISTS</code> is given, in which case the statement is a no-op and no error is raised. A missing or empty <em>name</em> is a syntax error (SQLSTATE <code>42601</code>).</p>
+<p>The store is just a catalog entry over a normal table. So every standard engine feature works on it without any change. MVCC visibility, row-level security, triggers, and replication all work on the backing table. They work the same as on a table you write by hand.</p>
+<p>The statement fails if a store with the same <em>name</em> already exists. It returns SQLSTATE <code>42710</code>. You can avoid this with <code>IF NOT EXISTS</code>. Then the statement does nothing and raises no error. A missing or empty <em>name</em> is a syntax error. It returns SQLSTATE <code>42601</code>.</p>
 
 <h2 id="parameters">Parameters</h2>
 <dl class="params">
 <dt>IF NOT EXISTS</dt>
-<dd>Do not raise an error if a checkpoint store with the same name already exists. When the store exists, the statement returns successfully without creating anything or altering the existing store. Note that this guard checks only for an existing checkpoint store of that name; it does not guarantee the backing table is identical.</dd>
+<dd>Do not raise an error if a checkpoint store with the same name already exists. When the store exists, the statement just returns. It creates nothing and changes nothing. This guard only checks for a checkpoint store with that name. It does not make sure the backing table is the same.</dd>
 <dt><em>name</em></dt>
-<dd>The name of the checkpoint store to create. It must match the engine's identifier pattern (<code>[A-Za-z][A-Za-z0-9_]*</code>). The backing table is created as <code>ck_<em>name</em></code> in the current schema.</dd>
+<dd>The name of the checkpoint store to create. It must match the engine's identifier pattern <code>[A-Za-z][A-Za-z0-9_]*</code>. The backing table is created as <code>ck_<em>name</em></code> in the current schema.</dd>
 <dt>WITH ( retention = '<em>interval_text</em>' )</dt>
-<dd>Optional. Stores a free-form retention expression (for example <code>'30 days'</code> or <code>'1 hour'</code>) on the store descriptor in the catalog. The value is recorded verbatim with surrounding quotes stripped; it is descriptive metadata only. In this release no automatic retention pruning is performed against it, old checkpoints are not deleted by the engine on the basis of this value. <code>retention</code> is the only key accepted inside the <code>WITH</code> clause.</dd>
+<dd>This is optional. It stores a free-form retention text on the store descriptor in the catalog. For example, you can use <code>'30 days'</code> or <code>'1 hour'</code>. The value is stored as is. The outer quotes are removed. It is only descriptive metadata. This release does no automatic retention pruning. The engine does not delete old checkpoints based on this value. <code>retention</code> is the only key allowed inside the <code>WITH</code> clause.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a checkpoint store named <code>agent_runs</code>:</p>
+<p>Create a checkpoint store named <code>agent_runs</code>.</p>
 <pre><code><span class="c-key">CREATE CHECKPOINT STORE</span> agent_runs<span class="c-com">;</span></code></pre>
 
-<p>Create it only if it does not already exist:</p>
+<p>Create it only if it does not already exist.</p>
 <pre><code><span class="c-key">CREATE CHECKPOINT STORE IF NOT EXISTS</span> agent_runs<span class="c-com">;</span></code></pre>
 
-<p>Create a store and record a retention expression on it:</p>
+<p>Create a store and save a retention text on it.</p>
 <pre><code><span class="c-key">CREATE CHECKPOINT STORE</span> agent_runs
     <span class="c-key">WITH</span> (retention = <span class="c-str">'30 days'</span>)<span class="c-com">;</span></code></pre>
 
-<p>Because the store is backed by an ordinary table, you can also read and write checkpoints directly against <code>ck_<em>name</em></code>:</p>
+<p>A normal table backs the store. So you can also read and write checkpoints straight against <code>ck_<em>name</em></code>.</p>
 <pre><code><span class="c-key">INSERT INTO</span> ck_agent_runs (thread_id, checkpoint_id, ck_values, metadata)
 <span class="c-key">VALUES</span> (<span class="c-str">'thread-1'</span>, <span class="c-str">'ckpt-001'</span>, <span class="c-str">'{"step":1}'</span>, <span class="c-str">'{"source":"loop"}'</span>)<span class="c-com">;</span>
 
@@ -78,12 +78,12 @@
 <span class="c-key">ORDER BY</span> created_at <span class="c-key">DESC</span><span class="c-com">;</span></code></pre>
 
 <div class="callout">
-<p>The grammar also accepts native checkpoint DML, <code>CHECKPOINT PUT [WRITES] INTO <em>name</em> VALUES (…)</code>, <code>CHECKPOINT GET FROM <em>name</em> THREAD '<em>id</em>' [AT '<em>checkpoint_id</em>']</code>, and <code>CHECKPOINT LIST FROM <em>name</em> THREAD '<em>id</em>' [LIMIT <em>n</em>]</code>, which compile down to <code>INSERT</code> / <code>SELECT</code> against the same backing table. <code>GET</code> returns the newest matching row; <code>LIST</code> returns history newest-first.</p>
+<p>The grammar also accepts native checkpoint DML. These are <code>CHECKPOINT PUT [WRITES] INTO <em>name</em> VALUES (…)</code>, <code>CHECKPOINT GET FROM <em>name</em> THREAD '<em>id</em>' [AT '<em>checkpoint_id</em>']</code>, and <code>CHECKPOINT LIST FROM <em>name</em> THREAD '<em>id</em>' [LIMIT <em>n</em>]</code>. They compile down to <code>INSERT</code> or <code>SELECT</code> against the same backing table. <code>GET</code> returns the newest matching row. <code>LIST</code> returns the history with the newest first.</p>
 </div>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE CHECKPOINT STORE</code> is an EvolutionDB extension. It is not part of the SQL standard and has no equivalent in PostgreSQL, PostgreSQL has no checkpoint-store object (its <code>CHECKPOINT</code> command is an unrelated WAL/buffer flush operation).</p>
-<p>The clauses EvolutionDB accepts are exactly <code>IF NOT EXISTS</code> and the single-key <code>WITH (retention = '…')</code> option shown in the Synopsis. There is no <code>TABLESPACE</code>, owner, encoding, or other PostgreSQL <code>CREATE …</code>-style clause here. Although the spelling of the <code>WITH</code> clause resembles a generic storage-parameter list, <code>retention</code> is the only recognized key and it is stored as descriptive metadata rather than enforced in this release.</p>
+<p><code>CREATE CHECKPOINT STORE</code> is an EvolutionDB extension. It is not part of the SQL standard. It has no match in PostgreSQL. PostgreSQL has no checkpoint-store object. Its <code>CHECKPOINT</code> command is a different thing. That command flushes WAL and buffers.</p>
+<p>EvolutionDB accepts only two clauses here. They are <code>IF NOT EXISTS</code> and the single-key <code>WITH (retention = '…')</code> option from the Synopsis. There is no <code>TABLESPACE</code>, owner, encoding, or other PostgreSQL <code>CREATE …</code> clause. The <code>WITH</code> clause looks like a normal storage-parameter list. But <code>retention</code> is the only key it knows. The engine stores it as descriptive metadata. It does not enforce it in this release.</p>
 
 <h2 id="see-also">See Also</h2>
 <ul>

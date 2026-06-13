@@ -15,69 +15,69 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
  <h1>Connect (PostgreSQL wire &amp; EVO)</h1>
- <p class="lede">A single EvolutionDB server speaks two protocols at once: the <strong>PostgreSQL wire protocol</strong> on <code>:5433</code> (so <code>psql</code>, DBeaver and any PG driver just work) and the native <strong>EVO text protocol</strong> on <code>:9967</code> (used by <code>evosql-cli</code>). This page covers how to reach the server on each, the default credentials and the environment variables that control them, and how to switch the active database with <code>USE</code>.</p>
+ <p class="lede">One EvolutionDB server speaks two protocols at the same time. It speaks the <strong>PostgreSQL wire protocol</strong> on <code>:5433</code>. So <code>psql</code>, DBeaver and any PG driver just work. It also speaks the native <strong>EVO text protocol</strong> on <code>:9967</code>. The <code>evosql-cli</code> tool uses this one. This page shows how to reach the server on each port. It shows the default login details and the environment variables that control them. It also shows how to switch the active database with <code>USE</code>.</p>
 
  <h2 id="ports">Two listeners, one server</h2>
- <p>On startup the adaptor (<code>adaptor/evosql-server</code>) spawns two listener threads and prints a banner with the live ports. The PG listener runs on the main thread; the EVO listener runs in a background thread.</p>
+ <p>When it starts, the adaptor <code>adaptor/evosql-server</code> opens two listener threads. It prints a banner with the live ports. The PG listener runs on the main thread. The EVO listener runs in a background thread.</p>
  <pre><code><span class="c-com"># start the server (local build)</span>
 ./adaptor/evosql-server
 <span class="c-com">#   PG  protocol on port 5433</span>
 <span class="c-com">#   EVO protocol on port 9967</span></code></pre>
- <p>Both default ports are configurable on the command line. A bare numeric argument is treated as the PG port for backward compatibility.</p>
+ <p>You can change both default ports on the command line. A plain number on its own is read as the PG port. This keeps old commands working.</p>
  <div class="sig">evosql-server [--pg-port PORT] [--evo-port PORT]</div>
  <pre><code><span class="c-com"># move the PG listener to 5434, keep EVO on 9967</span>
 ./adaptor/evosql-server --pg-port 5434
 
 <span class="c-com"># backward-compatible: a bare number sets the PG port</span>
 ./adaptor/evosql-server 5500</code></pre>
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>The defaults are <code>DEFAULT_PG_PORT = 5433</code> and <code>DEFAULT_EVO_PORT = 9967</code>. The startup banner echoes the resolved ports and whether TLS is enabled, so check the log if you are unsure which port a given instance is on.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>The defaults are <code>DEFAULT_PG_PORT = 5433</code> and <code>DEFAULT_EVO_PORT = 9967</code>. The startup banner prints the chosen ports and whether TLS is on. Check the log if you are not sure which port an instance uses.</div></div>
 
  <h2 id="credentials">Default credentials &amp; environment</h2>
- <p>The initial administrator user is created from two environment variables, read once when the database is first initialized:</p>
+ <p>The first admin user is built from two environment variables. The server reads them once, when the database is first set up.</p>
  <ul>
- <li><code>EVOSQL_USER_NAME</code>, the admin username. Defaults to <code>admin</code> when unset or empty.</li>
- <li><code>EVOSQL_PASSWORD</code>, the admin password. If unset or empty, the server generates a random 16-character password and prints it to stdout <strong>once</strong> (MySQL <code>--initialize</code> style).</li>
+ <li><code>EVOSQL_USER_NAME</code> is the admin username. It defaults to <code>admin</code> when it is not set or is empty.</li>
+ <li><code>EVOSQL_PASSWORD</code> is the admin password. If it is not set or is empty, the server makes a random 16-character password. It prints this password to stdout <strong>once</strong>. This works like MySQL <code>--initialize</code>.</li>
  </ul>
- <p>When no password is supplied, the server prints a one-time banner like this and never shows it again:</p>
+ <p>When you give no password, the server prints a one-time banner like this. It never shows it again.</p>
  <pre><code><span class="c-com">============================================================</span>
   GENERATED PASSWORD for 'admin': <span class="c-str">&lt;random-16-chars&gt;</span>
   Save this password! It will NOT be shown again.
   Change it with: <span class="c-key">ALTER USER</span> admin <span class="c-key">PASSWORD</span> <span class="c-str">'&lt;newpass&gt;'</span>
 <span class="c-com">============================================================</span></code></pre>
- <p>To get predictable credentials for development, set both variables before the first run:</p>
+ <p>To get fixed login details for development, set both variables before the first run.</p>
  <pre><code><span class="c-key">export</span> EVOSQL_USER_NAME=admin
 <span class="c-key">export</span> EVOSQL_PASSWORD=admin
 ./adaptor/evosql-server</code></pre>
- <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>These variables seed the admin user only on first initialization. Once the user exists in the catalog, changing the env vars has no effect, rotate the password with <code>ALTER USER &lt;name&gt; PASSWORD '&lt;newpass&gt;'</code> instead.</div></div>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>These variables set up the admin user only on first init. Once the user is in the catalog, changing the env vars does nothing. Change the password with <code>ALTER USER &lt;name&gt; PASSWORD '&lt;newpass&gt;'</code> instead.</div></div>
 
  <h2 id="pg-wire">PostgreSQL wire, psql &amp; DBeaver (:5433)</h2>
- <p>The PG listener implements the PostgreSQL v3 wire protocol: startup handshake, simple query, and the extended query protocol (Parse / Bind / Describe / Execute / Sync). That means standard PostgreSQL clients connect without any EvolutionDB-specific driver. Authentication is cleartext-password based, so always supply a username and password.</p>
+ <p>The PG listener supports the PostgreSQL v3 wire protocol. This covers the startup handshake, the simple query, and the extended query protocol with Parse, Bind, Describe, Execute and Sync. So normal PostgreSQL clients connect with no EvolutionDB driver. Login uses a cleartext password. Always send a username and password.</p>
  <pre><code><span class="c-com"># psql - note the explicit port</span>
 psql -h 127.0.0.1 -p 5433 -U admin -d testdb
 
 <span class="c-com"># or as a connection URI</span>
 psql <span class="c-str">"postgresql://admin@127.0.0.1:5433/testdb"</span></code></pre>
- <p>For <strong>DBeaver</strong> (or pgAdmin, or any JDBC tool), create a new <em>PostgreSQL</em> connection and fill in the fields:</p>
+ <p>For <strong>DBeaver</strong>, pgAdmin, or any JDBC tool, make a new <em>PostgreSQL</em> connection. Fill in the fields.</p>
  <ul>
  <li>Host: <code>127.0.0.1</code></li>
  <li>Port: <code>5433</code></li>
  <li>Username: <code>admin</code> (or your <code>EVOSQL_USER_NAME</code>)</li>
  <li>Password: your <code>EVOSQL_PASSWORD</code></li>
  </ul>
- <p>The adaptor fakes enough of <code>pg_catalog</code> and <code>information_schema</code> for GUI tools to introspect the schema tree, and named prepared statements are retained across Bind/Execute re-use (so driver auto-prepare and JDBC work). If the client opens a transaction and then disconnects, the server auto-rolls it back.</p>
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>TLS on the PG wire is enabled only when the server is started with both <code>EVOSQL_TLS_CERT</code> and <code>EVOSQL_TLS_KEY</code> set; otherwise the banner reports <code>TLS: disabled</code>.</div></div>
+ <p>The adaptor fakes enough of <code>pg_catalog</code> and <code>information_schema</code> for GUI tools to read the schema tree. Named prepared statements are kept across Bind and Execute re-use. So driver auto-prepare and JDBC work. If the client opens a transaction and then disconnects, the server rolls it back on its own.</p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>TLS on the PG wire is on only when the server starts with both <code>EVOSQL_TLS_CERT</code> and <code>EVOSQL_TLS_KEY</code> set. If not, the banner reports <code>TLS: disabled</code>.</div></div>
 
  <h2 id="evo">Native EVO text protocol (:9967)</h2>
- <p>EVO is a simple, line-oriented text protocol, easy to script over a raw socket and the transport that <code>evosql-cli</code> uses. A session is a short greeting handshake followed by line-framed queries and multi-line replies.</p>
+ <p>EVO is a simple text protocol that works line by line. It is easy to script over a raw socket. It is the transport that <code>evosql-cli</code> uses. A session starts with a short greeting handshake. After that come line-framed queries and multi-line replies.</p>
  <div class="sig">client → "EVO" · server → "HELLO EvoSQL 1.0" · [optional STARTTLS] · server → "AUTH_SCRAM"</div>
- <p>After the greeting the server offers authentication. It advertises <code>AUTH_SCRAM</code> to request SCRAM-SHA-256, but it also accepts a legacy cleartext <code>AUTH &lt;user&gt; &lt;pass&gt;</code> line for backward compatibility; on success it replies <code>AUTH_OK</code>. Queries are then sent as a two-line frame:</p>
+ <p>After the greeting the server offers login. It sends <code>AUTH_SCRAM</code> to ask for SCRAM-SHA-256. It also accepts an old cleartext <code>AUTH &lt;user&gt; &lt;pass&gt;</code> line to keep older clients working. On success it replies <code>AUTH_OK</code>. You then send queries as a two-line frame.</p>
  <pre><code><span class="c-com"># wire frame for one statement</span>
 SQL &lt;byte-length&gt;
 &lt;the SQL text on one line&gt;</code></pre>
- <p>The server streams the reply as keyword lines, <code>OK</code>, <code>TAG &lt;text&gt;</code> for command tags, <code>RESULT</code> / <code>COLS n</code> / <code>COL …</code> / <code>ROW</code> / <code>FIELD …</code> / <code>END</code> for result sets, <code>ERR &lt;sqlstate&gt; &lt;message&gt;</code> for errors, terminated by a final <code>READY</code> line. You rarely write this by hand: use the CLI below.</p>
+ <p>The server streams the reply as keyword lines. It sends <code>OK</code> for success. It sends <code>TAG &lt;text&gt;</code> for command tags. It sends <code>RESULT</code> / <code>COLS n</code> / <code>COL …</code> / <code>ROW</code> / <code>FIELD …</code> / <code>END</code> for result sets. It sends <code>ERR &lt;sqlstate&gt; &lt;message&gt;</code> for errors. A final <code>READY</code> line ends the reply. You rarely write this by hand. Use the CLI below.</p>
 
  <h2 id="cli">The evosql-cli client</h2>
- <p><code>cli/evosql-cli</code> is the interactive shell for the EVO protocol. With no arguments it connects to <code>localhost:9967</code> as user <code>admin</code> and prompts for a password.</p>
+ <p><code>cli/evosql-cli</code> is the interactive shell for the EVO protocol. With no arguments it connects to <code>localhost:9967</code> as user <code>admin</code>. It then asks you for a password.</p>
  <div class="sig">evosql-cli [-h HOST] [-p PORT] [-u USER] [-W PASSWORD] [-c SQL | -f FILE]</div>
  <pre><code><span class="c-com"># interactive shell, prompts for the password</span>
 ./cli/evosql-cli
@@ -91,8 +91,8 @@ SQL &lt;byte-length&gt;
 
 <span class="c-com"># a different host / port / user</span>
 ./cli/evosql-cli -h db.internal -p 9967 -u admin</code></pre>
- <p>The CLI defaults are <code>host=localhost</code>, <code>port=9967</code>, <code>user=admin</code>. The password comes from <code>-W</code>/<code>--password</code>, else the <code>EVOSQL_PASSWORD</code> environment variable, else an interactive prompt with echo disabled. Command history is kept in <code>~/.evosql_history</code> (last 500 lines); statements containing a <code>PASSWORD</code> keyword are deliberately excluded from the on-disk history.</p>
- <p>It is also scriptable for one-off commands and pipelines:</p>
+ <p>The CLI defaults are <code>host=localhost</code>, <code>port=9967</code> and <code>user=admin</code>. The password comes from <code>-W</code> or <code>--password</code> first. If that is missing, it comes from the <code>EVOSQL_PASSWORD</code> environment variable. If that is also missing, the CLI asks you with echo turned off. Command history is kept in <code>~/.evosql_history</code> and holds the last 500 lines. Statements that contain the <code>PASSWORD</code> keyword are kept out of the on-disk history on purpose.</p>
+ <p>You can also script it for one-off commands and pipelines.</p>
  <pre><code><span class="c-com"># run one statement and exit</span>
 ./cli/evosql-cli -c <span class="c-str">"SELECT 1"</span>
 
@@ -104,18 +104,18 @@ SQL &lt;byte-length&gt;
 
 <span class="c-com"># machine-readable output</span>
 ./cli/evosql-cli --format json -c <span class="c-str">"SELECT id, name FROM users"</span></code></pre>
- <p>Inside the interactive shell, end statements with <code>;</code> and use backslash meta-commands, for example <code>\dt</code> (list tables), <code>\l</code> (list databases), <code>\du</code> (list users), <code>\dn</code> (list schemas), <code>\d NAME</code> (describe a table), <code>\format table|csv|json</code>, <code>\timing</code>, <code>\x</code>, <code>\i FILE</code>, and <code>\q</code> to quit. Output formats are <code>table</code> (default), <code>csv</code>, and <code>json</code>, selectable with <code>--format</code> or <code>\format</code>.</p>
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>The EVO protocol has no in-band query cancel. Pressing <kbd>Ctrl-C</kbd> while a query is running abandons the socket and the CLI transparently reconnects, returning you to the prompt, the client itself never exits.</div></div>
+ <p>Inside the interactive shell, end each statement with <code>;</code>. You can also use backslash meta-commands. For example, <code>\dt</code> lists tables. <code>\l</code> lists databases. <code>\du</code> lists users. <code>\dn</code> lists schemas. <code>\d NAME</code> describes a table. There are also <code>\format table|csv|json</code>, <code>\timing</code>, <code>\x</code> and <code>\i FILE</code>. Use <code>\q</code> to quit. The output formats are <code>table</code>, <code>csv</code> and <code>json</code>. The default is <code>table</code>. Pick a format with <code>--format</code> or <code>\format</code>.</p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>The EVO protocol has no in-band query cancel. If you press <kbd>Ctrl-C</kbd> while a query runs, the CLI drops the socket. It then reconnects on its own and brings you back to the prompt. The client itself never exits.</div></div>
 
  <h2 id="use">Selecting a database with USE</h2>
- <p>A fresh session starts on a default database with the schema set to <code>default</code>. To switch the active database for the rest of the session, run <code>USE</code>:</p>
+ <p>A new session starts on a default database. The schema is set to <code>default</code>. To switch the active database for the rest of the session, run <code>USE</code>.</p>
  <div class="sig">USE &lt;database&gt;;</div>
  <pre><code><span class="c-key">USE</span> testdb;
 <span class="c-key">SELECT</span> * <span class="c-key">FROM</span> users;</code></pre>
- <p>Switching the active database also resets the active schema back to <code>default</code>. If the named database does not exist, the server raises an <em>undefined database</em> error and the active database is unchanged.</p>
- <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>On the PostgreSQL wire you typically pick the database at connect time (the <code>-d</code> flag in <code>psql</code>, or the Database field in DBeaver). <code>USE</code> works on both protocols, but for PG clients selecting the database in the connection string is the more conventional path.</div></div>
+ <p>Switching the active database also resets the active schema back to <code>default</code>. If the named database does not exist, the server raises an <em>undefined database</em> error. The active database stays the same.</p>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>On the PostgreSQL wire you usually pick the database when you connect. You use the <code>-d</code> flag in <code>psql</code> or the Database field in DBeaver. <code>USE</code> works on both protocols. But for PG clients, picking the database in the connection string is the more common way.</div></div>
 
- <div class="callout callout-note"><span class="material-symbols-outlined">menu_book</span><div>Want the full message-by-message breakdown of each protocol? See the <a href="/reference/">wire-protocol reference</a>.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">menu_book</span><div>Do you want the full message-by-message breakdown of each protocol? See the <a href="/reference/">wire-protocol reference</a>.</div></div>
 </main></div>
 <script src="/nav-data.js"></script>
 <script src="/nav.js"></script>
