@@ -42,6 +42,10 @@
 <p><strong>Not a PostgreSQL feature.</strong> Core PostgreSQL has no <code>CREATE JOB</code> statement and no built-in scheduler. Recurring tasks are usually handled by the outside <code>pg_cron</code> extension or by the host's <code>cron</code> or systemd. The SQL standard does not define scheduled jobs at all. EvolutionDB's <code>CREATE JOB … ON SCHEDULE … DO</code> syntax looks most like MySQL's <code>CREATE EVENT</code>. The behavior, the cron dialect, and the limits below are all specific to EvolutionDB.</p>
 </div>
 
+<div class="callout">
+<p><strong>Not the same as the agent's daily brief.</strong> <code>CREATE JOB</code> schedules <em>in-database</em> SQL inside the engine catalog. Application-level recurring tasks belong somewhere else. EvolutionAgent's morning <em>daily brief</em>, for example, is not a SQL job and has no <code>CREATE JOB</code> behind it. It runs in the MCP server's own background scheduler (a job named <code>brief_delivery</code>, by default daily at 07:30 UTC), which collects and renders the brief and queues it to the user. It is opt-in and self-hosted. For how that scheduler works and how to enable it, see the <a href="https://developer.evolutiondb.org/platform/agent/">EvolutionAgent developer docs</a>.</p>
+</div>
+
 <h2 id="create">19.2. Creating a job</h2>
 <p>See the <a href="/3.0/ref/create-job/">CREATE JOB</a> reference page for the full command synopsis.</p>
 <div class="synopsis">

@@ -40,31 +40,180 @@
     "meetings_header": "Meetings",
     "meetings_none": "No meetings scheduled.",
     "all_day": "all day",
-    "related_open": "open loops with attendees"
+    "related_open": "open loops with attendees",
+    "yesterday_header": "YESTERDAY",
+    "today_schedule": "TODAY'S SCHEDULE",
+    "quiet_day": "A quiet day.",
+    "no_meetings_today": "No meetings scheduled.",
+    "meetings_word": "meetings"
   },
   "heuristics": {
-    "question": ["\\?"],
-    "promise": ["i will\\b", "i'll\\b", "going to", "will do", "will send", "will check", "let me"],
-    "close": ["thanks", "thank you", "done", "resolved", "got it", "appreciate", "👍", "🙏", "🙌", "✅"],
-    "auto_from": ["noreply", "no-reply", "donotreply", "notification", "mailer", "newsletter", "bounce", "support@", "info@", "news@"],
-    "honorific_pre": ["Dr", "Prof", "Mr", "Ms", "Mrs", "Miss"],
+    "question": [
+      "\\?"
+    ],
+    "promise": [
+      "i will\\b",
+      "i'll\\b",
+      "going to",
+      "will do",
+      "will send",
+      "will check",
+      "let me"
+    ],
+    "close": [
+      "thanks",
+      "thank you",
+      "done",
+      "resolved",
+      "got it",
+      "appreciate",
+      "👍",
+      "🙏",
+      "🙌",
+      "✅"
+    ],
+    "auto_from": [
+      "noreply",
+      "no-reply",
+      "donotreply",
+      "notification",
+      "mailer",
+      "newsletter",
+      "bounce",
+      "support@",
+      "info@",
+      "news@"
+    ],
+    "honorific_pre": [
+      "Dr",
+      "Prof",
+      "Mr",
+      "Ms",
+      "Mrs",
+      "Miss"
+    ],
     "honorific_post": [],
-    "honorific_tokens": ["mr", "ms", "mrs", "miss", "dr", "prof", "sir", "madam"],
-    "org_suffix": ["Inc\\.?", "LLC", "Corp\\.?", "Co\\.?", "GmbH", "Ltd\\.?", "Group", "Holding"],
+    "honorific_tokens": [
+      "mr",
+      "ms",
+      "mrs",
+      "miss",
+      "dr",
+      "prof",
+      "sir",
+      "madam"
+    ],
+    "org_suffix": [
+      "Inc\\.?",
+      "LLC",
+      "Corp\\.?",
+      "Co\\.?",
+      "GmbH",
+      "Ltd\\.?",
+      "Group",
+      "Holding"
+    ],
     "title_upper_extra": "",
     "title_lower_extra": "",
-    "stop_title": ["The", "This", "That", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    "stop_title": [
+      "The",
+      "This",
+      "That",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+      "Sunday",
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
+    ],
     "id_patterns": [],
-    "stopwords": ["the", "a", "an", "of", "to", "and", "or", "for", "in", "on", "at", "is", "are", "was"],
-    "arousal": ["allergic", "allergy", "emergency", "urgent", "asap", "critical", "danger", "warning", "deadline", "important", "must", "never", "always", "fatal", "blood type", "medication", "dose", "password", "ssn", "passport"],
+    "stopwords": [
+      "the",
+      "a",
+      "an",
+      "of",
+      "to",
+      "and",
+      "or",
+      "for",
+      "in",
+      "on",
+      "at",
+      "is",
+      "are",
+      "was"
+    ],
+    "arousal": [
+      "allergic",
+      "allergy",
+      "emergency",
+      "urgent",
+      "asap",
+      "critical",
+      "danger",
+      "warning",
+      "deadline",
+      "important",
+      "must",
+      "never",
+      "always",
+      "fatal",
+      "blood type",
+      "medication",
+      "dose",
+      "password",
+      "ssn",
+      "passport"
+    ],
     "predicate_keywords": {
-      "worked_on": ["worked on", "working on", "worked", "developed", "built"],
-      "replied_to": ["replied to", "replied", "responded"],
-      "escalated_to": ["escalated to", "escalated", "escalate"],
-      "assigned": ["assigned to", "assigned"],
-      "manages": ["manages", "managed", "lead", "leads", "led"],
-      "owns": ["owns", "owner"],
-      "mentioned": ["mentioned"]
+      "worked_on": [
+        "worked on",
+        "working on",
+        "worked",
+        "developed",
+        "built"
+      ],
+      "replied_to": [
+        "replied to",
+        "replied",
+        "responded"
+      ],
+      "escalated_to": [
+        "escalated to",
+        "escalated",
+        "escalate"
+      ],
+      "assigned": [
+        "assigned to",
+        "assigned"
+      ],
+      "manages": [
+        "manages",
+        "managed",
+        "lead",
+        "leads",
+        "led"
+      ],
+      "owns": [
+        "owns",
+        "owner"
+      ],
+      "mentioned": [
+        "mentioned"
+      ]
     }
   }
 }

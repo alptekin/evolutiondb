@@ -40,36 +40,213 @@
     "meetings_header": "Toplantılar",
     "meetings_none": "Planlı toplantı yok.",
     "all_day": "tüm gün",
-    "related_open": "katılımcılarla açık döngüler"
+    "related_open": "katılımcılarla açık döngüler",
+    "yesterday_header": "DÜN",
+    "today_schedule": "BUGÜNÜN PROGRAMI",
+    "quiet_day": "Sakin bir gündü.",
+    "no_meetings_today": "Bugün toplantı yok.",
+    "meetings_word": "toplantı"
   },
   "heuristics": {
-    "question": ["\\bmi\\b", "\\bmu\\b", "\\bmı\\b", "\\bmü\\b", "misin", "musun", "edebilir"],
-    "promise": ["yapacağ", "yapıca", "gönderece", "hallede", "halledece", "bakacağ", "bakıca", "ayarlayaca", "ekleyece", "dönece", "dönerim", "iletece", "yollayaca", "yollarım", "çözece", "tamamlaya", "hazırlaya", "paylaşaca", "kontrol edece", "halledeyim", "bakayım", "yapayım"],
-    "close": ["çözüldü", "düzelt", "tamamd", "teşekkür", "halloldu", "sağ ?ol", "eyvallah", "süper", "harika", "tamam abi", "ok abi"],
-    "auto_from": ["bülten", "destek@"],
-    "honorific_pre": ["Doç", "Av", "Sayın", "Bay", "Bayan"],
-    "honorific_post": ["bey", "hanım", "hanim", "bey'?\\w*", "han\\w*"],
-    "honorific_tokens": ["bey", "hanim", "hanimefendi", "beyefendi", "bay", "bayan", "abla", "abi", "agabey", "agabi", "hoca", "hocam", "kardes", "sayin", "doc", "av"],
-    "org_suffix": ["A\\.?\\s?Ş\\.?", "Ltd\\.?(?:\\s?Şti\\.?)?", "San\\.?", "Tic\\.?", "Grup", "Kurumsal"],
+    "question": [
+      "\\bmi\\b",
+      "\\bmu\\b",
+      "\\bmı\\b",
+      "\\bmü\\b",
+      "misin",
+      "musun",
+      "edebilir"
+    ],
+    "promise": [
+      "yapacağ",
+      "yapıca",
+      "gönderece",
+      "hallede",
+      "halledece",
+      "bakacağ",
+      "bakıca",
+      "ayarlayaca",
+      "ekleyece",
+      "dönece",
+      "dönerim",
+      "iletece",
+      "yollayaca",
+      "yollarım",
+      "çözece",
+      "tamamlaya",
+      "hazırlaya",
+      "paylaşaca",
+      "kontrol edece",
+      "halledeyim",
+      "bakayım",
+      "yapayım"
+    ],
+    "close": [
+      "çözüldü",
+      "düzelt",
+      "tamamd",
+      "teşekkür",
+      "halloldu",
+      "sağ ?ol",
+      "eyvallah",
+      "süper",
+      "harika",
+      "tamam abi",
+      "ok abi"
+    ],
+    "auto_from": [
+      "bülten",
+      "destek@"
+    ],
+    "honorific_pre": [
+      "Doç",
+      "Av",
+      "Sayın",
+      "Bay",
+      "Bayan"
+    ],
+    "honorific_post": [
+      "bey",
+      "hanım",
+      "hanim",
+      "bey'?\\w*",
+      "han\\w*"
+    ],
+    "honorific_tokens": [
+      "bey",
+      "hanim",
+      "hanimefendi",
+      "beyefendi",
+      "bay",
+      "bayan",
+      "abla",
+      "abi",
+      "agabey",
+      "agabi",
+      "hoca",
+      "hocam",
+      "kardes",
+      "sayin",
+      "doc",
+      "av"
+    ],
+    "org_suffix": [
+      "A\\.?\\s?Ş\\.?",
+      "Ltd\\.?(?:\\s?Şti\\.?)?",
+      "San\\.?",
+      "Tic\\.?",
+      "Grup",
+      "Kurumsal"
+    ],
     "title_upper_extra": "ÇĞİÖŞÜ",
     "title_lower_extra": "çğıöşü",
-    "stop_title": ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık", "Bu", "Şu", "Bir"],
+    "stop_title": [
+      "Pazartesi",
+      "Salı",
+      "Çarşamba",
+      "Perşembe",
+      "Cuma",
+      "Cumartesi",
+      "Pazar",
+      "Ocak",
+      "Şubat",
+      "Mart",
+      "Nisan",
+      "Mayıs",
+      "Haziran",
+      "Temmuz",
+      "Ağustos",
+      "Eylül",
+      "Ekim",
+      "Kasım",
+      "Aralık",
+      "Bu",
+      "Şu",
+      "Bir"
+    ],
     "id_patterns": [
-      {"type": "iban", "re": "\\bTR\\d{2}(?:[ ]?\\d{2,4}){5,6}\\b", "flags": "i", "conf": 0.98},
-      {"type": "phone", "re": "(?<!\\d)(?:\\+90|0090|0)?[ ]?\\(?5\\d{2}\\)?[ ]?\\d{3}[ ]?\\d{2}[ ]?\\d{2}(?!\\d)", "conf": 0.9},
-      {"type": "tckn", "re": "(?<!\\d)[1-9]\\d{10}(?!\\d)", "conf": 0.9}
+      {
+        "type": "iban",
+        "re": "\\bTR\\d{2}(?:[ ]?\\d{2,4}){5,6}\\b",
+        "flags": "i",
+        "conf": 0.98
+      },
+      {
+        "type": "phone",
+        "re": "(?<!\\d)(?:\\+90|0090|0)?[ ]?\\(?5\\d{2}\\)?[ ]?\\d{3}[ ]?\\d{2}[ ]?\\d{2}(?!\\d)",
+        "conf": 0.9
+      },
+      {
+        "type": "tckn",
+        "re": "(?<!\\d)[1-9]\\d{10}(?!\\d)",
+        "conf": 0.9
+      }
     ],
     "stemmer": "turkish",
-    "stopwords": ["ve", "ile", "bir", "bu", "şu", "ne", "oldu", "için", "çok", "daha", "en", "de", "da", "ki", "mi", "mı"],
-    "arousal": ["acil", "önemli", "tehlike", "uyarı", "alerji", "asla", "mutlaka"],
+    "stopwords": [
+      "ve",
+      "ile",
+      "bir",
+      "bu",
+      "şu",
+      "ne",
+      "oldu",
+      "için",
+      "çok",
+      "daha",
+      "en",
+      "de",
+      "da",
+      "ki",
+      "mi",
+      "mı"
+    ],
+    "arousal": [
+      "acil",
+      "önemli",
+      "tehlike",
+      "uyarı",
+      "alerji",
+      "asla",
+      "mutlaka"
+    ],
     "predicate_keywords": {
-      "worked_on": ["çalıştı", "çalışıyor", "üzerinde", "geliştirdi"],
-      "replied_to": ["yanıt", "cevap", "döndü"],
-      "escalated_to": ["yükseltildi", "iletildi"],
-      "assigned": ["atandı", "atadı", "görevlendirildi", "verildi"],
-      "manages": ["yönetiyor", "yönetti", "yönetir"],
-      "owns": ["sahibi", "ait"],
-      "mentioned": ["bahsetti", "söz etti", "andı", "dedi"]
+      "worked_on": [
+        "çalıştı",
+        "çalışıyor",
+        "üzerinde",
+        "geliştirdi"
+      ],
+      "replied_to": [
+        "yanıt",
+        "cevap",
+        "döndü"
+      ],
+      "escalated_to": [
+        "yükseltildi",
+        "iletildi"
+      ],
+      "assigned": [
+        "atandı",
+        "atadı",
+        "görevlendirildi",
+        "verildi"
+      ],
+      "manages": [
+        "yönetiyor",
+        "yönetti",
+        "yönetir"
+      ],
+      "owns": [
+        "sahibi",
+        "ait"
+      ],
+      "mentioned": [
+        "bahsetti",
+        "söz etti",
+        "andı",
+        "dedi"
+      ]
     }
   }
 }
