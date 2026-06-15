@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>18. Subscriptions &amp; CDC | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>18. Subscriptions &amp; CDC</h1>
+<p class="lede">Durable subscriptions turn EvolutionDB's short-lived <code>LISTEN</code>/<code>NOTIFY</code> channels into change-data-capture streams that last and can be replayed. When a notification commits on a channel, it is saved to a mailbox on disk. A consumer can read that mailbox, acknowledge it, and replay it after reconnecting.</p>
+
+<h2 id="overview">18.1. Overview</h2>
+<p>EvolutionDB has an in-memory <code>LISTEN</code>/<code>NOTIFY</code> registry. It sends a payload to every connection that is listening on a channel right now. This delivery is best-effort. If no client is connected when the notification commits, the notification is lost. A <strong>durable subscription</strong> fixes this gap. It registers a named mailbox that is saved and bound to one channel. Each time a <code>NOTIFY</code> commits on that channel, the payload is added to the mailbox with a sequence number that always goes up. A consumer that was offline can connect again later. It can replay everything that arrived in the meantime with <code>RESUME SUBSCRIPTION</code>. It can also move an acknowledgement watermark forward with <code>ACK SUBSCRIPTION</code>. A background daemon then prunes what the consumer has already processed.</p>
+<p>Durable subscriptions are EvolutionDB's change-data-capture (CDC) building block. Application code or triggers emit <code>NOTIFY</code> on a channel. One or more durable subscribers read that stream at their own pace. Delivery is at-least-once. The stream can be replayed after a reconnect.</p>
+
+<div class="callout">
+<p><strong>How this relates to in-memory <code>NOTIFY</code>.</strong> Durable saving runs <em>after</em> the in-memory listener fan-out. It runs inside the same broadcast that happens at commit time. Live listeners are served first. The catalog walk that fills durable mailboxes only happens after the in-memory broadcast for the channel is delivered. So the fast path costs nothing when no subscription is set up. See <a href="/3.0/ref/notify/">NOTIFY</a> and <a href="/3.0/ref/listen/">LISTEN</a>.</p>
+</div>
+
+<h2 id="model">18.2. The subscription model</h2>
+<p>A subscription is a catalog object. It has a unique name and is bound to exactly one channel. Each subscription owns a private backing table. This table acts as its mailbox.</p>
+
+<h3 id="backing-table">18.2.1. Backing table</h3>
+<p>When you create a subscription named <code>s</code>, EvolutionDB creates a backing heap table named <code>sub_s</code> in the current schema. The table always has this fixed layout.</p>
+<pre class="synopsis"><code>CREATE TABLE sub_s (
+    seq        <span class="c-key">BIGINT</span>          <span class="c-key">PRIMARY KEY</span>,   <span class="c-com">-- monotonic, server-assigned</span>
+    payload    <span class="c-key">VARCHAR</span>(8000),                  <span class="c-com">-- the NOTIFY payload; '' for payload-less NOTIFY</span>
+    posted_at  <span class="c-key">TIMESTAMP</span>      <span class="c-key">NOT NULL</span>        <span class="c-com">-- UTC append time, 'YYYY-MM-DD HH:MM:SS'</span>
+);</code></pre>
+<p>One row is written for each published <code>NOTIFY</code>. The <code>seq</code> column is the primary key. The backing table's B+ tree keeps rows in ascending order by sequence. You do not need an <code>ORDER BY</code> to read them in arrival order. The <code>posted_at</code> stamp is set on the server in UTC at publish time.</p>
+
+<h3 id="catalog-fields">18.2.2. Subscription catalog fields</h3>
+<p>The system catalog stores one descriptor for each subscription. <code>SHOW SUBSCRIPTIONS</code> returns these columns.</p>
+<dl class="params">
+<dt><code>name</code> <span class="type">text</span></dt>
+<dd>Unique subscription name. Acts as the catalog key.</dd>
+<dt><code>channel</code> <span class="type">text</span></dt>
+<dd>The single <code>NOTIFY</code> channel that this subscription is bound to. Channel matching at publish time is case-insensitive.</dd>
+<dt><code>last_ack_seq</code> <span class="type">bigint</span></dt>
+<dd>The acknowledgement watermark. It starts at <code>0</code>, which means nothing is acknowledged yet. <code>RESUME</code> returns only rows with <code>seq &gt; last_ack_seq</code>. The prune daemon deletes rows with <code>seq &lt;= last_ack_seq</code>.</dd>
+<dt><code>next_seq</code> <span class="type">bigint</span></dt>
+<dd>The sequence number to give to the next published row. It starts at <code>1</code>. After each successful append, it goes up by one and is saved.</dd>
+<dt><code>ttl_days</code> <span class="type">int</span></dt>
+<dd>How long unacknowledged rows are kept, in days. The default is <code>7</code>. A value of <code>0</code> turns off the TTL prune. The acknowledged-row prune still runs.</dd>
+</dl>
+
+<h2 id="ddl">18.3. Creating and dropping subscriptions</h2>
+
+<h3 id="create">18.3.1. CREATE SUBSCRIPTION</h3>
+<p class="sig"><code>CREATE SUBSCRIPTION <em>name</em> FOR CHANNEL <em>channel</em></code><br/>
+<code>CREATE SUBSCRIPTION IF NOT EXISTS <em>name</em> FOR CHANNEL <em>channel</em></code></p>
+<p>This registers a durable subscription. It also creates its <code>sub_&lt;name&gt;</code> backing table in the same step. The watermark starts at <code>0</code>. The next sequence starts at <code>1</code>. The TTL starts at the <code>7</code>-day default. Both <em>name</em> and <em>channel</em> are required. If you leave out either one, you get a syntax error. The error code is <code>42601</code>.</p>
+<pre><code><span class="c-key">CREATE SUBSCRIPTION</span> orders_cdc <span class="c-key">FOR CHANNEL</span> order_events;</code></pre>
+<p>If a subscription with that name already exists, the statement fails with <code>42710</code>. If you add <code>IF NOT EXISTS</code>, the statement does nothing instead.</p>
+
+<h3 id="drop">18.3.2. DROP SUBSCRIPTION</h3>
+<p class="sig"><code>DROP SUBSCRIPTION <em>name</em></code><br/>
+<code>DROP SUBSCRIPTION IF EXISTS <em>name</em></code></p>
+<p>This unregisters the subscription and drops its backing table. Without <code>IF EXISTS</code>, dropping a subscription that does not exist fails with <code>42704</code>. With <code>IF EXISTS</code>, the statement does nothing instead.</p>
+<pre><code><span class="c-key">DROP SUBSCRIPTION IF EXISTS</span> orders_cdc;</code></pre>
+
+<h2 id="consuming">18.4. Consuming the stream</h2>
+
+<h3 id="resume">18.4.1. RESUME SUBSCRIPTION</h3>
+<p class="sig"><code>RESUME SUBSCRIPTION <em>name</em></code></p>
+<p>This returns the backlog for the subscription. The result set has the columns <code>(seq, payload, posted_at)</code>. It includes every mailbox row whose <code>seq</code> is strictly greater than the current <code>last_ack_seq</code>. The rows come back in ascending <code>seq</code> order. <code>RESUME</code> is read-only and idempotent. It never moves the watermark forward and never deletes rows. You get the same backlog until you acknowledge it. Resuming a subscription that does not exist fails with <code>42704</code>.</p>
+<pre><code><span class="c-key">RESUME SUBSCRIPTION</span> orders_cdc;
+<span class="c-com">--  seq | payload                  | posted_at</span>
+<span class="c-com">-- -----+--------------------------+---------------------</span>
+<span class="c-com">--    1 | {"id":42,"op":"insert"}  | 2026-06-12 09:14:03</span>
+<span class="c-com">--    2 | {"id":43,"op":"insert"}  | 2026-06-12 09:14:05</span></code></pre>
+
+<h3 id="ack">18.4.2. ACK SUBSCRIPTION</h3>
+<p class="sig"><code>ACK SUBSCRIPTION <em>name</em> UPTO <em>seq</em></code></p>
+<p>This moves the acknowledgement watermark to <em>seq</em>. The operation only moves <code>last_ack_seq</code> forward. It is idempotent. <code>ACK ... UPTO 5</code> followed by <code>ACK ... UPTO 3</code> leaves the watermark at <code>5</code>. The acknowledged sequence does not have to match a row that is actually stored. The watermark just moves, and the prune daemon catches up on its next tick. Acknowledging a subscription that does not exist fails with <code>42704</code>.</p>
+<pre><code><span class="c-key">ACK SUBSCRIPTION</span> orders_cdc <span class="c-key">UPTO</span> 2;</code></pre>
+
+<h2 id="lifecycle">18.5. End-to-end lifecycle</h2>
+<p>A full CDC loop joins the publisher side with the durable consumer side. The publisher side is <a href="/3.0/ref/notify/">NOTIFY</a>.</p>
+<pre><code><span class="c-com">-- 1. enroll a durable subscriber on a channel</span>
+<span class="c-key">CREATE SUBSCRIPTION</span> orders_cdc <span class="c-key">FOR CHANNEL</span> order_events;
+
+<span class="c-com">-- 2. producers emit notifications (e.g. from application code or a trigger)</span>
+<span class="c-key">NOTIFY</span> order_events, <span class="c-str">'{"id":42,"op":"insert"}'</span>;
+<span class="c-key">NOTIFY</span> order_events, <span class="c-str">'{"id":43,"op":"insert"}'</span>;
+
+<span class="c-com">-- 3. a consumer reconnects later and drains the backlog</span>
+<span class="c-key">RESUME SUBSCRIPTION</span> orders_cdc;        <span class="c-com">-- rows seq 1, 2</span>
+
+<span class="c-com">-- 4. after processing, acknowledge progress so the daemon can prune</span>
+<span class="c-key">ACK SUBSCRIPTION</span> orders_cdc <span class="c-key">UPTO</span> 2;
+
+<span class="c-com">-- 5. inspect every subscription's watermark and TTL</span>
+<span class="c-key">SHOW SUBSCRIPTIONS</span>;</code></pre>
+
+<h2 id="retention">18.6. Retention &amp; pruning</h2>
+<p>A background auto-reclaim daemon trims each subscription's backing table on a fixed interval. On every tick it walks the mailbox. It deletes a row when one of these conditions is true.</p>
+<ul>
+<li><strong>Acknowledged.</strong> The row's <code>seq</code> is <code>&lt;= last_ack_seq</code>. This prune always runs, no matter what the TTL is.</li>
+<li><strong>TTL-expired.</strong> <code>ttl_days &gt; 0</code> and the row's <code>posted_at</code> is older than <code>ttl_days</code> &times; 86&nbsp;400 seconds. This catches unacknowledged rows from consumers that never came back. Rows with a <code>NULL</code> timestamp are not TTL-pruned.</li>
+</ul>
+<p>The daemon collects the rows to remove and deletes them in bulk. It uses the same write lock as the other retention passes. It removes each row from both the heap and the PK B+ tree. It handles at most <strong>256</strong> rows per subscription per tick. A very large backlog is cleared over several ticks, not in one pass.</p>
+
+<div class="callout">
+<p><strong>Tuning the interval.</strong> The reclaim interval is <strong>30 seconds</strong> by default. You can lower it for tests with the <code>EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</code> environment variable. It accepts a value from <code>1</code> to <code>30</code> seconds.</p>
+</div>
+
+<h2 id="errors">18.7. Error codes</h2>
+<p>Subscription statements set these <code>SQLSTATE</code> values.</p>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Condition</th><th>Raised by</th></tr></thead>
+<tbody>
+<tr><td><code>42601</code></td><td>Missing subscription name, or missing <code>FOR CHANNEL</code></td><td><code>CREATE SUBSCRIPTION</code></td></tr>
+<tr><td><code>42710</code></td><td>Subscription name already exists (without <code>IF NOT EXISTS</code>)</td><td><code>CREATE SUBSCRIPTION</code></td></tr>
+<tr><td><code>42704</code></td><td>Subscription does not exist (without <code>IF EXISTS</code>)</td><td><code>DROP</code>, <code>RESUME</code>, <code>ACK</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="postgres">18.8. Comparison with PostgreSQL</h2>
+<p>EvolutionDB's syntax copies PostgreSQL's <code>CREATE SUBSCRIPTION</code> keyword on purpose. But the meaning is completely different. These are not logical-replication subscriptions.</p>
+<dl class="params">
+<dt>Source of data</dt>
+<dd>PostgreSQL subscriptions read a logical replication stream from a publisher's WAL. EvolutionDB subscriptions read committed <code>NOTIFY</code> payloads on a named channel. There is no upstream node, publication, or replication slot.</dd>
+<dt>Binding</dt>
+<dd>PostgreSQL binds a subscription to a <code>PUBLICATION</code> on a remote <code>CONNECTION</code>. EvolutionDB binds a subscription to a local channel with <code>FOR CHANNEL</code>. There is no publication object and no connection string.</dd>
+<dt>Delivery &amp; replay</dt>
+<dd>EvolutionDB uses a pull-based mailbox with a cursor you control. <code>RESUME</code> replays. <code>ACK ... UPTO</code> moves a watermark forward. A daemon prunes. PostgreSQL applies changes on its own with apply workers. It has no client-driven <code>RESUME</code>/<code>ACK</code> like this.</dd>
+<dt>Payload</dt>
+<dd>An EvolutionDB payload is the free-form text of a <code>NOTIFY</code>. The backing column caps it at 8000 bytes. It is not a decoded row change. EvolutionDB does not read the payload. The CDC structure is whatever the producer chooses to encode. This is usually JSON. It can include the operation, keys, and columns.</dd>
+<dt>Standard SQL</dt>
+<dd>Subscriptions, <code>RESUME</code>, and <code>ACK</code> are EvolutionDB extensions. They are not part of the SQL standard. <code>RESUME</code> and <code>ACK</code> are EvolutionDB-specific verbs with no PostgreSQL equivalent.</dd>
+</dl>
+
+<div class="callout">
+<p><strong>Notes &amp; limitations.</strong></p>
+<ul>
+<li>A subscription binds to exactly one channel. The channel is set at creation and cannot be changed. There is no <code>ALTER SUBSCRIPTION</code>. To rebind, drop the subscription and create it again.</li>
+<li><code>ttl_days</code> defaults to <code>7</code>. You cannot set it through DDL in this release. The prune daemon honors it, but <code>SHOW SUBSCRIPTIONS</code> only shows it read-only.</li>
+<li>The backing table is named <code>sub_&lt;name&gt;</code> in the current schema. It is an internal detail. Use only <code>RESUME</code> and <code>ACK</code> to read it. Do not query or change it directly.</li>
+<li>Delivery is at-least-once. There is no automatic deduplication. A consumer that does not <code>ACK</code> will see the same rows again on the next <code>RESUME</code>.</li>
+<li>Durable saving happens at <code>NOTIFY</code> commit time. Notifications sent in a transaction that rolls back are never saved.</li>
+<li>Channel matching is case-insensitive. Subscription and channel names follow the catalog name-length limit.</li>
+</ul>
+</div>
+
+<h2 id="see-also">18.9. See also</h2>
+<ul>
+<li><a href="/3.0/ref/notify/">NOTIFY</a>. Emit a payload on a channel. This is the publisher side of CDC.</li>
+<li><a href="/3.0/ref/listen/">LISTEN</a>. Subscribe a live connection to a channel. This is transient and in-memory.</li>
+<li><a href="/3.0/ref/create-subscription/">CREATE SUBSCRIPTION</a>, <a href="/3.0/ref/drop-subscription/">DROP SUBSCRIPTION</a>, <a href="/3.0/ref/resume-subscription/">RESUME SUBSCRIPTION</a>, <a href="/3.0/ref/ack-subscription/">ACK SUBSCRIPTION</a>. These are the command reference pages.</li>
+<li><a href="/3.0/ref/show/">SHOW SUBSCRIPTIONS</a>. List registered subscriptions and their watermarks.</li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

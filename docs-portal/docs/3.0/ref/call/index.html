@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CALL | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CALL</h1>
+<p class="lede">CALL runs a stored procedure. It runs the body one statement at a time.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CALL</span> <span class="c-com">procedure_name</span> ( <span class="opt">[ argument [, ... ] ]</span> )</code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CALL</code> runs a procedure that you made with
+<a href="/3.0/ref/create-procedure/">CREATE PROCEDURE</a>. EvolutionDB keeps the
+procedure body as raw SQL text. When you use <code>CALL</code>, the engine finds the
+procedure in the system catalog. It looks in the current database and the current schema.
+Then it binds your arguments to the declared parameters. Then it runs the body.</p>
+
+<p>The body is not compiled ahead of time. When you call the procedure, EvolutionDB does these steps.</p>
+<ol>
+<li>It finds <code>procedure_name</code> in the current database and schema. If no such
+procedure exists, the call fails with SQLSTATE <code>42883</code>
+(<em>procedure "name" does not exist</em>).</li>
+<li>It reads the stored parameter definitions. It checks that the number of
+arguments you passed matches the number of declared parameters exactly. If they do not match,
+the call raises SQLSTATE <code>42883</code>
+(<em>procedure "name" expects N arguments, got M</em>).</li>
+<li>It splits the body into single statements. It keeps string literals whole. It also keeps the
+control-flow blocks whole. These blocks are <code>IF</code>/<code>ELSEIF</code>/<code>ELSE</code>/<code>END&nbsp;IF</code>,
+<code>WHILE&nbsp;…&nbsp;DO</code>/<code>END&nbsp;WHILE</code>, <code>LOOP</code>/<code>END&nbsp;LOOP</code>,
+<code>FOR&nbsp;…&nbsp;DO</code>/<code>END&nbsp;FOR</code>, <code>FOREACH&nbsp;…&nbsp;DO</code>/<code>END&nbsp;FOREACH</code>,
+and <code>CASE</code>/<code>WHEN</code>/<code>END&nbsp;CASE</code>. Then it runs the statements in order.</li>
+<li>Before each statement runs, it replaces each declared parameter with the argument value. This works for
+positional references like <code>$1</code>, <code>$2</code>, and for references by parameter name.</li>
+</ol>
+
+<p>Argument values are put into the procedure's SQL as text. A string
+argument keeps its quotes. An integer, float, boolean, or <code>NULL</code> is
+put in as its literal text. A bare identifier is put in exactly as written. A
+session variable of the form <code>@var</code> is passed through as a reference.</p>
+
+<div class="callout">
+<p><strong>OUT and INOUT parameters.</strong> A parameter can be declared
+<code>OUT</code> or <code>INOUT</code>. If its argument is a session
+variable like <code>@var</code>, EvolutionDB writes the parameter's final value back
+into that variable when the procedure returns. It creates the variable if it does
+not exist yet. For <code>INOUT</code>, the variable's current value is also read in
+as the incoming argument. Arguments that are not <code>@</code>-variables do not
+get write-back.</p>
+</div>
+
+<div class="callout">
+<p><strong>Limits.</strong> A <code>CALL</code> takes at most 16 arguments.
+This matches the maximum of 16 declared procedure parameters. Extra arguments past
+the limit are ignored at parse time. Each argument value is stored in a 256-byte
+buffer. The procedure name is also stored in a 256-byte buffer.</p>
+</div>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt><code>procedure_name</code></dt>
+<dd>The plain name of an existing procedure. It is found in the current
+database and current schema. The <code>CALL</code> grammar does not allow
+schema-qualified names.</dd>
+
+<dt><code>argument</code></dt>
+<dd>A value passed by position to the matching parameter. The
+grammar accepts these argument forms.
+<ul>
+<li><strong>integer literal</strong>, for example <code>42</code></li>
+<li><strong>string literal</strong>, for example <code>'hello'</code>. The quotes are kept when the value is put in.</li>
+<li><strong>approximate-numeric / float literal</strong>, for example <code>3.14</code></li>
+<li><strong><code>NULL</code></strong>, put in as the literal <code>NULL</code></li>
+<li><strong>boolean</strong>, <code>TRUE</code> or <code>FALSE</code></li>
+<li><strong>identifier</strong>, a bare <code>NAME</code>, put in exactly as written</li>
+<li><strong>session variable</strong>, <code>@var</code>, which can take OUT/INOUT write-back</li>
+</ul>
+You cannot use expressions, function calls, or arithmetic as
+arguments. Only the literal forms above work. The number of arguments must
+match the number of declared parameters.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+
+<p>Create and call a procedure that inserts a row.</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">PROCEDURE</span> add_user(p_id <span class="c-key">INT</span>, p_name <span class="c-key">VARCHAR</span>(<span class="c-str">50</span>))
+<span class="c-key">BEGIN</span>
+    <span class="c-key">INSERT</span> <span class="c-key">INTO</span> users (id, name) <span class="c-key">VALUES</span> ($1, $2);
+<span class="c-key">END</span>;
+
+<span class="c-key">CALL</span> add_user(<span class="c-str">1</span>, <span class="c-str">'Ada'</span>);</code></pre>
+
+<p>You can use parameters by name instead of by position.</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">PROCEDURE</span> raise_salary(emp_id <span class="c-key">INT</span>, amount <span class="c-key">INT</span>)
+<span class="c-key">BEGIN</span>
+    <span class="c-key">UPDATE</span> employees <span class="c-key">SET</span> salary = salary + amount <span class="c-key">WHERE</span> id = emp_id;
+<span class="c-key">END</span>;
+
+<span class="c-key">CALL</span> raise_salary(<span class="c-str">7</span>, <span class="c-str">500</span>);</code></pre>
+
+<p>Call with no arguments. You still need the empty parentheses.</p>
+<pre><code><span class="c-key">CALL</span> nightly_cleanup();</code></pre>
+
+<p>Use an <code>OUT</code> parameter to read a value back into a session variable.</p>
+<pre><code><span class="c-key">CREATE</span> <span class="c-key">PROCEDURE</span> count_users(<span class="c-key">OUT</span> total <span class="c-key">INT</span>)
+<span class="c-key">BEGIN</span>
+    <span class="c-key">SET</span> total = (<span class="c-key">SELECT</span> <span class="c-key">COUNT</span>(*) <span class="c-key">FROM</span> users);
+<span class="c-key">END</span>;
+
+<span class="c-key">CALL</span> count_users(@n);
+<span class="c-key">SELECT</span> @n;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CALL</code> follows the idea of the SQL standard <code>&lt;call statement&gt;</code>
+and the PostgreSQL <code>CALL</code> statement. But the EvolutionDB form is narrower.</p>
+<ul>
+<li><strong>Argument forms are limited to literals and variable references.</strong>
+PostgreSQL accepts more. EvolutionDB does not accept free-form expressions, function
+calls, or named-argument syntax like <code>name =&gt; value</code> in the argument list.</li>
+<li><strong>The argument count must match exactly.</strong> Omitted parameters do not
+get default values.</li>
+<li><strong>Procedure names are not schema-qualified in the <code>CALL</code> grammar.</strong>
+The procedure is always found in the current database and schema.</li>
+<li><strong>Parameter binding is text substitution.</strong> It puts <code>$N</code> and
+named placeholders into the stored body. It is not a typed argument-binding system.</li>
+<li><strong>OUT/INOUT write-back targets session variables</strong> like <code>@var</code>.
+This is an EvolutionDB extension. It is not standard SQL behavior.</li>
+<li>As in PostgreSQL and the SQL standard, only procedures can be called with
+<code>CALL</code>. These are procedures made with <code>CREATE PROCEDURE</code>. Functions are
+called inside expressions, not with <code>CALL</code>.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-procedure/">CREATE PROCEDURE</a></li>
+<li><a href="/3.0/ref/drop-procedure/">DROP PROCEDURE</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/update/">UPDATE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

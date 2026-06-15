@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Microsoft Teams connector | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+ <h1>Microsoft Teams connector</h1>
+ <p class="lede">Copy your Microsoft Teams 1:1 and group chat messages into EvolutionDB long-term memory. The <a href="/platform/mcp-server/">MCP server</a> can then show them through <code>search_memory</code> from any MCP-aware client. This works with Claude, ChatGPT, Gemini, and Copilot.</p>
+
+ <h2 id="what-it-does">What it does</h2>
+ <p>The <code>evolutiondb-teams-sync</code> package reads Microsoft Graph's
+ <code>/me/chats</code> list. It reads the messages in each chat. Then it writes each
+ message into an EvolutionDB memory store over the PostgreSQL wire protocol. An AI
+ assistant connected through the <a href="/platform/mcp-server/">MCP server</a> can
+ then answer a question like "what did Ahmet say last week about the release plan?".
+ That is a normal <code>search_memory</code> call.</p>
+
+ <p>It reads every chat returned by <code>GET /me/chats</code>. The list includes the
+ members and the last message preview. For each chat it pulls
+ <code>/chats/{id}/messages</code> newest-first. It stops once it passes the chat's
+ watermark. Each message becomes one record under a fixed key. A re-sync then UPSERTs
+ instead of making duplicates.</p>
+
+ <pre><code><span class="c-com"># Record                 Key shape</span>
+A chat message            teams_chat_&lt;chat_id&gt;_&lt;message_id&gt;
+Per-chat watermark        teams_state_&lt;chat_id&gt;</code></pre>
+
+ <p>The per-chat watermark stores the highest <code>lastModifiedDateTime</code> seen so
+ far. It is keyed <code>teams_state_&lt;chat_id&gt;</code>. On later runs the watermark is read
+ from EvolutionDB and used as the floor. This way reruns never read the same message
+ again. Watermark rows carry no <code>fact</code> field. That is how the MCP
+ <code>search_memory</code> tool keeps them out of results.</p>
+
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Records are stored as JSON values. Each message carries a one-line <code>fact</code> string (<code>"&lt;sender&gt;: &lt;text&gt;"</code>) plus structured fields, <code>source</code> (<code>"teams"</code>), <code>kind</code> (<code>"chat"</code>), <code>chat_id</code>, <code>chat_name</code>, <code>chat_type</code>, <code>message_id</code>, <code>sender</code>, <code>sender_id</code>, <code>text</code>, <code>created_at</code>, <code>modified_at</code>, and <code>tags</code> (<code>["teams", "chat", &lt;chat_name&gt;]</code>).</div></div>
+
+ <p>Channel messages, meeting transcripts, and call recordings are out of
+ scope. They need higher-privilege Graph permissions. Those permissions need tenant admin
+ consent. The connector stays inside the delegated scopes that a user can
+ grant on their own.</p>
+
+ <h2 id="install">Install</h2>
+ <p>The PyPI distribution name is <code>evolutiondb-teams-sync</code>. The importable
+ module is <code>teams_sync</code>. It needs Python 3.9 or later. It depends on a few packages.
+ <code>msal&gt;=1.28</code> handles device-code auth. <code>httpx&gt;=0.27</code> is the Graph HTTP
+ client. <code>psycopg[binary]&gt;=3.1</code> handles PG-wire writes.
+ <code>evolutiondb-pii&gt;=0.1.1</code> does optional PII masking.
+ <code>mcp-server-evolutiondb&gt;=1.3.0</code> is also included, so a single install brings the MCP
+ integration as well.</p>
+
+ <pre><code><span class="c-com"># from PyPI</span>
+pip install evolutiondb-teams-sync
+
+<span class="c-com"># or editable, from the EvolutionDB repo</span>
+pip install -e client/teams-sync</code></pre>
+
+ <p>Installation registers a single console script named <code>evosql-teams-sync</code>.
+ It maps to <code>teams_sync.sync:main</code>. You can also run the module directly
+ with <code>python -m teams_sync.sync</code>.</p>
+
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>The package version is not the same in every place. <code>pyproject.toml</code> declares <code>0.1.3</code>. The importable module's <code>teams_sync.__version__</code> reads <code>0.1.2</code>. Development Status is <code>4 - Beta</code>.</div></div>
+
+ <h2 id="configure">Configure</h2>
+ <p>Before you configure, register a public-client app under Microsoft Entra ID. Go to App
+ registrations and then New registration. Enable <strong>Allow public client flows</strong>.
+ Add the delegated Graph permissions <code>Chat.Read</code>, <code>User.Read</code>,
+ and <code>offline_access</code>. Add <code>ChatMessage.Send</code> only if you opt
+ into sending. See the Notes section for that. None of these need tenant admin consent. Copy the app's
+ Application (client) ID and Directory (tenant) ID.</p>
+
+ <p>Configuration comes from environment variables. On startup the CLI loads a
+ dotenv file. The default file is <code>.env</code> in the working directory. You can change it with
+ <code>--env-file</code>. A missing file is ignored. The real shell environment always
+ wins over the file. Inside the file, the last non-empty value for a key wins.
+ Copy <code>.env.example</code> to <code>.env</code> and fill it in.</p>
+
+ <pre><code><span class="c-com"># --- Microsoft Entra ID app ---</span>
+AZURE_TENANT_ID=<span class="c-str">common</span>            <span class="c-com"># or your tenant GUID for single-tenant apps</span>
+AZURE_CLIENT_ID=<span class="c-str">&lt;application-client-id&gt;</span>
+
+<span class="c-com"># --- EvolutionDB (PG wire protocol) ---</span>
+EVOSQL_HOST=<span class="c-str">127.0.0.1</span>
+EVOSQL_PORT=<span class="c-str">5433</span>
+EVOSQL_USER=<span class="c-str">admin</span>
+EVOSQL_PASSWORD=<span class="c-str">admin</span>
+EVOSQL_DATABASE=<span class="c-str">evosql</span>
+
+<span class="c-com"># --- MCP correlation ---</span>
+MCP_USER_ID=<span class="c-str">alptekin_topal</span>      <span class="c-com"># namespace shared with the MCP server</span>
+TEAMS_MEMORY_STORE=<span class="c-str">mcp_mem</span>       <span class="c-com"># memory store to write into</span>
+TEAMS_POLL_INTERVAL=<span class="c-str">600</span>         <span class="c-com"># daemon poll interval, seconds</span>
+TEAMS_TOKEN_CACHE=<span class="c-str">~/.evosql/teams_token_cache.json</span></code></pre>
+
+ <p>The table below shows the variable reference as read by the <code>Config</code> class.
+ <code>TEAMS_TOKEN_CACHE</code> is read in <code>Config.token_cache</code>.
+ <code>EVOSQL_TEAMS_SEND</code> is read by the auth module.</p>
+
+ <pre><code><span class="c-com"># var                  default                              meaning</span>
+AZURE_TENANT_ID        common                               Entra ID tenant (authority)
+AZURE_CLIENT_ID        (none, required for sync)            app Application (client) ID
+TEAMS_TOKEN_CACHE      ~/.evosql/teams_token_cache.json     MSAL refresh-token cache path
+EVOSQL_HOST            127.0.0.1                            EvolutionDB host
+EVOSQL_PORT            5433                                 EvolutionDB PG-wire port
+EVOSQL_USER            admin                                EvolutionDB user
+EVOSQL_PASSWORD        admin                                EvolutionDB password
+EVOSQL_DATABASE        evosql                               target database
+MCP_USER_ID            default_user                         memory namespace (mem_namespace)
+TEAMS_MEMORY_STORE     mcp_mem                              memory store (CREATE MEMORY STORE)
+TEAMS_POLL_INTERVAL    600                                  poll interval in Config.poll_secs
+EVOSQL_TEAMS_SEND      (unset)                              opt-in: adds ChatMessage.Send scope</code></pre>
+
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div><code>AZURE_CLIENT_ID</code> is required for any sync mode. If it is empty after the env loads, the CLI prints an error and exits with code <code>2</code>. This happens before it contacts Graph or the database. <code>--auth</code> also builds <code>TeamsAuth</code>, which raises an error if the client ID is missing.</div></div>
+
+ <p>The token cache stores the MSAL refresh token at the path set by
+ <code>TEAMS_TOKEN_CACHE</code>. The default path is <code>~/.evosql/teams_token_cache.json</code>.
+ The file is chmod'd to <code>0600</code> after each write. After the first interactive login,
+ later runs refresh silently.</p>
+
+ <h2 id="usage">Usage</h2>
+ <p>The first step after install is a one-time login. After that you run one-shot or daemon
+ syncs. Each run needs exactly one mode flag. The choices are <code>--setup</code>, <code>--auth</code>,
+ <code>--once</code>, and <code>--interval</code>. You can only pick one of them at a time.</p>
+
+ <pre><code><span class="c-com"># One-time bootstrap: download the evosql-server binary and wire up MCP host configs.</span>
+evosql-teams-sync --setup
+
+<span class="c-com"># Log in once via device code; caches the refresh token and exits.</span>
+evosql-teams-sync --auth
+
+<span class="c-com"># One pass, then exit. --since bounds how far back the FIRST run on a chat goes.</span>
+python -m teams_sync.sync --once --since 24h
+
+<span class="c-com"># Daemon mode - re-run every N seconds (floored at 60).</span>
+python -m teams_sync.sync --interval 600
+
+<span class="c-com"># Verify auth + scopes, fetch from Graph, but write nothing to the DB.</span>
+python -m teams_sync.sync --once --dry-run</code></pre>
+
+ <p>These are the flags accepted by <code>main()</code>.</p>
+ <pre><code><span class="c-com"># --setup            one-time: download embedded evosql-server + write MCP host configs</span>
+<span class="c-com"># --auth             run device-code login, cache refresh token, exit</span>
+<span class="c-com"># --once             run a single sync pass and exit</span>
+<span class="c-com"># --interval SECONDS daemon mode; loops until SIGINT/SIGTERM (min 60s)</span>
+<span class="c-com"># --since SPEC       first-run watermark; SPEC is N + s|m|h|d|w (default 24h)</span>
+<span class="c-com"># --dry-run          talk to Graph but do not write to EvolutionDB</span>
+<span class="c-com"># --embedded         bring up a self-contained evosql-server before syncing</span>
+<span class="c-com"># --env-file PATH    dotenv file to load (default .env)</span></code></pre>
+
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Daemon mode is driven by <code>--interval SECONDS</code>. There is <em>no</em> <code>--daemon</code> flag, even though the comment in <code>.env.example</code> mentions one. <code>TEAMS_POLL_INTERVAL</code> fills <code>Config.poll_secs</code>. The sync loop's interval comes from the <code>--interval</code> argument, with a floor of 60s. On the first run of a given chat, <code>--since</code> sets the floor. After that the per-chat watermark in EvolutionDB takes over.</div></div>
+
+ <p>The device-code login shows the Microsoft URL and short code on stderr. It also tries to
+ use native features on the host when it can. On macOS it copies the code to
+ the clipboard, opens the login page, posts a Notification Center banner, and shows a
+ modal dialog. On Linux it tries <code>xdg-open</code> plus clipboard tools plus
+ <code>notify-send</code>. On Windows it copies the code and opens the browser. All of
+ these do nothing if the tools are missing.</p>
+
+ <p>Each pass prints a one-line summary to stderr. Here is an example.</p>
+ <pre><code>[teams-sync] wrote 37 messages across 12 chats (skipped 4 system / empty, 1 chats inaccessible (403/404 - orphan or deleted))</code></pre>
+
+ <p>The exit codes have these meanings. <code>0</code> means success. <code>2</code> means a configuration error, such as a missing
+ <code>AZURE_CLIENT_ID</code> or a bad <code>--since</code>. <code>3</code> means
+ an authentication failure. <code>4</code> means a sync pass raised an exception. <code>5</code> means
+ an embedded-server failure. In daemon mode, <code>SIGINT</code> and <code>SIGTERM</code>
+ ask for a graceful stop. The current pass finishes before the loop exits.</p>
+
+ <h3 id="docker">Running in Docker</h3>
+ <p>The repo's demo compose file ships a <code>teams-sync</code> service behind a
+ profile. This way it does not start with the rest of the demo.</p>
+ <pre><code><span class="c-com"># First-run device-code login (runs once, cleans up after itself):</span>
+docker compose -f docker-compose.demo.yml --profile teams \
+    run --rm teams-sync --auth
+
+<span class="c-com"># Bring the daemon up:</span>
+docker compose -f docker-compose.demo.yml --profile teams up -d teams-sync</code></pre>
+ <p>The token cache lives on a named volume called <code>teams_sync_state</code>. This means
+ recreating the container does not force a fresh login.</p>
+
+ <h2 id="reference">Reference</h2>
+
+ <h3 id="ref-sync"><code>teams_sync.sync</code>, CLI and sync loop</h3>
+
+ <div class="sig">main(argv: list | None = None) -&gt; int</div>
+ <p>The console-script entry point is registered as <code>evosql-teams-sync</code>. It parses the
+ arguments, loads the dotenv file, and builds a <code>Config</code>. Then it dispatches to
+ <code>--setup</code>, <code>--auth</code>, a single pass, or the daemon loop. It returns
+ the process exit code.</p>
+
+ <div class="sig">sync_once(cfg: Config, *, since_default: str | None, dry_run: bool = False) -&gt; dict[str, int]</div>
+ <p><code>sync_once</code> runs a single pass. It authenticates, fetches the signed-in user via
+ <code>get_me()</code>, reads every chat, and builds one record per message. It applies
+ watermark skipping. Unless <code>dry_run</code> is set, it writes to the store and advances
+ the watermark. It returns the counters dict
+ <code>{"chats", "messages", "skipped", "inaccessible_chats"}</code>. Some chats return 403 or 404
+ on the messages endpoint. Orphaned meeting chats and deleted chats are examples of this. These are counted as
+ <code>inaccessible_chats</code> and skipped. Any other Graph error is raised.</p>
+
+ <div class="sig">parse_since(text: str) -&gt; str</div>
+ <p><code>parse_since</code> converts a window spec like <code>"1h"</code>, <code>"24h"</code>, <code>"7d"</code>,
+ or <code>"30m"</code> into a UTC ISO-8601 timestamp
+ ending in <code>Z</code>. The units are <code>s|m|h|d|w</code>. The result is used as the first-run floor. It raises <code>ValueError</code>
+ on anything it cannot parse.</p>
+
+ <div class="sig">class Config</div>
+ <p><code>Config</code> reads all environment variables into typed attributes. These are <code>tenant_id</code>,
+ <code>client_id</code>, <code>token_cache</code>,
+ <code>evosql_host</code>/<code>port</code>/<code>user</code>/<code>pass</code>/<code>db</code>,
+ <code>user_id</code>, <code>store</code>, and <code>poll_secs</code>.</p>
+
+ <h3 id="ref-auth"><code>teams_sync.auth</code>, MSAL device-code login</h3>
+ <p><code>teams_sync.auth</code> wraps <code>msal.PublicClientApplication</code> with a token
+ cache that is saved on disk. The requested scopes are <code>Chat.Read</code> and <code>User.Read</code>.
+ MSAL adds <code>offline_access</code> on its own. If you set
+ <code>EVOSQL_TEAMS_SEND</code> to a truthy value, it also requests
+ <code>ChatMessage.Send</code>.</p>
+
+ <div class="sig">class TeamsAuth(tenant_id: str, client_id: str, cache_path: str)</div>
+ <p><code>TeamsAuth</code> builds the MSAL public-client app against
+ <code>https://login.microsoftonline.com/&lt;tenant_id&gt;</code>. It raises
+ <code>RuntimeError</code> right away if <code>client_id</code> is empty.</p>
+
+ <div class="sig">TeamsAuth.login_interactive() -&gt; str</div>
+ <p><code>login_interactive</code> runs the device-code flow. It shows the user code on stderr and through the platform's
+ native features. It blocks until the user finishes login or MSAL times out. Then it flushes
+ the token cache and returns the access token.</p>
+
+ <div class="sig">TeamsAuth.get_token() -&gt; str</div>
+ <p><code>get_token</code> is the token provider passed to the Graph client. It is called for each request. It tries a silent refresh
+ from the cached account first. It falls back to <code>login_interactive()</code> if no
+ account is cached or the refresh token was revoked.</p>
+
+ <div class="sig">class TokenStore(cache_path: str)</div>
+ <p><code>TokenStore</code> is a thin wrapper around <code>msal.SerializableTokenCache</code>. It reads the cache
+ file when it is created. On <code>flush()</code> it writes the file back and chmods it to
+ <code>0600</code>.</p>
+
+ <h3 id="ref-graph"><code>teams_sync.graph</code>, Microsoft Graph client</h3>
+ <p><code>teams_sync.graph</code> is a thin client over <code>httpx</code> against <code>graph.microsoft.com/v1.0</code>.
+ It has a 90s read timeout. You build it as <code>GraphClient(token_provider=…)</code>.</p>
+
+ <div class="sig">GraphClient.get_me() -&gt; dict</div>
+ <p><code>get_me</code> returns the signed-in user's profile, with <code>id</code>, <code>displayName</code>,
+ and <code>userPrincipalName</code>. The result is cached for the client's lifetime. The
+ <code>id</code> is used so 1:1 chats show the <em>other</em> participant's name.</p>
+
+ <div class="sig">GraphClient.list_chats() -&gt; list[dict]</div>
+ <p><code>list_chats</code> returns every chat the user is in, ordered by recent activity, via
+ <code>GET /me/chats?$top=50&amp;$orderby=lastMessagePreview/createdDateTime desc&amp;$expand=members,lastMessagePreview</code>.
+ It loads the full list, since chat counts are small.</p>
+
+ <div class="sig">GraphClient.get_chat_messages(chat_id: str, since_iso: str | None = None) -&gt; Iterator[dict]</div>
+ <p><code>get_chat_messages</code> yields messages from one chat newest-first via
+ <code>GET /chats/{chat_id}/messages?$top=50</code>. It stops as soon as it sees a message at or
+ older than <code>since_iso</code>. The cutoff is done on the client side because Graph rejects the
+ <code>$filter</code> form on some tenants.</p>
+
+ <div class="sig">chat_display_name(chat: dict, me_id: str | None = None) -&gt; str</div>
+ <p><code>chat_display_name</code> makes a best-effort chat label. It uses the explicit topic for group chats. It uses the other member's
+ display name for 1:1 chats when <code>me_id</code> is passed. Otherwise it uses a member-list summary.
+ As a last resort it uses the chat id.</p>
+
+ <div class="sig">message_text(msg: dict) -&gt; str</div>
+ <div class="sig">message_sender(msg: dict) -&gt; dict[str, str]</div>
+ <p><code>message_text</code> returns the plain-text body. It strips HTML with an internal
+ regex stripper. It returns an empty string for system messages like joins and leaves. The
+ caller counts those as <code>skipped</code>. <code>message_sender</code> extracts a
+ <code>{"name", "id"}</code> pair from <code>from.user</code> or <code>from.application</code>.</p>
+
+ <div class="sig">strip_sender_prefix(text: str, sender_name: str) -&gt; str</div>
+ <p><code>strip_sender_prefix</code> removes a duplicated leading sender display name. Some tenants put the name at the start of every message
+ body. This runs before the searchable <code>fact</code> field adds the sender back.</p>
+
+ <div class="sig">class GraphError(RuntimeError)</div>
+ <p><code>GraphError</code> carries the HTTP <code>status</code>. Some statuses are retryable. The retryable ones are <code>429</code>,
+ <code>502</code>, <code>503</code>, and <code>504</code>. They are retried inside the client. <code>429</code> and <code>503</code> honour <code>Retry-After</code>. <code>502</code> and <code>504</code>
+ use exponential backoff. Transient transport failures like timeouts, SSL EOF, and resets get a
+ 1/2/4/8/16s backoff before the error is raised.</p>
+
+ <h3 id="ref-state"><code>teams_sync.state</code>, EvolutionDB memory backend</h3>
+ <p><code>teams_sync.state</code> writes messages and watermarks over the PG wire protocol via <code>psycopg</code>.
+ When it is created, it issues <code>CREATE MEMORY STORE &lt;store&gt;</code> and ignores the error
+ if the store already exists. It reconnects up to three times with backoff if the
+ connection drops. The source notes that this backend follows the same reconnect pattern as
+ <code>mcp-server-evosql</code>.</p>
+
+ <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+ <p><code>MemoryStore</code> opens an autocommit connection and makes sure the target memory store exists. It raises
+ <code>RuntimeError</code> if <code>psycopg</code> is not installed.</p>
+
+ <div class="sig">MemoryStore.put_message(key: str, value: dict) -&gt; None</div>
+ <p><code>put_message</code> encodes <code>value</code> to JSON with size-budget truncation as described below. Then it runs
+ <code>MEMORY PUT INTO &lt;store&gt; VALUES (&lt;namespace&gt;, &lt;key&gt;, &lt;value&gt;)</code>. MEMORY
+ DML does not bind parameters, so string values are escaped inline.</p>
+
+ <div class="sig">MemoryStore.get_watermark(chat_id: str) -&gt; str | None</div>
+ <div class="sig">MemoryStore.set_watermark(chat_id: str, watermark_iso: str) -&gt; None</div>
+ <p>These read and write the per-chat watermark under <code>teams_state_&lt;chat_id&gt;</code>.
+ <code>get_watermark</code> queries the underlying <code>__mem_&lt;store&gt;</code> table
+ directly and filters by key on the client side. MEMORY tables do not expose
+ <code>mem_key</code> filtering over the PG wire.</p>
+
+ <div class="sig">MemoryStore.count_messages() -&gt; int</div>
+ <p><code>count_messages</code> counts the total memory rows for this namespace. That includes messages and watermarks. Smoke
+ tests use it to confirm that writes land.</p>
+
+ <h2 id="notes">Notes &amp; limitations</h2>
+ <ul>
+ <li><strong>Out of scope.</strong> Channel messages, meeting transcripts, and call
+ recordings are not included. They need Graph scopes that require tenant admin consent, and the connector
+ stays away from those.</li>
+ <li><strong>System and empty messages are skipped.</strong> Joins, leaves, and bodies
+ that strip to empty text are not indexed. They are counted under
+ <code>skipped</code>.</li>
+ <li><strong>Inaccessible chats are tolerated.</strong> <code>/me/chats</code> can list
+ chats that return 403 or 404 on the messages endpoint. This includes orphaned meeting chats, shared-channel
+ proxies, and chats deleted between the list and the read. These are counted and skipped. The pass
+ does not stop.</li>
+ <li><strong>Value size budget.</strong> EvolutionDB's MEMORY PUT path behaves badly with
+ large payloads. So <code>state.py</code> caps a stored value at about
+ <code>2500</code> bytes. Oversized messages are trimmed step by step. First it drops an
+ <code>html</code> mirror. Then it clips <code>text</code> and <code>fact</code> with a
+ head/tail marker. As a last resort it stores a stub that carries
+ <code>"truncated": true</code>, so the message is still recorded as existing.</li>
+ <li><strong>Optional PII masking.</strong> If <code>evolutiondb-pii</code> can be
+ imported, message records are passed through
+ <code>evolutiondb_pii.integration.protect_record</code> over the
+ <code>fact</code>, <code>text</code>, <code>sender</code>, and <code>chat</code> fields
+ before storage. If it is not installed, records are stored unmasked.</li>
+ <li><strong>Sending is opt-in and off by default.</strong> The connector is
+ read-only unless <code>EVOSQL_TEAMS_SEND</code> is set. Setting it adds the
+ <code>ChatMessage.Send</code> scope at consent time. See ADR-004. There is no send code
+ path in these modules. The flag only widens the requested OAuth scopes.</li>
+ <li><strong>Privacy and policy.</strong> A 1:1 or group chat captures everyone's
+ messages, not just yours. Some workplaces treat external archiving of colleagues'
+ messages as a policy violation. Every Graph call is also logged in the tenant audit
+ log. Records land in the same store the
+ <a href="/platform/mcp-server/">MCP server</a> reads from. So anyone with that
+ database and the matching <code>MCP_USER_ID</code> can recall the content through
+ <code>search_memory</code>. You can revoke the token at any time from
+ <code>https://myaccount.microsoft.com/applications</code>. The next call then gets a
+ <code>401</code> and stops.</li>
+ <li><strong>Embedded server reach.</strong> <code>--setup</code> and
+ <code>--embedded</code> download a prebuilt <code>evosql-server</code> from the latest
+ <code>server-v*</code> GitHub release. The binary is built for Linux x86_64, Linux arm64, and macOS arm64
+ only. Windows and macOS Intel do not have native binaries. Those hosts fall
+ back to Docker.</li>
+ <li><strong>Version.</strong> <code>pyproject.toml</code> says <code>0.1.3</code>, with
+ Development Status 4 - Beta. Note that <code>teams_sync.__version__</code> still reads
+ <code>0.1.2</code>.</li>
+ </ul>
+
+ <p>See also the <a href="/platform/mcp-server/">MCP server</a> docs, the sibling
+ <a href="/connectors/github/">GitHub</a> and
+ <a href="/connectors/azure-devops/">Azure DevOps</a> connectors, and the project wiki at
+ <a href="https://wiki.evolutiondb.org">wiki.evolutiondb.org</a>.</p>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

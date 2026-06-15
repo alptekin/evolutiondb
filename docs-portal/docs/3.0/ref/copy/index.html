@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>COPY | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>COPY</h1>
+<p class="lede">COPY moves many rows at once between a table and a file or a client stream. It works in CSV or TEXT format.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+COPY <span class="opt">table_name</span> <span class="opt">[ ( <span class="opt">column_name</span> [..] ) ]</span><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;{ FROM | TO } { <span class="opt">'filename'</span> | STDIN | STDOUT }<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="opt">[ [ WITH ] ( <var>option</var> [..] ) ]</span>
+
+<br/><br/>where <var>option</var> is one of:<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;FORMAT { CSV | TEXT }<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;CSV<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;DELIMITER 'delimiter_character'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;HEADER <span class="opt">[ boolean ]</span><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;NULL 'null_string'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;QUOTE 'quote_character'
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>COPY</code> moves data between an EvolutionDB table and a file on the operating system. This is server-side file mode. It can also move data between a table and the connected client. This is stream mode. <code>COPY FROM</code> imports rows into a table. <code>COPY TO</code> exports the rows of a table.</p>
+
+<p>When you name a file, the EvolutionDB server process reads or writes that file directly. So the path is found on the <em>server</em> host. The server's filesystem permissions apply. When you give <code>STDIN</code> or <code>STDOUT</code> instead, the data moves over the open client connection.</p>
+
+<p><code>COPY FROM</code> reads the input one line at a time. It splits each line into fields using the active dialect. Then it inserts each row through the normal insert path. So all the rules that apply to <code>INSERT</code> apply here too. This includes constraints, primary keys, foreign keys, and indexes. In server-side file mode the import runs as one auto-commit unit. Blank lines in the input are skipped. A row may fail for several reasons. It may have a parse error, break a constraint, or have a type mismatch. When that happens, the operation stops and reports the error.</p>
+
+<p><code>COPY TO</code> scans the whole table. It writes each row using the active dialect. <code>COPY TO</code> only reads. It does not change the table.</p>
+
+<callout>
+<strong>Server-side file paths are restricted.</strong> A <code>'filename'</code> given to <code>COPY</code> must be an <em>absolute</em> path. It must begin with <code>/</code>. It must not contain a <code>..</code> path component. If it does not follow these rules, the command is rejected. Relative paths are not accepted.
+</callout>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>table_name</dt>
+<dd>The name of an existing table. You copy into it with <code>FROM</code> or out of it with <code>TO</code>. A target table is always required. <code>COPY (query) TO</code> is not supported in this grammar. Only a table name may follow <code>COPY</code>.</dd>
+
+<dt>( column_name [..] )</dt>
+<dd>An optional list of columns. On <code>COPY FROM</code>, it says which columns the incoming fields go to. It also sets the order. When you leave it out, all columns of the table are used in their declared order.</dd>
+
+<dt>FROM</dt>
+<dd>Says that data flows <em>into</em> the table. This is an import. Use it with <code>'filename'</code> or <code>STDIN</code>.</dd>
+
+<dt>TO</dt>
+<dd>Says that data flows <em>out of</em> the table. This is an export. Use it with <code>'filename'</code> or <code>STDOUT</code>.</dd>
+
+<dt>'filename'</dt>
+<dd>The absolute path of the server-side file to read from or write to. On export the file is opened for writing. It is created if needed, or its old content is removed first. On import the file is opened for reading. The path must be absolute. It must not contain a <code>..</code> component.</dd>
+
+<dt>STDIN / STDOUT</dt>
+<dd>Moves data over the client connection instead of a server file. Use <code>STDIN</code> with <code>FROM</code>. Use <code>STDOUT</code> with <code>TO</code>. The connection adaptor drives the stream-mode transfer after the statement is parsed.</dd>
+
+<dt>FORMAT CSV | FORMAT TEXT</dt>
+<dd>Picks the data format. Choosing <code>CSV</code> also sets the active delimiter to a comma <code>,</code>. It sets the default null marker to the empty string. Choosing <code>TEXT</code> uses a tab delimiter and the <code>\N</code> null marker. If you give no format option, <code>TEXT</code> is the default.</dd>
+
+<dt>CSV</dt>
+<dd>A short form that means the same as <code>FORMAT CSV</code>.</dd>
+
+<dt>DELIMITER 'delimiter_character'</dt>
+<dd>The single character that separates fields within each line. Only the first character of the string is used. The default depends on the format. It is a tab for <code>TEXT</code> and a comma for <code>CSV</code>.</dd>
+
+<dt>HEADER [ boolean ]</dt>
+<dd>Controls a header line of column names. <code>HEADER</code> on its own turns it on. You may also follow <code>HEADER</code> with a boolean. The boolean can be <code>TRUE</code>, <code>FALSE</code>, or <code>UNKNOWN</code>. On <code>COPY TO</code>, a header row of column names is written first. On <code>COPY FROM</code>, the first input line is skipped. It is off by default.</dd>
+
+<dt>NULL 'null_string'</dt>
+<dd>The string that stands for a SQL <code>NULL</code> value. On import, a field equal to this string is stored as <code>NULL</code>. On export, <code>NULL</code> values are written as this string. The default is <code>\N</code> in <code>TEXT</code> format. It is the empty string in <code>CSV</code> format.</dd>
+
+<dt>QUOTE 'quote_character'</dt>
+<dd>The single character used to quote field values. Only the first character of the string is used. The default is the double quote <code>"</code>.</dd>
+</dl>
+
+<callout>
+You may write options in three ways. The grammar accepts all of them. You can write a bare list with commas. You can write a list inside parentheses <code>( ... )</code>. You can use the PostgreSQL-style <code>WITH ( ... )</code> form.
+</callout>
+
+<h2 id="examples">Examples</h2>
+
+<p>Export a whole table to a server-side CSV file with a header row.</p>
+<pre><code><span class="c-key">COPY</span> employees <span class="c-key">TO</span> <span class="c-str">'/var/lib/evosql/export/employees.csv'</span>
+    <span class="c-key">WITH</span> (<span class="c-key">FORMAT</span> <span class="c-key">CSV</span>, <span class="c-key">HEADER</span>);</code></pre>
+
+<p>Import a CSV file into specific columns. Skip its header line.</p>
+<pre><code><span class="c-key">COPY</span> employees (id, name, dept) <span class="c-key">FROM</span> <span class="c-str">'/var/lib/evosql/import/new_hires.csv'</span>
+    (<span class="c-key">FORMAT</span> <span class="c-key">CSV</span>, <span class="c-key">HEADER</span> <span class="c-key">TRUE</span>);</code></pre>
+
+<p>Export in tab-delimited TEXT format. This is the default. It uses the <code>\N</code> null marker.</p>
+<pre><code><span class="c-key">COPY</span> orders <span class="c-key">TO</span> <span class="c-str">'/tmp/orders.tsv'</span>;</code></pre>
+
+<p>Import with a custom delimiter and a custom null string.</p>
+<pre><code><span class="c-key">COPY</span> products <span class="c-key">FROM</span> <span class="c-str">'/srv/data/products.psv'</span>
+    <span class="c-key">WITH</span> (<span class="c-key">DELIMITER</span> <span class="c-str">'|'</span>, <span class="c-key">NULL</span> <span class="c-str">'(none)'</span>);</code></pre>
+
+<p>Stream rows to the connected client instead of a server file.</p>
+<pre><code><span class="c-key">COPY</span> audit_log <span class="c-key">TO</span> <span class="c-key">STDOUT</span> (<span class="c-key">FORMAT</span> <span class="c-key">CSV</span>);</code></pre>
+
+<p>Change the quote character for a CSV import.</p>
+<pre><code><span class="c-key">COPY</span> notes <span class="c-key">FROM</span> <span class="c-str">'/data/notes.csv'</span>
+    (<span class="c-key">CSV</span>, <span class="c-key">QUOTE</span> <span class="c-str">'~'</span>);</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p>The SQL standard has no <code>COPY</code> statement. It is a PostgreSQL extension. EvolutionDB copies part of it. EvolutionDB supports the <code>FROM</code> and <code>TO</code> directions. It supports server-side <code>'filename'</code> mode. It supports the <code>STDIN</code> and <code>STDOUT</code> stream forms. It supports an optional column list. It supports these options. The options are <code>FORMAT</code> with <code>CSV</code> or <code>TEXT</code>, the bare <code>CSV</code> short form, <code>DELIMITER</code>, <code>HEADER</code> with an optional boolean, <code>NULL</code>, and <code>QUOTE</code>. You may give options bare, in parentheses, or in a <code>WITH ( ... )</code> list.</p>
+<p>These are the main differences from PostgreSQL.</p>
+<ul>
+<li><strong>No <code>COPY (query) TO</code>.</strong> The source of a <code>COPY</code> is always a table name. The grammar does not accept the result of any <code>SELECT</code>.</li>
+<li><strong>Smaller option set.</strong> Some PostgreSQL options are not built in and are not recognized. These include <code>ESCAPE</code>, <code>FORCE_QUOTE</code>, <code>FORCE_NOT_NULL</code>, <code>FORCE_NULL</code>, <code>ENCODING</code>, <code>FREEZE</code>, <code>ON_ERROR</code>, and <code>PROGRAM</code>.</li>
+<li><strong>Path restrictions.</strong> Server-side filenames must be absolute. They may not contain a <code>..</code> component. Relative paths are rejected.</li>
+<li><strong>Boolean keyword for <code>HEADER</code>.</strong> EvolutionDB accepts <code>HEADER TRUE</code>, <code>HEADER FALSE</code>, and <code>HEADER UNKNOWN</code>. The PostgreSQL <code>HEADER MATCH</code> mode is not supported.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>
