@@ -5,7 +5,7 @@
 <title>CHECKPOINT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -42,7 +42,7 @@
 <h2 id="description">Description</h2>
 <p>A <em>checkpoint store</em> is a named object. It saves the middle state of a long-running agent run. This lets you pause, resume, branch, and audit the run. EvolutionDB builds it as ordinary catalog state on top of the regular storage engine. <code>CREATE CHECKPOINT STORE <var>name</var></code> adds an entry in the system catalog. It also auto-creates a backing heap table named <code>ck_<var>name</var></code> with a fixed schema. Every <code>CHECKPOINT</code> data statement turns into a plain <code>INSERT</code> or <code>SELECT</code> against that backing table. So checkpoint writes and reads use the same MVCC visibility, row-level security, triggers, and replication as any hand-written DML.</p>
 
-<p>The backing table has eight columns in a fixed order:</p>
+<p>The backing table has eight columns. They always appear in this order.</p>
 <dl class="params">
 <dt><code>thread_id</code> <span class="c-com">VARCHAR(255) NOT NULL</span></dt>
 <dd>Names the conversation or run that a checkpoint belongs to. All reads filter on this key.</dd>

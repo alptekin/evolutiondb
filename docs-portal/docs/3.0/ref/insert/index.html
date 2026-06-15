@@ -5,7 +5,7 @@
 <title>INSERT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -129,38 +129,38 @@ form.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Insert one row with every column set:</p>
+<p>This example inserts one row with every column set.</p>
 <pre><code><span class="c-key">INSERT INTO</span> users (id, name, email)
 <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'Ada'</span>, <span class="c-str">'ada@example.com'</span>);</code></pre>
 
-<p>Insert several rows in one statement. One column falls back to its default:</p>
+<p>This example inserts several rows in one statement. One column falls back to its default.</p>
 <pre><code><span class="c-key">INSERT INTO</span> users (id, name, role)
 <span class="c-key">VALUES</span> (<span class="c-str">2</span>, <span class="c-str">'Lin'</span>, <span class="c-key">DEFAULT</span>),
        (<span class="c-str">3</span>, <span class="c-str">'Bo'</span>,  <span class="c-str">'editor'</span>);</code></pre>
 
-<p>Leave out the column list. The values map to the columns in declaration order:</p>
+<p>This example leaves out the column list. The values map to the columns in declaration order.</p>
 <pre><code><span class="c-key">INSERT INTO</span> users <span class="c-key">VALUES</span> (<span class="c-str">4</span>, <span class="c-str">'Mei'</span>, <span class="c-str">'mei@example.com'</span>, <span class="c-key">DEFAULT</span>);</code></pre>
 
-<p>MySQL-style <code>SET</code> form:</p>
+<p>This example uses the MySQL-style <code>SET</code> form.</p>
 <pre><code><span class="c-key">INSERT INTO</span> users
 <span class="c-key">SET</span> id = <span class="c-str">5</span>, name = <span class="c-str">'Sam'</span>, role = <span class="c-key">DEFAULT</span>;</code></pre>
 
-<p>Insert from a query:</p>
+<p>This example inserts rows from a query.</p>
 <pre><code><span class="c-key">INSERT INTO</span> archived_users (id, name)
 <span class="c-key">SELECT</span> id, name <span class="c-key">FROM</span> users <span class="c-key">WHERE</span> active = <span class="c-str">0</span>;</code></pre>
 
-<p>Upsert with MySQL <code>ON DUPLICATE KEY UPDATE</code>:</p>
+<p>This example uses the MySQL <code>ON DUPLICATE KEY UPDATE</code> upsert.</p>
 <pre><code><span class="c-key">INSERT INTO</span> counters (key, hits)
 <span class="c-key">VALUES</span> (<span class="c-str">'home'</span>, <span class="c-str">1</span>)
 <span class="c-key">ON DUPLICATE KEY UPDATE</span> hits = hits + <span class="c-str">1</span>;</code></pre>
 
-<p>Upsert with PostgreSQL <code>ON CONFLICT</code> and return the result:</p>
+<p>This example uses the PostgreSQL <code>ON CONFLICT</code> upsert and returns the result.</p>
 <pre><code><span class="c-key">INSERT INTO</span> counters (key, hits)
 <span class="c-key">VALUES</span> (<span class="c-str">'home'</span>, <span class="c-str">1</span>)
 <span class="c-key">ON CONFLICT</span> (key) <span class="c-key">DO UPDATE SET</span> hits = hits + <span class="c-str">1</span>
 <span class="c-key">RETURNING</span> *;</code></pre>
 
-<p>Skip a conflicting row silently:</p>
+<p>This example skips a conflicting row in silence.</p>
 <pre><code><span class="c-key">INSERT INTO</span> counters (key, hits)
 <span class="c-key">VALUES</span> (<span class="c-str">'home'</span>, <span class="c-str">1</span>)
 <span class="c-key">ON CONFLICT DO NOTHING</span>;</code></pre>

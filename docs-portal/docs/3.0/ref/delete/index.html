@@ -5,7 +5,7 @@
 <title>DELETE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -70,8 +70,7 @@ points to the row's table before it removes the row. The result depends on the c
 <code>NO ACTION</code>. It may delete the child rows that reference the row for
 <code>CASCADE</code>. It may set the child foreign-key columns to <code>NULL</code> for
 <code>SET NULL</code>. It may set them to their column default for <code>SET DEFAULT</code>.
-Cascades go down at most 32 levels. A deeper chain, such as a circular reference, raises a
-foreign-key violation.</p>
+Cascades go down at most 32 levels. A deeper chain raises a foreign-key violation. A circular reference is one example.</p>
 
 <p><strong>Triggers, indexes, and policies.</strong> <code>BEFORE DELETE</code> and
 <code>AFTER DELETE</code> triggers run once for each row when the table defines them. The
@@ -161,8 +160,7 @@ order no longer exists.</p>
       <span class="c-key">AND</span> orders.status = <span class="c-str">'voided'</span>;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p>The single-table <code>DELETE FROM table WHERE ...</code> form, with <code>RETURNING</code>,
-follows the SQL standard and PostgreSQL closely. EvolutionDB's <code>RETURNING</code> works like
+<p>The single-table <code>DELETE FROM table WHERE ...</code> form follows the SQL standard and PostgreSQL closely. The <code>RETURNING</code> clause is included. EvolutionDB's <code>RETURNING</code> works like
 PostgreSQL's. You use <code>*</code> or a list of column names. It gives back the row values from
 before the delete.</p>
 <ul>

@@ -5,7 +5,7 @@
 <title>Memory &amp; Entity SQL | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,12 +15,12 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Memory &amp; Entity SQL</h1>
-<p class="lede">EvolutionDB has two SQL surfaces built for agent memory. <strong>MEMORY stores</strong> are a namespaced JSON key/value store. They can also hold vector embeddings for semantic search. <strong>ENTITY stores</strong> hold a key, a summary, and facts. They also track how often each entity is mentioned. Both surfaces are thin SQL skins over normal tables. Every statement compiles down to the engine's regular INSERT, SELECT, and DELETE path. So RLS policies, MVCC, triggers, and FK cascade all work the same way.</p>
+<p class="lede">EvolutionDB has two SQL surfaces built for agent memory. <strong>MEMORY stores</strong> are a namespaced JSON key/value store. They can also hold vector embeddings for semantic search. <strong>ENTITY stores</strong> hold a key, a summary, and facts. They also track how often each entity is mentioned. Both surfaces are thin SQL skins over normal tables. Every statement compiles down to the engine's regular INSERT, SELECT, and DELETE path. RLS policies, MVCC, triggers, and FK cascade all work the same way.</p>
 
 <h2 id="overview">How it works</h2>
-<p>A MEMORY store named <code>foo</code> uses a regular table named <code>mem_foo</code>. An ENTITY store named <code>bar</code> uses a table named <code>ent_bar</code>. The store is registered in the system catalog. The backing table is created in the current schema. The backing object is a normal table. So you can attach policies and triggers to it through the <code>ON MEMORY STORE</code> grammar. Everything that a hand-written DML statement supports works here too.</p>
+<p>A MEMORY store named <code>foo</code> uses a regular table named <code>mem_foo</code>. An ENTITY store named <code>bar</code> uses a table named <code>ent_bar</code>. The store is registered in the system catalog. The backing table is created in the current schema. The backing object is a normal table. You can attach policies and triggers to it through the <code>ON MEMORY STORE</code> grammar. Everything that a hand-written DML statement supports works here too.</p>
 <div class="callout callout-note">
-<p>Both surfaces treat keywords as case-insensitive. This is the same as the rest of EvolutionDB SQL. Store names are bare identifiers. They use the <span class="c-com">NAME</span> token. The namespace, key, value, summary, and facts arguments are single-quoted string literals. A doubled quote <code>''</code> is turned into a single <code>'</code> on write. So values round-trip correctly.</p>
+<p>Both surfaces treat keywords as case-insensitive. This is the same as the rest of EvolutionDB SQL. Store names are bare identifiers. They use the <span class="c-com">NAME</span> token. The namespace, key, value, summary, and facts arguments are single-quoted string literals. A doubled quote <code>''</code> is turned into a single <code>'</code> on write. Values round-trip correctly.</p>
 </div>
 
 <h2 id="create-memory-store">CREATE MEMORY STORE</h2>
@@ -29,7 +29,7 @@
 CREATE MEMORY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 &nbsp;&nbsp;[ WITH ( embedding_dim = <span class="c-key">N</span> [, distance = '<span class="c-str">metric</span>'] ) ]
 </div>
-<p>The backing table columns are:</p>
+<p>The backing table has these columns.</p>
 <ul>
 <li><code>mem_namespace</code>, VARCHAR(255) NOT NULL</li>
 <li><code>mem_key</code>, VARCHAR(255) NOT NULL</li>
@@ -48,7 +48,7 @@ CREATE MEMORY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 
 <span class="c-key">CREATE MEMORY STORE</span> agent_notes <span class="c-key">IF NOT EXISTS</span>;</code></pre>
 <div class="callout callout-warn">
-<p>The grammar token sequence is written as <code>CREATE MEMORY STORE IF EXISTS name</code>. But it works with <em>IF NOT EXISTS</em> semantics. When the store already exists, the statement does nothing. It does not raise an error.</p>
+<p>The grammar token sequence is written as <code>CREATE MEMORY STORE IF EXISTS name</code>. It works with <em>IF NOT EXISTS</em> semantics. When the store already exists, the statement does nothing. It does not raise an error.</p>
 </div>
 
 <h2 id="drop-memory-store">DROP MEMORY STORE</h2>
@@ -63,7 +63,7 @@ DROP MEMORY STORE IF EXISTS <span class="c-key">name</span>
 <p>Without <code>IF EXISTS</code>, dropping a store that does not exist raises an error. The SQLSTATE is <code>42704</code>. The drop finds the backing table in the current schema and removes it. Then it removes the store from the catalog.</p>
 
 <h2 id="memory-put">MEMORY PUT</h2>
-<p>Upserts a single row. The row is keyed on <code>(namespace, key)</code>. PUT is an atomic upsert. When the primary key already exists, the engine points the PK to the new tuple and drops the old one. So a failed re-insert can never leave the row deleted.</p>
+<p>Upserts a single row. The row is keyed on <code>(namespace, key)</code>. PUT is an atomic upsert. When the primary key already exists, the engine points the PK to the new tuple and drops the old one. A failed re-insert can never leave the row deleted.</p>
 <div class="sig">
 MEMORY PUT INTO <span class="c-key">name</span> VALUES ( '<span class="c-str">ns</span>', '<span class="c-str">key</span>', <span class="c-str">value</span> [, '<span class="c-str">embedding</span>'] )
 </div>
@@ -90,7 +90,7 @@ MEMORY GET FROM <span class="c-key">name</span> WHERE NS = '<span class="c-str">
 &nbsp;&nbsp;<span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'fav_color'</span>;</code></pre>
 <p>The result returns <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, then <code>embedding</code>, and <code>created_at</code>. The <code>embedding</code> column appears only when the store has one. The lookup matches on the composite <code>pk</code> column. It returns at most one row.</p>
 <div class="callout callout-note">
-<p>The <code>NS</code> and <code>KEY</code> comparisons must use <code>=</code>. The grammar accepts the generic <span class="c-com">COMPARISON</span> token in that spot. But GET turns the pair into the exact composite primary key. So only equality has any meaning here.</p>
+<p>The <code>NS</code> and <code>KEY</code> comparisons must use <code>=</code>. The grammar accepts the generic <span class="c-com">COMPARISON</span> token in that spot. GET turns the pair into the exact composite primary key. Only equality has any meaning here.</p>
 </div>
 
 <h2 id="memory-search">MEMORY SEARCH</h2>
@@ -100,7 +100,7 @@ MEMORY SEARCH <span class="c-key">name</span> USING VECTOR '<span class="c-str">
 </div>
 <pre><code><span class="c-key">MEMORY SEARCH</span> recall <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.10,0.05,-0.88]'</span>;
 <span class="c-key">MEMORY SEARCH</span> recall <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.10,0.05,-0.88]'</span> <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
-<p>The result returns <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, and <code>score</code>. Results are sorted by the score column in ascending order. So the closest matches appear first. When you leave out <code>LIMIT</code>, the default is 10.</p>
+<p>The result returns <code>mem_namespace</code>, <code>mem_key</code>, <code>mem_value</code>, and <code>score</code>. Results are sorted by the score column in ascending order. The closest matches appear first. When you leave out <code>LIMIT</code>, the default is 10.</p>
 <div class="callout callout-warn">
 <p>SEARCH needs the store to have been created with <code>embedding_dim &gt; 0</code>. Running it on a store with no embedding column raises SQLSTATE <code>42P01</code>.</p>
 </div>
@@ -112,9 +112,9 @@ MEMORY DELETE FROM <span class="c-key">name</span> WHERE NS = '<span class="c-st
 </div>
 <pre><code><span class="c-key">MEMORY DELETE FROM</span> agent_notes
 &nbsp;&nbsp;<span class="c-key">WHERE NS</span> = <span class="c-str">'user:42'</span> <span class="c-key">AND KEY</span> = <span class="c-str">'fav_color'</span>;</code></pre>
-<p>Inside the engine, this emits <code>DELETE FROM mem_&lt;name&gt; WHERE pk = '&lt;ns&gt;\x1E&lt;key&gt;'</code>. It runs through the standard delete path. So any RLS policy attached to the backing table is enforced. This is what makes <code>MEMORY DELETE</code> safe for multiple tenants. The composite key joins the namespace and key with the Record Separator byte 0x1E. You never write that byte yourself.</p>
+<p>Inside the engine, this emits <code>DELETE FROM mem_&lt;name&gt; WHERE pk = '&lt;ns&gt;\x1E&lt;key&gt;'</code>. It runs through the standard delete path. Any RLS policy attached to the backing table is enforced. This is what makes <code>MEMORY DELETE</code> safe for multiple tenants. The composite key joins the namespace and key with the Record Separator byte 0x1E. You never write that byte yourself.</p>
 <div class="callout callout-note">
-<p>Both <code>NS</code> and <code>KEY</code> are required in the DELETE grammar. There is no "delete a whole namespace" form here. DELETE always targets exactly one <code>(namespace, key)</code> row. To clear a namespace, list its keys and delete them one by one. Or work on the <code>mem_&lt;name&gt;</code> backing table directly with normal SQL.</p>
+<p>Both <code>NS</code> and <code>KEY</code> are required in the DELETE grammar. There is no "delete a whole namespace" form here. DELETE always targets exactly one <code>(namespace, key)</code> row. To clear a namespace, list its keys and delete them one by one. You can also work on the <code>mem_&lt;name&gt;</code> backing table directly with normal SQL.</p>
 </div>
 
 <h2 id="memory-list-namespaces">MEMORY LIST NAMESPACES</h2>
@@ -132,7 +132,7 @@ MEMORY LIST NAMESPACES IN <span class="c-key">name</span> [ PREFIX '<span class=
 CREATE ENTITY STORE <span class="c-key">name</span> [ IF NOT EXISTS ]
 DROP ENTITY STORE <span class="c-key">name</span> [ IF EXISTS ]
 </div>
-<p>The backing table columns are:</p>
+<p>The backing table has these columns.</p>
 <ul>
 <li><code>entity_key</code>, VARCHAR(255) PRIMARY KEY NOT NULL</li>
 <li><code>summary</code>, VARCHAR(8000)</li>
@@ -174,7 +174,7 @@ ENTITY RANK FROM <span class="c-key">name</span> [ LIMIT <span class="c-key">n</
 <p>Rows come back sorted by <code>mention_count</code> in descending order. When two rows tie, <code>last_seen</code> descending breaks the tie. The result has the same five columns as <code>ENTITY GET</code>.</p>
 
 <h2 id="policies-triggers">Policies and triggers on stores</h2>
-<p>A store's backing table is a regular table. So EvolutionDB gives you the <code>ON MEMORY STORE</code> grammar. It maps a store name to its backing table. You use it for security and automation:</p>
+<p>A store's backing table is a regular table. EvolutionDB gives you the <code>ON MEMORY STORE</code> grammar. It maps a store name to its backing table. You use it for security and automation.</p>
 <pre><code><span class="c-com">-- attach an RLS policy to a memory store's backing table</span>
 <span class="c-key">CREATE POLICY</span> tenant_isolation <span class="c-key">ON MEMORY STORE</span> recall <span class="c-com">/* ... */</span>;
 <span class="c-key">DROP POLICY</span> tenant_isolation <span class="c-key">ON MEMORY STORE</span> recall;
@@ -186,7 +186,7 @@ ENTITY RANK FROM <span class="c-key">name</span> [ LIMIT <span class="c-key">n</
 <span class="c-com">-- row-level trigger on a memory store</span>
 <span class="c-key">CREATE TRIGGER</span> audit_writes <span class="c-key">BEFORE INSERT ON MEMORY STORE</span> recall
 &nbsp;&nbsp;<span class="c-key">FOR EACH ROW BEGIN</span> <span class="c-com">/* ... */</span> <span class="c-key">END</span>;</code></pre>
-<p><code>MEMORY DELETE</code> routes through the engine's standard delete path. So any policy you attach this way is enforced on those deletes. It is also enforced on direct DML against the <code>mem_&lt;name&gt;</code> table.</p>
+<p><code>MEMORY DELETE</code> routes through the engine's standard delete path. Any policy you attach this way is enforced on those deletes. It is also enforced on direct DML against the <code>mem_&lt;name&gt;</code> table.</p>
 
 <h2 id="summary">Quick reference</h2>
 <div class="sig">

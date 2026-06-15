@@ -5,7 +5,7 @@
 <title>10. Indexes | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -16,7 +16,7 @@
 <main class="docs-content prose reveal">
 
 <h1>10. Indexes</h1>
-<p class="lede">EvolutionDB has four index access methods. They are the default B+ tree, an FNV-1a hash index, an in-memory HNSW graph for vector search, and an inverted full-text index. Each one has its own layout on disk or in memory. Each one encodes keys in its own way. And each one speeds up a different kind of query.</p>
+<p class="lede">EvolutionDB has four index access methods. They are the default B+ tree, an FNV-1a hash index, an in-memory HNSW graph for vector search, and an inverted full-text index. Each one has its own layout on disk or in memory. Each one encodes keys in its own way. Each one speeds up a different kind of query.</p>
 
 <p>An index is an extra structure. The engine can read it instead of scanning every row of a table. EvolutionDB builds indexes with <a href="/3.0/ref/create-index">CREATE INDEX</a> and <code>CREATE FULLTEXT INDEX</code>. It removes them with <a href="/3.0/ref/drop-index">DROP INDEX</a>. Every table also has one index that you do not create yourself. This is its <strong>primary-key index</strong>. It is a B+ tree. Its entries point at the heap location of each live row. The location is a <em>RowID</em>, which is <code>page_no:4 + slot_idx:2</code>. Secondary indexes use the same RowID value. So a matched index entry reaches its row directly. It does not need a second primary-key lookup.</p>
 
@@ -55,16 +55,16 @@
 
 <h3 id="btree-layout">10.2.1. Node Layout and Capacity</h3>
 
-<p>Each node page starts with the standard 16-byte page header. Next comes a 4-byte node header. The node header holds a 16-bit key count and a reserved 16-bit flags field. That leaves <strong>4076 bytes</strong> of node space for entries. A leaf entry is <code>[key_len:1][key:N][RowID:6]</code>. An internal node mixes <code>num_keys</code> separator keys with <code>num_keys + 1</code> child pointers. One byte holds each key length. So an index key can be at most <strong>255 bytes</strong> long, set by <code>BT2_MAX_KEY_LEN</code>. A longer key is rejected at insert time.</p>
+<p>Each node page starts with the standard 16-byte page header. Next comes a 4-byte node header. The node header holds a 16-bit key count and a reserved 16-bit flags field. That leaves <strong>4076 bytes</strong> of node space for entries. A leaf entry is <code>[key_len:1][key:N][RowID:6]</code>. An internal node mixes <code>num_keys</code> separator keys with <code>num_keys + 1</code> child pointers. One byte holds each key length. An index key can be at most <strong>255 bytes</strong> long. This limit is set by <code>BT2_MAX_KEY_LEN</code>. A longer key is rejected at insert time.</p>
 
 <p>Leaf pages are linked in both directions through the page header's <code>prev_page</code> and <code>next_page</code> fields. This sibling chain makes ordered scans and ranges cheap. The engine descends the tree once to find the starting leaf. After that, the cursor walks the chain. It does not descend again for each key.</p>
 
 <h3 id="btree-cmp">10.2.2. Key Comparison Is Numeric-Aware</h3>
 
-<p>Keys are stored as length-prefixed byte strings. But the comparison is not plain lexicographic. First the comparator tries to read both keys as 64-bit integers. If both read cleanly, it compares them as numbers. If that fails, it tries floating-point. If neither side is a number, it falls back to a byte-wise <code>memcmp</code>. On a common prefix, the shorter key comes first.</p>
+<p>Keys are stored as length-prefixed byte strings. The comparison is not plain lexicographic. First the comparator tries to read both keys as 64-bit integers. If both read cleanly, it compares them as numbers. If that fails, it tries floating-point. If neither side is a number, it falls back to a byte-wise <code>memcmp</code>. On a common prefix, the shorter key comes first.</p>
 
 <div class="callout">
-<p><strong>Why this matters.</strong> Numeric-aware comparison means an integer key like <code>100</code> sorts after <code>20</code>, which is correct. Both are stored as text. You do not get the lexicographic surprise of <code>"100" &lt; "20"</code>. There is a trade-off. Any value that looks like a number is ordered as a number. This happens no matter what type the column was declared as. The comparison buffers are limited to 256 bytes. So the numeric fast path only works on keys shorter than 255 bytes. Longer keys always use the lexicographic path.</p>
+<p><strong>Why this matters.</strong> Numeric-aware comparison means an integer key like <code>100</code> sorts after <code>20</code>. That is the correct order. Both are stored as text. You do not get the lexicographic surprise of <code>"100" &lt; "20"</code>. There is a trade-off. Any value that looks like a number is ordered as a number. This happens no matter what type the column was declared as. The comparison buffers are limited to 256 bytes. So the numeric fast path only works on keys shorter than 255 bytes. Longer keys always use the lexicographic path.</p>
 </div>
 
 <h3 id="btree-secondary">10.2.3. Secondary Keys and Composite Indexes</h3>
@@ -92,9 +92,9 @@
 
 <h3 id="hash-layout">10.3.1. Buckets, Hashing, and Overflow</h3>
 
-<p>Bucket routing uses the <strong>FNV-1a</strong> hash function. The hash is taken modulo the bucket count. A new index starts with <strong>64 buckets</strong> by default, set by <code>HASH_DEFAULT_BUCKETS</code>. It is capped at <strong>1017 buckets</strong>, set by <code>HASH_MAX_BUCKETS</code>. This cap lets the whole bucket array fit in one 4&nbsp;KB directory page. Bucket pages are allocated lazily. A bucket holds no page at all until its first entry arrives. An entry is <code>[key_len:2][key:N][RowID:6]</code>. Keys are limited to <strong>255 bytes</strong>, set by <code>HASH_MAX_KEY_LEN</code>. When a bucket page fills up, a new overflow page is allocated. It is linked into the chain through the page header.</p>
+<p>Bucket routing uses the <strong>FNV-1a</strong> hash function. The hash is taken modulo the bucket count. A new index starts with <strong>64 buckets</strong> by default. This default is set by <code>HASH_DEFAULT_BUCKETS</code>. The bucket count is capped at <strong>1017 buckets</strong>. This cap is set by <code>HASH_MAX_BUCKETS</code>. It lets the whole bucket array fit in one 4&nbsp;KB directory page. Bucket pages are allocated lazily. A bucket holds no page at all until its first entry arrives. An entry is <code>[key_len:2][key:N][RowID:6]</code>. Keys are limited to <strong>255 bytes</strong>. This limit is set by <code>HASH_MAX_KEY_LEN</code>. When a bucket page fills up, a new overflow page is allocated. It is linked into the chain through the page header.</p>
 
-<p>Like a secondary B+ tree, a hash entry stores the composite key <code>indexed_value␟PK</code>. But only the part <em>before</em> the <code>\x1F</code> separator is hashed for bucket routing. So every row that shares an indexed value lands in the same bucket. An equality lookup hashes just the search value. It walks that one bucket chain. It returns every entry whose key begins with <code>indexed_value␟</code>.</p>
+<p>Like a secondary B+ tree, a hash entry stores the composite key <code>indexed_value␟PK</code>. Only the part <em>before</em> the <code>\x1F</code> separator is hashed for bucket routing. So every row that shares an indexed value lands in the same bucket. An equality lookup hashes just the search value. It walks that one bucket chain. It returns every entry whose key begins with <code>indexed_value␟</code>.</p>
 
 <h3 id="hash-limits">10.3.2. When a Hash Index Applies</h3>
 
@@ -106,7 +106,7 @@
 
 <h2 id="hnsw">10.4. HNSW Vector Indexes</h2>
 
-<p>An HNSW index uses <code>USING HNSW</code>. It speeds up <em>approximate nearest-neighbor</em> search, also called ANN search, over a <code>VECTOR(dim)</code> column. It finds the rows whose embedding is closest to a query vector under a chosen distance metric. You build it with <a href="/3.0/ref/create-index">CREATE INDEX</a>. But it is not like the other three methods. It does not live in the page file. The graph and its dense vector store are held only in process memory, in <code>hnsw.c</code>.</p>
+<p>An HNSW index uses <code>USING HNSW</code>. It speeds up <em>approximate nearest-neighbor</em> search, also called ANN search, over a <code>VECTOR(dim)</code> column. It finds the rows whose embedding is closest to a query vector under a chosen distance metric. You build it with <a href="/3.0/ref/create-index">CREATE INDEX</a>. It is not like the other three methods. It does not live in the page file. The graph and its dense vector store are held only in process memory, in <code>hnsw.c</code>.</p>
 
 <pre><code><span class="c-com">-- build an HNSW index, choosing the distance metric via opclass</span>
 <span class="c-key">CREATE INDEX</span> idx_docs_embedding <span class="c-key">ON</span> docs
@@ -115,7 +115,7 @@
 
 <h3 id="hnsw-build">10.4.1. How the Graph Is Built</h3>
 
-<p>At <code>CREATE INDEX</code> time the engine scans the table once. It decodes the vector column's <code>float4</code> payload straight from each live tuple. No text-field buffer limits the dimension, so 1024-dimension embeddings work. It appends each <code>(primary&nbsp;key, vector)</code> pair to a dense, row-major store. Then it builds a multi-layer navigable graph over that store. Each node gets a random top level. Neighbor lists are filled by greedy beam search. The search uses the configured <code>ef_construction</code> candidate width. It keeps up to <code>m</code> links per node per level. At the base layer it keeps <code>2 × m</code> links. Graphs are tracked in a small static table keyed by <code>(table_id, index_name)</code>. There is a hard cap of <strong>64 concurrent graphs</strong>, set by <code>HNSW_MAX_GRAPHS</code>. Primary keys can be up to 256 bytes.</p>
+<p>At <code>CREATE INDEX</code> time the engine scans the table once. It decodes the vector column's <code>float4</code> payload straight from each live tuple. No text-field buffer limits the dimension, so 1024-dimension embeddings work. It appends each <code>(primary&nbsp;key, vector)</code> pair to a dense, row-major store. Then it builds a multi-layer navigable graph over that store. Each node gets a random top level. Neighbor lists are filled by greedy beam search. The search uses the configured <code>ef_construction</code> candidate width. It keeps up to <code>m</code> links per node per level. At the base layer it keeps <code>2 × m</code> links. Graphs are tracked in a small static table keyed by <code>(table_id, index_name)</code>. There is a hard cap of <strong>64 concurrent graphs</strong>. This cap is set by <code>HNSW_MAX_GRAPHS</code>. Primary keys can be up to 256 bytes.</p>
 
 <div class="callout">
 <p><strong>In-memory only. Rebuild required.</strong> In v1 the HNSW graph is <strong>not persisted</strong>. It is also <strong>not rebuilt automatically at server startup</strong>. After a restart, an existing HNSW index must be rebuilt with a fresh <code>CREATE INDEX</code> or a reindex. The DDL layer does record enough catalog metadata for automatic replay later. This metadata covers the column, the distance kind, <code>m</code>, and <code>ef_construction</code>. <code>DROP INDEX</code> frees the graph right away.</p>
@@ -128,13 +128,13 @@
 <dl class="params">
 <dt><code>vector_cosine_ops</code> (default)</dt><dd>Cosine distance, <code>1 − cos(a, b)</code>. A zero-norm vector on either side gives distance <code>1.0</code>. This is the default when you give no opclass. It is also the fallback for any opclass the engine does not know.</dd>
 <dt><code>vector_l2_ops</code></dt><dd>Euclidean (L2) distance. This is the straight-line distance between the two vectors.</dd>
-<dt><code>vector_ip_ops</code></dt><dd>Negative inner product, <code>−a·b</code>. Smaller means nearer, which matches the ordering of the other metrics. <code>vector_inner_ops</code> works as a synonym.</dd>
+<dt><code>vector_ip_ops</code></dt><dd>Negative inner product, <code>−a·b</code>. Smaller means nearer. This ordering matches the other metrics. <code>vector_inner_ops</code> works as a synonym.</dd>
 <dt><code>vector_l1_ops</code></dt><dd>Manhattan (L1) distance. This is the sum of the absolute per-component differences.</dd>
 </dl>
 
 <h3 id="hnsw-search">10.4.3. Searching the Index</h3>
 
-<p>You run vector search from SQL. You use helper functions and distance operators. The expression engine evaluates them. <code>hnsw_knn</code> returns a comma-separated list of the <em>k</em> nearest primary keys. They are ordered by distance from low to high. The value <em>k</em> defaults to 10 and is capped at 256.</p>
+<p>You run vector search from SQL using helper functions and distance operators. The expression engine evaluates them. <code>hnsw_knn</code> returns a comma-separated list of the <em>k</em> nearest primary keys. They are ordered by distance from low to high. The value <em>k</em> defaults to 10 and is capped at 256.</p>
 
 <pre><code><span class="c-com">-- k nearest neighbors of a query vector, by primary key</span>
 <span class="c-key">SELECT</span> hnsw_knn(<span class="c-str">'docs'</span>, <span class="c-str">'idx_docs_embedding'</span>, <span class="c-str">'[0.12, 0.04, ...]'</span>, 5);
@@ -145,7 +145,7 @@
 
 <p>The distance expressions are <code>cosine_distance(a, b)</code>, <code>l2_distance(a, b)</code>, <code>inner_product(a, b)</code>, and <code>l1_distance(a, b)</code>. There are also three operators. <code>&lt;-&gt;</code> is L2. <code>&lt;#&gt;</code> is negative inner product. <code>&lt;=&gt;</code> is cosine, and you can use it in <code>ORDER BY emb &lt;=&gt; '[…]'</code>. You can write a query vector in two ways. One way is a bracketed literal <code>'[f1, f2, …]'</code>. The other way is the client's <code>b64i8:&lt;base64&gt;</code> quantized form. This form is a float32 scale followed by an int8 array. It is more compact. It keeps a 1024-dimension query under the statement size cap.</p>
 
-<p>Inside, search picks one of two paths under the same interface. For a graph large enough to help, it does a multi-layer greedy descent. Then it does a base-layer beam search of width <code>ef_search</code>. The default width is 64, and it is widened to at least <em>k</em>. For very small graphs the engine takes the other path. It also takes it if graph construction hit an allocation failure. That path is an <strong>exact brute-force top-<em>k</em></strong> scan over the dense store. The switch is silent. So results are always correct. The graph only changes how fast they come back.</p>
+<p>Inside, search picks one of two paths under the same interface. For a graph large enough to help, it does a multi-layer greedy descent. Then it does a base-layer beam search of width <code>ef_search</code>. The default width is 64. It is widened to at least <em>k</em> when needed. For very small graphs the engine takes the other path. It also takes it if graph construction hit an allocation failure. That path is an <strong>exact brute-force top-<em>k</em></strong> scan over the dense store. The switch is silent. So results are always correct. The graph only changes how fast they come back.</p>
 
 <h3 id="hnsw-hybrid">10.4.4. Hybrid Search (Vector + Filter)</h3>
 
@@ -156,7 +156,7 @@
 <span class="c-com">-- report which strategy the planner chose and the filter selectivity</span>
 <span class="c-key">SELECT</span> hnsw_hybrid_explain(<span class="c-str">'docs'</span>, <span class="c-str">'idx_docs_embedding'</span>, <span class="c-str">'[0.12, ...]'</span>, 5, <span class="c-str">'lang=en'</span>);</code></pre>
 
-<p>In <code>auto</code> mode the engine measures the filter's selectivity. This is the matching rows over the total rows. Then it chooses a strategy. When fewer than 10% of rows match, it <strong>pre-filters</strong>. It ranks only the matching rows. Otherwise it <strong>post-filters</strong>. It ranks a wider, oversampled candidate set and then drops the non-matches. An empty filter falls back to plain <code>hnsw_knn</code>. In this version the filter predicate can only be equality.</p>
+<p>In <code>auto</code> mode the engine measures the filter's selectivity. Selectivity is the number of matching rows divided by the total rows. Then it chooses a strategy. When fewer than 10% of rows match, it <strong>pre-filters</strong>. It ranks only the matching rows. Otherwise it <strong>post-filters</strong>. It ranks a wider, oversampled candidate set and then drops the non-matches. An empty filter falls back to plain <code>hnsw_knn</code>. In this version the filter predicate can only be equality.</p>
 
 <h2 id="fulltext">10.5. Full-Text Indexes</h2>
 
@@ -171,14 +171,14 @@
 
 <h3 id="ft-tokenizer">10.5.1. The Tokenizer</h3>
 
-<p>The same tokenizer, <code>ft_tokenize</code>, runs at both build time and query time. So the two see the same token stream. Its rules are these.</p>
+<p>The same tokenizer, <code>ft_tokenize</code>, runs at both build time and query time. So the two see the same token stream. Its rules are listed below.</p>
 
 <dl class="params">
 <dt>Word boundaries</dt><dd>A token is a run of ASCII alphanumerics. Any byte ≥ <code>0x80</code> counts as part of a word. This keeps multi-byte UTF-8 letters attached to their words, such as Turkish characters. Any other byte ends the current token.</dd>
 <dt>Lowercasing</dt><dd>ASCII letters are lowercased, so matching is case-insensitive. Non-ASCII bytes pass through unchanged. This is because <code>tolower</code> on raw UTF-8 bytes is undefined. So in this version, queries against non-ASCII text match <strong>case-sensitively</strong>. Turkish text is one example. A proper Unicode case-fold is future work.</dd>
 <dt>Short-token filter</dt><dd>Tokens shorter than 2 characters are dropped.</dd>
 <dt>Stop words</dt><dd>A small built-in English stop-word list is removed. It holds 28 words, such as <code>a</code>, <code>an</code>, <code>and</code>, <code>the</code>, <code>of</code>, and <code>to</code>.</dd>
-<dt>Limits</dt><dd>A token is capped at 64 bytes, set by <code>FT_MAX_TOKEN_LEN</code>. Longer tokens are truncated. At most 256 tokens, set by <code>FT_MAX_TOKENS</code>, are taken from a single field.</dd>
+<dt>Limits</dt><dd>A token is capped at 64 bytes. This limit is set by <code>FT_MAX_TOKEN_LEN</code>. Longer tokens are truncated. At most 256 tokens are taken from a single field. This limit is set by <code>FT_MAX_TOKENS</code>.</dd>
 </dl>
 
 <div class="callout">
@@ -187,12 +187,12 @@
 
 <h2 id="compatibility">10.6. Compatibility</h2>
 
-<p>In the SQL standard, indexing is implementation-defined. So none of these statements are part of standard SQL. EvolutionDB's surface follows PostgreSQL and MySQL closely. But it differs in some clear ways that are worth knowing.</p>
+<p>In the SQL standard, indexing is implementation-defined. So none of these statements are part of standard SQL. EvolutionDB's surface follows PostgreSQL and MySQL closely. There are some clear differences that are worth knowing.</p>
 
 <ul>
 <li><strong>Access methods.</strong> EvolutionDB offers the default B+ tree, <code>USING HASH</code>, and <code>USING HNSW</code>. It does not support PostgreSQL's <code>gin</code>, <code>gist</code>, <code>spgist</code>, and <code>brin</code> method names. It also does not support a generic <code>USING <var>method</var></code> clause.</li>
-<li><strong>Hash indexes are static.</strong> PostgreSQL's hash index grows on its own. EvolutionDB's does not. The bucket count is fixed at create time, with 64 by default and a max of 1017, and it uses overflow chains. There is no rehash and no extendible split.</li>
-<li><strong>HNSW.</strong> The opclass names <code>vector_cosine_ops</code>, <code>vector_l2_ops</code>, <code>vector_ip_ops</code>, and <code>vector_l1_ops</code>, plus the <code>m</code> and <code>ef_construction</code> build parameters, match the pgvector extension. But EvolutionDB's graph is in-memory only. It is not auto-rebuilt at startup. You must use a single <code>VECTOR</code> column. Composite HNSW indexes are not supported.</li>
+<li><strong>Hash indexes are static.</strong> PostgreSQL's hash index grows on its own. EvolutionDB's does not. The bucket count is fixed at create time. The default is 64 and the max is 1017. It uses overflow chains. There is no rehash and no extendible split.</li>
+<li><strong>HNSW.</strong> The opclass names <code>vector_cosine_ops</code>, <code>vector_l2_ops</code>, <code>vector_ip_ops</code>, and <code>vector_l1_ops</code>, plus the <code>m</code> and <code>ef_construction</code> build parameters, match the pgvector extension. EvolutionDB's graph is in-memory only. It is not auto-rebuilt at startup. You must use a single <code>VECTOR</code> column. Composite HNSW indexes are not supported.</li>
 <li><strong>Full-text.</strong> EvolutionDB uses a dedicated MySQL-style <code>CREATE FULLTEXT INDEX</code> statement with <code>MATCH … AGAINST</code> queries. It does not use PostgreSQL's <code>tsvector</code> and GIN model. It is not auto-maintained on DML. It offers no stemming, no phrase search, and no ranked relevance.</li>
 <li><strong>Unsupported B+ tree and hash clauses.</strong> On non-HNSW indexes, these clauses are all rejected. They are <code>ASC</code>/<code>DESC</code>, <code>NULLS FIRST/LAST</code>, <code>COLLATE</code>, per-column opclasses, <code>INCLUDE</code>, partial-index <code>WHERE</code>, <code>TABLESPACE</code>, and storage-parameter <code>WITH (…)</code>.</li>
 </ul>

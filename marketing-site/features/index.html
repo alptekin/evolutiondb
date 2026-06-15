@@ -6,7 +6,7 @@
 <title>Features | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script id="tailwind-config">
         tailwind.config = {
             darkMode: "class",
@@ -245,20 +245,23 @@
 <div class="absolute top-1/2 left-1/3 w-64 h-64 bg-tertiary/10 blur-[120px] rounded-full" id="glow-3"></div>
 </div>
 <!-- Top Navigation -->
-<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-secondary/20 h-16 flex items-center justify-between px-margin-sm md:px-margin-lg">
-<a class="flex items-center gap-2" href="/">
-<span class="material-symbols-outlined text-neon-cyan text-[32px]">database</span>
-<span class="font-headline-md text-headline-md font-bold text-neon-cyan tracking-tight">EvolutionDB</span>
+<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-black/20 h-16 flex items-center justify-between px-4 md:px-8">
+<div class="flex items-center gap-x-5 lg:gap-x-7">
+<a class="flex items-center gap-2" href="https://evolutiondb.org/">
+<span class="material-symbols-outlined text-neon-cyan text-[28px]">database</span>
+<span class="font-bold text-neon-cyan tracking-tight text-[18px]" style="font-family:Hanken Grotesk">EvolutionDB</span>
 </a>
-<nav class="hidden md:flex gap-8 items-center">
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/">HOME</a>
-<a class="text-neon-cyan font-label-caps text-label-caps tracking-widest" href="/features/">FEATURES</a>
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/comparison/">COMPARISON</a>
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="https://github.com/alptekin/evolutiondb">GITHUB</a>
+<nav class="hidden md:flex gap-x-5 lg:gap-x-7 items-center">
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/">HOME</a>
+<a class="relative text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors after:content-[''] after:absolute after:-bottom-2 after:left-0 after:w-full after:h-0.5 after:bg-neon-cyan after:rounded-full" href="https://evolutiondb.org/features/">FEATURES</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/comparison/">COMPARISON</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://docs.evolutiondb.org/">DOCS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://developer.evolutiondb.org/">DEVELOPERS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutionagent.evolutiondb.org/">AGENT</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://wiki.evolutiondb.org/">WIKI</a>
 </nav>
-<div class="flex items-center gap-4">
-<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all active:scale-90" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
 </div>
+<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all text-[22px]" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
 </header>
 <!-- Main Content -->
 <main class="relative z-10 pt-32 pb-40 px-margin-sm container mx-auto max-w-container-max">
@@ -384,7 +387,7 @@ AS OF '2026-01-01';</pre>
 <p class="text-on-surface-variant text-body-md">Pages use transparent data encryption with AES-256. Passwords use PBKDF2-SHA256. Security lives in the storage layer itself.</p>
 </div>
 <div class="reveal stagger-3 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500">
-<span class="material-symbols-outlined text-tertiary text-4xl mb-4">smart_toy</span>
+<span class="material-symbols-outlined text-tertiary text-4xl mb-4">neurology</span>
 <h3 class="font-headline-md text-[24px] text-pure-white mb-4">Agent-native</h3>
 <p class="text-on-surface-variant text-body-md">It ships an MCP server and a standalone agent. Every action waits for a human. Drafts go into a queue first. A person approves them before anything is sent.</p>
 </div>

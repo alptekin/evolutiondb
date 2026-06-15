@@ -5,7 +5,7 @@
 <title>CREATE MEMORY STORE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -78,7 +78,7 @@ The metric matters only when <code>embedding_dim &gt; 0</code>.</dd>
 <pre><code><span class="c-key">CREATE MEMORY STORE IF NOT EXISTS</span> chat_recall
     <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">768</span>, distance = <span class="c-str">'l2'</span>);</code></pre>
 
-<p>Populate and query a store after creating it:</p>
+<p>This example populates a store and queries it after creating it.</p>
 <pre><code><span class="c-com">-- store a value (upsert on namespace+key)</span>
 <span class="c-key">MEMORY PUT INTO</span> agent_memory
     <span class="c-key">VALUES</span> (<span class="c-str">'user:42'</span>, <span class="c-str">'pref:lang'</span>, <span class="c-str">'{"lang":"tr"}'</span>, <span class="c-str">'[0.1,0.2,...]'</span>);

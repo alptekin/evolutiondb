@@ -5,7 +5,7 @@
 <title>22. Installation | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -20,11 +20,11 @@
 <p>EvolutionDB ships as three separate executables. They are all built from one source tree.</p>
 <dl class="params">
 <dt><code>evolution/evosql</code></dt>
-<dd>This is the standalone core SQL engine. It holds the parser, storage, and executor. You build it with <code>make evolution</code>. It is useful for embedded or single-user tests. It has no network listener.</dd>
+<dd>The standalone core SQL engine. It holds the parser, storage, and executor. You build it with <code>make evolution</code>. It is useful for embedded or single-user tests. It has no network listener.</dd>
 <dt><code>adaptor/evosql-server</code></dt>
-<dd>This is the dual-protocol server. It links the engine object files directly. It does <em>not</em> link a shared library. It serves the PostgreSQL wire protocol and the native EVO text protocol over TCP. This is what you run in production. You build it with <code>make adaptor</code>.</dd>
+<dd>The dual-protocol server. It links the engine object files directly. It does <em>not</em> link a shared library. It serves the PostgreSQL wire protocol and the native EVO text protocol over TCP. Run this in production. You build it with <code>make adaptor</code>.</dd>
 <dt><code>cli/evosql-cli</code></dt>
-<dd>This is the interactive command-line client. It is based on GNU readline. You build it with <code>make cli</code>.</dd>
+<dd>The interactive command-line client. It is based on GNU readline. You build it with <code>make cli</code>.</dd>
 </dl>
 
 <div class="callout">
@@ -90,7 +90,7 @@ make adaptor TLS=1
 make -C cli TLS=1</code></pre>
 
 <div class="callout">
-<p><strong>TLS is a build-time decision.</strong> In PostgreSQL, <code>ssl = on</code> is a runtime setting in <code>postgresql.conf</code> on a single binary. EvolutionDB is different. It compiles the TLS code in or out. A server built without <code>TLS=1</code> cannot serve TLS at all. Environment variables do not change this. See <a href="/3.0/admin/config/">23. Server Configuration</a> for the runtime certificate variables <code>EVOSQL_TLS_CERT</code> and <code>EVOSQL_TLS_KEY</code>.</p>
+<p><strong>TLS is a build-time decision.</strong> In PostgreSQL, <code>ssl = on</code> is a runtime setting in <code>postgresql.conf</code> on a single binary. EvolutionDB works differently. It compiles the TLS code in or out. A server built without <code>TLS=1</code> cannot serve TLS at all. Environment variables do not change this. See <a href="/3.0/admin/config/">23. Server Configuration</a> for the runtime certificate variables <code>EVOSQL_TLS_CERT</code> and <code>EVOSQL_TLS_KEY</code>.</p>
 </div>
 
 <h3 id="22.2.2">22.2.2. Regenerating the parser</h3>
@@ -113,11 +113,11 @@ make</code></pre>
 
 <dl class="params">
 <dt>Linux</dt>
-<dd>This is the reference platform. Executables have no suffix. The server links <code>-lpthread -lm -llz4</code>. Install the dev packages with your package manager. For example, run <code>apt-get install gcc make bison flex liblz4-dev libssl-dev libreadline-dev</code>.</dd>
+<dd>Linux is the reference platform. Executables have no suffix. The server links <code>-lpthread -lm -llz4</code>. Install the dev packages with your package manager. For example, run <code>apt-get install gcc make bison flex liblz4-dev libssl-dev libreadline-dev</code>.</dd>
 <dt>macOS (Darwin)</dt>
-<dd>It builds native binaries with no suffix. Homebrew keeps <code>liblz4</code>, <code>readline</code>, and <code>openssl</code> off the default search path. So the Makefiles add the Homebrew cellar include and lib paths for you. For example, they add <code>-I/opt/homebrew/include</code>. They also use <code>brew --prefix readline</code> and <code>brew --prefix openssl</code> for the keg-only formulas. Install with <code>brew install lz4 readline openssl bison flex</code>.</dd>
+<dd>macOS builds native binaries with no suffix. Homebrew keeps <code>liblz4</code>, <code>readline</code>, and <code>openssl</code> off the default search path. The Makefiles add the Homebrew cellar include and lib paths for you. For example, they add <code>-I/opt/homebrew/include</code>. They also use <code>brew --prefix readline</code> and <code>brew --prefix openssl</code> for the keg-only formulas. Install with <code>brew install lz4 readline openssl bison flex</code>.</dd>
 <dt>Windows (MinGW / MSYS2)</dt>
-<dd>It builds <code>.exe</code> files. These are <code>evosql.exe</code>, <code>evosql-server.exe</code>, and <code>evosql-cli.exe</code>. The Makefiles send linker temp files to <code>/tmp</code> to work around a permission issue. They link the Winsock library <code>-lws2_32</code> instead of pthreads.</dd>
+<dd>Windows builds <code>.exe</code> files. These are <code>evosql.exe</code>, <code>evosql-server.exe</code>, and <code>evosql-cli.exe</code>. The Makefiles send linker temp files to <code>/tmp</code> to work around a permission issue. They link the Winsock library <code>-lws2_32</code> instead of pthreads.</dd>
 </dl>
 
 <div class="callout">
@@ -142,7 +142,7 @@ docker compose down -v</code></pre>
 <pre><code>docker run -d -p 5433:5433 -p 9967:9967 \
     -e <span class="c-str">EVOSQL_PASSWORD</span>=mysecret evolutiondb/evolutiondb:latest</code></pre>
 
-<p>On first start the container entrypoint makes a self-signed TLS certificate under <code>/data/certs/</code> if none exists. The certificate is valid for 10 years and its CN is <code>evosql-server</code>. The entrypoint then exports <code>EVOSQL_TLS_CERT</code> and <code>EVOSQL_TLS_KEY</code>. After that it execs the server. The database file and certificates live in the <code>/data</code> volume. So the data survives <code>docker compose down</code>. But <code>down -v</code> destroys it.</p>
+<p>On first start the container entrypoint makes a self-signed TLS certificate under <code>/data/certs/</code> if none exists. The certificate is valid for 10 years and its CN is <code>evosql-server</code>. The entrypoint then exports <code>EVOSQL_TLS_CERT</code> and <code>EVOSQL_TLS_KEY</code>. After that it starts the server. The database file and certificates live in the <code>/data</code> volume. The data survives <code>docker compose down</code>. Running <code>down -v</code> destroys it.</p>
 
 <h3 id="22.4.1">22.4.1. Ports</h3>
 
@@ -173,13 +173,13 @@ docker compose down -v</code></pre>
 <p>A few other environment variables in the compose file shape the first start. The full list is in <a href="/3.0/admin/config/">23. Server Configuration</a>.</p>
 <dl class="params">
 <dt><code>EVOSQL_ENCRYPTION_KEY</code></dt>
-<dd>This is the master passphrase for AES-256 Transparent Data Encryption. Set it to an empty string to turn encryption off. Page&nbsp;0 is the file header. It is always stored in plaintext no matter what.</dd>
+<dd>The master passphrase for AES-256 Transparent Data Encryption. Set it to an empty string to turn encryption off. Page&nbsp;0 is the file header. It is always stored in plaintext no matter what.</dd>
 <dt><code>EVOSQL_CDC_PORT</code></dt>
-<dd>This turns on the change-data-capture streaming server on the given port. The stream uses JSON Lines.</dd>
+<dd>Turns on the change-data-capture streaming server on the given port. The stream uses JSON Lines.</dd>
 <dt><code>EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</code></dt>
-<dd>This sets how often the background reclaim and TTL tick runs. The compose file lowers it to <code>2</code> so TTL-driven row expiry shows up fast in tests. Production keeps the default of 30&nbsp;s.</dd>
+<dd>Sets how often the background reclaim and TTL tick runs. The compose file lowers it to <code>2</code> so TTL-driven row expiry shows up fast in tests. Production keeps the default of 30&nbsp;s.</dd>
 <dt><code>EVOSQL_BUFFER_POOL_SIZE</code></dt>
-<dd>This sets the clock-sweep buffer pool size. It takes a raw page count or a unit suffix of <code>K</code>, <code>M</code>, or <code>G</code>. The suffix is read against the 4&nbsp;KB page size. You can also set it with <code>--buffer-pool-size</code>.</dd>
+<dd>Sets the clock-sweep buffer pool size. It takes a raw page count or a unit suffix of <code>K</code>, <code>M</code>, or <code>G</code>. The suffix is read against the 4&nbsp;KB page size. You can also set it with <code>--buffer-pool-size</code>.</dd>
 </dl>
 
 <h2 id="22.5">22.5. Running a local build</h2>

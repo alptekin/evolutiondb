@@ -5,7 +5,7 @@
 <title>Go SDK | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -19,7 +19,7 @@
 
 <h2 id="what-it-does">What it does</h2>
 <p>The Go SDK (<code>go-evosql-memory</code>) is a thin wrapper around the C SDK <code>libevosql-memory</code>. It is <strong>not</strong> a pure-Go driver. The cgo layer links the C archive. It forwards each call to the matching <code>evo_*</code> function in <code>evosql_memory.h</code>. On the wire it speaks the EVO text protocol on default port <code>9967</code>. This is the same protocol used by the <a href="/cli/">CLI client</a> and the <a href="/platform/mcp-server/">MCP server</a>.</p>
-<p>The wrapper adds these things over raw cgo:</p>
+<p>The wrapper adds these improvements over raw cgo.</p>
 <ul>
 <li>A <code>Conn</code> struct with a finalizer-backed <code>Close()</code>. A forgotten connection is still released by the GC.</li>
 <li>A typed <code>*Error</code>. It carries a <code>Kind</code>, a <code>Message</code>, and a <code>SQLState</code>. The message comes from the C SDK thread-local last-error storage.</li>
@@ -34,7 +34,7 @@
 <h2 id="install">Install</h2>
 <p>The module path is shown below.</p>
 <div class="sig">github.com/alptekin/evolutiondb/client/go-evosql-memory</div>
-<p>The package needs <strong>cgo</strong>. The C archive <code>libevosql-memory.a</code> must be present at build time. Inside the monorepo the cgo directives use <code>${SRCDIR}</code>. The relative path resolves on its own. You just build the C SDK first.</p>
+<p>The package needs <strong>cgo</strong>. The C archive <code>libevosql-memory.a</code> must be present at build time. Inside the monorepo the cgo directives use <code>${SRCDIR}</code>. The relative path resolves on its own. Build the C SDK first.</p>
 <pre><code><span class="c-com"># build the C SDK archive first</span>
 make -C ../libevosql-memory
 
@@ -55,7 +55,7 @@ go build ./...</code></pre>
 </div>
 
 <h2 id="configure">Configure (connection &amp; auth)</h2>
-<p>There are no environment variables for connecting. You pass host, port, user, and password straight to <code>Connect</code>. The default login on a fresh EvoSQL server is <code>admin</code> / <code>admin</code>. The EVO text protocol listens on port <code>9967</code>.</p>
+<p>There are no environment variables for connecting. Pass host, port, user, and password straight to <code>Connect</code>. The default login on a fresh EvoSQL server is <code>admin</code> / <code>admin</code>. The EVO text protocol listens on port <code>9967</code>.</p>
 <pre><code>c, err := evosql.<span class="c-fn">Connect</span>(<span class="c-str">"127.0.0.1"</span>, <span class="c-num">9967</span>, <span class="c-str">"admin"</span>, <span class="c-str">"admin"</span>)
 <span class="c-key">if</span> err != <span class="c-key">nil</span> { <span class="c-com">/* handle */</span> }
 <span class="c-key">defer</span> c.<span class="c-fn">Close</span>()</code></pre>
@@ -167,7 +167,7 @@ lit := evosql.<span class="c-fn">FormatVector</span>(emb) <span class="c-com">//
 <h2 id="notes">Notes &amp; limitations</h2>
 <ul>
 <li><strong>cgo required.</strong> This is not a pure-Go driver. You must build or download <code>libevosql-memory</code> and have a C toolchain ready. Cross-compiling needs the matching C archive for the target platform.</li>
-<li><strong>A <code>*Conn</code> is not goroutine-safe.</strong> Open one connection per goroutine. The C SDK last-error storage is thread-local. So two goroutines on two connections will not see each other's errors through <code>Error.Message</code>.</li>
+<li><strong>A <code>*Conn</code> is not goroutine-safe.</strong> Open one connection per goroutine. The C SDK last-error storage is thread-local. Two goroutines on two connections will not see each other's errors through <code>Error.Message</code>.</li>
 <li><strong>Buffer limits.</strong> <code>Query</code> is capped at 256 rows by 32 columns by 4096 bytes per cell. <code>MemoryGet</code> reads up to 32&nbsp;KB. <code>CheckpointGetLatest</code> reads up to 64&nbsp;KB. Larger payloads are cut off.</li>
 <li><strong>No streaming binding.</strong> The C SDK underneath supports LISTEN/NOTIFY and CDC subscriptions. The Go package does not wrap them.</li>
 <li><strong>Go version.</strong> The module declares <code>go 1.21</code>.</li>

@@ -5,7 +5,7 @@
 <title>B. Data Type Reference | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,21 +18,21 @@
 <h1>B. Data Type Reference</h1>
 <p class="lede">This page lists every data type EvolutionDB 3.0 understands. It shows the integer <em>type code</em> the parser gives each type. It shows the byte layout used on disk in the binary tuple format. It also shows how each value is read back as text.</p>
 
-<p>This appendix comes straight from the two modules that define type behaviour. The first is the grammar in <code>evolution/parser/evoparser.y</code>. It assigns a type code to every declared column. The second is the codecs in <code>evolution/db/tuple_format.c</code>. They encode and decode values. When EvolutionDB acts differently from the SQL standard or from PostgreSQL, this chapter says so clearly. It does not pretend the behaviour matches. The parser accepts many type <em>names</em> so that MySQL and PostgreSQL source code still works. But at the storage layer those names fold into a much smaller set of physical encodings. That difference is the main point of this reference.</p>
+<p>This appendix comes straight from two modules that define type behaviour. The first is the grammar in <code>evolution/parser/evoparser.y</code>. It assigns a type code to every declared column. The second is the codecs in <code>evolution/db/tuple_format.c</code>. They encode and decode values. When EvolutionDB behaves differently from the SQL standard or from PostgreSQL, this chapter says so clearly. The parser accepts many type <em>names</em> so that MySQL and PostgreSQL source code still works. At the storage layer those names fold into a much smaller set of physical encodings. That difference is the main point of this reference.</p>
 
 <h2 id="type-codes">B.1. Type codes and the family/size split</h2>
 
-<p>When you declare a column, the parser does not store a type name. It works out a single integer <em>type code</em> and saves that in the system catalog. The encoding is a base-10000 split. It works like this.</p>
+<p>When you declare a column, the parser does not store a type name. It works out a single integer <em>type code</em> and saves that in the system catalog. The encoding uses a base-10000 split. It works like this.</p>
 
 <pre class="synopsis"><code><span class="c-key">type_code</span> = family × 10000 + size
 
 family = type_code / 10000      <span class="c-com">// integer division</span>
 size   = type_code % 10000      <span class="c-com">// length, dimension, or modifier</span></code></pre>
 
-<p>The <code>tuple_format.c</code> codec branches only on <code>family</code>. See the <code>type_family()</code> helper. The <code>size</code> part matters for just a few families. It holds the CHAR or VARCHAR length and the VECTOR dimension. For example, the column declaration <code>VARCHAR(50)</code> produces the type code <code>130050</code>. The family is <code>13</code> for string and varchar. The size is <code>50</code>. <code>VECTOR(768)</code> produces <code>260768</code>. The family is <code>26</code>. The dimension is <code>768</code>.</p>
+<p>The <code>tuple_format.c</code> codec branches only on <code>family</code>. See the <code>type_family()</code> helper. The <code>size</code> part matters for just a few families. It holds the CHAR or VARCHAR length and the VECTOR dimension. The column declaration <code>VARCHAR(50)</code> produces the type code <code>130050</code>. The family is <code>13</code> for string and varchar. The size is <code>50</code>. <code>VECTOR(768)</code> produces <code>260768</code>. The family is <code>26</code>. The dimension is <code>768</code>.</p>
 
 <div class="callout">
-<p><strong>Length modifiers and integer attributes are recorded but not enforced.</strong> The grammar folds extra attributes into the size part of the type code. <code>UNSIGNED</code> adds <code>1000</code>. <code>ZEROFILL</code> adds <code>2000</code> in rule <code>opt_uz</code>. A <code>DECIMAL(p,s)</code> scale adds <code>1000 × s</code> in rule <code>opt_length</code>. A column-level <code>BINARY</code> attribute on text adds <code>4000</code> in rule <code>opt_binary</code>. These bits stay in the catalog. But the storage codec never reads them. There is no range check. There is no zero-padding. There is no unsigned arithmetic at the tuple layer. Treat these bits as documentation, not as rules.</p>
+<p><strong>Length modifiers and integer attributes are recorded but not enforced.</strong> The grammar folds extra attributes into the size part of the type code. <code>UNSIGNED</code> adds <code>1000</code>. <code>ZEROFILL</code> adds <code>2000</code> in rule <code>opt_uz</code>. A <code>DECIMAL(p,s)</code> scale adds <code>1000 × s</code> in rule <code>opt_length</code>. A column-level <code>BINARY</code> attribute on text adds <code>4000</code> in rule <code>opt_binary</code>. These bits stay in the catalog. The storage codec never reads them. There is no range check. There is no zero-padding. There is no unsigned arithmetic at the tuple layer. Treat these bits as documentation, not as rules.</p>
 </div>
 
 <h2 id="tuple-layout">B.2. Where a value lives, the binary tuple</h2>
@@ -45,17 +45,17 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 <span class="c-key">[null bitmap]</span>                            <span class="c-com">// ceil(num_cols / 8) bytes</span>
 <span class="c-key">[column data ...]</span>                        <span class="c-com">// per-type encodings, in declared order</span></code></pre>
 
-<p>Here are the matching constants from <code>tuple_format.h</code>.</p>
+<p>The matching constants from <code>tuple_format.h</code> are listed below.</p>
 
 <dl class="params">
-<dt><code>TUPLE_MAGIC</code> = 0xE7</dt><dd>This is the first byte of every user-table tuple. A second magic value marks a TOAST stub. It is used for overflow values stored out of line. These values are pulled back in before decoding, and you do not need to do anything.</dd>
+<dt><code>TUPLE_MAGIC</code> = 0xE7</dt><dd>This is the first byte of every user-table tuple. A second magic value marks a TOAST stub. It is used for overflow values stored out of line. These values are pulled back in before decoding.</dd>
 <dt><code>TUPLE_PREFIX_SIZE</code> = 5</dt><dd>magic (1) + table_id (4).</dd>
 <dt><code>TUPLE_HEADER_SIZE</code> = 4</dt><dd>body_len (2, little-endian) + num_cols (1) + flags (1).</dd>
 <dt><code>TUPLE_MVCC_SIZE</code> = 8</dt><dd>xmin (4) + xmax (4). This part is present only when the MVCC flag bit is set.</dd>
 <dt><code>TUPLE_MAX_COLS</code> = 255</dt><dd>This is the hard limit on columns per tuple. num_cols is a single byte.</dd>
 </dl>
 
-<p>The <code>flags</code> byte tells you which optional sections are present. It also gives visibility hints. The bits are <code>0x01</code> HAS_NULLS, <code>0x02</code> MVCC, <code>0x04</code> HOT_UPDATED, <code>0x08</code> HEAP_ONLY, <code>0x10</code> XMIN_COMMITTED, and <code>0x20</code> XMIN_ABORTED. A NULL value takes <strong>zero</strong> bytes in the column-data region. It is recorded only by setting its bit in the null bitmap. So the encodings below describe non-NULL storage. See <a href="/3.0/ref/insert/">INSERT</a> and the MVCC chapter to learn how the header is filled in.</p>
+<p>The <code>flags</code> byte tells you which optional sections are present. It also gives visibility hints. The bits are <code>0x01</code> HAS_NULLS, <code>0x02</code> MVCC, <code>0x04</code> HOT_UPDATED, <code>0x08</code> HEAP_ONLY, <code>0x10</code> XMIN_COMMITTED, and <code>0x20</code> XMIN_ABORTED. A NULL value takes <strong>zero</strong> bytes in the column-data region. It is recorded only by setting its bit in the null bitmap. The encodings below describe non-NULL storage. See <a href="/3.0/ref/insert/">INSERT</a> and the MVCC chapter to learn how the header is filled in.</p>
 
 <h2 id="encodings">B.3. Physical storage by family</h2>
 
@@ -121,12 +121,12 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 </tbody>
 </table>
 
-<p>Notes on the table.</p>
+<p>These notes apply to the table above.</p>
 <ul>
-<li><strong>Families 1–5 share one encoding.</strong> TINYINT, SMALLINT, MEDIUMINT, INT, and INTEGER have five different type codes. But they all decode to a 4-byte <code>int32</code>. There is no 1-byte or 2-byte integer storage. There is no overflow check against the declared width. <code>BIT</code> shares family 1 with TINYINT. It is also stored as <code>int32</code>. It is not a bit-packed type.</li>
+<li><strong>Families 1–5 share one encoding.</strong> TINYINT, SMALLINT, MEDIUMINT, INT, and INTEGER have five different type codes. They all decode to a 4-byte <code>int32</code>. There is no 1-byte or 2-byte integer storage. There is no overflow check against the declared width. <code>BIT</code> shares family 1 with TINYINT. It is also stored as <code>int32</code>. It is not a bit-packed type.</li>
 <li><strong>REAL and DOUBLE both decode as 8-byte double.</strong> Family 7 and family 8 use the same codec branch. Only FLOAT in family 9 is a 4-byte single.</li>
 <li><strong>UUID has a fixed code, 180036.</strong> This is true no matter how you write the value. When the input string is malformed, the codec stores 16 zero bytes instead of raising an error.</li>
-<li>The <code>opt</code> term in TEXT-family codes is the column-level <code>BINARY</code> attribute, which adds <code>4000</code>. It does not change storage.</li>
+<li>The <code>opt</code> term in TEXT-family codes is the column-level <code>BINARY</code> attribute. It adds <code>4000</code>. It does not change storage.</li>
 </ul>
 
 <h2 id="numeric">B.5. Numeric, boolean, and UUID details</h2>
@@ -157,7 +157,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 <span class="c-key">[null bitmap]</span>   <span class="c-com">// ceil(count/8) bytes, only if flags &amp; 0x01 (HAS_NULLS)</span>
 <span class="c-key">[elements ...]</span> <span class="c-com">// each element in its base family's scalar encoding</span></code></pre>
 
-<p>The constants are <code>ARRAY_HEADER_SIZE</code> = 8 and <code>ARRAY_MAX_BLOB</code> = 65535. The maximum element count is 65535. A NULL element uses zero payload bytes. It is flagged only in the bitmap. The text form uses PostgreSQL-style braces, for example <code>{1,2,NULL,4}</code>. Elements that contain delimiters are quoted. The word <code>NULL</code> means a null element. It is unquoted and case-insensitive.</p>
+<p>The constants are <code>ARRAY_HEADER_SIZE</code> = 8 and <code>ARRAY_MAX_BLOB</code> = 65535. The maximum element count is 65535. A NULL element uses zero payload bytes. It is flagged only in the bitmap. The text form uses PostgreSQL-style braces. For example <code>{1,2,NULL,4}</code>. Elements that contain delimiters are quoted. The word <code>NULL</code> means a null element. It is unquoted and case-insensitive.</p>
 
 <p>Only some base families can be array elements. <code>tup_array_base_type_code()</code> defines the supported set. Anything else returns <code>-1</code> and the array build fails.</p>
 
@@ -174,7 +174,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 
 <h2 id="vectors">B.7. Vectors (family 26)</h2>
 
-<p>A <code>VECTOR(N)</code> column stores exactly <code>N</code> 32-bit floats. They are little-endian. There is <strong>no</strong> per-value length prefix. The dimension is read from the type code with <code>type_code % 10000</code>. So every row in the column is a fixed width of <code>4N</code> bytes. <code>VECTOR_MAX_DIM</code> = 16384.</p>
+<p>A <code>VECTOR(N)</code> column stores exactly <code>N</code> 32-bit floats. They are little-endian. There is <strong>no</strong> per-value length prefix. The dimension is read from the type code with <code>type_code % 10000</code>. Every row in the column is a fixed width of <code>4N</code> bytes. <code>VECTOR_MAX_DIM</code> = 16384.</p>
 
 <p>The text form is a bracketed list, <code>[f1,f2,...]</code>. Braces <code>{...}</code> are also accepted on input. NaN and infinity values are rejected at parse time. Embedding vectors must be finite. Large vectors can be hard to fit within the statement size cap. To help with this, the parser also accepts a compact quantized literal of the form <code>b64i8:&lt;base64&gt;</code>. It holds a float32 LE scale factor followed by <code>int8</code> components. The parser dequantizes it to float4 on the way in.</p>
 
@@ -194,7 +194,7 @@ size   = type_code % 10000      <span class="c-com">// length, dimension, or mod
 <li><strong>No checks at the type layer.</strong> <code>tuple_format.c</code> does not enforce declared lengths, DECIMAL precision and scale, UNSIGNED or ZEROFILL, ENUM or SET membership, or valid JSON. DATE, TIME, TIMESTAMP, DECIMAL, and JSON are stored as exact text. This is different from both the SQL standard and PostgreSQL. They validate and pack these types.</li>
 <li><strong>Endianness is fixed at little-endian.</strong> The on-disk file does not move across big-endian hosts.</li>
 <li><strong>NULL is metadata, not a value.</strong> A NULL uses zero column-data bytes. It is tracked only by the null bitmap. The HAS_NULLS flag bit gates that bitmap.</li>
-<li><strong>UUID never errors on bad input.</strong> It quietly stores 16 zero bytes. So you should validate UUIDs in your application.</li>
+<li><strong>UUID never errors on bad input.</strong> It quietly stores 16 zero bytes. You should validate UUIDs in your application.</li>
 <li><strong>Per-field text width is 256 bytes</strong> on read-back. Wide DECIMAL, TEXT, array, and vector values get cut off in their text form. The stored bytes are not affected. Vectors have a binary accessor for full data.</li>
 <li><strong>Hard limits.</strong> There are 255 columns per tuple. There are 65535 elements and 65535 bytes per array blob. There are 16384 dimensions per vector.</li>
 </ul>

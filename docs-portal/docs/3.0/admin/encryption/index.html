@@ -5,7 +5,7 @@
 <title>26. Encryption (TDE) | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -19,10 +19,10 @@
 
 <p>Transparent Data Encryption (TDE) works below the SQL layer. Tables, indexes, the system catalog, and the write-ahead log are all stored as 4&nbsp;KB pages. When TDE is active, those pages are encrypted as they go to disk. They are decrypted as they come back. The SQL you write and the rows you read do not change. From SQL the only visible effect is that the on-disk file <code>evosql.db</code> and its WAL cannot be read without the passphrase.</p>
 
-<p>This chapter describes exactly what EvolutionDB implements. It uses a two-layer key hierarchy called MEK and DEK. It uses AES-256 page encryption in CTR mode. It wraps keys with AES-256-GCM. It derives key material from the passphrase with PBKDF2-SHA256. Where it helps, this chapter compares EvolutionDB with PostgreSQL and other TDE designs. The comparison is honest. It does not claim features that do not exist.</p>
+<p>This chapter describes exactly what EvolutionDB implements. EvolutionDB uses a two-layer key hierarchy called MEK and DEK. It uses AES-256 page encryption in CTR mode. It wraps keys with AES-256-GCM. It derives key material from the passphrase with PBKDF2-SHA256. This chapter also compares EvolutionDB with PostgreSQL and other TDE designs where that is helpful. The comparison is honest. It does not claim features that do not exist.</p>
 
 <div class="callout">
-<p><strong>Build requirement.</strong> TDE is a compile-time feature. It is guarded by the <code>EVO_ENCRYPTION</code> macro. The server's <code>TLS=1</code> build sets this macro for you. That build also pulls in OpenSSL's EVP API for AES. A server built <em>without</em> <code>EVO_ENCRYPTION</code> turns the whole crypto path into no-op stubs. In that case the database is always plaintext. The encryption controls in this chapter then have no effect.</p>
+<p><strong>Build requirement.</strong> TDE is a compile-time feature. It is guarded by the <code>EVO_ENCRYPTION</code> macro. The server's <code>TLS=1</code> build sets this macro for you. That build also pulls in OpenSSL's EVP API for AES. A server built without <code>EVO_ENCRYPTION</code> turns the whole crypto path into no-op stubs. In that case the database is always plaintext. The encryption controls in this chapter then have no effect.</p>
 </div>
 
 <h2 id="overview">26.1. Overview</h2>
@@ -50,7 +50,7 @@
 </tbody>
 </table>
 
-<p>The DEK is the key that encrypts pages. The MEK exists only to protect the DEK. This extra layer makes rekeying cheap. Changing the passphrase changes the MEK. The new MEK re-wraps the same DEK. So the gigabytes of already-encrypted pages never need rewriting.</p>
+<p>The DEK is the key that encrypts pages. The MEK exists only to protect the DEK. This extra layer makes rekeying cheap. Changing the passphrase changes the MEK. The new MEK re-wraps the same DEK. The gigabytes of already-encrypted pages never need rewriting.</p>
 
 <p>The passphrase comes from the <code>EVOSQL_ENCRYPTION_KEY</code> environment variable. The server reads it with <code>getenv()</code> at startup and never saves it. If the variable is unset or empty, encryption is not initialized.</p>
 
@@ -80,12 +80,12 @@ DEK  ──AES-256-CTR──▶  page ciphertext  (pages 1..N)</code></pre>
 
 <p>The 32-byte DEK is wrapped under the MEK with AES-256-GCM. To wrap means to encrypt. The result is a 48-byte blob. It holds 32 bytes of ciphertext and then a 16-byte GCM authentication tag. This blob is stored in the <code>FileHeader</code> as <code>wrapped_dek[48]</code>.</p>
 
-<p>The GCM tag also works as a <strong>passphrase verifier</strong>. At startup the server derives the MEK from the passphrase and tries to unwrap the DEK. If the passphrase is wrong, the MEK is wrong, and the GCM tag check fails. The server treats that failure as a fatal "wrong encryption key" error. It does not quietly produce garbage.</p>
+<p>The GCM tag also works as a <strong>passphrase verifier</strong>. At startup the server derives the MEK from the passphrase and tries to unwrap the DEK. If the passphrase is wrong, the MEK is wrong. The GCM tag check fails. The server treats that failure as a fatal "wrong encryption key" error. It does not quietly produce garbage.</p>
 
 <pre><code><span class="c-com">FATAL: Wrong encryption key for this database.</span>
 <span class="c-com">The EVOSQL_ENCRYPTION_KEY does not match.</span></code></pre>
 
-<p>The wrapping IV is the fixed 12-byte string <code>EVO_WRAP_KEY</code>. Reusing a fixed IV with GCM is normally dangerous. It is safe here. Each database has its own random salt. That salt produces a unique MEK. So the key and IV pair is never reused across databases with the same DEK.</p>
+<p>The wrapping IV is the fixed 12-byte string <code>EVO_WRAP_KEY</code>. Reusing a fixed IV with GCM is normally dangerous. Here it is safe. Each database has its own random salt. That salt produces a unique MEK. The key and IV pair is therefore never reused across databases that share the same DEK.</p>
 
 <h2 id="page-encryption">26.3. Page encryption (AES-256-CTR)</h2>
 
@@ -103,15 +103,15 @@ DEK  ──AES-256-CTR──▶  page ciphertext  (pages 1..N)</code></pre>
 <pre class="synopsis"><code><span class="c-com">IV (16 bytes) = iv_prefix[8] || page_no_LE[4] || zeros[4]</span>
                └ random, per-DB ┘  └ little-endian ┘ └ counter ┘</code></pre>
 
-<p>The 8-byte <code>iv_prefix</code> is generated once with the OS CSPRNG when the database is created. It is stored in the <code>FileHeader</code> as <code>page_iv_prefix[8]</code>. The prefix <strong>never changes</strong>, even when the passphrase is rotated. The page number is part of the IV. So no two pages share an IV. That is the rule CTR mode puts on the caller.</p>
+<p>The 8-byte <code>iv_prefix</code> is generated once with the OS CSPRNG when the database is created. It is stored in the <code>FileHeader</code> as <code>page_iv_prefix[8]</code>. The prefix <strong>never changes</strong>, even when the passphrase is rotated. The page number is also part of the IV. This means no two pages share an IV. CTR mode requires exactly that.</p>
 
 <div class="callout">
-<p><strong>Limitation. CTR gives confidentiality, not integrity.</strong> GCM is used for the DEK wrap and has an authentication tag. CTR does not. So EvolutionDB does not detect tampering or bit-rot of encrypted pages. A flipped ciphertext bit quietly flips the matching plaintext bit. TDE here defends against <em>reading</em> the file. It does not defend against an attacker who can <em>change</em> it. Most zero-overhead page-level TDE schemes make the same trade-off. Use filesystem or volume integrity if you need tamper detection. You can also add checksums at a higher layer.</p>
+<p><strong>Limitation.</strong> CTR gives confidentiality, not integrity. GCM is used for the DEK wrap and has an authentication tag. CTR does not. So EvolutionDB does not detect tampering or bit-rot of encrypted pages. A flipped ciphertext bit quietly flips the matching plaintext bit. TDE here defends against <em>reading</em> the file. It does not defend against an attacker who can <em>change</em> it. Most zero-overhead page-level TDE schemes make the same trade-off. Use filesystem or volume integrity if you need tamper detection. You can also add checksums at a higher layer.</p>
 </div>
 
 <h3 id="page0-plaintext">26.3.2. Page 0 stays plaintext</h3>
 
-<p>Page&nbsp;0 is the <code>FileHeader</code>. It is never encrypted. Both the encrypt and decrypt entry points return early when <code>page_no == 0</code>. This is needed because page&nbsp;0 holds the startup metadata. That metadata is the magic, the salt, the wrapped DEK, and the IV prefix. The server must read it <em>before</em> it can derive any key. So the header shows that a database is encrypted. It also shows the salt, the wrapped DEK, and the IV prefix. None of these reveal the DEK without the passphrase.</p>
+<p>Page&nbsp;0 is the <code>FileHeader</code>. It is never encrypted. Both the encrypt and decrypt entry points return early when <code>page_no == 0</code>. Page&nbsp;0 holds the startup metadata: the magic, the salt, the wrapped DEK, and the IV prefix. The server must read this data <em>before</em> it can derive any key. The header does show that a database is encrypted and it shows the salt, the wrapped DEK, and the IV prefix. None of these reveal the DEK without the passphrase.</p>
 
 <p>EvolutionDB does not encrypt the <code>page_no == 0</code> region. PostgreSQL's at-rest encryption proposals keep some control data readable for the same reason. You cannot decrypt the thing that tells you how to decrypt.</p>
 
@@ -137,7 +137,7 @@ DEK  ──AES-256-CTR──▶  page ciphertext  (pages 1..N)</code></pre>
 
 <h3 id="enable-new">26.4.1. A new (empty) database</h3>
 
-<p>When the page manager creates a fresh <code>evosql.db</code> and <code>EVOSQL_ENCRYPTION_KEY</code> is set, it initializes encryption: it generates a random DEK, a random salt, and a random IV prefix; derives the MEK; wraps the DEK; and records all of that in the <code>FileHeader</code> with <code>encryption_enabled = 1</code>.</p>
+<p>When the page manager creates a fresh <code>evosql.db</code> and <code>EVOSQL_ENCRYPTION_KEY</code> is set, it initializes encryption. It generates a random DEK, a random salt, and a random IV prefix. It derives the MEK, wraps the DEK, and records all of that in the <code>FileHeader</code> with <code>encryption_enabled = 1</code>.</p>
 
 <pre><code><span class="c-com"># docker-compose.yml - set a strong custom key BEFORE first start</span>
 services:
@@ -149,11 +149,11 @@ services:
 <span class="c-key">export</span> EVOSQL_ENCRYPTION_KEY=<span class="c-str">"&lt;a long, random, high-entropy passphrase&gt;"</span>
 ./adaptor/evosql-server</code></pre>
 
-<p>On success the server logs <code>[TDE] Encryption initialized for new database</code>. From that point the file is encrypted permanently, there is no in-place "decrypt back to plaintext" operation.</p>
+<p>On success the server logs <code>[TDE] Encryption initialized for new database</code>. From that point the file is encrypted permanently. There is no in-place "decrypt back to plaintext" operation.</p>
 
 <h3 id="enable-existing">26.4.2. An existing encrypted database</h3>
 
-<p>For an existing file, the server reads <code>encryption_enabled</code> from page&nbsp;0 and, if set, derives the MEK from the supplied passphrase and unwraps the DEK. The startup matrix is:</p>
+<p>For an existing file, the server reads <code>encryption_enabled</code> from page&nbsp;0. If it is set, the server derives the MEK from the supplied passphrase and unwraps the DEK. The table below shows all startup outcomes.</p>
 
 <table>
 <thead><tr><th>File <code>encryption_enabled</code></th><th><code>EVOSQL_ENCRYPTION_KEY</code></th><th>Result</th></tr></thead>
@@ -167,35 +167,35 @@ services:
 </table>
 
 <div class="callout">
-<p><strong>Default-key warning.</strong> The shipped <code>docker-compose.yml</code> sets a built-in fallback passphrase so the demo "just works." That key is publicly known. When the server detects it, it prints a prominent warning to stderr. <strong>Always override <code>EVOSQL_ENCRYPTION_KEY</code> with your own secret before creating a production database</strong>, a database created under the default key is no more protected than a plaintext one.</p>
+<p><strong>Default-key warning.</strong> The shipped <code>docker-compose.yml</code> sets a built-in fallback passphrase so the demo "just works." That key is publicly known. When the server detects it, it prints a prominent warning to stderr. <strong>Always override <code>EVOSQL_ENCRYPTION_KEY</code> with your own secret before creating a production database.</strong> A database created under the default key is no more protected than a plaintext one.</p>
 </div>
 
 <h2 id="rekey">26.5. Rekeying (passphrase rotation)</h2>
 
-<p>Because the passphrase only protects the MEK, and the MEK only wraps the DEK, rotating the passphrase is an O(1) metadata operation: a new salt is generated, a new MEK is derived from the new passphrase, and the <em>same</em> DEK is re-wrapped under the new MEK. The IV prefix is left unchanged, so <strong>no data pages are re-encrypted</strong>. Only <code>encryption_salt</code> and <code>wrapped_dek</code> in the <code>FileHeader</code> change.</p>
+<p>The passphrase only protects the MEK. The MEK only wraps the DEK. Rotating the passphrase is therefore a fast metadata operation. A new salt is generated. A new MEK is derived from the new passphrase. The <em>same</em> DEK is re-wrapped under the new MEK. The IV prefix is left unchanged. <strong>No data pages are re-encrypted.</strong> Only <code>encryption_salt</code> and <code>wrapped_dek</code> in the <code>FileHeader</code> change.</p>
 
 <div class="callout">
-<p><strong>Implementation status, be precise.</strong> The rekey primitive (<code>pcrypt_rekey</code>) exists in the engine, but in EvolutionDB 3.0 it is <em>not</em> exposed through SQL. There is no <code>ALTER SYSTEM ... REKEY</code> statement, and no command-level surface in the parser or protocol layer drives it. Passphrase rotation is therefore an internal capability, not a user-facing operation in this release. This is a deliberately honest limitation rather than an advertised feature.</p>
+<p><strong>Implementation status.</strong> The rekey primitive (<code>pcrypt_rekey</code>) exists in the engine. In EvolutionDB 3.0 it is <em>not</em> exposed through SQL. There is no <code>ALTER SYSTEM ... REKEY</code> statement. No command-level surface in the parser or protocol layer drives it. Passphrase rotation is therefore an internal capability. It is not a user-facing operation in this release. This is a deliberate limitation, not an advertised feature.</p>
 </div>
 
 <h2 id="memory-hygiene">26.6. Key material in memory</h2>
 
-<p>Sensitive buffers are scrubbed after use rather than left on the stack or heap. The MEK is wiped immediately after it wraps or unwraps the DEK; SHA-256 contexts, HMAC pads, and PBKDF2 intermediates are wiped at the end of each operation; and on shutdown the DEK and IV prefix are wiped from the module's static state.</p>
+<p>Sensitive buffers are scrubbed after use. They are not left on the stack or heap. The MEK is wiped immediately after it wraps or unwraps the DEK. SHA-256 contexts, HMAC pads, and PBKDF2 intermediates are wiped at the end of each operation. On shutdown the DEK and IV prefix are wiped from the module's static state.</p>
 
-<p>Scrubbing uses <code>evo_secure_wipe()</code>, which is hardened against the compiler optimizing away a "dead" <code>memset</code> (CWE-14). It prefers platform primitives where available, <code>SecureZeroMemory()</code> on Windows, <code>memset_s()</code> when the C11 Annex&nbsp;K bounds-checking interface is present, and otherwise falls back to a <code>volatile</code> function-pointer indirection that the optimizer cannot prove is side-effect-free.</p>
+<p>Scrubbing uses <code>evo_secure_wipe()</code>. It is hardened against the compiler optimizing away a "dead" <code>memset</code> (CWE-14). It prefers platform primitives where available. On Windows it uses <code>SecureZeroMemory()</code>. When the C11 Annex&nbsp;K bounds-checking interface is present, it uses <code>memset_s()</code>. Otherwise it falls back to a <code>volatile</code> function-pointer indirection. The optimizer cannot prove that call is side-effect-free, so it keeps it.</p>
 
-<p>Password verification additionally uses a constant-time comparison to avoid leaking information through timing. Note these protections cover the <em>process</em>: while the server runs, the DEK and decrypted pages are necessarily resident in memory, which is the boundary of the at-rest threat model.</p>
+<p>Password verification also uses a constant-time comparison to avoid leaking information through timing. These protections cover the running process. While the server runs, the DEK and decrypted pages must stay in memory. That is the boundary of the at-rest threat model.</p>
 
 <h2 id="randomness">26.7. Randomness source</h2>
 
-<p>All key material: the DEK, the MEK salt, and the IV prefix, comes from the operating system CSPRNG via <code>crypto_random_bytes()</code>:</p>
+<p>All key material comes from the operating system CSPRNG via <code>crypto_random_bytes()</code>. This includes the DEK, the MEK salt, and the IV prefix.</p>
 
 <dl class="params">
 <dt>Linux / macOS</dt><dd>Reads from <code>/dev/urandom</code></dd>
 <dt>Windows</dt><dd><code>CryptGenRandom</code> via <code>CryptAcquireContext</code></dd>
 </dl>
 
-<p>A failure to obtain randomness aborts encryption initialization rather than falling back to a weak source.</p>
+<p>If obtaining randomness fails, encryption initialization is aborted. The server does not fall back to a weak source.</p>
 
 <h2 id="primitives">26.8. Cryptographic primitives summary</h2>
 
@@ -213,26 +213,26 @@ services:
 
 <h2 id="filenode">26.9. On-disk metadata layout</h2>
 
-<p>The encryption metadata lives in the plaintext <code>FileHeader</code> (page&nbsp;0), 73 bytes total:</p>
+<p>The encryption metadata lives in the plaintext <code>FileHeader</code> (page&nbsp;0). It is 73 bytes total.</p>
 
 <dl class="params">
 <dt><code>encryption_enabled</code> (1 byte)</dt><dd><code>0</code> = plaintext database, <code>1</code> = AES-256 TDE active</dd>
 <dt><code>encryption_salt[16]</code></dt><dd>PBKDF2 salt for MEK derivation</dd>
-<dt><code>wrapped_dek[48]</code></dt><dd>DEK encrypted by the MEK: 32 bytes ciphertext + 16-byte GCM tag</dd>
+<dt><code>wrapped_dek[48]</code></dt><dd>DEK encrypted by the MEK. It is 32 bytes of ciphertext followed by a 16-byte GCM tag.</dd>
 <dt><code>page_iv_prefix[8]</code></dt><dd>Fixed CTR IV prefix; unchanged across rekeys</dd>
 </dl>
 
-<p>None of these fields reveals the DEK or any plaintext: without the correct passphrase the wrapped DEK cannot be unwrapped (GCM verification fails) and the pages cannot be decrypted.</p>
+<p>None of these fields reveals the DEK or any plaintext. Without the correct passphrase the wrapped DEK cannot be unwrapped. The GCM verification fails and the pages cannot be decrypted.</p>
 
 <h2 id="comparison">26.10. Comparison with PostgreSQL and the SQL standard</h2>
 
-<p>For readers coming from PostgreSQL, the honest mapping is:</p>
+<p>These notes give an honest mapping for readers coming from PostgreSQL.</p>
 
 <dl class="params">
-<dt>Cluster-wide TDE</dt><dd>Core PostgreSQL has no built-in transparent cluster encryption (it has been a long-standing community proposal); at-rest encryption is typically delegated to filesystem/volume encryption or to forks/extensions. EvolutionDB ships whole-database page TDE in the engine itself.</dd>
-<dt>Column-level encryption</dt><dd>PostgreSQL's <code>pgcrypto</code> encrypts individual column values, leaving pages otherwise readable and requiring SQL changes. EvolutionDB has no column-level encryption, it encrypts whole pages and is invisible to SQL.</dd>
-<dt>Key management</dt><dd>EvolutionDB's MEK/DEK split resembles Oracle TDE's master-key / table-key model. The passphrase comes from an environment variable; there is no external KMS, HSM, or keystore integration.</dd>
-<dt>SQL standard</dt><dd>The SQL standard does not define transparent storage encryption. TDE here is an implementation-level feature with no standard syntax, which is why it is configured by environment variable rather than by DDL.</dd>
+<dt>Cluster-wide TDE</dt><dd>Core PostgreSQL has no built-in transparent cluster encryption. At-rest encryption is typically delegated to filesystem or volume encryption, or to forks and extensions. EvolutionDB ships whole-database page TDE in the engine itself.</dd>
+<dt>Column-level encryption</dt><dd>PostgreSQL's <code>pgcrypto</code> encrypts individual column values. Pages stay otherwise readable and SQL changes are required. EvolutionDB has no column-level encryption. It encrypts whole pages and is invisible to SQL.</dd>
+<dt>Key management</dt><dd>EvolutionDB's MEK/DEK split resembles Oracle TDE's master-key / table-key model. The passphrase comes from an environment variable. There is no external KMS, HSM, or keystore integration.</dd>
+<dt>SQL standard</dt><dd>The SQL standard does not define transparent storage encryption. TDE here is an implementation-level feature with no standard syntax. That is why it is configured by environment variable rather than by DDL.</dd>
 </dl>
 
 <div class="callout">
@@ -241,10 +241,10 @@ services:
 <li><strong>Compile-time gated.</strong> Requires a build with <code>EVO_ENCRYPTION</code> (the <code>TLS=1</code> build). Otherwise the crypto path is a no-op and the database is plaintext.</li>
 <li><strong>Permanent at creation.</strong> Encryption is set when the database file is first created. You cannot encrypt an existing plaintext file in place, nor decrypt an encrypted file back to plaintext, through any supported operation.</li>
 <li><strong>No SQL rekey.</strong> The rekey primitive exists internally but has no SQL/command surface in 3.0; passphrase rotation is not a user-facing feature.</li>
-<li><strong>Confidentiality only.</strong> Page encryption uses CTR with no per-page authentication tag, there is no tamper detection on data pages.</li>
+<li><strong>Confidentiality only.</strong> Page encryption uses CTR with no per-page authentication tag. There is no tamper detection on data pages.</li>
 <li><strong>KDF work factor.</strong> PBKDF2 is fixed at 100,000 SHA-256 iterations; rely on a strong passphrase, not the iteration count.</li>
 <li><strong>Default key is public.</strong> The shipped compose default passphrase is well known. Override it before creating any database you care about.</li>
-<li><strong>Memory is the boundary.</strong> While the server runs, the DEK and decrypted pages live in memory; TDE protects the file at rest, not a live-memory attacker who already holds the key.</li>
+<li><strong>Memory is the boundary.</strong> While the server runs, the DEK and decrypted pages live in memory. TDE protects the file at rest, not a live-memory attacker who already holds the key.</li>
 </ul>
 </div>
 

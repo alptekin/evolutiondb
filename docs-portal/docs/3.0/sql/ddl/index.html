@@ -5,7 +5,7 @@
 <title>5. Data Definition | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -230,7 +230,7 @@
 <span class="c-key">ALTER TABLE</span> t <span class="c-key">ENABLE CONSTRAINT</span> pos_price;
 <span class="c-key">ALTER TABLE</span> t <span class="c-key">DISABLE CONSTRAINT</span> pos_price;</code></pre>
 
-<p>When you add a <code>CHECK</code>, the engine scans every existing row. If any row fails, it rejects the constraint and reports the row number. Adding a <code>UNIQUE</code> constraint runs an O(n²) duplicate scan. Adding a <code>PRIMARY KEY</code> also rejects NULL values in the key columns. It refuses if the table already has a primary key. A duplicate constraint name raises <code>42710</code>. A missing one raises <code>42704</code>.</p>
+<p>When you add a <code>CHECK</code>, the engine scans every existing row. If any row fails, it rejects the constraint and reports the row number. Adding a <code>UNIQUE</code> constraint runs an O(n²) duplicate scan. Adding a <code>PRIMARY KEY</code> also rejects NULL values in the key columns. The engine refuses if the table already has a primary key. A duplicate constraint name raises <code>42710</code>. A missing one raises <code>42704</code>.</p>
 
 <p><strong>Deferred validation.</strong> The <code>NOT VALIDATE</code> suffix on a new <code>CHECK</code> or <code>FOREIGN KEY</code> adds the constraint without scanning existing data. The constraint is marked as not validated. A later <code>VALIDATE CONSTRAINT</code> runs the scan and sets the validated flag.</p>
 
@@ -292,7 +292,7 @@
 <span class="c-key">TRUNCATE</span> <span class="c-key">TABLE</span> t1, t2 <span class="c-key">CASCADE</span>;
 <span class="c-key">TRUNCATE</span> <span class="c-key">TABLE</span> logs <span class="c-key">CONTINUE IDENTITY</span>;</code></pre>
 
-<p>A table that is not empty may reference the target through a foreign key. In that case <code>TRUNCATE</code> fails with <code>23503</code>. To allow it, give <code>CASCADE</code>. Then the referencing table is truncated first. By default the auto-increment counter is reset to its start. <code>CONTINUE IDENTITY</code> keeps it. Table statistics are reset.</p>
+<p>Another table may reference the target through a foreign key and still have rows. In that case <code>TRUNCATE</code> fails with <code>23503</code>. To allow it, give <code>CASCADE</code>. Then the referencing table is truncated first. By default the auto-increment counter is reset to its start. <code>CONTINUE IDENTITY</code> keeps it. Table statistics are reset.</p>
 
 <h2 id="sequences">5.8. Sequences</h2>
 
@@ -319,7 +319,7 @@
 <dd>This sets what happens at a bound. The sequence either wraps to the opposite bound or raises an error. The default is <code>NOT CYCLE</code>.</dd>
 </dl>
 
-<p><code>nextval</code> is atomic. It runs under its own mutex. The first call returns the current value, which is the start value. It also marks the sequence as called. Later calls add the increment. At a bound they wrap or raise an error, based on the cycle flag. <code>setval</code> sets the stored value directly.</p>
+<p><code>nextval</code> is atomic. It runs under its own mutex. The first call returns the current value. That value is the start value. It also marks the sequence as called. Later calls add the increment. At a bound they wrap or raise an error, based on the cycle flag. <code>setval</code> sets the stored value directly.</p>
 
 <p>You can alter, restart, rename, and drop sequences.</p>
 

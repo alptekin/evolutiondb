@@ -5,7 +5,7 @@
 <title>30. Connecting (PG wire & EVO) | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -69,7 +69,7 @@
 
 <h2 id="pg-handshake">30.3. PostgreSQL wire protocol (port 5433)</h2>
 
-<p>EvolutionDB uses the PostgreSQL frontend/backend protocol <strong>version 3.0</strong>. The protocol number is <code>196608</code>. A startup message that asks for any other version is rejected. The handshake works as follows.</p>
+<p>EvolutionDB uses the PostgreSQL frontend/backend protocol <strong>version 3.0</strong>. The protocol number is <code>196608</code>. A startup message that asks for any other version is rejected. The handshake works as described below.</p>
 
 <h3 id="pg-startup">30.3.1. Startup and negotiation</h3>
 
@@ -90,7 +90,7 @@
 <p>After a valid v3.0 StartupMessage, the server always sends an <strong>AuthenticationCleartextPassword</strong> request. It waits for a <code>PasswordMessage</code> (<code>'p'</code>) in reply. The password is checked with <code>AuthenticateUser</code>. On success the server sends <code>AuthenticationOk</code>. On failure it sends a <code>FATAL</code> error with SQLSTATE <code>28P01</code> (<code>password authentication failed</code>).</p>
 
 <div class="callout">
-<p><strong>Note.</strong> The PG path uses <em>cleartext</em> password login only. MD5 and SCRAM-SHA-256 are <strong>not</strong> offered on the wire here. Real PostgreSQL uses <code>scram-sha-256</code> by default. The password travels over the wire in clear text. So you should turn on TLS with SSLRequest. This keeps the password encrypted while it moves. The native EVO protocol does offer SCRAM and does not send the password. See <a href="#evo">below</a>.</p>
+<p><strong>Note.</strong> The PG path uses <em>cleartext</em> password login only. MD5 and SCRAM-SHA-256 are <strong>not</strong> offered on the wire here. Real PostgreSQL uses <code>scram-sha-256</code> by default. The password travels over the wire in clear text. So you should turn on TLS with SSLRequest. This keeps the password encrypted while it moves. The native EVO protocol offers SCRAM and does not send the password. See <a href="#evo">below</a>.</p>
 </div>
 
 <h3 id="pg-ready">30.3.3. Parameters, key data, and ReadyForQuery</h3>
@@ -109,7 +109,7 @@
 <dt><code>IntervalStyle</code></dt><dd><code>postgres</code></dd>
 </dl>
 
-<p>Next the server sends <code>BackendKeyData</code>. This message carries the session-registry ID, which is used as the PID, and a random 32-bit cancel key. After that the server sends <code>ReadyForQuery</code>. The transaction-status byte in <code>ReadyForQuery</code> can be three values. <code>I</code> means idle. <code>T</code> means inside a transaction block. <code>E</code> means a failed transaction that waits for <a href="/3.0/ref/rollback/">ROLLBACK</a>.</p>
+<p>Next the server sends <code>BackendKeyData</code>. This message carries the session-registry ID. The session-registry ID is used as the PID. It also carries a random 32-bit cancel key. After that the server sends <code>ReadyForQuery</code>. The transaction-status byte in <code>ReadyForQuery</code> can be three values. <code>I</code> means idle. <code>T</code> means inside a transaction block. <code>E</code> means a failed transaction that waits for <a href="/3.0/ref/rollback/">ROLLBACK</a>.</p>
 
 <h3 id="pg-simple">30.3.4. Simple Query protocol</h3>
 
@@ -160,7 +160,7 @@ testdb=&gt; <span class="c-key">SELECT</span> id, name <span class="c-key">FROM<
 
 <dl class="params">
 <dt>SCRAM-SHA-256 (preferred)</dt>
-<dd>The client sends <code>SCRAM-CLIENT-FIRST &lt;data&gt;</code>. The server replies with the server-first message. The client sends <code>SCRAM-CLIENT-FINAL &lt;data&gt;</code>. The server checks the proof and returns the server-final message, which holds the ServerSignature for mutual authentication. The password is never sent. So this is safe even over plaintext.</dd>
+<dd>The client sends <code>SCRAM-CLIENT-FIRST &lt;data&gt;</code>. The server replies with the server-first message. The client sends <code>SCRAM-CLIENT-FINAL &lt;data&gt;</code>. The server checks the proof and returns the server-final message. The server-final message holds the ServerSignature for mutual authentication. The password is never sent. So this is safe even over plaintext.</dd>
 <dt>Legacy cleartext (backward compat)</dt>
 <dd>The client sends <code>AUTH &lt;username&gt; &lt;password&gt;</code>. The password is checked directly. Use SCRAM instead, or wrap the session in TLS.</dd>
 </dl>
@@ -173,12 +173,12 @@ testdb=&gt; <span class="c-key">SELECT</span> id, name <span class="c-key">FROM<
 
 <h3 id="evo-query">30.4.2. Running SQL with the SQL command</h3>
 
-<p>A query is sent as a length header line followed by the SQL body line:</p>
+<p>A query is sent as a length header line followed by the SQL body line. The format is shown below.</p>
 
 <pre class="synopsis"><code>SQL &lt;byte_length&gt;
 &lt;sql text&gt;</code></pre>
 
-<p>The length must be in the range <code>1..65000</code>. A value out of this range gives <code>ERR 42000</code>. A <code>SELECT</code> result is returned as a structured block:</p>
+<p>The length must be in the range <code>1..65000</code>. A value out of this range gives <code>ERR 42000</code>. A <code>SELECT</code> result is returned as a structured block shown below.</p>
 
 <pre><code>RESULT
 COLS &lt;n&gt;
@@ -207,7 +207,7 @@ READY</code></pre>
 </tbody>
 </table>
 
-<p>The binary batch payload encodes each parameter as a one-byte type code followed by its big-endian value:</p>
+<p>The binary batch payload encodes each parameter as a one-byte type code followed by its big-endian value. The type codes are listed below.</p>
 
 <table>
 <thead><tr><th>Code</th><th>Type</th><th>Payload</th></tr></thead>

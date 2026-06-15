@@ -5,7 +5,7 @@
 <title>BEGIN / COMMIT / ROLLBACK | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -140,19 +140,19 @@ then is kept. The <code>SAVEPOINT</code> keyword is optional.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Move money between two accounts as one atomic step:</p>
+<p>This example moves money between two accounts as one atomic step.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">UPDATE</span> accounts <span class="c-key">SET</span> balance = balance - <span class="c-str">100</span> <span class="c-key">WHERE</span> id = <span class="c-str">1</span>;
 <span class="c-key">UPDATE</span> accounts <span class="c-key">SET</span> balance = balance + <span class="c-str">100</span> <span class="c-key">WHERE</span> id = <span class="c-str">2</span>;
 <span class="c-key">COMMIT</span>;</code></pre>
 
-<p>Discard a set of changes instead of keeping them:</p>
+<p>This example discards a set of changes instead of keeping them.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">DELETE FROM</span> staging_rows;
 <span class="c-com">-- changed your mind:</span>
 <span class="c-key">ROLLBACK</span>;</code></pre>
 
-<p>Use a savepoint to undo only part of a transaction:</p>
+<p>This example uses a savepoint to undo only part of a transaction.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">INSERT INTO</span> orders (id, total) <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">50</span>);
 <span class="c-key">SAVEPOINT</span> before_items;
@@ -160,7 +160,7 @@ then is kept. The <code>SAVEPOINT</code> keyword is optional.</dd>
 <span class="c-key">ROLLBACK TO SAVEPOINT</span> before_items;   <span class="c-com">-- keep the order, drop the bad item</span>
 <span class="c-key">COMMIT</span>;</code></pre>
 
-<p>Choose an isolation level before opening the transaction:</p>
+<p>This example sets an isolation level before opening the transaction.</p>
 <pre><code><span class="c-key">SET TRANSACTION ISOLATION LEVEL</span> <span class="c-key">REPEATABLE READ</span>;
 <span class="c-key">BEGIN</span>;
 <span class="c-key">SELECT</span> count(*) <span class="c-key">FROM</span> inventory;
@@ -168,7 +168,7 @@ then is kept. The <code>SAVEPOINT</code> keyword is optional.</dd>
 <span class="c-key">SELECT</span> sum(qty) <span class="c-key">FROM</span> inventory;
 <span class="c-key">COMMIT</span>;</code></pre>
 
-<p><code>END</code> is interchangeable with <code>COMMIT</code>:</p>
+<p>This example shows that <code>END</code> is interchangeable with <code>COMMIT</code>.</p>
 <pre><code><span class="c-key">BEGIN</span>;
 <span class="c-key">UPDATE</span> settings <span class="c-key">SET</span> value = <span class="c-str">'on'</span> <span class="c-key">WHERE</span> key = <span class="c-str">'feature_x'</span>;
 <span class="c-key">END</span>;</code></pre>

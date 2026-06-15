@@ -5,7 +5,7 @@
 <title>UPDATE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -105,18 +105,18 @@ returns just those columns. The returned values show the <strong>new</strong> ro
 
 <h2 id="examples">Examples</h2>
 
-<p>Change one column on one row that you find by its primary key:</p>
+<p>This example changes one column on one row found by its primary key.</p>
 <pre><code><span class="c-key">UPDATE</span> employees <span class="c-key">SET</span> salary = <span class="c-str">75000</span> <span class="c-key">WHERE</span> id = <span class="c-str">42</span>;</code></pre>
 
-<p>Update several columns at once. One new value comes from an expression:</p>
+<p>This example updates several columns at once. One new value comes from an expression.</p>
 <pre><code><span class="c-key">UPDATE</span> products
    <span class="c-key">SET</span> price = price * <span class="c-str">1.10</span>, updated_by = <span class="c-str">'admin'</span>
  <span class="c-key">WHERE</span> category = <span class="c-str">'books'</span>;</code></pre>
 
-<p>A range condition over the primary key. This uses the B+ tree cursor fast path:</p>
+<p>This example uses a range condition over the primary key. It takes the B+ tree cursor fast path.</p>
 <pre><code><span class="c-key">UPDATE</span> orders <span class="c-key">SET</span> status = <span class="c-str">'archived'</span> <span class="c-key">WHERE</span> id &lt;= <span class="c-str">5000</span>;</code></pre>
 
-<p>Update only the first few matching rows in order, and return the new values:</p>
+<p>This example updates only the first few matching rows in order and returns the new values.</p>
 <pre><code><span class="c-key">UPDATE</span> tickets
    <span class="c-key">SET</span> priority = <span class="c-str">'high'</span>
  <span class="c-key">WHERE</span> assignee <span class="c-key">IS NULL</span>
@@ -124,7 +124,7 @@ returns just those columns. The returned values show the <strong>new</strong> ro
  <span class="c-key">LIMIT</span> <span class="c-str">10</span>
 <span class="c-key">RETURNING</span> id, priority;</code></pre>
 
-<p>Set a column to NULL:</p>
+<p>This example sets a column to NULL.</p>
 <pre><code><span class="c-key">UPDATE</span> accounts <span class="c-key">SET</span> closed_at = <span class="c-key">NULL</span> <span class="c-key">WHERE</span> id = <span class="c-str">7</span>;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>

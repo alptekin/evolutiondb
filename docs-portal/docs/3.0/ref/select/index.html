@@ -5,7 +5,7 @@
 <title>SELECT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -137,15 +137,15 @@
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Select every column from a table:</p>
+<p>This example selects every column from a table.</p>
 <pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees;</code></pre>
 
-<p>Return specific columns with an output alias and filter the rows:</p>
+<p>This example returns specific columns with an output alias and filters the rows.</p>
 <pre><code><span class="c-key">SELECT</span> name, salary <span class="c-key">AS</span> pay
 <span class="c-key">FROM</span> employees
 <span class="c-key">WHERE</span> dept_id = <span class="c-str">10</span>;</code></pre>
 
-<p>Eliminate duplicates and sort descending:</p>
+<p>This example eliminates duplicates and sorts the result in descending order.</p>
 <pre><code><span class="c-key">SELECT DISTINCT</span> dept_id
 <span class="c-key">FROM</span> employees
 <span class="c-key">ORDER BY</span> dept_id <span class="c-key">DESC</span>;</code></pre>
@@ -158,40 +158,40 @@
 <span class="c-key">ORDER BY</span> headcount <span class="c-key">DESC</span>
 <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
 
-<p>Inner join with an <code>ON</code> condition:</p>
+<p>This example uses an inner join with an <code>ON</code> condition.</p>
 <pre><code><span class="c-key">SELECT</span> e.name, d.dept_name
 <span class="c-key">FROM</span> employees <span class="c-key">AS</span> e
 <span class="c-key">INNER JOIN</span> departments <span class="c-key">AS</span> d <span class="c-key">ON</span> e.dept_id = d.id;</code></pre>
 
-<p>Left outer join with <code>USING</code>:</p>
+<p>This example uses a left outer join with <code>USING</code>.</p>
 <pre><code><span class="c-key">SELECT</span> e.name, d.dept_name
 <span class="c-key">FROM</span> employees e
 <span class="c-key">LEFT OUTER JOIN</span> departments d <span class="c-key">USING</span> (dept_id);</code></pre>
 
-<p>MySQL-style two-argument <code>LIMIT</code> (offset, count) for paging:</p>
+<p>This example uses the MySQL-style two-argument <code>LIMIT</code> form (offset, count) for paging.</p>
 <pre><code><span class="c-key">SELECT</span> name <span class="c-key">FROM</span> employees <span class="c-key">ORDER BY</span> name <span class="c-key">LIMIT</span> <span class="c-str">20</span>, <span class="c-str">10</span>;</code></pre>
 
-<p>Vector nearest-neighbor search using the cosine-distance operator:</p>
+<p>This example runs a vector nearest-neighbor search using the cosine-distance operator.</p>
 <pre><code><span class="c-key">SELECT</span> id <span class="c-key">FROM</span> documents
 <span class="c-key">ORDER BY</span> embedding <span class="c-key">&lt;=&gt;</span> <span class="c-str">'[0.12, 0.84, 0.05]'</span>
 <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
 
-<p>Time-travel query against a past transaction snapshot:</p>
+<p>This example runs a time-travel query against a past transaction snapshot.</p>
 <pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> accounts
 <span class="c-key">FOR SYSTEM_TIME AS OF TRANSACTION</span> <span class="c-str">4200</span>;</code></pre>
 
-<p>Lock the matched rows for update, skipping rows already locked:</p>
+<p>This example locks the matched rows for update. It skips rows that are already locked.</p>
 <pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> jobs
 <span class="c-key">WHERE</span> status = <span class="c-str">'pending'</span>
 <span class="c-key">FOR UPDATE SKIP LOCKED</span>;</code></pre>
 
-<p>Materialize a query result into a new table (PostgreSQL-style <code>SELECT INTO</code>):</p>
+<p>This example materializes a query result into a new table using the PostgreSQL-style <code>SELECT INTO</code> form.</p>
 <pre><code><span class="c-key">SELECT</span> name, salary
 <span class="c-key">INTO</span> high_earners
 <span class="c-key">FROM</span> employees
 <span class="c-key">WHERE</span> salary &gt; <span class="c-str">100000</span>;</code></pre>
 
-<p>Expand an array into rows with <code>UNNEST</code>:</p>
+<p>This example expands an array into rows using <code>UNNEST</code>.</p>
 <pre><code><span class="c-key">SELECT</span> v <span class="c-key">FROM</span> <span class="c-key">UNNEST</span>(ARRAY[<span class="c-str">1</span>, <span class="c-str">2</span>, <span class="c-str">3</span>]) <span class="c-key">AS</span> t(v);</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>

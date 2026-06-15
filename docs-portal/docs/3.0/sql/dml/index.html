@@ -5,7 +5,7 @@
 <title>6. Data Manipulation | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -254,7 +254,7 @@
 </dl>
 
 <div class="callout">
-<p><strong>Security note.</strong> Server-side file COPY does not yet require a superuser check. The text <code>..</code> guard also does not stop symbolic links. In the current release, any user who can read or write a table can use file-mode <code>COPY</code>. Through it they can read or write any file the server process can reach. Until a superuser gate ships, treat file-mode <code>COPY</code> as a privileged operation in practice. Stream mode with <code>STDIN</code> and <code>STDOUT</code> does not touch the server filesystem. It is not affected.</p>
+<p><strong>Security note.</strong> Server-side file COPY does not yet require a superuser check. The <code>..</code> guard also does not stop symbolic links. In the current release, any user who can read or write a table can use file-mode <code>COPY</code>. Through it they can read or write any file the server process can reach. Until a superuser gate ships, treat file-mode <code>COPY</code> as a privileged operation in practice. Stream mode with <code>STDIN</code> and <code>STDOUT</code> does not touch the server filesystem. It is not affected.</p>
 </div>
 
 <h2 id="truncate">6.6. Emptying a Table with TRUNCATE</h2>
@@ -284,7 +284,7 @@
 </tbody>
 </table>
 
-<p>Without <code>CASCADE</code>, you cannot truncate a table that is referenced by a foreign key from a non-empty table. It is rejected.</p>
+<p>Without <code>CASCADE</code>, you cannot truncate a table that is referenced by a foreign key from a non-empty table. The command is rejected.</p>
 
 <div class="callout">
 <p><code>cannot truncate table "…": referenced by foreign key from "…"</code> (SQLSTATE <code>23503</code>)</p>

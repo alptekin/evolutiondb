@@ -5,7 +5,7 @@
 <title>4. SQL Syntax | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,7 +18,7 @@
 <h1>4. SQL Syntax</h1>
 <p class="lede">This page shows how EvolutionDB reads SQL text. It covers tokens, identifiers, literals, comments, operators, and keywords. It also shows how statements start and end.</p>
 
-<p>This chapter describes the <em>lexical structure</em> of the SQL dialect that EvolutionDB 3.0 accepts. These are the rules that turn a stream of characters into the tokens the grammar reads. Everything here comes straight from the Flex scanner (<code>evolution/parser/evolexer.l</code>) and the Bison grammar (<code>evolution/parser/evoparser.y</code>). When the dialect differs from the SQL standard or from PostgreSQL, this page says so clearly.</p>
+<p>This chapter describes the <em>lexical structure</em> of the SQL dialect that EvolutionDB 3.0 accepts. These rules turn a stream of characters into the tokens the grammar reads. Everything here comes from the Flex scanner (<code>evolution/parser/evolexer.l</code>) and the Bison grammar (<code>evolution/parser/evoparser.y</code>). When the dialect differs from the SQL standard or from PostgreSQL, this page notes the difference.</p>
 
 <div class="callout">
 <p><strong>Lineage.</strong> The scanner is case-insensitive and reentrant. Its keyword set mixes MySQL and PostgreSQL spellings. For example, both <code>INT8</code> and <code>BIGINT</code> map to the same type. This mix is on purpose, for better compatibility. EvolutionDB speaks the PostgreSQL wire protocol. It also accepts many MySQL-style forms at the lexical level. A token can exist here without full PostgreSQL meaning. To see what each form really does, read the per-command pages under <a href="/3.0/ref/select/">SQL Commands</a>.</p>
@@ -34,12 +34,12 @@
 <dt>User variables</dt><dd>Session variables prefixed with <code>@</code>. See <a href="#uservars">§4.4</a>.</dd>
 <dt>Comments and whitespace</dt><dd>Discarded before reaching the grammar. See <a href="#comments">§4.6</a>.</dd>
 </dl>
-<p>The scanner moves a byte cursor named <code>g_lex_pos</code> forward on every token. This lets the parser copy out the exact text of a subquery. That is how correlated and <code>LATERAL</code> subqueries are saved for re-execution. You do not see this at the syntax level. It is the reason subquery text comes back exactly as you wrote it.</p>
+<p>The scanner moves a byte cursor named <code>g_lex_pos</code> forward on every token. This lets the parser copy out the exact text of a subquery. Correlated and <code>LATERAL</code> subqueries use this cursor so the engine can re-execute them. You do not see this at the syntax level. It is why subquery text comes back exactly as you wrote it.</p>
 
 <h2 id="identifiers">4.2. Identifiers and Names</h2>
-<p>An unquoted identifier (token <code>NAME</code>) must begin with an ASCII letter and may continue with letters, digits, and underscores:</p>
+<p>An unquoted identifier (token <code>NAME</code>) must begin with an ASCII letter. It may continue with letters, digits, and underscores.</p>
 <pre class="synopsis"><code>[A-Za-z][A-Za-z0-9_]*</code></pre>
-<p>This is the exact pattern in the scanner. The results differ from both the SQL standard and PostgreSQL. Note the points below.</p>
+<p>This is the exact pattern in the scanner. The results differ from the SQL standard and from PostgreSQL in a few ways.</p>
 <ul>
 <li>An identifier <strong>cannot start with an underscore</strong>. So <code>_tmp</code> is not a valid bare identifier. PostgreSQL does allow a leading <code>_</code>.</li>
 <li>Only ASCII letters work in bare identifiers. Non-ASCII and Unicode letters are not part of the <code>NAME</code> pattern.</li>
@@ -47,9 +47,9 @@
 </ul>
 
 <h3 id="quoted-identifiers">4.2.1. Backtick-Quoted Identifiers</h3>
-<p>To use a reserved word or a name that does not fit the bare pattern, wrap it in backticks. This follows the MySQL convention. It is not the SQL-standard double quote.</p>
+<p>To use a reserved word as a name, or a name that does not fit the bare pattern, wrap it in backticks. This is the MySQL convention. It is not the SQL-standard double quote.</p>
 <pre class="synopsis"><code>`<span class="c-str">any chars except backtick, slash, backslash, dot, newline</span>`</code></pre>
-<p>The scanner removes the outer backticks. It returns the inner text as a <code>NAME</code>. A backtick with no closing backtick before the end of the line is an error. It raises <span class="c-str">"unterminated quoted name"</span>.</p>
+<p>The scanner removes the outer backticks and returns the inner text as a <code>NAME</code>. If a backtick has no closing backtick before the end of the line, the scanner raises <span class="c-str">"unterminated quoted name"</span>.</p>
 <pre><code><span class="c-key">CREATE TABLE</span> `<span class="c-str">orders</span>` (
     `<span class="c-str">select</span>`  <span class="c-key">INTEGER</span>,        <span class="c-com">-- reserved word used as a column name</span>
     `<span class="c-str">order date</span>` <span class="c-key">DATE</span>       <span class="c-com">-- embedded space is legal inside backticks</span>
@@ -70,7 +70,7 @@
 <h2 id="literals">4.3. Constants (Literals)</h2>
 
 <h3 id="string-literals">4.3.1. String Constants</h3>
-<p>A string constant is a character sequence bounded by single quotes or double quotes:</p>
+<p>A string constant is a character sequence bounded by single quotes or double quotes.</p>
 <pre class="synopsis"><code><span class="c-str">'( \\. | '' | [^'\n] )*'</span>
 <span class="c-str">"( \\. | "" | [^"\n] )*"</span></code></pre>
 <p>A string supports two ways to escape characters.</p>
@@ -86,7 +86,7 @@
 </div>
 
 <h3 id="numeric-literals">4.3.2. Numeric Constants</h3>
-<p>The scanner distinguishes exact integers from approximate (floating-point) numbers:</p>
+<p>The scanner distinguishes exact integers from approximate (floating-point) numbers.</p>
 <dl class="params">
 <dt><code>INTNUM</code>, integer</dt><dd>Pattern <code>-?[0-9]+</code>, parsed with <code>atoi</code>. An optional leading minus sign is part of the integer token itself.</dd>
 <dt><code>APPROXNUM</code>, approximate</dt><dd>A number with a decimal point, an exponent, or both. Examples are <code>3.14</code>, <code>.5</code>, <code>1E10</code>, and <code>2.5e-3</code>. Parsed with <code>atof</code>.</dd>
@@ -134,7 +134,7 @@
 <p>The scanner returns the operator tokens below. Single-character punctuation in the set <code>- + &amp; ~ | ^ / % * ( ) , . ; ! [ ]</code> is returned as itself. Multi-character operators have their own tokens.</p>
 
 <h3 id="comparison-ops">4.5.1. Comparison Operators</h3>
-<p>All comparison operators collapse to one <code>COMPARISON</code> token. The token carries a sub-code. The parser then branches on that sub-code. This is why the <code>=</code> in a <code>WITH (m = 16)</code> index option and the <code>=</code> in a <code>WHERE</code> clause are the same lexical token.</p>
+<p>All comparison operators collapse to one <code>COMPARISON</code> token. The token carries a sub-code. The parser then branches on that sub-code. This means the <code>=</code> in a <code>WITH (m = 16)</code> index option and the <code>=</code> in a <code>WHERE</code> clause are the same lexical token.</p>
 <table>
 <thead><tr><th>Operator</th><th>Meaning</th><th>Sub-code</th></tr></thead>
 <tbody>
@@ -217,7 +217,7 @@
 </dl>
 
 <h3 id="type-keywords">4.7.2. Data-Type Keywords</h3>
-<p>The grammar's <code>data_type</code> rule encodes each type as an integer <code>typeVal</code>. Here <code>typeVal / 10000</code> is the type family. The rest carries length and precision. The table below lists the accepted type keywords. It shows their MySQL and PostgreSQL aliases the way the scanner spells them.</p>
+<p>The grammar's <code>data_type</code> rule encodes each type as an integer <code>typeVal</code>. The expression <code>typeVal / 10000</code> gives the type family. The remainder carries length and precision. The table below lists the accepted type keywords and their MySQL and PostgreSQL aliases.</p>
 <table>
 <thead><tr><th>Family</th><th>Keyword(s) accepted</th><th>Notes</th></tr></thead>
 <tbody>
@@ -239,16 +239,16 @@
 <p>See <a href="/3.0/ref/create-table/">CREATE TABLE</a> for how these types work in column definitions. See <a href="#col-atts">§4.8.2</a> for column attributes.</p>
 
 <h3 id="reserved-note">4.7.3. A Note on Reserved Words</h3>
-<p>The keyword set is large because the dialect covers many features. These include window functions, vector search, document, graph, and memory stores, scheduled jobs, and pub/sub. Not every keyword is fully reserved in every position. The grammar keeps some common words usable as names on purpose. For example, <code>LEVEL</code> is <em>not</em> reserved, so <code>… AS level</code> works. The scanner reads <code>VALUE</code> but returns it as an ordinary <code>NAME</code>. When in doubt, backtick-quote a name that might collide. See <a href="#quoted-identifiers">§4.2.1</a>.</p>
+<p>The keyword set is large because the dialect covers many features. These include window functions, vector search, document stores, graph stores, memory stores, scheduled jobs, and pub/sub. Not every keyword is fully reserved in every position. The grammar intentionally keeps some common words usable as names. For example, <code>LEVEL</code> is <em>not</em> reserved, so <code>… AS level</code> works. The scanner reads <code>VALUE</code> but returns it as an ordinary <code>NAME</code>. If you are unsure, wrap any name that might collide in backticks. See <a href="#quoted-identifiers">§4.2.1</a>.</p>
 
 <h2 id="statements">4.8. Statements and Termination</h2>
 
 <h3 id="termination">4.8.1. Statement Termination</h3>
-<p>The grammar's start symbol is a semicolon-terminated statement list:</p>
+<p>The grammar's start symbol is a semicolon-terminated statement list.</p>
 <pre class="sig"><code>stmt_list : stmt <span class="c-key">';'</span>
           | stmt <span class="c-key">';'</span> stmt_list
           ;</code></pre>
-<p>So a semicolon (<code>;</code>) ends every statement. You can send many statements in one batch, separated by semicolons. The semicolon is part of the grammar. It is required. It is not just a separator that the client strips.</p>
+<p>A semicolon (<code>;</code>) ends every statement. You can send many statements in one batch. Separate them with semicolons. The semicolon is part of the grammar and is required. It is not just a separator that the client strips.</p>
 <pre><code><span class="c-key">CREATE TABLE</span> t (id <span class="c-key">INTEGER</span> <span class="c-key">PRIMARY KEY</span>);
 <span class="c-key">INSERT INTO</span> t <span class="c-key">VALUES</span> (1);
 <span class="c-key">SELECT</span> * <span class="c-key">FROM</span> t;</code></pre>

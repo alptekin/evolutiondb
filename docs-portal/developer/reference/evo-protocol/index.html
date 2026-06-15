@@ -5,7 +5,7 @@
 <title>EVO text protocol | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -27,21 +27,21 @@
 <li><strong>Handshake</strong>. The client sends a greeting. The server sends <code>HELLO</code>. The session may upgrade with <code>STARTTLS</code>. Then comes the <code>AUTH_SCRAM</code> or <code>AUTH</code> exchange. It ends with <code>AUTH_OK</code>.</li>
 <li><strong>Command loop</strong>. The client sends commands like <code>SQL</code>, <code>PREPARE</code>, <code>EXECUTE</code>, <code>EXECUTE_BATCH</code>, <code>EXECUTE_BATCH_BINARY</code>, <code>DEALLOCATE</code>, and <code>QUIT</code>. The server answers. It sends a final <code>READY</code> line for each command.</li>
 </ol>
-<p>The server reads lines with the connection's line reader. The main read buffer is 65536 bytes. All I/O goes through a <code>conn_t</code> wrapper. So the same code works the same way over plaintext or TLS.</p>
+<p>The server reads lines with the connection's line reader. The main read buffer is 65536 bytes. All I/O goes through a <code>conn_t</code> wrapper. The same code works the same way over plaintext or TLS.</p>
 
 <h2 id="handshake">Handshake</h2>
 <p>The handshake follows a strict order. Each step below is a single line unless noted.</p>
 
 <h3 id="greeting">Greeting</h3>
-<p>The client starts by sending the greeting line:</p>
+<p>The client starts by sending the greeting line.</p>
 <div class="sig"><code>EVO</code></div>
-<p>The first line must be <code>EVO</code>. If it is anything else, the server sends an error and closes the connection:</p>
+<p>The first line must be <code>EVO</code>. If it is anything else, the server sends an error and closes the connection.</p>
 <pre><code><span class="c-key">ERR</span> <span class="c-str">08000</span> Expected EVO greeting</code></pre>
-<p>When the greeting is valid, the server sends back its version banner:</p>
+<p>When the greeting is valid, the server sends back its version banner.</p>
 <pre><code><span class="c-key">HELLO</span> EvoSQL <span class="c-str">1.0</span></code></pre>
 
 <h3 id="starttls">STARTTLS upgrade</h3>
-<p>The server offers an upgrade when TLS is built in and ready. It offers this before authentication. This way the password is never sent in cleartext.</p>
+<p>The server offers an upgrade when TLS is built in and ready. It offers this before authentication. The password is never sent in cleartext.</p>
 <pre><code><span class="c-com">// server, only when TLS is available</span>
 <span class="c-key">STARTTLS</span></code></pre>
 <p>The client can accept or decline.</p>
@@ -55,14 +55,14 @@
 </div>
 
 <h3 id="auth">Authentication</h3>
-<p>The server offers SCRAM-SHA-256. It sends:</p>
+<p>The server offers SCRAM-SHA-256. It sends this challenge.</p>
 <pre><code><span class="c-key">AUTH_SCRAM</span></code></pre>
 <p>The client replies with one of two formats. The prefix of the next line picks the path.</p>
 
 <h4 id="auth-scram">SCRAM-SHA-256 (preferred)</h4>
-<p>SCRAM never sends the password. So it keeps the secret safe even without TLS. The exchange has three client and server message pairs.</p>
+<p>SCRAM never sends the password. It keeps the secret safe even without TLS. The exchange has three client and server message pairs.</p>
 <div class="sig"><code>SCRAM-CLIENT-FIRST &lt;client-first-message&gt;</code></div>
-<p>The server reads the client-first message. It replies with the server-first message. This is the raw SCRAM line that <code>scram_server_first</code> makes. The client then sends:</p>
+<p>The server reads the client-first message. It replies with the server-first message. This is the raw SCRAM line that <code>scram_server_first</code> makes. The client then sends the final message.</p>
 <div class="sig"><code>SCRAM-CLIENT-FINAL &lt;client-final-message&gt;</code></div>
 <p>The server checks the client proof. It replies with the server-final message. This message holds the ServerSignature for mutual authentication. A failure at any step sends a SQLSTATE <code>28P01</code> error and closes the connection. Here are some examples:</p>
 <pre><code><span class="c-key">ERR</span> <span class="c-str">28P01</span> SCRAM: invalid client-first message
@@ -70,9 +70,9 @@
 <span class="c-key">ERR</span> <span class="c-str">28P01</span> SCRAM authentication failed</code></pre>
 
 <h4 id="auth-cleartext">Legacy cleartext AUTH</h4>
-<p>To keep old clients working, a client may instead send one line with spaces:</p>
+<p>To keep old clients working, a client may instead send one line with spaces.</p>
 <div class="sig"><code>AUTH &lt;username&gt; &lt;password&gt;</code></div>
-<p>The username runs up to the first whitespace. Everything after the space is the password. On failure the server sends:</p>
+<p>The username runs up to the first whitespace. Everything after the space is the password. If the login fails, the server sends this error.</p>
 <pre><code><span class="c-key">ERR</span> <span class="c-str">28P01</span> Authentication failed</code></pre>
 <p>The line must be a SCRAM client-first line or an <code>AUTH</code> line. If it is neither, the server sends:</p>
 <pre><code><span class="c-key">ERR</span> <span class="c-str">28000</span> Expected AUTH or SCRAM-CLIENT-FIRST</code></pre>
@@ -87,17 +87,17 @@
 
 <h2 id="command-loop">Command loop</h2>
 <p>After <code>AUTH_OK</code> the server loops. It reads one command line at a time. If the session has an idle timeout, the server uses <code>select()</code> to wait. On timeout it sends <code>ERR 57P05 idle timeout</code> and closes.</p>
-<p>Every command response ends with a line on its own:</p>
+<p>Every command response ends with a line on its own.</p>
 <pre><code><span class="c-key">READY</span></code></pre>
 <p>The one exception is <code>QUIT</code>. It ends the session.</p>
 
 <h3 id="quit">QUIT</h3>
 <div class="sig"><code>QUIT</code></div>
-<p>The server replies <code>BYE</code> and ends the loop. Any open transaction is rolled back during teardown. See below.</p>
+<p>The server replies <code>BYE</code> and ends the loop. Any open transaction is rolled back during teardown.</p>
 <pre><code><span class="c-key">BYE</span></code></pre>
 
 <h3 id="sql">SQL request</h3>
-<p>A query is sent in two parts. First comes a header line that gives the byte length. Right after it comes the SQL body on its own line:</p>
+<p>A query is sent in two parts. First comes a header line that gives the byte length. Right after it comes the SQL body on its own line.</p>
 <div class="sig"><code>SQL &lt;length&gt;<span class="c-com">\n</span>&lt;sql-text&gt;<span class="c-com">\n</span></code></div>
 <p>The <code>&lt;length&gt;</code> must be greater than 0 and at most 65000. If it is not, the server sends:</p>
 <pre><code><span class="c-key">ERR</span> <span class="c-str">42000</span> Invalid SQL length
@@ -135,18 +135,18 @@
 <p>The full reply then ends with <code>READY</code>.</p>
 
 <div class="callout callout-warn">
-<p>At the token level, <code>FIELD NULL</code> looks the same as a real value whose text is the four characters <code>NULL</code>. The server sends <code>FIELD NULL</code> only when the field is a true SQL NULL. But some clients need to send back a string value of <code>"NULL"</code>. Those clients should know that the text framing cannot tell the two apart.</p>
+<p>At the token level, <code>FIELD NULL</code> looks the same as a real value whose text is the four characters <code>NULL</code>. The server sends <code>FIELD NULL</code> only when the field is a true SQL NULL. Some clients need to send back a string value of <code>"NULL"</code>. Those clients should know that the text framing cannot tell the two apart.</p>
 </div>
 
 <h3 id="ok-tag">OK / TAG (non-SELECT)</h3>
-<p>Some statements are not SELECT and not a COPY stream. For those, the server replies with:</p>
+<p>Some statements are not SELECT and not a COPY stream. For those, the server sends this reply.</p>
 <pre><code><span class="c-key">OK</span>
 <span class="c-key">TAG</span> &lt;command_tag&gt;
 <span class="c-key">READY</span></code></pre>
 <p>The command tag is the engine's result tag. For example, <code>INSERT 0 1</code>, <code>UPDATE 3</code>, or <code>DELETE 2</code>.</p>
 
 <h3 id="errors">ERR responses</h3>
-<p>An error is a single line. It carries the SQLSTATE and the message:</p>
+<p>An error is a single line. It carries the SQLSTATE and the message.</p>
 <div class="sig"><code>ERR &lt;sqlstate&gt; &lt;message&gt;</code></div>
 <p>For query errors the SQLSTATE and message come from the result set. These are <code>rs-&gt;error_sqlstate</code> and <code>rs-&gt;error_message</code>. Protocol errors use fixed SQLSTATEs from the source code. The codes are listed below.</p>
 <ul>
@@ -158,16 +158,16 @@
 <li><code>26000</code> for a prepared statement that is not found.</li>
 <li><code>22000</code> for a COPY failure.</li>
 </ul>
-<p>An unknown command gives back:</p>
+<p>An unknown command returns this error.</p>
 <pre><code><span class="c-key">ERR</span> <span class="c-str">42000</span> Unknown command: &lt;line&gt;
 <span class="c-key">READY</span></code></pre>
 
 <h2 id="copy">COPY streaming</h2>
-<p>A <code>SQL</code> request can be a COPY statement. Then the server uses a streaming sub-protocol instead of the normal result framing. First it signals that it is ready:</p>
+<p>A <code>SQL</code> request can be a COPY statement. The server then uses a streaming sub-protocol instead of the normal result framing. First it signals that it is ready.</p>
 <pre><code><span class="c-key">COPY_READY</span></code></pre>
 
 <h3 id="copy-in">COPY FROM STDIN</h3>
-<p>After <code>COPY_READY</code>, the client sends the data. It sends one CSV row per line. Each line ends with <code>\n</code>. The client marks the end of the data with the PostgreSQL sentinel line:</p>
+<p>After <code>COPY_READY</code>, the client sends the data. It sends one CSV row per line. Each line ends with <code>\n</code>. The client marks the end of the data with the PostgreSQL sentinel line.</p>
 <div class="sig"><code>\.</code></div>
 <p>On success the server replies with the row count as a COPY tag. On failure it sends a SQLSTATE <code>22000</code> error.</p>
 <pre><code><span class="c-key">OK</span>
@@ -194,7 +194,7 @@
 
 <h3 id="prepare">PREPARE</h3>
 <div class="sig"><code>PREPARE &lt;stmt_name&gt; &lt;byte_length&gt;<span class="c-com">\n</span>&lt;sql-body&gt;<span class="c-com">\n</span></code></div>
-<p>The body length must be 1 to 65000. The server counts the <code>$1</code> to <code>$9</code> placeholders to find the parameter count. It stores the template and replies:</p>
+<p>The body length must be 1 to 65000. The server counts the <code>$1</code> to <code>$9</code> placeholders to find the parameter count. It stores the template and replies.</p>
 <pre><code><span class="c-key">OK</span>
 <span class="c-key">TAG</span> PREPARE
 <span class="c-key">READY</span></code></pre>
@@ -203,7 +203,7 @@
 <h3 id="execute">EXECUTE</h3>
 <div class="sig"><code>EXECUTE &lt;stmt_name&gt; &lt;param_count&gt;<span class="c-com">\n</span>&lt;param1&gt;<span class="c-com">\n</span>&lt;param2&gt;<span class="c-com">\n</span>...</code></div>
 <p>The header is followed by <code>param_count</code> lines. There is one line per parameter value. The server puts each value into the matching <code>$N</code> in the template. The special value <code>\N</code> becomes the SQL value <code>NULL</code>. Every other value is wrapped in single quotes. Any quotes inside the value are doubled. The server then runs the filled-in SQL. It answers with the <code>RESULT</code> framing for a SELECT, or with <code>OK</code> and <code>TAG</code> for anything else. Then it sends <code>READY</code>.</p>
-<p>The named statement may not exist. In that case the server still reads the declared parameter lines so the protocol stays in sync. Then it sends:</p>
+<p>The named statement may not exist. In that case the server still reads the declared parameter lines so the protocol stays in sync. Then it sends this error.</p>
 <pre><code><span class="c-key">ERR</span> <span class="c-str">26000</span> Prepared statement '&lt;name&gt;' not found
 <span class="c-key">READY</span></code></pre>
 
@@ -236,29 +236,29 @@
 <p>The server turns each binary parameter into its text form. It then uses the same substitution and run path as <code>EXECUTE_BATCH</code>. The response is the same as <code>EXECUTE_BATCH</code>. It is <code>BATCH_OK &lt;total_affected&gt;</code> or <code>BATCH_ERR &lt;row_index&gt; &lt;sqlstate&gt; &lt;msg&gt;</code>. Each one is followed by <code>READY</code>. Here <code>param_count</code> must be 0 to 32. An out-of-range argument gives <code>ERR 42000 EXECUTE_BATCH_BINARY: invalid arguments</code>.</p>
 
 <div class="callout callout-warn">
-<p>The binary batch has no fixed-size tail after an error. The text batch is different here. If the server replies <code>BATCH_ERR</code>, the client MUST stop sending payload bytes. The next read starts a fresh command. If the statement name is not found, the server reads the whole payload. It decodes it field by field. Then it replies <code>ERR 26000</code>.</p>
+<p>The binary batch has no fixed-size tail after an error. The text batch works differently here. If the server replies <code>BATCH_ERR</code>, the client MUST stop sending payload bytes. The next read starts a fresh command. If the statement name is not found, the server reads the whole payload. It decodes it field by field. Then it replies <code>ERR 26000</code>.</p>
 </div>
 
 <h3 id="deallocate">DEALLOCATE</h3>
 <div class="sig"><code>DEALLOCATE &lt;stmt_name&gt;</code></div>
-<p>This frees a prepared statement. It also compacts the slot table. On success the server sends:</p>
+<p>This frees a prepared statement. It also compacts the slot table. On success the server sends this response.</p>
 <pre><code><span class="c-key">OK</span>
 <span class="c-key">TAG</span> DEALLOCATE
 <span class="c-key">READY</span></code></pre>
 <p>A missing name gives <code>ERR 42000 DEALLOCATE: missing statement name</code>. An unknown statement gives <code>ERR 26000 Prepared statement '&lt;name&gt;' not found</code>.</p>
 
 <h2 id="notify">Async NOTIFY frames</h2>
-<p>The server pushes LISTEN/NOTIFY messages on its own time. It sends them between replies. A notification is a frame with two parts. It is made of lines. The client can read it between two <code>READY</code> markers.</p>
+<p>The server pushes LISTEN/NOTIFY messages on its own time. It sends them between replies. A notification is a frame made of lines. The client can read it between two <code>READY</code> markers.</p>
 <pre><code><span class="c-key">NOTIFY</span> &lt;sender_session_id&gt; &lt;channel&gt; &lt;payload_len&gt;
 &lt;payload&gt;</code></pre>
-<p>The header gives the sender session id, the channel name, and the payload byte length. The payload bytes follow on the next line. The server writes the frame as one unit under the connection's write lock. So it cannot mix with a multi-line <code>RESULT</code> that is being streamed.</p>
+<p>The header gives the sender session id, the channel name, and the payload byte length. The payload bytes follow on the next line. The server writes the frame as one unit under the connection's write lock. It cannot mix with a multi-line <code>RESULT</code> that is being streamed.</p>
 
 <h2 id="session-teardown">Session teardown</h2>
-<p>The loop can end in three ways. The client can send <code>QUIT</code>. The client can disconnect. The session can hit an idle timeout. When the loop ends, the server does these things:</p>
+<p>The loop can end in three ways. The client can send <code>QUIT</code>. The client can disconnect. The session can hit an idle timeout. When the loop ends, the server does these things.</p>
 <ul>
 <li>It frees all prepared statements for the session.</li>
 <li>It <strong>rolls back</strong> any open transaction. The undo log is replayed and freed. For a SERIALIZABLE transaction it also removes the transaction from the conflict graph.</li>
-<li>It drops the LISTEN/NOTIFY state. It marks the connection invalid. So any in-flight async senders stop their writes.</li>
+<li>It drops the LISTEN/NOTIFY state. It marks the connection invalid. Any in-flight async senders stop their writes.</li>
 <li>It removes the session from the session registry. It drops session-scoped temporary tables.</li>
 <li>It shuts down TLS if TLS is active. The socket itself is closed by <code>server.c</code>, not by the protocol handler.</li>
 </ul>

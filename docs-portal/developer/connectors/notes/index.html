@@ -5,7 +5,7 @@
 <title>Apple Notes connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,11 +15,11 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Apple Notes connector</h1>
-<p class="lede">This is a macOS-only <code>*-sync</code> connector. It reads your Apple Notes through the JavaScript-for-Automation bridge. It stores each note in EvolutionDB long-term memory. An AI assistant can then recall the note later through <code>search_memory</code>.</p>
+<p class="lede">The <code>*-sync</code> connector for Apple Notes runs on macOS only. It reads your notes through the JavaScript-for-Automation bridge and stores each note in EvolutionDB long-term memory. An AI assistant can then recall the note later through <code>search_memory</code>.</p>
 
 <h2 id="what-it-does">What it does</h2>
-<p>The package <code>evolutiondb-notes-sync</code> talks to <strong>Notes.app</strong> over the macOS JavaScript-for-Automation (JXA) bridge. It converts each note's HTML body to plain text. Then it saves the note into an EvolutionDB <a href="/platform/mcp-server/">MCP memory store</a>. The <a href="/platform/mcp-server/">MCP server</a> shows those notes through <code>search_memory</code>. An assistant can then answer questions about something you wrote weeks ago.</p>
-<p>The connector reads notes through JXA on purpose. It does not parse <code>NoteStore.sqlite</code> directly. The source comments explain why. Apple encodes each note body as gzip plus a private "NotesBody" protobuf inside <code>ZICCLOUDSYNCINGOBJECT.ZDATA</code>. That format changes across macOS releases. JXA returns the already-rendered HTML body and stays stable across versions. The cost is that the user must grant Automation permission. You set this under System Settings → Privacy &amp; Security → Automation → Terminal/iTerm → Notes. macOS asks for this on the first run.</p>
+<p>The package <code>evolutiondb-notes-sync</code> talks to <strong>Notes.app</strong> over the macOS JavaScript-for-Automation (JXA) bridge. It converts each note's HTML body to plain text. Then it saves the note into an EvolutionDB <a href="/platform/mcp-server/">MCP memory store</a>. The <a href="/platform/mcp-server/">MCP server</a> exposes those notes through <code>search_memory</code>. An assistant can then answer questions about something you wrote weeks ago.</p>
+<p>The connector reads notes through JXA on purpose. It does not parse <code>NoteStore.sqlite</code> directly. The source comments explain why. Apple encodes each note body as gzip plus a private "NotesBody" protobuf inside <code>ZICCLOUDSYNCINGOBJECT.ZDATA</code>. That format changes across macOS releases. JXA returns the already-rendered HTML body and stays stable across versions. The cost is that the user must grant Automation permission. You set this under System Settings &gt; Privacy &amp; Security &gt; Automation &gt; Terminal/iTerm &gt; Notes. macOS asks for this on the first run.</p>
 <p>Each pass does the following.</p>
 <ul>
 <li>Starts <code>/usr/bin/osascript -l JavaScript</code> with an embedded JXA script. The script loops over <code>Application('Notes').notes()</code> and prints one JSON object per note. Each object holds the id, name, body, folder, modified, and created fields.</li>
@@ -46,14 +46,14 @@ pip install evolutiondb-notes-sync
 pip install -e client/notes-sync
 </code></pre>
 <p>Installing gives you a single console script named <code>evolutiondb-notes-sync</code>. Its entry point is <code>notes_sync.__main__:main</code>.</p>
-<p>The package directory has no README. This page comes from the source code itself and the packaging metadata. The source files are <code>notes_sync/sync.py</code> and <code>notes_sync/state.py</code>.</p>
+<p>The package directory has no README. This page comes from the source code and the packaging metadata. The source files are <code>notes_sync/sync.py</code> and <code>notes_sync/state.py</code>.</p>
 
 <h2 id="configure">Configure (env vars / auth)</h2>
-<p>You configure everything through environment variables. The CLI loads a dotenv file before it reads them. By default it loads <code>.env</code> in the working directory. You can change this with <code>--env-file</code>. Values already in the process environment win. The loader <code>_load_dotenv</code> uses <code>os.environ.setdefault</code>. So it never overwrites a value that is already set. It also skips blank values, comments, and lines without an <code>=</code>.</p>
+<p>You configure everything through environment variables. The CLI loads a dotenv file before it reads them. By default it loads <code>.env</code> in the working directory. You can change this with <code>--env-file</code>. Values already in the process environment win. The loader <code>_load_dotenv</code> uses <code>os.environ.setdefault</code>, so it never overwrites a value that is already set. It also skips blank values, comments, and lines without an <code>=</code>.</p>
 
 <h3 id="notes-auth">macOS Automation permission</h3>
-<p>There is no API key and no OAuth flow. The only auth is the macOS Automation permission. It lets the running terminal control Notes.app. On the first run macOS shows the Automation consent prompt. After you grant it, later runs are silent. You grant it under System Settings → Privacy &amp; Security → Automation → your terminal → Notes. If permission is denied or missing, the notes show up as per-note errors. These errors are logged to stderr.</p>
-<p>You may not be on macOS. In that case <code>/usr/bin/osascript</code> is not present. The connector then prints <code>[notes-sync] /usr/bin/osascript not found - Notes sync is macOS-only.</code> and returns nothing.</p>
+<p>There is no API key and no OAuth flow. The only auth is the macOS Automation permission. It lets the running terminal control Notes.app. On the first run macOS shows the Automation consent prompt. After you grant it, later runs are silent. You grant it under System Settings &gt; Privacy &amp; Security &gt; Automation &gt; your terminal &gt; Notes. If permission is denied or missing, the notes show up as per-note errors. These errors are logged to stderr.</p>
+<p>If you are not on macOS, <code>/usr/bin/osascript</code> is not present. The connector then prints <code>[notes-sync] /usr/bin/osascript not found - Notes sync is macOS-only.</code> and returns nothing.</p>
 
 <h3 id="env-vars">Environment variables</h3>
 <table>
@@ -71,7 +71,7 @@ pip install -e client/notes-sync
 <p>Each variable maps to one attribute of the <code>Config</code> class. The attributes are <code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code>, and <code>store</code>. This connector is not token-based. There is no required secret. Every variable has a default.</p>
 
 <h2 id="usage">Usage</h2>
-<p>The CLI has five flags. They are <code>--once</code>, <code>--interval &lt;seconds&gt;</code>, <code>--since &lt;iso&gt;</code>, <code>--dry-run</code>, and <code>--env-file &lt;path&gt;</code>. The <code>--since</code> flag is empty by default. The <code>--env-file</code> flag is <code>.env</code> by default.</p>
+<p>The CLI has five flags. They are <code>--once</code>, <code>--interval &lt;seconds&gt;</code>, <code>--since &lt;iso&gt;</code>, <code>--dry-run</code>, and <code>--env-file &lt;path&gt;</code>. The <code>--since</code> flag is empty by default. The <code>--env-file</code> flag defaults to <code>.env</code>.</p>
 <pre><code><span class="c-com"># First run - import everything, then exit.</span>
 evolutiondb-notes-sync <span class="c-key">--once</span>
 
@@ -91,7 +91,7 @@ evolutiondb-notes-sync <span class="c-key">--once</span> <span class="c-key">--d
 <p>On failure the line is <code>{"ok": false, "error": "&lt;message&gt;"}</code>. The process then exits with code <code>4</code>. The numbers above are examples. They are not real counts.</p>
 
 <h3 id="since-semantics">--since semantics</h3>
-<p><code>--since</code> is an optional <strong>ISO-8601 floor</strong>. It only sets the lower bound for a first run. An example value is <code>2026-01-01T00:00:00Z</code>. It is <em>not</em> a relative duration. The value is passed through as is and compared as a string against each note's <code>modified_at</code>. An empty value is the default. It means import everything. Once the store holds a watermark, the watermark wins over <code>--since</code>. The connector uses the stored watermark if there is one. Otherwise it uses the <code>--since</code> value.</p>
+<p><code>--since</code> is an optional <strong>ISO-8601 floor</strong>. It only sets the lower bound for a first run. An example value is <code>2026-01-01T00:00:00Z</code>. It is <em>not</em> a relative duration. The value is passed through as is and compared as a string against each note's <code>modified_at</code>. An empty value is the default. An empty value means import everything. Once the store holds a watermark, the watermark wins over <code>--since</code>. The connector uses the stored watermark if there is one. Otherwise it uses the <code>--since</code> value.</p>
 
 <h3 id="record-shape">Record shape</h3>
 <p>Each note is stored as a JSON record under the key <code>note_&lt;note-id&gt;</code>. <code>_build_record</code> writes these fields.</p>
@@ -109,23 +109,23 @@ evolutiondb-notes-sync <span class="c-key">--once</span> <span class="c-key">--d
   <span class="c-str">"tags"</span>:        [<span class="c-str">"notes"</span>, <span class="c-str">"apple-notes"</span>]  <span class="c-com">// + "truncated" when text was clipped</span>
 }
 </code></pre>
-<p>The note text is clipped to <code>_MAX_TEXT_CHARS = 3000</code>. The source explains the spare room. EvolutionDB caps a single SQL statement at 8KB. The <code>MEMORY PUT</code> wrapper, the JSON envelope, and single-quote doubling can roughly double the byte count on the wire. So 3000 chars leaves room for a note full of quotes or multi-byte UTF-8. When text is clipped, <code>truncated</code> is set to <code>true</code> and a <code>"truncated"</code> tag is added.</p>
+<p>The note text is clipped to <code>_MAX_TEXT_CHARS = 3000</code>. The source explains why this limit exists. EvolutionDB caps a single SQL statement at 8KB. The <code>MEMORY PUT</code> wrapper, the JSON envelope, and single-quote doubling can roughly double the byte count on the wire. So 3000 chars leaves room for a note full of quotes or multi-byte UTF-8. When text is clipped, <code>truncated</code> is set to <code>true</code> and a <code>"truncated"</code> tag is added.</p>
 
 <h3 id="pii">PII protection (optional)</h3>
-<p><code>evolutiondb-pii</code> may expose <code>protect_record</code>. If it does, the connector runs each record through it before writing. This masks or encrypts the <code>fact</code>, <code>title</code>, and <code>text</code> fields. It uses the key prefix <code>notes_pii_&lt;id&gt;</code>. It can also produce companion records that are written next to the main one. If the import fails, <code>_protect</code> just passes the record through. The record is then stored unchanged. The structural metadata is always stored in the clear. This means the folder, id, and timestamps.</p>
+<p><code>evolutiondb-pii</code> may expose <code>protect_record</code>. If it does, the connector runs each record through it before writing. This masks or encrypts the <code>fact</code>, <code>title</code>, and <code>text</code> fields. It uses the key prefix <code>notes_pii_&lt;id&gt;</code>. It can also produce companion records that are written next to the main one. If the import fails, <code>_protect</code> passes the record through unchanged. The record is then stored as-is. The structural metadata is always stored in the clear. This includes the folder, id, and timestamps.</p>
 
 <h2 id="reference">Reference</h2>
 <p>The package has four small modules. <code>notes_sync.__init__</code> holds the version and the docstring. <code>notes_sync.__main__</code> is the script shim that calls <code>main</code>. <code>notes_sync.sync</code> holds the config, the JXA, record building, the sync loop, and the CLI. <code>notes_sync.state</code> is the EvolutionDB memory backend. There is no separate API-client module. The client is the embedded JXA script driven by <code>osascript</code>.</p>
 
 <h3 id="ref-sync">notes_sync.sync</h3>
 <div class="sig">def main(argv: Optional[List[str]] = None) -&gt; int</div>
-<p>This is the CLI entry point. It is the <code>evolutiondb-notes-sync</code> console script. It parses arguments, loads the dotenv file, builds <code>Config</code>, and installs signal handlers. Then it runs one pass or loops on <code>--interval</code>. It returns a process exit code. The code is <code>4</code> if a pass raises an error. Otherwise it is <code>0</code>.</p>
+<p><code>main</code> is the CLI entry point. It is the <code>evolutiondb-notes-sync</code> console script. It parses arguments, loads the dotenv file, builds <code>Config</code>, and installs signal handlers. Then it runs one pass or loops on <code>--interval</code>. It returns a process exit code. The code is <code>4</code> if a pass raises an error. Otherwise it is <code>0</code>.</p>
 
 <div class="sig">def sync_once(cfg: Config, *, since_iso: Optional[str], dry_run: bool = False) -&gt; Dict[str, int]</div>
 <p>Runs a single sync pass. If <code>dry_run</code> is off, it builds a <code>MemoryStore</code> and reads its watermark. The floor it uses is <code>watermark or since_iso</code>. It loops over every note through <code>iter_notes</code>. It skips empty notes and notes at or below the floor. It writes the rest, plus any PII companion records. It moves the watermark forward to the highest <code>modified_at</code> it has seen. Then it returns the counter dict with <code>notes</code>, <code>skipped</code>, and <code>errors</code>. A single failing note is logged to stderr and counted as <code>errors</code>. It does not stop the pass.</p>
 
 <div class="sig">def iter_notes() -&gt; Iterable[Dict]</div>
-<p>Starts <code>/usr/bin/osascript -l JavaScript</code> running the embedded JXA. It streams one JSON note per line. JXA's <code>console.log</code> writes to stderr. So stdout and stderr are merged with <code>stderr=STDOUT</code>. Without this, the stderr pipe would fill up at about 64KB on the first oversized note. Then <code>osascript</code> would block forever. Non-JSON lines are ignored. Lines with an <code>error</code> key are logged and skipped. If <code>osascript</code> is missing, you are not on macOS. It then prints a notice and returns nothing.</p>
+<p>Starts <code>/usr/bin/osascript -l JavaScript</code> running the embedded JXA. It streams one JSON note per line. JXA's <code>console.log</code> writes to stderr, so stdout and stderr are merged with <code>stderr=STDOUT</code>. Without this, the stderr pipe would fill up at about 64KB on the first oversized note and <code>osascript</code> would block forever. Non-JSON lines are ignored. Lines with an <code>error</code> key are logged and skipped. If <code>osascript</code> is missing, the function prints a notice and returns nothing.</p>
 
 <div class="sig">def _html_to_text(body_html: str) -&gt; str</div>
 <p>A cheap regex-based HTML-to-text conversion. It turns the block tags <code>br</code>, <code>p</code>, <code>div</code>, <code>h1</code>–<code>h6</code>, and <code>li</code> into newlines. It strips all other tags. It decodes HTML entities and collapses whitespace. It is not a full HTML parser. It is good enough for the simple markup that Apple Notes emits.</p>
@@ -137,7 +137,7 @@ evolutiondb-notes-sync <span class="c-key">--once</span> <span class="c-key">--d
 
 <h3 id="ref-state">notes_sync.state</h3>
 <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
-<p>The EvolutionDB memory backend. It connects through <code>psycopg</code> in autocommit mode. On init it tries to run <code>CREATE MEMORY STORE &lt;store&gt;</code> on a best-effort basis. All operations run through a reconnect-with-backoff wrapper named <code>_retry</code>. It makes 3 attempts. The backoff is 0.5s times the attempt number. It recovers from dropped connections such as <code>OperationalError</code> and <code>InterfaceError</code>. The module docstring says it is a mirror of the sibling connector packages. This keeps each connector free of any dependency on the others.</p>
+<p>The EvolutionDB memory backend. It connects through <code>psycopg</code> in autocommit mode. On init it tries to run <code>CREATE MEMORY STORE &lt;store&gt;</code> on a best-effort basis. All operations run through a reconnect-with-backoff wrapper named <code>_retry</code>. It makes 3 attempts. The backoff is 0.5s times the attempt number. It recovers from dropped connections such as <code>OperationalError</code> and <code>InterfaceError</code>. The module docstring notes that it mirrors the sibling connector packages. This keeps each connector free of any dependency on the others.</p>
 <div class="sig">MemoryStore.get_watermark_iso() -&gt; Optional[str]</div>
 <p>Reads the stored ISO watermark for the configured namespace. The key is <code>notes_state_latest</code>. The value is the <code>modified_at</code> field of its JSON value. It returns <code>None</code> if there is no watermark yet.</p>
 <div class="sig">MemoryStore.set_watermark_iso(iso: str) -&gt; None</div>
@@ -153,7 +153,7 @@ evolutiondb-notes-sync <span class="c-key">--once</span> <span class="c-key">--d
 <li><strong>Plain text only.</strong> Bodies are flattened by a regex. It is not a real HTML parser. Attachments, images, tables, and checklists are not kept. Long notes are clipped at 3000 characters and tagged <code>truncated</code>.</li>
 <li><strong>String-comparison watermark.</strong> The incremental floor compares <code>modified_at</code> values as strings. This works only because Notes timestamps are written as fixed-width ISO-8601 UTC. The format is <code>NSISO8601DateFormatWithInternetDateTime</code>. A note with no modification date falls back to its creation date.</li>
 <li><strong>SQL built by string interpolation.</strong> <code>state.py</code> escapes values with a local <code>_e()</code> helper. It strips newlines and tabs and doubles single quotes. It then puts the values into the <code>MEMORY PUT</code>, <code>SELECT</code>, and <code>DELETE</code> statements. It does not use parameter binding.</li>
-<li><strong>Privacy.</strong> Notes can hold very personal data. The optional <code>evolutiondb-pii</code> integration masks <code>fact</code>, <code>title</code>, and <code>text</code>. But that package or a public key may be absent. Then the records are stored in the clear. Anyone with the matching <code>MCP_USER_ID</code> namespace can recall them through <code>search_memory</code>.</li>
+<li><strong>Privacy.</strong> Notes can hold very personal data. The optional <code>evolutiondb-pii</code> integration masks <code>fact</code>, <code>title</code>, and <code>text</code>. But that package or a public key may be absent. In that case the records are stored in the clear. Anyone with the matching <code>MCP_USER_ID</code> namespace can recall them through <code>search_memory</code>.</li>
 <li><strong>No tests.</strong> The package ships no test suite. There is no <code>tests/</code> directory in the distribution.</li>
 </ul>
 <p>Related: <a href="/platform/mcp-server/">MCP server</a> · <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a>.</p>

@@ -5,7 +5,7 @@
 <title>CREATE SEQUENCE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -66,7 +66,7 @@
 <p>Create an ascending sequence that starts at 1 and goes up by 1. This uses all the defaults.</p>
 <pre><code><span class="c-key">CREATE SEQUENCE</span> order_id_seq;</code></pre>
 
-<p>Read values from it:</p>
+<p>This example reads values from the sequence.</p>
 <pre><code><span class="c-key">SELECT</span> nextval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 1  (the START value)</span>
 <span class="c-key">SELECT</span> nextval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 2</span>
 <span class="c-key">SELECT</span> currval(<span class="c-str">'order_id_seq'</span>);   <span class="c-com">-- 2</span></code></pre>

@@ -5,7 +5,7 @@
 <title>17. LISTEN / NOTIFY | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -48,7 +48,7 @@
 <pre><code><span class="c-key">LISTEN</span> orders <span class="c-key">SELF</span>;
 <span class="c-com">-- now this session WILL be delivered its own NOTIFY orders events</span></code></pre>
 <div class="callout">
-<p><strong>Honest contrast with PostgreSQL.</strong> PostgreSQL has no per-channel "self" switch. Same-session delivery is controlled globally by the <code>client_min_messages</code> and queue mechanics. A backend simply does not see its own notifications. EvolutionDB's <code>LISTEN ... SELF</code> is an EvolutionDB-specific extension. The grammar comment notes one reason for the keyword. It was chosen over a <code>WITH (self = true)</code> clause to avoid a token conflict on <code>=</code> in the <code>LISTEN</code> context.</p>
+<p><strong>Honest contrast with PostgreSQL.</strong> PostgreSQL has no per-channel "self" switch. Same-session delivery is controlled globally by <code>client_min_messages</code> and queue mechanics. A backend simply does not see its own notifications. EvolutionDB's <code>LISTEN ... SELF</code> is an EvolutionDB-specific extension. The grammar comment notes one reason for the keyword choice. It was chosen over a <code>WITH (self = true)</code> clause to avoid a token conflict on <code>=</code> in the <code>LISTEN</code> context.</p>
 </div>
 
 <h2 id="unlisten">17.3. UNLISTEN, cancelling subscriptions</h2>
@@ -67,7 +67,7 @@
 <pre><code><span class="c-key">NOTIFY</span> channel
 <span class="c-key">NOTIFY</span> channel<span class="c-com">,</span> <span class="c-str">'payload'</span></code></pre>
 </div>
-<p>A <code>NOTIFY</code> raises an event on a channel. It can take an optional single-quoted payload string. <code>NOTIFY</code> does <strong>not</strong> fire right away, unlike <code>LISTEN</code> and <code>UNLISTEN</code>. It is <em>enqueued</em> onto the session's pending list. It is delivered when the surrounding transaction commits. See <a href="#transactions">§17.5</a>. The command tag is <code>NOTIFY</code>.</p>
+<p>A <code>NOTIFY</code> raises an event on a channel. It can take an optional single-quoted payload string. <code>NOTIFY</code> does <strong>not</strong> fire right away. Unlike <code>LISTEN</code> and <code>UNLISTEN</code>, it is <em>enqueued</em> onto the session's pending list. It is delivered when the surrounding transaction commits. See <a href="#transactions">§17.5</a>. The command tag is <code>NOTIFY</code>.</p>
 <pre><code><span class="c-key">NOTIFY</span> orders;
 <span class="c-key">NOTIFY</span> orders<span class="c-com">,</span> <span class="c-str">'order 4711 shipped'</span>;</code></pre>
 <p>Payloads are plain text. The parser strips the surrounding quotes and stages the payload for the executor. An empty payload and a missing payload are the same. Both deliver an empty string to listeners.</p>

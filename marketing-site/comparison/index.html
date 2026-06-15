@@ -6,7 +6,7 @@
 <title>How EvolutionDB Compares</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script id="tailwind-config">
         tailwind.config = {
             darkMode: "class",
@@ -290,20 +290,23 @@
 <!-- Background Mesh -->
 <div class="bg-mesh animate-drift"></div>
 <!-- Top Navigation Bar -->
-<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-secondary/20 h-16 flex items-center justify-between px-margin-sm md:px-margin-lg">
-<a class="flex items-center gap-2" href="/">
-<span class="material-symbols-outlined text-neon-cyan text-[32px]">database</span>
-<span class="font-headline-md text-headline-md font-bold text-neon-cyan tracking-tight">EvolutionDB</span>
+<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-black/20 h-16 flex items-center justify-between px-4 md:px-8">
+<div class="flex items-center gap-x-5 lg:gap-x-7">
+<a class="flex items-center gap-2" href="https://evolutiondb.org/">
+<span class="material-symbols-outlined text-neon-cyan text-[28px]">database</span>
+<span class="font-bold text-neon-cyan tracking-tight text-[18px]" style="font-family:Hanken Grotesk">EvolutionDB</span>
 </a>
-<nav class="hidden md:flex gap-8 items-center">
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/">HOME</a>
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/features/">FEATURES</a>
-<a class="text-neon-cyan font-label-caps text-label-caps tracking-widest" href="/comparison/">COMPARISON</a>
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="https://github.com/alptekin/evolutiondb">GITHUB</a>
+<nav class="hidden md:flex gap-x-5 lg:gap-x-7 items-center">
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/">HOME</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/features/">FEATURES</a>
+<a class="relative text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors after:content-[''] after:absolute after:-bottom-2 after:left-0 after:w-full after:h-0.5 after:bg-neon-cyan after:rounded-full" href="https://evolutiondb.org/comparison/">COMPARISON</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://docs.evolutiondb.org/">DOCS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://developer.evolutiondb.org/">DEVELOPERS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutionagent.evolutiondb.org/">AGENT</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://wiki.evolutiondb.org/">WIKI</a>
 </nav>
-<div class="flex items-center gap-4">
-<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all active:scale-90" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
 </div>
+<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all text-[22px]" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
 </header>
 <main class="relative z-10 flex-grow pt-32 pb-24 px-margin-sm md:px-gutter max-w-container-max mx-auto w-full">
 <!-- Hero Section -->
@@ -344,7 +347,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">Memory Built Into the Engine</h3>
 <p class="text-on-surface-variant mb-6 font-body-md leading-relaxed">
- EvolutionDB speaks the PostgreSQL wire protocol. So psql, DBeaver, and pgAdmin connect right away. The difference is deeper than that. Agent memory and vector types are built into the storage engine at the DDL level. You do not add them through an extension.
+ EvolutionDB speaks the PostgreSQL wire protocol. So psql, DBeaver, and pgAdmin connect right away. The difference goes deeper than that. Agent memory and vector types are built into the storage engine at the DDL level. You do not add them through an extension.
  </p>
 <div class="space-y-4">
 <div class="flex items-start gap-4">
@@ -393,7 +396,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">MongoDB Atlas Vector Search</h3>
 <p class="text-on-surface-variant mb-6">
- Atlas Vector Search is a managed cloud service. It sits on top of a document store. EvolutionDB is a single binary that you run yourself. It even has a zero-Docker embedded mode. It puts relational SQL, documents, and vectors in one engine.
+ Atlas Vector Search is a managed cloud service. It sits on top of a document store. EvolutionDB is a single binary that you run yourself. It has a zero-Docker embedded mode. It puts relational SQL, documents, and vectors in one engine.
  </p>
 <ul class="space-y-3">
 <li class="flex items-center gap-3 text-on-surface">
@@ -418,7 +421,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 </div>
 <h3 class="font-headline-md text-headline-md mb-4">Pinecone / Weaviate</h3>
 <p class="text-on-surface-variant mb-6">
- Dedicated vector databases store embeddings in a separate service. That service runs next to your main database. EvolutionDB keeps vectors and relational data in the same engine. So one query can filter rows and run semantic search. You do not need a second system to keep in sync.
+ Dedicated vector databases store embeddings in a separate service. That service runs next to your main database. EvolutionDB keeps vectors and relational data in the same engine. One query can filter rows and run semantic search at the same time. You do not need a second system to keep in sync.
  </p>
 <div class="p-4 bg-white/5 rounded-lg border border-white/5 space-y-3">
 <div class="flex items-center gap-3">
@@ -452,7 +455,7 @@ How <span class="text-neon-cyan text-glow">EvolutionDB</span> Compares
 <p class="text-[10px] font-label-caps">ENTITY STORE</p>
 </div>
 <div class="p-4 glass-panel text-center rounded-lg hover:bg-white/5 transition-colors">
-<span class="material-symbols-outlined text-neon-cyan mb-2 block" data-icon="smart_toy">smart_toy</span>
+<span class="material-symbols-outlined text-neon-cyan mb-2 block" data-icon="extension">extension</span>
 <p class="text-[10px] font-label-caps">MCP SERVER</p>
 </div>
 <div class="p-4 glass-panel text-center rounded-lg hover:bg-white/5 transition-colors">

@@ -5,7 +5,7 @@
 <title>Outlook connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -50,9 +50,9 @@ web_link               direct link to the Outlook web UI
 tags                   outlook, email, folder + categories, plus
                        important / unread / attachment / truncated</code></pre>
 
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Tags make recall faster. A downstream <code>search_memory(tag="important")</code> or <code>search_memory(tag="unread")</code> can answer "what should I read first" without scanning every row. A <code>high</code>-importance message gets the <code>important</code> tag. An unread one gets <code>unread</code>. One with an attachment gets <code>attachment</code>. A body that hit the 3&nbsp;000-char cap gets <code>truncated</code>.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Tags make recall faster. A downstream <code>search_memory(tag="important")</code> or <code>search_memory(tag="unread")</code> can answer "what should I read first" without scanning every row. A <code>high</code>-importance message gets the <code>important</code> tag. An unread message gets <code>unread</code>. A message with an attachment gets <code>attachment</code>. A body that hit the 3&nbsp;000-char cap gets <code>truncated</code>.</div></div>
 
- <p>The connector keeps one watermark. It holds the highest <code>receivedDateTime</code> seen so far and is stored under
+ <p>The connector keeps one watermark. It holds the highest <code>receivedDateTime</code> seen so far. It is stored under
  the key <code>outlook_state_latest</code>. The next pass uses it to filter Graph with
  <code>$filter=receivedDateTime gt &lt;watermark&gt;</code> and skip everything older.</p>
 
@@ -76,7 +76,7 @@ pip install -e client/outlook-sync</code></pre>
 
  <h2 id="configure">Configure</h2>
  <p>Microsoft Graph needs an Entra ID app registration in your own Azure tenant.
- Create a registration in <strong>Azure Portal → Microsoft Entra ID → App
+ Create a registration in <strong>Azure Portal &rarr; Microsoft Entra ID &rarr; App
  registrations</strong>. Enable <strong>"Allow public client flows"</strong> under
  Authentication. The device-code flow uses no redirect URI. Then add the
  <strong>delegated</strong> Microsoft Graph permissions <code>Mail.Read</code>,
@@ -89,7 +89,7 @@ pip install -e client/outlook-sync</code></pre>
  file. The default is <code>.env</code> in the working directory. You can change it with
  <code>--env-file</code>. A missing file is ignored. The loader uses
  <code>setdefault</code>. A value already set in the environment is never
- overwritten, and blank values in the file are skipped.</p>
+ overwritten. Blank values in the file are skipped.</p>
 
  <pre><code><span class="c-com"># --- Microsoft / Azure ---</span>
 AZURE_CLIENT_ID=<span class="c-str">00000000-0000-0000-0000-000000000000</span>   <span class="c-com"># Application (client) ID - required</span>
@@ -108,7 +108,7 @@ OUTLOOK_MEMORY_STORE=<span class="c-str">mcp_mem</span>      <span class="c-com"
 OUTLOOK_TOKEN_CACHE=<span class="c-str">~/.evosql/outlook_token.json</span>   <span class="c-com"># refresh-token cache (mode 0600)</span>
 OUTLOOK_POLL_INTERVAL=<span class="c-str">900</span>        <span class="c-com"># default --interval seconds</span></code></pre>
 
- <p>Here are the variables, as read by the <code>Config</code> class and the auth module.</p>
+ <p>The table below lists all variables as read by the <code>Config</code> class and the auth module.</p>
 
  <pre><code><span class="c-com"># var                   default                          meaning</span>
 AZURE_CLIENT_ID          (none, required)                 Application (client) ID from Azure
@@ -124,13 +124,13 @@ EVOSQL_PASSWORD          admin                            EvolutionDB password
 EVOSQL_DATABASE          evosql                           target database
 EVOSQL_OUTLOOK_SEND      (unset = read-only)              opt-in: 1/true/yes/on adds the Mail.Send scope</code></pre>
 
- <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div><code>AZURE_CLIENT_ID</code> is required. <code>sync_once</code> raises a <code>RuntimeError</code> if it is empty, and the <code>OutlookAuth</code> constructor raises <code>AuthError</code>. By default the connector requests only <code>Mail.Read</code>, <code>User.Read</code>, and <code>offline_access</code>. It cannot send mail or change the mailbox. Setting <code>EVOSQL_OUTLOOK_SEND</code> to a truthy value adds the <code>Mail.Send</code> scope at consent time. Only the outbox action loop's approve_send uses it (ADR-004). The default stays read-only.</div></div>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div><code>AZURE_CLIENT_ID</code> is required. <code>sync_once</code> raises a <code>RuntimeError</code> if it is empty. The <code>OutlookAuth</code> constructor raises <code>AuthError</code> for the same reason. By default the connector requests only <code>Mail.Read</code>, <code>User.Read</code>, and <code>offline_access</code>. It cannot send mail or change the mailbox. Set <code>EVOSQL_OUTLOOK_SEND</code> to a truthy value to add the <code>Mail.Send</code> scope at consent time. Only the outbox action loop's approve_send uses it (ADR-004). The default stays read-only.</div></div>
 
  <h3 id="first-auth">First-time auth</h3>
  <p>The first run prints a short device code and the
  <code>https://microsoft.com/devicelogin</code> URL to stderr. Open the URL in any
- browser. You can use a different machine, which helps with SSH and headless hosts. Sign in, type the code, and approve consent. The token is then cached at
- <code>OUTLOOK_TOKEN_CACHE</code>. The default path is <code>~/.evosql/outlook_token.json</code> and the file is
+ browser. You can use a different machine. This helps with SSH and headless hosts. Sign in, type the code, and approve consent. The token is then cached at
+ <code>OUTLOOK_TOKEN_CACHE</code>. The default path is <code>~/.evosql/outlook_token.json</code>. The file is
  written with mode <code>0600</code>. Later runs use the refresh token
  silently. Microsoft rotates the refresh token on each refresh, so the new one is
  saved every time.</p>
@@ -163,7 +163,7 @@ evolutiondb-outlook-sync --once --since 1d --dry-run
 <span class="c-com"># Point at an explicit dotenv file.</span>
 evolutiondb-outlook-sync --once --env-file ~/secrets/outlook.env</code></pre>
 
- <p>These are the flags that <code>main()</code> accepts.</p>
+ <p>The table below lists the flags that <code>main()</code> accepts.</p>
  <pre><code><span class="c-com"># --auth              run the device-code consent flow, persist the refresh token, exit</span>
 <span class="c-com"># --once              run a single pass and exit</span>
 <span class="c-com"># --interval SECONDS  daemon mode; loops until SIGINT/SIGTERM (floored at 60s)</span>
@@ -191,7 +191,7 @@ evolutiondb-outlook-sync --once --env-file ~/secrets/outlook.env</code></pre>
  <h3 id="ref-sync"><code>outlook_sync.sync</code>, CLI and sync loop</h3>
 
  <div class="sig">main(argv: list | None = None) -&gt; int</div>
- <p>This is the console-script entry point, registered as <code>evolutiondb-outlook-sync</code>.
+ <p>The console-script entry point is registered as <code>evolutiondb-outlook-sync</code>.
  It loads the dotenv file and builds a <code>Config</code>. It then either runs the
  <code>--auth</code> consent flow, runs a single pass, or loops on the interval.
  It returns the process exit code.</p>
@@ -200,7 +200,7 @@ evolutiondb-outlook-sync --once --env-file ~/secrets/outlook.env</code></pre>
  <p>Runs a single pass. It builds an <code>OutlookAuth</code> and an
  <code>OutlookClient</code>. It resolves folder IDs to display names once. It then makes two
  passes. The first is a cross-folder <code>/me/messages</code> pass. The second is an explicit
- <code>SentItems</code> pass, which is skipped when <code>--folder</code> is given. An
+ <code>SentItems</code> pass. The second pass is skipped when <code>--folder</code> is given. An
  in-process seen-set and the store's <code>has_message</code> check remove duplicates. Each
  surviving message is built into a record and optionally PII-protected. It is written
  unless <code>dry_run</code> is set. The function returns the counters dict
@@ -232,8 +232,7 @@ evolutiondb-outlook-sync --once --env-file ~/secrets/outlook.env</code></pre>
  <div class="sig">OutlookAuth.ensure_token(interactive: bool = False) -&gt; str</div>
  <p>Returns a valid access token. It uses the cached token if it is still valid for more than 60s. Otherwise it does a
  silent refresh-token exchange. With <code>interactive=True</code> it falls back to the
- device-code flow on a failed refresh. With <code>interactive=False</code>, which is the sync
- path, it raises <code>AuthError</code> instead and prompts "run with --auth".</p>
+ device-code flow on a failed refresh. With <code>interactive=False</code> it raises <code>AuthError</code> instead and prompts "run with --auth". The sync path uses <code>interactive=False</code>.</p>
 
  <div class="sig">class TokenCache(path: Path)</div>
  <p><code>load()</code> reads the cache JSON. It returns <code>{}</code> on missing or
@@ -314,7 +313,7 @@ evolutiondb-outlook-sync --once --env-file ~/secrets/outlook.env</code></pre>
  <ul>
  <li><strong>Read-only by default.</strong> The requested scopes are
  <code>Mail.Read</code>, <code>User.Read</code>, and <code>offline_access</code>. The
- connector cannot send mail, mark messages, or change the mailbox. To allow this you set
+ connector cannot send mail, mark messages, or change the mailbox. To allow sending, set
  <code>EVOSQL_OUTLOOK_SEND</code> to add <code>Mail.Send</code> for the outbox
  action loop. See ADR-004 for details.</li>
  <li><strong>Body cap.</strong> Bodies are clipped at 3&nbsp;000 characters to stay
@@ -325,7 +324,7 @@ evolutiondb-outlook-sync --once --env-file ~/secrets/outlook.env</code></pre>
  copied back. A row that fails to write is logged and skipped. One bad row never
  aborts the pass.</li>
  <li><strong>Watermark blind spot.</strong> The watermark is
- <code>receivedDateTime</code>. So a message backdated by a sender to a time earlier
+ <code>receivedDateTime</code>. A message backdated by a sender to a time earlier
  than the current watermark will not be picked up on the next pass. An occasional
  <code>--since 30d</code> re-run catches stragglers via the <code>has_message</code>
  dedup check.</li>
@@ -339,8 +338,8 @@ evolutiondb-outlook-sync --once --env-file ~/secrets/outlook.env</code></pre>
  database and the matching <code>MCP_USER_ID</code> can recall the content through
  <code>search_memory</code>.</li>
  <li><strong>Version.</strong> The packaged distribution is <code>0.1.3</code>.
- Its PyPI status is Development Status 4, Beta. Note that <code>outlook_sync.__version__</code> in the
- module is <code>"0.1.0"</code>.</li>
+ Its PyPI status is Development Status 4, Beta. The
+ <code>outlook_sync.__version__</code> attribute in the module is <code>"0.1.0"</code>.</li>
  </ul>
 
  <p>See also the <a href="/platform/mcp-server/">MCP server</a> docs. The project

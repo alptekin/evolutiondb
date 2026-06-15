@@ -5,7 +5,7 @@
 <title>CREATE USER | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -45,7 +45,7 @@ not case sensitive. The authenticator first looks for the lower-case name. If th
 is not found, it then looks for the name exactly as stored.</p>
 
 <div class="callout">
-<p><strong>Note</strong> &mdash; Most EvolutionDB statements go through the Flex/Bison SQL
+<p><strong>Note.</strong> Most EvolutionDB statements go through the Flex/Bison SQL
 parser. <code>CREATE USER</code> does not. The protocol adaptor's catalog layer catches
 it first. It reads the statement as a plain command string. This is why only the exact
 <code>CREATE USER <em>name</em> PASSWORD '<em>password</em>'</code> shape is accepted.</p>
@@ -69,21 +69,21 @@ An empty password is rejected with an invalid-parameter error.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a user with a password in single quotes:</p>
+<p>This example creates a user with a password in single quotes.</p>
 <pre><code><span class="c-key">CREATE USER</span> reporting <span class="c-key">PASSWORD</span> <span class="c-str">'r3port!ng_2026'</span>;</code></pre>
 
 <p>Create a user, then grant it access to a table. Access is a separate step.</p>
 <pre><code><span class="c-key">CREATE USER</span> analyst <span class="c-key">PASSWORD</span> <span class="c-str">'an4lyst'</span>;
 <span class="c-key">GRANT SELECT ON</span> orders <span class="c-key">TO</span> analyst;</code></pre>
 
-<p>Connect as the new user with the EVO CLI:</p>
+<p>This example connects as the new user with the EVO CLI.</p>
 <pre><code>./cli/evosql-cli -U analyst -W   <span class="c-com"># prompts for the password</span></code></pre>
 
-<p>Trying to create a user that already exists fails:</p>
+<p>Trying to create a user that already exists fails with an error.</p>
 <pre><code><span class="c-key">CREATE USER</span> analyst <span class="c-key">PASSWORD</span> <span class="c-str">'whatever'</span>;
 <span class="c-com">-- ERROR: User 'analyst' already exists  (SQLSTATE 42710)</span></code></pre>
 
-<p>Omitting the <code>PASSWORD</code> clause is a syntax error:</p>
+<p>Omitting the <code>PASSWORD</code> clause is a syntax error.</p>
 <pre><code><span class="c-key">CREATE USER</span> guest;
 <span class="c-com">-- ERROR: Syntax: CREATE USER &lt;name&gt; PASSWORD '&lt;pass&gt;'  (SQLSTATE 42601)</span></code></pre>
 

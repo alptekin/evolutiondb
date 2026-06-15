@@ -5,7 +5,7 @@
 <title>A. Error Codes (SQLSTATE) | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -20,10 +20,10 @@
 <h2 id="overview">A.1. Overview</h2>
 <p>EvolutionDB follows the SQLSTATE convention from the SQL standard. A code is exactly five characters. It is split into a two-character <em>class</em> and a three-character <em>subclass</em>. Class <code>00</code> means success. Class <code>01</code> is a warning. Class <code>02</code> means "no data". Every other class means an error. Codes go to clients on both protocols.</p>
 <ul>
-<li><strong>PostgreSQL wire protocol</strong> on port <code>5433</code>. The code goes into the <code>C</code> field of the <code>ErrorResponse</code> message. The <code>M</code> field next to it holds the readable message.</li>
+<li><strong>PostgreSQL wire protocol</strong> on port <code>5433</code>. The code goes into the <code>C</code> field of the <code>ErrorResponse</code> message. The <code>M</code> field holds the readable message.</li>
 <li><strong>EVO text protocol</strong> on port <code>9967</code>. The code is the first token of an error line. For example, <code>ERR 23505 duplicate key value violates unique constraint</code>.</li>
 </ul>
-<p>Inside the engine, the active code lives in a six-byte field <code>g_err.sqlstate</code>. That is five characters plus a NUL terminator. The code is cleared to an empty string at the start of every statement. The operation module that finds the error sets it. The adaptor copies it as is into the result set sent back to the client.</p>
+<p>Inside the engine, the active code lives in a six-byte field <code>g_err.sqlstate</code>. That is five characters plus a NUL terminator. The code is cleared to an empty string at the start of every statement. The operation module that finds the error sets it. The adaptor copies it into the result set sent back to the client.</p>
 
 <div class="callout">
 <strong>How a code is set in the engine.</strong> Operation modules use one helper macro. It is defined in <code>evolution/db/evosql_errcodes.h</code>.
@@ -33,7 +33,7 @@ The macro copies the five characters of the named code. Then it writes the trail
 </div>
 
 <h2 id="numbering">A.2. The EvolutionDB numbering scheme</h2>
-<p>When the SQL standard fixes a code, EvolutionDB uses that value as is. When the standard leaves a slot open, each vendor makes its own subclasses. Each vendor keeps its own letter so codes never clash. EvolutionDB keeps the letter <strong><code>E</code></strong>.</p>
+<p>When the SQL standard fixes a code, EvolutionDB uses that value. When the standard leaves a slot open, each vendor makes its own subclasses. Each vendor keeps its own letter so codes never clash. EvolutionDB keeps the letter <strong><code>E</code></strong>.</p>
 
 <table>
 <thead><tr><th>Vendor</th><th>Subclass marker</th><th>Example</th></tr></thead>
@@ -63,7 +63,7 @@ The macro copies the five characters of the named code. Then it writes the trail
 <dt><code>42000</code>, Syntax Error or Access Rule Violation (generic)</dt>
 <dd>The query executor and the EVO protocol use this as the general fallback. They use it when <code>g_err.sqlstate</code> is empty. Many EVO protocol framing errors report <code>42000</code> directly. These include a bad command, missing arguments, and an invalid SQL length.</dd>
 <dt><code>22000</code>, Data Exception (generic)</dt>
-<dd><a href="/3.0/ref/copy/">COPY</a> row parsing uses this fallback. It uses it when no more specific data-exception code is available.</dd>
+<dd><a href="/3.0/ref/copy/">COPY</a> row parsing uses this fallback when no more specific data-exception code is available.</dd>
 <dt><code>00000</code>, Successful Completion</dt>
 <dd>The start value of a result set's SQLSTATE. It holds before any error happens.</dd>
 </dl>
@@ -188,7 +188,7 @@ The macro copies the five characters of the named code. Then it writes the trail
 </table>
 
 <h3 id="class-42">A.4.10. Syntax error or access rule violation (class 42)</h3>
-<p>This class covers parse-time errors. It also covers name-resolution and privilege errors. It is the widest class. It holds most of EvolutionDB's vendor <code>E</code>-subclass codes.</p>
+<p>This class covers parse-time errors. It also covers name-resolution and privilege errors. It is the widest class and holds most of EvolutionDB's vendor <code>E</code>-subclass codes.</p>
 <table>
 <thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Meaning</th></tr></thead>
 <tbody>
@@ -202,7 +202,7 @@ The macro copies the five characters of the named code. Then it writes the trail
 <tr><td><code>42704</code></td><td>UNDEFINED_OBJECT</td><td><em>Emitted</em> when a referenced object does not exist. This includes an index, a sequence, or a constraint.</td></tr>
 <tr><td><code>42710</code></td><td>DUPLICATE_OBJECT</td><td><em>Emitted</em> when an object of that name already exists.</td></tr>
 <tr><td><code>42803</code></td><td>GROUPING_ERROR</td><td>Invalid use of an aggregate or <code>GROUP BY</code>.</td></tr>
-<tr><td><code>42501</code></td><td>INSUFFICIENT_PRIVILEGE</td><td><em>Emitted</em> when the waterfall privilege check denies access. The check runs in this order. TABLE, then SCHEMA, then DATABASE. See <a href="/3.0/ref/grant/">GRANT</a>.</td></tr>
+<tr><td><code>42501</code></td><td>INSUFFICIENT_PRIVILEGE</td><td><em>Emitted</em> when the waterfall privilege check denies access. The check runs in order. First TABLE, then SCHEMA, then DATABASE. See <a href="/3.0/ref/grant/">GRANT</a>.</td></tr>
 <tr><td><code>42846</code></td><td>CANNOT_COERCE</td><td>A value of one type cannot be cast to another.</td></tr>
 <tr><td><code>42E01</code></td><td>UNDEFINED_TABLE</td><td><em>Emitted</em> when a referenced table does not exist. This is an EvolutionDB vendor code. It matches PostgreSQL <code>42P01</code>. Some paths still emit the literal <code>42P01</code>.</td></tr>
 <tr><td><code>42E02</code></td><td>UNDEFINED_PARAMETER</td><td>A referenced bind parameter is undefined.</td></tr>
@@ -292,10 +292,10 @@ The macro copies the five characters of the named code. Then it writes the trail
 <h2 id="differences">A.6. Differences from PostgreSQL and the SQL standard</h2>
 <p>EvolutionDB works with PostgreSQL clients on purpose. But it does not copy PostgreSQL's full error-code catalog. Here are the honest differences.</p>
 <ul>
-<li><strong>The vendor marker is <code>E</code>, not <code>P</code>.</strong> PostgreSQL emits <code>42P01</code>, <code>22P02</code>, <code>28P01</code>, or <code>25P01</code>. EvolutionDB's canonical codes are <code>42E01</code>, <code>22E02</code>, <code>28E01</code>, and <code>25E01</code>. A few legacy paths still emit the PostgreSQL <code>P</code> literals for the best driver compatibility. These are <code>42P01</code>, <code>08P01</code>, <code>40P01</code>, and <code>55P03</code>.</li>
+<li><strong>The vendor marker is <code>E</code>, not <code>P</code>.</strong> PostgreSQL emits <code>42P01</code>, <code>22P02</code>, <code>28P01</code>, or <code>25P01</code>. EvolutionDB's canonical codes are <code>42E01</code>, <code>22E02</code>, <code>28E01</code>, and <code>25E01</code>. A few legacy paths still emit the PostgreSQL <code>P</code> literals for driver compatibility. These are <code>42P01</code>, <code>08P01</code>, <code>40P01</code>, and <code>55P03</code>.</li>
 <li><strong>Far fewer codes than PostgreSQL.</strong> EvolutionDB defines only the codes it needs. Large parts of PostgreSQL's catalog are missing. These include PL/pgSQL classes, configuration-file errors, and FDW errors.</li>
 <li><strong>Vendor classes <code>E0</code> to <code>EX</code> are unique to EvolutionDB.</strong> They describe the page-based storage engine, the buffer pool, RECLAIM, and ID generation. A portable application should not rely on these except for logging.</li>
-<li><strong>No message catalog.</strong> Some systems map an SQLSTATE to a fixed message. EvolutionDB does not. It sets the code and the message on their own at each error site. For code that handles errors, match on the SQLSTATE code. Never match on the message text.</li>
+<li><strong>No message catalog.</strong> Some systems map an SQLSTATE to a fixed message. EvolutionDB does not. It sets the code and the message separately at each error site. For code that handles errors, match on the SQLSTATE code. Never match on the message text.</li>
 </ul>
 
 <div class="callout">

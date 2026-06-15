@@ -5,7 +5,7 @@
 <title>MEMORY PUT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -47,8 +47,8 @@ Each memory store is built as a normal heap table. The table is named
 fills in that table's columns for you. It builds the composite primary key
 from <em>namespace</em> and <em>key</em>. It sets <code>created_at</code> to the
 current UTC timestamp. It leaves <code>ttl_at</code> NULL. The write goes through the
-engine's normal insert path. So MVCC visibility, constraints, and
-any policies on the backing table all apply.
+engine's normal insert path. MVCC visibility rules apply. Constraints and policies on
+the backing table also apply.
 </p>
 <p>
 You can give the <em>embedding</em> argument only for stores that have an embedding
@@ -139,7 +139,7 @@ schema. It does not use an explicit column list and conflict target. Unlike a st
 parameters and expressions are not accepted in the <code>VALUES</code> list. The
 matching hand-written statement would be an
 <code>INSERT INTO mem_&lt;store_name&gt; (...) VALUES (...)</code> on the backing
-table. You would also need to compute the primary key, the timestamp, and the conflict handling by hand.
+table. You would also need to compute the primary key and the timestamp, and handle the conflict yourself.
 </p>
 
 <h2 id="see-also">See Also</h2>

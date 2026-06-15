@@ -5,7 +5,7 @@
 <title>LISTEN / UNLISTEN / NOTIFY | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -135,7 +135,7 @@ current subscriptions.</p>
 <h2 id="compatibility">Compatibility</h2>
 <p>The SQL standard has no <code>LISTEN</code>, <code>UNLISTEN</code>, or <code>NOTIFY</code> command. These
 commands follow PostgreSQL.</p>
-<p>Here are the differences from PostgreSQL worth noting.</p>
+<p>These are the differences from PostgreSQL worth noting.</p>
 <ul>
 <li>EvolutionDB delivers same-session notifications only when the listen used the
 <code>LISTEN channel SELF</code> form. PostgreSQL handles this at <code>NOTIFY</code> time and has no

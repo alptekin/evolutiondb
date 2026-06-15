@@ -5,7 +5,7 @@
 <title>13. JSON | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -17,7 +17,7 @@
 <h1>13. JSON</h1>
 <p class="lede">EvolutionDB stores JSON documents as text. It checks each document when you write it. It gives you a MySQL-compatible set of functions. It also gives you the <code>-&gt;</code> and <code>-&gt;&gt;</code> path operators to read, change, and search documents.</p>
 
-<p>This chapter describes the <code>JSON</code> data type. It also describes every JSON operation that EvolutionDB really supports. The JSON support is small and self-contained. It uses little memory and is built on a recursive-descent parser. It follows the <strong>MySQL</strong> function set and the MySQL <code>$.path</code> expression syntax. It does not follow the PostgreSQL <code>json</code>/<code>jsonb</code> operator set. It does not follow the SQL/JSON standard. When the behaviour differs from those systems, this chapter says so clearly.</p>
+<p>This chapter describes the <code>JSON</code> data type. It also describes every JSON operation that EvolutionDB supports. The JSON support is small and self-contained. It uses little memory and is built on a recursive-descent parser. It follows the <strong>MySQL</strong> function set and the MySQL <code>$.path</code> expression syntax. It does not follow the PostgreSQL <code>json</code>/<code>jsonb</code> operator set. It does not follow the SQL/JSON standard. When the behaviour differs from those systems, this chapter says so clearly.</p>
 
 <div class="callout">
 <strong>At a glance.</strong> EvolutionDB JSON is <em>text-backed</em>. A <code>JSON</code> column holds the original document bytes. EvolutionDB checks the bytes when you write them. There is no binary or decomposed storage form. There is no path indexing. You cannot change a document in place. The transformation functions return a new string. If you have used MySQL's JSON functions, this will feel familiar. If you have used PostgreSQL <code>jsonb</code>, the operators here are different.
@@ -78,7 +78,7 @@
 </code></pre>
 
 <div class="callout">
-<strong>Supported subset.</strong> Only two kinds of step work here. The first is a key step with <code>.key</code>. The second is a numeric index step with <code>[n]</code>. Some features are <em>not</em> supported. Wildcards like <code>$.*</code> and <code>$[*]</code> do not work. The recursive descent operator <code>$**</code> does not work. Quoted member names like <code>$."weird key"</code> do not work. Negative indexes and range indexes do not work. An index step needs at least one digit. A key step needs a name that is not empty. If not, the path is rejected. Key names are matched against an internal 256-byte buffer. So very long keys are cut short for the comparison.
+<strong>Supported subset.</strong> Only two kinds of step work here. The first is a key step with <code>.key</code>. The second is a numeric index step with <code>[n]</code>. Some features are <em>not</em> supported. Wildcards like <code>$.*</code> and <code>$[*]</code> do not work. The recursive descent operator <code>$**</code> does not work. Quoted member names like <code>$."weird key"</code> do not work. Negative indexes and range indexes do not work. An index step needs at least one digit. A key step needs a name that is not empty. If not, the path is rejected. Key names are matched against an internal 256-byte buffer. Very long keys are cut short for the comparison.
 </div>
 
 <h2 id="operators">13.3. The <code>-&gt;</code> and <code>-&gt;&gt;</code> Operators</h2>

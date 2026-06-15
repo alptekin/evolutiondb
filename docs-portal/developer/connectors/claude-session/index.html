@@ -5,7 +5,7 @@
 <title>Claude sessions connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,7 +15,7 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>Claude sessions connector</h1>
-<p class="lede">This connector reads your Claude Code session transcripts and saves them into EvolutionDB long-term memory. The assistant can then search your past conversations. It reads local files only. It needs no API and no token.</p>
+<p class="lede">The connector reads your Claude Code session transcripts and saves them into EvolutionDB long-term memory. The assistant can then search your past conversations. It reads local files only. It needs no API and no token.</p>
 
 <h2 id="what-it-does">What it does</h2>
 <p>
@@ -128,12 +128,12 @@ pass before they stop.
 
 <div class="sig">def parse_session(path: Path) -&gt; Optional[Dict]</div>
 <p>
-This parses one transcript file into a session record. It returns <code>None</code> if the
+<code>parse_session</code> parses one transcript file into a session record. It returns <code>None</code> if the
 file has no usable conversation. A file is not usable when it has no session id, or when it
 has zero user and assistant turns. It reads <code>type=user</code> lines and keeps real
 string prompts only. It reads <code>type=assistant</code> lines and keeps <code>text</code>
 blocks only. It picks up <code>aiTitle</code> from an <code>ai-title</code> line. It leaves
-out sidechain lines, which are subagent lines. The returned dict includes these fields.
+out sidechain lines. Sidechain lines are subagent lines. The returned dict includes these fields.
 <code>fact</code>, <code>source</code> with the value <code>"claude_session"</code>,
 <code>kind</code> with the value <code>"session"</code>, <code>session_id</code>,
 <code>title</code>, <code>project</code>, <code>cwd</code>, <code>git_branch</code>,
@@ -143,7 +143,7 @@ out sidechain lines, which are subagent lines. The returned dict includes these 
 
 <div class="sig">def sync_once(cfg: Config, *, dry_run: bool = False) -&gt; Dict[str, int]</div>
 <p>
-This globs <code>**/*.jsonl</code> under the configured projects dir. It parses each file.
+<code>sync_once</code> globs <code>**/*.jsonl</code> under the configured projects dir. It parses each file.
 It upserts sessions that are new or have grown. It skips a session when its
 <code>ended_at</code> is at or before the stored watermark. It returns the counters
 <code>{"sessions", "skipped", "errors"}</code>. It raises <code>RuntimeError</code> if the
@@ -152,7 +152,7 @@ projects dir does not exist. When <code>dry_run=True</code>, it never opens a DB
 
 <div class="sig">class Config</div>
 <p>
-This reads all settings from environment variables. See
+<code>Config</code> reads all settings from environment variables. See
 <a href="#configure">Configure</a>. The settings are <code>projects_dir</code>,
 <code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>,
 <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code> from
@@ -161,7 +161,7 @@ This reads all settings from environment variables. See
 
 <div class="sig">def main() -&gt; int</div>
 <p>
-This is the CLI entry point. It is registered as the
+<code>main</code> is the CLI entry point. It is registered as the
 <code>evolutiondb-claude-session-sync</code> console script. It parses the args. It loads
 the dotenv file. It builds a <code>Config</code>. It installs signal handlers. It runs once
 or loops on the interval. It returns the process exit code.
@@ -169,10 +169,10 @@ or loops on the interval. It returns the process exit code.
 
 <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
 <p>
-This is the DB backend in <code>claude_session_sync.state</code>. It connects with
+<code>MemoryStore</code> is the DB backend in <code>claude_session_sync.state</code>. It connects with
 <code>psycopg</code> in autocommit mode. It issues <code>CREATE MEMORY STORE</code>. It
 ignores the failure if the store already exists. It reconnects up to 3 times with backoff
-when a connection drops. It has these methods:
+when a connection drops. It has these methods.
 </p>
 <ul>
 <li><code>get_watermark(session_id) -&gt; Optional[str]</code> reads the stored

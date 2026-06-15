@@ -5,7 +5,7 @@
 <title>31. evosql-cli | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -60,7 +60,7 @@
 <dd>Print the usage text and exit with code <code>0</code>.</dd>
 </dl>
 
-<p>Example sessions:</p>
+<p>These examples show common ways to start the client.</p>
 
 <pre><code><span class="c-com"># interactive shell, default localhost:9967 as admin</span>
 evosql-cli
@@ -78,7 +78,7 @@ evosql-cli -f schema.sql
 evosql-cli &lt; schema.sql</code></pre>
 
 <div class="callout">
-<strong>Password handling.</strong> The client checks for the password in this order. First <code>-W</code>, then <code>EVOSQL_PASSWORD</code>, then the interactive prompt. A secret on the command line is visible to other users in the process table. For anything sensitive, use the environment variable or the prompt instead.
+<strong>Password handling.</strong> The client checks for the password in this order. First it checks <code>-W</code>. Then it checks <code>EVOSQL_PASSWORD</code>. Then it shows an interactive prompt. A secret on the command line is visible to other users in the process table. For anything sensitive, use the environment variable or the prompt instead.
 </div>
 
 <h2 id="connecting">31.2. Connecting and authentication</h2>
@@ -89,7 +89,7 @@ evosql-cli &lt; schema.sql</code></pre>
 <li>The client sends the line <code>EVO</code>. This says which protocol it uses.</li>
 <li>The server replies with a line that starts with <code>HELLO</code>. Any other greeting is a fatal error.</li>
 <li>The server then sends one of <code>STARTTLS</code>, <code>AUTH_REQUIRED</code>, or <code>AUTH_SCRAM</code>.</li>
-<li>The client may be built with TLS support. See below. If <code>STARTTLS</code> is offered and the client has TLS support, the connection is upgraded to TLS <em>before</em> any credentials are sent. The next message is the auth request. It is read over the encrypted channel.</li>
+<li>TLS support is a compile-time option. If <code>STARTTLS</code> is offered and the client has TLS support, the connection is upgraded to TLS <em>before</em> any credentials are sent. The next message is the auth request. It is read over the encrypted channel.</li>
 <li>For <code>AUTH_REQUIRED</code> or <code>AUTH_SCRAM</code>, the client sends <code>AUTH <var>username</var> <var>password</var></code> and waits for <code>AUTH_OK</code>. Any other reply means the login failed and the client exits.</li>
 </ol>
 
@@ -304,7 +304,7 @@ SELECT count(*) FROM t;</code></pre>
 <pre><code>evosql-cli -c <span class="c-str">"SELECT 1"</span> &amp;&amp; echo ok || echo failed</code></pre>
 
 <div class="callout">
-<strong>Errors do not stop a script.</strong> In script mode a server <code>ERR</code> sets the error flag. The run keeps going to the next statement. At the end the process still exits <code>1</code>. A lost connection with code <code>-1</code> does stop the script. A Ctrl-C cancel with code <code>-2</code> also stops it. This is different from <code>psql</code>'s default and from its <code>ON_ERROR_STOP</code>. There is no setting like that here.
+<strong>Errors do not stop a script.</strong> In script mode a server <code>ERR</code> sets the error flag. The run keeps going to the next statement. At the end the process still exits <code>1</code>. A lost connection with code <code>-1</code> does stop the script. A Ctrl-C cancel with code <code>-2</code> also stops it. This is different from <code>psql</code>'s default and from its <code>ON_ERROR_STOP</code>. There is no equivalent setting here.
 </div>
 
 <h2 id="errors-tags">31.7. Status tags, errors, and timing</h2>

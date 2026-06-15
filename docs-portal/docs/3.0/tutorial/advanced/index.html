@@ -5,7 +5,7 @@
 <title>3. Advanced Features | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -17,10 +17,10 @@
 <h1>3. Advanced Features</h1>
 <p class="lede">EvolutionDB does more than plain tables and queries. It has transactional snapshot isolation. It has several kinds of index. It also has agent-memory and vector tools built right into SQL. This chapter shows what those features do in version 3.0.</p>
 
-<p>The earlier chapters covered creating tables and running queries. This chapter is a tutorial for the parts that make EvolutionDB more than a single-file SQL engine. It covers multi-version transactions. It covers the index types you can build on a table. It also covers the vector and memory features made for AI-agent work. Every example below runs against a live server. Connect with the CLI client <code>evosql-cli</code>. You can also use any PostgreSQL wire-protocol client on port 5433. Where the behaviour is different from PostgreSQL or the SQL standard, the text says so plainly. It does not pretend they are the same.</p>
+<p>The earlier chapters covered creating tables and running queries. This chapter is a tutorial for the parts that make EvolutionDB more than a single-file SQL engine. It covers multi-version transactions. It covers the index types you can build on a table. It also covers the vector and memory features made for AI-agent work. Every example below runs against a live server. Connect with the CLI client <code>evosql-cli</code>. You can also use any PostgreSQL wire-protocol client on port 5433. When a behaviour differs from PostgreSQL or the SQL standard, the text says so plainly.</p>
 
 <div class="callout">
-<p><strong>About this chapter.</strong> The features here are described as they really work today. This includes their version-1 limits. Some parts have caveats that are written inline. The HNSW vector index and the agent-memory <code>SEARCH</code> path are two of these. Read the "Notes" callouts before you depend on a feature in production.</p>
+<p><strong>About this chapter.</strong> The features here are described as they really work today. This includes their version-1 limits. Some parts have caveats written inline. The HNSW vector index and the agent-memory <code>SEARCH</code> path are two examples. Read the "Notes" callouts before you depend on a feature in production.</p>
 </div>
 
 <h2 id="transactions">3.1. Transactions and MVCC</h2>
@@ -172,12 +172,12 @@
 
 <h3 id="index-concurrently">3.2.3. Building an index without blocking writers</h3>
 
-<p>Add <code>CONCURRENTLY</code> to build an index while other sessions keep writing to the table. The build runs in three phases. Phase&nbsp;1 registers the index in the catalog with a <em>building</em> state. Phase&nbsp;2 scans the existing rows in batches of 100. It releases the engine lock between batches so other queries can run. At the same time, a modification log records the primary keys of any rows that concurrent DML changes. Phase&nbsp;3 reconciles that log. It removes stale entries. It inserts current values for each touched key. Only then does it mark the index <em>ready</em>.</p>
+<p>Add <code>CONCURRENTLY</code> to build an index while other sessions keep writing to the table. The build runs in three phases. Phase&nbsp;1 registers the index in the catalog with a <em>building</em> state. Phase&nbsp;2 scans the existing rows in batches of 100. It releases the engine lock between batches so other queries can run. At the same time, a modification log records the primary keys of any rows that concurrent DML touches. Phase&nbsp;3 reconciles that log. It removes stale entries. It inserts current values for each touched key. Only then does it mark the index <em>ready</em>.</p>
 
 <pre><code><span class="c-key">CREATE INDEX CONCURRENTLY</span> idx_created <span class="c-key">ON</span> events (created_at);
 </code></pre>
 
-<p>The query planner ignores an index until it is marked ready. So a concurrent build never returns partial results. The batch-unlock design is safe for two reasons. B+ tree splits only move entries to the right, so the in-progress cursor stays valid. And deletes are lazy markers. They do not move entries.</p>
+<p>The query planner ignores an index until it is marked ready. So a concurrent build never returns partial results. The batch-unlock design is safe for two reasons. B+ tree splits only move entries to the right. So the in-progress cursor stays valid. Deletes are lazy markers. They do not move entries.</p>
 
 <h3 id="fulltext">3.2.4. Full-text indexes</h3>
 
@@ -296,7 +296,7 @@
 
 <h3 id="memory-crud">3.4.2. Storing and reading memories</h3>
 
-<p><code>MEMORY PUT</code> is an <strong>upsert</strong>. It is keyed on (namespace, key). When there is a collision, it atomically points the primary key at the freshly inserted row. So a failed re-insert can never leave the row missing. The embedding argument is optional. It only matters for stores that were created with an embedding dimension.</p>
+<p><code>MEMORY PUT</code> is an <strong>upsert</strong>. It is keyed on (namespace, key). When there is a collision, the engine replaces the old row and links the primary key to the new one. A failed re-insert can never leave the row missing. The embedding argument is optional. It only matters for stores that were created with an embedding dimension.</p>
 
 <pre><code><span class="c-com">-- upsert a value (no embedding)</span>
 <span class="c-key">MEMORY PUT INTO</span> notes
@@ -334,7 +334,7 @@
 <li><code>MEMORY SEARCH</code> needs a store created with <code>embedding_dim &gt; 0</code>. Searching a KV-only store raises an error.</li>
 <li>Search computes the score for each row over the backing table. Then it orders by that score. It does not yet route through the HNSW index. So for very large stores it scales linearly. The result ranking is still correct.</li>
 <li><code>ttl_at</code> is stored, and it is NULL by default. But the store layer does not enforce expiry on its own. Treat it as advisory metadata for now.</li>
-<li>A store <em>is</em> a table. So you can always query <code>mem_&lt;store&gt;</code> directly with standard SQL. Do this when you need joins, aggregates, or filters that the memory verbs do not offer.</li>
+<li>A store is a table. So you can always query <code>mem_&lt;store&gt;</code> directly with standard SQL. Do this when you need joins, aggregates, or filters that the memory verbs do not offer.</li>
 </ul>
 </div>
 

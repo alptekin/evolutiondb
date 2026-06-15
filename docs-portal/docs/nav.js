@@ -14,21 +14,24 @@
       return '<option value="' + x.v + '"' + (x.v === D.version ? " selected" : "") + '>' + x.label + "</option>";
     }).join("");
     bar.innerHTML =
-      '<div class="flex items-center gap-3">' +
+      '<div class="flex items-center gap-x-5 lg:gap-x-7">' +
         '<button id="navToggle" class="lg:hidden material-symbols-outlined text-on-surface-variant">menu</button>' +
         '<a class="flex items-center gap-2" href="' + D.home + '">' +
           '<span class="material-symbols-outlined text-neon-cyan text-[28px]">database</span>' +
-          '<span class="font-bold text-neon-cyan tracking-tight" style="font-family:Hanken Grotesk">EvolutionDB</span>' +
-          '<span class="hidden sm:inline text-on-surface-variant text-sm" style="font-family:JetBrains Mono">' + (D.tagline || "") + '</span>' +
+          '<span class="font-bold text-neon-cyan tracking-tight text-[18px]" style="font-family:Hanken Grotesk">EvolutionDB</span>' +
         '</a>' +
-        (vers ? '<select id="verSel" class="verselect ml-2">' + vers + "</select>" : "") +
+        (vers ? '<select id="verSel" class="verselect">' + vers + "</select>" : "") +
+        '<nav class="hidden lg:flex items-center gap-x-5 xl:gap-x-7">' +
+          [['HOME','https://evolutiondb.org/','home'],['FEATURES','https://evolutiondb.org/features/','features'],['COMPARISON','https://evolutiondb.org/comparison/','comparison'],['DOCS','https://docs.evolutiondb.org/','docs'],['DEVELOPERS','https://developer.evolutiondb.org/','developer'],['AGENT','https://evolutionagent.evolutiondb.org/','agent'],['WIKI','https://wiki.evolutiondb.org/','wiki']].map(function (s) {
+            var base = 'font-label-caps text-[11px] uppercase tracking-widest transition-colors';
+            var cls = (s[2] === D.site)
+              ? 'relative text-neon-cyan ' + base + " after:content-[''] after:absolute after:-bottom-2 after:left-0 after:w-full after:h-0.5 after:bg-neon-cyan after:rounded-full"
+              : 'text-on-surface-variant hover:text-neon-cyan ' + base;
+            return '<a class="' + cls + '" href="' + s[1] + '">' + s[0] + '</a>';
+          }).join('') +
+        '</nav>' +
       '</div>' +
-      '<nav class="flex items-center gap-5 text-sm">' +
-        '<a class="hidden md:inline text-on-surface-variant hover:text-neon-cyan transition-colors" href="https://evolutiondb.org">Home</a>' +
-        '<a class="hidden md:inline text-on-surface-variant hover:text-neon-cyan transition-colors" href="https://developer.evolutiondb.org">Developers</a>' +
-        '<a class="hidden md:inline text-on-surface-variant hover:text-neon-cyan transition-colors" href="https://wiki.evolutiondb.org">Wiki</a>' +
-        '<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>' +
-      '</nav>';
+      '<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all text-[22px]" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>';
     var vsel = document.getElementById("verSel");
     if (vsel) vsel.addEventListener("change", function () {
       // swap the /<oldver>/ segment for the chosen one

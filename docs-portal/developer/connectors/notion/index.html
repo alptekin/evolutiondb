@@ -5,7 +5,7 @@
 <title>Notion connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -50,7 +50,7 @@ pip install evolutiondb-notion-sync</code></pre>
 
  <h2 id="configure">Configure (env vars / auth)</h2>
  <p>
- The <code>Config</code> class reads all settings from environment variables. It loads a
+ The <code>Config</code> class reads all settings from environment variables when it is built. It loads a
  <code>.env</code> file first with <code>os.environ.setdefault</code>. The <code>--env-file</code> flag
  sets the path. The default is <code>.env</code> in the working directory. Real environment variables
  always win over <code>.env</code> entries.
@@ -68,7 +68,7 @@ pip install evolutiondb-notion-sync</code></pre>
  <tr><td><code>NOTION_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>Target memory store name.</td></tr>
  </tbody>
  </table>
- <p>Follow these steps to set up Notion access. They come from the package docstring.</p>
+ <p>Follow these steps to set up Notion access.</p>
  <ol>
  <li>Create an internal integration at <code>https://www.notion.so/my-integrations</code> and copy its secret.</li>
  <li>Export it as <code>NOTION_TOKEN</code> in <code>.env</code> or the calling shell.</li>
@@ -163,7 +163,7 @@ counts = sync_once(cfg, dry_run=<span class="c-key">False</span>)
  <p>Reads a readable title from a page object. It finds the property of type <code>title</code>. It returns <code>"(untitled)"</code> when there is none.</p>
 
  <div class="sig">block_plain(block: Dict) -&gt; str</div>
- <p>Returns the plain text of a single block. It supports these rich-text block types. They are <code>paragraph</code>, <code>heading_1/2/3</code>, <code>bulleted_list_item</code>, <code>numbered_list_item</code>, <code>to_do</code>, <code>quote</code>, <code>callout</code>, <code>toggle</code>, and <code>code</code>. Any other block type gives an empty string.</p>
+ <p>Returns the plain text of a single block. It supports these rich-text block types: <code>paragraph</code>, <code>heading_1/2/3</code>, <code>bulleted_list_item</code>, <code>numbered_list_item</code>, <code>to_do</code>, <code>quote</code>, <code>callout</code>, <code>toggle</code>, and <code>code</code>. Any other block type gives an empty string.</p>
 
  <div class="sig">rich_text_plain(items: Optional[List[Dict]]) -&gt; str</div>
  <p>Joins the <code>plain_text</code> of a Notion rich-text array.</p>
@@ -188,11 +188,11 @@ counts = sync_once(cfg, dry_run=<span class="c-key">False</span>)
  <h2 id="notes">Notes &amp; limitations</h2>
  <ul>
  <li><strong>One-way, page-level only.</strong> The connector reads from Notion and writes to EvolutionDB. It never writes back to Notion. It indexes <em>pages</em>. These are objects of type <code>page</code>. It does not list databases as records. It only flattens top-level page blocks into the body text.</li>
- <li><strong>Incremental via watermark.</strong> <code>/search</code> returns newest pages first, and the loop stops at the stored watermark. So an interrupted or repeated run starts again from the last synced page. It does not walk everything again. The first run against a full workspace walks all visible pages.</li>
+ <li><strong>Incremental via watermark.</strong> <code>/search</code> returns newest pages first. The loop stops at the stored watermark. An interrupted or repeated run starts again from the last synced page. It does not walk everything again. The first run against a full workspace walks all visible pages.</li>
  <li><strong>PII masking is optional.</strong> If <code>evolutiondb-pii</code> is installed, the fields <code>fact</code>, <code>title</code>, and <code>text</code> pass through <code>protect_record</code> before storage. Any companion records are written too. If the import fails, records are stored without masking. There is no warning. The masking step is just skipped.</li>
  <li><strong>SQL value escaping.</strong> <code>state.py</code> builds <code>MEMORY PUT</code> and <code>SELECT</code> statements by string interpolation. It uses a local <code>_e()</code> helper. This helper strips control characters and doubles single quotes. The namespace, store, and key values flow through it. Treat <code>NOTION_MEMORY_STORE</code> and <code>MCP_USER_ID</code> as trusted configuration, not as untrusted input.</li>
  <li><strong>Interval floor.</strong> <code>--interval</code> values below 60 are raised to 60 seconds.</li>
- <li><strong>Version note.</strong> <code>pyproject.toml</code> declares version <code>0.1.1</code>. But <code>notion_sync/__init__.py</code> still reports <code>__version__ = "0.1.0"</code>.</li>
+ <li><strong>Version note.</strong> <code>pyproject.toml</code> declares version <code>0.1.1</code>. <code>notion_sync/__init__.py</code> still reports <code>__version__ = "0.1.0"</code>.</li>
  </ul>
 
  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>
