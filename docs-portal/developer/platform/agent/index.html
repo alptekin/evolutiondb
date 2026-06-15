@@ -93,6 +93,39 @@ result = agent.run(<span class="c-str">"who am I waiting on?"</span>)
     <span class="c-key">print</span>(step[<span class="c-str">"tool"</span>], step[<span class="c-str">"input"</span>])</code></pre>
  <p>The repo also ships <code>examples/demo.py</code>. It is a self-contained morning-assistant task. It starts a throwaway local <code>evosql-server</code> if none is running. Then it runs a real multi-step task. The task recalls and saves memory, drafts a reply, and queues it. If <code>ANTHROPIC_API_KEY</code> is set and <code>anthropic</code> is installed, it uses the real model. If not, it falls back to a scripted model. The tools, memory, and database stay real, but the demo runs offline.</p>
 
+ <h3>Daily Brief</h3>
+ <p>The MCP server runs a background scheduler. One of its jobs is named <code>brief_delivery</code>. By default it runs daily at <strong>07:30 UTC</strong>. The job calls <code>brief.collect()</code> and <code>brief.render()</code>. Then it queues the rendered brief as a self-addressed outbox item with the subject <code>"Your daily brief"</code>. The brief has three parts: a recap of yesterday (activity counts by source plus the meetings you had), today's schedule (your calendar meetings, time and title), and what is pending (open loops: who is waiting on you and at what priority, what you are waiting on, and promises you made).</p>
+ <p>Two earlier jobs keep the data fresh before the 07:30 brief runs. The <code>open_loops</code> job runs about every 30 minutes. The <code>self_model</code> job runs daily at 05:30.</p>
+ <pre><code>☀️  GOOD MORNING ALPTEKIN — 15 Jun 2026
+    Founder, EvolutionDB
+
+📆 YESTERDAY · 2026-06-14
+    7 emails  ·  3 Slack messages
+    🕒 1 meetings: Design review
+
+📅 TODAY'S SCHEDULE (2)
+    🕒 09:30  Sprint standup
+    🕒 14:00  Investor call
+
+🔴 WAITING ON YOU (1)
+   ⭐ Ayse                  ·   2d · approve the contract</code></pre>
+ <p>The brief is <strong>opt-in</strong> and self-hosted. Without the variables below it stays a dry-run draft that is queued to yourself and never sent. To turn on real delivery, set these and run the scheduler as a loop.</p>
+ <table>
+ <thead><tr><th>Env var</th><th>Value</th><th>Purpose</th></tr></thead>
+ <tbody>
+ <tr><td><code>EVOSQL_BRIEF_DELIVERY</code></td><td><code>gmail:you@example.com</code></td><td>Channel plus recipient. The recipient is yourself.</td></tr>
+ <tr><td><code>EVOSQL_BRIEF_AUTOSEND</code></td><td><code>1</code></td><td>Opt in to auto-approve this self-brief. Off by default.</td></tr>
+ <tr><td><code>EVOSQL_SEND_ENABLED</code></td><td><code>1</code></td><td>Turn off the global dry-run guard.</td></tr>
+ <tr><td><code>EVOSQL_SEND_CHANNELS</code></td><td><code>gmail</code></td><td>Channels allowed to deliver.</td></tr>
+ </tbody>
+ </table>
+ <p>You also need a Gmail token scoped to <code>gmail.send</code>. The read-only sync connector cannot send. Then run the scheduler.</p>
+ <pre><code><span class="c-key">export</span> EVOSQL_BRIEF_DELIVERY=<span class="c-str">"gmail:you@example.com"</span>
+<span class="c-key">export</span> EVOSQL_BRIEF_AUTOSEND=1
+<span class="c-key">export</span> EVOSQL_SEND_ENABLED=1 EVOSQL_SEND_CHANNELS=gmail
+python -m mcp_server_evosql.scheduler run     <span class="c-com"># the scheduler loop</span></code></pre>
+ <div class="callout callout-note"><span class="material-symbols-outlined">verified_user</span><div><strong>Why this may auto-send (ADR-004).</strong> The brief goes to <em>you</em>, so there is no third party to protect. That is the one case where <code>EVOSQL_BRIEF_AUTOSEND=1</code> can skip the approval step. Every <em>other</em> outbound reply still requires explicit human approval through <code>approve_send</code>. The agent never sends anything to other people on its own.</div></div>
+
  <h2 id="reference">Reference</h2>
  <p><code>evolution_agent.__init__</code> exports the public surface. It exports <code>AgentLoop</code>, <code>DEFAULT_MODEL</code>, <code>DEFAULT_SYSTEM</code>, and <code>build_anthropic_tools</code>.</p>
 

@@ -346,6 +346,83 @@
         </div>
     </div>
 
+    <!-- Morning Brief Section -->
+    <div id="morning-brief" class="mt-40 w-full">
+        <div class="reveal flex justify-center mb-4">
+            <span class="inline-flex items-center gap-2 px-4 py-1 rounded-full glass-panel border-deep-indigo/30">
+                <span class="w-2 h-2 rounded-full bg-deep-indigo pulse-cyan"></span>
+                <span class="text-deep-indigo font-label-caps text-[10px] tracking-[0.2em] uppercase">Daily Brief</span>
+            </span>
+        </div>
+        <h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-4">Your Morning Brief</h2>
+        <p class="reveal stagger-1 text-center text-on-surface-variant text-body-md max-w-2xl mx-auto mb-16">
+            EvolutionAgent can email you a short brief each morning. It reads from the memory it already keeps, then sums up your day in three parts.
+        </p>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
+            <!-- Left: the three parts -->
+            <div class="space-y-6">
+                <div class="reveal stagger-1 p-margin-md glass-panel rounded-lg flex gap-4">
+                    <span class="material-symbols-outlined text-deep-indigo text-3xl shrink-0">history</span>
+                    <div>
+                        <h3 class="font-headline-md text-[20px] text-pure-white mb-2">Yesterday's Recap</h3>
+                        <p class="text-on-surface-variant text-body-md">Activity counts by source, like 7 emails and 3 Slack messages, plus the meetings you had that day.</p>
+                    </div>
+                </div>
+                <div class="reveal stagger-2 p-margin-md glass-panel rounded-lg flex gap-4">
+                    <span class="material-symbols-outlined text-neon-cyan text-3xl shrink-0">today</span>
+                    <div>
+                        <h3 class="font-headline-md text-[20px] text-pure-white mb-2">Today's Schedule</h3>
+                        <p class="text-on-surface-variant text-body-md">Your calendar meetings for today, each with its start time and title, so you know what is coming.</p>
+                    </div>
+                </div>
+                <div class="reveal stagger-3 p-margin-md glass-panel rounded-lg flex gap-4">
+                    <span class="material-symbols-outlined text-tertiary text-3xl shrink-0">pending_actions</span>
+                    <div>
+                        <h3 class="font-headline-md text-[20px] text-pure-white mb-2">What's Pending</h3>
+                        <p class="text-on-surface-variant text-body-md">Open loops in one place: who is waiting on you and at what priority, what you are waiting on, and the promises you made.</p>
+                    </div>
+                </div>
+                <div class="reveal stagger-4 p-5 glass-panel rounded-lg border border-deep-indigo/20 flex gap-3 items-start">
+                    <span class="material-symbols-outlined text-deep-indigo text-xl shrink-0">verified_user</span>
+                    <p class="text-on-surface-variant text-[13px] leading-relaxed">The brief goes to you and only you, so it can send itself once you opt in. Every other outbound reply still waits for your explicit approval.</p>
+                </div>
+            </div>
+
+            <!-- Right: sample rendered brief (terminal-style card) -->
+            <div class="reveal stagger-2">
+                <div class="glass-panel rounded-lg p-6 font-code-sm text-[13px] leading-relaxed">
+                    <div class="flex items-center gap-2 mb-4 pb-4 border-b border-glass-border">
+                        <span class="w-3 h-3 rounded-full bg-red-500"></span>
+                        <span class="w-3 h-3 rounded-full bg-yellow-500"></span>
+                        <span class="w-3 h-3 rounded-full bg-green-500"></span>
+                        <span class="text-on-surface-variant text-[11px] ml-2">Your daily brief</span>
+                    </div>
+                    <div class="space-y-3 whitespace-pre-wrap break-words">
+                        <div>
+                            <p class="text-pure-white">☀️  GOOD MORNING ALPTEKIN — 15 Jun 2026</p>
+                            <p class="text-on-surface-variant/60 pl-6">Founder, EvolutionDB</p>
+                        </div>
+                        <div>
+                            <p class="text-neon-cyan">📆 YESTERDAY · 2026-06-14</p>
+                            <p class="text-on-surface-variant pl-6">7 emails  ·  3 Slack messages</p>
+                            <p class="text-on-surface-variant pl-6">🕒 1 meetings: Design review</p>
+                        </div>
+                        <div>
+                            <p class="text-neon-cyan">📅 TODAY'S SCHEDULE (2)</p>
+                            <p class="text-on-surface-variant pl-6">🕒 09:30  Sprint standup</p>
+                            <p class="text-on-surface-variant pl-6">🕒 14:00  Investor call</p>
+                        </div>
+                        <div>
+                            <p class="text-tertiary">🔴 WAITING ON YOU (1)</p>
+                            <p class="text-on-surface-variant pl-6">⭐ Ayse                  ·   2d · approve the contract</p>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-on-surface-variant/50 text-[11px] font-code-sm mt-4 text-center">Sample rendered brief. Opt-in and self-hosted: until you enable sending, it stays a queued draft to yourself.</p>
+            </div>
+        </div>
+    </div>
+
     <!-- Connectors Section -->
     <div id="connectors" class="mt-40 w-full">
         <h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-4">14 Data Sources</h2>

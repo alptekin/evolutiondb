@@ -30,6 +30,50 @@ def _load(backend, store, ns):
     return out
 
 
+# sources that count as "activity" in the yesterday recap (calendar shown
+# separately as meetings, so gcal is intentionally excluded here)
+_INGEST_SRC = ("gmail", "outlook", "slack", "teams", "imessage",
+               "notes", "browser", "github", "youtube", "azure")
+
+# activity-count nouns, by locale code, English fallback. Kept here (not in the
+# locale files) so the recap's plural nouns stay next to the counting logic.
+SRC_LABEL = {
+    "en": {"gmail": "emails", "outlook": "emails", "slack": "Slack messages",
+           "teams": "Teams messages", "imessage": "iMessages", "notes": "notes",
+           "browser": "pages", "github": "GitHub items", "youtube": "videos",
+           "azure": "Azure DevOps items"},
+    "tr": {"gmail": "e-posta", "outlook": "e-posta", "slack": "Slack mesajı",
+           "teams": "Teams mesajı", "imessage": "iMessage", "notes": "not",
+           "browser": "sayfa", "github": "GitHub öğesi", "youtube": "video",
+           "azure": "Azure DevOps öğesi"},
+}
+
+
+def _primary_rows(backend, ns):
+    """Every row in the primary memory store (the ingested feed)."""
+    from .server import _e
+    out = []
+    for row in backend._query(
+            f"SELECT mem_value FROM __mem_{backend.memory} "
+            f"WHERE mem_namespace = '{_e(ns)}'") or []:
+        try:
+            out.append(json.loads(row[0]))
+        except Exception:
+            pass
+    return out
+
+
+def _row_day(rec):
+    """The day (YYYY-MM-DD) a synced row belongs to, taken from whichever ISO
+    timestamp field its connector wrote (gmail=sent_at, slack=created_at, ...),
+    else '' when none is present."""
+    for f in ("created_at", "sent_at", "when", "date", "timestamp"):
+        v = rec.get(f)
+        if isinstance(v, str) and len(v) >= 10:
+            return v[:10]
+    return ""
+
+
 def collect(backend, ns):
     loops = _load(backend, backend.loops_store, ns)
     selfm = {d.get("section"): d.get("content")
@@ -56,8 +100,35 @@ def collect(backend, ns):
                                    d.get("age_days", 999)))
     waiting_them.sort(key=lambda d: d.get("age_days", 999))
     promises.sort(key=lambda d: d.get("age_days", 999))
+
+    # day context: yesterday's activity recap + today's schedule, from the
+    # calendar (source="gcal") and ingested feed in one pass over the store.
+    from . import meeting
+    today = meeting.resolve_day("today")
+    yday = meeting.resolve_day("yesterday")
+    rows = _primary_rows(backend, ns)
+
+    def _evday(rec):
+        s = rec.get("start") or ""
+        return s[:10] if len(s) >= 10 else ""
+
+    events = [r for r in rows
+              if r.get("source") == "gcal" and r.get("kind") == "event"]
+    today_events = sorted([e for e in events if _evday(e) == today],
+                          key=lambda e: (e.get("start") or ""))
+    yest_meetings = sorted([e for e in events if _evday(e) == yday],
+                           key=lambda e: (e.get("start") or ""))
+    y_counts = {}
+    for r in rows:
+        src = r.get("source")
+        if src in _INGEST_SRC and _row_day(r) == yday:
+            y_counts[src] = y_counts.get(src, 0) + 1
+
     return {"self": selfm, "waiting_me": waiting_me, "waiting_them": waiting_them,
-            "promises": promises, "stale": stale}
+            "promises": promises, "stale": stale,
+            "today_events": today_events,
+            "yesterday": {"date": yday, "counts": y_counts,
+                          "meetings": yest_meetings}}
 
 
 def _line(d):
@@ -79,6 +150,35 @@ def render(data, name="", lang_set=True, lang="english") -> str:
     if role:
         L.append(f"    {role[:96]}")
     L.append("")
+
+    # ---- yesterday recap ----
+    labels = SRC_LABEL.get(locales.normalize_lang(lang), SRC_LABEL["en"])
+    yd = data.get("yesterday") or {}
+    L.append(f"📆 {U.get('yesterday_header', 'YESTERDAY')} · {yd.get('date', '')}")
+    counts = yd.get("counts") or {}
+    parts = [f"{counts[s]} {labels.get(s, s)}" for s in _INGEST_SRC if counts.get(s)]
+    if parts:
+        L.append("    " + "  ·  ".join(parts))
+    ym = yd.get("meetings") or []
+    if ym:
+        titles = ", ".join((m.get("summary") or "—")[:28] for m in ym[:4])
+        L.append(f"    🕒 {len(ym)} {U.get('meetings_word', 'meetings')}: {titles}")
+    if not parts and not ym:
+        L.append("    " + U.get("quiet_day", "A quiet day."))
+    L.append("")
+
+    # ---- today's schedule ----
+    te = data.get("today_events") or []
+    L.append(f"📅 {U.get('today_schedule', 'TODAY')} ({len(te)})")
+    if not te:
+        L.append("    " + U.get("no_meetings_today", "No meetings scheduled."))
+    for m in te[:8]:
+        start = m.get("start") or ""
+        when = (U.get("all_day", "all day") if m.get("all_day")
+                else (start[11:16] if "T" in start and len(start) >= 16 else ""))
+        L.append(f"    🕒 {when:5}  {(m.get('summary') or '—')[:60]}")
+    L.append("")
+
     L.append(f"🔴 {U['waiting_on_you']} ({len(data['waiting_me'])})")
     if not data["waiting_me"]:
         L.append(U["waiting_on_you_empty"])

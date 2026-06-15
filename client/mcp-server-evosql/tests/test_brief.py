@@ -92,6 +92,50 @@ def test_render_lists_waiting_lines():
     assert "⭐" in out                                   # high-priority marker
 
 
+def test_collect_day_context_events_and_activity():
+    # yesterday recap (activity counts + meetings) and today's schedule, derived
+    # from the primary memory store's calendar + ingested feed.
+    from mcp_server_evosql import meeting
+    today = meeting.resolve_day("today")
+    yday = meeting.resolve_day("yesterday")
+    b = FakeBackend()
+    b.put(b.memory, NS, "gcal_event_t1",
+          {"source": "gcal", "kind": "event", "summary": "Standup",
+           "start": today + "T09:00:00+00:00"})
+    b.put(b.memory, NS, "gcal_event_y1",
+          {"source": "gcal", "kind": "event", "summary": "Demo",
+           "start": yday + "T15:00:00+00:00"})
+    b.put(b.memory, NS, "gmail_1",
+          {"source": "gmail", "kind": "email", "sent_at": yday + "T10:00:00+00:00"})
+    b.put(b.memory, NS, "gmail_2",
+          {"source": "gmail", "kind": "email", "sent_at": yday + "T11:00:00+00:00"})
+    b.put(b.memory, NS, "slack_1",
+          {"source": "slack", "kind": "message", "created_at": yday + "T12:00:00+00:00"})
+    b.put(b.memory, NS, "gmail_old",
+          {"source": "gmail", "kind": "email", "sent_at": "2000-01-01T00:00:00+00:00"})
+
+    data = brief.collect(b, NS)
+    assert [e["summary"] for e in data["today_events"]] == ["Standup"]
+    assert [m["summary"] for m in data["yesterday"]["meetings"]] == ["Demo"]
+    assert data["yesterday"]["counts"] == {"gmail": 2, "slack": 1}  # old row excluded
+    assert data["yesterday"]["date"] == yday
+
+
+def test_render_includes_day_sections():
+    from mcp_server_evosql import locales
+    U = locales.ui("english")
+    data = {"self": {}, "waiting_me": [], "waiting_them": [], "promises": [],
+            "stale": [],
+            "today_events": [{"summary": "Standup", "all_day": False,
+                              "start": "2026-06-15T09:00:00+00:00"}],
+            "yesterday": {"date": "2026-06-14", "counts": {"gmail": 2},
+                          "meetings": [{"summary": "Demo"}]}}
+    out = brief.render(data, name="alp", lang_set=True)
+    assert U["yesterday_header"] in out and U["today_schedule"] in out
+    assert "2 emails" in out and "Demo" in out
+    assert "Standup" in out and "09:00" in out
+
+
 def test_queue_drafts_creates_pending():
     os.environ.pop("EVOSQL_LOOP_LLM", None)              # draft is the off-note
     from mcp_server_evosql import outbox
@@ -128,6 +172,8 @@ def main():
                test_render_shows_counts_and_sections,
                test_render_language_nag_only_when_unset,
                test_render_lists_waiting_lines,
+               test_collect_day_context_events_and_activity,
+               test_render_includes_day_sections,
                test_queue_drafts_creates_pending,
                test_approve_queued_all_dry_runs_without_send):
         fn()
