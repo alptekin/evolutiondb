@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>25. Roles &amp; Privileges | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>25. Roles &amp; Privileges</h1>
+<p class="lede">EvolutionDB controls who may connect and what they may do. It uses three things stored in the catalog. There are login users, non-login roles, and object privileges. Privileges are checked with a waterfall that tries the most specific scope first. The waterfall order is TABLE&nbsp;&rarr;&nbsp;SCHEMA&nbsp;&rarr;&nbsp;DATABASE.</p>
+
+<p>This chapter describes the access-control model. It matches how the engine works in <code>evolution/db/UserMgmt.c</code> and <code>evolution/db/GrantMgmt.c</code>. All users, roles, and grants are stored as normal rows. The rows live in the system catalog B+ trees inside the <code>evosql.db</code> file. There is no separate authentication file. EvolutionDB sometimes works differently from the SQL standard or PostgreSQL. When it does, this page points out the difference clearly.</p>
+
+<h2 id="overview">25.1. Overview of the access-control model</h2>
+<p>Three catalog tables support everything in this chapter.</p>
+<dl class="params">
+<dt><code>CAT_SYS_USERS</code></dt>
+<dd>One row per principal. A principal is a <em>login user</em> with <code>is_role = 0</code>. Or it is a <em>role</em> with <code>is_role = 1</code>. The key is the principal name. The record holds the PBKDF2-SHA256 password hash. The hash is empty for roles.</dd>
+<dt><code>CAT_SYS_GRANTS</code></dt>
+<dd>One row per grant. The composite key is <code>username:scope_type:scope_name</code>. The record stores a comma-separated privilege list and a single <code>grant_option</code> flag. Role memberships are stored in this same tree. They use <code>scope_type = ROLE</code>.</dd>
+</dl>
+<p>Two principals are special. They are not stored in a table. They exist on their own.</p>
+<ul>
+<li><strong><code>admin</code></strong>, the built-in superuser. <a href="#admin-superuser">§25.6</a>.</li>
+<li><strong><code>PUBLIC</code></strong>, a special principal. Its grants apply to every user. They add up with the user's own grants. <a href="#public">§25.5</a>.</li>
+</ul>
+
+<div class="callout">
+<p><strong>Not the SQL-standard separation.</strong> The SQL standard and PostgreSQL keep three things apart in the catalog. These are <em>authorization identifiers</em>, <em>roles</em>, and <em>privileges</em>. EvolutionDB does it differently. Users and roles share one catalog table. The <code>is_role</code> flag is the only thing that tells them apart. A role is just a principal that cannot log in but can hold grants. There is no privilege inheritance graph. The only inheritance comes from direct role membership. See <a href="#roles">§25.4</a>.</p>
+</div>
+
+<h2 id="users">25.2. Users</h2>
+<p>A user is a principal that can log in and open a session. You create, change, drop, and list users with SQL. The adaptor catches this SQL and sends it to <code>UserMgmt.c</code>.</p>
+
+<h3 id="create-user">25.2.1. Creating users</h3>
+<p>See the <a href="/3.0/ref/create-user/">CREATE USER</a> reference page for full syntax.</p>
+<pre class="synopsis"><code><span class="c-key">CREATE USER</span> name <span class="c-key">PASSWORD</span> <span class="c-str">'password'</span>;</code></pre>
+<p>You must give both a name and a password. The password cannot be empty. If either one is empty, you get an error. The SQLSTATE is <code>22023</code>, which means <em>invalid parameter value</em>. The engine hashes the password with PBKDF2-SHA256. It does this before it takes the catalog write lock. Then it creates the user row. It only creates the row if no principal of that name already exists. A duplicate name raises SQLSTATE <code>42710</code>, which means <em>duplicate object</em>.</p>
+<pre><code><span class="c-com">-- create an application login</span>
+<span class="c-key">CREATE USER</span> app_rw <span class="c-key">PASSWORD</span> <span class="c-str">'s3cret-pw'</span>;</code></pre>
+
+<h3 id="alter-user">25.2.2. Changing a password</h3>
+<pre class="synopsis"><code><span class="c-key">ALTER USER</span> name <span class="c-key">PASSWORD</span> <span class="c-str">'newpassword'</span>;</code></pre>
+<p><code>ALTER USER ... PASSWORD</code> hashes the new password again. Then it writes over the stored hash. EvolutionDB only supports the password change form of <code>ALTER USER</code>. You cannot rename a user. You cannot change other attributes. PostgreSQL has privilege attributes like <code>SUPERUSER</code> and <code>CREATEDB</code>. EvolutionDB does not have these. If you alter a name that does not exist, you get SQLSTATE <code>42704</code>, which means <em>undefined object</em>.</p>
+<pre><code><span class="c-key">ALTER USER</span> app_rw <span class="c-key">PASSWORD</span> <span class="c-str">'rotated-pw'</span>;</code></pre>
+
+<h3 id="drop-user">25.2.3. Dropping users</h3>
+<pre class="synopsis"><code><span class="c-key">DROP USER</span> name;</code></pre>
+<p>Dropping a user removes the catalog row. The engine also has <code>DropUserGrants()</code>. It deletes every grant whose key starts with that username. So a dropped user leaves no orphaned grants behind. Dropping a user that does not exist raises SQLSTATE <code>42704</code>.</p>
+
+<h3 id="list-users">25.2.4. Listing users</h3>
+<p><code>SHOW USERS</code> lists the principals in <code>CAT_SYS_USERS</code>. It leaves out anything with <code>is_role = 1</code>. So it returns login users only. See <a href="/3.0/ref/show/">SHOW</a>.</p>
+<pre><code><span class="c-key">SHOW USERS</span>;</code></pre>
+
+<h2 id="authentication">25.3. Authentication</h2>
+<p>When a session sends credentials, <code>AuthenticateUser()</code> runs the following steps in order.</p>
+<ol>
+<li>The engine makes the username lower case and looks it up in the catalog. If that fails, it tries the original case as a fallback. This makes login <strong>case-insensitive</strong> in most cases. It still works for a name stored with mixed case.</li>
+<li>If the matched principal is a role with <code>is_role = 1</code>, authentication fails right away. <strong>Roles cannot log in.</strong></li>
+<li>The engine checks the password against the stored hash. It uses a constant-time comparison. This helps stop timing attacks.</li>
+</ol>
+
+<h3 id="password-hashing">25.3.1. Password hashing</h3>
+<p>Passwords are never stored in plaintext. The stored value is a PBKDF2-SHA256 string. It describes itself. It looks like this.</p>
+<pre><code>pbkdf2:100000:&lt;32-hex-salt&gt;:&lt;64-hex-hash&gt;</code></pre>
+<dl class="params">
+<dt>Algorithm</dt><dd>PBKDF2 with HMAC-SHA256.</dd>
+<dt>Iterations</dt><dd><code>100000</code>. This is the compiled constant <code>PBKDF2_ITERATIONS</code>.</dd>
+<dt>Salt</dt><dd>16 random bytes per password. This is <code>PBKDF2_SALT_LEN</code>. It is stored as hex in the hash string.</dd>
+<dt>Derived key</dt><dd>32 bytes. This is <code>PBKDF2_KEY_LEN</code>.</dd>
+</dl>
+<p>The engine wipes plaintext password buffers and derived hashes from memory after use. It uses <code>evo_secure_wipe()</code> for this.</p>
+
+<h3 id="initial-admin">25.3.2. The initial admin password</h3>
+<p>On first start, the engine sets up the <code>admin</code> login from environment variables.</p>
+<dl class="params">
+<dt><code>EVOSQL_USER_NAME</code></dt>
+<dd>The first login name. It defaults to <code>admin</code> when it is unset or empty.</dd>
+<dt><code>EVOSQL_PASSWORD</code></dt>
+<dd>The first password. If it is unset or empty, the engine makes a random 16-character password. It hashes the password, stores it, and prints it to stdout <strong>one time only</strong>. This works like MySQL <code>--initialize</code>. The password is never shown again. You can change it later with <code>ALTER USER</code>.</dd>
+</dl>
+<pre><code><span class="c-com"># first boot with a generated password (printed once on stdout)</span>
+./adaptor/evosql-server
+
+<span class="c-com"># or pin the credentials up front</span>
+EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></pre>
+<div class="callout">
+<p><strong>Documentation vs. source note.</strong> The project security guideline recommends a PBKDF2 iteration count of at least 600,000. The shipped 3.0 engine compiles <code>PBKDF2_ITERATIONS = 100000</code>. This page documents the value the code really uses. Treat the higher figure as a hardening target. It is not the current behavior.</p>
+</div>
+
+<h2 id="roles">25.4. Roles</h2>
+<p>A role is a principal that cannot log in. It can hold privileges. You can grant it to users. Roles let you build a set of privileges one time. Then you can attach that set to many users.</p>
+
+<h3 id="role-lifecycle">25.4.1. Creating and dropping roles</h3>
+<pre class="synopsis"><code><span class="c-key">CREATE ROLE</span> name;
+<span class="c-key">DROP ROLE</span> name;</code></pre>
+<p><code>CREATE ROLE</code> fails if any user <em>or</em> role of that name already exists. Users and roles share one namespace. <code>DROP ROLE</code> first checks that the target really is a role with <code>is_role = 1</code>. Then it does a full cleanup. It removes the role's catalog row. It deletes all grants <em>held by</em> the role. It removes every membership edge that points <em>to</em> the role. So no user stays a member of a role that no longer exists.</p>
+
+<h3 id="role-membership">25.4.2. Granting roles to users</h3>
+<pre class="synopsis"><code><span class="c-key">GRANT</span> role_name <span class="c-key">TO</span> user_name;
+<span class="c-key">REVOKE</span> role_name <span class="c-key">FROM</span> user_name;</code></pre>
+<p>Membership is itself a catalog grant. It is stored with <code>scope_type = ROLE</code>. The scope name is equal to the role. The privilege text is the literal word <code>MEMBER</code>. Granting a role runs three checks. The role must exist. The target user must exist. The target must be a user and not another role. You cannot grant a role to a principal that is itself a role. <strong>Roles cannot be nested.</strong> A duplicate membership is also rejected.</p>
+<pre><code><span class="c-key">CREATE ROLE</span> reporting;
+<span class="c-key">GRANT SELECT</span> <span class="c-key">ON SCHEMA</span> testdb.public <span class="c-key">TO</span> reporting;
+<span class="c-key">GRANT</span> reporting <span class="c-key">TO</span> app_rw;   <span class="c-com">-- app_rw now inherits reporting's grants</span></code></pre>
+
+<h3 id="role-inheritance">25.4.3. How role privileges are inherited</h3>
+<p>The engine runs a privilege check in steps. First it checks the user's own grants and the <code>PUBLIC</code> grants. If none of those decide the result, it looks up the user's direct role memberships. Then it runs the same waterfall again for each role. See <a href="#waterfall">§25.7</a>. Membership goes only one level deep. The engine does not follow a role granted to another role. In any case, that kind of nesting is not allowed at grant time. A check looks at no more than 16 role memberships per user.</p>
+
+<h2 id="public">25.5. The PUBLIC pseudo-principal</h2>
+<p>Grants made to <code>PUBLIC</code> apply to every user. EvolutionDB treats <code>PUBLIC</code> grants as <strong>additive</strong> only. During a check, the engine first looks at the user's own grants. If the result is still undecided, it looks at <code>PUBLIC</code> grants. It uses the same waterfall for both. So a <code>REVOKE</code> for one user does <em>not</em> cancel a privilege granted to <code>PUBLIC</code>. To remove that privilege, you must revoke it from <code>PUBLIC</code> directly.</p>
+<div class="callout">
+<p><strong>No default PUBLIC grants.</strong> PostgreSQL grants some default privileges to <code>PUBLIC</code> on new objects. EvolutionDB does not. A new EvolutionDB database has <strong>no</strong> implicit <code>PUBLIC</code> grants. This is a closed default like MySQL. New non-admin users start with no access. They get access only after you make a grant.</p>
+</div>
+
+<h2 id="admin-superuser">25.6. The admin superuser</h2>
+<p>The principal named <code>admin</code> is a hard-coded superuser. The name is matched without case. Every privilege check for <code>admin</code> returns <em>allowed</em> right away. It does no catalog I/O. <code>HasGrantOption()</code> also always returns true for <code>admin</code>. The engine seeds one grant on first start to keep the rule consistent. This grant gives <code>admin</code> the <code>ALL</code> privilege on <code>DATABASE *</code> with grant option. The in-memory fast path means <code>admin</code> is authorized even before any grant row is read.</p>
+<div class="callout">
+<p><strong>Caution.</strong> Superuser status is fixed to the exact name <code>admin</code>. There is no <code>ALTER USER ... SUPERUSER</code>. You cannot promote or demote superuser status at runtime. Treat the <code>admin</code> credential as the master key to the instance.</p>
+</div>
+
+<h2 id="privileges">25.7. Privileges and scopes</h2>
+<p>EvolutionDB has six object privileges. It also has the <code>ALL</code> shorthand. Each grant stores them as a comma-separated text list. The engine parses this list into a bitmask with <code>parse_privs()</code> when it checks a privilege. Privilege keywords are case-insensitive. <code>ALL</code> and <code>ALL PRIVILEGES</code> mean the same thing.</p>
+<table>
+<thead><tr><th>Keyword</th><th>Internal bit</th><th>Governs</th></tr></thead>
+<tbody>
+<tr><td><code>SELECT</code></td><td><code>0x01</code></td><td>Reading rows</td></tr>
+<tr><td><code>INSERT</code></td><td><code>0x02</code></td><td>Adding rows</td></tr>
+<tr><td><code>UPDATE</code></td><td><code>0x04</code></td><td>Modifying rows</td></tr>
+<tr><td><code>DELETE</code></td><td><code>0x08</code></td><td>Removing rows</td></tr>
+<tr><td><code>CREATE</code></td><td><code>0x10</code></td><td>Creating objects</td></tr>
+<tr><td><code>DROP</code></td><td><code>0x20</code></td><td>Dropping objects</td></tr>
+<tr><td><code>ALL</code></td><td><code>0x3F</code></td><td>All six of the above</td></tr>
+</tbody>
+</table>
+<p>An unknown token adds nothing to the mask. A privilege string that parses to an empty mask is rejected. Both <code>GRANT</code> and <code>REVOKE</code> reject it as an invalid privilege. The SQLSTATE is <code>42501</code>.</p>
+
+<h3 id="scopes">25.7.1. Scope levels</h3>
+<p>A grant attaches a privilege set to one of three object scopes. The scope name is turned into a standard dotted path.</p>
+<table>
+<thead><tr><th>Scope</th><th>Type code</th><th>Scope-name form</th></tr></thead>
+<tbody>
+<tr><td><code>DATABASE</code></td><td>1</td><td><code>database</code>, or <code>*</code> for the wildcard</td></tr>
+<tr><td><code>SCHEMA</code></td><td>2</td><td><code>database.schema</code></td></tr>
+<tr><td><code>TABLE</code></td><td>3</td><td><code>database.schema.table</code></td></tr>
+<tr><td><code>ROLE</code></td><td>4</td><td><code>rolename</code>. This is a membership edge. See <a href="#role-membership">§25.4.2</a>.</td></tr>
+</tbody>
+</table>
+<p>The <code>*</code> wildcard is only honored at <code>DATABASE</code> scope. It is the mechanism behind the seeded admin grant. There is no schema-level or table-level wildcard. There are also no column-, sequence-, or routine-level privileges.</p>
+
+<h2 id="grant-revoke">25.8. GRANT and REVOKE</h2>
+<p>Full syntax is on the <a href="/3.0/ref/grant/">GRANT</a> and <a href="/3.0/ref/revoke/">REVOKE</a> reference pages.</p>
+<pre class="synopsis"><code><span class="c-key">GRANT</span> priv[, priv ...] <span class="c-key">ON</span> {<span class="c-key">DATABASE</span> | <span class="c-key">SCHEMA</span> | <span class="c-key">TABLE</span>} object <span class="c-key">TO</span> user [<span class="c-key">WITH GRANT OPTION</span>];
+<span class="c-key">REVOKE</span> priv[, priv ...] <span class="c-key">ON</span> {<span class="c-key">DATABASE</span> | <span class="c-key">SCHEMA</span> | <span class="c-key">TABLE</span>} object <span class="c-key">FROM</span> user;</code></pre>
+
+<h3 id="grant-semantics">25.8.1. GRANT semantics</h3>
+<p>A grant is keyed by <code>(user, scope_type, scope_name)</code>. If no grant exists for that triple, a new row is created with the parsed privilege mask. If a grant already exists, the new privileges are <strong>merged</strong> (bitwise OR) into the existing set rather than replacing it. <code>WITH GRANT OPTION</code> is sticky. Specifying it sets the option to true. Omitting it leaves an already-set option untouched. <code>GRANT</code> never silently drops a privilege the principal already held at that scope.</p>
+<pre><code><span class="c-key">CREATE USER</span> analyst <span class="c-key">PASSWORD</span> <span class="c-str">'pw'</span>;
+<span class="c-key">GRANT SELECT</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">TO</span> analyst;
+<span class="c-key">GRANT INSERT</span>, <span class="c-key">UPDATE</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">TO</span> analyst;
+<span class="c-com">-- analyst now holds SELECT,INSERT,UPDATE on that table</span></code></pre>
+
+<h3 id="grant-option">25.8.2. WITH GRANT OPTION</h3>
+<p>The grant option is a single boolean stored on the grant row. It is not tracked per individual privilege. <code>HasGrantOption()</code> answers whether a principal may re-grant a privilege. It returns true if the principal holds the requested privilege at the exact scope and the row's grant-option flag is set. For <code>DATABASE</code> scope the wildcard <code>*</code> grant is also consulted. <code>admin</code> always passes.</p>
+
+<h3 id="revoke-semantics">25.8.3. REVOKE semantics</h3>
+<p><code>REVOKE</code> targets the same <code>(user, scope_type, scope_name)</code> triple. If no matching grant exists, it errors with SQLSTATE <code>42704</code>. Otherwise the requested privileges are cleared from the mask. If some privileges remain, the grant row is rewritten with the reduced set. If none remain, the row is deleted entirely. Revoking <code>ALL</code> additionally clears the grant option.</p>
+<pre><code><span class="c-key">REVOKE INSERT</span>, <span class="c-key">UPDATE</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">FROM</span> analyst;
+<span class="c-com">-- analyst retains only SELECT on that table</span>
+<span class="c-key">REVOKE</span> <span class="c-key">ALL</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">FROM</span> analyst;
+<span class="c-com">-- grant row removed entirely</span></code></pre>
+<div class="callout">
+<p><strong>No cascading revoke.</strong> <code>REVOKE</code> affects only the named principal's own grant row. It does not cascade to principals who received the privilege from that principal via <code>WITH GRANT OPTION</code>. There is no <code>RESTRICT</code>/<code>CASCADE</code> clause. There is also no separate form to revoke only the grant option. To drop the option, you must revoke and re-grant.</p>
+</div>
+
+<h3 id="show-grants">25.8.4. Inspecting grants</h3>
+<p><code>SHOW GRANTS</code> lists grants for the current user. <code>SHOW GRANTS FOR user</code> lists them for a named principal. With no user specified, the engine enumerates every user's grants and then appends the <code>PUBLIC</code> grants. See <a href="/3.0/ref/show/">SHOW</a>.</p>
+<pre><code><span class="c-key">SHOW GRANTS</span> <span class="c-key">FOR</span> analyst;</code></pre>
+
+<h2 id="waterfall">25.9. The TABLE &rarr; SCHEMA &rarr; DATABASE waterfall</h2>
+<p>Authorization for a data operation is decided by <code>CheckPrivilege(username, database, schema, table, privilege)</code>. The check is <strong>most-specific-first</strong> and short-circuits the moment any source grants the needed bit. The order is fixed.</p>
+<ol>
+<li><strong>admin fast path.</strong> If the principal is <code>admin</code>, return allowed at once.</li>
+<li><strong>User grants, by scope, narrowest first.</strong>
+ <ol>
+ <li>TABLE, <code>database.schema.table</code> (only attempted when all three are present)</li>
+ <li>SCHEMA, <code>database.schema</code></li>
+ <li>DATABASE, the named <code>database</code>, then the <code>*</code> wildcard</li>
+ </ol>
+</li>
+<li><strong>PUBLIC grants.</strong> The same TABLE&rarr;SCHEMA&rarr;DATABASE&rarr;<code>*</code> sequence runs for the <code>PUBLIC</code> principal.</li>
+<li><strong>Role-inherited grants.</strong> For each of the user's roles, the same waterfall runs again.</li>
+<li>If nothing matched, return <em>denied</em>.</li>
+</ol>
+<p>Most specific wins first. A privilege found at TABLE scope ends the search before SCHEMA or DATABASE rows are even read. The check stops at the first granting source. The waterfall can only add authority as it widens. It never withholds a broad grant because a narrower scope is silent. There is no deny rule. A grant either exists and permits, or it is absent.</p>
+<pre><code><span class="c-com">-- broad read at the database level</span>
+<span class="c-key">GRANT SELECT</span> <span class="c-key">ON DATABASE</span> testdb <span class="c-key">TO</span> analyst;
+<span class="c-com">-- a SELECT on testdb.public.orders is now allowed:</span>
+<span class="c-com">-- TABLE and SCHEMA rows are absent, the DATABASE grant matches.</span>
+
+<span class="c-com">-- a narrower write grant, layered on top</span>
+<span class="c-key">GRANT INSERT</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">TO</span> analyst;
+<span class="c-com">-- INSERT on that one table is allowed via the TABLE grant;</span>
+<span class="c-com">-- INSERT elsewhere in testdb remains denied.</span></code></pre>
+
+<h2 id="errors">25.10. Error codes</h2>
+<p>The user- and privilege-management paths set the following SQLSTATEs. They are defined in <code>evosql_errcodes.h</code>.</p>
+<table>
+<thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Raised when</th></tr></thead>
+<tbody>
+<tr><td><code>42501</code></td><td>INSUFFICIENT_PRIVILEGE</td><td>An empty/invalid privilege list is given to <code>GRANT</code> or <code>REVOKE</code>.</td></tr>
+<tr><td><code>42704</code></td><td>UNDEFINED_OBJECT</td><td><code>REVOKE</code> finds no matching grant; <code>ALTER USER</code>/<code>DROP USER</code> names a user that does not exist.</td></tr>
+<tr><td><code>42710</code></td><td>DUPLICATE_OBJECT</td><td><code>CREATE USER</code> names a principal that already exists.</td></tr>
+<tr><td><code>22023</code></td><td>INVALID_PARAMETER_VALUE</td><td>A required username or password is missing/empty.</td></tr>
+<tr><td><code>EX000</code></td><td>INTERNAL_ERROR</td><td>Password hashing or a catalog write fails internally.</td></tr>
+</tbody>
+</table>
+
+<h2 id="limitations">25.11. Notes and limitations</h2>
+<div class="callout">
+<p><strong>What EvolutionDB 3.0 does not implement.</strong> The model is deliberately narrower than the SQL standard or PostgreSQL. These are the notable gaps.</p>
+<ul>
+<li>No column-, sequence-, function/procedure-, or large-object-level privileges. Only the six object privileges in <a href="#privileges">§25.7</a> exist, at DATABASE/SCHEMA/TABLE scope only.</li>
+<li>No object <code>OWNER</code> concept and therefore no implicit owner privileges. Authorization comes entirely from explicit grants (plus the <code>admin</code> fast path and <code>PUBLIC</code>).</li>
+<li>No role inheritance graph beyond one level of direct membership, and roles cannot be nested. At most 16 memberships per user are consulted per check.</li>
+<li>No cascading <code>REVOKE</code>, no <code>RESTRICT</code>/<code>CASCADE</code>, and no standalone way to drop only a grant option.</li>
+<li>No <code>USAGE</code>, <code>TEMPORARY</code>, <code>CONNECT</code>, or other PostgreSQL privilege keywords.</li>
+<li><code>ALTER USER</code> changes only the password; there are no login attributes or role flags.</li>
+<li>Superuser is fixed to the name <code>admin</code> and cannot be reassigned.</li>
+<li>The shipped PBKDF2 iteration count is <code>100000</code>, below the project's stated 600,000 hardening target.</li>
+</ul>
+</div>
+
+<h2 id="see-also">25.12. See also</h2>
+<ul>
+<li><a href="/3.0/ref/create-user/">CREATE USER</a>, create a login principal.</li>
+<li><a href="/3.0/ref/grant/">GRANT</a>, grant privileges or role membership.</li>
+<li><a href="/3.0/ref/revoke/">REVOKE</a>, remove privileges or role membership.</li>
+<li><a href="/3.0/ref/show/">SHOW</a>, <code>SHOW USERS</code>, <code>SHOW GRANTS</code>.</li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

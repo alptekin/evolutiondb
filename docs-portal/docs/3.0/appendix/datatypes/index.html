@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>B. Data Type Reference | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+<h1>B. Data Type Reference</h1>
+<p class="lede">This page lists every data type EvolutionDB 3.0 understands. It shows the integer <em>type code</em> the parser gives each type. It shows the byte layout used on disk in the binary tuple format. It also shows how each value is read back as text.</p>
+
+<p>This appendix comes straight from two modules that define type behaviour. The first is the grammar in <code>evolution/parser/evoparser.y</code>. It assigns a type code to every declared column. The second is the codecs in <code>evolution/db/tuple_format.c</code>. They encode and decode values. When EvolutionDB behaves differently from the SQL standard or from PostgreSQL, this chapter says so clearly. The parser accepts many type <em>names</em> so that MySQL and PostgreSQL source code still works. At the storage layer those names fold into a much smaller set of physical encodings. That difference is the main point of this reference.</p>
+
+<h2 id="type-codes">B.1. Type codes and the family/size split</h2>
+
+<p>When you declare a column, the parser does not store a type name. It works out a single integer <em>type code</em> and saves that in the system catalog. The encoding uses a base-10000 split. It works like this.</p>
+
+<pre class="synopsis"><code><span class="c-key">type_code</span> = family × 10000 + size
+
+family = type_code / 10000      <span class="c-com">// integer division</span>
+size   = type_code % 10000      <span class="c-com">// length, dimension, or modifier</span></code></pre>
+
+<p>The <code>tuple_format.c</code> codec branches only on <code>family</code>. See the <code>type_family()</code> helper. The <code>size</code> part matters for just a few families. It holds the CHAR or VARCHAR length and the VECTOR dimension. The column declaration <code>VARCHAR(50)</code> produces the type code <code>130050</code>. The family is <code>13</code> for string and varchar. The size is <code>50</code>. <code>VECTOR(768)</code> produces <code>260768</code>. The family is <code>26</code>. The dimension is <code>768</code>.</p>
+
+<div class="callout">
+<p><strong>Length modifiers and integer attributes are recorded but not enforced.</strong> The grammar folds extra attributes into the size part of the type code. <code>UNSIGNED</code> adds <code>1000</code>. <code>ZEROFILL</code> adds <code>2000</code> in rule <code>opt_uz</code>. A <code>DECIMAL(p,s)</code> scale adds <code>1000 × s</code> in rule <code>opt_length</code>. A column-level <code>BINARY</code> attribute on text adds <code>4000</code> in rule <code>opt_binary</code>. These bits stay in the catalog. The storage codec never reads them. There is no range check. There is no zero-padding. There is no unsigned arithmetic at the tuple layer. Treat these bits as documentation, not as rules.</p>
+</div>
+
+<h2 id="tuple-layout">B.2. Where a value lives, the binary tuple</h2>
+
+<p>A user-table row is a single binary tuple. It is built by <code>tup_build()</code>. The encodings below make more sense once you know the bytes around each value. Here is the layout.</p>
+
+<pre class="synopsis"><code><span class="c-key">[magic 1B = 0xE7]</span> <span class="c-key">[table_id 4B]</span>          <span class="c-com">// prefix, 5 bytes</span>
+<span class="c-key">[body_len 2B]</span> <span class="c-key">[num_cols 1B]</span> <span class="c-key">[flags 1B]</span>   <span class="c-com">// header, 4 bytes</span>
+<span class="c-key">[xmin 4B]</span> <span class="c-key">[xmax 4B]</span>                       <span class="c-com">// MVCC, 8 bytes - present only if flags &amp; 0x02</span>
+<span class="c-key">[null bitmap]</span>                            <span class="c-com">// ceil(num_cols / 8) bytes</span>
+<span class="c-key">[column data ...]</span>                        <span class="c-com">// per-type encodings, in declared order</span></code></pre>
+
+<p>The matching constants from <code>tuple_format.h</code> are listed below.</p>
+
+<dl class="params">
+<dt><code>TUPLE_MAGIC</code> = 0xE7</dt><dd>This is the first byte of every user-table tuple. A second magic value marks a TOAST stub. It is used for overflow values stored out of line. These values are pulled back in before decoding.</dd>
+<dt><code>TUPLE_PREFIX_SIZE</code> = 5</dt><dd>magic (1) + table_id (4).</dd>
+<dt><code>TUPLE_HEADER_SIZE</code> = 4</dt><dd>body_len (2, little-endian) + num_cols (1) + flags (1).</dd>
+<dt><code>TUPLE_MVCC_SIZE</code> = 8</dt><dd>xmin (4) + xmax (4). This part is present only when the MVCC flag bit is set.</dd>
+<dt><code>TUPLE_MAX_COLS</code> = 255</dt><dd>This is the hard limit on columns per tuple. num_cols is a single byte.</dd>
+</dl>
+
+<p>The <code>flags</code> byte tells you which optional sections are present. It also gives visibility hints. The bits are <code>0x01</code> HAS_NULLS, <code>0x02</code> MVCC, <code>0x04</code> HOT_UPDATED, <code>0x08</code> HEAP_ONLY, <code>0x10</code> XMIN_COMMITTED, and <code>0x20</code> XMIN_ABORTED. A NULL value takes <strong>zero</strong> bytes in the column-data region. It is recorded only by setting its bit in the null bitmap. The encodings below describe non-NULL storage. See <a href="/3.0/ref/insert/">INSERT</a> and the MVCC chapter to learn how the header is filled in.</p>
+
+<h2 id="encodings">B.3. Physical storage by family</h2>
+
+<p>The codec knows exactly seven storage shapes. It picks the shape from <code>family</code>. Every declared type maps onto one of these shapes. All multi-byte numbers are little-endian.</p>
+
+<table>
+<thead><tr><th>Storage shape</th><th>Families</th><th>On-disk encoding</th></tr></thead>
+<tbody>
+<tr><td>32-bit integer</td><td>1, 2, 3, 4, 5</td><td><code>int32</code> LE, 4 bytes. Built with <code>atoi()</code>. Read back with <code>%d</code>.</td></tr>
+<tr><td>64-bit integer</td><td>6</td><td><code>int64</code> LE, 8 bytes. Built with <code>strtoll()</code>.</td></tr>
+<tr><td>Double</td><td>7, 8</td><td><code>double</code> LE, 8 bytes. Read back with <code>%.15g</code>.</td></tr>
+<tr><td>Float</td><td>9</td><td><code>float</code> LE, 4 bytes. Read back with <code>%.7g</code>.</td></tr>
+<tr><td>UUID</td><td>18</td><td>16 raw bytes. Read from and written to the 8-4-4-4-12 hex form.</td></tr>
+<tr><td>Boolean</td><td>22</td><td>1 byte. The value is 0 or 1.</td></tr>
+<tr><td>Vector</td><td>26</td><td><code>dim × 4</code> bytes of <code>float4</code> LE. There is <em>no</em> length prefix. The dimension comes from the type code.</td></tr>
+<tr><td>Array</td><td>25</td><td><code>uint16</code> blob-length prefix + 1-D array blob. See B.6.</td></tr>
+<tr><td>Length-prefixed bytes</td><td>all others (10–17, 23, …)</td><td><code>uint16</code> length + raw bytes. This is the catch-all "string" path.</td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+<p><strong>The string path is the default, and it covers a lot.</strong> Any family not listed above falls into the length-prefixed byte path. This happens in the <code>default:</code> case of <code>tup_build()</code>. So DATE, TIME, TIMESTAMP, DECIMAL, CHAR, VARCHAR, TEXT, BINARY, VARBINARY, BLOB, ENUM, SET, JSON, and YEAR are <strong>all stored as the exact input text</strong>, with a length prefix. There is no numeric DECIMAL form. There is no packed date or time. The tuple layer does not check that JSON is valid or that an ENUM value is a real member. The bytes you send are the bytes that get stored.</p>
+</div>
+
+<h2 id="type-table">B.4. Complete type reference</h2>
+
+<p>This table lists every type the grammar accepts. It shows the type code each one produces and the storage shape it lands in. <code>L</code> is the declared length. <code>N</code> is the vector dimension. <code>p,s</code> is the DECIMAL precision and scale. <code>n</code> is the ENUM or SET member count. A code shown as a plain number is fixed.</p>
+
+<table>
+<thead><tr><th>Declared type</th><th>Family</th><th>Type code</th><th>Stored as</th></tr></thead>
+<tbody>
+<tr><td><code>BIT</code>, <code>TINYINT</code></td><td>1</td><td>10000 + L</td><td>int32 LE (4B)</td></tr>
+<tr><td><code>SMALLINT</code></td><td>2</td><td>20000 + L</td><td>int32 LE (4B)</td></tr>
+<tr><td><code>MEDIUMINT</code></td><td>3</td><td>30000 + L</td><td>int32 LE (4B)</td></tr>
+<tr><td><code>INT</code></td><td>4</td><td>40000 + L</td><td>int32 LE (4B)</td></tr>
+<tr><td><code>INTEGER</code></td><td>5</td><td>50000 + L</td><td>int32 LE (4B)</td></tr>
+<tr><td><code>BIGINT</code></td><td>6</td><td>60000 + L</td><td>int64 LE (8B)</td></tr>
+<tr><td><code>REAL</code></td><td>7</td><td>70000 + L</td><td>double LE (8B)</td></tr>
+<tr><td><code>DOUBLE</code></td><td>8</td><td>80000 + L</td><td>double LE (8B)</td></tr>
+<tr><td><code>FLOAT</code></td><td>9</td><td>90000 + L</td><td>float LE (4B)</td></tr>
+<tr><td><code>DATE</code></td><td>10</td><td>100001</td><td>text, len-prefixed</td></tr>
+<tr><td><code>TIME</code></td><td>10</td><td>100002</td><td>text, len-prefixed</td></tr>
+<tr><td><code>TIMESTAMP</code></td><td>10</td><td>100003</td><td>text, len-prefixed</td></tr>
+<tr><td><code>DATETIME</code></td><td>10</td><td>100004</td><td>text, len-prefixed</td></tr>
+<tr><td><code>YEAR</code></td><td>10</td><td>100005</td><td>text, len-prefixed</td></tr>
+<tr><td><code>DECIMAL(p,s)</code></td><td>11</td><td>110000 + p + 1000·s</td><td>text, len-prefixed</td></tr>
+<tr><td><code>CHAR(L)</code></td><td>12</td><td>120000 + L</td><td>text, len-prefixed</td></tr>
+<tr><td><code>VARCHAR(L)</code></td><td>13</td><td>130000 + L</td><td>text, len-prefixed</td></tr>
+<tr><td><code>BINARY(L)</code></td><td>14</td><td>140000 + L</td><td>text, len-prefixed</td></tr>
+<tr><td><code>VARBINARY(L)</code></td><td>15</td><td>150000 + L</td><td>text, len-prefixed</td></tr>
+<tr><td><code>TINYBLOB / BLOB / MEDIUMBLOB / LONGBLOB</code></td><td>16</td><td>160001–160004</td><td>text, len-prefixed</td></tr>
+<tr><td><code>TINYTEXT</code></td><td>17</td><td>170000 + opt</td><td>text, len-prefixed</td></tr>
+<tr><td><code>TEXT</code></td><td>17</td><td>171000 + opt</td><td>text, len-prefixed</td></tr>
+<tr><td><code>MEDIUMTEXT</code></td><td>17</td><td>172000 + opt</td><td>text, len-prefixed</td></tr>
+<tr><td><code>LONGTEXT</code></td><td>17</td><td>173000 + opt</td><td>text, len-prefixed</td></tr>
+<tr><td><code>UUID</code></td><td>18</td><td>180036</td><td>16 raw bytes</td></tr>
+<tr><td><code>ENUM(...)</code></td><td>20</td><td>200000 + n</td><td>text, len-prefixed</td></tr>
+<tr><td><code>SET(...)</code></td><td>21</td><td>210000 + n</td><td>text, len-prefixed</td></tr>
+<tr><td><code>BOOLEAN</code></td><td>22</td><td>220001</td><td>1 byte (0/1)</td></tr>
+<tr><td><code>JSON</code></td><td>23</td><td>230000</td><td>text, len-prefixed</td></tr>
+<tr><td><code>&lt;type&gt;[]</code> (array)</td><td>25</td><td>250000 + base_family</td><td>uint16 len + blob</td></tr>
+<tr><td><code>VECTOR(N)</code></td><td>26</td><td>260000 + N</td><td>N × float4 LE (4N bytes)</td></tr>
+</tbody>
+</table>
+
+<p>These notes apply to the table above.</p>
+<ul>
+<li><strong>Families 1–5 share one encoding.</strong> TINYINT, SMALLINT, MEDIUMINT, INT, and INTEGER have five different type codes. They all decode to a 4-byte <code>int32</code>. There is no 1-byte or 2-byte integer storage. There is no overflow check against the declared width. <code>BIT</code> shares family 1 with TINYINT. It is also stored as <code>int32</code>. It is not a bit-packed type.</li>
+<li><strong>REAL and DOUBLE both decode as 8-byte double.</strong> Family 7 and family 8 use the same codec branch. Only FLOAT in family 9 is a 4-byte single.</li>
+<li><strong>UUID has a fixed code, 180036.</strong> This is true no matter how you write the value. When the input string is malformed, the codec stores 16 zero bytes instead of raising an error.</li>
+<li>The <code>opt</code> term in TEXT-family codes is the column-level <code>BINARY</code> attribute. It adds <code>4000</code>. It does not change storage.</li>
+</ul>
+
+<h2 id="numeric">B.5. Numeric, boolean, and UUID details</h2>
+
+<p>Integers are parsed at INSERT time. Families 1–5 use C's <code>atoi()</code>. BIGINT uses <code>strtoll()</code>. A value that is too big for the target width wraps around. It does not raise an error. Floating types use <code>strtod()</code>. Booleans treat <code>true</code>, <code>t</code>, and <code>1</code> as true. The word <code>true</code> is case-insensitive. Anything else is stored as false. There is no separate NULL byte. See the null bitmap in B.2.</p>
+
+<pre><code><span class="c-key">CREATE TABLE</span> demo (
+  id   <span class="c-key">INT</span>,            <span class="c-com">-- 40000, stored int32 LE</span>
+  big  <span class="c-key">BIGINT</span>,         <span class="c-com">-- 60000, stored int64 LE</span>
+  px   <span class="c-key">FLOAT</span>,          <span class="c-com">-- 90000, stored float4 LE</span>
+  ok   <span class="c-key">BOOLEAN</span>,        <span class="c-com">-- 220001, stored as 1 byte</span>
+  uid  <span class="c-key">UUID</span>            <span class="c-com">-- 180036, stored as 16 raw bytes</span>
+);
+
+<span class="c-key">INSERT INTO</span> demo <span class="c-key">VALUES</span>
+  (<span class="c-str">7</span>, <span class="c-str">9000000000</span>, <span class="c-str">3.14</span>, <span class="c-str">true</span>,
+   <span class="c-str">'550e8400-e29b-41d4-a716-446655440000'</span>);
+
+<span class="c-key">SELECT</span> ok, uid <span class="c-key">FROM</span> demo;   <span class="c-com">-- -> true | 550e8400-e29b-41d4-a716-446655440000</span></code></pre>
+
+<p>On read-back, doubles print with <code>%.15g</code> and floats print with <code>%.7g</code>. So the printed precision depends on the storage family. The per-field text buffer is 256 bytes. It is declared as <code>fields[][256]</code>. This is the limit for how wide any single decoded value can be. See B.7.</p>
+
+<h2 id="arrays">B.6. Arrays (family 25)</h2>
+
+<p>You declare an array column by adding <code>[]</code> to any supported scalar type. The type code becomes <code>250000 + base_family</code>. Arrays are one-dimensional only. Inside the tuple the value starts with a <code>uint16</code> blob length. Then comes a self-describing blob. The blob begins with this 8-byte header.</p>
+
+<pre class="synopsis"><code><span class="c-key">[ndim 1B = 1]</span> <span class="c-key">[flags 1B]</span> <span class="c-key">[elem_type_code 4B LE]</span> <span class="c-key">[count 2B LE]</span>
+<span class="c-key">[null bitmap]</span>   <span class="c-com">// ceil(count/8) bytes, only if flags &amp; 0x01 (HAS_NULLS)</span>
+<span class="c-key">[elements ...]</span> <span class="c-com">// each element in its base family's scalar encoding</span></code></pre>
+
+<p>The constants are <code>ARRAY_HEADER_SIZE</code> = 8 and <code>ARRAY_MAX_BLOB</code> = 65535. The maximum element count is 65535. A NULL element uses zero payload bytes. It is flagged only in the bitmap. The text form uses PostgreSQL-style braces. For example <code>{1,2,NULL,4}</code>. Elements that contain delimiters are quoted. The word <code>NULL</code> means a null element. It is unquoted and case-insensitive.</p>
+
+<p>Only some base families can be array elements. <code>tup_array_base_type_code()</code> defines the supported set. Anything else returns <code>-1</code> and the array build fails.</p>
+
+<dl class="params">
+<dt>Supported element families</dt><dd>1–9 are all numeric. 10 is date and time, normalized to TIMESTAMP. 11 is DECIMAL. 12–15 are CHAR, VARCHAR, BINARY, and VARBINARY. 17 is TEXT. 18 is UUID. 22 is BOOLEAN. 23 is JSON.</dd>
+<dt>Unsupported element families</dt><dd>ENUM (20), SET (21), BLOB (16), VECTOR (26), and arrays of arrays. If you declare these as <code>[]</code>, the build fails.</dd>
+</dl>
+
+<pre><code><span class="c-key">CREATE TABLE</span> tags (id <span class="c-key">INT</span>, labels <span class="c-key">TEXT</span>[]);   <span class="c-com">-- 250017</span>
+<span class="c-key">INSERT INTO</span> tags <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'{alpha,beta,NULL,"with,comma"}'</span>);
+<span class="c-key">SELECT</span> labels <span class="c-key">FROM</span> tags;   <span class="c-com">-- -> {alpha,beta,NULL,"with,comma"}</span></code></pre>
+
+<p>See <a href="/3.0/ref/create-table/">CREATE TABLE</a> for the column declaration syntax.</p>
+
+<h2 id="vectors">B.7. Vectors (family 26)</h2>
+
+<p>A <code>VECTOR(N)</code> column stores exactly <code>N</code> 32-bit floats. They are little-endian. There is <strong>no</strong> per-value length prefix. The dimension is read from the type code with <code>type_code % 10000</code>. Every row in the column is a fixed width of <code>4N</code> bytes. <code>VECTOR_MAX_DIM</code> = 16384.</p>
+
+<p>The text form is a bracketed list, <code>[f1,f2,...]</code>. Braces <code>{...}</code> are also accepted on input. NaN and infinity values are rejected at parse time. Embedding vectors must be finite. Large vectors can be hard to fit within the statement size cap. To help with this, the parser also accepts a compact quantized literal of the form <code>b64i8:&lt;base64&gt;</code>. It holds a float32 LE scale factor followed by <code>int8</code> components. The parser dequantizes it to float4 on the way in.</p>
+
+<pre><code><span class="c-key">CREATE TABLE</span> docs (id <span class="c-key">INT</span>, embedding <span class="c-key">VECTOR</span>(<span class="c-str">3</span>));   <span class="c-com">-- 260003</span>
+<span class="c-key">INSERT INTO</span> docs <span class="c-key">VALUES</span> (<span class="c-str">1</span>, <span class="c-str">'[0.1, 0.2, 0.3]'</span>);
+<span class="c-key">SELECT</span> embedding <span class="c-key">FROM</span> docs;   <span class="c-com">-- -> [0.1,0.2,0.3]</span></code></pre>
+
+<div class="callout">
+<p><strong>Text decoding of wide vectors gets cut off. Use the binary accessor instead.</strong> The generic field decoder writes into a 256-byte buffer. If a vector's text form is longer than that, it ends with a <code>...]</code> marker. This is only a display effect. No data is lost. The full payload is always intact on disk. If you need every component, read it directly with <code>tup_get_vector()</code>. That function copies the raw <code>float4</code> array and skips text rendering. The same 256-byte limit applies to any wide string, array, or DECIMAL value when it is rendered as text.</p>
+</div>
+
+<h2 id="notes">B.8. Notes and limitations</h2>
+
+<div class="callout">
+<ul>
+<li><strong>Type names are much richer than type behaviour.</strong> About two dozen declared types fold into seven physical encodings. Picking <code>SMALLINT</code> instead of <code>BIGINT</code> changes the storage width from 4B to 8B. Picking <code>SMALLINT</code> instead of <code>MEDIUMINT</code> or <code>INT</code> does not change anything. All three are <code>int32</code>.</li>
+<li><strong>No checks at the type layer.</strong> <code>tuple_format.c</code> does not enforce declared lengths, DECIMAL precision and scale, UNSIGNED or ZEROFILL, ENUM or SET membership, or valid JSON. DATE, TIME, TIMESTAMP, DECIMAL, and JSON are stored as exact text. This is different from both the SQL standard and PostgreSQL. They validate and pack these types.</li>
+<li><strong>Endianness is fixed at little-endian.</strong> The on-disk file does not move across big-endian hosts.</li>
+<li><strong>NULL is metadata, not a value.</strong> A NULL uses zero column-data bytes. It is tracked only by the null bitmap. The HAS_NULLS flag bit gates that bitmap.</li>
+<li><strong>UUID never errors on bad input.</strong> It quietly stores 16 zero bytes. You should validate UUIDs in your application.</li>
+<li><strong>Per-field text width is 256 bytes</strong> on read-back. Wide DECIMAL, TEXT, array, and vector values get cut off in their text form. The stored bytes are not affected. Vectors have a binary accessor for full data.</li>
+<li><strong>Hard limits.</strong> There are 255 columns per tuple. There are 65535 elements and 65535 bytes per array blob. There are 16384 dimensions per vector.</li>
+</ul>
+</div>
+
+<p>Related reference pages: <a href="/3.0/ref/create-table/">CREATE TABLE</a>, <a href="/3.0/ref/insert/">INSERT</a>, <a href="/3.0/ref/select/">SELECT</a>.</p>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>24. Managing Databases | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>24. Managing Databases</h1>
+<p class="lede">A database in EvolutionDB is a named namespace. It is registered in the catalog and owns one or more schemas. This chapter shows how to create databases. It also shows how to switch between them with <code>USE</code>. It explains how the multi-database layout maps onto EvolutionDB's single unified storage file.</p>
+
+<h2 id="overview">24.1. Overview</h2>
+<p>
+Some systems give each database its own files. Some give each database its own cluster directory. EvolutionDB is different. It stores <em>every</em> database in one unified, page-based file. That file is <code>root/evosql.db</code>. The <code>root/</code> directory contains nothing else. There are no per-database subdirectories on disk. Databases, schemas, tables, and all other metadata live inside that file's system catalog. The catalog is itself a set of B&plus;trees.
+</p>
+<p>
+Creating a database is a pure catalog operation. It inserts a row into the catalog's database list. It does not allocate or set up any separate file. A database is best understood as a logical grouping. It is not a physical storage boundary.
+</p>
+<div class="callout">
+<p><span class="material-symbols-outlined">layers</span> <strong>The naming hierarchy has three levels.</strong> The levels are <code>database &rarr; schema &rarr; table</code>. Every new database gets a starting schema named <code>default</code>. Every session starts out pointed at some database and some schema. Schema management is covered in detail in <a href="/3.0/admin/schemas/">Chapter 25, Managing Schemas</a>. This chapter focuses on the database level.</p>
+</div>
+
+<h2 id="defaults">24.2. The Default Database and Schema</h2>
+<p>
+On the very first start of a fresh storage file, EvolutionDB sets up the catalog. It creates a single database named <code>evosql</code>. That database holds a single schema named <code>default</code>. A new session inherits these values if you do not specify anything else. The current database defaults to <code>evosql</code>. The current schema defaults to <code>default</code>.
+</p>
+<dl class="params">
+<dt>Default database</dt>
+<dd><code>evosql</code>. It is created automatically the first time the catalog is set up. It always has internal database id <code>1</code>.</dd>
+<dt>Default schema</dt>
+<dd><code>default</code>. It is created inside every database at creation time. This includes <code>evosql</code>.</dd>
+<dt>Storage root</dt>
+<dd>The directory <code>root/</code>. It holds the single file <code>root/evosql.db</code>. The directory name is fixed. It is not per-database.</dd>
+</dl>
+<div class="callout">
+<p><span class="material-symbols-outlined">info</span> <strong>PostgreSQL contrast.</strong> PostgreSQL ships with <code>postgres</code>, <code>template0</code>, and <code>template1</code>. In PostgreSQL, <code>CREATE DATABASE</code> physically clones a template directory. EvolutionDB has no template databases. It has no per-database directory. So there is nothing to clone. A new database is just a catalog entry plus its own <code>default</code> schema.</p>
+</div>
+
+<h2 id="create-database">24.3. Creating a Database</h2>
+<p>
+Use the <a href="/3.0/ref/create-database/"><code>CREATE&nbsp;DATABASE</code></a> command. The only argument is the database name. EvolutionDB does not accept the per-database options found in standard SQL or PostgreSQL. Those options include owner, encoding, locale, template, tablespace, and connection limit.
+</p>
+<div class="synopsis">
+<pre class="sig"><code><span class="c-key">CREATE DATABASE</span> <span class="c-com">name</span>
+<span class="c-key">CREATE DATABASE</span> <span class="c-key">IF NOT EXISTS</span> <span class="c-com">name</span></code></pre>
+</div>
+<p>Creating a database registers it in the catalog. It also gives the database a schema named <code>default</code> right away.</p>
+<pre><code><span class="c-key">CREATE DATABASE</span> shop;
+<span class="c-com">-- server responds: CREATE DATABASE shop</span>
+
+<span class="c-com">-- The new database already contains schema "default".</span>
+<span class="c-key">USE</span> shop;
+<span class="c-key">CREATE TABLE</span> products (
+    id    <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+    name  <span class="c-key">VARCHAR</span>(<span class="c-str">100</span>)
+);  <span class="c-com">-- created in shop.default.products</span></code></pre>
+
+<h3 id="if-not-exists">24.3.1. <code>IF NOT EXISTS</code></h3>
+<p>
+Suppose you create a database whose name is already registered. Without <code>IF NOT EXISTS</code>, the command fails with SQLSTATE <code>42E04</code>. That code means a duplicate database. With <code>IF NOT EXISTS</code>, the command does nothing and succeeds quietly when the database already exists.
+</p>
+<pre><code><span class="c-key">CREATE DATABASE</span> shop;                  <span class="c-com">-- ok</span>
+<span class="c-key">CREATE DATABASE</span> shop;                  <span class="c-com">-- ERROR 42E04: database "shop" already exists</span>
+<span class="c-key">CREATE DATABASE</span> <span class="c-key">IF NOT EXISTS</span> shop;    <span class="c-com">-- ok, no change</span></code></pre>
+<div class="callout">
+<p><span class="material-symbols-outlined">warning</span> <strong>Note.</strong> <code>CREATE DATABASE</code> does <em>not</em> switch your session to the new database. The current database stays the same after the command returns. You must run <a href="#use"><code>USE</code></a> on its own to start working inside the new database.</p>
+</div>
+
+<h2 id="use">24.4. Switching Databases with <code>USE</code></h2>
+<p>
+The <a href="/3.0/ref/use/"><code>USE</code></a> command changes which database your next statements work on. EvolutionDB checks the name against the catalog. If the name is found, it sets that database as the session's current database. There is one side effect. The current schema is <strong>reset to <code>default</code></strong>. Switching databases does not keep the schema you had selected before.
+</p>
+<div class="synopsis">
+<pre class="sig"><code><span class="c-key">USE</span> <span class="c-com">database_name</span></code></pre>
+</div>
+<pre><code><span class="c-key">USE</span> shop;
+<span class="c-com">-- server responds: USE DATABASE shop</span>
+<span class="c-com">-- current database = shop, current schema reset to "default"</span></code></pre>
+<p>
+Suppose the named database is not in the catalog. Then <code>USE</code> fails with SQLSTATE <code>3D000</code>. That code means an undefined database. The session's current database stays the same.
+</p>
+<pre><code><span class="c-key">USE</span> nope;   <span class="c-com">-- ERROR 3D000: database "nope" does not exist</span></code></pre>
+
+<h3 id="session-scope">24.4.1. <code>USE</code> Is Per-Session</h3>
+<p>
+The current database and current schema are stored in each connection's own query context. They are not a global server setting. Two clients connected at the same time can point at two different databases. One connection's <code>USE</code> never affects another. The selection lasts only for the life of the connection.
+</p>
+<div class="callout">
+<p><span class="material-symbols-outlined">info</span> <strong>PostgreSQL and standard-SQL contrast.</strong> PostgreSQL has no <code>USE</code> statement. You select a database by reconnecting. A connection is bound to one database for its whole life. EvolutionDB's <code>USE</code> works more like the MySQL <code>USE</code> statement. It is an in-session switch. But it also resets the active schema to <code>default</code>. MySQL does not do this. MySQL treats "database" and "schema" as the same thing.</p>
+</div>
+
+<h3 id="startup-db">24.4.2. The Database Chosen at Connect Time</h3>
+<p>
+A client can connect over the PostgreSQL wire protocol. The database name in the startup message becomes the session's first current database. A well-configured PostgreSQL client lands right in the database it asked for. It does not need an explicit <code>USE</code>. The same applies to a driver such as the one used by DBeaver or <code>psql</code>. A session that does not name a database falls back to the default. The default is <code>evosql</code>.
+</p>
+
+<h2 id="layout">24.5. The Multi-Database Layout</h2>
+<p>
+All databases share <code>root/evosql.db</code>. Qualifying an object name is purely logical. A fully qualified table reference has this form.
+</p>
+<pre><code>database.schema.table</code></pre>
+<p>
+At runtime, the engine resolves unqualified names against the session's current database and current schema. The old path form <code>root/&lt;database&gt;/&lt;schema&gt;/&lt;table&gt;</code> still shows up inside the engine for backward compatibility. It is used when extracting bare table names. But it does <em>not</em> map to real directories on disk. It is a naming convention. It is not a filesystem layout.
+</p>
+<table>
+<thead>
+<tr><th>Level</th><th>Created by</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td>Database</td><td><a href="/3.0/ref/create-database/"><code>CREATE DATABASE</code></a></td><td>Catalog entry only. Always starts with a <code>default</code> schema.</td></tr>
+<tr><td>Schema</td><td><a href="/3.0/ref/create-schema/"><code>CREATE SCHEMA</code></a></td><td>Created inside the current database. See <a href="/3.0/admin/schemas/">Chapter 25</a>.</td></tr>
+<tr><td>Table</td><td><a href="/3.0/ref/create-table/"><code>CREATE TABLE</code></a></td><td>Created inside the current schema of the current database.</td></tr>
+</tbody>
+</table>
+
+<h3 id="implications">24.5.1. Practical Implications</h3>
+<dl class="params">
+<dt>One file, one buffer pool</dt>
+<dd>Every database is paged through the same 4&nbsp;KB buffer pool. They all use the same write-ahead log. Databases are a way to organize your data. They do not isolate storage, caching, or I/O from one another.</dd>
+<dt>No per-database tuning</dt>
+<dd><code>CREATE DATABASE</code> accepts only a name. So there are no per-database encodings, collations, owners, or tablespaces to set.</dd>
+<dt>Names are case-sensitive in the catalog</dt>
+<dd>Database names are stored and looked up as given. However, <a href="#drop">the current-database guard</a> compares names without case sensitivity.</dd>
+</dl>
+
+<h2 id="drop">24.6. Dropping a Database</h2>
+<p>
+The <a href="/3.0/ref/drop-database/"><code>DROP&nbsp;DATABASE</code></a> command removes a database. The removal cascades to all of its schemas and the tables inside them.
+</p>
+<div class="synopsis">
+<pre class="sig"><code><span class="c-key">DROP DATABASE</span> <span class="c-com">name</span>
+<span class="c-key">DROP DATABASE</span> <span class="c-key">IF EXISTS</span> <span class="c-com">name</span></code></pre>
+</div>
+<pre><code><span class="c-key">DROP DATABASE</span> shop;             <span class="c-com">-- drops shop and everything inside it</span>
+<span class="c-key">DROP DATABASE</span> <span class="c-key">IF EXISTS</span> shop;   <span class="c-com">-- no error if shop is already gone</span></code></pre>
+<p>You cannot drop the database your session is currently using. Switch away first. You can also connect somewhere else.</p>
+<pre><code><span class="c-key">USE</span> shop;
+<span class="c-key">DROP DATABASE</span> shop;   <span class="c-com">-- ERROR 55006: cannot drop the currently open database "shop"</span>
+<span class="c-key">USE</span> evosql;
+<span class="c-key">DROP DATABASE</span> shop;   <span class="c-com">-- ok</span></code></pre>
+<div class="callout">
+<p><span class="material-symbols-outlined">warning</span> <strong>Note. The drop always cascades.</strong> <code>DROP DATABASE</code> always removes every schema and every table the database holds. There is no <code>RESTRICT</code> mode that refuses to drop a non-empty database. This operation destroys data and cannot be undone. If you drop a database that does not exist, the command fails with SQLSTATE <code>3D000</code> unless you use <code>IF EXISTS</code>. That code means an undefined database.</p>
+</div>
+
+<h2 id="errors">24.7. Error Codes</h2>
+<p>The database-management commands report the following SQLSTATE values.</p>
+<table>
+<thead>
+<tr><th>SQLSTATE</th><th>Condition</th><th>Raised by</th></tr>
+</thead>
+<tbody>
+<tr><td><code>42E04</code></td><td>duplicate database</td><td><code>CREATE DATABASE</code> on an existing name, when <code>IF NOT EXISTS</code> is not used</td></tr>
+<tr><td><code>3D000</code></td><td>undefined database</td><td><code>USE</code> or <code>DROP DATABASE</code> on a name not in the catalog</td></tr>
+<tr><td><code>55006</code></td><td>object in use</td><td><code>DROP DATABASE</code> on the currently open database</td></tr>
+<tr><td><code>58030</code></td><td>I/O error</td><td><code>CREATE DATABASE</code> when the catalog write fails</td></tr>
+</tbody>
+</table>
+<p class="text-sm">
+For comparison, schema-level commands use <code>42E06</code> for a duplicate schema. They use <code>3F000</code> for an undefined schema. Those codes are documented in <a href="/3.0/admin/schemas/">Chapter 25, Managing Schemas</a>.
+</p>
+
+<h2 id="see-also">24.8. See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-database/"><code>CREATE DATABASE</code></a>. Full command reference.</li>
+<li><a href="/3.0/ref/drop-database/"><code>DROP DATABASE</code></a>. Full command reference.</li>
+<li><a href="/3.0/ref/use/"><code>USE</code></a>. Switch the active database.</li>
+<li><a href="/3.0/admin/schemas/">Chapter 25, Managing Schemas</a>. The next level of the namespace.</li>
+<li><a href="/3.0/ref/create-schema/"><code>CREATE SCHEMA</code></a>. Add a schema to the current database.</li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Node.js SDK | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>Node.js SDK</h1>
+<p class="lede"><code>evosql-memory</code> is a Node.js and TypeScript binding. It sits on top of the native <code>libevosql-memory</code> C library. It gives you a <code>Connection</code> class for raw SQL. It also has helpers for agent memory and LangGraph checkpoints.</p>
+
+<h2 id="what-it-does">What it does</h2>
+<p>The <code>node-evosql-memory</code> package is a thin <code>ffi-napi</code> binding over the C SDK <code>libevosql-memory</code>. It loads the shared library when you call <code>require</code>. It maps the C surface with <code>ffi-napi</code> and <code>ref-napi</code>. It gives you a single <code>Connection</code> class. On top of plain <code>exec</code> and <code>query</code> it adds helper methods. The agent memory store uses <code>memoryPut</code>, <code>memoryGet</code>, and <code>memoryDelete</code>. LangGraph checkpoints use <code>checkpointPut</code> and <code>checkpointGetLatest</code>. It connects to a running EvolutionDB server over the network. It is a client, not an embedded engine.</p>
+<p>It uses FFI over a native <code>.dylib</code> or <code>.so</code> file. The shared library must be present on the host. See <a href="#configure">Configure</a> for more. It supports Node 18 and above.</p>
+<p>The <a href="/platform/mcp-server/">MCP server</a> opens the same memory store to AI agents. You can read more about the main ideas on the <a href="https://wiki.evolutiondb.org">project wiki</a>.</p>
+
+<h2 id="install">Install</h2>
+<p>The package name is <code>evosql-memory</code>. In the monorepo it lives at <code>client/node-evosql-memory</code>. It depends on <code>ffi-napi</code> at <code>^4.0.3</code> and <code>ref-napi</code> at <code>^3.0.3</code>. You also need the native shared library. You can build it from source or download a pre-built binary.</p>
+<pre><code><span class="c-com"># Build the C SDK first, then install the Node deps</span>
+make -C ../libevosql-memory                 <span class="c-com"># build libevosql-memory</span>
+<span class="c-key">cd</span> client/node-evosql-memory
+npm install                                  <span class="c-com"># ffi-napi + ref-napi</span>
+npm run example                              <span class="c-com"># runs examples/put_get.js</span></code></pre>
+<p>You can also use a pre-built binary. Every GitHub Release has binaries for Linux, macOS, and Windows. Download the one for your platform and unpack it. Then point <code>EVOSQL_MEMORY_LIB</code> at the shared library. This lets you skip the <code>make</code> step.</p>
+<pre><code><span class="c-com"># https://github.com/alptekin/evolutiondb/releases/latest</span>
+<span class="c-key">export</span> EVOSQL_MEMORY_LIB=<span class="c-str">/path/to/libevosql-memory.dylib</span></code></pre>
+
+<h2 id="configure">Configure</h2>
+<p>There is no config file. You pass connection settings to the <code>Connection</code> constructor in order. The settings are <code>host</code>, <code>port</code>, <code>user</code>, and <code>password</code>. The examples use <code>127.0.0.1</code>, port <code>9967</code>, and <code>admin</code> for both the user and the password.</p>
+<p>The SDK reads only one environment variable. It is the location of the shared library. At load time the binding looks for <code>libevosql-memory.&#123;dylib,so&#125;</code> in this exact order:</p>
+<ol>
+<li><code>process.env.EVOSQL_MEMORY_LIB</code>. This is an explicit path. It is used only if the file exists.</li>
+<li><code>../../libevosql-memory/build/libevosql-memory.&#123;dylib,so&#125;</code>. This is the in-tree SDK build directory. The path is relative to <code>lib/index.js</code>.</li>
+<li>The system loader path, such as <code>/usr/local/lib</code> or <code>/usr/lib</code>. Here <code>ffi.Library</code> gets the bare name <code>evosql-memory</code>.</li>
+</ol>
+<p>The file extension comes from <code>process.platform</code>. It is <code>.dylib</code> on macOS, which is <code>darwin</code>. On other systems it is <code>.so</code>.</p>
+<p>The EvolutionDB server controls authentication. The SDK forwards the <code>user</code> and <code>password</code> you pass to <code>evo_connect</code>. The binding itself does not store credentials or handle tokens.</p>
+
+<h2 id="usage">Usage</h2>
+<p>Open a connection and run statements. Always close the connection in a <code>finally</code> block.</p>
+<pre><code><span class="c-key">const</span> &#123; Connection &#125; = <span class="c-key">require</span>(<span class="c-str">'evosql-memory'</span>);
+
+<span class="c-key">const</span> c = <span class="c-key">new</span> Connection(<span class="c-str">'127.0.0.1'</span>, <span class="c-str">9967</span>, <span class="c-str">'admin'</span>, <span class="c-str">'admin'</span>);
+<span class="c-key">try</span> &#123;
+    c.exec(<span class="c-str">'CREATE MEMORY STORE demo'</span>);
+    c.memoryPut(<span class="c-str">'demo'</span>, <span class="c-str">'users'</span>, <span class="c-str">'alice'</span>, <span class="c-str">'&#123;"role":"pm"&#125;'</span>);
+    console.log(c.memoryGet(<span class="c-str">'demo'</span>, <span class="c-str">'users'</span>, <span class="c-str">'alice'</span>));
+&#125; <span class="c-key">finally</span> &#123;
+    c.close();
+&#125;</code></pre>
+<p>The smoke example in <code>examples/put_get.js</code> shows the full cycle. It creates a store, puts a value, gets it, and drops the store.</p>
+<pre><code><span class="c-key">const</span> &#123; Connection &#125; = <span class="c-key">require</span>(<span class="c-str">'..'</span>);
+
+<span class="c-key">const</span> c = <span class="c-key">new</span> Connection(<span class="c-str">'127.0.0.1'</span>, <span class="c-str">9967</span>, <span class="c-str">'admin'</span>, <span class="c-str">'admin'</span>);
+<span class="c-key">try</span> &#123;
+    c.exec(<span class="c-str">'DROP MEMORY STORE IF EXISTS node_demo'</span>);
+    c.exec(<span class="c-str">'CREATE MEMORY STORE node_demo'</span>);
+
+    c.memoryPut(<span class="c-str">'node_demo'</span>, <span class="c-str">'users'</span>, <span class="c-str">'alice'</span>,
+                 <span class="c-str">'&#123;"role":"pm","team":"infra"&#125;'</span>);
+    <span class="c-key">const</span> value = c.memoryGet(<span class="c-str">'node_demo'</span>, <span class="c-str">'users'</span>, <span class="c-str">'alice'</span>);
+    console.log(<span class="c-str">'alice -&gt;'</span>, value);
+
+    c.exec(<span class="c-str">'DROP MEMORY STORE node_demo'</span>);
+&#125; <span class="c-key">finally</span> &#123;
+    c.close();
+&#125;</code></pre>
+<p>Use <code>query</code> for any read. It returns an array of rows. Each row is an array of column strings.</p>
+<pre><code><span class="c-key">const</span> rows = c.query(<span class="c-str">'SELECT key, value FROM ...'</span>);
+<span class="c-key">for</span> (<span class="c-key">const</span> [key, value] <span class="c-key">of</span> rows) &#123;
+    console.log(key, value);
+&#125;</code></pre>
+<p>To add an embedding, pass a numeric array as the optional fifth argument to <code>memoryPut</code>. The array is turned into a Float32 vector literal by <code>formatVector</code> before it is sent.</p>
+<pre><code>c.memoryPut(<span class="c-str">'demo'</span>, <span class="c-str">'docs'</span>, <span class="c-str">'doc-1'</span>,
+             <span class="c-str">'&#123;"title":"intro"&#125;'</span>, [<span class="c-str">0.12</span>, <span class="c-str">0.98</span>, <span class="c-str">-0.4</span>]);</code></pre>
+
+<h2 id="reference">Reference</h2>
+<p>The module exports four names. They are <code>Connection</code>, <code>EvoError</code>, <code>EvoNotFoundError</code>, and <code>formatVector</code>.</p>
+
+<h3>Connection</h3>
+<div class="sig">new Connection(host, port, user, password)</div>
+<p>Opens a connection with <code>evo_connect</code>. It throws the last C error if the handle is null. A <code>Connection</code> is <strong>not</strong> safe to share across worker threads. Open one connection per worker.</p>
+
+<div class="sig">close()</div>
+<p>Calls <code>evo_close</code> and sets the handle to null. It is safe to call more than once. You can call it on a connection that is already closed.</p>
+
+<div class="sig">exec(sql) → int</div>
+<p>Runs a statement with <code>evo_exec</code>. It returns the non-negative return code. For example, this can be the number of affected rows as reported by the C layer. It throws <code>EvoError</code> if the code is negative.</p>
+
+<div class="sig">query(sql, opts = &#123;&#125;) → string[][]</div>
+<p>Runs a query with <code>evo_query</code>. It decodes the flat result buffer into rows of column strings. The <code>opts</code> object sets the buffer sizes. <code>maxRows</code> has a default of <code>256</code>. <code>maxCols</code> has a default of <code>32</code>. <code>colBufSize</code> sets the bytes per cell and has a default of <code>4096</code>. It throws <code>EvoError</code> on a negative return code.</p>
+
+<div class="sig">memoryPut(store, namespace, key, valueJson, embedding = null)</div>
+<p>Inserts or updates a memory row with <code>evo_memory_put</code>. <code>valueJson</code> is a JSON string. If <code>embedding</code> is a non-empty array, it is turned into a vector literal. If it is empty, the embedding is left out. It throws <code>EvoError</code> if the return code is not zero.</p>
+
+<div class="sig">memoryGet(store, namespace, key, bufSize = 32 * 1024)</div>
+<p>Reads a memory row with <code>evo_memory_get</code>. It reads into a buffer of <code>bufSize</code> bytes. The default is 32 KiB. It returns the NUL-terminated value as a UTF-8 string. It throws <code>EvoNotFoundError</code> when the row is missing. The missing-row return code is <code>-7</code>. It throws <code>EvoError</code> for any other non-zero code.</p>
+
+<div class="sig">memoryDelete(store, namespace, key)</div>
+<p>Deletes a memory row with <code>evo_memory_delete</code>. It throws <code>EvoError</code> on a non-zero return code.</p>
+
+<div class="sig">checkpointPut(store, threadId, ns, checkpointId, valuesJson, metadataJson = '&#123;&#125;')</div>
+<p>Writes a LangGraph checkpoint with <code>evo_checkpoint_put</code>. <code>valuesJson</code> and <code>metadataJson</code> are JSON strings. <code>metadataJson</code> defaults to <code>'&#123;&#125;'</code>. It throws <code>EvoError</code> on a non-zero return code.</p>
+
+<div class="sig">checkpointGetLatest(store, threadId, bufSize = 64 * 1024)</div>
+<p>Gets the latest checkpoint for a thread with <code>evo_checkpoint_get_latest</code>. It reads into a buffer of <code>bufSize</code> bytes. The default is 64 KiB. It returns the UTF-8 string. It throws <code>EvoNotFoundError</code> when no checkpoint exists. The missing-checkpoint return code is <code>-7</code>. It throws <code>EvoError</code> otherwise.</p>
+
+<h3>formatVector(vec) → string</h3>
+<div class="sig">formatVector(vec)</div>
+<p>This helper turns a numeric JavaScript array into a vector literal. It returns <code>''</code> for an empty input or for input that is not an array. It packs the values as Float32 and calls <code>evo_vector_format</code>. If that returns a positive length, the formatted literal is used. If not, it falls back to a JS-side <code>[v0,v1,...]</code> string. Each value has 6 decimal places.</p>
+
+<h3>EvoError / EvoNotFoundError</h3>
+<div class="sig">class EvoError extends Error</div>
+<p><code>EvoError</code> is the base error for all failures. It carries <code>code</code>, which is a number with a default of <code>-1</code>. It also carries <code>sqlstate</code>, a 5-char Postgres-style state. The message and SQLSTATE come from the C SDK's thread-local last-error storage. They are read with <code>evo_strerror</code> and <code>evo_sqlstate</code>.</p>
+<div class="sig">class EvoNotFoundError extends EvoError</div>
+<p><code>EvoNotFoundError</code> means the row is not present. The code is <code>-7</code>. It is thrown by <code>memoryGet</code> and <code>checkpointGetLatest</code>.</p>
+
+<h2 id="notes">Notes &amp; limitations</h2>
+<ul>
+<li><strong>FFI dependency.</strong> The package is an <code>ffi-napi</code> binding. The native <code>libevosql-memory</code> shared library must be present and found. See <a href="#configure">Configure</a> for more. There is no pure-JS fallback.</li>
+<li><strong>Node 18+.</strong> This is set with <code>engines.node</code> in <code>package.json</code>.</li>
+<li><strong>Not thread-safe.</strong> Do not share a <code>Connection</code> across worker threads. Open one connection per worker. The C SDK's last-error storage is thread-local. An error in one worker does not leak into another worker's reading.</li>
+<li><strong>String results only.</strong> <code>query</code> returns columns as decoded UTF-8 strings. There is no automatic type coercion. <code>colBufSize</code> sets the limit for cells that are too large.</li>
+<li><strong>Fixed buffers.</strong> <code>memoryGet</code> and <code>checkpointGetLatest</code> read into a buffer that you size. The defaults are 32 KiB and 64 KiB. Raise <code>bufSize</code> for larger values.</li>
+<li><strong>No TypeScript typings shipped.</strong> The package is written in plain JavaScript. It uses CommonJS with <code>main: lib/index.js</code>. You can use it from TypeScript, but no <code>.d.ts</code> file is bundled.</li>
+<li><strong>License.</strong> MIT.</li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

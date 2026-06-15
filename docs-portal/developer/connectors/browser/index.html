@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Browser history connector | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+
+ <h1>Browser history connector</h1>
+ <p class="lede">This connector reads your local browser history. It reads the visit records from each browser's SQLite file on disk. It writes those records into EvolutionDB long-term memory. There is no OAuth, no extension, and no remote API.</p>
+
+ <h2 id="what-it-does">What it does</h2>
+ <p>
+ <code>evolutiondb-browser-sync</code> is a <code>*-sync</code> connector. It finds every browser
+ profile the current user owns. It opens each browser's history file read-only. It turns the
+ visit rows into one common record shape. Then it writes them into an EvolutionDB
+ <code>MEMORY STORE</code> over the PostgreSQL wire protocol. It can run once or as a polling
+ daemon. It keeps a watermark for each profile, so repeat passes only import new visits.
+ </p>
+ <p>The supported browsers fall into two families on disk.</p>
+ <ul>
+ <li><strong>Chromium family.</strong> This includes Chrome (and Beta / Chromium), Edge, Brave, Arc, Vivaldi, and Opera. History lives in a <code>History</code> SQLite file with a <code>urls(url, title, visit_count, last_visit_time)</code> table. Timestamps are Chrome-epoch microseconds since 1601.</li>
+ <li><strong>Mozilla family.</strong> This includes Firefox (and Developer Edition / Nightly). History lives in <code>places.sqlite</code> with a <code>moz_places(url, title, visit_count, last_visit_date)</code> table. Timestamps are Unix microseconds.</li>
+ </ul>
+ <p>
+ Each visit becomes one memory record. The key is <code>(browser, profile, sha1(url))</code>. So
+ if you sync the same URL again, it updates the existing row instead of adding a new one. Records get
+ automatic tags from the URL host. For example <code>youtube</code>/<code>video</code>, <code>github</code>/<code>code</code>,
+ <code>search</code>, <code>ai</code>, <code>news</code>, and <code>banking</code>. This way the catalog can answer
+ topic questions without reading every URL string.
+ </p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>There is no README in the package. This page is written from the source itself. The <code>pyproject.toml</code> reports version <code>0.1.2</code>. But <code>browser_sync/__init__.py</code> still hard-codes <code>__version__ = "0.1.0"</code>. That mismatch is in the real package.</div></div>
+
+ <h2 id="install">Install</h2>
+ <p>The distribution name is <code>evolutiondb-browser-sync</code>. It needs Python <code>&gt;=3.9</code>.</p>
+ <pre><code><span class="c-com"># From the package directory (client/browser-sync)</span>
+pip install evolutiondb-browser-sync</code></pre>
+ <p>It pulls in two runtime dependencies.</p>
+ <ul>
+ <li><code>psycopg[binary]&gt;=3.1</code> is the PostgreSQL driver used to talk to EvolutionDB.</li>
+ <li><code>evolutiondb-pii&gt;=0.1.1</code> is optional PII masking. The sync imports
+ <code>evolutiondb_pii.integration.protect_record</code>. If it cannot be imported, masking is
+ skipped. The records are then written unmasked.</li>
+ </ul>
+ <p>Installing registers one console script. See <code>[project.scripts]</code>.</p>
+ <div class="sig">evolutiondb-browser-sync = browser_sync.__main__:main</div>
+ <p>You can also run the module directly with <code>python -m browser_sync</code>.</p>
+
+ <h2 id="configure">Configure (env vars / auth)</h2>
+ <p>
+ There is <strong>no auth flow</strong>. There is no <code>--auth</code> subcommand and no OAuth. The browser's
+ history lives in a file the user already owns. So the connector just opens it read-only.
+ Connection and behavior come entirely from environment variables. These are read in
+ <code>Config.__init__</code>. The defaults are shown below.
+ </p>
+ <pre><code><span class="c-com"># EvolutionDB connection (PostgreSQL wire protocol, port 5433)</span>
+EVOSQL_HOST=<span class="c-str">127.0.0.1</span>
+EVOSQL_PORT=<span class="c-str">5433</span>
+EVOSQL_USER=<span class="c-str">admin</span>
+EVOSQL_PASSWORD=<span class="c-str">admin</span>
+EVOSQL_DATABASE=<span class="c-str">evosql</span>
+
+<span class="c-com"># Memory store + namespace</span>
+MCP_USER_ID=<span class="c-str">default_user</span>          <span class="c-com"># memory namespace</span>
+BROWSER_MEMORY_STORE=<span class="c-str">mcp_mem</span>      <span class="c-com"># target MEMORY STORE name</span>
+BROWSER_POLL_INTERVAL=<span class="c-str">1800</span>        <span class="c-com"># read into Config but see note below</span></code></pre>
+ <p>
+ A small built-in loader reads the variables from a <code>.env</code> file. You can set the path with <code>--env-file</code>.
+ The default path is <code>.env</code>. The loader uses
+ <code>os.environ.setdefault</code>. So a value that is already in the real environment wins over
+ the <code>.env</code> file. Blank values in <code>.env</code> are ignored.
+ </p>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><code>BROWSER_POLL_INTERVAL</code> is parsed into <code>Config.poll_secs</code>. But the CLI daemon loop uses the <code>--interval</code> argument instead of this field. The daemon interval has a floor of 60 seconds.</div></div>
+
+ <h2 id="usage">Usage</h2>
+ <p>The CLI is built with <code>argparse</code>. The program name is <code>prog="evolutiondb-browser-sync"</code>. These are the real flags.</p>
+ <ul>
+ <li><code>--once</code> runs a single sync pass over every found profile, then exits.</li>
+ <li><code>--interval SECONDS</code> turns on daemon mode. It repeats passes on a timer. The minimum is 60 seconds. Each pass is incremental.</li>
+ <li><code>--since</code> sets the time floor used on a profile's <em>first</em> run, before it has a stored watermark. The default is <code>7d</code>. It accepts <code>&lt;n&gt;&lt;unit&gt;</code> where the unit is one of <code>s m h d w</code>. For example <code>1h</code> or <code>30d</code>.</li>
+ <li><code>--browser</code> takes a comma list to limit the browsers. The options are <code>chrome,edge,firefox,brave,arc,vivaldi,opera</code>. Empty means every browser that is found.</li>
+ <li><code>--list</code> prints every found profile, then exits. It shows the browser, profile id, and history path.</li>
+ <li><code>--dry-run</code> does everything except write to memory. No connection is opened.</li>
+ <li><code>--env-file</code> sets the path to the <code>.env</code> file. The default is <code>.env</code>.</li>
+ </ul>
+
+ <pre><code><span class="c-com"># See which profiles this machine exposes (no DB needed)</span>
+evolutiondb-browser-sync --list
+
+<span class="c-com"># Single pass over everything, importing the last 30 days on first run</span>
+evolutiondb-browser-sync --once --since <span class="c-str">30d</span>
+
+<span class="c-com"># Chrome + Firefox only, no writes, just count what would import</span>
+evolutiondb-browser-sync --once --dry-run --browser <span class="c-str">chrome,firefox</span>
+
+<span class="c-com"># Daemon: re-scan every 30 minutes (incremental via watermark)</span>
+evolutiondb-browser-sync --interval <span class="c-str">1800</span></code></pre>
+
+ <p>
+ A pass prints one JSON line to stdout. On success the line carries the counters returned by
+ <code>sync_once</code>. On failure it reports the error.
+ </p>
+ <pre><code><span class="c-com"># success</span>
+{<span class="c-str">"ok"</span>: true, <span class="c-str">"profiles"</span>: 3, <span class="c-str">"visits"</span>: 1280, <span class="c-str">"skipped"</span>: 0, <span class="c-str">"errors"</span>: 0}
+<span class="c-com"># failure</span>
+{<span class="c-str">"ok"</span>: false, <span class="c-str">"error"</span>: <span class="c-str">"..."</span>}</code></pre>
+ <p>
+ There are three exit codes. <code>0</code> means normal. <code>2</code> means a bad <code>--since</code> value. <code>4</code> means a pass
+ raised an error. <code>SIGINT</code> and <code>SIGTERM</code> ask for a clean stop. The daemon finishes the
+ current pass before it exits.
+ </p>
+
+ <p>You can also use the connector as a library.</p>
+ <pre><code><span class="c-key">from</span> browser_sync <span class="c-key">import</span> scanner, extract
+<span class="c-key">from</span> browser_sync.sync <span class="c-key">import</span> Config, sync_once
+
+<span class="c-com"># 1. discover profiles, optionally filtered</span>
+profiles = scanner.discover_profiles([<span class="c-str">"chrome"</span>])
+<span class="c-key">for</span> p <span class="c-key">in</span> profiles:
+    <span class="c-key">for</span> rec <span class="c-key">in</span> extract.iter_visits(p, since_iso=<span class="c-key">None</span>):
+        print(rec[<span class="c-str">"url"</span>], rec[<span class="c-str">"last_visited_at"</span>], rec[<span class="c-str">"tags"</span>])
+
+<span class="c-com"># 2. or run a full pass (dry-run = no DB connection)</span>
+counts = sync_once(Config(), since_iso=<span class="c-key">None</span>,
+                   browser_filter=<span class="c-key">None</span>, dry_run=<span class="c-key">True</span>)</code></pre>
+
+ <h2 id="reference">Reference</h2>
+
+ <h3 id="scanner"><code>browser_sync.scanner</code></h3>
+ <div class="sig">@dataclass(frozen=True) Profile(family, browser, profile_id, history_path)</div>
+ <p>A <code>Profile</code> represents one found browser profile. <code>family</code> is <code>"chromium"</code> or <code>"firefox"</code>. <code>browser</code> is an id like <code>"chrome"</code>/<code>"edge"</code>/<code>"firefox"</code>. <code>profile_id</code> is a human label such as <code>"Chrome/Default"</code> or <code>"Firefox/&lt;random-id&gt;"</code>. <code>history_path</code> is the <code>Path</code> to the SQLite history file.</p>
+ <div class="sig">discover_profiles(browser_filter: List[str] = None) -&gt; List[Profile]</div>
+ <p><code>discover_profiles</code> lists every Chromium and Firefox profile on the current OS. It works on macOS, on Linux (including snap and flatpak), and on Windows. For Chromium it walks each vendor's user-data root. It keeps <code>Default</code> and <code>Profile*</code> directories that hold a <code>History</code> file. For Firefox it reads <code>profiles.ini</code>. If that is missing, it scans a <code>Profiles/</code> directory instead. It keeps the profiles that have a <code>places.sqlite</code>. The optional <code>browser_filter</code> keeps only the matching browser ids. The ids are lower-cased.</p>
+
+ <h3 id="extract"><code>browser_sync.extract</code></h3>
+ <div class="sig">iter_visits(profile: Profile, since_iso: Optional[str] = None) -&gt; Iterator[Dict]</div>
+ <p><code>iter_visits</code> opens the profile's history store read-only. It yields the visit records in a common shape. It picks the Chromium or Firefox SELECT based on <code>profile.family</code>. You can pass <code>since_iso</code> as a UTC ISO 8601 string to filter out rows whose latest visit is older. Some URLs use internal or non-web schemes and are skipped. The skipped schemes are <code>chrome://</code>, <code>edge://</code>, <code>moz-extension://</code>, <code>about:</code>, <code>file://</code>, <code>data:</code>, <code>javascript:</code>, <code>blob:</code>, <code>view-source:</code>, and more.</p>
+ <p>A running browser holds an exclusive WAL lock. To get around it, the store is first copied to a temp file with <code>shutil.copy</code>. The copy includes any <code>-wal</code> and <code>-shm</code> sidecars. The copy can hit a <code>PermissionError</code>. This usually happens on Windows when the browser is busy. In that case it falls back to opening the live file using the SQLite URI <code>file:&lt;path&gt;?mode=ro&amp;immutable=1</code>.</p>
+ <p>Each record is a dict. The fields are: <code>fact</code> is a sentence a person can read. <code>source</code> is <code>"browser"</code>. <code>kind</code> is <code>"visit"</code>. Then there are <code>browser</code>, <code>browser_family</code>, <code>profile</code>, <code>url</code>, <code>title</code>, and <code>visit_count</code>. <code>last_visited_at</code> is an ISO string. <code>url_hash</code> is the first 16 hex chars of <code>sha1(url)</code>. <code>tags</code> is always <code>["browser", "history", &lt;browser&gt;]</code>, plus any topic tags taken from the host.</p>
+
+ <h3 id="sync"><code>browser_sync.sync</code></h3>
+ <div class="sig">main(argv: Optional[List[str]] = None) -&gt; int</div>
+ <p><code>main</code> is the CLI entry point and the registered console script. It parses arguments, loads the <code>.env</code> file, and installs signal handlers. Then it runs one pass for <code>--once</code> or when there is no <code>--interval</code>. With <code>--interval</code> it loops instead. It returns the process exit code.</p>
+ <div class="sig">sync_once(cfg, *, since_iso, browser_filter, dry_run=False) -&gt; Dict[str, int]</div>
+ <p><code>sync_once</code> runs a single pass. For each found profile it reads the stored watermark. If there is none, it uses <code>since_iso</code> as the floor. It then goes through the new visits, masks them if masking is on, and writes each record. It moves the watermark forward to the newest visit it saw. It returns the counters <code>{"profiles", "visits", "skipped", "errors"}</code>. If one profile fails, the error is caught and logged to stderr. It is counted in <code>errors</code>, and the pass keeps going. When <code>dry_run</code> is true, no <code>MemoryStore</code> is created.</p>
+ <div class="sig">parse_since(text: str) -&gt; str</div>
+ <p><code>parse_since</code> turns a relative duration like <code>"1h"</code> or <code>"7d"</code> into an absolute UTC ISO 8601 floor that ends in <code>…Z</code>. It raises <code>ValueError</code> on bad input. The units are <code>s m h d w</code>.</p>
+ <div class="sig">class Config</div>
+ <p><code>Config</code> reads all eight environment variables listed under <a href="#configure">Configure</a> into typed fields. The fields are <code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code>, <code>store</code>, and <code>poll_secs</code>.</p>
+
+ <h3 id="state"><code>browser_sync.state</code></h3>
+ <div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+ <p><code>MemoryStore</code> is the memory backend. It connects with <code>psycopg</code> in autocommit mode. On init it tries to run <code>CREATE MEMORY STORE &lt;store&gt;</code> as a best effort. It reconnects on its own up to 3 times. It waits a bit longer each time in steps of 0.5s. This happens on <code>OperationalError</code> and <code>InterfaceError</code>. The main methods are listed below.</p>
+ <ul>
+ <li><code>put_record(key, record)</code> turns the record into JSON. It then runs <code>MEMORY PUT INTO &lt;store&gt; VALUES ('&lt;namespace&gt;','&lt;key&gt;','&lt;json&gt;')</code>.</li>
+ <li><code>get_watermark_iso(profile_id)</code> reads the watermark row for one profile. The key is <code>browser_state_&lt;profile&gt;</code>. It reads it straight from <code>__mem_&lt;store&gt;</code> and returns its <code>last_visited_at</code>.</li>
+ <li><code>set_watermark_iso(profile_id, last_iso)</code> upserts that watermark row.</li>
+ </ul>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>Values are escaped by hand. The module-level <code>_e</code> helper doubles single quotes and strips newlines and tabs. The values are put straight into the SQL string. These calls are not parameterised. Treat the connector as trusted local tooling. It is not a general-purpose query path.</div></div>
+
+ <h2 id="notes">Notes &amp; limitations</h2>
+ <ul>
+ <li><strong>Local-only and read-only.</strong> Nothing is fetched from a remote place. No browser data is changed. The connector opens a snapshot copy of files the user already owns. Or it opens an immutable read-only handle to them.</li>
+ <li><strong>No <code>--auth</code> or OAuth.</strong> This is on purpose and is noted in the source. Do not expect a credentials flow.</li>
+ <li><strong>One row per unique URL per profile.</strong> Records are keyed by the SHA-1 of the URL. So a URL visited many times is a single upserted row. That row carries its latest <code>visit_count</code> and <code>last_visited_at</code>. It is not one row per visit.</li>
+ <li><strong>Incremental via watermark.</strong> After the first run the floor for each profile is the stored watermark. So <code>--since</code> only matters before a watermark exists.</li>
+ <li><strong>PII masking is optional.</strong> If <code>evolutiondb-pii</code> cannot be imported, the <code>fact</code>, <code>title</code>, and <code>url</code> fields are stored unmasked.</li>
+ <li><strong>Version field mismatch.</strong> <code>__init__.__version__</code> is <code>0.1.0</code>. It lags the packaged version <code>0.1.2</code>.</li>
+ <li><strong>No tests and no README ship in the package directory.</strong></li>
+ </ul>
+ <p>
+ The records this connector writes can be queried through the same memory store the
+ <a href="/platform/mcp-server/">MCP server</a> exposes. For protocol and store internals, see the
+ <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a>.
+ </p>
+
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

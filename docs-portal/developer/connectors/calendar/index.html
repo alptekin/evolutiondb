@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Google Calendar connector | EvolutionDB</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>Google Calendar connector</h1>
+<p class="lede">A one-way <code>*-sync</code> connector. It pulls Google Calendar events into EvolutionDB long-term memory. An assistant can then recall meetings weeks later. The events sit next to the chat and email memory that the sibling connectors write.</p>
+
+<h2 id="what-it-does">What it does</h2>
+<p>The package <code>evolutiondb-calendar-sync</code> reads events from every calendar your Google account can see. It writes one record per event into an EvolutionDB <em>memory store</em> with an UPSERT. It is strictly read-only against Google. The only OAuth scope it asks for is <code>https://www.googleapis.com/auth/calendar.readonly</code>. So it cannot create, edit, or delete events on your calendar.</p>
+<p>Sync is incremental. Google sends back a <code>nextSyncToken</code> on each event-list call. The connector saves that token per calendar and sends it on the next run. The token is kept in the same memory store under a <code>gcal_state_&lt;calendar_id&gt;</code> key. Only changed events come over the wire. A cancelled event is treated as a delete. The matching memory row is removed. Sometimes Google answers <code>410 Gone</code> because the token is older than 30 days. When that happens, the connector clears the stale token and starts over from the <code>--since</code> floor.</p>
+<p>Each event is shaped into a record. The record holds these fields. It is written as JSON into the store.</p>
+<ul>
+<li><code>fact</code> is a one-line sentence in plain language. It is built from the title, time, calendar, and organizer. It is used for search recall.</li>
+<li><code>summary</code> is the event title. It falls back to <code>(no title)</code>.</li>
+<li><code>description</code> is the event body. It is clipped to the first 1000 characters. See <a href="#notes">Notes</a>.</li>
+<li><code>location</code> holds the event location. <code>organizer</code> holds an email or display name. <code>attendees</code> holds a list of names.</li>
+<li><code>start</code> and <code>end</code> hold an RFC 3339 timestamp for timed events. They hold a bare date for all-day events. <code>all_day</code> is a boolean.</li>
+<li><code>status</code> is one of <code>confirmed</code>, <code>tentative</code>, or <code>cancelled</code>. There are also <code>html_link</code>, <code>created_at</code>, and <code>updated_at</code>.</li>
+<li><code>calendar_id</code> and <code>calendar_name</code> identify the calendar. <code>source</code> is set to <code>gcal</code>. <code>kind</code> is set to <code>event</code>. <code>tags</code> is set to <code>["gcal", "event", &lt;calendar_name&gt;]</code>.</li>
+</ul>
+<p>Each record is keyed <code>gcal_event_&lt;calendar_id&gt;_&lt;event_id&gt;</code>. A re-sync of the same event overwrites the old row. It does not make a duplicate.</p>
+<p>The memory store is reached over the PostgreSQL wire protocol. The default port is <code>5433</code>. It uses the EvolutionDB <code>MEMORY</code> SQL surface. See the <a href="/platform/mcp-server/">MCP server</a> to learn how an assistant later reads these records back with <code>search_memory</code>.</p>
+
+<h2 id="install">Install</h2>
+<pre><code><span class="c-com"># From PyPI</span>
+pip install evolutiondb-calendar-sync
+
+<span class="c-com"># Or editable, from this repo</span>
+pip install -e client/calendar-sync</code></pre>
+<p>It needs Python 3.9 or newer. It has two runtime dependencies. <code>psycopg[binary]&gt;=3.1</code> handles the EvolutionDB connection. <code>evolutiondb-pii&gt;=0.1.1</code> is optional and does PII redaction. See <a href="#notes">Notes</a>. The Google API access uses only the Python standard library, such as <code>urllib</code> and <code>http.server</code>. There is no Google SDK dependency.</p>
+
+<h2 id="configure">Configure</h2>
+<p>The connector reads its settings from environment variables. You can seed them from a <code>.env</code> file. A <code>.env.example</code> ships with the package. The loader only fills variables that are not already set in the environment. It uses <code>os.environ.setdefault</code>. Real environment values win over the file.</p>
+
+<h3 id="oauth-setup">Google OAuth setup</h3>
+<p>If you already set up <code>evolutiondb-gmail-sync</code>, you can reuse the same OAuth Desktop client. Just enable the Calendar API on the same Google Cloud project.</p>
+<ol>
+<li>Enable the Calendar API. Go to <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com">calendar-json.googleapis.com</a> → <strong>Enable</strong>.</li>
+<li>APIs &amp; Services → <strong>Credentials</strong> → reuse an existing Desktop OAuth client, or create one of type <em>Desktop app</em>.</li>
+<li>Copy the Client ID and Client secret into your environment as <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>.</li>
+<li>Make sure your Google account is listed under <em>Test Users</em> on the OAuth consent screen.</li>
+</ol>
+
+<h3 id="env-vars">Environment variables</h3>
+<table>
+<thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>GOOGLE_CLIENT_ID</code></td><td><em>(required)</em></td><td>OAuth Desktop client ID</td></tr>
+<tr><td><code>GOOGLE_CLIENT_SECRET</code></td><td><em>(required)</em></td><td>OAuth Desktop client secret</td></tr>
+<tr><td><code>CALENDAR_TOKEN_CACHE</code></td><td><code>~/.evosql/calendar_token.json</code></td><td>Where the refresh and access token is cached. It is written with mode <code>0600</code> on POSIX.</td></tr>
+<tr><td><code>EVOSQL_HOST</code></td><td><code>127.0.0.1</code></td><td>EvolutionDB host</td></tr>
+<tr><td><code>EVOSQL_PORT</code></td><td><code>5433</code></td><td>EvolutionDB PostgreSQL-wire port</td></tr>
+<tr><td><code>EVOSQL_USER</code></td><td><code>admin</code></td><td>EvolutionDB user</td></tr>
+<tr><td><code>EVOSQL_PASSWORD</code></td><td><code>admin</code></td><td>EvolutionDB password</td></tr>
+<tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>EvolutionDB database</td></tr>
+<tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>The namespace the records are written under. It must match what the MCP server reads.</td></tr>
+<tr><td><code>CALENDAR_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>Name of the memory store</td></tr>
+<tr><td><code>CALENDAR_POLL_INTERVAL</code></td><td><code>900</code></td><td>Daemon-mode poll interval in seconds. It is loaded into config. The daemon loop is driven by the <code>--interval</code> flag instead. See <a href="#notes">Notes</a>.</td></tr>
+</tbody>
+</table>
+<p>The example file recommends keeping <code>CALENDAR_TOKEN_CACHE</code> separate from gmail-sync's cache. Revoking one scope will then not break the other.</p>
+
+<h2 id="usage">Usage</h2>
+<h3 id="first-auth">First-time auth</h3>
+<p>Run the consent flow once. It opens a browser tab to Google's consent screen. It catches the redirect on a loopback port. It stores the refresh token at the cache path. Later runs are silent.</p>
+<pre><code>evolutiondb-calendar-sync --auth</code></pre>
+
+<h3 id="run">Running a sync</h3>
+<pre><code><span class="c-com"># One pass; bootstrap from a wall-clock floor (default --since is 29d).</span>
+evolutiondb-calendar-sync --once --since 30d
+
+<span class="c-com"># Daemon mode: poll every 15 minutes (900 seconds).</span>
+evolutiondb-calendar-sync --interval 900
+
+<span class="c-com"># Auth + scope check, no writes.</span>
+evolutiondb-calendar-sync --once --dry-run</code></pre>
+<p>Each pass prints a one-line JSON summary to stdout. Here is an example.</p>
+<pre><code><span class="c-str">{"ok": true, "calendars": 6, "events": 142, "deleted": 3, "skipped": 1, "errors": 0}</span></code></pre>
+<p>On failure it prints <code class="c-str">{"ok": false, "error": "…"}</code>. It adds a <code>"hint": "run with --auth"</code> when the token is missing.</p>
+
+<h3 id="flags">CLI flags</h3>
+<table>
+<thead><tr><th>Flag</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>--auth</code></td><td>, </td><td>Run the consent flow, cache the token, and exit</td></tr>
+<tr><td><code>--once</code></td><td>, </td><td>Run a single sync pass and exit</td></tr>
+<tr><td><code>--interval N</code></td><td>, </td><td>Daemon mode. Repeat a pass every <code>N</code> seconds. The value is floored at 60.</td></tr>
+<tr><td><code>--since DUR</code></td><td><code>29d</code></td><td>First-run wall-clock floor for <code>updatedMin</code>. The format looks like <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>3d</code>, <code>2w</code>.</td></tr>
+<tr><td><code>--dry-run</code></td><td>, </td><td>Fetch and authenticate but write nothing to EvolutionDB</td></tr>
+<tr><td><code>--env-file PATH</code></td><td><code>.env</code></td><td>Path to the dotenv file to load before reading config</td></tr>
+</tbody>
+</table>
+<p>If you give neither <code>--once</code> nor <code>--interval</code>, the tool runs exactly one pass and exits. The exit codes are simple. <code>0</code> means success. <code>2</code> means a bad <code>--since</code>. <code>3</code> means an auth error, so run <code>--auth</code>. <code>4</code> means any other failure.</p>
+
+<h2 id="reference">Reference</h2>
+
+<h3 id="ref-main"><code>calendar_sync.sync</code></h3>
+<div class="sig">main(argv: list | None = None) -&gt; int</div>
+<p>The CLI entry point. It is wired as the <code>evolutiondb-calendar-sync</code> console script through <code>calendar_sync.__main__:main</code>. It parses arguments, loads the dotenv file, and builds <code>Config</code>. Then it does one of three things. It runs the consent flow for <code>--auth</code>, runs a single pass, or runs the daemon loop. It installs <code>SIGTERM</code> and <code>SIGINT</code> handlers so the daemon finishes the current pass before it exits.</p>
+
+<div class="sig">sync_once(cfg: Config, *, since_iso: str | None, dry_run: bool = False) -&gt; dict</div>
+<p>Runs one full pass over every calendar. For each calendar it reads the saved sync token. Then it calls the API. It runs incrementally if a token exists. Otherwise it bootstraps from <code>since_iso</code>. It writes or deletes records and saves the new <code>nextSyncToken</code>. On a <code>SyncTokenExpired</code> error (a 410), it clears the token and starts over. It returns the counter dict <code>{"calendars", "events", "deleted", "skipped", "errors"}</code>. With <code>dry_run=True</code> no store is opened and nothing is written.</p>
+
+<div class="sig">parse_since(text: str) -&gt; str</div>
+<p>Takes a duration string like <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>3d</code>, or <code>2w</code>. It turns the string into an RFC 3339 UTC timestamp that ends in <code>…Z</code>. It does this by subtracting the duration from now. It raises <code>ValueError</code> on anything it cannot parse.</p>
+
+<div class="sig">Config()</div>
+<p>Reads all the environment variables listed under <a href="#env-vars">Environment variables</a> into attributes. The attributes are <code>client_id</code>, <code>client_secret</code>, <code>token_cache</code>, <code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code>, <code>store</code>, and <code>poll_secs</code>.</p>
+
+<p>The test suite also covers two helpers that live inside the module. <code>_event_when(event)</code> renders the start time as a human string. It handles an all-day <code>date</code> and a timed <code>dateTime</code>. <code>_build_event_record(event, calendar)</code> shapes one event into the record dict. It returns <code>None</code> for cancelled events.</p>
+
+<h3 id="ref-api"><code>calendar_sync.api</code></h3>
+<div class="sig">class CalendarClient(token_provider: Callable[[], str], user_agent="evolutiondb-calendar-sync")</div>
+<p>A small Google Calendar v3 REST client built on <code>urllib</code>. The bearer token is fetched lazily through <code>token_provider</code> on each request.</p>
+<div class="sig">CalendarClient.list_calendars() -&gt; list[dict]</div>
+<p>Returns every calendar in the user's calendar list. That includes owned calendars, subscribed calendars, holiday feeds, and more. It follows <code>nextPageToken</code> pagination.</p>
+<div class="sig">CalendarClient.list_events(calendar_id, *, sync_token=None, updated_min_iso=None) -&gt; dict</div>
+<p>Walks all events on one calendar. It is paginated and uses <code>singleEvents=true</code> and <code>maxResults=250</code>. With <code>sync_token</code> it does an incremental delta. Otherwise <code>updated_min_iso</code> bootstraps a wall-clock floor and sets <code>showDeleted=true</code>. It returns <code>{"events": [...], "next_sync_token": str | None}</code>.</p>
+<p>The client retries transient transport errors. These include timeouts, SSL or connection resets, and dropped keep-alives. It retries them with exponential backoff of <code>1,2,4,8,16</code>s. It honours the <code>429</code> <code>Retry-After</code> header. It quietly retries one <code>401</code> by refreshing the token. It retries a Google <code>5xx</code> response such as <code>500/502/503/504</code> with backoff of <code>1,2,4,8</code>s. The read timeout per request is <code>90</code>s.</p>
+<div class="sig">exception CalendarError(status, msg, url)</div>
+<p>Raised for an HTTP error response that the client could not recover from. It carries <code>.status</code>.</p>
+<div class="sig">exception SyncTokenExpired</div>
+<p>Raised on <code>410 Gone</code>. The sync token is older than 30 days. A full re-sync is needed. The sync loop catches this. It then clears the token and starts over.</p>
+
+<h3 id="ref-auth"><code>calendar_sync.auth</code></h3>
+<div class="sig">class GmailAuth(client_id, client_secret, cache_path)</div>
+<p>The OAuth 2.0 loopback-redirect flow. It is also called the "Installed app" flow. It is shared word for word with gmail-sync. Only the requested scope differs. The scope used here is <code>calendar.readonly</code>. The class name and some log prefixes still read <code>gmail-sync</code>. See <a href="#notes">Notes</a>.</p>
+<div class="sig">GmailAuth.ensure_token(interactive: bool = False) -&gt; str</div>
+<p>Returns a valid access token. It uses the cached access token if it is still valid. If not, it exchanges the cached refresh token. If that also fails and <code>interactive=True</code> is set (meaning <code>--auth</code> was passed), it spins up a one-shot loopback HTTP server, opens the consent URL in a browser, and exchanges the auth code. It raises <code>AuthError</code> when no token is cached and <code>interactive</code> is false.</p>
+<div class="sig">class TokenCache(path) · exception AuthError</div>
+<p><code>TokenCache</code> loads and saves the JSON token file in an atomic way, with chmod <code>0600</code>. The file holds <code>{refresh_token, access_token, expires_at, scope}</code>. <code>AuthError</code> wraps any consent or token-endpoint failure.</p>
+
+<h3 id="ref-state"><code>calendar_sync.state</code></h3>
+<div class="sig">class MemoryStore(host, port, user, password, database, store, namespace)</div>
+<p>The EvolutionDB backend over <code>psycopg</code> in autocommit mode. On construction it issues <code>CREATE MEMORY STORE</code>. That command is ignored if the store already exists. It auto-reconnects up to 3 times on a dropped connection. Records and per-calendar sync tokens are read and written through the EvolutionDB <code>MEMORY</code> SQL surface. That surface uses <code>MEMORY PUT INTO</code>, <code>MEMORY DELETE FROM</code>, and a <code>SELECT</code> against <code>__mem_&lt;store&gt;</code>.</p>
+<div class="sig">put_record(key, record) · delete_record(key)</div>
+<p>UPSERT a JSON record under the namespace, or delete one. The delete is used when Google reports an event as cancelled or deleted.</p>
+<div class="sig">get_sync_token(calendar_id) · set_sync_token(calendar_id, token) · clear_sync_token(calendar_id)</div>
+<p>Read, save, and drop the per-calendar <code>nextSyncToken</code>. It is stored under the key <code>gcal_state_&lt;calendar_id&gt;</code>. <code>clear_sync_token</code> is called on a <code>410</code>.</p>
+
+<h2 id="notes">Notes &amp; limitations</h2>
+<ul>
+<li><strong>The <code>--since</code> default is <code>29d</code>, not <code>30d</code>.</strong> The README run examples show <code>--since 30d</code>. The code defaults to <code>29d</code> on purpose. Using <code>30d</code> hits Google's exact-30-day ceiling for <code>updatedMin</code> with <code>showDeleted=true</code>, and the API answers <code>410</code>. If a re-sync bootstrap hits that ceiling, the connector does not crash. It reports an error per calendar and asks you to lower <code>--since</code> below 30 days.</li>
+<li><strong>Description clip.</strong> The README says the description is clipped to "1 kB". The real clip is the first <strong>1000 characters</strong>. The <code>_short</code> helper does this and adds a trailing <code>" …[clipped]"</code> marker.</li>
+<li><strong>Daemon interval source.</strong> Daemon mode is driven by the <code>--interval</code> flag. The flag value is floored at 60s. It is not driven by the <code>CALENDAR_POLL_INTERVAL</code> env var. The env var is read into <code>Config.poll_secs</code>, but the loop does not use it right now.</li>
+<li><strong>Version string mismatch.</strong> <code>pyproject.toml</code> declares version <code>0.1.2</code>. But <code>calendar_sync.__version__</code> is <code>"0.1.0"</code>.</li>
+<li><strong>Shared auth module.</strong> <code>auth.py</code> is reused from gmail-sync without changes. The OAuth class is named <code>GmailAuth</code>. Several stderr log lines and the callback page still say <code>gmail-sync</code>. This is only cosmetic. The scope it asks for is Calendar's <code>calendar.readonly</code>.</li>
+<li><strong>Optional PII redaction.</strong> If <code>evolutiondb-pii</code> can be imported, the fields <code>fact</code>, <code>summary</code>, <code>description</code>, <code>location</code>, <code>organizer</code>, and <code>attendees</code> are passed through <code>protect_record</code> before they are stored. Any companion redaction records are written too. If the package is not installed, records are stored as they are.</li>
+<li><strong>SQL value escaping.</strong> The store builds SQL by string interpolation. It doubles single quotes and strips control characters with the <code>_e</code> helper. It does not use parameterized queries.</li>
+<li><strong>Privacy.</strong> The token can read events you were invited to on other people's calendars. Once an event lands in EvolutionDB, anyone with the matching <code>MCP_USER_ID</code> can recall it through <code>search_memory</code>. Use a dedicated Google account for sensitive calendars. See the <a href="https://wiki.evolutiondb.org">EvolutionDB wiki</a> for the wider memory and privacy model.</li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

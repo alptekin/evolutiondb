@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>13. JSON | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>13. JSON</h1>
+<p class="lede">EvolutionDB stores JSON documents as text. It checks each document when you write it. It gives you a MySQL-compatible set of functions. It also gives you the <code>-&gt;</code> and <code>-&gt;&gt;</code> path operators to read, change, and search documents.</p>
+
+<p>This chapter describes the <code>JSON</code> data type. It also describes every JSON operation that EvolutionDB supports. The JSON support is small and self-contained. It uses little memory and is built on a recursive-descent parser. It follows the <strong>MySQL</strong> function set and the MySQL <code>$.path</code> expression syntax. It does not follow the PostgreSQL <code>json</code>/<code>jsonb</code> operator set. It does not follow the SQL/JSON standard. When the behaviour differs from those systems, this chapter says so clearly.</p>
+
+<div class="callout">
+<strong>At a glance.</strong> EvolutionDB JSON is <em>text-backed</em>. A <code>JSON</code> column holds the original document bytes. EvolutionDB checks the bytes when you write them. There is no binary or decomposed storage form. There is no path indexing. You cannot change a document in place. The transformation functions return a new string. If you have used MySQL's JSON functions, this will feel familiar. If you have used PostgreSQL <code>jsonb</code>, the operators here are different.
+</div>
+
+<h2 id="type">13.1. The <code>JSON</code> Data Type</h2>
+
+<p>EvolutionDB has one JSON type. You can write it as <code>JSON</code> or <code>JSONB</code>. The parser accepts both spellings. Both map to the <em>same</em> type. There is no separate binary form. So <code>JSONB</code> is only an alias. It exists so tools that emit <code>JSONB</code> still work.</p>
+
+<table>
+<thead><tr><th>Property</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Type names</td><td><code>JSON</code>, <code>JSONB</code> (alias)</td></tr>
+<tr><td>Internal type code</td><td><code>230000</code> (type family <code>23</code>)</td></tr>
+<tr><td>On-disk form</td><td>Original JSON text, stored in the binary tuple format like any variable-length value</td></tr>
+<tr><td>Validation</td><td>Document is parsed and rejected if not well-formed JSON (on write)</td></tr>
+<tr><td>Maximum nesting</td><td>64 levels (<code>JSON_MAX_DEPTH</code>)</td></tr>
+</tbody>
+</table>
+
+<p>EvolutionDB checks a value before it goes into a <code>JSON</code> column. It uses the same parser as <a href="/3.0/sql/json/#valid"><code>JSON_VALID</code></a>. An invalid document is rejected at write time.</p>
+
+<pre><code><span class="c-key">CREATE TABLE</span> events (
+  id    <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
+  payload <span class="c-key">JSON</span>
+);
+
+<span class="c-com">-- accepted: well-formed object</span>
+<span class="c-key">INSERT INTO</span> events <span class="c-key">VALUES</span> (1, <span class="c-str">'{"user":"ada","tags":["x","y"],"active":true}'</span>);
+
+<span class="c-com">-- rejected: trailing comma is not valid JSON</span>
+<span class="c-key">INSERT INTO</span> events <span class="c-key">VALUES</span> (2, <span class="c-str">'{"user":"ada",}'</span>);
+<span class="c-com">-- ERROR: invalid JSON: '{"user":"ada",}'   (SQLSTATE data_exception)</span>
+</code></pre>
+
+<p>See <a href="/3.0/ref/create-table">CREATE TABLE</a> for column declaration and <a href="/3.0/ref/insert">INSERT</a> for write semantics.</p>
+
+<div class="callout">
+<strong>Validation grammar.</strong> The parser accepts standard JSON. This means objects, arrays, and strings. Strings may use the escapes <code>\" \\ \/ \b \f \n \r \t</code> and <code>\uXXXX</code>. It also accepts numbers. A number may have an optional sign, an integer part, a fraction, and an exponent. It accepts the literals <code>true</code>, <code>false</code>, and <code>null</code>. It rejects integers with a leading zero. It rejects control characters inside strings. It rejects documents deeper than 64 levels. PostgreSQL <code>jsonb</code> removes duplicate object keys and reorders keys. EvolutionDB does <em>not</em> do this. It stores the document exactly as written. So key order and whitespace are kept.
+</div>
+
+<h2 id="path">13.2. Path Expressions</h2>
+
+<p>Some functions and operators point to a place inside a document. They use MySQL-style path expressions. A path starts with <code>$</code>. This is the document root. After it come zero or more steps.</p>
+
+<dl class="params">
+<dt><code>.key</code></dt><dd>Reads a member of an object by its key name.</dd>
+<dt><code>[n]</code></dt><dd>Reads an element of an array by its index. The index starts at zero.</dd>
+</dl>
+
+<p>You can chain steps to any depth. For example <code>$.user.name</code>, <code>$.tags[0]</code>, or <code>$.items[2].sku</code>. A bare <code>$</code> means the whole document.</p>
+
+<pre><code><span class="c-com">-- given payload = {"user":"ada","tags":["x","y"],"address":{"city":"berlin"}}</span>
+<span class="c-key">SELECT</span> JSON_EXTRACT(payload, <span class="c-str">'$.user'</span>)        <span class="c-key">FROM</span> events;  <span class="c-com">-- "ada"</span>
+<span class="c-key">SELECT</span> JSON_EXTRACT(payload, <span class="c-str">'$.tags[1]'</span>)     <span class="c-key">FROM</span> events;  <span class="c-com">-- "y"</span>
+<span class="c-key">SELECT</span> JSON_EXTRACT(payload, <span class="c-str">'$.address.city'</span>) <span class="c-key">FROM</span> events;  <span class="c-com">-- "berlin"</span>
+<span class="c-key">SELECT</span> JSON_EXTRACT(payload, <span class="c-str">'$'</span>)             <span class="c-key">FROM</span> events;  <span class="c-com">-- whole document</span>
+</code></pre>
+
+<div class="callout">
+<strong>Supported subset.</strong> Only two kinds of step work here. The first is a key step with <code>.key</code>. The second is a numeric index step with <code>[n]</code>. Some features are <em>not</em> supported. Wildcards like <code>$.*</code> and <code>$[*]</code> do not work. The recursive descent operator <code>$**</code> does not work. Quoted member names like <code>$."weird key"</code> do not work. Negative indexes and range indexes do not work. An index step needs at least one digit. A key step needs a name that is not empty. If not, the path is rejected. Key names are matched against an internal 256-byte buffer. Very long keys are cut short for the comparison.
+</div>
+
+<h2 id="operators">13.3. The <code>-&gt;</code> and <code>-&gt;&gt;</code> Operators</h2>
+
+<p>The arrow operators are a short way to extract a value. The left side is a JSON expression. The right side is a path. They are left-associative.</p>
+
+<dl class="params">
+<dt><code>json -&gt; path</code></dt><dd>Extracts the value at <em>path</em> and keeps its JSON form. A string result keeps its quotes.</dd>
+<dt><code>json -&gt;&gt; path</code></dt><dd>Extracts the value at <em>path</em> as <em>text</em>. A JSON string result loses its quotes. A JSON <code>null</code> becomes SQL <code>NULL</code>.</dd>
+</dl>
+
+<pre><code><span class="c-com">-- payload = {"user":"ada","age":31}</span>
+<span class="c-key">SELECT</span> payload -&gt; <span class="c-str">'$.user'</span>  <span class="c-key">FROM</span> events;  <span class="c-com">-- "ada"   (quoted JSON string)</span>
+<span class="c-key">SELECT</span> payload -&gt;&gt; <span class="c-str">'$.user'</span> <span class="c-key">FROM</span> events;  <span class="c-com">-- ada     (plain text)</span>
+<span class="c-key">SELECT</span> payload -&gt; <span class="c-str">'$.age'</span>   <span class="c-key">FROM</span> events;  <span class="c-com">-- 31</span>
+</code></pre>
+
+<p>Both operators return SQL <code>NULL</code> in two cases. The first is when either side is <code>NULL</code>. The second is when the path matches nothing in the document. The right side uses the same <code>$.path</code> syntax as the functions above. A bare key with no leading <code>$</code> is also accepted. It is treated as a single object-key step.</p>
+
+<div class="callout">
+<strong>Contrast with PostgreSQL.</strong> In PostgreSQL, <code>-&gt;</code> takes a <em>single</em> key or array index. That is one text value or one integer. The <code>#&gt;</code> and <code>#&gt;&gt;</code> operators take a path array. The <code>@&gt;</code>, <code>?</code>, and <code>jsonb_path_*</code> operators complete the set. EvolutionDB is different. Its <code>-&gt;</code> and <code>-&gt;&gt;</code> accept a <em>whole MySQL <code>$.path</code></em> on the right. It has no <code>#&gt;</code>, <code>@&gt;</code>, or <code>?</code> operators. For containment and existence checks, use the <a href="/3.0/sql/json/#mutation"><code>JSON_CONTAINS</code></a> and <a href="/3.0/sql/json/#mutation"><code>JSON_CONTAINS_PATH</code></a> functions instead.
+</div>
+
+<h2 id="inspection">13.4. Inspection Functions</h2>
+
+<p>These functions read a document. They do not change it.</p>
+
+<dl class="params">
+<dt><code>JSON_VALID(<i>doc</i>)</code></dt><dd>Returns <code>1</code> if <em>doc</em> is well-formed JSON. Returns <code>0</code> if it is not. This is the same check used when you write to a <code>JSON</code> column.</dd>
+<dt><code>JSON_TYPE(<i>doc</i>)</code></dt><dd>Returns the type of the top-level value. It is one of <code>OBJECT</code>, <code>ARRAY</code>, <code>STRING</code>, <code>BOOLEAN</code>, <code>NULL</code>, <code>INTEGER</code>, or <code>DOUBLE</code>. A number with <code>.</code>, <code>e</code>, or <code>E</code> is reported as <code>DOUBLE</code>. Any other number is reported as <code>INTEGER</code>.</dd>
+<dt><code>JSON_LENGTH(<i>doc</i>)</code></dt><dd>For an object, this is the number of keys. For an array, it is the number of elements. For a scalar, it is <code>1</code>.</dd>
+<dt><code>JSON_DEPTH(<i>doc</i>)</code></dt><dd>The nesting depth. A scalar or an empty container has depth <code>1</code>. Each nested object or array adds one level.</dd>
+<dt><code>JSON_KEYS(<i>doc</i>)</code></dt><dd>Returns a JSON array of the top-level object's key names. The names keep their quotes. For example <code>["user","tags"]</code>. This works only for objects.</dd>
+<dt><code>JSON_EXTRACT(<i>doc</i>, <i>path</i>)</code></dt><dd>Returns the value at <em>path</em> in its JSON form. Returns <code>NULL</code> if the path matches nothing. This is the same as the <code>-&gt;</code> operator.</dd>
+</dl>
+
+<pre><code><span class="c-com">-- payload = {"user":"ada","tags":["x","y"],"meta":{"v":1.5}}</span>
+<span class="c-key">SELECT</span> JSON_VALID(payload)   <span class="c-key">FROM</span> events;  <span class="c-com">-- 1</span>
+<span class="c-key">SELECT</span> JSON_TYPE(payload)    <span class="c-key">FROM</span> events;  <span class="c-com">-- OBJECT</span>
+<span class="c-key">SELECT</span> JSON_LENGTH(payload)  <span class="c-key">FROM</span> events;  <span class="c-com">-- 3</span>
+<span class="c-key">SELECT</span> JSON_DEPTH(payload)   <span class="c-key">FROM</span> events;  <span class="c-com">-- 3</span>
+<span class="c-key">SELECT</span> JSON_KEYS(payload)    <span class="c-key">FROM</span> events;  <span class="c-com">-- ["user","tags","meta"]</span>
+<span class="c-key">SELECT</span> JSON_TYPE(<span class="c-str">'1.5'</span>)        <span class="c-key">FROM</span> events;  <span class="c-com">-- DOUBLE</span>
+<span class="c-key">SELECT</span> JSON_TYPE(<span class="c-str">'42'</span>)         <span class="c-key">FROM</span> events;  <span class="c-com">-- INTEGER</span>
+</code></pre>
+
+<h2 id="construction">13.5. Construction and Formatting Functions</h2>
+
+<dl class="params">
+<dt><code>JSON_OBJECT(<i>k1</i>, <i>v1</i>[, <i>k2</i>, <i>v2</i>])</code></dt><dd>Builds a JSON object from key and value pairs. It takes one or two pairs. A value that is itself valid JSON is kept as-is. Any other value is quoted as a JSON string.</dd>
+<dt><code>JSON_ARRAY(<i>v1</i>[, <i>v2</i>[, <i>v3</i>]])</code></dt><dd>Builds a JSON array from one to three values. It uses the same rule for each element. Valid JSON is kept as-is. Anything else is quoted as a string.</dd>
+<dt><code>JSON_QUOTE(<i>str</i>)</code></dt><dd>Wraps <em>str</em> in double quotes. It escapes special characters. These are <code>"</code>, <code>\</code>, newline, carriage return, tab, and control characters as <code>\uXXXX</code>. The result is a JSON string literal.</dd>
+<dt><code>JSON_UNQUOTE(<i>doc</i>)</code></dt><dd>The reverse of <code>JSON_QUOTE</code>. If <em>doc</em> is a quoted JSON string, it removes the quotes and unescapes the text. If not, it returns the input unchanged.</dd>
+<dt><code>JSON_PRETTY(<i>doc</i>)</code></dt><dd>Renders the document again with two-space indentation and newlines. If the input cannot be parsed, it returns the original text unchanged.</dd>
+</dl>
+
+<pre><code><span class="c-key">SELECT</span> JSON_OBJECT(<span class="c-str">'name'</span>, <span class="c-str">'ada'</span>, <span class="c-str">'age'</span>, <span class="c-str">'31'</span>);
+<span class="c-com">-- {"name":"ada","age":31}    (31 is valid JSON, embedded; "ada" quoted)</span>
+
+<span class="c-key">SELECT</span> JSON_ARRAY(<span class="c-str">'1'</span>, <span class="c-str">'two'</span>, <span class="c-str">'true'</span>);
+<span class="c-com">-- [1,"two",true]</span>
+
+<span class="c-key">SELECT</span> JSON_QUOTE(<span class="c-str">'a"b'</span>);     <span class="c-com">-- "a\"b"</span>
+<span class="c-key">SELECT</span> JSON_UNQUOTE(<span class="c-str">'"a\nb"'</span>); <span class="c-com">-- a&lt;newline&gt;b</span>
+</code></pre>
+
+<div class="callout">
+<strong>Argument-count limits.</strong> <code>JSON_OBJECT</code> takes one or two key and value pairs. A four-argument call is merged into one object. <code>JSON_ARRAY</code> takes one, two, or three elements. These argument counts are fixed in the grammar. They are not the variadic forms that MySQL and PostgreSQL have. To build larger objects or arrays, you must put the JSON text together in another way.
+</div>
+
+<h2 id="mutation">13.6. Modification, Containment, and Search</h2>
+
+<p>The modification functions return a <em>new</em> document. They never change stored data in place. Use them inside an <a href="/3.0/ref/update">UPDATE</a> to save a change.</p>
+
+<dl class="params">
+<dt><code>JSON_SET(<i>doc</i>, <i>path</i>, <i>val</i>)</code></dt><dd>Adds the key if it is missing. Replaces its value if the key is there.</dd>
+<dt><code>JSON_INSERT(<i>doc</i>, <i>path</i>, <i>val</i>)</code></dt><dd>Adds the key only if it does not already exist. It leaves existing keys alone.</dd>
+<dt><code>JSON_REPLACE(<i>doc</i>, <i>path</i>, <i>val</i>)</code></dt><dd>Updates the key only if it already exists. It does not add missing keys.</dd>
+<dt><code>JSON_REMOVE(<i>doc</i>, <i>path</i>)</code></dt><dd>Deletes the key at <em>path</em>.</dd>
+<dt><code>JSON_CONTAINS(<i>target</i>, <i>candidate</i>)</code></dt><dd>Returns <code>1</code> if <em>candidate</em> is inside <em>target</em>. The match can be scalar equality. It can be a subset of object keys and values. It can be array-element membership, checked recursively. Otherwise it returns <code>0</code>.</dd>
+<dt><code>JSON_CONTAINS_PATH(<i>doc</i>, <i>mode</i>, <i>path</i>)</code></dt><dd>Returns <code>1</code> if the path exists in <em>doc</em>. <em>mode</em> is <code>'all'</code> or <code>'one'</code> and is case-insensitive. Any value other than <code>'all'</code> is treated as <code>'one'</code>.</dd>
+<dt><code>JSON_SEARCH(<i>doc</i>, <i>mode</i>, <i>str</i>)</code></dt><dd>Searches string values for an exact match of <em>str</em>. It returns the matching paths as JSON path strings. For example <code>"$.user"</code>. With <em>mode</em> <code>'all'</code> it returns every match, separated by commas. Any other mode stops at the first match. It returns <code>NULL</code> when nothing matches.</dd>
+</dl>
+
+<pre><code><span class="c-com">-- payload = {"user":"ada","age":31}</span>
+<span class="c-key">UPDATE</span> events <span class="c-key">SET</span> payload = JSON_SET(payload, <span class="c-str">'$.age'</span>, <span class="c-str">'32'</span>) <span class="c-key">WHERE</span> id = 1;
+<span class="c-com">-- {"user":"ada","age":32}</span>
+
+<span class="c-key">UPDATE</span> events <span class="c-key">SET</span> payload = JSON_REMOVE(payload, <span class="c-str">'$.age'</span>)   <span class="c-key">WHERE</span> id = 1;
+<span class="c-com">-- {"user":"ada"}</span>
+
+<span class="c-key">SELECT</span> JSON_CONTAINS(<span class="c-str">'{"a":1,"b":2}'</span>, <span class="c-str">'{"a":1}'</span>);   <span class="c-com">-- 1</span>
+<span class="c-key">SELECT</span> JSON_CONTAINS_PATH(<span class="c-str">'{"a":1}'</span>, <span class="c-str">'one'</span>, <span class="c-str">'$.a'</span>);  <span class="c-com">-- 1</span>
+<span class="c-key">SELECT</span> JSON_SEARCH(<span class="c-str">'{"u":"ada","v":"bob"}'</span>, <span class="c-str">'one'</span>, <span class="c-str">'ada'</span>);  <span class="c-com">-- "$.u"</span>
+</code></pre>
+
+<div class="callout">
+<strong>Single-key limitation on modification.</strong> <code>JSON_SET</code>, <code>JSON_INSERT</code>, <code>JSON_REPLACE</code>, and <code>JSON_REMOVE</code> work on <em>top-level object keys only</em>. The document must be an object. The path must be a single <code>$.key</code> step. Nested paths like <code>$.a.b</code> are rejected. Array indexes like <code>$.a[0]</code> are rejected. This is a planned simplification. The MySQL versions accept any path and many path and value pairs. <code>JSON_SEARCH</code> matches only string values. It skips numbers, booleans, and <code>null</code>. It needs an exact, full-string match. It does not use a <code>LIKE</code> pattern.
+</div>
+
+<h2 id="errors">13.7. Error Reference</h2>
+
+<table>
+<thead><tr><th>Situation</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td>Invalid JSON written to a <code>JSON</code> column</td><td>The write is rejected with <code>invalid JSON: '…'</code>. SQLSTATE is <code>data_exception</code></td></tr>
+<tr><td>Path does not match any value</td><td><code>JSON_EXTRACT</code>, <code>-&gt;</code>, and <code>-&gt;&gt;</code> return <code>NULL</code></td></tr>
+<tr><td>Malformed path expression</td><td>The function returns <code>NULL</code></td></tr>
+<tr><td><code>JSON_SET</code> family with a nested path, an array index, or a non-object document</td><td>Returns <code>NULL</code>. The operation is not applied</td></tr>
+<tr><td>JSON <code>null</code> extracted with <code>-&gt;&gt;</code> or <code>JSON_EXTRACT(text)</code></td><td>Becomes SQL <code>NULL</code></td></tr>
+<tr><td>Document deeper than 64 levels</td><td>Treated as invalid JSON</td></tr>
+</tbody>
+</table>
+
+<h2 id="notes">13.8. Notes and Limitations</h2>
+
+<div class="callout">
+<strong>Implementation notes.</strong>
+<ul>
+<li><strong>Text storage, not binary.</strong> <code>JSON</code> and <code>JSONB</code> are the same text-backed type. There is no decomposed or indexed binary form. So whitespace, key order, and duplicate keys are kept exactly as written.</li>
+<li><strong>No JSON indexing.</strong> A query that filters on <code>-&gt;&gt;</code> or <code>JSON_EXTRACT</code> does a full scan. There are no expression or path indexes over JSON.</li>
+<li><strong>Fixed buffers.</strong> JSON expression evaluation uses fixed-size buffers. A document can be up to about 4&nbsp;KB per evaluation step. A key can be up to 256&nbsp;bytes. The output is limited by the column or result buffer. Very large documents or values may be cut short.</li>
+<li><strong>MySQL flavour, not PostgreSQL or SQL/JSON.</strong> The function names, the <code>$.path</code> syntax, and the <code>JSON_TYPE</code> labels follow MySQL. There is no <code>jsonb</code>. There are no <code>@&gt;</code>, <code>?</code>, or <code>#&gt;</code> operators. There is no <code>JSON_TABLE</code>. There are no SQL/JSON <code>JSON_VALUE</code> or <code>JSON_QUERY</code> constructs.</li>
+<li><strong>Modification is shallow.</strong> You can only set, insert, replace, or remove single top-level object keys.</li>
+</ul>
+</div>
+
+<p>Related reference pages are <a href="/3.0/ref/create-table">CREATE TABLE</a>, <a href="/3.0/ref/insert">INSERT</a>, <a href="/3.0/ref/update">UPDATE</a>, and <a href="/3.0/ref/select">SELECT</a>.</p>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>

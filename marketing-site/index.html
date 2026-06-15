@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>EvolutionDB | Long-Term Memory for AI Agents</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary": "#ffd6a3",
+                        "on-surface-variant": "#bbc9cd",
+                        "on-secondary": "#1000a9",
+                        "on-secondary-fixed": "#07006c",
+                        "tertiary-fixed-dim": "#ffb957",
+                        "surface-container-highest": "#31353f",
+                        "glass-fill": "rgba(30, 41, 59, 0.6)",
+                        "surface-tint": "#2fd9f4",
+                        "error": "#ffb4ab",
+                        "on-primary-fixed-variant": "#004e5a",
+                        "surface-base": "#1E293B",
+                        "surface-container-lowest": "#0a0e17",
+                        "background": "#0f131c",
+                        "secondary-container": "#3131c0",
+                        "error-container": "#93000a",
+                        "on-secondary-container": "#b0b2ff",
+                        "surface-variant": "#31353f",
+                        "surface-container": "#1c1f29",
+                        "on-tertiary-container": "#6e4600",
+                        "tertiary-container": "#ffb13b",
+                        "surface-bright": "#353943",
+                        "tertiary-fixed": "#ffddb5",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-high": "#262a34",
+                        "neon-cyan": "#22D3EE",
+                        "on-primary-fixed": "#001f25",
+                        "secondary-fixed": "#e1e0ff",
+                        "on-primary": "#00363e",
+                        "on-primary-container": "#005763",
+                        "glass-border": "rgba(255, 255, 255, 0.1)",
+                        "on-tertiary": "#462b00",
+                        "pure-white": "#FFFFFF",
+                        "inverse-on-surface": "#2c303a",
+                        "deep-indigo": "#6366F1",
+                        "primary-container": "#22d3ee",
+                        "on-tertiary-fixed-variant": "#643f00",
+                        "surface": "#0f131c",
+                        "secondary": "#c0c1ff",
+                        "inverse-primary": "#006877",
+                        "outline-variant": "#3c494c",
+                        "primary-fixed": "#a2eeff",
+                        "surface-container-low": "#181b25",
+                        "outline": "#859397",
+                        "on-surface": "#dfe2ef",
+                        "on-secondary-fixed-variant": "#2f2ebe",
+                        "on-tertiary-fixed": "#2a1800",
+                        "on-error": "#690005",
+                        "inverse-surface": "#dfe2ef",
+                        "primary-fixed-dim": "#2fd9f4",
+                        "primary": "#8aebff",
+                        "on-background": "#dfe2ef",
+                        "secondary-fixed-dim": "#c0c1ff",
+                        "surface-dim": "#0f131c"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "1rem",
+                        "lg": "2rem",
+                        "xl": "3rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-sm": "16px",
+                        "gutter": "24px",
+                        "margin-md": "32px",
+                        "container-max": "1280px",
+                        "unit": "8px",
+                        "margin-lg": "64px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Hanken Grotesk"],
+                        "body-lg": ["Inter"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "code-sm": ["JetBrains Mono"],
+                        "label-caps": ["JetBrains Mono"]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .text-glow {
+            text-shadow: 0 0 15px rgba(34, 211, 238, 0.5);
+        }
+
+        /* Keyframes */
+        @keyframes float {
+            0% { transform: translateY(0px) rotateX(0deg) rotateY(0deg); }
+            50% { transform: translateY(-20px) rotateX(2deg) rotateY(2deg); }
+            100% { transform: translateY(0px) rotateX(0deg) rotateY(0deg); }
+        }
+        .animate-float {
+            animation: float 6s ease-in-out infinite;
+        }
+        .animate-float-delayed {
+            animation: float 8s ease-in-out infinite;
+            animation-delay: -2s;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(34, 211, 238, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+        }
+        .pulse-cyan {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        .shimmer-effect {
+            position: relative;
+            overflow: hidden;
+        }
+        .shimmer-effect::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(255, 255, 255, 0.2),
+                transparent
+            );
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes lava-lamp {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .lava-bg {
+            background: radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.1) 0%, rgba(15, 19, 28, 1) 70%);
+            background-size: 200% 200%;
+            animation: lava-lamp 15s ease infinite;
+        }
+
+        /* Entrance Animations */
+        .reveal {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .reveal.active {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .stagger-1 { transition-delay: 0.1s; }
+        .stagger-2 { transition-delay: 0.2s; }
+        .stagger-3 { transition-delay: 0.3s; }
+        .stagger-4 { transition-delay: 0.4s; }
+
+        @media (prefers-reduced-motion: reduce) {
+            .reveal, .animate-float, .animate-float-delayed, .shimmer-effect::after, .lava-bg {
+                animation: none !important;
+                transition: none !important;
+                transform: none !important;
+                opacity: 1 !important;
+            }
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-surface-container-lowest text-on-surface font-body-md selection:bg-neon-cyan/30 lava-bg">
+<!-- Hero Background Animation Decor -->
+<div class="fixed inset-0 z-0 pointer-events-none">
+<div class="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-deep-indigo/10 blur-[120px] rounded-full"></div>
+<div class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-cyan/10 blur-[120px] rounded-full"></div>
+</div>
+<!-- Top Navigation Shell -->
+<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-black/20 h-16 flex items-center justify-between px-4 md:px-8">
+<div class="flex items-center gap-x-5 lg:gap-x-7">
+<a class="flex items-center gap-2" href="https://evolutiondb.org/">
+<span class="material-symbols-outlined text-neon-cyan text-[28px]">database</span>
+<span class="font-bold text-neon-cyan tracking-tight text-[18px]" style="font-family:Hanken Grotesk">EvolutionDB</span>
+</a>
+<nav class="hidden md:flex gap-x-5 lg:gap-x-7 items-center">
+<a class="relative text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors after:content-[''] after:absolute after:-bottom-2 after:left-0 after:w-full after:h-0.5 after:bg-neon-cyan after:rounded-full" href="https://evolutiondb.org/">HOME</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/features/">FEATURES</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/comparison/">COMPARISON</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://docs.evolutiondb.org/">DOCS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://developer.evolutiondb.org/">DEVELOPERS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutionagent.evolutiondb.org/">AGENT</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://wiki.evolutiondb.org/">WIKI</a>
+</nav>
+</div>
+<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all text-[22px]" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
+</header>
+<!-- Main Content Canvas -->
+<main class="relative z-10 pt-32 pb-40 px-margin-sm min-h-screen flex flex-col items-center justify-center max-w-container-max mx-auto overflow-hidden">
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center w-full">
+<!-- Left: Typography & Actions -->
+<div class="lg:col-span-7 flex flex-col items-start space-y-8">
+<div class="reveal active stagger-1 inline-flex items-center gap-2 px-4 py-1 rounded-full glass-panel border-neon-cyan/20">
+<span class="w-2 h-2 rounded-full bg-neon-cyan pulse-cyan"></span>
+<span class="text-neon-cyan font-label-caps text-[10px] tracking-[0.2em] uppercase">v3.0 · Open Source</span>
+</div>
+<h1 class="reveal active stagger-2 font-display-lg text-[64px] leading-[72px] lg:text-[84px] lg:leading-[92px] font-bold text-pure-white tracking-tight text-glow">
+ Long-Term Memory <br/>
+<span class="text-neon-cyan">for AI Agents.</span>
+ </h1>
+<p class="reveal active stagger-3 font-body-lg text-body-lg text-on-surface-variant max-w-xl">
+ EvolutionDB is an open-source SQL database written in C. It gives AI agents a memory that lasts. One binary holds your tables, your agent memory, and a vector index.
+ </p>
+<div class="reveal active stagger-4 flex flex-col sm:flex-row gap-4 pt-4">
+<a class="px-8 py-4 rounded-lg bg-gradient-to-r from-neon-cyan to-deep-indigo text-on-primary font-bold transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(34,211,238,0.3)] shimmer-effect text-center" href="https://github.com/alptekin/evolutiondb">
+ Get Started
+ </a>
+<a class="px-8 py-4 rounded-lg glass-panel hover:bg-white/10 text-pure-white transition-all hover:scale-105 active:scale-95 text-center" href="https://github.com/alptekin/evolutiondb">
+ View on GitHub
+ </a>
+</div>
+<div class="reveal active stagger-4 flex items-center gap-6 pt-8 opacity-60">
+<span class="font-label-caps text-[12px] text-on-surface-variant">SUPPORTED PROTOCOLS</span>
+<div class="flex gap-4 grayscale brightness-150">
+<span class="material-symbols-outlined text-[24px]" title="PostgreSQL wire protocol">dataset</span>
+<span class="material-symbols-outlined text-[24px]" title="Native EVO text protocol">terminal</span>
+<span class="material-symbols-outlined text-[24px]" title="MCP server for agents">extension</span>
+</div>
+</div>
+</div>
+<!-- Right: Visual Cards & Bento-ish Grid -->
+<div class="lg:col-span-5 relative h-[500px] flex items-center justify-center">
+<!-- Floating Glass Card 1 -->
+<div class="absolute top-0 left-0 w-64 p-8 glass-panel rounded-lg shadow-2xl animate-float z-20 hover:scale-105 transition-transform duration-500 cursor-default">
+<div class="flex items-center gap-3 mb-4">
+<span class="material-symbols-outlined text-neon-cyan">layers</span>
+<span class="text-neon-cyan font-label-caps text-[10px] tracking-widest">NATIVE SQL PRIMITIVES</span>
+</div>
+<div class="space-y-3">
+<div class="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+<div class="h-full w-4/5 bg-neon-cyan"></div>
+</div>
+<div class="h-2 w-2/3 bg-white/5 rounded-full overflow-hidden">
+<div class="h-full w-1/2 bg-deep-indigo"></div>
+</div>
+</div>
+<p class="mt-4 text-[12px] text-on-surface-variant font-code-sm">MEMORY STORE ON</p>
+</div>
+<!-- Floating Glass Card 2 -->
+<div class="absolute bottom-10 right-0 w-72 p-8 glass-panel rounded-lg shadow-2xl animate-float-delayed z-30 hover:scale-105 transition-transform duration-500 cursor-default">
+<div class="flex items-center justify-between mb-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary">bolt</span>
+<span class="text-pure-white font-bold text-headline-md">One Binary</span>
+</div>
+</div>
+<div class="font-code-sm text-on-surface-variant text-[11px] bg-black/40 p-4 rounded-md border border-glass-border">
+ $./evosql-server <br/>
+<span class="text-neon-cyan">Starting EvolutionDB..</span><br/>
+<span class="text-tertiary">PG :5433 · EVO :9967</span>
+</div>
+</div>
+<!-- Abstract Glow -->
+<div class="absolute w-80 h-80 bg-neon-cyan/20 rounded-full blur-[100px] z-10 pointer-events-none"></div>
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] border border-neon-cyan/10 rounded-full animate-pulse pointer-events-none"></div>
+<!-- Featured Image -->
+<div class="relative w-full aspect-square rounded-xl overflow-hidden glass-panel border-glass-border shadow-[0_40px_80px_rgba(0,0,0,0.5)]">
+<img alt="Futuristic server core" class="w-full h-full object-cover opacity-40 mix-blend-overlay" data-alt="A high-tech futuristic server core glowing with neon cyan and deep indigo energy. The setting is a dark, atmospheric data center with cables that pulse with light, echoing a sci-fi aesthetic. Large floating glass panels with holographic code data hover around the central unit. The lighting is dramatic and cinematic, with soft blurs and sharp highlights that emphasize the premium, technical nature of the technology." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCCyKplA4Mq_I5SST8rKnIhYDyynFKc-Ghhi9i0N12U9BcVDXv1yJuyuAL5JLUEUkmuHiqC3Mu5UndwMQL7dxhCAAUiw9xVduf4biGfn0K7eW0LaAzQ375Nm4xuIINPbgV2No47DUb5e-28eYkJ5auEj0DuBs1bIU4uAgihE-oY4Rq_WE2B4LkHon2dUfYC8ZsEJ7Sf0l8KJCe6K_cm4wgB0Ue9nfo0zzLS5fNZE5O1wAk5Zk-Kld0suRWrK9eToLx0e2xiZBgth4A"/>
+</div>
+</div>
+</div>
+<!-- Secondary Features Section -->
+<div class="mt-40 w-full">
+<h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-16">Why EvolutionDB?</h2>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<div class="reveal stagger-1 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
+<span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">memory</span>
+<h3 class="font-headline-md text-[24px] text-pure-white mb-4">Memory In-Engine</h3>
+<p class="text-on-surface-variant text-body-md">MEMORY STORE and ENTITY STORE are built into the SQL engine. Agent memory is part of the database itself. It is not an add-on.</p>
+</div>
+<div class="reveal stagger-2 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
+<span class="material-symbols-outlined text-secondary text-4xl mb-4">scatter_plot</span>
+<h3 class="font-headline-md text-[24px] text-pure-white mb-4">Native Vectors</h3>
+<p class="text-on-surface-variant text-body-md">The engine has a VECTOR(N) type and an HNSW index. You can run meaning-based and keyword search together. You do not need any extra service.</p>
+</div>
+<div class="reveal stagger-3 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
+<span class="material-symbols-outlined text-tertiary text-4xl mb-4">update</span>
+<h3 class="font-headline-md text-[24px] text-pure-white mb-4">Time-Travel</h3>
+<p class="text-on-surface-variant text-body-md">EvolutionDB keeps old versions of your rows. You can read your data as it was at any past time with AS OF. You never lose the past.</p>
+</div>
+</div>
+</div>
+<!-- Tertiary Capabilities Section -->
+<div class="mt-40 w-full">
+<h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-4">Built for Agents on Real Storage</h2>
+<p class="reveal stagger-1 text-center text-on-surface-variant text-body-md max-w-2xl mx-auto mb-16">One server supports two protocols. It supports the PostgreSQL wire protocol and a native EVO protocol. This means it works with psql and DBeaver. It also ships an MCP server and a standalone agent.</p>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
+<div class="reveal stagger-1 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
+<span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">lan</span>
+<h3 class="font-headline-md text-[20px] text-pure-white mb-3">Dual Protocol</h3>
+<p class="text-on-surface-variant text-body-md">One binary serves the PostgreSQL wire protocol on port 5433. It also serves the EVO protocol on port 9967. An embedded mode runs without Docker.</p>
+</div>
+<div class="reveal stagger-2 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
+<span class="material-symbols-outlined text-secondary text-4xl mb-4">neurology</span>
+<h3 class="font-headline-md text-[20px] text-pure-white mb-3">Agent-Native</h3>
+<p class="text-on-surface-variant text-body-md">EvolutionDB ships an MCP server and a standalone agent. Every action needs human approval. The agent saves a draft first. A person reads it before anything is sent.</p>
+</div>
+<div class="reveal stagger-3 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
+<span class="material-symbols-outlined text-tertiary text-4xl mb-4">storage</span>
+<h3 class="font-headline-md text-[20px] text-pure-white mb-3">Unified Storage</h3>
+<p class="text-on-surface-variant text-body-md">It uses 4KB pages, B+ tree indexes, and a Clock-Sweep buffer pool. A write-ahead log keeps your data safe after a crash.</p>
+</div>
+<div class="reveal stagger-4 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
+<span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">shield_lock</span>
+<h3 class="font-headline-md text-[20px] text-pure-white mb-3">Secure & Multi-Tenant</h3>
+<p class="text-on-surface-variant text-body-md">Each tenant gets its own DATABASE, USER, and GRANT. Pages are encrypted with AES-256. Logins use PBKDF2-SHA256.</p>
+</div>
+</div>
+</div>
+<!-- Closing CTA -->
+<div class="mt-40 w-full">
+<div class="reveal glass-panel rounded-xl p-margin-lg text-center flex flex-col items-center gap-6 shadow-[0_40px_80px_rgba(0,0,0,0.4)]">
+<h2 class="font-headline-md text-headline-md text-pure-white text-glow">Give your agents a memory that lasts.</h2>
+<p class="text-on-surface-variant text-body-md max-w-xl">EvolutionDB is open source under the MIT license. Clone it, run one binary, and connect with the tools you already use.</p>
+<div class="flex flex-col sm:flex-row gap-4 pt-2">
+<a class="px-8 py-4 rounded-lg bg-gradient-to-r from-neon-cyan to-deep-indigo text-on-primary font-bold transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(34,211,238,0.3)] shimmer-effect text-center" href="https://github.com/alptekin/evolutiondb">
+ Get Started
+ </a>
+<a class="px-8 py-4 rounded-lg glass-panel hover:bg-white/10 text-pure-white transition-all hover:scale-105 active:scale-95 text-center" href="https://github.com/alptekin/evolutiondb">
+ View on GitHub
+ </a>
+</div>
+</div>
+</div>
+</main>
+<!-- Bottom Navigation Shell (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 w-full z-50 bg-glass-fill backdrop-blur-xl border-t border-glass-border h-20 flex justify-around items-center px-4 rounded-t-lg">
+<a class="flex flex-col items-center justify-center text-neon-cyan scale-105" href="/">
+<span class="material-symbols-outlined">database</span>
+<span class="font-label-caps text-[10px] mt-1">Home</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant/70 active:scale-90 transition-transform" href="/features/">
+<span class="material-symbols-outlined">bolt</span>
+<span class="font-label-caps text-[10px] mt-1">Features</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant/70 active:scale-90 transition-transform" href="/comparison/">
+<span class="material-symbols-outlined">balance</span>
+<span class="font-label-caps text-[10px] mt-1">Compare</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant/70 active:scale-90 transition-transform" href="https://github.com/alptekin/evolutiondb">
+<span class="material-symbols-outlined">code</span>
+<span class="font-label-caps text-[10px] mt-1">GitHub</span>
+</a>
+</nav>
+<!-- Footer -->
+<footer class="relative z-10 w-full bg-surface-container-lowest/50 backdrop-blur-lg border-t border-glass-border py-margin-md px-margin-sm flex flex-col items-center gap-6 text-center">
+<div class="flex items-center gap-2 mb-2">
+<span class="material-symbols-outlined text-neon-cyan">database</span>
+<span class="font-headline-md text-headline-md text-neon-cyan font-bold">EvolutionDB</span>
+</div>
+<div class="flex flex-wrap justify-center gap-8">
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="/features/">Features</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="/comparison/">Comparison</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://evolutionagent.evolutiondb.org/">EvolutionAgent</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://developer.evolutiondb.org/">Developer Docs</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://docs.evolutiondb.org/">SQL Reference</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://wiki.evolutiondb.org/">Engine Wiki</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://github.com/alptekin/evolutiondb">GitHub</a>
+</div>
+<p class="text-on-surface-variant text-body-md opacity-50 mt-4">© 2026 EvolutionDB · Open Source (MIT)</p>
+</footer>
+<script>
+        // Intersection Observer for scroll reveal animations
+        const revealCallback = (entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('active');
+                }
+            });
+        };
+
+        const revealObserver = new IntersectionObserver(revealCallback, {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        });
+
+        document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+        // Simple parallax / 3D movement effect for floating cards
+        document.addEventListener('mousemove', (e) => {
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+            const amount = 20;
+            const x = (e.clientX / window.innerWidth - 0.5) * amount;
+            const y = (e.clientY / window.innerHeight - 0.5) * amount;
+
+            const elements = document.querySelectorAll('.animate-float, .animate-float-delayed');
+            elements.forEach((el, index) => {
+                const depth = (index + 1) * 0.5;
+                // Preserve the float animation's base transform while adding mouse interaction
+                el.style.transform = `translate(${x * depth}px, ${y * depth}px) rotateX(${y * 0.5}deg) rotateY(${x * -0.5}deg)`;
+            });
+        });
+    </script>
+</body></html>

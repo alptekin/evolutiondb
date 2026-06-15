@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CREATE MEMORY STORE | EvolutionDB 3.0</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="/tw.js"></script>
+<link href="/style.css" rel="stylesheet"/>
+</head>
+<body class="bg-surface-container-lowest text-on-surface" style="font-family:Inter">
+<header id="topbar"></header>
+<div class="docs-shell pt-16">
+<aside class="docs-sidebar" id="sidebar"></aside>
+<main class="docs-content prose reveal">
+<h1>CREATE MEMORY STORE</h1>
+<p class="lede">Create a new long-term agent memory store. It is a namespaced key/value store. It can also hold vector embeddings for semantic search.</p>
+
+<h2 id="synopsis">Synopsis</h2>
+<div class="synopsis">
+<pre><code><span class="c-key">CREATE MEMORY STORE</span> <span class="opt">[ IF NOT EXISTS ]</span> <span class="c-com">store_name</span>
+    <span class="opt">[ WITH ( <span class="c-com">option</span> [, ... ] ) ]</span>
+
+<span class="c-com">where</span> <span class="c-com">option</span> <span class="c-com">is one of:</span>
+
+    <span class="c-key">embedding_dim</span> = <span class="c-com">N</span>
+    <span class="c-key">distance</span> = <span class="c-str">'cosine'</span> | <span class="c-str">'l2'</span> | <span class="c-str">'inner'</span> | <span class="c-str">'ip'</span> | <span class="c-str">'l1'</span></code></pre>
+</div>
+
+<h2 id="description">Description</h2>
+<p><code>CREATE MEMORY STORE</code> adds a new memory store in the current schema. It also creates the table behind it. A memory store is made for agent long-term memory. Each record has a <em>namespace</em> and a <em>key</em>. Each record holds a JSON <em>value</em>. Each record can also hold a vector <em>embedding</em> for semantic similarity search.</p>
+<p>The store is backed by a normal table. The table is named <code>mem_&lt;store_name&gt;</code> and is created in the current schema. The table has these columns.</p>
+<ul>
+<li><code>mem_namespace</code>, <code>VARCHAR(255) NOT NULL</code></li>
+<li><code>mem_key</code>, <code>VARCHAR(255) NOT NULL</code></li>
+<li><code>pk</code>, <code>VARCHAR(512) PRIMARY KEY</code>. It joins the namespace and the key.</li>
+<li><code>mem_value</code>, <code>JSON</code>. It can be null.</li>
+<li><code>embedding</code>, <code>VECTOR(N)</code>. It exists <strong>only</strong> when <code>embedding_dim</code> is greater than 0.</li>
+<li><code>created_at</code>, <code>TIMESTAMP</code></li>
+<li><code>ttl_at</code>, <code>TIMESTAMP</code>. It can be null.</li>
+</ul>
+<p>When you leave out <code>embedding_dim</code> or set it to 0, there is no <code>embedding</code> column. The store then works as a plain namespaced JSON key/value table. In that case <code>MEMORY SEARCH</code> on the store fails. There is no embedding column to score against.</p>
+<p>The backing table is a normal table. So everything that works for tables works for a memory store. This includes MVCC, primary-key uniqueness on <code>(namespace, key)</code>, row-level security policies, triggers, and foreign-key cascades. The <code>MEMORY PUT</code>, <code>GET</code>, <code>SEARCH</code>, <code>DELETE</code>, and <code>LIST NAMESPACES</code> commands are simple wrappers. They turn into normal <code>INSERT</code>/<code>SELECT</code>/<code>DELETE</code> statements on <code>mem_&lt;store_name&gt;</code>.</p>
+<p>To create a store, no memory store with the same name may exist yet. With <code>IF NOT EXISTS</code>, no error is raised if the store already exists. The existing store stays the same.</p>
+
+<h2 id="parameters">Parameters</h2>
+<dl class="params">
+<dt>IF NOT EXISTS</dt>
+<dd>Do nothing if a memory store with the same name already exists. No error is raised. The existing store is not changed. Its <code>embedding_dim</code> and <code>distance</code> settings stay the same.</dd>
+
+<dt>store_name</dt>
+<dd>The name of the memory store to create. The backing table is named <code>mem_&lt;store_name&gt;</code> and is created in the current schema.</dd>
+
+<dt>embedding_dim = N</dt>
+<dd>The number of dimensions in the vector embedding kept with each record. When <code>N &gt; 0</code>, an <code>embedding VECTOR(N)</code> column is added to the backing table. The store then supports <code>MEMORY SEARCH ... USING VECTOR</code>. When you leave out this option, the default is 0. No embedding column is created. The store is a plain JSON key/value store.</dd>
+
+<dt>distance = 'metric'</dt>
+<dd>The distance metric used by <code>MEMORY SEARCH</code> to rank results against the query vector. This setting is saved on the store. It picks which vector function scores each row at search time. These are the accepted values.
+<ul>
+<li><code>'cosine'</code> is cosine distance. This is the default. It is also used when you leave out the option or give a value that is not known.</li>
+<li><code>'l2'</code> is Euclidean distance. It is also called L2.</li>
+<li><code>'inner'</code> or <code>'ip'</code> is inner product.</li>
+<li><code>'l1'</code> is Manhattan distance. It is also called L1.</li>
+</ul>
+The metric matters only when <code>embedding_dim &gt; 0</code>.</dd>
+</dl>
+
+<h2 id="examples">Examples</h2>
+<p>Create a plain JSON key/value memory store. It has no semantic search.</p>
+<pre><code><span class="c-key">CREATE MEMORY STORE</span> agent_notes;</code></pre>
+
+<p>Create a store with 1536-dimension embeddings. It uses the default cosine metric.</p>
+<pre><code><span class="c-key">CREATE MEMORY STORE</span> agent_memory
+    <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">1536</span>);</code></pre>
+
+<p>Create a store with embeddings ranked by L2 distance. Create it only if it does not already exist.</p>
+<pre><code><span class="c-key">CREATE MEMORY STORE IF NOT EXISTS</span> chat_recall
+    <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">768</span>, distance = <span class="c-str">'l2'</span>);</code></pre>
+
+<p>This example populates a store and queries it after creating it.</p>
+<pre><code><span class="c-com">-- store a value (upsert on namespace+key)</span>
+<span class="c-key">MEMORY PUT INTO</span> agent_memory
+    <span class="c-key">VALUES</span> (<span class="c-str">'user:42'</span>, <span class="c-str">'pref:lang'</span>, <span class="c-str">'{"lang":"tr"}'</span>, <span class="c-str">'[0.1,0.2,...]'</span>);
+
+<span class="c-com">-- read it back</span>
+<span class="c-key">MEMORY GET FROM</span> agent_memory
+    <span class="c-key">WHERE</span> NS = <span class="c-str">'user:42'</span> <span class="c-key">AND</span> KEY = <span class="c-str">'pref:lang'</span>;
+
+<span class="c-com">-- semantic search (requires embedding_dim &gt; 0)</span>
+<span class="c-key">MEMORY SEARCH</span> agent_memory <span class="c-key">USING VECTOR</span> <span class="c-str">'[0.1,0.2,...]'</span> <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>
+
+<h2 id="compatibility">Compatibility</h2>
+<p><code>CREATE MEMORY STORE</code> is an EvolutionDB extension. It is <strong>not</strong> part of the SQL standard. PostgreSQL has no matching statement. The closest thing in PostgreSQL is to create a table and add a <code>pgvector</code> column by hand. The EvolutionDB memory store puts the namespaced key/value schema, the optional embedding column, and the distance metric into one simple command.</p>
+<p>Here are some notes on the EvolutionDB behavior.</p>
+<ul>
+<li>The <code>WITH</code> clause accepts only the <code>embedding_dim</code> and <code>distance</code> options. There is no other storage-parameter syntax. PostgreSQL-style table options are not accepted here.</li>
+<li>The only known distances are <code>'cosine'</code>, <code>'l2'</code>, <code>'inner'</code>/<code>'ip'</code>, and <code>'l1'</code>. Any other string quietly falls back to <code>'cosine'</code>.</li>
+<li>The backing table <code>mem_&lt;store_name&gt;</code> is a real table. It is fully visible to normal SQL. You can read, secure, or trigger its rows just like any user table.</li>
+</ul>
+
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="/3.0/ref/create-table/">CREATE TABLE</a></li>
+<li><a href="/3.0/ref/create-policy/">CREATE POLICY</a></li>
+<li><a href="/3.0/ref/create-trigger/">CREATE TRIGGER</a></li>
+<li><a href="/3.0/ref/select/">SELECT</a></li>
+<li><a href="/3.0/ref/insert/">INSERT</a></li>
+<li><a href="/3.0/ref/delete/">DELETE</a></li>
+</ul>
+</main></div>
+<script src="/nav-data.js"></script>
+<script src="/nav.js"></script>
+</body></html>
