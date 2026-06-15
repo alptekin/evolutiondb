@@ -5,7 +5,7 @@
 <title>CREATE DOC STORE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -31,7 +31,7 @@
 <h2 id="description">Description</h2>
 <p><code>CREATE DOCUMENT STORE</code> makes a new document store named <em>store_name</em>. A document store is a thin layer on top of a normal EvolutionDB table. The engine creates a backing table named <code>doc_&lt;store_name&gt;</code> in the current schema. It also adds the store to the system catalog. The store sits on a normal table. So MVCC visibility, row-level security, and the standard error path all work on its documents.</p>
 
-<p>The backing table always has the same fixed layout:</p>
+<p>The backing table always has the same fixed layout. It has these columns.</p>
 <ul>
 <li><code>id</code>, <code>VARCHAR(255)</code>, <code>NOT NULL</code>, primary key</li>
 <li><code>content</code>, <code>VARCHAR(8000)</code>, the document body</li>
@@ -67,7 +67,7 @@
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a plain JSON document store with no vector column:</p>
+<p>This example creates a plain JSON document store with no vector column.</p>
 <pre><code><span class="c-key">CREATE DOCUMENT STORE</span> notes;</code></pre>
 
 <p>Create a store with 384-dimensional embeddings. Results are ranked by cosine distance. This is the default.</p>
@@ -78,7 +78,7 @@
 <pre><code><span class="c-key">CREATE DOCUMENT STORE</span> products
     <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">768</span>, distance = <span class="c-str">'l2'</span>);</code></pre>
 
-<p>Create a store only if one does not already exist:</p>
+<p>This example creates a store only if one does not already exist.</p>
 <pre><code><span class="c-key">CREATE DOCUMENT STORE IF EXISTS</span> articles
     <span class="c-key">WITH</span> (embedding_dim = <span class="c-str">384</span>, distance = <span class="c-str">'cosine'</span>);</code></pre>
 
@@ -91,7 +91,7 @@
 
 <h2 id="compatibility">Compatibility</h2>
 <p><code>CREATE DOCUMENT STORE</code> is an EvolutionDB extension. The SQL standard has no document store. PostgreSQL has no command like this one. In PostgreSQL you use a <code>jsonb</code> column on a normal table instead. PostgreSQL gets vector search from the third-party <code>pgvector</code> extension. You add it with <code>CREATE EXTENSION</code> and a <code>vector</code> column type. EvolutionDB puts both ideas into one command and a small set of <code>DOCUMENT</code> verbs.</p>
-<p>Here are the main differences:</p>
+<p>These are the main differences.</p>
 <ul>
 <li>The idempotency keyword is <code>IF EXISTS</code>. PostgreSQL's <code>CREATE</code> statements use <code>IF NOT EXISTS</code>.</li>
 <li>The backing table schema is fixed. It has <code>id</code>, <code>content</code>, <code>meta</code>, an optional <code>embedding</code>, and <code>created_at</code>. You cannot set it yourself. You cannot add extra columns through this command.</li>

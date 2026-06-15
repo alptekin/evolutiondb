@@ -5,7 +5,7 @@
 <title>COPY | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -114,7 +114,7 @@ You may write options in three ways. The grammar accepts all of them. You can wr
 
 <h2 id="compatibility">Compatibility</h2>
 <p>The SQL standard has no <code>COPY</code> statement. It is a PostgreSQL extension. EvolutionDB copies part of it. EvolutionDB supports the <code>FROM</code> and <code>TO</code> directions. It supports server-side <code>'filename'</code> mode. It supports the <code>STDIN</code> and <code>STDOUT</code> stream forms. It supports an optional column list. It supports these options. The options are <code>FORMAT</code> with <code>CSV</code> or <code>TEXT</code>, the bare <code>CSV</code> short form, <code>DELIMITER</code>, <code>HEADER</code> with an optional boolean, <code>NULL</code>, and <code>QUOTE</code>. You may give options bare, in parentheses, or in a <code>WITH ( ... )</code> list.</p>
-<p>Here are the main differences from PostgreSQL.</p>
+<p>These are the main differences from PostgreSQL.</p>
 <ul>
 <li><strong>No <code>COPY (query) TO</code>.</strong> The source of a <code>COPY</code> is always a table name. The grammar does not accept the result of any <code>SELECT</code>.</li>
 <li><strong>Smaller option set.</strong> Some PostgreSQL options are not built in and are not recognized. These include <code>ESCAPE</code>, <code>FORCE_QUOTE</code>, <code>FORCE_NOT_NULL</code>, <code>FORCE_NULL</code>, <code>ENCODING</code>, <code>FREEZE</code>, <code>ON_ERROR</code>, and <code>PROGRAM</code>.</li>

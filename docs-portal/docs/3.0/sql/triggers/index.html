@@ -5,7 +5,7 @@
 <title>21. Triggers &amp; Procedures | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -63,19 +63,19 @@
 <span class="c-key">END</span>;</code></pre>
 
 <div class="callout">
-<strong>OR REPLACE semantics.</strong> You give <code>OR REPLACE</code> and a procedure of the same name already exists. The engine then drops the old definition and creates it again. Without <code>OR REPLACE</code>, a duplicate name fails with SQLSTATE <code>42P07</code> (<em>"procedure/function already exists"</em>). Lookup is by name only. So <code>CREATE FUNCTION</code> and <code>CREATE PROCEDURE</code> share one namespace per schema.
+<strong>OR REPLACE semantics.</strong> When you give <code>OR REPLACE</code> and a procedure of the same name already exists, the engine drops the old definition and creates it again. Without <code>OR REPLACE</code>, a duplicate name fails with SQLSTATE <code>42P07</code> (<em>"procedure/function already exists"</em>). Lookup is by name only. So <code>CREATE FUNCTION</code> and <code>CREATE PROCEDURE</code> share one namespace per schema.
 </div>
 
 <h2 id="param-substitution">21.3. Parameter and variable substitution</h2>
 <p>EvolutionDB does not bind parameters as typed values. Instead it uses <em>textual substitution</em> before it runs each statement in the body. The engine walks the SQL. It replaces each parameter name with the matching argument text. It also replaces the positional markers <code>$1</code>, <code>$2</code>, and so on. The substitution skips text inside single-quoted string literals. So a literal that holds a parameter name is left alone.</p>
-<p>This means the quoting around an argument matters. A string argument keeps its quotes. For example, it arrives as <code>'alice'</code>. A numeric argument arrives as bare digits. <code>NULL</code> arrives as the keyword <code>NULL</code>. A boolean arrives as <code>TRUE</code>/<code>FALSE</code>. The engine then parses the substituted text. So you must write the body to expect substituted SQL, not bound values.</p>
+<p>The quoting around an argument matters. A string argument keeps its quotes. For example, it arrives as <code>'alice'</code>. A numeric argument arrives as bare digits. <code>NULL</code> arrives as the keyword <code>NULL</code>. A boolean arrives as <code>TRUE</code>/<code>FALSE</code>. The engine then parses the substituted text. So you must write the body to expect substituted SQL, not bound values.</p>
 
 <div class="callout">
 <strong>Security caveat.</strong> Arguments are spliced into SQL text. So a procedure call is really string interpolation. Pass only trusted or already-escaped values. There is no separate bind layer to stop injection. This is a chosen limit of the text-driven engine. It is not the parameterized-statement model that the SQL standard describes.
 </div>
 
 <h2 id="control-flow">21.4. Control flow inside a body</h2>
-<p>The body splitter (<code>split_proc_statements</code>) first divides the body on <code>;</code>. Then it splits again at control-flow keyword boundaries. A block map (<code>proc_build_block_map</code>) records the matching <code>END</code> markers. This lets the interpreter jump. The engine recognises the following constructs.</p>
+<p>The body splitter divides the body on <code>;</code>. Then it splits again at control-flow keyword boundaries. A block map records the matching <code>END</code> markers. This lets the interpreter jump. The engine recognises the following constructs.</p>
 <table>
 <thead><tr><th>Construct</th><th>Form</th></tr></thead>
 <tbody>
@@ -153,12 +153,12 @@
 <p><strong>Memory-store triggers.</strong> You can attach a trigger to a memory store with <code>ON MEMORY STORE name</code>. The parser stages the store name with an internal <code>@mem:</code> sentinel. At creation, the engine resolves the store through the catalog. It rewrites the store to its backing table <code>mem_&lt;name&gt;</code>. After that, the trigger fires just like a normal table trigger. A <code>PUT</code> event on a memory store is mapped to the <code>INSERT</code> (<code>'I'</code>) event inside the engine. A store that does not exist raises SQLSTATE <code>42704</code>.</p>
 
 <h2 id="firing">21.7. Trigger firing model, errors, and recursion</h2>
-<p>The engine fires matching triggers from the <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> hook points. It fires them once per affected row. It filters them by timing, event, and the <code>enabled</code> flag. For each fired trigger, the engine wraps the substituted body as a temporary procedure. It calls the procedure, then drops it. So triggers and procedures run through the same engine. Here is how it works.</p>
+<p>The engine fires matching triggers from the <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> hook points. It fires them once per affected row. It filters them by timing, event, and the <code>enabled</code> flag. For each fired trigger, the engine wraps the substituted body as a temporary procedure. It calls the procedure, then drops it. So triggers and procedures run through the same engine. The steps are shown below.</p>
 <pre><code><span class="c-com">-- conceptual expansion performed internally per fired trigger</span>
 <span class="c-key">CREATE OR REPLACE PROCEDURE</span> __trig_&lt;id&gt;__() <span class="c-key">AS</span> <span class="c-key">BEGIN</span> &lt;substituted body&gt; <span class="c-key">END</span>;
 <span class="c-key">CALL</span> __trig_&lt;id&gt;__();
 <span class="c-key">DROP PROCEDURE IF EXISTS</span> __trig_&lt;id&gt;__;</code></pre>
-<p><strong>Recursion limit.</strong> A depth counter guards trigger execution. Nesting beyond <strong>16</strong> levels (<code>MAX_TRIGGER_DEPTH</code>) quietly stops further trigger firing. It does not raise an error. This prevents runaway recursion.</p>
+<p><strong>Recursion limit.</strong> A depth counter guards trigger execution. Nesting beyond <strong>16</strong> levels (<code>MAX_TRIGGER_DEPTH</code>) quietly stops further trigger firing. No error is raised. This prevents runaway recursion.</p>
 
 <p><strong>Raising errors with SIGNAL.</strong> A body can stop with a user-defined error. This works for both procedures and triggers.</p>
 <div class="synopsis">
@@ -177,8 +177,8 @@
 <p>These are the error codes that the trigger and procedure paths raise.</p>
 <dl class="params">
 <dt><code>42P01</code></dt><dd>Trigger target table does not exist.</dd>
-<dt><code>42P07</code></dt><dd>Duplicate object: procedure/function already exists (without <code>OR REPLACE</code>), or trigger name already exists.</dd>
-<dt><code>42883</code></dt><dd>Procedure/function does not exist on <code>CALL</code> or <code>DROP</code>. Or the trigger does not exist on <code>DROP</code> without <code>IF EXISTS</code>. Or the argument count does not match on <code>CALL</code>.</dd>
+<dt><code>42P07</code></dt><dd>Duplicate object. A procedure or function already exists (without <code>OR REPLACE</code>), or a trigger name already exists.</dd>
+<dt><code>42883</code></dt><dd>Procedure or function does not exist on <code>CALL</code> or <code>DROP</code>. The trigger does not exist on <code>DROP</code> without <code>IF EXISTS</code>. The argument count does not match on <code>CALL</code>.</dd>
 <dt><code>42704</code></dt><dd>Memory store named in <code>ON MEMORY STORE</code> does not exist.</dd>
 <dt><code>45000</code></dt><dd>Default SQLSTATE for an unqualified <code>SIGNAL</code> (user-defined exception).</dd>
 <dt><code>53200</code></dt><dd>Out of memory while preparing a <code>CALL</code> body for execution.</dd>
@@ -195,7 +195,7 @@
 <li><strong>Textual parameter substitution, not value binding.</strong> Arguments and <code>OLD</code>/<code>NEW</code> references are spliced into SQL text. There is no typed parameter binding and no protection against injection.</li>
 <li><strong>No procedure/function overloading.</strong> Lookup is by name within a schema. Functions and procedures share that namespace.</li>
 <li><strong>Functions are not callable inline.</strong> A <code>CREATE FUNCTION</code> body runs through the same engine as a procedure. The return type is recorded. But the database does not let you call user functions inside a <code>SELECT</code> the way PostgreSQL does.</li>
-<li><strong>Fixed capacities.</strong> Body ≤ 8192 bytes. ≤ 16 parameters/arguments. ≤ 128 statement units. ≤ 32 local variables, ≤ 8 cursors, ≤ 8 handlers per call. Trigger recursion depth ≤ 16.</li>
+<li><strong>Fixed capacities.</strong> Body &le; 8192 bytes. &le; 16 parameters/arguments. &le; 128 statement units. &le; 32 local variables, &le; 8 cursors, &le; 8 handlers per call. Trigger recursion depth &le; 16.</li>
 <li><strong>No trigger ordering guarantees by name.</strong> There are also no transition tables (<code>REFERENCING … OLD/NEW TABLE</code>).</li>
 </ul>
 </div>

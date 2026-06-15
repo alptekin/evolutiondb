@@ -5,7 +5,7 @@
 <title>EvolutionDB for Developers</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -19,7 +19,7 @@
  <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">DEVELOPER PORTAL</span>
  </div>
  <h1>Build on EvolutionDB</h1>
- <p class="lede">Here you find everything you need to give your app or agent long-term memory. You get language SDKs, ready-made data connectors, the platform packages, and the wire-protocol reference. Every package here is open source under the MIT license. They all live in the <a href="https://github.com/alptekin/evolutiondb">monorepo</a>.</p>
+ <p class="lede">Here you find everything you need to give your app or agent long-term memory. You get language SDKs, ready-made data connectors, platform packages, and the wire-protocol reference. Every package here is open source under the MIT license. They all live in the <a href="https://github.com/alptekin/evolutiondb">monorepo</a>.</p>
 
  <h2 id="start">Quick start</h2>
  <p>Run the database first. It is one binary. It speaks the PostgreSQL wire protocol on <code>:5433</code> and the native EVO protocol on <code>:9967</code>. Then you can talk to it from the language you like.</p>
@@ -34,7 +34,7 @@ m.save(<span class="c-str">"Alice prefers email over Slack"</span>, tags=[<span 
 m.search(<span class="c-str">"how does Alice like to be contacted?"</span>)</code></pre>
 
  <h2 id="sdks">Memory SDKs</h2>
- <p>These are small clients for the <code>MEMORY STORE</code> and <code>ENTITY STORE</code> primitives. You get one for your language.</p>
+ <p>These are small clients for the <code>MEMORY STORE</code> and <code>ENTITY STORE</code> primitives. Pick the one for your language.</p>
  <div class="card-grid">
  <a class="doc-card" href="/sdk/python/"><span class="material-symbols-outlined">code</span><h3>Python</h3><p>python-evosql-memory, the reference client.</p></a>
  <a class="doc-card" href="/sdk/node/"><span class="material-symbols-outlined">javascript</span><h3>Node.js</h3><p>node-evosql-memory for JS/TS apps.</p></a>
@@ -43,7 +43,7 @@ m.search(<span class="c-str">"how does Alice like to be contacted?"</span>)</cod
  </div>
 
  <h2 id="connectors">Connectors</h2>
- <p>These are drop-in <code>*-sync</code> apps. They pull activity from the tools you already use into EvolutionDB long-term memory. They work with GitHub, Azure DevOps, Gmail, Outlook, Teams, Slack, Calendar, Notion, Notes, Browser, iMessage, YouTube and Claude sessions.</p>
+ <p>These are drop-in <code>*-sync</code> apps. They pull activity from the tools you already use into EvolutionDB long-term memory. They support GitHub, Azure DevOps, Gmail, Outlook, Teams, Slack, Calendar, Notion, Notes, Browser, iMessage, YouTube, and Claude sessions.</p>
  <div class="card-grid">
  <a class="doc-card" href="/connectors/github/"><span class="material-symbols-outlined">merge</span><h3>GitHub &amp; Azure DevOps</h3><p>PRs, reviews, pipelines → memory.</p></a>
  <a class="doc-card" href="/connectors/gmail/"><span class="material-symbols-outlined">mail</span><h3>Mail &amp; chat</h3><p>Gmail, Outlook, Teams, Slack, iMessage.</p></a>
@@ -53,12 +53,12 @@ m.search(<span class="c-str">"how does Alice like to be contacted?"</span>)</cod
  <h2 id="platform">Platform</h2>
  <div class="card-grid">
  <a class="doc-card" href="/platform/mcp-server/"><span class="material-symbols-outlined">dns</span><h3>MCP Server</h3><p>Long-term memory + action loop for Claude.</p></a>
- <a class="doc-card" href="/platform/agent/"><span class="material-symbols-outlined">smart_toy</span><h3>evolution-agent</h3><p>Standalone, host-independent agent loop.</p></a>
+ <a class="doc-card" href="/platform/agent/"><span class="material-symbols-outlined">neurology</span><h3>evolution-agent</h3><p>Standalone, host-independent agent loop.</p></a>
  <a class="doc-card" href="/platform/pii/"><span class="material-symbols-outlined">shield</span><h3>PII guard</h3><p>Mask &amp; encrypt before storing.</p></a>
  <a class="doc-card" href="/platform/orchestrator/"><span class="material-symbols-outlined">tune</span><h3>Orchestrator</h3><p>Supervise the connector fleet.</p></a>
  </div>
 
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Do you want to learn how the engine works inside, function by function? You can read the <a href="https://wiki.evolutiondb.org">code wiki</a>.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Want to learn how the engine works inside, function by function? Read the <a href="https://wiki.evolutiondb.org">code wiki</a>.</div></div>
 </main>
 </div>
 <script src="/nav-data.js"></script>

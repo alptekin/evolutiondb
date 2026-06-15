@@ -5,7 +5,7 @@
 <title>8. Data Types | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,7 +18,7 @@
 <p class="lede">EvolutionDB has a fixed set of built-in column types. Each type carries a numeric <em>type code</em>. The code holds both the family and the size. This chapter lists the types the engine really supports. It also shows how each one is stored in the binary tuple.</p>
 
 <h2 id="overview">8.1. Overview</h2>
-<p>Every column in a <a href="/3.0/ref/create-table/">CREATE TABLE</a> statement is turned by the parser into a single integer. This integer is the <strong>type code</strong> (<code>typeVal</code>). All type metadata in the catalog comes from this one number. All encode and decode choices at run time come from it too. The encoding works like this:</p>
+<p>Every column in a <a href="/3.0/ref/create-table/">CREATE TABLE</a> statement is turned by the parser into a single integer. This integer is the <strong>type code</strong> (<code>typeVal</code>). All type metadata in the catalog comes from this one number. All encode and decode choices at run time come from it too. The encoding follows this formula.</p>
 <pre><code><span class="c-com">-- typeVal = family × 10000 + size</span>
 family  = typeVal / 10000
 size    = typeVal % 10000</code></pre>

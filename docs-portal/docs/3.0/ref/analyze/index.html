@@ -5,7 +5,7 @@
 <title>ANALYZE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -28,7 +28,7 @@
 
 <h2 id="description">Description</h2>
 <p><code>ANALYZE TABLE</code> does a sequential scan of <code>table_name</code>. It then records statistics in the system catalog. Two clauses are optional. They work on their own and do not depend on each other. The <code>WITH SAMPLE</code> clause controls how many rows are read. The histogram clause controls which per-column histograms are built or removed. <code>EXPLAIN</code> reads these statistics when it estimates row counts and picks access paths.</p>
-<p>If you use no optional clause, <code>ANALYZE TABLE t</code> rebuilds every statistic for the table:</p>
+<p>If you use no optional clause, <code>ANALYZE TABLE t</code> rebuilds every statistic for the table.</p>
 <ul>
 <li><strong>Table-level statistics</strong>. These are <code>row_count</code>, <code>page_count</code>, and <code>last_analyzed</code>. <code>page_count</code> is the number of heap pages. It is found by walking the page chain. <code>last_analyzed</code> is the wall-clock time of this run.</li>
 <li><strong>Per-column statistics</strong>. These are <code>null_count</code>, <code>distinct_count</code>, <code>min</code>, <code>max</code>, and <code>avg_width</code> for each column.</li>

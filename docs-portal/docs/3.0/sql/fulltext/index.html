@@ -5,7 +5,7 @@
 <title>12. Full-Text Search | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -17,7 +17,7 @@
 <h1>12. Full-Text Search</h1>
 <p class="lede">EvolutionDB has a small full-text search feature for one text column. It is built on a shared tokenizer, an inverted B+ tree index, and the <code>MATCH (col) AGAINST ('query')</code> expression. The expression scores each row by how many query words it contains.</p>
 
-<p>Full-text search helps you find rows whose text columns contain one or more search words. It does not match a literal substring or a LIKE pattern. The whole feature is small on purpose. It has three parts. They all share one tokenizer. This way the words seen when the index is built are the same words seen at query time. The three parts are:</p>
+<p>Full-text search helps you find rows whose text columns contain one or more search words. It does not match a literal substring or a LIKE pattern. The whole feature is small on purpose. It has three parts. They all share one tokenizer. This way the words seen when the index is built are the same words seen at query time. The three parts are listed below.</p>
 
 <ul>
 <li>A <strong>tokenizer</strong>. It lowercases text, splits on non-alphanumeric boundaries, drops very short words, and removes a small list of English stop words.</li>
@@ -33,7 +33,7 @@
 
 <p>Tokenization turns a raw text value into a list of normalized words. The same routine runs when a full-text index is filled and when <code>MATCH … AGAINST</code> is evaluated. So the two always agree on word boundaries and on letter case.</p>
 
-<p>These are the rules applied to the input text:</p>
+<p>These rules apply to the input text.</p>
 
 <dl class="params">
 <dt>Word boundaries</dt>
@@ -52,7 +52,7 @@
 
 <p>The byte-level rule keeps multibyte letters attached to their words. Turkish and other non-Latin letters are examples. But the rule does <em>not</em> change their case. So non-ASCII text matches in a case-sensitive way in this release. A query term must match the stored term byte for byte in its non-ASCII part.</p>
 
-<p>Here is an example of how a sentence is tokenized:</p>
+<p>This example shows how a sentence is tokenized.</p>
 
 <pre><code><span class="c-com">-- input:  "The Quick, Brown FOX!"</span>
 <span class="c-com">-- output: ["quick", "brown", "fox"]</span>
@@ -66,7 +66,7 @@
 
 <h2 id="stop-words">12.2. The stop-word list</h2>
 
-<p>The tokenizer removes a fixed, built-in list of common English words. You cannot change the list in this release. These words are dropped wherever they appear:</p>
+<p>The tokenizer removes a fixed, built-in list of common English words. You cannot change the list in this release. These words are dropped wherever they appear.</p>
 
 <table>
 <thead><tr><th>Stop words (29 entries)</th></tr></thead>
@@ -89,7 +89,7 @@
 
 <h3 id="match-semantics">12.3.1. Evaluation semantics</h3>
 
-<p>When a row is evaluated, EvolutionDB does these steps:</p>
+<p>When a row is evaluated, EvolutionDB follows these steps.</p>
 
 <ol>
 <li>It reads the named column's value for that row.</li>
@@ -148,7 +148,7 @@
 
 <h2 id="creating-index">12.4. Creating a full-text index</h2>
 
-<p>A full-text index is created with the <code>FULLTEXT</code> keyword on <a href="/3.0/ref/create-index/">CREATE INDEX</a>:</p>
+<p>A full-text index is created with the <code>FULLTEXT</code> keyword on <a href="/3.0/ref/create-index/">CREATE INDEX</a>.</p>
 
 <div class="synopsis">
 <pre class="sig"><code><span class="c-key">CREATE FULLTEXT INDEX</span> <span class="c-key">index_name</span> <span class="c-key">ON</span> <span class="c-key">table_name</span> ( <span class="c-key">column_name</span> )</code></pre>

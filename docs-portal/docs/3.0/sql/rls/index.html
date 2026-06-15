@@ -5,7 +5,7 @@
 <title>20. Row-Level Security | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,7 +18,7 @@
 <h1>20. Row-Level Security</h1>
 <p class="lede">Row-Level Security (RLS) lets you add per-table policies. These policies limit which rows a session user can read, insert, update, or delete. The engine enforces them on every DML path. Your application does not have to do this work.</p>
 
-<p>EvolutionDB has RLS as a small subset of the PostgreSQL model. A table carries an <em>RLS-enabled</em> flag. You can attach any number of named <strong>policies</strong> to that table. A policy has an optional row-filter expression with <code class="c-key">USING</code>. It also has an optional write-validation expression with <code class="c-key">WITH CHECK</code>. Each policy has a command scope and an optional role list. When the flag is on, the engine filters reads through the matching <code class="c-key">USING</code> expressions. It also checks written rows against the matching <code class="c-key">WITH CHECK</code> expressions.</p>
+<p>EvolutionDB supports RLS as a small subset of the PostgreSQL model. A table carries an <em>RLS-enabled</em> flag. You can attach any number of named <strong>policies</strong> to that table. A policy has an optional row-filter expression with <code class="c-key">USING</code>. It also has an optional write-validation expression with <code class="c-key">WITH CHECK</code>. Each policy has a command scope and an optional role list. When the flag is on, the engine filters reads through the matching <code class="c-key">USING</code> expressions. It also checks written rows against the matching <code class="c-key">WITH CHECK</code> expressions.</p>
 
 <p>The SQL commands and their storage are handled in <code>evolution/db/Policy.c</code>. The runtime helpers live in the same place. These are the read overlay and the write check. The SELECT, INSERT, UPDATE, and DELETE paths call them.</p>
 
@@ -109,7 +109,7 @@
 
 <h2 id="cmd-codes">20.4. Command Scopes</h2>
 
-<p>The <code class="c-key">FOR</code> clause stores a single command-code byte on the policy. A policy takes part in enforcement only when its scope matches the operation that is running. A scope of <code class="c-key">ALL</code> always matches.</p>
+<p>The <code class="c-key">FOR</code> clause stores a single command-code byte on the policy. A policy takes part in enforcement only when its scope matches the current operation. A scope of <code class="c-key">ALL</code> always matches.</p>
 
 <table>
 <thead><tr><th>FOR clause</th><th>Code</th><th>Applies to</th></tr></thead>
@@ -163,7 +163,7 @@
 
 <h2 id="superuser">20.6. Superuser Bypass</h2>
 
-<p>The <code class="c-str">admin</code> user counts as a superuser. It skips both the read overlay and the write check fully. RLS is never applied to its statements. This is true no matter what the table's flag is or what policies exist. The engine knows the superuser by a case-insensitive match of the session user name against <code class="c-str">admin</code>. EvolutionDB has no per-table "force RLS" mode right now. So there is no way to make the superuser follow its own policies.</p>
+<p>The <code class="c-str">admin</code> user counts as a superuser. It skips both the read overlay and the write check fully. RLS is never applied to its statements. This is true no matter what the table's flag is or what policies exist. The engine identifies the superuser by a case-insensitive match of the session user name against <code class="c-str">admin</code>. EvolutionDB has no per-table "force RLS" mode right now. So there is no way to make the superuser follow its own policies.</p>
 
 <h2 id="errors">20.7. Error Codes</h2>
 
@@ -184,10 +184,10 @@
 <h2 id="notes">20.8. Notes and Limitations</h2>
 
 <div class="callout">
-<p>EvolutionDB's RLS is a chosen subset of the SQL and PostgreSQL model. Here is how it differs from PostgreSQL.</p>
+<p>EvolutionDB's RLS is a chosen subset of the SQL and PostgreSQL model. These are the main differences from PostgreSQL.</p>
 <ul>
 <li><strong>No <code class="c-key">ALTER POLICY</code>.</strong> To change a policy, <code class="c-key">DROP</code> it and <code class="c-key">CREATE</code> it again.</li>
-<li><strong>No <code class="c-key">FORCE ROW LEVEL SECURITY</code>.</strong> The owner and superuser <code class="c-str">admin</code> always skips policies. You cannot turn on enforcement for the superuser.</li>
+<li><strong>No <code class="c-key">FORCE ROW LEVEL SECURITY</code>.</strong> The owner and superuser <code class="c-str">admin</code> always skip policies. You cannot turn on enforcement for the superuser.</li>
 <li><strong>Superuser detection is name-based.</strong> Only the literal user <code class="c-str">admin</code> counts as a superuser for RLS. This does not come from a role privilege system.</li>
 <li><strong>Role matching is by session user name.</strong> The <code class="c-key">TO</code> list is compared against the current user. The match is case-insensitive. The value <code class="c-str">public</code> is special and means all roles. There is no role-membership or inheritance resolution.</li>
 <li><strong>Fixed limits.</strong> A policy can have at most 8 roles. The limit is <code>CAT_MAX_POLICY_ROLES</code>. Each serialized <code class="c-key">USING</code> or <code class="c-key">WITH CHECK</code> expression is capped at 2048 bytes. The limit is <code>CAT_MAX_POLICY_EXPR</code>.</li>

@@ -5,7 +5,7 @@
 <title>1. Getting Started | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -41,7 +41,7 @@
 <span class="c-key">EVOSQL_CDC_PORT</span>: 9970
 <span class="c-key">EVOSQL_AUTO_RECLAIM_INTERVAL_SEC</span>: 2
 <span class="c-key">EVOSQL_ENCRYPTION_KEY</span>: <span class="c-str">"…"</span></code></pre>
-<p>So with the default Compose setup the login is <code>admin</code> / <code>admin</code>. To stop the server and keep your data, run <code>docker compose down</code>. To stop it <i>and</i> delete the data volume, run <code>docker compose down -v</code>.</p>
+<p>With the default Compose setup, the login is <code>admin</code> / <code>admin</code>. To stop the server and keep your data, run <code>docker compose down</code>. To stop it and delete the data volume, run <code>docker compose down -v</code>.</p>
 <p>You can also run the published image directly. This lets you set your own password.</p>
 <pre><code><span class="c-key">docker</span> run -d -p 5433:5433 -p 9967:9967 \
     -e EVOSQL_PASSWORD=mysecret evolutiondb/evolutiondb:latest</code></pre>
@@ -189,7 +189,7 @@
 <li><b>Authentication mode is fixed.</b> The wire protocol always uses CleartextPassword. There is no MD5 or SCRAM negotiation like in stock PostgreSQL. Use TLS on untrusted links.</li>
 <li><b>Single storage file, global state.</b> The engine keeps all data in one page-based file. It runs queries one at a time behind a lock for thread safety. It is a single-process server, not a multi-node cluster.</li>
 <li><b>Catalog is emulated, not complete.</b> The server fakes enough of <code>pg_catalog</code> and <code>information_schema</code> for common GUI tools to read schemas. Do not expect full PostgreSQL system-catalog fidelity.</li>
-<li><b>Type spellings are broad but the implementation is its own.</b> The engine accepts many MySQL and PostgreSQL type names as aliases. For example, <code>BOOL</code> maps to <code>BOOLEAN</code>, and <code>NUMERIC</code> maps to <code>DECIMAL</code>. But behavior follows EvolutionDB's engine, not any one upstream database. Check edge cases against the reference pages, not against PostgreSQL habits.</li>
+<li><b>Type aliases are accepted but behavior is EvolutionDB's own.</b> The engine accepts many MySQL and PostgreSQL type names as aliases. For example, <code>BOOL</code> maps to <code>BOOLEAN</code>, and <code>NUMERIC</code> maps to <code>DECIMAL</code>. Behavior follows EvolutionDB's engine, not any one upstream database. Check edge cases against the reference pages, not against PostgreSQL habits.</li>
 </ul>
 </div>
 

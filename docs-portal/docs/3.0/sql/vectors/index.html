@@ -5,7 +5,7 @@
 <title>14. Vectors &amp; Hybrid Search | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -104,7 +104,7 @@
 </div>
 
 <h3 id="orderby">14.3.1. Cosine <code>ORDER BY</code></h3>
-<p>You can rank a column by cosine distance against a query literal right inside <code>ORDER BY</code>. Use the <code>&lt;=&gt;</code> operator like this:</p>
+<p>You can rank a column by cosine distance against a query literal right inside <code>ORDER BY</code>. Use the <code>&lt;=&gt;</code> operator as shown below.</p>
 
 <pre class="sig"><code><span class="c-key">ORDER BY</span> <span class="c-com">column</span> <span class="c-key">&lt;=&gt;</span> <span class="c-str">'[f1,f2,…]'</span> [ <span class="c-key">ASC</span> | <span class="c-key">DESC</span> ]</code></pre>
 
@@ -113,7 +113,7 @@
 <span class="c-key">ORDER BY</span> emb <span class="c-key">&lt;=&gt;</span> <span class="c-str">'[0.10, 0.20, 0.97]'</span> <span class="c-key">ASC</span>
 <span class="c-key">LIMIT</span> <span class="c-str">3</span>;</code></pre>
 
-<p>Only the cosine sub-operator works in this position. You might use another comparison operator with a string literal in <code>ORDER BY</code>. That includes <code>=</code>, <code>&lt;</code>, and <code>&gt;</code>. The grammar rejects it with a clear error. It is not ignored without warning.</p>
+<p>Only the cosine sub-operator works in this position. If you use another comparison operator with a string literal in <code>ORDER BY</code>, such as <code>=</code>, <code>&lt;</code>, or <code>&gt;</code>, the grammar rejects it with a clear error. It is not ignored without warning.</p>
 
 <h2 id="hnsw">14.4. The HNSW Index</h2>
 <p>For larger collections, use an HNSW index. HNSW stands for Hierarchical Navigable Small World. It finds nearest neighbors without scanning every row at query time. You create it with the <code>USING HNSW</code> access method on a single <code>VECTOR(N)</code> column.</p>
@@ -156,16 +156,16 @@
 <h3 id="build">14.4.3. How the index is built and stored</h3>
 <p>When you run <code>CREATE INDEX</code>, the engine scans the table. It decodes the vector column from every live row into a dense in-memory store. Then it builds a multi-layer navigable graph over that store. Each indexed table and column pair is identified by <code>(table_id, index_name)</code>. The graph and its vectors live only in process memory. There is no on-disk copy of the graph right now.</p>
 
-<p>Search walks the graph when two things are true. The graph must have built without errors. The collection must be large enough to gain from it. The walk is a sub-linear greedy beam walk. Some collections have <code>2·ef_search</code> rows or fewer. For those, or when graph construction hit an allocation failure, the engine falls back on its own to an <strong>exact brute-force top-k scan</strong> over the dense store. The brute-force path is always exact. The graph path is approximate.</p>
+<p>Search walks the graph when two things are true. The graph must have built without errors. The collection must be large enough to gain from it. The walk is a sub-linear greedy beam walk. Some collections have <code>2·ef_search</code> rows or fewer. For those collections, or when graph construction hit an allocation failure, the engine falls back on its own to an <strong>exact brute-force top-k scan</strong> over the dense store. The brute-force path is always exact. The graph path is approximate.</p>
 
 <h3 id="knn">14.4.4. Querying with <code>HNSW_KNN</code></h3>
-<p>You run nearest-neighbor lookups against the index through the <code>HNSW_KNN</code> table function:</p>
+<p>You run nearest-neighbor lookups against the index through the <code>HNSW_KNN</code> table function.</p>
 
 <pre class="sig"><code><span class="c-key">HNSW_KNN</span> ( <span class="c-com">table_name</span>, <span class="c-com">index_name</span>, <span class="c-com">query_vector</span>, <span class="c-com">k</span> )</code></pre>
 
 <dl class="params">
 <dt><code>table_name</code>, <code>index_name</code></dt><dd>The table and the HNSW index to search.</dd>
-<dt><code>query_vector</code></dt><dd>A vector literal in any accepted form. That means <code>[…]</code>, <code>{…}</code>, or <code>b64i8:</code>. Its dimension must match the indexed column. A mismatch returns no result.</dd>
+<dt><code>query_vector</code></dt><dd>A vector literal in any accepted form. The accepted forms are <code>[…]</code>, <code>{…}</code>, and <code>b64i8:</code>. Its dimension must match the indexed column. A mismatch returns no result.</dd>
 <dt><code>k</code></dt><dd>An integer literal. It is the number of nearest neighbors to return. They come back ordered by ascending distance.</dd>
 </dl>
 
@@ -177,7 +177,7 @@
 );</code></pre>
 
 <div class="callout">
-<p><strong>The index is not kept up to date or rebuilt on its own.</strong> An HNSW graph is a snapshot from the moment you ran <code>CREATE INDEX</code>. Rows you insert, update, or delete after that do <em>not</em> show up until you rebuild the index. This release also does not reload existing HNSW indexes when the server starts. To refresh the graph, run <code>CREATE INDEX</code> again. You can use <code>REINDEX</code> once it is available. This is very different from PostgreSQL indexes. Those are kept up to date inside each transaction on every write.</p>
+<p><strong>The index is not kept up to date or rebuilt on its own.</strong> An HNSW graph is a snapshot from the moment you ran <code>CREATE INDEX</code>. Rows you insert, update, or delete after that do <em>not</em> show up until you rebuild the index. This release also does not reload existing HNSW indexes when the server starts. To refresh the graph, run <code>CREATE INDEX</code> again. You can use <code>REINDEX</code> once it is available. This is very different from PostgreSQL indexes. PostgreSQL indexes are kept up to date inside each transaction on every write.</p>
 </div>
 
 <h2 id="hybrid">14.5. Hybrid (Lexical + Vector) Search</h2>
@@ -211,7 +211,7 @@
 <p>The filter compares against the column's text value. NULL column values never match. The predicate is a single equality only. Ranges, <code>OR</code>, and multi-column predicates are not part of the hybrid call. For richer filtering, use plain <code>HNSW_KNN</code> with a <code>WHERE</code> clause in a surrounding <a href="/3.0/ref/select/">SELECT</a>.</p>
 
 <h3 id="explain">14.5.1. Inspecting the chosen strategy</h3>
-<p>There is a diagnostic sibling called <code>HNSW_HYBRID_EXPLAIN</code>. It takes the same arguments as <code>HNSW_FILTER_KNN</code>. Instead of results, it tells you which strategy the planner picked. It also reports the selectivity stats it used. Those are the candidate count, which is the total scanned, the number of filter matches, and the measured selectivity.</p>
+<p>There is a diagnostic sibling called <code>HNSW_HYBRID_EXPLAIN</code>. It takes the same arguments as <code>HNSW_FILTER_KNN</code>. Instead of results, it tells you which strategy the planner picked. It also reports the selectivity stats it used. Those stats are the candidate count, the number of filter matches, and the measured selectivity. The candidate count is the total number of rows scanned.</p>
 
 <pre class="sig"><code><span class="c-key">HNSW_HYBRID_EXPLAIN</span> ( <span class="c-com">table_name</span>, <span class="c-com">index_name</span>, <span class="c-com">query_vector</span>, <span class="c-com">k</span>,
                       <span class="c-str">'column=value[:mode]'</span> )</code></pre>
@@ -247,7 +247,7 @@
 <li><strong>Fixed query beam width.</strong> <code>ef_search</code> is fixed at 64. It is widened to <code>k</code> when <code>k</code> is larger. There is no per-query <code>SET ef_search</code> yet.</li>
 <li><strong>One column per HNSW index.</strong> An HNSW index covers a single <code>VECTOR(N)</code> column.</li>
 <li><strong>Single equality in hybrid search.</strong> <code>HNSW_FILTER_KNN</code> supports exactly one <code>column = value</code> predicate. It is not a general WHERE engine.</li>
-<li><strong>Bounded internal capacity.</strong> The active HNSW graph registry holds a fixed number of graphs, which is 64. It holds primary-key keys up to 256 bytes. Very long composite keys are truncated for index bookkeeping.</li>
+<li><strong>Bounded internal capacity.</strong> The active HNSW graph registry holds a fixed number of graphs. That number is 64. It holds primary-key keys up to 256 bytes. Very long composite keys are truncated for index bookkeeping.</li>
 <li><strong>Operator coverage.</strong> Only <code>&lt;-&gt;</code> for L2 and <code>&lt;#&gt;</code> for inner product are general operators. Cosine through <code>&lt;=&gt;</code> works only in <code>ORDER BY</code>. L1 has no operator. PostgreSQL and <code>pgvector</code> give a full operator family per metric and push distance operators into the index. EvolutionDB does not do either.</li>
 </ul>
 </div>

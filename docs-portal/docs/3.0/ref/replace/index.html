@@ -5,7 +5,7 @@
 <title>REPLACE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -80,7 +80,7 @@
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a table with a primary key. Then replace into it.</p>
+<p>This example creates a table with a primary key and then uses REPLACE on it.</p>
 <pre><code><span class="c-key">CREATE TABLE</span> products (
     id     <span class="c-key">INT</span> <span class="c-key">PRIMARY KEY</span>,
     name   <span class="c-key">VARCHAR</span>(50),
@@ -111,7 +111,7 @@
 
 <h2 id="compatibility">Compatibility</h2>
 <p><code>REPLACE</code> is <strong>not part of the SQL standard</strong>. <strong>PostgreSQL does not have a REPLACE statement</strong>. EvolutionDB's REPLACE follows the <strong>MySQL/MariaDB</strong> dialect. It accepts the same three forms <code>VALUES</code>, <code>SET</code>, and <code>... SELECT</code>. It also accepts the optional <code>INTO</code> keyword and the priority and <code>IGNORE</code> modifiers in the MySQL syntax spots.</p>
-<p>Here are the differences and limits to keep in mind.</p>
+<p>These are the differences and limits to keep in mind.</p>
 <ul>
 <li><strong>Primary key only.</strong> Like MySQL, EvolutionDB resolves the conflict by deleting the old row and inserting the new one. EvolutionDB does this against the table's <em>primary key</em>. It does not treat extra UNIQUE constraints as separate conflict targets.</li>
 <li><strong>Priority hints do nothing.</strong> <code>LOW_PRIORITY</code>, <code>DELAYED</code>, and <code>HIGH_PRIORITY</code> are accepted for syntax compatibility. They do not affect scheduling.</li>

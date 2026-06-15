@@ -5,7 +5,7 @@
 <title>CREATE MESSAGE LOG | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -25,7 +25,7 @@
 
 <h2 id="description">Description</h2>
 <p><code>CREATE MESSAGE LOG</code> registers a new append-only message log. A message log is built for storing conversation history. This means agent chat turns, session transcripts, and similar work where you mostly add new rows. You reach the data by a session identifier and not by raw SQL row operations.</p>
-<p>The command creates a normal backing table named <code>ml_<em>name</em></code> in the current schema. It also adds an entry in the system catalog. That entry links the log name to the table. The backing table has these fixed columns:</p>
+<p>The command creates a normal backing table named <code>ml_<em>name</em></code> in the current schema. It also adds an entry in the system catalog. That entry links the log name to the table. The backing table has these fixed columns.</p>
 <dl class="params">
 <dt><code>seq</code>, <code>BIGINT</code></dt>
 <dd>Primary key. It auto-increments and starts at 1 with a step of 1. It sets the append order of messages.</dd>
@@ -55,13 +55,13 @@
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a basic message log:</p>
+<p>This example creates a basic message log.</p>
 <pre><code><span class="c-key">CREATE MESSAGE LOG</span> chat_history;</code></pre>
 
-<p>Create a log with a retention hint of 7 days:</p>
+<p>This example creates a log with a retention hint of 7 days.</p>
 <pre><code><span class="c-key">CREATE MESSAGE LOG</span> agent_sessions <span class="c-key">WITH</span> (ttl = <span class="c-str">'7 days'</span>);</code></pre>
 
-<p>Append messages to a session, then read them back:</p>
+<p>This example appends messages to a session and then reads them back.</p>
 <pre><code><span class="c-key">MESSAGE APPEND INTO</span> chat_history
     <span class="c-key">VALUES</span> (<span class="c-str">'sess-42'</span>, <span class="c-str">'user'</span>, <span class="c-str">'What is EvolutionDB?'</span>);
 
@@ -75,7 +75,7 @@
 <span class="c-com">-- read only the most recent 10 turns</span>
 <span class="c-key">MESSAGE READ FROM</span> chat_history <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span> <span class="c-key">LAST</span> 10;</code></pre>
 
-<p>Count and prune a session:</p>
+<p>This example counts and prunes a session.</p>
 <pre><code><span class="c-com">-- how many messages in the session</span>
 <span class="c-key">MESSAGE COUNT FROM</span> chat_history <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span>;
 
@@ -85,7 +85,7 @@
 <span class="c-com">-- delete only rows older than seq 1000 (seq &lt; 1000)</span>
 <span class="c-key">MESSAGE TRUNCATE FROM</span> chat_history <span class="c-key">WHERE SESSION</span> = <span class="c-str">'sess-42'</span> <span class="c-key">BEFORE</span> 1000;</code></pre>
 
-<p>Remove the log and its backing table:</p>
+<p>This example removes the log and its backing table.</p>
 <pre><code><span class="c-key">DROP MESSAGE LOG</span> chat_history;
 <span class="c-key">DROP MESSAGE LOG</span> <span class="c-key">IF EXISTS</span> chat_history;</code></pre>
 

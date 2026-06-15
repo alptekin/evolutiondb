@@ -5,7 +5,7 @@
 <title>DROP INDEX | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -43,16 +43,16 @@
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create an index. Then drop it by name:</p>
+<p>This example creates an index and then drops it by name.</p>
 <pre><code><span class="c-key">CREATE INDEX</span> idx_users_email <span class="c-key">ON</span> users (email)<span class="c-key">;</span>
 <span class="c-key">DROP INDEX</span> idx_users_email<span class="c-key">;</span></code></pre>
-<p>Drop a hash index made with <code>USING HASH</code>. The drop command is the same for every index type:</p>
+<p>This example drops a hash index made with <code>USING HASH</code>. The drop command is the same for every index type.</p>
 <pre><code><span class="c-key">CREATE INDEX</span> idx_orders_status <span class="c-key">ON</span> orders (status) <span class="c-key">USING HASH</span><span class="c-key">;</span>
 <span class="c-key">DROP INDEX</span> idx_orders_status<span class="c-key">;</span></code></pre>
-<p>A try to drop a primary-key index fails:</p>
+<p>Trying to drop a primary-key index fails with an error.</p>
 <pre><code><span class="c-com">-- raises: cannot drop primary key index '...'</span>
 <span class="c-key">DROP INDEX</span> users_pkey<span class="c-key">;</span></code></pre>
-<p>Dropping an index that does not exist fails:</p>
+<p>Dropping an index that does not exist fails with an error.</p>
 <pre><code><span class="c-com">-- raises: index 'no_such_index' does not exist</span>
 <span class="c-key">DROP INDEX</span> no_such_index<span class="c-key">;</span></code></pre>
 

@@ -5,7 +5,7 @@
 <title>9. Functions &amp; Operators | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,7 +18,7 @@
 <h1>9. Functions &amp; Operators</h1>
 <p class="lede">This chapter covers the operators, built-in functions, conditional expressions, type coercion, and <code>NULL</code> handling in EvolutionDB 3.0. These work in <code>WHERE</code>, <code>SELECT</code>, <code>HAVING</code>, <code>SET</code>, <code>DEFAULT</code>, and <code>CHECK</code>. They behave exactly as the engine's single expression evaluator runs them.</p>
 
-<p>The Bison parser turns every scalar expression into an expression tree. One function evaluates that tree. It is <code>expr_evaluate</code>, in <code>evolution/db/expression.c</code>. The tree has no separate type system. Each node is evaluated to a string. That string is its rendered value. The evaluator also returns a second flag. The flag says whether the value is <code>NULL</code>. A second routine, <code>expr_evaluate_num</code>, evaluates the same tree to a C <code>double</code> for arithmetic. This string-plus-NULL-flag model explains most of the type coercion and comparison behavior in this chapter.</p>
+<p>The Bison parser turns every scalar expression into an expression tree. One function evaluates that tree. The function is <code>expr_evaluate</code>, in <code>evolution/db/expression.c</code>. The tree has no separate type system. Each node is evaluated to a string. That string is its rendered value. The evaluator also returns a second flag. The flag says whether the value is <code>NULL</code>. A second routine, <code>expr_evaluate_num</code>, evaluates the same tree to a C <code>double</code> for arithmetic. This string-plus-NULL-flag model explains most of the type coercion and comparison behavior in this chapter.</p>
 
 <div class="callout">
 <p><strong>Scope of this chapter.</strong> This chapter documents only the functions and operators that the expression evaluator really implements. It gives their real argument counts, return shapes, and edge behavior. Sometimes EvolutionDB borrows syntax from MySQL or PostgreSQL but runs it differently. Examples are integer-only <code>%</code>, a non-collating <code>LIKE</code>, and MySQL-style <code>NULL</code>-propagating <code>CONCAT</code>. The chapter calls out each such difference. Some functions are parsed but only matter in other clauses. These include aggregates resolved by the query executor, window functions, and the set-returning <code>unnest</code> in <code>FROM</code>. The chapter notes them where they touch the evaluator.</p>
@@ -28,7 +28,7 @@
 
 <p>A scalar expression is evaluated against one row. The row comes as two parallel arrays. One array holds the column names. The other holds the string column values. The evaluator resolves a column reference by name. The match is case-insensitive. It returns string literals as they are. For any arithmetic or numeric node it calls the numeric evaluator and renders the result back as text. Integer results print without a decimal point. Other numbers use <code>%g</code> formatting.</p>
 
-<p>The string-valued design leads to two facts. They come up again and again in this chapter.</p>
+<p>The string-valued design leads to two facts that come up again and again in this chapter.</p>
 
 <dl class="params">
 <dt>Values carry no static type</dt><dd>At evaluation time, a column value, a literal, and a function result are all text. Each operation decides on its own whether to treat the operands as numbers or as text. It does this by looking at the operand strings. See <a href="#coercion">Section 9.7</a>.</dd>
@@ -129,7 +129,7 @@
 
 <h3 id="case-when">9.3.1. CASE</h3>
 
-<p>Both forms of <code>CASE</code> are supported. The searched form tests a boolean condition in each branch. The simple form compares one operand against each <code>WHEN</code> value. The engine desugars the simple form into the searched form. It turns each <code>WHEN v</code> into the comparison <code>operand = v</code>. So both forms share one evaluator.</p>
+<p>Both forms of <code>CASE</code> are supported. The searched form tests a boolean condition in each branch. The simple form compares one operand against each <code>WHEN</code> value. The engine desugars the simple form into the searched form. It turns each <code>WHEN v</code> into the comparison <code>operand = v</code>. Both forms share one evaluator.</p>
 
 <pre><code><span class="c-com">-- searched CASE</span>
 <span class="c-key">SELECT</span> <span class="c-key">CASE</span>
@@ -303,7 +303,7 @@
 
 <h3 id="vector">9.6.7. Vector Distance Functions and Operators</h3>
 
-<p>Vectors arrive as text. One form is bracketed, like <code>[f1,f2,...]</code> or <code>{f1,f2,...}</code>. Another form is a compact quantized form, like <code>b64i8:&lt;base64&gt;</code>. The quantized form is decoded back to floats. Here are the distance operators and their named equivalents.</p>
+<p>Vectors arrive as text. One form is bracketed, like <code>[f1,f2,...]</code> or <code>{f1,f2,...}</code>. Another form is a compact quantized form, like <code>b64i8:&lt;base64&gt;</code>. The quantized form is decoded back to floats. The table below shows the distance operators and their named equivalents.</p>
 
 <table>
 <thead><tr><th>Operator</th><th>Distance</th></tr></thead>
@@ -315,7 +315,7 @@
 </tbody>
 </table>
 
-<p>If either operand is <code>NULL</code>, the result is <code>NULL</code>. If the two vectors have different dimensions, the result is <code>NULL</code>. When the operands are not vector literals, the cosine operator falls back to a string-equality test. That test returns <code>t</code> or <code>f</code>. The other operators need vectors. They return <code>NULL</code> in that case. There are companion functions too. <code>vector_dim(v)</code> gives the element count. <code>vector_norm(v)</code> gives the L2 norm. <code>vector_normalize(v)</code> gives the unit vector as bracketed text. All three round-trip through the same parser. The approximate nearest-neighbor helpers <code>hnsw_knn(...)</code> and <code>hnsw_filter_knn(...)</code> return comma-separated primary-key lists. See <a href="/3.0/ref/create-index">CREATE INDEX</a>.</p>
+<p>If either operand is <code>NULL</code>, the result is <code>NULL</code>. If the two vectors have different dimensions, the result is also <code>NULL</code>. When the operands are not vector literals, the cosine operator falls back to a string-equality test. That test returns <code>t</code> or <code>f</code>. The other operators need vectors. They return <code>NULL</code> in that case. There are companion functions too. <code>vector_dim(v)</code> gives the element count. <code>vector_norm(v)</code> gives the L2 norm. <code>vector_normalize(v)</code> gives the unit vector as bracketed text. All three round-trip through the same parser. The approximate nearest-neighbor helpers <code>hnsw_knn(...)</code> and <code>hnsw_filter_knn(...)</code> return comma-separated primary-key lists. See <a href="/3.0/ref/create-index">CREATE INDEX</a>.</p>
 
 <h3 id="utility">9.6.8. Subqueries, Notifications, and Timing</h3>
 
@@ -331,7 +331,7 @@
 
 <h2 id="coercion">9.7. Type Coercion and CAST</h2>
 
-<p>Values are untyped text during evaluation. So each operation decides coercion on its own. There is no declared expression type.</p>
+<p>Values are untyped text during evaluation. Each operation decides coercion on its own. There is no declared expression type.</p>
 
 <dl class="params">
 <dt>Comparisons</dt><dd>Both operands are compared as <em>numbers</em> only when each renders as a full, valid number. The whole string must be consumed by <code>strtod</code> and must be non-empty. If either side is not a clean number, the comparison falls back to a byte-wise <code>strcmp</code>. So <code>'10' = 10</code> and <code>'2' &lt; '10'</code> both behave as numbers. But <code>'10x' &lt; '9'</code> compares as text.</dd>
@@ -339,7 +339,7 @@
 <dt>Boolean context</dt><dd>A value is true if it is <code>t</code>, <code>true</code> in any case, or a non-zero number. Inside <code>CASE</code> and <code>IF</code>, <code>1</code> is also taken as true.</dd>
 </dl>
 
-<p>You convert types on purpose with <code>CAST(expr AS type)</code>. The target type's family code drives the conversion. Recall the type encoding from Chapter 4, where <code>typeVal / 10000</code> is the family.</p>
+<p>You convert types on purpose with <code>CAST(expr AS type)</code>. The target type's family code drives the conversion. The type encoding is described in Chapter 4. There, <code>typeVal / 10000</code> is the family.</p>
 
 <table>
 <thead><tr><th>Target family</th><th>CAST behavior</th></tr></thead>
@@ -357,7 +357,7 @@
 
 <h2 id="null-handling">9.8. NULL Handling Summary</h2>
 
-<p>The treatment of <code>NULL</code> is not the same across operations. The table below gathers the rules from earlier sections. It puts the differences side by side.</p>
+<p>The treatment of <code>NULL</code> is not the same across operations. The table below gathers the rules from earlier sections and puts the differences side by side.</p>
 
 <table>
 <thead><tr><th>Context</th><th>NULL behavior</th></tr></thead>

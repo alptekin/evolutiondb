@@ -5,7 +5,7 @@
 <title>Slack connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -33,7 +33,7 @@
 <p>The sync loop skips these on purpose.</p>
 <ul>
 <li>System messages with subtype <code>channel_join</code>, <code>channel_leave</code>, <code>bot_add</code>, or <code>bot_remove</code>. These are just noise.</li>
-<li>Messages that have no <code>text</code> and no <code>attachments</code>. These count as <code>skipped</code>. The README says file and image binaries are not stored. Only the text caption is captured. Reactions are not indexed.</li>
+<li>Messages that have no <code>text</code> and no <code>attachments</code>. These count as <code>skipped</code>. The connector does not store file or image binaries. It only saves the text caption. Reactions are not indexed.</li>
 </ul>
 
 <h2 id="install">Install</h2>
@@ -50,14 +50,14 @@ pip install -e client/slack-sync
 <p>You configure everything through environment variables. The CLI loads a dotenv file before it reads them. By default this is <code>.env</code> in the working directory. You can change it with <code>--env-file</code>. Values already in the process environment win. The loader uses <code>setdefault</code>, so it never overwrites what is already set.</p>
 
 <h3 id="slack-auth">Slack authentication</h3>
-<p>Auth uses one <strong>User OAuth token</strong> in the form <code>xoxp-…</code>. You create it at <a href="https://api.slack.com/apps">https://api.slack.com/apps</a> → Create New App → From scratch. Add the read-only <em>user-token</em> scopes below under OAuth &amp; Permissions. Then install the app and copy the User OAuth Token into <code>SLACK_USER_TOKEN</code>.</p>
+<p>Auth uses one <strong>User OAuth token</strong> in the form <code>xoxp-…</code>. You create it at <a href="https://api.slack.com/apps">https://api.slack.com/apps</a>. Select Create New App, then From scratch. Add the read-only <em>user-token</em> scopes below under OAuth &amp; Permissions. Then install the app and copy the User OAuth Token into <code>SLACK_USER_TOKEN</code>.</p>
 <pre><code>channels:history    channels:read
 groups:history      groups:read
 im:history          im:read
 mpim:history        mpim:read
 users:read
 </code></pre>
-<p>These are user scopes, not bot scopes. The package walks the conversations the human is part of. So you do not need workspace-admin approval. The README notes that sending is opt-in and off by default. If you keep only the scopes above, the token stays read-only. The outbox action loop's reply path also needs the <code>chat:write</code> scope plus <code>EVOSQL_SEND_ENABLED=1</code> and <code>EVOSQL_SEND_CHANNELS=slack</code>, per ADR-004. That send path lives outside this package.</p>
+<p>These are user scopes, not bot scopes. The package walks the conversations the human is part of. So you do not need workspace-admin approval. Sending is opt-in and off by default. If you keep only the scopes above, the token stays read-only. The outbox action loop's reply path also needs the <code>chat:write</code> scope plus <code>EVOSQL_SEND_ENABLED=1</code> and <code>EVOSQL_SEND_CHANNELS=slack</code>, per ADR-004. That send path lives outside this package.</p>
 
 <h3 id="env-vars">Environment variables</h3>
 <table>
@@ -71,7 +71,7 @@ users:read
 <tr><td><code>EVOSQL_DATABASE</code></td><td><code>evosql</code></td><td>Database name.</td></tr>
 <tr><td><code>MCP_USER_ID</code></td><td><code>default_user</code></td><td>Memory namespace. Records are written under this namespace and recalled per <code>MCP_USER_ID</code>.</td></tr>
 <tr><td><code>SLACK_MEMORY_STORE</code></td><td><code>mcp_mem</code></td><td>Name of the EvolutionDB memory store to write into.</td></tr>
-<tr><td><code>SLACK_POLL_INTERVAL</code></td><td><code>600</code></td><td>Daemon-mode poll interval in seconds. It is used by <code>Config.poll_secs</code>.</td></tr>
+<tr><td><code>SLACK_POLL_INTERVAL</code></td><td><code>600</code></td><td>Daemon-mode poll interval in seconds. <code>Config.poll_secs</code> reads this value.</td></tr>
 </tbody>
 </table>
 
@@ -93,7 +93,7 @@ evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--d
 <p>On failure the line is <code>{"ok": false, "error": "&lt;message&gt;"}</code>. The numbers above are just an example from the README. They are not guaranteed counts.</p>
 
 <h3 id="since-syntax">--since syntax</h3>
-<p><code>--since</code> takes a duration in the form <code>&lt;n&gt;&lt;unit&gt;</code>. The unit is one of <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code>. Some examples are <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>3d</code>, and <code>2w</code>. It is turned into a Unix-seconds floor that becomes Slack's <code>oldest</code> bound. A bad value exits with code 2. <code>--since</code> is only the <em>default</em> floor. For channels that already have a stored watermark, the watermark wins.</p>
+<p><code>--since</code> takes a duration in the form <code>&lt;n&gt;&lt;unit&gt;</code>. The unit is one of <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code>. Some examples are <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>3d</code>, and <code>2w</code>. The connector turns it into a Unix-seconds floor and passes that as Slack's <code>oldest</code> bound. A bad value exits with code 2. <code>--since</code> is only the <em>default</em> floor. For channels that already have a stored watermark, the watermark wins.</p>
 
 <h3 id="record-shape">Record shape</h3>
 <p>Each message is stored as a JSON record under the key <code>slack_msg_&lt;channel&gt;_&lt;ts&gt;</code>. These are the fields written by <code>_build_record</code>.</p>
@@ -113,7 +113,7 @@ evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--d
   <span class="c-str">"tags"</span>:         [<span class="c-str">"slack"</span>, <span class="c-str">"#general"</span>]
 }
 </code></pre>
-<p>Message <code>text</code> is clipped to about 4000 characters. Extra text is cut off and gets the suffix <code>…[clipped]</code>. Thread replies set <code>kind</code> to <code>thread_reply</code>, carry the parent's <code>thread_ts</code>, and add a <code>"thread"</code> tag.</p>
+<p>The connector clips message <code>text</code> to about 4000 characters. Extra text is cut off and gets the suffix <code>…[clipped]</code>. Thread replies set <code>kind</code> to <code>thread_reply</code>, carry the parent's <code>thread_ts</code>, and add a <code>"thread"</code> tag.</p>
 
 <h2 id="reference">Reference</h2>
 <p>The package has three small modules. <code>slack_sync.sync</code> holds config, record building, the sync loop, and the CLI. <code>slack_sync.api</code> is the Slack Web API client. <code>slack_sync.state</code> is the EvolutionDB memory backend.</p>
@@ -129,7 +129,7 @@ evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--d
 <p>Parses a <code>&lt;n&gt;&lt;s|m|h|d|w&gt;</code> duration into a Unix-seconds float. The value is relative to now in UTC. It raises <code>ValueError</code> on anything else.</p>
 
 <div class="sig">class Config</div>
-<p>Reads all environment variables into typed attributes. The attributes are <code>token</code>, <code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code>, <code>store</code>, and <code>poll_secs</code>. It is built after the dotenv file is loaded.</p>
+<p>Reads all environment variables into typed attributes. The attributes are <code>token</code>, <code>evosql_host</code>, <code>evosql_port</code>, <code>evosql_user</code>, <code>evosql_pass</code>, <code>evosql_db</code>, <code>user_id</code>, <code>store</code>, and <code>poll_secs</code>. The CLI builds it after loading the dotenv file.</p>
 
 <p>There are some internal helpers. <code>_build_record(...)</code> builds the record dict shown above. <code>_ts_to_iso(ts)</code> converts a Slack <code>ts</code> to an ISO-8601 <code>Z</code> string, or to <code>None</code>. <code>_short(s, n=4000)</code> clips long text. <code>_load_dotenv(path)</code> fills the environment without overwriting existing values.</p>
 
@@ -143,7 +143,7 @@ evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--d
 <div class="sig">SlackClient.replies(channel: str, thread_ts: str, oldest: Optional[float] = None) -&gt; Iterator[Dict]</div>
 <p>Pages <code>conversations.replies</code> for one thread. It skips the parent message because <code>history</code> already captured it. It yields the replies in time order.</p>
 <div class="sig">SlackClient.user_name(user_id: str) -&gt; str</div>
-<p>Resolves a <code>U…</code> id to a display name via <code>users.info</code>. It uses an in-memory cache. It falls back through <code>display_name</code> → <code>real_name</code> → <code>name</code> → the raw id. It returns the id itself if the lookup fails. This can happen for a deleted user or a missing scope.</p>
+<p>Resolves a <code>U…</code> id to a display name via <code>users.info</code>. It uses an in-memory cache. It falls back through <code>display_name</code>, then <code>real_name</code>, then <code>name</code>, then the raw id. It returns the id itself if the lookup fails. This can happen for a deleted user or a missing scope.</p>
 <div class="sig">def conversation_display_name(conv: Dict, client: SlackClient) -&gt; str</div>
 <p>Makes a human label for a conversation row. A DM resolves to the other user's display name. A group DM resolves to its <code>purpose.value</code>. A channel resolves to <code>#name</code>.</p>
 <div class="sig">class SlackError(code: str, msg: str, url: str)</div>
@@ -155,7 +155,7 @@ evolutiondb-slack-sync <span class="c-key">--once</span> <span class="c-key">--d
 <div class="sig">MemoryStore.get_watermark(channel: str) -&gt; Optional[str]</div>
 <p>Reads the stored Slack <code>ts</code> watermark for a channel. The key is <code>slack_state_&lt;channel&gt;</code>. It returns <code>None</code> if the channel has not been seen yet.</p>
 <div class="sig">MemoryStore.set_watermark(channel: str, ts: str) -&gt; None</div>
-<p>Writes the channel watermark with <code>MEMORY PUT INTO &lt;store&gt;</code>. It stores the Slack <code>ts</code> exactly as is. So microsecond precision round-trips.</p>
+<p>Writes the channel watermark with <code>MEMORY PUT INTO &lt;store&gt;</code>. It stores the Slack <code>ts</code> exactly as is. The round-trip keeps microsecond precision.</p>
 <div class="sig">MemoryStore.put_record(key: str, record: Dict) -&gt; None</div>
 <p>Serializes a record dict to JSON. It writes the JSON with <code>MEMORY PUT INTO &lt;store&gt;</code> under the configured namespace.</p>
 

@@ -5,7 +5,7 @@
 <title>27. Backup, WAL &amp; Recovery | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -17,7 +17,7 @@
 <h1>27. Backup, WAL &amp; Recovery</h1>
 <p class="lede">This page explains how EvolutionDB keeps your data safe when a crash happens. It covers the full-page-image write-ahead log, the checkpoint that recycles it, two-pass replay on restart, point-in-time recovery from the WAL archive, and the base backup that clones a live database.</p>
 
-<p>Durability in EvolutionDB rests on one mechanism. It is a <strong>full-page-image (FPI) write-ahead log</strong> built in <code>evolution/db/wal.c</code>. Before any changed 4&nbsp;KB page reaches the data file <code>evosql.db</code>, a full image of that page is added to the log file <code>evosql.wal</code> and flushed. If the process dies between the log write and the data write, the next start replays the logged images. This way no page is ever left torn. Everything else in this chapter is built on top of that one log. That includes checkpoints, recovery, the time-travel archive, and base backups.</p>
+<p>Durability in EvolutionDB rests on one mechanism. It is a <strong>full-page-image (FPI) write-ahead log</strong> built in <code>evolution/db/wal.c</code>. Before any changed 4&nbsp;KB page reaches the data file <code>evosql.db</code>, a full image of that page is added to the log file <code>evosql.wal</code> and flushed. If the process dies between the log write and the data write, the next start replays the logged images. No page is ever left torn. Everything else in this chapter is built on top of that one log. That includes checkpoints, recovery, the time-travel archive, and base backups.</p>
 
 <div class="callout">
 <p><strong>A note on terminology.</strong> The SQL keyword <code>CHECKPOINT</code> in EvolutionDB belongs to the LangGraph <em>checkpoint store</em> feature. See <a href="/3.0/ref/checkpoint/">CHECKPOINT</a> and <a href="/3.0/ref/create-checkpoint-store/">CREATE CHECKPOINT STORE</a>. It has <em>nothing to do</em> with the WAL checkpoint described here. The WAL checkpoint is an internal engine operation. No SQL statement triggers it. When this chapter says &ldquo;checkpoint&rdquo; on its own, it means the WAL checkpoint.</p>
@@ -53,7 +53,7 @@
 <dt><code>timestamp</code></dt>
 <dd>Microseconds since the Unix epoch. It is captured with <code>gettimeofday()</code> at log time. This is what makes the WAL archive replayable to a point in time. See <a href="#pitr">§27.5</a>.</dd>
 <dt><code>crc32</code></dt>
-<dd>An IEEE CRC-32 over the 18-byte header <em>plus</em> the page image. It uses the zlib and gzip polynomial. Replay recomputes it and compares it. If it does not match, replay stops at that record. This way a partly written tail record is never applied.</dd>
+<dd>An IEEE CRC-32 over the 18-byte header <em>plus</em> the page image. It uses the zlib and gzip polynomial. Replay recomputes it and compares it. If it does not match, replay stops at that record. A partly written tail record is never applied.</dd>
 </dl>
 
 <p>EvolutionDB logs <em>whole pages</em>, not logical row operations. There is no redo or undo record type. There is no per-tuple delta. There is no separate logical record stream in the WAL itself. The unit of recovery is the 4&nbsp;KB page. This makes replay safe to repeat. Re-applying a page image does no harm. The cost is a larger log than a delta-based design would produce.</p>
@@ -69,99 +69,99 @@
 <p>An auto-commit statement or an explicit <code>COMMIT</code> may succeed. When it does, the server calls <code>bp_wal_flush_dirty()</code> in the buffer pool. This happens before the transaction is marked committed in the commit log. The steps are below.</p>
 
 <ol>
-<li>Walk the set of pages this transaction made dirty. A small array tracks them. If that array overflows, which is rare, it falls back to a full buffer-pool scan.</li>
+<li>Walk the set of pages this transaction made dirty. A small array tracks them. If that array overflows, it falls back to a full buffer-pool scan. This is rare.</li>
 <li>For each dirty page, add its current image to the WAL with <code>wal_log_page()</code>.</li>
 <li>Run a <strong>single</strong> <code>wal_fsync()</code> that flushes all of those records at once.</li>
 <li>Only then assign a commit sequence number and record the commit.</li>
 </ol>
 
-<p>Batching the <code>fsync</code>, one flush per commit instead of one per page, is the key performance choice; the source notes it is roughly 100× faster than a per-page sync. The trade-off is that the durability boundary is the <em>commit</em>: if the server crashes after <code>COMMIT</code> returns, the WAL holds the images and recovery restores them; if it crashes mid-transaction, the un-flushed dirty pages are simply lost and the partial work never reaches disk.</p>
+<p>Batching the <code>fsync</code> to one flush per commit instead of one per page is the key performance choice. The source notes it is roughly 100x faster than a per-page sync. The trade-off is that the durability boundary is the <em>commit</em>. If the server crashes after <code>COMMIT</code> returns, the WAL holds the images and recovery restores them. If it crashes mid-transaction, the un-flushed dirty pages are lost and the partial work never reaches disk.</p>
 
 <div class="callout">
-<p><strong>Durability is at commit, not at statement.</strong> Because the WAL <code>fsync</code> is deferred to commit, a statement inside an open transaction is <em>not</em> durable until you <code>COMMIT</code> (see <a href="/3.0/ref/transaction/">transaction control</a>). This matches the SQL standard's notion of transactional durability and PostgreSQL's default behavior, but EvolutionDB has no per-statement or asynchronous-commit knob to change it.</p>
+<p><strong>Durability is at commit, not at statement.</strong> Because the WAL <code>fsync</code> is deferred to commit, a statement inside an open transaction is <em>not</em> durable until you <code>COMMIT</code> (see <a href="/3.0/ref/transaction/">transaction control</a>). This matches the SQL standard's notion of transactional durability and PostgreSQL's default behavior. EvolutionDB has no per-statement or asynchronous-commit knob to change it.</p>
 </div>
 
 <h2 id="checkpoint">27.3. WAL Checkpoints</h2>
 
-<p>A checkpoint is the operation that lets the WAL be recycled. Conceptually it declares &ldquo;everything logged so far is now safely in the data file, so the log can be thrown away.&rdquo; <code>wal_checkpoint()</code> performs three steps under the WAL lock:</p>
+<p>A checkpoint is the operation that lets the WAL be recycled. It declares that everything logged so far is now safely in the data file, so the log can be thrown away. <code>wal_checkpoint()</code> performs three steps under the WAL lock.</p>
 
 <ol>
-<li><strong>Archive.</strong> If the active WAL holds any records, they are appended to <code>evosql.wal.archive</code> before being discarded. This archive is what powers point-in-time recovery (<a href="#pitr">§27.5</a>); without it, checkpointing would permanently erase history.</li>
+<li><strong>Archive.</strong> If the active WAL holds any records, they are appended to <code>evosql.wal.archive</code> before being discarded. This archive is what powers point-in-time recovery (<a href="#pitr">§27.5</a>). Without it, checkpointing would permanently erase history.</li>
 <li><strong>Advance.</strong> <code>checkpoint_lsn</code> is moved up to the current write position.</li>
 <li><strong>Truncate.</strong> The active <code>evosql.wal</code> is truncated back to its 16-byte header, then the header is rewritten and <code>fsync</code>'d.</li>
 </ol>
 
 <p>Any distributed-transaction <code>PREPARE</code> records that are still live are re-logged into the freshly truncated WAL so prepared transactions survive the checkpoint (see <a href="#xa">§27.7</a>).</p>
 
-<p>Crucially, <strong>the caller is responsible for flushing dirty pages to the data file before calling <code>wal_checkpoint()</code></strong>, the WAL layer itself does not flush the buffer pool. The only place this contract is honored is <code>wal_shutdown()</code>, which runs after <code>pgm_shutdown()</code> has flushed all pages.</p>
+<p>The caller is responsible for flushing dirty pages to the data file before calling <code>wal_checkpoint()</code>. The WAL layer itself does not flush the buffer pool. The only place this contract is honored is <code>wal_shutdown()</code>. It runs after <code>pgm_shutdown()</code> has flushed all pages.</p>
 
 <div class="callout">
-<p><strong>When does a checkpoint actually happen?</strong> In the current engine, a WAL checkpoint runs <strong>only at clean shutdown</strong>, when the server receives <code>SIGTERM</code>/<code>SIGINT</code> and drains, it flushes the buffer pool and then calls <code>wal_shutdown()</code>, which checkpoints and closes the log. There is <em>no</em> periodic background checkpointer, no time- or size-triggered checkpoint, and <strong>no SQL command to force one</strong>. As a consequence, <code>evosql.wal</code> grows for the entire lifetime of a running process and is reclaimed only on a graceful stop. Plan log-disk headroom accordingly for long-lived servers, and prefer clean shutdowns over <code>SIGKILL</code>.</p>
+<p><strong>When does a checkpoint actually happen?</strong> In the current engine, a WAL checkpoint runs <strong>only at clean shutdown</strong>. When the server receives <code>SIGTERM</code>/<code>SIGINT</code> and drains, it flushes the buffer pool and then calls <code>wal_shutdown()</code>. This function checkpoints and closes the log. There is <em>no</em> periodic background checkpointer, no time- or size-triggered checkpoint, and <strong>no SQL command to force one</strong>. As a consequence, <code>evosql.wal</code> grows for the entire lifetime of a running process and is reclaimed only on a graceful stop. Plan log-disk headroom accordingly for long-lived servers, and prefer clean shutdowns over <code>SIGKILL</code>.</p>
 </div>
 
 <div class="callout">
-<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL has a dedicated checkpointer process driven by <code>checkpoint_timeout</code> and <code>max_wal_size</code>, plus a manual <code>CHECKPOINT</code> SQL command. EvolutionDB has none of these tuning knobs; its checkpoint is an implicit, shutdown-time event.</p>
+<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL has a dedicated checkpointer process driven by <code>checkpoint_timeout</code> and <code>max_wal_size</code>, plus a manual <code>CHECKPOINT</code> SQL command. EvolutionDB has none of these tuning knobs. Its checkpoint is an implicit, shutdown-time event.</p>
 </div>
 
 <h2 id="recovery">27.4. Crash Recovery</h2>
 
-<p>Recovery is automatic and happens during <code>pgm_init()</code> when the data file is opened. Because EvolutionDB supports transparent data encryption (TDE), where page&nbsp;0 (the file header) is always plaintext but data pages are encrypted, replay is split into <strong>two passes</strong>:</p>
+<p>Recovery is automatic and happens during <code>pgm_init()</code> when the data file is opened. EvolutionDB supports transparent data encryption (TDE). Page&nbsp;0 (the file header) is always plaintext but data pages are encrypted. Because of this, replay is split into <strong>two passes</strong>.</p>
 
 <dl class="params">
 <dt>Pass 1, page 0 only (<code>wal_replay_page0()</code>, inside <code>wal_init()</code>)</dt>
-<dd>Replays only logged images of page&nbsp;0, the file header, which is never encrypted. The page manager then re-reads the recovered header and, if the database is encrypted, initializes TDE from it. This must come first because the keys needed to decrypt data pages live in the header.</dd>
+<dd>Replays only logged images of page&nbsp;0. Page&nbsp;0 is the file header and is never encrypted. The page manager then re-reads the recovered header. If the database is encrypted, it initializes TDE from the header. This must come first because the keys needed to decrypt data pages live in the header.</dd>
 <dt>Pass 2, data pages (<code>wal_replay_remaining()</code> → <code>wal_replay_data()</code>)</dt>
 <dd>Runs after TDE is live. Replays every non-page-0 record, encrypting each page on the way to disk when TDE is enabled. On completion it performs a checkpoint (advancing <code>checkpoint_lsn</code> and truncating the WAL).</dd>
 </dl>
 
-<p>Within each pass the replay loop reads records sequentially from just past the header to end-of-file. For every record it:</p>
+<p>Within each pass the replay loop reads records sequentially from just past the header to end-of-file. For every record it does the following.</p>
 
 <ol>
-<li>Reads the record header and validates <code>page_len</code> is in range (otherwise replay stops, this is how a torn tail record is detected).</li>
-<li>Recomputes the CRC-32 over header+payload and compares it to the stored CRC; on mismatch, replay stops.</li>
+<li>Reads the record header and validates <code>page_len</code> is in range. If it is out of range, replay stops. This is how a torn tail record is detected.</li>
+<li>Recomputes the CRC-32 over header+payload and compares it to the stored CRC. On mismatch, replay stops.</li>
 <li>Skips any record whose <code>lsn ≤ checkpoint_lsn</code> (already on disk).</li>
 <li><code>pwrite()</code>s the page image to <code>page_no × 4096</code> in the data file, encrypting first if TDE is on and the page is not page&nbsp;0.</li>
 </ol>
 
-<p>A clean start (empty WAL) recovers zero pages and proceeds normally. When recovery does apply pages, the server logs the count:</p>
+<p>A clean start (empty WAL) recovers zero pages and proceeds normally. When recovery does apply pages, the server logs the count.</p>
 
 <pre><code>[WAL] Initialized (checkpoint_lsn=0, next_lsn=1)
 [WAL] Pass 2: replayed 12 data page(s)
 [WAL] Crash recovery: 12 page(s) restored</code></pre>
 
 <div class="callout">
-<p><strong>Recovery is redo-only and idempotent.</strong> There is no undo phase and no concept of replaying a transaction log up to the last commit, replay simply re-applies page images that were logged but might not have landed in the data file. Because uncommitted work is never flushed (its WAL records are never <code>fsync</code>'d), there is nothing to roll back. This also means recovery cannot be made to stop &ldquo;just before&rdquo; a bad transaction; for selective restore you need the time-travel archive below.</p>
+<p><strong>Recovery is redo-only and idempotent.</strong> There is no undo phase and no concept of replaying a transaction log up to the last commit. Replay simply re-applies page images that were logged but might not have landed in the data file. Because uncommitted work is never flushed (its WAL records are never <code>fsync</code>'d), there is nothing to roll back. Recovery also cannot be made to stop just before a bad transaction. For selective restore you need the time-travel archive below.</p>
 </div>
 
 <h2 id="pitr">27.5. Point-in-Time / Time-Travel Recovery</h2>
 
-<p>Every checkpoint appends the records it is about to discard to <code>evosql.wal.archive</code>. Because each record carries a microsecond timestamp, the archive can be replayed up to a chosen instant, restoring the database to how it looked at that time. This is implemented by <code>wal_restore_to_timestamp()</code>.</p>
+<p>Every checkpoint appends the records it is about to discard to <code>evosql.wal.archive</code>. Each record carries a microsecond timestamp. The archive can be replayed up to a chosen instant, restoring the database to how it looked at that time. This is implemented by <code>wal_restore_to_timestamp()</code>.</p>
 
-<p>The procedure restores a <em>base snapshot taken before the target time</em>, then replays archived records in order, applying each page image (TDE-encrypting as needed) and <strong>stopping at the first record whose timestamp exceeds the target</strong>:</p>
+<p>The procedure restores a <em>base snapshot taken before the target time</em>, then replays archived records in order, applying each page image (TDE-encrypting as needed) and <strong>stopping at the first record whose timestamp exceeds the target</strong>.</p>
 
 <pre><code><span class="c-com"># Conceptual workflow (engine-internal; see the caveat below)</span>
 <span class="c-com"># 1. Put a base copy of evosql.db in place - taken before the target time.</span>
 <span class="c-com"># 2. Replay evosql.wal.archive up to target epoch-microseconds.</span>
 <span class="c-com">#    Records with timestamp <= target are applied; the first one past it halts replay.</span></code></pre>
 
-<p>The companion <code>wal_archive_range()</code> reports the timestamp span available in the archive (its first and last record timestamps), so a recovery tool can validate that the requested target actually falls inside the retained window before attempting a restore.</p>
+<p><code>wal_archive_range()</code> reports the timestamp span available in the archive. It returns the first and last record timestamps. A recovery tool can use this to confirm that the requested target falls inside the retained window before attempting a restore.</p>
 
 <div class="callout">
-<p><strong>Limitation: no SQL/operator surface yet.</strong> <code>wal_restore_to_timestamp()</code> and <code>wal_archive_range()</code> are implemented engine functions, but in this release <em>nothing calls them</em>: there is no SQL statement, server flag, or CLI command that exposes point-in-time recovery to an operator. The plumbing (timestamped records, the growing <code>evosql.wal.archive</code>) is in place and correct, but driving a restore requires invoking the API directly. Treat PITR as a building block, not a turnkey feature. Also note the archive only ever <em>grows</em>: the <code>RETENTION</code> clause you may see on checkpoint <em>stores</em> does not prune it, and there is no archive-cleanup job.</p>
+<p><strong>Limitation: no SQL/operator surface yet.</strong> <code>wal_restore_to_timestamp()</code> and <code>wal_archive_range()</code> are implemented engine functions, but in this release <em>nothing calls them</em>. There is no SQL statement, server flag, or CLI command that exposes point-in-time recovery to an operator. The plumbing (timestamped records, the growing <code>evosql.wal.archive</code>) is in place and correct, but driving a restore requires invoking the API directly. Treat PITR as a building block, not a turnkey feature. Also note the archive only ever <em>grows</em>. The <code>RETENTION</code> clause you may see on checkpoint <em>stores</em> does not prune it, and there is no archive-cleanup job.</p>
 </div>
 
 <div class="callout">
-<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL drives PITR through <code>recovery_target_time</code>/<code>recovery_target_lsn</code> in the recovery configuration plus a <code>restore_command</code> that fetches archived segments, and it can recover to a transaction id or named restore point. EvolutionDB's archive is timestamp-keyed only, replay is whole-page, and the restore is invoked programmatically rather than through a config-driven recovery mode.</p>
+<p><strong>Contrast with PostgreSQL.</strong> PostgreSQL drives PITR through <code>recovery_target_time</code>/<code>recovery_target_lsn</code> in the recovery configuration plus a <code>restore_command</code> that fetches archived segments. It can also recover to a transaction id or named restore point. EvolutionDB's archive is timestamp-keyed only, replay is whole-page, and the restore is invoked programmatically rather than through a config-driven recovery mode.</p>
 </div>
 
 <h2 id="base-backup">27.6. Base Backups</h2>
 
-<p>A <strong>base backup</strong> is a consistent physical copy of the database, produced by a one-shot server mode. Starting the server with <code>--base-backup&nbsp;<var>PATH</var></code> initializes the engine, clones the data directory to <var>PATH</var>, and exits <strong>without binding any listener sockets</strong>, it never serves clients (see <a href="/3.0/admin/config/">Server Configuration §23.7</a>). It is the supported way to bootstrap a fresh replica from a primary.</p>
+<p>A <strong>base backup</strong> is a consistent physical copy of the database. It is produced by a one-shot server mode. Starting the server with <code>--base-backup&nbsp;<var>PATH</var></code> initializes the engine, clones the data directory to <var>PATH</var>, and exits <strong>without binding any listener sockets</strong>. It never serves clients (see <a href="/3.0/admin/config/">Server Configuration §23.7</a>). It is the supported way to bootstrap a fresh replica from a primary.</p>
 
 <pre><code><span class="c-com"># Clone a consistent copy into a directory and exit (0 = success)</span>
 evosql-server <span class="c-key">--base-backup</span> /backups/evosql-2026-06-12</code></pre>
 
-<p>Internally <code>repl_create_backup()</code> first pins a consistent point: it flushes the page manager and buffer pool, then <code>fsync</code>s the WAL, then records the current LSN as the backup's start LSN. It then writes one of two layouts depending on <var>PATH</var>:</p>
+<p>Internally <code>repl_create_backup()</code> first pins a consistent point. It flushes the page manager and buffer pool, then <code>fsync</code>s the WAL, then records the current LSN as the backup's start LSN. It then writes one of two layouts depending on <var>PATH</var>.</p>
 
 <dl class="params">
 <dt>Directory mode (<var>PATH</var> is or becomes a directory)</dt>
@@ -180,12 +180,12 @@ evosql-server <span class="c-key">--base-backup</span> /backups/evosql-2026-06-1
 [REPL] Base backup bundle created at /backups/evosql-2026-06-12 (lsn=437, 8388608 data bytes)</code></pre>
 
 <div class="callout">
-<p><strong>Backup is physical, file-level, and offline-to-clients.</strong> EvolutionDB has no <code>pg_dump</code>-style logical/SQL backup and no streaming <code>pg_basebackup</code> protocol; the backup mechanism is this one-shot copy. The simplest manual alternative is to stop the server cleanly (which checkpoints and truncates the WAL) and copy <code>evosql.db</code>, and, if you want point-in-time material, <code>evosql.wal.archive</code>, with ordinary filesystem tools. Copying <code>evosql.db</code> from a <em>running</em> server without using <code>--base-backup</code> is unsafe, because there is no externally-triggerable checkpoint to quiesce it.</p>
+<p><strong>Backup is physical, file-level, and offline-to-clients.</strong> EvolutionDB has no <code>pg_dump</code>-style logical/SQL backup and no streaming <code>pg_basebackup</code> protocol. The backup mechanism is this one-shot copy. The simplest manual alternative is to stop the server cleanly (which checkpoints and truncates the WAL) and copy <code>evosql.db</code>. If you want point-in-time material, also copy <code>evosql.wal.archive</code> using ordinary filesystem tools. Copying <code>evosql.db</code> from a <em>running</em> server without using <code>--base-backup</code> is unsafe, because there is no externally-triggerable checkpoint to quiesce it.</p>
 </div>
 
 <h2 id="xa">27.7. WAL &amp; Distributed Transactions</h2>
 
-<p>The WAL is also where two-phase (XA) commit records are persisted so prepared transactions survive a crash. These are not page images; they reuse the record format with reserved sentinel <code>page_no</code> values and a small payload instead of a 4&nbsp;KB page:</p>
+<p>The WAL is also where two-phase (XA) commit records are persisted so prepared transactions survive a crash. These are not page images. They reuse the record format with reserved sentinel <code>page_no</code> values and a small payload instead of a 4&nbsp;KB page.</p>
 
 <table>
 <thead><tr><th>Record</th><th><code>page_no</code> sentinel</th><th>Payload</th></tr></thead>
@@ -196,7 +196,7 @@ evosql-server <span class="c-key">--base-backup</span> /backups/evosql-2026-06-1
 </tbody>
 </table>
 
-<p>During replay, records with a <code>page_no</code> at or above <code>0xFFFFFFFC</code> are recognized as XA records and are <em>not</em> written to the data file: they are counted as replayed but handled in memory by the XA subsystem after recovery, reconstructing the set of prepared-but-unresolved transactions. As noted in <a href="#checkpoint">§27.3</a>, live <code>PREPARE</code> records are also re-logged across a checkpoint so they are not lost when the active WAL is truncated.</p>
+<p>During replay, records with a <code>page_no</code> at or above <code>0xFFFFFFFC</code> are recognized as XA records and are <em>not</em> written to the data file. They are counted as replayed but handled in memory by the XA subsystem after recovery, reconstructing the set of prepared-but-unresolved transactions. As noted in <a href="#checkpoint">§27.3</a>, live <code>PREPARE</code> records are also re-logged across a checkpoint so they are not lost when the active WAL is truncated.</p>
 
 <h2 id="reference">27.8. Quick Reference</h2>
 
@@ -224,12 +224,12 @@ evosql-server <span class="c-key">--base-backup</span> /backups/evosql-2026-06-1
 <div class="callout">
 <p><strong>Notes &amp; limitations</strong></p>
 <ul>
-<li><strong>Whole-page log.</strong> The WAL stores full 4 KB page images, not logical deltas; recovery is redo-only and idempotent. There is no undo log in the WAL and no transaction-level replay target.</li>
-<li><strong>Checkpoint only at clean shutdown.</strong> No background, timed, or size-triggered checkpointer exists, and there is no SQL command to force one. The active WAL grows for the life of the process and is reclaimed only on graceful stop, avoid hard kills.</li>
+<li><strong>Whole-page log.</strong> The WAL stores full 4 KB page images, not logical deltas. Recovery is redo-only and idempotent. There is no undo log in the WAL and no transaction-level replay target.</li>
+<li><strong>Checkpoint only at clean shutdown.</strong> No background, timed, or size-triggered checkpointer exists, and there is no SQL command to force one. The active WAL grows for the life of the process and is reclaimed only on graceful stop. Avoid hard kills.</li>
 <li><strong>Durability is per-commit.</strong> The WAL <code>fsync</code> is batched to commit time. Work in an open transaction is not durable until <code>COMMIT</code>.</li>
-<li><strong>PITR has no operator surface.</strong> Time-travel restore is implemented but unexposed: no statement, flag, or tool invokes it in this release; the archive is also never pruned.</li>
+<li><strong>PITR has no operator surface.</strong> Time-travel restore is implemented but unexposed. No statement, flag, or tool invokes it in this release. The archive is also never pruned.</li>
 <li><strong>Backups are physical.</strong> Use <code>--base-backup</code> on a running server, or copy files after a clean shutdown. There is no logical (<code>pg_dump</code>-style) export and no streaming basebackup protocol.</li>
-<li><strong>TDE-aware replay.</strong> Recovery and restore re-encrypt data pages on write when the database is encrypted; page 0 is always handled in plaintext first so keys can be loaded.</li>
+<li><strong>TDE-aware replay.</strong> Recovery and restore re-encrypt data pages on write when the database is encrypted. Page 0 is always handled in plaintext first so keys can be loaded.</li>
 </ul>
 </div>
 

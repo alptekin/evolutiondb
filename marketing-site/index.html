@@ -6,7 +6,7 @@
 <title>EvolutionDB | Long-Term Memory for AI Agents</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script id="tailwind-config">
         tailwind.config = {
             darkMode: "class",
@@ -203,20 +203,23 @@
 <div class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-cyan/10 blur-[120px] rounded-full"></div>
 </div>
 <!-- Top Navigation Shell -->
-<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-secondary/20 h-16 flex items-center justify-between px-margin-sm md:px-margin-lg">
-<a class="flex items-center gap-2" href="/">
-<span class="material-symbols-outlined text-neon-cyan text-[32px]">database</span>
-<span class="font-headline-md text-headline-md font-bold text-neon-cyan tracking-tight">EvolutionDB</span>
+<header class="fixed top-0 w-full z-50 bg-glass-fill backdrop-blur-md border-b border-glass-border shadow-2xl shadow-black/20 h-16 flex items-center justify-between px-4 md:px-8">
+<div class="flex items-center gap-x-5 lg:gap-x-7">
+<a class="flex items-center gap-2" href="https://evolutiondb.org/">
+<span class="material-symbols-outlined text-neon-cyan text-[28px]">database</span>
+<span class="font-bold text-neon-cyan tracking-tight text-[18px]" style="font-family:Hanken Grotesk">EvolutionDB</span>
 </a>
-<nav class="hidden md:flex gap-8 items-center">
-<a class="text-neon-cyan font-label-caps text-label-caps tracking-widest" href="/">HOME</a>
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/features/">FEATURES</a>
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="/comparison/">COMPARISON</a>
-<a class="text-on-surface-variant hover:text-neon-cyan transition-colors font-label-caps text-label-caps tracking-widest" href="https://github.com/alptekin/evolutiondb">GITHUB</a>
+<nav class="hidden md:flex gap-x-5 lg:gap-x-7 items-center">
+<a class="relative text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors after:content-[''] after:absolute after:-bottom-2 after:left-0 after:w-full after:h-0.5 after:bg-neon-cyan after:rounded-full" href="https://evolutiondb.org/">HOME</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/features/">FEATURES</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutiondb.org/comparison/">COMPARISON</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://docs.evolutiondb.org/">DOCS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://developer.evolutiondb.org/">DEVELOPERS</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://evolutionagent.evolutiondb.org/">AGENT</a>
+<a class="text-on-surface-variant hover:text-neon-cyan font-label-caps text-[11px] uppercase tracking-widest transition-colors" href="https://wiki.evolutiondb.org/">WIKI</a>
 </nav>
-<div class="flex items-center gap-4">
-<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all active:scale-90" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
 </div>
+<a class="material-symbols-outlined text-on-surface-variant hover:text-neon-cyan transition-all text-[22px]" href="https://github.com/alptekin/evolutiondb" title="GitHub">code</a>
 </header>
 <!-- Main Content Canvas -->
 <main class="relative z-10 pt-32 pb-40 px-margin-sm min-h-screen flex flex-col items-center justify-center max-w-container-max mx-auto overflow-hidden">
@@ -247,7 +250,7 @@
 <div class="flex gap-4 grayscale brightness-150">
 <span class="material-symbols-outlined text-[24px]" title="PostgreSQL wire protocol">dataset</span>
 <span class="material-symbols-outlined text-[24px]" title="Native EVO text protocol">terminal</span>
-<span class="material-symbols-outlined text-[24px]" title="MCP server for agents">smart_toy</span>
+<span class="material-symbols-outlined text-[24px]" title="MCP server for agents">extension</span>
 </div>
 </div>
 </div>
@@ -316,7 +319,7 @@
 <!-- Tertiary Capabilities Section -->
 <div class="mt-40 w-full">
 <h2 class="reveal font-headline-md text-headline-md text-center text-pure-white mb-4">Built for Agents on Real Storage</h2>
-<p class="reveal stagger-1 text-center text-on-surface-variant text-body-md max-w-2xl mx-auto mb-16">One server speaks two protocols. It speaks the PostgreSQL wire protocol and a native EVO protocol. So it works with psql and DBeaver. It also ships an MCP server and a standalone agent.</p>
+<p class="reveal stagger-1 text-center text-on-surface-variant text-body-md max-w-2xl mx-auto mb-16">One server supports two protocols. It supports the PostgreSQL wire protocol and a native EVO protocol. This means it works with psql and DBeaver. It also ships an MCP server and a standalone agent.</p>
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
 <div class="reveal stagger-1 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
 <span class="material-symbols-outlined text-neon-cyan text-4xl mb-4">lan</span>
@@ -324,7 +327,7 @@
 <p class="text-on-surface-variant text-body-md">One binary serves the PostgreSQL wire protocol on port 5433. It also serves the EVO protocol on port 9967. An embedded mode runs without Docker.</p>
 </div>
 <div class="reveal stagger-2 p-margin-md glass-panel rounded-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-500 cursor-pointer">
-<span class="material-symbols-outlined text-secondary text-4xl mb-4">smart_toy</span>
+<span class="material-symbols-outlined text-secondary text-4xl mb-4">neurology</span>
 <h3 class="font-headline-md text-[20px] text-pure-white mb-3">Agent-Native</h3>
 <p class="text-on-surface-variant text-body-md">EvolutionDB ships an MCP server and a standalone agent. Every action needs human approval. The agent saves a draft first. A person reads it before anything is sent.</p>
 </div>
@@ -382,10 +385,13 @@
 <span class="font-headline-md text-headline-md text-neon-cyan font-bold">EvolutionDB</span>
 </div>
 <div class="flex flex-wrap justify-center gap-8">
-<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://github.com/alptekin/evolutiondb">GitHub</a>
 <a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="/features/">Features</a>
 <a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="/comparison/">Comparison</a>
-<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://github.com/alptekin/evolutiondb/issues">Community</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://evolutionagent.evolutiondb.org/">EvolutionAgent</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://developer.evolutiondb.org/">Developer Docs</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://docs.evolutiondb.org/">SQL Reference</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://wiki.evolutiondb.org/">Engine Wiki</a>
+<a class="text-on-surface-variant hover:text-pure-white transition-all font-body-md" href="https://github.com/alptekin/evolutiondb">GitHub</a>
 </div>
 <p class="text-on-surface-variant text-body-md opacity-50 mt-4">© 2026 EvolutionDB · Open Source (MIT)</p>
 </footer>

@@ -5,7 +5,7 @@
 <title>Python SDK | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -18,7 +18,7 @@
 <p class="lede"><code>evosql_memory</code> is a Pythonic <code>ctypes</code> wrapper over the <code>libevosql-memory</code> shared library. It also ships thin duck-typed adapters for six agent frameworks. These are LangGraph, LangChain, LlamaIndex, CrewAI, AutoGen, and Mem0.</p>
 
 <h2 id="what-it-does">What it does</h2>
-<p>The package gives Python apps and agents direct access to EvolutionDB's memory primitives. These are <code>MEMORY STORE</code>, <code>CHECKPOINT STORE</code>, <code>MESSAGE LOG</code>, <code>ENTITY STORE</code>, and <code>DOCUMENT STORE</code>. Access runs over the native EVO wire protocol. The default port is <code>9967</code>. The package is a binding, not a rewrite. The C SDK already owns connection state, error handling, and the wire protocol. You can <a href="/platform/mcp-server/">see the platform packages</a> and the C SDK in the monorepo. <code>evosql_memory</code> loads that shared library and exposes the following:</p>
+<p>The package gives Python apps and agents direct access to EvolutionDB's memory primitives. These are <code>MEMORY STORE</code>, <code>CHECKPOINT STORE</code>, <code>MESSAGE LOG</code>, <code>ENTITY STORE</code>, and <code>DOCUMENT STORE</code>. Access runs over the native EVO wire protocol. The default port is <code>9967</code>. The package is a binding, not a rewrite. The C SDK already owns connection state, error handling, and the wire protocol. You can <a href="/platform/mcp-server/">see the platform packages</a> and the C SDK in the monorepo. <code>evosql_memory</code> loads that shared library and exposes these components.</p>
 <ul>
 <li><code>Connection</code> runs generic SQL with <code>exec_</code> and <code>query</code>. It also has typed helpers for the memory and checkpoint stores.</li>
 <li><code>Subscription</code> is a background <code>LISTEN</code> and event stream. A Python callback is bridged to the C callback. It runs on a C-owned worker thread.</li>
@@ -41,7 +41,7 @@ python3 client/python-evosql-memory/examples/react_agent_demo.py</code></pre>
 <p>Pre-built shared libraries are attached to GitHub Releases. They cover Linux x64/arm64, macOS arm64/x64, and Windows x64. You can find them at <a href="https://github.com/alptekin/evolutiondb/releases/latest">github.com/alptekin/evolutiondb/releases/latest</a>. Point <code>EVOSQL_MEMORY_LIB</code> at a downloaded library to skip the <code>make</code> step.</p>
 
 <h2 id="configure">Configure library location and auth</h2>
-<p>At import time, <code>evosql_memory.core</code> searches for the shared library in this exact order. It loads the first one that resolves.</p>
+<p>At import time, <code>evosql_memory.core</code> searches for the shared library in a fixed order. It loads the first one that resolves.</p>
 <ol>
 <li><code>$EVOSQL_MEMORY_LIB</code> is an explicit path to the library. This is the override.</li>
 <li><code>../../libevosql-memory/build/libevosql-memory.{dylib,so}</code> is relative to the package directory. A source checkout works with no env setup.</li>
@@ -117,7 +117,7 @@ graph = workflow.compile(checkpointer=checkpointer, store=store)</code></pre>
 <div class="sig">close() -&gt; None</div>
 <p>Closes the underlying handle. It is idempotent.</p>
 <div class="sig">exec_(sql: str) -&gt; int</div>
-<p>Runs DML and DDL. It returns the affected-row count, or 0. It raises <code>EvoSqlError</code> on a server-side failure. Note the trailing underscore. The name <code>exec</code> avoids the Python builtin.</p>
+<p>Runs DML and DDL. It returns the affected-row count, or 0. It raises <code>EvoSqlError</code> on a server-side failure. Note the trailing underscore. The name avoids a clash with the Python builtin <code>exec</code>.</p>
 <div class="sig">query(sql: str, max_rows: int = 256, max_cols: int = 32, col_buf_size: int = 4096) -&gt; List[List[str]]</div>
 <p>Runs a SELECT and returns rows. Every cell is a string. NULL is <code>""</code>. The result buffer is allocated on the Python side. Its size is <code>max_rows * max_cols * col_buf_size</code> bytes. Bump the sizes for larger results. Over-sizing only costs RAM.</p>
 <div class="sig">memory_put(store, ns, key, value_json, embedding: Optional[Sequence[float]] = None) -&gt; None</div>
@@ -171,7 +171,7 @@ graph = workflow.compile(checkpointer=checkpointer, store=store)</code></pre>
 <ul>
 <li><strong>Source-tree only.</strong> There is no <code>pip install</code>, no <code>pyproject.toml</code>, no <code>setup.py</code>, and no PyPI package. Use <code>PYTHONPATH</code>. The package landing page shows a <code>pip install python-evosql-memory</code> and <code>MemoryClient</code> snippet. That describes a planned API. The real entry points are <code>connect()</code> and <code>Connection</code>. There is no <code>MemoryClient</code> class in the code today.</li>
 <li><strong>Shared library required.</strong> Import fails with <code>OSError</code> if <code>libevosql-memory.{dylib,so}</code> cannot be located. Set <code>EVOSQL_MEMORY_LIB</code> or build the C SDK.</li>
-<li><strong>Threading.</strong> Use one <code>Connection</code> per thread. This is the C SDK contract. A single <code>Subscription</code> never re-enters its own callback. It uses an internal per-subscription mutex. But two subscriptions can fire callbacks in parallel. Make your callbacks safe for that.</li>
+<li><strong>Threading.</strong> Use one <code>Connection</code> per thread. This is the C SDK contract. A single <code>Subscription</code> never re-enters its own callback. It uses an internal per-subscription mutex. Two subscriptions can fire callbacks in parallel. Make your callbacks safe for that.</li>
 <li><strong>Results are text.</strong> <code>query()</code> returns strings. Callers parse JSON and numbers themselves. Buffers are pre-allocated. Very large rows need a larger <code>col_buf_size</code> or <code>buf_size</code>.</li>
 <li><strong>SQL is string-built.</strong> Adapters interpolate identifiers and values into SQL. They escape single quotes from <code>'</code> to <code>''</code>. Store names and other identifiers are not parameterized. Treat them as trusted.</li>
 <li><strong>Adapters are duck-typed shims</strong> against framework contracts. They are not the frameworks themselves. Verify against your installed framework version. Several reference engine features are tied to specific server tasks. These are MESSAGE LOG, DOCUMENT FILTER, and ENTITY STORE. They require server support for those statements.</li>

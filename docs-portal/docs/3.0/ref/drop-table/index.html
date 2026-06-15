@@ -5,7 +5,7 @@
 <title>DROP TABLE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -58,13 +58,13 @@
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Drop a table:</p>
+<p>This example drops a table.</p>
 <pre><code><span class="c-key">DROP TABLE</span> employees;</code></pre>
 
 <p>Drop a table only if it exists. This hides the error when the table is missing.</p>
 <pre><code><span class="c-key">DROP TABLE IF EXISTS</span> staging_import;</code></pre>
 
-<p>Drop a parent table along with every table that inherits from it:</p>
+<p>This example drops a parent table along with every table that inherits from it.</p>
 <pre><code><span class="c-com">-- 'people' has child tables 'employees' and 'customers'</span>
 <span class="c-key">DROP TABLE</span> people <span class="c-key">CASCADE</span>;</code></pre>
 

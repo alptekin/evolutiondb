@@ -5,7 +5,7 @@
 <title>25. Roles &amp; Privileges | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -61,7 +61,7 @@
 <pre><code><span class="c-key">SHOW USERS</span>;</code></pre>
 
 <h2 id="authentication">25.3. Authentication</h2>
-<p>When a session sends credentials, <code>AuthenticateUser()</code> does the following steps in order.</p>
+<p>When a session sends credentials, <code>AuthenticateUser()</code> runs the following steps in order.</p>
 <ol>
 <li>The engine makes the username lower case and looks it up in the catalog. If that fails, it tries the original case as a fallback. This makes login <strong>case-insensitive</strong> in most cases. It still works for a name stored with mixed case.</li>
 <li>If the matched principal is a role with <code>is_role = 1</code>, authentication fails right away. <strong>Roles cannot log in.</strong></li>
@@ -122,7 +122,7 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 </div>
 
 <h2 id="admin-superuser">25.6. The admin superuser</h2>
-<p>The principal named <code>admin</code> is a hard-coded superuser. The name is matched without case. Every privilege check for <code>admin</code> returns <em>allowed</em> right away. It does no catalog I/O. <code>HasGrantOption()</code> also always returns true for <code>admin</code>. The engine seeds one grant on first start to keep the rule consistent. This grant gives <code>admin</code> the <code>ALL</code> privilege on <code>DATABASE *</code> with grant option. But the in-memory fast path means <code>admin</code> is authorized even before any grant row is read.</p>
+<p>The principal named <code>admin</code> is a hard-coded superuser. The name is matched without case. Every privilege check for <code>admin</code> returns <em>allowed</em> right away. It does no catalog I/O. <code>HasGrantOption()</code> also always returns true for <code>admin</code>. The engine seeds one grant on first start to keep the rule consistent. This grant gives <code>admin</code> the <code>ALL</code> privilege on <code>DATABASE *</code> with grant option. The in-memory fast path means <code>admin</code> is authorized even before any grant row is read.</p>
 <div class="callout">
 <p><strong>Caution.</strong> Superuser status is fixed to the exact name <code>admin</code>. There is no <code>ALTER USER ... SUPERUSER</code>. You cannot promote or demote superuser status at runtime. Treat the <code>admin</code> credential as the master key to the instance.</p>
 </div>
@@ -154,7 +154,7 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 <tr><td><code>ROLE</code></td><td>4</td><td><code>rolename</code>. This is a membership edge. See <a href="#role-membership">§25.4.2</a>.</td></tr>
 </tbody>
 </table>
-<p>The <code>*</code> wildcard is only honored at <code>DATABASE</code> scope and is the mechanism behind the seeded admin grant. There is no schema- or table-level wildcard, and there are no column-, sequence-, or routine-level privileges.</p>
+<p>The <code>*</code> wildcard is only honored at <code>DATABASE</code> scope. It is the mechanism behind the seeded admin grant. There is no schema-level or table-level wildcard. There are also no column-, sequence-, or routine-level privileges.</p>
 
 <h2 id="grant-revoke">25.8. GRANT and REVOKE</h2>
 <p>Full syntax is on the <a href="/3.0/ref/grant/">GRANT</a> and <a href="/3.0/ref/revoke/">REVOKE</a> reference pages.</p>
@@ -162,45 +162,45 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 <span class="c-key">REVOKE</span> priv[, priv ...] <span class="c-key">ON</span> {<span class="c-key">DATABASE</span> | <span class="c-key">SCHEMA</span> | <span class="c-key">TABLE</span>} object <span class="c-key">FROM</span> user;</code></pre>
 
 <h3 id="grant-semantics">25.8.1. GRANT semantics</h3>
-<p>A grant is keyed by <code>(user, scope_type, scope_name)</code>. If no grant exists for that triple, a new row is created with the parsed privilege mask. If a grant already exists, the new privileges are <strong>merged</strong> (bitwise OR) into the existing set rather than replacing it, and <code>WITH GRANT OPTION</code> is sticky: specifying it sets the option to true, while omitting it leaves an already-set option untouched. <code>GRANT</code> never silently drops a privilege the principal already held at that scope.</p>
+<p>A grant is keyed by <code>(user, scope_type, scope_name)</code>. If no grant exists for that triple, a new row is created with the parsed privilege mask. If a grant already exists, the new privileges are <strong>merged</strong> (bitwise OR) into the existing set rather than replacing it. <code>WITH GRANT OPTION</code> is sticky. Specifying it sets the option to true. Omitting it leaves an already-set option untouched. <code>GRANT</code> never silently drops a privilege the principal already held at that scope.</p>
 <pre><code><span class="c-key">CREATE USER</span> analyst <span class="c-key">PASSWORD</span> <span class="c-str">'pw'</span>;
 <span class="c-key">GRANT SELECT</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">TO</span> analyst;
 <span class="c-key">GRANT INSERT</span>, <span class="c-key">UPDATE</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">TO</span> analyst;
 <span class="c-com">-- analyst now holds SELECT,INSERT,UPDATE on that table</span></code></pre>
 
 <h3 id="grant-option">25.8.2. WITH GRANT OPTION</h3>
-<p>The grant option is a single boolean stored on the grant row, it is not tracked per individual privilege. <code>HasGrantOption()</code> answers whether a principal may re-grant a privilege: it returns true if the principal holds the requested privilege at the exact scope <em>and</em> the row's grant-option flag is set. For <code>DATABASE</code> scope the wildcard <code>*</code> grant is also consulted. (<code>admin</code> always passes.)</p>
+<p>The grant option is a single boolean stored on the grant row. It is not tracked per individual privilege. <code>HasGrantOption()</code> answers whether a principal may re-grant a privilege. It returns true if the principal holds the requested privilege at the exact scope and the row's grant-option flag is set. For <code>DATABASE</code> scope the wildcard <code>*</code> grant is also consulted. <code>admin</code> always passes.</p>
 
 <h3 id="revoke-semantics">25.8.3. REVOKE semantics</h3>
-<p><code>REVOKE</code> targets the same <code>(user, scope_type, scope_name)</code> triple. If no matching grant exists, it errors with SQLSTATE <code>42704</code>. Otherwise the requested privileges are cleared from the mask: if some privileges remain, the grant row is rewritten with the reduced set; if none remain, the row is deleted entirely. Revoking <code>ALL</code> additionally clears the grant option on the way out.</p>
+<p><code>REVOKE</code> targets the same <code>(user, scope_type, scope_name)</code> triple. If no matching grant exists, it errors with SQLSTATE <code>42704</code>. Otherwise the requested privileges are cleared from the mask. If some privileges remain, the grant row is rewritten with the reduced set. If none remain, the row is deleted entirely. Revoking <code>ALL</code> additionally clears the grant option.</p>
 <pre><code><span class="c-key">REVOKE INSERT</span>, <span class="c-key">UPDATE</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">FROM</span> analyst;
 <span class="c-com">-- analyst retains only SELECT on that table</span>
 <span class="c-key">REVOKE</span> <span class="c-key">ALL</span> <span class="c-key">ON TABLE</span> testdb.public.orders <span class="c-key">FROM</span> analyst;
 <span class="c-com">-- grant row removed entirely</span></code></pre>
 <div class="callout">
-<p><strong>No cascading revoke.</strong> <code>REVOKE</code> affects only the named principal's own grant row. It does not cascade to principals who received the privilege from that principal via <code>WITH GRANT OPTION</code>, and there is no <code>RESTRICT</code>/<code>CASCADE</code> clause. There is also no separate "revoke grant option only" form, to drop the option you must revoke and re-grant.</p>
+<p><strong>No cascading revoke.</strong> <code>REVOKE</code> affects only the named principal's own grant row. It does not cascade to principals who received the privilege from that principal via <code>WITH GRANT OPTION</code>. There is no <code>RESTRICT</code>/<code>CASCADE</code> clause. There is also no separate form to revoke only the grant option. To drop the option, you must revoke and re-grant.</p>
 </div>
 
 <h3 id="show-grants">25.8.4. Inspecting grants</h3>
-<p><code>SHOW GRANTS</code> lists grants for the current user; <code>SHOW GRANTS FOR user</code> lists them for a named principal. With no user specified, the engine enumerates every user's grants and then appends the <code>PUBLIC</code> grants. See <a href="/3.0/ref/show/">SHOW</a>.</p>
+<p><code>SHOW GRANTS</code> lists grants for the current user. <code>SHOW GRANTS FOR user</code> lists them for a named principal. With no user specified, the engine enumerates every user's grants and then appends the <code>PUBLIC</code> grants. See <a href="/3.0/ref/show/">SHOW</a>.</p>
 <pre><code><span class="c-key">SHOW GRANTS</span> <span class="c-key">FOR</span> analyst;</code></pre>
 
 <h2 id="waterfall">25.9. The TABLE &rarr; SCHEMA &rarr; DATABASE waterfall</h2>
-<p>Authorization for a data operation is decided by <code>CheckPrivilege(username, database, schema, table, privilege)</code>. The check is <strong>most-specific-first</strong> and short-circuits the moment any source grants the needed bit. The order is fixed:</p>
+<p>Authorization for a data operation is decided by <code>CheckPrivilege(username, database, schema, table, privilege)</code>. The check is <strong>most-specific-first</strong> and short-circuits the moment any source grants the needed bit. The order is fixed.</p>
 <ol>
-<li><strong>admin fast path</strong>, if the principal is <code>admin</code>, return allowed at once.</li>
-<li><strong>User grants, by scope, narrowest first:</strong>
+<li><strong>admin fast path.</strong> If the principal is <code>admin</code>, return allowed at once.</li>
+<li><strong>User grants, by scope, narrowest first.</strong>
  <ol>
  <li>TABLE, <code>database.schema.table</code> (only attempted when all three are present)</li>
  <li>SCHEMA, <code>database.schema</code></li>
  <li>DATABASE, the named <code>database</code>, then the <code>*</code> wildcard</li>
  </ol>
 </li>
-<li><strong>PUBLIC grants</strong>, identical TABLE&rarr;SCHEMA&rarr;DATABASE&rarr;<code>*</code> sequence for the <code>PUBLIC</code> principal.</li>
-<li><strong>Role-inherited grants</strong>: for each of the user's roles, the same waterfall again.</li>
+<li><strong>PUBLIC grants.</strong> The same TABLE&rarr;SCHEMA&rarr;DATABASE&rarr;<code>*</code> sequence runs for the <code>PUBLIC</code> principal.</li>
+<li><strong>Role-inherited grants.</strong> For each of the user's roles, the same waterfall runs again.</li>
 <li>If nothing matched, return <em>denied</em>.</li>
 </ol>
-<p>"Most specific wins first" means a privilege found at TABLE scope ends the search before SCHEMA or DATABASE rows are even read. Because the check stops at the first <em>granting</em> source, the waterfall can only ever <em>add</em> authority as it widens, it never withholds a broad grant because a narrower scope is silent. There is no deny rule: a grant either exists and permits, or it is absent.</p>
+<p>Most specific wins first. A privilege found at TABLE scope ends the search before SCHEMA or DATABASE rows are even read. The check stops at the first granting source. The waterfall can only add authority as it widens. It never withholds a broad grant because a narrower scope is silent. There is no deny rule. A grant either exists and permits, or it is absent.</p>
 <pre><code><span class="c-com">-- broad read at the database level</span>
 <span class="c-key">GRANT SELECT</span> <span class="c-key">ON DATABASE</span> testdb <span class="c-key">TO</span> analyst;
 <span class="c-com">-- a SELECT on testdb.public.orders is now allowed:</span>
@@ -212,7 +212,7 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 <span class="c-com">-- INSERT elsewhere in testdb remains denied.</span></code></pre>
 
 <h2 id="errors">25.10. Error codes</h2>
-<p>The user- and privilege-management paths set the following SQLSTATEs (defined in <code>evosql_errcodes.h</code>):</p>
+<p>The user- and privilege-management paths set the following SQLSTATEs. They are defined in <code>evosql_errcodes.h</code>.</p>
 <table>
 <thead><tr><th>SQLSTATE</th><th>Symbol</th><th>Raised when</th></tr></thead>
 <tbody>
@@ -226,7 +226,7 @@ EVOSQL_USER_NAME=admin EVOSQL_PASSWORD=changeme ./adaptor/evosql-server</code></
 
 <h2 id="limitations">25.11. Notes and limitations</h2>
 <div class="callout">
-<p><strong>What EvolutionDB 3.0 does not implement.</strong> The model is deliberately narrower than the SQL standard or PostgreSQL. Notably:</p>
+<p><strong>What EvolutionDB 3.0 does not implement.</strong> The model is deliberately narrower than the SQL standard or PostgreSQL. These are the notable gaps.</p>
 <ul>
 <li>No column-, sequence-, function/procedure-, or large-object-level privileges. Only the six object privileges in <a href="#privileges">§25.7</a> exist, at DATABASE/SCHEMA/TABLE scope only.</li>
 <li>No object <code>OWNER</code> concept and therefore no implicit owner privileges. Authorization comes entirely from explicit grants (plus the <code>admin</code> fast path and <code>PUBLIC</code>).</li>

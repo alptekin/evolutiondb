@@ -5,7 +5,7 @@
 <title>YouTube connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -19,11 +19,11 @@
  <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">CONNECTOR</span>
  </div>
  <h1>YouTube connector</h1>
- <p class="lede">This is a <code>*-sync</code> connector. It pulls your YouTube <em>subscriptions</em>, <em>playlists</em> and <em>liked videos</em> into EvolutionDB long-term memory. These are the public signals that stand in for a watch history. An AI assistant can then recall "which channels do I follow about Rust?" or "what was that video I liked last month?".</p>
+ <p class="lede">This is a <code>*-sync</code> connector. It pulls your YouTube <em>subscriptions</em>, <em>playlists</em> and <em>liked videos</em> into EvolutionDB long-term memory. These are the public signals that represent your watch activity. An AI assistant can then recall which channels you follow about Rust, or which video you liked last month.</p>
 
  <h2 id="what">What it does</h2>
  <p>The package is called <code>evolutiondb-youtube-sync</code>. The version is <code>0.1.1</code> in <code>pyproject.toml</code>. It talks to the YouTube Data API v3. It walks three resources for the signed-in account. It writes one memory record per item into a <code>MEMORY STORE</code>. It uses the PostgreSQL wire protocol on <code>:5433</code>. You can run it once or as a polling loop.</p>
- <p>It covers the three signals the public API still exposes. Watch history itself has not been in the public API since 2016. So the connector captures <em>what channels you follow, what playlists you own, and what videos you liked</em> instead. One pass reads these resources:</p>
+ <p>It covers the three signals the public API still exposes. Watch history has not been in the public API since 2016. So the connector captures what channels you follow, what playlists you own, and what videos you liked. One pass reads these resources.</p>
  <ul>
  <li><strong>Subscriptions</strong> are the channels you follow. It reads <code>/subscriptions?mine=true</code> with <code>part=snippet</code>.</li>
  <li><strong>Playlists</strong> are the playlists you own. It reads <code>/playlists?mine=true</code> with <code>part=snippet,contentDetails</code>.</li>
@@ -43,13 +43,13 @@
 
 <span class="c-com"># or editable, from the monorepo</span>
 <span class="c-key">pip install</span> -e client/youtube-sync</code></pre>
- <p>It needs Python <code>&gt;=3.9</code>. The runtime dependencies are <code>psycopg[binary]&gt;=3.1</code> and <code>evolutiondb-pii&gt;=0.1.1</code>. The first one is the EvolutionDB and PostgreSQL wire client. The PII package is used only when it is present. See <a href="#notes">Notes &amp; limitations</a>. Installing the package adds one console script named <code>evolutiondb-youtube-sync</code>. Its entry point is <code>youtube_sync.__main__:main</code>, which calls <code>youtube_sync.sync:main</code>.</p>
+ <p>It needs Python <code>&gt;=3.9</code>. The runtime dependencies are <code>psycopg[binary]&gt;=3.1</code> and <code>evolutiondb-pii&gt;=0.1.1</code>. The first one is the EvolutionDB and PostgreSQL wire client. The PII package is used only when it is present. See <a href="#notes">Notes &amp; limitations</a>. Installing the package adds one console script named <code>evolutiondb-youtube-sync</code>. Its entry point is <code>youtube_sync.__main__:main</code>. That entry point calls <code>youtube_sync.sync:main</code>.</p>
 
  <h2 id="configure">Configure</h2>
- <p>Configuration is read from environment variables. The CLI also loads a dotenv file on its own. The default file is <code>.env</code>, and you can change it with <code>--env-file</code>. Existing environment variables win over file values. The loader uses <code>os.environ.setdefault</code> and skips lines with empty values.</p>
+ <p>Configuration is read from environment variables. The CLI also loads a dotenv file on its own. The default file is <code>.env</code>. You can change it with <code>--env-file</code>. Existing environment variables win over file values. The loader uses <code>os.environ.setdefault</code> and skips lines with empty values.</p>
 
  <h3 id="oauth">Google OAuth</h3>
- <p>The connector reuses the <em>same</em> Google OAuth installed-app client you already set up for <a href="/developer/connectors/gmail/">gmail-sync</a>. It only asks for the <code>youtube.readonly</code> scope. You must add that scope to your OAuth consent screen. Then set these values.</p>
+ <p>The connector reuses the same Google OAuth installed-app client you already set up for <a href="/developer/connectors/gmail/">gmail-sync</a>. It only asks for the <code>youtube.readonly</code> scope. You must add that scope to your OAuth consent screen. Then set these values.</p>
  <pre><code>GOOGLE_CLIENT_ID=xxxxxxxxxx.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxx
 
@@ -93,10 +93,10 @@ evolutiondb-youtube-sync --interval 900
 
 <span class="c-com"># Authenticate + fetch without writing anything to the database.</span>
 evolutiondb-youtube-sync --once --dry-run</code></pre>
- <p>Each pass prints a one-line JSON summary on stdout. It has one counter per resource:</p>
+ <p>Each pass prints a one-line JSON summary on stdout. It has one counter per resource.</p>
  <pre><code>{<span class="c-str">"ok"</span>: true, <span class="c-str">"subscriptions"</span>: 37, <span class="c-str">"playlists"</span>: 4, <span class="c-str">"liked_videos"</span>: 218, <span class="c-str">"errors"</span>: 0}</code></pre>
  <p>On an auth failure the summary is <code>{"ok": false, "error": "…", "hint": "run with --auth"}</code> and the exit code is 3. Any other failure prints <code>{"ok": false, "error": "…"}</code> and the exit code is 4. A fetch failure on one resource is caught for that resource alone. It bumps the <code>errors</code> counter and is logged to stderr. The other resources still run. In daemon mode, <code>SIGTERM</code> and <code>SIGINT</code> ask for a graceful stop after the current pass finishes.</p>
- <p>You can also drive the engine from your own code:</p>
+ <p>You can also drive the engine from your own code.</p>
  <pre><code><span class="c-key">from</span> youtube_sync.sync <span class="c-key">import</span> Config, sync_once
 
 cfg = Config()  <span class="c-com"># reads env vars described above</span>
@@ -108,15 +108,15 @@ counts = sync_once(cfg, dry_run=<span class="c-key">False</span>, interactive=<s
 
  <h3 id="ref-sync">youtube_sync.sync</h3>
  <div class="sig">def main(argv: list | None = None) -&gt; int</div>
- <p>This is the CLI entry point and the console script. It parses the arguments, loads the dotenv file, and builds a <code>Config</code>. Then it runs the <code>--auth</code> flow, a single pass, or the polling loop. It returns a process exit code.</p>
+ <p>The CLI entry point and the console script. It parses the arguments, loads the dotenv file, and builds a <code>Config</code>. Then it runs the <code>--auth</code> flow, a single pass, or the polling loop. It returns a process exit code.</p>
  <div class="sig">def sync_once(cfg: Config, *, dry_run: bool = False, interactive: bool = False) -&gt; dict</div>
- <p>Runs one sync pass. It builds a <code>YouTubeAuth</code> and a <code>YouTubeClient</code>. It opens a <code>MemoryStore</code> unless <code>dry_run</code> is set. Then it reads subscriptions, playlists and liked videos. For each item it builds one record, masks PII if available, and UPSERTs it. It writes the <code>last_sync</code> watermark at the end. It returns a counter dict <code>{"subscriptions", "playlists", "liked_videos", "errors"}</code>. It raises <code>RuntimeError</code> if <code>GOOGLE_CLIENT_ID</code> or <code>GOOGLE_CLIENT_SECRET</code> is missing.</p>
+ <p>Runs one sync pass. It builds a <code>YouTubeAuth</code> and a <code>YouTubeClient</code>. It opens a <code>MemoryStore</code> unless <code>dry_run</code> is set. Then it reads subscriptions, playlists and liked videos. For each item it builds one record, masks PII if available, and UPSERTs it. It writes the <code>last_sync</code> watermark at the end. It returns a counter dict with keys <code>subscriptions</code>, <code>playlists</code>, <code>liked_videos</code>, and <code>errors</code>. It raises <code>RuntimeError</code> if <code>GOOGLE_CLIENT_ID</code> or <code>GOOGLE_CLIENT_SECRET</code> is missing.</p>
  <div class="sig">class Config</div>
- <p>A snapshot of all configuration read from environment variables. This includes the Google client id and secret, the token cache path, the EvolutionDB connection, the <code>MCP_USER_ID</code> namespace, and the store name. All fields are filled in <code>__init__</code> from <code>os.environ</code> with the defaults listed above.</p>
+ <p>A snapshot of all configuration read from environment variables. Fields include the Google client id and secret, the token cache path, the EvolutionDB connection, the <code>MCP_USER_ID</code> namespace, and the store name. All fields are filled in <code>__init__</code> from <code>os.environ</code> with the defaults listed above.</p>
 
  <h3 id="ref-auth">youtube_sync.auth</h3>
  <div class="sig">class YouTubeAuth(client_id: str, client_secret: str, cache_path: str)</div>
- <p>Runs the Google OAuth 2.0 loopback-redirect flow for an installed app. It uses only the standard library, which is urllib and <code>http.server</code>. It asks for the <code>youtube.readonly</code> scope with <code>access_type=offline</code> and <code>prompt=consent</code>. It raises <code>AuthError</code> if the client id or secret is missing.</p>
+ <p>Runs the Google OAuth 2.0 loopback-redirect flow for an installed app. It uses only the standard library. It uses urllib and <code>http.server</code>. It asks for the <code>youtube.readonly</code> scope with <code>access_type=offline</code> and <code>prompt=consent</code>. It raises <code>AuthError</code> if the client id or secret is missing.</p>
  <div class="sig">def YouTubeAuth.ensure_token(interactive: bool = False) -&gt; str</div>
  <p>Returns a valid access token. It uses the cached access token if it still has more than 60s of life. Otherwise it refreshes the token with the stored refresh token. When <code>interactive=True</code> and no token works, it runs the browser consent flow. It also runs that flow again if a refresh fails. When <code>interactive=False</code> it raises <code>AuthError</code> and tells you to run <code>--auth</code>.</p>
  <div class="sig">class TokenCache(path: Path)</div>
@@ -126,7 +126,7 @@ counts = sync_once(cfg, dry_run=<span class="c-key">False</span>, interactive=<s
 
  <h3 id="ref-api">youtube_sync.api</h3>
  <div class="sig">class YouTubeClient(token_provider: Callable[[], str], user_agent: str = "evolutiondb-youtube-sync")</div>
- <p>A small YouTube Data API v3 client for <code>https://youtube.googleapis.com/youtube/v3</code>. It is built on urllib and pins no SDK. The <code>token_provider</code> callable gives a bearer token for each request. This way token refresh is invisible to the caller. It retries once on <code>401</code> by minting a new token. It also retries once on <code>429</code>. On <code>429</code> it honors <code>Retry-After</code> before it sleeps and retries. The default wait is 30s.</p>
+ <p>A small YouTube Data API v3 client for <code>https://youtube.googleapis.com/youtube/v3</code>. It is built on urllib and pins no SDK. The <code>token_provider</code> callable gives a bearer token for each request. Token refresh is invisible to the caller. It retries once on <code>401</code> by minting a new token. It also retries once on <code>429</code>. On <code>429</code> it honors <code>Retry-After</code> before it sleeps and retries. The default wait is 30s.</p>
  <div class="sig">def YouTubeClient.subscriptions() -&gt; Iterator[dict]</div>
  <p>Yields the signed-in user's subscription items. It uses <code>part=snippet</code>, <code>mine=true</code>, and <code>maxResults=50</code>. It follows <code>nextPageToken</code> pagination on its own.</p>
  <div class="sig">def YouTubeClient.playlists() -&gt; Iterator[dict]</div>
@@ -151,7 +151,7 @@ counts = sync_once(cfg, dry_run=<span class="c-key">False</span>, interactive=<s
  <li><strong>No watch history.</strong> Watch history is not in the public YouTube API. It was removed in 2016. So the connector covers subscriptions, owned playlists and liked videos on purpose. These are the closest public signals.</li>
  <li><strong>Read-only.</strong> Only the <code>youtube.readonly</code> scope is requested. There is no write or send path. No <code>EVOSQL_*_SEND</code>-style opt-in exists for this connector.</li>
  <li><strong>Full re-sync each pass.</strong> <code>state.py</code> exposes <code>get_watermark_iso()</code> and the driver records a <code>last_sync</code> watermark. But <code>sync_once()</code> does not yet use the watermark to limit what it fetches. Every pass re-reads all three resources. It relies on key-based UPSERT to avoid duplicates. Incremental fetch is wired up but not yet used.</li>
- <li><strong>Playlist contents are not stored.</strong> <code>YouTubeClient.playlist_items()</code> exists and is used for liked videos through <code>LL</code>. But the driver does not expand the items of your <em>own</em> playlists. It stores only the playlist record, which is the title and the item count.</li>
+ <li><strong>Playlist contents are not stored.</strong> <code>YouTubeClient.playlist_items()</code> exists and is used for liked videos through <code>LL</code>. But the driver does not expand the items of your own playlists. It stores only the playlist record. That record contains the title and the item count.</li>
  <li><strong>Optional PII masking.</strong> If <code>evolutiondb-pii</code> can be imported, the fields <code>fact</code>, <code>title</code>, <code>description</code>, <code>channel</code> and <code>url</code> are run through <code>protect_record</code> before storage. This emits companion records keyed <code>&lt;main_key&gt;_pii</code>. Without the package, records are stored as they are. See the <a href="/platform/pii/">PII guard</a>.</li>
  <li><strong>Version mismatch.</strong> <code>pyproject.toml</code> declares <code>0.1.1</code>. <code>youtube_sync/__init__.__version__</code> still reads <code>0.1.0</code>. Treat the pyproject value as the correct one.</li>
  <li><strong>Daemon floor.</strong> <code>--interval</code> has a minimum of 60 seconds. With no <code>--interval</code>, or with <code>--once</code>, it runs a single pass and exits.</li>

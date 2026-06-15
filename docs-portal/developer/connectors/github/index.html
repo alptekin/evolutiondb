@@ -5,7 +5,7 @@
 <title>GitHub connector | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -16,7 +16,7 @@
 <main class="docs-content prose reveal">
 
  <h1>GitHub connector</h1>
- <p class="lede">This connector pulls every GitHub PR and issue thread you take part in into EvolutionDB long-term memory. The <a href="/platform/mcp-server/">MCP server</a> can then show them through <code>search_memory</code>.</p>
+ <p class="lede">The GitHub connector pulls every GitHub PR and issue thread you take part in into EvolutionDB long-term memory. The <a href="/platform/mcp-server/">MCP server</a> can then show them through <code>search_memory</code>.</p>
 
  <h2 id="what-it-does">What it does</h2>
  <p>The <code>evolutiondb-github-sync</code> package walks GitHub's
@@ -28,7 +28,7 @@
  <a href="/platform/mcp-server/">MCP server</a> can then recall what you decided
  on a past PR without reading the diff again.</p>
 
- <p>For every matching thread the connector writes one record per object. Each record uses a fixed key. This way a re-sync UPSERTs the record instead of making a duplicate. The keys look like this:</p>
+ <p>For every matching thread the connector writes one record per object. Each record uses a fixed key. A re-sync UPSERTs the record instead of making a duplicate. The keys follow this pattern.</p>
 
  <pre><code><span class="c-com"># Record                  Key shape</span>
 The thread itself          gh_thread_&lt;repo&gt;#&lt;number&gt;
@@ -83,7 +83,7 @@ MCP_USER_ID=<span class="c-str">default_user</span>      <span class="c-com"># n
 GITHUB_MEMORY_STORE=<span class="c-str">mcp_mem</span>   <span class="c-com"># memory store to write into</span>
 GITHUB_POLL_INTERVAL=<span class="c-str">900</span>     <span class="c-com"># daemon-mode poll interval, seconds</span></code></pre>
 
- <p>Here is the variable reference. This is what the <code>Config</code> class reads.</p>
+ <p>The table below shows each variable and what the <code>Config</code> class reads from it.</p>
 
  <pre><code><span class="c-com"># var                  default        meaning</span>
 GITHUB_TOKEN          (none, required)  GitHub PAT - Bearer auth on every API call
@@ -114,7 +114,7 @@ evolutiondb-github-sync --once --dry-run
 <span class="c-com"># Point at an explicit dotenv file.</span>
 evolutiondb-github-sync --once --env-file ~/secrets/github.env</code></pre>
 
- <p>These are the flags that <code>main()</code> accepts.</p>
+ <p>The list below shows all flags that <code>main()</code> accepts.</p>
  <pre><code><span class="c-com"># --once              run a single pass and exit</span>
 <span class="c-com"># --interval SECONDS  daemon mode; loops until SIGINT/SIGTERM (min 60s)</span>
 <span class="c-com"># --since SPEC        floor for the first pass; SPEC is N + s|m|h|d|w (default 7d)</span>
@@ -140,7 +140,7 @@ evolutiondb-github-sync --once --env-file ~/secrets/github.env</code></pre>
  <h3 id="ref-cli"><code>github_sync.sync</code>, CLI and sync loop</h3>
 
  <div class="sig">main(argv: list | None = None) -&gt; int</div>
- <p>This is the console-script entry point. It is registered as <code>evolutiondb-github-sync</code>.
+ <p>The console-script entry point is registered as <code>evolutiondb-github-sync</code>.
  It parses arguments, loads the dotenv file, and builds a <code>Config</code>. Then it runs once
  or loops on the interval. It returns the process exit code.</p>
 
@@ -174,7 +174,7 @@ evolutiondb-github-sync --once --env-file ~/secrets/github.env</code></pre>
  <div class="sig">GitHubClient.get_pr_review_comments(owner, repo, number) -&gt; list[dict]</div>
  <div class="sig">GitHubClient.get_issue_comments(owner, repo, number) -&gt; list[dict]</div>
  <div class="sig">GitHubClient.get_pr_reviews(owner, repo, number) -&gt; list[dict]</div>
- <p>These fetch the data for one thread and fully paginate it. The first gets the diff-anchored review comments. The second gets the general
+ <p>These three methods fetch the data for one thread and fully paginate it. The first gets the diff-anchored review comments. The second gets the general
  issue-thread comments. The third gets the PR reviews.</p>
 
  <div class="sig">parse_repository_url(url: str) -&gt; dict | None</div>
@@ -212,7 +212,7 @@ evolutiondb-github-sync --once --env-file ~/secrets/github.env</code></pre>
  <code>Retry-After</code> header. It waits at most 5 times before it raises. Transient
  transport failures are retried with exponential backoff of 1, 2, 4, 8, and 16&nbsp;s.</p>
 
- <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><code>/search/issues</code> returns at most 1,000 results per query. So a narrow <code>--since</code> window matters for very active accounts.</div></div>
+ <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div><code>/search/issues</code> returns at most 1,000 results per query. A narrow <code>--since</code> window matters for very active accounts.</div></div>
 
  <h2 id="notes">Notes &amp; limitations</h2>
  <ul>
@@ -226,7 +226,7 @@ evolutiondb-github-sync --once --env-file ~/secrets/github.env</code></pre>
  <code>search_memory</code>. Do not use a <code>GITHUB_TOKEN</code> with broader scope
  than you would hand the assistant directly.</li>
  <li><strong>State backend.</strong> The source says <code>state.py</code> is a
- copy of the teams-sync backend. It is copied into each connector. This way each package works after a
+ copy of the teams-sync backend. It is copied into each connector. Each package works after a
  single <code>pip install</code> and does not need a shared library.</li>
  <li><strong>Version.</strong> <code>0.1.0</code> (Development Status: 4 - Beta).</li>
  </ul>

@@ -5,7 +5,7 @@
 <title>GRANT | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -69,25 +69,25 @@
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Give a user read access on a table:</p>
+<p>This example gives a user read access on a table.</p>
 <pre><code><span class="c-key">GRANT</span> <span class="c-key">SELECT</span> <span class="c-key">ON</span> <span class="c-key">TABLE</span> orders <span class="c-key">TO</span> analyst;</code></pre>
 
-<p>Give several privileges at once and let the recipient pass them on:</p>
+<p>This example gives several privileges at once and lets the recipient pass them on.</p>
 <pre><code><span class="c-key">GRANT</span> <span class="c-key">SELECT</span>, <span class="c-key">INSERT</span>, <span class="c-key">UPDATE</span> <span class="c-key">ON</span> <span class="c-key">TABLE</span> orders <span class="c-key">TO</span> app_user <span class="c-key">WITH GRANT OPTION</span>;</code></pre>
 
-<p>Give every privilege on a schema to everyone:</p>
+<p>This example gives every privilege on a schema to everyone.</p>
 <pre><code><span class="c-key">GRANT</span> <span class="c-key">ALL PRIVILEGES</span> <span class="c-key">ON</span> <span class="c-key">SCHEMA</span> reporting <span class="c-key">TO</span> PUBLIC;</code></pre>
 
 <p>Give create and drop rights across all databases. This uses the wildcard scope.</p>
 <pre><code><span class="c-key">GRANT</span> <span class="c-key">CREATE</span>, <span class="c-key">DROP</span> <span class="c-key">ON</span> <span class="c-key">DATABASE</span> <span class="c-str">'*'</span> <span class="c-key">TO</span> dba;</code></pre>
 
-<p>Give database-level read access to a single database:</p>
+<p>This example gives database-level read access to a single database.</p>
 <pre><code><span class="c-key">GRANT</span> <span class="c-key">SELECT</span> <span class="c-key">ON</span> <span class="c-key">DATABASE</span> testdb <span class="c-key">TO</span> readonly;</code></pre>
 
 <p>Grant role membership. There is no <code>ON</code> clause. Run this as <code>admin</code>.</p>
 <pre><code><span class="c-key">GRANT</span> reporting_role <span class="c-key">TO</span> analyst;</code></pre>
 
-<p>Look at the grants you made:</p>
+<p>This example shows how to look at the grants you made.</p>
 <pre><code><span class="c-key">SHOW GRANTS</span> <span class="c-key">FOR</span> analyst;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>

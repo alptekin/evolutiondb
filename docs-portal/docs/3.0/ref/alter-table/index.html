@@ -5,7 +5,7 @@
 <title>ALTER TABLE | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -153,10 +153,10 @@
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">MODIFY COLUMN</span> display_name <span class="c-key">VARCHAR</span>(100) <span class="c-key">NOT NULL</span>;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">CHANGE</span> display_name full_name <span class="c-key">VARCHAR</span>(120);</code></pre>
 
-<p>Drop a column.</p>
+<p>This example drops a column.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">DROP COLUMN</span> full_name;</code></pre>
 
-<p>Add constraints.</p>
+<p>These examples add different types of constraints.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD CONSTRAINT</span> chk_age <span class="c-key">CHECK</span> (age &gt;= 18);
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD CONSTRAINT</span> uq_email <span class="c-key">UNIQUE</span> (email);
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">ADD CONSTRAINT</span> pk_emp <span class="c-key">PRIMARY KEY</span> (id);
@@ -168,13 +168,13 @@
     <span class="c-key">REFERENCES</span> employees (id) <span class="c-key">NOT VALIDATE</span>;
 <span class="c-key">ALTER TABLE</span> orders <span class="c-key">VALIDATE CONSTRAINT</span> fk_emp2;</code></pre>
 
-<p>Rename, disable, enable again, and drop a constraint.</p>
+<p>This example renames a constraint, disables it, enables it again, then drops it.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> employees <span class="c-key">RENAME CONSTRAINT</span> chk_age <span class="c-key">TO</span> chk_min_age;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">DISABLE CONSTRAINT</span> chk_min_age;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">ENABLE CONSTRAINT</span> chk_min_age;
 <span class="c-key">ALTER TABLE</span> employees <span class="c-key">DROP CONSTRAINT</span> chk_min_age;</code></pre>
 
-<p>Turn row-level security on and off, and manage a TTL column.</p>
+<p>These examples turn row-level security on and off. They also set and drop a TTL column.</p>
 <pre><code><span class="c-key">ALTER TABLE</span> sessions <span class="c-key">ENABLE ROW LEVEL SECURITY</span>;
 <span class="c-key">ALTER TABLE</span> sessions <span class="c-key">SET TTL_COLUMN =</span> <span class="c-str">'expires_at'</span>;
 <span class="c-key">ALTER TABLE</span> sessions <span class="c-key">DROP TTL</span>;

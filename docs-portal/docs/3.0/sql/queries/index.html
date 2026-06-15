@@ -5,7 +5,7 @@
 <title>7. Queries | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -20,7 +20,7 @@
 <p>This chapter describes the read path. The full grammar and a clause-by-clause reference live on the <a href="/3.0/ref/select/">SELECT</a> command page. Here we focus on <em>behavior</em>. We show what each stage computes, in what order it runs, and where EvolutionDB differs from PostgreSQL or the SQL standard. Everything below matches the engine source. The main files are <code>evolution/db/Select.c</code>, <code>evolution/db/expression.c</code>, and the adaptor's join pipeline in <code>adaptor/join.c</code>.</p>
 
 <h2 id="overview">7.1. Overview &amp; Processing Order</h2>
-<p>A table query runs stage by stage. The stages run in this order:</p>
+<p>A table query runs stage by stage. These are the stages, in order.</p>
 <ol>
 <li><strong>FROM / join.</strong> The leftmost source is the driving relation. Each next source is joined onto the row so far. Rows are produced one at a time. See <a href="#joins">§7.3</a>.</li>
 <li><strong>WHERE.</strong> The boolean condition runs against each candidate row. Rows that do not come out true are dropped. See <a href="#where">§7.2</a>.</li>
@@ -33,11 +33,11 @@
 </ol>
 <p>Inside the core engine there are two physical shapes. A single-table query finds the table in the catalog. Then it does one of two things. It does a <strong>primary-key lookup</strong> when the <code>WHERE</code> is a single equality on the PK. Otherwise it does a <strong>sequential table scan</strong> through the buffer pool and decodes each binary tuple as it goes. A multi-table query goes to the <a href="#joins">join pipeline</a>. Both paths decode rows with <code>tup_extract_fields()</code> and stream them. The engine does not build a separate query-plan tree. It has no cost-based optimizer.</p>
 <div class="callout">
-<strong>Note.</strong> EvolutionDB runs expressions on the <em>text</em> form of each column value. This is the same form the wire protocol returns. Comparisons try a numeric reading first. If that fails, they fall back to byte-wise string comparison. There is no separate typed expression engine. This keeps the code small. It also means a few behaviors differ from a strictly typed planner. They are called out in each section below.</p>
+<strong>Note.</strong> EvolutionDB runs expressions on the <em>text</em> form of each column value. This is the same form the wire protocol returns. Comparisons try a numeric reading first. If that fails, they fall back to byte-wise string comparison. There is no separate typed expression engine. This keeps the code small. It also means a few behaviors differ from a strictly typed planner. They are called out in each section below.
 </div>
 
 <h2 id="projections">7.1.1. Projections (the select list)</h2>
-<p>Each select-list item is an expression node. Its type is <code>ExprNode</code>, and the parser builds it. These forms are supported:</p>
+<p>Each select-list item is an expression node. Its type is <code>ExprNode</code>. The parser builds it. The following forms are supported.</p>
 <ul>
 <li><code>*</code> projects every column of the source.</li>
 <li>Plain column references. These are <code>col</code> or qualified <code>alias.col</code>. Qualified names resolve by exact match first. If that fails, the engine drops the qualifier and matches the bare column name. See <code>expr_evaluate</code>, case <code>EXPR_COLUMN</code>.</li>
@@ -83,9 +83,9 @@
   <span class="c-key">AND</span> note <span class="c-key">LIKE</span> <span class="c-str">'%urgent%'</span>;</code></pre>
 
 <h3 id="where-pushdown">PK lookup &amp; push-down</h3>
-<p>For a single table, the engine looks for a <code>WHERE</code> that is a lone equality on the primary-key column. A simple comparison on the PK also counts. <code>expr_is_simple_pk_range()</code> detects this case. It is served by a direct B+ tree lookup with <code>bt2_search</code> instead of a full scan. The join pipeline uses the same idea for <em>first-table push-down</em>. An <code>alias.col = literal</code> term that targets the driving table is pulled out by <code>extract_eq_for_alias</code>. It is used as a PK lookup or as an early per-row column filter. This runs before the rest of the <code>WHERE</code> tree is applied to the full merged row.</p>
+<p>For a single table, the engine looks for a <code>WHERE</code> that is a lone equality on the primary-key column. A simple comparison on the PK also counts. <code>expr_is_simple_pk_range()</code> detects this case. It is served by a direct B+ tree lookup with <code>bt2_search</code> instead of a full scan. The join pipeline uses the same idea for first-table push-down. An <code>alias.col = literal</code> term that targets the driving table is pulled out by <code>extract_eq_for_alias</code>. It is used as a PK lookup or as an early per-row column filter. This runs before the rest of the <code>WHERE</code> tree is applied to the full merged row.</p>
 <div class="callout">
-<strong>Note.</strong> The choice between numeric and string comparison is made per value at run time. It does not depend on the declared column type. Two operands that both look numeric are compared as numbers, even if the column is text. Mixed cases fall back to <code>strcmp</code>. There is no implicit collation beyond byte order. String comparison is case-sensitive. Column-name <em>resolution</em>, on the other hand, is case-insensitive.
+<strong>Note.</strong> The choice between numeric and string comparison is made per value at run time. It does not depend on the declared column type. Two operands that both look numeric are compared as numbers, even if the column is text. Mixed cases fall back to <code>strcmp</code>. There is no implicit collation beyond byte order. String comparison is case-sensitive. Column-name resolution, on the other hand, is case-insensitive.
 </div>
 
 <h2 id="joins">7.3. Joins</h2>
@@ -107,7 +107,7 @@
 </table>
 
 <h3 id="join-exec">How a join row is produced</h3>
-<p>Before the pipeline starts, the engine reads each <code>ON</code> condition with <code>extract_eq_columns()</code>. It finds the equality <code>left.col = right.col</code>. It maps this to two keys. The <em>left key</em> is a column index in the row built so far. The <em>right key</em> is a column in the table being joined. Then, for each table after the first, one of these happens:</p>
+<p>Before the pipeline starts, the engine reads each <code>ON</code> condition with <code>extract_eq_columns()</code>. It finds the equality <code>left.col = right.col</code>. It maps this to two keys. The <em>left key</em> is a column index in the row built so far. The <em>right key</em> is a column in the table being joined. For each table after the first, one of the following happens.</p>
 <ul>
 <li>If the right key is the joined table's <strong>primary key</strong>, the match is found with an O(log n) B+ tree lookup. The function is <code>bt2_search</code>.</li>
 <li>If not, the joined table is <strong>scanned</strong>. Rows are kept where the right-key column equals the left key value. This is a nested-loop scan.</li>
@@ -126,7 +126,7 @@
 </div>
 
 <h2 id="subqueries">7.4. Subqueries</h2>
-<p>Subqueries are stored as raw SQL text on the expression node. The field is <code>subquery_sql</code>. They are run through a callback <code>g_qctx-&gt;subquery_fn</code>. The callback runs the inner statement and returns its values. <code>expr_evaluate</code> handles these forms:</p>
+<p>Subqueries are stored as raw SQL text on the expression node. The field is <code>subquery_sql</code>. They are run through a callback <code>g_qctx-&gt;subquery_fn</code>. The callback runs the inner statement and returns its values. <code>expr_evaluate</code> handles the following forms.</p>
 <dl class="params">
 <dt>Scalar subquery, <code>(SELECT ...)</code></dt>
 <dd>Run and reduced to a single value. You can use it anywhere a scalar expression is allowed.</dd>
@@ -172,8 +172,8 @@
 <p><code>SELECT DISTINCT</code> removes duplicate result rows after projection. <code>DISTINCTROW</code> works as a synonym. Duplicate removal compares the rendered output rows.</p>
 
 <h3 id="order">ORDER BY</h3>
-<p>Rows are sorted with <code>qsort</code> over the result set. Each sort key may be a column name, a qualified <code>table.column</code>, or a 1-based column position like <code>ORDER BY 2</code>. Each key may end with <code>ASC</code>, which is the default, or <code>DESC</code>. The comparison is <strong>adaptive</strong>. When both values parse fully and cleanly as numbers, the order is numeric. Otherwise it is by string. See <code>CompareRecords</code> in <code>Select.c</code>. <code>DESC</code> just flips the comparison result.</p>
-<p>There is a special form, <code>ORDER BY <i>vector_col</i> &lt;=&gt; '<i>literal</i>'</code>. It ranks rows by cosine distance for nearest-neighbor search. The executor can take an approximate-nearest-neighbor fast path. This needs a ready HNSW index on the column and a <code>LIMIT</code> on the query. It also needs no disqualifying clause. Such clauses are <code>DISTINCT</code>, <code>OFFSET</code>, a join, or extra sort keys. If the fast path does not apply, the engine brute-force sorts by distance.</p>
+<p>Rows are sorted with <code>qsort</code> over the result set. Each sort key may be a column name, a qualified <code>table.column</code>, or a 1-based column position like <code>ORDER BY 2</code>. Each key may end with <code>ASC</code> (the default) or <code>DESC</code>. The comparison is <strong>adaptive</strong>. When both values parse fully and cleanly as numbers, the order is numeric. Otherwise it is by string. See <code>CompareRecords</code> in <code>Select.c</code>. <code>DESC</code> just flips the comparison result.</p>
+<p>There is a special form, <code>ORDER BY <i>vector_col</i> &lt;=&gt; '<i>literal</i>'</code>. It ranks rows by cosine distance for nearest-neighbor search. The executor can take an approximate-nearest-neighbor fast path. This needs a ready HNSW index on the column and a <code>LIMIT</code> on the query. It also needs no disqualifying clause. Disqualifying clauses are <code>DISTINCT</code>, <code>OFFSET</code>, a join, or extra sort keys. If the fast path does not apply, the engine brute-force sorts by distance.</p>
 <pre><code><span class="c-key">SELECT</span> id <span class="c-key">FROM</span> documents
 <span class="c-key">ORDER BY</span> embedding <span class="c-key">&lt;=&gt;</span> <span class="c-str">'[0.12, 0.84, 0.05]'</span>
 <span class="c-key">LIMIT</span> <span class="c-str">5</span>;</code></pre>

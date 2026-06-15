@@ -5,7 +5,7 @@
 <title>CREATE POLICY | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -80,13 +80,13 @@
 </div>
 
 <h2 id="examples">Examples</h2>
-<p>Limit a table so each tenant sees only its own rows. Then turn on enforcement:</p>
+<p>This example limits a table so each tenant sees only its own rows. It then turns on enforcement.</p>
 <pre><code><span class="c-key">CREATE POLICY</span> tenant_isolation <span class="c-key">ON</span> orders
     <span class="c-key">USING</span> (tenant_id = current_tenant);
 
 <span class="c-key">ALTER TABLE</span> orders <span class="c-key">ENABLE ROW LEVEL SECURITY</span>;</code></pre>
 
-<p>A read-only policy for one role. It also has a write check that stops back-dated inserts:</p>
+<p>This example creates a read-only policy for one role. It also adds a write check that stops back-dated inserts.</p>
 <pre><code><span class="c-key">CREATE POLICY</span> analyst_read <span class="c-key">ON</span> events
     <span class="c-key">FOR</span> <span class="c-key">SELECT</span>
     <span class="c-key">TO</span> analyst, auditor
@@ -96,23 +96,23 @@
     <span class="c-key">FOR</span> <span class="c-key">INSERT</span>
     <span class="c-key">WITH CHECK</span> (created_at &gt;= <span class="c-str">'2026-01-01'</span>);</code></pre>
 
-<p>A restrictive policy added on top of permissive ones. A row must pass both. This one applies to everyone through <code>public</code>:</p>
+<p>This example adds a restrictive policy on top of permissive ones. A row must pass both. It applies to everyone through <code>public</code>.</p>
 <pre><code><span class="c-key">CREATE POLICY</span> hide_archived <span class="c-key">ON</span> documents
     <span class="c-key">AS</span> <span class="c-key">RESTRICTIVE</span>
     <span class="c-key">TO</span> public
     <span class="c-key">USING</span> (archived = <span class="c-key">false</span>);</code></pre>
 
-<p>Protect a memory store. The policy is created on its backing table:</p>
+<p>This example protects a memory store. The policy is created on its backing table.</p>
 <pre><code><span class="c-key">CREATE POLICY</span> session_scope <span class="c-key">ON MEMORY STORE</span> sessions
     <span class="c-key">USING</span> (mem_namespace = owner_namespace);
 
 <span class="c-key">ALTER MEMORY STORE</span> sessions <span class="c-key">ENABLE ROW LEVEL SECURITY</span>;</code></pre>
 
-<p>Remove a policy:</p>
+<p>This example removes a policy.</p>
 <pre><code><span class="c-key">DROP POLICY</span> tenant_isolation <span class="c-key">ON</span> orders;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE POLICY</code> is not part of the SQL standard. It follows PostgreSQL's row-level security extension. EvolutionDB supports a useful subset:</p>
+<p><code>CREATE POLICY</code> is not part of the SQL standard. It follows PostgreSQL's row-level security extension. EvolutionDB supports a useful subset of that extension.</p>
 <ul>
 <li><strong>Supported.</strong> <code>AS PERMISSIVE</code> and <code>RESTRICTIVE</code> with permissive as the default. <code>FOR ALL</code>, <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> with all as the default. <code>TO</code> role lists with the <code>public</code> pseudo-role. <code>USING</code>. <code>WITH CHECK</code>. As in PostgreSQL, a missing <code>WITH CHECK</code> falls back to <code>USING</code>. Permissive policies join with <code>OR</code>. Restrictive policies join with <code>AND</code> on top.</li>
 <li><strong>Differences.</strong> <code>FOR</code> accepts only a single command keyword. There is no <code>ALTER POLICY</code> command. To change a policy, drop it and create it again. The <code>ON MEMORY STORE</code> form is an EvolutionDB extension. PostgreSQL has no equivalent. Role matching is case-insensitive against the connected username. The built-in <code>admin</code> account is always a superuser. It bypasses all policies.</li>

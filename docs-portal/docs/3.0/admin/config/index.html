@@ -5,7 +5,7 @@
 <title>23. Server Configuration | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -17,7 +17,7 @@
 <h1>23. Server Configuration</h1>
 <p class="lede">This page shows how to start and tune <code>evosql-server</code>. It covers the listener ports it opens. It covers the command-line flags and environment variables it reads at boot. It also covers the limits on how many clients it will serve at once.</p>
 
-<p>EvolutionDB has one server executable, <code>evosql-server</code>. It is built from <code>adaptor/</code>. It is a <strong>dual-protocol</strong> server. One process starts two TCP listeners. One is the PostgreSQL wire protocol. The other is the native EVO text protocol. Both share one SQL engine and one data file, <code>evosql.db</code>. You set all configuration when the process starts. You use command-line flags and environment variables. PostgreSQL uses a <code>postgresql.conf</code> file and a <code>SET</code>-able GUC reload, but EvolutionDB has <em>neither</em>. The settings on this page are read once in <code>main()</code>. They apply for the whole life of the process.</p>
+<p>EvolutionDB has one server executable, <code>evosql-server</code>. It is built from <code>adaptor/</code>. It is a <strong>dual-protocol</strong> server. One process starts two TCP listeners. One is the PostgreSQL wire protocol. The other is the native EVO text protocol. Both share one SQL engine and one data file, <code>evosql.db</code>. You set all configuration when the process starts. You use command-line flags and environment variables. PostgreSQL uses a <code>postgresql.conf</code> file and a reloadable GUC. EvolutionDB has neither. The settings on this page are read once in <code>main()</code>. They apply for the whole life of the process.</p>
 
 <div class="callout">
 <p><strong>Precedence.</strong> Some settings have both a flag and an environment variable. The server uses one rule for all of them. <strong>It reads environment variables first to set defaults. Then command-line flags override them.</strong> The flag always wins.</p>
@@ -96,7 +96,7 @@ evosql-server <span class="c-key">--pg-port</span> 5443 <span class="c-key">--ev
 
 <h2 id="connection-limits">23.3. Connection Limits and the Worker Pool</h2>
 
-<p>EvolutionDB sets a hard limit on the number of client connections at one time. The accept loop in <code>server_listen()</code> checks the live count under a mutex before it handles each connection. The new socket is <strong>closed right away</strong> when the limit is already reached. The server also logs a rejection line.</p>
+<p>EvolutionDB sets a hard limit on the number of client connections at one time. The accept loop in <code>server_listen()</code> checks the live count under a mutex before it handles each connection. When the limit is already reached, the new socket is <strong>closed right away</strong>. The server also logs a rejection line.</p>
 
 <pre><code>[PG] Connection rejected: limit 100 reached</code></pre>
 
@@ -153,7 +153,7 @@ evosql-server <span class="c-key">--buffer-pool-size</span> 65536   <span class=
 <dt><code>EVOSQL_USER_NAME</code></dt>
 <dd>The name of the bootstrap superuser. The default is <strong><code>admin</code></strong>.</dd>
 <dt><code>EVOSQL_PASSWORD</code></dt>
-<dd>The password for the bootstrap superuser. The server <strong>creates a random 16-character password and prints it once</strong> at startup when this is unset or empty. Save it from the logs. The server does not store it in plaintext and does not show it again. The stored credential uses PBKDF2-SHA256. See <a href="/3.0/ref/create-user/">CREATE USER</a> and <a href="/3.0/admin/security/">Security</a>.</dd>
+<dd>The password for the bootstrap superuser. When this is unset or empty, the server <strong>creates a random 16-character password and prints it once</strong> at startup. Save it from the logs. The server does not store it in plaintext and does not show it again. The stored credential uses PBKDF2-SHA256. See <a href="/3.0/ref/create-user/">CREATE USER</a> and <a href="/3.0/admin/security/">Security</a>.</dd>
 </dl>
 
 <pre><code><span class="c-com"># Deterministic credentials for local development</span>

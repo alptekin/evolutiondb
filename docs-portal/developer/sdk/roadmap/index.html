@@ -5,7 +5,7 @@
 <title>SDKs | language roadmap | EvolutionDB</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -19,7 +19,7 @@
  <span class="text-neon-cyan" style="font-family:JetBrains Mono;font-size:11px;letter-spacing:.15em">SDK · LANGUAGE FAMILY</span>
  </div>
  <h1>SDKs, language roadmap</h1>
- <p class="lede">EvolutionDB ships a family of agent-memory clients under <code>client/*-evosql-memory</code>. One C library, <code>libevosql-memory</code>, does the wire work. Every other language is a thin binding over it through C FFI. This page gives the <strong>honest status of the family</strong>. It shows what is built and tested. It shows what is built but not yet tested in the repo. It shows what each binding still depends on. When a binding has no test suite, it says so. It never says "works".</p>
+ <p class="lede">EvolutionDB ships a family of agent-memory clients under <code>client/*-evosql-memory</code>. One C library, <code>libevosql-memory</code>, handles all wire work. Every other language is a thin binding over it through C FFI. This page gives the <strong>honest status of the family</strong>. It shows what is built and tested. It shows what is built but not yet tested in the repo. It shows what each binding still depends on. When a binding has no test suite, this page says so. It never claims something works when it is not tested.</p>
 
  <h2 id="shape">The shape of the family</h2>
  <p>Every binding talks to <code>evosql-server</code> through one shared base. The heavy work lives in the C library. This includes TCP, the EVO handshake, AUTH, <code>RESULT</code>/<code>ROW</code> parsing, <code>NOTIFY</code> framing, CDC NDJSON, and vector formatting. The language layers add idiomatic features on top. These are things like generics, exceptions, <code>IDisposable</code>, and finalizers. The language layers do not rewrite the protocol.</p>
@@ -35,15 +35,15 @@
       <span class="c-key">Python  Node  Go  C++  .NET  Java  Ruby  Rust  Swift</span></code></pre>
  <p>The C contract is small and stable. It has about 16 public functions in <code>include/evosql_memory.h</code>. These cover connect/close, <code>exec</code>/<code>query</code>, the memory and checkpoint verbs, vector formatting, the subscribe/CDC pair, and the two last-error accessors. Every binding mirrors that same surface.</p>
 
- <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>Read this page, not the directory listing. Each binding directory holds real source files of meaningful size. So "is there code?" is the wrong question. All nine have code. The real difference is <strong>maturity</strong>. Some bindings ship their own tests. Some ship only a smoke example. Each one has its own things it needs to run at all. The sections below cover all of this.</div></div>
+ <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>Read this page, not the directory listing. Each binding directory holds real source files of meaningful size. So "is there code?" is the wrong question. All nine have code. The real difference is <strong>maturity</strong>. Some bindings ship their own tests. Some ship only a smoke example. Each one has its own requirements to run at all. The sections below cover all of this.</div></div>
 
  <h2 id="contract">The shared contract (read this first)</h2>
- <p>No binding stands alone. Each one finds the C artifact at build or load time. This is <code>libevosql-memory.{so,dylib,dll}</code> or the static <code>.a</code>. Each one then takes the C error path and turns it into a language-native exception. The C error path uses <code>evo_strerror</code> and <code>evo_sqlstate</code>. Here are the C error codes every binding maps from.</p>
+ <p>No binding stands alone. Each one finds the C artifact at build or load time. The artifact is <code>libevosql-memory.{so,dylib,dll}</code> or the static <code>.a</code>. Each binding then takes the C error path and turns it into a language-native exception. The C error path uses <code>evo_strerror</code> and <code>evo_sqlstate</code>. The table below shows the C error codes that every binding maps from.</p>
  <div class="sig">EVO_OK = 0 · EVO_ERR_CONNECT = -2 · EVO_ERR_AUTH = -3 · EVO_ERR_PROTOCOL = -4 · EVO_ERR_SQL = -5 · EVO_ERR_BUFFER = -6 · EVO_ERR_NOT_FOUND = -7</div>
  <p>Build the C SDK once. Every other binding then uses the artifact in <code>client/libevosql-memory/build/</code>.</p>
  <pre><code><span class="c-com"># produces libevosql-memory.{dylib,so,a} + a pkg-config file</span>
 make -C client/libevosql-memory</code></pre>
- <p>This is the most important fact about the bindings that are not C and not pure Python. The artifact must exist first. You can also point them at a pre-built release binary through an env override. Until then, they have nothing to link against.</p>
+ <p>This is the most important fact about bindings that are not C and not pure Python. The artifact must exist first. You can also point them at a pre-built release binary through an env override. Until then, they have nothing to link against.</p>
 
  <h2 id="tiers">Maturity tiers</h2>
  <p>Bindings fall into three tiers. The tier shows how much of the binding itself is tested in the repo. This is separate from the C library. The C library works. It has its own tests and compiled artifacts.</p>
@@ -68,7 +68,7 @@ make -C client/libevosql-memory</code></pre>
  </table>
  <p>Python is the widest surface in the family. It uses <code>ctypes</code> auto-discovery to find the C library. It ships adapters for six agent frameworks.</p>
  <div class="sig">LangGraph · LangChain · LlamaIndex · CrewAI · AutoGen · Mem0 (compat)</div>
- <p>These files are present. There is <code>evosql_memory/core.py</code>. There are the six adapter modules under <code>evosql_memory/adapters/</code>. There is an example agent and a test module. Of all the language bindings, Python is the one with tests in the repo.</p>
+ <p>These files are present. There is <code>evosql_memory/core.py</code>. There are six adapter modules under <code>evosql_memory/adapters/</code>. There is an example agent and a test module. Of all the language bindings, Python is the one with tests in the repo.</p>
  <div class="callout callout-note"><span class="material-symbols-outlined">info</span><div>Here "test-covered" means a test file exists in the binding's own tree. Like every test in this project, these are runtime tests. They need a reachable <code>evosql-server</code>. They do not replace checking that your own deployment connects.</div></div>
 
  <h3 id="tier-2">Tier 2: Implemented bindings, smoke example only</h3>
@@ -83,7 +83,7 @@ make -C client/libevosql-memory</code></pre>
  <p>Both wrap the same ~16-function contract in an idiomatic way. Go uses an <code>EvoSQL</code> struct. Node uses a module with the FFI surface in <code>lib/index.js</code>. Treat them as implemented bindings. Confirm them against your own server before you rely on them in production. There is no assertion suite in the repo that proves every verb.</p>
 
  <h3 id="tier-3">Tier 3: Implemented bindings, no tests, binary-dependent</h3>
- <p>Six bindings exist as complete, idiomatic wrappers. They have full FFI, P-Invoke, JNA, or system-module surfaces with native error types. But each one ships <strong>only source plus a smoke example, no test suite</strong>. Each one also needs the C artifact to be built first. You can also point it at a pre-built release binary. They are real code. They are not checked on their own in the repo. Do not assume any of these is production-proven from this repo alone.</p>
+ <p>Six bindings exist as complete, idiomatic wrappers. They have full FFI, P-Invoke, JNA, or system-module surfaces with native error types. But each one ships <strong>only source plus a smoke example, no test suite</strong>. Each one also needs the C artifact to be built first. You can also point it at a pre-built release binary. They are real code. But they are not checked on their own in the repo. Do not assume any of these is production-proven from this repo alone.</p>
  <table>
  <thead><tr><th>binding</th><th>version</th><th>runtime / mechanism</th><th>requires</th></tr></thead>
  <tbody>
@@ -95,12 +95,12 @@ make -C client/libevosql-memory</code></pre>
  <tr><td><strong>Swift</strong>, <code>EvoSQLMemory</code></td><td>, </td><td>swift-tools 5.7; system-module C interop</td><td><code>-Xlinker -L../libevosql-memory/build</code></td></tr>
  </tbody>
  </table>
- <p>Each of these mirrors the same put/get/checkpoint/subscribe contract. Each one maps <code>evo_strerror</code> and <code>evo_sqlstate</code> to a native error. C++ uses <code>evosql::Error</code> and <code>NotFound</code>. .NET uses <code>EvoException</code> and <code>EvoNotFoundException</code>. Java uses <code>NotFoundException</code>. Ruby uses <code>NotFound</code>. Rust uses an <code>Error</code> enum. Swift uses <code>EvoError</code> and <code>EvoNotFound</code>. The wrappers are written and idiomatic. Two things are missing. There is no test coverage in the repo. And the C artifact they bind against is not there until you build it.</p>
+ <p>Each of these mirrors the same put/get/checkpoint/subscribe contract. Each one maps <code>evo_strerror</code> and <code>evo_sqlstate</code> to a native error. C++ uses <code>evosql::Error</code> and <code>NotFound</code>. .NET uses <code>EvoException</code> and <code>EvoNotFoundException</code>. Java uses <code>NotFoundException</code>. Ruby uses <code>NotFound</code>. Rust uses an <code>Error</code> enum. Swift uses <code>EvoError</code> and <code>EvoNotFound</code>. The wrappers are written and idiomatic. Two things are missing. There is no test coverage in the repo. And the C artifact they bind against is not present until you build it.</p>
 
  <div class="callout callout-warn"><span class="material-symbols-outlined">warning</span><div>This page will not tell you that any Tier-3 binding is "shipped and working." The source is present. The smoke example compiles against a built C library. But there is no test suite in these directories to back a stronger claim. So no stronger claim is made here. Build the C SDK. Run the binding's <code>put_get</code> example against your own server. Verify it before you depend on it.</div></div>
 
  <h2 id="building-out">What "completing" a binding means</h2>
- <p>You move a Tier-2 or Tier-3 binding toward first-class with the same five steps every existing binding followed.</p>
+ <p>You move a Tier-2 or Tier-3 binding toward first-class by following the same five steps that every existing binding followed.</p>
  <ol>
  <li>Find the <code>libevosql-memory</code> artifact by env override or relative path to <code>../libevosql-memory/build/</code>.</li>
  <li>Bind the ~16-function public API from <code>include/evosql_memory.h</code>.</li>
@@ -108,7 +108,7 @@ make -C client/libevosql-memory</code></pre>
  <li>Surface <code>evo_strerror()</code> and <code>evo_sqlstate()</code> as native exceptions.</li>
  <li>Ship a smoke example that drops, creates, writes, and reads a memory store.</li>
  </ol>
- <p>The honest gap for the Tier-2 and Tier-3 set is the step after (5). That step is a test suite in the repo that asserts each verb. The C library and Python binding already do this. Until that lands for a given binding, this page labels it by what is really there, not by hope.</p>
+ <p>The honest gap for the Tier-2 and Tier-3 set is the step after step 5. That step is a test suite in the repo that asserts each verb. The C library and Python binding already do this. Until that lands for a given binding, this page labels it by what is really there, not by hope.</p>
 
  <h2 id="pick">Picking a binding today</h2>
  <ul>

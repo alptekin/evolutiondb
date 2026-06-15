@@ -5,7 +5,7 @@
 <title>11. Transactions &amp; MVCC | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -30,13 +30,13 @@ links to the
 <p>Every statement in EvolutionDB runs inside a transaction. If you have not opened an
 explicit block, each statement runs in its own auto-committed transaction. The change is
 applied and made durable as soon as the statement succeeds. Opening a block with
-<code>BEGIN</code> holds back that commit until you say so. This way a group of changes
-either all take effect together or none of them do.</p>
+<code>BEGIN</code> holds back that commit until you say so. A group of changes either all
+take effect together or none of them do.</p>
 
 <p>Concurrency control uses two separate parts.</p>
 <dl class="params">
 <dt>Undo log (rollback)</dt>
-<dd>This is a stack of <em>undo entries</em>. Each connection has its own. Every
+<dd>The undo log is a stack of <em>undo entries</em>. Each connection has its own. Every
 <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> inside an open block
 pushes an entry. The entry records how to reverse the change. <code>COMMIT</code> throws
 the log away. <code>ROLLBACK</code> replays it in reverse. This gives atomicity per
@@ -45,7 +45,7 @@ connection.</dd>
 <dd>Each transaction gets a 32-bit transaction id (XID). Row versions carry the XID
 that created them (<code>xmin</code>) and the XID that deleted them (<code>xmax</code>).
 A transaction reads through a <em>snapshot</em>. The snapshot decides which versions are
-visible. So reads never block writes and writes never block reads.</dd>
+visible. Reads never block writes and writes never block reads.</dd>
 </dl>
 
 <p>The two layers work together. An <code>UPDATE</code> or <code>DELETE</code> does not
@@ -98,7 +98,7 @@ statement takes its own snapshot.</p>
 
 <div class="callout">
 <strong>Note.</strong> The isolation level is <em>not</em> read from words typed after
-<code>BEGIN</code>. The verb is matched by its prefix. So any extra text is accepted but
+<code>BEGIN</code>. The verb is matched by its prefix. Any extra text is accepted but
 ignored. For example, <code>BEGIN ISOLATION LEVEL SERIALIZABLE</code> ignores the extra
 words. Use <a href="/3.0/ref/set/">SET TRANSACTION ISOLATION LEVEL</a> first instead. If you
 run <code>BEGIN</code> while already inside a block, the server logs a warning and does
@@ -115,7 +115,7 @@ visible to other connections that take their snapshots after the commit.</p>
 <h3 id="rollback">11.2.3. ROLLBACK</h3>
 <p><code>ROLLBACK</code> drops the block. The undo log is replayed in reverse. This restores
 every inserted, updated, or deleted row. The XID is marked aborted in the CLOG. And its
-locks are released. Deletes and updates are soft. So rollback usually just clears the
+locks are released. Deletes and updates are soft. Rollback usually just clears the
 <code>xmax</code> marker on the affected tuples. It does not rewrite any data.</p>
 
 <table>
@@ -150,8 +150,8 @@ Names are matched without case. Up to 64 savepoints may be active at once.</dd>
 <dt><code>ROLLBACK TO</code> <span class="opt">[SAVEPOINT]</span> name</dt>
 <dd>Replays undo entries down to the recorded depth. This undoes all work done after the
 savepoint. Then it destroys any savepoints made after it. The savepoint itself stays and
-you can roll back to it again. This also clears the aborted state. So you can keep going
-after a statement error, as long as you set a savepoint before it.</dd>
+you can roll back to it again. This also clears the aborted state. You can keep going
+after a statement error as long as you set a savepoint before it.</dd>
 <dt><code>RELEASE</code> <span class="opt">[SAVEPOINT]</span> name</dt>
 <dd>Forgets <em>name</em> and all newer savepoints. It does not undo any work. The data
 changes stay part of the still-open transaction.</dd>
@@ -169,7 +169,7 @@ changes stay part of the still-open transaction.</dd>
 <strong>Note.</strong> In EvolutionDB a savepoint is a position in the undo log of one
 connection. It rolls back data changes made since the savepoint. It does not take a
 separate MVCC sub-snapshot. The visibility snapshot in use stays the transaction's snapshot
-or the statement's snapshot. It is not the savepoint's. If you run <code>SAVEPOINT</code>,
+or the statement's snapshot. It is not tied to the savepoint. If you run <code>SAVEPOINT</code>,
 <code>ROLLBACK TO</code>, or <code>RELEASE</code> outside a transaction, the server raises
 <code>SQLSTATE 25P01</code>. If you name a savepoint that does not exist, it raises
 <code>SQLSTATE 3B001</code> (<em>savepoint does not exist</em>).
@@ -203,28 +203,28 @@ level after a transaction has already run a query, the server raises
 <p>Here is an honest comparison with the SQL standard and PostgreSQL.</p>
 <ul>
 <li><strong>READ UNCOMMITTED.</strong> The standard allows dirty reads at this level.
-EvolutionDB does not do dirty reads. Uncommitted versions are never made visible. So this
+EvolutionDB does not do dirty reads. Uncommitted versions are never made visible. This
 level acts exactly like <code>READ COMMITTED</code>. This matches PostgreSQL. PostgreSQL
 also turns <code>READ UNCOMMITTED</code> into <code>READ COMMITTED</code>.</li>
 <li><strong>READ COMMITTED.</strong> Each statement sees a snapshot taken when it starts.
-So two statements in the same transaction can see different committed data. Non-repeatable
+Two statements in the same transaction can see different committed data. Non-repeatable
 reads and phantoms are possible. This is the standard meaning of the level.</li>
-<li><strong>REPEATABLE READ.</strong> The whole transaction reads through one snapshot. So
-rows it has already read do not change under it. EvolutionDB does not do
-first-updater-wins abort detection at this level. So it does not give the stricter
+<li><strong>REPEATABLE READ.</strong> The whole transaction reads through one snapshot.
+Rows it has already read do not change under it. EvolutionDB does not do
+first-updater-wins abort detection at this level. It does not give the stricter
 "snapshot isolation" anomaly set that PostgreSQL's REPEATABLE READ gives.</li>
 <li><strong>SERIALIZABLE.</strong> This adds a conflict guard. The guard tracks read and
-write dependencies. It rejects a commit that forms a dangerous shape, which is write skew.
+write dependencies. It rejects a commit that forms a dangerous shape known as write skew.
 It also adds gap locks to block phantom inserts into a scanned range. To keep a single
 serial order across the whole system, it takes a process-wide mutex for the life of the
-transaction. So DML from other connections waits until this transaction commits or rolls
+transaction. DML from other connections waits until this transaction commits or rolls
 back. A failed serialization check aborts the commit with <code>SQLSTATE 40001</code>
 (<em>could not serialize access due to read/write dependencies among transactions</em>).</li>
 </ul>
 
 <div class="callout">
 <strong>Note.</strong> <code>SERIALIZABLE</code> holds a global DML mutex for the whole life
-of the transaction. So it serializes writes across all connections. It does not allow the
+of the transaction. It serializes writes across all connections. It does not allow the
 optimistic concurrency that PostgreSQL's SSI allows. Use it as a correctness tool for
 critical sections. Do not use it as a high-throughput level. The conflict guard tracks a
 limited number of read interests and predicate locks per transaction. It catches common
@@ -233,7 +233,7 @@ write-skew patterns. But it is not a full dependency-graph analysis.
 
 <h2 id="snapshots">11.5. Snapshots &amp; visibility</h2>
 <p>A snapshot is a view of transaction activity at one moment in time. It records the
-following.</p>
+following fields.</p>
 <dl class="params">
 <dt><code>xmin</code></dt><dd>The lowest XID still active when the snapshot was taken. Every XID below this is finished.</dd>
 <dt><code>xmax</code></dt><dd>One past the highest XID assigned so far. Every XID at or above this is "in the future" and invisible.</dd>
@@ -250,7 +250,7 @@ visible to a snapshot. It works roughly like this.</p>
 <code>xmin</code> is the reserved value <code>1</code>. It is treated as committed long ago
 and is always visible.</li>
 <li>If <code>xmin</code> is the snapshot's own XID, the tuple is the reader's own insert.
-It is visible, unless the same transaction also deleted it.</li>
+It is visible unless the same transaction also deleted it.</li>
 <li>In other cases <code>xmin</code> must be <em>committed</em> in the CLOG, <em>below</em>
 <code>xmax</code>, and <em>not</em> in the active list. Only then is the creating
 transaction's work visible.</li>
@@ -279,7 +279,7 @@ SQL:2011-style clause on <a href="/3.0/ref/select/">SELECT</a>.</p>
 
 <div class="callout">
 <strong>Note.</strong> The historical view does not track concurrency. It has no active
-list. So it shows a clean image with only committed data at the chosen XID. How far back
+list. It shows a clean image with only committed data at the chosen XID. How far back
 you can go is limited by retention. The CSN cache and commit-timestamp cache use a ring
 buffer. If a snapshot's XID has dropped out of the kept window, the server rejects it. It
 does not return a misleading result.
@@ -329,9 +329,9 @@ timeout. The search has a fixed depth limit.</p>
 
 <div class="callout">
 <strong>Note.</strong> Shared locks use a single holder slot per row. The last writer wins
-for the recorded holder. So <code>FOR SHARE</code> is treated as compatible, but it is not
+for the recorded holder. <code>FOR SHARE</code> is treated as compatible, but it is not
 fully multi-holder. <code>SKIP LOCKED</code> is accepted on <code>FOR UPDATE</code> and
-<code>FOR SHARE</code> for syntax compatibility. Row locks are keyed by primary key. So a
+<code>FOR SHARE</code> for syntax compatibility. Row locks are keyed by primary key. A
 table without a usable primary key cannot take a row lock. In that case the request does
 nothing.
 </div>
@@ -339,16 +339,16 @@ nothing.
 <h3 id="gaplocks">11.6.2. Gap locks (phantom prevention)</h3>
 <p>Gap locks stop phantom inserts in <code>SERIALIZABLE</code> transactions. A range scan can
 take a <em>gap lock</em>. The lock covers a key interval <code>(lo, hi]</code> on a table.
-An empty bound means &minus;&infin; or +&infin;. Suppose another transaction tries to
-<code>INSERT</code> a key that falls inside an active gap lock held by a different XID. Then
-the insert waits. It uses the same timeout as row locks. It waits until the gap lock is
+An empty bound means &minus;&infin; or +&infin;. If another transaction tries to
+<code>INSERT</code> a key that falls inside an active gap lock held by a different XID, the
+insert waits. It uses the same timeout as row locks. It waits until the gap lock is
 released at the holder's commit or rollback. Gap locks do not conflict with each other. They
 conflict only with inserts. They are taken on their own during <code>SERIALIZABLE</code>
 range scans. There is no explicit statement for them.</p>
 
 <h2 id="lifecycle">11.7. XID lifecycle &amp; reserved ids</h2>
 <p>Transaction ids are 32-bit values. A counter that only goes up hands them out. The counter
-is kept in the database file header. So the ids survive a restart. A few values are
+is kept in the database file header. The ids survive a restart. A few values are
 reserved.</p>
 
 <dl class="params">
@@ -361,12 +361,12 @@ reserved.</p>
 <code>01</code> means committed. <code>10</code> means aborted. The bits are packed into 4
 KB pages. Each page covers 16,320 ids and is chained for overflow. At startup the server
 records the first XID it assigns. Any XID below that value still marked in-progress belongs
-to a session that crashed. It is treated as aborted. So its half-written rows never become
+to a session that crashed. It is treated as aborted. Its half-written rows never become
 visible.</p>
 
 <div class="callout">
 <strong>Note.</strong> For auto-commit DML, XID assignment is lazy. A transaction id is not
-given out until the first write. So read-only statements do not use up ids. The active
+given out until the first write. Read-only statements do not use up ids. The active
 transaction array holds up to 256 entries. This sets the limit on how many transactions
 running at once a snapshot can track exactly.
 </div>

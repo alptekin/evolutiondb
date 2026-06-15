@@ -5,7 +5,7 @@
 <title>2. The SQL Language | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,9 +15,9 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>2. The SQL Language</h1>
-<p class="lede">This is a hands-on tour of the SQL that EvolutionDB really speaks. You will create tables, insert rows, and read them back. You will filter rows with <code>WHERE</code> and order results with <code>ORDER BY</code>. Everything here is based on what the engine does, not on what the SQL standard allows.</p>
+<p class="lede">A hands-on tour of the SQL that EvolutionDB speaks. You will create tables, insert rows, and read them back. You will filter rows with <code>WHERE</code> and order results with <code>ORDER BY</code>. Every example here is based on what the engine actually does, not on what the SQL standard allows.</p>
 
-<p>This chapter assumes you have a running server. The PostgreSQL wire protocol runs on port <code>5433</code>. The native EVO protocol runs on port <code>9967</code>. It also assumes you have a session connected to a database. Every example below uses only features the EvolutionDB engine truly runs. When EvolutionDB works differently from PostgreSQL or the SQL standard, we point out the difference clearly.</p>
+<p>This chapter assumes you have a running server. The PostgreSQL wire protocol runs on port <code>5433</code>. The native EVO protocol runs on port <code>9967</code>. You also need a session connected to a database. Every example below uses only features the EvolutionDB engine truly supports. When EvolutionDB works differently from PostgreSQL or the SQL standard, the difference is pointed out clearly.</p>
 
 <div class="callout">
 <p><strong>Conventions.</strong> SQL keywords are shown in upper case so they are easy to read. The EvolutionDB lexer does not care about case for keywords. So <code>SELECT</code>, <code>select</code>, and <code>Select</code> all mean the same thing. Table and column names are also compared without regard to case. The engine matches columns with <code>strcasecmp</code>.</p>
@@ -25,7 +25,7 @@
 
 <h2 id="concepts">2.1. Tables and the Storage Model</h2>
 
-<p>An EvolutionDB table is an ordered set of typed columns. Every table lives inside one page-based file. The file is named <code>evosql.db</code> and uses 4&nbsp;KB pages. The table definition is kept in the system catalog. This includes the name, the columns, the types, and the constraints. The rows are stored as binary tuples in a heap. A B+ tree on the primary key indexes that heap.</p>
+<p>An EvolutionDB table is an ordered set of typed columns. Every table lives inside one page-based file. The file is named <code>evosql.db</code> and uses 4&nbsp;KB pages. The table definition is kept in the system catalog. The catalog stores the name, the columns, the types, and the constraints. Rows are stored as binary tuples in a heap. A B+ tree on the primary key indexes that heap.</p>
 
 <p>Two limits are worth knowing up front. They are hard caps in the engine, not soft advice.</p>
 
@@ -33,7 +33,7 @@
 <dt>Maximum columns per table</dt>
 <dd>The limit is set by <code>CAT_MAX_COLUMNS</code>. <code>CREATE TABLE</code> rejects any table that has more columns than this. The same limit also covers inherited columns and system-versioning shadow columns.</dd>
 <dt>Record size</dt>
-<dd>One row's value buffer must fit within <code>RECORD_BUF_SIZE</code>. If the row's text is too big, <code>INSERT</code> raises a <code>data_exception</code>. This happens before the tuple is even built.</dd>
+<dd>One row's value buffer must fit within <code>RECORD_BUF_SIZE</code>. If the row's text is too big, <code>INSERT</code> raises a <code>data_exception</code>. The check happens before the tuple is built.</dd>
 </dl>
 
 <h2 id="creating-a-table">2.2. Creating a New Table</h2>
@@ -48,11 +48,11 @@
     active    <span class="c-key">BOOLEAN</span> <span class="c-key">DEFAULT</span> <span class="c-str">true</span>
 );</code></pre>
 
-<p>When this works, the engine reports <code>command(s) completed successfully!..</code>. Whitespace and line breaks do not matter. The statement ends with a semicolon.</p>
+<p>When the command works, the engine reports <code>command(s) completed successfully!..</code>. Whitespace and line breaks do not matter. The statement ends with a semicolon.</p>
 
 <h3 id="types">2.2.1. Data Types</h3>
 
-<p>EvolutionDB stores each column type as a single integer. The part <code>typeVal / 10000</code> is the <em>type family</em>. The part <code>typeVal % 10000</code> is the size for that family. For example, this size is the length of a <code>VARCHAR</code>. The grammar assigns these codes directly. The table below lists the families you will use in everyday tutorial SQL.</p>
+<p>EvolutionDB stores each column type as a single integer. The part <code>typeVal / 10000</code> is the <em>type family</em>. The part <code>typeVal % 10000</code> is the size for that family. For a <code>VARCHAR</code>, the size is the maximum length. The grammar assigns these codes directly. The table below lists the families you will use in everyday tutorial SQL.</p>
 
 <table>
 <thead><tr><th>SQL written</th><th>Family base</th><th>Stored as</th><th>Notes</th></tr></thead>
@@ -72,7 +72,7 @@
 </table>
 
 <div class="callout">
-<p><strong>Honest contrast with PostgreSQL.</strong> EvolutionDB checks the type of the text value at insert time. These checks are narrow on purpose. The integer and float families check that the text reads as a number. <code>VARCHAR(n)</code> and <code>CHAR(n)</code> check length. <code>BOOLEAN</code>, <code>UUID</code>, and <code>JSON</code> have format checks. The <code>DATE</code>, <code>TIME</code>, <code>TIMESTAMP</code>, <code>TEXT</code>, and <code>BLOB</code> families are accepted <em>without</em> any value check. PostgreSQL rejects a bad timestamp. EvolutionDB stores it as is. Do not count on the engine to reject a bad date.</p>
+<p><strong>Honest contrast with PostgreSQL.</strong> EvolutionDB checks the type of the text value at insert time. These checks are narrow on purpose. The integer and float families check that the text reads as a number. <code>VARCHAR(n)</code> and <code>CHAR(n)</code> check length. <code>BOOLEAN</code>, <code>UUID</code>, and <code>JSON</code> have format checks. The <code>DATE</code>, <code>TIME</code>, <code>TIMESTAMP</code>, <code>TEXT</code>, and <code>BLOB</code> families are accepted <em>without</em> any value check. PostgreSQL rejects a bad timestamp. EvolutionDB stores it as given. Do not count on the engine to reject a bad date.</p>
 </div>
 
 <h3 id="constraints">2.2.2. Column Constraints and Defaults</h3>
@@ -85,9 +85,9 @@
 <dt><code>NOT NULL</code></dt>
 <dd>An <code>INSERT</code> that leaves the column empty or sets it to <code>NULL</code> raises <code>not_null_violation</code> (23502).</dd>
 <dt><code>UNIQUE</code></dt>
-<dd>This is checked by scanning the existing rows. A duplicate non-NULL value raises <code>unique_violation</code> (23505). Two NULL values do not clash with each other.</dd>
+<dd>The engine checks uniqueness by scanning the existing rows. A duplicate non-NULL value raises <code>unique_violation</code> (23505). Two NULL values do not clash with each other.</dd>
 <dt><code>DEFAULT value</code></dt>
-<dd>This is used when you leave a column out of a column-list <code>INSERT</code>. Surrounding quotes are stripped from string literals. A few function defaults are run at insert time. These include <code>CURRENT_TIMESTAMP</code> and <code>gen_random_uuid()</code>.</dd>
+<dd>The default is used when you leave a column out of a column-list <code>INSERT</code>. Surrounding quotes are stripped from string literals. A few function defaults are run at insert time. These include <code>CURRENT_TIMESTAMP</code> and <code>gen_random_uuid()</code>.</dd>
 <dt><code>CHECK (expr)</code></dt>
 <dd>The expression is tested against each new row. A false result raises <code>check_violation</code> (23514).</dd>
 </dl>
@@ -122,7 +122,7 @@
 <p>Each row is checked and stored on its own. Every value is checked against its column's type. See <a href="#types">§2.2.1</a> for types. The value is also checked against the <code>NOT NULL</code>, <code>UNIQUE</code>, and <code>CHECK</code> constraints. All of these checks run first. Then the binary tuple is written to the heap and the primary key is added to the B+ tree.</p>
 
 <div class="callout">
-<p><strong>Note, control bytes are stripped.</strong> Inside the engine, EvolutionDB separates row data with control bytes. One byte marks the end of a field. Another byte marks the end of a row. A crafted value could break these field boundaries. To stop that, the engine removes those bytes from your values during insert. For normal text you never see this. But it means you cannot store those exact control characters.</p>
+<p><strong>Note on control bytes.</strong> Inside the engine, EvolutionDB separates row data with control bytes. One byte marks the end of a field. Another byte marks the end of a row. A crafted value could break these field boundaries. To stop that, the engine removes those bytes from your values during insert. For normal text you never see this. But it means you cannot store those exact control characters.</p>
 </div>
 
 <h2 id="querying">2.4. Querying a Table</h2>
@@ -135,7 +135,7 @@
 
 <h3 id="primary-key-lookup">2.4.1. Looking Up a Single Row by Key</h3>
 
-<p>When a query asks for a row by its primary key, EvolutionDB can answer straight from the B+ tree. It does not scan the heap. It searches the index for the key and reads exactly that one tuple. This is the fast path. It is an O(log&nbsp;n) index probe, not a full scan. A query on other columns falls back to a scan.</p>
+<p>When a query asks for a row by its primary key, EvolutionDB answers straight from the B+ tree. The heap is not scanned. The engine searches the index for the key and reads exactly that one tuple. The lookup is O(log&nbsp;n). A query on other columns falls back to a full scan.</p>
 
 <h2 id="where">2.5. Filtering Rows With WHERE</h2>
 
@@ -149,28 +149,28 @@
 <pre><code><span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees
 <span class="c-key">WHERE</span> salary &gt;= <span class="c-str">9000</span> <span class="c-key">AND</span> active = <span class="c-key">true</span>;</code></pre>
 
-<p>The engine compares numerically when both sides read as numbers. Otherwise it compares as text, character by character. This is the same two-way comparison the engine uses inside. It matters for mixed data. If a value is compared as text, it matches and sorts by character order, not by number value. Numeric comparison only happens when both sides are valid numbers.</p>
+<p>The engine compares numerically when both sides read as numbers. Otherwise it compares as text, character by character. This matters for mixed data. If a value is compared as text, it matches and sorts by character order, not by number value. Numeric comparison only happens when both sides are valid numbers.</p>
 
 <div class="callout">
-<p><strong>Honest contrast.</strong> EvolutionDB runs <code>WHERE</code> on the text form of each row. There is no cost-based optimizer that picks among many indexes. The primary key B+ tree is used for direct key lookups. All other conditions are handled by scanning. So think of <code>WHERE</code> as a row filter over a scan. The one exception is when you pin the primary key to a single value.</p>
+<p><strong>Honest contrast.</strong> EvolutionDB runs <code>WHERE</code> on the text form of each row. There is no cost-based optimizer that picks among many indexes. The primary key B+ tree is used for direct key lookups. All other conditions are handled by scanning. Think of <code>WHERE</code> as a row filter over a scan. The one exception is when you pin the primary key to a single value.</p>
 </div>
 
 <h2 id="order-by">2.6. Sorting Results With ORDER BY</h2>
 
-<p>By default, rows come back in heap-scan order. You should treat that order as undefined. To set an order, add <code>ORDER BY</code> with a column name.</p>
+<p>By default, rows come back in heap-scan order. Treat that order as undefined. To set an order, add <code>ORDER BY</code> with a column name.</p>
 
 <pre><code><span class="c-key">SELECT</span> name, salary <span class="c-key">FROM</span> employees
 <span class="c-key">ORDER BY</span> salary;</code></pre>
 
-<p>The default direction is ascending. Add <code>DESC</code> for descending order. Add <code>ASC</code> if you want to state ascending order.</p>
+<p>The default direction is ascending. Add <code>DESC</code> for descending order. Add <code>ASC</code> if you want to state ascending order explicitly.</p>
 
 <pre><code><span class="c-key">SELECT</span> name, salary <span class="c-key">FROM</span> employees
 <span class="c-key">ORDER BY</span> salary <span class="c-key">DESC</span>;</code></pre>
 
-<p>The sort uses the same rule as the <code>WHERE</code> comparison. If both values in a pair read cleanly as numbers, it sorts by number. Otherwise it sorts as text. So an <code>INTEGER</code> column sorts <code>2 &lt; 10</code> as you expect. A <code>VARCHAR</code> column that holds <code>"10"</code> and <code>"2"</code> sorts <code>"10"</code> before <code>"2"</code>.</p>
+<p>The sort uses the same rule as the <code>WHERE</code> comparison. If both values in a pair read cleanly as numbers, the sort is by number. Otherwise it sorts as text. So an <code>INTEGER</code> column sorts <code>2 &lt; 10</code> as you expect. A <code>VARCHAR</code> column that holds <code>"10"</code> and <code>"2"</code> sorts <code>"10"</code> before <code>"2"</code>.</p>
 
 <div class="callout">
-<p><strong>Note, the 500-row sort cap.</strong> The <code>SELECT *</code> path loads rows into a fixed in-memory buffer before it sorts them. That buffer holds at most <strong>500 rows</strong>. Suppose you use <code>ORDER BY</code> on a table with more than 500 rows on this path. The engine collects and sorts only the first 500 rows it scans. The rest are left out of the sorted output. This is an engine limit, not standard SQL behavior. PostgreSQL would sort the whole result set. If a column named in <code>ORDER BY</code> does not exist, the engine reports the error. It then falls back to an unordered scan instead of stopping.</p>
+<p><strong>Note on the 500-row sort cap.</strong> The <code>SELECT *</code> path loads rows into a fixed in-memory buffer before it sorts them. That buffer holds at most <strong>500 rows</strong>. If you use <code>ORDER BY</code> on a table with more than 500 rows on this path, the engine collects and sorts only the first 500 rows it scans. The rest are left out of the sorted output. This is an engine limit, not standard SQL behavior. PostgreSQL would sort the whole result set. If a column named in <code>ORDER BY</code> does not exist, the engine reports the error and falls back to an unordered scan instead of stopping.</p>
 </div>
 
 <h2 id="putting-together">2.7. Putting It Together</h2>
@@ -196,11 +196,11 @@
 <span class="c-key">WHERE</span>  dept = <span class="c-str">'Engineering'</span>
 <span class="c-key">ORDER BY</span> salary <span class="c-key">DESC</span>;</code></pre>
 
-<p>The last query returns Barbara Liskov with 9500 before Ada Lovelace with 9200. It leaves out Alan Turing. His department does not match the filter.</p>
+<p>The last query returns Barbara Liskov with 9500 before Ada Lovelace with 9200. Alan Turing is left out because his department does not match the filter.</p>
 
 <h2 id="error-codes">2.8. Common Errors in This Chapter</h2>
 
-<p>The work above raises SQLSTATE error codes when you break a constraint or a type rule. These are the codes you are most likely to see while you follow this tutorial.</p>
+<p>The work above raises SQLSTATE error codes when you break a constraint or a type rule. These are the codes you are most likely to see while following this tutorial.</p>
 
 <dl class="params">
 <dt><code>22001</code>, string data right truncation</dt>

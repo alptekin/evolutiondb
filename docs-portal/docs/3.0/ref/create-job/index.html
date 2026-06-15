@@ -5,7 +5,7 @@
 <title>CREATE JOB | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -31,7 +31,7 @@ the current minute on the clock. When that minute matches the cron pattern, the
 job is marked as due.</p>
 
 <p>You give both the cron expression and the SQL body as quoted string
-literals. So whitespace and special characters in them follow the lexer's normal
+literals. Whitespace and special characters in them follow the lexer's normal
 quoting rules. They do not follow the SQL grammar. The outer quotes are removed
 before the values are stored in the catalog.</p>
 
@@ -85,36 +85,35 @@ empty.</dd>
 </dl>
 
 <h2 id="examples">Examples</h2>
-<p>Create a job that runs every day at 03:00 UTC:</p>
+<p>This example creates a job that runs every day at 03:00 UTC.</p>
 <pre><code><span class="c-key">CREATE JOB</span> nightly_rollup
     <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 3 * * *'</span>
     <span class="c-key">DO</span> <span class="c-str">'INSERT INTO daily_totals SELECT today(), sum(amount) FROM orders'</span>;</code></pre>
 
-<p>Create a job that fires at the top of every hour:</p>
+<p>This example creates a job that fires at the top of every hour.</p>
 <pre><code><span class="c-key">CREATE JOB</span> hourly_ping
     <span class="c-key">ON SCHEDULE</span> <span class="c-str">'0 * * * *'</span>
     <span class="c-key">DO</span> <span class="c-str">'UPDATE heartbeat SET ticked_at = now()'</span>;</code></pre>
 
-<p>Create a job only if one of that name does not already exist:</p>
+<p>This example creates a job only if no job with that name already exists.</p>
 <pre><code><span class="c-key">CREATE JOB IF EXISTS</span> weekly_cleanup
     <span class="c-key">ON SCHEDULE</span> <span class="c-str">'30 4 * * 0'</span>   <span class="c-com">-- 04:30 every Sunday (dow 0)</span>
     <span class="c-key">DO</span> <span class="c-str">'DELETE FROM sessions WHERE expired = TRUE'</span>;</code></pre>
 
-<p>Inspect, disable, re-enable, and remove a job:</p>
+<p>This example shows how to inspect, disable, re-enable, and remove a job.</p>
 <pre><code><span class="c-key">SHOW JOBS</span>;
 <span class="c-key">ALTER JOB</span> hourly_ping <span class="c-key">DISABLE</span>;
 <span class="c-key">ALTER JOB</span> hourly_ping <span class="c-key">ENABLE</span>;
 <span class="c-key">DROP JOB</span> <span class="opt">[ IF EXISTS ]</span> hourly_ping;</code></pre>
 
 <h2 id="compatibility">Compatibility</h2>
-<p><code>CREATE JOB</code> is not part of the SQL standard. The SQL standard has no idea of
-scheduled jobs.</p>
+<p><code>CREATE JOB</code> is not part of the SQL standard. The SQL standard does not define scheduled jobs.</p>
 
 <p>It is also not a PostgreSQL command. Core PostgreSQL has no built-in
 scheduler. The closest thing in PostgreSQL is the third-party <code>pg_cron</code>
 extension. Its <code>cron.schedule('name', '0 3 * * *', 'SQL')</code> function call
 uses the same five-field cron style. EvolutionDB offers this as native DDL
-instead of a function. Its cron evaluator is kept simple on purpose. The rules are:</p>
+instead of a function. Its cron evaluator is kept simple on purpose. These are the rules.</p>
 <ul>
 <li>Exactly five fields. Each field is either <code>*</code> or a single integer. No ranges,
 comma lists, or step values. This is unlike <code>pg_cron</code> and standard crontab.</li>

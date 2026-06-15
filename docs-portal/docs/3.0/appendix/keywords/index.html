@@ -5,7 +5,7 @@
 <title>C. Keywords | EvolutionDB 3.0</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100.700,0.1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
 <script src="/tw.js"></script>
 <link href="/style.css" rel="stylesheet"/>
 </head>
@@ -15,11 +15,11 @@
 <aside class="docs-sidebar" id="sidebar"></aside>
 <main class="docs-content prose reveal">
 <h1>C. Keywords</h1>
-<p class="lede">This is the full list of words that the EvolutionDB lexer treats as keywords. It tells you what they mean. It tells you how they are matched. Matching is case-insensitive. A few words have special context-sensitive rules. It also shows how to use a normal identifier when its name is the same as a keyword.</p>
+<p class="lede">This page lists every word that the EvolutionDB lexer treats as a keyword. It explains what each word means and how it is matched. Matching is case-insensitive. A few words have special context-sensitive rules. The page also shows how to use a normal identifier when its name is the same as a keyword.</p>
 
 <h2 id="overview">C.1. Overview</h2>
 <p>EvolutionDB first breaks every SQL statement into tokens. The Flex scanner does this work. It is defined in <code>evolution/parser/evolexer.l</code>. A <em>keyword</em> is a word that the scanner maps to its own grammar token. For example, <code>SELECT</code> maps to <code>SELECT</code>, and <code>BIGINT</code> maps to <code>BIGINT</code>. Other words map to the generic identifier token <code>NAME</code>. The grammar that reads those tokens lives in <code>evoparser.y</code>. This appendix covers only the scanner side. It shows which words are reserved and how they are matched.</p>
-<p>This list comes straight from the source code. Hand-written rules in the lexer build it. It is not generated from a standard. So the keyword set mixes spellings from the SQL standard, PostgreSQL, and MySQL on purpose. Some words exist only to support one dialect. The notes below point those out.</p>
+<p>This list comes straight from the source code. Hand-written rules in the lexer build it. It is not generated from a standard. The keyword set mixes spellings from the SQL standard, PostgreSQL, and MySQL on purpose. Some words exist only to support one dialect. The notes below point those out.</p>
 <div class="callout">
 <strong>Note.</strong> PostgreSQL sorts keywords into SQL-standard groups. These groups are <em>reserved</em>, <em>non-reserved</em>, and <em>reserved but usable as a function or type name</em>. EvolutionDB's lexer does not do this. Any word in this list is a keyword token everywhere it appears. There are two exceptions. The first is when you write it as a quoted identifier. See <a href="#identifiers">C.5</a>. The second is when one of the context-sensitive rules in <a href="#context">C.4</a> applies. The groups in this appendix only sort words by purpose. They are not a formal reservation class.</p>
 </div>
@@ -29,8 +29,8 @@
 <div class="synopsis">
 <pre><code><span class="c-com">%option noyywrap nodefault yylineno case-insensitive reentrant bison-bridge</span></code></pre>
 </div>
-<p>So you can write keywords in any mix of upper- and lower-case. <code>SELECT</code>, <code>select</code>, and <code>SeLeCt</code> are all the same token. This is also true for type names, function names, and every other word in this appendix.</p>
-<p>Case does not matter <em>only</em> when the scanner recognizes a keyword. Unquoted identifiers are kept exactly as typed by the <code>NAME</code> rule. That rule is <code>[A-Za-z][A-Za-z0-9_]*</code>. String literals also keep their bytes exactly. So the case of your identifiers and data values stays the way you typed it.</p>
+<p>You can write keywords in any mix of upper- and lower-case. <code>SELECT</code>, <code>select</code>, and <code>SeLeCt</code> are all the same token. The same is true for type names, function names, and every other word in this appendix.</p>
+<p>Case does not matter only when the scanner recognizes a keyword. Unquoted identifiers are kept exactly as typed by the <code>NAME</code> rule. That rule is <code>[A-Za-z][A-Za-z0-9_]*</code>. String literals also keep their bytes exactly. The case of your identifiers and data values stays the way you typed it.</p>
 <pre><code><span class="c-com">-- all three statements parse identically</span>
 <span class="c-key">SELECT</span> * <span class="c-key">FROM</span> employees;
 <span class="c-key">select</span> * <span class="c-key">from</span> employees;
@@ -114,7 +114,7 @@
 <tr><td><code>VECTOR</code></td><td><code>VECTOR</code>, see <a href="/3.0/ref/create-table/">CREATE TABLE</a> and the vector functions in <a href="#functions">C.6</a></td></tr>
 </tbody>
 </table>
-<p>Some more words are also keywords. These are the type modifiers <code>UNSIGNED</code> and <code>ZEROFILL</code>, the <code>SIGNAL</code>-adjacent attributes, and the <code>VIRTUAL</code> and <code>STORED</code> generated-column markers.</p>
+<p>Some more words are also keywords. These include the type modifiers <code>UNSIGNED</code> and <code>ZEROFILL</code>, the <code>SIGNAL</code>-adjacent attributes, and the <code>VIRTUAL</code> and <code>STORED</code> generated-column markers.</p>
 
 <h3 id="cat-tx">C.3.5. Transaction, cursor and procedural keywords</h3>
 <table>
@@ -132,7 +132,7 @@
 <p class="c-com">* The grammar recognizes the <code>SAVEPOINT</code> and <code>SHOW</code> statement entry points. The other words shown here come from the keyword rules in the lexer.</p>
 
 <h3 id="cat-evo">C.3.6. EvolutionDB-specific extension keywords</h3>
-<p>These words have no match in the SQL standard, PostgreSQL, or MySQL in the way described here. They exist to drive EvolutionDB's own subsystems. These subsystems are LISTEN/NOTIFY, logical subscriptions, the document, graph, memory, message, checkpoint, and entity stores, time-travel, scheduled jobs, sharding, and vector search.</p>
+<p>These words have no match in the SQL standard, PostgreSQL, or MySQL in the way described here. They exist to drive EvolutionDB's own subsystems. These subsystems include LISTEN/NOTIFY, logical subscriptions, the document store, graph store, memory store, message log, checkpoint store, entity store, time-travel, scheduled jobs, sharding, and vector search.</p>
 <table>
 <thead><tr><th>Subsystem</th><th>Keywords</th></tr></thead>
 <tbody>
@@ -172,7 +172,7 @@
 </dl>
 
 <h3 id="ctx-funcname">C.4.3. Function-or-identifier words (trailing <code>(</code> lookahead)</h3>
-<p>Several words are keywords only when a <code>(</code> comes right after them. In any other case they are normal identifiers. The lexer looks at the next character. If it is <code>(</code>, the word becomes the matching function token. If it is not, the word is returned as a plain <code>NAME</code> for a column or alias. This way you can still use these names as identifiers.</p>
+<p>Several words are keywords only when a <code>(</code> comes right after them. In any other case they are normal identifiers. The lexer looks at the next character. If it is <code>(</code>, the word becomes the matching function token. If it is not, the word is returned as a plain <code>NAME</code> for a column or alias. This lets you use these names as identifiers.</p>
 <table>
 <thead><tr><th>Word</th><th>Followed by <code>(</code></th><th>Otherwise</th></tr></thead>
 <tbody>
@@ -188,7 +188,7 @@
 <tr><td><code>REPLACE</code></td><td>string <code>REPLACE(...)</code> function</td><td><code>REPLACE</code> statement keyword</td></tr>
 </tbody>
 </table>
-<p>This is why you can use <code>count</code>, <code>sum</code>, <code>min</code>, <code>max</code>, <code>avg</code> and <code>rank</code> as column names. But if you write them right before a parenthesis, you call the function instead.</p>
+<p>This is why you can use <code>count</code>, <code>sum</code>, <code>min</code>, <code>max</code>, <code>avg</code> and <code>rank</code> as column names. If you write them right before a parenthesis, you call the function instead.</p>
 <pre><code><span class="c-com">-- "count" used as a column name (no following parenthesis)</span>
 <span class="c-key">SELECT</span> count <span class="c-key">FROM</span> inventory;
 
@@ -196,10 +196,10 @@
 <span class="c-key">SELECT</span> COUNT(*) <span class="c-key">FROM</span> inventory;</code></pre>
 
 <h3 id="ctx-value">C.4.4. <code>VALUE</code></h3>
-<p>The word <code>VALUE</code> works in an unusual way. Its rule does not return a keyword token. Instead it returns an identifier token whose text is the string <code>"VALUE"</code>. So <code>VALUE</code> is always treated as a normal name. It is never reserved. Its plural is <code>VALUES</code>. That one <em>is</em> a reserved keyword used by <a href="/3.0/ref/insert/">INSERT</a>.</p>
+<p>The word <code>VALUE</code> works in an unusual way. Its rule does not return a keyword token. Instead it returns an identifier token whose text is the string <code>"VALUE"</code>. So <code>VALUE</code> is always treated as a normal name. It is never reserved. Its plural is <code>VALUES</code>. <code>VALUES</code> <em>is</em> a reserved keyword used by <a href="/3.0/ref/insert/">INSERT</a>.</p>
 
 <h3 id="ctx-bool">C.4.5. <code>TRUE</code>, <code>FALSE</code>, <code>UNKNOWN</code>, <code>NULL</code></h3>
-<p>The boolean literals return a single <code>BOOL</code> token. An integer value is attached to tell them apart. <code>TRUE</code> carries <code>1</code>. <code>FALSE</code> carries <code>0</code>. <code>UNKNOWN</code> carries <code>-1</code> for three-valued logic. <code>NULL</code> returns the separate <code>NULLX</code> token. <code>UNKNOWN</code> appears in two rules. So it can be a standalone keyword token or a boolean literal. The grammar position decides which one.</p>
+<p>The boolean literals return a single <code>BOOL</code> token. An integer value is attached to tell them apart. <code>TRUE</code> carries <code>1</code>. <code>FALSE</code> carries <code>0</code>. <code>UNKNOWN</code> carries <code>-1</code> for three-valued logic. <code>NULL</code> returns the separate <code>NULLX</code> token. <code>UNKNOWN</code> appears in two rules. It can be a standalone keyword token or a boolean literal. The grammar position decides which one.</p>
 
 <h2 id="identifiers">C.5. Using keywords as identifiers</h2>
 <p>Sometimes you need a table, column, or alias whose name is the same as a reserved word. To do this, wrap the name in backticks. The lexer's quoted-identifier rule accepts <code>`...`</code>. It strips the backticks and returns the inner text as a plain <code>NAME</code>. This works even if that text would normally be a keyword.</p>
@@ -210,11 +210,11 @@
 <span class="c-key">CREATE</span> <span class="c-key">TABLE</span> t (`order` <span class="c-key">INT</span>, `select` <span class="c-key">VARCHAR</span>(<span class="c-str">20</span>));
 <span class="c-key">SELECT</span> `order`, `select` <span class="c-key">FROM</span> t;</code></pre>
 <div class="callout">
-<strong>Note.</strong> A backtick-quoted identifier may not contain a backtick, backslash, dot, or newline. The rule's character class leaves those characters out. An opening backtick with no closing backtick before the end of the line raises <em>"unterminated quoted name"</em>. EvolutionDB uses MySQL-style backticks for quoted identifiers here. The double-quote character belongs to the <em>string-literal</em> rule, not the identifier rule. So you cannot use it in place of a backtick to quote an identifier.</p>
+<strong>Note.</strong> A backtick-quoted identifier may not contain a backtick, backslash, dot, or newline. The rule's character class leaves those characters out. An opening backtick with no closing backtick before the end of the line raises <em>"unterminated quoted name"</em>. EvolutionDB uses MySQL-style backticks for quoted identifiers. The double-quote character belongs to the <em>string-literal</em> rule, not the identifier rule. You cannot use it in place of a backtick to quote an identifier.</p>
 </div>
 
 <h2 id="functions">C.6. Built-in function names (call-position keywords)</h2>
-<p>The lexer recognizes a large set of built-in function names. Each one is matched only when a <code>(</code> comes right after it. When they are not in a call position, they are <em>not</em> reserved. They fall through to the identifier rule. So they are listed apart from the keyword groups above. They are grouped here by purpose:</p>
+<p>The lexer recognizes a large set of built-in function names. Each one is matched only when a <code>(</code> comes right after it. When they are not in a call position, they are <em>not</em> reserved. They fall through to the identifier rule. They are listed apart from the keyword groups above and grouped here by purpose.</p>
 <dl class="params">
 <dt>String</dt>
 <dd><code>SUBSTR</code>/<code>SUBSTRING</code>, <code>TRIM</code>, <code>UPPER</code>, <code>LOWER</code>, <code>LENGTH</code>, <code>CHAR_LENGTH</code>, <code>TOKEN_LENGTH</code>, <code>CONCAT</code>, <code>LEFT</code>, <code>RIGHT</code>, <code>LPAD</code>, <code>RPAD</code>, <code>REVERSE</code>, <code>REPEAT</code>, <code>REPLACE</code>, <code>INSTR</code>, <code>LOCATE</code></dd>
@@ -264,21 +264,21 @@
 </table>
 
 <h2 id="compatibility">C.8. Compatibility</h2>
-<p>EvolutionDB's keyword set mixes many dialects on purpose. Here are a few honest contrasts with the systems it borrows spellings from.</p>
+<p>EvolutionDB's keyword set mixes many dialects on purpose. Here are some honest contrasts with the systems it borrows spellings from.</p>
 <ul>
-<li><strong>vs. the SQL standard.</strong> EvolutionDB has no formal reservation classes. The standard splits words into reserved words and non-reserved words. Non-reserved words can also be used as identifiers. EvolutionDB works in a different way. First, you can use any keyword as a backtick-quoted identifier. Second, a small set of words use the trailing-<code>(</code> trick of <a href="#ctx-funcname">C.4.3</a>. There is no idea here of a word that is reserved "except as a function or type name" the way the standard defines it.</li>
-<li><strong>vs. PostgreSQL.</strong> PostgreSQL uses double quotes for identifiers and a keyword table sorted into groups. EvolutionDB uses MySQL-style backticks (<a href="#identifiers">C.5</a>) and a flat, hand-maintained list. Many PostgreSQL spellings are still here. These are <code>LATERAL</code>, <code>RETURNING</code>, <code>JSONB</code> folded to the <code>JSON</code> token, <code>UUID</code>, <code>MATERIALIZED</code>, <code>CONCURRENTLY</code>, <code>NEXTVAL</code>/<code>CURRVAL</code>, <code>GEN_RANDOM_UUID</code>, and <code>PG_NOTIFY</code> as an alias.</li>
-<li><strong>vs. MySQL.</strong> Many MySQL spellings are accepted. These are the integer aliases <code>INT8</code>, <code>INT4</code>, <code>INT2</code>, <code>INT1</code>, and <code>MIDDLEINT</code>, plus <code>AUTO_INCREMENT</code>, <code>DISTINCTROW</code>, <code>STRAIGHT_JOIN</code>, <code>HIGH_PRIORITY</code>/<code>LOW_PRIORITY</code>, <code>SQL_BIG_RESULT</code> and friends, the <code>ON DUPLICATE KEY</code> upsert, <code>REGEXP</code>/<code>RLIKE</code>, <code>GROUP_CONCAT</code>, and <code>LAST_INSERT_ID</code>.</li>
+<li><strong>vs. the SQL standard.</strong> EvolutionDB has no formal reservation classes. The standard splits words into reserved words and non-reserved words. Non-reserved words can also be used as identifiers. EvolutionDB works differently. You can use any keyword as a backtick-quoted identifier. A small set of words also use the trailing-<code>(</code> trick of <a href="#ctx-funcname">C.4.3</a>. There is no concept of a word that is reserved "except as a function or type name" as the standard defines it.</li>
+<li><strong>vs. PostgreSQL.</strong> PostgreSQL uses double quotes for identifiers and a keyword table sorted into groups. EvolutionDB uses MySQL-style backticks (<a href="#identifiers">C.5</a>) and a flat, hand-maintained list. Many PostgreSQL spellings are still present. These include <code>LATERAL</code>, <code>RETURNING</code>, <code>JSONB</code> folded to the <code>JSON</code> token, <code>UUID</code>, <code>MATERIALIZED</code>, <code>CONCURRENTLY</code>, <code>NEXTVAL</code>/<code>CURRVAL</code>, <code>GEN_RANDOM_UUID</code>, and <code>PG_NOTIFY</code> as an alias.</li>
+<li><strong>vs. MySQL.</strong> Many MySQL spellings are accepted. These include the integer aliases <code>INT8</code>, <code>INT4</code>, <code>INT2</code>, <code>INT1</code>, and <code>MIDDLEINT</code>, plus <code>AUTO_INCREMENT</code>, <code>DISTINCTROW</code>, <code>STRAIGHT_JOIN</code>, <code>HIGH_PRIORITY</code>/<code>LOW_PRIORITY</code>, <code>SQL_BIG_RESULT</code> and friends, the <code>ON DUPLICATE KEY</code> upsert, <code>REGEXP</code>/<code>RLIKE</code>, <code>GROUP_CONCAT</code>, and <code>LAST_INSERT_ID</code>.</li>
 <li><strong>EvolutionDB-only.</strong> The extension keywords in <a href="#cat-evo">C.3.6</a> are specific to EvolutionDB. They cover pub/sub, subscriptions, the document, graph, memory, message, checkpoint, and entity stores, scheduled jobs, sharding, and system-versioning. The vector operators <code>&lt;-&gt;</code>, <code>&lt;#&gt;</code>, and <code>&lt;=&gt;</code> are also specific to EvolutionDB.</li>
 </ul>
 
 <div class="callout">
-<strong>Note, caveats.</strong>
+<strong>Notes and caveats.</strong>
 <ul>
-<li>This appendix matches the rules in <code>evolution/parser/evolexer.l</code> exactly as they are compiled into the parser. The keyword list is hand-written. So it can drift between releases. After any lexer change, regenerate the parser with <code>make generate</code> and check this list again.</li>
+<li>This appendix matches the rules in <code>evolution/parser/evolexer.l</code> exactly as they are compiled into the parser. The keyword list is hand-written. It can drift between releases. After any lexer change, regenerate the parser with <code>make generate</code> and check this list again.</li>
 <li>A word being a keyword token does not mean the grammar accepts the whole statement. It also does not mean the engine fully implements the feature. The scanner only sorts words. The meaning lives on the individual <a href="/3.0/ref/select/">command reference</a> pages.</li>
 <li>A word is reserved everywhere. There is no per-statement reservation. If a word here is the same as a name you want, quote it with backticks (<a href="#identifiers">C.5</a>).</li>
-<li>Some words show up in more than one rule on purpose. Examples are <code>UNKNOWN</code>, <code>NODE</code>, <code>OF</code>, <code>STORE</code>, <code>RANK</code>, and <code>CHECKPOINT</code>. Flex uses the first rule that matches. So the order in the source file decides which token wins when the position is unclear.</li>
+<li>Some words show up in more than one rule on purpose. Examples are <code>UNKNOWN</code>, <code>NODE</code>, <code>OF</code>, <code>STORE</code>, <code>RANK</code>, and <code>CHECKPOINT</code>. Flex uses the first rule that matches. The order in the source file decides which token wins when the position is unclear.</li>
 </ul>
 </div>
 
