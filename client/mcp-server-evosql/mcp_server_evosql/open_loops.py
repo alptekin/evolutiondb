@@ -49,19 +49,53 @@ _AUTO_CONTENT = re.compile(
     r'\b(?:code|otp|pin)\b[:\s]+\d{3,8}\b|\b\d{4,8}\b\s+is your\b)', re.I)
 
 
-def _is_shortcode_sender(name: str) -> bool:
-    """An SMS/brand sender id, not a person: a short numeric short-code (a real
-    phone has >= 10 digits) or an ALL-CAPS alphabetic brand id (e.g.
-    'EXAMPLECO', 'WIDGET CORP'). Real contacts are stored proper-case
-    (e.g. 'John Doe'), so this separates the two without an allow-list."""
-    n = (name or "").strip()
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def is_nonhuman_sender(name: str, source: str | None = None) -> bool:
+    """True if `name` is a service/automated sender id, not a person. No brand
+    allow-list, language-neutral:
+
+      * a valid email handle is a real person                  -> False (kept)
+      * a MASKED number/id (contains '*', e.g. a bank's
+        '+90...****..' or a redacted code)                     -> True
+      * a purely numeric short-code (< 7 digits) is a brand;
+        a full-length phone number is a possible person        -> short-code True
+      * an obvious brand SHAPE — ALL-CAPS, a CamelCase single token
+        (internal capital, e.g. 'WidgetPay'), or a digit-bearing single
+        token                                                  -> True
+
+    A single plain word ('Sam', 'Foobar') is left alone: a brand id of that
+    shape is indistinguishable from a real first name without an allow-list,
+    so we keep it rather than risk dropping a real person. `source` is accepted
+    for callers' convenience and future per-channel tuning. Real contacts
+    ('John Doe', 'alex@example.com', '+900000000000', 'Sam') stay False.
+    """
+    n = (name or "").strip().strip('"')
     if len(n) < 3:
         return False
-    has_alpha = any(c.isalpha() for c in n)
-    if not has_alpha:                       # purely numeric/symbol sender
+    if _EMAIL_RE.match(n):                        # real person via email handle
+        return False
+    if "*" in n:                                  # masked number/id => automated
+        return True
+    if not any(c.isalpha() for c in n):           # purely numeric/symbol sender
         digits = re.sub(r"\D", "", n)
-        return bool(digits) and len(digits) <= 6      # short-code, not a phone
-    return not any(c.islower() for c in n)            # ALL-CAPS brand id
+        return bool(digits) and len(digits) <= 6   # short-code, not a full phone
+    if " " not in n:                              # single token
+        if not any(c.islower() for c in n):
+            return True                           # ALL-CAPS id
+        if any(c.isdigit() for c in n):
+            return True                           # digit-bearing token
+        letters = [c for c in n if c.isalpha()]
+        if any(c.isupper() for c in letters[1:]):
+            return True                           # CamelCase brand (e.g. WidgetPay)
+        return False                              # a single plain word -> keep
+    return not any(c.islower() for c in n)         # multi-token ALL-CAPS brand id
+
+
+def _is_shortcode_sender(name: str) -> bool:
+    """Back-compat alias: channel-agnostic non-human sender test."""
+    return is_nonhuman_sender(name, None)
 
 
 def _ts(d):
@@ -106,7 +140,7 @@ def _is_auto(d):
                        for k in ("text", "snippet", "fact", "subject"))
     if _AUTO_CONTENT.search(content):
         return True
-    return _is_shortcode_sender(_disp(sender))
+    return is_nonhuman_sender(_disp(sender), d.get("source"))
 
 
 def _thread_key(d, source):
@@ -235,6 +269,112 @@ def mark_resolved(backend, ns: str, loop_key: str, *, reason: str = "sent_reply"
     backend._exec(f"MEMORY PUT INTO {backend.loops_store} VALUES "
                   f"('{_e(ns)}','{_e(loop_key)}','{_e(json.dumps(rec))}')")
     return True
+
+
+# ------------------------------------------------------------------ #
+#  User dismissals — "this isn't a loop, stop showing it"            #
+# ------------------------------------------------------------------ #
+# A loop the user has dismissed by hand. Persisted as RUNTIME DATA (the user's
+# own thread identities), never as code literals, so brand/contact names stay
+# out of the source. A dismissed loop is hidden from the brief AND not re-opened
+# by job_open_loops. Reversible via undismiss(). Identity is the stable
+# source|thread pair carried on every loop record, so it survives re-derivation.
+_DISMISS_KEY = "__loop_dismiss__"
+
+
+def _loop_ident(rec) -> str:
+    return "%s|%s" % (rec.get("source") or "?",
+                      rec.get("thread_key") or rec.get("counterparty") or "?")
+
+
+def load_dismissed(backend, ns: str) -> dict:
+    """The dismissed-loop map {ident: dismissed_at_iso} for a namespace."""
+    from .server import _e
+    rows = backend._query(
+        f"SELECT mem_value FROM __mem_{backend.loops_store} "
+        f"WHERE mem_namespace = '{_e(ns)}' AND mem_key = '{_e(_DISMISS_KEY)}'") or []
+    if rows and rows[0] and rows[0][0]:
+        try:
+            v = json.loads(rows[0][0])
+            return v if isinstance(v, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def is_dismissed(dismissed: dict, rec) -> bool:
+    return _loop_ident(rec) in (dismissed or {})
+
+
+def _save_dismissed(backend, ns, dismissed):
+    from .server import _e
+    backend._exec(f"MEMORY PUT INTO {backend.loops_store} VALUES "
+                  f"('{_e(ns)}','{_e(_DISMISS_KEY)}','{_e(json.dumps(dismissed))}')")
+
+
+def dismiss_matching(backend, ns: str, pairs) -> int:
+    """Dismiss every OPEN loop matching one of `pairs` — a (counterparty,
+    snippet_substring) tuple. An empty snippet matches any loop from that
+    counterparty; a snippet pins ONE thread when a person has several loops, so
+    a colleague's still-relevant items are not dropped with the stale one.
+    `pairs` is RUNTIME input (the user's own data) — never hard-coded here."""
+    norm = [(_disp(cp).strip().lower(), (snip or "").strip().lower())
+            for cp, snip in pairs]
+    dismissed = load_dismissed(backend, ns)
+    keys = []
+    from .server import _e
+    for row in backend._query(
+            f"SELECT mem_key, mem_value FROM __mem_{backend.loops_store} "
+            f"WHERE mem_namespace = '{_e(ns)}'") or []:
+        try:
+            rec = json.loads(row[1])
+        except Exception:
+            continue
+        if rec.get("status") != "open":
+            continue
+        cp = (rec.get("counterparty") or "").strip().lower()
+        hay = ((rec.get("what") or "") + " " + (rec.get("snippet") or "")).lower()
+        for ncp, nsnip in norm:
+            if cp == ncp and (not nsnip or nsnip in hay):
+                dismissed[_loop_ident(rec)] = datetime.now(timezone.utc).isoformat()
+                keys.append(row[0])
+                break
+    if keys:
+        _save_dismissed(backend, ns, dismissed)
+        for k in keys:
+            mark_resolved(backend, ns, k, reason="user_dismissed")
+    return len(keys)
+
+
+def dismiss_by_counterparty(backend, ns: str, names) -> int:
+    """Dismiss every OPEN loop from one of `names` (any thread). Thin wrapper
+    over dismiss_matching for the common 'this sender is all noise' case."""
+    return dismiss_matching(backend, ns, [(n, "") for n in names])
+
+
+def undismiss_by_counterparty(backend, ns: str, names) -> int:
+    """Reverse a dismissal (the loop can surface again on its next inbound)."""
+    want = {_disp(n).strip().lower() for n in names if (n or "").strip()}
+    dismissed = load_dismissed(backend, ns)
+    from .server import _e
+    drop = set()
+    for row in backend._query(
+            f"SELECT mem_value FROM __mem_{backend.loops_store} "
+            f"WHERE mem_namespace = '{_e(ns)}'") or []:
+        try:
+            rec = json.loads(row[0])
+        except Exception:
+            continue
+        if (rec.get("counterparty") or "").strip().lower() in want:
+            drop.add(_loop_ident(rec))
+    n = 0
+    for ident in list(dismissed):
+        if ident in drop:
+            del dismissed[ident]
+            n += 1
+    if n:
+        _save_dismissed(backend, ns, dismissed)
+    return n
 
 
 # ---------------------------------------------------------------- #
@@ -596,6 +736,14 @@ def job_open_loops(backend, ns: str) -> int:
     # sweep so they still participate in cross-run resolve-on-disappear.
     open_now.update(_github_loops(backend, ns))
     open_now.update(_ado_loops(backend, ns))
+
+    # --- drop loops the user has dismissed by hand -----------------------
+    # They fall out of open_now, so the resolution sweep below flips them to
+    # resolved and they are never re-written as open. (Reversible.)
+    dismissed = load_dismissed(backend, ns)
+    if dismissed:
+        open_now = {k: v for k, v in open_now.items()
+                    if not is_dismissed(dismissed, v)}
 
     # --- close loops that are no longer open (cross-run resolution) -------
     existing = {}

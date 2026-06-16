@@ -46,9 +46,9 @@ def test_collect_buckets_and_filters():
 def test_collect_orders_high_priority_first():
     b = FakeBackend()
     b.put(b.loops_store, NS, "l1", _loop(counterparty="Normal", age_days=1))
-    b.put(b.loops_store, NS, "l2", _loop(counterparty="VIP", priority="high", age_days=30))
+    b.put(b.loops_store, NS, "l2", _loop(counterparty="Vera", priority="high", age_days=30))
     data = brief.collect(b, NS)
-    assert [d["counterparty"] for d in data["waiting_me"]] == ["VIP", "Normal"]
+    assert [d["counterparty"] for d in data["waiting_me"]] == ["Vera", "Normal"]
 
 
 def test_render_shows_counts_and_sections():
@@ -92,6 +92,22 @@ def test_render_lists_waiting_lines():
     assert "⭐" in out                                   # high-priority marker
 
 
+def test_collect_drops_nonhuman_senders():
+    # service/automated senders (brand SMS ids, masked numbers) that slipped
+    # into the loop store must NOT appear in the brief's actionable buckets.
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "real",
+          _loop(counterparty="Ada Lovelace", source="teams", loop_type="request"))
+    b.put(b.loops_store, NS, "brand",
+          _loop(counterparty="MockPay", source="imessage", loop_type="request"))
+    b.put(b.loops_store, NS, "masked",
+          _loop(counterparty="+900000****11", source="imessage", loop_type="request"))
+    data = brief.collect(b, NS)
+    assert [d["counterparty"] for d in data["waiting_me"]] == ["Ada Lovelace"]
+    # the dropped service senders land in stale, not in the actionable list
+    assert {"MockPay", "+900000****11"} <= {d["counterparty"] for d in data["stale"]}
+
+
 def test_collect_day_context_events_and_activity():
     # yesterday recap (activity counts + meetings) and today's schedule, derived
     # from the primary memory store's calendar + ingested feed.
@@ -119,6 +135,26 @@ def test_collect_day_context_events_and_activity():
     assert [m["summary"] for m in data["yesterday"]["meetings"]] == ["Demo"]
     assert data["yesterday"]["counts"] == {"gmail": 2, "slack": 1}  # old row excluded
     assert data["yesterday"]["date"] == yday
+
+
+def test_collect_prefers_graph_role_and_outlook_events():
+    # an authoritative Graph job title overrides the LLM-inferred role, and
+    # Outlook-sourced calendar events surface in today's schedule.
+    from mcp_server_evosql import meeting
+    today = meeting.resolve_day("today")
+    b = FakeBackend()
+    b.put(b.selfmodel_store, NS, "self_role",
+          {"section": "role", "content": {"summary": "guessed tech lead"}})
+    b.put(b.memory, NS, "outlook_self_profile",
+          {"source": "outlook", "kind": "self_profile",
+           "job_title": "Software Director",
+           "role_summary": "Software Director, WeChip"})
+    b.put(b.memory, NS, "outlook_evt_1",
+          {"source": "outlook", "kind": "event", "summary": "Sprint sync",
+           "start": today + "T09:00:00"})
+    data = brief.collect(b, NS)
+    assert data["self"]["role"]["summary"] == "Software Director, WeChip"
+    assert [e["summary"] for e in data["today_events"]] == ["Sprint sync"]
 
 
 def test_render_includes_day_sections():
@@ -172,7 +208,9 @@ def main():
                test_render_shows_counts_and_sections,
                test_render_language_nag_only_when_unset,
                test_render_lists_waiting_lines,
+               test_collect_drops_nonhuman_senders,
                test_collect_day_context_events_and_activity,
+               test_collect_prefers_graph_role_and_outlook_events,
                test_render_includes_day_sections,
                test_queue_drafts_creates_pending,
                test_approve_queued_all_dry_runs_without_send):
