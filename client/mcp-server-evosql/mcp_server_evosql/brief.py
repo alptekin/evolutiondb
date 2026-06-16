@@ -86,14 +86,30 @@ def collect(backend, ns):
         lt = d.get("loop_type")
         return lt in (None, "request", "question")
 
+    from . import open_loops
+    _dismissed = open_loops.load_dismissed(backend, ns)
+
+    def human(d):
+        # drop service/automated senders (bank/OTP/brand SMS ids, masked
+        # numbers) that slipped into the loop store before the sender filter —
+        # so the brief shows people, not notifications.
+        return not open_loops.is_nonhuman_sender(d.get("counterparty"),
+                                                 d.get("source"))
+
+    def shown(d):
+        # honour the user's hand dismissals ("this isn't a loop, stop showing it")
+        return not open_loops.is_dismissed(_dismissed, d)
+
     waiting_me = [d for d in openl
                   if d.get("direction") == "awaiting_me"
-                  and d.get("actionable", True) and needs_reply(d)]
+                  and d.get("actionable", True) and needs_reply(d)
+                  and human(d) and shown(d)]
     waiting_them = [d for d in openl if d.get("direction") == "awaiting_them"
-                    and d.get("actionable", True)]
+                    and d.get("actionable", True) and human(d) and shown(d)]
     promises = [d for d in openl if d.get("direction") == "i_owe_them"
-                and d.get("actionable", True)]
-    stale = [d for d in openl if not d.get("actionable", True)]
+                and d.get("actionable", True) and human(d) and shown(d)]
+    stale = [d for d in openl
+             if shown(d) and (not d.get("actionable", True) or not human(d))]
 
     # priority high first, then most recent
     waiting_me.sort(key=lambda d: (0 if d.get("priority") == "high" else 1,
@@ -101,8 +117,9 @@ def collect(backend, ns):
     waiting_them.sort(key=lambda d: d.get("age_days", 999))
     promises.sort(key=lambda d: d.get("age_days", 999))
 
-    # day context: yesterday's activity recap + today's schedule, from the
-    # calendar (source="gcal") and ingested feed in one pass over the store.
+    # day context: yesterday's activity recap + today's schedule, from any
+    # calendar source (Google "gcal" or Outlook/M365 "outlook") and the
+    # ingested feed, in one pass over the store.
     from . import meeting
     today = meeting.resolve_day("today")
     yday = meeting.resolve_day("yesterday")
@@ -113,7 +130,8 @@ def collect(backend, ns):
         return s[:10] if len(s) >= 10 else ""
 
     events = [r for r in rows
-              if r.get("source") == "gcal" and r.get("kind") == "event"]
+              if r.get("source") in meeting.CAL_SOURCES
+              and r.get("kind") == "event"]
     today_events = sorted([e for e in events if _evday(e) == today],
                           key=lambda e: (e.get("start") or ""))
     yest_meetings = sorted([e for e in events if _evday(e) == yday],
@@ -123,6 +141,16 @@ def collect(backend, ns):
         src = r.get("source")
         if src in _INGEST_SRC and _row_day(r) == yday:
             y_counts[src] = y_counts.get(src, 0) + 1
+
+    # authoritative role: a Graph /me job title (source of truth) beats the
+    # LLM-inferred self-model summary, so the brief states the real title.
+    prof = next((r for r in rows
+                 if r.get("kind") == "self_profile"
+                 and (r.get("role_summary") or r.get("job_title"))), None)
+    if prof:
+        selfm = dict(selfm)
+        selfm["role"] = {"summary": prof.get("role_summary") or prof.get("job_title"),
+                         "confidence": 1.0, "source": prof.get("source") or "profile"}
 
     return {"self": selfm, "waiting_me": waiting_me, "waiting_them": waiting_them,
             "promises": promises, "stale": stale,

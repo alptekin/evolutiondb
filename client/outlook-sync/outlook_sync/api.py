@@ -73,6 +73,24 @@ MESSAGE_SELECT = ",".join([
     "webLink",
 ])
 
+# Fields we ask Graph to return per calendar event (kept explicit, like
+# MESSAGE_SELECT). Times arrive as {dateTime, timeZone}; attendees/organizer
+# as {emailAddress:{name,address}}.
+CALENDAR_SELECT = ",".join([
+    "id",
+    "subject",
+    "bodyPreview",
+    "start",
+    "end",
+    "location",
+    "organizer",
+    "attendees",
+    "isAllDay",
+    "isCancelled",
+    "webLink",
+    "lastModifiedDateTime",
+])
+
 
 class GraphError(Exception):
     def __init__(self, status: int, msg: str, url: str):
@@ -232,7 +250,26 @@ class OutlookClient:
         return out
 
     def get_user(self) -> Dict:
-        return self._get(f"{GRAPH_API}/me")
+        # Explicit $select keeps the projection to identity fields we use
+        # (never silently widen what we read), per the MESSAGE_SELECT note.
+        return self._get(f"{GRAPH_API}/me", {
+            "$select": "displayName,jobTitle,department,"
+                       "officeLocation,mail,userPrincipalName"})
+
+    def list_calendar_events(self, *, start_iso: str, end_iso: str,
+                             top: int = 50) -> Iterator[Dict]:
+        """Calendar events in the [start_iso, end_iso) window via
+        /me/calendarView, which expands recurring series into single
+        instances (plain /me/events returns only the series masters).
+        Requires the Calendars.Read scope."""
+        params = {
+            "startDateTime": start_iso,
+            "endDateTime":   end_iso,
+            "$select":       CALENDAR_SELECT,
+            "$top":          str(top),
+            "$orderby":      "start/dateTime asc",
+        }
+        yield from self._paginate(f"{GRAPH_API}/me/calendarView", params)
 
 
 def addr_text(addr: Optional[Dict]) -> str:

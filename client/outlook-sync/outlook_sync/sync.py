@@ -211,6 +211,57 @@ def _build_record(msg: Dict, folder_lookup: Dict[str, str]) -> Optional[Dict]:
     }
 
 
+def _self_profile_record(me: Dict) -> Dict:
+    """The user's own Graph profile -> a self_profile row. The brief/self-model
+    read job_title as the AUTHORITATIVE role (vs an LLM guess)."""
+    title = (me.get("jobTitle") or "").strip()
+    disp = (me.get("displayName") or "").strip()
+    # a "Name | Company" display name carries the org after the pipe
+    org = disp.split("|", 1)[1].strip() if "|" in disp else ""
+    summary = (title + (f", {org}" if org else "")) if title else ""
+    return {
+        "fact": (f"My job title is {title}" + (f" at {org}" if org else ""))
+                if title else "Self profile",
+        "source": "outlook", "kind": "self_profile",
+        "display_name": disp, "job_title": title,
+        "department": (me.get("department") or "").strip(),
+        "office_location": (me.get("officeLocation") or "").strip(),
+        "org": org, "role_summary": summary or title,
+        "tags": ["outlook", "self", "profile"],
+    }
+
+
+def _build_event_record(ev: Dict) -> Optional[Dict]:
+    """Turn a Graph calendar event into the same shape the Google calendar
+    connector emits (source/kind/summary/start/end/attendees/...), so the
+    morning brief's schedule treats both identically."""
+    eid = ev.get("id")
+    if not eid:
+        return None
+    summary = ev.get("subject") or "(no title)"
+    # Graph times: {"dateTime": "2026-06-16T09:00:00.0000000", "timeZone": ...}.
+    # Trim to seconds; the brief reads date (start[:10]) and HH:MM (start[11:16]).
+    start = ((ev.get("start") or {}).get("dateTime") or "")[:19]
+    end = ((ev.get("end") or {}).get("dateTime") or "")[:19]
+    loc = (ev.get("location") or {}).get("displayName") or ""
+    organizer = api_mod.addr_text(ev.get("organizer"))
+    attendees = [a for a in (api_mod.addr_text(x)
+                             for x in (ev.get("attendees") or [])) if a]
+    cancelled = bool(ev.get("isCancelled"))
+    return {
+        "fact": f"Meeting: {summary}"
+                + (f" with {', '.join(attendees[:5])}" if attendees else ""),
+        "source": "outlook", "kind": "event",
+        "event_id": eid, "summary": summary,
+        "start": start, "end": end, "all_day": bool(ev.get("isAllDay")),
+        "location": loc, "organizer": organizer, "attendees": attendees,
+        "status": "cancelled" if cancelled else "confirmed",
+        "web_link": ev.get("webLink", ""),
+        "last_modified": ev.get("lastModifiedDateTime", ""),
+        "tags": ["outlook", "calendar", "event"],
+    }
+
+
 # ---------------------------------------------------------------- #
 #  Sync                                                             #
 # ---------------------------------------------------------------- #
@@ -236,6 +287,17 @@ def sync_once(cfg: Config, *,
             database=cfg.evosql_db, store=cfg.store,
             namespace=cfg.user_id,
         )
+
+    # Capture the user's own profile (authoritative job title etc.). User.Read
+    # is already granted, so this needs no extra scope. The brief/self-model use
+    # this as the real role instead of an LLM guess. Best-effort.
+    if store is not None:
+        try:
+            store.put_record("outlook_self_profile",
+                             _self_profile_record(client.get_user()))
+        except api_mod.GraphError as exc:
+            print(f"[outlook-sync] /me profile fetch failed: {exc}",
+                  file=sys.stderr, flush=True)
 
     # Resolve folder id → name once per pass. Cheap call; lets us
     # tag rows with the folder users actually see in Outlook
@@ -324,6 +386,26 @@ def sync_once(cfg: Config, *,
             print(f"[outlook-sync] SentItems pass failed: {exc}",
                   file=sys.stderr, flush=True)
             counters["errors"] += 1
+
+    # Pass 3 — calendar events via /me/calendarView. Needs Calendars.Read; if
+    # the cached token predates that scope the call 403s and we skip it (mail
+    # still synced). Events use their own key space and a fixed time window, so
+    # they never touch the mail watermark.
+    if store is not None:
+        now = datetime.now(timezone.utc)
+        win_start = (now - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+        win_end = (now + timedelta(days=14)).strftime("%Y-%m-%dT00:00:00Z")
+        try:
+            for ev in client.list_calendar_events(start_iso=win_start,
+                                                  end_iso=win_end):
+                rec = _build_event_record(ev)
+                if rec:
+                    store.put_record(f"outlook_evt_{rec['event_id']}", rec)
+                    counters["events"] = counters.get("events", 0) + 1
+        except api_mod.GraphError as exc:
+            print(f"[outlook-sync] calendar pass skipped "
+                  f"(grant Calendars.Read via --auth?): {exc}",
+                  file=sys.stderr, flush=True)
 
     if store and highest and highest != (wm or ""):
         store.set_watermark_iso(highest)
