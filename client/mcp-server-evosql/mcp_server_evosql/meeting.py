@@ -24,6 +24,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 
+# Calendar sources that feed the meeting brief / today's schedule. Google
+# Calendar ("gcal") and Outlook/M365 ("outlook") both write kind="event" rows
+# in the same shape (summary/start/end/attendees/...), so both surface.
+CAL_SOURCES = ("gcal", "outlook", "o365")
+
+
 # ---------------------------------------------------------------- data
 def _events(backend, ns: str) -> List[Dict[str, Any]]:
     """All calendar events in the namespace (from the primary memory store)."""
@@ -37,7 +43,7 @@ def _events(backend, ns: str) -> List[Dict[str, Any]]:
             rec = json.loads(r[0])
         except (ValueError, TypeError):
             continue
-        if rec.get("source") == "gcal" and rec.get("kind") == "event":
+        if rec.get("source") in CAL_SOURCES and rec.get("kind") == "event":
             out.append(rec)
     return out
 
