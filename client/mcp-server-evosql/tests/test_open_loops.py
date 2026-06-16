@@ -94,6 +94,65 @@ def test_is_shortcode_sender():
     assert not ol._is_shortcode_sender("ab")         # too short
 
 
+def test_is_nonhuman_sender_brand_ids_and_masked():
+    # CamelCase / ALL-CAPS / digit-bearing single-token sender ids are brands,
+    # the old ALL-CAPS-only check missed the mixed-case ones. Masked numbers
+    # (bank/legal SMS) are automated on any channel. (Fictional, language-neutral.)
+    for brand in ("WidgetPay", "AcmeBankCard", "MockPay", "ACMEBANK", "Otp2Go"):
+        assert ol.is_nonhuman_sender(brand, "imessage"), brand
+    assert ol.is_nonhuman_sender("+900000****11", "imessage")   # masked number
+    assert ol.is_nonhuman_sender("+900000****11")               # any channel
+    # real people stay (phone, email, multi-token, and single first names —
+    # a plain word is indistinguishable from a brand, so we keep it)
+    assert not ol.is_nonhuman_sender("+900000000000", "imessage")
+    assert not ol.is_nonhuman_sender("alex@example.com", "imessage")
+    assert not ol.is_nonhuman_sender("John Doe", "imessage")
+    assert not ol.is_nonhuman_sender("Sam", "imessage")         # single first name kept
+    assert not ol.is_nonhuman_sender("Mehmet", "gmail")
+    assert ol.is_nonhuman_sender("AcmeBankCard", "gmail")       # CamelCase brand
+
+
+def test_dismiss_by_counterparty_sticks_and_hides():
+    # The user marks a loop "not pending"; it must be dropped now AND not be
+    # re-opened by the next derivation. Fictional, language-neutral names.
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "loop_imessage_t1",
+          {"kind": "open_loop", "status": "open", "direction": "awaiting_me",
+           "source": "imessage", "thread_key": "t1", "counterparty": "Foobar",
+           "snippet": "promo", "actionable": True})
+    b.put(b.loops_store, NS, "loop_teams_t2",
+          {"kind": "open_loop", "status": "open", "direction": "awaiting_me",
+           "source": "teams", "thread_key": "t2", "counterparty": "Real Person",
+           "snippet": "hey", "actionable": True})
+    n = ol.dismiss_by_counterparty(b, NS, ["Foobar"])
+    assert n == 1
+    assert b.rows(b.loops_store, NS)["loop_imessage_t1"]["status"] == "resolved"
+    dis = ol.load_dismissed(b, NS)
+    assert ol.is_dismissed(dis, {"source": "imessage", "thread_key": "t1"})
+    assert not ol.is_dismissed(dis, {"source": "teams", "thread_key": "t2"})
+    assert ol.undismiss_by_counterparty(b, NS, ["Foobar"]) == 1
+    assert not ol.load_dismissed(b, NS)
+
+
+def test_dismiss_matching_pins_one_thread_by_snippet():
+    # A person with two loops: dismiss only the one whose snippet matches, so
+    # their still-relevant thread is kept. Fictional, language-neutral.
+    b = FakeBackend()
+    b.put(b.loops_store, NS, "loop_teams_a",
+          {"status": "open", "direction": "awaiting_me", "source": "teams",
+           "thread_key": "a", "counterparty": "Pat Lee", "actionable": True,
+           "what": "review the pull request", "snippet": "can you review"})
+    b.put(b.loops_store, NS, "loop_imessage_b",
+          {"status": "open", "direction": "i_owe_them", "source": "imessage",
+           "thread_key": "b", "counterparty": "Pat Lee", "actionable": True,
+           "what": "bring the charger", "snippet": "dont forget the charger"})
+    n = ol.dismiss_matching(b, NS, [("Pat Lee", "charger")])
+    assert n == 1
+    rows = b.rows(b.loops_store, NS)
+    assert rows["loop_imessage_b"]["status"] == "resolved"   # the chore, dropped
+    assert rows["loop_teams_a"]["status"] == "open"          # the PR, kept
+
+
 def test_thread_key():
     assert ol._thread_key({"thread_id": "T1", "message_id": "M9"}, "gmail") == "T1"
     assert ol._thread_key({"message_id": "M9"}, "gmail") == "M9"
@@ -332,7 +391,13 @@ def test_resolution_flips_stale_open_loop():
 
 
 def main():
-    tests = [test_disp, test_is_auto, test_thread_key, test_regexes,
+    tests = [test_disp, test_is_auto,
+             test_is_auto_filters_sms_brand_shortcodes,
+             test_is_auto_keeps_real_people, test_is_shortcode_sender,
+             test_is_nonhuman_sender_brand_ids_and_masked,
+             test_dismiss_by_counterparty_sticks_and_hides,
+             test_dismiss_matching_pins_one_thread_by_snippet,
+             test_thread_key, test_regexes,
              test_detect_my_teams_id,
              test_awaiting_me_inbound_after_my_reply,
              test_one_way_inbound_is_not_a_loop, test_short_ack_closes_the_loop,

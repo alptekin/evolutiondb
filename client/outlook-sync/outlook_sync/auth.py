@@ -43,6 +43,7 @@ DEFAULT_TENANT = "common"
 
 SCOPES = [
     "https://graph.microsoft.com/Mail.Read",
+    "https://graph.microsoft.com/Calendars.Read",
     "https://graph.microsoft.com/User.Read",
     "offline_access",
 ]
@@ -144,11 +145,21 @@ class OutlookAuth:
     # -- main API ----------------------------------------------------
     def ensure_token(self, interactive: bool = False) -> str:
         cached = self.cache.load()
+        # Scopes we now require (offline_access never appears in the granted
+        # scope string, so exclude it). A refresh-token grant can only return
+        # ALREADY-consented scopes — it can never ADD a newly requested one. So
+        # on an explicit interactive (--auth) run, if the cached token does not
+        # already cover what we need, skip the cached/refresh shortcuts and force
+        # a FRESH consent; otherwise scope widening (e.g. adding Calendars.Read)
+        # silently no-ops.
+        want = {s for s in _scopes() if s != "offline_access"}
+        covers = want.issubset(set((cached.get("scope") or "").split()))
+
         if cached.get("access_token") and cached.get("expires_at", 0) \
-                > time.time() + 60:
+                > time.time() + 60 and (covers or not interactive):
             return cached["access_token"]
 
-        if cached.get("refresh_token"):
+        if cached.get("refresh_token") and (covers or not interactive):
             try:
                 fresh = self._refresh(cached["refresh_token"])
                 # Microsoft rotates refresh tokens on each refresh —
