@@ -34,6 +34,30 @@ from typing import Dict, Optional
 from . import api as api_mod
 from . import state as state_mod
 
+# Optional PII protection — masks identifiers in the issue/PR title + body
+# before MEMORY PUT, matching the other connectors. Transparent passthrough
+# when evolutiondb-pii is not installed.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "title", "body", "snippet", "text"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS, key_prefix=f"{main_key}_pii")
+
+
+def _store_put(store, key, rec):
+    """Mask the record (protect_record) then write it and any PII companions."""
+    rec, companions = _protect(rec, key)
+    store.put_record(key, rec)
+    for ck, cv in companions:
+        store.put_record(ck, cv)
+
 
 # ---------------------------------------------------------------- #
 #  Config                                                           #
@@ -213,7 +237,7 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
         thread_rec = _build_issue_record(issue, owner, repo)
         if store:
             key = f"gh_thread_{repo_full}#{number}"
-            store.put_record(key, thread_rec)
+            _store_put(store, key, thread_rec)
         counters["threads"] += 1
 
         is_pr = "pull_request" in issue
@@ -224,7 +248,7 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
                                                   number=number,
                                                   kind="pr_comment")
                     if store:
-                        store.put_record(f"gh_pr_comment_{c['id']}", rec)
+                        _store_put(store, f"gh_pr_comment_{c['id']}", rec)
                     counters["comments"] += 1
                 for r in client.get_pr_reviews(owner, repo, number):
                     if not r.get("body"):
@@ -233,7 +257,7 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
                                                   number=number,
                                                   kind="pr_review")
                     if store:
-                        store.put_record(f"gh_pr_review_{r['id']}", rec)
+                        _store_put(store, f"gh_pr_review_{r['id']}", rec)
                     counters["reviews"] += 1
 
             for c in client.get_issue_comments(owner, repo, number):
@@ -241,7 +265,7 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
                                               number=number,
                                               kind="issue_comment")
                 if store:
-                    store.put_record(f"gh_issue_comment_{c['id']}", rec)
+                    _store_put(store, f"gh_issue_comment_{c['id']}", rec)
                 counters["comments"] += 1
         except api_mod.GitHubError as exc:
             print(f"[github-sync] {repo_full}#{number} failed: {exc}",

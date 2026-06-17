@@ -25,6 +25,8 @@ import os
 import urllib.request
 from typing import Optional
 
+from . import pii_egress
+
 _ANTHROPIC = ("anthropic", "claude", "sonnet")
 _OPENAI_COMPAT = ("openai", "openrouter", "custom", "openai-compatible")
 
@@ -55,6 +57,7 @@ def chat(prompt: str, *, provider: str, model: str,
     """Send a single user message and return the assistant's text (stripped),
     or None when the provider is unknown. Exceptions propagate — every caller
     already wraps its opt-in LLM call in try/except and degrades gracefully."""
+    prompt = pii_egress.scrub(prompt)   # mask PII before any provider dispatch
     p = (provider or "").strip().lower()
 
     if p in _ANTHROPIC:
