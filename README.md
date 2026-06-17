@@ -139,6 +139,74 @@ docker run -d -p 5433:5433 -p 9967:9967 \
     -e EVOSQL_PASSWORD=mysecret evolutiondb/evolutiondb:latest
 ```
 
+## Run the whole stack (engine + agent)
+
+One command brings up the SQL engine plus the standalone agent web UI:
+
+```bash
+./install.sh                            # bootstrap + build + up
+```
+
+`install.sh` is idempotent. It checks Docker is present, copies
+`.env.example` to `.env` (never overwriting an existing `.env`),
+generates a random `EVOSQL_PASSWORD` and `EVOSQL_ENCRYPTION_KEY` if those
+are still blank/`admin`, then runs the agent profile. To do it by hand:
+
+```bash
+cp .env.example .env                    # then edit secrets in .env
+docker compose --profile agent up -d    # engine + agent web UI
+```
+
+A plain `docker compose up -d` (no `--profile agent`) still brings up the
+engine only, exactly as before. After the stack is up:
+
+- PostgreSQL wire : `127.0.0.1:5433`
+- EVO protocol    : `127.0.0.1:9967`
+- Agent web UI    : `http://127.0.0.1:8800`
+
+Set `ANTHROPIC_API_KEY` in `.env` to enable the cloud LLM (without it the
+agent runs with no LLM turns).
+
+### Secure-by-default posture
+
+- **Loopback host ports.** Every published port binds to `127.0.0.1`, so
+  a fresh install is not reachable from the LAN or internet.
+- **Set secrets in `.env`.** `EVOSQL_PASSWORD` defaults to `admin` only
+  when left blank; change it (or let `install.sh` generate one). The
+  `.env` file is gitignored — never commit it.
+- **Exposing publicly is opt-in.** To serve beyond loopback you must set
+  `EVOSQL_BIND=0.0.0.0` (the engine binds `127.0.0.1` by default),
+  provide a TLS cert/key, and set `EVOSQL_MCP_AUTH_TOKEN` for the MCP HTTP
+  transport. Drop the `127.0.0.1:` prefix on the compose port mappings
+  only after those are in place.
+
+### Data-handling notes (what is and isn't protected)
+
+- **PII masking is opt-in and field-level.** At rest it runs per
+  connector via `protect_record()`; at retrieval via
+  `EVOSQL_PII_RETRIEVAL`; outbound to an LLM it masks only when
+  `EVOSQL_PII_EGRESS=on`. Default `off` means enrichment text reaches the
+  model provider unmasked. (The agent image always installs
+  `evolutiondb-pii`, so turning egress masking `on` never fail-closes.)
+  name/DOB rules ship disabled (heuristic only).
+- **Encryption at rest (TDE) needs both halves.** Whole-DB AES-256-CTR
+  page encryption activates only with a `TLS=1` / `EVO_ENCRYPTION` build
+  *and* an `EVOSQL_ENCRYPTION_KEY` passphrase. Without both, the DB file
+  *and* the WAL are plaintext on disk. Page 0 (FileHeader) is always
+  plaintext. CTR gives confidentiality, not tamper-detection.
+- **Send invariant (ADR-004).** The agent never sends on its own; it
+  drafts and queues, a human approves (`approve_send`), and delivery is
+  dry-run unless explicitly opted in.
+- **Roadmap, not shipped:** key rotation, per-tenant RLS, engine
+  `MASKING` SQL, and reliable person-name redaction.
+- **Sub-processors depend on what you enable.** Models: Anthropic
+  (default, optional), OpenAI (optional embeddings), Gemini/Azure (named,
+  not wired by default), Ollama (local, no egress). Connectors that call
+  external APIs: Google (Gmail/Calendar/YouTube), Microsoft
+  (Outlook/Teams), Slack, GitHub, Notion, Azure DevOps. Local-only (no
+  sub-processor): iMessage, Apple Notes, Browser history, Claude sessions.
+  Connector scopes are read-only by default; send scopes are opt-in.
+
 ## Testing
 
 ```bash

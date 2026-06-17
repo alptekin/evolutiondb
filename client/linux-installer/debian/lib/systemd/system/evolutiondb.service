@@ -2,6 +2,13 @@
 Description=EvolutionDB SQL engine
 Documentation=https://github.com/alptekin/evolutiondb
 After=network.target
+# Crash-loop backoff: if the service restarts more than StartLimitBurst
+# times within StartLimitIntervalSec seconds, systemd stops trying and
+# leaves it failed (instead of looping forever). Combined with
+# Restart=on-failure below, >5 crashes in 60s fail-stops the unit so a
+# hard-failing config surfaces for ops instead of churning silently.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
