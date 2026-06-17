@@ -3,6 +3,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "platform.h"
 #include "net.h"
 
@@ -49,7 +50,21 @@ int net_bind_listen(socket_t sock, int port, int backlog)
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+
+    /* Bind address is configurable via EVOSQL_BIND. Default is loopback so a
+     * fresh install is not exposed on the network. Set EVOSQL_BIND=0.0.0.0
+     * (or "*") to listen on all interfaces, or a specific IPv4 address. */
+    {
+        const char *bind_addr = getenv("EVOSQL_BIND");
+        if (!bind_addr || !*bind_addr)
+            bind_addr = "127.0.0.1";
+        if (strcmp(bind_addr, "0.0.0.0") == 0 || strcmp(bind_addr, "*") == 0) {
+            addr.sin_addr.s_addr = INADDR_ANY;
+        } else if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
+            /* Unparseable address: fail safe to loopback rather than wildcard. */
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        }
+    }
     addr.sin_port        = htons((unsigned short)port);
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERR)
