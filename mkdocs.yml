@@ -115,5 +115,12 @@ nav:
           - "DML profile — phase 6.3": dml-profile-phase6.3.md
           - "Benchmarks v1": benchmarks/v1.md
           - "Benchmarks v2 — vendor sweep": benchmarks/v2-vendors.md
+  - Governance:
+      - "Doc pack overview": governance/README.md
+      - "Privacy policy (template)": governance/privacy-policy.md
+      - "Data Processing Addendum (template)": governance/dpa.md
+      - "Sub-processors (conditional)": governance/sub-processors.md
+      - "Data retention policy (template)": governance/data-retention-policy.md
+      - "Breach-response runbook (template)": governance/breach-response-runbook.md
   - Release notes:
       - "3.0.0": release-notes/3.0.0.md
