@@ -26,6 +26,14 @@
 #define DEFAULT_PG_PORT   5433
 #define DEFAULT_EVO_PORT  9967
 
+/* Portable setenv: --bind / --data-dir are sugar over the EVOSQL_BIND /
+ * EVOSQL_DATA_DIR env vars, read later by net.c and DatabaseMgmt.c. */
+#ifdef _WIN32
+  #define EVO_SETENV(k, v) _putenv_s((k), (v))
+#else
+  #define EVO_SETENV(k, v) setenv((k), (v), 1)
+#endif
+
 /* ---- Graceful shutdown on SIGTERM/SIGINT ---- */
 #ifndef _WIN32
 #include <signal.h>
@@ -154,6 +162,10 @@ int main(int argc, char *argv[])
             role_str = argv[++i];
         else if (strcmp(argv[i], "--base-backup") == 0 && i + 1 < argc)
             base_backup_path = argv[++i];
+        else if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
+            EVO_SETENV("EVOSQL_BIND", argv[++i]);   /* listener address; default loopback */
+        else if (strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc)
+            EVO_SETENV("EVOSQL_DATA_DIR", argv[++i]);  /* must be set before server_init_ex */
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
     }

@@ -150,6 +150,13 @@ class AgentLoop:
         stop_reason = "max_turns"
         used_in = used_out = 0
 
+        # Opt-in daily token cap (EVOSQL_LLM_DAILY_TOKENS) shared with the
+        # enrichment path. A no-op when unset, so default runs are unchanged.
+        try:
+            from mcp_server_evosql import spend
+        except Exception:
+            spend = None
+
         def _result(turns, reason):
             return {"final_text": final_text, "steps": steps, "turns": turns,
                     "stop_reason": reason,
@@ -165,6 +172,14 @@ class AgentLoop:
                                     "stop_reason": "budget"})
                 return _result(turn, "budget")
 
+            # Stop gracefully if today's hard spend cap is already reached.
+            if spend is not None and spend.cap() > 0 and spend.spent_today() >= spend.cap():
+                self._emit("budget", {"used": spend.spent_today(),
+                                      "budget": spend.cap(), "scope": "daily"})
+                self._emit("done", {"final_text": final_text, "turns": turn,
+                                    "stop_reason": "spend_cap"})
+                return _result(turn, "spend_cap")
+
             resp = self.client.messages.create(
                 model=self.model, max_tokens=self.max_tokens,
                 system=self.system, tools=self.tools, messages=messages)
@@ -172,8 +187,12 @@ class AgentLoop:
 
             usage = getattr(resp, "usage", None)
             if usage is not None:
-                used_in += int(getattr(usage, "input_tokens", 0) or 0)
-                used_out += int(getattr(usage, "output_tokens", 0) or 0)
+                turn_in = int(getattr(usage, "input_tokens", 0) or 0)
+                turn_out = int(getattr(usage, "output_tokens", 0) or 0)
+                used_in += turn_in
+                used_out += turn_out
+                if spend is not None:
+                    spend.record(turn_in + turn_out)   # feed the daily ledger
 
             messages.append({"role": "assistant",
                              "content": _blocks_to_dicts(resp.content)})

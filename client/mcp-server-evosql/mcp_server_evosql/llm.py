@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import urllib.error
 import urllib.request
 from typing import Optional
 
@@ -52,12 +54,53 @@ def _openai_key() -> str:
             or os.environ.get("OPENROUTER_API_KEY") or "")
 
 
+def _urlopen_json(req, timeout: int = 60, attempts: int = 4) -> dict:
+    """POST ``req`` and parse the JSON body, retrying on HTTP 429 / 5xx and
+    transient network errors with exponential backoff (honouring Retry-After).
+    The Anthropic SDK does this itself, so only the urllib paths need it."""
+    delay = 1.0
+    for n in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+                return json.loads(r.read().decode("utf-8", "replace") or "{}")
+        except urllib.error.HTTPError as e:
+            retryable = e.code == 429 or 500 <= e.code < 600
+            if not retryable or n == attempts - 1:
+                raise
+            ra = e.headers.get("Retry-After") if e.headers else None
+            wait = float(ra) if (ra and str(ra).isdigit()) else delay
+            time.sleep(min(wait, 30.0))
+            delay *= 2
+        except urllib.error.URLError:
+            if n == attempts - 1:
+                raise
+            time.sleep(min(delay, 30.0))
+            delay *= 2
+    return {}   # unreachable: the loop either returns or raises
+
+
 def chat(prompt: str, *, provider: str, model: str,
          max_tokens: int = 2000) -> Optional[str]:
     """Send a single user message and return the assistant's text (stripped),
     or None when the provider is unknown. Exceptions propagate — every caller
-    already wraps its opt-in LLM call in try/except and degrades gracefully."""
-    prompt = pii_egress.scrub(prompt)   # mask PII before any provider dispatch
+    already wraps its opt-in LLM call in try/except and degrades gracefully.
+
+    This wrapper applies the two cross-cutting guards (PII egress masking and
+    the opt-in daily token cap) once, then delegates the provider call to
+    ``_dispatch``."""
+    from . import spend
+    prompt = pii_egress.scrub(prompt)        # mask PII before any provider dispatch
+    spend.check(spend.estimate_tokens(prompt) + max_tokens)   # daily-cap pre-flight
+    result = _dispatch(prompt, provider=provider, model=model, max_tokens=max_tokens)
+    if result is not None:
+        spend.record(spend.estimate_tokens(prompt, result))
+    return result
+
+
+def _dispatch(prompt: str, *, provider: str, model: str,
+              max_tokens: int) -> Optional[str]:
+    """Provider dispatch only — no PII scrub, no spend accounting (the chat()
+    wrapper does both). The urllib paths retry 429/5xx via _urlopen_json."""
     p = (provider or "").strip().lower()
 
     if p in _ANTHROPIC:
@@ -79,8 +122,7 @@ def chat(prompt: str, *, provider: str, model: str,
             headers["HTTP-Referer"] = "https://github.com/alptekin/evolutiondb"
         req = urllib.request.Request(_openai_base(p) + "/chat/completions",
                                      data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310
-            data = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        data = _urlopen_json(req)
         choices = data.get("choices") or [{}]
         return ((choices[0].get("message") or {}).get("content") or "").strip()
 
@@ -91,8 +133,7 @@ def chat(prompt: str, *, provider: str, model: str,
                           ).encode()
         req = urllib.request.Request(host + "/api/chat", data=body,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310
-            data = json.loads(r.read().decode("utf-8", "replace") or "{}")
+        data = _urlopen_json(req)
         return ((data.get("message") or {}).get("content") or "").strip()
 
     return None
