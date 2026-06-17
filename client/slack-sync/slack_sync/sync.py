@@ -25,6 +25,30 @@ from typing import Dict, Optional
 from . import api as api_mod
 from . import state as state_mod
 
+# Optional PII protection — masks identifiers in the message text before
+# MEMORY PUT, matching the other connectors. Transparent passthrough when
+# evolutiondb-pii is not installed.
+try:
+    from evolutiondb_pii.integration import protect_record as _pii_protect
+except ImportError:
+    _pii_protect = None
+
+_PII_FIELDS = ["fact", "text", "snippet"]
+
+
+def _protect(rec, main_key):
+    if _pii_protect is None:
+        return rec, []
+    return _pii_protect(rec, fields=_PII_FIELDS, key_prefix=f"{main_key}_pii")
+
+
+def _store_put(store, key, rec):
+    """Mask the record (protect_record) then write it and any PII companions."""
+    rec, companions = _protect(rec, key)
+    store.put_record(key, rec)
+    for ck, cv in companions:
+        store.put_record(ck, cv)
+
 
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -168,7 +192,7 @@ def sync_once(cfg: Config, *, since_default: Optional[float],
                                       conv_name=conv_name,
                                       sender_name=sender)
                 if store:
-                    store.put_record(
+                    _store_put(store, 
                         f"slack_msg_{ch_id}_{msg['ts']}", rec)
                 counters["messages"] += 1
                 try:
@@ -188,7 +212,7 @@ def sync_once(cfg: Config, *, since_default: Optional[float],
                                               sender_name=rsender,
                                               parent_ts=msg["ts"])
                         if store:
-                            store.put_record(
+                            _store_put(store, 
                                 f"slack_msg_{ch_id}_{reply['ts']}", rrec)
                         counters["replies"] += 1
                         try:

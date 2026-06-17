@@ -205,11 +205,14 @@ class AgentLoop:
                 result = self.server._call_tool(name, args, self.identity)
                 steps.append({"tool": name, "input": args, "result": result})
                 self._emit("tool_result", {"tool": name, "result": result})
+                # DB-sourced tool results are the real PII path back to the
+                # model — mask the serialized content before it is sent.
+                from mcp_server_evosql import pii_egress
+                content = json.dumps(result, ensure_ascii=False, default=str)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": getattr(tu, "id", ""),
-                    "content": json.dumps(result, ensure_ascii=False,
-                                          default=str),
+                    "content": pii_egress.scrub(content),
                 })
             messages.append({"role": "user", "content": tool_results})
 
