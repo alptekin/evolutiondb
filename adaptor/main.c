@@ -89,6 +89,7 @@ int main(int argc, char *argv[])
     int dist_port = 9969;              /* --dist-port (distributed query engine) */
     const char *role_str = NULL;       /* --role primary|replica|witness */
     const char *base_backup_path = NULL;  /* --base-backup PATH */
+    int require_tls = 0;               /* --require-tls / EVOSQL_REQUIRE_TLS */
     int i;
 
     /* Environment defaults (CLI flags below override).
@@ -166,6 +167,8 @@ int main(int argc, char *argv[])
             EVO_SETENV("EVOSQL_BIND", argv[++i]);   /* listener address; default loopback */
         else if (strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc)
             EVO_SETENV("EVOSQL_DATA_DIR", argv[++i]);  /* must be set before server_init_ex */
+        else if (strcmp(argv[i], "--require-tls") == 0)
+            require_tls = 1;           /* reject non-loopback plaintext PG connections */
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
     }
@@ -244,6 +247,32 @@ int main(int argc, char *argv[])
         } else {
             printf("[TLS] No EVOSQL_TLS_CERT / EVOSQL_TLS_KEY set — TLS disabled\n");
         }
+    }
+
+    /* Require-TLS gate for non-loopback PG connections. Env fallback, then a
+     * hard startup guard: enabling it without TLS available would refuse every
+     * remote SSLRequest and then reject the plaintext fallback — locking out
+     * all remote clients. Fail fast instead of starting in that trap. */
+    {
+        extern int g_pg_require_tls;
+        if (!require_tls) {
+            const char *e = getenv("EVOSQL_REQUIRE_TLS");
+            if (e && (e[0] == '1' || e[0] == 't' || e[0] == 'T' ||
+                      e[0] == 'y' || e[0] == 'Y'))
+                require_tls = 1;
+        }
+        if (require_tls && !tls_is_available()) {
+            fprintf(stderr,
+                "[FATAL] require-tls is set but TLS is unavailable. Build with "
+                "TLS=1 and set EVOSQL_TLS_CERT / EVOSQL_TLS_KEY, or unset "
+                "EVOSQL_REQUIRE_TLS. Refusing to start to avoid locking out "
+                "remote clients.\n");
+            server_cleanup();
+            return 1;
+        }
+        g_pg_require_tls = require_tls;
+        if (require_tls)
+            printf("[TLS] require-tls: non-loopback PG connections must use TLS\n");
     }
 
     /* Banner */

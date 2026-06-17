@@ -293,6 +293,25 @@ void pg_send_result_set(conn_t *conn, const ResultSet *rs)
     pg_send_command_complete(conn, rs->command_tag);
 }
 
+/* When set (EVOSQL_REQUIRE_TLS / --require-tls), non-loopback PG connections
+ * must use TLS — a plaintext password is never accepted over the network.
+ * Default 0 so local/docker/test deployments are unchanged. main.c hard-fails
+ * at startup if this is set without TLS available, to prevent admin lockout. */
+int g_pg_require_tls = 0;
+
+/* True if the peer is on 127.0.0.0/8 (loopback). Determined from the socket
+ * itself via getpeername, so no per-connection plumbing through the dispatch
+ * path is needed. On any error or non-IPv4 peer it returns 0 (treat as remote
+ * — the safe default for a TLS-required check). */
+static int conn_is_loopback(socket_t sock)
+{
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    if (getpeername(sock, (struct sockaddr *)&addr, &len) != 0) return 0;
+    if (addr.sin_family != AF_INET) return 0;
+    return (ntohl(addr.sin_addr.s_addr) >> 24) == 127;
+}
+
 /* ----------------------------------------------------------------
  *  Startup / handshake — with TLS and cleartext password auth
  * ---------------------------------------------------------------- */
@@ -396,6 +415,17 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
                 startup_user[sizeof(startup_user) - 1] = '\0';
             }
         }
+    }
+
+    /* ── TLS-required gate (off by default) ──
+     * A non-loopback connection that did not negotiate TLS must not be sent a
+     * cleartext-password request. Loopback stays plaintext (local CLI, the
+     * in-cluster agent, and the raw-wire test suite are unaffected). */
+    if (g_pg_require_tls && !conn->is_tls && !conn_is_loopback(conn->sock)) {
+        pg_send_error(conn, "FATAL", "28000",
+                      "TLS required for non-loopback connections "
+                      "(connect with sslmode=require)");
+        return -1;
     }
 
     /* ── Authentication: request cleartext password ── */
