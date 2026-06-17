@@ -26,16 +26,27 @@
 #include "wal.h"
 #include "../../adaptor/platform.h"
 
-/* Default checkpoint interval. PostgreSQL's checkpoint_timeout default is 5min;
- * we match that as a conservative starting point. EVOSQL_CHECKPOINT_INTERVAL_SEC
- * overrides it; a value <= 0 disables the thread entirely (back-compat: an
- * un-configured deployment that wants the legacy shutdown-only behavior can set
- * it to 0, and the short-lived test suite never reaches the first tick). */
-#define WAL_CHECKPOINT_INTERVAL_SEC_DEFAULT 300
+/* Default checkpoint interval. OPT-IN (0 = disabled): an un-configured
+ * deployment keeps the legacy shutdown-only behavior, so nothing changes by
+ * default — importantly, a replication primary is not periodically truncating
+ * the WAL its sender streams from. Set EVOSQL_CHECKPOINT_INTERVAL_SEC > 0 to
+ * enable (e.g. 300, matching PostgreSQL's checkpoint_timeout). */
+#define WAL_CHECKPOINT_INTERVAL_SEC_DEFAULT 0
 
 static int          g_ckpt_interval_sec = WAL_CHECKPOINT_INTERVAL_SEC_DEFAULT;
 static pthread_t    g_ckpt_thread;
 static volatile int g_ckpt_running = 0;
+
+/* Optional truncate guard: the active WAL is truncated only when this returns
+ * non-zero (or when unset). The adaptor registers a replication-aware guard so
+ * the checkpointer never truncates the WAL while a replica streams from it; the
+ * standalone engine leaves it NULL and truncates normally. */
+static int (*g_truncate_guard)(void) = NULL;
+
+void wal_checkpointer_set_truncate_guard(int (*guard)(void))
+{
+    g_truncate_guard = guard;
+}
 
 /* One checkpoint pass under full write exclusion. */
 static void wal_checkpointer_tick(void)
@@ -63,14 +74,24 @@ static void wal_checkpointer_tick(void)
         int fd = pgm_get_fd();
         if (fd >= 0) fsync(fd);           /* make it all durable BEFORE truncating WAL */
     }
-    wal_checkpoint();                     /* archive + truncate active WAL */
+    /* Truncate the WAL only when the guard permits (e.g. no replica is
+     * streaming from it). The durability flush above always runs. */
+    int truncated = 0;
+    if (!g_truncate_guard || g_truncate_guard()) {
+        wal_checkpoint();                 /* archive + truncate active WAL */
+        truncated = 1;
+    }
 
     rwlock_wrunlock(&g_parse_lock);
     mutex_unlock(&g_dml_mutex);
 
     if (before > 0) {
-        fprintf(stderr, "[WAL-CKPT] checkpoint: WAL %lld -> %lld bytes\n",
-                before, wal_size());
+        if (truncated)
+            fprintf(stderr, "[WAL-CKPT] checkpoint: WAL %lld -> %lld bytes\n",
+                    before, wal_size());
+        else
+            fprintf(stderr, "[WAL-CKPT] flushed; WAL truncation skipped "
+                    "(replication active), WAL %lld bytes retained\n", before);
     }
 }
 

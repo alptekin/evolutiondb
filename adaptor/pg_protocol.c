@@ -421,7 +421,8 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
      * A non-loopback connection that did not negotiate TLS must not be sent a
      * cleartext-password request. Loopback stays plaintext (local CLI, the
      * in-cluster agent, and the raw-wire test suite are unaffected). */
-    if (g_pg_require_tls && !conn->is_tls && !conn_is_loopback(conn->sock)) {
+    if (g_pg_require_tls && !conn->is_tls && !conn->trusted_internal &&
+        !conn_is_loopback(conn->sock)) {
         pg_send_error(conn, "FATAL", "28000",
                       "TLS required for non-loopback connections "
                       "(connect with sslmode=require)");

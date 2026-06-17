@@ -150,6 +150,12 @@ int repl_get_status(ReplicationStatus *out);
 void repl_set_role(int role);
 int  repl_get_role(void);
 
+/* True (1) when the background WAL checkpointer may truncate the active WAL:
+ * PRIMARY role with no active replication slots. Registered as the
+ * checkpointer's truncate guard so truncation never stalls a connected
+ * replica's byte-offset WAL stream. */
+int  repl_wal_truncate_ok(void);
+
 /* ----------------------------------------------------------------
  *  Synchronous commit (Commit 2)
  *

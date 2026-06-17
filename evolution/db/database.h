@@ -214,6 +214,10 @@ void auto_reclaim_stop(void);
  * exclusion. Interval via EVOSQL_CHECKPOINT_INTERVAL_SEC (<=0 disables). */
 void wal_checkpointer_start(void);
 void wal_checkpointer_stop(void);
+/* Register a guard the checkpointer calls before truncating the WAL; truncation
+ * proceeds only if it returns non-zero (or is unset). The adaptor wires a
+ * replication-aware guard so an active replica's WAL stream is never cut. */
+void wal_checkpointer_set_truncate_guard(int (*guard)(void));
 
 int AnalyzeTableProcess(void);
 

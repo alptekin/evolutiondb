@@ -77,6 +77,11 @@ int wal_checkpoint(void);
 /* Current active WAL size in bytes (0 when WAL is inactive). */
 long long wal_size(void);
 
+/* Canonical active-WAL path. External consumers (replication sender, base
+ * backup) must use this rather than hardcoding "evosql.wal", since
+ * EVOSQL_DATA_DIR relocates the WAL into the data directory. */
+const char *wal_get_path(void);
+
 /* Shut down WAL subsystem. Performs a final checkpoint and closes
  * the WAL file. */
 void wal_shutdown(void);

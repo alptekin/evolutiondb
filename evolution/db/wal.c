@@ -440,6 +440,16 @@ int wal_checkpoint(void)
     return 0;
 }
 
+/* Canonical active-WAL path (g_dbRoot/evosql.wal, or a CWD-relative fallback
+ * before g_dbRoot is set). Consumers outside wal.c — the replication WAL sender
+ * and base-backup bundler — MUST use this instead of hardcoding "evosql.wal",
+ * otherwise a non-default EVOSQL_DATA_DIR relocates the WAL out from under them.
+ * Returns "evosql.wal" if wal_init has not run yet. */
+const char *wal_get_path(void)
+{
+    return g_wal_path[0] ? g_wal_path : "evosql.wal";
+}
+
 /* Current active WAL size in bytes (header + records), 0 when inactive.
  * Used by the background checkpointer for logging / a size-based trigger.
  * Takes g_wal_lock briefly so it is safe to call from another thread. */
