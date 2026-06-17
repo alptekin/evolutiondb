@@ -94,6 +94,36 @@ def _summarize_result(result: Any) -> Dict[str, Any]:
     return out
 
 
+def _identity_fields(ident) -> Dict[str, Any]:
+    """The who-columns every row carries — identifiers only, never secrets."""
+    return {
+        "tenant": getattr(ident, "tenant_id", ""),
+        "user": getattr(ident, "user_id", ""),
+        "roles": list(getattr(ident, "roles", ()) or ()),
+    }
+
+
+def _append_row(backend, ident, rec: Dict[str, Any]) -> None:
+    """The single append path: stamp a process-unique, time-ordered key and
+    PUT one json row into the tenant's append-only audit store.
+
+    Append-only by construction — the key is unique (ms + monotonic seq) so a
+    write never overwrites a prior row, and there is no UPDATE/DELETE here. The
+    value is ALWAYS the json.dumps of ``rec`` (no raw-string concatenation of
+    caller-supplied content outside json), so the privacy/escaping contract is
+    identical for every audit kind. Best-effort: the PUT is swallowed so an
+    audit failure can never break the calling flow."""
+    from .server import _e
+    key = f"audit_{int(rec['ts'] * 1000)}_{next(_SEQ):08d}"
+    try:
+        backend._exec(
+            f"MEMORY PUT INTO {backend.audit_store} VALUES "
+            f"('{_e(getattr(ident, 'user_id', '') or '')}','{key}',"
+            f"'{_e(json.dumps(rec))}')")
+    except Exception:
+        pass
+
+
 def record(backend, ident, tool: str, outcome: str, *,
            args: Optional[Dict[str, Any]] = None,
            result: Any = None,
@@ -102,12 +132,9 @@ def record(backend, ident, tool: str, outcome: str, *,
     """Append one audit row. Best-effort by contract — callers wrap it, and it
     also swallows internally, so the hot path is one PUT that cannot fail the
     tool call."""
-    from .server import _e
     rec: Dict[str, Any] = {
         "ts": time.time(),
-        "tenant": getattr(ident, "tenant_id", ""),
-        "user": getattr(ident, "user_id", ""),
-        "roles": list(getattr(ident, "roles", ()) or ()),
+        **_identity_fields(ident),
         "tool": tool,
         "outcome": outcome,            # ok | error | denied | exception
         "args": _summarize_args(tool, args),
@@ -120,11 +147,66 @@ def record(backend, ident, tool: str, outcome: str, *,
         rec["duration_ms"] = int(duration_ms)
     if ref:
         rec["ref"] = ref
-    key = f"audit_{int(rec['ts'] * 1000)}_{next(_SEQ):08d}"
+    _append_row(backend, ident, rec)
+
+
+# ------------------------------------------------------------ auth / RBAC
+# Auth + privilege changes do NOT pass through _call_tool, so without these
+# thin wrappers they leave no tenant-visible trace (Faz 0 gap-closure). Both
+# reuse _append_row — same store, same unique-key, same json-only value path,
+# same append-only/best-effort contract as record(). The whitelist here is the
+# row shape itself: identifiers + outcome + an OPTIONAL non-sensitive ref. A
+# raw token/secret/recipient is NEVER passed in or stored — callers pass a
+# token PREFIX-hash or an item id as ``ref`` at most.
+
+# Fixed, small event vocabularies keep the store grep-able and bound what an
+# auth/privilege row can ever say (no free-form content channel).
+_AUTH_EVENTS = frozenset({"auth.denied", "auth.resolve", "connector.oauth_grant"})
+_PRIV_ACTIONS = frozenset({"privilege.grant", "privilege.revoke"})
+_AUTH_OUTCOMES = frozenset({"ok", "denied"})
+
+
+def record_auth(backend, ident, event: str, outcome: str,
+                ref: Optional[str] = None) -> None:
+    """Append one auth-event row (denial / state change). ``event`` is one of
+    ``_AUTH_EVENTS``; ``outcome`` is ``ok``|``denied``. ``ref`` is an OPTIONAL
+    non-sensitive reference (a token PREFIX-hash or an item id) — NEVER the
+    token/secret itself. Best-effort: any failure is swallowed so the auth flow
+    is never blocked."""
     try:
-        backend._exec(
-            f"MEMORY PUT INTO {backend.audit_store} VALUES "
-            f"('{_e(ident.user_id)}','{key}','{_e(json.dumps(rec))}')")
+        ev = event if event in _AUTH_EVENTS else "auth.resolve"
+        oc = outcome if outcome in _AUTH_OUTCOMES else "denied"
+        rec: Dict[str, Any] = {
+            "ts": time.time(),
+            **_identity_fields(ident),
+            "kind": "auth",
+            "event": ev,
+            "outcome": oc,
+        }
+        if ref:
+            rec["ref"] = str(ref)
+        _append_row(backend, ident, rec)
+    except Exception:
+        pass
+
+
+def record_privilege(backend, ident, action: str, target: str,
+                     outcome: str = "ok") -> None:
+    """Append one privilege-change row. ``action`` is one of ``_PRIV_ACTIONS``;
+    ``target`` is a ROLE/USER identifier only (no secrets/content). Best-effort:
+    any failure is swallowed so the privilege flow is never blocked."""
+    try:
+        act = action if action in _PRIV_ACTIONS else "privilege.grant"
+        oc = outcome if outcome in _AUTH_OUTCOMES else "ok"
+        rec: Dict[str, Any] = {
+            "ts": time.time(),
+            **_identity_fields(ident),
+            "kind": "privilege",
+            "action": act,
+            "target": str(target) if target is not None else "",
+            "outcome": oc,
+        }
+        _append_row(backend, ident, rec)
     except Exception:
         pass
 
