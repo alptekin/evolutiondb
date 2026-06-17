@@ -220,9 +220,18 @@ int wal_init(int data_fd)
 {
     g_data_fd = data_fd;
 
-    /* Derive WAL path from data file path */
-    /* The data file is "evosql.db", WAL is "evosql.wal" */
-    snprintf(g_wal_path, sizeof(g_wal_path), "evosql.wal");
+    /* Put the WAL next to evosql.db inside the data directory (g_dbRoot, set by
+     * db_ensure_root before pgm_init -> wal_init). This makes EVOSQL_DATA_DIR
+     * capture the FULL durable state: a volume/backup of the data dir is
+     * self-contained and crash recovery finds the matching WAL. Falls back to a
+     * CWD-relative name if g_dbRoot is unset (embedded/early-init paths).
+     * Migration: a clean prior shutdown leaves the old CWD WAL empty, so moving
+     * the path loses nothing; only an un-replayed crash WAL left in the CWD
+     * would be skipped. */
+    if (g_dbRoot[0])
+        snprintf(g_wal_path, sizeof(g_wal_path), "%s/evosql.wal", g_dbRoot);
+    else
+        snprintf(g_wal_path, sizeof(g_wal_path), "evosql.wal");
 
     /* Open or create WAL file */
     g_wal_fd = open(g_wal_path, O_RDWR | O_CREAT, 0644);
@@ -429,6 +438,18 @@ int wal_checkpoint(void)
 
     pthread_mutex_unlock(&g_wal_lock);
     return 0;
+}
+
+/* Current active WAL size in bytes (header + records), 0 when inactive.
+ * Used by the background checkpointer for logging / a size-based trigger.
+ * Takes g_wal_lock briefly so it is safe to call from another thread. */
+long long wal_size(void)
+{
+    if (!g_wal_active || g_wal_fd < 0) return 0;
+    pthread_mutex_lock(&g_wal_lock);
+    off_t s = lseek(g_wal_fd, 0, SEEK_END);
+    pthread_mutex_unlock(&g_wal_lock);
+    return (s < 0) ? 0 : (long long)s;
 }
 
 void wal_shutdown(void)

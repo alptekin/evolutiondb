@@ -208,6 +208,13 @@ int ReclaimTableProcess(void);
 int should_auto_reclaim(uint32_t table_id);
 void auto_reclaim_start(void);
 void auto_reclaim_stop(void);
+
+/* Background WAL checkpointer (wal_checkpointer.c): periodically flushes dirty
+ * pages, fsyncs the data file, then truncates the WAL under full write
+ * exclusion. Interval via EVOSQL_CHECKPOINT_INTERVAL_SEC (<=0 disables). */
+void wal_checkpointer_start(void);
+void wal_checkpointer_stop(void);
+
 int AnalyzeTableProcess(void);
 
 /* Parser-set histogram request (Task 99 — Feature #101).
