@@ -402,7 +402,13 @@ void server_init_ex(int buffer_pool_pages)
     { extern void xa_init(void); xa_init(); }
 
     auto_reclaim_start();
-    wal_checkpointer_start();   /* periodic WAL flush+checkpoint (bounds WAL growth) */
+    /* Don't let the checkpointer truncate the WAL while a replica streams from
+     * it (the sender reads the active WAL by byte offset). */
+    {
+        extern int repl_wal_truncate_ok(void);
+        wal_checkpointer_set_truncate_guard(repl_wal_truncate_ok);
+    }
+    wal_checkpointer_start();   /* opt-in periodic WAL flush+checkpoint (bounds WAL growth) */
 }
 
 int server_get_buffer_pool_pages(void) { return g_buffer_pool_pages; }

@@ -26,6 +26,9 @@ typedef struct {
     void    *ssl;       /* placeholder — always NULL */
 #endif
     int      is_tls;    /* 1 if TLS active on this connection */
+    int      trusted_internal; /* 1 for the cluster node-to-node transport —
+                                * exempt from the require-TLS gate (see
+                                * dist_handle_client); 0 for external clients */
 
     /* ------------------------------------------------------------------
      *  LISTEN/NOTIFY support (Task 91 — Feature #62)

@@ -500,6 +500,7 @@ void dist_handle_client(socket_t sock)
 {
     conn_t conn;
     conn_init(&conn, sock);
+    conn.trusted_internal = 1;  /* cluster node-to-node: exempt from require-TLS gate */
     conn_lock_init(&conn, CONN_PROTO_PG);  /* Task 91: output serialization */
 
     /* PG startup handshake (trusted — accept any user) */
