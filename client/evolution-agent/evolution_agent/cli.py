@@ -385,9 +385,46 @@ def cmd_restore(a) -> int:
     return 0
 
 
+# ----------------------------------------------------------------- DSAR
+def cmd_export_data(a) -> int:
+    """Right-to-access: export every row a user owns, across all stores, as
+    JSON (to --out or stdout)."""
+    from mcp_server_evosql import dsar
+    backend, default_ns = _backend_ns()
+    user = a.user or default_ns
+    data = dsar.export_user(backend, user)
+    text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        print(f"exported {data['row_count']} row(s) for {user} -> {a.out}")
+    else:
+        print(text)
+    return 0
+
+
+def cmd_erase_data(a) -> int:
+    """Right-to-erasure: delete every row a user owns across all stores. IRREVERSIBLE.
+    Without --yes it is a dry run that only reports what WOULD be erased."""
+    from mcp_server_evosql import dsar
+    backend, default_ns = _backend_ns()
+    user = a.user or default_ns
+    if not a.yes:
+        preview = dsar.export_user(backend, user)
+        print(f"DRY RUN — would erase {preview['row_count']} row(s) for {user} "
+              f"across {len(preview['stores'])} store(s). Pass --yes to proceed "
+              f"(this is IRREVERSIBLE).")
+        return 0
+    res = dsar.erase_user(backend, user)
+    print(f"erased {res['row_count']} row(s) for {user} "
+          f"across {len(res['deleted'])} store(s).")
+    return 0
+
+
 # ----------------------------------------------------------------- wiring
 _SUBCOMMANDS = {"run", "chat", "brief", "approve", "status", "connect",
-                "accounts", "sync", "config", "doctor", "backup", "restore"}
+                "accounts", "sync", "config", "doctor", "backup", "restore",
+                "export-data", "erase-data"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -443,6 +480,16 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--data-dir", default=None, help="engine data dir (default: $EVOSQL_DATA_DIR or root)")
     rs.add_argument("--force", action="store_true", help="overwrite a non-empty data dir")
     rs.set_defaults(fn=cmd_restore)
+
+    ed = sub.add_parser("export-data", help="export all of a user's data (DSAR access)")
+    ed.add_argument("--user", default=None, help="user namespace (default: MCP_USER_ID)")
+    ed.add_argument("--out", default=None, help="write JSON here (default: stdout)")
+    ed.set_defaults(fn=cmd_export_data)
+
+    er = sub.add_parser("erase-data", help="erase all of a user's data (DSAR erasure, IRREVERSIBLE)")
+    er.add_argument("--user", default=None, help="user namespace (default: MCP_USER_ID)")
+    er.add_argument("--yes", action="store_true", help="actually erase (omit for a dry run)")
+    er.set_defaults(fn=cmd_erase_data)
     return p
 
 
