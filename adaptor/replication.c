@@ -504,21 +504,33 @@ static pthread_t g_receiver_thread;
 /* recv_all was used by the pre-conn_t receiver loop; now superseded by
  * conn_recv_exact which handles both plain and TLS transports. */
 
-/* Replication slot: persist last received LSN to file */
+/* Replication slot: persist last received LSN to file. The path lives in the
+ * data directory (db_get_root() = g_dbRoot, honoring EVOSQL_DATA_DIR) so a slot
+ * is not stranded in the CWD when a custom data dir is used. Built lazily —
+ * g_dbRoot is set by db_ensure_root before any replication activity. */
 static uint32_t g_last_received_lsn = 0;
-static const char *g_slot_path = "root/evosql.slot";
+
+static const char *slot_path(void)
+{
+    static char p[1024];
+    if (!p[0]) {
+        const char *root = db_get_root();
+        snprintf(p, sizeof(p), "%s/evosql.slot", (root && root[0]) ? root : "root");
+    }
+    return p;
+}
 
 static void slot_save(uint32_t lsn)
 {
     g_last_received_lsn = lsn;
-    int fd = open(g_slot_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(slot_path(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) { write(fd, &lsn, 4); close(fd); }
 }
 
 static uint32_t slot_load(void)
 {
     uint32_t lsn = 0;
-    int fd = open(g_slot_path, O_RDONLY);
+    int fd = open(slot_path(), O_RDONLY);
     if (fd >= 0) { read(fd, &lsn, 4); close(fd); }
     g_last_received_lsn = lsn;
     return lsn;

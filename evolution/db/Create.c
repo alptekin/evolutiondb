@@ -921,8 +921,12 @@ int CreateTableProcess(void)
                 TableDesc refTd;
                 char refPath[1024];
                 if (g_constr.fkRefSchema[fi][0] != '\0') {
-                    snprintf(refPath, sizeof(refPath), "root/%s/%s/%s",
-                             g_currentDatabase, g_constr.fkRefSchema[fi], g_constr.fkRefTable[fi]);
+                    /* Cross-schema reference: build the same g_dbRoot-prefixed
+                     * logical path db_table_path() uses, honoring
+                     * EVOSQL_DATA_DIR (was a hardcoded "root/"). */
+                    snprintf(refPath, sizeof(refPath), "%s/%s/%s/%s",
+                             db_get_root(), g_currentDatabase,
+                             g_constr.fkRefSchema[fi], g_constr.fkRefTable[fi]);
                 } else {
                     db_table_path(g_constr.fkRefTable[fi], refPath, sizeof(refPath));
                 }
