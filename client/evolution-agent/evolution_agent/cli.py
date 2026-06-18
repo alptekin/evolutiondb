@@ -390,8 +390,7 @@ def cmd_export_data(a) -> int:
     """Right-to-access: export every row a user owns, across all stores, as
     JSON (to --out or stdout)."""
     from mcp_server_evosql import dsar
-    backend, default_ns = _backend_ns()
-    user = a.user or default_ns
+    backend, user = _backend_ns()          # user from --user (global) / MCP_USER_ID
     data = dsar.export_user(backend, user)
     text = json.dumps(data, indent=2, ensure_ascii=False, default=str)
     if a.out:
@@ -407,8 +406,7 @@ def cmd_erase_data(a) -> int:
     """Right-to-erasure: delete every row a user owns across all stores. IRREVERSIBLE.
     Without --yes it is a dry run that only reports what WOULD be erased."""
     from mcp_server_evosql import dsar
-    backend, default_ns = _backend_ns()
-    user = a.user or default_ns
+    backend, user = _backend_ns()          # user from --user (global) / MCP_USER_ID
     if not a.yes:
         preview = dsar.export_user(backend, user)
         print(f"DRY RUN — would erase {preview['row_count']} row(s) for {user} "
@@ -482,19 +480,38 @@ def build_parser() -> argparse.ArgumentParser:
     rs.set_defaults(fn=cmd_restore)
 
     ed = sub.add_parser("export-data", help="export all of a user's data (DSAR access)")
-    ed.add_argument("--user", default=None, help="user namespace (default: MCP_USER_ID)")
     ed.add_argument("--out", default=None, help="write JSON here (default: stdout)")
     ed.set_defaults(fn=cmd_export_data)
 
     er = sub.add_parser("erase-data", help="erase all of a user's data (DSAR erasure, IRREVERSIBLE)")
-    er.add_argument("--user", default=None, help="user namespace (default: MCP_USER_ID)")
     er.add_argument("--yes", action="store_true", help="actually erase (omit for a dry run)")
     er.set_defaults(fn=cmd_erase_data)
     return p
 
 
+def _pop_global_identity(argv: list) -> list:
+    """Pull a global --user / --tenant (any position) out of argv and set the
+    identity env the MCP server's single-tenant identity reads (MCP_USER_ID /
+    MCP_TENANT_ID), so one invocation can act as a given user/tenant for every
+    command. Supports `--user X` and `--user=X`. (Full token-based multi-tenant
+    resolution is the separate SaaS/Faz-2 path.)"""
+    env_for = {"--user": "MCP_USER_ID", "--tenant": "MCP_TENANT_ID"}
+    out, i = [], 0
+    while i < len(argv):
+        tok = argv[i]
+        hit = False
+        for flag, env in env_for.items():
+            if tok == flag and i + 1 < len(argv):
+                os.environ[env] = argv[i + 1]; i += 2; hit = True; break
+            if tok.startswith(flag + "="):
+                os.environ[env] = tok[len(flag) + 1:]; i += 1; hit = True; break
+        if not hit:
+            out.append(tok); i += 1
+    return out
+
+
 def main(argv: Optional[list] = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = _pop_global_identity(list(sys.argv[1:] if argv is None else argv))
     # default to `run` when the first token is a prompt, not a subcommand
     if argv and not argv[0].startswith("-") and argv[0] not in _SUBCOMMANDS:
         argv = ["run"] + argv
