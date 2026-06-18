@@ -51,6 +51,8 @@ def test_dispatch_routes_each_subcommand():
         "doctor":             (["doctor"], "cmd_doctor"),
         "backup":             (["backup", "/tmp/_evo_dest"], "cmd_backup"),
         "restore":            (["restore", "/tmp/_evo_src"], "cmd_restore"),
+        "export-data":        (["export-data"], "cmd_export_data"),
+        "erase-data":         (["erase-data"], "cmd_erase_data"),
     }
     for label, (argv, expect) in cases.items():
         rc, fn = _route(argv)
@@ -138,13 +140,36 @@ def test_restore_respects_force():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_erase_data_requires_yes_for_real_delete():
+    import mcp_server_evosql.dsar as dsar
+    saved_bn = cli._backend_ns
+    saved_erase, saved_export = dsar.erase_user, dsar.export_user
+    calls = {"erase": 0, "export": 0}
+    cli._backend_ns = lambda: (object(), "alice@globex")
+    dsar.erase_user = lambda b, u: (calls.__setitem__("erase", calls["erase"] + 1)
+                                    or {"row_count": 0, "deleted": {}})
+    dsar.export_user = lambda b, u: (calls.__setitem__("export", calls["export"] + 1)
+                                     or {"row_count": 0, "stores": {}})
+    try:
+        # no --yes: a dry run (preview via export), real erase NOT called
+        assert cli.cmd_erase_data(argparse.Namespace(user=None, yes=False)) == 0
+        assert calls["erase"] == 0 and calls["export"] == 1
+        # --yes: real erase happens
+        assert cli.cmd_erase_data(argparse.Namespace(user=None, yes=True)) == 0
+        assert calls["erase"] == 1
+    finally:
+        cli._backend_ns = saved_bn
+        dsar.erase_user, dsar.export_user = saved_erase, saved_export
+
+
 def main():
     for fn in (test_dispatch_routes_each_subcommand,
                test_unsupported_provider_errors,
                test_doctor_returns_nonzero_when_unconfigured,
                test_backup_copies_data_dir,
                test_restore_refuses_when_engine_running,
-               test_restore_respects_force):
+               test_restore_respects_force,
+               test_erase_data_requires_yes_for_real_delete):
         fn()
         print(f"  ok  {fn.__name__}")
     print("OK — evoagent cli")
