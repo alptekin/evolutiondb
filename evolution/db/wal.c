@@ -384,15 +384,31 @@ uint32_t wal_log_xa_resolve(const char *xa_xid, int commit)
     return wal_log_page(page_no, payload, payload_len);
 }
 
+/* Opt-in WAL archiving (EVOSQL_WAL_ARCHIVE). Default OFF — see wal_checkpoint:
+ * nothing in the running server reads the archive, so by default we don't grow
+ * it. Set to 1/true/yes to retain evosql.wal.archive for offline restore. */
+static int wal_archive_enabled(void)
+{
+    const char *e = getenv("EVOSQL_WAL_ARCHIVE");
+    return e && (e[0] == '1' || e[0] == 't' || e[0] == 'T' ||
+                 e[0] == 'y' || e[0] == 'Y');
+}
+
 int wal_checkpoint(void)
 {
     if (!g_wal_active || g_wal_fd < 0) return -1;
 
     pthread_mutex_lock(&g_wal_lock);
 
-    /* Archive: append current WAL records to archive file before truncating.
-     * This enables Time-Travel Recovery (restore to a past timestamp). */
-    {
+    /* Archive: append current WAL records to evosql.wal.archive before
+     * truncating, for wal_restore_to_timestamp (offline time-travel restore).
+     * OPT-IN via EVOSQL_WAL_ARCHIVE — default OFF, because nothing in the
+     * running server consumes the archive (crash recovery replays the live WAL;
+     * FOR SYSTEM_TIME AS OF reads MVCC snapshots, not the archive), so leaving
+     * it on was unbounded write-only growth. Off => the checkpointer bounds the
+     * WAL with no ever-growing archive; on => the archive is kept for external
+     * restore tooling (its retention is then the operator's responsibility). */
+    if (wal_archive_enabled()) {
         off_t wal_size = lseek(g_wal_fd, 0, SEEK_END);
         if (wal_size > (off_t)sizeof(WalHeader)) {
             char archive_path[2048];
