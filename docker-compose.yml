@@ -1,23 +1,61 @@
+# docker-compose.yml — EvolutionDB one-command stack.
+#
+#   docker compose up -d                  # engine-only (default profile)
+#   docker compose --profile agent up -d  # engine + agent web UI
+#
+# Secrets and tunables come from a local `.env` (gitignored). Copy the
+# template and edit it before first run:
+#
+#   cp .env.example .env        # or run ./install.sh which does this for you
+#
+# SECURE BY DEFAULT: every published host port binds to the loopback
+# interface (127.0.0.1) so a fresh `up` is NOT reachable from the LAN /
+# internet. To expose the engine externally you must opt in deliberately
+# (EVOSQL_BIND=0.0.0.0 inside the container, TLS cert/key, and an
+# EVOSQL_MCP_AUTH_TOKEN for the MCP HTTP transport).
 services:
   evosql:
     build: .
+    # Loopback-only host bindings. The "127.0.0.1:" prefix is what keeps
+    # the engine off the network on a default install — do not drop it
+    # without also enabling TLS + auth.
     ports:
-      - "5433:5433"
-      - "9967:9967"
-      - "9970:9970"   # Task 211: CDC streaming (JSON Lines)
+      - "127.0.0.1:5433:5433"   # PostgreSQL wire protocol
+      - "127.0.0.1:9967:9967"   # native EVO text protocol
+      - "127.0.0.1:9970:9970"   # Task 211: CDC streaming (JSON Lines)
     volumes:
       - evosql-data:/data
+    env_file:
+      - .env
     environment:
-      EVOSQL_USER_NAME: admin
-      EVOSQL_PASSWORD: admin
+      EVOSQL_USER_NAME: ${EVOSQL_USER_NAME:-admin}
+      # Default admin/admin only when .env leaves it blank. Change it in
+      # .env (./install.sh generates a random one on first run).
+      EVOSQL_PASSWORD: ${EVOSQL_PASSWORD:-admin}
       EVOSQL_CDC_PORT: 9970
       # Task 213 — drop the auto-RECLAIM tick to 2s so TTL-driven row
       # expiry runs visibly inside a normal test iteration. Production
       # leaves the default 30s (set this back if running benchmarks).
       EVOSQL_AUTO_RECLAIM_INTERVAL_SEC: 2
-      EVOSQL_ENCRYPTION_KEY: ${EVOSQL_ENCRYPTION_KEY:-MuhtacOldugunKudret!DamarlarindakiAsilKandaMevcuttur}
-      # To generate a random password, remove or comment out EVOSQL_PASSWORD
-      # To disable encryption, set EVOSQL_ENCRYPTION_KEY to empty string
+      # Whole-DB TDE (AES-256-CTR page encryption) only activates with a
+      # TLS=1 / EVO_ENCRYPTION build AND a non-empty passphrase here.
+      # Empty (default) => the DB file and WAL are PLAINTEXT on disk.
+      EVOSQL_ENCRYPTION_KEY: ${EVOSQL_ENCRYPTION_KEY:-}
+    # Bounded crash-loop backoff. Restart up to 5 times on non-zero exit,
+    # then give up so a hard-failing config surfaces instead of looping
+    # forever (NOT 'restart: always').
+    restart: on-failure:5
+    # The runtime image (debian:bookworm-slim) ships only libc6/libssl3/
+    # openssl/liblz4 — no nc/psql/curl/bash — so the probe uses openssl
+    # to open a TCP connection to the plain EVO port. A refused
+    # connection (engine not up yet) makes openssl exit non-zero =>
+    # unhealthy; a successful TCP open => healthy.
+    healthcheck:
+      test: ["CMD-SHELL", "openssl s_client -connect 127.0.0.1:9967 -quiet </dev/null >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
 
   cli:
     build: ./cli
@@ -26,6 +64,42 @@ services:
     stdin_open: true
     tty: true
     entrypoint: ["sleep", "infinity"]
+
+  # ----- Agent web UI (agent profile) -------------------------------
+  # Standalone agent loop + chat web UI over the MCP tools. Activate with
+  # `docker compose --profile agent up -d` (kept out of the default
+  # profile so a plain `up` stays engine-only, exactly as before).
+  agent:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.python
+    profiles: [agent]
+    depends_on:
+      - evosql
+    env_file:
+      - .env
+    environment:
+      # MANDATORY: psycopg defaults EVOSQL_HOST to 127.0.0.1, which inside
+      # this container is the agent itself — not the engine. Point it at
+      # the compose service name so the agent can actually reach evosql.
+      EVOSQL_HOST: evosql
+      EVOSQL_PORT: 5433
+      EVOSQL_USER: ${EVOSQL_USER_NAME:-admin}
+      EVOSQL_PASSWORD: ${EVOSQL_PASSWORD:-admin}
+      EVOSQL_DATABASE: evosql
+      # Bind the web UI to all interfaces INSIDE the container so the host
+      # port mapping below can reach it. The host side is still loopback.
+      EVOSQL_WEB_HOST: 0.0.0.0
+      EVOSQL_WEB_PORT: 8800
+      # Daily LLM token budget (0 = off). Surfaced from .env.
+      EVOSQL_LLM_DAILY_TOKENS: ${EVOSQL_LLM_DAILY_TOKENS:-200000}
+      # Outbound-LLM PII masking. off (default) => enrichment text reaches
+      # the model provider UNMASKED. on => masked (requires evolutiondb-pii,
+      # which this image always installs, so 'on' never fail-closes).
+      EVOSQL_PII_EGRESS: ${EVOSQL_PII_EGRESS:-off}
+    ports:
+      - "127.0.0.1:8800:8800"   # agent web UI (loopback-only)
+    restart: on-failure:5
 
 volumes:
   evosql-data:

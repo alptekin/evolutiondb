@@ -402,6 +402,13 @@ void server_init_ex(int buffer_pool_pages)
     { extern void xa_init(void); xa_init(); }
 
     auto_reclaim_start();
+    /* Don't let the checkpointer truncate the WAL while a replica streams from
+     * it (the sender reads the active WAL by byte offset). */
+    {
+        extern int repl_wal_truncate_ok(void);
+        wal_checkpointer_set_truncate_guard(repl_wal_truncate_ok);
+    }
+    wal_checkpointer_start();   /* opt-in periodic WAL flush+checkpoint (bounds WAL growth) */
 }
 
 int server_get_buffer_pool_pages(void) { return g_buffer_pool_pages; }
@@ -414,7 +421,21 @@ void server_cleanup(void)
     pool_shutdown();
 
     auto_reclaim_stop();
-    /* WAL checkpoint before pgm_shutdown flushes buffer pool */
+    wal_checkpointer_stop();
+
+    /* Durability ordering: flush the FULL durable state (FileHeader free-list/
+     * metadata via pgm_flush, plus all dirty pages) and fsync it BEFORE
+     * truncating the WAL. wal_shutdown() -> wal_checkpoint() truncates the WAL,
+     * and everything it makes redundant must already be on disk; otherwise a
+     * kill between the truncate and pgm_shutdown's flush would lose committed
+     * data (WAL gone, data file stale — bp_flush_all alone even leaves the
+     * FileHeader stale, orphaning freshly allocated pages). pgm_flush is
+     * idempotent, so pgm_shutdown re-flushing afterward is fine. */
+    pgm_flush();
+    {
+        int fd = pgm_get_fd();
+        if (fd >= 0) fsync(fd);
+    }
     {
         extern void wal_shutdown(void);
         wal_shutdown();

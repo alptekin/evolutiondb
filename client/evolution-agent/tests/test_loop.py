@@ -201,6 +201,38 @@ def test_token_budget_stops_the_run():
     assert out["usage"]["total_tokens"] == 10000
 
 
+def test_daily_spend_cap_stops_the_run():
+    # Pre-seed today's ledger above a small cap; the loop must stop before the
+    # first model call (no scripted FakeClient response is consumed).
+    import datetime
+    import json
+    import tempfile
+
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    with open(path, "w") as f:
+        json.dump({today: 1000}, f)
+
+    saved = {k: os.environ.get(k)
+             for k in ("EVOSQL_LLM_SPEND_FILE", "EVOSQL_LLM_DAILY_TOKENS")}
+    os.environ["EVOSQL_LLM_SPEND_FILE"] = path
+    os.environ["EVOSQL_LLM_DAILY_TOKENS"] = "500"      # 1000 already >= 500
+    try:
+        client = FakeClient([([_text("should never run")], "end_turn", _usage(1, 1))])
+        out = AgentLoop(FakeServer(), client=client, tools=[]).run("go")
+        assert out["stop_reason"] == "spend_cap"
+        assert len(client.calls) == 0                  # no model call was made
+        assert out["turns"] == 0
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        os.remove(path)
+
+
 def test_no_budget_never_stops_on_cost():
     client = FakeClient([
         ([_tool_use("t1", "daily_brief", {})], "tool_use", _usage(9999, 9999)),
