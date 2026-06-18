@@ -297,9 +297,97 @@ def _check_provider_safe(provider) -> str:
         return "unsupported"
 
 
+# ----------------------------------------------------------------- backup
+def _data_dir() -> str:
+    """The engine's data directory (EVOSQL_DATA_DIR, default 'root') — the
+    self-contained folder that holds evosql.db + the WAL after the data-dir
+    hardening, so a copy of it is a complete backup."""
+    return os.environ.get("EVOSQL_DATA_DIR") or "root"
+
+
+def _engine_reachable(timeout: float = 0.4) -> bool:
+    """True if something is listening on the engine's PG port — used to refuse a
+    restore under a live server (which would corrupt the data)."""
+    import socket
+    host = os.environ.get("EVOSQL_HOST", "127.0.0.1")
+    port = int(os.environ.get("EVOSQL_PORT", "5433"))
+    try:
+        with socket.create_connection((host, port), timeout):
+            return True
+    except OSError:
+        return False
+
+
+def cmd_backup(a) -> int:
+    """Copy the engine data directory to a timestamped backup folder. This is a
+    crash-consistent online backup: it copies evosql.db first and the WAL last,
+    so a restore replays the WAL to reach a consistent state (the same recovery
+    the engine runs after a crash). For a guaranteed-quiescent copy, stop the
+    engine first."""
+    import shutil
+    import datetime
+    src = a.data_dir or _data_dir()
+    if not os.path.isdir(src):
+        _stderr(f"data dir not found: {src} (set EVOSQL_DATA_DIR or --data-dir)")
+        return 1
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest_root = a.dest or "."
+    dest = os.path.join(dest_root, f"evosql-backup-{stamp}")
+    os.makedirs(dest, exist_ok=True)
+    # Order matters for crash consistency: data file first, WAL/archive last,
+    # so the copied WAL is at least as new as the copied data file.
+    names = os.listdir(src)
+    ordered = ([n for n in names if n == "evosql.db"]
+               + [n for n in names if n not in ("evosql.db", "evosql.wal",
+                                                 "evosql.wal.archive")]
+               + [n for n in names if n in ("evosql.wal", "evosql.wal.archive")])
+    copied = 0
+    for n in ordered:
+        s = os.path.join(src, n)
+        if os.path.isfile(s):
+            shutil.copy2(s, os.path.join(dest, n)); copied += 1
+        elif os.path.isdir(s):
+            shutil.copytree(s, os.path.join(dest, n)); copied += 1
+    print(f"backed up {copied} item(s) from {src} -> {dest}")
+    print("note: crash-consistent online backup; restore replays the WAL. "
+          "Stop the engine first for a fully quiescent copy.")
+    return 0
+
+
+def cmd_restore(a) -> int:
+    """Restore a backup folder into the engine data directory. Refuses to run
+    while the engine is reachable (restoring under a live server corrupts data)
+    and refuses to overwrite a non-empty data dir without --force."""
+    import shutil
+    src = a.src
+    if not os.path.isdir(src):
+        _stderr(f"backup folder not found: {src}")
+        return 1
+    dest = a.data_dir or _data_dir()
+    if _engine_reachable():
+        _stderr("the engine appears to be running — stop it before restoring "
+                "(restoring under a live server corrupts data).")
+        return 1
+    if os.path.isdir(dest) and os.listdir(dest) and not a.force:
+        _stderr(f"target data dir {dest} is not empty — pass --force to overwrite.")
+        return 1
+    os.makedirs(dest, exist_ok=True)
+    restored = 0
+    for n in os.listdir(src):
+        s = os.path.join(src, n); d = os.path.join(dest, n)
+        if os.path.isfile(s):
+            shutil.copy2(s, d); restored += 1
+        elif os.path.isdir(s):
+            shutil.rmtree(d, ignore_errors=True); shutil.copytree(s, d); restored += 1
+    print(f"restored {restored} item(s) from {src} -> {dest}")
+    print("now (re)start the engine — it will replay the WAL to reach a "
+          "consistent state.")
+    return 0
+
+
 # ----------------------------------------------------------------- wiring
 _SUBCOMMANDS = {"run", "chat", "brief", "approve", "status", "connect",
-                "accounts", "sync", "config", "doctor"}
+                "accounts", "sync", "config", "doctor", "backup", "restore"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -344,6 +432,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="readiness checklist").set_defaults(
         fn=cmd_doctor, model=None, provider=None)
+
+    bk = sub.add_parser("backup", help="copy the engine data dir to a backup folder")
+    bk.add_argument("dest", nargs="?", help="destination folder (default: .)")
+    bk.add_argument("--data-dir", default=None, help="engine data dir (default: $EVOSQL_DATA_DIR or root)")
+    bk.set_defaults(fn=cmd_backup)
+
+    rs = sub.add_parser("restore", help="restore a backup folder into the data dir")
+    rs.add_argument("src", help="backup folder to restore from")
+    rs.add_argument("--data-dir", default=None, help="engine data dir (default: $EVOSQL_DATA_DIR or root)")
+    rs.add_argument("--force", action="store_true", help="overwrite a non-empty data dir")
+    rs.set_defaults(fn=cmd_restore)
     return p
 
 

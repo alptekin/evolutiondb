@@ -49,6 +49,8 @@ def test_dispatch_routes_each_subcommand():
         "sync":               (["sync", "gmail"], "cmd_sync"),
         "config":             (["config", "path"], "cmd_config"),
         "doctor":             (["doctor"], "cmd_doctor"),
+        "backup":             (["backup", "/tmp/_evo_dest"], "cmd_backup"),
+        "restore":            (["restore", "/tmp/_evo_src"], "cmd_restore"),
     }
     for label, (argv, expect) in cases.items():
         rc, fn = _route(argv)
@@ -81,10 +83,68 @@ def test_doctor_returns_nonzero_when_unconfigured():
             os.environ["ANTHROPIC_API_KEY"] = saved_key
 
 
+def test_backup_copies_data_dir():
+    import tempfile, shutil
+    d = tempfile.mkdtemp()
+    try:
+        src = os.path.join(d, "data"); os.makedirs(src)
+        open(os.path.join(src, "evosql.db"), "wb").write(b"DBDATA")
+        open(os.path.join(src, "evosql.wal"), "wb").write(b"WALDATA")
+        dest = os.path.join(d, "backups")
+        rc = cli.cmd_backup(argparse.Namespace(data_dir=src, dest=dest))
+        assert rc == 0
+        folders = os.listdir(dest)
+        assert len(folders) == 1                       # one timestamped folder
+        bk = os.path.join(dest, folders[0])
+        assert open(os.path.join(bk, "evosql.db"), "rb").read() == b"DBDATA"
+        assert open(os.path.join(bk, "evosql.wal"), "rb").read() == b"WALDATA"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_restore_refuses_when_engine_running():
+    import tempfile, shutil
+    d = tempfile.mkdtemp(); saved = cli._engine_reachable
+    try:
+        src = os.path.join(d, "bk"); os.makedirs(src)
+        open(os.path.join(src, "evosql.db"), "wb").write(b"X")
+        dest = os.path.join(d, "data")
+        cli._engine_reachable = lambda *a, **k: True   # pretend the engine is up
+        rc = cli.cmd_restore(argparse.Namespace(src=src, data_dir=dest, force=False))
+        assert rc != 0                                  # refused
+        assert not os.path.exists(dest) or not os.listdir(dest)
+    finally:
+        cli._engine_reachable = saved
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_restore_respects_force():
+    import tempfile, shutil
+    d = tempfile.mkdtemp(); saved = cli._engine_reachable
+    try:
+        src = os.path.join(d, "bk"); os.makedirs(src)
+        open(os.path.join(src, "evosql.db"), "wb").write(b"NEW")
+        dest = os.path.join(d, "data"); os.makedirs(dest)
+        open(os.path.join(dest, "evosql.db"), "wb").write(b"OLD")
+        cli._engine_reachable = lambda *a, **k: False
+        # non-empty target without --force -> refused, original untouched
+        assert cli.cmd_restore(argparse.Namespace(src=src, data_dir=dest, force=False)) != 0
+        assert open(os.path.join(dest, "evosql.db"), "rb").read() == b"OLD"
+        # with --force -> overwritten
+        assert cli.cmd_restore(argparse.Namespace(src=src, data_dir=dest, force=True)) == 0
+        assert open(os.path.join(dest, "evosql.db"), "rb").read() == b"NEW"
+    finally:
+        cli._engine_reachable = saved
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     for fn in (test_dispatch_routes_each_subcommand,
                test_unsupported_provider_errors,
-               test_doctor_returns_nonzero_when_unconfigured):
+               test_doctor_returns_nonzero_when_unconfigured,
+               test_backup_copies_data_dir,
+               test_restore_refuses_when_engine_running,
+               test_restore_respects_force):
         fn()
         print(f"  ok  {fn.__name__}")
     print("OK — evoagent cli")
