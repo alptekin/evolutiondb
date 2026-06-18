@@ -267,9 +267,24 @@ def cmd_doctor(a) -> int:
         check(False, "EvolutionDB reachable", str(e)[:80])
     if os.environ.get("EVOSQL_EMBEDDED"):
         check(True, "embedded mode", "EVOSQL_EMBEDDED set")
-    # advisory, not a failure
-    print("  ⚠ engine still binds 0.0.0.0 (no --bind yet) — run it only on a "
-          "trusted host/loopback until network hardening lands")
+
+    # Bind posture (advisory). The engine now defaults to loopback; only a
+    # wildcard bind without TLS is worth flagging.
+    bind = os.environ.get("EVOSQL_BIND", "").strip() or "127.0.0.1 (default)"
+    if bind in ("0.0.0.0", "*"):
+        print(f"  ⚠ engine bind = {bind} (all interfaces) — front it with TLS, "
+              "or set EVOSQL_BIND=127.0.0.1 / --bind 127.0.0.1")
+    else:
+        print(f"  ✓ engine bind = {bind}")
+
+    # Daily LLM spend cap (advisory).
+    cap = os.environ.get("EVOSQL_LLM_DAILY_TOKENS", "").strip()
+    if cap and cap.isdigit() and int(cap) > 0:
+        print(f"  ✓ daily LLM token cap = {cap}")
+    else:
+        print("  ⓘ no daily LLM token cap — set EVOSQL_LLM_DAILY_TOKENS to bound spend")
+
+    print("  ⓘ data dir: EVOSQL_DATA_DIR overrides the default ./root")
     print("  ⓘ connectors: manage with `evoagent connect <name>` / `accounts`")
     return 0 if ok else 1
 

@@ -25,21 +25,32 @@
 #define ROOT_DIR "root"
 #define DEFAULT_DB "evosql"
 
+/* Data directory holding evosql.db and the WAL. Defaults to ROOT_DIR ("root")
+ * for backward compatibility; override with EVOSQL_DATA_DIR (or --data-dir,
+ * which the adaptor exports into the environment before db_ensure_root). */
+static const char *db_data_dir(void)
+{
+    const char *d = getenv("EVOSQL_DATA_DIR");
+    return (d && *d) ? d : ROOT_DIR;
+}
+
 /* ----------------------------------------------------------------
  *  Ensure the root directory and unified storage exist
  * ---------------------------------------------------------------- */
 void db_ensure_root(void)
 {
-    /* Create root/ directory for evosql.db */
-    MKDIR(ROOT_DIR);
+    const char *root = db_data_dir();
+
+    /* Create the data directory for evosql.db */
+    MKDIR(root);
 
     /* Set root path */
-    snprintf(g_dbRoot, sizeof(g_dbRoot), "%s", ROOT_DIR);
+    snprintf(g_dbRoot, sizeof(g_dbRoot), "%s", root);
 
     /* Initialize unified page-based storage */
     {
         char dbFile[1024];
-        snprintf(dbFile, sizeof(dbFile), "%s/evosql.db", ROOT_DIR);
+        snprintf(dbFile, sizeof(dbFile), "%s/evosql.db", root);
         pgm_init(dbFile);  /* WAL replay happens inside pgm_init if needed */
         cat_init();  /* Creates default db/schema/admin on first run */
     }

@@ -261,6 +261,18 @@ def for_tenant(tenant_id: str, user_id: str,
     )
 
 
+# A minimal principal for the audit layer's identity-field reader
+# (tenant/user/roles getattrs only). Used at auth/privilege call sites where no
+# full request-scoped ``Identity`` exists yet (e.g. a token denial, a role
+# grant). Deliberately NOT a full Identity — it carries no DB credentials, so
+# an audit row can never accidentally surface a connection secret.
+@dataclass(frozen=True)
+class _RoleAudit:
+    tenant_id: str
+    user_id: str
+    roles: Tuple[str, ...] = ()
+
+
 # ---------------------------------------------------------------- registry
 class Registry:
     """Thin key-value control-plane over the admin backend's ``mcp_control``
@@ -367,6 +379,17 @@ class Registry:
         rec.setdefault("users", {})[user_id] = list(roles)
         rec["updated_at"] = _now_iso()
         self._put(_NS_ROLE, key, rec)
+        # Faz 0 gap-closure: a role grant/record never passes through the
+        # _call_tool audit hook, so without this it leaves no audit trace.
+        # Best-effort + identifiers only (target = the granted user_id, the
+        # new roles as the audited identity's roles); never blocks the write.
+        try:
+            from . import audit
+            grantee = _RoleAudit(tenant_id, user_id, tuple(roles))
+            audit.record_privilege(self.backend, grantee, "privilege.grant",
+                                   user_id)
+        except Exception:
+            pass
 
     def get_roles(self, tenant_id: str, user_id: str) -> Optional[Tuple[str, ...]]:
         rec = self._get(_NS_ROLE, tenant_db_name(tenant_id))
@@ -505,13 +528,40 @@ def identity_for_token(token: str, admin_backend) -> Optional[Identity]:
     user_id = sub.get("user_id")
     if not tenant_id or not user_id:
         return None
+    # token PREFIX-hash: a non-reversible, non-sensitive reference for the
+    # audit row that does NOT carry the raw bearer token (token_hash already
+    # one-way hashes; we keep only its first 12 chars as a correlation handle).
+    ref = token_hash(token)[:12]
     meta = reg.get_tenant(tenant_id)
     if not meta or meta.get("status") != "active":
+        # Tenant gone/suspended: identity is known, so record the denial. The
+        # tenant DB may not be addressable any more, so this writes to the
+        # control-plane audit store (best-effort; skipped silently on failure).
+        _audit_auth_denied(reg.backend, tenant_id, user_id, (), ref)
         return None
     roles = reg.get_roles(tenant_id, user_id)
     if not roles:
+        # Tenant active but the (tenant,user) has no role record -> not
+        # authorized. Identity is known; record the denial best-effort.
+        _audit_auth_denied(reg.backend, tenant_id, user_id, (), ref)
         return None
     return for_tenant(tenant_id, user_id, roles)
+
+
+def _audit_auth_denied(backend, tenant_id: str, user_id: str,
+                       roles: Tuple[str, ...], ref: Optional[str]) -> None:
+    """Best-effort auth-denial audit at a token-resolution dead end where the
+    tenant/user is known. Faz 0: if the backend exposes no addressable audit
+    store, skip silently (a fully unresolvable token leaves no row — noted as a
+    follow-up). Never alters the fail-closed control flow."""
+    try:
+        if not getattr(backend, "audit_store", None):
+            return
+        from . import audit
+        ident = _RoleAudit(tenant_id, user_id, tuple(roles))
+        audit.record_auth(backend, ident, "auth.denied", "denied", ref=ref)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------- ops CLI

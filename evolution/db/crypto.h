@@ -14,8 +14,12 @@
 #define SHA256_DIGEST_SIZE  32
 #define SHA256_BLOCK_SIZE   64
 
-/* PBKDF2 parameters */
-#define PBKDF2_ITERATIONS   100000
+/* PBKDF2 parameters.
+ * The iteration count is embedded in every stored hash
+ * ("pbkdf2:<iters>:<salt>:<hash>") and crypto_verify_password() reads it back,
+ * so raising this only strengthens NEW hashes — existing passwords keep
+ * validating against their own stored count. OWASP-aligned floor. */
+#define PBKDF2_ITERATIONS   600000
 #define PBKDF2_SALT_LEN     16
 #define PBKDF2_KEY_LEN      32
 

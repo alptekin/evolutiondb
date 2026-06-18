@@ -33,4 +33,11 @@ WORKDIR /data
 
 EXPOSE 5433 9967
 
+# Liveness probe, mirroring the docker-compose.yml healthcheck. The
+# runtime image has only openssl (no nc/psql/curl/bash), so probe by
+# opening a TCP connection to the plain EVO port: a refused connection
+# (server not up) exits non-zero => unhealthy.
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 --start-period=15s \
+    CMD openssl s_client -connect 127.0.0.1:9967 -quiet </dev/null >/dev/null 2>&1 || exit 1
+
 ENTRYPOINT ["/app/entrypoint.sh"]
