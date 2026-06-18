@@ -266,16 +266,20 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
         if (rs->has_error) {
             clog_set_aborted(qctx->mvcc_xid);
         } else {
-            /* WAL: flush all dirty pages to WAL before commit.
-             * This guarantees durability — if the server crashes after
-             * commit returns, the WAL has the page images for recovery. */
+            /* Commit ordering for crash durability: mark the txn committed in
+             * CLOG FIRST (this dirties the CLOG page), THEN flush — so the
+             * commit marker rides the SAME WAL fsync as the data pages and the
+             * FileHeader. Otherwise the marker is only WAL-logged on the NEXT
+             * commit's flush, so the last committed txn before a crash replays
+             * its tuple but reads as uncommitted (silently lost). No extra
+             * fsync: the marker joins the existing flush. */
+            uint32_t csn = pgm_next_csn();
+            clog_set_committed_csn(qctx->mvcc_xid, csn);
             {
                 extern void pgm_wal_flush_dirty(int fd);
                 extern int pgm_get_fd(void);
-                pgm_wal_flush_dirty(pgm_get_fd());  /* WAL-logs the FileHeader too */
+                pgm_wal_flush_dirty(pgm_get_fd());  /* logs data + FileHeader + CLOG marker, one fsync */
             }
-            uint32_t csn = pgm_next_csn();
-            clog_set_committed_csn(qctx->mvcc_xid, csn);
         }
         /* Release all row locks held by this auto-committed transaction */
         {
