@@ -1375,9 +1375,9 @@ static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
         /* WAL flush for durability */
         {
-            extern void bp_wal_flush_dirty(int fd);
+            extern void pgm_wal_flush_dirty(int fd);
             extern int pgm_get_fd(void);
-            bp_wal_flush_dirty(pgm_get_fd());
+            pgm_wal_flush_dirty(pgm_get_fd());  /* WAL-logs the FileHeader too */
         }
 
         /* Persist PREPARE record to disk (survives crash) */
@@ -1437,8 +1437,8 @@ static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
         /* Commit from current session */
         if (ctx->tx_xid > 0) {
-            { extern void bp_wal_flush_dirty(int fd); extern int pgm_get_fd(void);
-              bp_wal_flush_dirty(pgm_get_fd()); }
+            { extern void pgm_wal_flush_dirty(int fd); extern int pgm_get_fd(void);
+              pgm_wal_flush_dirty(pgm_get_fd()); }  /* WAL-logs the FileHeader too */
             uint32_t csn = pgm_next_csn();
             clog_set_committed_csn(ctx->tx_xid, csn);
             { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid);
@@ -1664,9 +1664,9 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 if (ctx->tx_xid > 0) {
                     /* WAL: flush dirty pages before commit for durability */
                     {
-                        extern void bp_wal_flush_dirty(int fd);
+                        extern void pgm_wal_flush_dirty(int fd);
                         extern int pgm_get_fd(void);
-                        bp_wal_flush_dirty(pgm_get_fd());
+                        pgm_wal_flush_dirty(pgm_get_fd());  /* WAL-logs the FileHeader too */
                     }
                     /* Synchronous commit: wait for
                      * replica majority to confirm this transaction's WAL

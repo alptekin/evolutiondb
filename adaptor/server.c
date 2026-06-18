@@ -270,9 +270,9 @@ void safe_query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
              * This guarantees durability — if the server crashes after
              * commit returns, the WAL has the page images for recovery. */
             {
-                extern void bp_wal_flush_dirty(int fd);
+                extern void pgm_wal_flush_dirty(int fd);
                 extern int pgm_get_fd(void);
-                bp_wal_flush_dirty(pgm_get_fd());
+                pgm_wal_flush_dirty(pgm_get_fd());  /* WAL-logs the FileHeader too */
             }
             uint32_t csn = pgm_next_csn();
             clog_set_committed_csn(qctx->mvcc_xid, csn);
