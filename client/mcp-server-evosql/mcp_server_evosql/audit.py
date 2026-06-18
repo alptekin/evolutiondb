@@ -15,8 +15,10 @@ addresses. Writes are best-effort: an audit failure must never break the tool.
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +27,27 @@ AUDIT_KEEP_PER_NS = 1000        # prune bound, enforced by the scheduler job
 # Key suffix: a process-monotonic counter, so rows written within the same
 # millisecond still sort in insertion order (the key is the sort key).
 _SEQ = itertools.count()
+
+# Tamper-evidence: each row carries prev = the previous row's hash and
+# hash = sha256(prev + the row's content). Editing a row changes its hash;
+# deleting/reordering breaks a prev->hash link. verify_chain() detects both.
+# The chain is per (store, namespace); the head hash per chain is cached for
+# this process and seeded from the last stored row so it survives a restart.
+_GENESIS = "0" * 64
+_CHAIN: Dict[str, str] = {}
+_CHAIN_LOCK = threading.Lock()
+
+
+def _chain_key(store: str, ns: str) -> str:
+    return f"{store}\x1f{ns}"
+
+
+def _content_hash(prev: str, rec: Dict[str, Any]) -> str:
+    """Link hash for a row: covers the row's content (everything except the
+    chain fields) plus the previous row's hash, so any edit changes it."""
+    body = {k: v for k, v in rec.items() if k not in ("prev", "hash")}
+    payload = prev + json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 # Per-tool argument whitelist: identifiers + sizes only, no content/PII.
 _ARG_FIELDS = {
@@ -103,9 +126,22 @@ def _identity_fields(ident) -> Dict[str, Any]:
     }
 
 
+def _last_stored_hash(backend, ns: str) -> str:
+    """Hash of the newest already-stored row for ns, to continue the chain
+    across a process restart; genesis if there are none."""
+    try:
+        recent = trail(backend, ns, limit=1)
+        if recent and isinstance(recent[0], dict) and recent[0].get("hash"):
+            return str(recent[0]["hash"])
+    except Exception:
+        pass
+    return _GENESIS
+
+
 def _append_row(backend, ident, rec: Dict[str, Any]) -> None:
-    """The single append path: stamp a process-unique, time-ordered key and
-    PUT one json row into the tenant's append-only audit store.
+    """The single append path: stamp a process-unique, time-ordered key, link
+    the row into the tamper-evident hash chain, and PUT one json row into the
+    tenant's append-only audit store.
 
     Append-only by construction — the key is unique (ms + monotonic seq) so a
     write never overwrites a prior row, and there is no UPDATE/DELETE here. The
@@ -114,12 +150,25 @@ def _append_row(backend, ident, rec: Dict[str, Any]) -> None:
     identical for every audit kind. Best-effort: the PUT is swallowed so an
     audit failure can never break the calling flow."""
     from .server import _e
+    ns = getattr(ident, "user_id", "") or ""
     key = f"audit_{int(rec['ts'] * 1000)}_{next(_SEQ):08d}"
+    # Link into the per-(store,ns) hash chain under a lock so concurrent appends
+    # stay correctly ordered. Best-effort: never let chaining break the audit.
     try:
-        backend._exec(
-            f"MEMORY PUT INTO {backend.audit_store} VALUES "
-            f"('{_e(getattr(ident, 'user_id', '') or '')}','{key}',"
-            f"'{_e(json.dumps(rec))}')")
+        ck = _chain_key(backend.audit_store, ns)
+        with _CHAIN_LOCK:
+            prev = _CHAIN.get(ck)
+            if prev is None:
+                prev = _last_stored_hash(backend, ns)
+            rec["prev"] = prev
+            rec["hash"] = _content_hash(prev, rec)
+            try:
+                backend._exec(
+                    f"MEMORY PUT INTO {backend.audit_store} VALUES "
+                    f"('{_e(ns)}','{key}','{_e(json.dumps(rec))}')")
+                _CHAIN[ck] = rec["hash"]   # advance head only on a successful write
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -228,6 +277,46 @@ def trail(backend, ns: str, limit: int = 50) -> List[Dict[str, Any]]:
             continue
     out.sort(key=lambda kv: kv[0], reverse=True)   # key embeds the ms timestamp
     return [rec for _, rec in out[:max(1, int(limit))]]
+
+
+def verify_chain(backend, ns: str) -> Dict[str, Any]:
+    """Recompute the tamper-evidence hash chain for a namespace, oldest-first.
+
+    Returns {ok, rows, broken_at, reason}. ok=False with the offending row key
+    when a row's content no longer matches its stored hash (``content-altered``)
+    or a row's ``prev`` does not link to the previous present row
+    (``link-broken`` — a delete or reorder). The FIRST present row's ``prev`` is
+    accepted: the scheduler's prune drops the oldest rows, so the head of what
+    remains legitimately references a pruned-away predecessor. Detects naive
+    edits/deletes/reorders; a forger with write access would have to recompute
+    every subsequent row's hash (export the head hash periodically for a
+    stronger external anchor)."""
+    from .server import _e
+    try:
+        rows = backend._query(
+            f"SELECT mem_key, mem_value FROM __mem_{backend.audit_store} "
+            f"WHERE mem_namespace = '{_e(ns)}'") or []
+    except Exception:
+        return {"ok": True, "rows": 0, "broken_at": None, "reason": None}
+
+    items = []
+    for r in rows:
+        try:
+            items.append((str(r[0]), json.loads(r[1]) if isinstance(r[1], str) else r[1]))
+        except Exception:
+            continue
+    items.sort(key=lambda kv: kv[0])   # key embeds the ms timestamp -> oldest-first
+
+    prev_hash = None
+    for key, rec in items:
+        if not isinstance(rec, dict):
+            return {"ok": False, "rows": len(items), "broken_at": key, "reason": "unparseable"}
+        if _content_hash(rec.get("prev", _GENESIS), rec) != rec.get("hash"):
+            return {"ok": False, "rows": len(items), "broken_at": key, "reason": "content-altered"}
+        if prev_hash is not None and rec.get("prev") != prev_hash:
+            return {"ok": False, "rows": len(items), "broken_at": key, "reason": "link-broken"}
+        prev_hash = rec.get("hash")
+    return {"ok": True, "rows": len(items), "broken_at": None, "reason": None}
 
 
 def prune(backend, ns: str, keep: int = AUDIT_KEEP_PER_NS) -> int:
