@@ -302,8 +302,8 @@ void evo_handle_client(socket_t sock)
         char server_first[1024];
 
         /* Process client-first-message, produce server-first-message */
-        if (scram_server_first(line + 19, scram_username, &scram,
-                               server_first, sizeof(server_first)) < 0) {
+        if (scram_server_first(line + 19, NULL, scram_username, &scram,
+                               server_first, sizeof(server_first), 0) < 0) {
             evo_sendf(&conn, "ERR 28P01 SCRAM: invalid client-first message\n");
             printf("[EVO] SCRAM auth failed for client-first\n"); fflush(stdout);
             evo_secure_wipe(&scram, sizeof(scram));
@@ -334,7 +334,7 @@ void evo_handle_client(socket_t sock)
         /* Verify client proof and produce server-final-message */
         char server_final[256];
         if (scram_server_final(line + 19, &scram,
-                               server_final, sizeof(server_final)) < 0) {
+                               server_final, sizeof(server_final), 0) < 0) {
             evo_sendf(&conn, "ERR 28P01 SCRAM authentication failed\n");
             printf("[EVO] SCRAM auth failed for user '%s'\n", scram_username);
             fflush(stdout);

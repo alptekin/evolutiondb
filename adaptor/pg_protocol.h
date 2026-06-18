@@ -48,6 +48,9 @@
 /* Authentication sub-types (inside R message) */
 #define PG_AUTH_OK                0
 #define PG_AUTH_CLEARTEXT_PASSWORD 3
+#define PG_AUTH_SASL             10   /* AuthenticationSASL — mechanism list */
+#define PG_AUTH_SASL_CONTINUE    11   /* AuthenticationSASLContinue — server-first */
+#define PG_AUTH_SASL_FINAL       12   /* AuthenticationSASLFinal — server-signature */
 
 /* Write buffer for building messages */
 typedef struct {
