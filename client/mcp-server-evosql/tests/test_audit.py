@@ -263,3 +263,57 @@ def test_identity_for_token_unresolvable_skips_silently(monkeypatch):
     # An unknown token resolves to no subject -> no tenant -> no audit row.
     assert tenancy.identity_for_token("tok_unknown_fictional", admin) is None
     assert admin.rows(admin.audit_store) == {}
+
+
+# ---------------------------------------------------------------- tamper-evidence
+def test_chain_present_and_verifies():
+    audit._CHAIN.clear()                       # isolate the process-level head cache
+    b = FakeBackend()
+    for i in range(5):
+        audit.record(b, _ident(), "forget", "ok", args={"key": f"k{i}"})
+    recs = list(b.rows(b.audit_store, NS).values())
+    assert len(recs) == 5
+    assert all("prev" in r and "hash" in r for r in recs)   # every row is chained
+    v = audit.verify_chain(b, NS)
+    assert v["ok"] and v["rows"] == 5 and v["broken_at"] is None, v
+
+
+def test_chain_detects_content_tamper():
+    audit._CHAIN.clear()
+    b = FakeBackend()
+    for i in range(4):
+        audit.record(b, _ident(), "forget", "ok", args={"key": f"k{i}"})
+    # Attacker edits a stored row's content but cannot recompute its hash.
+    store = b._rows[b.audit_store]
+    k = sorted(store.keys(), key=lambda nk: nk[1])[1]       # a non-first row
+    rec = json.loads(store[k]); rec["outcome"] = "denied"   # flip a field
+    store[k] = json.dumps(rec)
+    res = audit.verify_chain(b, NS)
+    assert not res["ok"] and res["reason"] == "content-altered", res
+
+
+def test_chain_detects_deletion():
+    audit._CHAIN.clear()
+    b = FakeBackend()
+    for i in range(5):
+        audit.record(b, _ident(), "forget", "ok", args={"key": f"k{i}"})
+    # Attacker removes a middle row -> the next row's prev no longer links.
+    store = b._rows[b.audit_store]
+    mid = sorted(store.keys(), key=lambda nk: nk[1])[2]
+    del store[mid]
+    res = audit.verify_chain(b, NS)
+    assert not res["ok"] and res["reason"] == "link-broken", res
+
+
+def test_chain_tolerates_prune_of_oldest():
+    audit._CHAIN.clear()
+    b = FakeBackend()
+    for i in range(6):
+        audit.record(b, _ident(), "forget", "ok", args={"key": f"k{i}"})
+    # Pruning the OLDEST rows is legitimate; the new head's prev references a
+    # pruned predecessor, which verify must accept.
+    store = b._rows[b.audit_store]
+    for k in sorted(store.keys(), key=lambda nk: nk[1])[:2]:
+        del store[k]
+    res = audit.verify_chain(b, NS)
+    assert res["ok"] and res["rows"] == 4, res
