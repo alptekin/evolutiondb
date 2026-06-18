@@ -169,9 +169,9 @@ static int scram_load_user_keys(const char *password_hash, ScramState *state)
  *  scram_server_first
  * ================================================================ */
 
-int scram_server_first(const char *client_first, char *username,
-                       ScramState *state, char *server_first,
-                       int server_first_size)
+int scram_server_first(const char *client_first, const char *override_username,
+                       char *username, ScramState *state, char *server_first,
+                       int server_first_size, int bare_output)
 {
     /*
      * client-first-message format (from task spec):
@@ -215,8 +215,12 @@ int scram_server_first(const char *client_first, char *username,
 
     if (!n_attr || !r_attr) return -1;
 
-    /* Extract username: from "n=" to next comma */
-    {
+    /* Username: from the out-of-band StartupMessage (PG, where client-first n=
+     * is empty) when override_username is set; otherwise from the client-first
+     * n= attribute (EVO). */
+    if (override_username && override_username[0]) {
+        snprintf(username, 256, "%s", override_username);
+    } else {
         const char *ustart = n_attr + 2;
         const char *uend = strchr(ustart, ',');
         if (!uend) return -1;
@@ -283,9 +287,14 @@ int scram_server_first(const char *client_first, char *username,
              "r=%s,s=%s,i=%d",
              state->combined_nonce, salt_b64, state->iterations);
 
-    /* Copy to output buffer */
-    snprintf(server_first, server_first_size, "SCRAM-SERVER-FIRST %s",
-             state->server_first);
+    /* Copy to output buffer. PG SASL wants the bare server-first-message; the
+     * EVO text protocol wants it prefixed. The AuthMessage always uses the bare
+     * body (state->server_first), so framing here is transport-only. */
+    if (bare_output)
+        snprintf(server_first, server_first_size, "%s", state->server_first);
+    else
+        snprintf(server_first, server_first_size, "SCRAM-SERVER-FIRST %s",
+                 state->server_first);
 
     return 0;
 }
@@ -295,7 +304,8 @@ int scram_server_first(const char *client_first, char *username,
  * ================================================================ */
 
 int scram_server_final(const char *client_final, ScramState *state,
-                       char *server_final, int server_final_size)
+                       char *server_final, int server_final_size,
+                       int bare_output)
 {
     /*
      * client-final-message format:
@@ -381,9 +391,13 @@ int scram_server_final(const char *client_final, ScramState *state,
 
     evo_secure_wipe(server_signature, sizeof(server_signature));
 
-    /* Build server-final-message: v=<base64_server_signature> */
-    snprintf(server_final, server_final_size,
-             "SCRAM-SERVER-FINAL v=%s", sig_b64);
+    /* Build server-final-message: v=<base64_server_signature>.
+     * Bare for PG SASL; "SCRAM-SERVER-FINAL "-prefixed for the EVO protocol. */
+    if (bare_output)
+        snprintf(server_final, server_final_size, "v=%s", sig_b64);
+    else
+        snprintf(server_final, server_final_size,
+                 "SCRAM-SERVER-FINAL v=%s", sig_b64);
 
     return 0;
 }

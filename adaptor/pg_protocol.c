@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "platform.h"
 #include "pg_protocol.h"
+#include "scram.h"
 #include "tls.h"
 #include "../evolution/db/database.h"
 #include "util.h"
@@ -312,8 +314,142 @@ static int conn_is_loopback(socket_t sock)
     return (ntohl(addr.sin_addr.s_addr) >> 24) == 127;
 }
 
+/* Opt-in SCRAM-SHA-256 over the PG wire (EVOSQL_PG_SASL). Default OFF — the
+ * cleartext-password flow stays the default so the raw-wire test suite and
+ * simple clients are unaffected; turn it on to require SASL (the password is
+ * never sent, even over a non-TLS link). */
+static int pg_sasl_enabled(void)
+{
+    const char *e = getenv("EVOSQL_PG_SASL");
+    return e && (e[0] == '1' || e[0] == 't' || e[0] == 'T' ||
+                 e[0] == 'y' || e[0] == 'Y');
+}
+
+/* Bounded read of one frontend message (type + body), rejecting bodies larger
+ * than bufsize — used for the SASL 'p' messages (always small). */
+static int sasl_read(conn_t *conn, char *type, char *buf, int bufsize, int *blen)
+{
+    char h[5];
+    if (pg_recv_exact(conn, h, 5) < 0) return -1;
+    *type = h[0];
+    unsigned int len = ((unsigned int)(unsigned char)h[1] << 24) |
+                       ((unsigned int)(unsigned char)h[2] << 16) |
+                       ((unsigned int)(unsigned char)h[3] << 8) |
+                       ((unsigned int)(unsigned char)h[4]);
+    int body = (int)len - 4;
+    if (body < 0 || body > bufsize) return -1;
+    if (body > 0 && pg_recv_exact(conn, buf, body) < 0) return -1;
+    *blen = body;
+    return 0;
+}
+
+/* SCRAM-SHA-256 over the PG SASL framing (RFC 5802 + the PG message wrapper).
+ * Returns 0 (authenticated; AuthenticationOk already sent) or -1 (an
+ * ErrorResponse was sent). The password never crosses the wire; the SCRAM keys
+ * derive from the user's existing stored PBKDF2 hash (scram.c), so there is no
+ * verifier migration. Username comes from the StartupMessage (the PG
+ * client-first carries an empty n=). */
+static int pg_handle_sasl(conn_t *conn, const char *startup_user)
+{
+    PgBuf b;
+    char body[2048];
+    char type;
+    int blen;
+
+    /* AuthenticationSASL: advertise SCRAM-SHA-256 (no channel binding). */
+    pg_buf_init(&b, PG_RESP_AUTH);
+    pg_buf_add_int32(&b, PG_AUTH_SASL);
+    pg_buf_add_string(&b, "SCRAM-SHA-256");   /* mechanism name + NUL */
+    pg_buf_add_byte(&b, '\0');                /* end of mechanism list */
+    if (pg_buf_send(&b, conn) < 0) return -1;
+
+    /* SASLInitialResponse: mechanism cstring, int32 len, client-first-message */
+    if (sasl_read(conn, &type, body, sizeof(body), &blen) < 0 ||
+        type != PG_MSG_PASSWORD) {
+        pg_send_error(conn, "FATAL", "28P01", "SASL: expected initial response");
+        return -1;
+    }
+    int i = 0;
+    while (i < blen && body[i] != '\0') i++;  /* mechanism name */
+    if (i >= blen) {                          /* no NUL terminator */
+        pg_send_error(conn, "FATAL", "28P01", "SASL: malformed initial response");
+        return -1;
+    }
+    /* Only SCRAM-SHA-256 is advertised; reject any other mechanism explicitly. */
+    if (strcmp(body, "SCRAM-SHA-256") != 0) {
+        pg_send_error(conn, "FATAL", "28P01",
+                      "SASL: unsupported mechanism (only SCRAM-SHA-256)");
+        return -1;
+    }
+    if (++i + 4 > blen) {                     /* skip NUL, need the int32 len */
+        pg_send_error(conn, "FATAL", "28P01", "SASL: malformed initial response");
+        return -1;
+    }
+    int crlen = ((unsigned char)body[i] << 24) | ((unsigned char)body[i + 1] << 16) |
+                ((unsigned char)body[i + 2] << 8) | ((unsigned char)body[i + 3]);
+    i += 4;
+    char client_first[1024];
+    if (crlen < 0 || i + crlen > blen || crlen >= (int)sizeof(client_first)) {
+        pg_send_error(conn, "FATAL", "28P01", "SASL: bad client-first length");
+        return -1;
+    }
+    memcpy(client_first, body + i, crlen);
+    client_first[crlen] = '\0';
+
+    ScramState st;
+    memset(&st, 0, sizeof(st));
+    char uname[256];
+    char server_first[640];
+    if (scram_server_first(client_first, startup_user, uname, &st,
+                           server_first, sizeof(server_first), 1) < 0) {
+        pg_send_error(conn, "FATAL", "28P01",
+                      "SCRAM: unknown user or invalid client-first");
+        evo_secure_wipe(&st, sizeof(st));
+        return -1;
+    }
+
+    /* AuthenticationSASLContinue: server-first-message */
+    pg_buf_init(&b, PG_RESP_AUTH);
+    pg_buf_add_int32(&b, PG_AUTH_SASL_CONTINUE);
+    pg_buf_add_bytes(&b, server_first, (int)strlen(server_first));
+    if (pg_buf_send(&b, conn) < 0) { evo_secure_wipe(&st, sizeof(st)); return -1; }
+
+    /* SASLResponse: client-final-message (raw SASL bytes) */
+    if (sasl_read(conn, &type, body, sizeof(body), &blen) < 0 ||
+        type != PG_MSG_PASSWORD) {
+        pg_send_error(conn, "FATAL", "28P01", "SASL: expected client-final response");
+        evo_secure_wipe(&st, sizeof(st));
+        return -1;
+    }
+    char client_final[1024];
+    if (blen >= (int)sizeof(client_final)) {
+        pg_send_error(conn, "FATAL", "28P01", "SASL: client-final too long");
+        evo_secure_wipe(&st, sizeof(st));
+        return -1;
+    }
+    memcpy(client_final, body, blen);
+    client_final[blen] = '\0';
+
+    char server_final[256];
+    if (scram_server_final(client_final, &st, server_final,
+                           sizeof(server_final), 1) < 0) {
+        pg_send_error(conn, "FATAL", "28P01", "password authentication failed");
+        evo_secure_wipe(&st, sizeof(st));
+        return -1;
+    }
+    evo_secure_wipe(&st, sizeof(st));
+
+    /* AuthenticationSASLFinal: server-signature, then AuthenticationOk */
+    pg_buf_init(&b, PG_RESP_AUTH);
+    pg_buf_add_int32(&b, PG_AUTH_SASL_FINAL);
+    pg_buf_add_bytes(&b, server_final, (int)strlen(server_final));
+    if (pg_buf_send(&b, conn) < 0) return -1;
+    pg_send_auth_ok(conn);
+    return 0;
+}
+
 /* ----------------------------------------------------------------
- *  Startup / handshake — with TLS and cleartext password auth
+ *  Startup / handshake — with TLS, SASL/SCRAM, and cleartext password auth
  * ---------------------------------------------------------------- */
 int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
 {
@@ -429,12 +565,19 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
         return -1;
     }
 
-    /* ── Authentication: request cleartext password ── */
-    fprintf(stderr, "[debug] requesting cleartext password...\n"); fflush(stderr);
-    pg_send_auth_cleartext(conn);
+    /* ── Authentication ──
+     * SASL/SCRAM-SHA-256 when EVOSQL_PG_SASL is set (the password never crosses
+     * the wire); otherwise the cleartext-password flow (the default — the
+     * raw-wire test suite and simple clients use it). The trusted internal
+     * cluster transport always uses cleartext. Both paths send AuthenticationOk
+     * on success and then fall through to the shared ParameterStatus block. */
+    if (pg_sasl_enabled() && !conn->trusted_internal) {
+        if (pg_handle_sasl(conn, startup_user) < 0)
+            return -1;   /* pg_handle_sasl already sent an ErrorResponse */
+    } else {
+        pg_send_auth_cleartext(conn);
 
-    /* Read PasswordMessage ('p') */
-    {
+        /* Read PasswordMessage ('p') */
         char pw_header[5];
         if (pg_recv_exact(conn, pw_header, 5) < 0)
             return -1;
@@ -469,13 +612,9 @@ int pg_handle_startup(conn_t *conn, char *out_user, int user_size)
             evo_secure_wipe(password, sizeof(password));
             return -1;
         }
-
         evo_secure_wipe(password, sizeof(password));
+        pg_send_auth_ok(conn);
     }
-
-    /* Authentication succeeded */
-    fprintf(stderr, "[debug] sending auth_ok...\n"); fflush(stderr);
-    pg_send_auth_ok(conn);
 
     /* Copy username to caller */
     if (out_user && user_size > 0) {
