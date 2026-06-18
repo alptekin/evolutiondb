@@ -47,6 +47,42 @@ static void shutdown_handler(int sig)
     server_cleanup();
     _exit(0);
 }
+
+/* Crash safety net for genuine fatal signals (segfault / bus / FPE / abort).
+ * In server mode a bad QUERY is already recovered via setjmp/longjmp (the
+ * engine does not abort), so this fires only on real memory corruption / a
+ * NULL deref in C / an unexpected abort(). It MUST be async-signal-safe:
+ * only write()/signal()/raise()/_exit() — NO server_cleanup (locks + stdio
+ * could deadlock or corrupt inside a signal handler). We leave a breadcrumb,
+ * then restore the default disposition and re-raise so a core dump is produced
+ * and the process exits with a failure status the supervisor acts on
+ * (docker restart:on-failure / systemd Restart=on-failure). Data already
+ * committed is durable: every commit fsyncs the WAL before returning. */
+static void fatal_signal_handler(int sig)
+{
+#define EVO_WMSG(s) (void)write(STDERR_FILENO, (s), sizeof(s) - 1)
+    switch (sig) {
+        case SIGSEGV: EVO_WMSG("\n[FATAL] SIGSEGV — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+        case SIGBUS:  EVO_WMSG("\n[FATAL] SIGBUS — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+        case SIGFPE:  EVO_WMSG("\n[FATAL] SIGFPE — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+        default:      EVO_WMSG("\n[FATAL] fatal signal — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+    }
+#undef EVO_WMSG
+    /* Restore the default disposition and UNBLOCK the signal (the kernel masks
+     * it while we're in the handler), then re-raise so the process dies by the
+     * signal — producing a core dump and a signal-accurate exit status the
+     * supervisor treats as failure. sigemptyset/sigaddset/sigprocmask/signal/
+     * raise/_exit are all async-signal-safe. */
+    signal(sig, SIG_DFL);
+    {
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, sig);
+        sigprocmask(SIG_UNBLOCK, &set, NULL);
+    }
+    raise(sig);
+    _exit(70);              /* belt-and-suspenders if raise somehow returns */
+}
 #endif
 
 /* ---- Thread param for listener ---- */
@@ -211,6 +247,13 @@ int main(int argc, char *argv[])
     signal(SIGPIPE, SIG_IGN);
     signal(SIGTERM, shutdown_handler);
     signal(SIGINT,  shutdown_handler);
+    /* Crash safety net: log + re-raise on a real fatal signal so the process
+     * fails cleanly and the supervisor restarts it (committed data is durable
+     * via the WAL). Query-level errors never reach here — they longjmp. */
+    signal(SIGSEGV, fatal_signal_handler);
+    signal(SIGBUS,  fatal_signal_handler);
+    signal(SIGFPE,  fatal_signal_handler);
+    signal(SIGABRT, fatal_signal_handler);
 #endif
 
     printf("EvolutionDB v%s\n", EVODB_VERSION);
