@@ -456,6 +456,22 @@ void pgm_flush(void)
     pthread_mutex_unlock(&g_pgm_lock);
 }
 
+/* Commit-time WAL flush. Push the dirty FileHeader (page 0: free list, page
+ * count, catalog roots) into the buffer pool FIRST so it joins the dirty set,
+ * then WAL-log the whole dirty set. Without the header in the WAL, a crash
+ * before the next checkpoint replays the data pages but restores a stale
+ * page 0 — the pages allocated for freshly committed rows become unreachable
+ * and those rows vanish. Commit paths must call this instead of
+ * bp_wal_flush_dirty directly. */
+void pgm_wal_flush_dirty(int fd)
+{
+    extern void bp_wal_flush_dirty(int fd);
+    pthread_mutex_lock(&g_pgm_lock);
+    flush_header_if_dirty();   /* write_header -> bp_write(page 0) -> tracked dirty */
+    pthread_mutex_unlock(&g_pgm_lock);
+    bp_wal_flush_dirty(fd);    /* logs the tracked dirty pages, now including page 0 */
+}
+
 uint32_t pgm_get_catalog_root(CatalogID id)
 {
     if (id < 0 || id >= CATALOG_ROOT_SLOTS) return 0;
