@@ -152,14 +152,30 @@ def test_erase_data_requires_yes_for_real_delete():
                                      or {"row_count": 0, "stores": {}})
     try:
         # no --yes: a dry run (preview via export), real erase NOT called
-        assert cli.cmd_erase_data(argparse.Namespace(user=None, yes=False)) == 0
+        assert cli.cmd_erase_data(argparse.Namespace(yes=False)) == 0
         assert calls["erase"] == 0 and calls["export"] == 1
         # --yes: real erase happens
-        assert cli.cmd_erase_data(argparse.Namespace(user=None, yes=True)) == 0
+        assert cli.cmd_erase_data(argparse.Namespace(yes=True)) == 0
         assert calls["erase"] == 1
     finally:
         cli._backend_ns = saved_bn
         dsar.erase_user, dsar.export_user = saved_erase, saved_export
+
+
+def test_global_user_tenant_sets_identity_env():
+    saved = {k: os.environ.get(k) for k in ("MCP_USER_ID", "MCP_TENANT_ID")}
+    try:
+        rest = cli._pop_global_identity(["--user", "alice@globex",
+                                         "--tenant=acme", "status", "--json"])
+        assert rest == ["status", "--json"]            # flags removed, rest intact
+        assert os.environ["MCP_USER_ID"] == "alice@globex"
+        assert os.environ["MCP_TENANT_ID"] == "acme"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def main():
@@ -169,7 +185,8 @@ def main():
                test_backup_copies_data_dir,
                test_restore_refuses_when_engine_running,
                test_restore_respects_force,
-               test_erase_data_requires_yes_for_real_delete):
+               test_erase_data_requires_yes_for_real_delete,
+               test_global_user_tenant_sets_identity_env):
         fn()
         print(f"  ok  {fn.__name__}")
     print("OK — evoagent cli")
