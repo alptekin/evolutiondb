@@ -157,6 +157,12 @@ int  pgm_write_page(uint32_t page_no, const void *buf);
 /* Flush all dirty pages to disk. */
 void pgm_flush(void);
 
+/* Commit-time WAL flush: ensures the dirty FileHeader (page 0) is WAL-logged
+ * with the rest of the dirty set, so a crash before the next checkpoint
+ * recovers the free list / page count / catalog roots. Commit paths must use
+ * this instead of bp_wal_flush_dirty directly. */
+void pgm_wal_flush_dirty(int fd);
+
 /* Get/set catalog root page numbers. */
 uint32_t pgm_get_catalog_root(CatalogID id);
 void     pgm_set_catalog_root(CatalogID id, uint32_t page_no);
