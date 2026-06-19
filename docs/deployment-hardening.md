@@ -21,9 +21,10 @@ A one-line summary of the security model:
   chain, and DSAR export/erase tooling.
 - **Operator responsibility** — turning the opt-in protections on, supplying
   strong secrets and certificates, and running behind a supervisor.
-- **Roadmap (not shipped)** — encryption key rotation, per-tenant
-  isolation/RLS, SSO/OIDC, engine-side masking SQL, reliable name redaction,
-  and tamper-*proof* (externally anchored) audit.
+- **Roadmap (not shipped)** — data-key (DEK) rotation / full re-encryption (the
+  *passphrase* can be rotated, see below), per-tenant isolation/RLS, SSO/OIDC,
+  engine-side masking SQL, reliable name redaction, and tamper-*proof*
+  (externally anchored) audit.
 
 ---
 
@@ -159,7 +160,26 @@ When active, encryption is AES-256-CTR per page. Important caveats:
 - **Page 0 (the FileHeader) is always plaintext.**
 - CTR mode gives **confidentiality, not integrity** — it does not detect
   tampering of the ciphertext.
-- **There is no key rotation yet** (roadmap). Choose the passphrase carefully.
+- **The passphrase can be rotated** offline; the underlying data key cannot
+  (no full re-encryption — roadmap). See "Rotating the passphrase" below.
+
+### Rotating the passphrase
+
+You can rotate the at-rest passphrase without re-encrypting the data — only the
+key wrapping in the FileHeader changes (the data key and page ciphertext stay
+the same), so it is fast. Do it on a **stopped** engine:
+
+```bash
+EVOSQL_ENCRYPTION_KEY=<current> EVOSQL_ENCRYPTION_KEY_NEW=<new> \
+  evosql-server --rekey --data-dir <dir>     # re-wraps the key, then exits
+EVOSQL_ENCRYPTION_KEY=<new> evosql-server --data-dir <dir>   # start with the new one
+```
+
+The new passphrase is read from the environment (`EVOSQL_ENCRYPTION_KEY_NEW`),
+never the command line, so it does not leak via the process list. After
+rotation the old passphrase no longer opens the database. Back up the data dir
+first. (This rotates the passphrase/MEK; rotating the data key itself is
+roadmap.)
 
 ### Send safety
 
@@ -181,6 +201,7 @@ to use once any port is reachable beyond loopback.
 | `EVOSQL_USER_NAME` | Admin username for the SQL engine. | `admin` | a non-obvious name |
 | `EVOSQL_PASSWORD` | Admin password (stored PBKDF2-SHA256, 600k iters). | `admin` (or blank → `admin` in compose) | strong random secret |
 | `EVOSQL_ENCRYPTION_KEY` | Whole-DB TDE passphrase (AES-256-CTR). Empty = data file + WAL plaintext. Needs a `TLS=1`/`EVO_ENCRYPTION` build to take effect. | empty (TDE off) | set, on an encryption-enabled build |
+| `EVOSQL_ENCRYPTION_KEY_NEW` | New passphrase for offline `--rekey` rotation (read with `EVOSQL_ENCRYPTION_KEY` as the current one). Ignored outside `--rekey`. | unset | set only during rotation |
 | `EVOSQL_BIND` | Interface the engine binds inside the container. Unparseable values fail safe to loopback. | `127.0.0.1` | `127.0.0.1`; `0.0.0.0` only with TLS+auth |
 | `EVOSQL_REQUIRE_TLS` | When set (truthy), non-loopback PG connections must use TLS; plaintext password never accepted over the network. Server refuses to start if set without TLS available. | `0` (off) | `1` |
 | `EVOSQL_PG_SASL` | When set (truthy), require SCRAM-SHA-256 on the PG wire; password never sent. | off | `1` |
