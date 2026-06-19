@@ -598,3 +598,100 @@ int pgm_rekey(const char *new_passphrase)
         return -1;
     return 0;
 }
+
+/* Rotate the data-encryption key (DEK): generate a brand-new DEK + IV prefix,
+ * re-encrypt EVERY page under it, and persist the new key material in the
+ * FileHeader. Unlike pgm_rekey (passphrase-only re-wrap), this rewrites all
+ * ciphertext, so it is O(database size).
+ *
+ * Crash-safe via the same temp-file + atomic-rename pattern as PITR: pages are
+ * re-encrypted into "<data_dir>/evosql.db.rekey", validated, fsync'd, then
+ * rename()d over evosql.db. The live data file is never touched until a
+ * validated replacement exists, so a failed rotation leaves the original
+ * (old-key) database intact. The passphrase is unchanged — the new DEK is
+ * wrapped under the CURRENT EVOSQL_ENCRYPTION_KEY, so the operator restarts
+ * with the same passphrase.
+ *
+ * Offline use only (caller stops background threads and exits afterward — the
+ * new key is re-derived from the new header on restart, so there is no in-place
+ * commit). Returns 0 on success, -1 on any failure (original intact). */
+int pgm_rotate_dek(void)
+{
+    if (!pcrypt_is_enabled()) return -1;          /* DB is plaintext */
+
+    /* Make the on-disk file the current (old-key) ciphertext we will read. */
+    pgm_flush();
+
+    uint8_t new_salt[16], new_wrapped[48], new_iv[8];
+    if (pcrypt_begin_rotation(new_salt, new_wrapped, new_iv) != 0)
+        return -1;
+
+    const char *root = db_get_root();
+    if (!root || !root[0]) { pcrypt_abort_rotation(); return -1; }
+
+    char db_path[2048], tmp_path[2048];
+    snprintf(db_path, sizeof(db_path), "%s/evosql.db", root);
+    snprintf(tmp_path, sizeof(tmp_path), "%s/evosql.db.rekey", root);
+
+    int tmp_fd = open(tmp_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (tmp_fd < 0) { pcrypt_abort_rotation(); return -1; }
+
+    uint32_t total = g_header.total_pages;
+    int ok = 1;
+
+    /* Page 0: the FileHeader stays plaintext but carries the NEW key wrapping. */
+    {
+        FileHeader hdr = g_header;
+        memcpy(hdr.encryption_salt, new_salt, 16);
+        memcpy(hdr.wrapped_dek, new_wrapped, 48);
+        memcpy(hdr.page_iv_prefix, new_iv, 8);
+        if (pwrite(tmp_fd, &hdr, sizeof(FileHeader), 0) != (ssize_t)sizeof(FileHeader))
+            ok = 0;
+    }
+
+    /* Pages 1..total-1: decrypt with the old key, re-encrypt with the new key. */
+    uint8_t buf[EVO_PAGE_SIZE];
+    for (uint32_t pno = 1; ok && pno < total; pno++) {
+        off_t off = (off_t)pno * EVO_PAGE_SIZE;
+        if (pread(g_global_fd, buf, EVO_PAGE_SIZE, off) != (ssize_t)EVO_PAGE_SIZE) {
+            ok = 0; break;
+        }
+        if (pcrypt_recrypt_page(buf, pno) != 0) { ok = 0; break; }
+        if (pwrite(tmp_fd, buf, EVO_PAGE_SIZE, off) != (ssize_t)EVO_PAGE_SIZE) {
+            ok = 0; break;
+        }
+    }
+
+    /* Validate the rebuilt header, make it durable, then swap atomically. */
+    if (ok) {
+        uint32_t magic = 0;
+        if (pread(tmp_fd, &magic, 4, 0) != 4 || magic != EVO_MAGIC)
+            ok = 0;
+    }
+    if (ok && fsync(tmp_fd) != 0) ok = 0;
+    close(tmp_fd);
+
+    if (!ok) {
+        unlink(tmp_path);
+        pcrypt_abort_rotation();
+        return -1;
+    }
+    if (rename(tmp_path, db_path) != 0) {
+        unlink(tmp_path);
+        pcrypt_abort_rotation();
+        return -1;
+    }
+    /* Make the rename durable: fsync the data directory so the new dirent
+     * survives a crash. (Without it a "successful" rotation could silently
+     * revert to the original on power loss — the safe direction, but
+     * surprising.) Best-effort; the swap already happened. */
+    {
+        int dfd = open(root, O_RDONLY);
+        if (dfd >= 0) { fsync(dfd); close(dfd); }
+    }
+    /* New key material is now persisted in the swapped-in header; drop the
+     * in-memory scratch. The caller must exit — the old DEK is still active in
+     * memory and would mis-decrypt the freshly re-encrypted file. */
+    pcrypt_abort_rotation();
+    return 0;
+}

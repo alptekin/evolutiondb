@@ -27,6 +27,12 @@ static uint8_t         g_iv_prefix[8];        /* Fixed prefix for page CTR IVs *
 static int             g_encryption_enabled = 0;
 static EVP_CIPHER_CTX *g_ctr_ctx = NULL;      /* Cached CTR context (avoids alloc per page) */
 
+/* DEK-rotation scratch: the NEW key/IV-prefix, live only between
+ * pcrypt_begin_rotation() and the offline re-encryption + process exit. */
+static uint8_t         g_new_dek[32];
+static uint8_t         g_new_iv_prefix[8];
+static int             g_rotating = 0;
+
 /* ================================================================
  *  MEK derivation: passphrase + salt → 256-bit key
  * ================================================================ */
@@ -125,12 +131,17 @@ static void init_ctr_ctx(void)
         EVP_EncryptInit_ex(g_ctr_ctx, EVP_aes_256_ctr(), NULL, NULL, NULL);
 }
 
-static int crypt_page_ctr(uint8_t *buf, uint32_t page_no)
+/* CTR transform of one page with an EXPLICIT key + IV prefix (CTR is symmetric,
+ * so this both encrypts and decrypts). The base primitive used by the normal
+ * path (current key) and by DEK rotation (old key to decrypt, new key to
+ * re-encrypt). */
+static int crypt_page_ctr_key(uint8_t *buf, uint32_t page_no,
+                              const uint8_t *dek, const uint8_t *iv_prefix)
 {
     if (!g_ctr_ctx) return -1;
 
     uint8_t iv[16];
-    memcpy(iv, g_iv_prefix, 8);
+    memcpy(iv, iv_prefix, 8);
     iv[8]  = (uint8_t)(page_no);
     iv[9]  = (uint8_t)(page_no >> 8);
     iv[10] = (uint8_t)(page_no >> 16);
@@ -140,13 +151,18 @@ static int crypt_page_ctr(uint8_t *buf, uint32_t page_no)
     int len;
 
     /* Re-init with key + IV; cipher already set on the cached context */
-    if (EVP_EncryptInit_ex(g_ctr_ctx, NULL, NULL, g_dek, iv) != 1)
+    if (EVP_EncryptInit_ex(g_ctr_ctx, NULL, NULL, dek, iv) != 1)
         return -1;
     /* CTR supports in-place: output overwrites input directly */
     if (EVP_EncryptUpdate(g_ctr_ctx, buf, &len, buf, EVO_PAGE_SIZE) != 1)
         return -1;
 
     return 0;
+}
+
+static int crypt_page_ctr(uint8_t *buf, uint32_t page_no)
+{
+    return crypt_page_ctr_key(buf, page_no, g_dek, g_iv_prefix);
 }
 
 /* ================================================================
@@ -271,6 +287,78 @@ int pcrypt_rekey(const char *new_passphrase, uint8_t *new_salt_out,
     return rc;
 }
 
+/* ================================================================
+ *  Data-key (DEK) rotation — full re-encryption
+ *
+ *  Unlike pcrypt_rekey (which only re-wraps the SAME DEK under a new
+ *  passphrase), this generates a brand-new DEK and a new IV prefix, so EVERY
+ *  page must be decrypted with the old key and re-encrypted with the new one.
+ *  The caller (pgm_rotate_dek) drives the per-page pass and persists the new
+ *  salt/wrapped-DEK/IV-prefix in the FileHeader. Offline only.
+ * ================================================================ */
+
+/* Begin rotation: derive a new DEK + IV prefix, wrap the new DEK under the
+ * CURRENT passphrase (DEK rotation keeps the passphrase) with a fresh salt.
+ * The new material is held in module scratch for pcrypt_recrypt_page(); the old
+ * key stays active for decryption. Returns 0 and fills the three out buffers
+ * (to be written into the FileHeader) on success. */
+int pcrypt_begin_rotation(uint8_t *new_salt_out, uint8_t *new_wrapped_dek_out,
+                          uint8_t *new_iv_prefix_out)
+{
+    if (!g_encryption_enabled) return -1;
+    const char *passphrase = getenv("EVOSQL_ENCRYPTION_KEY");
+    if (!passphrase || !passphrase[0]) return -1;
+
+    /* Generate the new key material. Wipe the (live) new DEK on every failure
+     * path so a fresh 256-bit key is never left sitting in module memory. */
+    if (crypto_random_bytes(g_new_dek, 32) < 0 ||
+        crypto_random_bytes(g_new_iv_prefix, 8) < 0 ||
+        crypto_random_bytes(new_salt_out, 16) < 0) {
+        evo_secure_wipe(g_new_dek, 32);
+        evo_secure_wipe(g_new_iv_prefix, 8);
+        return -1;
+    }
+
+    uint8_t new_mek[32];
+    derive_mek(passphrase, new_salt_out, new_mek);
+    int rc = wrap_dek(new_mek, g_new_dek, new_wrapped_dek_out);
+    evo_secure_wipe(new_mek, 32);
+    if (rc != 0) {
+        evo_secure_wipe(g_new_dek, 32);
+        evo_secure_wipe(g_new_iv_prefix, 8);
+        return -1;
+    }
+
+    memcpy(new_iv_prefix_out, g_new_iv_prefix, 8);
+    g_rotating = 1;
+    return 0;
+}
+
+/* Re-encrypt one page in place: decrypt with the OLD key, encrypt with the NEW
+ * key. Page 0 (plaintext FileHeader) is a no-op — the caller rewrites it with
+ * the new key material directly. Must be called between begin and abort. */
+int pcrypt_recrypt_page(uint8_t *buf, uint32_t page_no)
+{
+    if (!g_rotating) return -1;
+    if (page_no == 0) return 0;
+    if (crypt_page_ctr_key(buf, page_no, g_dek, g_iv_prefix) != 0)
+        return -1;   /* decrypt with old key */
+    if (crypt_page_ctr_key(buf, page_no, g_new_dek, g_new_iv_prefix) != 0)
+        return -1;   /* encrypt with new key */
+    return 0;
+}
+
+/* Discard the in-flight new key material (failure path). The old key stays
+ * active. After a SUCCESSFUL rotation the caller exits the process and the new
+ * key is re-derived from the new header on restart, so there is no in-place
+ * commit. */
+void pcrypt_abort_rotation(void)
+{
+    evo_secure_wipe(g_new_dek, 32);
+    evo_secure_wipe(g_new_iv_prefix, 8);
+    g_rotating = 0;
+}
+
 void pcrypt_shutdown(void)
 {
     if (g_ctr_ctx) {
@@ -279,6 +367,9 @@ void pcrypt_shutdown(void)
     }
     evo_secure_wipe(g_dek, 32);
     evo_secure_wipe(g_iv_prefix, 8);
+    evo_secure_wipe(g_new_dek, 32);
+    evo_secure_wipe(g_new_iv_prefix, 8);
+    g_rotating = 0;
     g_encryption_enabled = 0;
 }
 
