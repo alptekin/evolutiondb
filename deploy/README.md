@@ -55,6 +55,23 @@ KEEP=1 ./deploy/kind-smoke.sh # leave the cluster up to poke at it
 This catches ~90% of deployment bugs (templating, PVC binding, secret wiring,
 the engine actually starting and persisting) for free, in minutes.
 
+### Full stack — `kind-stack-smoke.sh`
+
+Goes further: builds **both** images (engine + agent), deploys the whole stack
+plus an in-cluster mock OIDC provider, and proves the agent works end-to-end —
+the web UI responds, the `/api` auth gate enforces (no token → 401, static
+token → 200, so the agent really reaches the engine Service), and **operator
+OIDC SSO works live**: a JWT minted by the in-cluster IdP is accepted (agent
+fetches its JWKS and validates) while a forged-signature JWT is rejected.
+
+```bash
+./deploy/kind-stack-smoke.sh        # engine + agent + live OIDC, then destroy
+KEEP=1 ./deploy/kind-stack-smoke.sh # leave it up; port-forward to poke at the UI
+```
+
+A real IdP (Keycloak / Entra ID / Okta) replaces the mock — the agent validates
+identically, and MFA is enforced by the IdP.
+
 ## When to go to AWS / EKS
 
 The engine is single-process, so for a **single self-hosted deployment** you get
