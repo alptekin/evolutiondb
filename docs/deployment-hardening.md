@@ -21,10 +21,10 @@ A one-line summary of the security model:
   chain, and DSAR export/erase tooling.
 - **Operator responsibility** — turning the opt-in protections on, supplying
   strong secrets and certificates, and running behind a supervisor.
-- **Roadmap (not shipped)** — data-key (DEK) rotation / full re-encryption (the
-  *passphrase* can be rotated, see below), per-tenant isolation/RLS, SSO/OIDC,
-  engine-side masking SQL, reliable name redaction, and tamper-*proof*
-  (externally anchored) audit.
+- **Roadmap (not shipped)** — external KMS/HSM key management (passphrase and
+  data-key rotation are both shipped, see below), per-tenant isolation/RLS,
+  SSO/OIDC, engine-side masking SQL, reliable name redaction, and
+  tamper-*proof* (externally anchored) audit.
 
 ---
 
@@ -160,14 +160,17 @@ When active, encryption is AES-256-CTR per page. Important caveats:
 - **Page 0 (the FileHeader) is always plaintext.**
 - CTR mode gives **confidentiality, not integrity** — it does not detect
   tampering of the ciphertext.
-- **The passphrase can be rotated** offline; the underlying data key cannot
-  (no full re-encryption — roadmap). See "Rotating the passphrase" below.
+- **Both the passphrase and the data key can be rotated** offline. See
+  "Rotating keys" below.
 
-### Rotating the passphrase
+### Rotating keys
 
-You can rotate the at-rest passphrase without re-encrypting the data — only the
-key wrapping in the FileHeader changes (the data key and page ciphertext stay
-the same), so it is fast. Do it on a **stopped** engine:
+Two offline rotations are available; run both on a **stopped** engine and back
+up the data dir first.
+
+**Passphrase rotation** (`--rekey`) — fast, header-only: re-wraps the same data
+key under a new passphrase, so the old passphrase stops working. The data and
+page ciphertext are unchanged.
 
 ```bash
 EVOSQL_ENCRYPTION_KEY=<current> EVOSQL_ENCRYPTION_KEY_NEW=<new> \
@@ -176,10 +179,27 @@ EVOSQL_ENCRYPTION_KEY=<new> evosql-server --data-dir <dir>   # start with the ne
 ```
 
 The new passphrase is read from the environment (`EVOSQL_ENCRYPTION_KEY_NEW`),
-never the command line, so it does not leak via the process list. After
-rotation the old passphrase no longer opens the database. Back up the data dir
-first. (This rotates the passphrase/MEK; rotating the data key itself is
-roadmap.)
+never the command line, so it does not leak via the process list.
+
+**Data-key rotation** (`--rotate-key`) — generates a brand-new data key and
+**re-encrypts every page** under it (cost is O(database size)), keeping the same
+passphrase. Use this when the data key itself may be compromised, not just the
+passphrase.
+
+```bash
+EVOSQL_ENCRYPTION_KEY=<passphrase> evosql-server --rotate-key --data-dir <dir>
+EVOSQL_ENCRYPTION_KEY=<passphrase> evosql-server --data-dir <dir>   # same passphrase
+```
+
+Both rotations re-encrypt into a temp file, validate it, and swap it in
+atomically — a failed rotation leaves the original data file intact.
+
+!!! warning "Rotation does not re-protect the WAL archive"
+    If continuous archiving (`EVOSQL_WAL_ARCHIVE`) is on, `evosql.wal.archive`
+    holds **plaintext** full-page images across history. Rotating either key
+    does **not** touch that archive — cover it with separate retention /
+    encryption controls, and treat a rotation as a reason to start a fresh
+    archive.
 
 ### Send safety
 
