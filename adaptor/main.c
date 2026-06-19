@@ -132,6 +132,7 @@ int main(int argc, char *argv[])
     long long recover_to_us = 0;       /* --recover-to <epoch_microseconds> */
     int recover_to_set = 0;            /* distinguishes target 0 from "unset" */
     int rekey_mode = 0;                /* --rekey (rotate encryption passphrase) */
+    int rotate_key_mode = 0;           /* --rotate-key (rotate DEK + re-encrypt) */
     int i;
 
     /* Environment defaults (CLI flags below override).
@@ -211,6 +212,8 @@ int main(int argc, char *argv[])
         }
         else if (strcmp(argv[i], "--rekey") == 0)
             rekey_mode = 1;            /* new passphrase via EVOSQL_ENCRYPTION_KEY_NEW */
+        else if (strcmp(argv[i], "--rotate-key") == 0)
+            rotate_key_mode = 1;       /* new DEK + full re-encryption (same passphrase) */
         else if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
             EVO_SETENV("EVOSQL_BIND", argv[++i]);   /* listener address; default loopback */
         else if (strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc)
@@ -337,6 +340,33 @@ int main(int argc, char *argv[])
         fflush(stderr);
         /* Bypass server_cleanup(): the new header is already flushed + fsync'd;
          * a second flush is harmless but unnecessary. */
+        _exit(0);
+    }
+
+    /* --rotate-key mode: rotate the data-encryption key and re-encrypt every
+     * page under it, then exit. The passphrase is unchanged (the new DEK is
+     * wrapped under the current EVOSQL_ENCRYPTION_KEY), so the operator just
+     * restarts with the same passphrase. Crash-safe: a validated re-encrypted
+     * copy is swapped in atomically, so a failure leaves the original intact. */
+    if (rotate_key_mode) {
+        auto_reclaim_stop();
+        wal_checkpointer_stop();
+
+        int rc = pgm_rotate_dek();
+        if (rc != 0) {
+            fprintf(stderr, "[ROTATE-KEY] Failed. The database must be encrypted "
+                    "and EVOSQL_ENCRYPTION_KEY the current passphrase. The "
+                    "original data file is intact.\n");
+            fflush(stderr);
+            _exit(1);
+        }
+        fprintf(stderr, "[ROTATE-KEY] Data key rotated and all pages re-encrypted. "
+                "Restart normally with the same EVOSQL_ENCRYPTION_KEY.\n");
+        fflush(stdout);
+        fflush(stderr);
+        /* Bypass server_cleanup(): the old DEK is still active in memory and
+         * would mis-decrypt the freshly re-encrypted file. The new file is
+         * already fsync'd + swapped in; restart re-derives the new key. */
         _exit(0);
     }
 
