@@ -358,8 +358,12 @@ static void stream_qctx_end(QueryContext *qctx, QueryContext *prev,
         if (failed) {
             clog_set_aborted(qctx->mvcc_xid);
         } else {
-            bp_wal_flush_dirty(pgm_get_fd());
+            /* Mark committed FIRST so the CLOG marker rides the same WAL fsync
+             * as the data + FileHeader (pgm_wal_flush_dirty, not bp_, so page 0
+             * is logged too); otherwise a crash right after a COPY loses the
+             * last committed batch's marker. */
             clog_set_committed_csn(qctx->mvcc_xid, pgm_next_csn());
+            pgm_wal_flush_dirty(pgm_get_fd());
         }
         lock_release_all(qctx->mvcc_xid);
         lock_gap_release_all(qctx->mvcc_xid);

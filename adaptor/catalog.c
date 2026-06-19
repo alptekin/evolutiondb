@@ -1375,9 +1375,9 @@ static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
         /* WAL flush for durability */
         {
-            extern void bp_wal_flush_dirty(int fd);
+            extern void pgm_wal_flush_dirty(int fd);
             extern int pgm_get_fd(void);
-            bp_wal_flush_dirty(pgm_get_fd());
+            pgm_wal_flush_dirty(pgm_get_fd());  /* WAL-logs the FileHeader too */
         }
 
         /* Persist PREPARE record to disk (survives crash) */
@@ -1437,10 +1437,13 @@ static int handle_xa(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
         /* Commit from current session */
         if (ctx->tx_xid > 0) {
-            { extern void bp_wal_flush_dirty(int fd); extern int pgm_get_fd(void);
-              bp_wal_flush_dirty(pgm_get_fd()); }
+            /* Mark committed FIRST so the CLOG marker rides the same WAL fsync
+             * as data + FileHeader (see server.c auto-commit); otherwise the
+             * last committed txn before a crash is lost. */
             uint32_t csn = pgm_next_csn();
             clog_set_committed_csn(ctx->tx_xid, csn);
+            { extern void pgm_wal_flush_dirty(int fd); extern int pgm_get_fd(void);
+              pgm_wal_flush_dirty(pgm_get_fd()); }  /* logs data + FileHeader + CLOG marker */
             { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid);
               extern void lock_gap_release_all(uint32_t); lock_gap_release_all(ctx->tx_xid); }
             { extern void cg_unregister_tx(uint32_t); cg_unregister_tx(ctx->tx_xid); }
@@ -1662,17 +1665,26 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                 }
                 /* MVCC: mark committed in CLOG with CSN */
                 if (ctx->tx_xid > 0) {
-                    /* WAL: flush dirty pages before commit for durability */
+                    /* Mark committed FIRST so the CLOG marker is dirtied before
+                     * the WAL flush and rides the SAME fsync as the data +
+                     * FileHeader — uniform with the auto-commit path. Otherwise
+                     * the last committed txn before a crash replays its tuple
+                     * but reads as uncommitted (lost). Commit is visible at the
+                     * in-memory mark and durable at the flush (standard
+                     * early-visibility ordering). No extra fsync. */
+                    uint32_t csn = pgm_next_csn();
+                    clog_set_committed_csn(ctx->tx_xid, csn);
+                    /* WAL: flush dirty pages (incl. the CLOG marker) for durability */
                     {
-                        extern void bp_wal_flush_dirty(int fd);
+                        extern void pgm_wal_flush_dirty(int fd);
                         extern int pgm_get_fd(void);
-                        bp_wal_flush_dirty(pgm_get_fd());
+                        pgm_wal_flush_dirty(pgm_get_fd());  /* logs data + FileHeader + CLOG marker */
                     }
-                    /* Synchronous commit: wait for
-                     * replica majority to confirm this transaction's WAL
-                     * LSN before acknowledging COMMIT to the client.
-                     * Gated by EVOSQL_SYNC_COMMIT=1. Silently degrades
-                     * to async commit on timeout (logged). */
+                    /* Synchronous commit: wait for replica majority to confirm
+                     * this transaction's WAL LSN before acknowledging COMMIT to
+                     * the client. Reads the post-flush LSN, so it stays after
+                     * the flush. Gated by EVOSQL_SYNC_COMMIT=1; degrades to
+                     * async commit on timeout (logged). */
                     if (repl_sync_commit_enabled()) {
                         uint32_t target_lsn = wal_get_current_lsn();
                         if (target_lsn > 0 &&
@@ -1683,8 +1695,6 @@ static int handle_transaction(const char *sql, ResultSet *rs,
                                     target_lsn);
                         }
                     }
-                    uint32_t csn = pgm_next_csn();
-                    clog_set_committed_csn(ctx->tx_xid, csn);
                     { extern void lock_release_all(uint32_t); lock_release_all(ctx->tx_xid);
                       extern void lock_gap_release_all(uint32_t); lock_gap_release_all(ctx->tx_xid); }
                     mvcc_unregister_tx(ctx->tx_xid);

@@ -43,6 +43,22 @@ int  pcrypt_decrypt_page(uint8_t *buf, uint32_t page_no);
 int  pcrypt_rekey(const char *new_passphrase, uint8_t *new_salt_out,
                   uint8_t *new_wrapped_dek_out);
 
+/* --- Data-key (DEK) rotation: full re-encryption under a brand-new DEK --- */
+
+/* Begin rotation: derive a new DEK + IV prefix and wrap the new DEK under the
+ * current passphrase with a fresh salt. Fills new_salt_out[16],
+ * new_wrapped_dek_out[48], new_iv_prefix_out[8] for the FileHeader; the old key
+ * stays active for decryption. Returns 0 on success. */
+int  pcrypt_begin_rotation(uint8_t *new_salt_out, uint8_t *new_wrapped_dek_out,
+                           uint8_t *new_iv_prefix_out);
+
+/* Re-encrypt one page in place: decrypt with the old key, encrypt with the new.
+ * No-op for page 0. Valid only between begin and abort. Returns 0 on success. */
+int  pcrypt_recrypt_page(uint8_t *buf, uint32_t page_no);
+
+/* Discard in-flight new key material (failure path); the old key stays active. */
+void pcrypt_abort_rotation(void);
+
 /* Wipe DEK + state from memory. */
 void pcrypt_shutdown(void);
 
@@ -66,6 +82,14 @@ static inline int pcrypt_decrypt_page(uint8_t *b, uint32_t p)
 
 static inline int pcrypt_rekey(const char *p, uint8_t *s, uint8_t *w)
 { (void)p; (void)s; (void)w; return -1; }
+
+static inline int pcrypt_begin_rotation(uint8_t *s, uint8_t *w, uint8_t *iv)
+{ (void)s; (void)w; (void)iv; return -1; }
+
+static inline int pcrypt_recrypt_page(uint8_t *b, uint32_t p)
+{ (void)b; (void)p; return -1; }
+
+static inline void pcrypt_abort_rotation(void) {}
 
 static inline void pcrypt_shutdown(void) {}
 

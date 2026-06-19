@@ -17,9 +17,18 @@ same record:
   private key, which never leaves `~/.evosql/pii_private.pem`.
 
 No data is ever stored in plaintext alongside the masked record;
-no PII reaches an external LLM through the standard search path;
-a one-shot CLI restores the originals when the operator
+no PII reaches an external LLM through the standard **search/retrieval**
+path; a one-shot CLI restores the originals when the operator
 authenticates with the private key.
+
+**Scope (read this).** Masking is applied where it is wired:
+per-connector at rest via `protect_record`, and at retrieval via
+`EVOSQL_PII_RETRIEVAL`. Internal **enrichment** calls (entity extraction,
+episode summaries, the standalone agent loop) only mask their outbound
+prompts when `EVOSQL_PII_EGRESS=on` (opt-in, fail-closed); with it `off`
+(the default) those tasks send their text to the configured model
+provider unmasked. At-rest masking is field-level, **not** whole-DB
+encryption — the engine WAL/replication stream is not yet encrypted.
 
 ## Why hybrid encryption (and not plain RSA)?
 

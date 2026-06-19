@@ -48,6 +48,9 @@
 /* Authentication sub-types (inside R message) */
 #define PG_AUTH_OK                0
 #define PG_AUTH_CLEARTEXT_PASSWORD 3
+#define PG_AUTH_SASL             10   /* AuthenticationSASL — mechanism list */
+#define PG_AUTH_SASL_CONTINUE    11   /* AuthenticationSASLContinue — server-first */
+#define PG_AUTH_SASL_FINAL       12   /* AuthenticationSASLFinal — server-signature */
 
 /* Write buffer for building messages */
 typedef struct {
@@ -57,6 +60,11 @@ typedef struct {
 
 /* Read exact number of bytes from connection */
 int pg_recv_exact(conn_t *conn, char *buf, int len);
+
+/* When non-zero, non-loopback PG connections must use TLS (no plaintext
+ * password over the network). Set once at startup from EVOSQL_REQUIRE_TLS /
+ * --require-tls; default 0. */
+extern int g_pg_require_tls;
 
 /* Startup/handshake — returns 0 on success, -1 on failure.
  * Fills out_user with the authenticated username (max 256 bytes). */

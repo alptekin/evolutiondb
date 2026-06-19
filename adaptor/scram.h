@@ -62,9 +62,15 @@ typedef struct {
  *
  *  Returns 0 on success, -1 on parse / crypto error.
  * ---------------------------------------------------------------- */
-int scram_server_first(const char *client_first, char *username,
-                       ScramState *state, char *server_first,
-                       int server_first_size);
+/* override_username: when non-NULL, the username is taken from here (the PG
+ * wire carries it in the StartupMessage, so the client-first n= is empty);
+ * NULL = parse it from the client-first n= (EVO).
+ * bare_output: 0 = prefix the output with "SCRAM-SERVER-FIRST " (EVO text
+ * framing); 1 = emit the bare server-first-message (PG SASL). The bare body is
+ * always what goes into the SCRAM AuthMessage, regardless of framing. */
+int scram_server_first(const char *client_first, const char *override_username,
+                       char *username, ScramState *state, char *server_first,
+                       int server_first_size, int bare_output);
 
 /* ----------------------------------------------------------------
  *  scram_server_final -- process SCRAM-CLIENT-FINAL, verify client
@@ -78,6 +84,7 @@ int scram_server_first(const char *client_first, char *username,
  *  Returns 0 on success (proof valid), -1 on failure.
  * ---------------------------------------------------------------- */
 int scram_server_final(const char *client_final, ScramState *state,
-                       char *server_final, int server_final_size);
+                       char *server_final, int server_final_size,
+                       int bare_output);
 
 #endif /* SCRAM_H */

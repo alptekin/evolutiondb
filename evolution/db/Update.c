@@ -262,8 +262,9 @@ static int enforce_fk_on_update(const TableDesc *parentTd,
         int numDefaults = 0;
         if (onUpdateAction == 4) {
             char childPath[1024];
-            snprintf(childPath, sizeof(childPath), "root/%s/%s/%s",
-                     g_currentDatabase, g_currentSchema, childTd.table_name);
+            /* g_dbRoot-prefixed path (honors EVOSQL_DATA_DIR) — same as
+             * db_table_path; was a hardcoded "root/". */
+            db_table_path(childTd.table_name, childPath, sizeof(childPath));
             numDefaults = ReadDefaults(childPath, childDefaults, CAT_MAX_COLUMNS);
         }
 

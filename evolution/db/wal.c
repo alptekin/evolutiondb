@@ -21,9 +21,16 @@
 #include "page_crypt.h"
 
 /* ================================================================
- *  CRC32 (IEEE polynomial, same as zlib/gzip)
+ *  CRC32
  * ================================================================ */
-static const uint32_t crc32_table[256] = {
+
+/* LEGACY table — preserved VERBATIM. The original table was malformed (only
+ * 252 of 256 entries populated, so [252..255] are implicit zeros, plus several
+ * non-standard/duplicate values), so it is NOT a real CRC-32. It was, however,
+ * self-consistent: both the writer and the verifier used it, so records written
+ * by WAL_VERSION 1 still replay correctly. We keep it ONLY to verify those
+ * pre-existing version-1 records on upgrade — do NOT use it for new records. */
+static const uint32_t crc32_table_legacy[256] = {
     0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,
     0xE963A535,0x9E6495A3,0x0EDB8832,0x79DCB8A4,0xE0D5E91B,0x97D2D988,
     0x09B64C2B,0x7EB17CBB,0xE7B82D09,0x90BF1D91,0x1DB71064,0x6AB020F2,
@@ -68,6 +75,64 @@ static const uint32_t crc32_table[256] = {
     0x36034AF6,0x41047A60,0xDF60EFC3,0xA8670955,0x316E79EF,0x466D0979
 };
 
+static uint32_t wal_crc32_legacy(const void *data, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t crc = 0xFFFFFFFF;
+    for (size_t i = 0; i < len; i++)
+        crc = crc32_table_legacy[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFF;
+}
+
+/* Correct IEEE 802.3 reflected CRC-32 (poly 0xEDB88320, same as zlib/gzip).
+ * Self-check: crc("123456789") == 0xCBF43926. Used for all WAL_VERSION >= 2
+ * records (write + verify) and for the WAL archive read by PITR. */
+static const uint32_t crc32_table[256] = {
+    0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,
+    0xE963A535,0x9E6495A3,0x0EDB8832,0x79DCB8A4,0xE0D5E91E,0x97D2D988,
+    0x09B64C2B,0x7EB17CBD,0xE7B82D07,0x90BF1D91,0x1DB71064,0x6AB020F2,
+    0xF3B97148,0x84BE41DE,0x1ADAD47D,0x6DDDE4EB,0xF4D4B551,0x83D385C7,
+    0x136C9856,0x646BA8C0,0xFD62F97A,0x8A65C9EC,0x14015C4F,0x63066CD9,
+    0xFA0F3D63,0x8D080DF5,0x3B6E20C8,0x4C69105E,0xD56041E4,0xA2677172,
+    0x3C03E4D1,0x4B04D447,0xD20D85FD,0xA50AB56B,0x35B5A8FA,0x42B2986C,
+    0xDBBBC9D6,0xACBCF940,0x32D86CE3,0x45DF5C75,0xDCD60DCF,0xABD13D59,
+    0x26D930AC,0x51DE003A,0xC8D75180,0xBFD06116,0x21B4F4B5,0x56B3C423,
+    0xCFBA9599,0xB8BDA50F,0x2802B89E,0x5F058808,0xC60CD9B2,0xB10BE924,
+    0x2F6F7C87,0x58684C11,0xC1611DAB,0xB6662D3D,0x76DC4190,0x01DB7106,
+    0x98D220BC,0xEFD5102A,0x71B18589,0x06B6B51F,0x9FBFE4A5,0xE8B8D433,
+    0x7807C9A2,0x0F00F934,0x9609A88E,0xE10E9818,0x7F6A0DBB,0x086D3D2D,
+    0x91646C97,0xE6635C01,0x6B6B51F4,0x1C6C6162,0x856530D8,0xF262004E,
+    0x6C0695ED,0x1B01A57B,0x8208F4C1,0xF50FC457,0x65B0D9C6,0x12B7E950,
+    0x8BBEB8EA,0xFCB9887C,0x62DD1DDF,0x15DA2D49,0x8CD37CF3,0xFBD44C65,
+    0x4DB26158,0x3AB551CE,0xA3BC0074,0xD4BB30E2,0x4ADFA541,0x3DD895D7,
+    0xA4D1C46D,0xD3D6F4FB,0x4369E96A,0x346ED9FC,0xAD678846,0xDA60B8D0,
+    0x44042D73,0x33031DE5,0xAA0A4C5F,0xDD0D7CC9,0x5005713C,0x270241AA,
+    0xBE0B1010,0xC90C2086,0x5768B525,0x206F85B3,0xB966D409,0xCE61E49F,
+    0x5EDEF90E,0x29D9C998,0xB0D09822,0xC7D7A8B4,0x59B33D17,0x2EB40D81,
+    0xB7BD5C3B,0xC0BA6CAD,0xEDB88320,0x9ABFB3B6,0x03B6E20C,0x74B1D29A,
+    0xEAD54739,0x9DD277AF,0x04DB2615,0x73DC1683,0xE3630B12,0x94643B84,
+    0x0D6D6A3E,0x7A6A5AA8,0xE40ECF0B,0x9309FF9D,0x0A00AE27,0x7D079EB1,
+    0xF00F9344,0x8708A3D2,0x1E01F268,0x6906C2FE,0xF762575D,0x806567CB,
+    0x196C3671,0x6E6B06E7,0xFED41B76,0x89D32BE0,0x10DA7A5A,0x67DD4ACC,
+    0xF9B9DF6F,0x8EBEEFF9,0x17B7BE43,0x60B08ED5,0xD6D6A3E8,0xA1D1937E,
+    0x38D8C2C4,0x4FDFF252,0xD1BB67F1,0xA6BC5767,0x3FB506DD,0x48B2364B,
+    0xD80D2BDA,0xAF0A1B4C,0x36034AF6,0x41047A60,0xDF60EFC3,0xA867DF55,
+    0x316E8EEF,0x4669BE79,0xCB61B38C,0xBC66831A,0x256FD2A0,0x5268E236,
+    0xCC0C7795,0xBB0B4703,0x220216B9,0x5505262F,0xC5BA3BBE,0xB2BD0B28,
+    0x2BB45A92,0x5CB36A04,0xC2D7FFA7,0xB5D0CF31,0x2CD99E8B,0x5BDEAE1D,
+    0x9B64C2B0,0xEC63F226,0x756AA39C,0x026D930A,0x9C0906A9,0xEB0E363F,
+    0x72076785,0x05005713,0x95BF4A82,0xE2B87A14,0x7BB12BAE,0x0CB61B38,
+    0x92D28E9B,0xE5D5BE0D,0x7CDCEFB7,0x0BDBDF21,0x86D3D2D4,0xF1D4E242,
+    0x68DDB3F8,0x1FDA836E,0x81BE16CD,0xF6B9265B,0x6FB077E1,0x18B74777,
+    0x88085AE6,0xFF0F6A70,0x66063BCA,0x11010B5C,0x8F659EFF,0xF862AE69,
+    0x616BFFD3,0x166CCF45,0xA00AE278,0xD70DD2EE,0x4E048354,0x3903B3C2,
+    0xA7672661,0xD06016F7,0x4969474D,0x3E6E77DB,0xAED16A4A,0xD9D65ADC,
+    0x40DF0B66,0x37D83BF0,0xA9BCAE53,0xDEBB9EC5,0x47B2CF7F,0x30B5FFE9,
+    0xBDBDF21C,0xCABAC28A,0x53B39330,0x24B4A3A6,0xBAD03605,0xCDD70693,
+    0x54DE5729,0x23D967BF,0xB3667A2E,0xC4614AB8,0x5D681B02,0x2A6F2B94,
+    0xB40BBE37,0xC30C8EA1,0x5A05DF1B,0x2D02EF8D
+};
+
 static uint32_t wal_crc32(const void *data, size_t len)
 {
     const uint8_t *p = (const uint8_t *)data;
@@ -85,6 +150,12 @@ static int             g_data_fd = -1;      /* data file fd (for replay) */
 static WalHeader       g_wal_header;
 static pthread_mutex_t g_wal_lock = PTHREAD_MUTEX_INITIALIZER;
 static int             g_wal_active = 0;
+
+/* Set while recovering a WAL_VERSION-1 file whose records carry the legacy
+ * (malformed) CRC: replay must verify them with wal_crc32_legacy(). Cleared
+ * once the file is migrated to the current version, after which every record
+ * uses the correct wal_crc32(). Single-threaded recovery, so no lock needed. */
+static int             g_wal_legacy_crc = 0;
 
 /* WAL file path — derived from data file */
 static char            g_wal_path[2048];
@@ -139,7 +210,9 @@ static int replay_one_record(off_t pos, off_t file_size,
     char *crc_buf = (char *)malloc(crc_len);
     if (!crc_buf) return -1;
     pread(g_wal_fd, crc_buf, crc_len, pos);
-    uint32_t computed_crc = wal_crc32(crc_buf, crc_len);
+    /* Version-1 records were written with the legacy CRC; verify them with it. */
+    uint32_t computed_crc = g_wal_legacy_crc ? wal_crc32_legacy(crc_buf, crc_len)
+                                             : wal_crc32(crc_buf, crc_len);
     free(crc_buf);
     if (computed_crc != stored_crc) return -1;
 
@@ -208,8 +281,6 @@ static int wal_replay_data(void)
     }
     if (replayed > 0) fsync(g_data_fd);
     return replayed;
-
-    return replayed;
 }
 
 /* ================================================================
@@ -220,9 +291,18 @@ int wal_init(int data_fd)
 {
     g_data_fd = data_fd;
 
-    /* Derive WAL path from data file path */
-    /* The data file is "evosql.db", WAL is "evosql.wal" */
-    snprintf(g_wal_path, sizeof(g_wal_path), "evosql.wal");
+    /* Put the WAL next to evosql.db inside the data directory (g_dbRoot, set by
+     * db_ensure_root before pgm_init -> wal_init). This makes EVOSQL_DATA_DIR
+     * capture the FULL durable state: a volume/backup of the data dir is
+     * self-contained and crash recovery finds the matching WAL. Falls back to a
+     * CWD-relative name if g_dbRoot is unset (embedded/early-init paths).
+     * Migration: a clean prior shutdown leaves the old CWD WAL empty, so moving
+     * the path loses nothing; only an un-replayed crash WAL left in the CWD
+     * would be skipped. */
+    if (g_dbRoot[0])
+        snprintf(g_wal_path, sizeof(g_wal_path), "%s/evosql.wal", g_dbRoot);
+    else
+        snprintf(g_wal_path, sizeof(g_wal_path), "evosql.wal");
 
     /* Open or create WAL file */
     g_wal_fd = open(g_wal_path, O_RDWR | O_CREAT, 0644);
@@ -243,6 +323,10 @@ int wal_init(int data_fd)
             goto init_new;
         }
 
+        /* CRC migration: a version-1 WAL holds records written with the legacy
+         * (malformed) CRC, so recovery must verify them with it. */
+        g_wal_legacy_crc = (g_wal_header.version < WAL_VERSION);
+
         /* Two-pass crash recovery:
          *   Pass 1: Replay page 0 (FileHeader, always plaintext)
          *   → caller re-reads header + inits TDE from recovered data
@@ -251,7 +335,18 @@ int wal_init(int data_fd)
         if (wal_has_pending()) {
             recovered += wal_replay_page0();
             /* TDE may not be active yet — Pass 2 is deferred to
-             * wal_replay_remaining() called by pgm_init after TDE init */
+             * wal_replay_remaining() called by pgm_init after TDE init. The
+             * version bump to the current CRC era happens there, once the old
+             * records have been replayed and the WAL truncated. */
+        } else if (g_wal_legacy_crc) {
+            /* No pending records to replay (clean prior shutdown), so the file
+             * is effectively empty: migrate it to the current version now, and
+             * every record from here on uses the correct CRC. */
+            g_wal_header.version = WAL_VERSION;
+            wal_flush_header();
+            g_wal_legacy_crc = 0;
+            fprintf(stderr, "[WAL] Migrated WAL header to version %d (CRC-32)\n",
+                    WAL_VERSION);
         }
         g_wal_active = 1;
         fprintf(stderr, "[WAL] Initialized (checkpoint_lsn=%u, next_lsn=%u)\n",
@@ -291,8 +386,16 @@ int wal_replay_remaining(void)
     if (recovered > 0)
         fprintf(stderr, "[WAL] Pass 2: replayed %d data page(s)\n", recovered);
 
-    /* Checkpoint: clear WAL after full recovery */
+    /* Checkpoint: clear WAL after full recovery. The old (version-1) records
+     * have now been replayed, so migrate the header to the current CRC era —
+     * from here on every record uses the correct wal_crc32(). */
     g_wal_header.checkpoint_lsn = g_wal_header.next_lsn;
+    if (g_wal_header.version < WAL_VERSION) {
+        g_wal_header.version = WAL_VERSION;
+        g_wal_legacy_crc = 0;
+        fprintf(stderr, "[WAL] Migrated WAL header to version %d (CRC-32) "
+                "after recovery\n", WAL_VERSION);
+    }
     ftruncate(g_wal_fd, sizeof(WalHeader));
     wal_flush_header();
 
@@ -326,7 +429,10 @@ uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len
     }
     memcpy(rec + WAL_RECORD_HEADER_SIZE, page_data, page_len);
 
-    /* CRC covers header + page data */
+    /* CRC covers header + page data. New records ALWAYS use the correct CRC:
+     * recovery is synchronous and migrates the header to WAL_VERSION (clearing
+     * g_wal_legacy_crc) before any commit can run, so we never append a new-CRC
+     * record into a still-version-1 file. Do not log a page during recovery. */
     uint32_t crc = wal_crc32(rec, WAL_RECORD_HEADER_SIZE + page_len);
     memcpy(rec + WAL_RECORD_HEADER_SIZE + page_len, &crc, 4);
 
@@ -375,29 +481,61 @@ uint32_t wal_log_xa_resolve(const char *xa_xid, int commit)
     return wal_log_page(page_no, payload, payload_len);
 }
 
+/* Opt-in WAL archiving (EVOSQL_WAL_ARCHIVE). Default OFF — see wal_checkpoint:
+ * nothing in the running server reads the archive, so by default we don't grow
+ * it. Set to 1/true/yes to retain evosql.wal.archive for offline restore. */
+static int wal_archive_enabled(void)
+{
+    const char *e = getenv("EVOSQL_WAL_ARCHIVE");
+    return e && (e[0] == '1' || e[0] == 't' || e[0] == 'T' ||
+                 e[0] == 'y' || e[0] == 'Y');
+}
+
 int wal_checkpoint(void)
 {
     if (!g_wal_active || g_wal_fd < 0) return -1;
 
     pthread_mutex_lock(&g_wal_lock);
 
-    /* Archive: append current WAL records to archive file before truncating.
-     * This enables Time-Travel Recovery (restore to a past timestamp). */
-    {
+    /* Archive: append current WAL records to evosql.wal.archive before
+     * truncating, for wal_restore_to_timestamp (offline time-travel restore).
+     * OPT-IN via EVOSQL_WAL_ARCHIVE — default OFF, because nothing in the
+     * running server consumes the archive (crash recovery replays the live WAL;
+     * FOR SYSTEM_TIME AS OF reads MVCC snapshots, not the archive), so leaving
+     * it on was unbounded write-only growth. Off => the checkpointer bounds the
+     * WAL with no ever-growing archive; on => the archive is kept for external
+     * restore tooling (its retention is then the operator's responsibility). */
+    if (wal_archive_enabled()) {
         off_t wal_size = lseek(g_wal_fd, 0, SEEK_END);
         if (wal_size > (off_t)sizeof(WalHeader)) {
             char archive_path[2048];
             snprintf(archive_path, sizeof(archive_path), "%s.archive", g_wal_path);
             int afd = open(archive_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
             if (afd >= 0) {
-                /* Copy records (skip WAL header) to archive */
+                /* Copy records (skip WAL header) to archive. A short/failed
+                 * write would leave a torn record at the tail, which PITR's
+                 * archive reader rejects (refusing the whole recovery). Guard
+                 * it: on any read/write shortfall, roll the archive back to the
+                 * size it had before this append so it stays a clean stream of
+                 * whole records (this checkpoint's window is simply not
+                 * archived — committed data is still durable in evosql.db). */
+                off_t archive_before = lseek(afd, 0, SEEK_END);
                 off_t src = sizeof(WalHeader);
                 char copy_buf[8192];
+                int copy_ok = 1;
                 while (src < wal_size) {
                     ssize_t n = pread(g_wal_fd, copy_buf, sizeof(copy_buf), src);
-                    if (n <= 0) break;
-                    write(afd, copy_buf, n);
+                    if (n <= 0) { copy_ok = 0; break; }
+                    if (write(afd, copy_buf, n) != n) { copy_ok = 0; break; }
                     src += n;
+                }
+                if (!copy_ok) {
+                    fprintf(stderr, "[WAL] Archive append failed; rolling back to "
+                            "%lld bytes (last good checkpoint boundary)\n",
+                            (long long)archive_before);
+                    if (ftruncate(afd, archive_before) != 0)
+                        fprintf(stderr, "[WAL] WARNING: archive rollback failed — "
+                                "archive may be torn\n");
                 }
                 fsync(afd);
                 close(afd);
@@ -429,6 +567,28 @@ int wal_checkpoint(void)
 
     pthread_mutex_unlock(&g_wal_lock);
     return 0;
+}
+
+/* Canonical active-WAL path (g_dbRoot/evosql.wal, or a CWD-relative fallback
+ * before g_dbRoot is set). Consumers outside wal.c — the replication WAL sender
+ * and base-backup bundler — MUST use this instead of hardcoding "evosql.wal",
+ * otherwise a non-default EVOSQL_DATA_DIR relocates the WAL out from under them.
+ * Returns "evosql.wal" if wal_init has not run yet. */
+const char *wal_get_path(void)
+{
+    return g_wal_path[0] ? g_wal_path : "evosql.wal";
+}
+
+/* Current active WAL size in bytes (header + records), 0 when inactive.
+ * Used by the background checkpointer for logging / a size-based trigger.
+ * Takes g_wal_lock briefly so it is safe to call from another thread. */
+long long wal_size(void)
+{
+    if (!g_wal_active || g_wal_fd < 0) return 0;
+    pthread_mutex_lock(&g_wal_lock);
+    off_t s = lseek(g_wal_fd, 0, SEEK_END);
+    pthread_mutex_unlock(&g_wal_lock);
+    return (s < 0) ? 0 : (long long)s;
 }
 
 void wal_shutdown(void)
@@ -475,42 +635,65 @@ int wal_restore_to_timestamp(int data_fd, int64_t target_epoch_us)
     off_t file_size = lseek(afd, 0, SEEK_END);
     off_t pos = 0;
     int restored = 0;
+    int corrupt = 0;   /* set when the archive is torn/garbled mid-stream */
     char page_buf[EVO_PAGE_SIZE];
 
     while (pos < file_size) {
+        /* The archive is a contiguous stream of whole records. If pos < EOF but
+         * a full record header+CRC can't fit, the tail is torn — NOT a clean
+         * stop. We must NOT treat that as "done", or we would swap in a half-
+         * rewound database and call it success. */
+        if (pos + WAL_RECORD_HEADER_SIZE + WAL_CRC_SIZE > file_size) {
+            corrupt = 1; break;
+        }
+
         uint32_t rec_lsn;
         uint32_t rec_page_no;
         uint16_t rec_page_len;
         int64_t  rec_timestamp;
 
-        if (pread(afd, &rec_lsn, 4, pos) != 4) break;
-        if (pread(afd, &rec_page_no, 4, pos + 4) != 4) break;
-        if (pread(afd, &rec_page_len, 2, pos + 8) != 2) break;
-        if (pread(afd, &rec_timestamp, 8, pos + 10) != 8) break;
+        if (pread(afd, &rec_lsn, 4, pos) != 4 ||
+            pread(afd, &rec_page_no, 4, pos + 4) != 4 ||
+            pread(afd, &rec_page_len, 2, pos + 8) != 2 ||
+            pread(afd, &rec_timestamp, 8, pos + 10) != 8) {
+            corrupt = 1; break;
+        }
 
-        if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) break;
+        if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) {
+            corrupt = 1; break;
+        }
 
-        /* Stop if record is past the target timestamp */
+        off_t rec_end = pos + WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+        if (rec_end > file_size) {            /* record claims to run past EOF */
+            corrupt = 1; break;
+        }
+
+        /* Clean stop: this record is newer than the target. Everything applied
+         * so far is a prefix of the archive in LSN order — an internally
+         * consistent point-in-time image. This is the ONLY non-error way out. */
         if (rec_timestamp > target_epoch_us) break;
 
         /* Read page data */
         if (pread(afd, page_buf, rec_page_len, pos + WAL_RECORD_HEADER_SIZE)
-            != (ssize_t)rec_page_len)
-            break;
+            != (ssize_t)rec_page_len) {
+            corrupt = 1; break;
+        }
 
-        /* Verify CRC */
+        /* Verify CRC — a mismatch mid-archive is bit-rot, not end-of-data. */
         uint32_t stored_crc;
         off_t crc_off = pos + WAL_RECORD_HEADER_SIZE + rec_page_len;
-        if (pread(afd, &stored_crc, 4, crc_off) != 4) break;
-
+        if (pread(afd, &stored_crc, 4, crc_off) != 4) {
+            corrupt = 1; break;
+        }
         size_t crc_len = WAL_RECORD_HEADER_SIZE + rec_page_len;
         char *crc_buf = (char *)malloc(crc_len);
-        if (!crc_buf) break;
+        if (!crc_buf) { corrupt = 1; break; }
         pread(afd, crc_buf, crc_len, pos);
         uint32_t computed_crc = wal_crc32(crc_buf, crc_len);
         free(crc_buf);
-
-        if (computed_crc != stored_crc) break;
+        if (computed_crc != stored_crc) {
+            corrupt = 1; break;
+        }
 
         /* Apply page to data file (with TDE encryption if needed) */
         off_t data_offset = (off_t)rec_page_no * EVO_PAGE_SIZE;
@@ -524,11 +707,20 @@ int wal_restore_to_timestamp(int data_fd, int64_t target_epoch_us)
         }
         restored++;
 
-        pos += WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+        pos = rec_end;
     }
 
     if (restored > 0) fsync(data_fd);
     close(afd);
+
+    if (corrupt) {
+        /* Refuse to present a partial recovery as complete. The caller
+         * (wal_pitr_recover) discards the temp file and keeps the original. */
+        fprintf(stderr, "[WAL] Time-Travel Recovery ABORTED: archive torn or corrupt "
+                "after %d page(s) at offset %lld of %lld bytes.\n",
+                restored, (long long)pos, (long long)file_size);
+        return -1;
+    }
 
     fprintf(stderr, "[WAL] Time-Travel Recovery: restored %d page(s) to target timestamp\n",
             restored);
@@ -570,4 +762,136 @@ int wal_archive_range(int64_t *min_ts, int64_t *max_ts)
     if (min_ts) *min_ts = first_ts;
     if (max_ts) *max_ts = last_ts;
     return 0;
+}
+
+/* Point-in-time recovery: reconstruct the data file as-of target_epoch_us from
+ * the continuous WAL archive (EVOSQL_WAL_ARCHIVE), then atomically swap it in.
+ *
+ * Model: the archive holds a full-page image for every flushed page version, so
+ * replaying every record with timestamp <= target onto a FRESH file rebuilds the
+ * database exactly as it was at that instant — no base backup needed. The catch
+ * is completeness: archiving MUST have been on from creation, or early pages are
+ * missing. We guard the obvious failure (no FileHeader/page 0) but cannot prove
+ * full coverage, so the operator precondition stands.
+ *
+ * Safety: we replay into "<data_dir>/evosql.db.pitr", validate its FileHeader,
+ * fsync, then rename() over evosql.db. The live data file is never touched until
+ * a validated replacement exists, so a failed/aborted recovery leaves the
+ * original intact. Page 0 is plaintext; pages > 0 are re-encrypted by
+ * wal_restore_to_timestamp using the DEK already loaded into pcrypt (per-DB key,
+ * identical across header versions — there is no key rotation).
+ *
+ * Caller contract: engine init has run (pcrypt + g_wal_path set) and the
+ * background mutators (auto-reclaim, checkpointer) are stopped. Returns the
+ * number of pages restored on success (data file swapped), or < 0 on failure
+ * (original left untouched). */
+int wal_pitr_recover(const char *data_dir, int64_t target_epoch_us)
+{
+    if (!data_dir || !data_dir[0]) {
+        fprintf(stderr, "[PITR] No data directory resolved — cannot recover\n");
+        return -1;
+    }
+
+    /* The archive must exist and bracket the target, else there is nothing (or
+     * not enough) to reconstruct from. */
+    int64_t amin = 0, amax = 0;
+    if (wal_archive_range(&amin, &amax) != 0) {
+        fprintf(stderr, "[PITR] No WAL archive found. PITR needs EVOSQL_WAL_ARCHIVE "
+                "enabled from creation plus periodic checkpoints.\n");
+        return -1;
+    }
+    fprintf(stderr, "[PITR] Archive window: [%lld .. %lld] us\n",
+            (long long)amin, (long long)amax);
+    fprintf(stderr, "[PITR] Recovery target: %lld us\n", (long long)target_epoch_us);
+    if (target_epoch_us < amin) {
+        fprintf(stderr, "[PITR] Target is before the archive start (%lld) — no data "
+                "exists for that point. Aborting.\n", (long long)amin);
+        return -1;
+    }
+    if (target_epoch_us > amax)
+        fprintf(stderr, "[PITR] Target is past the archive end — recovering to the "
+                "latest archived state (%lld us).\n", (long long)amax);
+
+    char db_path[2048], tmp_path[2048];
+    snprintf(db_path, sizeof(db_path), "%s/evosql.db", data_dir);
+    snprintf(tmp_path, sizeof(tmp_path), "%s/evosql.db.pitr", data_dir);
+
+    int tmp_fd = open(tmp_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (tmp_fd < 0) {
+        fprintf(stderr, "[PITR] Cannot create temp recovery file %s\n", tmp_path);
+        return -1;
+    }
+
+    /* Replay every archived page image with timestamp <= target onto the fresh
+     * temp file (reuses the time-travel replay; it pwrites to the fd we pass).
+     * A negative return means the archive was torn/corrupt mid-stream — NOT a
+     * clean stop — so we must abort rather than swap in a partial image. */
+    int restored = wal_restore_to_timestamp(tmp_fd, target_epoch_us);
+    if (restored < 0) {
+        fprintf(stderr, "[PITR] Archive is torn or corrupt — recovery aborted; "
+                "the original data file is intact.\n");
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+    if (restored == 0) {
+        fprintf(stderr, "[PITR] No pages restored — archive empty for this target.\n");
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    /* The rebuilt file MUST begin with a valid FileHeader (page 0), or the
+     * archive did not cover DB creation and the result is unusable. Page 0 is
+     * always plaintext, so a raw read of the magic is correct even under TDE. */
+    uint32_t magic = 0;
+    if (pread(tmp_fd, &magic, 4, 0) != 4 || magic != EVO_MAGIC) {
+        fprintf(stderr, "[PITR] Recovered file has no valid FileHeader "
+                "(magic=0x%08X, expected 0x%08X). The archive likely does not "
+                "cover DB creation. Aborting; the original data file is intact.\n",
+                magic, (uint32_t)EVO_MAGIC);
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    /* Match the physical file size to the recovered header's total_pages so the
+     * free-list / catalog roots never reference pages past EOF (a page that was
+     * allocated by time T but whose only FPI is after T is then a zeroed page in
+     * the file, not a short read past EOF). total_pages is at byte offset 8:
+     * magic(4)+version(2)+page_size(2). Extend-only — never shrink below what we
+     * actually wrote. */
+    uint32_t total_pages = 0;
+    if (pread(tmp_fd, &total_pages, 4, 8) == 4 && total_pages > 0 &&
+        (off_t)total_pages <= (off_t)1 << 32) {
+        off_t want = (off_t)total_pages * EVO_PAGE_SIZE;
+        off_t have = lseek(tmp_fd, 0, SEEK_END);
+        if (want > have && ftruncate(tmp_fd, want) != 0)
+            fprintf(stderr, "[PITR] Warning: could not size recovery file to "
+                    "%u pages\n", total_pages);
+    }
+
+    if (fsync(tmp_fd) != 0) {
+        /* Without a durable temp file the swap could expose a half-written image
+         * after a crash — abort rather than risk it. */
+        fprintf(stderr, "[PITR] fsync of recovery file failed — aborting; "
+                "original data file is intact.\n");
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+    close(tmp_fd);
+
+    /* Atomic swap: the original is replaced only now that a validated as-of-T
+     * file exists. */
+    if (rename(tmp_path, db_path) != 0) {
+        fprintf(stderr, "[PITR] Failed to swap recovered file into place (%s -> %s); "
+                "original left intact.\n", tmp_path, db_path);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    fprintf(stderr, "[PITR] Recovered %d page(s) to target. Restart the server "
+            "normally to serve the as-of-T database.\n", restored);
+    return restored;
 }

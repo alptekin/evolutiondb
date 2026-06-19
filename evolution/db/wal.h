@@ -26,9 +26,13 @@
 
 #include <stdint.h>
 
-/* WAL file magic and version */
+/* WAL file magic and version.
+ * Version 1: records carry a legacy, malformed CRC (self-consistent but weak).
+ * Version 2: records carry a correct IEEE 802.3 CRC-32. On startup a version-1
+ *   WAL is replayed with the legacy CRC, then migrated to version 2; from then
+ *   on every record uses the correct CRC. See crc32 handling in wal.c. */
 #define WAL_MAGIC       0x57414C45  /* "WALE" */
-#define WAL_VERSION     1
+#define WAL_VERSION     2
 
 /* WAL file header (16 bytes) */
 typedef struct {
@@ -73,6 +77,14 @@ uint32_t wal_log_page(uint32_t page_no, const void *page_data, uint16_t page_len
  * 4. Truncates active WAL file
  * Returns 0 on success, -1 on error. */
 int wal_checkpoint(void);
+
+/* Current active WAL size in bytes (0 when WAL is inactive). */
+long long wal_size(void);
+
+/* Canonical active-WAL path. External consumers (replication sender, base
+ * backup) must use this rather than hardcoding "evosql.wal", since
+ * EVOSQL_DATA_DIR relocates the WAL into the data directory. */
+const char *wal_get_path(void);
 
 /* Shut down WAL subsystem. Performs a final checkpoint and closes
  * the WAL file. */
@@ -120,7 +132,14 @@ int wal_restore_to_timestamp(int data_fd, int64_t target_epoch);
 
 /* Get the timestamp range available in the WAL archive.
  * Returns 0 on success, -1 if no archive exists.
- * min_ts and max_ts are set to epoch seconds. */
+ * min_ts and max_ts are set to epoch microseconds. */
 int wal_archive_range(int64_t *min_ts, int64_t *max_ts);
+
+/* Point-in-time recovery: rebuild "<data_dir>/evosql.db" as-of target_epoch_us
+ * from the continuous WAL archive, swapping it in atomically (the original is
+ * untouched until a validated replacement exists). Engine init must have run
+ * (pcrypt + WAL path set) and background mutators must be stopped before this is
+ * called. Returns pages restored on success, or < 0 on failure. See wal.c. */
+int wal_pitr_recover(const char *data_dir, int64_t target_epoch_us);
 
 #endif /* WAL_H */

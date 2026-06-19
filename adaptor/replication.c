@@ -288,13 +288,10 @@ static void *sender_handle_replica(void *arg)
 
     /* Send WAL file content from the requested offset.
      * WAL records start after the 16-byte header. */
-    int wal_fd = open("evosql.wal", O_RDONLY);
+    int wal_fd = open(wal_get_path(), O_RDONLY);
     if (wal_fd < 0) {
-        /* Try with root/ prefix */
-        wal_fd = open("root/evosql.wal", O_RDONLY);
-    }
-    if (wal_fd < 0) {
-        fprintf(stderr, "[REPL] Cannot open WAL file for streaming\n");
+        fprintf(stderr, "[REPL] Cannot open WAL file for streaming (%s)\n",
+                wal_get_path());
         socket_close(client_fd);
         return NULL;
     }
@@ -361,8 +358,7 @@ static void *sender_handle_replica(void *arg)
         if (sender_drain_acks(&c, replica_id) < 0) goto disconnected;
 
         /* Check for new records in WAL */
-        wal_fd = open("evosql.wal", O_RDONLY);
-        if (wal_fd < 0) wal_fd = open("root/evosql.wal", O_RDONLY);
+        wal_fd = open(wal_get_path(), O_RDONLY);
         if (wal_fd < 0) continue;
 
         file_size = lseek(wal_fd, 0, SEEK_END);
@@ -508,21 +504,33 @@ static pthread_t g_receiver_thread;
 /* recv_all was used by the pre-conn_t receiver loop; now superseded by
  * conn_recv_exact which handles both plain and TLS transports. */
 
-/* Replication slot: persist last received LSN to file */
+/* Replication slot: persist last received LSN to file. The path lives in the
+ * data directory (db_get_root() = g_dbRoot, honoring EVOSQL_DATA_DIR) so a slot
+ * is not stranded in the CWD when a custom data dir is used. Built lazily —
+ * g_dbRoot is set by db_ensure_root before any replication activity. */
 static uint32_t g_last_received_lsn = 0;
-static const char *g_slot_path = "root/evosql.slot";
+
+static const char *slot_path(void)
+{
+    static char p[1024];
+    if (!p[0]) {
+        const char *root = db_get_root();
+        snprintf(p, sizeof(p), "%s/evosql.slot", (root && root[0]) ? root : "root");
+    }
+    return p;
+}
 
 static void slot_save(uint32_t lsn)
 {
     g_last_received_lsn = lsn;
-    int fd = open(g_slot_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(slot_path(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) { write(fd, &lsn, 4); close(fd); }
 }
 
 static uint32_t slot_load(void)
 {
     uint32_t lsn = 0;
-    int fd = open(g_slot_path, O_RDONLY);
+    int fd = open(slot_path(), O_RDONLY);
     if (fd >= 0) { read(fd, &lsn, 4); close(fd); }
     g_last_received_lsn = lsn;
     return lsn;
@@ -1101,6 +1109,22 @@ int repl_get_role(void)
     return g_repl_role;
 }
 
+/* Truncate guard for the background WAL checkpointer (registered via
+ * wal_checkpointer_set_truncate_guard). The WAL sender streams from the active
+ * WAL by byte offset and is not truncation-aware, so truncating it out from
+ * under a connected replica would silently stall replication. Only allow
+ * truncation on a PRIMARY with no active replication slots; a replica/witness
+ * never truncates its locally-applied WAL here. With no replication configured
+ * (the single-node default) this is a PRIMARY with zero slots -> truncation
+ * proceeds normally. */
+int repl_wal_truncate_ok(void)
+{
+    if (repl_get_role() != REPL_ROLE_PRIMARY)
+        return 0;
+    ReplicationSlot slots[REPL_MAX_SLOTS];
+    return repl_list_slots(slots, REPL_MAX_SLOTS) == 0;
+}
+
 int repl_get_status(ReplicationStatus *out)
 {
     if (!out) return -1;
@@ -1207,9 +1231,14 @@ int repl_create_backup(const char *backup_path)
 
         /* Copy WAL (best-effort: if missing, BACKUP_LABEL.lsn still
          * lets the replica replay from its first catch-up stream). */
-        if (access("evosql.wal", R_OK) == 0) copy_file("evosql.wal", dst_wal);
-        else if (access("root/evosql.wal", R_OK) == 0)
-            copy_file("root/evosql.wal", dst_wal);
+        {
+            const char *wp = wal_get_path();
+            if (access(wp, R_OK) == 0)
+                copy_file(wp, dst_wal);
+            else
+                fprintf(stderr, "[REPL] base backup: active WAL %s not found — "
+                        "replica will rely on catch-up streaming\n", wp);
+        }
 
         /* Write BACKUP_LABEL */
         FILE *lf = fopen(dst_label, "w");

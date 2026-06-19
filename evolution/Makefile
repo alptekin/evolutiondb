@@ -63,6 +63,7 @@ SRCS = main.c \
        db/table_lock.c \
        db/conflict_guard.c \
        db/auto_reclaim.c \
+       db/wal_checkpointer.c \
        db/Notify.c \
        db/Procedure.c \
        db/Trigger.c \
