@@ -21,10 +21,11 @@ A one-line summary of the security model:
   chain, and DSAR export/erase tooling.
 - **Operator responsibility** — turning the opt-in protections on, supplying
   strong secrets and certificates, and running behind a supervisor.
-- **Roadmap (not shipped)** — external KMS/HSM key management (passphrase and
-  data-key rotation are both shipped, see below), per-tenant isolation/RLS,
-  SSO/OIDC, engine-side masking SQL, reliable name redaction, and
-  tamper-*proof* (externally anchored) audit.
+- **Roadmap (not shipped)** — native KMS-envelope / HSM (PKCS#11) key custody
+  (passphrase + data-key rotation and external-secret-store *sourcing* via a key
+  command are shipped, see below), per-tenant isolation/RLS, SSO/OIDC,
+  engine-side masking SQL, reliable name redaction, and tamper-*proof*
+  (externally anchored) audit.
 
 ---
 
@@ -160,6 +161,11 @@ When active, encryption is AES-256-CTR per page. Important caveats:
 - **Page 0 (the FileHeader) is always plaintext.**
 - CTR mode gives **confidentiality, not integrity** — it does not detect
   tampering of the ciphertext.
+- **Source the passphrase from a secret store, not a plaintext env var, when
+  you can:** set `EVOSQL_ENCRYPTION_KEY_CMD` to a command that prints the
+  passphrase (e.g. `vault kv get -field=passphrase secret/evosql`) so the secret
+  lives in the store, not on the host. It takes precedence over
+  `EVOSQL_ENCRYPTION_KEY`.
 - **Both the passphrase and the data key can be rotated** offline. See
   "Rotating keys" below.
 
@@ -220,7 +226,8 @@ to use once any port is reachable beyond loopback.
 | --- | --- | --- | --- |
 | `EVOSQL_USER_NAME` | Admin username for the SQL engine. | `admin` | a non-obvious name |
 | `EVOSQL_PASSWORD` | Admin password (stored PBKDF2-SHA256, 600k iters). | `admin` (or blank → `admin` in compose) | strong random secret |
-| `EVOSQL_ENCRYPTION_KEY` | Whole-DB TDE passphrase (AES-256-CTR). Empty = data file + WAL plaintext. Needs a `TLS=1`/`EVO_ENCRYPTION` build to take effect. | empty (TDE off) | set, on an encryption-enabled build |
+| `EVOSQL_ENCRYPTION_KEY` | Whole-DB TDE passphrase (AES-256-CTR). Empty = data file + WAL plaintext. Needs a `TLS=1`/`EVO_ENCRYPTION` build to take effect. | empty (TDE off) | set, on an encryption-enabled build (or use the key command below) |
+| `EVOSQL_ENCRYPTION_KEY_CMD` | A command whose stdout is the TDE passphrase — the hook for an external secret store / KMS (e.g. `vault kv get -field=passphrase secret/evosql`, or an `aws`/`gcloud`/`az` CLI call). Takes precedence over `EVOSQL_ENCRYPTION_KEY`. The command runs with the server's privileges and environment. | unset | set to source the passphrase from your secret store |
 | `EVOSQL_ENCRYPTION_KEY_NEW` | New passphrase for offline `--rekey` rotation (read with `EVOSQL_ENCRYPTION_KEY` as the current one). Ignored outside `--rekey`. | unset | set only during rotation |
 | `EVOSQL_BIND` | Interface the engine binds inside the container. Unparseable values fail safe to loopback. | `127.0.0.1` | `127.0.0.1`; `0.0.0.0` only with TLS+auth |
 | `EVOSQL_REQUIRE_TLS` | When set (truthy), non-loopback PG connections must use TLS; plaintext password never accepted over the network. Server refuses to start if set without TLS available. | `0` (off) | `1` |
