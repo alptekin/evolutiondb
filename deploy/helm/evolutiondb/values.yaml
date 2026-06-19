@@ -15,10 +15,29 @@ auth:
 
 encryption:
   enabled: false
-  key: ""               # Passphrase for TDE (AES-256)
+  key: ""               # Passphrase for TDE (AES-256), stored in a K8s Secret
+  keyCommand: ""        # KMS hook: a command whose stdout is the passphrase
+                        # (EVOSQL_ENCRYPTION_KEY_CMD), e.g. "vault kv get -field=
+                        # passphrase secret/evosql". Takes precedence over key.
   existingSecret: ""    # Use existing K8s secret for encryption key
 
 machineId: ""           # Machine ID (0-1023) for snowflake_id(). Empty = from hostname
+
+# Network binding inside the pod. The engine defaults to LOOPBACK for safety, so
+# in Kubernetes it MUST bind 0.0.0.0 or the (headless) Service cannot reach it.
+network:
+  bind: "0.0.0.0"
+
+# Wire-level hardening. TLS termination is usually done at the Ingress, so these
+# default off; enable pgSasl to negotiate SCRAM-SHA-256 (password never on wire).
+security:
+  pgSasl: false         # EVOSQL_PG_SASL — require SCRAM-SHA-256 on the PG wire
+  requireTls: false     # EVOSQL_REQUIRE_TLS — refuse non-loopback plaintext PG
+
+# Write-ahead log durability/ops.
+wal:
+  checkpointIntervalSec: 300   # EVOSQL_CHECKPOINT_INTERVAL_SEC; 0 = only at shutdown
+  archive: false               # EVOSQL_WAL_ARCHIVE (needed for PITR; grows on disk)
 
 service:
   type: ClusterIP
@@ -41,6 +60,7 @@ persistence:
   storageClass: ""      # Empty = default storage class
   accessMode: ReadWriteOnce
   size: 10Gi
+  mountPath: /data      # the engine's EVOSQL_DATA_DIR points here (evosql.db + WAL)
 
 resources:
   requests:
@@ -57,3 +77,37 @@ affinity: {}
 serviceMonitor:
   enabled: false
   interval: 30s
+
+# Optional standalone agent (MCP server + web UI). Off by default — the engine
+# chart stands alone. When enabled it runs as its own Deployment + Service,
+# connects to the engine Service, and exposes the human-approval web UI.
+agent:
+  enabled: false
+  image:
+    repository: evolutiondb/evolution-agent
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  webPort: 8800
+  # Auth for the agent's /api/*: set a static token, OR enable OIDC SSO below.
+  webToken: ""              # EVOSQL_WEB_TOKEN (stored in a Secret); empty = open
+  ratePerMin: 60            # EVOSQL_WEB_RATE_PER_MIN
+  oidc:
+    issuer: ""              # EVOSQL_OIDC_ISSUER — enable OIDC bearer-JWT SSO
+    audience: ""            # EVOSQL_OIDC_AUDIENCE
+  anthropicApiKey: ""       # ANTHROPIC_API_KEY (Secret); empty = chat disabled
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: agent.evolutiondb.local
+    tls: []
