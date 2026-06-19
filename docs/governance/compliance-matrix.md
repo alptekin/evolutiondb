@@ -110,7 +110,7 @@ Defaults worth internalising before you read the tables:
 | Supervisor / restart policy | Reference supervisor configs: Docker `restart: on-failure:5` with a healthcheck, and a systemd unit (with `StartLimit`-style bounding). The operator must actually run under a supervisor. | Use the provided `docker-compose.yml` / systemd unit, or your own supervisor. | Provided (reference) + Operator-responsibility | SOC 2 A1.2; ISO A.8.6, A.5.30; GDPR Art. 32(1)(b) |
 | Backup / restore | Crash-consistent backup and restore (`evoagent backup` / `evoagent restore`); restore refuses to run while the engine appears live and will not overwrite a non-empty data dir without `--force`. | `evoagent backup <dir>` / `evoagent restore <dir>`. | Provided | SOC 2 A1.2, A1.3, CC7.5; ISO A.8.13 (backup); GDPR Art. 32(1)(c) |
 | Backup scheduling, off-site copies, restore testing | Scheduling backups, storing copies off-host/off-site, encrypting backup media, and periodically test-restoring are the operator's responsibility. | Operator-managed. | Operator-responsibility | SOC 2 A1.2, A1.3; ISO A.8.13, A.5.30; GDPR Art. 32(1)(c) |
-| Point-in-time recovery (PITR) | Full continuous PITR to an arbitrary timestamp. | — | **Roadmap** — not shipped | SOC 2 A1.2; ISO A.8.13 (planned control) |
+| Point-in-time recovery (PITR) | Rewind the database to a past timestamp by replaying the WAL archive (`evosql-server --recover-to <epoch_us>`), with an atomic validated swap that leaves the original intact on failure. Requires archiving on from creation; recent-tail granularity is the last checkpoint. | `EVOSQL_WAL_ARCHIVE=1` from creation + periodic `EVOSQL_CHECKPOINT_INTERVAL_SEC`; recover with `--recover-to`. | Provided (opt-in; archive-from-creation) | SOC 2 A1.2; ISO A.8.13 |
 | High availability / replication | ADR-001 describes replication v1; treat HA/failover topology as something you design, deploy, and test. | See [ADR-001](../adr/ADR-001-task-97-replication-v1.md). | Operator-responsibility / partial | SOC 2 A1.2; ISO A.8.14 (redundancy), A.5.29, A.5.30 |
 
 ## Secure deployment
@@ -150,8 +150,6 @@ represent any of these as available.
 - **Tamper-PROOF audit with external anchoring** — the audit chain is
   tamper-evident; making it tamper-proof requires periodic export of head hashes
   to an independent store (operator-driven today).
-- **Full point-in-time recovery (PITR)** — backup/restore and crash recovery
-  exist; continuous PITR to an arbitrary timestamp does not.
 
 **Operator-responsibility (the software cannot supply these):**
 
