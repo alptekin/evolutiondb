@@ -45,6 +45,81 @@ def _web_token() -> str:
     return os.environ.get("EVOSQL_WEB_TOKEN", "")
 
 
+# -- OIDC / SSO bearer-token validation -------------------------------------
+# When EVOSQL_OIDC_ISSUER is set, /api/* also accepts an `Authorization: Bearer
+# <jwt>` access token from that OpenID Connect issuer: the operator logs in via
+# their IdP (Keycloak, Microsoft Entra ID, Okta, Google, Auth0), which enforces
+# MFA, and we verify the resulting JWT's signature (against the issuer's JWKS),
+# issuer, audience, and expiry. The static EVOSQL_WEB_TOKEN stays as a
+# machine-to-machine fallback. Validation is standards-based, so any compliant
+# IdP works; MFA needs no code here (the IdP enforces it before issuing a token).
+_OIDC_LOCK = threading.Lock()
+_OIDC_JWKS_URI: dict = {}     # issuer -> jwks_uri (cached discovery)
+_OIDC_CLIENTS: dict = {}      # jwks_uri -> PyJWKClient (caches signing keys)
+
+
+def _oidc_issuer() -> str:
+    return os.environ.get("EVOSQL_OIDC_ISSUER", "").rstrip("/")
+
+
+def _oidc_enabled() -> bool:
+    return bool(_oidc_issuer())
+
+
+def _oidc_jwks_uri(issuer: str) -> str:
+    """Resolve the issuer's jwks_uri from its OIDC discovery document (cached).
+    EVOSQL_OIDC_JWKS_URI overrides discovery when set."""
+    override = os.environ.get("EVOSQL_OIDC_JWKS_URI", "")
+    if override:
+        return override
+    with _OIDC_LOCK:
+        if issuer in _OIDC_JWKS_URI:
+            return _OIDC_JWKS_URI[issuer]
+    import urllib.request
+    with urllib.request.urlopen(
+            issuer + "/.well-known/openid-configuration", timeout=5) as r:
+        doc = json.loads(r.read().decode())
+    jwks_uri = doc.get("jwks_uri", "")
+    with _OIDC_LOCK:
+        _OIDC_JWKS_URI[issuer] = jwks_uri
+    return jwks_uri
+
+
+def _oidc_validate(token: str) -> bool:
+    """Verify a bearer JWT against the configured OIDC issuer. True only on a
+    fully valid token: RS256 signature (via the issuer's JWKS) + issuer +
+    audience (when EVOSQL_OIDC_AUDIENCE is set) + expiry."""
+    issuer = _oidc_issuer()
+    if not issuer or not token:
+        return False
+    try:
+        import jwt
+        from jwt import PyJWKClient
+    except ImportError:
+        sys.stderr.write("WARNING: EVOSQL_OIDC_ISSUER is set but PyJWT is not "
+                         "installed (pip install 'pyjwt[crypto]'); rejecting "
+                         "OIDC tokens.\n")
+        return False
+    try:
+        jwks_uri = _oidc_jwks_uri(issuer)
+        if not jwks_uri:
+            return False
+        with _OIDC_LOCK:
+            client = _OIDC_CLIENTS.get(jwks_uri)
+            if client is None:
+                client = PyJWKClient(jwks_uri)
+                _OIDC_CLIENTS[jwks_uri] = client
+        signing_key = client.get_signing_key_from_jwt(token)
+        audience = os.environ.get("EVOSQL_OIDC_AUDIENCE", "") or None
+        jwt.decode(token, signing_key.key, algorithms=["RS256"],
+                   issuer=issuer, audience=audience,
+                   options={"require": ["exp", "iss"],
+                            "verify_aud": bool(audience)})
+        return True
+    except Exception:
+        return False
+
+
 def _rate_per_min() -> int:
     try:
         return max(0, int(os.environ.get("EVOSQL_WEB_RATE_PER_MIN", "60")))
@@ -108,13 +183,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- access control ---------------------------------------------------
     def _auth_ok(self) -> bool:
-        """When EVOSQL_WEB_TOKEN is set, /api/* requires it via
-        `Authorization: Bearer <tok>` or `?token=<tok>` (the latter for the
-        EventSource chat stream, which can't set headers). Constant-time
-        compare. Empty token = auth disabled (loopback-default dev)."""
-        tok = _web_token()
-        if not tok:
-            return True
+        """Gate /api/*. Accepts the static EVOSQL_WEB_TOKEN (constant-time
+        compare, for machine-to-machine) OR, when EVOSQL_OIDC_ISSUER is set, a
+        valid OIDC bearer JWT (operator SSO; MFA enforced by the IdP). The
+        bearer arrives via `Authorization: Bearer <tok>` or `?token=<tok>` (the
+        latter for the EventSource chat stream, which can't set headers). Open
+        only when NEITHER auth method is configured (loopback-default dev)."""
         presented = ""
         hdr = self.headers.get("Authorization", "")
         if hdr.startswith("Bearer "):
@@ -122,7 +196,15 @@ class Handler(BaseHTTPRequestHandler):
         else:
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             presented = q.get("token", [""])[0]
-        return bool(presented) and hmac.compare_digest(presented, tok)
+
+        tok = _web_token()
+        if tok and presented and hmac.compare_digest(presented, tok):
+            return True
+        if _oidc_enabled() and presented and _oidc_validate(presented):
+            return True
+        if not tok and not _oidc_enabled():
+            return True  # nothing configured → loopback-default dev
+        return False
 
     def _rate_ok(self) -> bool:
         limit = _rate_per_min()
@@ -234,12 +316,17 @@ def main() -> int:
     port = int(os.environ.get("EVOSQL_WEB_PORT", "8800"))
     httpd = ThreadingHTTPServer((host, port), Handler)
     model = "ready" if _have_model() else "NOT configured (set ANTHROPIC_API_KEY)"
-    auth = "token-protected" if _web_token() else "OPEN (no EVOSQL_WEB_TOKEN)"
+    if _oidc_enabled():
+        auth = f"OIDC SSO ({_oidc_issuer()})" + (" + token" if _web_token() else "")
+    elif _web_token():
+        auth = "token-protected"
+    else:
+        auth = "OPEN (no EVOSQL_WEB_TOKEN / EVOSQL_OIDC_ISSUER)"
     print(f"evolution-agent web on http://{host}:{port}  ·  model: {model}  ·  api: {auth}",
           file=sys.stderr, flush=True)
-    if not _web_token() and host not in ("127.0.0.1", "localhost", "::1"):
-        print(f"WARNING: bound to {host} with NO EVOSQL_WEB_TOKEN — the agent API "
-              "is open to the network. Set EVOSQL_WEB_TOKEN before exposing it.",
+    if not _web_token() and not _oidc_enabled() and host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"WARNING: bound to {host} with NO EVOSQL_WEB_TOKEN / EVOSQL_OIDC_ISSUER — "
+              "the agent API is open to the network. Set one before exposing it.",
               file=sys.stderr, flush=True)
     print("nothing is ever sent — drafts queue for approval (ADR-004)",
           file=sys.stderr, flush=True)

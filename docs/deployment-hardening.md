@@ -23,9 +23,10 @@ A one-line summary of the security model:
   strong secrets and certificates, and running behind a supervisor.
 - **Roadmap (not shipped)** — native KMS-envelope / HSM (PKCS#11) key custody
   (passphrase + data-key rotation and external-secret-store *sourcing* via a key
-  command are shipped, see below), per-tenant isolation/RLS, SSO/OIDC,
-  engine-side masking SQL, reliable name redaction, and tamper-*proof*
-  (externally anchored) audit.
+  command are shipped, see below), per-tenant isolation/RLS, interactive OIDC
+  browser redirect-login (bearer-JWT SSO on the agent API *is* shipped —
+  `EVOSQL_OIDC_ISSUER`), engine-side masking SQL, reliable name redaction, and
+  tamper-*proof* (externally anchored) audit.
 
 ---
 
@@ -245,7 +246,10 @@ to use once any port is reachable beyond loopback.
 | --- | --- | --- | --- |
 | `EVOSQL_WEB_HOST` | Interface the web UI binds. (compose sets `0.0.0.0` inside the container behind a loopback host-port map.) | `127.0.0.1` | `127.0.0.1` behind a reverse proxy |
 | `EVOSQL_WEB_PORT` | Web UI port. | `8800` | n/a |
-| `EVOSQL_WEB_TOKEN` | Shared secret required on `/api/*` (Bearer header or `?token=`), constant-time compared. Empty = auth disabled. | empty (open) | set a strong token |
+| `EVOSQL_WEB_TOKEN` | Shared secret required on `/api/*` (Bearer header or `?token=`), constant-time compared. Empty = auth disabled (unless OIDC is set). | empty (open) | set a strong token, or use OIDC |
+| `EVOSQL_OIDC_ISSUER` | Enable operator SSO: `/api/*` also accepts an OIDC bearer JWT from this issuer (validated against its JWKS: RS256 signature + issuer + audience + expiry). The IdP enforces MFA. | unset | set to your IdP issuer URL |
+| `EVOSQL_OIDC_AUDIENCE` | Required `aud` claim on the OIDC token. Strongly recommended when OIDC is on (without it, audience is not checked). | unset | set to your app/client id |
+| `EVOSQL_OIDC_JWKS_URI` | Override the JWKS URL (otherwise discovered from `<issuer>/.well-known/openid-configuration`). | unset (discovered) | usually leave unset |
 | `EVOSQL_WEB_RATE_PER_MIN` | Per-IP request rate limit for the web API; `0` disables. | `60` | tune to your traffic |
 
 ### MCP HTTP transport
