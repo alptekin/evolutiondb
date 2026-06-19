@@ -128,7 +128,14 @@ int wal_restore_to_timestamp(int data_fd, int64_t target_epoch);
 
 /* Get the timestamp range available in the WAL archive.
  * Returns 0 on success, -1 if no archive exists.
- * min_ts and max_ts are set to epoch seconds. */
+ * min_ts and max_ts are set to epoch microseconds. */
 int wal_archive_range(int64_t *min_ts, int64_t *max_ts);
+
+/* Point-in-time recovery: rebuild "<data_dir>/evosql.db" as-of target_epoch_us
+ * from the continuous WAL archive, swapping it in atomically (the original is
+ * untouched until a validated replacement exists). Engine init must have run
+ * (pcrypt + WAL path set) and background mutators must be stopped before this is
+ * called. Returns pages restored on success, or < 0 on failure. See wal.c. */
+int wal_pitr_recover(const char *data_dir, int64_t target_epoch_us);
 
 #endif /* WAL_H */

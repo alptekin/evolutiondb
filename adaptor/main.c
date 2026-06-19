@@ -22,6 +22,8 @@
 #include "distributed.h"
 #include "tls.h"
 #include "../evolution/db/version.h"
+#include "../evolution/db/wal.h"
+#include "../evolution/db/database.h"
 
 #define DEFAULT_PG_PORT   5433
 #define DEFAULT_EVO_PORT  9967
@@ -126,6 +128,8 @@ int main(int argc, char *argv[])
     const char *role_str = NULL;       /* --role primary|replica|witness */
     const char *base_backup_path = NULL;  /* --base-backup PATH */
     int require_tls = 0;               /* --require-tls / EVOSQL_REQUIRE_TLS */
+    long long recover_to_us = 0;       /* --recover-to <epoch_microseconds> */
+    int recover_to_set = 0;            /* distinguishes target 0 from "unset" */
     int i;
 
     /* Environment defaults (CLI flags below override).
@@ -199,6 +203,10 @@ int main(int argc, char *argv[])
             role_str = argv[++i];
         else if (strcmp(argv[i], "--base-backup") == 0 && i + 1 < argc)
             base_backup_path = argv[++i];
+        else if (strcmp(argv[i], "--recover-to") == 0 && i + 1 < argc) {
+            recover_to_us = strtoll(argv[++i], NULL, 10);  /* epoch microseconds */
+            recover_to_set = 1;
+        }
         else if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
             EVO_SETENV("EVOSQL_BIND", argv[++i]);   /* listener address; default loopback */
         else if (strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc)
@@ -269,6 +277,31 @@ int main(int argc, char *argv[])
         int rc = repl_create_backup(base_backup_path);
         server_cleanup();
         return rc == 0 ? 0 : 1;
+    }
+
+    /* --recover-to <epoch_us> mode: rewind the database to a past point in time
+     * from the continuous WAL archive (EVOSQL_WAL_ARCHIVE), then exit. Runs here
+     * — right after engine init, before any listener or background thread — so
+     * the data file is mutated out-of-band with nothing else touching it.
+     *
+     * WARNING: this rewrites the data file in place (the live tail past the last
+     * archived checkpoint is discarded). Stop the server cleanly first (a clean
+     * shutdown archives the final WAL) and copy the data dir if you may still
+     * need the current state. The reconstruction is validated and swapped in
+     * atomically, so a FAILED recovery leaves the original intact. */
+    if (recover_to_set) {
+        /* Quiesce the background mutators server_init_ex started, so neither the
+         * auto-reclaimer nor the checkpointer writes while we rebuild the file. */
+        auto_reclaim_stop();
+        wal_checkpointer_stop();
+
+        int restored = wal_pitr_recover(db_get_root(), (int64_t)recover_to_us);
+        fflush(stdout);
+        fflush(stderr);
+        /* Bypass server_cleanup(): pgm_shutdown would flush the stale in-memory
+         * FileHeader (still the pre-rewind state) back over the recovered page 0.
+         * The recovered file is already fsync'd and swapped in. */
+        _exit(restored < 0 ? 1 : 0);
     }
 
     /* Task 91: LISTEN/NOTIFY registry */
