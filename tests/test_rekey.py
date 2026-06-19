@@ -1,16 +1,18 @@
 """
-test_rekey.py — at-rest encryption passphrase rotation (evosql-server --rekey).
+test_rekey.py — at-rest key rotation (evosql-server --rekey and --rotate-key).
 
-Drives the locally built binary (no Docker). Creates an encrypted database with
-passphrase A, rotates it to B offline with `--rekey`, and checks that:
+Drives the locally built binary (no Docker).
 
-  1. after rotation the data is intact and decrypts under the NEW passphrase,
+Passphrase rotation (`--rekey`, header-only re-wrap of the same DEK):
+  1. after A->B the data is intact and decrypts under the NEW passphrase,
   2. the OLD passphrase no longer opens the database,
   3. `--rekey` refuses on a plaintext (unencrypted) database,
   4. `--rekey` refuses when EVOSQL_ENCRYPTION_KEY_NEW is not set.
 
-Rotation only re-wraps the data-encryption key under a new MEK (no page
-re-encryption), so it is a header-only change.
+Data-key rotation (`--rotate-key`, new DEK + full re-encryption, same passphrase):
+  5. the wrapped DEK and on-disk ciphertext change, yet the data still reads
+     back under the same passphrase,
+  6. `--rotate-key` refuses on a plaintext database.
 
 Run directly:  python tests/test_rekey.py
 Skips cleanly (exit 0) if the server binary has not been built.
@@ -138,6 +140,27 @@ def _seed_encrypted_db(data_dir):
         _stop(p)
 
 
+def _rotate_key(data_dir, enc_key):
+    return subprocess.run(
+        [SERVER, "--rotate-key"],
+        env=_env(data_dir, enc_key),
+        capture_output=True, timeout=60)
+
+
+def _header_wrapped_dek(data_dir):
+    """Read the 48-byte wrapped DEK from the FileHeader (offset 161)."""
+    with open(os.path.join(data_dir, "evosql.db"), "rb") as f:
+        f.seek(161)
+        return f.read(48)
+
+
+def _ciphertext_after_page0(data_dir):
+    """Raw bytes of the data region (everything past the plaintext page 0)."""
+    with open(os.path.join(data_dir, "evosql.db"), "rb") as f:
+        f.seek(4096)
+        return f.read()
+
+
 def _read_rows(enc_key, data_dir):
     """Start with enc_key and return the rk_t rows, or raise if unreadable."""
     p, ok = _start(data_dir, enc_key=enc_key)
@@ -228,6 +251,55 @@ def test_rekey_refuses_without_new_key():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_rotate_key_reencrypts_and_data_survives():
+    """Full DEK rotation: a new data key re-encrypts every page; the wrapped
+    DEK and the on-disk ciphertext must change, and the data must still read
+    back under the SAME passphrase (the new DEK is wrapped under it)."""
+    d = tempfile.mkdtemp(prefix="evorotate_")
+    try:
+        _seed_encrypted_db(d)
+        wrapped_before = _header_wrapped_dek(d)
+        cipher_before = _ciphertext_after_page0(d)
+
+        r = _rotate_key(d, enc_key=KEY_A)
+        assert r.returncode == 0, \
+            f"--rotate-key should succeed, exit={r.returncode}\n{r.stderr.decode(errors='replace')}"
+
+        wrapped_after = _header_wrapped_dek(d)
+        cipher_after = _ciphertext_after_page0(d)
+        assert wrapped_after != wrapped_before, "wrapped DEK must change after rotation"
+        assert len(cipher_after) == len(cipher_before), "file size must be unchanged"
+        assert cipher_after != cipher_before, "page ciphertext must change after re-encryption"
+
+        # Same passphrase still opens the DB (new DEK wrapped under it) and the
+        # data decrypts correctly.
+        rows = _read_rows(KEY_A, d)
+        ids = sorted(int(x[0]) for x in rows)
+        assert ids == [1, 2, 3, 4, 5], f"expected ids 1..5 after DEK rotation, got {ids}"
+        vals = {int(x[0]): x[1] for x in rows}
+        assert vals[3] == "secret_3", f"decrypted value mismatch after rotation: {vals.get(3)!r}"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_rotate_key_refuses_plaintext_db():
+    d = tempfile.mkdtemp(prefix="evorotate_plain_")
+    try:
+        p, ok = _start(d, enc_key=None)
+        assert ok, "plaintext server failed to start"
+        try:
+            c = _connect()
+            _exec(c, "CREATE TABLE rk_t (id INT PRIMARY KEY)")
+            c.close()
+        finally:
+            _stop(p)
+
+        r = _rotate_key(d, enc_key=None)
+        assert r.returncode != 0, "--rotate-key must refuse on a plaintext database"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     print("=== Encryption Passphrase Rotation (--rekey) Tests ===")
     if not os.path.exists(SERVER):
@@ -238,6 +310,9 @@ if __name__ == "__main__":
     run_test("old_key_no_longer_opens_db", test_old_key_no_longer_opens_db)
     run_test("rekey_refuses_plaintext_db", test_rekey_refuses_plaintext_db)
     run_test("rekey_refuses_without_new_key", test_rekey_refuses_without_new_key)
+    run_test("rotate_key_reencrypts_and_data_survives",
+             test_rotate_key_reencrypts_and_data_survives)
+    run_test("rotate_key_refuses_plaintext_db", test_rotate_key_refuses_plaintext_db)
 
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)

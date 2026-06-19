@@ -74,7 +74,8 @@ Defaults worth internalising before you read the tables:
 | At-rest integrity / tamper detection | AES-256-CTR gives **confidentiality only**, not integrity or tamper detection. There is no authenticated-encryption / page-MAC layer. | — | **Roadmap / Not provided** | ISO A.8.24; SOC 2 CC6.1 — operator must add compensating controls |
 | Encryption key custody | The passphrase is supplied by the operator via the environment; key storage, rotation discipline, and access control to the key are entirely the operator's responsibility. | Operator-managed (`EVOSQL_ENCRYPTION_KEY` source, secrets manager, file permissions). | Operator-responsibility | SOC 2 CC6.1; ISO A.8.24; GDPR Art. 32(1) |
 | Passphrase (MEK) rotation | Rotate the at-rest encryption passphrase offline (`evosql-server --rekey`): the data-encryption key is re-wrapped under a new passphrase-derived key, so the old passphrase stops working. Header-only — the DEK and page ciphertext are unchanged. | `--rekey` with `EVOSQL_ENCRYPTION_KEY` (current) + `EVOSQL_ENCRYPTION_KEY_NEW` (new). | Provided (passphrase rotation) | ISO A.8.24; SOC 2 CC6.1 |
-| Data-key (DEK) rotation / re-encryption | Rotating the underlying data-encryption key and re-encrypting every page. | — | **Roadmap** — not shipped | ISO A.8.24 (planned control) |
+| Data-key (DEK) rotation / re-encryption | Rotate the data-encryption key and re-encrypt every page offline (`evosql-server --rotate-key`), with an atomic validated swap (original intact on failure). Same passphrase; cost is O(database size). | `--rotate-key` with the current `EVOSQL_ENCRYPTION_KEY`. | Provided (opt-in; offline) | ISO A.8.24; SOC 2 CC6.1 |
+| External KMS / HSM key management | Sourcing keys from an external KMS / HSM instead of a passphrase env var. | — | **Roadmap** — not shipped | ISO A.8.24 (planned control) |
 
 ## Audit & accountability
 
@@ -135,9 +136,10 @@ represent any of these as available.
 
 **Roadmap (not shipped):**
 
-- **Data-key (DEK) rotation / full re-encryption** — the at-rest *passphrase*
-  can be rotated (`--rekey`, re-wraps the DEK), but rotating the underlying
-  data-encryption key and re-encrypting every page is not implemented.
+- **External KMS / HSM integration** — encryption keys are derived from a
+  passphrase (env var); there is no integration with an external key-management
+  service or HSM. (Both passphrase rotation `--rekey` and full data-key rotation
+  `--rotate-key` are shipped.)
 - **At-rest tamper detection / authenticated encryption** — AES-256-CTR provides
   confidentiality only; there is no page-MAC or integrity layer.
 - **Per-tenant row-level security and isolation**, and **token-based
