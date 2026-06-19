@@ -30,9 +30,30 @@
 
 /* Persistence constants — see raft_save_state below. */
 #define RAFT_STATE_MAGIC   0x54464152   /* "RAFT" in LE */
-#define RAFT_STATE_PATH    "root/raft.state"
-#define RAFT_SNAPSHOT_PATH "root/raft.snapshot"
 #define RAFT_COMPACTION_INTERVAL 10000  /* AppendEntries count */
+
+/* Raft state/snapshot files live in the data directory (db_get_root() =
+ * g_dbRoot, honoring EVOSQL_DATA_DIR) rather than a hardcoded "root/" in the
+ * CWD. Built lazily; g_dbRoot is set before the Raft engine starts. */
+static const char *raft_state_path(void)
+{
+    static char p[1024];
+    if (!p[0]) {
+        const char *r = db_get_root();
+        snprintf(p, sizeof(p), "%s/raft.state", (r && r[0]) ? r : "root");
+    }
+    return p;
+}
+
+static const char *raft_snapshot_path(void)
+{
+    static char p[1024];
+    if (!p[0]) {
+        const char *r = db_get_root();
+        snprintf(p, sizeof(p), "%s/raft.snapshot", (r && r[0]) ? r : "root");
+    }
+    return p;
+}
 
 /* ================================================================
  *  State
@@ -90,7 +111,8 @@ void raft_set_role_callback(void (*cb)(int new_role, int leader_id))
  * ================================================================ */
 static void raft_save_state(void)
 {
-    char tmp[] = RAFT_STATE_PATH ".tmp";
+    char tmp[1040];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", raft_state_path());
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return;
     uint32_t magic = RAFT_STATE_MAGIC;
@@ -101,7 +123,7 @@ static void raft_save_state(void)
         write(fd, &voted, 4) == 4) {
         fsync(fd);
         close(fd);
-        rename(tmp, RAFT_STATE_PATH);
+        rename(tmp, raft_state_path());
     } else {
         close(fd);
         unlink(tmp);
@@ -110,7 +132,7 @@ static void raft_save_state(void)
 
 static void raft_load_state(void)
 {
-    int fd = open(RAFT_STATE_PATH, O_RDONLY);
+    int fd = open(raft_state_path(), O_RDONLY);
     if (fd < 0) return;
     uint32_t magic = 0, term = 0;
     int32_t voted = -1;
@@ -135,7 +157,8 @@ static uint32_t g_append_counter = 0;
 
 static void raft_write_snapshot(void)
 {
-    char tmp[] = RAFT_SNAPSHOT_PATH ".tmp";
+    char tmp[1040];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", raft_snapshot_path());
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return;
     uint32_t magic = RAFT_STATE_MAGIC;
@@ -146,7 +169,7 @@ static void raft_write_snapshot(void)
         write(fd, &last_term, 4) == 4) {
         fsync(fd);
         close(fd);
-        rename(tmp, RAFT_SNAPSHOT_PATH);
+        rename(tmp, raft_snapshot_path());
         fprintf(stderr, "[RAFT] Snapshot written: committed_lsn=%u term=%u\n",
                 committed_lsn, last_term);
     } else {

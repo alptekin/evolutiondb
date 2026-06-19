@@ -90,6 +90,48 @@ def test_approve_forwards_item_id():
         httpd.shutdown()
 
 
+def _code(port, path, headers=None):
+    import urllib.error
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def test_api_requires_token_when_set():
+    os.environ["EVOSQL_WEB_TOKEN"] = "sek"
+    web._RATE.clear()
+    httpd, port = _serve(FakeServer())
+    try:
+        assert _code(port, "/api/pending") == 401                 # no token
+        assert _code(port, "/api/pending?token=wrong") == 401      # wrong token
+        assert _code(port, "/api/pending?token=sek") == 200        # query token
+        assert _code(port, "/api/pending",
+                     {"Authorization": "Bearer sek"}) == 200       # header token
+        assert _code(port, "/") == 200                             # UI shell stays open
+    finally:
+        httpd.shutdown()
+        os.environ.pop("EVOSQL_WEB_TOKEN", None)
+        web._RATE.clear()
+
+
+def test_rate_limit_returns_429():
+    os.environ.pop("EVOSQL_WEB_TOKEN", None)
+    os.environ["EVOSQL_WEB_RATE_PER_MIN"] = "3"
+    web._RATE.clear()
+    httpd, port = _serve(FakeServer())
+    try:
+        codes = [_code(port, "/api/pending") for _ in range(5)]
+        assert codes[:3] == [200, 200, 200]      # under the limit
+        assert 429 in codes[3:]                  # then rate-limited
+    finally:
+        httpd.shutdown()
+        os.environ.pop("EVOSQL_WEB_RATE_PER_MIN", None)
+        web._RATE.clear()
+
+
 def test_approve_requires_id():
     httpd, port = _serve(FakeServer())
     try:

@@ -46,6 +46,7 @@ Source = "https://github.com/alptekin/evolutiondb/tree/main/client/evolution-age
 Issues = "https://github.com/alptekin/evolutiondb/issues"
 
 [project.scripts]
+evoagent = "evolution_agent.cli:main"
 evolution-agent = "evolution_agent.__main__:main"
 evolution-agent-web = "evolution_agent.web:main"
 

@@ -82,6 +82,7 @@ void conn_init(conn_t *c, socket_t sock)
     c->sock        = sock;
     c->ssl         = NULL;
     c->is_tls      = 0;
+    c->trusted_internal = 0;
     c->valid       = 1;
     c->protocol    = CONN_PROTO_PG;  /* default, overwritten by conn_lock_init */
     c->initialized = 0;
@@ -263,6 +264,7 @@ void conn_init(conn_t *c, socket_t sock)
     c->sock        = sock;
     c->ssl         = NULL;
     c->is_tls      = 0;
+    c->trusted_internal = 0;
     c->valid       = 1;
     c->protocol    = CONN_PROTO_PG;  /* default, overwritten by conn_lock_init */
     c->initialized = 0;

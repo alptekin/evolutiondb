@@ -28,8 +28,20 @@
     <key>RunAtLoad</key>
     <true/>
 
+    <!-- KeepAlive=true respawns the daemon WHENEVER it exits, with no
+         built-in attempt limit. launchd has no equivalent to systemd's
+         StartLimitBurst, so a hard-failing binary will loop forever;
+         ThrottleInterval only spaces the restarts out. Ops must
+         intervene on a crash loop (e.g. `launchctl bootout` the daemon
+         and check /usr/local/share/evosql/server.err.log). -->
     <key>KeepAlive</key>
     <true/>
+
+    <!-- Minimum seconds between successive launches. Raised to 10 so a
+         crash loop backs off (10s between respawns) instead of pinning
+         the CPU. This is rate-limiting, NOT a give-up threshold. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
 
     <key>StandardOutPath</key>
     <string>/usr/local/share/evosql/server.out.log</string>

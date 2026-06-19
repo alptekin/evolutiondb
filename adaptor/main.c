@@ -22,9 +22,20 @@
 #include "distributed.h"
 #include "tls.h"
 #include "../evolution/db/version.h"
+#include "../evolution/db/wal.h"
+#include "../evolution/db/database.h"
+#include "../evolution/db/page_mgr.h"
 
 #define DEFAULT_PG_PORT   5433
 #define DEFAULT_EVO_PORT  9967
+
+/* Portable setenv: --bind / --data-dir are sugar over the EVOSQL_BIND /
+ * EVOSQL_DATA_DIR env vars, read later by net.c and DatabaseMgmt.c. */
+#ifdef _WIN32
+  #define EVO_SETENV(k, v) _putenv_s((k), (v))
+#else
+  #define EVO_SETENV(k, v) setenv((k), (v), 1)
+#endif
 
 /* ---- Graceful shutdown on SIGTERM/SIGINT ---- */
 #ifndef _WIN32
@@ -38,6 +49,42 @@ static void shutdown_handler(int sig)
     (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
     server_cleanup();
     _exit(0);
+}
+
+/* Crash safety net for genuine fatal signals (segfault / bus / FPE / abort).
+ * In server mode a bad QUERY is already recovered via setjmp/longjmp (the
+ * engine does not abort), so this fires only on real memory corruption / a
+ * NULL deref in C / an unexpected abort(). It MUST be async-signal-safe:
+ * only write()/signal()/raise()/_exit() — NO server_cleanup (locks + stdio
+ * could deadlock or corrupt inside a signal handler). We leave a breadcrumb,
+ * then restore the default disposition and re-raise so a core dump is produced
+ * and the process exits with a failure status the supervisor acts on
+ * (docker restart:on-failure / systemd Restart=on-failure). Data already
+ * committed is durable: every commit fsyncs the WAL before returning. */
+static void fatal_signal_handler(int sig)
+{
+#define EVO_WMSG(s) (void)write(STDERR_FILENO, (s), sizeof(s) - 1)
+    switch (sig) {
+        case SIGSEGV: EVO_WMSG("\n[FATAL] SIGSEGV — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+        case SIGBUS:  EVO_WMSG("\n[FATAL] SIGBUS — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+        case SIGFPE:  EVO_WMSG("\n[FATAL] SIGFPE — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+        default:      EVO_WMSG("\n[FATAL] fatal signal — crashing; supervisor should restart (committed data durable via WAL)\n"); break;
+    }
+#undef EVO_WMSG
+    /* Restore the default disposition and UNBLOCK the signal (the kernel masks
+     * it while we're in the handler), then re-raise so the process dies by the
+     * signal — producing a core dump and a signal-accurate exit status the
+     * supervisor treats as failure. sigemptyset/sigaddset/sigprocmask/signal/
+     * raise/_exit are all async-signal-safe. */
+    signal(sig, SIG_DFL);
+    {
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, sig);
+        sigprocmask(SIG_UNBLOCK, &set, NULL);
+    }
+    raise(sig);
+    _exit(70);              /* belt-and-suspenders if raise somehow returns */
 }
 #endif
 
@@ -81,6 +128,11 @@ int main(int argc, char *argv[])
     int dist_port = 9969;              /* --dist-port (distributed query engine) */
     const char *role_str = NULL;       /* --role primary|replica|witness */
     const char *base_backup_path = NULL;  /* --base-backup PATH */
+    int require_tls = 0;               /* --require-tls / EVOSQL_REQUIRE_TLS */
+    long long recover_to_us = 0;       /* --recover-to <epoch_microseconds> */
+    int recover_to_set = 0;            /* distinguishes target 0 from "unset" */
+    int rekey_mode = 0;                /* --rekey (rotate encryption passphrase) */
+    int rotate_key_mode = 0;           /* --rotate-key (rotate DEK + re-encrypt) */
     int i;
 
     /* Environment defaults (CLI flags below override).
@@ -154,6 +206,20 @@ int main(int argc, char *argv[])
             role_str = argv[++i];
         else if (strcmp(argv[i], "--base-backup") == 0 && i + 1 < argc)
             base_backup_path = argv[++i];
+        else if (strcmp(argv[i], "--recover-to") == 0 && i + 1 < argc) {
+            recover_to_us = strtoll(argv[++i], NULL, 10);  /* epoch microseconds */
+            recover_to_set = 1;
+        }
+        else if (strcmp(argv[i], "--rekey") == 0)
+            rekey_mode = 1;            /* new passphrase via EVOSQL_ENCRYPTION_KEY_NEW */
+        else if (strcmp(argv[i], "--rotate-key") == 0)
+            rotate_key_mode = 1;       /* new DEK + full re-encryption (same passphrase) */
+        else if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
+            EVO_SETENV("EVOSQL_BIND", argv[++i]);   /* listener address; default loopback */
+        else if (strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc)
+            EVO_SETENV("EVOSQL_DATA_DIR", argv[++i]);  /* must be set before server_init_ex */
+        else if (strcmp(argv[i], "--require-tls") == 0)
+            require_tls = 1;           /* reject non-loopback plaintext PG connections */
         else if (argv[i][0] >= '0' && argv[i][0] <= '9')
             pg_port = atoi(argv[i]);   /* backward compat: bare number = PG port */
     }
@@ -196,6 +262,13 @@ int main(int argc, char *argv[])
     signal(SIGPIPE, SIG_IGN);
     signal(SIGTERM, shutdown_handler);
     signal(SIGINT,  shutdown_handler);
+    /* Crash safety net: log + re-raise on a real fatal signal so the process
+     * fails cleanly and the supervisor restarts it (committed data is durable
+     * via the WAL). Query-level errors never reach here — they longjmp. */
+    signal(SIGSEGV, fatal_signal_handler);
+    signal(SIGBUS,  fatal_signal_handler);
+    signal(SIGFPE,  fatal_signal_handler);
+    signal(SIGABRT, fatal_signal_handler);
 #endif
 
     printf("EvolutionDB v%s\n", EVODB_VERSION);
@@ -211,6 +284,90 @@ int main(int argc, char *argv[])
         int rc = repl_create_backup(base_backup_path);
         server_cleanup();
         return rc == 0 ? 0 : 1;
+    }
+
+    /* --recover-to <epoch_us> mode: rewind the database to a past point in time
+     * from the continuous WAL archive (EVOSQL_WAL_ARCHIVE), then exit. Runs here
+     * — right after engine init, before any listener or background thread — so
+     * the data file is mutated out-of-band with nothing else touching it.
+     *
+     * WARNING: this rewrites the data file in place (the live tail past the last
+     * archived checkpoint is discarded). Stop the server cleanly first (a clean
+     * shutdown archives the final WAL) and copy the data dir if you may still
+     * need the current state. The reconstruction is validated and swapped in
+     * atomically, so a FAILED recovery leaves the original intact. */
+    if (recover_to_set) {
+        /* Quiesce the background mutators server_init_ex started, so neither the
+         * auto-reclaimer nor the checkpointer writes while we rebuild the file. */
+        auto_reclaim_stop();
+        wal_checkpointer_stop();
+
+        int restored = wal_pitr_recover(db_get_root(), (int64_t)recover_to_us);
+        fflush(stdout);
+        fflush(stderr);
+        /* Bypass server_cleanup(): pgm_shutdown would flush the stale in-memory
+         * FileHeader (still the pre-rewind state) back over the recovered page 0.
+         * The recovered file is already fsync'd and swapped in. */
+        _exit(restored < 0 ? 1 : 0);
+    }
+
+    /* --rekey mode: rotate the at-rest encryption passphrase, then exit. The
+     * CURRENT passphrase comes from EVOSQL_ENCRYPTION_KEY (server_init_ex used
+     * it to load the DEK); the NEW one from EVOSQL_ENCRYPTION_KEY_NEW (an env
+     * var, never argv, so it does not leak via the process list). Only the
+     * FileHeader's key wrapping changes — data pages are untouched. */
+    if (rekey_mode) {
+        auto_reclaim_stop();
+        wal_checkpointer_stop();
+
+        const char *newp = getenv("EVOSQL_ENCRYPTION_KEY_NEW");
+        if (!newp || !newp[0]) {
+            fprintf(stderr, "[REKEY] Set EVOSQL_ENCRYPTION_KEY_NEW to the new "
+                    "passphrase and EVOSQL_ENCRYPTION_KEY to the current one.\n");
+            fflush(stderr);
+            _exit(1);
+        }
+        int rc = pgm_rekey(newp);
+        if (rc != 0) {
+            fprintf(stderr, "[REKEY] Failed. The database must be encrypted and "
+                    "EVOSQL_ENCRYPTION_KEY must be the current passphrase.\n");
+            fflush(stderr);
+            _exit(1);
+        }
+        fprintf(stderr, "[REKEY] Encryption passphrase rotated. Restart with "
+                "EVOSQL_ENCRYPTION_KEY set to the new passphrase.\n");
+        fflush(stdout);
+        fflush(stderr);
+        /* Bypass server_cleanup(): the new header is already flushed + fsync'd;
+         * a second flush is harmless but unnecessary. */
+        _exit(0);
+    }
+
+    /* --rotate-key mode: rotate the data-encryption key and re-encrypt every
+     * page under it, then exit. The passphrase is unchanged (the new DEK is
+     * wrapped under the current EVOSQL_ENCRYPTION_KEY), so the operator just
+     * restarts with the same passphrase. Crash-safe: a validated re-encrypted
+     * copy is swapped in atomically, so a failure leaves the original intact. */
+    if (rotate_key_mode) {
+        auto_reclaim_stop();
+        wal_checkpointer_stop();
+
+        int rc = pgm_rotate_dek();
+        if (rc != 0) {
+            fprintf(stderr, "[ROTATE-KEY] Failed. The database must be encrypted "
+                    "and EVOSQL_ENCRYPTION_KEY the current passphrase. The "
+                    "original data file is intact.\n");
+            fflush(stderr);
+            _exit(1);
+        }
+        fprintf(stderr, "[ROTATE-KEY] Data key rotated and all pages re-encrypted. "
+                "Restart normally with the same EVOSQL_ENCRYPTION_KEY.\n");
+        fflush(stdout);
+        fflush(stderr);
+        /* Bypass server_cleanup(): the old DEK is still active in memory and
+         * would mis-decrypt the freshly re-encrypted file. The new file is
+         * already fsync'd + swapped in; restart re-derives the new key. */
+        _exit(0);
     }
 
     /* Task 91: LISTEN/NOTIFY registry */
@@ -232,6 +389,32 @@ int main(int argc, char *argv[])
         } else {
             printf("[TLS] No EVOSQL_TLS_CERT / EVOSQL_TLS_KEY set — TLS disabled\n");
         }
+    }
+
+    /* Require-TLS gate for non-loopback PG connections. Env fallback, then a
+     * hard startup guard: enabling it without TLS available would refuse every
+     * remote SSLRequest and then reject the plaintext fallback — locking out
+     * all remote clients. Fail fast instead of starting in that trap. */
+    {
+        extern int g_pg_require_tls;
+        if (!require_tls) {
+            const char *e = getenv("EVOSQL_REQUIRE_TLS");
+            if (e && (e[0] == '1' || e[0] == 't' || e[0] == 'T' ||
+                      e[0] == 'y' || e[0] == 'Y'))
+                require_tls = 1;
+        }
+        if (require_tls && !tls_is_available()) {
+            fprintf(stderr,
+                "[FATAL] require-tls is set but TLS is unavailable. Build with "
+                "TLS=1 and set EVOSQL_TLS_CERT / EVOSQL_TLS_KEY, or unset "
+                "EVOSQL_REQUIRE_TLS. Refusing to start to avoid locking out "
+                "remote clients.\n");
+            server_cleanup();
+            return 1;
+        }
+        g_pg_require_tls = require_tls;
+        if (require_tls)
+            printf("[TLS] require-tls: non-loopback PG connections must use TLS\n");
     }
 
     /* Banner */

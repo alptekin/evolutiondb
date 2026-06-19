@@ -1,0 +1,73 @@
+# client/Dockerfile.python — Python image for the EvolutionDB agent stack.
+#
+# Build context is the `client/` directory (see docker-compose.yml:
+# build.context = ./client) so the local source packages below are
+# COPYable and pip-installable by path.
+#
+# Packages installed (all from local source, editable-free wheels):
+#   mcp-server-evosql[send]   MCP tools + action-loop send transports
+#   evolutiondb-pii           PII masking — ALWAYS installed so that
+#                             EVOSQL_PII_EGRESS=on never fail-closes
+#                             (pii_egress.scrub() errors when 'on' but the
+#                             masker is missing; installing it unconditionally
+#                             keeps that path safe).
+#   evolution-agent[anthropic]  standalone agent loop + Claude SDK + web UI
+#   orchestrator              control-panel / connector hub
+
+# ---- Build stage: compile wheels for everything + deps ----
+FROM python:3.12-slim AS builder
+
+# Build deps for any package that ships native extensions transitively.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# Copy the four local source trees (paths are relative to the client/
+# build context).
+COPY mcp-server-evosql/ mcp-server-evosql/
+COPY evolutiondb-pii/    evolutiondb-pii/
+COPY evolution-agent/    evolution-agent/
+COPY orchestrator/       orchestrator/
+
+# Build wheels for the local packages + their full dependency closure
+# into /wheels so the runtime stage installs offline with no toolchain.
+RUN python -m pip install --no-cache-dir --upgrade pip wheel \
+    && pip wheel --no-cache-dir -w /wheels \
+        "./mcp-server-evosql[send]" \
+        "./evolutiondb-pii" \
+        "./evolution-agent[anthropic]" \
+        "./orchestrator"
+
+# ---- Runtime stage ----
+FROM python:3.12-slim
+
+# Non-root runtime user. The agent only needs network + its own
+# site-packages; nothing writes to the image filesystem at runtime.
+RUN useradd --create-home --uid 10001 agent
+
+COPY --from=builder /wheels /wheels
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --no-index --find-links=/wheels \
+        "mcp-server-evolutiondb[send]" \
+        "evolutiondb-pii" \
+        "evolutiondb-agent[anthropic]" \
+        "evolutiondb-hub" \
+    && rm -rf /wheels
+
+USER agent
+WORKDIR /home/agent
+
+# The web UI binds to EVOSQL_WEB_HOST:EVOSQL_WEB_PORT (default
+# 127.0.0.1:8800; compose overrides host to 0.0.0.0). Published on the
+# host as 127.0.0.1:8800 by docker-compose.yml.
+EXPOSE 8800
+
+# Default: serve the agent web chat UI.
+#
+# Override the command for other entry points, e.g.:
+#   one-shot CLI turn:  ["evolution-agent", "--once", "your prompt"]
+#   interactive CLI:    ["evoagent"]
+#   MCP HTTP transport: ["evolutiondb-mcp-http"]   # needs EVOSQL_MCP_AUTH_TOKEN
+#   connector hub:      ["evolutiondb-hub"]
+CMD ["evolution-agent-web"]

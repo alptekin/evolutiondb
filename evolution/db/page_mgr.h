@@ -113,7 +113,7 @@ typedef struct {
     uint8_t  encryption_enabled;               /* 0=off, 1=AES-256 TDE active */
     uint8_t  encryption_salt[16];              /* PBKDF2 salt for MEK derivation */
     uint8_t  wrapped_dek[48];                  /* DEK encrypted with MEK (32 ct + 16 GCM tag) */
-    uint8_t  page_iv_prefix[8];               /* fixed CTR IV prefix (never changes on rekey) */
+    uint8_t  page_iv_prefix[8];               /* CTR IV prefix; unchanged on passphrase rekey, replaced on DEK rotation */
     /* Size breakdown (must total exactly EVO_PAGE_SIZE = 4096):
      *   magic(4) + version(2) + page_size(2) + total_pages(4) + free_list_head(4) = 16
      *   catalog_roots[27] = 108        (Task 225 added CAT_SYS_ENTITY_STORES)
@@ -157,6 +157,12 @@ int  pgm_write_page(uint32_t page_no, const void *buf);
 /* Flush all dirty pages to disk. */
 void pgm_flush(void);
 
+/* Commit-time WAL flush: ensures the dirty FileHeader (page 0) is WAL-logged
+ * with the rest of the dirty set, so a crash before the next checkpoint
+ * recovers the free list / page count / catalog roots. Commit paths must use
+ * this instead of bp_wal_flush_dirty directly. */
+void pgm_wal_flush_dirty(int fd);
+
 /* Get/set catalog root page numbers. */
 uint32_t pgm_get_catalog_root(CatalogID id);
 void     pgm_set_catalog_root(CatalogID id, uint32_t page_no);
@@ -166,6 +172,17 @@ uint32_t pgm_next_id(int id_type); /* 0=table, 1=schema, 2=db */
 
 /* Re-read FileHeader from disk (after WAL recovery invalidates buffer pool). */
 void pgm_reload_header(void);
+
+/* Rotate the at-rest encryption passphrase: re-wrap the same DEK under a new
+ * MEK (no page re-encryption) and persist it in the FileHeader. Offline only.
+ * Returns 0 on success, -1 if not encrypted / empty passphrase / failure. */
+int  pgm_rekey(const char *new_passphrase);
+
+/* Rotate the data-encryption key (DEK): generate a new DEK and re-encrypt every
+ * page under it, then atomically swap the file in (the original is intact on
+ * failure). Same passphrase. Offline only; the caller must exit afterward.
+ * Returns 0 on success, -1 if not encrypted / failure. */
+int  pgm_rotate_dek(void);
 
 /* MVCC: atomically increment and return the next transaction ID. */
 uint32_t pgm_next_xid(void);
