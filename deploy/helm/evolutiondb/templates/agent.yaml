@@ -1,0 +1,156 @@
+{{- if .Values.agent.enabled }}
+{{- $fullName := include "evolutiondb.fullname" . -}}
+{{- $agentName := printf "%s-agent" $fullName -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $agentName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  replicas: {{ .Values.agent.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "evolutiondb.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "evolutiondb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      containers:
+        - name: agent
+          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          # The image's default CMD is ["evolution-agent-web"].
+          ports:
+            - name: web
+              containerPort: {{ .Values.agent.webPort }}
+          env:
+            # -- connect to the engine Service --
+            - name: EVOSQL_HOST
+              value: {{ $fullName | quote }}
+            - name: EVOSQL_PORT
+              value: {{ .Values.service.pgPort | quote }}
+            - name: EVOSQL_USER
+              value: {{ .Values.auth.username | quote }}
+            {{- if or .Values.auth.password .Values.auth.existingSecret }}
+            - name: EVOSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "evolutiondb.secretName" . }}
+                  key: password
+            {{- end }}
+            # -- web server --
+            - name: EVOSQL_WEB_HOST
+              value: "0.0.0.0"
+            - name: EVOSQL_WEB_PORT
+              value: {{ .Values.agent.webPort | quote }}
+            - name: EVOSQL_WEB_RATE_PER_MIN
+              value: {{ .Values.agent.ratePerMin | quote }}
+            {{- if .Values.agent.oidc.issuer }}
+            # -- operator SSO (MFA enforced by the IdP) --
+            - name: EVOSQL_OIDC_ISSUER
+              value: {{ .Values.agent.oidc.issuer | quote }}
+            - name: EVOSQL_OIDC_AUDIENCE
+              value: {{ .Values.agent.oidc.audience | quote }}
+            {{- end }}
+            {{- if .Values.agent.webToken }}
+            - name: EVOSQL_WEB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $agentName }}
+                  key: web-token
+            {{- end }}
+            {{- if .Values.agent.anthropicApiKey }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $agentName }}
+                  key: anthropic-api-key
+            {{- end }}
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: web
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $agentName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  type: {{ .Values.agent.service.type }}
+  ports:
+    - name: web
+      port: {{ .Values.agent.webPort }}
+      targetPort: web
+      protocol: TCP
+  selector:
+    {{- include "evolutiondb.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+{{- if or .Values.agent.webToken .Values.agent.anthropicApiKey }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $agentName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+type: Opaque
+data:
+  {{- if .Values.agent.webToken }}
+  web-token: {{ .Values.agent.webToken | b64enc | quote }}
+  {{- end }}
+  {{- if .Values.agent.anthropicApiKey }}
+  anthropic-api-key: {{ .Values.agent.anthropicApiKey | b64enc | quote }}
+  {{- end }}
+{{- end }}
+{{- if .Values.agent.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $agentName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+  {{- with .Values.agent.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.agent.ingress.className }}
+  ingressClassName: {{ .Values.agent.ingress.className }}
+  {{- end }}
+  {{- with .Values.agent.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.agent.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $agentName }}
+                port:
+                  number: {{ .Values.agent.webPort }}
+{{- end }}
+{{- end }}
