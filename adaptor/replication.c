@@ -618,17 +618,23 @@ static void *receiver_loop(void *arg)
                 bp_invalidate_page(data_fd, rec_page_no);
                 records++;
 
-                /* Update replication slot LSN (persist every 100 records) */
                 {
                     uint32_t rec_lsn;
                     memcpy(&rec_lsn, rec, 4);
                     g_last_received_lsn = rec_lsn;
-                    if (records % 100 == 0) {
+
+                    /* Make the applied page durable, then ACK this LSN — so an
+                     * ACK means the data is on the replica's disk (proper
+                     * semantics for sync_commit waiters), and confirmed_lsn
+                     * tracks the primary record-by-record instead of lagging
+                     * until the next 100-record boundary / 5s heartbeat (the
+                     * old `records % 100` cadence left low-volume replicas
+                     * perpetually one or more records behind). Slot persistence
+                     * stays batched — it is a separate small file write. */
+                    fsync(data_fd);
+                    send_ack_conn(c, rec_lsn);
+                    if (records % 100 == 0)
                         slot_save(rec_lsn);
-                        /* ACK every 100 records so master sync_commit
-                         * waiters don't stall for the 5s heartbeat. */
-                        send_ack_conn(c, rec_lsn);
-                    }
                 }
 
                 /* CDC: decode page image for logical replication events */
