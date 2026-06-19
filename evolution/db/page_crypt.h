@@ -65,6 +65,11 @@ void pcrypt_shutdown(void);
 /* Is encryption active? */
 int  pcrypt_is_enabled(void);
 
+/* Is an at-rest passphrase configured — via EVOSQL_ENCRYPTION_KEY or an external
+ * key command EVOSQL_ENCRYPTION_KEY_CMD (the KMS/secret-store hook)? Used by the
+ * storage layer to gate encryption init. */
+int  pcrypt_passphrase_available(void);
+
 #else /* !EVO_ENCRYPTION — stub implementations */
 
 static inline int pcrypt_init_new(uint8_t *s, uint8_t *w, uint8_t *iv)
@@ -94,6 +99,8 @@ static inline void pcrypt_abort_rotation(void) {}
 static inline void pcrypt_shutdown(void) {}
 
 static inline int pcrypt_is_enabled(void) { return 0; }
+
+static inline int pcrypt_passphrase_available(void) { return 0; }
 
 #endif /* EVO_ENCRYPTION */
 #endif /* PAGE_CRYPT_H */
