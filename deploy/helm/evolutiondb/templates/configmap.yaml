@@ -6,6 +6,30 @@ metadata:
     {{- include "evolutiondb.labels" . | nindent 4 }}
 data:
   EVOSQL_USER_NAME: {{ .Values.auth.username | quote }}
+  # Bind to all interfaces inside the pod — the engine defaults to LOOPBACK for
+  # safety, so without this the headless Service cannot reach it.
+  EVOSQL_BIND: {{ .Values.network.bind | quote }}
+  {{- if .Values.persistence.enabled }}
+  # Persist into the mounted PVC, not the container's ephemeral working dir.
+  EVOSQL_DATA_DIR: {{ .Values.persistence.mountPath | quote }}
+  {{- end }}
+  {{- if .Values.security.pgSasl }}
+  EVOSQL_PG_SASL: "1"
+  {{- end }}
+  {{- if .Values.security.requireTls }}
+  EVOSQL_REQUIRE_TLS: "1"
+  {{- end }}
+  {{- if .Values.wal.checkpointIntervalSec }}
+  EVOSQL_CHECKPOINT_INTERVAL_SEC: {{ .Values.wal.checkpointIntervalSec | quote }}
+  {{- end }}
+  {{- if .Values.wal.archive }}
+  EVOSQL_WAL_ARCHIVE: "1"
+  {{- end }}
+  {{- if .Values.encryption.keyCommand }}
+  # KMS hook: command whose stdout is the TDE passphrase (takes precedence over
+  # a literal key). Use this to fetch from Vault / cloud KMS instead of a Secret.
+  EVOSQL_ENCRYPTION_KEY_CMD: {{ .Values.encryption.keyCommand | quote }}
+  {{- end }}
   {{- if .Values.machineId }}
   EVOSQL_MACHINE_ID: {{ .Values.machineId | quote }}
   {{- end }}
