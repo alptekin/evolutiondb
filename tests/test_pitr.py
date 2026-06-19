@@ -13,6 +13,12 @@ Scenarios:
   1. recover to a point BETWEEN the batches  -> only batch 1 survives
   2. recover to a point AFTER both batches    -> both batches survive
   3. recover to a point BEFORE DB creation     -> aborts, original left intact
+  4. encrypted DB roundtrip                    -> rewinds + decrypts correctly
+  5. torn archive tail                         -> aborts, original left intact
+
+It also guards the WAL CRC-32 correctness fix (the archive integrity PITR
+relies on): hard-crash recovery round-trips the corrected CRC, and a patched
+version-1 WAL header is migrated to version 2 with data intact.
 
 Run directly (no Docker):  python tests/test_pitr.py
 Skips cleanly (exit 0) if the server binary has not been built.
@@ -105,6 +111,13 @@ def _stop(p):
         p.wait(timeout=20)
     except subprocess.TimeoutExpired:
         p.kill(); p.wait()
+
+
+def _crash(p):
+    """Hard crash (SIGKILL): no clean shutdown, so the live WAL keeps its
+    committed-but-uncheckpointed tail for crash recovery to replay."""
+    p.send_signal(signal.SIGKILL)
+    p.wait(timeout=20)
 
 
 def _recover_to(data_dir, target_us, enc_key=None):
@@ -305,6 +318,75 @@ def test_recover_torn_archive_aborts_and_keeps_original():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_crash_recovery_roundtrip_new_crc():
+    """Hard-crash recovery exercises replay_one_record with the corrected
+    (version-2) CRC: rows committed before a SIGKILL must replay back on
+    restart. This is the regression guard that the WAL CRC change round-trips
+    through the actual crash path, not just clean shutdown."""
+    d = tempfile.mkdtemp(prefix="evopitr_crash_")
+    try:
+        p = _start(d)
+        c = _connect()
+        _exec(c, "DROP TABLE IF EXISTS pitr_t")
+        _exec(c, "CREATE TABLE pitr_t (id INT PRIMARY KEY, val VARCHAR(50))")
+        for i in range(1, 9):
+            _exec(c, f"INSERT INTO pitr_t VALUES ({i}, 'crash_{i}')")
+        c.close()
+        time.sleep(0.4)          # let the commit fsync the WAL
+        _crash(p)                # SIGKILL — no clean shutdown
+
+        p = _start(d)            # restart -> crash recovery replays the WAL
+        try:
+            c = _connect()
+            n = _count(c)
+            assert n == 8, f"crash recovery must replay all 8 committed rows, got {n}"
+            c.close()
+        finally:
+            _stop(p)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_wal_v1_header_is_migrated():
+    """A version-1 WAL (legacy-CRC era) with no pending records must be migrated
+    to version 2 on startup, with data intact. Simulates upgrading from an old
+    binary after a clean shutdown by patching the WAL header version 2 -> 1."""
+    import struct
+    d = tempfile.mkdtemp(prefix="evopitr_mig_")
+    try:
+        p = _start(d)
+        c = _connect()
+        _exec(c, "DROP TABLE IF EXISTS pitr_t")
+        _exec(c, "CREATE TABLE pitr_t (id INT PRIMARY KEY, val VARCHAR(50))")
+        for i in range(1, 6):
+            _exec(c, f"INSERT INTO pitr_t VALUES ({i}, 'v1_{i}')")
+        c.close()
+        _stop(p)                 # clean stop -> WAL truncated to its header, version 2
+
+        # Patch the WAL header version field (uint16 at byte offset 4: after the
+        # 4-byte magic) from 2 back to 1, as an old binary would have left it.
+        wal = os.path.join(d, "evosql.wal")
+        with open(wal, "r+b") as f:
+            f.seek(4); ver = struct.unpack("<H", f.read(2))[0]
+            assert ver == 2, f"expected fresh WAL at version 2, got {ver}"
+            f.seek(4); f.write(struct.pack("<H", 1))
+
+        p = _start(d)            # startup must migrate v1 -> v2 and keep data
+        try:
+            c = _connect()
+            n = _count(c)
+            assert n == 5, f"data must survive v1->v2 migration, got {n} rows"
+            c.close()
+        finally:
+            _stop(p)
+
+        with open(wal, "rb") as f:
+            f.seek(4); ver = struct.unpack("<H", f.read(2))[0]
+        assert ver == 2, f"WAL header must be migrated back to version 2, got {ver}"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     print("=== Point-In-Time Recovery (--recover-to) Tests ===")
     if not os.path.exists(SERVER):
@@ -322,6 +404,10 @@ if __name__ == "__main__":
              test_recover_encrypted_db_keeps_only_batch1)
     run_test("recover_torn_archive_aborts_and_keeps_original",
              test_recover_torn_archive_aborts_and_keeps_original)
+    run_test("crash_recovery_roundtrip_new_crc",
+             test_crash_recovery_roundtrip_new_crc)
+    run_test("wal_v1_header_is_migrated",
+             test_wal_v1_header_is_migrated)
 
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
