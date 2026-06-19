@@ -173,6 +173,11 @@ uint32_t pgm_next_id(int id_type); /* 0=table, 1=schema, 2=db */
 /* Re-read FileHeader from disk (after WAL recovery invalidates buffer pool). */
 void pgm_reload_header(void);
 
+/* Rotate the at-rest encryption passphrase: re-wrap the same DEK under a new
+ * MEK (no page re-encryption) and persist it in the FileHeader. Offline only.
+ * Returns 0 on success, -1 if not encrypted / empty passphrase / failure. */
+int  pgm_rekey(const char *new_passphrase);
+
 /* MVCC: atomically increment and return the next transaction ID. */
 uint32_t pgm_next_xid(void);
 
