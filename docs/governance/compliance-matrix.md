@@ -75,7 +75,8 @@ Defaults worth internalising before you read the tables:
 | Encryption key custody | The passphrase is supplied by the operator via the environment; key storage, rotation discipline, and access control to the key are entirely the operator's responsibility. | Operator-managed (`EVOSQL_ENCRYPTION_KEY` source, secrets manager, file permissions). | Operator-responsibility | SOC 2 CC6.1; ISO A.8.24; GDPR Art. 32(1) |
 | Passphrase (MEK) rotation | Rotate the at-rest encryption passphrase offline (`evosql-server --rekey`): the data-encryption key is re-wrapped under a new passphrase-derived key, so the old passphrase stops working. Header-only — the DEK and page ciphertext are unchanged. | `--rekey` with `EVOSQL_ENCRYPTION_KEY` (current) + `EVOSQL_ENCRYPTION_KEY_NEW` (new). | Provided (passphrase rotation) | ISO A.8.24; SOC 2 CC6.1 |
 | Data-key (DEK) rotation / re-encryption | Rotate the data-encryption key and re-encrypt every page offline (`evosql-server --rotate-key`), with an atomic validated swap (original intact on failure). Same passphrase; cost is O(database size). | `--rotate-key` with the current `EVOSQL_ENCRYPTION_KEY`. | Provided (opt-in; offline) | ISO A.8.24; SOC 2 CC6.1 |
-| External KMS / HSM key management | Sourcing keys from an external KMS / HSM instead of a passphrase env var. | — | **Roadmap** — not shipped | ISO A.8.24 (planned control) |
+| External KMS / secret-store key sourcing | The TDE passphrase can be fetched from an external secret store / KMS via a key command (`EVOSQL_ENCRYPTION_KEY_CMD`) — e.g. `vault kv get`, an `aws`/`gcloud`/`az` CLI call, or any script — instead of a plaintext env var. The passphrase→MEK→wrapped-DEK envelope is unchanged; the secret simply lives in the store, not on the host. (Not a native KMS-wrapped-DEK envelope / HSM PKCS#11 integration.) | `EVOSQL_ENCRYPTION_KEY_CMD="<command>"`. | Provided (key-command hook) | ISO A.8.24; SOC 2 CC6.1 |
+| Native KMS-envelope / HSM (PKCS#11) | KMS directly wrapping the DEK in the FileHeader, or an HSM holding the key via PKCS#11. | — | **Roadmap** — not shipped | ISO A.8.24 (planned control) |
 
 ## Audit & accountability
 
@@ -136,10 +137,11 @@ represent any of these as available.
 
 **Roadmap (not shipped):**
 
-- **External KMS / HSM integration** — encryption keys are derived from a
-  passphrase (env var); there is no integration with an external key-management
-  service or HSM. (Both passphrase rotation `--rekey` and full data-key rotation
-  `--rotate-key` are shipped.)
+- **Native KMS-envelope / HSM (PKCS#11)** — the passphrase can be sourced from
+  an external store via a key command (`EVOSQL_ENCRYPTION_KEY_CMD`), but KMS
+  directly wrapping the DEK, or an HSM holding the key over PKCS#11, is not
+  implemented. (Passphrase rotation `--rekey`, data-key rotation `--rotate-key`,
+  and external-secret-store sourcing are all shipped.)
 - **At-rest tamper detection / authenticated encryption** — AES-256-CTR provides
   confidentiality only; there is no page-MAC or integrity layer.
 - **Per-tenant row-level security and isolation**, and **token-based

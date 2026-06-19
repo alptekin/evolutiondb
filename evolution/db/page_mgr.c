@@ -144,8 +144,7 @@ static int create_new_file(const char *filepath)
 
     /* Try to initialize encryption for new database */
     {
-        const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
-        if (enc_key && enc_key[0]) {
+        if (pcrypt_passphrase_available()) {
             if (pcrypt_init_new(g_header.encryption_salt,
                                 g_header.wrapped_dek,
                                 g_header.page_iv_prefix) == 0) {
@@ -207,8 +206,7 @@ int pgm_init(const char *filepath)
 
         /* Phase 2: Initialize TDE if header is valid and encrypted */
         if (header_ok) {
-            const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
-            int has_key = (enc_key && enc_key[0]);
+            int has_key = pcrypt_passphrase_available();
             if (g_header.encryption_enabled && has_key)
                 pcrypt_init_existing(g_header.encryption_salt,
                                      g_header.wrapped_dek,
@@ -231,8 +229,7 @@ int pgm_init(const char *filepath)
                 header_ok = (g_header.magic == EVO_MAGIC) ? 1 : 0;
                 /* Re-init TDE from recovered header if encrypted */
                 if (header_ok && g_header.encryption_enabled) {
-                    const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
-                    if (enc_key && enc_key[0] && !pcrypt_is_enabled())
+                    if (pcrypt_passphrase_available() && !pcrypt_is_enabled())
                         pcrypt_init_existing(g_header.encryption_salt,
                                              g_header.wrapped_dek,
                                              g_header.page_iv_prefix);
@@ -270,8 +267,7 @@ int pgm_init(const char *filepath)
 
         /* --- Encryption state machine --- */
         {
-            const char *enc_key = getenv("EVOSQL_ENCRYPTION_KEY");
-            int has_key = (enc_key && enc_key[0]);
+            int has_key = pcrypt_passphrase_available();
 
             if (g_header.encryption_enabled && has_key) {
                 /* Encrypted DB + key provided → unlock
@@ -291,8 +287,9 @@ int pgm_init(const char *filepath)
             } else if (g_header.encryption_enabled && !has_key) {
                 /* Encrypted DB + no key → cannot open */
                 fprintf(stderr,
-                    "FATAL: Database is encrypted but EVOSQL_ENCRYPTION_KEY "
-                    "is not set.\nSet the environment variable to unlock.\n");
+                    "FATAL: Database is encrypted but no passphrase is available.\n"
+                    "Set EVOSQL_ENCRYPTION_KEY, or EVOSQL_ENCRYPTION_KEY_CMD to a "
+                    "command that prints the passphrase, to unlock it.\n");
                 close(g_global_fd);
                 g_global_fd = -1;
                 pthread_mutex_unlock(&g_pgm_lock);

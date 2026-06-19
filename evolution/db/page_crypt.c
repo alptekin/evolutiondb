@@ -187,14 +187,70 @@ static void warn_default_key(const char *passphrase)
 }
 
 /* ================================================================
+ *  Passphrase resolution — env var or external key command (KMS hook)
+ *
+ *  The MEK passphrase normally comes from EVOSQL_ENCRYPTION_KEY (plaintext env
+ *  var). For an external KMS / secret store, set EVOSQL_ENCRYPTION_KEY_CMD to a
+ *  command whose stdout is the passphrase — e.g.
+ *      EVOSQL_ENCRYPTION_KEY_CMD="vault kv get -field=passphrase secret/evosql"
+ *  (or an aws/gcloud/az CLI call, or any script). This is the same pattern as
+ *  PostgreSQL's ssl_passphrase_command: provider-agnostic, no new link deps.
+ *  The command takes precedence; the plaintext env var is the fallback default.
+ * ================================================================ */
+static int resolve_passphrase(char *out, size_t outsz)
+{
+    if (outsz == 0) return 0;
+    out[0] = '\0';
+
+    const char *cmd = getenv("EVOSQL_ENCRYPTION_KEY_CMD");
+    if (cmd && cmd[0]) {
+        FILE *fp = popen(cmd, "r");
+        if (!fp) {
+            fprintf(stderr, "[TDE] EVOSQL_ENCRYPTION_KEY_CMD failed to launch\n");
+            return 0;
+        }
+        size_t n = fread(out, 1, outsz - 1, fp);
+        int rc = pclose(fp);
+        out[n] = '\0';
+        /* Strip trailing CR/LF — secret tools usually append a newline. */
+        while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r'))
+            out[--n] = '\0';
+        if (rc != 0)
+            fprintf(stderr, "[TDE] EVOSQL_ENCRYPTION_KEY_CMD exited non-zero (%d)\n", rc);
+        if (n == 0) {
+            fprintf(stderr, "[TDE] EVOSQL_ENCRYPTION_KEY_CMD produced no passphrase\n");
+            return 0;
+        }
+        return 1;
+    }
+
+    const char *env = getenv("EVOSQL_ENCRYPTION_KEY");
+    if (env && env[0]) {
+        snprintf(out, outsz, "%s", env);
+        return 1;
+    }
+    return 0;
+}
+
+/* ================================================================
  *  Public API
  * ================================================================ */
+
+/* Is an at-rest passphrase configured (via env var or key command)? Used by the
+ * storage layer to gate encryption init without re-implementing resolution. */
+int pcrypt_passphrase_available(void)
+{
+    char buf[1024];
+    int ok = resolve_passphrase(buf, sizeof(buf));
+    evo_secure_wipe(buf, sizeof(buf));
+    return ok;
+}
 
 int pcrypt_init_new(uint8_t *salt_out, uint8_t *wrapped_dek_out,
                     uint8_t *iv_prefix_out)
 {
-    const char *passphrase = getenv("EVOSQL_ENCRYPTION_KEY");
-    if (!passphrase || !passphrase[0]) return -1;
+    char passphrase[1024];
+    if (!resolve_passphrase(passphrase, sizeof(passphrase))) return -1;
 
     /* 1. Generate random DEK */
     if (crypto_random_bytes(g_dek, 32) < 0) {
@@ -232,14 +288,15 @@ int pcrypt_init_new(uint8_t *salt_out, uint8_t *wrapped_dek_out,
         warn_default_key(passphrase);
     }
 
+    evo_secure_wipe(passphrase, sizeof(passphrase));
     return rc;
 }
 
 int pcrypt_init_existing(const uint8_t *salt, const uint8_t *wrapped_dek,
                          const uint8_t *iv_prefix)
 {
-    const char *passphrase = getenv("EVOSQL_ENCRYPTION_KEY");
-    if (!passphrase || !passphrase[0]) return -1;
+    char passphrase[1024];
+    if (!resolve_passphrase(passphrase, sizeof(passphrase))) return -1;
 
     memcpy(g_iv_prefix, iv_prefix, 8);
 
@@ -249,12 +306,16 @@ int pcrypt_init_existing(const uint8_t *salt, const uint8_t *wrapped_dek,
     int rc = unwrap_dek(mek, wrapped_dek, g_dek);
     evo_secure_wipe(mek, 32);
 
-    if (rc < 0) return -1;  /* wrong passphrase → GCM tag verification failed */
+    if (rc < 0) {  /* wrong passphrase → GCM tag verification failed */
+        evo_secure_wipe(passphrase, sizeof(passphrase));
+        return -1;
+    }
 
     init_ctr_ctx();
     g_encryption_enabled = 1;
     fprintf(stderr, "[TDE] Encryption key verified, database unlocked\n");
     warn_default_key(passphrase);
+    evo_secure_wipe(passphrase, sizeof(passphrase));
     return 0;
 }
 
@@ -306,8 +367,8 @@ int pcrypt_begin_rotation(uint8_t *new_salt_out, uint8_t *new_wrapped_dek_out,
                           uint8_t *new_iv_prefix_out)
 {
     if (!g_encryption_enabled) return -1;
-    const char *passphrase = getenv("EVOSQL_ENCRYPTION_KEY");
-    if (!passphrase || !passphrase[0]) return -1;
+    char passphrase[1024];
+    if (!resolve_passphrase(passphrase, sizeof(passphrase))) return -1;
 
     /* Generate the new key material. Wipe the (live) new DEK on every failure
      * path so a fresh 256-bit key is never left sitting in module memory. */
@@ -316,11 +377,13 @@ int pcrypt_begin_rotation(uint8_t *new_salt_out, uint8_t *new_wrapped_dek_out,
         crypto_random_bytes(new_salt_out, 16) < 0) {
         evo_secure_wipe(g_new_dek, 32);
         evo_secure_wipe(g_new_iv_prefix, 8);
+        evo_secure_wipe(passphrase, sizeof(passphrase));
         return -1;
     }
 
     uint8_t new_mek[32];
     derive_mek(passphrase, new_salt_out, new_mek);
+    evo_secure_wipe(passphrase, sizeof(passphrase));
     int rc = wrap_dek(new_mek, g_new_dek, new_wrapped_dek_out);
     evo_secure_wipe(new_mek, 32);
     if (rc != 0) {
