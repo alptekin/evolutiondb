@@ -208,8 +208,6 @@ static int wal_replay_data(void)
     }
     if (replayed > 0) fsync(g_data_fd);
     return replayed;
-
-    return replayed;
 }
 
 /* ================================================================
@@ -415,14 +413,30 @@ int wal_checkpoint(void)
             snprintf(archive_path, sizeof(archive_path), "%s.archive", g_wal_path);
             int afd = open(archive_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
             if (afd >= 0) {
-                /* Copy records (skip WAL header) to archive */
+                /* Copy records (skip WAL header) to archive. A short/failed
+                 * write would leave a torn record at the tail, which PITR's
+                 * archive reader rejects (refusing the whole recovery). Guard
+                 * it: on any read/write shortfall, roll the archive back to the
+                 * size it had before this append so it stays a clean stream of
+                 * whole records (this checkpoint's window is simply not
+                 * archived — committed data is still durable in evosql.db). */
+                off_t archive_before = lseek(afd, 0, SEEK_END);
                 off_t src = sizeof(WalHeader);
                 char copy_buf[8192];
+                int copy_ok = 1;
                 while (src < wal_size) {
                     ssize_t n = pread(g_wal_fd, copy_buf, sizeof(copy_buf), src);
-                    if (n <= 0) break;
-                    write(afd, copy_buf, n);
+                    if (n <= 0) { copy_ok = 0; break; }
+                    if (write(afd, copy_buf, n) != n) { copy_ok = 0; break; }
                     src += n;
+                }
+                if (!copy_ok) {
+                    fprintf(stderr, "[WAL] Archive append failed; rolling back to "
+                            "%lld bytes (last good checkpoint boundary)\n",
+                            (long long)archive_before);
+                    if (ftruncate(afd, archive_before) != 0)
+                        fprintf(stderr, "[WAL] WARNING: archive rollback failed — "
+                                "archive may be torn\n");
                 }
                 fsync(afd);
                 close(afd);
@@ -522,42 +536,65 @@ int wal_restore_to_timestamp(int data_fd, int64_t target_epoch_us)
     off_t file_size = lseek(afd, 0, SEEK_END);
     off_t pos = 0;
     int restored = 0;
+    int corrupt = 0;   /* set when the archive is torn/garbled mid-stream */
     char page_buf[EVO_PAGE_SIZE];
 
     while (pos < file_size) {
+        /* The archive is a contiguous stream of whole records. If pos < EOF but
+         * a full record header+CRC can't fit, the tail is torn — NOT a clean
+         * stop. We must NOT treat that as "done", or we would swap in a half-
+         * rewound database and call it success. */
+        if (pos + WAL_RECORD_HEADER_SIZE + WAL_CRC_SIZE > file_size) {
+            corrupt = 1; break;
+        }
+
         uint32_t rec_lsn;
         uint32_t rec_page_no;
         uint16_t rec_page_len;
         int64_t  rec_timestamp;
 
-        if (pread(afd, &rec_lsn, 4, pos) != 4) break;
-        if (pread(afd, &rec_page_no, 4, pos + 4) != 4) break;
-        if (pread(afd, &rec_page_len, 2, pos + 8) != 2) break;
-        if (pread(afd, &rec_timestamp, 8, pos + 10) != 8) break;
+        if (pread(afd, &rec_lsn, 4, pos) != 4 ||
+            pread(afd, &rec_page_no, 4, pos + 4) != 4 ||
+            pread(afd, &rec_page_len, 2, pos + 8) != 2 ||
+            pread(afd, &rec_timestamp, 8, pos + 10) != 8) {
+            corrupt = 1; break;
+        }
 
-        if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) break;
+        if (rec_page_len == 0 || rec_page_len > EVO_PAGE_SIZE) {
+            corrupt = 1; break;
+        }
 
-        /* Stop if record is past the target timestamp */
+        off_t rec_end = pos + WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+        if (rec_end > file_size) {            /* record claims to run past EOF */
+            corrupt = 1; break;
+        }
+
+        /* Clean stop: this record is newer than the target. Everything applied
+         * so far is a prefix of the archive in LSN order — an internally
+         * consistent point-in-time image. This is the ONLY non-error way out. */
         if (rec_timestamp > target_epoch_us) break;
 
         /* Read page data */
         if (pread(afd, page_buf, rec_page_len, pos + WAL_RECORD_HEADER_SIZE)
-            != (ssize_t)rec_page_len)
-            break;
+            != (ssize_t)rec_page_len) {
+            corrupt = 1; break;
+        }
 
-        /* Verify CRC */
+        /* Verify CRC — a mismatch mid-archive is bit-rot, not end-of-data. */
         uint32_t stored_crc;
         off_t crc_off = pos + WAL_RECORD_HEADER_SIZE + rec_page_len;
-        if (pread(afd, &stored_crc, 4, crc_off) != 4) break;
-
+        if (pread(afd, &stored_crc, 4, crc_off) != 4) {
+            corrupt = 1; break;
+        }
         size_t crc_len = WAL_RECORD_HEADER_SIZE + rec_page_len;
         char *crc_buf = (char *)malloc(crc_len);
-        if (!crc_buf) break;
+        if (!crc_buf) { corrupt = 1; break; }
         pread(afd, crc_buf, crc_len, pos);
         uint32_t computed_crc = wal_crc32(crc_buf, crc_len);
         free(crc_buf);
-
-        if (computed_crc != stored_crc) break;
+        if (computed_crc != stored_crc) {
+            corrupt = 1; break;
+        }
 
         /* Apply page to data file (with TDE encryption if needed) */
         off_t data_offset = (off_t)rec_page_no * EVO_PAGE_SIZE;
@@ -571,11 +608,20 @@ int wal_restore_to_timestamp(int data_fd, int64_t target_epoch_us)
         }
         restored++;
 
-        pos += WAL_RECORD_HEADER_SIZE + rec_page_len + WAL_CRC_SIZE;
+        pos = rec_end;
     }
 
     if (restored > 0) fsync(data_fd);
     close(afd);
+
+    if (corrupt) {
+        /* Refuse to present a partial recovery as complete. The caller
+         * (wal_pitr_recover) discards the temp file and keeps the original. */
+        fprintf(stderr, "[WAL] Time-Travel Recovery ABORTED: archive torn or corrupt "
+                "after %d page(s) at offset %lld of %lld bytes.\n",
+                restored, (long long)pos, (long long)file_size);
+        return -1;
+    }
 
     fprintf(stderr, "[WAL] Time-Travel Recovery: restored %d page(s) to target timestamp\n",
             restored);
@@ -617,4 +663,136 @@ int wal_archive_range(int64_t *min_ts, int64_t *max_ts)
     if (min_ts) *min_ts = first_ts;
     if (max_ts) *max_ts = last_ts;
     return 0;
+}
+
+/* Point-in-time recovery: reconstruct the data file as-of target_epoch_us from
+ * the continuous WAL archive (EVOSQL_WAL_ARCHIVE), then atomically swap it in.
+ *
+ * Model: the archive holds a full-page image for every flushed page version, so
+ * replaying every record with timestamp <= target onto a FRESH file rebuilds the
+ * database exactly as it was at that instant — no base backup needed. The catch
+ * is completeness: archiving MUST have been on from creation, or early pages are
+ * missing. We guard the obvious failure (no FileHeader/page 0) but cannot prove
+ * full coverage, so the operator precondition stands.
+ *
+ * Safety: we replay into "<data_dir>/evosql.db.pitr", validate its FileHeader,
+ * fsync, then rename() over evosql.db. The live data file is never touched until
+ * a validated replacement exists, so a failed/aborted recovery leaves the
+ * original intact. Page 0 is plaintext; pages > 0 are re-encrypted by
+ * wal_restore_to_timestamp using the DEK already loaded into pcrypt (per-DB key,
+ * identical across header versions — there is no key rotation).
+ *
+ * Caller contract: engine init has run (pcrypt + g_wal_path set) and the
+ * background mutators (auto-reclaim, checkpointer) are stopped. Returns the
+ * number of pages restored on success (data file swapped), or < 0 on failure
+ * (original left untouched). */
+int wal_pitr_recover(const char *data_dir, int64_t target_epoch_us)
+{
+    if (!data_dir || !data_dir[0]) {
+        fprintf(stderr, "[PITR] No data directory resolved — cannot recover\n");
+        return -1;
+    }
+
+    /* The archive must exist and bracket the target, else there is nothing (or
+     * not enough) to reconstruct from. */
+    int64_t amin = 0, amax = 0;
+    if (wal_archive_range(&amin, &amax) != 0) {
+        fprintf(stderr, "[PITR] No WAL archive found. PITR needs EVOSQL_WAL_ARCHIVE "
+                "enabled from creation plus periodic checkpoints.\n");
+        return -1;
+    }
+    fprintf(stderr, "[PITR] Archive window: [%lld .. %lld] us\n",
+            (long long)amin, (long long)amax);
+    fprintf(stderr, "[PITR] Recovery target: %lld us\n", (long long)target_epoch_us);
+    if (target_epoch_us < amin) {
+        fprintf(stderr, "[PITR] Target is before the archive start (%lld) — no data "
+                "exists for that point. Aborting.\n", (long long)amin);
+        return -1;
+    }
+    if (target_epoch_us > amax)
+        fprintf(stderr, "[PITR] Target is past the archive end — recovering to the "
+                "latest archived state (%lld us).\n", (long long)amax);
+
+    char db_path[2048], tmp_path[2048];
+    snprintf(db_path, sizeof(db_path), "%s/evosql.db", data_dir);
+    snprintf(tmp_path, sizeof(tmp_path), "%s/evosql.db.pitr", data_dir);
+
+    int tmp_fd = open(tmp_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (tmp_fd < 0) {
+        fprintf(stderr, "[PITR] Cannot create temp recovery file %s\n", tmp_path);
+        return -1;
+    }
+
+    /* Replay every archived page image with timestamp <= target onto the fresh
+     * temp file (reuses the time-travel replay; it pwrites to the fd we pass).
+     * A negative return means the archive was torn/corrupt mid-stream — NOT a
+     * clean stop — so we must abort rather than swap in a partial image. */
+    int restored = wal_restore_to_timestamp(tmp_fd, target_epoch_us);
+    if (restored < 0) {
+        fprintf(stderr, "[PITR] Archive is torn or corrupt — recovery aborted; "
+                "the original data file is intact.\n");
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+    if (restored == 0) {
+        fprintf(stderr, "[PITR] No pages restored — archive empty for this target.\n");
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    /* The rebuilt file MUST begin with a valid FileHeader (page 0), or the
+     * archive did not cover DB creation and the result is unusable. Page 0 is
+     * always plaintext, so a raw read of the magic is correct even under TDE. */
+    uint32_t magic = 0;
+    if (pread(tmp_fd, &magic, 4, 0) != 4 || magic != EVO_MAGIC) {
+        fprintf(stderr, "[PITR] Recovered file has no valid FileHeader "
+                "(magic=0x%08X, expected 0x%08X). The archive likely does not "
+                "cover DB creation. Aborting; the original data file is intact.\n",
+                magic, (uint32_t)EVO_MAGIC);
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    /* Match the physical file size to the recovered header's total_pages so the
+     * free-list / catalog roots never reference pages past EOF (a page that was
+     * allocated by time T but whose only FPI is after T is then a zeroed page in
+     * the file, not a short read past EOF). total_pages is at byte offset 8:
+     * magic(4)+version(2)+page_size(2). Extend-only — never shrink below what we
+     * actually wrote. */
+    uint32_t total_pages = 0;
+    if (pread(tmp_fd, &total_pages, 4, 8) == 4 && total_pages > 0 &&
+        (off_t)total_pages <= (off_t)1 << 32) {
+        off_t want = (off_t)total_pages * EVO_PAGE_SIZE;
+        off_t have = lseek(tmp_fd, 0, SEEK_END);
+        if (want > have && ftruncate(tmp_fd, want) != 0)
+            fprintf(stderr, "[PITR] Warning: could not size recovery file to "
+                    "%u pages\n", total_pages);
+    }
+
+    if (fsync(tmp_fd) != 0) {
+        /* Without a durable temp file the swap could expose a half-written image
+         * after a crash — abort rather than risk it. */
+        fprintf(stderr, "[PITR] fsync of recovery file failed — aborting; "
+                "original data file is intact.\n");
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+    close(tmp_fd);
+
+    /* Atomic swap: the original is replaced only now that a validated as-of-T
+     * file exists. */
+    if (rename(tmp_path, db_path) != 0) {
+        fprintf(stderr, "[PITR] Failed to swap recovered file into place (%s -> %s); "
+                "original left intact.\n", tmp_path, db_path);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    fprintf(stderr, "[PITR] Recovered %d page(s) to target. Restart the server "
+            "normally to serve the as-of-T database.\n", restored);
+    return restored;
 }
