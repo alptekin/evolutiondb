@@ -21,10 +21,16 @@
  * initialize a real lock at load time. */
 rwlock_t g_parse_lock;
 
+/* DML mutex: the server serializes single-statement DML on this (defined in
+ * adaptor/server.c there). The standalone auto-reclaim and WAL-checkpointer
+ * paths take it too, so provide and initialize a real one here. */
+mutex_t g_dml_mutex;
+
 __attribute__((constructor))
-static void standalone_init_parse_lock(void)
+static void standalone_init_locks(void)
 {
     rwlock_init(&g_parse_lock);
+    mutex_init(&g_dml_mutex);
 }
 
 /* Distributed sharding — disabled in the standalone CLI. */
