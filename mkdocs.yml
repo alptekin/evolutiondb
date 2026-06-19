@@ -90,6 +90,7 @@ plugins:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Secure deployment & hardening: deployment-hardening.md
   - Comparison: comparison.md
   - Blog:
       - blog/index.md
@@ -122,5 +123,6 @@ nav:
       - "Sub-processors (conditional)": governance/sub-processors.md
       - "Data retention policy (template)": governance/data-retention-policy.md
       - "Breach-response runbook (template)": governance/breach-response-runbook.md
+      - "Compliance control matrix (template)": governance/compliance-matrix.md
   - Release notes:
       - "3.0.0": release-notes/3.0.0.md
