@@ -566,3 +566,35 @@ int pgm_get_fd(void)
 {
     return g_global_fd;
 }
+
+/* Rotate the at-rest encryption passphrase (MEK). The data-encryption key (DEK)
+ * and the page IV prefix are unchanged, so existing pages are NOT re-encrypted:
+ * pcrypt_rekey re-wraps the same DEK under a new MEK derived from new_passphrase
+ * and a fresh salt, and we persist just the new salt + wrapped DEK in the
+ * FileHeader (page 0, always plaintext). After this returns the operator must
+ * restart with EVOSQL_ENCRYPTION_KEY set to new_passphrase.
+ *
+ * Offline use only (no concurrent writers — caller stops background threads).
+ * Returns 0 on success, -1 if the database is not encrypted, the new passphrase
+ * is empty, the re-wrap fails, or the header could not be persisted durably. */
+int pgm_rekey(const char *new_passphrase)
+{
+    if (!pcrypt_is_enabled()) return -1;          /* DB is plaintext */
+    if (!new_passphrase || !new_passphrase[0]) return -1;
+
+    pthread_mutex_lock(&g_pgm_lock);
+    int rc = pcrypt_rekey(new_passphrase, g_header.encryption_salt,
+                          g_header.wrapped_dek);
+    if (rc == 0)
+        mark_header_dirty();
+    pthread_mutex_unlock(&g_pgm_lock);
+    if (rc != 0) return -1;
+
+    /* Persist page 0 durably: pgm_flush writes the dirty header (and any dirty
+     * pages) through the buffer pool to disk; fsync makes the new wrapping
+     * durable before we report success. */
+    pgm_flush();
+    if (g_global_fd >= 0 && fsync(g_global_fd) != 0)
+        return -1;
+    return 0;
+}
