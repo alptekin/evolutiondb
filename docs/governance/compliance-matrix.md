@@ -62,7 +62,7 @@ Defaults worth internalising before you read the tables:
 | Privilege model (engine) | Waterfall privilege check TABLE → SCHEMA → DATABASE for SQL-level authorization. | Built in (grant/revoke via SQL). | Provided | SOC 2 CC6.1, CC6.3; ISO A.8.2, A.8.3 (privileged & access rights); GDPR Art. 32(1)(b) |
 | Single-tenant identity | `--user` / `--tenant` set `MCP_USER_ID` / `MCP_TENANT_ID` — the env-level single-tenant identity used to scope a user's stores. | `--user`, `--tenant` (CLI), or the env vars directly. | Provided (single-tenant) | SOC 2 CC6.1, CC6.3; ISO A.8.3; GDPR Art. 32(1)(b) |
 | Multi-tenant isolation / RLS | Token-based multi-tenant authentication and per-tenant row-level isolation. | — | **Roadmap** (SaaS / Phase 2) — not shipped | SOC 2 CC6.1, CC6.3; ISO A.8.3 (planned control) |
-| SSO / OIDC federation | Federated single sign-on. | — | **Roadmap** — not shipped | SOC 2 CC6.1; ISO A.5.16, A.5.17 (planned control) |
+| SSO / OIDC (agent web API) | The agent web API accepts an OIDC bearer JWT validated against a configured issuer's JWKS (RS256 signature + issuer + audience + expiry). The operator authenticates at their IdP (Keycloak / Entra ID / Okta / Google / Auth0), which enforces MFA, and presents the resulting token. Interactive browser redirect-login (auth-code flow) is additional UX, not yet shipped. Does not federate the SQL engine's own user auth. | `EVOSQL_OIDC_ISSUER` (+ `EVOSQL_OIDC_AUDIENCE`). | Provided (bearer-JWT; MFA via IdP) | SOC 2 CC6.1; ISO A.5.16, A.5.17 |
 
 ## Encryption in transit & at rest
 
