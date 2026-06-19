@@ -23,7 +23,7 @@ A one-line summary of the security model:
   strong secrets and certificates, and running behind a supervisor.
 - **Roadmap (not shipped)** — encryption key rotation, per-tenant
   isolation/RLS, SSO/OIDC, engine-side masking SQL, reliable name redaction,
-  tamper-*proof* (externally anchored) audit, and full point-in-time recovery.
+  and tamper-*proof* (externally anchored) audit.
 
 ---
 
@@ -263,7 +263,40 @@ is WAL-logged at commit and the commit marker rides the same `fsync`. Enable the
 background checkpointer (`EVOSQL_CHECKPOINT_INTERVAL_SEC`) to keep the WAL
 bounded between restarts.
 
-Full point-in-time recovery (PITR) is roadmap, not shipped.
+### Point-in-time recovery (PITR)
+
+PITR rewinds the database to a past instant by replaying the opt-in WAL archive.
+It is **off unless you enable archiving from the start**:
+
+1. Run with `EVOSQL_WAL_ARCHIVE=1` **from database creation**, plus periodic
+   checkpoints (`EVOSQL_CHECKPOINT_INTERVAL_SEC` > 0). Each checkpoint appends
+   the WAL records since the last one to `EVOSQL_DATA_DIR/evosql.wal.archive`.
+   That archive grows continuously — its retention is your responsibility.
+2. To recover, **stop the server cleanly first** (a clean shutdown archives the
+   final WAL tail). Copy the data dir if you may still want the current state.
+3. Rewind, then start normally:
+
+```bash
+evosql-server --recover-to <epoch_microseconds> --data-dir <dir>   # rewinds, then exits
+evosql-server --data-dir <dir>                                     # serves the as-of-T DB
+```
+
+`--recover-to` reconstructs the database as of the target into a temp file,
+validates it, and swaps it in atomically — a failed or torn-archive recovery
+leaves the original data file **intact** (it aborts with a non-zero exit). It
+prints the archive's available time window; pick a target inside it.
+
+Caveats, stated honestly:
+
+- **Archiving must have been on from creation.** If it started late, early pages
+  are missing and recovery is refused (no valid header) or incomplete.
+- **Granularity for the recent tail is the last checkpoint.** Records written
+  after the last checkpoint reach the archive only on a clean shutdown, so PITR
+  to a moment between the last checkpoint and an unclean crash is not possible —
+  recovery rounds down to the last archived state and says so.
+- **Encrypted databases** are supported: page 0 stays plaintext, data pages are
+  re-encrypted with the same key. Use the same `EVOSQL_ENCRYPTION_KEY`.
+- `--recover-to` rewrites the data file in place. Do it on a stopped engine.
 
 ### Data-subject requests (DSAR)
 
