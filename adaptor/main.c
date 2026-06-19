@@ -24,6 +24,7 @@
 #include "../evolution/db/version.h"
 #include "../evolution/db/wal.h"
 #include "../evolution/db/database.h"
+#include "../evolution/db/page_mgr.h"
 
 #define DEFAULT_PG_PORT   5433
 #define DEFAULT_EVO_PORT  9967
@@ -130,6 +131,7 @@ int main(int argc, char *argv[])
     int require_tls = 0;               /* --require-tls / EVOSQL_REQUIRE_TLS */
     long long recover_to_us = 0;       /* --recover-to <epoch_microseconds> */
     int recover_to_set = 0;            /* distinguishes target 0 from "unset" */
+    int rekey_mode = 0;                /* --rekey (rotate encryption passphrase) */
     int i;
 
     /* Environment defaults (CLI flags below override).
@@ -207,6 +209,8 @@ int main(int argc, char *argv[])
             recover_to_us = strtoll(argv[++i], NULL, 10);  /* epoch microseconds */
             recover_to_set = 1;
         }
+        else if (strcmp(argv[i], "--rekey") == 0)
+            rekey_mode = 1;            /* new passphrase via EVOSQL_ENCRYPTION_KEY_NEW */
         else if (strcmp(argv[i], "--bind") == 0 && i + 1 < argc)
             EVO_SETENV("EVOSQL_BIND", argv[++i]);   /* listener address; default loopback */
         else if (strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc)
@@ -302,6 +306,38 @@ int main(int argc, char *argv[])
          * FileHeader (still the pre-rewind state) back over the recovered page 0.
          * The recovered file is already fsync'd and swapped in. */
         _exit(restored < 0 ? 1 : 0);
+    }
+
+    /* --rekey mode: rotate the at-rest encryption passphrase, then exit. The
+     * CURRENT passphrase comes from EVOSQL_ENCRYPTION_KEY (server_init_ex used
+     * it to load the DEK); the NEW one from EVOSQL_ENCRYPTION_KEY_NEW (an env
+     * var, never argv, so it does not leak via the process list). Only the
+     * FileHeader's key wrapping changes — data pages are untouched. */
+    if (rekey_mode) {
+        auto_reclaim_stop();
+        wal_checkpointer_stop();
+
+        const char *newp = getenv("EVOSQL_ENCRYPTION_KEY_NEW");
+        if (!newp || !newp[0]) {
+            fprintf(stderr, "[REKEY] Set EVOSQL_ENCRYPTION_KEY_NEW to the new "
+                    "passphrase and EVOSQL_ENCRYPTION_KEY to the current one.\n");
+            fflush(stderr);
+            _exit(1);
+        }
+        int rc = pgm_rekey(newp);
+        if (rc != 0) {
+            fprintf(stderr, "[REKEY] Failed. The database must be encrypted and "
+                    "EVOSQL_ENCRYPTION_KEY must be the current passphrase.\n");
+            fflush(stderr);
+            _exit(1);
+        }
+        fprintf(stderr, "[REKEY] Encryption passphrase rotated. Restart with "
+                "EVOSQL_ENCRYPTION_KEY set to the new passphrase.\n");
+        fflush(stdout);
+        fflush(stderr);
+        /* Bypass server_cleanup(): the new header is already flushed + fsync'd;
+         * a second flush is harmless but unnecessary. */
+        _exit(0);
     }
 
     /* Task 91: LISTEN/NOTIFY registry */
