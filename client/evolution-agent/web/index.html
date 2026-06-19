@@ -92,6 +92,14 @@
   <div id="toast"></div>
 
 <script>
+// When the server is token-protected (EVOSQL_WEB_TOKEN), open the page as
+// /?token=<TOKEN>; every /api call then forwards it (EventSource can't set
+// headers, so the token rides the query string).
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+function api(path){
+  if(!TOKEN) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN);
+}
 const log = document.getElementById('log');
 const form = document.getElementById('f');
 const q = document.getElementById('q');
@@ -119,7 +127,7 @@ form.addEventListener('submit', e=>{
   const text=q.value.trim(); if(!text) return;
   q.value=''; sendBtn.disabled=true; addUser(text);
   const {tl,b}=startBot();
-  const es=new EventSource('/api/chat?q='+encodeURIComponent(text));
+  const es=new EventSource(api('/api/chat?q='+encodeURIComponent(text)));
   es.onmessage=ev=>{
     const m=JSON.parse(ev.data);
     if(m.kind==='text'){ const s=el('step thinking'); s.textContent='💭 '+m.text; tl.appendChild(s); scroll(); }
@@ -138,7 +146,7 @@ function toast(msg){
 }
 
 async function approve(id){
-  const r=await fetch('/api/approve',{method:'POST',
+  const r=await fetch(api('/api/approve'),{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
   const d=await r.json().catch(()=>({}));
   if(d && d.ok!==false){
@@ -151,7 +159,7 @@ async function approve(id){
 
 async function refreshPending(){
   try{
-    const r=await fetch('/api/pending'); const d=await r.json();
+    const r=await fetch(api('/api/pending')); const d=await r.json();
     const items=(d.pending)||[];
     pending.innerHTML='';
     if(!items.length){ pending.appendChild(el('empty')).textContent='No drafts awaiting approval.'; return; }
