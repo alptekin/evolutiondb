@@ -25,6 +25,7 @@ advice, and nothing here certifies the deployment against any standard.
 | [sub-processors.md](sub-processors.md) | Conditional sub-processor table — which third parties are involved depends on the connectors and model providers you enable. |
 | [data-retention-policy.md](data-retention-policy.md) | Honest statement of what the software retains and what it does not auto-expire today. |
 | [breach-response-runbook.md](breach-response-runbook.md) | Practical incident steps: detect, contain, assess, notify, recover, learn. |
+| [compliance-matrix.md](compliance-matrix.md) | Self-assessment control matrix mapping shipped controls to GDPR / SOC 2 / ISO 27001 — a template you complete, not a certification. |
 
 ## How to use the `[PLACEHOLDER]` fields
 
