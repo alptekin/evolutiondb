@@ -26,9 +26,13 @@
 
 #include <stdint.h>
 
-/* WAL file magic and version */
+/* WAL file magic and version.
+ * Version 1: records carry a legacy, malformed CRC (self-consistent but weak).
+ * Version 2: records carry a correct IEEE 802.3 CRC-32. On startup a version-1
+ *   WAL is replayed with the legacy CRC, then migrated to version 2; from then
+ *   on every record uses the correct CRC. See crc32 handling in wal.c. */
 #define WAL_MAGIC       0x57414C45  /* "WALE" */
-#define WAL_VERSION     1
+#define WAL_VERSION     2
 
 /* WAL file header (16 bytes) */
 typedef struct {
