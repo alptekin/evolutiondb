@@ -118,6 +118,50 @@ class TenantSupervisor:
         for inst in insts:
             self._terminate(inst)
 
+    # -- per-tenant backup / restore (Phase 2 #2) ---------------------------
+    def backup(self, tenant_id: str, dest_dir: str) -> str:
+        """Crash-consistent ONLINE backup of one tenant's data dir into
+        ``dest_dir``. Because each tenant is its own engine + data dir, a
+        per-tenant backup is just a copy of that dir — but the order matters:
+        copy ``evosql.db`` first and the WAL/archive last, so a restore replays
+        the WAL to a consistent state (the same ordering evoagent backup uses).
+        The tenant engine may keep running. Returns dest_dir."""
+        src = self._tenant_dir(tenant_id)
+        if not os.path.isdir(src):
+            raise RuntimeError(f"no data dir for tenant {tenant_id!r}")
+        os.makedirs(dest_dir, exist_ok=True)
+        names = os.listdir(src)
+        # data file first, then everything else, then WAL + archive last
+        ordered = ([n for n in names if n == "evosql.db"]
+                   + [n for n in names
+                      if n not in ("evosql.db", "evosql.wal", "evosql.wal.archive")]
+                   + [n for n in names if n in ("evosql.wal", "evosql.wal.archive")])
+        for n in ordered:
+            s = os.path.join(src, n)
+            d = os.path.join(dest_dir, n)
+            if os.path.isdir(s):
+                shutil.copytree(s, d, dirs_exist_ok=True)
+            else:
+                shutil.copy2(s, d)
+        return dest_dir
+
+    def restore(self, tenant_id: str, src_dir: str) -> TenantInstance:
+        """Restore a tenant from a backup dir: stop its engine, replace its data
+        dir from ``src_dir``, and start it again on the same port. Offline for
+        that ONE tenant only — every other tenant keeps serving."""
+        if not os.path.isdir(src_dir):
+            raise RuntimeError(f"backup source {src_dir!r} not found")
+        # stop() pops the instance from _instances, so the monitor will NOT
+        # respawn it underneath us during the swap.
+        self.stop(tenant_id)
+        data_dir = self._tenant_dir(tenant_id)
+        shutil.rmtree(data_dir, ignore_errors=True)
+        shutil.copytree(src_dir, data_dir)
+        return self.ensure(tenant_id)
+
+    def _tenant_dir(self, tenant_id: str) -> str:
+        return os.path.join(self.base_dir, tenant_db_name(tenant_id))
+
     # -- internals ----------------------------------------------------------
     def _alloc_ports(self, tenant_id: str) -> int:
         """Stable pg port per tenant (evo port = pg+1). Remembered so a restart
@@ -130,7 +174,7 @@ class TenantSupervisor:
         return port
 
     def _spawn(self, tenant_id: str) -> TenantInstance:
-        data_dir = os.path.join(self.base_dir, tenant_db_name(tenant_id))
+        data_dir = self._tenant_dir(tenant_id)
         os.makedirs(data_dir, exist_ok=True)
         pg_port = self._alloc_ports(tenant_id)
         evo_port = pg_port + 1
