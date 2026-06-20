@@ -274,8 +274,9 @@ int DropPolicyProcess(void)
 
 int policy_is_superuser(const char *username)
 {
-    if (!username || !username[0]) return 0;
-    return strcasecmp(username, "admin") == 0 ? 1 : 0;
+    /* Delegate to the central role-based superuser test (GrantMgmt.c) so RLS
+     * and privilege checks agree on who is a superuser. */
+    return user_is_superuser(username);
 }
 
 static int policy_applies_to_user(const PolicyDesc *pd, const char *username)

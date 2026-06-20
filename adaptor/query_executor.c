@@ -8557,8 +8557,8 @@ void query_execute(const char *sql, ResultSet *rs, SessionCtx *ctx)
 
     /* ── Privilege enforcement ──
      * Determine which privilege is needed for this query type and
-     * check it against the grant system.  admin always passes. */
-    if (ctx && ctx->username[0] && strcasecmp(ctx->username, "admin") != 0) {
+     * check it against the grant system.  A superuser always passes. */
+    if (ctx && ctx->username[0] && !user_is_superuser(ctx->username)) {
         const char *needed_priv = NULL;
 
         if (is_select_query(sql))        needed_priv = "SELECT";

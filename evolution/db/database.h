@@ -615,6 +615,10 @@ int  ListUsers(char names[][256], int max_users);
 
 /* Grant / Privilege management (GrantMgmt.c) */
 void db_ensure_grants(void);
+/* Superuser = the configured bootstrap admin (EVOSQL_USER_NAME) OR a holder of
+ * the reserved "superuser" role. Replaces the old hardcoded "admin" check. */
+const char *db_bootstrap_superuser(void);
+int  user_is_superuser(const char *username);
 int  CheckPrivilege(const char *username, const char *database,
                     const char *schema, const char *table,
                     const char *privilege);
