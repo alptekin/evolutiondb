@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EvolutionDB · Control Plane</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --txt:#e6edf3;
+    --muted:#8b949e; --accent:#2f81f7; --ok:#2ea043; --warn:#d29922;
+    --danger:#da3633; --pill:#21262d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;
+         border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .sub{color:var(--muted);font-size:12px}
+  header .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  input,select,button{font:inherit;color:var(--txt);background:var(--bg);
+       border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+  button{cursor:pointer;background:var(--pill)}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.danger{border-color:var(--danger);color:#ff7b72}
+  button.danger:hover{background:var(--danger);color:#fff}
+  main{padding:20px;max-width:1100px;margin:0 auto}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+  .bar input{min-width:130px}
+  table{width:100%;border-collapse:collapse;background:var(--panel);
+        border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;
+     letter-spacing:.04em}
+  tr:last-child td{border-bottom:none}
+  td .acts{display:flex;gap:6px;flex-wrap:wrap}
+  td .acts button{padding:4px 8px;font-size:12px}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;
+        background:var(--pill);border:1px solid var(--line)}
+  .pill.active{color:#7ee787;border-color:#238636}
+  .pill.suspended{color:#ffa657;border-color:#9e6a03}
+  .pill.dedicated{color:#a5d6ff;border-color:#1f6feb}
+  .empty{color:var(--muted);text-align:center;padding:40px}
+  #toast{position:fixed;right:20px;bottom:20px;background:var(--panel);
+         border:1px solid var(--line);border-radius:8px;padding:10px 14px;
+         opacity:0;transition:opacity .2s;max-width:420px}
+  #toast.show{opacity:1}
+  #toast.err{border-color:var(--danger);color:#ff7b72}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
+         align-items:center;justify-content:center}
+  .modal.show{display:flex}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:20px;max-width:540px;width:90%}
+  .card h2{margin:0 0 10px;font-size:15px}
+  .card code{display:block;background:var(--bg);border:1px solid var(--line);
+        border-radius:6px;padding:10px;word-break:break-all;margin:10px 0;
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#7ee787}
+  .card .warn{color:var(--warn);font-size:12px}
+  .row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>EvolutionDB</h1><span class="sub">control plane · tenant management</span>
+  <div class="right">
+    <input id="token" type="password" placeholder="operator token" style="width:200px">
+    <button onclick="saveToken()">Set token</button>
+    <button onclick="load()">Refresh</button>
+  </div>
+</header>
+<main>
+  <div class="bar">
+    <strong>New tenant:</strong>
+    <input id="t_id" placeholder="tenant id (e.g. acme)">
+    <input id="t_name" placeholder="display name (optional)">
+    <input id="t_user" placeholder="admin user (optional)">
+    <button class="primary" onclick="provision()">Provision</button>
+  </div>
+  <table>
+    <thead><tr><th>Tenant</th><th>Name</th><th>Tier</th><th>Status</th>
+      <th>Created</th><th>Actions</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+  </table>
+</main>
+
+<div class="modal" id="modal"><div class="card">
+  <h2 id="m_title"></h2><div id="m_body"></div>
+  <div class="row"><button onclick="closeModal()">Close</button></div>
+</div></div>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+function token(){return localStorage.getItem('evosql_op_token')||'';}
+function saveToken(){localStorage.setItem('evosql_op_token',$('#token').value.trim());toast('token saved');load();}
+function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className='show'+(err?' err':'');setTimeout(()=>t.className='',3200);}
+
+async function api(method,path,body){
+  const opt={method,headers:{}};
+  const tok=token(); if(tok) opt.headers['Authorization']='Bearer '+tok;
+  if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body);}
+  const r=await fetch(path,opt);
+  let data={}; try{data=await r.json();}catch(e){}
+  if(!r.ok) throw new Error(data.error||('HTTP '+r.status));
+  return data;
+}
+
+async function load(){
+  try{
+    const {tenants}=await api('GET','/api/tenants');
+    const tb=$('#rows');
+    if(!tenants.length){tb.innerHTML='<tr><td colspan="6" class="empty">No tenants yet.</td></tr>';return;}
+    tb.innerHTML=tenants.map(t=>{
+      const sus=t.status==='suspended';
+      const tier=t.tier==='dedicated'?'<span class="pill dedicated">dedicated</span>':'<span class="pill">shared</span>';
+      const st=`<span class="pill ${esc(t.status)}">${esc(t.status)}</span>`;
+      const id=esc(t.tenant_id);
+      return `<tr>
+        <td><strong>${id}</strong></td><td>${esc(t.name||'')}</td>
+        <td>${tier}</td><td>${st}</td><td>${esc((t.created||'').slice(0,19).replace('T',' '))}</td>
+        <td><div class="acts">
+          ${sus?`<button onclick="act('${id}','resume')">Resume</button>`
+               :`<button onclick="act('${id}','suspend')">Suspend</button>`}
+          <button onclick="issueToken('${id}')">Token</button>
+          <button onclick="setTier('${id}','${t.tier==='dedicated'?'shared':'dedicated'}')">→ ${t.tier==='dedicated'?'shared':'dedicated'}</button>
+          <button onclick="dsar('${id}')">DSAR</button>
+          <button class="danger" onclick="del('${id}')">Delete</button>
+        </div></td></tr>`;
+    }).join('');
+  }catch(e){ $('#rows').innerHTML=`<tr><td colspan="6" class="empty">${esc(e.message)}</td></tr>`; toast(e.message,true);}
+}
+
+async function provision(){
+  const tenant_id=$('#t_id').value.trim();
+  if(!tenant_id){toast('tenant id required',true);return;}
+  try{ await api('POST','/api/tenants',{tenant_id,name:$('#t_name').value.trim(),admin_user:$('#t_user').value.trim()});
+    $('#t_id').value=$('#t_name').value=$('#t_user').value=''; toast('provisioned '+tenant_id); load();
+  }catch(e){toast(e.message,true);}
+}
+async function act(id,what){ try{await api('POST',`/api/tenants/${encodeURIComponent(id)}/${what}`);toast(`${id}: ${what}`);load();}catch(e){toast(e.message,true);} }
+async function setTier(id,tier){ try{await api('POST',`/api/tenants/${encodeURIComponent(id)}/tier`,{tier});toast(`${id} → ${tier}`);load();}catch(e){toast(e.message,true);} }
+async function del(id){
+  if(!confirm(`Delete tenant "${id}"? This drops its database and is IRREVERSIBLE.`))return;
+  try{await api('DELETE',`/api/tenants/${encodeURIComponent(id)}?confirm=1`);toast('deleted '+id);load();}catch(e){toast(e.message,true);}
+}
+async function issueToken(id){
+  const user=prompt(`Issue a bearer token for which user in "${id}"?`, id); if(user===null)return;
+  try{ const r=await api('POST',`/api/tenants/${encodeURIComponent(id)}/token`,{user_id:user.trim()});
+    modal(`Token for ${esc(id)} / ${esc(r.user_id)}`,
+      `<code>${esc(r.token)}</code><p class="warn">Shown once — only its hash is stored. Copy it now. Valid ${esc(r.ttl_days)} days.</p>`);
+  }catch(e){toast(e.message,true);}
+}
+async function dsar(id){
+  const user=prompt(`DSAR for which user in "${id}"?`); if(!user)return;
+  const what=prompt(`Type "export" to download ${user}'s data, or "erase" to permanently delete it.`,'export');
+  if(what==='export'){
+    try{ const r=await api('POST',`/api/tenants/${encodeURIComponent(id)}/dsar/export`,{user});
+      const blob=new Blob([JSON.stringify(r.bundle,null,2)],{type:'application/json'});
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+      a.download=`dsar-${id}-${user}.json`;a.click();toast(`exported ${r.bundle.row_count} rows`);
+    }catch(e){toast(e.message,true);}
+  }else if(what==='erase'){
+    if(!confirm(`Permanently erase ALL of ${user}'s data in ${id}? IRREVERSIBLE.`))return;
+    try{ const r=await api('POST',`/api/tenants/${encodeURIComponent(id)}/dsar/erase`,{user,confirm:true});
+      toast(`erased ${r.result.row_count} rows (receipt: ${r.result.receipt})`);
+    }catch(e){toast(e.message,true);}
+  }
+}
+function modal(title,html){$('#m_title').innerHTML=title;$('#m_body').innerHTML=html;$('#modal').className='modal show';}
+function closeModal(){$('#modal').className='modal';}
+
+$('#token').value=token();
+load();
+</script>
+</body>
+</html>

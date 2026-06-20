@@ -96,6 +96,30 @@ controlPlane:
     storageSize: 1Gi
     storageClass: ""            # empty = cluster default
     memLimitMb: 0               # 0 = engine default; else EVOSQL_BUFFER_POOL_SIZE cap
+  # Operator control-plane UI (evosql-control-plane): an authenticated browser
+  # front door to manage tenants (provision / suspend / token / tier / DSAR).
+  # Runs from the agent image; OFF by default.
+  ui:
+    enabled: false
+    port: 8900
+    ratePerMin: 120
+    tenantSecret: ""            # REQUIRED when enabled — derives every tenant DB password
+    controlToken: ""            # static operator superuser token (fallback to OIDC)
+    operators: ""               # comma list of OIDC sub/email allowed as operators
+    oidc:
+      issuer: ""                # EVOSQL_OIDC_ISSUER — operator SSO (MFA at the IdP)
+      audience: ""
+    service:
+      type: ClusterIP
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: "1", memory: 512Mi }
+    ingress:
+      enabled: false
+      className: ""
+      annotations: {}
+      host: control.evolutiondb.local
+      tls: []
 
 # Optional standalone agent (MCP server + web UI). Off by default — the engine
 # chart stands alone. When enabled it runs as its own Deployment + Service,

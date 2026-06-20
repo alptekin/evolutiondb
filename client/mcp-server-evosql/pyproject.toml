@@ -87,10 +87,12 @@ evolutiondb-inspector  = "mcp_server_evosql.inspector:main"
 evolutiondb-tags       = "mcp_server_evosql.tagger_cli:main"
 evolutiondb-mcp-http   = "mcp_server_evosql.http_transport:main"
 evolutiondb-mcp-oauth  = "mcp_server_evosql.oauth_proxy:main"
+evosql-control-plane   = "mcp_server_evosql.control_plane:main"
 
 [tool.setuptools.packages.find]
 include = ["mcp_server_evosql*"]
 
 [tool.setuptools.package-data]
-# Ship the runtime i18n locale resources (language data lives here, not in .py).
-mcp_server_evosql = ["locales/*.json"]
+# Ship the runtime i18n locale resources (language data lives here, not in .py)
+# and the single-file control-plane UI served by `evosql-control-plane`.
+mcp_server_evosql = ["locales/*.json", "../web/control.html"]
