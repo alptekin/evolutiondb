@@ -200,6 +200,51 @@ def test_dsar_export_and_erase():
         s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
 
 
+def test_connected_accounts_list_and_revoke():
+    os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
+    s = _Srv()
+    try:
+        s.req("POST", "/api/tenants", {"tenant_id": "acme", "admin_user": "acme"})
+        # seed two connector tokens for acme (namespace defaults to tenant_id)
+        tb = s.cp.tenant_backend("acme", "acme")
+        tb.put("mcp_tokens", "acme", "token:gmail", {"enc": "X", "updated": 111})
+        tb.put("mcp_tokens", "acme", "token:slack", {"enc": "Y", "updated": 222})
+        code, body = s.req("GET", "/api/tenants/acme/accounts")
+        assert code == 200
+        names = [a["connector"] for a in body["accounts"]]
+        assert names == ["gmail", "slack"] and body["accounts"][0]["updated"] == 111
+        # the encrypted blob is never surfaced
+        assert "enc" not in json.dumps(body)
+        # revoke gmail -> only slack remains
+        code, _ = s.req("POST", "/api/tenants/acme/accounts/gmail/revoke")
+        assert code == 200
+        code, body = s.req("GET", "/api/tenants/acme/accounts")
+        assert [a["connector"] for a in body["accounts"]] == ["slack"]
+    finally:
+        s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
+
+
+def test_oauth_consents_list_and_revoke():
+    os.environ["EVOSQL_CONTROL_TOKEN"] = TOKEN
+    os.environ.pop("MCP_USER_ID", None)                   # -> namespace "default_user"
+    s = _Srv()
+    try:
+        admin = s.cp.admin_backend()
+        admin.put("mcp_oauth", "default_user", "consent:client-abc",
+                  {"scope": "mcp", "approved_by": "ops", "expires": 9999999999})
+        code, body = s.req("GET", "/api/consents")
+        assert code == 200
+        assert [c["client_id"] for c in body["consents"]] == ["client-abc"]
+        assert body["consents"][0]["approved_by"] == "ops"
+        # revoke -> gone
+        code, _ = s.req("POST", "/api/consents/client-abc/revoke")
+        assert code == 200
+        code, body = s.req("GET", "/api/consents")
+        assert body["consents"] == []
+    finally:
+        s.close(); os.environ.pop("EVOSQL_CONTROL_TOKEN", None)
+
+
 if __name__ == "__main__":
     print("=== Phase 2 governance: operator control-plane UI ===")
     run("operator_auth_static_token", test_operator_auth_static_token)
@@ -208,5 +253,7 @@ if __name__ == "__main__":
     run("http_auth_gate", test_http_auth_gate)
     run("tenant_lifecycle_round_trip", test_tenant_lifecycle_round_trip)
     run("dsar_export_and_erase", test_dsar_export_and_erase)
+    run("connected_accounts_list_and_revoke", test_connected_accounts_list_and_revoke)
+    run("oauth_consents_list_and_revoke", test_oauth_consents_list_and_revoke)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
