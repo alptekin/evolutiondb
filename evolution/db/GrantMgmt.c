@@ -131,16 +131,51 @@ static unsigned check_user_scope(const char *username,
  *  Called from db_ensure_root() after db_ensure_users().
  *  Creates admin:DATABASE:*:ALL:1
  * ---------------------------------------------------------------- */
+/* The bootstrap superuser is the configured admin (EVOSQL_USER_NAME, default
+ * "admin"). Cached on first use. This replaces the hardcoded "admin" magic
+ * string so the superuser is (a) configurable and (b) not a single fixed name.
+ * Reserved role name SUPERUSER_ROLE grants superuser to any user holding it. */
+#define SUPERUSER_ROLE "superuser"
+
+const char *db_bootstrap_superuser(void)
+{
+    static char name[256];
+    static int  init = 0;
+    if (!init) {
+        const char *e = getenv("EVOSQL_USER_NAME");
+        snprintf(name, sizeof(name), "%s", (e && e[0]) ? e : "admin");
+        init = 1;
+    }
+    return name;
+}
+
+/* Role-based superuser test (replaces the old `username == "admin"` magic):
+ * a user is a superuser if it is the configured bootstrap admin, OR it holds
+ * the reserved "superuser" role (CREATE ROLE superuser; GRANT superuser TO u).
+ * No catalog-format change — role membership reuses the existing SCOPE_ROLE
+ * grants. */
+int user_is_superuser(const char *username)
+{
+    if (!username || !username[0]) return 0;
+    if (strcasecmp(username, db_bootstrap_superuser()) == 0) return 1;
+    char roles[16][256];
+    int n = ListRolesForUser(username, roles, 16);
+    for (int i = 0; i < n; i++)
+        if (strcasecmp(roles[i], SUPERUSER_ROLE) == 0) return 1;
+    return 0;
+}
+
 void db_ensure_grants(void)
 {
-    /* Check if admin already has a wildcard DATABASE grant */
+    const char *su = db_bootstrap_superuser();
+    /* Check if the bootstrap superuser already has a wildcard DATABASE grant */
     GrantDesc gd;
-    if (cat_find_grant("admin", SCOPE_DATABASE, "*", &gd) == 0) {
+    if (cat_find_grant(su, SCOPE_DATABASE, "*", &gd) == 0) {
         return; /* Already initialized */
     }
 
-    /* Create initial admin superuser grant */
-    cat_create_grant("admin", SCOPE_DATABASE, "*", "ALL", 1);
+    /* Create initial bootstrap-superuser grant */
+    cat_create_grant(su, SCOPE_DATABASE, "*", "ALL", 1);
 }
 
 /* ----------------------------------------------------------------
@@ -162,8 +197,8 @@ int CheckPrivilege(const char *username,
     unsigned found;
     char scope_name[512];
 
-    /* admin is superuser — always allowed */
-    if (strcasecmp(username, "admin") == 0) return 1;
+    /* superuser — always allowed (bootstrap admin or the superuser role) */
+    if (user_is_superuser(username)) return 1;
 
     priv_bit = parse_privs(privilege);
     if (priv_bit == 0) return 0;
@@ -256,7 +291,7 @@ int HasGrantOption(const char *username,
     unsigned priv_bit;
     GrantDesc gd;
 
-    if (strcasecmp(username, "admin") == 0) return 1;
+    if (user_is_superuser(username)) return 1;
 
     priv_bit = parse_privs(privilege);
     if (priv_bit == 0) return 0;

@@ -3937,9 +3937,12 @@ static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
     int is_revoke = (strncasecmp(p, "REVOKE", 6) == 0 && isspace((unsigned char)p[6]));
     if (!is_grant && !is_revoke) return 0;
 
-    /* Only admin (or users with GRANT OPTION) can run GRANT/REVOKE.
-     * For simplicity, check admin first — GRANT OPTION checked later. */
-    const char *caller = ctx ? ctx->username : "admin";
+    /* Only a superuser (or users with GRANT OPTION) can run GRANT/REVOKE.
+     * Superuser is checked first; GRANT OPTION is checked later. A request with
+     * no session context is the system/bootstrap path (treated as the bootstrap
+     * superuser); every tenant request carries its own non-superuser username. */
+    const char *caller = (ctx && ctx->username[0]) ? ctx->username
+                                                   : db_bootstrap_superuser();
 
     p += is_grant ? 5 : 6;
     while (*p && isspace((unsigned char)*p)) p++;
@@ -3994,11 +3997,11 @@ static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
                 username[ui++] = *p++;
             username[ui] = '\0';
 
-            /* Auth: only admin can manage role membership */
-            if (strcasecmp(caller, "admin") != 0) {
+            /* Auth: only a superuser can manage role membership */
+            if (!user_is_superuser(caller)) {
                 result_init(rs);
                 result_set_error(rs, "42501",
-                    "Permission denied: only admin can manage role membership");
+                    "Permission denied: only a superuser can manage role membership");
                 return 1;
             }
 
@@ -4138,9 +4141,9 @@ static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
 
     /* Authorization check:
-     * - admin can always GRANT/REVOKE
-     * - non-admin needs GRANT OPTION on the same scope to delegate */
-    if (strcasecmp(caller, "admin") != 0) {
+     * - a superuser can always GRANT/REVOKE
+     * - a non-superuser needs GRANT OPTION on the same scope to delegate */
+    if (!user_is_superuser(caller)) {
         /* Check the caller has all privileges being granted with GRANT OPTION */
         int has_option = HasGrantOption(caller, scope_type, scope_name, priv_buf);
         if (!has_option) {
@@ -4175,10 +4178,46 @@ static int handle_grant_revoke(const char *sql, ResultSet *rs, SessionCtx *ctx)
 /* ----------------------------------------------------------------
  *  User management: CREATE/DROP/ALTER USER
  * ---------------------------------------------------------------- */
-static int handle_user_mgmt(const char *sql, ResultSet *rs)
+static int handle_user_mgmt(const char *sql, ResultSet *rs, SessionCtx *ctx)
 {
     const char *p = sql;
     while (*p && isspace((unsigned char)*p)) p++;
+
+    /* Is this a user/role-management command at all? */
+    int c_user = (strncasecmp(p, "CREATE USER", 11) == 0 && isspace((unsigned char)p[11]));
+    int d_user = (strncasecmp(p, "DROP USER",   9) == 0 && isspace((unsigned char)p[9]));
+    int a_user = (strncasecmp(p, "ALTER USER", 10) == 0 && isspace((unsigned char)p[10]));
+    int c_role = (strncasecmp(p, "CREATE ROLE", 11) == 0 && isspace((unsigned char)p[11]));
+    int d_role = (strncasecmp(p, "DROP ROLE",   9) == 0 && isspace((unsigned char)p[9]));
+    if (c_user || d_user || a_user || c_role || d_role) {
+        /* Phase 2 #3 boundary defense: managing users and roles requires a
+         * superuser. Without this gate ANY tenant could CREATE/DROP users, mint
+         * roles, or — the real working escalation — `ALTER USER <admin>
+         * PASSWORD ...` to seize the superuser account and cross every tenant
+         * boundary (user/role DDL is dispatched here BEFORE the per-query
+         * privilege check). A non-superuser may still change ITS OWN password
+         * (ALTER USER <self> PASSWORD ...). */
+        const char *caller = (ctx && ctx->username[0]) ? ctx->username
+                                                       : db_bootstrap_superuser();
+        if (!user_is_superuser(caller)) {
+            int self_pw = 0;
+            if (a_user) {
+                const char *q = p + 10;
+                while (*q && isspace((unsigned char)*q)) q++;
+                char target[256]; int ti = 0;
+                while (*q && !isspace((unsigned char)*q) && *q != ';' && ti < 255)
+                    target[ti++] = *q++;
+                target[ti] = '\0';
+                self_pw = (target[0] && strcasecmp(target, caller) == 0);
+            }
+            if (!self_pw) {
+                result_init(rs);
+                result_set_error(rs, "42501",
+                    "Permission denied: only a superuser can manage users and roles");
+                return 1;
+            }
+        }
+    }
 
     /* CREATE USER <name> PASSWORD '<pass>' */
     if (strncasecmp(p, "CREATE USER", 11) == 0 && isspace((unsigned char)p[11])) {
@@ -5449,7 +5488,7 @@ int catalog_try_handle(const char *sql, ResultSet *rs, SessionCtx *ctx)
     }
 
     /* User management: CREATE/DROP/ALTER USER */
-    if (handle_user_mgmt(sql, rs)) return 1;
+    if (handle_user_mgmt(sql, rs, ctx)) return 1;
 
     /* GRANT / REVOKE */
     if (handle_grant_revoke(sql, rs, ctx)) return 1;
