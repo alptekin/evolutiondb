@@ -66,6 +66,7 @@
   <div class="right">
     <input id="token" type="password" placeholder="operator token" style="width:200px">
     <button onclick="saveToken()">Set token</button>
+    <button onclick="consents()">OAuth consents</button>
     <button onclick="load()">Refresh</button>
   </div>
 </header>
@@ -125,6 +126,7 @@ async function load(){
                :`<button onclick="act('${id}','suspend')">Suspend</button>`}
           <button onclick="issueToken('${id}')">Token</button>
           <button onclick="setTier('${id}','${t.tier==='dedicated'?'shared':'dedicated'}')">→ ${t.tier==='dedicated'?'shared':'dedicated'}</button>
+          <button onclick="accounts('${id}')">Accounts</button>
           <button onclick="dsar('${id}')">DSAR</button>
           <button class="danger" onclick="del('${id}')">Delete</button>
         </div></td></tr>`;
@@ -167,6 +169,41 @@ async function dsar(id){
       toast(`erased ${r.result.row_count} rows (receipt: ${r.result.receipt})`);
     }catch(e){toast(e.message,true);}
   }
+}
+async function accounts(id){
+  try{
+    const {accounts}=await api('GET',`/api/tenants/${encodeURIComponent(id)}/accounts`);
+    const rows = accounts.length ? accounts.map(a=>
+      `<tr><td><strong>${esc(a.connector)}</strong></td>
+        <td class="muted">${a.updated?esc(new Date(a.updated*1000).toISOString().slice(0,19).replace('T',' ')):''}</td>
+        <td><button class="danger" onclick="revokeAccount('${esc(id)}','${esc(a.connector)}')">Revoke</button></td></tr>`).join('')
+      : `<tr><td colspan="3" class="muted">No connected accounts.</td></tr>`;
+    modal(`Connected accounts · ${esc(id)}`,
+      `<table style="width:100%"><thead><tr><th>Connector</th><th>Updated</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
+  }catch(e){toast(e.message,true);}
+}
+async function revokeAccount(id,connector){
+  if(!confirm(`Revoke ${connector} for ${id}? The tenant must re-authorize.`))return;
+  try{ await api('POST',`/api/tenants/${encodeURIComponent(id)}/accounts/${encodeURIComponent(connector)}/revoke`);
+    toast(`revoked ${connector}`); accounts(id);
+  }catch(e){toast(e.message,true);}
+}
+async function consents(){
+  try{
+    const {consents,namespace}=await api('GET','/api/consents');
+    const rows = consents.length ? consents.map(c=>
+      `<tr><td><strong>${esc(c.client_id)}</strong></td><td class="muted">${esc(c.scope||'')}</td>
+        <td class="muted">${esc(c.approved_by||'')}</td>
+        <td><button class="danger" onclick="revokeConsent('${esc(c.client_id)}')">Revoke</button></td></tr>`).join('')
+      : `<tr><td colspan="4" class="muted">No remembered OAuth approvals.</td></tr>`;
+    modal(`Remembered OAuth approvals · ${esc(namespace)}`,
+      `<table style="width:100%"><thead><tr><th>Client</th><th>Scope</th><th>By</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
+  }catch(e){toast(e.message,true);}
+}
+async function revokeConsent(cid){
+  if(!confirm(`Forget the approval for ${cid}? Its next authorization will prompt again.`))return;
+  try{ await api('POST',`/api/consents/${encodeURIComponent(cid)}/revoke`); toast('revoked '+cid); consents();
+  }catch(e){toast(e.message,true);}
 }
 function modal(title,html){$('#m_title').innerHTML=title;$('#m_body').innerHTML=html;$('#modal').className='modal show';}
 function closeModal(){$('#modal').className='modal';}
