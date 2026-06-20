@@ -71,6 +71,12 @@ class FakeCursor:
             store = re.search(r"__mem_(\w+)", sql).group(1)
             self.db.pop((store, lits[0], lits[1]), None)
             return
+        if "MEM_NAMESPACE, MEM_KEY, MEM_VALUE" in up:
+            store = re.search(r"__mem_(\w+)", sql).group(1)
+            ns = lits[0] if lits else None
+            self._res = [(n, k, v) for (st, n, k), v in self.db.items()
+                         if st == store and (ns is None or n == ns)]
+            return
         if "MEM_KEY, MEM_VALUE" in up:
             store = re.search(r"__mem_(\w+)", sql).group(1)
             ns = lits[0]; pfx = (lits[1][:-1] if len(lits) > 1 and lits[1].endswith("%")
@@ -158,6 +164,29 @@ def test_delete():
     assert ts.load() == {}
 
 
+def test_rotate_token_key():
+    from evolutiondb_pii.token_store import rotate_token_key
+    conn = FakeConn()
+    OLD, NEW = "old-token-key", "new-token-key"
+    # seed two tenants' tokens under the OLD key
+    TokenStore("gmail", env=_env("alice", OLD), conn=conn).save({"access_token": "A"})
+    TokenStore("slack", env=_env("bob", OLD), conn=conn).save({"token": "B"})
+    # rotate the encryption key
+    n = rotate_token_key(conn, OLD, NEW)
+    assert n == 2
+    # readable under the NEW key, NOT under the old one
+    assert TokenStore("gmail", env=_env("alice", NEW), conn=conn).load() == {"access_token": "A"}
+    assert TokenStore("slack", env=_env("bob", NEW), conn=conn).load() == {"token": "B"}
+    raised = False
+    try:
+        TokenStore("gmail", env=_env("alice", OLD), conn=conn).load()
+    except Exception:
+        raised = True
+    assert raised, "the OLD key should no longer decrypt after rotation"
+    # re-running rotates nothing (rows no longer open under OLD)
+    assert rotate_token_key(conn, OLD, NEW) == 0
+
+
 def test_maybe_none_without_secret():
     assert TokenStore.maybe("gmail", env=_env(secret="")) is None
     # with a secret AND an injected conn (skips the engine probe) -> a store
@@ -195,7 +224,8 @@ if __name__ == "__main__":
     print("=== per-tenant connector token store ===")
     for fn in (test_seal_open_roundtrip, test_wrong_key_cannot_open,
                test_save_load_roundtrip_and_value_is_encrypted,
-               test_namespace_isolation, test_delete, test_maybe_none_without_secret):
+               test_namespace_isolation, test_delete, test_rotate_token_key,
+               test_maybe_none_without_secret):
         run(fn.__name__, fn)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
