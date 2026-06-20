@@ -138,7 +138,7 @@ def _last_stored_hash(backend, ns: str) -> str:
     return _GENESIS
 
 
-def _append_row(backend, ident, rec: Dict[str, Any]) -> None:
+def _append_row(backend, ident, rec: Dict[str, Any], ns: Optional[str] = None) -> None:
     """The single append path: stamp a process-unique, time-ordered key, link
     the row into the tamper-evident hash chain, and PUT one json row into the
     tenant's append-only audit store.
@@ -148,9 +148,15 @@ def _append_row(backend, ident, rec: Dict[str, Any]) -> None:
     value is ALWAYS the json.dumps of ``rec`` (no raw-string concatenation of
     caller-supplied content outside json), so the privacy/escaping contract is
     identical for every audit kind. Best-effort: the PUT is swallowed so an
-    audit failure can never break the calling flow."""
+    audit failure can never break the calling flow.
+
+    ``ns`` overrides the namespace the row is filed under (default: the
+    identity's user_id). The DSAR erasure receipt uses this to file under the
+    compliance namespace ``DSAR_NS`` so the proof survives the subject's own
+    erasure (the erase sweep deletes only the subject's namespace)."""
     from .server import _e
-    ns = getattr(ident, "user_id", "") or ""
+    if ns is None:
+        ns = getattr(ident, "user_id", "") or ""
     key = f"audit_{int(rec['ts'] * 1000)}_{next(_SEQ):08d}"
     # Link into the per-(store,ns) hash chain under a lock so concurrent appends
     # stay correctly ordered. Best-effort: never let chaining break the audit.
@@ -258,6 +264,47 @@ def record_privilege(backend, ident, action: str, target: str,
         _append_row(backend, ident, rec)
     except Exception:
         pass
+
+
+# ------------------------------------------------------------ DSAR receipt
+# A right-to-erasure (GDPR Art. 17) request must leave PROOF it was honored —
+# but the proof cannot live in the erased user's own namespace (the sweep would
+# delete it). So DSAR receipts are filed under this fixed COMPLIANCE namespace,
+# in the same tamper-evident, append-only chain as every other audit row, and
+# they survive the subject's erasure. The row names WHO ran it (operator) and
+# WHOSE data (subject) plus the counts — never any erased content.
+DSAR_NS = "__dsar__"
+_DSAR_ACTIONS = frozenset({"dsar.export", "dsar.erase"})
+
+
+def record_dsar(backend, operator, action: str, subject: str, *,
+                counts: Optional[Dict[str, Any]] = None,
+                ref: Optional[str] = None) -> None:
+    """Append one DSAR receipt under the compliance namespace ``DSAR_NS``.
+    ``operator`` is the Identity that ran the request (its tenant/user/roles are
+    recorded); ``subject`` is the user whose data was exported/erased;
+    ``action`` is one of ``_DSAR_ACTIONS``. Best-effort, like every audit write."""
+    try:
+        act = action if action in _DSAR_ACTIONS else "dsar.export"
+        rec: Dict[str, Any] = {
+            "ts": time.time(),
+            **_identity_fields(operator),     # who ran it (operator)
+            "kind": "dsar",
+            "action": act,
+            "subject": str(subject) if subject is not None else "",
+        }
+        if counts:
+            rec["counts"] = counts
+        if ref:
+            rec["ref"] = ref
+        _append_row(backend, operator, rec, ns=DSAR_NS)
+    except Exception:
+        pass
+
+
+def dsar_receipts(backend, limit: int = 50) -> List[Dict[str, Any]]:
+    """The newest DSAR receipts (read-only) — the compliance proof trail."""
+    return trail(backend, DSAR_NS, limit=limit)
 
 
 def trail(backend, ns: str, limit: int = 50) -> List[Dict[str, Any]]:
