@@ -171,7 +171,7 @@ def sync_once(cfg: Config, *,
             "scope to your OAuth consent screen).")
 
     auth = auth_mod.YouTubeAuth(cfg.client_id, cfg.client_secret,
-                                  cfg.token_cache)
+                                  cfg.token_cache, namespace=cfg.user_id)
     client = api_mod.YouTubeClient(
         token_provider=lambda: auth.ensure_token(interactive=interactive))
 
@@ -254,7 +254,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                   "are required for --auth", file=sys.stderr)
             return 2
         a = auth_mod.YouTubeAuth(cfg.client_id, cfg.client_secret,
-                                   cfg.token_cache)
+                                   cfg.token_cache, namespace=cfg.user_id)
         try:
             a.ensure_token(interactive=True)
         except auth_mod.AuthError as exc:

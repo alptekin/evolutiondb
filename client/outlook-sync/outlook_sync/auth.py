@@ -68,10 +68,23 @@ class AuthError(Exception):
 #  Token cache                                                      #
 # ---------------------------------------------------------------- #
 class TokenCache:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, connector: str = None, namespace: str = None):
         self.path = path.expanduser()
+        # Per-tenant store (opt-in): when EVOSQL_TENANT_SECRET + the engine are
+        # configured, the token lives encrypted in the engine namespaced by
+        # MCP_USER_ID instead of one machine-wide file. None -> local file (dev
+        # unchanged).
+        self._store = None
+        if connector:
+            try:
+                from evolutiondb_pii.token_store import TokenStore
+                self._store = TokenStore.maybe(connector, namespace)
+            except ImportError:
+                self._store = None
 
     def load(self) -> Dict:
+        if self._store is not None:
+            return self._store.load()
         if not self.path.exists():
             return {}
         try:
@@ -80,6 +93,9 @@ class TokenCache:
             return {}
 
     def save(self, data: Dict) -> None:
+        if self._store is not None:
+            self._store.save(data)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
@@ -122,7 +138,8 @@ def _post(url: str, form: Dict[str, str]) -> Dict:
 #  Public flow                                                      #
 # ---------------------------------------------------------------- #
 class OutlookAuth:
-    def __init__(self, client_id: str, tenant: str, cache_path: str):
+    def __init__(self, client_id: str, tenant: str, cache_path: str,
+                 namespace: str = None):
         if not client_id:
             raise AuthError(
                 "AZURE_CLIENT_ID is required — register a public client "
@@ -130,7 +147,8 @@ class OutlookAuth:
                 "Application (client) ID in .env")
         self.client_id = client_id
         self.tenant    = tenant or DEFAULT_TENANT
-        self.cache     = TokenCache(Path(cache_path))
+        self.cache     = TokenCache(Path(cache_path), connector="outlook",
+                                    namespace=namespace)
 
     @property
     def _device_url(self) -> str:

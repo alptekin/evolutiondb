@@ -135,12 +135,29 @@ def _expand(path: str) -> Path:
 
 class TokenStore:
     """Thin wrapper around msal.SerializableTokenCache that handles the
-    on-disk read/write so callers don't have to."""
+    read/write so callers don't have to. Persists to the per-tenant encrypted
+    engine store (opt-in, namespaced by MCP_USER_ID) when configured, else the
+    local file — single-user / dev is unchanged."""
 
-    def __init__(self, cache_path: str):
+    def __init__(self, cache_path: str, namespace: str = None):
         self.path = _expand(cache_path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.cache = msal.SerializableTokenCache()
+        self._shared = None
+        try:
+            from evolutiondb_pii.token_store import TokenStore as _SharedStore
+            self._shared = _SharedStore.maybe("teams", namespace)
+        except ImportError:
+            self._shared = None
+        if self._shared is not None:
+            blob = (self._shared.load() or {}).get("msal")
+            if blob:
+                try:
+                    self.cache.deserialize(blob)
+                except Exception as exc:
+                    print(f"[teams-sync] stored token unreadable, starting "
+                          f"fresh ({exc})", file=sys.stderr)
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             try:
                 self.cache.deserialize(self.path.read_text(encoding="utf-8"))
@@ -149,23 +166,28 @@ class TokenStore:
                       f"fresh ({exc})", file=sys.stderr)
 
     def flush(self) -> None:
-        if self.cache.has_state_changed:
-            self.path.write_text(self.cache.serialize(), encoding="utf-8")
-            try:
-                os.chmod(self.path, 0o600)
-            except OSError:
-                pass
+        if not self.cache.has_state_changed:
+            return
+        if self._shared is not None:
+            self._shared.save({"msal": self.cache.serialize()})
+            return
+        self.path.write_text(self.cache.serialize(), encoding="utf-8")
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
 
 
 class TeamsAuth:
-    def __init__(self, tenant_id: str, client_id: str, cache_path: str):
+    def __init__(self, tenant_id: str, client_id: str, cache_path: str,
+                 namespace: str = None):
         if not client_id:
             raise RuntimeError(
                 "AZURE_CLIENT_ID is required. Register a public-client "
                 "app under Microsoft Entra ID → App registrations and "
                 "set its Application (client) ID in .env."
             )
-        self.store = TokenStore(cache_path)
+        self.store = TokenStore(cache_path, namespace=namespace)
         self.app = msal.PublicClientApplication(
             client_id,
             authority=f"https://login.microsoftonline.com/{tenant_id or 'common'}",
