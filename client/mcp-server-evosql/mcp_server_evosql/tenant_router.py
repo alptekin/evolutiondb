@@ -32,6 +32,17 @@ from .tenant_supervisor import TenantSupervisor
 SHARED = "shared"
 DEDICATED = "dedicated"
 
+ACTIVE = "active"
+SUSPENDED = "suspended"
+
+
+class TenantSuspended(Exception):
+    """Raised when routing a suspended tenant. The server turns this into a
+    denial — a suspended tenant (non-payment, abuse, offboarding) is refused."""
+    def __init__(self, tenant_id: str):
+        super().__init__(f"tenant {tenant_id!r} is suspended")
+        self.tenant_id = tenant_id
+
 
 @dataclass(frozen=True)
 class ConnCoords:
@@ -67,6 +78,7 @@ class TenantRouter:
         self.shared_admin_user = shared_admin_user
         self._tiers: Dict[str, str] = dict(tiers or {})
         self._tier_lookup = tier_lookup
+        self._status: Dict[str, str] = {}   # tenant_id -> active|suspended
 
     # -- tier metadata ------------------------------------------------------
     def tier(self, tenant_id: str) -> str:
@@ -80,10 +92,27 @@ class TenantRouter:
             raise ValueError(f"unknown tier {tier!r}")
         self._tiers[tenant_id] = tier
 
+    # -- lifecycle ----------------------------------------------------------
+    def status(self, tenant_id: str) -> str:
+        return self._status.get(tenant_id, ACTIVE)
+
+    def suspend(self, tenant_id: str) -> None:
+        """Suspend a tenant: future requests are refused, and its dedicated
+        engine (if any) is stopped to free resources. Reversible via resume()."""
+        self._status[tenant_id] = SUSPENDED
+        self.supervisor.stop(tenant_id)
+
+    def resume(self, tenant_id: str) -> None:
+        """Reactivate a suspended tenant; its engine restarts on the next
+        request (ensure())."""
+        self._status[tenant_id] = ACTIVE
+
     # -- routing ------------------------------------------------------------
     def coordinates(self, tenant_id: str) -> ConnCoords:
         """Resolve the tenant to its tier's connection coordinates, ensuring a
-        dedicated engine is running when needed."""
+        dedicated engine is running when needed. Refuses a suspended tenant."""
+        if self.status(tenant_id) == SUSPENDED:
+            raise TenantSuspended(tenant_id)
         if self.tier(tenant_id) == DEDICATED:
             inst = self.supervisor.ensure(tenant_id)
             # The dedicated engine IS the tenant: connect to its default db as
