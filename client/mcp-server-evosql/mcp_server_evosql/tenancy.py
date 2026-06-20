@@ -116,6 +116,20 @@ def tenant_store_prefix(tenant_id: str) -> str:
     return _ident("s", tenant_id, 48)
 
 
+def tenant_k8s_name(tenant_id: str) -> str:
+    """Deterministic, collision-free Kubernetes object name for a dedicated
+    tenant's workload (``t-<slug>-<h>``).
+
+    Kubernetes names are RFC 1123 labels: lowercase ``[a-z0-9-]``, start/end
+    alphanumeric, <= 63 chars — but the db name uses ``_`` and may be mixed
+    case. This derives a DNS-safe name from the SAME injective construction
+    (slug + full-id hash), so the StatefulSet/Service/Secret/PVC names stay
+    unique per raw tenant id. Capped at 50 so the StatefulSet's ``-0`` pod
+    ordinal and any headless-Service suffix stay within 63."""
+    name = _ident("t", tenant_id, 50).replace("_", "-").lower()
+    return name.strip("-") or "t-tenant"
+
+
 @dataclass(frozen=True)
 class Identity:
     """Immutable, request-scoped principal. Hashable so it can key a registry."""

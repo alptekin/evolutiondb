@@ -78,6 +78,25 @@ serviceMonitor:
   enabled: false
   interval: 30s
 
+# Multi-tenant SaaS control plane (Phase 2 #5). When enabled, this creates the
+# ServiceAccount + namespaced RBAC that the KubernetesTenantBackend needs to
+# provision DEDICATED tenants as one StatefulSet + Service + Secret + PVC each
+# (pod-per-tenant fault isolation). Most tenants stay on the SHARED engine above
+# (GRANT-isolated); only the premium/dedicated tier gets its own pod. The
+# control-plane process (the MCP server, run from the agent image with the
+# router + KubernetesTenantBackend) mounts this SA. Off by default.
+controlPlane:
+  enabled: false
+  serviceAccountName: ""        # empty = "<fullname>-control-plane"
+  # Defaults the control plane uses when it provisions a dedicated tenant.
+  tenant:
+    image:
+      repository: evolutiondb/evolutiondb
+      tag: "latest"
+    storageSize: 1Gi
+    storageClass: ""            # empty = cluster default
+    memLimitMb: 0               # 0 = engine default; else EVOSQL_BUFFER_POOL_SIZE cap
+
 # Optional standalone agent (MCP server + web UI). Off by default — the engine
 # chart stands alone. When enabled it runs as its own Deployment + Service,
 # connects to the engine Service, and exposes the human-approval web UI.
