@@ -18,12 +18,13 @@ import argparse
 import json
 import sys
 
-from .token_store import DEFAULT_STORE, TokenStore, _secret_from
+from .token_store import (DEFAULT_STORE, TokenStore, _secret_from,            # noqa: F401
+                          rotate_token_key)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="evolutiondb-token")
-    ap.add_argument("action", choices=["set", "get", "delete", "list"])
+    ap.add_argument("action", choices=["set", "get", "delete", "list", "rotate-key"])
     ap.add_argument("connector", nargs="?",
                     help="connector name (gmail/outlook/youtube/teams/slack/github)")
     ap.add_argument("--namespace", help="tenant/user namespace (default MCP_USER_ID)")
@@ -32,12 +33,26 @@ def main(argv=None) -> int:
                     help="field name for --token (default 'token')")
     ap.add_argument("--json", dest="json_blob",
                     help="full token dict as JSON (set) — overrides --token")
+    ap.add_argument("--old", help="rotate-key: current key (default the active secret)")
+    ap.add_argument("--new", help="rotate-key: the new EVOSQL_TOKEN_KEY")
     args = ap.parse_args(argv)
 
     if not _secret_from(None):
         print("error: set EVOSQL_TENANT_SECRET (or EVOSQL_TOKEN_KEY) first",
               file=sys.stderr)
         return 2
+
+    if args.action == "rotate-key":
+        new = args.new
+        if not new:
+            print("error: rotate-key needs --new <key>", file=sys.stderr)
+            return 2
+        old = args.old or _secret_from(None)
+        from .store_io import connect_from_env
+        n = rotate_token_key(connect_from_env(), old, new)
+        print(json.dumps({"ok": True, "rotated": n,
+                          "note": "now run with EVOSQL_TOKEN_KEY set to the new key"}))
+        return 0
 
     if args.action != "list" and not args.connector:
         print("error: a connector name is required", file=sys.stderr)
