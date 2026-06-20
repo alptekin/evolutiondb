@@ -64,11 +64,17 @@ def _get_no_redirect(base, path):
 
 @pytest.fixture()
 def proxy():
+    import os
     # force the in-memory fallback so no EvolutionDB is required
     o._store._psycopg = False
     o._store._mem.clear()
     o._used_codes.clear()
     o._op_counter[0] = 0
+    # no operator auth configured -> the loopback consent decision is dev-open,
+    # so these flow tests don't need a token. Clear any leaked operator env.
+    _opvars = ("EVOSQL_CONTROL_TOKEN", "EVOSQL_OIDC_ISSUER",
+               "EVOSQL_CONTROL_OPERATORS")
+    _saved = {k: os.environ.pop(k, None) for k in _opvars}
     srv = ThreadingHTTPServer(("127.0.0.1", 0), o._Handler)
     port = srv.server_address[1]
     t = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -78,6 +84,9 @@ def proxy():
     finally:
         srv.shutdown()
         srv.server_close()
+        for k, v in _saved.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 def test_register_rejects_empty_redirect_uris(proxy):
@@ -118,14 +127,17 @@ def test_full_flow_and_code_cannot_be_replayed(proxy):
                    {"redirect_uris": ["https://good.example/cb"]})
     cid = reg["client_id"]
     verifier, chal = _pkce()
-    q = urllib.parse.urlencode({
-        "client_id": cid, "response_type": "code",
-        "redirect_uri": "https://good.example/cb",
-        "code_challenge": chal, "code_challenge_method": "S256",
-        "state": "s1"})
-    status, loc, _ = _get_no_redirect(proxy, f"/authorize?{q}")
-    assert status == 302 and loc and "code=" in loc
-    code = urllib.parse.parse_qs(urllib.parse.urlparse(loc).query)["code"][0]
+    authz = {"client_id": cid, "response_type": "code",
+             "redirect_uri": "https://good.example/cb",
+             "code_challenge": chal, "code_challenge_method": "S256",
+             "state": "s1"}
+    # GET /authorize now shows the consent screen (HTML), NOT an auto-redirect.
+    status, loc, _ = _get_no_redirect(proxy, "/authorize?" + urllib.parse.urlencode(authz))
+    assert status == 200 and loc is None
+    # The operator approves (loopback dev-open: no operator auth configured).
+    status, body = _post(proxy, "/authorize", {**authz, "decision": "allow"})
+    assert status == 200 and "code=" in body["redirect"]
+    code = urllib.parse.parse_qs(urllib.parse.urlparse(body["redirect"]).query)["code"][0]
 
     token_req = {"grant_type": "authorization_code", "code": code,
                  "redirect_uri": "https://good.example/cb",
