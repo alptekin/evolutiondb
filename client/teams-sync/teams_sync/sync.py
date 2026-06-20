@@ -165,7 +165,8 @@ def sync_once(cfg: Config, *, since_default: Optional[str],
               dry_run: bool = False) -> Dict[str, int]:
     """Single sync pass over every chat. Returns counters for the caller
     (and tests) to assert against."""
-    auth = auth_mod.TeamsAuth(cfg.tenant_id, cfg.client_id, cfg.token_cache)
+    auth = auth_mod.TeamsAuth(cfg.tenant_id, cfg.client_id, cfg.token_cache,
+                              namespace=cfg.user_id)
     graph = graph_mod.GraphClient(token_provider=auth.get_token)
 
     if dry_run:
@@ -329,7 +330,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.auth:
         try:
             tokens = auth_mod.TeamsAuth(cfg.tenant_id, cfg.client_id,
-                                         cfg.token_cache)
+                                         cfg.token_cache, namespace=cfg.user_id)
             tokens.login_interactive()
             print("[teams-sync] login OK; refresh token cached at "
                   f"{cfg.token_cache}", file=sys.stderr)
