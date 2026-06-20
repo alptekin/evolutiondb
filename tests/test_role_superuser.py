@@ -160,6 +160,37 @@ def test_non_superuser_cannot_manage_users_or_roles():
         _stop(p); shutil.rmtree(d, ignore_errors=True)
 
 
+def test_copy_file_mode_requires_superuser():
+    """Server-side COPY FROM/TO a file must require superuser — otherwise a
+    tenant with table access could read or write arbitrary host files (cross
+    every tenant boundary). Stream mode (STDIN/STDOUT) is unaffected."""
+    d = tempfile.mkdtemp(prefix="evo_copy_")
+    p = _start(d, 5496, "admin", "admin")
+    out_admin = os.path.join(d, "admin_out.csv")
+    out_carol = os.path.join(d, "carol_out.csv")
+    try:
+        assert _q(5496, "admin", "admin", "CREATE TABLE ct (id INT PRIMARY KEY)") is None
+        assert _q(5496, "admin", "admin", "INSERT INTO ct VALUES (1)") is None
+        assert _q(5496, "admin", "admin", "CREATE USER carol PASSWORD 'cpw'") is None
+        # give carol broad DB access so she PASSES the per-query SELECT check and
+        # actually reaches the COPY file-mode gate (which must still deny her).
+        assert _q(5496, "admin", "admin", "GRANT ALL ON DATABASE evosql TO carol") is None
+
+        # superuser admin CAN copy to a server file
+        err = _q(5496, "admin", "admin", f"COPY ct TO '{out_admin}'")
+        assert err is None and os.path.exists(out_admin), \
+            f"superuser COPY to file failed: {err}"
+
+        # non-superuser carol (even with DB grant) is DENIED, and no file appears
+        err = _q(5496, "carol", "cpw", f"COPY ct TO '{out_carol}'")
+        assert err is not None, "non-superuser carol was allowed COPY to a file"
+        assert "superuser" in err.lower(), f"wrong denial reason: {err}"
+        assert not os.path.exists(out_carol), \
+            "carol's COPY wrote a host file despite the denial"
+    finally:
+        _stop(p); shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     print("=== Phase 2 #3: role-based superuser (no hardcoded admin) ===")
     if not os.path.exists(SERVER):
@@ -170,5 +201,7 @@ if __name__ == "__main__":
              test_bootstrap_is_configurable_and_admin_not_magic)
     run_test("non_superuser_cannot_manage_users_or_roles",
              test_non_superuser_cannot_manage_users_or_roles)
+    run_test("copy_file_mode_requires_superuser",
+             test_copy_file_mode_requires_superuser)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
