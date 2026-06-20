@@ -132,6 +132,45 @@ def test_ensure_is_idempotent():
         shutil.rmtree(base, ignore_errors=True)
 
 
+def test_per_tenant_backup_and_restore():
+    """Phase 2 #2: each tenant's own data dir makes per-tenant backup a copy;
+    restore rolls that ONE tenant back while others keep serving."""
+    base = tempfile.mkdtemp(prefix="evo_tenants_bk_")
+    bdir = tempfile.mkdtemp(prefix="evo_tenant_backup_")
+    sup = TenantSupervisor(base, binary=BIN, base_port=6460)
+    try:
+        a = sup.ensure("acme")
+        other = sup.ensure("globex")
+        _exec(a.pg_port, a.password, "DROP TABLE IF EXISTS bk_t")
+        _exec(a.pg_port, a.password, "CREATE TABLE bk_t (id INT PRIMARY KEY)")
+        for i in range(1, 4):
+            _exec(a.pg_port, a.password, f"INSERT INTO bk_t VALUES ({i})")
+
+        sup.backup("acme", bdir)            # snapshot at 3 rows
+
+        for i in range(4, 6):               # advance to 5 rows
+            _exec(a.pg_port, a.password, f"INSERT INTO bk_t VALUES ({i})")
+        rows, _ = q(a.pg_port, a.password, "SELECT COUNT(*) FROM bk_t")
+        assert rows[0][0] == "5", f"expected 5 before restore, got {rows[0][0]}"
+
+        a2 = sup.restore("acme", bdir)      # roll back to the 3-row snapshot
+        rows, err = None, "x"
+        for _ in range(20):
+            rows, err = q(a2.pg_port, a.password, "SELECT COUNT(*) FROM bk_t")
+            if err is None:
+                break
+            time.sleep(0.25)
+        assert err is None and rows[0][0] == "3", \
+            f"restore should roll acme back to 3 rows, got {rows} (err={err})"
+
+        # the OTHER tenant was untouched by acme's restore
+        assert other.alive(), "globex engine died during acme's restore"
+    finally:
+        sup.stop_all()
+        shutil.rmtree(base, ignore_errors=True)
+        shutil.rmtree(bdir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     print("=== Phase 2 #1: process-per-tenant fault isolation ===")
     if not os.path.exists(BIN):
@@ -140,5 +179,6 @@ if __name__ == "__main__":
     run("per_tenant_isolation_and_fault_isolation",
         test_per_tenant_isolation_and_fault_isolation)
     run("ensure_is_idempotent", test_ensure_is_idempotent)
+    run("per_tenant_backup_and_restore", test_per_tenant_backup_and_restore)
     print(f"\nResults: {passed} passed, {failed} failed out of {passed + failed}")
     sys.exit(1 if failed > 0 else 0)
