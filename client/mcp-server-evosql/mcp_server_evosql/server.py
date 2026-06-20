@@ -3253,6 +3253,11 @@ class MCPServer:
         # tenant's backend once built (back-compat for introspection).
         self._backends: Dict[Tuple[str, ...], MemoryBackend] = {}
         self.backend: Optional[MemoryBackend] = None
+        # Optional Phase-2 tier router. When set (a TenantSupervisor-backed
+        # TenantRouter), _backend_for routes a request to its tenant's tier —
+        # the shared pool or the tenant's own dedicated engine. Default None =
+        # byte-for-byte the existing single-shared-engine behaviour.
+        self.router = None
         self.embedded = None      # EmbeddedEvolutionDB handle, if EVOSQL_EMBEDDED
         # The HTTP transport serves requests on many threads (ThreadingHTTPServer),
         # so the lazy first-connect must be serialized: without this lock two
@@ -3273,7 +3278,19 @@ class MCPServer:
         connects as its own DB user and (when issue_use) lands on its own
         database via ``USE`` — the engine then enforces isolation.
         """
-        key = identity.backend_key
+        # Phase-2 tier routing: when a router is configured, resolve a resolved
+        # TENANT identity to its tier target (shared pool or its own dedicated
+        # engine). The legacy/default identity (control plane + single-tenant
+        # back-compat) always stays on the shared-engine path unchanged.
+        if self.router is not None and identity is not self.default_identity:
+            t = self.router.target_for_identity(identity)
+        else:
+            t = {"host": self.host, "port": self.port,
+                 "user": identity.db_user, "password": identity.db_password,
+                 "database": identity.db_name, "prefix": identity.prefix,
+                 "use_database": (identity.db_name if identity.issue_use else None),
+                 "cache_key": identity.backend_key}
+        key = t["cache_key"]
         b = self._backends.get(key)
         if b is not None:
             return b
@@ -3283,21 +3300,23 @@ class MCPServer:
                 return b
             # Zero-Docker: with EVOSQL_EMBEDDED set, spawn a local EvolutionDB
             # once (shared by all tenants) if nothing is already serving the
-            # port (no-op + harmless otherwise).
-            if self.embedded is None:
+            # port (no-op + harmless otherwise). Only the SHARED pool is
+            # auto-started here; dedicated engines come from the router's
+            # supervisor.
+            if self.embedded is None and t["host"] == self.host and t["port"] == self.port:
                 from . import embedded
                 self.embedded = embedded.maybe_start(self.host, self.port)
             # Build fully before publishing into the registry, so a racing
             # reader never sees a half-initialized backend.
             backend = MemoryBackend(
-                self.host, self.port, identity.db_user, identity.db_password,
-                identity.db_name, identity.prefix,
+                t["host"], t["port"], t["user"], t["password"],
+                t["database"], t["prefix"],
                 embedder=self.embedder, tagger=self.tagger,
                 reranker=self.reranker, lexical=self.lexical,
                 rerank_mode=self.rerank_mode,
                 embedder2=self.embedder2,
                 query_transform=self.query_transform,
-                use_database=(identity.db_name if identity.issue_use else None))
+                use_database=t["use_database"])
             self._backends[key] = backend
             if key == self.default_identity.backend_key:
                 self.backend = backend
