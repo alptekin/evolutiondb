@@ -69,12 +69,17 @@ class TenantInstance:
 class TenantSupervisor:
     def __init__(self, base_dir: str, *, binary: Optional[str] = None,
                  base_port: int = 6400, bind: str = "127.0.0.1",
-                 auto_restart: bool = True, ready_timeout: float = 20.0):
+                 auto_restart: bool = True, ready_timeout: float = 20.0,
+                 mem_limit_mb: Optional[int] = None):
         self.base_dir = base_dir
         self.binary = binary or _default_binary()
         self.base_port = base_port
         self.bind = bind
         self.ready_timeout = ready_timeout
+        # Per-tenant noisy-neighbour cap: each dedicated engine's buffer pool is
+        # bounded to mem_limit_mb (via --buffer-pool-size), so one tenant cannot
+        # starve the host of memory. None = engine default.
+        self.mem_limit_mb = mem_limit_mb
         self._instances: Dict[str, TenantInstance] = {}
         self._ports: Dict[str, int] = {}     # stable port per tenant (survives restart)
         self._next_port = base_port
@@ -109,6 +114,15 @@ class TenantSupervisor:
             inst = self._instances.pop(tenant_id, None)
         if inst is not None:
             self._terminate(inst)
+
+    def delete(self, tenant_id: str) -> None:
+        """Offboard a tenant: stop its engine and remove its data dir + port
+        reservation. Irreversible — the tenant's data is gone (back it up with
+        backup() first if you may need it)."""
+        self.stop(tenant_id)
+        with self._lock:
+            self._ports.pop(tenant_id, None)
+        shutil.rmtree(self._tenant_dir(tenant_id), ignore_errors=True)
 
     def stop_all(self) -> None:
         self._stop_monitor.set()
@@ -189,10 +203,12 @@ class TenantSupervisor:
         # Drop any inherited multi-tenant secret so a per-tenant engine is a
         # plain single-database server (the supervisor IS the tenancy layer).
         env.pop("EVOSQL_TENANT_SECRET", None)
+        cmd = [self.binary, "--pg-port", str(pg_port), "--evo-port", str(evo_port),
+               "--bind", self.bind]
+        if self.mem_limit_mb:
+            cmd += ["--buffer-pool-size", f"{self.mem_limit_mb}M"]
         proc = subprocess.Popen(
-            [self.binary, "--pg-port", str(pg_port), "--evo-port", str(evo_port),
-             "--bind", self.bind],
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         inst = TenantInstance(tenant_id=tenant_id, data_dir=data_dir,
                               pg_port=pg_port, evo_port=evo_port,
                               password=password, proc=proc)
