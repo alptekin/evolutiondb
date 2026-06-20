@@ -98,3 +98,20 @@ class TenantRouter:
                           user=tenant_db_user(tenant_id),
                           password=derive_db_password(tenant_id),
                           issue_use=True, tier=SHARED)
+
+    def target_for_identity(self, identity) -> dict:
+        """Map a resolved Identity to the backend connection target for its
+        tier. Used by the MCP server's backend factory so a request lands on
+        the tenant's tier (shared pool vs its own engine). Keeps the identity's
+        store ``prefix`` (the store names are tier-independent, so a graduated
+        tenant's stores keep their names). The cache key includes the tier +
+        host/port so a tenant's shared and dedicated backends cache apart."""
+        c = self.coordinates(identity.tenant_id)
+        return {
+            "host": c.host, "port": c.port, "user": c.user,
+            "password": c.password, "database": c.db,
+            "use_database": c.db if c.issue_use else None,
+            "prefix": identity.prefix,
+            "cache_key": (identity.tenant_id, c.tier, c.host, c.port,
+                          c.db, c.user, identity.prefix),
+        }
