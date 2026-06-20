@@ -158,6 +158,101 @@ class ControlPlane:
         result = dsar.erase_and_record(backend, operator, subject)
         return {"result": result}
 
+    # -- connected accounts (connector tokens) + OAuth consents -----------
+    def list_accounts(self, tenant_id: str, user: str = "") -> dict:
+        """The connector accounts a tenant/user has connected — the per-tenant
+        token-store rows (token:<connector>). Values stay encrypted; we only
+        surface the connector name + last-updated, never the token."""
+        if not self.registry().get_tenant(tenant_id):
+            raise KeyError(tenant_id)
+        from .server import _e
+        ns = (user or "").strip() or tenant_id
+        backend = self.tenant_backend(tenant_id, ns)
+        rows = []
+        try:
+            rows = backend._query(
+                "SELECT mem_key, mem_value FROM __mem_mcp_tokens "
+                f"WHERE mem_namespace = '{_e(ns)}' "
+                "AND mem_key LIKE 'token:%'") or []
+        except Exception:
+            rows = []
+        out = []
+        for key, val in rows:
+            connector = str(key).split("token:", 1)[-1]
+            updated = None
+            try:
+                updated = json.loads(val).get("updated")
+            except Exception:
+                pass
+            out.append({"connector": connector, "updated": updated})
+        out.sort(key=lambda a: a["connector"])
+        return {"tenant_id": tenant_id, "user": ns, "accounts": out}
+
+    def revoke_account(self, operator, tenant_id: str, connector: str,
+                       user: str = "") -> dict:
+        """Delete a tenant's stored connector token — they must re-authorize."""
+        if not self.registry().get_tenant(tenant_id):
+            raise KeyError(tenant_id)
+        from .server import _e, _valid_key
+        ns = (user or "").strip() or tenant_id
+        key = f"token:{connector}"
+        if not _valid_key(key):
+            raise ValueError(f"invalid connector name: {connector!r}")
+        backend = self.tenant_backend(tenant_id, ns)
+        try:
+            backend._exec(f"MEMORY DELETE FROM mcp_tokens "
+                          f"WHERE NS = '{_e(ns)}' AND KEY = '{_e(key)}'")
+        except Exception:
+            pass
+        self._audit(operator, "revoke_account", "ok", ref=f"{tenant_id}:{ns}:{connector}")
+        return {"tenant_id": tenant_id, "user": ns, "connector": connector,
+                "revoked": True}
+
+    def list_consents(self) -> dict:
+        """OAuth client approvals remembered by the proxy (consent:<client_id>
+        in the mcp_oauth store, the proxy's MCP_USER_ID namespace)."""
+        from .server import _e
+        ns = os.environ.get("MCP_USER_ID", "default_user")
+        backend = self.admin_backend()
+        rows = []
+        try:
+            rows = backend._query(
+                "SELECT mem_key, mem_value FROM __mem_mcp_oauth "
+                f"WHERE mem_namespace = '{_e(ns)}' "
+                "AND mem_key LIKE 'consent:%'") or []
+        except Exception:
+            rows = []
+        out = []
+        for key, val in rows:
+            cid = str(key).split("consent:", 1)[-1]
+            rec = {}
+            try:
+                rec = json.loads(val)
+            except Exception:
+                pass
+            out.append({"client_id": cid, "scope": rec.get("scope"),
+                        "approved_by": rec.get("approved_by"),
+                        "expires": rec.get("expires")})
+        out.sort(key=lambda a: a["client_id"])
+        return {"namespace": ns, "consents": out}
+
+    def revoke_consent(self, operator, client_id: str) -> dict:
+        """Forget a remembered OAuth approval — the client's next /authorize
+        shows the consent screen again."""
+        from .server import _e, _valid_key
+        key = f"consent:{client_id}"
+        if not _valid_key(key):
+            raise ValueError(f"invalid client_id: {client_id!r}")
+        ns = os.environ.get("MCP_USER_ID", "default_user")
+        backend = self.admin_backend()
+        try:
+            backend._exec(f"MEMORY DELETE FROM mcp_oauth "
+                          f"WHERE NS = '{_e(ns)}' AND KEY = '{_e(key)}'")
+        except Exception:
+            pass
+        self._audit(operator, "revoke_consent", "ok", ref=client_id)
+        return {"client_id": client_id, "revoked": True}
+
 
 # ====================================================================== http
 def _rate_per_min() -> int:
@@ -246,6 +341,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/tenants":
             return self._safe(lambda: self.cp.list_tenants())
+        if path == "/api/consents":
+            return self._safe(lambda: self.cp.list_consents())
+        parts = [p for p in path.split("/") if p]
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "tenants"
+                and parts[3] == "accounts"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            user = q.get("user", [""])[0]
+            tid = urllib.parse.unquote(parts[2])
+            return self._safe(lambda: self.cp.list_accounts(tid, user))
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -286,6 +390,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"error": "confirm=true required (irreversible)"})
                 return self._safe(lambda: self.cp.dsar_erase(
                     op, tid, body.get("user", "")))
+            # /api/tenants/<id>/accounts/<connector>/revoke
+            if action == "accounts" and len(parts) >= 6 and parts[5] == "revoke":
+                connector = urllib.parse.unquote(parts[4])
+                return self._safe(lambda: self.cp.revoke_account(
+                    op, tid, connector, body.get("user", "")))
+        # /api/consents/<client_id>/revoke
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "consents"
+                and parts[3] == "revoke"):
+            return self._safe(lambda: self.cp.revoke_consent(
+                op, urllib.parse.unquote(parts[2])))
         return self._json(404, {"error": "not found"})
 
     def do_DELETE(self):
