@@ -3216,6 +3216,46 @@ TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "export_my_data",
+        "description": (
+            "Right-to-access (GDPR Art. 15 / DSAR): export every row you own "
+            "across all memory stores as a portable, machine-readable bundle. "
+            "Read-only — nothing is changed. Defaults to YOUR own data; an admin "
+            "may pass `user` to export another user in the same tenant. Files a "
+            "compliance receipt that you accessed the data."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string",
+                         "description": "Admin only: export this user's data "
+                                        "instead of your own."},
+            },
+        },
+    },
+    {
+        "name": "erase_my_data",
+        "description": (
+            "Right-to-erasure (GDPR Art. 17 / 'right to be forgotten'): "
+            "permanently delete every row you own across all memory stores. "
+            "IRREVERSIBLE — requires confirm=true. Defaults to YOUR own data; an "
+            "admin may pass `user` to erase another user in the same tenant. A "
+            "tamper-evident receipt is filed under a compliance namespace that "
+            "is NOT erased, so the deletion stays provable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "confirm": {"type": "boolean",
+                            "description": "Must be true — this cannot be undone."},
+                "user": {"type": "string",
+                         "description": "Admin only: erase this user's data "
+                                        "instead of your own."},
+            },
+            "required": ["confirm"],
+        },
+    },
 ]
 
 
@@ -3716,6 +3756,41 @@ class MCPServer:
             return {"ok": True, "user_id": uid,
                     "delivered": sum(1 for r in results if r.get("sent")),
                     "results": results}
+
+        if name == "export_my_data":
+            from . import dsar
+            target = (args.get("user") or "").strip() or uid
+            if target != uid and not ident.has_role("admin"):
+                return {"error": "permission denied: only an admin may export "
+                                 "another user's data"}
+            bundle = dsar.export_and_record(
+                b, ident, target, tenant=getattr(ident, "tenant_id", ""))
+            return {"ok": True, **bundle}
+
+        if name == "erase_my_data":
+            from . import audit, dsar
+            # Destructive: admin/member only, and only an admin may target
+            # someone else. Audit every denial so a probe leaves a trace.
+            if not ident.has_role("admin", "member"):
+                try:
+                    audit.record(b, ident, "erase_my_data", "denied", args=args)
+                except Exception:
+                    pass
+                return {"error": f"permission denied: role(s) "
+                                 f"{list(ident.roles)} may not erase data"}
+            target = (args.get("user") or "").strip() or uid
+            if target != uid and not ident.has_role("admin"):
+                try:
+                    audit.record(b, ident, "erase_my_data", "denied", args=args)
+                except Exception:
+                    pass
+                return {"error": "permission denied: only an admin may erase "
+                                 "another user's data"}
+            if not bool(args.get("confirm")):
+                return {"error": "erase_my_data requires confirm=true "
+                                 "(this is irreversible)"}
+            result = dsar.erase_and_record(b, ident, target)
+            return {"ok": True, **result}
 
         return {"error": f"unknown tool: {name}"}
 
