@@ -13,7 +13,11 @@ works against a local, embedded, or remote engine alike. Erasure is exact-key
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List
+
+# Portable export envelope version — bump if the bundle shape changes.
+BUNDLE_FORMAT = "evosql-dsar/1"
 
 
 def stores(backend) -> List[str]:
@@ -43,6 +47,55 @@ def export_user(backend, user: str) -> Dict[str, Any]:
             out[store] = recs
             total += len(recs)
     return {"user": user, "stores": out, "row_count": total}
+
+
+def export_bundle(backend, user: str, tenant: str = "") -> Dict[str, Any]:
+    """Right-to-access as a PORTABLE, machine-readable artifact: the user's rows
+    wrapped in a versioned envelope (format + tenant + timestamp) the caller can
+    serialize to JSON and hand to the data subject. Read-only."""
+    ex = export_user(backend, user)
+    return {
+        "format": BUNDLE_FORMAT,
+        "kind": "access-export",
+        "tenant": tenant or "",
+        "user": user,
+        "generated_at": int(time.time()),
+        "row_count": ex["row_count"],
+        "stores": ex["stores"],
+    }
+
+
+def export_and_record(backend, operator, subject: str,
+                      tenant: str = "") -> Dict[str, Any]:
+    """Build the access-export bundle for ``subject`` AND file a compliance
+    receipt (proof of access) under the DSAR namespace. ``operator`` is the
+    Identity that ran the request. Read-only on the subject's data."""
+    bundle = export_bundle(backend, subject, tenant=tenant)
+    try:
+        from . import audit
+        audit.record_dsar(backend, operator, "dsar.export", subject,
+                          counts={"row_count": bundle["row_count"],
+                                  "stores": len(bundle["stores"])})
+    except Exception:
+        pass
+    return bundle
+
+
+def erase_and_record(backend, operator, subject: str) -> Dict[str, Any]:
+    """Right-to-erasure WITH proof: erase every row ``subject`` owns, then file a
+    tamper-evident receipt under the DSAR compliance namespace (which is NOT the
+    subject's namespace, so the proof survives the erasure). ``operator`` is the
+    Identity that ran the request. IRREVERSIBLE."""
+    result = erase_user(backend, subject)
+    try:
+        from . import audit
+        audit.record_dsar(backend, operator, "dsar.erase", subject,
+                          counts={"row_count": result["row_count"],
+                                  "stores": result["deleted"]})
+        result["receipt"] = "filed"
+    except Exception:
+        result["receipt"] = "unavailable"
+    return result
 
 
 def erase_user(backend, user: str) -> Dict[str, Any]:
