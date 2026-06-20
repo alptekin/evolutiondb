@@ -32,7 +32,9 @@ def _disp(name):
 
 def _llm(prompt: str) -> str:
     """One anthropic call. Model from EVOSQL_PROFILE_LLM_MODEL. Returns text."""
-    from . import pii_egress
+    from . import pii_egress, provider_policy
+    # Residency / no-train gate before this direct SDK call (fail-closed when on).
+    provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
     prompt = pii_egress.scrub(prompt)   # mask PII before this direct SDK call
     import anthropic
     c = anthropic.Anthropic()

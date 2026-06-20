@@ -115,6 +115,10 @@ class _OpenAITagger(TopicTagger):
         snippet = (text or "").strip()
         if not snippet:
             return []
+        # Residency/no-train gate + PII mask before sending text to OpenAI.
+        from mcp_server_evosql import pii_egress, provider_policy
+        provider_policy.check("openai", endpoint=self._URL)
+        snippet = pii_egress.scrub(snippet)
         body = json.dumps({
             "model": self.model,
             "messages": [
