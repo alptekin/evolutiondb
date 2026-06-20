@@ -131,3 +131,55 @@ class TokenStore:
         except Exception as exc:
             if "relation does not exist" not in str(exc).lower():
                 raise
+
+
+def rotate_token_key(conn, old_secret: str, new_secret: str, *,
+                     store: str = DEFAULT_STORE) -> int:
+    """Re-encrypt every stored connector token under a NEW key secret, returning
+    the number of rows rotated. Each row is decrypted with the OLD-secret-derived
+    key and re-encrypted with the NEW one (per (namespace, connector), so every
+    derived key changes). A row that doesn't decrypt under ``old_secret``
+    (already rotated / foreign) is skipped, so re-running is safe.
+
+    Rotate ``EVOSQL_TOKEN_KEY`` (the dedicated token-encryption key) with this —
+    NOT ``EVOSQL_TENANT_SECRET``, which also derives every tenant's DB password.
+    """
+    from .store_io import _e
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT mem_namespace, mem_key, mem_value "
+                        f"FROM __mem_{store}")
+            rows = cur.fetchall() or []
+    except Exception as exc:
+        if "relation does not exist" in str(exc).lower():
+            return 0
+        raise
+    old_env = {"EVOSQL_TOKEN_KEY": old_secret}
+    new_env = {"EVOSQL_TOKEN_KEY": new_secret}
+    rotated = 0
+    for ns, key, val in rows:
+        key = str(key)
+        if not key.startswith("token:"):
+            continue
+        connector = key.split("token:", 1)[1]
+        try:
+            rec = val if isinstance(val, dict) else json.loads(val)
+            blob = rec.get("enc")
+            if not blob:
+                continue
+            plain = TokenStore(connector, namespace=ns, store=store,
+                               env=old_env, conn=conn)._open(blob)
+        except Exception:
+            continue                       # not openable under old key -> skip
+        reblob = TokenStore(connector, namespace=ns, store=store,
+                            env=new_env, conn=conn)._seal(plain)
+        new_val = json.dumps({"enc": reblob, "updated": int(time.time())},
+                             ensure_ascii=False)
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM __mem_{store} "
+                        f"WHERE mem_namespace='{_e(str(ns))}' "
+                        f"AND mem_key='{_e(key)}'")
+            cur.execute(f"MEMORY PUT INTO {store} VALUES "
+                        f"('{_e(str(ns))}','{_e(key)}','{_e(new_val)}')")
+        rotated += 1
+    return rotated
