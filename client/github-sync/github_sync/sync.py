@@ -77,16 +77,32 @@ def _load_dotenv(path: Path) -> None:
 
 class Config:
     def __init__(self):
-        self.token       = os.environ.get("GITHUB_TOKEN", "").strip()
+        self.user_id     = os.environ.get("MCP_USER_ID", "default_user")
+        # Per-tenant token (opt-in): prefer the encrypted, namespaced store; fall
+        # back to the GITHUB_TOKEN env var (single-user / dev / seed).
+        self.token       = _resolve_token("github", self.user_id, "GITHUB_TOKEN")
         self.username    = os.environ.get("GITHUB_USERNAME", "").strip()
         self.evosql_host = os.environ.get("EVOSQL_HOST", "127.0.0.1")
         self.evosql_port = int(os.environ.get("EVOSQL_PORT", "5433"))
         self.evosql_user = os.environ.get("EVOSQL_USER", "admin")
         self.evosql_pass = os.environ.get("EVOSQL_PASSWORD", "admin")
         self.evosql_db   = os.environ.get("EVOSQL_DATABASE", "evosql")
-        self.user_id     = os.environ.get("MCP_USER_ID", "default_user")
         self.store       = os.environ.get("GITHUB_MEMORY_STORE", "mcp_mem")
         self.poll_secs   = int(os.environ.get("GITHUB_POLL_INTERVAL", "900"))
+
+
+def _resolve_token(connector: str, namespace: str, env_var: str) -> str:
+    """Prefer the per-tenant encrypted token store, else the env var. Fail-soft."""
+    try:
+        from evolutiondb_pii.token_store import TokenStore
+        ts = TokenStore.maybe(connector, namespace)
+        if ts is not None:
+            stored = (ts.load() or {}).get("token")
+            if stored:
+                return str(stored).strip()
+    except Exception:
+        pass
+    return os.environ.get(env_var, "").strip()
 
 
 # ---------------------------------------------------------------- #

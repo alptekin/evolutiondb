@@ -160,7 +160,7 @@ def sync_once(cfg: Config, *,
         raise RuntimeError(
             "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set")
     auth = auth_mod.GmailAuth(cfg.client_id, cfg.client_secret,
-                              cfg.token_cache)
+                              cfg.token_cache, namespace=cfg.user_id)
 
     # Non-interactive in the sync loop — assume --auth has already
     # been run. The auth module raises a clear AuthError otherwise.
@@ -276,7 +276,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.auth:
         try:
             authmod = auth_mod.GmailAuth(cfg.client_id, cfg.client_secret,
-                                          cfg.token_cache)
+                                          cfg.token_cache, namespace=cfg.user_id)
             authmod.ensure_token(interactive=True)
             print("[gmail-sync] authentication cached at "
                   f"{cfg.token_cache}", file=sys.stderr, flush=True)
