@@ -1,0 +1,53 @@
+{{- if .Values.controlPlane.enabled }}
+# Multi-tenant control plane (Phase 2 #5). The KubernetesTenantBackend (run by
+# the control-plane MCP server) turns a dedicated tenant into a StatefulSet +
+# Service + Secret + PVC. This ServiceAccount + Role grant exactly the verbs that
+# requires — namespaced (a Role, not a ClusterRole), so the blast radius is this
+# one namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "evolutiondb.controlPlaneServiceAccountName" . }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "evolutiondb.controlPlaneServiceAccountName" . }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+rules:
+  # Per-tenant workloads.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets/scale"]      # suspend/resume = scale 0/1
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["services", "secrets", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read-only: rollout/readiness checks + (optional) log inspection.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "evolutiondb.controlPlaneServiceAccountName" . }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "evolutiondb.controlPlaneServiceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "evolutiondb.controlPlaneServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

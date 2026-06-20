@@ -72,6 +72,54 @@ KEEP=1 ./deploy/kind-stack-smoke.sh # leave it up; port-forward to poke at the U
 A real IdP (Keycloak / Entra ID / Okta) replaces the mock — the agent validates
 identically, and MFA is enforced by the IdP.
 
+## Phase 2 — multi-tenant control plane (pod-per-tenant)
+
+Most tenants share one engine, isolated by `GRANT` (the engine denies
+cross-tenant reads with `42501`). The **dedicated** tier instead gives a tenant
+its OWN engine pod for hard fault isolation — a crash/OOM in one tenant cannot
+touch another. The `KubernetesTenantBackend`
+(`client/mcp-server-evosql/mcp_server_evosql/tenant_k8s.py`) turns a dedicated
+tenant into one **StatefulSet + headless Service + Secret + PVC**, and the
+`TenantRouter` reaches it through the Service DNS — the same router surface as
+the local-process tier, so graduating shared → dedicated is a config flip, not a
+rewrite. Lifecycle maps straight onto Kubernetes: **suspend** scales to 0
+(compute freed, PVC kept), **resume** scales back (data intact), **delete**
+removes every object.
+
+Enable the control-plane RBAC the backend needs (a namespaced `ServiceAccount` +
+`Role`; no cluster-scoped power):
+
+```bash
+helm install evo deploy/helm/evolutiondb \
+  --set controlPlane.enabled=true \
+  --set controlPlane.tenant.image.repository=evolutiondb/evolutiondb \
+  --set controlPlane.tenant.memLimitMb=256   # per-tenant buffer-pool cap
+```
+
+The control-plane process (the MCP server, run from the agent image with the
+router + `KubernetesTenantBackend`) mounts that ServiceAccount and provisions
+dedicated tenants on demand.
+
+### Free local proof — `kind-tenant-pod-smoke.sh`
+
+Proves the whole pod-per-tenant story on kind, for free. It installs the chart
+with `controlPlane.enabled=true`, checks the ServiceAccount's RBAC with
+`kubectl auth can-i` (and confirms it is *not* cluster-wide), then — running
+**as that ServiceAccount** — provisions a dedicated tenant, writes/reads rows
+through its Service, suspends it (pod scales to 0), resumes it (the rows
+survived on the PVC), and deletes it (every object gone).
+
+```bash
+./deploy/kind-tenant-pod-smoke.sh        # build, prove pod-per-tenant, destroy
+KEEP=1 ./deploy/kind-tenant-pod-smoke.sh # leave the cluster up
+```
+
+What this does **not** yet cover (honest scope; tracked follow-ups): a hosted
+control-plane UI with real OAuth consent screens, full self-service DSAR
+export/delete, automated KMS key rotation, and data-residency / no-train
+provider controls. The provisioning *mechanism* is proven; the governance
+surface around it is the remaining SaaS work.
+
 ## When to go to AWS / EKS
 
 The engine is single-process, so for a **single self-hosted deployment** you get
