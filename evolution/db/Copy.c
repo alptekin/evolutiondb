@@ -533,22 +533,25 @@ int CopyProcess(void)
         return 0;
     }
 
+    /* Server-side file COPY (FROM/TO '/path') reads or writes host files, so it
+     * requires a SUPERUSER. Without this, any user with INSERT/SELECT on a table
+     * could read or write arbitrary server-accessible files via COPY — crossing
+     * every tenant boundary (a path guard alone does not defeat symlinks, and a
+     * tenant must never touch the host filesystem). Stream mode (STDIN/STDOUT)
+     * is client data and returned above, so this gates only file mode. */
+    if (!user_is_superuser(db_get_current_user())) {
+        snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
+                 "COPY to/from a server file requires superuser privileges");
+        g_err.error = 1;
+        return -1;
+    }
+
     if (!copy_path_is_safe(g_copy.path)) {
         snprintf(g_err.errorMsg, sizeof(g_err.errorMsg),
                  "COPY file path must be absolute and must not contain '..'");
         g_err.error = 1;
         return -1;
     }
-
-    /*
-     * FIXME(security, Task 85 Faz 6): server-side file COPY should require
-     * superuser (ADMIN role). The textual ".." guard does not defeat
-     * symlinks — today any user holding INSERT/SELECT on a table can
-     * read or write arbitrary server-accessible files via COPY FROM/TO
-     * '/path'. Either gate file mode behind a superuser check here or
-     * resolve `g_copy.path` with realpath() and verify it sits under a
-     * configured allow-prefix before proceeding.
-     */
 
     int rc;
     if (g_copy.direction == EVO_COPY_DIR_FROM) {
