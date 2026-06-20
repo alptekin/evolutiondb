@@ -239,6 +239,9 @@ def _llm_extract(text: str, backend: str) -> List[Mention]:
         import urllib.request
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
         model = os.environ.get("EVOSQL_ENTITY_LLM_MODEL", "llama3.1")
+        from . import pii_egress, provider_policy
+        provider_policy.check("ollama", endpoint=host)
+        prompt = pii_egress.scrub(prompt)
         body = json.dumps({"model": model, "prompt": prompt, "stream": False,
                            "format": "json"}).encode()
         req = urllib.request.Request(host + "/api/generate", body,
@@ -248,6 +251,9 @@ def _llm_extract(text: str, backend: str) -> List[Mention]:
         parsed = json.loads(data.get("response", "[]"))
         return parsed if isinstance(parsed, list) else parsed.get("entities", [])
     if backend in ("anthropic", "sonnet"):
+        from . import pii_egress, provider_policy
+        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
+        prompt = pii_egress.scrub(prompt)
         import anthropic
         c = anthropic.Anthropic()
         msg = c.messages.create(
