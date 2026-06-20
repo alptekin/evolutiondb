@@ -1,0 +1,160 @@
+{{- if .Values.controlPlane.ui.enabled }}
+{{- $fullName := include "evolutiondb.fullname" . -}}
+{{- $cpName := printf "%s-control-plane-ui" $fullName -}}
+# The operator control-plane UI (evosql-control-plane). Runs from the agent image
+# (which contains the mcp_server_evosql package) but overrides the CMD. Mounts the
+# control-plane ServiceAccount so it can later provision dedicated tenants on K8s.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $cpName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "evolutiondb.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: control-plane-ui
+  template:
+    metadata:
+      labels:
+        {{- include "evolutiondb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: control-plane-ui
+    spec:
+      serviceAccountName: {{ include "evolutiondb.controlPlaneServiceAccountName" . }}
+      containers:
+        - name: control-plane-ui
+          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          command: ["evosql-control-plane"]
+          ports:
+            - name: web
+              containerPort: {{ .Values.controlPlane.ui.port }}
+          env:
+            # -- connect to the engine Service (admin / evosql DB) --
+            - name: EVOSQL_HOST
+              value: {{ $fullName | quote }}
+            - name: EVOSQL_PORT
+              value: {{ .Values.service.pgPort | quote }}
+            - name: EVOSQL_USER
+              value: {{ .Values.auth.username | quote }}
+            {{- if or .Values.auth.password .Values.auth.existingSecret }}
+            - name: EVOSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "evolutiondb.secretName" . }}
+                  key: password
+            {{- end }}
+            # -- control-plane web server --
+            - name: EVOSQL_CONTROL_HOST
+              value: "0.0.0.0"
+            - name: EVOSQL_CONTROL_PORT
+              value: {{ .Values.controlPlane.ui.port | quote }}
+            - name: EVOSQL_CONTROL_RATE_PER_MIN
+              value: {{ .Values.controlPlane.ui.ratePerMin | quote }}
+            # -- multi-tenant secret (REQUIRED to provision/derive tenants) --
+            - name: EVOSQL_TENANT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cpName }}
+                  key: tenant-secret
+            {{- if .Values.controlPlane.ui.controlToken }}
+            - name: EVOSQL_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cpName }}
+                  key: control-token
+            {{- end }}
+            {{- if .Values.controlPlane.ui.oidc.issuer }}
+            # -- operator SSO (MFA enforced by the IdP); operators on the allowlist --
+            - name: EVOSQL_OIDC_ISSUER
+              value: {{ .Values.controlPlane.ui.oidc.issuer | quote }}
+            - name: EVOSQL_OIDC_AUDIENCE
+              value: {{ .Values.controlPlane.ui.oidc.audience | quote }}
+            - name: EVOSQL_CONTROL_OPERATORS
+              value: {{ .Values.controlPlane.ui.operators | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.controlPlane.ui.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: web
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $cpName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane-ui
+spec:
+  type: {{ .Values.controlPlane.ui.service.type }}
+  ports:
+    - name: web
+      port: {{ .Values.controlPlane.ui.port }}
+      targetPort: web
+      protocol: TCP
+  selector:
+    {{- include "evolutiondb.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane-ui
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $cpName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane-ui
+type: Opaque
+data:
+  # The multi-tenant secret derives every tenant DB password — keep it stable
+  # and safe. If unset here, set controlPlane.ui.tenantSecret (or wire an
+  # existingSecret in a future iteration).
+  tenant-secret: {{ required "controlPlane.ui.tenantSecret is required when controlPlane.ui.enabled" .Values.controlPlane.ui.tenantSecret | b64enc | quote }}
+  {{- if .Values.controlPlane.ui.controlToken }}
+  control-token: {{ .Values.controlPlane.ui.controlToken | b64enc | quote }}
+  {{- end }}
+{{- if .Values.controlPlane.ui.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $cpName }}
+  labels:
+    {{- include "evolutiondb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane-ui
+  {{- with .Values.controlPlane.ui.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.controlPlane.ui.ingress.className }}
+  ingressClassName: {{ .Values.controlPlane.ui.ingress.className }}
+  {{- end }}
+  {{- with .Values.controlPlane.ui.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.controlPlane.ui.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $cpName }}
+                port:
+                  number: {{ .Values.controlPlane.ui.port }}
+{{- end }}
+{{- end }}
