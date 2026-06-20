@@ -562,6 +562,26 @@ def identity_for_token(token: str, admin_backend) -> Optional[Identity]:
     return for_tenant(tenant_id, user_id, roles)
 
 
+def registry_tier_lookup(admin_backend):
+    """A ``tier_lookup(tenant_id) -> 'shared'|'dedicated'|None`` backed by the
+    control-plane registry, so the tier an operator sets (control_plane.set_tier
+    persists it in the tenant meta) actually drives TenantRouter routing. Pass it
+    as ``TenantRouter(..., tier_lookup=registry_tier_lookup(admin_backend))``.
+    Best-effort: a missing tenant / store / unknown value returns None (the
+    router then defaults to the shared tier)."""
+    reg = Registry(admin_backend)
+
+    def _lookup(tenant_id: str):
+        try:
+            meta = reg.get_tenant(tenant_id) or {}
+        except Exception:
+            return None
+        t = meta.get("tier")
+        return t if t in ("shared", "dedicated") else None
+
+    return _lookup
+
+
 def _audit_auth_denied(backend, tenant_id: str, user_id: str,
                        roles: Tuple[str, ...], ref: Optional[str]) -> None:
     """Best-effort auth-denial audit at a token-resolution dead end where the
