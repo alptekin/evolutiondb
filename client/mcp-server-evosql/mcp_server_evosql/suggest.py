@@ -101,6 +101,9 @@ def draft_reply(thread_msgs, loop, self_role, name, language) -> str:
         f"Return ONLY the reply text.\n\n"
         f"Conversation (most recent last):\n{convo}")
     try:
+        from . import pii_egress, provider_policy
+        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
+        prompt = pii_egress.scrub(prompt)
         import anthropic
         c = anthropic.Anthropic()
         msg = c.messages.create(

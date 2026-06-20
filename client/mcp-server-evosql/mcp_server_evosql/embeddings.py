@@ -172,6 +172,12 @@ class _OpenAIProvider(EmbeddingProvider):
     def embed(self, text: str) -> Optional[List[float]]:
         if not text or not text.strip():
             return None
+        # Residency / no-train gate: refuse to send embedding input to an
+        # unvetted provider/endpoint (fail-closed when on; no-op by default).
+        # (PII masking is intentionally NOT applied here — it would alter the
+        # embedding vector and degrade search; that is a separate policy.)
+        from . import provider_policy
+        provider_policy.check("openai", endpoint=self._URL)
         body = json.dumps({"input": text, "model": self.model}).encode()
         req = urllib.request.Request(
             self._URL,

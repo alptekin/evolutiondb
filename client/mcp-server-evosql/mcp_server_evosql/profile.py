@@ -140,6 +140,9 @@ def _llm_label(rows: List[dict], backend: str) -> str:
         import urllib.request
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
         model = os.environ.get("EVOSQL_PROFILE_LLM_MODEL", "llama3.1")
+        from . import pii_egress, provider_policy
+        provider_policy.check("ollama", endpoint=host)
+        prompt = pii_egress.scrub(prompt)
         body = json.dumps({"model": model, "prompt": prompt,
                            "stream": False}).encode()
         req = urllib.request.Request(host + "/api/generate", body,
@@ -147,6 +150,9 @@ def _llm_label(rows: List[dict], backend: str) -> str:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode()).get("response", "").strip()[:60]
     if backend in ("anthropic", "sonnet"):
+        from . import pii_egress, provider_policy
+        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
+        prompt = pii_egress.scrub(prompt)
         import anthropic
         c = anthropic.Anthropic()
         m = c.messages.create(

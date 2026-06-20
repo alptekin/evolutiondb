@@ -180,6 +180,15 @@ class AgentLoop:
                                     "stop_reason": "spend_cap"})
                 return _result(turn, "spend_cap")
 
+            # Residency / no-train gate before each outbound model call
+            # (fail-closed when on; no-op by default). The agent loop is
+            # Anthropic-shaped, so the provider is anthropic.
+            try:
+                from mcp_server_evosql import provider_policy
+                provider_policy.check(
+                    "anthropic", endpoint=provider_policy.anthropic_endpoint())
+            except ImportError:
+                pass
             resp = self.client.messages.create(
                 model=self.model, max_tokens=self.max_tokens,
                 system=self.system, tools=self.tools, messages=messages)

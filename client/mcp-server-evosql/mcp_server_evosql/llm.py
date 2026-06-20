@@ -28,9 +28,22 @@ import urllib.request
 from typing import Optional
 
 from . import pii_egress
+from . import provider_policy
 
 _ANTHROPIC = ("anthropic", "claude", "sonnet")
 _OPENAI_COMPAT = ("openai", "openrouter", "custom", "openai-compatible")
+
+
+def _endpoint_for(provider: str) -> Optional[str]:
+    """The endpoint host a provider call will hit — for the residency gate."""
+    p = (provider or "").strip().lower()
+    if p in _ANTHROPIC:
+        return provider_policy.anthropic_endpoint()
+    if p in _OPENAI_COMPAT:
+        return _openai_base(p)
+    if p == "ollama":
+        return os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+    return None
 
 
 def available(provider: Optional[str]) -> bool:
@@ -89,6 +102,9 @@ def chat(prompt: str, *, provider: str, model: str,
     the opt-in daily token cap) once, then delegates the provider call to
     ``_dispatch``."""
     from . import spend
+    # Residency / no-train gate FIRST: refuse a disallowed provider/endpoint
+    # before any work or content leaves the host (fail-closed when on).
+    provider_policy.check(provider, endpoint=_endpoint_for(provider), model=model)
     prompt = pii_egress.scrub(prompt)        # mask PII before any provider dispatch
     spend.check(spend.estimate_tokens(prompt) + max_tokens)   # daily-cap pre-flight
     result = _dispatch(prompt, provider=provider, model=model, max_tokens=max_tokens)

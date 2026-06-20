@@ -60,11 +60,17 @@ def llm_adjudicate(new_fact: str, old_fact: str, backend: str) -> str:
         import requests
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
         model = os.environ.get("EVOSQL_RECONCILE_LLM_MODEL", "llama3.1")
+        from . import pii_egress, provider_policy
+        provider_policy.check("ollama", endpoint=host)
+        prompt = pii_egress.scrub(prompt)
         r = requests.post(f"{host}/api/generate",
                           json={"model": model, "prompt": prompt,
                                 "stream": False}, timeout=60)
         word = (r.json().get("response") or "").strip().upper()
     elif backend in ("anthropic", "sonnet"):
+        from . import pii_egress, provider_policy
+        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
+        prompt = pii_egress.scrub(prompt)
         import anthropic
         c = anthropic.Anthropic()
         m = c.messages.create(
@@ -95,11 +101,17 @@ def llm_reconsolidate(old_fact: str, correction: str, backend: str) -> str:
         import requests
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
         model = os.environ.get("EVOSQL_RECONSOLIDATE_LLM_MODEL", "llama3.1")
+        from . import pii_egress, provider_policy
+        provider_policy.check("ollama", endpoint=host)
+        prompt = pii_egress.scrub(prompt)
         r = requests.post(f"{host}/api/generate",
                           json={"model": model, "prompt": prompt,
                                 "stream": False}, timeout=60)
         word = (r.json().get("response") or "").strip().upper()
     elif backend in ("anthropic", "sonnet"):
+        from . import pii_egress, provider_policy
+        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
+        prompt = pii_egress.scrub(prompt)
         import anthropic
         c = anthropic.Anthropic()
         m = c.messages.create(
