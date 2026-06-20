@@ -273,7 +273,7 @@ def sync_once(cfg: Config, *,
         raise RuntimeError("AZURE_CLIENT_ID must be set in .env")
 
     auth = auth_mod.OutlookAuth(cfg.client_id, cfg.tenant_id,
-                                  cfg.token_cache)
+                                  cfg.token_cache, namespace=cfg.user_id)
     client = api_mod.OutlookClient(
         token_provider=lambda: auth.ensure_token(interactive=False))
 
@@ -453,7 +453,7 @@ def main(argv: Optional[list] = None) -> int:
     if args.auth:
         try:
             a = auth_mod.OutlookAuth(cfg.client_id, cfg.tenant_id,
-                                       cfg.token_cache)
+                                       cfg.token_cache, namespace=cfg.user_id)
             a.ensure_token(interactive=True)
             print(f"[outlook-sync] authentication cached at "
                   f"{cfg.token_cache}", file=sys.stderr, flush=True)

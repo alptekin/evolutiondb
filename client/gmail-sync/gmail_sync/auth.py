@@ -110,10 +110,23 @@ def _await_callback(port: int, timeout: float = 300.0) -> Dict:
 #  Token cache                                                      #
 # ---------------------------------------------------------------- #
 class TokenCache:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, connector: str = None, namespace: str = None):
         self.path = path.expanduser()
+        # Per-tenant store (opt-in): when EVOSQL_TENANT_SECRET + the engine are
+        # configured, the token lives encrypted in the engine namespaced by
+        # MCP_USER_ID — so tenants don't share one machine-wide token file.
+        # Otherwise (None) we keep using the local file: dev is unchanged.
+        self._store = None
+        if connector:
+            try:
+                from evolutiondb_pii.token_store import TokenStore
+                self._store = TokenStore.maybe(connector, namespace)
+            except ImportError:
+                self._store = None
 
     def load(self) -> Dict:
+        if self._store is not None:
+            return self._store.load()
         if not self.path.exists():
             return {}
         try:
@@ -122,6 +135,9 @@ class TokenCache:
             return {}
 
     def save(self, data: Dict) -> None:
+        if self._store is not None:
+            self._store.save(data)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
@@ -161,12 +177,13 @@ def _post(url: str, form: Dict[str, str]) -> Dict:
 # ---------------------------------------------------------------- #
 class GmailAuth:
     def __init__(self, client_id: str, client_secret: str,
-                 cache_path: str):
+                 cache_path: str, namespace: str = None):
         if not client_id or not client_secret:
             raise AuthError("client_id + client_secret are required")
         self.client_id     = client_id
         self.client_secret = client_secret
-        self.cache         = TokenCache(Path(cache_path))
+        self.cache         = TokenCache(Path(cache_path), connector="gmail",
+                                        namespace=namespace)
 
     # -- main API ----------------------------------------------------
     def ensure_token(self, interactive: bool = False) -> str:

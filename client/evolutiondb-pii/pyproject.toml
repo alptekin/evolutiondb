@@ -48,6 +48,7 @@ Issues     = "https://github.com/alptekin/evolutiondb/issues"
 
 [project.scripts]
 evolutiondb-pii = "evolutiondb_pii.__main__:main"
+evolutiondb-token = "evolutiondb_pii.token_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["evolutiondb_pii*"]
