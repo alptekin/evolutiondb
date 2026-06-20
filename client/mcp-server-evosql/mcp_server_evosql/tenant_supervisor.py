@@ -61,6 +61,7 @@ class TenantInstance:
     password: str
     proc: subprocess.Popen
     user: str = "admin"
+    host: str = "127.0.0.1"   # loopback for local processes; Service DNS on K8s
 
     def alive(self) -> bool:
         return self.proc.poll() is None

@@ -51,6 +51,20 @@ Secret name for auth credentials
 {{- end }}
 
 {{/*
+ServiceAccount name for the multi-tenant control plane. This SA is granted the
+RBAC (see rbac.yaml) to create/scale/delete the per-tenant StatefulSets,
+Services, Secrets and PVCs that the KubernetesTenantBackend provisions for
+dedicated tenants.
+*/}}
+{{- define "evolutiondb.controlPlaneServiceAccountName" -}}
+{{- if .Values.controlPlane.serviceAccountName }}
+{{- .Values.controlPlane.serviceAccountName }}
+{{- else }}
+{{- printf "%s-control-plane" (include "evolutiondb.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/*
 Secret name for encryption key
 */}}
 {{- define "evolutiondb.encryptionSecretName" -}}

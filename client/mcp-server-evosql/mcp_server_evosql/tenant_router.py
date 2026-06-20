@@ -116,8 +116,11 @@ class TenantRouter:
         if self.tier(tenant_id) == DEDICATED:
             inst = self.supervisor.ensure(tenant_id)
             # The dedicated engine IS the tenant: connect to its default db as
-            # its admin; the OS process is the boundary, so no USE.
-            return ConnCoords(host="127.0.0.1", port=inst.pg_port, db="evosql",
+            # its admin; the boundary is the OS process (local) or the pod (K8s),
+            # so no USE. host is loopback for the local supervisor and the
+            # per-tenant Service DNS for the Kubernetes backend.
+            return ConnCoords(host=getattr(inst, "host", "127.0.0.1"),
+                              port=inst.pg_port, db="evosql",
                               user="admin", password=inst.password,
                               issue_use=False, tier=DEDICATED)
         # Shared pool: connect as the tenant's own DB user and USE its database;
