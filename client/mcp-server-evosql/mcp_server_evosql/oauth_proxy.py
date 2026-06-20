@@ -8,17 +8,19 @@ shared bearer token, which ChatGPT refuses. This proxy adds the
 OAuth surface, then forwards authenticated `/mcp` requests to the
 upstream MCP server with the shared bearer.
 
-For a personal hub there is no real consent decision to make — the
-single human running it is always the owner. Consent is therefore
-auto-approved and tokens are long-lived. State is in-memory and
-re-created on restart; ChatGPT re-registers on demand.
+`/authorize` shows a real CONSENT SCREEN: a connecting client is approved only
+after an OPERATOR (operator_auth — OIDC / static token; never a tenant token)
+clicks Allow. An approval can be remembered per client so repeat authorizations
+skip the screen. Tokens are long-lived; non-remembered state is in-memory and
+re-created on restart (ChatGPT re-registers on demand).
 
 Endpoints
 ---------
   GET    /.well-known/oauth-protected-resource     RFC 9728
   GET    /.well-known/oauth-authorization-server   RFC 8414
   POST   /register                                 RFC 7591
-  GET    /authorize                                code+PKCE, auto-approves
+  GET    /authorize                                code+PKCE, consent screen
+  POST   /authorize                                operator Allow/Deny decision
   POST   /token                                    code → access_token
   *      /mcp                                       proxied to upstream
   *      /                                          OPTIONS preflight, /health
@@ -28,13 +30,18 @@ Environment
   EVOSQL_MCP_UPSTREAM         default http://127.0.0.1:8970/mcp
   EVOSQL_MCP_AUTH_TOKEN       bearer the upstream expects (empty = none)
   EVOSQL_OAUTH_PROXY_PORT     default 8972
+  EVOSQL_CONTROL_TOKEN / EVOSQL_OIDC_ISSUER / EVOSQL_CONTROL_OPERATORS
+                             operator credential for the consent screen
+  EVOSQL_OAUTH_CONSENT_TTL_DAYS  remembered-approval lifetime (default 90)
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import hashlib
+import html as _html_escape
 import json
+import re
 import os
 import secrets
 import sys
@@ -45,6 +52,11 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional
+
+try:                                  # package import (console script / -m)
+    from . import operator_auth
+except ImportError:                   # bare-script run: same-dir sibling module
+    import operator_auth
 
 
 UPSTREAM_URL   = os.environ.get("EVOSQL_MCP_UPSTREAM",
@@ -59,6 +71,8 @@ ACCESS_TOKEN_TTL_SEC = int(os.environ.get(
     "EVOSQL_OAUTH_TOKEN_TTL_DAYS", "90")) * 24 * 3600
 CODE_TTL_SEC         = 600               # 10 min — RFC-recommended max
 CLIENT_MAX_AGE_SEC   = 30 * 24 * 3600    # prune stale client registrations
+CONSENT_TTL_SEC      = int(os.environ.get(
+    "EVOSQL_OAUTH_CONSENT_TTL_DAYS", "90")) * 24 * 3600  # remembered approvals
 MAX_MEM_ENTRIES      = 5000              # cap the in-memory cache (DoS guard)
 SWEEP_EVERY          = 25                # sweep expired rows every N register/token
 
@@ -245,7 +259,7 @@ class _Store:
             drop = False
             if not isinstance(val, dict):
                 drop = True
-            elif key.startswith(("code:", "token:")):
+            elif key.startswith(("code:", "token:", "consent:")):
                 drop = int(val.get("expires", 0)) < now
             elif key.startswith("client:"):
                 drop = int(val.get("client_id_issued_at", now)) \
@@ -318,6 +332,80 @@ def _self_origin(headers) -> str:
     # No trusted source for the public hostname — fall back to loopback rather
     # than echo an unverified Host into signed/discovery surfaces.
     return f"http://127.0.0.1:{LISTEN_PORT}"
+
+
+def _consent_page(client: dict, p: Dict[str, str]) -> str:
+    """The OAuth consent screen: shows WHO is asking (client) and FOR WHAT
+    (scope), and posts the operator's Allow/Deny decision back to /authorize.
+    The auth params ride in a JS object; the operator credential is sent as a
+    Bearer header via fetch (so a form POST without it can't approve)."""
+    name = _html_escape.escape(client.get("client_name") or "An application")
+    host = _html_escape.escape(
+        urllib.parse.urlparse(p.get("redirect_uri", "")).netloc or "the client")
+    params = json.dumps({k: p.get(k, "") for k in (
+        "client_id", "redirect_uri", "state", "code_challenge",
+        "code_challenge_method", "response_type")})
+    # The params (state/code_challenge are attacker-controllable) are embedded in
+    # an inline <script>. json.dumps does NOT escape '<'/'>' so a value containing
+    # '</script>' would break out -> reflected XSS in the operator's browser.
+    # Unicode-escape the script-breaking chars (still valid JSON, parses identically).
+    params = (params.replace("<", "\\u003c").replace(">", "\\u003e")
+              .replace("&", "\\u0026"))
+    _tpl = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authorize · EvolutionDB</title><style>
+ :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--txt:#e6edf3;--muted:#8b949e;
+   --accent:#2f81f7;--ok:#2ea043;--danger:#da3633}
+ *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);
+   font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+   display:flex;min-height:100vh;align-items:center;justify-content:center}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+   padding:28px;max-width:460px;width:92%}
+ h1{font-size:17px;margin:0 0 4px}.muted{color:var(--muted);font-size:13px}
+ .scope{background:var(--bg);border:1px solid var(--line);border-radius:8px;
+   padding:12px 14px;margin:18px 0}
+ .scope b{color:var(--accent)}
+ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 4px}
+ input{width:100%;background:var(--bg);color:var(--txt);border:1px solid var(--line);
+   border-radius:6px;padding:9px 11px;font:inherit}
+ .chk{display:flex;gap:8px;align-items:center;margin:14px 0;font-size:13px;color:var(--muted)}
+ .chk input{width:auto}
+ .row{display:flex;gap:10px;margin-top:18px}
+ button{flex:1;font:inherit;padding:10px;border-radius:8px;cursor:pointer;border:1px solid var(--line);background:#21262d;color:var(--txt)}
+ button.allow{background:var(--accent);border-color:var(--accent);color:#fff}
+ button.deny:hover{border-color:var(--danger);color:#ff7b72}
+ #err{color:#ff7b72;font-size:13px;margin-top:12px;min-height:18px}
+</style></head><body><div class="card">
+ <h1>Authorize access</h1>
+ <p class="muted"><b>__NAME__</b> wants to connect to your EvolutionDB.</p>
+ <div class="scope">Requested access: <b>mcp</b> &mdash; the memory &amp; tools API.<br>
+   <span class="muted">Redirects to: __HOST__</span></div>
+ <label>Operator credential (token)</label>
+ <input id="op" type="password" placeholder="EVOSQL_CONTROL_TOKEN or operator OIDC token" autofocus>
+ <label class="chk"><input id="remember" type="checkbox" checked> Remember this application</label>
+ <div class="row">
+   <button class="deny" onclick="decide('deny')">Deny</button>
+   <button class="allow" onclick="decide('allow')">Allow</button>
+ </div>
+ <div id="err"></div>
+</div><script>
+ const P=__PARAMS__;
+ async function decide(d){
+   const tok=document.getElementById('op').value.trim();
+   const body=Object.assign({},P,{decision:d,remember:document.getElementById('remember').checked?'1':'0'});
+   const h={'Content-Type':'application/json'}; if(tok) h['Authorization']='Bearer '+tok;
+   try{
+     const r=await fetch('/authorize',{method:'POST',headers:h,body:JSON.stringify(body)});
+     const j=await r.json().catch(()=>({}));
+     if(r.ok && j.redirect){ window.location=j.redirect; return; }
+     document.getElementById('err').textContent=(j.error_description||j.error||('HTTP '+r.status));
+   }catch(e){ document.getElementById('err').textContent=String(e); }
+ }
+</script></body></html>"""
+    # Single left-to-right pass so an already-substituted value (e.g. a
+    # client_name of literal "__PARAMS__") is never re-scanned/clobbered.
+    repl = {"__NAME__": name, "__HOST__": host, "__PARAMS__": params}
+    return re.sub("__NAME__|__HOST__|__PARAMS__", lambda m: repl[m.group(0)], _tpl)
 
 
 # ---------------------------------------------------------------- #
@@ -444,79 +532,141 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(201, meta)
 
     # ---------- authorize ----------
-    def _handle_authorize(self) -> None:
-        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        def get(k: str) -> str: return (q.get(k) or [""])[0]
-
-        client_id      = get("client_id")
-        redirect_uri   = get("redirect_uri")
-        response_type  = get("response_type")
-        state          = get("state")
-        challenge      = get("code_challenge")
-        challenge_meth = get("code_challenge_method")
-
+    def _validate_authz(self, p: Dict[str, str]):
+        """Validate the authorize parameters (client + exact redirect_uri +
+        PKCE S256). Returns ``(client, err)`` — ``err`` is None on success, else
+        a descriptor: ``{"code":n,"body":{...}}`` for a failure BEFORE the
+        redirect_uri is trusted (a plain JSON error), or ``{"redirect":(error,
+        desc)}`` for an OAuth error to be sent to the (validated) redirect_uri.
+        Shared by the GET consent screen and the POST decision so both enforce
+        the exact same checks."""
+        client_id = p.get("client_id", "")
+        redirect_uri = p.get("redirect_uri", "")
         with _lock:
             client = _store.get(f"client:{client_id}")
-
         if not client:
-            # No registered client → can't trust the redirect_uri, so
-            # respond with a plain error page instead of redirecting.
-            return self._json(400, {
-                "error":             "invalid_client",
-                "error_description": "client_id not registered",
-            })
-
-        # Require an EXACT match against a registered redirect_uri,
-        # unconditionally. Previously the check was skipped when the registered
-        # list was empty, which let a client registered with no redirect_uris
-        # have the authorization code sent to any attacker-supplied URI. Empty
-        # registration is now rejected at /register, so this list is non-empty.
-        registered_uris = client.get("redirect_uris") or []
-        if not redirect_uri or redirect_uri not in registered_uris:
-            return self._json(400, {
-                "error":             "invalid_request",
+            return None, {"code": 400, "body": {
+                "error": "invalid_client",
+                "error_description": "client_id not registered"}}
+        # EXACT match against a registered redirect_uri (empty registration is
+        # rejected at /register, so this list is non-empty).
+        if not redirect_uri or redirect_uri not in (client.get("redirect_uris") or []):
+            return None, {"code": 400, "body": {
+                "error": "invalid_request",
                 "error_description": "redirect_uri must exactly match a "
-                                     "registered redirect URI",
-            })
+                                     "registered redirect URI"}}
+        if p.get("response_type") != "code":
+            return client, {"redirect": ("unsupported_response_type",
+                                         "only response_type=code is supported")}
+        if p.get("code_challenge_method") != "S256":
+            return client, {"redirect": ("invalid_request",
+                                         "code_challenge_method must be S256")}
+        if not p.get("code_challenge"):
+            return client, {"redirect": ("invalid_request",
+                                         "code_challenge is required")}
+        return client, None
 
-        if response_type != "code":
-            return self._err_redirect(redirect_uri, state,
-                "unsupported_response_type",
-                "only response_type=code is supported")
-        if challenge_meth != "S256":
-            return self._err_redirect(redirect_uri, state,
-                "invalid_request",
-                "code_challenge_method must be S256")
-        if not challenge:
-            return self._err_redirect(redirect_uri, state,
-                "invalid_request",
-                "code_challenge is required")
-
+    def _authz_success_url(self, p: Dict[str, str]) -> str:
+        """Mint a fresh authorization code (PKCE-bound) and build the success
+        redirect URL back to the client."""
         code = _rand(24)
         with _lock:
             _store.put(f"code:{code}", {
-                "client_id":      client_id,
-                "redirect_uri":   redirect_uri,
-                "code_challenge": challenge,
+                "client_id":      p["client_id"],
+                "redirect_uri":   p["redirect_uri"],
+                "code_challenge": p["code_challenge"],
                 "expires":        _now() + CODE_TTL_SEC,
             })
-        sep = "&" if "?" in redirect_uri else "?"
-        url = f"{redirect_uri}{sep}code={urllib.parse.quote(code)}"
-        if state:
-            url += f"&state={urllib.parse.quote(state)}"
-        self._redirect(url)
+        sep = "&" if "?" in p["redirect_uri"] else "?"
+        url = f"{p['redirect_uri']}{sep}code={urllib.parse.quote(code)}"
+        if p.get("state"):
+            url += f"&state={urllib.parse.quote(p['state'])}"
+        return url
 
-    def _err_redirect(self, redirect_uri: str, state: str,
-                       error: str, desc: str) -> None:
-        if not redirect_uri:
-            return self._json(400, {"error": error,
-                                     "error_description": desc})
+    def _err_url(self, redirect_uri: str, state: str, error: str, desc: str) -> str:
         sep = "&" if "?" in redirect_uri else "?"
         url = (f"{redirect_uri}{sep}error={error}"
                f"&error_description={urllib.parse.quote(desc)}")
         if state:
             url += f"&state={urllib.parse.quote(state)}"
-        self._redirect(url)
+        return url
+
+    def _err_redirect(self, redirect_uri: str, state: str,
+                       error: str, desc: str) -> None:
+        if not redirect_uri:
+            return self._json(400, {"error": error, "error_description": desc})
+        self._redirect(self._err_url(redirect_uri, state, error, desc))
+
+    def _operator_bearer(self, p: Dict[str, str]) -> str:
+        hdr = self.headers.get("Authorization", "")
+        if hdr.startswith("Bearer "):
+            return hdr[7:]
+        return p.get("operator_token", "")
+
+    # ---------- authorize: consent screen (GET) ----------
+    def _handle_authorize(self) -> None:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        p = {k: (v or [""])[0] for k, v in q.items()}
+        client, err = self._validate_authz(p)
+        if err is not None:
+            if "redirect" in err:
+                e, d = err["redirect"]
+                return self._err_redirect(p.get("redirect_uri", ""),
+                                          p.get("state", ""), e, d)
+            return self._json(err["code"], err["body"])
+        # A remembered, unexpired approval for this client short-circuits the
+        # screen (the standard "remember my decision" behaviour).
+        with _lock:
+            consent = _store.get(f"consent:{p['client_id']}")
+        if (consent and consent.get("scope") == "mcp"
+                and int(consent.get("expires", 0)) >= _now()):
+            return self._redirect(self._authz_success_url(p))
+        # Otherwise show the consent screen — an operator must approve.
+        return self._html(200, _consent_page(client, p))
+
+    # ---------- authorize: consent decision (POST) ----------
+    def _handle_authorize_decision(self) -> None:
+        p = self._parse_body_params()
+        client, err = self._validate_authz(p)
+        if err is not None:
+            if "redirect" in err:
+                e, d = err["redirect"]
+                return self._json(200, {"redirect": self._err_url(
+                    p.get("redirect_uri", ""), p.get("state", ""), e, d)})
+            return self._json(err["code"], err["body"])
+        # Only an OPERATOR may approve a client (OIDC / static token; never a
+        # tenant token). Refuse everyone else — this is the consent gate.
+        host = self.server.server_address[0] if self.server else ""
+        loopback = host in ("127.0.0.1", "localhost", "::1")
+        op = operator_auth.authorize_operator(self._operator_bearer(p),
+                                              loopback=loopback)
+        if op is None:
+            return self._json(403, {
+                "error": "access_denied",
+                "error_description": "operator authorization required to "
+                                     "approve this client"})
+        if (p.get("decision") or "").lower() != "allow":
+            return self._json(200, {"redirect": self._err_url(
+                p["redirect_uri"], p.get("state", ""),
+                "access_denied", "the operator denied access")})
+        if (p.get("remember") or "").lower() in ("1", "true", "yes", "on"):
+            with _lock:
+                _store.put(f"consent:{p['client_id']}", {
+                    "scope": "mcp", "approved_by": op.subject,
+                    "at": _now(), "expires": _now() + CONSENT_TTL_SEC})
+        return self._json(200, {"redirect": self._authz_success_url(p)})
+
+    def _html(self, status: int, html: str) -> None:
+        data = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     # ---------- token ----------
     def _handle_token(self) -> None:
@@ -673,6 +823,8 @@ class _Handler(BaseHTTPRequestHandler):
         path, _, _ = self.path.partition("?")
         if path == "/register":
             return self._handle_register()
+        if path == "/authorize":
+            return self._handle_authorize_decision()
         if path == "/token":
             return self._handle_token()
         if path == "/mcp":
