@@ -71,7 +71,8 @@ class TenantSupervisor:
     def __init__(self, base_dir: str, *, binary: Optional[str] = None,
                  base_port: int = 6400, bind: str = "127.0.0.1",
                  auto_restart: bool = True, ready_timeout: float = 20.0,
-                 mem_limit_mb: Optional[int] = None):
+                 mem_limit_mb: Optional[int] = None,
+                 key_provider_for=None):
         self.base_dir = base_dir
         self.binary = binary or _default_binary()
         self.base_port = base_port
@@ -81,8 +82,15 @@ class TenantSupervisor:
         # bounded to mem_limit_mb (via --buffer-pool-size), so one tenant cannot
         # starve the host of memory. None = engine default.
         self.mem_limit_mb = mem_limit_mb
+        # Optional per-tenant at-rest encryption: a factory
+        # key_provider_for(tenant_id) -> KeyProvider supplies each tenant's
+        # passphrase (so every tenant has its OWN key, naturally per-tenant).
+        # None = tenants run unencrypted (byte-for-byte unchanged). Rotation is
+        # driven by rotate_key() against the same provider.
+        self.key_provider_for = key_provider_for
         self._instances: Dict[str, TenantInstance] = {}
         self._ports: Dict[str, int] = {}     # stable port per tenant (survives restart)
+        self._rotating: set = set()          # tenants mid key-rotation (no spawn)
         self._next_port = base_port
         self._lock = threading.RLock()
         os.makedirs(base_dir, exist_ok=True)
@@ -97,6 +105,11 @@ class TenantSupervisor:
         """Idempotently ensure the tenant's engine is running; return it. Stable
         ports + data dir across restarts, so reconnects keep working."""
         with self._lock:
+            if tenant_id in self._rotating:
+                # A key rotation is atomically swapping this tenant's data file;
+                # a second engine on the same data dir would corrupt it.
+                raise RuntimeError(
+                    f"tenant {tenant_id!r} is mid key-rotation; retry shortly")
             inst = self._instances.get(tenant_id)
             if inst is not None and inst.alive():
                 return inst
@@ -124,6 +137,39 @@ class TenantSupervisor:
         with self._lock:
             self._ports.pop(tenant_id, None)
         shutil.rmtree(self._tenant_dir(tenant_id), ignore_errors=True)
+
+    def rotate_key(self, tenant_id: str, *, rotate_dek: bool = True) -> dict:
+        """Automated at-rest key rotation for ONE tenant (the KMS-rotation
+        button). Offline for that ONE tenant only — every other tenant keeps
+        serving. Stop its engine, rotate the key against the tenant's provider
+        (rekey the passphrase, optionally rotate the DEK + re-encrypt), then
+        restart — _spawn picks up the now-current new passphrase automatically.
+        Requires key_provider_for (the supervisor must be running encrypted
+        tenants). Returns the rotate_engine_key result dict."""
+        if self.key_provider_for is None:
+            raise RuntimeError("rotate_key requires key_provider_for "
+                               "(tenants are not encrypted)")
+        from . import key_rotation
+        provider = self.key_provider_for(tenant_id)
+        # Mark rotating so a concurrent ensure()/monitor never spawns a second
+        # engine onto the data dir while --rekey/--rotate-key swaps it.
+        with self._lock:
+            self._rotating.add(tenant_id)
+        # stop() pops the instance so the monitor won't respawn mid-rotation.
+        self.stop(tenant_id)
+        try:
+            return key_rotation.rotate_engine_key(
+                self.binary, self._tenant_dir(tenant_id), provider,
+                rotate_dek=rotate_dek)
+        finally:
+            # ALWAYS clear the flag and restart the tenant, even if rotation
+            # raised — a rotation failure must not leave the tenant down.
+            with self._lock:
+                self._rotating.discard(tenant_id)
+            try:
+                self.ensure(tenant_id)
+            except Exception:
+                pass
 
     def stop_all(self) -> None:
         self._stop_monitor.set()
@@ -189,6 +235,14 @@ class TenantSupervisor:
         return port
 
     def _spawn(self, tenant_id: str) -> TenantInstance:
+        # Belt-and-suspenders: refuse to spawn ANY engine onto a data dir that a
+        # key rotation is mid-swapping, no matter which caller reached here
+        # (ensure/monitor/restore/...). rotate_key clears _rotating before its
+        # own restart, so the post-rotation ensure() is not blocked. Always
+        # called under self._lock.
+        if tenant_id in self._rotating:
+            raise RuntimeError(
+                f"tenant {tenant_id!r} is mid key-rotation; spawn refused")
         data_dir = self._tenant_dir(tenant_id)
         os.makedirs(data_dir, exist_ok=True)
         pg_port = self._alloc_ports(tenant_id)
@@ -208,25 +262,63 @@ class TenantSupervisor:
                "--bind", self.bind]
         if self.mem_limit_mb:
             cmd += ["--buffer-pool-size", f"{self.mem_limit_mb}M"]
-        proc = subprocess.Popen(
-            cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        inst = TenantInstance(tenant_id=tenant_id, data_dir=data_dir,
-                              pg_port=pg_port, evo_port=evo_port,
-                              password=password, proc=proc)
-        if not self._wait_ready(pg_port):
-            self._terminate(inst)
-            raise RuntimeError(
-                f"tenant {tenant_id!r} engine did not become ready on :{pg_port}")
-        self._instances[tenant_id] = inst
-        return inst
 
-    def _wait_ready(self, port: int) -> bool:
+        # Per-tenant at-rest encryption: supply this tenant's passphrase. Try the
+        # current key first; if the engine can't open the file with it AND a
+        # pending (uncommitted) rotation key exists, try that — this recovers
+        # from a crash strictly between a successful --rekey (header already under
+        # the new key) and commit(); a successful start on the pending key means
+        # we then commit() it to reconcile the key source with the disk.
+        if self.key_provider_for is not None:
+            provider = self.key_provider_for(tenant_id)
+            candidates = [(provider.current(), False)]
+            pend = provider.pending_key()
+            if pend and pend != candidates[0][0]:
+                candidates.append((pend, True))
+        else:
+            provider = None
+            candidates = [(None, False)]
+
+        for key, is_pending in candidates:
+            if key is not None:
+                env["EVOSQL_ENCRYPTION_KEY"] = key
+            else:
+                env.pop("EVOSQL_ENCRYPTION_KEY", None)
+            proc = subprocess.Popen(
+                cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            inst = TenantInstance(tenant_id=tenant_id, data_dir=data_dir,
+                                  pg_port=pg_port, evo_port=evo_port,
+                                  password=password, proc=proc)
+            if self._wait_ready(pg_port, proc):
+                if is_pending and provider is not None:
+                    # The engine opens + validates the encrypted data file during
+                    # server_init and EXITS (never binding the port) if the key is
+                    # wrong — so a key that fails returns earlier as "not ready",
+                    # and reaching here with the pending key means the data really
+                    # did open under it (the rekey had committed on disk but not in
+                    # the key source). Reconcile by committing the pending key.
+                    try:
+                        provider.commit()
+                    except Exception:
+                        pass
+                self._instances[tenant_id] = inst
+                return inst
+            self._terminate(inst)
+        raise RuntimeError(
+            f"tenant {tenant_id!r} engine did not become ready on :{pg_port}")
+
+    def _wait_ready(self, port: int, proc: "Optional[subprocess.Popen]" = None) -> bool:
         deadline = time.time() + self.ready_timeout
         while time.time() < deadline:
             try:
                 socket.create_connection((self.bind, port), 0.5).close()
                 return True
             except OSError:
+                # If the engine process has already exited (e.g. it refused to
+                # open the data file with the supplied key), stop waiting now
+                # instead of polling until the full timeout.
+                if proc is not None and proc.poll() is not None:
+                    return False
                 time.sleep(0.1)
         return False
 
@@ -248,7 +340,8 @@ class TenantSupervisor:
         its own (its data dir persists, so committed data survives)."""
         while not self._stop_monitor.wait(0.5):
             with self._lock:
-                dead = [t for t, i in self._instances.items() if not i.alive()]
+                dead = [t for t, i in self._instances.items()
+                        if not i.alive() and t not in self._rotating]
                 for t in dead:
                     try:
                         self._spawn(t)   # reuses the same port + data dir
