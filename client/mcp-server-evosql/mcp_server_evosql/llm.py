@@ -93,44 +93,61 @@ def _urlopen_json(req, timeout: int = 60, attempts: int = 4) -> dict:
 
 
 def chat(prompt: str, *, provider: str, model: str,
-         max_tokens: int = 2000) -> Optional[str]:
-    """Send a single user message and return the assistant's text (stripped),
-    or None when the provider is unknown. Exceptions propagate — every caller
-    already wraps its opt-in LLM call in try/except and degrades gracefully.
+         max_tokens: int = 2000, system: Optional[str] = None,
+         temperature: Optional[float] = None) -> Optional[str]:
+    """Send a single user message (with an optional ``system`` prompt) and return
+    the assistant's text (stripped), or None when the provider is unknown.
+    Exceptions propagate — every caller already wraps its opt-in LLM call in
+    try/except and degrades gracefully.
 
-    This wrapper applies the two cross-cutting guards (PII egress masking and
-    the opt-in daily token cap) once, then delegates the provider call to
-    ``_dispatch``."""
+    This is the ONE chokepoint that applies the cross-cutting egress guards
+    (residency/no-train gate, PII egress masking, the opt-in daily token cap),
+    then delegates the provider call to ``_dispatch``. Enrichment callers route
+    through here so those guards live in one place, not duplicated per module."""
     from . import spend
     # Residency / no-train gate FIRST: refuse a disallowed provider/endpoint
     # before any work or content leaves the host (fail-closed when on).
     provider_policy.check(provider, endpoint=_endpoint_for(provider), model=model)
     prompt = pii_egress.scrub(prompt)        # mask PII before any provider dispatch
+    if system:
+        system = pii_egress.scrub(system)
     spend.check(spend.estimate_tokens(prompt) + max_tokens)   # daily-cap pre-flight
-    result = _dispatch(prompt, provider=provider, model=model, max_tokens=max_tokens)
+    result = _dispatch(prompt, provider=provider, model=model,
+                       max_tokens=max_tokens, system=system, temperature=temperature)
     if result is not None:
         spend.record(spend.estimate_tokens(prompt, result))
     return result
 
 
 def _dispatch(prompt: str, *, provider: str, model: str,
-              max_tokens: int) -> Optional[str]:
+              max_tokens: int, system: Optional[str] = None,
+              temperature: Optional[float] = None) -> Optional[str]:
     """Provider dispatch only — no PII scrub, no spend accounting (the chat()
-    wrapper does both). The urllib paths retry 429/5xx via _urlopen_json."""
+    wrapper does both). The urllib paths retry 429/5xx via _urlopen_json. A
+    ``system`` prompt / ``temperature`` (when set) are threaded to the provider;
+    when both are None the call is byte-for-byte the previous one."""
     p = (provider or "").strip().lower()
+    msgs = ([{"role": "system", "content": system}] if system else []) \
+        + [{"role": "user", "content": prompt}]
 
     if p in _ANTHROPIC:
         import anthropic
         c = anthropic.Anthropic()
+        kw = {}
+        if system:
+            kw["system"] = system
+        if temperature is not None:
+            kw["temperature"] = temperature
         msg = c.messages.create(model=model, max_tokens=max_tokens,
-                                messages=[{"role": "user", "content": prompt}])
+                                messages=[{"role": "user", "content": prompt}], **kw)
         return (msg.content[0].text or "").strip()
 
     if p in _OPENAI_COMPAT:
         key = _openai_key()
-        body = json.dumps({"model": model, "max_tokens": max_tokens,
-                           "messages": [{"role": "user", "content": prompt}]}
-                          ).encode()
+        payload = {"model": model, "max_tokens": max_tokens, "messages": msgs}
+        if temperature is not None:
+            payload["temperature"] = temperature
+        body = json.dumps(payload).encode()
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = f"Bearer {key}"
@@ -144,9 +161,10 @@ def _dispatch(prompt: str, *, provider: str, model: str,
 
     if p == "ollama":
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
-        body = json.dumps({"model": model, "stream": False,
-                           "messages": [{"role": "user", "content": prompt}]}
-                          ).encode()
+        payload = {"model": model, "stream": False, "messages": msgs}
+        if temperature is not None:
+            payload["options"] = {"temperature": temperature}
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(host + "/api/chat", data=body,
                                      headers={"Content-Type": "application/json"})
         data = _urlopen_json(req)

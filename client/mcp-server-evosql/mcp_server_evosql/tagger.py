@@ -115,35 +115,19 @@ class _OpenAITagger(TopicTagger):
         snippet = (text or "").strip()
         if not snippet:
             return []
-        # Residency/no-train gate + PII mask before sending text to OpenAI.
-        from mcp_server_evosql import pii_egress, provider_policy
-        provider_policy.check("openai", endpoint=self._URL)
-        snippet = pii_egress.scrub(snippet)
-        body = json.dumps({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self._SYSTEM_PROMPT},
-                {"role": "user",   "content": snippet[:2000]},
-            ],
-            "max_tokens":  60,
-            "temperature": 0.0,
-        }).encode()
-        req = urllib.request.Request(self._URL, data=body, method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type":  "application/json",
-                "Accept":        "application/json",
-            })
+        # Route through llm.chat (the single egress chokepoint: residency/no-train
+        # gate + PII mask + spend cap live there). System prompt + temperature 0.0
+        # are threaded through; the OpenAI endpoint/key come from the same env.
+        from mcp_server_evosql import llm
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                payload = json.loads(resp.read().decode())
-            raw = payload["choices"][0]["message"]["content"]
-        except (urllib.error.URLError, TimeoutError,
-                ValueError, KeyError, IndexError) as exc:
+            raw = llm.chat(snippet[:2000], provider="openai", model=self.model,
+                           max_tokens=60, system=self._SYSTEM_PROMPT,
+                           temperature=0.0)
+        except Exception as exc:
             print(f"[tagger] openai call failed: {exc}",
                   file=sys.stderr, flush=True)
             return []
-        return parse_tags(raw)
+        return parse_tags(raw or "")
 
 
 def provider_from_env() -> TopicTagger:

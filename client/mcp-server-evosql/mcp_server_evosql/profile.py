@@ -136,30 +136,13 @@ def _llm_label(rows: List[dict], backend: str) -> str:
     sample = "\n".join(f"- {(r.get('text') or '')[:120]}" for r in rows[:10])
     prompt = ("Summarize this cluster of a user's notes in <=5 words "
               "(a topic label). Notes:\n" + sample)
-    if backend == "ollama":
-        import urllib.request
-        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-        model = os.environ.get("EVOSQL_PROFILE_LLM_MODEL", "llama3.1")
-        from . import pii_egress, provider_policy
-        provider_policy.check("ollama", endpoint=host)
-        prompt = pii_egress.scrub(prompt)
-        body = json.dumps({"model": model, "prompt": prompt,
-                           "stream": False}).encode()
-        req = urllib.request.Request(host + "/api/generate", body,
-                                     {"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read().decode()).get("response", "").strip()[:60]
-    if backend in ("anthropic", "sonnet"):
-        from . import pii_egress, provider_policy
-        provider_policy.check("anthropic", endpoint=provider_policy.anthropic_endpoint())
-        prompt = pii_egress.scrub(prompt)
-        import anthropic
-        c = anthropic.Anthropic()
-        m = c.messages.create(
-            model=os.environ.get("EVOSQL_PROFILE_LLM_MODEL", "claude-sonnet-4-6"),
-            max_tokens=40, messages=[{"role": "user", "content": prompt}])
-        return m.content[0].text.strip()[:60]
-    raise RuntimeError("unknown EVOSQL_PROFILE_LLM backend")
+    default = "claude-sonnet-4-6" if backend in ("anthropic", "sonnet") else "llama3.1"
+    model = os.environ.get("EVOSQL_PROFILE_LLM_MODEL", default)
+    from . import llm
+    if not llm.available(backend):
+        raise RuntimeError("unknown EVOSQL_PROFILE_LLM backend")
+    return (llm.chat(prompt, provider=backend, model=model, max_tokens=40)
+            or "").strip()[:60]
 
 
 def _pick_k(n: int, k: Optional[int]) -> int:
