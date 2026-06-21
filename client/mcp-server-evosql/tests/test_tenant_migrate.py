@@ -107,7 +107,8 @@ def test_graduate_moves_data():
         src.execute("CREATE MEMORY STORE mem_notes")
         src.execute("""MEMORY PUT INTO mem_notes VALUES ('u1','k1','"first"')""")
         src.execute("""MEMORY PUT INTO mem_notes VALUES ('u1','k2','"second"')""")
-        src.execute("CREATE TABLE proj (id INT, name VARCHAR(40))")
+        src.execute("CREATE TABLE proj (id INT PRIMARY KEY, name VARCHAR(40))")
+        src.execute("CREATE INDEX i_pname ON proj (name)")
         src.execute("INSERT INTO proj VALUES (1,'alpha')")
         src.execute("INSERT INTO proj VALUES (2,'beta')")
 
@@ -135,6 +136,13 @@ def test_graduate_moves_data():
         assert rows[0][0] == "2", f"table not migrated: {rows}"
         rows = chk.query("SELECT name FROM proj WHERE id=2")
         assert rows and rows[0][0] == "beta", f"table value lost: {rows}"
+        # PRIMARY KEY carried -> a duplicate-PK insert is rejected on the dst
+        _c, _r, dup_err, _t = simple_query(chk.sock, "INSERT INTO proj VALUES (1,'dup')")
+        assert dup_err, "PRIMARY KEY was not migrated (duplicate id accepted)"
+        # secondary index carried -> pg_indexes on the dst lists it
+        idx_rows = chk.query("SELECT * FROM pg_indexes")
+        idx_names = [str(r[2]) for r in idx_rows if len(r) >= 3 and str(r[1]) == "proj"]
+        assert "i_pname" in idx_names, f"index not migrated: {idx_names}"
         chk.close(); src.close(); dst.close()
     finally:
         sup.stop_all()
